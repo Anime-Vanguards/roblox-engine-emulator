@@ -248,7 +248,15 @@ struct Inner {
     times: Option<Vec<f64>>,
     records: Vec<Record>,
     by_id: FxHashMap<InstanceId, usize>,
-    present: FxHashSet<InstanceId>,
+    /// Per record: in the world at the last walk (what was drawn then)
+    present: Vec<bool>,
+    /// The records in the world at the last walk, in walk order
+    present_list: Vec<usize>,
+    /// Per record: the last walk that found it in the world ([`Inner::walks`])
+    seen: Vec<u32>,
+    walks: u32,
+    /// The last walk's instances, kept for its buffer
+    walk_buffer: Vec<InstanceId>,
     /// Property writes since the last sample, in order (deduplicated)
     dirty: Vec<(InstanceId, NameId)>,
     dirty_set: FxHashSet<(InstanceId, NameId)>,
@@ -498,14 +506,25 @@ fn write_events(path: &Path, events: &Json, lines: Option<std::fs::File>) -> Res
 /// `value` as pretty JSON two levels in (an element of a top-level object's array): each line 4
 /// spaces in, as the object's pretty JSON holds it.
 fn indented(value: &Json, out: &mut Vec<u8>) {
-    let text = serde_json::to_string_pretty(value).unwrap_or_default();
-    for (index, line) in text.split('\n').enumerate() {
-        if index > 0 {
-            out.push(b'\n');
-        }
-        out.extend_from_slice(b"    ");
-        out.extend_from_slice(line.as_bytes());
+    thread_local! {
+        static TEXT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     }
+    TEXT.with(|text| {
+        let mut text = text.borrow_mut();
+        text.clear();
+        if serde_json::to_writer_pretty(&mut *text, value).is_err() {
+            text.clear();
+        }
+        // (a string's newline is escaped: every raw one ends a line)
+        out.reserve(text.len() + 4 * (1 + text.iter().filter(|&&byte| byte == b'\n').count()));
+        for (index, line) in text.split(|&byte| byte == b'\n').enumerate() {
+            if index > 0 {
+                out.push(b'\n');
+            }
+            out.extend_from_slice(b"    ");
+            out.extend_from_slice(line);
+        }
+    });
 }
 
 /// [`indented`] as a block of its own.
@@ -661,6 +680,12 @@ fn visibility_of(engine: &Engine, class: ClassId) -> Visibility {
     } else {
         Visibility::None
     }
+}
+
+/// Whether `id` was in the world at the last walk (and is recorded).
+#[inline]
+fn is_present(inner: &Inner, id: &InstanceId) -> bool {
+    inner.by_id.get(id).is_some_and(|&index| inner.present.get(index).copied().unwrap_or(false))
 }
 
 fn skipped(inner: &mut Inner, engine: &Engine, class: ClassId) -> bool {
@@ -1269,7 +1294,8 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
     let frame = inner.frame;
 
     // What is in the world now, parents first
-    let mut now: Vec<InstanceId> = Vec::new();
+    let mut now: Vec<InstanceId> = std::mem::take(&mut inner.walk_buffer);
+    now.clear();
     let mut stack: Vec<InstanceId> = state.dom.children_of(world.workspace).iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
         let class = state.dom.at(id).class;
@@ -1288,7 +1314,8 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
     inner.adorned.clear();
     inner.screens.clear();
     if let Some(player_gui) = world.local_player.and_then(|player| state.dom.children_of(player).iter().copied().find(|&c| is_a(engine, state.dom.at(c).class, "PlayerGui"))) {
-        let drawn: FxHashSet<InstanceId> = now.iter().copied().collect();
+        // (what the walk found so far: built only once a GUI here names an Adornee)
+        let mut drawn: Option<FxHashSet<InstanceId>> = None;
         let adornee_name = engine.reflection.name_id("Adornee");
         // (instance, inside a ScreenGui)
         let mut guis: Vec<(InstanceId, bool)> = state.dom.children_of(player_gui).iter().rev().map(|&c| (c, false)).collect();
@@ -1297,7 +1324,7 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
             let adorned = (is_a(engine, class, "SurfaceGuiBase") || is_a(engine, class, "BillboardGui"))
                 .then(|| adornee_name.and_then(|name| state.dom.raw_get(id, name)).and_then(Value::as_instance))
                 .flatten()
-                .filter(|adornee| drawn.contains(adornee));
+                .filter(|adornee| drawn.get_or_insert_with(|| now.iter().copied().collect()).contains(adornee));
             let screen = !in_screen && class_name(engine, class) == "ScreenGui";
             if let Some(adornee) = adorned {
                 inner.adorned.insert(id, adornee);
@@ -1340,14 +1367,23 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
             inner.lighting = Some(lighting_record(state, engine, lighting, inner));
         }
     }
-    let now_set: FxHashSet<InstanceId> = now.iter().copied().collect();
+    inner.walks += 1;
+    let walk = inner.walks;
+    let mut found: Vec<usize> = Vec::with_capacity(inner.present_list.len() + 16);
 
     // Appearances, comings back and moves inside the world
     for &id in &now {
-        let Some((parent, in_lighting)) = parent_slot(inner, state, engine, id) else { continue };
+        let Some((parent, in_lighting)) = parent_slot(inner, state, engine, id) else {
+            // (recorded and in the world, though drawn under nothing now: still there)
+            if let Some(&index) = inner.by_id.get(&id) {
+                mark_seen(inner, &mut found, index, walk);
+            }
+            continue;
+        };
         match inner.by_id.get(&id).copied() {
             None => {
-                appear(inner, state, engine, id, parent, in_lighting);
+                let index = appear(inner, state, engine, id, parent, in_lighting);
+                mark_seen(inner, &mut found, index, walk);
             }
             Some(index) => {
                 let current_parent = drawn_parent(inner, state, id);
@@ -1358,21 +1394,41 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
                     inner.records[index].parent_id = current_parent;
                     inner.records[index].home = path;
                 }
-                if !inner.present.contains(&id) {
+                if !inner.present.get(index).copied().unwrap_or(false) {
                     show(&mut inner.records[index], state, engine, frame);
                     resample(inner, state, engine, index);
                 }
+                mark_seen(inner, &mut found, index, walk);
             }
         }
     }
-    // Departures
-    let gone: Vec<InstanceId> = inner.present.iter().copied().filter(|id| !now_set.contains(id)).collect();
-    for id in gone {
-        if let Some(&index) = inner.by_id.get(&id) {
+    // Departures: what was there at the last walk and is not now
+    let previous = std::mem::replace(&mut inner.present_list, found);
+    for &index in &previous {
+        if inner.seen[index] != walk {
+            inner.present[index] = false;
             hide(&mut inner.records[index], engine, frame);
         }
     }
-    inner.present = now.iter().copied().filter(|id| inner.by_id.contains_key(id)).collect();
+    let found = std::mem::take(&mut inner.present_list);
+    for &index in &found {
+        inner.present[index] = true;
+    }
+    inner.present_list = found;
+    inner.walk_buffer = now;
+}
+
+/// Record `index` is in the world at walk `walk` (once per walk).
+#[inline]
+fn mark_seen(inner: &mut Inner, found: &mut Vec<usize>, index: usize, walk: u32) {
+    if inner.seen.len() <= index {
+        inner.seen.resize(index + 1, 0);
+        inner.present.resize(index + 1, false);
+    }
+    if inner.seen[index] != walk {
+        inner.seen[index] = walk;
+        found.push(index);
+    }
 }
 
 /// What changed in the world this frame: property writes, emits and clears, attachments that move by
@@ -1391,7 +1447,7 @@ fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lightin
         // looks through that one
         if (Some(name) == camera_names.0 || Some(name) == camera_names.1) && let Some(frames) = inner.viewports.get(&id).cloned() {
             for index in frames {
-                if inner.present.contains(&inner.records[index].id) {
+                if inner.present.get(index).copied().unwrap_or(false) {
                     for (property, _, json) in camera_values(state, engine, id) {
                         change(&mut inner.records[index], property, Track::Plain, json, frame);
                     }
@@ -1426,7 +1482,7 @@ fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lightin
             continue;
         }
         let Some(&index) = inner.by_id.get(&id) else { continue };
-        if !inner.present.contains(&id) || inner.records[index].appear >= frame {
+        if !is_present(inner, &id) || inner.records[index].appear >= frame {
             continue;
         }
         let class = inner.records[index].class;
@@ -1475,14 +1531,14 @@ fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lightin
     // Emits and clears of what is in the world
     for (id, count, from) in std::mem::take(&mut inner.emits) {
         if let Some(&index) = inner.by_id.get(&id) {
-            if inner.present.contains(&id) {
+            if is_present(inner, &id) {
                 inner.records[index].emits.push((frame, count, from));
             }
         }
     }
     for id in std::mem::take(&mut inner.clears) {
         if let Some(&index) = inner.by_id.get(&id) {
-            if inner.present.contains(&id) {
+            if is_present(inner, &id) {
                 inner.records[index].clears.push(frame);
             }
         }
@@ -1494,7 +1550,7 @@ fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lightin
     sampled.sort_unstable();
     for index in sampled {
         let id = inner.records[index].id;
-        if inner.present.contains(&id) {
+        if is_present(inner, &id) {
             backfill_carried(inner, &state, engine, index, frame);
             let cframe = drawn_cframe(&state, engine, id);
             let mut warnings = std::mem::take(&mut inner.warnings);
@@ -1676,20 +1732,21 @@ fn reduce(keys: Vec<Json>, field: &str, tolerance: f64) -> Vec<Json> {
     if keys.len() <= 2 {
         return keys;
     }
-    let at = |key: &Json| key["at"].as_f64().unwrap_or_default();
-    let values = |key: &Json| numbers(&key[field]);
+    // (each key's time and numbers read once: the test below visits every key between the anchor and the next)
+    let at: Vec<f64> = keys.iter().map(|key| key["at"].as_f64().unwrap_or_default()).collect();
+    let values: Vec<Option<Vec<f64>>> = keys.iter().map(|key| numbers(&key[field])).collect();
     let mut kept = vec![keys[0].clone()];
     let mut anchor = 0;
     for index in 1..keys.len() - 1 {
-        let (a, b) = (values(&keys[anchor]), values(&keys[index + 1]));
-        let (ta, tb) = (at(&keys[anchor]), at(&keys[index + 1]));
-        let fits = match (&a, &b) {
+        let (a, b) = (&values[anchor], &values[index + 1]);
+        let (ta, tb) = (at[anchor], at[index + 1]);
+        let fits = match (a, b) {
             (Some(a), Some(b)) if a.len() == b.len() => (anchor + 1..=index).all(|between| {
-                let Some(v) = values(&keys[between]) else { return false };
+                let Some(v) = &values[between] else { return false };
                 if v.len() != a.len() {
                     return false;
                 }
-                let alpha = (at(&keys[between]) - ta) / (tb - ta).max(1e-9);
+                let alpha = (at[between] - ta) / (tb - ta).max(1e-9);
                 v.iter().zip(a.iter().zip(b.iter())).all(|(v, (a, b))| (a + (b - a) * alpha - v).abs() <= tolerance * (1.0 + v.abs()))
             }),
             _ => false,
