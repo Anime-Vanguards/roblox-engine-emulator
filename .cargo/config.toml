@@ -1,0 +1,4 @@
+# rust-lld (it comes with the Rust toolchain) links the Windows target instead of link.exe: faster on every
+# rebuild of ree and of each test binary (docs/building.md "Build")
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"

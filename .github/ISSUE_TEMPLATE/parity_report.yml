@@ -1,0 +1,52 @@
+name: Looks different from Studio
+description: Our output differs from what Roblox Studio shows or does for the same input
+labels: ["parity", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Parity is what this project is for, so these reports are very welcome. We need Studio's result next to ours to act on them.
+  - type: textarea
+    id: difference
+    attributes:
+      label: What differs
+      description: Describe the difference, and attach Studio's image (or output) and ours side by side.
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input that shows it
+      description: The smallest scene or script that shows the difference, built from scratch. Attach it, or paste the script.
+    validations:
+      required: true
+  - type: input
+    id: studio
+    attributes:
+      label: Studio version and settings
+      description: Studio's version (Help > About), graphics quality, and anything else that changes the result.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: The input is mine to share (no assets, models or places from games I don't own).
+          required: true
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true

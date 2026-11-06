@@ -1,0 +1,354 @@
+//! Loads the Luau service stubs (`services.luau`) with the engine primitives they use.
+
+use std::rc::Rc;
+
+use mlua::prelude::*;
+
+use super::{
+    Flow, convert, enum_item_value,
+    instance::{set_parent, set_property},
+    instance_value, modules, raw, signal_value, types,
+};
+use crate::{Engine, instance as core};
+
+const SERVICES: &str = include_str!("services.luau");
+const SERVER: &str = include_str!("server.luau");
+
+/// The named registry value holding server.luau's R.SetJoinData (a server run's only): what
+/// Context.SetJoinData calls to give a player the join data Player:GetJoinData returns
+pub const SET_JOIN_DATA: &str = "ree.setjoindata";
+
+fn instance_of(value: &LuaValue) -> LuaResult<crate::InstanceId> {
+    match value {
+        LuaValue::UserData(ud) => raw::instance_of_ud(ud).ok_or_else(|| LuaError::runtime("Instance expected")),
+        _ => Err(LuaError::runtime("Instance expected")),
+    }
+}
+
+pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    let r = lua.create_table()?;
+    let e = engine.clone();
+    r.set(
+        "Method",
+        lua.create_function(move |_, (class_name, name, function): (String, String, LuaFunction)| {
+            let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else {
+                return Ok(());
+            };
+            e.behaviors.borrow_mut().add_lua_method(class, name, function);
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "Getter",
+        lua.create_function(move |_, (class_name, name, function): (String, String, LuaFunction)| {
+            let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else {
+                return Ok(());
+            };
+            e.behaviors.borrow_mut().add_getter(
+                class,
+                name,
+                Rc::new(move |lua, engine, id| Ok(function.call::<LuaValue>(instance_value(lua, engine, id)?)?)),
+            );
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        // a setter that first passes the assigned value through `filter(instance, value)` (which may
+        // swap it), then assigns what it returns as the property's own setter does (a derived view's,
+        // engine::derived: a Content view of a string asset id), else as a plain assignment (coerced,
+        // notified)
+        "ContentSetter",
+        lua.create_function(move |_, (class_name, name, filter): (String, String, LuaFunction)| {
+            let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else {
+                return Ok(());
+            };
+            let Some(info) = e.reflection.class_property(class, name).cloned() else { return Ok(()) };
+            let previous = e.behaviors.borrow().find_setter(&e.reflection, class, name).cloned();
+            e.behaviors.borrow_mut().add_setter(
+                class,
+                name,
+                Rc::new(move |lua, engine, id, value| {
+                    let value = filter.call::<LuaValue>((instance_value(lua, engine, id)?, value))?;
+                    if let Some(previous) = &previous {
+                        return previous(lua, engine, id, value);
+                    }
+                    let coerced = convert::coerce(lua, engine, &info, &value)?;
+                    set_property(engine, id, name, coerced);
+                    Ok(())
+                }),
+            );
+            // (a member resolved before now cached it without the setter)
+            e.clear_member_cache();
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "Create",
+        lua.create_function(move |lua, class_name: String| {
+            let class = e.reflection.class_id(&class_name).ok_or_else(|| LuaError::runtime(format!("Unable to create an Instance of type \"{class_name}\"")))?;
+            let id = core::create(&mut e.state.borrow_mut(), &e.reflection, class);
+            instance_value(lua, &e, id)
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "RawSet",
+        lua.create_function(move |_, (target, name, value, silent): (LuaValue, String, LuaValue, bool)| {
+            let id = instance_of(&target)?;
+            let Some(name) = e.reflection.name_id(&name) else { return Ok(false) };
+            let value = convert::from_lua(&value);
+            let hooks = e.hooks.borrow();
+            let mut state = e.state.borrow_mut();
+            Ok(if silent {
+                core::raw_set_silent(&mut state, &e.reflection, id, name, value)
+            } else {
+                core::raw_set(&mut state, &e.reflection, &hooks, id, name, value)
+            })
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "RawGet",
+        // (`stored_only`: nil unless the instance holds a value, never the class default)
+        lua.create_function(move |lua, (target, name, stored_only): (LuaValue, String, Option<bool>)| {
+            let id = instance_of(&target)?;
+            let Some(name) = e.reflection.name_id(&name) else { return Ok(LuaValue::Nil) };
+            let value = {
+                let state = e.state.borrow();
+                if stored_only == Some(true) {
+                    state.dom.at(id).stored(name).filter(|value| !matches!(value, crate::value::Value::Nil)).cloned()
+                } else {
+                    state.dom.raw_get(id, name).cloned()
+                }
+            };
+            match value {
+                Some(value) => convert::to_lua(lua, &e, &value),
+                None => Ok(LuaValue::Nil),
+            }
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "Children",
+        lua.create_function(move |lua, target: LuaValue| {
+            let id = instance_of(&target)?;
+            // (a lazily imported bundle instance's children are made first, as GetChildren makes them)
+            if e.state.borrow().dom.at(id).has(crate::dom::flags::LAZY_PENDING) {
+                crate::project::materialize_lazy(&mut e.state.borrow_mut(), &e.reflection, id);
+            }
+            let children = e.state.borrow().dom.at(id).children.clone();
+            let table = lua.create_table_with_capacity(children.len(), 0)?;
+            for child in children {
+                table.raw_push(instance_value(lua, &e, child)?)?;
+            }
+            Ok(table)
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "SetParent",
+        lua.create_function(move |_, (child, parent): (LuaValue, LuaValue)| {
+            let child = instance_of(&child)?;
+            let parent = if parent.is_nil() { None } else { Some(instance_of(&parent)?) };
+            set_parent(&e, child, parent).map_err(|_| LuaError::runtime("SetParent failed"))
+        })?,
+    )?;
+    // The engine's Luau that prices its own methods (services.luau Priced): Mute(true) drops the Instance API's
+    // charges until Mute(false), Charge adds the method's own cost
+    let e = engine.clone();
+    r.set(
+        "Mute",
+        lua.create_function(move |lua, on: bool| {
+            crate::cost::mute_host_nanos(lua, on);
+            let muted = e.state.borrow().sched.muted.clone();
+            muted.set(if on { muted.get() + 1 } else { muted.get().saturating_sub(1) });
+            Ok(())
+        })?,
+    )?;
+    let costs = lua.create_table()?;
+    for (name, seconds) in [
+        ("ActorInvoke", crate::cost::ACTOR_INVOKE),
+        ("SharedIncrement", crate::cost::SHARED_INCREMENT),
+        ("ModelQuery", crate::cost::MODEL_QUERY),
+        ("Thread", crate::cost::THREAD),
+        ("PivotSingle", crate::cost::PIVOT_SINGLE),
+        ("PivotPart", crate::cost::PIVOT_PART),
+        ("PivotBase", crate::cost::PIVOT_BASE),
+        ("PivotLoose", crate::cost::PIVOT_LOOSE),
+        ("ScaleScanned", crate::cost::SCALE_SCANNED),
+        ("ScalePartPlaced", crate::cost::SCALE_PART_PLACED),
+        ("ScalePartLoose", crate::cost::SCALE_PART_LOOSE),
+        ("ScaleAttachment", crate::cost::SCALE_ATTACHMENT),
+        ("ScaleJoint", crate::cost::SCALE_JOINT),
+    ] {
+        costs.set(name, seconds)?;
+    }
+    r.set("Cost", costs)?;
+    let e = engine.clone();
+    r.set(
+        "Charge",
+        lua.create_function(move |_, seconds: f64| {
+            e.state.borrow().sched.charge_priced(seconds);
+            Ok(())
+        })?,
+    )?;
+    // Model:PivotTo / ScaleTo: many part moves as one step (world::joints batches)
+    let e = engine.clone();
+    r.set(
+        "BeginMoves",
+        lua.create_function(move |_, ()| {
+            crate::world::joints::begin_batch(&mut e.state.borrow_mut());
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "EndMoves",
+        lua.create_function(move |_, ()| {
+            let hooks = e.hooks.borrow();
+            let mut state = e.state.borrow_mut();
+            crate::world::joints::end_batch(&mut state, &e.reflection, &hooks);
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "Missing",
+        lua.create_function(move |_, (class_name, member): (String, String)| {
+            e.state.borrow_mut().output.missing(&class_name, &member);
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "LocalPlayer",
+        lua.create_function(move |lua, ()| match e.world().local_player {
+            Some(player) => instance_value(lua, &e, player),
+            None => Ok(LuaValue::Nil),
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "GetEnumItem",
+        lua.create_function(move |lua, (enum_name, item_name): (String, String)| match e.reflection.enum_item(&enum_name, &item_name) {
+            Some(item) => enum_item_value(lua, &e, item),
+            None => Ok(LuaValue::Nil),
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "NewSignal",
+        lua.create_function(move |lua, name: String| {
+            let signal = types::new_signal(&e, &name);
+            signal_value(lua, &e, signal)
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "GetCallback",
+        lua.create_function(move |_, (target, name): (LuaValue, String)| {
+            let id = instance_of(&target)?;
+            let Some(name) = e.reflection.name_id(&name) else { return Ok(LuaValue::Nil) };
+            Ok(e.state.borrow().dom.at(id).callback(name).cloned().unwrap_or(LuaValue::Nil))
+        })?,
+    )?;
+    // KeyframeSequenceProvider:GetKeyframeSequenceAsync's copy of an animation, else nil and the error
+    let e = engine.clone();
+    r.set(
+        "KeyframeSequence",
+        lua.create_function(move |lua, uri: String| match crate::animation::source::sequence(&e, &uri) {
+            Ok(sequence) => Ok((instance_value(lua, &e, sequence)?, None)),
+            Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
+        })?,
+    )?;
+    // ContentProvider:PreloadAsync's animations: the seconds until the ones it asks for arrive
+    let e = engine.clone();
+    r.set(
+        "PreloadAnimations",
+        lua.create_function(move |_, items: LuaTable| {
+            let mut ids = Vec::new();
+            for item in items.sequence_values::<LuaValue>() {
+                if let Ok(id) = instance_of(&item?) {
+                    ids.push(id);
+                }
+            }
+            Ok(crate::animation::preload(&e, &ids))
+        })?,
+    )?;
+    // EditableImage pixels (crate::images): an asset's or file's as (width, height, buffer), else nil
+    // and the error; a snapshot of a drawn image written as a PNG, its path
+    let e = engine.clone();
+    r.set(
+        "LoadImage",
+        lua.create_function(move |lua, uri: String| match crate::images::load(&e, &uri) {
+            Ok(pixels) => Ok((LuaValue::Number(pixels.width as f64), LuaValue::Number(pixels.height as f64), LuaValue::Buffer(lua.create_buffer(pixels.rgba)?), None)),
+            Err(error) => Ok((LuaValue::Nil, LuaValue::Nil, LuaValue::Nil, Some(error))),
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "SaveImage",
+        lua.create_function(move |_, (width, height, pixels): (u32, u32, mlua::Buffer)| match crate::images::save(&e, width, height, &pixels.to_vec()) {
+            Ok(path) => Ok((Some(path.to_string_lossy().replace('\\', "/")), None)),
+            Err(error) => Ok((None, Some(error))),
+        })?,
+    )?;
+    // HttpService JSON: Lune's serde (sorted keys, empty tables as `{}`, integral numbers as integers)
+    r.set(
+        "JsonEncode",
+        lua.create_function(|lua, value: LuaValue| {
+            let safe = crate::services::json_safe(lua, &value, &mut Vec::new()).map_err(|flow| match flow {
+                Flow::Error(error) => LuaError::runtime(error.message),
+                Flow::Fail(error) => error,
+                Flow::Yield => LuaError::runtime("JsonEncode yielded"),
+            })?;
+            let json: serde_json::Value = lua.from_value_with(
+                safe,
+                LuaDeserializeOptions::new().sort_keys(true).deny_recursive_tables(false).deny_unsupported_types(true),
+            )?;
+            serde_json::to_string(&json).map_err(LuaError::external)
+        })?,
+    )?;
+    r.set(
+        "JsonDecode",
+        lua.create_function(|lua, text: LuaValue| {
+            let LuaValue::String(text) = text else { return Ok((false, LuaValue::Nil)) };
+            // (services port) Lune's serde.decode number semantics (engine::lune_json)
+            let decoded = std::str::from_utf8(&text.as_bytes()).map_err(|e| e.to_string()).and_then(crate::lune_json::decode);
+            match decoded {
+                Ok(value) => Ok((
+                    true,
+                    lua.to_value_with(
+                        &value,
+                        LuaSerializeOptions::new().set_array_metatable(false).serialize_none_to_null(false).serialize_unit_to_null(false),
+                    )?,
+                )),
+                Err(_) => Ok((false, LuaValue::Nil)),
+            }
+        })?,
+    )?;
+    let options = lua.create_table()?;
+    options.set("TopbarInset", engine.options.topbar_inset)?;
+    options.set("ViewportWidth", engine.options.viewport_width)?;
+    options.set("ViewportHeight", engine.options.viewport_height)?;
+    r.set("Options", options)?;
+    let mouse: LuaValue = engine.lua.borrow().shared.as_ref().map(|s| s.raw_get("__rurMouse")).transpose()?.unwrap_or(LuaValue::Nil);
+    r.set("Mouse", mouse)?;
+
+    let shared = engine.lua.borrow().shared.clone().ok_or_else(|| LuaError::runtime("shared globals"))?;
+    let services = lua.load(SERVICES).set_name("=rur.services").set_environment(shared.clone()).set_compiler(modules::engine_compiler()).into_function()?;
+    crate::cost::engine_luau(lua, services)?.call::<()>(r.clone())?;
+    // A server's own services (DataStores, MemoryStores, MessagingService, the server side of remotes)
+    if engine.options.server() {
+        let server = lua.load(SERVER).set_name("=rur.server").set_environment(shared).set_compiler(modules::engine_compiler()).into_function()?;
+        crate::cost::engine_luau(lua, server)?.call::<()>(r.clone())?;
+        if let LuaValue::Function(set_join_data) = r.get::<LuaValue>("SetJoinData")? {
+            lua.set_named_registry_value(SET_JOIN_DATA, set_join_data)?;
+        }
+    }
+    engine.clear_member_cache();
+    Ok(())
+}

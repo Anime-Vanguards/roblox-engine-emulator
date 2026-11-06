@@ -1,0 +1,13 @@
+# Maintainers review everything. Paths that touch credentials, network access, CI or
+# repository policy are listed separately so they can never be approved by anyone else.
+*                       @Pyseph
+
+/.github/               @Pyseph
+/SECURITY.md            @Pyseph
+/AGENTS.md              @Pyseph
+/src/serve/             @Pyseph
+/src/project/model_assets.rs @Pyseph
+/src/animation/source.rs @Pyseph
+/tools/vendor.mjs       @Pyseph
+/.cargo/                @Pyseph
+/build.rs               @Pyseph

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/Anime-Vanguards/roblox-engine-emulator/security/advisories/new
+    about: Privately, to the maintainers only. Please never post these publicly.
+  - name: Help with a Roblox game or account
+    url: https://github.com/Anime-Vanguards/roblox-engine-emulator/blob/main/SUPPORT.md
+    about: This tracker is only for this tool. Game, account and purchase questions aren't handled here.

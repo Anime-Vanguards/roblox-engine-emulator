@@ -1,0 +1,1776 @@
+--- a/crates/lune-std-luau/src/lib.rs
++++ b/crates/lune-std-luau/src/lib.rs
+@@ -26,9 +26,12 @@
+     Errors when out of memory.
+ */
+ pub fn module(lua: Lua) -> LuaResult<LuaTable> {
++    let clone_proxy = unsafe { lua.create_c_function(clone_proxy)? };
+     TableBuilder::new(lua)?
+         .with_function("compile", compile_source)?
+         .with_function("load", load_source)?
++        .with_function("loadNative", load_native)?
++        .with_value("cloneProxy", clone_proxy)?
+         .build_readonly()
+ }
+ 
+@@ -93,3 +96,95 @@
+ 
+     Ok(function)
+ }
++
++fn load_native(
++    lua: &Lua,
++    (source, options): (LuaString, LuauLoadOptions),
++) -> LuaResult<LuaFunction> {
++    if options.inject_globals {
++        return Err(LuaError::runtime(
++            "native load requires injectGlobals=false",
++        ));
++    }
++    let custom = options
++        .environment
++        .ok_or(LuaError::runtime("native load requires environment"))?;
++    let environment = lua.create_table()?;
++    environment.set_metatable(custom.metatable())?;
++    for pair in custom.pairs() {
++        let (key, value): (LuaValue, LuaValue) = pair?;
++        environment.raw_set(key, value)?;
++    }
++    let mut names = std::collections::BTreeSet::<String>::new();
++    fn collect(
++        table: &LuaTable,
++        names: &mut std::collections::BTreeSet<String>,
++        depth: usize,
++    ) -> LuaResult<()> {
++        if depth > 16 {
++            return Err(LuaError::runtime("environment chain too deep"));
++        }
++        for pair in table.pairs::<LuaValue, LuaValue>() {
++            if let (LuaValue::String(key), _) = pair? {
++                names.insert(key.to_str()?.to_string());
++            }
++        }
++        if let Some(meta) = table.metatable() {
++            match meta.raw_get::<LuaValue>("__index")? {
++                LuaValue::Nil => (),
++                LuaValue::Table(parent) => collect(&parent, names, depth + 1)?,
++                _ => {
++                    return Err(LuaError::runtime(
++                        "native environment requires table __index",
++                    ));
++                }
++            }
++        }
++        Ok(())
++    }
++    collect(&environment, &mut names, 0)?;
++    collect(&lua.globals(), &mut names, 0)?;
++    let bytes = mlua::Compiler::new()
++        .set_optimization_level(2)
++        .set_mutable_globals(names.into_iter())
++        .compile(source.as_bytes())?;
++    environment.set_safeenv(true);
++    let previous = lua.globals();
++    unsafe {
++        lua.exec_raw::<()>((environment.clone(),), |state| {
++            mlua::ffi::lua_replace(state, mlua::ffi::LUA_GLOBALSINDEX);
++        })?;
++    }
++    lua.enable_jit(true);
++    let loaded = lua
++        .load(bytes)
++        .set_name(options.debug_name)
++        .set_environment(environment)
++        .into_function();
++    unsafe {
++        lua.exec_raw::<()>((previous,), |state| {
++            mlua::ffi::lua_replace(state, mlua::ffi::LUA_GLOBALSINDEX);
++        })?;
++    }
++    lua.enable_jit(
++        lua.app_data_ref::<JitEnablement>()
++            .ok_or(LuaError::runtime("missing JIT setting"))?
++            .enabled(),
++    );
++    loaded
++}
++
++unsafe extern "C-unwind" fn clone_proxy(state: *mut mlua::ffi::lua_State) -> std::os::raw::c_int {
++    use mlua::ffi::*;
++    // UTAG_PROXY is reserved by Luau for newproxy, never Rust-owned userdata.
++    unsafe {
++        if lua_type(state, 1) != LUA_TUSERDATA || lua_userdatatag(state, 1) != LUA_UTAG_LIMIT + 1 {
++            luaL_error(state, c"proxy userdata required".as_ptr());
++        }
++        lua_newuserdatatagged(state, 0, LUA_UTAG_LIMIT + 1);
++        if lua_getmetatable(state, 1) != 0 {
++            lua_setmetatable(state, -2);
++        }
++    }
++    1
++}
+--- a/crates/lune-std-serde/src/lib.rs
++++ b/crates/lune-std-serde/src/lib.rs
+@@ -7,6 +7,7 @@
+ 
+ mod compress_decompress;
+ mod encode_decode;
++mod fast_json;
+ mod hash;
+ 
+ pub use self::compress_decompress::{CompressDecompressFormat, compress, decompress};
+--- a/crates/lune-std-serde/src/encode_decode.rs
++++ b/crates/lune-std-serde/src/encode_decode.rs
+@@ -94,6 +94,14 @@
+ pub fn encode(value: LuaValue, lua: &Lua, config: EncodeDecodeConfig) -> LuaResult<LuaString> {
+     let bytes = match config.format {
+         EncodeDecodeFormat::Json | EncodeDecodeFormat::JsonC => {
++            static FAST: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++            let enabled = *FAST.get_or_init(|| std::env::var("RUR_NATIVE_JSON").as_deref() != Ok("0"));
++            if !config.pretty && enabled {
++                if let Some(bytes) = crate::fast_json::try_encode(lua, value.clone())? {
++                    return lua.create_string(bytes);
++                }
++            }
++
+             let serialized: JsonValue = lua.from_value_with(value, LUA_DESERIALIZE_OPTIONS)?;
+             if config.pretty {
+                 serde_json::to_vec_pretty(&serialized).into_lua_err()?
+--- a/crates/lune/src/rt/runtime.rs
++++ b/crates/lune/src/rt/runtime.rs
+@@ -85,6 +85,13 @@
+     pub fn new() -> LuaResult<Self> {
+         let lua = Lua::new();
+ 
++        // Runtime helpers execute on every frame; retain local type metadata for native codegen.
++        lua.set_compiler(
++            mlua::Compiler::new()
++                .set_optimization_level(2)
++                .set_type_info_level(1),
++        );
++
+         let sched = Scheduler::new(lua.clone());
+         let fns = Functions::new(lua.clone()).expect("has scheduler");
+ 
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -62,3 +62,6 @@
+ module_name_repetitions = { level = "allow", priority = 1 }
+ needless_pass_by_value = { level = "allow", priority = 1 }
+ wildcard_imports = { level = "allow", priority = 1 }
++
++[patch.crates-io]
++luau0-src = { path = '../luau0-src' }
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1660,8 +1660,6 @@
+ [[package]]
+ name = "luau0-src"
+ version = "0.15.9+luau694"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "71a02a835f81c2bbf5edd17b595a7927fa0c91002b11f5bc1d2402d0ac392ed7"
+ dependencies = [
+  "cc",
+ ]
+--- a/crates/lune-roblox/src/datatypes/conversion.rs
++++ b/crates/lune-roblox/src/datatypes/conversion.rs
+@@ -88,7 +88,7 @@
+             match (self, variant_type) {
+                 (LuaValue::Boolean(b), DomType::Bool) => Ok(DomValue::Bool(*b)),
+ 
+-                (LuaValue::Integer(i), DomType::Int64) => Ok(DomValue::Int64(*i)),
++                (LuaValue::Integer(i), DomType::Int64) => Ok(DomValue::Int64(*i as i64)),
+                 (LuaValue::Integer(i), DomType::Int32) => Ok(DomValue::Int32(*i as i32)),
+                 (LuaValue::Integer(i), DomType::Float64) => Ok(DomValue::Float64(*i as f64)),
+                 (LuaValue::Integer(i), DomType::Float32) => Ok(DomValue::Float32(*i as f32)),
+--- a/crates/lune-utils/src/fmt/value/recursive.rs
++++ b/crates/lune-utils/src/fmt/value/recursive.rs
+@@ -70,7 +70,7 @@
+             let is_array = values
+                 .iter()
+                 .enumerate()
+-                .all(|(i, (key, _))| key.as_integer().is_some_and(|x| x == (i as i64) + 1));
++                .all(|(i, (key, _))| key.as_integer().is_some_and(|x| x as i64 == (i as i64) + 1));
+ 
+             let formatted_values = if is_array {
+                 format_array(values, config, visited, depth)?
+--- a/crates/lune-utils/src/process/args.rs
++++ b/crates/lune-utils/src/process/args.rs
+@@ -259,7 +259,7 @@
+             lua.create_function_mut(move |lua, (): ()| match vars.next() {
+                 None => Ok((LuaValue::Nil, LuaValue::Nil)),
+                 Some((index, value)) => Ok((
+-                    LuaValue::Integer(index as i64),
++                    LuaValue::Integer(index as _),
+                     LuaValue::String(lua.create_string(value)?),
+                 )),
+             })
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -434,11 +434,11 @@
+-    let dir = (to - from).normalize();
+-    let xaxis = up.cross(dir).normalize();
+-    let yaxis = dir.cross(xaxis).normalize();
++    let back = (from - to).normalize_or(Vec3::Z);
++    let xaxis = up.cross(back).normalize_or(Vec3::X);
++    let yaxis = back.cross(xaxis).normalize();
+ 
+     Mat4::from_cols(
+-        Vec3::new(xaxis.x, yaxis.x, dir.x).extend(0.0),
+-        Vec3::new(xaxis.y, yaxis.y, dir.y).extend(0.0),
+-        Vec3::new(xaxis.z, yaxis.z, dir.z).extend(0.0),
++        xaxis.extend(0.0),
++        yaxis.extend(0.0),
++        back.extend(0.0),
+         from.extend(1.0),
+     )
+ }
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence.rs
+@@ -21,13 +21,68 @@
+     pub(crate) keypoints: Vec<NumberSequenceKeypoint>,
+ }
+ 
++/// Roblox's keypoint limit for NumberSequence and ColorSequence ("a maximum of 20 keypoints").
++pub(crate) const MAX_SEQUENCE_KEYPOINTS: usize = 20;
++
++/// How far the first and last times may be from 0 and 1 (not measured in Studio; rbxmk's tolerance).
++const SEQUENCE_END_TOLERANCE: f32 = 1e-4;
++
++/// The keypoints of a sequence constructor's table, read as Roblox reads them: at most 20, each a
++/// `T` (the messages are Studio's: "ColorSequence.new(): table is too long.",
++/// "NumberSequence.new(): table of NumberSequenceKeypoints expected.").
++pub(crate) fn sequence_keypoints<T: LuaUserData + Copy + 'static>(
++    lua: &Lua,
++    table: &LuaTable,
++    kind: &str,
++) -> LuaResult<Vec<T>> {
++    let count = table.raw_len();
++    if count > MAX_SEQUENCE_KEYPOINTS {
++        return Err(LuaError::RuntimeError(format!(
++            "{kind}.new(): table is too long."
++        )));
++    }
++    let mut keypoints = Vec::with_capacity(count);
++    for index in 1..=count {
++        let value: LuaValue = table.raw_get(index)?;
++        match LuaUserDataRef::<T>::from_lua(value, lua) {
++            Ok(keypoint) => keypoints.push(*keypoint),
++            Err(_) => {
++                return Err(LuaError::RuntimeError(format!(
++                    "{kind}.new(): table of {kind}Keypoints expected."
++                )));
++            }
++        }
++    }
++    Ok(keypoints)
++}
++
++/// The rules a sequence's keypoint times follow: at least two, in non-descending order, the last at
++/// time 1 and the first at time 0. Studio's messages ("NumberSequence: requires at least 2
++/// keypoints", "...: all keypoints must be ordered by time", "ColorSequence must end at time=1.0");
++/// the start message and the order of the two end checks are not measured.
++pub(crate) fn check_sequence_times(kind: &str, times: &[f32]) -> LuaResult<()> {
++    let fail = |message: String| Err(LuaError::RuntimeError(message));
++    if times.len() < 2 {
++        return fail(format!("{kind}: requires at least 2 keypoints"));
++    }
++    if times.windows(2).any(|pair| pair[1] < pair[0]) {
++        return fail(format!("{kind}: all keypoints must be ordered by time"));
++    }
++    if (times[times.len() - 1] - 1.0).abs() > SEQUENCE_END_TOLERANCE {
++        return fail(format!("{kind} must end at time=1.0"));
++    }
++    if times[0].abs() > SEQUENCE_END_TOLERANCE {
++        return fail(format!("{kind} must start at time=0.0"));
++    }
++    Ok(())
++}
++
+ impl LuaExportsTable for NumberSequence {
+     const EXPORT_NAME: &'static str = "NumberSequence";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         type ArgsColor = f32;
+         type ArgsColors = (f32, f32);
+-        type ArgsKeypoints = Vec<LuaUserDataRef<NumberSequenceKeypoint>>;
+ 
+         let number_sequence_new = |lua: &Lua, args: LuaMultiValue| {
+             if let Ok(value) = ArgsColor::from_lua_multi(args.clone(), lua) {
+@@ -60,14 +115,18 @@
+                         },
+                     ],
+                 })
+-            } else if let Ok(keypoints) = ArgsKeypoints::from_lua_multi(args, lua) {
+-                Ok(NumberSequence {
+-                    keypoints: keypoints.iter().map(|k| **k).collect(),
+-                })
++            } else if let Some(LuaValue::Table(table)) = args.front() {
++                let mut keypoints: Vec<NumberSequenceKeypoint> =
++                    sequence_keypoints(lua, table, "NumberSequence")?;
++                let times: Vec<f32> = keypoints.iter().map(|k| k.time).collect();
++                check_sequence_times("NumberSequence", &times)?;
++                let last = keypoints.len() - 1;
++                keypoints[0].time = 0.0;
++                keypoints[last].time = 1.0;
++                Ok(NumberSequence { keypoints })
+             } else {
+-                // FUTURE: Better error message here using given arg types
+                 Err(LuaError::RuntimeError(
+-                    "Invalid arguments to constructor".to_string(),
++                    "NumberSequence.new(): table of NumberSequenceKeypoints expected.".to_string(),
+                 ))
+             }
+         };
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
+@@ -27,10 +27,18 @@
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         let number_sequence_keypoint_new =
+             |_: &Lua, (time, value, envelope): (f32, f32, Option<f32>)| {
++                // Roblox's documentation: "The envelope parameter must be a non-negative number"
++                // (the message is not measured in Studio)
++                let envelope = envelope.unwrap_or_default();
++                if envelope < 0.0 {
++                    return Err(LuaError::RuntimeError(
++                        "NumberSequenceKeypoint: envelope must be non-negative".to_string(),
++                    ));
++                }
+                 Ok(NumberSequenceKeypoint {
+                     time,
+                     value,
+-                    envelope: envelope.unwrap_or_default(),
++                    envelope,
+                 })
+             };
+ 
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence.rs
+@@ -9,7 +9,11 @@
+ 
+ use crate::exports::LuaExportsTable;
+ 
+-use super::{super::*, Color3, ColorSequenceKeypoint};
++use super::{
++    super::*,
++    Color3, ColorSequenceKeypoint,
++    number_sequence::{check_sequence_times, sequence_keypoints},
++};
+ 
+ /**
+     An implementation of the [ColorSequence](https://create.roblox.com/docs/reference/engine/datatypes/ColorSequence) Roblox datatype.
+@@ -27,7 +31,6 @@
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         type ArgsColor = LuaUserDataRef<Color3>;
+         type ArgsColors = (LuaUserDataRef<Color3>, LuaUserDataRef<Color3>);
+-        type ArgsKeypoints = Vec<LuaUserDataRef<ColorSequenceKeypoint>>;
+ 
+         let color_sequence_new = |lua: &Lua, args: LuaMultiValue| {
+             if let Ok(color) = ArgsColor::from_lua_multi(args.clone(), lua) {
+@@ -56,14 +59,19 @@
+                         },
+                     ],
+                 })
+-            } else if let Ok(keypoints) = ArgsKeypoints::from_lua_multi(args, lua) {
+-                Ok(ColorSequence {
+-                    keypoints: keypoints.iter().map(|k| **k).collect(),
+-                })
++            } else if let Some(LuaValue::Table(table)) = args.front() {
++                let mut keypoints: Vec<ColorSequenceKeypoint> =
++                    sequence_keypoints(lua, table, "ColorSequence")?;
++                let times: Vec<f32> = keypoints.iter().map(|k| k.time).collect();
++                check_sequence_times("ColorSequence", &times)?;
++                let last = keypoints.len() - 1;
++                keypoints[0].time = 0.0;
++                keypoints[last].time = 1.0;
++                Ok(ColorSequence { keypoints })
+             } else {
+-                // FUTURE: Better error message here using given arg types
++                // Studio's message for a missing or non-table argument
+                 Err(LuaError::RuntimeError(
+-                    "Invalid arguments to constructor".to_string(),
++                    "ColorSequence.new(): table expected".to_string(),
+                 ))
+             }
+         };
+--- a/crates/lune-roblox/src/datatypes/types/number_range.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_range.rs
+@@ -24,14 +24,14 @@
+     const EXPORT_NAME: &'static str = "NumberRange";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let number_range_new = |_: &Lua, (min, max): (f32, Option<f32>)| {
+-            Ok(match max {
+-                Some(max) => NumberRange {
+-                    min: min.min(max),
+-                    max: min.max(max),
+-                },
+-                None => NumberRange { min, max: min },
+-            })
++        // Roblox's documentation: "The minimum must be less than or equal to maximum" (not measured
++        // in Studio; the message is rbxmk's wording). Lune swapped the two instead.
++        let number_range_new = |_: &Lua, (min, max): (f32, Option<f32>)| match max {
++            Some(max) if min > max => Err(LuaError::RuntimeError(
++                "NumberRange: invalid range".to_string(),
++            )),
++            Some(max) => Ok(NumberRange { min, max }),
++            None => Ok(NumberRange { min, max: min }),
+         };
+ 
+         TableBuilder::new(lua)?
+--- a/crates/lune-roblox/src/datatypes/types/brick_color.rs
++++ b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+@@ -30,16 +30,17 @@
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         type ArgsNumber = u16;
+         type ArgsName = String;
+-        type ArgsRgb = (u8, u8, u8);
++        type ArgsRgb = (f32, f32, f32);
+         type ArgsColor3 = LuaUserDataRef<Color3>;
+ 
++        // three numbers are 0-1 components before one is a number: (1, 0, 0) is Really red, not White
+         let brick_color_new = |lua: &Lua, args: LuaMultiValue| {
+-            if let Ok(number) = ArgsNumber::from_lua_multi(args.clone(), lua) {
++            if let Ok((r, g, b)) = ArgsRgb::from_lua_multi(args.clone(), lua) {
++                Ok(color_from_rgb(r, g, b))
++            } else if let Ok(number) = ArgsNumber::from_lua_multi(args.clone(), lua) {
+                 Ok(color_from_number(number))
+             } else if let Ok(name) = ArgsName::from_lua_multi(args.clone(), lua) {
+                 Ok(color_from_name(name))
+-            } else if let Ok((r, g, b)) = ArgsRgb::from_lua_multi(args.clone(), lua) {
+-                Ok(color_from_rgb(r, g, b))
+             } else if let Ok(color) = ArgsColor3::from_lua_multi(args.clone(), lua) {
+                 Ok(Self::from(*color))
+             } else {
+@@ -50,11 +51,12 @@
+             }
+         };
+ 
+-        let brick_color_palette = |_: &Lua, index: u16| {
+-            if index == 0 {
+-                Err(LuaError::RuntimeError("Invalid index".to_string()))
+-            } else if let Some(number) = BRICK_COLOR_PALETTE.get((index - 1) as usize) {
+-                Ok(color_from_number(*number))
++        // Roblox's documentation: a zero-based index (0 through 127); "An error is thrown if the
++        // index is out of bounds" (the message is not measured in Studio)
++        let brick_color_palette = |_: &Lua, index: f64| {
++            let index = index.trunc();
++            if index >= 0.0 && index < BRICK_COLOR_PALETTE.len() as f64 {
++                Ok(color_from_number(BRICK_COLOR_PALETTE[index as usize]))
+             } else {
+                 Err(LuaError::RuntimeError("Invalid index".to_string()))
+             }
+@@ -112,10 +114,8 @@
+ 
+ impl From<Color3> for BrickColor {
+     fn from(value: Color3) -> Self {
+-        let r = value.r.clamp(u8::MIN as f32, u8::MAX as f32) as u8;
+-        let g = value.g.clamp(u8::MIN as f32, u8::MAX as f32) as u8;
+-        let b = value.b.clamp(u8::MIN as f32, u8::MAX as f32) as u8;
+-        color_from_rgb(r, g, b)
++        // a Color3's components are 0-1, as BrickColor.new(r, g, b)'s (Lune read them as 0-255)
++        color_from_rgb(value.r, value.g, value.b)
+     }
+ }
+ 
+@@ -161,8 +161,15 @@
+     }
+ }
+ 
+-const BRICK_COLOR_DEFAULT_VALUE: BrickColorDef =
+-    &BRICK_COLOR_VALUES[(BRICK_COLOR_DEFAULT - 1) as usize];
++// The entry numbered BRICK_COLOR_DEFAULT ("Medium stone grey"), which Roblox's documentation says an
++// unknown name gives; the table is not indexed by number (Lune took its 194th entry)
++const BRICK_COLOR_DEFAULT_VALUE: BrickColorDef = {
++    let mut index = 0;
++    while BRICK_COLOR_VALUES[index].0 != BRICK_COLOR_DEFAULT {
++        index += 1;
++    }
++    &BRICK_COLOR_VALUES[index]
++};
+ 
+ fn color_from_number(index: u16) -> BrickColor {
+     BRICK_COLOR_VALUES
+@@ -181,28 +188,25 @@
+         .into()
+ }
+ 
+-fn color_from_rgb(r: u8, g: u8, b: u8) -> BrickColor {
+-    let r = r as i16;
+-    let g = g as i16;
+-    let b = b as i16;
++// The brick colour nearest 0-1 components, as Roblox's documentation describes BrickColor.new(r, g,
++// b): the smallest sum of absolute channel differences over every known brick colour (the lowest
++// number on a tie, not measured in Studio). Lune summed the signed differences of 0-255 bytes.
++fn color_from_rgb(r: f32, g: f32, b: f32) -> BrickColor {
+     BRICK_COLOR_VALUES
+         .iter()
+         .fold(
+-            (None, u16::MAX),
++            (BRICK_COLOR_DEFAULT_VALUE, f32::INFINITY),
+             |(closest_color, closest_distance), color| {
+-                let cr = color.2.0 as i16;
+-                let cg = color.2.1 as i16;
+-                let cb = color.2.2 as i16;
+-                let distance = ((r - cr) + (g - cg) + (b - cb)).unsigned_abs();
++                let channel = |value: f32, byte: u8| (value - f32::from(byte) / 255.0).abs();
++                let distance = channel(r, color.2.0) + channel(g, color.2.1) + channel(b, color.2.2);
+                 if distance < closest_distance {
+-                    (Some(color), distance)
++                    (color, distance)
+                 } else {
+                     (closest_color, closest_distance)
+                 }
+             },
+         )
+         .0
+-        .unwrap_or(BRICK_COLOR_DEFAULT_VALUE)
+         .into()
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/physical_properties.rs
++++ b/crates/lune-roblox/src/datatypes/types/physical_properties.rs
+@@ -72,13 +72,14 @@
+                 acoustic_absorption,
+             )) = ArgsNumbers::from_lua_multi(args, lua)
+             {
++                // Roblox's documentation: each value is clamped to its acceptable range
+                 Ok(PhysicalProperties {
+-                    density,
+-                    friction,
+-                    friction_weight: friction_weight.unwrap_or(1.0),
+-                    elasticity,
+-                    elasticity_weight: elasticity_weight.unwrap_or(1.0),
+-                    acoustic_absorption: acoustic_absorption.unwrap_or(1.0),
++                    density: density.clamp(0.0001, 100.0),
++                    friction: friction.clamp(0.0, 2.0),
++                    friction_weight: friction_weight.unwrap_or(1.0).clamp(0.0, 100.0),
++                    elasticity: elasticity.clamp(0.0, 1.0),
++                    elasticity_weight: elasticity_weight.unwrap_or(1.0).clamp(0.0, 100.0),
++                    acoustic_absorption: acoustic_absorption.unwrap_or(1.0).clamp(0.0, 1.0),
+                 })
+             } else {
+                 // FUTURE: Better error message here using given arg types
+--- a/crates/lune-roblox/src/datatypes/types/vector2int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2int16.rs
+@@ -9,7 +9,7 @@
+ 
+ use crate::exports::LuaExportsTable;
+ 
+-use super::super::*;
++use super::{super::*, vector3int16::int16_component};
+ 
+ /**
+     An implementation of the [Vector2int16](https://create.roblox.com/docs/reference/engine/datatypes/Vector2int16)
+@@ -25,10 +25,10 @@
+     const EXPORT_NAME: &'static str = "Vector2int16";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let vector2int16_new = |_: &Lua, (x, y): (Option<i16>, Option<i16>)| {
++        let vector2int16_new = |_: &Lua, (x, y): (Option<f64>, Option<f64>)| {
+             Ok(Vector2int16(IVec2 {
+-                x: x.unwrap_or_default() as i32,
+-                y: y.unwrap_or_default() as i32,
++                x: int16_component(x),
++                y: int16_component(y),
+             }))
+         };
+ 
+--- a/crates/lune-roblox/src/datatypes/types/vector3int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector3int16.rs
+@@ -21,15 +21,25 @@
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ pub struct Vector3int16(pub IVec3);
+ 
++/// A constructor component as Roblox's documentation describes it: rounded down, and a value
++/// outside [-32768, 32768) overflows the 16-bit integer (32768 is -32768) instead of raising.
++/// Non-finite values are 0 (not measured in Studio).
++pub(crate) fn int16_component(value: Option<f64>) -> i32 {
++    match value {
++        Some(value) if value.is_finite() => i32::from(value.floor() as i64 as i16),
++        _ => 0,
++    }
++}
++
+ impl LuaExportsTable for Vector3int16 {
+     const EXPORT_NAME: &'static str = "Vector3int16";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let vector3int16_new = |_: &Lua, (x, y, z): (Option<i16>, Option<i16>, Option<i16>)| {
++        let vector3int16_new = |_: &Lua, (x, y, z): (Option<f64>, Option<f64>, Option<f64>)| {
+             Ok(Vector3int16(IVec3 {
+-                x: x.unwrap_or_default() as i32,
+-                y: y.unwrap_or_default() as i32,
+-                z: z.unwrap_or_default() as i32,
++                x: int16_component(x),
++                y: int16_component(y),
++                z: int16_component(z),
+             }))
+         };
+ 
+@@ -59,7 +69,7 @@
+ 
+ impl fmt::Display for Vector3int16 {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", self.0.x, self.0.y)
++        write!(f, "{}, {}, {}", self.0.x, self.0.y, self.0.z)
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/vector2.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2.rs
+@@ -93,12 +93,46 @@
+         methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
+         methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
+         methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
+-        methods.add_meta_method(LuaMetaMethod::Mul, userdata_impl_mul_f32);
+-        methods.add_meta_method(LuaMetaMethod::Div, userdata_impl_div_f32);
+-        methods.add_meta_method(LuaMetaMethod::IDiv, userdata_impl_idiv_f32);
++        // Roblox also takes the number first (measured in Studio: 2 * v, 2 / v and 2 // v per
++        // component)
++        methods.add_meta_function(LuaMetaMethod::Mul, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            match number_first(&lhs, &rhs)? {
++                Some((n, v)) => Ok(Vector2(v.0 * n)),
++                None => userdata_impl_mul_f32(lua, &*vector2_of(&lhs)?, rhs),
++            }
++        });
++        methods.add_meta_function(LuaMetaMethod::Div, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            match number_first(&lhs, &rhs)? {
++                Some((n, v)) => Ok(Vector2(Vec2::splat(n) / v.0)),
++                None => userdata_impl_div_f32(lua, &*vector2_of(&lhs)?, rhs),
++            }
++        });
++        methods.add_meta_function(LuaMetaMethod::IDiv, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            match number_first(&lhs, &rhs)? {
++                Some((n, v)) => Ok(Vector2((Vec2::splat(n) / v.0).floor())),
++                None => userdata_impl_idiv_f32(lua, &*vector2_of(&lhs)?, rhs),
++            }
++        });
+     }
+ }
+ 
++fn vector2_of(value: &LuaValue) -> LuaResult<LuaUserDataRef<Vector2>> {
++    match value {
++        LuaValue::UserData(ud) => ud.borrow::<Vector2>(),
++        _ => Err(LuaError::runtime(format!("Vector2 expected, got {}", value.type_name()))),
++    }
++}
++
++/// `(number, vector)` when the number is the left operand and the Vector2 the right.
++fn number_first(lhs: &LuaValue, rhs: &LuaValue) -> LuaResult<Option<(f32, Vector2)>> {
++    let n = match lhs {
++        LuaValue::Number(n) => *n as f32,
++        LuaValue::Integer(i) => *i as f32,
++        _ => return Ok(None),
++    };
++    Ok(Some((n, *vector2_of(rhs)?)))
++}
++
+ impl fmt::Display for Vector2 {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         write!(f, "{}, {}", self.0.x, self.0.y)
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -1,7 +1,7 @@
+ #![allow(clippy::items_after_statements)]
+ 
+ use core::fmt;
+-use std::ops;
++use std::{ops, sync::Arc};
+ 
+ use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
+ use mlua::{Variadic, prelude::*};
+@@ -11,7 +11,7 @@ use lune_utils::TableBuilder;
+ 
+ use crate::exports::LuaExportsTable;
+ 
+-use super::{super::*, Vector3};
++use super::{super::*, Vector3, VectorArg, charge_host_calls, native_vector};
+ 
+ /**
+     An implementation of the [CFrame](https://create.roblox.com/docs/reference/engine/datatypes/CFrame)
+@@ -23,6 +23,23 @@ use super::{super::*, Vector3};
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ pub struct CFrame(pub Mat4);
+ 
++/// A method under each of its names, charged to the script as the two Luau calls (the lookup and the
++/// call) the engine's prelude spent on it before it was native
++macro_rules! aliased {
++    ($methods:ident, [$($name:literal),+], $function:expr) => {
++        $($methods.add_method($name, charged_method($function));)+
++    };
++}
++
++fn charged_method<A, R>(
++    function: impl Fn(&Lua, &CFrame, A) -> LuaResult<R> + 'static,
++) -> impl Fn(&Lua, &CFrame, A) -> LuaResult<R> + 'static {
++    move |lua, this, args| {
++        charge_host_calls(lua, 2);
++        function(lua, this, args)
++    }
++}
++
+ impl CFrame {
+     pub const IDENTITY: Self = Self(Mat4::IDENTITY);
+ 
+@@ -52,7 +69,7 @@ impl LuaExportsTable for CFrame {
+             Ok(CFrame(Mat4::from_euler(EulerRot::XYZ, rx, ry, rz)))
+         };
+ 
+-        let cframe_from_axis_angle = |_: &Lua, (v, r): (LuaUserDataRef<Vector3>, f32)| {
++        let cframe_from_axis_angle = |_: &Lua, (v, r): (VectorArg, f32)| {
+             Ok(CFrame(Mat4::from_axis_angle(v.0, r)))
+         };
+ 
+@@ -66,10 +83,10 @@ impl LuaExportsTable for CFrame {
+ 
+         let cframe_from_matrix = |_: &Lua,
+                                   (pos, rx, ry, rz): (
+-            LuaUserDataRef<Vector3>,
+-            LuaUserDataRef<Vector3>,
+-            LuaUserDataRef<Vector3>,
+-            Option<LuaUserDataRef<Vector3>>,
++            VectorArg,
++            VectorArg,
++            VectorArg,
++            Option<VectorArg>,
+         )| {
+             Ok(CFrame(Mat4::from_cols(
+                 rx.0.extend(0.0),
+@@ -84,26 +101,17 @@ impl LuaExportsTable for CFrame {
+             Ok(CFrame(Mat4::from_euler(EulerRot::YXZ, ry, rx, rz)))
+         };
+ 
+-        let cframe_look_at = |_: &Lua,
+-                              (from, to, up): (
+-            LuaUserDataRef<Vector3>,
+-            LuaUserDataRef<Vector3>,
+-            Option<LuaUserDataRef<Vector3>>,
+-        )| {
++        let cframe_look_at = |_: &Lua, (from, to, up): (VectorArg, VectorArg, Option<VectorArg>)| {
+             Ok(CFrame(look_at(
+                 from.0,
+                 to.0,
+-                up.as_deref().unwrap_or(&Vector3(Vec3::Y)).0,
++                up.map_or(Vec3::Y, |up| up.0),
+             )))
+         };
+ 
+         // Dynamic args constructor
+-        type ArgsPos = LuaUserDataRef<Vector3>;
+-        type ArgsLook = (
+-            LuaUserDataRef<Vector3>,
+-            LuaUserDataRef<Vector3>,
+-            Option<LuaUserDataRef<Vector3>>,
+-        );
++        type ArgsPos = VectorArg;
++        type ArgsLook = (VectorArg, VectorArg, Option<VectorArg>);
+ 
+         type ArgsPosXYZ = (f32, f32, f32);
+         type ArgsPosXYZQuat = (f32, f32, f32, f32, f32, f32, f32);
+@@ -117,12 +125,35 @@ impl LuaExportsTable for CFrame {
+                 Err(err) => Err(err),
+             },
+ 
++            // Roblox's CFrame.new(from, to): looking at `to`
++            2 => {
++                let vector = |index: usize| {
++                    ArgsPos::from_lua(args[index].clone(), lua).map_err(|cause| {
++                        LuaError::BadArgument {
++                            to: Some("new".to_string()),
++                            pos: index + 1,
++                            name: None,
++                            cause: Arc::new(cause),
++                        }
++                    })
++                };
++                Ok(CFrame(look_at(vector(0)?.0, vector(1)?.0, Vec3::Y)))
++            }
++
+             3 => {
+-                if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua) {
++                // the position as plain numbers, without the argument conversions below
++                let number = |index: usize| match args[index] {
++                    LuaValue::Number(n) => Some(n as f32),
++                    LuaValue::Integer(n) => Some(n as f32),
++                    _ => None,
++                };
++                if let (Some(x), Some(y), Some(z)) = (number(0), number(1), number(2)) {
++                    Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
++                } else if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua) {
+                     Ok(CFrame(look_at(
+                         from.0,
+                         to.0,
+-                        up.as_deref().unwrap_or(&Vector3(Vec3::Y)).0,
++                        up.map_or(Vec3::Y, |up| up.0),
+                     )))
+                 } else if let Ok((x, y, z)) = ArgsPosXYZ::from_lua_multi(args, lua) {
+                     Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
+@@ -176,8 +207,19 @@ impl LuaExportsTable for CFrame {
+ 
+ impl LuaUserData for CFrame {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+-        fields.add_field_method_get("Position", |_, this| Ok(Vector3(this.position())));
+-        fields.add_field_method_get("Rotation", |_, this| {
++        // Vectors come back as Luau's native vector, which is what a script's Vector3 is; each read is
++        // charged to the script as the one Luau call the engine's prelude spent on it before it was native
++        fields.add_field_method_get("Position", |lua, this| {
++            charge_host_calls(lua, 1);
++            Ok(native_vector(this.position()))
++        });
++        // (Roblox still answers its deprecated lowercase members)
++        fields.add_field_method_get("p", |lua, this| {
++            charge_host_calls(lua, 1);
++            Ok(native_vector(this.position()))
++        });
++        fields.add_field_method_get("Rotation", |lua, this| {
++            charge_host_calls(lua, 1);
+             Ok(CFrame(Mat4::from_cols(
+                 this.0.x_axis,
+                 this.0.y_axis,
+@@ -185,27 +227,49 @@ impl LuaUserData for CFrame {
+                 Vec3::ZERO.extend(1.0),
+             )))
+         });
+-        fields.add_field_method_get("X", |_, this| Ok(this.position().x));
+-        fields.add_field_method_get("Y", |_, this| Ok(this.position().y));
+-        fields.add_field_method_get("Z", |_, this| Ok(this.position().z));
+-        fields.add_field_method_get("XVector", |_, this| Ok(Vector3(this.orientation().x_axis)));
+-        fields.add_field_method_get("YVector", |_, this| Ok(Vector3(this.orientation().y_axis)));
+-        fields.add_field_method_get("ZVector", |_, this| Ok(Vector3(this.orientation().z_axis)));
+-        fields.add_field_method_get("RightVector", |_, this| {
+-            Ok(Vector3(this.orientation().x_axis))
++        fields.add_field_method_get("X", |lua, this| {
++            charge_host_calls(lua, 1);
++            Ok(this.position().x)
++        });
++        fields.add_field_method_get("Y", |lua, this| {
++            charge_host_calls(lua, 1);
++            Ok(this.position().y)
+         });
+-        fields.add_field_method_get("UpVector", |_, this| Ok(Vector3(this.orientation().y_axis)));
+-        fields.add_field_method_get("LookVector", |_, this| {
+-            Ok(Vector3(-this.orientation().z_axis))
++        fields.add_field_method_get("Z", |lua, this| {
++            charge_host_calls(lua, 1);
++            Ok(this.position().z)
+         });
++        for name in ["XVector", "RightVector", "rightVector"] {
++            fields.add_field_method_get(name, |lua, this| {
++                charge_host_calls(lua, 1);
++                Ok(native_vector(this.orientation().x_axis))
++            });
++        }
++        for name in ["YVector", "UpVector", "upVector"] {
++            fields.add_field_method_get(name, |lua, this| {
++                charge_host_calls(lua, 1);
++                Ok(native_vector(this.orientation().y_axis))
++            });
++        }
++        fields.add_field_method_get("ZVector", |lua, this| {
++            charge_host_calls(lua, 1);
++            Ok(native_vector(this.orientation().z_axis))
++        });
++        for name in ["LookVector", "lookVector"] {
++            fields.add_field_method_get(name, |lua, this| {
++                charge_host_calls(lua, 1);
++                Ok(native_vector(-this.orientation().z_axis))
++            });
++        }
+     }
+ 
+     #[allow(clippy::too_many_lines)]
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+-        // Methods
+-        methods.add_method("Inverse", |_, this, ()| Ok(this.inverse()));
+-        methods.add_method(
+-            "Lerp",
++        // Methods, and the deprecated lowercase names Roblox still answers
++        aliased!(methods, ["Inverse", "inverse"], |_, this, ()| Ok(this.inverse()));
++        aliased!(
++            methods,
++            ["Lerp", "lerp"],
+             |_, this, (goal, alpha): (LuaUserDataRef<CFrame>, f32)| {
+                 let quat_this = Quat::from_mat4(&this.0);
+                 let quat_goal = Quat::from_mat4(&goal.0);
+@@ -219,7 +283,7 @@ impl LuaUserData for CFrame {
+                     rotation,
+                     translation,
+                 )))
+-            },
++            }
+         );
+         methods.add_method("Orthonormalize", |_, this, ()| {
+             let rotation = Quat::from_mat4(&this.0);
+@@ -229,67 +293,73 @@ impl LuaUserData for CFrame {
+                 translation,
+             )))
+         });
+-        methods.add_method(
+-            "ToWorldSpace",
++        aliased!(
++            methods,
++            ["ToWorldSpace", "toWorldSpace"],
+             |_, this, rhs: Variadic<LuaUserDataRef<CFrame>>| {
+                 Ok(rhs
+                     .into_iter()
+                     .map(|cf| *this * *cf)
+                     .collect::<Variadic<_>>())
+-            },
++            }
+         );
+-        methods.add_method(
+-            "ToObjectSpace",
++        aliased!(
++            methods,
++            ["ToObjectSpace", "toObjectSpace"],
+             |_, this, rhs: Variadic<LuaUserDataRef<CFrame>>| {
+                 let inverse = this.inverse();
+                 Ok(rhs
+                     .into_iter()
+                     .map(|cf| inverse * *cf)
+                     .collect::<Variadic<_>>())
+-            },
++            }
+         );
+-        methods.add_method(
+-            "PointToWorldSpace",
+-            |_, this, rhs: Variadic<LuaUserDataRef<Vector3>>| {
++        aliased!(
++            methods,
++            ["PointToWorldSpace", "pointToWorldSpace"],
++            |_, this, rhs: Variadic<VectorArg>| {
+                 Ok(rhs
+                     .into_iter()
+-                    .map(|v3| *this * *v3)
++                    .map(|v3| native_vector((*this * Vector3(v3.0)).0))
+                     .collect::<Variadic<_>>())
+-            },
++            }
+         );
+-        methods.add_method(
+-            "PointToObjectSpace",
+-            |_, this, rhs: Variadic<LuaUserDataRef<Vector3>>| {
++        aliased!(
++            methods,
++            ["PointToObjectSpace", "pointToObjectSpace"],
++            |_, this, rhs: Variadic<VectorArg>| {
+                 let inverse = this.inverse();
+                 Ok(rhs
+                     .into_iter()
+-                    .map(|v3| inverse * *v3)
++                    .map(|v3| native_vector((inverse * Vector3(v3.0)).0))
+                     .collect::<Variadic<_>>())
+-            },
++            }
+         );
+-        methods.add_method(
+-            "VectorToWorldSpace",
+-            |_, this, rhs: Variadic<LuaUserDataRef<Vector3>>| {
++        aliased!(
++            methods,
++            ["VectorToWorldSpace", "vectorToWorldSpace"],
++            |_, this, rhs: Variadic<VectorArg>| {
+                 let result = *this - Vector3(this.position());
+                 Ok(rhs
+                     .into_iter()
+-                    .map(|v3| result * *v3)
++                    .map(|v3| native_vector((result * Vector3(v3.0)).0))
+                     .collect::<Variadic<_>>())
+-            },
++            }
+         );
+-        methods.add_method(
+-            "VectorToObjectSpace",
+-            |_, this, rhs: Variadic<LuaUserDataRef<Vector3>>| {
++        aliased!(
++            methods,
++            ["VectorToObjectSpace", "vectorToObjectSpace"],
++            |_, this, rhs: Variadic<VectorArg>| {
+                 let inverse = this.inverse();
+                 let result = inverse - Vector3(inverse.position());
+                 Ok(rhs
+                     .into_iter()
+-                    .map(|v3| result * *v3)
++                    .map(|v3| native_vector((result * Vector3(v3.0)).0))
+                     .collect::<Variadic<_>>())
+-            },
++            }
+         );
+         #[rustfmt::skip]
+-        methods.add_method("GetComponents", |_, this, ()| {
++        aliased!(methods, ["GetComponents", "components"], |_, this, ()| {
+             let pos = this.position();
+             let transposed = this.orientation().transpose();
+             Ok((
+@@ -299,7 +369,7 @@ impl LuaUserData for CFrame {
+                 transposed.z_axis.x, transposed.z_axis.y,   transposed.z_axis.z,
+             ))
+         });
+-        methods.add_method("ToEulerAnglesXYZ", |_, this, ()| {
++        aliased!(methods, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |_, this, ()| {
+             Ok(Quat::from_mat4(&this.0).to_euler(EulerRot::XYZ))
+         });
+         methods.add_method("ToEulerAnglesYXZ", |_, this, ()| {
+@@ -310,20 +380,29 @@ impl LuaUserData for CFrame {
+             let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
+             Ok((rx, ry, rz))
+         });
+-        methods.add_method("ToAxisAngle", |_, this, ()| {
++        aliased!(methods, ["ToAxisAngle", "toAxisAngle"], |_, this, ()| {
+             let (axis, angle) = Quat::from_mat4(&this.0).to_axis_angle();
+-            Ok((Vector3(axis), angle))
++            Ok((native_vector(axis), angle))
+         });
+         // Metamethods
+         methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+         methods.add_meta_method(LuaMetaMethod::Mul, |lua, this, rhs: LuaValue| {
+-            if let LuaValue::UserData(ud) = &rhs {
+-                if let Ok(cf) = ud.borrow::<CFrame>() {
+-                    return lua.create_userdata(*this * *cf);
+-                } else if let Ok(vec) = ud.borrow::<Vector3>() {
+-                    return lua.create_userdata(*this * *vec);
++            charge_host_calls(lua, 1);
++            match &rhs {
++                LuaValue::Vector(v) => {
++                    return Ok(native_vector(
++                        (*this * Vector3(Vec3::new(v.x(), v.y(), v.z()))).0,
++                    ));
++                }
++                LuaValue::UserData(ud) => {
++                    if let Ok(cf) = ud.borrow::<CFrame>() {
++                        return Ok(LuaValue::UserData(lua.create_userdata(*this * *cf)?));
++                    } else if let Ok(vec) = ud.borrow::<Vector3>() {
++                        return Ok(native_vector((*this * *vec).0));
++                    }
+                 }
++                _ => {}
+             }
+             Err(LuaError::FromLuaConversionError {
+                 from: rhs.type_name(),
+@@ -336,11 +415,17 @@ impl LuaUserData for CFrame {
+         });
+         methods.add_meta_method(
+             LuaMetaMethod::Add,
+-            |_, this, vec: LuaUserDataRef<Vector3>| Ok(*this + *vec),
++            |lua, this, vec: VectorArg| {
++                charge_host_calls(lua, 1);
++                Ok(*this + Vector3(vec.0))
++            },
+         );
+         methods.add_meta_method(
+             LuaMetaMethod::Sub,
+-            |_, this, vec: LuaUserDataRef<Vector3>| Ok(*this - *vec),
++            |lua, this, vec: VectorArg| {
++                charge_host_calls(lua, 1);
++                Ok(*this - Vector3(vec.0))
++            },
+         );
+     }
+ }
+--- a/crates/lune-roblox/src/datatypes/types/mod.rs
++++ b/crates/lune-roblox/src/datatypes/types/mod.rs
+@@ -51,5 +51,5 @@ pub use udim2::UDim2;
+ pub use unique_id::UniqueId;
+ pub use vector2::Vector2;
+ pub use vector2int16::Vector2int16;
+-pub use vector3::Vector3;
++pub use vector3::{Vector3, VectorArg, charge_host_calls, native_vector};
+ pub use vector3int16::Vector3int16;
+--- a/crates/lune-roblox/src/datatypes/types/vector3.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector3.rs
+@@ -24,6 +24,60 @@ use super::{super::*, EnumItem};
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ pub struct Vector3(pub Vec3);
+ 
++/**
++    A Vector3 argument, as Roblox scripts hold one: Luau's native vector, or a [`Vector3`] userdata.
++*/
++#[derive(Debug, Clone, Copy)]
++pub struct VectorArg(pub Vec3);
++
++impl FromLua for VectorArg {
++    fn from_lua(value: LuaValue, _: &Lua) -> LuaResult<Self> {
++        match &value {
++            LuaValue::Vector(v) => Ok(Self(Vec3::new(v.x(), v.y(), v.z()))),
++            LuaValue::UserData(ud) => ud
++                .borrow::<Vector3>()
++                .map(|v| Self(v.0))
++                .map_err(|_| Self::mismatch(&value)),
++            _ => Err(Self::mismatch(&value)),
++        }
++    }
++}
++
++impl VectorArg {
++    fn mismatch(value: &LuaValue) -> LuaError {
++        LuaError::FromLuaConversionError {
++            // (Luau has one number type: an integral value is a number to a script)
++            from: if matches!(value, LuaValue::Integer(_)) {
++                "number"
++            } else {
++                value.type_name()
++            },
++            to: "userdata".to_string(),
++            message: Some("expected userdata of type 'Vector3'".to_string()),
++        }
++    }
++}
++
++/**
++    A vector as Luau's native vector, the value scripts see as a Vector3.
++*/
++pub fn native_vector(v: Vec3) -> LuaValue {
++    LuaValue::Vector(mlua::Vector::new(v.x, v.y, v.z))
++}
++
++unsafe extern "C-unwind" {
++    fn lua_workhostcalls(state: *mut mlua::ffi::lua_State, calls: std::ffi::c_int);
++}
++
++/**
++    Counts `calls` host calls for the script that called the running native function: the work clock
++    charges a script for each call into the host's own Luau (the patched VM's `lua_workhostcalls`), and a
++    datatype operation served natively costs it what the Luau that served it did.
++*/
++pub fn charge_host_calls(lua: &Lua, calls: i32) {
++    unsafe { lua_workhostcalls(lua.current_thread().state(), calls) }
++}
++
+ impl LuaExportsTable for Vector3 {
+     const EXPORT_NAME: &'static str = "Vector3";
+ 
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -11,7 +11,7 @@ use lune_utils::TableBuilder;
+ 
+ use crate::exports::LuaExportsTable;
+ 
+-use super::{super::*, Vector3, VectorArg, charge_host_calls, native_vector};
++use super::{super::*, Vector3, VectorArg, charge_host_nanos, native_vector};
+ 
+ /**
+     An implementation of the [CFrame](https://create.roblox.com/docs/reference/engine/datatypes/CFrame)
+@@ -23,23 +23,88 @@ use super::{super::*, Vector3, VectorArg, charge_host_calls, native_vector};
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ pub struct CFrame(pub Mat4);
+ 
+-/// A method under each of its names, charged to the script as the two Luau calls (the lookup and the
+-/// call) the engine's prelude spent on it before it was native
++/// What Studio spends on each CFrame operation beyond the instructions that reach it (the loads, the
++/// call, the loop around it), in nanoseconds, so that the work clock's cost for a CFrame operation in a
++/// loop is Studio's (an op_cost probe, one body run in a lobby's playtest client and
++/// in ree). Negative where the call alone already counts more than Studio spent on all of it.
++pub mod price {
++    //! Nanoseconds beyond what the instructions that reach the operation count (the loads, the call, the loop
++    //! around it). Each is the lobby playtest client's median of four runs (the op_cost probe's
++    //! `datatype` rows, in its client DataModel) less what ree counts for the same
++    //! loop with no price (the VM's own charge for the call: 1.6 for a member, 15.1 for a method, 28-31 for a
++    //! constructor the prelude wraps). A CFrame the operation returns is a userdata the garbage collector
++    //! sweeps, which a client with a big heap pays for: the same operations in an empty test place cost
++    //! 40-50 ns less (`*` 20 against 62, Inverse 20 against 69), and the allocating rows vary 2-3x between
++    //! runs (Lerp 85-140, `*` 30-78, new(Vector3) 15-78), so these are good to about +-30 %.
++    pub const MEMBER: i32 = 0;
++    pub const ROTATION: i32 = 61;
++    pub const MUL_CFRAME: i32 = 60;
++    pub const MUL_VECTOR: i32 = 8;
++    pub const ADD_VECTOR: i32 = 46;
++    pub const INVERSE: i32 = 54;
++    pub const LERP: i32 = 91;
++    pub const TO_WORLD: i32 = 55;
++    pub const TO_OBJECT: i32 = 54;
++    pub const POINT_TO_WORLD: i32 = -4;
++    pub const POINT_TO_OBJECT: i32 = 0;
++    pub const VECTOR_TO_WORLD: i32 = -4;
++    pub const VECTOR_TO_OBJECT: i32 = 0;
++    pub const COMPONENTS: i32 = 121;
++    pub const EULER: i32 = 8;
++    pub const AXIS_ANGLE: i32 = 3;
++    /// (not measured)
++    pub const ORTHONORMALIZE: i32 = 0;
++    pub const NEW_VECTOR: i32 = -3;
++    pub const NEW_XYZ: i32 = -2;
++    pub const NEW_LOOK: i32 = 55;
++    /// (not measured)
++    pub const NEW_QUAT: i32 = 0;
++    /// (not measured)
++    pub const NEW_MATRIX: i32 = 0;
++    pub const ANGLES: i32 = 51;
++    pub const FROM_AXIS_ANGLE: i32 = 48;
++    pub const LOOK_AT: i32 = 55;
++}
++
++/// A method under each of its names, charged `price` nanoseconds
+ macro_rules! aliased {
+-    ($methods:ident, [$($name:literal),+], $function:expr) => {
+-        $($methods.add_method($name, charged_method($function));)+
++    ($methods:ident, $price:expr, [$($name:literal),+], $function:expr) => {
++        $($methods.add_method($name, charged_method($price, $function));)+
+     };
+ }
+ 
+ fn charged_method<A, R>(
++    price: i32,
+     function: impl Fn(&Lua, &CFrame, A) -> LuaResult<R> + 'static,
+ ) -> impl Fn(&Lua, &CFrame, A) -> LuaResult<R> + 'static {
+     move |lua, this, args| {
+-        charge_host_calls(lua, 2);
++        charge_host_nanos(lua, price);
+         function(lua, this, args)
+     }
+ }
+ 
++/// An Enum.RotationOrder argument (the host's Enum items print as "Enum.RotationOrder.XYZ"; nil is XYZ):
++/// the order's name and glam's rotation for it. Angles go by the letters of the name, x y z.
++fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<(&'static str, EulerRot)> {
++    let text = match order {
++        None | Some(LuaValue::Nil) => String::from("Enum.RotationOrder.XYZ"),
++        Some(item) => item.to_string()?,
++    };
++    Ok(match text.strip_prefix("Enum.RotationOrder.") {
++        Some("XYZ") => ("XYZ", EulerRot::XYZ),
++        Some("XZY") => ("XZY", EulerRot::XZY),
++        Some("YXZ") => ("YXZ", EulerRot::YXZ),
++        Some("YZX") => ("YZX", EulerRot::YZX),
++        Some("ZXY") => ("ZXY", EulerRot::ZXY),
++        Some("ZYX") => ("ZYX", EulerRot::ZYX),
++        // (Studio's message for a string: "Invalid value for enum 'RotationOrder'")
++        _ => {
++            let _ = function;
++            return Err(LuaError::RuntimeError("Invalid value for enum 'RotationOrder'".to_string()));
++        }
++    })
++}
++
+ impl CFrame {
+     pub const IDENTITY: Self = Self(Mat4::IDENTITY);
+ 
+@@ -65,29 +130,44 @@ impl LuaExportsTable for CFrame {
+ 
+     #[allow(clippy::too_many_lines)]
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let cframe_angles = |_: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++        let cframe_angles = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++            charge_host_nanos(lua, price::ANGLES);
+             Ok(CFrame(Mat4::from_euler(EulerRot::XYZ, rx, ry, rz)))
+         };
+ 
+-        let cframe_from_axis_angle = |_: &Lua, (v, r): (VectorArg, f32)| {
++        let cframe_from_axis_angle = |lua: &Lua, (v, r): (VectorArg, f32)| {
++            charge_host_nanos(lua, price::FROM_AXIS_ANGLE);
+             Ok(CFrame(Mat4::from_axis_angle(v.0, r)))
+         };
+ 
+-        let cframe_from_euler_angles_xyz = |_: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++        let cframe_from_euler_angles_xyz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++            charge_host_nanos(lua, price::ANGLES);
+             Ok(CFrame(Mat4::from_euler(EulerRot::XYZ, rx, ry, rz)))
+         };
+ 
+-        let cframe_from_euler_angles_yxz = |_: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++        let cframe_from_euler_angles = |lua: &Lua, (rx, ry, rz, order): (f32, f32, f32, Option<LuaValue>)| {
++            charge_host_nanos(lua, price::ANGLES);
++            let (name, rotation) = rotation_order(order.as_ref(), "fromEulerAngles")?;
++            let by_axis = [rx, ry, rz];
++            let [a, b, c] = name.chars().map(|axis| by_axis[(axis as usize) - ('X' as usize)]).collect::<Vec<_>>()[..] else {
++                unreachable!()
++            };
++            Ok(CFrame(Mat4::from_euler(rotation, a, b, c)))
++        };
++
++        let cframe_from_euler_angles_yxz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++            charge_host_nanos(lua, price::ANGLES);
+             Ok(CFrame(Mat4::from_euler(EulerRot::YXZ, ry, rx, rz)))
+         };
+ 
+-        let cframe_from_matrix = |_: &Lua,
++        let cframe_from_matrix = |lua: &Lua,
+                                   (pos, rx, ry, rz): (
+             VectorArg,
+             VectorArg,
+             VectorArg,
+             Option<VectorArg>,
+         )| {
++            charge_host_nanos(lua, price::NEW_MATRIX);
+             Ok(CFrame(Mat4::from_cols(
+                 rx.0.extend(0.0),
+                 ry.0.extend(0.0),
+@@ -97,11 +177,13 @@ impl LuaExportsTable for CFrame {
+             )))
+         };
+ 
+-        let cframe_from_orientation = |_: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++        let cframe_from_orientation = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++            charge_host_nanos(lua, price::ANGLES);
+             Ok(CFrame(Mat4::from_euler(EulerRot::YXZ, ry, rx, rz)))
+         };
+ 
+-        let cframe_look_at = |_: &Lua, (from, to, up): (VectorArg, VectorArg, Option<VectorArg>)| {
++        let cframe_look_at = |lua: &Lua, (from, to, up): (VectorArg, VectorArg, Option<VectorArg>)| {
++            charge_host_nanos(lua, price::LOOK_AT);
+             Ok(CFrame(look_at(
+                 from.0,
+                 to.0,
+@@ -117,7 +199,17 @@ impl LuaExportsTable for CFrame {
+         type ArgsPosXYZQuat = (f32, f32, f32, f32, f32, f32, f32);
+         type ArgsMatrix = (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32);
+ 
+-        let cframe_new = |lua: &Lua, args: LuaMultiValue| match args.len() {
++        let cframe_new = |lua: &Lua, args: LuaMultiValue| {
++            charge_host_nanos(lua, match (args.len(), args.front()) {
++                (1, _) => price::NEW_VECTOR,
++                (2, _) => price::NEW_LOOK,
++                (3, Some(LuaValue::Number(_) | LuaValue::Integer(_))) => price::NEW_XYZ,
++                (3, _) => price::NEW_LOOK,
++                (7, _) => price::NEW_QUAT,
++                (12, _) => price::NEW_MATRIX,
++                _ => 0,
++            });
++            match args.len() {
+             0 => Ok(CFrame(Mat4::IDENTITY)),
+ 
+             1 => match ArgsPos::from_lua_multi(args, lua) {
+@@ -189,12 +281,14 @@ impl LuaExportsTable for CFrame {
+                 "Invalid number of arguments: expected 0, 1, 3, 7, or 12, got {}",
+                 args.len()
+             ))),
++            }
+         };
+ 
+         TableBuilder::new(lua)?
+             .with_function("Angles", cframe_angles)?
+             .with_value("identity", CFrame(Mat4::IDENTITY))?
+             .with_function("fromAxisAngle", cframe_from_axis_angle)?
++            .with_function("fromEulerAngles", cframe_from_euler_angles)?
+             .with_function("fromEulerAnglesXYZ", cframe_from_euler_angles_xyz)?
+             .with_function("fromEulerAnglesYXZ", cframe_from_euler_angles_yxz)?
+             .with_function("fromMatrix", cframe_from_matrix)?
+@@ -210,16 +304,16 @@ impl LuaUserData for CFrame {
+         // Vectors come back as Luau's native vector, which is what a script's Vector3 is; each read is
+         // charged to the script as the one Luau call the engine's prelude spent on it before it was native
+         fields.add_field_method_get("Position", |lua, this| {
+-            charge_host_calls(lua, 1);
++            charge_host_nanos(lua, price::MEMBER);
+             Ok(native_vector(this.position()))
+         });
+         // (Roblox still answers its deprecated lowercase members)
+         fields.add_field_method_get("p", |lua, this| {
+-            charge_host_calls(lua, 1);
++            charge_host_nanos(lua, price::MEMBER);
+             Ok(native_vector(this.position()))
+         });
+         fields.add_field_method_get("Rotation", |lua, this| {
+-            charge_host_calls(lua, 1);
++            charge_host_nanos(lua, price::ROTATION);
+             Ok(CFrame(Mat4::from_cols(
+                 this.0.x_axis,
+                 this.0.y_axis,
+@@ -228,36 +322,36 @@ impl LuaUserData for CFrame {
+             )))
+         });
+         fields.add_field_method_get("X", |lua, this| {
+-            charge_host_calls(lua, 1);
++            charge_host_nanos(lua, price::MEMBER);
+             Ok(this.position().x)
+         });
+         fields.add_field_method_get("Y", |lua, this| {
+-            charge_host_calls(lua, 1);
++            charge_host_nanos(lua, price::MEMBER);
+             Ok(this.position().y)
+         });
+         fields.add_field_method_get("Z", |lua, this| {
+-            charge_host_calls(lua, 1);
++            charge_host_nanos(lua, price::MEMBER);
+             Ok(this.position().z)
+         });
+         for name in ["XVector", "RightVector", "rightVector"] {
+             fields.add_field_method_get(name, |lua, this| {
+-                charge_host_calls(lua, 1);
++                charge_host_nanos(lua, price::MEMBER);
+                 Ok(native_vector(this.orientation().x_axis))
+             });
+         }
+         for name in ["YVector", "UpVector", "upVector"] {
+             fields.add_field_method_get(name, |lua, this| {
+-                charge_host_calls(lua, 1);
++                charge_host_nanos(lua, price::MEMBER);
+                 Ok(native_vector(this.orientation().y_axis))
+             });
+         }
+         fields.add_field_method_get("ZVector", |lua, this| {
+-            charge_host_calls(lua, 1);
++            charge_host_nanos(lua, price::MEMBER);
+             Ok(native_vector(this.orientation().z_axis))
+         });
+         for name in ["LookVector", "lookVector"] {
+             fields.add_field_method_get(name, |lua, this| {
+-                charge_host_calls(lua, 1);
++                charge_host_nanos(lua, price::MEMBER);
+                 Ok(native_vector(-this.orientation().z_axis))
+             });
+         }
+@@ -266,9 +360,10 @@ impl LuaUserData for CFrame {
+     #[allow(clippy::too_many_lines)]
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+         // Methods, and the deprecated lowercase names Roblox still answers
+-        aliased!(methods, ["Inverse", "inverse"], |_, this, ()| Ok(this.inverse()));
++        aliased!(methods, price::INVERSE, ["Inverse", "inverse"], |_, this, ()| Ok(this.inverse()));
+         aliased!(
+             methods,
++            price::LERP,
+             ["Lerp", "lerp"],
+             |_, this, (goal, alpha): (LuaUserDataRef<CFrame>, f32)| {
+                 let quat_this = Quat::from_mat4(&this.0);
+@@ -285,16 +380,17 @@ impl LuaUserData for CFrame {
+                 )))
+             }
+         );
+-        methods.add_method("Orthonormalize", |_, this, ()| {
++        methods.add_method("Orthonormalize", charged_method(price::ORTHONORMALIZE, |_, this, ()| {
+             let rotation = Quat::from_mat4(&this.0);
+             let translation = this.0.w_axis.truncate();
+             Ok(CFrame(Mat4::from_rotation_translation(
+                 rotation.normalize(),
+                 translation,
+             )))
+-        });
++        }));
+         aliased!(
+             methods,
++            price::TO_WORLD,
+             ["ToWorldSpace", "toWorldSpace"],
+             |_, this, rhs: Variadic<LuaUserDataRef<CFrame>>| {
+                 Ok(rhs
+@@ -305,6 +401,7 @@ impl LuaUserData for CFrame {
+         );
+         aliased!(
+             methods,
++            price::TO_OBJECT,
+             ["ToObjectSpace", "toObjectSpace"],
+             |_, this, rhs: Variadic<LuaUserDataRef<CFrame>>| {
+                 let inverse = this.inverse();
+@@ -316,6 +413,7 @@ impl LuaUserData for CFrame {
+         );
+         aliased!(
+             methods,
++            price::POINT_TO_WORLD,
+             ["PointToWorldSpace", "pointToWorldSpace"],
+             |_, this, rhs: Variadic<VectorArg>| {
+                 Ok(rhs
+@@ -326,6 +424,7 @@ impl LuaUserData for CFrame {
+         );
+         aliased!(
+             methods,
++            price::POINT_TO_OBJECT,
+             ["PointToObjectSpace", "pointToObjectSpace"],
+             |_, this, rhs: Variadic<VectorArg>| {
+                 let inverse = this.inverse();
+@@ -337,6 +436,7 @@ impl LuaUserData for CFrame {
+         );
+         aliased!(
+             methods,
++            price::VECTOR_TO_WORLD,
+             ["VectorToWorldSpace", "vectorToWorldSpace"],
+             |_, this, rhs: Variadic<VectorArg>| {
+                 let result = *this - Vector3(this.position());
+@@ -348,6 +448,7 @@ impl LuaUserData for CFrame {
+         );
+         aliased!(
+             methods,
++            price::VECTOR_TO_OBJECT,
+             ["VectorToObjectSpace", "vectorToObjectSpace"],
+             |_, this, rhs: Variadic<VectorArg>| {
+                 let inverse = this.inverse();
+@@ -359,7 +460,7 @@ impl LuaUserData for CFrame {
+             }
+         );
+         #[rustfmt::skip]
+-        aliased!(methods, ["GetComponents", "components"], |_, this, ()| {
++        aliased!(methods, price::COMPONENTS, ["GetComponents", "components"], |_, this, ()| {
+             let pos = this.position();
+             let transposed = this.orientation().transpose();
+             Ok((
+@@ -369,18 +470,28 @@ impl LuaUserData for CFrame {
+                 transposed.z_axis.x, transposed.z_axis.y,   transposed.z_axis.z,
+             ))
+         });
+-        aliased!(methods, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |_, this, ()| {
++        aliased!(methods, price::EULER, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |_, this, ()| {
+             Ok(Quat::from_mat4(&this.0).to_euler(EulerRot::XYZ))
+         });
+-        methods.add_method("ToEulerAnglesYXZ", |_, this, ()| {
++        methods.add_method("ToEulerAnglesYXZ", charged_method(price::EULER, |_, this, ()| {
+             let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
+             Ok((rx, ry, rz))
+-        });
+-        methods.add_method("ToOrientation", |_, this, ()| {
++        }));
++        methods.add_method("ToOrientation", charged_method(price::EULER, |_, this, ()| {
+             let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
+             Ok((rx, ry, rz))
++        }));
++        // ToEulerAngles(order = Enum.RotationOrder.XYZ): the three angles in x, y, z order for the rotation order named
++        aliased!(methods, price::EULER, ["ToEulerAngles", "toEulerAngles"], |_, this, order: Option<LuaValue>| {
++            let (name, rotation) = rotation_order(order.as_ref(), "ToEulerAngles")?;
++            let (a, b, c) = Quat::from_mat4(&this.0).to_euler(rotation);
++            let mut angles = [0.0f32; 3];
++            for (angle, axis) in [a, b, c].into_iter().zip(name.chars()) {
++                angles[(axis as usize) - ('X' as usize)] = angle;
++            }
++            Ok((angles[0], angles[1], angles[2]))
+         });
+-        aliased!(methods, ["ToAxisAngle", "toAxisAngle"], |_, this, ()| {
++        aliased!(methods, price::AXIS_ANGLE, ["ToAxisAngle", "toAxisAngle"], |_, this, ()| {
+             let (axis, angle) = Quat::from_mat4(&this.0).to_axis_angle();
+             Ok((native_vector(axis), angle))
+         });
+@@ -388,17 +499,19 @@ impl LuaUserData for CFrame {
+         methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+         methods.add_meta_method(LuaMetaMethod::Mul, |lua, this, rhs: LuaValue| {
+-            charge_host_calls(lua, 1);
+             match &rhs {
+                 LuaValue::Vector(v) => {
++                    charge_host_nanos(lua, price::MUL_VECTOR);
+                     return Ok(native_vector(
+                         (*this * Vector3(Vec3::new(v.x(), v.y(), v.z()))).0,
+                     ));
+                 }
+                 LuaValue::UserData(ud) => {
+                     if let Ok(cf) = ud.borrow::<CFrame>() {
++                        charge_host_nanos(lua, price::MUL_CFRAME);
+                         return Ok(LuaValue::UserData(lua.create_userdata(*this * *cf)?));
+                     } else if let Ok(vec) = ud.borrow::<Vector3>() {
++                        charge_host_nanos(lua, price::MUL_VECTOR);
+                         return Ok(native_vector((*this * *vec).0));
+                     }
+                 }
+@@ -416,14 +529,14 @@ impl LuaUserData for CFrame {
+         methods.add_meta_method(
+             LuaMetaMethod::Add,
+             |lua, this, vec: VectorArg| {
+-                charge_host_calls(lua, 1);
++                charge_host_nanos(lua, price::ADD_VECTOR);
+                 Ok(*this + Vector3(vec.0))
+             },
+         );
+         methods.add_meta_method(
+             LuaMetaMethod::Sub,
+             |lua, this, vec: VectorArg| {
+-                charge_host_calls(lua, 1);
++                charge_host_nanos(lua, price::ADD_VECTOR);
+                 Ok(*this - Vector3(vec.0))
+             },
+         );
+--- a/crates/lune-roblox/src/datatypes/types/color3.rs
++++ b/crates/lune-roblox/src/datatypes/types/color3.rs
+@@ -136,7 +136,8 @@ impl LuaUserData for Color3 {
+         // Methods
+         methods.add_method(
+             "Lerp",
+-            |_, this, (rhs, alpha): (LuaUserDataRef<Color3>, f32)| {
++            |lua, this, (rhs, alpha): (LuaUserDataRef<Color3>, f32)| {
++                super::charge_host_nanos(lua, super::datatype_price::COLOR3_LERP);
+                 let v3_this = Vec3::new(this.r, this.g, this.b);
+                 let v3_rhs = Vec3::new(rhs.r, rhs.g, rhs.b);
+                 let v3 = v3_this.lerp(v3_rhs, alpha);
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence.rs
+@@ -33,6 +33,7 @@ impl LuaExportsTable for ColorSequence {
+         type ArgsColors = (LuaUserDataRef<Color3>, LuaUserDataRef<Color3>);
+ 
+         let color_sequence_new = |lua: &Lua, args: LuaMultiValue| {
++            super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
+             if let Ok(color) = ArgsColor::from_lua_multi(args.clone(), lua) {
+                 Ok(ColorSequence {
+                     keypoints: vec![
+--- a/crates/lune-roblox/src/datatypes/types/mod.rs
++++ b/crates/lune-roblox/src/datatypes/types/mod.rs
+@@ -51,5 +51,5 @@ pub use udim2::UDim2;
+ pub use unique_id::UniqueId;
+ pub use vector2::Vector2;
+ pub use vector2int16::Vector2int16;
+-pub use vector3::{Vector3, VectorArg, charge_host_calls, native_vector};
++pub use vector3::{Vector3, VectorArg, charge_host_calls, charge_host_nanos, datatype_price, native_vector};
+ pub use vector3int16::Vector3int16;
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence.rs
+@@ -85,6 +85,7 @@ impl LuaExportsTable for NumberSequence {
+         type ArgsColors = (f32, f32);
+ 
+         let number_sequence_new = |lua: &Lua, args: LuaMultiValue| {
++            super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
+             if let Ok(value) = ArgsColor::from_lua_multi(args.clone(), lua) {
+                 Ok(NumberSequence {
+                     keypoints: vec![
+--- a/crates/lune-roblox/src/datatypes/types/udim2.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim2.rs
+@@ -28,7 +28,8 @@ impl LuaExportsTable for UDim2 {
+     const EXPORT_NAME: &'static str = "UDim2";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let udim2_from_offset = |_: &Lua, (x, y): (Option<i32>, Option<i32>)| {
++        let udim2_from_offset = |lua: &Lua, (x, y): (Option<i32>, Option<i32>)| {
++            super::charge_host_nanos(lua, super::datatype_price::UDIM2_FROM_OFFSET);
+             Ok(UDim2 {
+                 x: UDim::new(0f32, x.unwrap_or_default()),
+                 y: UDim::new(0f32, y.unwrap_or_default()),
+@@ -83,7 +84,8 @@ impl LuaUserData for UDim2 {
+         // Methods
+         methods.add_method(
+             "Lerp",
+-            |_, this, (goal, alpha): (LuaUserDataRef<UDim2>, f32)| {
++            |lua, this, (goal, alpha): (LuaUserDataRef<UDim2>, f32)| {
++                super::charge_host_nanos(lua, super::datatype_price::UDIM2_LERP);
+                 let this_x = Vec2::new(this.x.scale, this.x.offset as f32);
+                 let goal_x = Vec2::new(goal.x.scale, goal.x.offset as f32);
+ 
+--- a/crates/lune-roblox/src/datatypes/types/vector3.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector3.rs
+@@ -78,6 +78,34 @@ pub fn charge_host_calls(lua: &Lua, calls: i32) {
+     unsafe { lua_workhostcalls(lua.current_thread().state(), calls) }
+ }
+ 
++unsafe extern "C-unwind" {
++    fn lua_workhostnanos(state: *mut mlua::ffi::lua_State, nanos: std::ffi::c_int);
++}
++
++/**
++    Charges `nanos` nanoseconds to the script that called the running native function: what Studio's
++    operation costs beyond the instructions that reached it (the call, the loads, the loop around it),
++    which the work clock counts on their own. Negative when Studio spends less on the whole operation
++    than those instructions count. Priced per operation in `price` below.
++*/
++pub fn charge_host_nanos(lua: &Lua, nanos: i32) {
++    if nanos != 0 {
++        unsafe { lua_workhostnanos(lua.current_thread().state(), nanos) }
++    }
++}
++
++/// What Studio spends on the other datatypes' operations that cost more than a call (CFrame's are in `cframe::price`):
++/// the lobby playtest client's median of four runs of an op_cost probe less what ree counts for the
++/// loop without a price. The other datatype rows are within 35 % of the client's number without one (Vector2 / UDim /
++/// NumberRange / Ray constructors, Color3.new / fromRGB / fromHSV, UDim2.new, ToHSV), +-15 ns of noise.
++pub mod datatype_price {
++    pub const COLOR3_LERP: i32 = 21;
++    pub const UDIM2_FROM_OFFSET: i32 = 20;
++    pub const UDIM2_LERP: i32 = 17;
++    pub const COLOR_SEQUENCE_NEW: i32 = 50;
++    pub const NUMBER_SEQUENCE_NEW: i32 = 59;
++}
++
+ impl LuaExportsTable for Vector3 {
+     const EXPORT_NAME: &'static str = "Vector3";
+ 
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -36,12 +36,23 @@
+     //! sweeps, which a client with a big heap pays for: the same operations in an empty test place cost
+     //! 40-50 ns less (`*` 20 against 62, Inverse 20 against 69), and the allocating rows vary 2-3x between
+     //! runs (Lerp 85-140, `*` 30-78, new(Vector3) 15-78), so these are good to about +-30 %.
++    //!
++    //! `*`, Inverse and `==` are the exception: they are priced as a handler meets them, a few times a
++    //! frame on a CFrame taken from an instance (a bridge_ops probe, 28 rigs, five motors each, the median
++    //! of 210 frames; an empty test place's client and a match place's client, three runs, six readings each): Inverse
++    //! 18-42 ns (median 24.5), `* CFrame.identity` 20-39 (24.6), `== CFrame.identity` 15-26 (22.2); the same
++    //! operations in the op_cost loop of the lobby client read 69, 62 and (not probed). A cut that removes them
++    //! from per-frame code (a rig's per-frame cuts) is priced from the first set; a loop of thousands of them reads
++    //! about 40 ns low per operation in ree, as the test place's loop does.
+     pub const MEMBER: i32 = 0;
+     pub const ROTATION: i32 = 61;
+-    pub const MUL_CFRAME: i32 = 60;
++    pub const MUL_CFRAME: i32 = 21;
++    /// `CFrame == CFrame` is a metamethod call in Studio (22.2 ns median in the rig frame), where the VM counts only the
++    /// instruction
++    pub const EQ: i32 = 17;
+     pub const MUL_VECTOR: i32 = 8;
+     pub const ADD_VECTOR: i32 = 46;
+-    pub const INVERSE: i32 = 54;
++    pub const INVERSE: i32 = 9;
+     pub const LERP: i32 = 91;
+     pub const TO_WORLD: i32 = 55;
+     pub const TO_OBJECT: i32 = 54;
+@@ -496,7 +507,10 @@
+             Ok((native_vector(axis), angle))
+         });
+         // Metamethods
+-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
++        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, other: LuaValue| {
++            charge_host_nanos(lua, price::EQ);
++            userdata_impl_eq(lua, this, other)
++        });
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+         methods.add_meta_method(LuaMetaMethod::Mul, |lua, this, rhs: LuaValue| {
+             match &rhs {
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -44,8 +44,13 @@ pub mod price {
+     //! operations in the op_cost loop of the lobby client read 69, 62 and (not probed). A cut that removes them
+     //! from per-frame code (a rig's per-frame cuts) is priced from the first set; a loop of thousands of them reads
+     //! about 40 ns low per operation in ree, as the test place's loop does.
++    //!
++    //! `:ToObjectSpace`, `:Lerp`, `.Rotation`, `CFrame.Angles` and `CFrame.fromEulerAngles*` follow: the same
++    //! rig-frame bench (a match place's client, three runs, six readings each, medians in ns): ToObjectSpace 28.9 (24-64),
++    //! Lerp 66.8 (44-88), Rotation 30.3 (9-66), Angles 28.6 (18-36), fromEulerAnglesXYZ 27.0 (16-34). The op_cost loop of
++    //! the lobby client reads 71, 110, 63, 87 for the first four, 1.5-3x higher.
+     pub const MEMBER: i32 = 0;
+-    pub const ROTATION: i32 = 61;
++    pub const ROTATION: i32 = 29;
+     pub const MUL_CFRAME: i32 = 21;
+     /// `CFrame == CFrame` is a metamethod call in Studio (22.2 ns median in the rig frame), where the VM counts only the
+     /// instruction
+@@ -53,9 +58,9 @@ pub mod price {
+     pub const MUL_VECTOR: i32 = 8;
+     pub const ADD_VECTOR: i32 = 46;
+     pub const INVERSE: i32 = 9;
+-    pub const LERP: i32 = 91;
++    pub const LERP: i32 = 49;
+     pub const TO_WORLD: i32 = 55;
+-    pub const TO_OBJECT: i32 = 54;
++    pub const TO_OBJECT: i32 = 12;
+     pub const POINT_TO_WORLD: i32 = -4;
+     pub const POINT_TO_OBJECT: i32 = 0;
+     pub const VECTOR_TO_WORLD: i32 = -4;
+@@ -72,7 +77,8 @@ pub mod price {
+     pub const NEW_QUAT: i32 = 0;
+     /// (not measured)
+     pub const NEW_MATRIX: i32 = 0;
+-    pub const ANGLES: i32 = 51;
++    /// negative: the constructor's call and the instructions that reach it already count more than Studio's 27-29 ns
++    pub const ANGLES: i32 = -3;
+     pub const FROM_AXIS_ANGLE: i32 = 48;
+     pub const LOOK_AT: i32 = 55;
+ }
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -49,6 +49,10 @@ pub mod price {
+     //! rig-frame bench (a match place's client, three runs, six readings each, medians in ns): ToObjectSpace 28.9 (24-64),
+     //! Lerp 66.8 (44-88), Rotation 30.3 (9-66), Angles 28.6 (18-36), fromEulerAnglesXYZ 27.0 (16-34). The op_cost loop of
+     //! the lobby client reads 71, 110, 63, 87 for the first four, 1.5-3x higher.
++    //!
++    //! `:ToWorldSpace`, `:PointToWorldSpace` and `:ToAxisAngle` follow (the same bench, a match place's client, six
++    //! runs of six readings, medians in ns): ToWorldSpace 26.6 (16-121; the twin of ToObjectSpace, which reads 28.5),
++    //! PointToWorldSpace 24.4 with the vector hoisted out of the loop, ToAxisAngle 22.2 here and 26.3 in the earlier three runs.
+     pub const MEMBER: i32 = 0;
+     pub const ROTATION: i32 = 29;
+     pub const MUL_CFRAME: i32 = 21;
+@@ -59,15 +63,15 @@ pub mod price {
+     pub const ADD_VECTOR: i32 = 46;
+     pub const INVERSE: i32 = 9;
+     pub const LERP: i32 = 49;
+-    pub const TO_WORLD: i32 = 55;
++    pub const TO_WORLD: i32 = 10;
+     pub const TO_OBJECT: i32 = 12;
+-    pub const POINT_TO_WORLD: i32 = -4;
++    pub const POINT_TO_WORLD: i32 = 8;
+     pub const POINT_TO_OBJECT: i32 = 0;
+     pub const VECTOR_TO_WORLD: i32 = -4;
+     pub const VECTOR_TO_OBJECT: i32 = 0;
+     pub const COMPONENTS: i32 = 121;
+     pub const EULER: i32 = 8;
+-    pub const AXIS_ANGLE: i32 = 3;
++    pub const AXIS_ANGLE: i32 = 10;
+     /// (not measured)
+     pub const ORTHONORMALIZE: i32 = 0;
+     pub const NEW_VECTOR: i32 = -3;

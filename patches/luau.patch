@@ -1,0 +1,1052 @@
+--- a/luau/Compiler/src/ValueTracking.cpp
++++ b/luau/Compiler/src/ValueTracking.cpp
+@@ -93,12 +93,12 @@
+ void assignMutable(DenseHashMap<AstName, Global>& globals, const AstNameTable& names, const char* const* mutableGlobals)
+ {
+     if (AstName name = names.get("_G"); name.value)
+-        globals[name] = Global::Mutable;
++        globals[name] = Global::Written;
+ 
+     if (mutableGlobals)
+         for (const char* const* ptr = mutableGlobals; *ptr; ++ptr)
+             if (AstName name = names.get(*ptr); name.value)
+-                globals[name] = Global::Mutable;
++                globals[name] = Global::Written;
+ }
+ 
+ void trackValues(DenseHashMap<AstName, Global>& globals, DenseHashMap<AstLocal*, Variable>& variables, AstNode* root)
+@@ -109,3 +109,4 @@
+ 
+ } // namespace Compile
+ } // namespace Luau
++
+--- a/luau/VM/src/lobject.h
++++ b/luau/VM/src/lobject.h
+@@ -282,6 +282,9 @@
+ /*
+ ** Function Prototypes
+ */
++// Proto flags bit of a host's own function (lua_setworkexempt): its work is not counted as a script's
++#define LUAU_PROTO_WORK_EXEMPT (1 << 7)
++
+ // clang-format off
+ typedef struct Proto
+ {
+@@ -382,6 +385,7 @@
+     uint8_t nupvalues;
+     uint8_t stacksize;
+     uint8_t preload;
++    uint8_t builtin; // Canonical C closure fastcall ID; zero for all other closures.
+ 
+     GCObject* gclist;
+     struct LuaTable* env;
+@@ -404,6 +408,9 @@
+     };
+ } Closure;
+ 
++static_assert(offsetof(Closure, builtin) == 7, "builtin tag must use existing closure padding");
++static_assert(offsetof(Closure, gclist) == 8, "closure pointer layout must remain unchanged");
++
+ #define iscfunction(o) (ttype(o) == LUA_TFUNCTION && clvalue(o)->isC)
+ #define isLfunction(o) (ttype(o) == LUA_TFUNCTION && !clvalue(o)->isC)
+ 
+--- a/luau/VM/src/lfunc.cpp
++++ b/luau/VM/src/lfunc.cpp
+@@ -64,6 +64,7 @@
+     c->nupvalues = cast_byte(nelems);
+     c->stacksize = p->maxstacksize;
+     c->preload = 0;
++    c->builtin = 0;
+     c->l.p = p;
+     for (int i = 0; i < nelems; ++i)
+         setnilvalue(&c->l.uprefs[i]);
+@@ -79,6 +80,7 @@
+     c->nupvalues = cast_byte(nelems);
+     c->stacksize = LUA_MINSTACK;
+     c->preload = 0;
++    c->builtin = 0;
+     c->c.f = NULL;
+     c->c.cont = NULL;
+     c->c.debugname = NULL;
+--- a/luau/VM/src/lmathlib.cpp
++++ b/luau/VM/src/lmathlib.cpp
+@@ -1,6 +1,7 @@
+ // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+ // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+ #include "lualib.h"
++#include "lbytecode.h"
+ 
+ #include "lstate.h"
+ 
+@@ -477,6 +478,11 @@
+     pcg32_seed(&L->global->rngstate, seed);
+ 
+     luaL_register(L, LUA_MATHLIBNAME, mathlib);
++
++    lua_getfield(L, -1, "floor");
++    if (iscfunction(L->top - 1) && clvalue(L->top - 1)->c.f == math_floor)
++        clvalue(L->top - 1)->builtin = LBF_MATH_FLOOR;
++    lua_pop(L, 1);
+     lua_pushnumber(L, PI);
+     lua_setfield(L, -2, "pi");
+     lua_pushnumber(L, HUGE_VAL);
+--- a/luau/VM/src/lstrlib.cpp
++++ b/luau/VM/src/lstrlib.cpp
+@@ -1,6 +1,8 @@
+ // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+ // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+ #include "lualib.h"
++#include "lbytecode.h"
++#include "lstate.h"
+ 
+ #include "lstring.h"
+ 
+@@ -1673,6 +1675,11 @@
+ int luaopen_string(lua_State* L)
+ {
+     luaL_register(L, LUA_STRLIBNAME, strlib);
++
++    lua_getfield(L, -1, "byte");
++    if (iscfunction(L->top - 1) && clvalue(L->top - 1)->c.f == str_byte)
++        clvalue(L->top - 1)->builtin = LBF_STRING_BYTE;
++    lua_pop(L, 1);
+     createmetatable(L);
+ 
+     return 1;
+--- a/luau/VM/src/ltablib.cpp
++++ b/luau/VM/src/ltablib.cpp
+@@ -1,6 +1,7 @@
+ // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
+ // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+ #include "lualib.h"
++#include "lbytecode.h"
+ 
+ #include "lapi.h"
+ #include "lnumutils.h"
+@@ -10,6 +11,7 @@
+ #include "lgc.h"
+ #include "ldebug.h"
+ #include "lvm.h"
++#include "ltm.h"
+ 
+ static int foreachi(lua_State* L)
+ {
+@@ -531,6 +533,27 @@
+     LuaTable* t = hvalue(L->base);
+     StkId v = L->base + 1;
+ 
++    // Without a needle equality metamethod, every table comparison is identity.
++    // The dense array prefix needs neither a hash lookup nor generic equality dispatch.
++    if (ttistable(v) && fasttm(L, hvalue(v)->metatable, TM_EQ) == NULL)
++    {
++        LuaTable* needle = hvalue(v);
++        for (; init <= t->sizearray; ++init)
++        {
++            const TValue* e = &t->array[init - 1];
++            if (ttisnil(e))
++            {
++                lua_pushnil(L);
++                return 1;
++            }
++            if (ttistable(e) && hvalue(e) == needle)
++            {
++                lua_pushinteger(L, init);
++                return 1;
++            }
++        }
++    }
++
+     for (int i = init;; ++i)
+     {
+         const TValue* e = luaH_getnum(t, i);
+@@ -619,6 +642,11 @@
+ {
+     luaL_register(L, LUA_TABLIBNAME, tab_funcs);
+ 
++    lua_getfield(L, -1, "insert");
++    if (iscfunction(L->top - 1) && clvalue(L->top - 1)->c.f == tinsert)
++        clvalue(L->top - 1)->builtin = LBF_TABLE_INSERT;
++    lua_pop(L, 1);
++
+     // Lua 5.1 compat
+     lua_pushcfunction(L, tunpack, "unpack");
+     lua_setglobal(L, "unpack");
+--- a/luau/CodeGen/src/CodeGenUtils.cpp
++++ b/luau/CodeGen/src/CodeGenUtils.cpp
+@@ -177,6 +177,20 @@
+ 
+     Closure* ccl = clvalue(ra);
+ 
++    // The actual callee owns this tag, so inherited globals, aliases and argument
++    // side effects retain ordinary CALL semantics without trusting safeenv.
++    if (ccl->builtin != 0)
++    {
++        LUAU_ASSERT(ccl->isC && ccl->nupvalues == 0);
++        int nparams = int(argtop - ra - 1);
++        int n = luauF_table[ccl->builtin](L, ra, ra + 1, nresults, ra + 2, nparams);
++        if (n >= 0)
++        {
++            L->top = nresults == LUA_MULTRET ? ra + n : L->ci->top;
++            return nullptr;
++        }
++    }
++
+     CallInfo* ci = incr_ci(L);
+     ci->func = ra;
+     ci->base = ra + 1;
+--- a/luau/CodeGen/src/EmitInstructionX64.cpp
++++ b/luau/CodeGen/src/EmitInstructionX64.cpp
+@@ -36,6 +36,10 @@
+     build.call(qword[rNativeContext + offsetof(NativeContext, callProlog)]);
+     RegisterX64 ccl = rax; // Returned from callProlog
+ 
++    Label builtinDone;
++    build.test(ccl, ccl);
++    build.jcc(ConditionX64::Zero, builtinDone);
++
+     emitUpdateBase(build);
+ 
+     Label cFuncCall;
+@@ -131,6 +135,7 @@
+             build.call(qword[rNativeContext + offsetof(NativeContext, callEpilogC)]);
+ 
+             emitUpdateBase(build);
++            build.setLabel(builtinDone);
+             return;
+         }
+ 
+@@ -170,6 +175,7 @@
+         build.mov(rax, qword[cip + offsetof(CallInfo, top)]);
+         build.mov(qword[rState + offsetof(lua_State, top)], rax);
+     }
++    build.setLabel(builtinDone);
+ }
+ 
+ void emitInstReturn(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, int actualResults, bool functionVariadic)
+--- a/luau/CodeGen/src/CodeGenUtils.h
++++ b/luau/CodeGen/src/CodeGenUtils.h
+@@ -14,6 +14,7 @@
+ 
+ void forgPrepXnextFallback(lua_State* L, TValue* ra, int pc);
+ 
++// Returns null when a tagged canonical C function completed without a call frame.
+ Closure* callProlog(lua_State* L, TValue* ra, StkId argtop, int nresults);
+ void callEpilogC(lua_State* L, int nresults, int n);
+ 
+--- a/luau/CodeGen/src/IrTranslation.cpp
++++ b/luau/CodeGen/src/IrTranslation.cpp
+@@ -880,8 +880,10 @@
+ 
+     IrOp fallback = build.block(IrBlockKind::Fallback);
+ 
+-    // In unsafe environment, instead of retrying fastcall at 'pcpos' we side-exit directly to fallback sequence
+-    build.inst(IrCmd::CHECK_SAFE_ENV, build.vmExit(pcpos + getOpLength(opcode)));
++    // In unsafe environment, instead of retrying fastcall at 'pcpos' we take the fallback sequence (the
++    // ordinary call the interpreter makes there) in native code, rather than leaving native code for
++    // the rest of the function (rur: script environments are never 'safe')
++    build.inst(IrCmd::CHECK_SAFE_ENV, fallback);
+ 
+     BuiltinImplResult br = translateBuiltin(
+         build, LuauBuiltinFunction(bfid), ra, arg, builtinArgs, builtinArg3, nparams, nresults, fallback, pcpos + getOpLength(opcode)
+@@ -894,13 +896,7 @@
+         if (nresults == LUA_MULTRET)
+             build.inst(IrCmd::ADJUST_STACK_TO_REG, build.vmReg(ra), build.constInt(br.actualResultCount));
+ 
+-        if (br.type != BuiltinImplType::UsesFallback)
+-        {
+-            // We ended up not using the fallback block, kill it
+-            build.function.blockOp(fallback).kind = IrBlockKind::Dead;
+-
+-            return build.undef();
+-        }
++        // (the fallback block stays: an unsafe environment takes it)
+     }
+     else
+     {
+@@ -1070,8 +1066,8 @@
+     IrOp target = build.blockAtInst(pcpos + 1 + LUAU_INSN_D(*pc));
+     IrOp fallback = build.block(IrBlockKind::Fallback);
+ 
+-    // fast-path: pairs/next
+-    build.inst(IrCmd::CHECK_SAFE_ENV, build.vmExit(pcpos));
++    // fast-path: pairs/next (an unsafe environment keeps the iterator function, in native code)
++    build.inst(IrCmd::CHECK_SAFE_ENV, fallback);
+     IrOp tagB = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra + 1));
+     build.inst(IrCmd::CHECK_TAG, tagB, build.constTag(LUA_TTABLE), fallback);
+     IrOp tagC = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra + 2));
+@@ -1098,8 +1094,8 @@
+     IrOp fallback = build.block(IrBlockKind::Fallback);
+     IrOp finish = build.block(IrBlockKind::Internal);
+ 
+-    // fast-path: ipairs/inext
+-    build.inst(IrCmd::CHECK_SAFE_ENV, build.vmExit(pcpos));
++    // fast-path: ipairs/inext (an unsafe environment keeps the iterator function, in native code)
++    build.inst(IrCmd::CHECK_SAFE_ENV, fallback);
+     IrOp tagB = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra + 1));
+     build.inst(IrCmd::CHECK_TAG, tagB, build.constTag(LUA_TTABLE), fallback);
+     IrOp tagC = build.inst(IrCmd::LOAD_TAG, build.vmReg(ra + 2));
+@@ -1327,7 +1323,12 @@
+     int k = LUAU_INSN_D(*pc);
+     uint32_t aux = pc[1];
+ 
+-    build.inst(IrCmd::CHECK_SAFE_ENV, build.vmExit(pcpos));
++    // An import resolved at load is only used in a safe environment; one that was not (luau_load resolves
++    // none unless the loading thread's globals are safe) is looked up in the closure's environment by
++    // GET_CACHED_IMPORT, as the interpreter does, safe or not: native code no longer has to leave
++    CODEGEN_ASSERT(build.function.proto);
++    if (!ttisnil(&build.function.proto->k[k]))
++        build.inst(IrCmd::CHECK_SAFE_ENV, build.vmExit(pcpos));
+     build.inst(IrCmd::GET_CACHED_IMPORT, build.vmReg(ra), build.vmConst(k), build.constImport(aux), build.constUint(pcpos + 1));
+ }
+ 
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -302,6 +302,29 @@
+ LUA_API int lua_gc(lua_State* L, int what, int data);
+ 
+ /*
++** work counters: what scripts made the interpreter do since the state began (the counts only grow);
++** functions marked with lua_setworkexempt (a host's own Luau) count apart, in hostops only
++*/
++typedef struct lua_WorkCounters
++{
++    uint64_t ops[256]; // instructions dispatched by the interpreter, by opcode (native code counts none)
++    uint64_t allocated; // bytes of the collectable objects a script function's own instructions allocated (not its C calls)
++    uint64_t ccalls; // C functions a script function called
++    uint64_t tmcalls; // C functions called as metamethods of a script function's instructions
++    uint64_t hostops[256]; // instructions of exempt functions
++    uint64_t hostcalls; // exempt functions a script function called (directly or through a C function)
++    uint64_t objects; // collectable objects a script function's own instructions allocated (tables, closures, strings, upvalues)
++    uint64_t stored; // bytes of table storage they allocated (array and hash parts, a grown array's new size)
++    uint64_t rehashed; // keys a script function's own instructions made a table rehash (its growth)
++} lua_WorkCounters;
++
++LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
++// marks the Luau function at idx and every function defined in it as the host's own (not counted as script work)
++LUA_API void lua_setworkexempt(lua_State* L, int idx);
++// counts host calls for the script below the native function that asks, as if it had called exempt functions (a datatype operation served natively)
++LUA_API void lua_workhostcalls(lua_State* L, int calls);
++
++/*
+ ** memory statistics
+ ** all allocated bytes are attributed to the memory category of the running thread (0..LUA_MEMORY_CATEGORIES-1)
+ */
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -1144,6 +1144,31 @@
+ ** Garbage-collection function
+ */
+ 
++const lua_WorkCounters* lua_workcounters(lua_State* L)
++{
++    return &L->global->work;
++}
++
++static void setworkexempt(Proto* p)
++{
++    p->flags |= LUAU_PROTO_WORK_EXEMPT;
++    for (int i = 0; i < p->sizep; ++i)
++        setworkexempt(p->p[i]);
++}
++
++void lua_setworkexempt(lua_State* L, int idx)
++{
++    const TValue* o = index2addr(L, idx);
++    api_check(L, isLfunction(o));
++    setworkexempt(clvalue(o)->l.p);
++}
++
++void lua_workhostcalls(lua_State* L, int calls)
++{
++    if (luaE_scriptwork(L))
++        L->global->work.hostcalls += calls;
++}
++
+ int lua_gc(lua_State* L, int what, int data)
+ {
+     int res = 0;
+--- a/luau/VM/src/lmem.cpp
++++ b/luau/VM/src/lmem.cpp
+@@ -494,6 +494,16 @@
+         freeclasspage(L, g->freegcopages, &g->allgcopages, page, sizeClass);
+ }
+ 
++// counts a collectable object a script's own instruction allocates (lua_WorkCounters); a C function's allocations
++// count with its call
++static void countallocated(lua_State* L, size_t nsize)
++{
++    if (!luaE_scriptinsn(L))
++        return;
++    L->global->work.allocated += nsize;
++    L->global->work.objects++;
++}
++
+ void* luaM_new_(lua_State* L, size_t nsize, uint8_t memcat)
+ {
+     global_State* g = L->global;
+@@ -546,6 +556,7 @@
+ 
+     g->totalbytes += nsize;
+     g->memcatbytes[memcat] += nsize;
++    countallocated(L, nsize);
+ 
+     if (LUAU_UNLIKELY(!!g->cb.onallocate))
+     {
+@@ -632,7 +643,8 @@ void* luaM_realloc_(lua_State* L, void* block, size_t osize, size_t nsize, uint8
+     g->totalbytes = (g->totalbytes - osize) + nsize;
+     g->memcatbytes[memcat] += nsize - osize;
+ 
+-    if (LUAU_UNLIKELY(!!g->cb.onallocate))
++    // a thread's own stack and CallInfo array are reported by ldo.cpp (reportthreadalloc) once the thread points at the new block
++    if (LUAU_UNLIKELY(!!g->cb.onallocate) && block != (void*)L->stack && block != (void*)L->base_ci)
+     {
+         g->cb.onallocate(L, osize, nsize);
+     }
+--- a/luau/VM/src/ldo.cpp
++++ b/luau/VM/src/ldo.cpp
+@@ -181,6 +181,21 @@ static void correctstack(lua_State* L, TValue* oldstack)
+     L->base = (L->base - oldstack) + L->stack;
+ }
+ 
++// reports a growth of this thread's own stack or CallInfo array to the allocation callback, which walks the
++// frames: only once the thread points at the new block (luaM_realloc_ skips these), and a frame being set up
++// for the call that needs the room has no pc yet, so it is reported from its caller's
++static void reportthreadalloc(lua_State* L, size_t osize, size_t nsize, int fornewci)
++{
++    if (LUAU_LIKELY(!L->global->cb.onallocate))
++        return;
++
++    if (fornewci)
++        L->ci--;
++    L->global->cb.onallocate(L, osize, nsize);
++    if (fornewci)
++        L->ci++;
++}
++
+ void luaD_reallocstack(lua_State* L, int newsize, int fornewci)
+ {
+     // throw 'out of memory' error because space for a custom error message cannot be guaranteed here
+@@ -201,6 +216,7 @@ void luaD_reallocstack(lua_State* L, int newsize, int fornewci)
+ 
+     TValue* oldstack = L->stack;
+     int realsize = newsize + EXTRA_STACK;
++    int oldsize = L->stacksize;
+     LUAU_ASSERT(L->stack_last - L->stack == L->stacksize - EXTRA_STACK);
+     luaM_reallocarray(L, L->stack, L->stacksize, realsize, TValue, L->memcat);
+     TValue* newstack = L->stack;
+@@ -209,15 +225,18 @@ void luaD_reallocstack(lua_State* L, int newsize, int fornewci)
+     L->stacksize = realsize;
+     L->stack_last = newstack + newsize;
+     correctstack(L, oldstack);
++    reportthreadalloc(L, size_t(oldsize) * sizeof(TValue), size_t(realsize) * sizeof(TValue), fornewci);
+ }
+ 
+ void luaD_reallocCI(lua_State* L, int newsize)
+ {
+     CallInfo* oldci = L->base_ci;
++    int oldsize = L->size_ci;
+     luaM_reallocarray(L, L->base_ci, L->size_ci, newsize, CallInfo, L->memcat);
+     L->size_ci = newsize;
+     L->ci = (L->ci - oldci) + L->base_ci;
+     L->end_ci = L->base_ci + L->size_ci - 1;
++    reportthreadalloc(L, size_t(oldsize) * sizeof(CallInfo), size_t(newsize) * sizeof(CallInfo), 0);
+ }
+ 
+ void luaD_growstack(lua_State* L, int n)
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -226,6 +226,7 @@
+     g->ecb = lua_ExecutionCallbacks();
+ 
+     g->gcstats = GCStats();
++    g->work = lua_WorkCounters();
+ 
+ #ifdef LUAI_GCMETRICS
+     g->gcmetrics = GCMetrics();
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -226,6 +226,8 @@
+ #ifdef LUAI_GCMETRICS
+     GCMetrics gcmetrics;
+ #endif
++
++    lua_WorkCounters work; // what the interpreter did, for a host that charges its cost (lua_workcounters)
+ } global_State;
+ // clang-format on
+ 
+@@ -305,5 +307,31 @@
+ // macro to convert any Lua object into a GCObject
+ #define obj2gco(v) check_exp(iscollectable(v), cast_to(GCObject*, (v) + 0))
+ 
++// the work counts a Luau closure's instructions go to (lua_WorkCounters)
++#define luaE_workops(L, cl) (((cl)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) ? (L)->global->work.hostops : (L)->global->work.ops)
++
++// whose work L does from frame ci down: 1 when the innermost Luau frame is a script's (not exempt), 2 when it is
++// exempt and a script's frame is below it (the host's work for a script), else 0
++inline int luaE_workframe(lua_State* L, CallInfo* ci)
++{
++    if (!L->stack) // the thread's stack is still being made (its frames are not set up)
++        return 0;
++    int found = 1;
++    for (; ci >= L->base_ci; --ci)
++        if (isLua(ci))
++        {
++            if ((ci_func(ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
++                return found;
++            found = 2;
++        }
++    return 0;
++}
++
++// whether a script function's own instruction is running (the innermost frame is a script's Luau frame, not a C function's)
++#define luaE_scriptinsn(L) ((L)->stack && isLua((L)->ci) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++
++#define luaE_scriptframe(L, ci) (luaE_workframe(L, ci) == 1)
++#define luaE_scriptwork(L) luaE_scriptframe(L, (L)->ci)
++
+ LUAI_FUNC lua_State* luaE_newthread(lua_State* L);
+ LUAI_FUNC void luaE_freethread(lua_State* L, lua_State* L1, struct lua_Page* page);
+--- a/luau/VM/src/ltable.cpp
++++ b/luau/VM/src/ltable.cpp
+@@ -317,10 +317,19 @@
+     return totaluse;
+ }
+ 
++// counts the table storage a script's own instruction allocates (lua_WorkCounters)
++static void countstored(lua_State* L, size_t bytes)
++{
++    if (luaE_scriptinsn(L))
++        L->global->work.stored += bytes;
++}
++
+ static void setarrayvector(lua_State* L, LuaTable* t, int size)
+ {
+     if (size > MAXSIZE)
+         luaG_runerror(L, "table overflow");
++    if (size > t->sizearray)
++        countstored(L, size * sizeof(TValue));
+     luaM_reallocarray(L, t->array, t->sizearray, size, TValue, t->memcat);
+     TValue* array = t->array;
+     for (int i = t->sizearray; i < size; i++)
+@@ -343,6 +352,7 @@
+         if (lsize > MAXBITS)
+             luaG_runerror(L, "table overflow");
+         size = twoto(lsize);
++        countstored(L, size * sizeof(LuaNode));
+         t->node = luaM_newarray(L, size, LuaNode, t->memcat);
+         for (i = 0; i < size; i++)
+         {
+@@ -483,6 +493,9 @@
+         nasize = adjustasize(t, nasize, ek);
+     }
+ 
++    if (luaE_scriptinsn(L))
++        L->global->work.rehashed += totaluse;
++
+     // resize the table to new computed sizes
+     resize(L, t, nasize, nh);
+ }
+@@ -810,6 +823,7 @@
+ 
+     if (tt->sizearray)
+     {
++        countstored(L, tt->sizearray * sizeof(TValue));
+         t->array = luaM_newarray(L, tt->sizearray, TValue, t->memcat);
+         maybesetaboundary(t, getaboundary(tt));
+         t->sizearray = tt->sizearray;
+@@ -820,6 +834,7 @@
+     if (tt->node != dummynode)
+     {
+         int size = 1 << tt->lsizenode;
++        countstored(L, size * sizeof(LuaNode));
+         t->node = luaM_newarray(L, size, LuaNode, t->memcat);
+         t->lsizenode = tt->lsizenode;
+         t->nodemask8 = tt->nodemask8;
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -118,9 +118,12 @@
+  * VM_CONTINUE() Use an opcode override to dispatch with computed goto or
+  * switch statement to skip a LOP_BREAK instruction.
+  */
++// Counts each instruction the interpreter dispatches (lua_workcounters)
++#define VM_COUNT_OP(op) (workops[uint8_t(op)]++)
++
+ #if VM_USE_CGOTO
+ #define VM_CASE(op) CASE_##op:
+-#define VM_NEXT() goto*(SingleStep ? &&dispatch : kDispatchTable[LUAU_INSN_OP(*pc)])
++#define VM_NEXT() goto*(SingleStep ? &&dispatch : (VM_COUNT_OP(LUAU_INSN_OP(*pc)), kDispatchTable[LUAU_INSN_OP(*pc)]))
+ #define VM_CONTINUE(op) goto* kDispatchTable[uint8_t(op)]
+ #else
+ #define VM_CASE(op) case op:
+@@ -205,11 +208,15 @@
+     StkId base;
+     TValue* k;
+     const Instruction* pc;
++    uint64_t* workops; // where cl's instructions are counted (luaE_workops)
+ 
+     LUAU_ASSERT(isLua(L->ci));
+     LUAU_ASSERT(L->isactive);
+     LUAU_ASSERT(!isblack(obj2gco(L))); // we don't use luaC_threadbarrier because active threads never turn black
+ 
++    if ((clvalue(L->ci->func)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && luaE_scriptframe(L, L->ci - 1))
++        L->global->work.hostcalls++;
++
+ #if VM_HAS_NATIVE
+     if ((L->ci->flags & LUA_CALLINFO_NATIVE) && !SingleStep)
+     {
+@@ -227,6 +234,7 @@
+ 
+     pc = L->ci->savedpc;
+     cl = clvalue(L->ci->func);
++    workops = luaE_workops(L, cl);
+     base = L->base;
+     k = cl->l.p->k;
+ 
+@@ -252,12 +260,14 @@
+             }
+ 
+ #if VM_USE_CGOTO
++            VM_COUNT_OP(LUAU_INSN_OP(*pc));
+             VM_CONTINUE(LUAU_INSN_OP(*pc));
+ #endif
+         }
+ 
+ #if !VM_USE_CGOTO
+         size_t dispatchOp = LUAU_INSN_OP(*pc);
++        VM_COUNT_OP(dispatchOp);
+ 
+     dispatchContinue:
+         switch (dispatchOp)
+@@ -956,7 +966,10 @@
+                     // this will result in execution continuing in native code, and is equivalent to if (p->execdata) but has no additional overhead
+                     // note that p->codeentry may point *outside* of p->code..p->code+p->sizecode, but that pointer never gets saved to savedpc.
+                     pc = SingleStep ? p->code : p->codeentry;
++                    if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                        L->global->work.hostcalls++;
+                     cl = ccl;
++                    workops = luaE_workops(L, cl);
+                     base = L->base;
+                     k = p->k;
+                     VM_NEXT();
+@@ -964,6 +977,8 @@
+                 else
+                 {
+                     lua_CFunction func = ccl->c.f;
++                    if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
++                        L->global->work.ccalls++;
+                     int n = func(L);
+ 
+                     // yield
+@@ -1052,6 +1067,7 @@
+                 // reentry
+                 pc = cip->savedpc;
+                 cl = nextcl;
++                workops = luaE_workops(L, cl);
+                 base = L->base;
+                 k = nextproto->k;
+                 VM_NEXT();
+@@ -3098,6 +3114,8 @@
+     else
+     {
+         lua_CFunction func = ccl->c.f;
++        if (luaE_scriptwork(L))
++            L->global->work.ccalls++;
+         int n = func(L);
+ 
+         // yield
+--- a/luau/VM/src/lvmutils.cpp
++++ b/luau/VM/src/lvmutils.cpp
+@@ -599,6 +599,8 @@
+     LUAU_ASSERT(L->top == L->base + nparams);
+ 
+     lua_CFunction func = clvalue(fun)->c.f;
++    if (luaE_scriptwork(L))
++        L->global->work.tmcalls++;
+     int n = func(L);
+     LUAU_ASSERT(n >= 0); // yields should have been blocked by nCcalls
+ 
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -316,6 +316,8 @@ typedef struct lua_WorkCounters
+     uint64_t objects; // collectable objects a script function's own instructions allocated (tables, closures, strings, upvalues)
+     uint64_t stored; // bytes of table storage they allocated (array and hash parts, a grown array's new size)
+     uint64_t rehashed; // keys a script function's own instructions made a table rehash (its growth)
++    int64_t hostnanos; // nanoseconds a native datatype operation charged the script (lua_workhostnanos; may be negative: a correction to what its instructions counted)
++    uint64_t muted; // while above 0 the engine's Luau prices a whole call itself (lua_workmute): lua_workhostnanos charges nothing
+ } lua_WorkCounters;
+ 
+ LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
+@@ -323,6 +325,11 @@ LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
+ LUA_API void lua_setworkexempt(lua_State* L, int idx);
+ // counts host calls for the script below the native function that asks, as if it had called exempt functions (a datatype operation served natively)
+ LUA_API void lua_workhostcalls(lua_State* L, int calls);
++// charges nanoseconds to the script below the native function that asks (a datatype operation priced from Studio's own cost; negative when
++// the instructions that called it already count more than Studio spent on the whole operation)
++LUA_API void lua_workhostnanos(lua_State* L, int nanos);
++// on: one more level of muting; off: one less (the engine's Luau prices a whole call itself, as Scheduler.muted does for the host's charges)
++LUA_API void lua_workmute(lua_State* L, int on);
+ 
+ /*
+ ** memory statistics
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -1169,6 +1169,22 @@ void lua_workhostcalls(lua_State* L, int calls)
+         L->global->work.hostcalls += calls;
+ }
+ 
++void lua_workhostnanos(lua_State* L, int nanos)
++{
++    // (also for a constructor the engine's wrapper calls for a script: the host's work for a script)
++    if (L->global->work.muted == 0 && luaE_workframe(L, L->ci) != 0)
++        L->global->work.hostnanos += nanos;
++}
++
++void lua_workmute(lua_State* L, int on)
++{
++    uint64_t& muted = L->global->work.muted;
++    if (on)
++        ++muted;
++    else if (muted > 0)
++        --muted;
++}
++
+ int lua_gc(lua_State* L, int what, int data)
+ {
+     int res = 0;
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -318,6 +318,9 @@ typedef struct lua_WorkCounters
+     uint64_t rehashed; // keys a script function's own instructions made a table rehash (its growth)
+     int64_t hostnanos; // nanoseconds a native datatype operation charged the script (lua_workhostnanos; may be negative: a correction to what its instructions counted)
+     uint64_t muted; // while above 0 the engine's Luau prices a whole call itself (lua_workmute): lua_workhostnanos charges nothing
++    uint64_t vectormagnitudes; // .Magnitude reads the VM answered on a vector for a script's own instruction
++    uint64_t vectorunits; // .Unit reads the same way
++    uint64_t vectormethods; // method calls (NAMECALL) a script's own instruction made on a vector
+ } lua_WorkCounters;
+ 
+ LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -856,6 +856,9 @@ reentry:
+                     LuaTable* mt = ttisuserdata(rb) ? uvalue(rb)->metatable : L->global->mt[ttype(rb)];
+                     const TValue* tmi = 0;
+ 
++                    if (ttisvector(rb) && luaE_scriptinsn(L))
++                        L->global->work.vectormethods++;
++
+                     // fast-path: metatable with __namecall
+                     if (const TValue* fn = fasttm(L, mt, TM_NAMECALL))
+                     {
+--- a/luau/VM/src/lvmutils.cpp
++++ b/luau/VM/src/lvmutils.cpp
+@@ -93,6 +93,48 @@ static void callTM(lua_State* L, const TValue* f, const TValue* p1, const TValue
+     luaD_call(L, L->top - 4, 0);
+ }
+ 
++// The members of a Vector3 the VM answers itself, where the engine's Luau used to serve them with a function call: a
++// component by a key the compiler could not fold (`v[axis]`), and Magnitude / Unit (either case), computed as the
++// vector library's magnitude and normalize do. Methods and the error for an unknown member come from the metatable's
++// __index table and its metatable. A read for a script's own instruction is counted (lua_WorkCounters).
++static bool luaV_vectormember(lua_State* L, const float* v, const TString* name, StkId res)
++{
++    const char* s = getstr(name);
++    if (s[1] == '\0')
++    {
++        int ic = (s[0] | ' ') - 'x';
++        if (unsigned(ic) >= 3 || (s[0] != 'x' + ic && s[0] != 'X' + ic))
++            return false;
++        setnvalue(res, v[ic]);
++        return true;
++    }
++    if (strcmp(s + 1, "agnitude") == 0 && (s[0] == 'M' || s[0] == 'm'))
++    {
++        if (luaE_scriptinsn(L))
++            L->global->work.vectormagnitudes++;
++#if LUA_VECTOR_SIZE == 4
++        setnvalue(res, sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]));
++#else
++        setnvalue(res, sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
++#endif
++        return true;
++    }
++    if (strcmp(s + 1, "nit") == 0 && (s[0] == 'U' || s[0] == 'u'))
++    {
++        if (luaE_scriptinsn(L))
++            L->global->work.vectorunits++;
++#if LUA_VECTOR_SIZE == 4
++        float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
++        setvvalue(res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, v[3] * invSqrt);
++#else
++        float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
++        setvvalue(res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, 0.0f);
++#endif
++        return true;
++    }
++    return false;
++}
++
+ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
+ {
+     int loop;
+@@ -116,6 +158,8 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
+             }
+             // t isn't a table, so see if it has an INDEX meta-method to look up the key with
+         }
++        else if (ttisvector(t) && ttisstring(key) && luaV_vectormember(L, vvalue(t), tsvalue(key), val))
++            return;
+         else if (ttisnil(tm = luaT_gettmbyobj(L, t, TM_INDEX)))
+             luaG_indexerror(L, t, key);
+         if (ttisfunction(tm))
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -14,7 +14,7 @@
+ name = "luau0-src"
+ version = "0.15.9+luau694"
+ authors = ["Aleksandr Orlenko <zxteam@protonmail.com>"]
+-build = false
++build = "build.rs"
+ autolib = false
+ autobins = false
+ autoexamples = false
+--- /dev/null
++++ b/build.rs
+@@ -0,0 +1,6 @@
++// Makes the crate's fingerprint follow its C++ sources: without a build script Cargo fingerprints only the Rust files,
++// so a patched VM (luau/) left every existing build linking the old one (mlua-sys compiles these sources in its own
++// build script, which reruns only when this crate rebuilds)
++fn main() {
++	println!("cargo:rerun-if-changed=luau");
++}
+diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
+index 873877c..01ff8cf 100644
+--- a/luau/VM/src/lgc.cpp
++++ b/luau/VM/src/lgc.cpp
+@@ -638,6 +638,9 @@ static size_t cleartable(lua_State* L, GCObject* l)
+ 
+ static void freeobj(lua_State* L, GCObject* o, lua_Page* page)
+ {
++    if (o->gch.marked & bitmask(HASHIDBIT))
++        luaH_forgetid(o);
++
+     switch (o->gch.tt)
+     {
+     case LUA_TPROTO:
+diff --git a/luau/VM/src/lgc.h b/luau/VM/src/lgc.h
+index 2500bd3..6d981fc 100644
+--- a/luau/VM/src/lgc.h
++++ b/luau/VM/src/lgc.h
+@@ -57,6 +57,8 @@
+ #define WHITE1BIT 1
+ #define BLACKBIT 2
+ #define FIXEDBIT 3
++// the object has an id in ltable.cpp's hash map (luaH_forgetid when it is freed)
++#define HASHIDBIT 4
+ #define WHITEBITS bit2mask(WHITE0BIT, WHITE1BIT)
+ 
+ #define iswhite(x) test2bits((x)->gch.marked, WHITE0BIT, WHITE1BIT)
+diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
+index 1408c14..30ca83c 100644
+--- a/luau/VM/src/ltable.cpp
++++ b/luau/VM/src/ltable.cpp
+@@ -25,6 +25,8 @@
+ 
+ #include "ltable.h"
+ 
++#include <unordered_map>
++#include <stdlib.h>
+ #include "lstate.h"
+ #include "ldebug.h"
+ #include "lgc.h"
+@@ -73,6 +75,72 @@ static LuaNode* hashpointer(const LuaTable* t, const void* p)
+     return hashpow2(t, h);
+ }
+ 
++// A key hashes by what it is, not where it lives: an object's address differs between runs, and with it the order `pairs` visits
++// a table keyed by objects (so the order handlers run in, and where each one's work lands in a frame). An Instance (userdata tag 73,
++// lua/raw.rs: slot index, generation, creation serial) hashes by its serial. Any other object (table, function, thread, buffer, userdata) hashes by an
++// id handed out the first time it is a key, from a per-thread counter; the map forgets it when the object is freed (lgc.cpp freeobj,
++// HASHIDBIT marks the objects that have one). REE_HASH_ADDRESS=1 hashes by address, as stock Luau does.
++static unsigned int mixid(unsigned int h)
++{
++    // REE_HASH_SEED=<n> deals every id a different table order, the same in every run: what a code change that only reorders
++    // handlers writes is measured against (a trace differ's noise floor)
++    static const unsigned int seed = getenv("REE_HASH_SEED") ? unsigned(atoi(getenv("REE_HASH_SEED"))) * 0x2545f491u : 0u;
++    h += seed;
++    h ^= h >> 16;
++    h *= 0xc2b2ae35u;
++    h ^= h >> 13;
++    return h;
++}
++
++struct HashIds
++{
++    std::unordered_map<const void*, unsigned int> ids;
++    unsigned int next = 1;
++};
++
++static thread_local HashIds hashids;
++
++void luaH_forgetid(const void* object)
++{
++    hashids.ids.erase(object);
++}
++
++static LuaNode* hashgcobject(const LuaTable* t, GCObject* o)
++{
++    static const bool byaddress = getenv("REE_HASH_ADDRESS") != nullptr;
++    if (byaddress)
++        return hashpointer(t, o);
++
++    unsigned int id;
++    auto found = hashids.ids.find(o);
++    if (found != hashids.ids.end())
++    {
++        id = found->second;
++    }
++    else
++    {
++        // (a thread whose states are all closed starts from 1 again: a second run in one process orders as the first did)
++        if (hashids.ids.empty())
++            hashids.next = 1;
++        id = hashids.next++;
++        hashids.ids.emplace(o, id);
++        o->gch.marked |= cast_byte(bitmask(HASHIDBIT));
++    }
++    return hashpow2(t, mixid(id * 0x9e3779b1u));
++}
++
++static LuaNode* hashuserdata(const LuaTable* t, Udata* u)
++{
++    if (u->tag != 73 || u->len < 12)
++        return hashgcobject(t, obj2gco(u));
++
++    // (slot index, generation, creation serial): the serial only. A slot is reused when the collector frees an instance, which
++    // depends on the heap, so two runs of one scene give a new instance different slots and a slot hash orders `pairs` differently.
++    unsigned int ids[3];
++    memcpy(ids, u->data, sizeof(ids));
++    return hashpow2(t, mixid(ids[2] * 0x9e3779b1u));
++}
++
+ static LuaNode* hashnum(const LuaTable* t, double n)
+ {
+     static_assert(sizeof(double) == sizeof(unsigned int) * 2, "expected a 8-byte double");
+@@ -144,8 +212,10 @@ static LuaNode* mainposition(const LuaTable* t, const TValue* key)
+         return hashboolean(t, bvalue(key));
+     case LUA_TLIGHTUSERDATA:
+         return hashpointer(t, pvalue(key));
++    case LUA_TUSERDATA:
++        return hashuserdata(t, uvalue(key));
+     default:
+-        return hashpointer(t, gcvalue(key));
++        return hashgcobject(t, gcvalue(key));
+     }
+ }
+ 
+diff --git a/luau/VM/src/ltable.h b/luau/VM/src/ltable.h
+index 50d1e64..07ffeaf 100644
+--- a/luau/VM/src/ltable.h
++++ b/luau/VM/src/ltable.h
+@@ -29,6 +29,7 @@ LUAI_FUNC int luaH_next(lua_State* L, LuaTable* t, StkId key);
+ LUAI_FUNC int luaH_getn(LuaTable* t);
+ LUAI_FUNC LuaTable* luaH_clone(lua_State* L, LuaTable* tt);
+ LUAI_FUNC void luaH_clear(LuaTable* tt);
++LUAI_FUNC void luaH_forgetid(const void* object);
+ 
+ #define luaH_setslot(L, t, slot, key) (invalidateTMcache(t), (slot == luaO_nilobject ? luaH_newkey(L, t, key) : cast_to(TValue*, slot)))
+ 
+--- a/luau/Ast/src/Parser.cpp
++++ b/luau/Ast/src/Parser.cpp
+@@ -415,6 +415,11 @@ AstStat* Parser::parseStat()
+     default:;
+     }
+ 
++    // `const Name = ...` declares a local that is never reassigned, as Roblox's Luau parses it; code that runs reassigns
++    // none, so it compiles as `local`
++    if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" && lexer.lookahead().type == Lexeme::Name)
++        return parseLocal(AstArray<AstAttr*>({nullptr, 0}));
++
+     Location start = lexer.current().location;
+ 
+     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -70,6 +70,7 @@ typedef struct CallInfo
+ #define LUA_CALLINFO_RETURN (1 << 0) // should the interpreter return after returning from this callinfo? first frame must have this set
+ #define LUA_CALLINFO_HANDLE (1 << 1) // should the error thrown during execution get handled by continuation from this callinfo? func must be C
+ #define LUA_CALLINFO_NATIVE (1 << 2) // should this function be executed using execution callback for native code
++#define LUA_CALLINFO_FORGLOOP (1 << 3) // the iterator of the caller's FORGLOOP (savedpc at its aux): its return finishes the loop step, so it can yield as in Roblox
+ 
+ #define curr_func(L) (clvalue(L->ci->func))
+ #define ci_func(ci) (clvalue((ci)->func))
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -1057,6 +1057,24 @@ reentry:
+                 Closure* nextcl = clvalue(cip->func);
+                 Proto* nextproto = nextcl->l.p;
+ 
++                // the iterator of a FORGLOOP returned: finish that loop step as the luaD_call path does
++                if (LUAU_UNLIKELY(ci->flags & LUA_CALLINFO_FORGLOOP))
++                {
++                    Instruction loopinsn = cip->savedpc[-1];
++                    StkId loopra = cip->base + LUAU_INSN_A(loopinsn);
++
++                    // copy first variable back into the iteration index
++                    setobj2s(L, loopra + 2, loopra + 3);
++
++                    pc = cip->savedpc + (ttisnil(loopra + 3) ? 1 : LUAU_INSN_D(loopinsn));
++                    cl = nextcl;
++                    workops = luaE_workops(L, cl);
++                    base = L->base;
++                    k = nextproto->k;
++                    LUAU_ASSERT(unsigned(pc - cl->l.p->code) < unsigned(cl->l.p->sizecode));
++                    VM_NEXT();
++                }
++
+ #if VM_HAS_NATIVE
+                 if (LUAU_UNLIKELY((cip->flags & LUA_CALLINFO_NATIVE) && !SingleStep))
+                 {
+@@ -2423,6 +2441,44 @@ reentry:
+                     L->top = ra + 3 + 3; // func + 2 args (state and index)
+                     LUAU_ASSERT(L->top <= L->stack_last);
+ 
++                    // a Luau iterator runs as a frame of this interpreter, not a C call, so it can yield (Roblox's VM lets
++                    // it); its LOP_RETURN finishes this step (LUA_CALLINFO_FORGLOOP). It runs interpreted (p->code).
++                    if (ttisfunction(ra) && !clvalue(ra)->isC)
++                    {
++                        Closure* ccl = clvalue(ra);
++                        Proto* p = ccl->l.p;
++                        L->ci->savedpc = pc;
++
++                        CallInfo* ci = incr_ci(L);
++                        ci->func = ra + 3;
++                        ci->base = ra + 3 + 1;
++                        ci->top = L->top + ccl->stacksize;
++                        ci->savedpc = NULL;
++                        ci->flags = LUA_CALLINFO_FORGLOOP;
++                        ci->nresults = uint8_t(aux);
++
++                        L->base = ci->base;
++
++                        // reallocs the stack: ra is not used after this line
++                        luaD_checkstackfornewci(L, ccl->stacksize);
++                        LUAU_ASSERT(ci->top <= L->stack_last);
++
++                        StkId argi = L->top;
++                        StkId argend = L->base + p->numparams;
++                        while (argi < argend)
++                            setnilvalue(argi++);
++                        L->top = p->is_vararg ? argi : ci->top;
++
++                        pc = p->code;
++                        if ((p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                            L->global->work.hostcalls++;
++                        cl = ccl;
++                        workops = luaE_workops(L, cl);
++                        base = L->base;
++                        k = p->k;
++                        VM_NEXT();
++                    }
++
+                     VM_PROTECT(luaD_call(L, ra + 3, uint8_t(aux)));
+                     L->top = L->ci->top;
+ 

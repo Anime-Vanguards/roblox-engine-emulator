@@ -1,0 +1,86 @@
+[package]
+name = "roblox-engine-emulator"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+license = "GPL-2.0-or-later"
+repository = "https://github.com/Anime-Vanguards/roblox-engine-emulator"
+description = "An emulated Roblox engine that runs a game's own Luau offline: instances, reflection, signals, the scheduler, services, the 3D world and a recorder"
+
+[lib]
+name = "roblox_engine_emulator"
+path = "src/lib.rs"
+
+# `ree`: the command line (src/main.rs; docs/cli.md)
+[[bin]]
+name = "ree"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["jit", "bundles", "meshes", "cli"]
+# Luau native code generation (a WebAssembly build has none: its VM interprets)
+jit = ["mlua/luau-jit"]
+# Asset manifest bundle mounts through an asset worker (a child process: not on the web)
+bundles = ["dep:sha2"]
+# EditableMesh from mesh assets: their FileMesh bytes decoded by ror's ror-mesh (src/meshes.rs); without it
+# CreateEditableMeshAsync of an asset starts empty with a warning
+meshes = ["dep:ror-mesh"]
+# The `ree` binary
+cli = ["dep:mimalloc"]
+# A heap profile of a `ree` command (dhat-heap.json in the working directory, for DHAT's viewer)
+# instead of mimalloc: `cargo build --release --features dhat-heap`
+dhat-heap = ["dep:dhat"]
+
+# Exact versions: a host (roblox-ui-renderer) resolves the same ones, so the engine behaves the same in
+# every build (serde_json's float parsing, rbx-dom's defaults)
+[dependencies]
+chrono = "=0.4.45"
+# The 3D world's CFrame arithmetic and spatial queries (src/world); the version Lune's datatypes use
+glam = "=0.30.10"
+# Lune's Roblox datatypes as Luau values, patched (vendor/, tools/vendor.mjs)
+lune-roblox = { path = "vendor/lune-roblox", version = "=0.3.4" }
+mlua = { version = "=0.11.4", features = ["luau", "serialize", "async"] }
+# Keep the VM ABI/source release aligned with the canonical Luau patch (vendor/luau0-src).
+mlua-sys = "=0.8.3"
+# EditableImage pixels: assets decoded, snapshots of drawn images written (src/images.rs); ror's version
+png = "=0.18.1"
+rayon = "=1.11.0"
+rbx_binary = "=2.0.1"
+rbx_dom_weak = "=4.2.0"
+rbx_reflection = "=6.1.0"
+rbx_reflection_database = "=2.0.2"
+rbx_xml = "=2.0.1"
+rustc-hash = "=2.1.3"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = { version = "=1.0.145", features = ["float_roundtrip"] }
+sha2 = { version = "=0.10.9", optional = true }
+mimalloc = { version = "=0.1.52", default-features = false, features = ["v2"], optional = true }
+dhat = { version = "=0.3.3", optional = true }
+ror-mesh = { git = "https://github.com/Anime-Vanguards/roblox-object-renderer", rev = "60c69c9821e245f74181467bdc58ca0a8babf04c", optional = true }
+# EncodingService (src/services/encoding.rs): the versions rbx_binary and its dependencies build already
+zstd = "=0.13.3"
+base64 = "=0.13.1"
+
+[workspace]
+resolver = "3"
+exclude = ["vendor"]
+
+# The patched Luau VM (vendor/luau0-src). Only a workspace root's [patch] applies: a crate that
+# depends on this one adds the same entry, pointing at this repository (docs/api.md "Use from another crate").
+[patch.crates-io]
+luau0-src = { path = "vendor/luau0-src" }
+
+# `--release` is the everyday build: full optimisation, incremental, many codegen units, so an edit rebuilds
+# in seconds. `lto = false` keeps cargo's ThinLTO across this crate's codegen units: the engine's cross-module
+# inlining (with lto = "off" an edit rebuilds in half the time, but property reads and writes measured 5-25%
+# slower; docs/building.md "Build"). Float results are the same either way (no fast-math).
+[profile.release]
+opt-level = 3
+lto = false
+incremental = true
+codegen-units = 256
+
+[profile.dev.package."*"]
+opt-level = 2

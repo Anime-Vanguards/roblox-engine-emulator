@@ -1,0 +1,64 @@
+# Claude Code on issues and PRs, started only by a maintainer writing "@claude" in a comment.
+# It reads and comments; it can't push (the public branch only accepts the sync's deploy key)
+# and it never builds or runs contributors' code. It does nothing until the repository has a
+# CLAUDE_CODE_OAUTH_TOKEN secret (from `claude setup-token`, on the maintainers' subscription).
+name: Claude
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+# One run per issue or PR at a time; a newer mention waits instead of racing it.
+concurrency:
+  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    name: Claude (maintainer request)
+    if: >-
+      !github.event.repository.private &&
+      contains(github.event.comment.body, '@claude') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # read the checkout
+      issues: write # post its reply on issues
+      pull-requests: write # post review comments on PRs
+    steps:
+      - name: Skip when no token is configured
+        id: token
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: echo "ok=$HAS_TOKEN" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.token.outputs.ok == 'true'
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@e4a6faad497d33dbc7144135c75e41f82f0bf6c0 # v1.0.255
+        if: steps.token.outputs.ok == 'true'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The job's own short-lived token, limited to the permissions above, so the Claude GitHub
+          # App doesn't have to be installed on this repository.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Read-only tools: no builds, no package scripts, no web access, nothing outside the checkout.
+          claude_args: >-
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*)"
+            --disallowedTools "WebFetch,WebSearch,Write,Edit,NotebookEdit"
+          settings: |
+            {
+              "permissions": {
+                "deny": [
+                  "Read(//proc/**)", "Read(//sys/**)", "Read(//etc/**)", "Read(//home/**)",
+                  "Read(//root/**)", "Read(//tmp/**)", "Read(//var/**)", "Read(~/**)"
+                ]
+              }
+            }

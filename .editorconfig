@@ -1,0 +1,28 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+indent_style = tab
+trim_trailing_whitespace = true
+
+# Rust and Python: 4 spaces
+[*.{rs,py}]
+indent_style = space
+indent_size = 4
+
+[*.{md,yml,yaml}]
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = false
+
+[*.json]
+indent_style = tab
+
+# Patches keep their context lines' leading spaces; vendor/ is generated from the pinned archives and the patches
+[{patches/**,vendor/**}]
+charset = unset
+indent_style = unset
+indent_size = unset
+insert_final_newline = unset
+trim_trailing_whitespace = false
