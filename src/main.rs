@@ -130,13 +130,15 @@ static PROFILER: std::sync::Mutex<Option<dhat::Profiler>> = std::sync::Mutex::ne
 fn main() {
     // mimalloc commits a thread's segments page by page as they fill instead of 32 MiB at once:
     // the same allocations, ~28 MB less committed for the `--service` client and each pool thread
-    // (MIMALLOC_EAGER_COMMIT still overrides it); and it decommits freed pages at once instead of
-    // 10 ms later, when the next allocation might run its purge: a profile's mesh effects scene
-    // peaked at 769 MB instead of 823 (MIMALLOC_PURGE_DELAY still overrides it)
+    // (MIMALLOC_EAGER_COMMIT still overrides it); and it keeps freed pages 100 ms before
+    // decommitting them (mimalloc's default is 10 ms; 0 decommitted at once): a heavy cutscene's
+    // frames free and reuse the same pages, and decommitting them at once spent ~10% of its
+    // recording in commit calls and page faults, for 5-15% less peak memory
+    // (MIMALLOC_PURGE_DELAY still overrides it)
     #[cfg(not(feature = "dhat-heap"))]
     unsafe {
         heap::mi_option_set_enabled_default(heap::MI_OPTION_EAGER_COMMIT, false);
-        heap::mi_option_set_default(heap::MI_OPTION_PURGE_DELAY, 0);
+        heap::mi_option_set_default(heap::MI_OPTION_PURGE_DELAY, 100);
     }
     #[cfg(feature = "dhat-heap")]
     {
