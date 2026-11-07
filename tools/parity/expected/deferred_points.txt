@@ -1,0 +1,17 @@
+# engine: Roblox Studio 0.744.0.7441077, a headless playing client (script identity 2 unless the probe asks for another; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-07
+from-PreRender c0 c1 c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-PreAnimation c0 |PreA c1 c2 c3 c4 c5 c6 |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-PreSimulation c0 |PreS c1 c2 c3 c4 c5 c6 |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-PostSimulation c0 |Post c1 c2 c3 c4 c5 c6 |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-Heartbeat c0 |Hear c1 c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-Stepped c0 |PreS c1 c2 c3 c4 c5 c6 |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-RenderStepped c0 c1 c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-delay c0 c1 |Hear c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-wait c0 c1 |Hear c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-legacy-wait c0 c1 c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-legacy-spawn c0 c1 c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post
+from-bindtorenderstep c0 c1 c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post
+defer-chain-1000 steps 80 per-frame 0:1,1:79
+cut-event count 80 messages 1 Enum.MessageType.MessageError Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function on line @133 in <probe>
+after-cut fires 1

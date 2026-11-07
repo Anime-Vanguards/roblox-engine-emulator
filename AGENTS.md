@@ -24,6 +24,7 @@ cargo test --release <name>           # one test, by (part of) its name
 cargo clippy --release --all-targets  # lints (no project-wide clippy config)
 node tools/vendor.mjs                 # rebuild vendor/ after changing a file in patches/ (downloads two pinned archives)
 node tools/vendor.mjs --check         # vendor/ is exactly the pinned archives plus patches/
+node tools/parity/run.mjs [--diff]    # differential probes: ree against the real engine's captured output
 ```
 
 Don't run `cargo fmt` on the tree: the code isn't rustfmt-formatted (long lines), and a format pass would rewrite
