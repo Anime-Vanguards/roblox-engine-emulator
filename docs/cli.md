@@ -558,6 +558,8 @@ with it (profile-view/, on ratatui: the engine's crate has no terminal UI). Each
 tables with their header raised and every other row shaded, charts and gauges; the panel that takes the keys has its
 border in the accent.
 
+<img src="media/profile-view-source.webp" width="100%" alt="The Source view of tools/profile-demo/leaderboard.luau: each line's work, instructions and allocations beside the code on a heat scale, the sort's comparator the hottest line, and the selected line's opcodes below">
+
 - **What it opens**: a profile folder (it holds profile.json), the folder of a run made with `--profile` (profile/ in
   it), or a what-if folder. Two folders are a pair, before and after, and open on Diff. A what-if folder opens on
   Compare, with the baseline's run at the largest size open in the other views.

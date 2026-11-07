@@ -36,6 +36,8 @@ tools/hw-counters/     the counter service `--profile hw` reads through (a crate
 profile-view/          the profile viewer, `ree profile view|render` (a crate and binary of its own, reading profile
                        folders): the terminal UI, its views and issue detectors, and the PNG, SVG and text renderer;
                        fonts/ the bundled JetBrains Mono
+tools/what-if/         variant files for `ree profile try`, with what each shows
+tools/profile-demo/    a harness written slowly on purpose, to try the profiler and its viewer on (README "Profiling")
 tests/                 the patched VM's tests and the process guards
 docs/engine.md         the contract: architecture, rules and formats
 ```
