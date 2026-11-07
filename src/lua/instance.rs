@@ -975,8 +975,9 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     behaviors.add_method(base, K::Remove as NameId, remove.clone());
     behaviors.add_method(base, K::remove as NameId, remove);
     behaviors.add_method(base, K::ClearAllChildren as NameId, method(|lua, engine, id, _| {
+        // Last child first (measured in a playing client, Studio 0.744: tools/parity/probes/hierarchy.luau)
         let children = engine.state.borrow().dom.at(id).children.clone();
-        for child in children {
+        for child in children.into_iter().rev() {
             destroy(lua, engine, child)?;
         }
         Ok(none())

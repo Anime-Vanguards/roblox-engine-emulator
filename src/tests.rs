@@ -281,6 +281,27 @@ fn destroy_and_clone() {
 }
 
 #[test]
+fn clear_all_children_destroys_the_last_child_first() {
+    // Measured in a playing client (Studio 0.744): ChildRemoved fires for C3, C2, C1
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        for Index = 1, 3 do
+            local Child = Instance.new("Folder")
+            Child.Name = "C" .. Index
+            Child.Parent = Folder
+        end
+        Folder.ChildRemoved:Connect(function(Child) print(Child.Name) end)
+        Folder:ClearAllChildren()
+        "#,
+    );
+    assert_eq!(lines(&engine), vec!["print: C3", "print: C2", "print: C1"]);
+}
+
+#[test]
 fn enums_and_engine_datatypes() {
     assert_script(
         r#"

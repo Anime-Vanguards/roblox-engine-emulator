@@ -931,10 +931,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "clear-all-children Root.DescendantAdded(C),Root.ChildAdded(C),Root.DescendantAdded(C1),Root.DescendantAdded(C2),Root.DescendantAdded(C3),C.DescendantRemoving(C3),Root.DescendantRemoving(C3),C.ChildRemoved(C3),C.DescendantRemoving(C2),Root.DescendantRemoving(C2),C.ChildRemoved(C2),C.DescendantRemoving(C1),Root.DescendantRemoving(C1),C.ChildRemoved(C1)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "parent-to-self error Attempt to set Self as its own parent",
 			"why": "not fixed yet"
 		},
