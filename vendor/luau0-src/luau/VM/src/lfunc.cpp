@@ -11,6 +11,7 @@ Proto* luaF_newproto(lua_State* L)
     Proto* f = luaM_newgco(L, Proto, sizeof(Proto), L->activememcat);
 
     luaC_init(L, f, LUA_TPROTO);
+    luaC_coldmade(L, obj2gco(f));
 
     f->nups = 0;
     f->numparams = 0;
@@ -59,6 +60,7 @@ Closure* luaF_newLclosure(lua_State* L, int nelems, LuaTable* e, Proto* p)
 {
     Closure* c = luaM_newgco(L, Closure, sizeLclosure(nelems), L->activememcat);
     luaC_init(L, c, LUA_TFUNCTION);
+    luaC_coldmade(L, obj2gco(c));
     c->isC = 0;
     c->env = e;
     c->nupvalues = cast_byte(nelems);

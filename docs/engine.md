@@ -374,7 +374,25 @@ are plain member reads (an instruction).
 
 The first touch of an instance in a frame (a read, a write or a method call) costs more than the next ones:
 45 ns for a part, 270 ns for a GUI object or UI component, which a client lays out and draws every frame
-(`COLD_TOUCH`, `COLD_TOUCH_GUI`), and a write's dirtying on top (`cold_write_extra`).
+(`COLD_TOUCH`, `COLD_TOUCH_GUI`), and a write's dirtying on top (`cold_write_extra`). The first use of each
+member in a frame runs the engine's own code for it cold: a property's first write 1.4 us more, its first read
+0.5, a method's first call 0.8 (`FIRST_WRITE`, `FIRST_READ`, `FIRST_CALL`, `Touched::first_use`; a client's
+first GUI write of a frame 1.65 us over the same write later in it, a part's 0.9-2.35, a method's 0.6-0.95).
+
+A client runs its engine work between two frames' scripts, so Luau that runs once a frame over data it made
+earlier finds that out of the caches too. The VM marks each table, Luau closure and function a script touches
+in a frame (a bit of the object's header that nothing else uses), counts the first touch in a frame of one
+made before the frame (`lua_coldtracking`, `lua_coldframe`; the work counters' `coldtables`, `coldclosures`,
+`coldprotos` and `coldcode`), and the clock charges each 200 ns a table, 30 a closure, 5 a function and 0.85 an
+instruction of its code (`LUAU_COLD_TABLE` and below). A table made in the frame is not cold, and a walk run
+twice in a frame pays once. The lists of marked objects live outside the VM's heap, and a collected object's
+page goes back to the allocator a frame later: collectgarbage("count"), gcinfo and the collector's pace are
+the same with the marks counted and without. A host turns the counting on where it charges scripts' Luau
+(an interpreting VM: `ree record`, `ree run`, `ree serve`, a host that calls `interpret_modules` or
+`interpret_all`). A client pays 14 ns a record walked once a frame when the records were made together in one
+loop, 50-70 when other allocations came between them, 140-210 when they were made over many frames between
+instances and other allocations: the VM does not see where an object lies, and the price is the made-over-time
+end, where a game's per-frame data is.
 
 The prices are measured with the parity bench (`tools/cost-parity`, README there): about 400 workloads that
 run unchanged in ree and in a real client, engine calls by family, the language loops interpreted and as a
@@ -386,13 +404,15 @@ and each job takes its scene out of the DataModel again (`Corpus.Cleanup`): the 
 the later groups' spatial queries meet three copies of their geometry. A memory row keeps every round's
 objects alive until the row ends and reads its median round.
 
-What the prices compose to on real per-frame code is a second, larger question. Measured on a game's own
-modules timed the same way on both sides (a GUI scroll and gradient step, an effect system's step lists,
-four unit attacks' casts), the work clock reads 0.15-0.5x a client's time: code that runs once a frame over
-many objects finds them out of the CPU's caches (a walk of 900 records allocated over time 227 ns a record
-in a client against 17 ns at the loop prices), and a GUI read after the GUI changed lays it out first (a
-rect read 1.06 us after a scroll, 0.27 us after none). The prices are a hot loop's; per-frame code of a
-game costs more than they say.
+What the prices compose to on real per-frame code is a second question, measured on a game's own modules
+timed the same way on both sides (a GUI scroll and gradient step, an effect system's step lists, four unit
+attacks' casts; held out of every fit, a virtualized card grid on its frame scheduler and a server's enemy
+movement loop). Without the cold costs above the work clock read 0.15-0.53x a client; with them a GUI scroll
+0.82x, a gradient step 0.76x, the step lists 0.76-1.05x, the server loop 1.02-1.07x, the card grid 0.48-0.51x
+and the attacks' casts 0.32-0.67x. What is still missing is named in every profile's summary (`cost::FIDELITY`):
+where data lies, an instance touched alone (a part costs a client about 0.4 us on its first touch in a frame
+when touched by itself, 45 ns in a loop over parts made together), the engine work on an effect's instances in
+a cast, and what a layout leaves warm. Size a cut in a client.
 
 A script's environment is safe, as Roblox makes every script's: its imports (`game`, `Vector3.new`,
 `math.floor`) are resolved when it loads and read as constants, builtins (`math.*`, `type`, `typeof`, ...)

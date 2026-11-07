@@ -582,6 +582,7 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
 {
     LuaTable* t = luaM_newgco(L, LuaTable, sizeof(LuaTable), L->activememcat);
     luaC_init(L, t, LUA_TTABLE);
+    luaC_coldmade(L, obj2gco(t));
     t->metatable = NULL;
     t->tmcache = cast_byte(~0);
     t->array = NULL;
@@ -884,6 +885,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
 {
     LuaTable* t = luaM_newgco(L, LuaTable, sizeof(LuaTable), L->activememcat);
     luaC_init(L, t, LUA_TTABLE);
+    luaC_coldmade(L, obj2gco(t));
     t->metatable = tt->metatable;
     t->tmcache = tt->tmcache;
     t->array = NULL;

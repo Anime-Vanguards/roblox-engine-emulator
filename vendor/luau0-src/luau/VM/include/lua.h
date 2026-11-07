@@ -333,6 +333,10 @@ typedef struct lua_WorkCounters
     uint64_t formats; // string.format calls for a script (an interpolated string is one)
     uint64_t formatspecs; // the % specifiers they formatted
     uint64_t newstrings; // strings a script's work made that the VM did not hold already (an equal string alive is reused)
+    uint64_t coldtables; // tables a script's work touched first in a frame (lua_coldframe), made before the frame began
+    uint64_t coldclosures; // Luau closures a script's work called first in a frame, made before it
+    uint64_t coldprotos; // functions whose code a script's work ran first in a frame, loaded before it
+    uint64_t coldcode; // the instructions of those functions (their code's size)
 } lua_WorkCounters;
 
 LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
@@ -349,6 +353,14 @@ LUA_API void lua_workmute(lua_State* L, int on);
 // set the next cycle's trigger): the wall clock (lua_clock) by default, so where it steps depends on how fast the host ran; a host
 // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
 LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
+
+// cold touches (the work counters' cold*): a client runs a frame's engine work between two frames' scripts, so a table, closure or
+// function a frame's script work touches first finds it out of the CPU's caches. On, the VM marks each table, Luau closure and
+// function its instructions touch, in the object's header (a bit no other use has; nothing a script reads changes), and counts the
+// first touch in a frame of one made before the frame; lua_coldframe begins a frame (every object is cold again). Off (the default),
+// a touch only sets the mark once. Pages of collected objects are returned to the allocator at the next frame while it is on.
+LUA_API void lua_coldtracking(lua_State* L, int on);
+LUA_API void lua_coldframe(lua_State* L);
 
 // the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
 // `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names

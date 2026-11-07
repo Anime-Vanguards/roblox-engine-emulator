@@ -281,6 +281,12 @@ pub fn interprets_all(engine: &Engine) -> bool {
     engine.modules.borrow().interpret_all
 }
 
+/// Whether this engine's module chunks stay interpreted ([`interpret_modules`] or [`interpret_all`]): their Luau is what the work
+/// clock counts and charges (a natively compiled chunk's instructions are not counted)
+pub fn interprets_scripts(engine: &Engine) -> bool {
+    engine.modules.borrow().interpreted
+}
+
 /// Compiles the oldest deferred chunk to native code; returns whether more are waiting.
 pub fn compile_deferred(lua: &Lua, engine: &Engine) -> bool {
     let next = engine.modules.borrow_mut().deferred.as_mut().and_then(|queue| queue.pop_front());

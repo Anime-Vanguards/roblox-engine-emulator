@@ -89,6 +89,7 @@ static void close_state(lua_State* L)
 {
     global_State* g = L->global;
     luaF_close(L, L->stack); // close all upvalues for this thread
+    luaC_coldfree(L);        // pages are freed at once from here on
     luaC_freeall(L);         // collect all objects
     LUAU_ASSERT(g->strt.nuse == 0);
     luaM_freearray(L, L->global->strt.hash, L->global->strt.size, TString*, 0);
@@ -238,6 +239,8 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
     g->gcclockud = NULL;
     g->typeofnames = NULL;
     g->vectortypename = NULL;
+    g->coldon = 0;
+    g->coldslot = 0;
 
 #ifdef LUAI_GCMETRICS
     g->gcmetrics = GCMetrics();

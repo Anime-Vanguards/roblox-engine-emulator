@@ -243,6 +243,8 @@ reentry:
     pc = L->ci->savedpc;
     cl = clvalue(L->ci->func);
     workops = luaE_workops(L, cl);
+    luaC_touch(L, cl);
+    luaC_touch(L, cl->l.p);
     base = L->base;
     k = cl->l.p->k;
 
@@ -476,6 +478,7 @@ reentry:
                 if (LUAU_LIKELY(ttistable(rb)))
                 {
                     LuaTable* h = hvalue(rb);
+                    luaC_touch(L, h);
 
                     int slot = LUAU_INSN_C(insn) & h->nodemask8;
                     LuaNode* n = &h->node[slot];
@@ -593,6 +596,7 @@ reentry:
                 if (LUAU_LIKELY(ttistable(rb)))
                 {
                     LuaTable* h = hvalue(rb);
+                    luaC_touch(L, h);
 
                     int slot = LUAU_INSN_C(insn) & h->nodemask8;
                     LuaNode* n = &h->node[slot];
@@ -667,6 +671,7 @@ reentry:
                 if (ttistable(rb) && ttisnumber(rc))
                 {
                     LuaTable* h = hvalue(rb);
+                    luaC_touch(L, h);
 
                     double indexd = nvalue(rc);
                     int index = int(indexd);
@@ -697,6 +702,7 @@ reentry:
                 if (ttistable(rb) && ttisnumber(rc))
                 {
                     LuaTable* h = hvalue(rb);
+                    luaC_touch(L, h);
 
                     double indexd = nvalue(rc);
                     int index = int(indexd);
@@ -728,6 +734,7 @@ reentry:
                 if (ttistable(rb))
                 {
                     LuaTable* h = hvalue(rb);
+                    luaC_touch(L, h);
 
                     if (LUAU_LIKELY(unsigned(c) < unsigned(h->sizearray) && !h->metatable))
                     {
@@ -756,6 +763,7 @@ reentry:
                 if (ttistable(rb))
                 {
                     LuaTable* h = hvalue(rb);
+                    luaC_touch(L, h);
 
                     if (LUAU_LIKELY(unsigned(c) < unsigned(h->sizearray) && !h->metatable && !h->readonly))
                     {
@@ -829,6 +837,7 @@ reentry:
                 if (LUAU_LIKELY(ttistable(rb)))
                 {
                     LuaTable* h = hvalue(rb);
+                    luaC_touch(L, h);
                     // note: we can't use nodemask8 here because we need to query the main position of the table, and 8-bit nodemask8 only works
                     // for predictive lookups
                     LuaNode* n = &h->node[tsvalue(kv)->hash & (sizenode(h) - 1)];
@@ -988,6 +997,8 @@ reentry:
                         L->global->work.hostcalls++;
                     cl = ccl;
                     workops = luaE_workops(L, cl);
+                    luaC_touch(L, cl);
+                    luaC_touch(L, p);
                     base = L->base;
                     k = p->k;
                     VM_NEXT();
@@ -2173,6 +2184,7 @@ reentry:
                 if (LUAU_LIKELY(ttistable(rb)))
                 {
                     LuaTable* h = hvalue(rb);
+                    luaC_touch(L, h);
 
                     if (fastnotm(h->metatable, TM_LEN))
                     {
@@ -2387,6 +2399,7 @@ reentry:
                 if (ttisnil(ra) && ttistable(ra + 1))
                 {
                     LuaTable* h = hvalue(ra + 1);
+                    luaC_touch(L, h);
                     int index = int(reinterpret_cast<uintptr_t>(pvalue(ra + 2)));
 
                     int sizearray = h->sizearray;
@@ -2491,6 +2504,8 @@ reentry:
                             L->global->work.hostcalls++;
                         cl = ccl;
                         workops = luaE_workops(L, cl);
+                        luaC_touch(L, cl);
+                        luaC_touch(L, p);
                         base = L->base;
                         k = p->k;
                         VM_NEXT();

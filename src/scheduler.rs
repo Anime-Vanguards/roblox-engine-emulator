@@ -229,6 +229,8 @@ pub struct Scheduler {
     pub touched: Rc<std::cell::RefCell<crate::cost::Touched>>,
     /// The Luau VM's work counters (lua::raw::install), charged by what they cost Studio (cost::luau)
     pub vm_counters: Option<*const crate::cost::VmCounters>,
+    /// Whether the VM counts cold touches (cost::cold_tracking): on from the first frame of a VM whose scripts are interpreted
+    pub cold_tracking: bool,
     /// What the VM's work had cost when last charged
     vm_charged: f64,
     /// The work clock:the virtual time plus the work charged since, never behind the frame's time
@@ -371,6 +373,7 @@ impl Scheduler {
             work_drained: Rc::new(std::cell::Cell::new(0.0)),
             touched: Rc::new(std::cell::RefCell::new(crate::cost::Touched::new())),
             vm_counters: None,
+            cold_tracking: false,
             vm_charged: 0.0,
             cpu: f64::NEG_INFINITY,
             stretch: 0.0,
@@ -1418,6 +1421,15 @@ fn render(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
         crate::boundary::begin_frame(delta);
         state.sched.begin_phase();
         profile::count("renderSteps", 1);
+    }
+    // The VM's tables, closures and functions go cold with the instances (cost.rs LUAU_COLD_TABLE): a VM that interprets its
+    // scripts (their Luau is charged) counts their first touch in a frame from the first frame on
+    let cold = engine.state.borrow().sched.cold_tracking;
+    if cold {
+        crate::cost::cold_frame(lua);
+    } else if engine.state.borrow().sched.vm_counters.is_some() && crate::lua::modules::interprets_scripts(engine) {
+        crate::cost::cold_tracking(lua, true);
+        engine.state.borrow_mut().sched.cold_tracking = true;
     }
     flush_deferred(lua, engine)?;
     // Measured order: the render-step bindings, the tween step, then one resumption point that

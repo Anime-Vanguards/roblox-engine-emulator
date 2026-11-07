@@ -61,6 +61,8 @@
 #define HASHIDBIT 4
 // a host's profile marked the object (lua_profilemark): freeing it calls the profile's hook (lprofile.cpp luaP_freed)
 #define PROFBIT 5
+// a table, Luau closure or function touched in the current frame (lua_coldtracking; luaC_coldtouch)
+#define COLDBIT 6
 #define WHITEBITS bit2mask(WHITE0BIT, WHITE1BIT)
 
 #define iswhite(x) test2bits((x)->gch.marked, WHITE0BIT, WHITE1BIT)
@@ -147,3 +149,12 @@ LUAI_FUNC void luaC_enumheap(
 );
 LUAI_FUNC int64_t luaC_allocationrate(lua_State* L);
 LUAI_FUNC const char* luaC_statename(int state);
+
+// cold touches (lua_coldtracking): an object a frame's work touches first is marked (COLDBIT) and, made before the frame, counted
+LUAI_FUNC void luaC_coldtouch(lua_State* L, GCObject* o);
+// a new table, closure or function: touched in the frame that made it
+LUAI_FUNC void luaC_coldmade(lua_State* L, GCObject* o);
+// whether a collected object's page waits for the next frame to go back to the allocator (true: the page is kept, lmem.cpp freepage)
+LUAI_FUNC bool luaC_colddefer(lua_State* L, struct lua_Page* page);
+LUAI_FUNC void luaC_coldfree(lua_State* L);
+#define luaC_touch(L, o) (LUAU_LIKELY(testbit(obj2gco(o)->gch.marked, COLDBIT)) ? (void)0 : luaC_coldtouch(L, obj2gco(o)))

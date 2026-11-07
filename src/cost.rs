@@ -157,11 +157,37 @@ impl ColdKind {
     }
 }
 
+/// What a script uses of an instance's members, for the first use of each in a frame ([`Touched::first_use`])
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MemberUse {
+    Read = 0,
+    Write = 1,
+    Call = 2,
+}
+
+/// The key of a read that finds a child by its name rather than a member (the engine's own lookup code, whatever the name)
+pub const CHILD_LOOKUP: crate::reflection::NameId = crate::reflection::NameId::MAX;
+
+/// The first use in a frame of each of an instance's members a script reads, writes or calls, by kind: the engine's code for it
+/// runs cold after the frame's render and physics steps (a rendered client of a game's lobby, roblox-sim, Studio 0.744: one call at
+/// a time right after Heartbeat resumed the probe, each on an instance of its own, the median of 42 frames, against the same
+/// sequence run again in the frame on other instances; notes/macro firstprobe): a frame's first GUI property write 1.65 us more,
+/// the first write of another property 1.1-1.45, a part's first writes 0.9 (Transparency) and 2.35 (CFrame), a child found by name
+/// and written 2.4-2.6; the first rect read 1.5 and a plain property's 0.3; a method's first call 0.6-0.95 (FindFirstChild,
+/// GetAttribute, GetPivot). A member's second use in the frame costs 0.2-0.3 more than hot and later ones 0.08: not charged.
+pub const FIRST_READ: f64 = 0.5e-6;
+pub const FIRST_WRITE: f64 = 1.4e-6;
+pub const FIRST_CALL: f64 = 0.8e-6;
+
 /// The frame each instance slot was last touched in (one per engine: the scheduler owns it, the Instance API's C metamethods
-/// share it like the work cell).
+/// share it like the work cell), and the frame each member was last used in ([`Touched::first_use`]).
 pub struct Touched {
     frame: u32,
     stamps: Vec<u32>,
+    /// By [`MemberUse`], the frame each member name was last used in; the last slot of each is [`CHILD_LOOKUP`]'s
+    members: [Vec<u32>; 3],
+    /// What a member's first use in a frame costs, by [`MemberUse`]
+    first_prices: [f64; 3],
     /// Whether the most recent [`Touched::touch`] found its instance cold
     last_cold: bool,
     /// The first-touch price of each class ([`cold_touch`]) by ClassId: [`COLD_TOUCH`] for every class until [`Touched::set_prices`]
@@ -172,7 +198,15 @@ pub struct Touched {
 
 impl Touched {
     pub fn new() -> Self {
-        Touched { frame: 1, stamps: Vec::new(), last_cold: false, prices: Vec::new(), kinds: Vec::new() }
+        Touched {
+            frame: 1,
+            stamps: Vec::new(),
+            members: [Vec::new(), Vec::new(), Vec::new()],
+            first_prices: [FIRST_READ, FIRST_WRITE, FIRST_CALL],
+            last_cold: false,
+            prices: Vec::new(),
+            kinds: Vec::new(),
+        }
     }
 
     /// Prices each class's first touch ([`cold_touch`]) and cold writes ([`ColdKind`]).
@@ -196,6 +230,28 @@ impl Touched {
     /// Frame `frame` begins (every instance is cold again).
     pub fn begin_frame(&mut self, frame: u64) {
         self.frame = frame as u32 + 1;
+    }
+
+    /// What a script's use of member `name` (a read, a write or a method call) adds for the engine's code being cold: its first use in
+    /// the frame costs [`FIRST_READ`], [`FIRST_WRITE`] or [`FIRST_CALL`], later ones nothing. A read that finds a child passes
+    /// [`CHILD_LOOKUP`].
+    #[inline]
+    pub fn first_use(&mut self, kind: MemberUse, name: crate::reflection::NameId) -> f64 {
+        let price = self.first_prices[kind as usize];
+        if price == 0.0 {
+            return 0.0;
+        }
+        let stamps = &mut self.members[kind as usize];
+        let slot = if name == CHILD_LOOKUP { 0 } else { name as usize + 1 };
+        if stamps.len() <= slot {
+            stamps.resize(slot + 1 + slot / 2, 0);
+        }
+        if stamps[slot] == self.frame {
+            0.0
+        } else {
+            stamps[slot] = self.frame;
+            price
+        }
     }
 
     /// The first-touch price of `class` ([`cold_touch`]) if the instance in slot `index` has not been touched in this frame, else 0;
@@ -765,6 +821,11 @@ pub const MESH_DECODE_VERTEX: f64 = 1.2e-6;
 /// a game's animations, 11 KB to 2.1 MB: 0.24-0.88 s, median 0.41, one 1.65; no trend with size).
 pub const ANIMATION_FETCH: f64 = 0.45;
 
+/// What the work clock is beside a client's own time, for a profile's summary (profiler/report.rs): the prices are measured one call
+/// at a time and the cold costs of a frame's first touches on the game's own per-frame code (docs/engine.md "Work clock"); what is
+/// not modelled is named, so nobody reads the clock as a client's where it is not one.
+pub const FIDELITY: &str = "fidelity: prices measured in a client, with a frame's cold first touches of tables, functions and engine members; a game's per-frame code reads 0.5-1.1x a client (most 0.75-1.1x), an attack's cast 0.3-0.7x. Not modelled: where data lies in memory (made together in one loop it reads dear), an instance touched alone (a part's first touch in a frame costs a client about 0.4 us, here 0.045), the engine work on an effect's instances in a cast, and what a layout leaves warm. Size a cut in a client";
+
 /// What the Luau VM did since it started (vendor/luau0-src, patches/luau.patch: lua_workcounters)
 #[repr(C)]
 pub struct VmCounters {
@@ -817,6 +878,12 @@ pub struct VmCounters {
     pub formatspecs: u64,
     /// Strings a script's work made that the VM did not hold already
     pub newstrings: u64,
+    /// Tables, Luau closures and functions a script's work touched first in a frame (lua_coldframe), made before the frame began,
+    /// and the instructions of those functions (their code's size): [`LUAU_COLD_TABLE`] and below
+    pub coldtables: u64,
+    pub coldclosures: u64,
+    pub coldprotos: u64,
+    pub coldcode: u64,
 }
 
 unsafe extern "C-unwind" {
@@ -824,6 +891,20 @@ unsafe extern "C-unwind" {
     fn lua_setworkexempt(state: *mut mlua::ffi::lua_State, index: std::ffi::c_int);
     fn lua_workmute(state: *mut mlua::ffi::lua_State, on: std::ffi::c_int);
     fn lua_setgcclock(state: *mut mlua::ffi::lua_State, clock: Option<unsafe extern "C" fn(*mut std::ffi::c_void) -> f64>, ud: *mut std::ffi::c_void);
+    fn lua_coldtracking(state: *mut mlua::ffi::lua_State, on: std::ffi::c_int);
+    fn lua_coldframe(state: *mut mlua::ffi::lua_State);
+}
+
+/// Turns the VM's cold touches on or off (patches/luau.patch `lua_coldtracking`): on, the first touch in a frame of a table, Luau closure
+/// or function made before the frame is counted (VmCounters `coldtables` and below) and priced ([`luau`]). A host that charges scripts'
+/// Luau (it interprets them) turns it on; nothing a script reads changes either way.
+pub fn cold_tracking(lua: &mlua::Lua, on: bool) {
+    unsafe { lua_coldtracking(lua.current_thread().state(), on as std::ffi::c_int) }
+}
+
+/// A frame begins for the VM's cold touches: every object is cold again ([`cold_tracking`]).
+pub fn cold_frame(lua: &mlua::Lua) {
+    unsafe { lua_coldframe(lua.current_thread().state()) }
 }
 
 /// The garbage collector's clock: the scripts' own Luau work so far, measured at fixed prices ([`collector_work`]).
@@ -920,8 +1001,32 @@ pub fn luau(c: &VmCounters) -> f64 {
         + c.cloneitems as f64 * LUAU_CLONE_ITEM
         + c.concatitems as f64 * LUAU_CONCAT_ITEM
         + c.splitparts as f64 * LUAU_SPLIT_PART
-        + c.formats as f64 * LUAU_FORMAT)
+        + c.formats as f64 * LUAU_FORMAT
+        + c.coldtables as f64 * LUAU_COLD_TABLE
+        + c.coldclosures as f64 * LUAU_COLD_CLOSURE
+        + c.coldprotos as f64 * LUAU_COLD_PROTO
+        + c.coldcode as f64 * LUAU_COLD_CODE)
 }
+
+
+
+/// Cold per-frame Luau, in nanoseconds: what a client pays the first time in a frame a script touches a table, calls a Luau closure or
+/// runs a function made before the frame (VmCounters `coldtables` and below; patches/luau.patch `lua_coldframe`), beyond the hot
+/// prices above. A client runs its engine work (layout, rendering, physics) between two frames' scripts, so code that runs once a
+/// frame over data it made over time finds both out of the CPU's caches, which a hot loop never does. Measured in rendered clients of
+/// a game's lobby and match place (roblox-sim, Studio 0.744; notes/macro coldprobe, six sessions): records walked once a frame cost
+/// over the same walk hot 14 ns a record made together in one loop, 50-70 spread among other allocations, 85-180 made one a frame,
+/// 140-210 made over many frames between instances and other allocations (a walk of the same records as a list costs the same:
+/// it is where they lie, not the walk), more for wide records (16 keys: 110-125); a closure 41-59 ns (made spread), a module's
+/// function about 16 with its closure (made together at load), and a long function 0.85 ns an instruction of its code (600
+/// statements once a frame: 5.5 ns a statement against 2.5). A game's per-frame data is made over time: the table price is the
+/// spread end, which the game's own per-frame code bears out (notes/macro: a gradient step's 900 records 207-238 ns each over the
+/// hot prices, the per-frame code of a scrolled grid, of an effect system and of a server's enemy loop at 0.76-1.07x a client with
+/// it). Data made together in one loop reads up to 14x dear: the VM does not see where an object lies.
+pub const LUAU_COLD_TABLE: f64 = 200.0;
+pub const LUAU_COLD_CLOSURE: f64 = 30.0;
+pub const LUAU_COLD_PROTO: f64 = 5.0;
+pub const LUAU_COLD_CODE: f64 = 0.85;
 
 /// The kinds of instruction priced apart (tools/cost-parity/fit.py CLASSES), by opcode (Luau's Bytecode.h order): what a code generator
 /// turns into a few machine instructions (arithmetic, moves, jumps, comparisons), `%` / `//` / `^`, keyed table reads and writes,

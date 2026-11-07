@@ -3365,3 +3365,502 @@ index 1e27fb6..7dc3b92 100644
  
  // whether L's VM runs the stepping interpreter for a profile (luau_execute)
  LUAI_FUNC bool luaP_stepping(lua_State* L);
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index 94b10dc..e59884d 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -333,6 +333,10 @@ typedef struct lua_WorkCounters
+     uint64_t formats; // string.format calls for a script (an interpolated string is one)
+     uint64_t formatspecs; // the % specifiers they formatted
+     uint64_t newstrings; // strings a script's work made that the VM did not hold already (an equal string alive is reused)
++    uint64_t coldtables; // tables a script's work touched first in a frame (lua_coldframe), made before the frame began
++    uint64_t coldclosures; // Luau closures a script's work called first in a frame, made before it
++    uint64_t coldprotos; // functions whose code a script's work ran first in a frame, loaded before it
++    uint64_t coldcode; // the instructions of those functions (their code's size)
+ } lua_WorkCounters;
+ 
+ LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
+@@ -350,6 +354,14 @@ LUA_API void lua_workmute(lua_State* L, int on);
+ // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
+ LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
+ 
++// cold touches (the work counters' cold*): a client runs a frame's engine work between two frames' scripts, so a table, closure or
++// function a frame's script work touches first finds it out of the CPU's caches. On, the VM marks each table, Luau closure and
++// function its instructions touch, in the object's header (a bit no other use has; nothing a script reads changes), and counts the
++// first touch in a frame of one made before the frame; lua_coldframe begins a frame (every object is cold again). Off (the default),
++// a touch only sets the mark once. Pages of collected objects are returned to the allocator at the next frame while it is on.
++LUA_API void lua_coldtracking(lua_State* L, int on);
++LUA_API void lua_coldframe(lua_State* L);
++
+ // the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
+ // `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names
+ // every vector. The table is held for the collector (a weak-keyed one keeps its weak keys).
+diff --git a/luau/VM/src/lfunc.cpp b/luau/VM/src/lfunc.cpp
+index 09c8472..14593d2 100644
+--- a/luau/VM/src/lfunc.cpp
++++ b/luau/VM/src/lfunc.cpp
+@@ -11,6 +11,7 @@ Proto* luaF_newproto(lua_State* L)
+     Proto* f = luaM_newgco(L, Proto, sizeof(Proto), L->activememcat);
+ 
+     luaC_init(L, f, LUA_TPROTO);
++    luaC_coldmade(L, obj2gco(f));
+ 
+     f->nups = 0;
+     f->numparams = 0;
+@@ -59,6 +60,7 @@ Closure* luaF_newLclosure(lua_State* L, int nelems, LuaTable* e, Proto* p)
+ {
+     Closure* c = luaM_newgco(L, Closure, sizeLclosure(nelems), L->activememcat);
+     luaC_init(L, c, LUA_TFUNCTION);
++    luaC_coldmade(L, obj2gco(c));
+     c->isC = 0;
+     c->env = e;
+     c->nupvalues = cast_byte(nelems);
+diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
+index ddb9691..f00e18a 100644
+--- a/luau/VM/src/lgc.cpp
++++ b/luau/VM/src/lgc.cpp
+@@ -2,6 +2,10 @@
+ // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+ #include "lgc.h"
+ 
++#include <mutex>
++#include <stdlib.h>
++#include <stddef.h>
++
+ #include "lobject.h"
+ #include "lstate.h"
+ #include "ltable.h"
+@@ -1328,3 +1332,180 @@ const char* luaC_statename(int state)
+         return NULL;
+     }
+ }
++
++/*
++** Cold touches (lua_coldtracking). A client runs a frame's engine work (layout, rendering, physics) between two frames' scripts, so a
++** table, Luau closure or function a frame's script work touches first is out of the CPU's caches: once a frame over many such objects
++** costs a client several cache misses each, which a hot loop never pays. The first touch in a frame marks the object (COLDBIT, a bit of
++** its header no other use has) and, if the object was made before the frame began and the work is a script's, counts it; lua_coldframe
++** clears the marks of every object marked since the last one. The marked objects' list and the state live outside the VM's heap, so the
++** heap's size, the collector's pace and every value a script reads stay the same. A collected object's page goes back to the allocator
++** only after the marks are cleared (luaC_colddefer), so the list never points into freed memory.
++*/
++struct ColdState
++{
++    GCObject** touched;
++    size_t touchedcount;
++    size_t touchedcapacity;
++    lua_Page** pages;
++    size_t pagecount;
++    size_t pagecapacity;
++};
++
++// the states that track cold touches, by global_State::coldslot (0: none); slots are taken and given back under the lock, and each
++// state reads only its own slot
++static const unsigned int kColdSlots = 4096;
++static ColdState* coldstates[kColdSlots];
++static std::mutex coldlock;
++
++#if UINTPTR_MAX == 0xffffffffffffffffull
++// coldon and coldslot sit in padding: the state's size (counted in totalbytes) is the stock one
++static_assert(offsetof(global_State, gray) == 40 && offsetof(global_State, freepages) == 96, "the cold fields must not move global_State's layout");
++#endif
++
++static bool coldgrow(void** items, size_t* capacity, size_t itemsize)
++{
++    size_t wanted = *capacity ? *capacity * 2 : 4096;
++    void* grown = realloc(*items, wanted * itemsize);
++    if (!grown)
++        return false;
++    *items = grown;
++    *capacity = wanted;
++    return true;
++}
++
++static void coldpush(global_State* g, GCObject* o)
++{
++    ColdState* c = coldstates[g->coldslot];
++    if (c->touchedcount == c->touchedcapacity && !coldgrow((void**)&c->touched, &c->touchedcapacity, sizeof(GCObject*)))
++    {
++        // (out of memory: stop tracking; the marks already set stay, so those objects read touched from now on)
++        g->coldon = 0;
++        return;
++    }
++    c->touched[c->touchedcount++] = o;
++}
++
++void luaC_coldtouch(lua_State* L, GCObject* o)
++{
++    l_setbit(o->gch.marked, COLDBIT);
++    global_State* g = L->global;
++    if (!g->coldon)
++        return;
++    coldpush(g, o);
++    // counted for a script's work: its instruction (or a C function it called) touched the table, or the function it runs is a script's
++    if (!luaE_scriptwork(L))
++        return;
++    switch (o->gch.tt)
++    {
++    case LUA_TTABLE:
++        g->work.coldtables++;
++        break;
++    case LUA_TFUNCTION:
++        g->work.coldclosures++;
++        break;
++    case LUA_TPROTO:
++        g->work.coldprotos++;
++        g->work.coldcode += uint64_t(gco2p(o)->sizecode);
++        break;
++    }
++}
++
++void luaC_coldmade(lua_State* L, GCObject* o)
++{
++    l_setbit(o->gch.marked, COLDBIT);
++    global_State* g = L->global;
++    if (g->coldon)
++        coldpush(g, o);
++}
++
++bool luaC_colddefer(lua_State* L, lua_Page* page)
++{
++    global_State* g = L->global;
++    if (!g->coldon)
++        return false;
++    ColdState* c = coldstates[g->coldslot];
++    if (c->pagecount == c->pagecapacity && !coldgrow((void**)&c->pages, &c->pagecapacity, sizeof(lua_Page*)))
++        return false;
++    c->pages[c->pagecount++] = page;
++    return true;
++}
++
++// clears the marks of the objects marked since the last frame and returns the pages freed since then to the allocator
++static void coldclear(lua_State* L, ColdState* c)
++{
++    // (a marked object may have been collected since: its block is still in a page of the VM's, kept by luaC_colddefer, and a mark
++    // written into a free block or a new object of another kind means nothing)
++    for (size_t i = 0; i < c->touchedcount; ++i)
++        c->touched[i]->gch.marked &= cast_byte(~bitmask(COLDBIT));
++    c->touchedcount = 0;
++    for (size_t i = 0; i < c->pagecount; ++i)
++        luaM_releasepage(L, c->pages[i]);
++    c->pagecount = 0;
++}
++
++void luaC_coldfree(lua_State* L)
++{
++    global_State* g = L->global;
++    if (!g->coldslot)
++        return;
++    ColdState* c = coldstates[g->coldslot];
++    coldclear(L, c);
++    free(c->touched);
++    free(c->pages);
++    free(c);
++    {
++        std::lock_guard<std::mutex> guard(coldlock);
++        coldstates[g->coldslot] = NULL;
++    }
++    g->coldslot = 0;
++    g->coldon = 0;
++}
++
++static bool coldunmark(void* context, lua_Page* page, GCObject* gco)
++{
++    gco->gch.marked &= cast_byte(~bitmask(COLDBIT));
++    return false;
++}
++
++LUA_API void lua_coldtracking(lua_State* L, int on)
++{
++    global_State* g = L->global;
++    if (on && !g->coldon)
++    {
++        if (!g->coldslot)
++        {
++            ColdState* c = (ColdState*)calloc(1, sizeof(ColdState));
++            if (!c)
++                return;
++            std::lock_guard<std::mutex> guard(coldlock);
++            for (unsigned int slot = 1; slot < kColdSlots; ++slot)
++                if (!coldstates[slot])
++                {
++                    coldstates[slot] = c;
++                    g->coldslot = slot;
++                    break;
++                }
++            if (!g->coldslot)
++            {
++                free(c);
++                return;
++            }
++        }
++        // every object is cold: the marks set while tracking was off are not in the list
++        luaM_visitgco(L, NULL, coldunmark);
++        g->coldon = 1;
++    }
++    else if (!on && g->coldon)
++    {
++        coldclear(L, coldstates[g->coldslot]);
++        g->coldon = 0;
++    }
++}
++
++LUA_API void lua_coldframe(lua_State* L)
++{
++    global_State* g = L->global;
++    if (g->coldon)
++        coldclear(L, coldstates[g->coldslot]);
++}
+diff --git a/luau/VM/src/lgc.h b/luau/VM/src/lgc.h
+index 819b63a..cd9c099 100644
+--- a/luau/VM/src/lgc.h
++++ b/luau/VM/src/lgc.h
+@@ -61,6 +61,8 @@
+ #define HASHIDBIT 4
+ // a host's profile marked the object (lua_profilemark): freeing it calls the profile's hook (lprofile.cpp luaP_freed)
+ #define PROFBIT 5
++// a table, Luau closure or function touched in the current frame (lua_coldtracking; luaC_coldtouch)
++#define COLDBIT 6
+ #define WHITEBITS bit2mask(WHITE0BIT, WHITE1BIT)
+ 
+ #define iswhite(x) test2bits((x)->gch.marked, WHITE0BIT, WHITE1BIT)
+@@ -147,3 +149,12 @@ LUAI_FUNC void luaC_enumheap(
+ );
+ LUAI_FUNC int64_t luaC_allocationrate(lua_State* L);
+ LUAI_FUNC const char* luaC_statename(int state);
++
++// cold touches (lua_coldtracking): an object a frame's work touches first is marked (COLDBIT) and, made before the frame, counted
++LUAI_FUNC void luaC_coldtouch(lua_State* L, GCObject* o);
++// a new table, closure or function: touched in the frame that made it
++LUAI_FUNC void luaC_coldmade(lua_State* L, GCObject* o);
++// whether a collected object's page waits for the next frame to go back to the allocator (true: the page is kept, lmem.cpp freepage)
++LUAI_FUNC bool luaC_colddefer(lua_State* L, struct lua_Page* page);
++LUAI_FUNC void luaC_coldfree(lua_State* L);
++#define luaC_touch(L, o) (LUAU_LIKELY(testbit(obj2gco(o)->gch.marked, COLDBIT)) ? (void)0 : luaC_coldtouch(L, obj2gco(o)))
+diff --git a/luau/VM/src/lmem.cpp b/luau/VM/src/lmem.cpp
+index d107d84..032bb43 100644
+--- a/luau/VM/src/lmem.cpp
++++ b/luau/VM/src/lmem.cpp
+@@ -6,6 +6,7 @@
+ #include "ldo.h"
+ #include "ldebug.h"
+ #include "lprofile.h"
++#include "lgc.h"
+ 
+ #include <string.h>
+ 
+@@ -313,10 +314,20 @@ static void freepage(lua_State* L, lua_Page** pageset, lua_Page* page)
+             *pageset = page->listnext;
+     }
+ 
++    // a page of collected objects waits for the next frame while cold touches are tracked: the list of marked objects may point into it
++    if (pageset == &g->allgcopages && luaC_colddefer(L, page))
++        return;
++
+     // so long
+     (*g->frealloc)(g->ud, page, page->pageSize, 0);
+ }
+ 
++void luaM_releasepage(lua_State* L, lua_Page* page)
++{
++    global_State* g = L->global;
++    (*g->frealloc)(g->ud, page, page->pageSize, 0);
++}
++
+ static void freeclasspage(lua_State* L, lua_Page** freepageset, lua_Page** pageset, lua_Page* page, uint8_t sizeClass)
+ {
+     // remove page from freelist
+diff --git a/luau/VM/src/lmem.h b/luau/VM/src/lmem.h
+index aff0754..192efa4 100644
+--- a/luau/VM/src/lmem.h
++++ b/luau/VM/src/lmem.h
+@@ -31,3 +31,5 @@ LUAI_FUNC lua_Page* luaM_getnextpage(lua_Page* page);
+ 
+ LUAI_FUNC void luaM_visitpage(lua_Page* page, void* context, bool (*visitor)(void* context, lua_Page* page, GCObject* gco));
+ LUAI_FUNC void luaM_visitgco(lua_State* L, void* context, bool (*visitor)(void* context, lua_Page* page, GCObject* gco));
++// gives a page that freepage kept back (lgc.cpp luaC_colddefer) to the allocator
++LUAI_FUNC void luaM_releasepage(lua_State* L, lua_Page* page);
+diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
+index b8b9c4d..a6055d9 100644
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -89,6 +89,7 @@ static void close_state(lua_State* L)
+ {
+     global_State* g = L->global;
+     luaF_close(L, L->stack); // close all upvalues for this thread
++    luaC_coldfree(L);        // pages are freed at once from here on
+     luaC_freeall(L);         // collect all objects
+     LUAU_ASSERT(g->strt.nuse == 0);
+     luaM_freearray(L, L->global->strt.hash, L->global->strt.size, TString*, 0);
+@@ -238,6 +239,8 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
+     g->gcclockud = NULL;
+     g->typeofnames = NULL;
+     g->vectortypename = NULL;
++    g->coldon = 0;
++    g->coldslot = 0;
+ 
+ #ifdef LUAI_GCMETRICS
+     g->gcmetrics = GCMetrics();
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index da0657a..39fbdc3 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -175,6 +175,7 @@ typedef struct global_State
+ 
+     uint8_t currentwhite;
+     uint8_t gcstate; // state of garbage collector
++    uint8_t coldon; // cold touches are tracked (lua_coldtracking; in the padding before gray: the state keeps its size)
+ 
+ 
+     GCObject* gray;      // list of gray objects
+@@ -187,6 +188,7 @@ typedef struct global_State
+     int gcgoal;                               // see LUAI_GCGOAL
+     int gcstepmul;                            // see LUAI_GCSTEPMUL
+     int gcstepsize;                          // see LUAI_GCSTEPSIZE
++    unsigned int coldslot; // the state's ColdState in lgc.cpp's table, 0 for none (in the padding before freepages)
+ 
+     struct lua_Page* freepages[LUA_SIZECLASSES]; // free page linked list for each size class for non-collectable objects
+     struct lua_Page* freegcopages[LUA_SIZECLASSES]; // free page linked list for each size class for collectable objects
+diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
+index 718ebaf..5431119 100644
+--- a/luau/VM/src/ltable.cpp
++++ b/luau/VM/src/ltable.cpp
+@@ -582,6 +582,7 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
+ {
+     LuaTable* t = luaM_newgco(L, LuaTable, sizeof(LuaTable), L->activememcat);
+     luaC_init(L, t, LUA_TTABLE);
++    luaC_coldmade(L, obj2gco(t));
+     t->metatable = NULL;
+     t->tmcache = cast_byte(~0);
+     t->array = NULL;
+@@ -884,6 +885,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
+ {
+     LuaTable* t = luaM_newgco(L, LuaTable, sizeof(LuaTable), L->activememcat);
+     luaC_init(L, t, LUA_TTABLE);
++    luaC_coldmade(L, obj2gco(t));
+     t->metatable = tt->metatable;
+     t->tmcache = tt->tmcache;
+     t->array = NULL;
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index 77252b3..26187cf 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -243,6 +243,8 @@ reentry:
+     pc = L->ci->savedpc;
+     cl = clvalue(L->ci->func);
+     workops = luaE_workops(L, cl);
++    luaC_touch(L, cl);
++    luaC_touch(L, cl->l.p);
+     base = L->base;
+     k = cl->l.p->k;
+ 
+@@ -476,6 +478,7 @@ reentry:
+                 if (LUAU_LIKELY(ttistable(rb)))
+                 {
+                     LuaTable* h = hvalue(rb);
++                    luaC_touch(L, h);
+ 
+                     int slot = LUAU_INSN_C(insn) & h->nodemask8;
+                     LuaNode* n = &h->node[slot];
+@@ -593,6 +596,7 @@ reentry:
+                 if (LUAU_LIKELY(ttistable(rb)))
+                 {
+                     LuaTable* h = hvalue(rb);
++                    luaC_touch(L, h);
+ 
+                     int slot = LUAU_INSN_C(insn) & h->nodemask8;
+                     LuaNode* n = &h->node[slot];
+@@ -667,6 +671,7 @@ reentry:
+                 if (ttistable(rb) && ttisnumber(rc))
+                 {
+                     LuaTable* h = hvalue(rb);
++                    luaC_touch(L, h);
+ 
+                     double indexd = nvalue(rc);
+                     int index = int(indexd);
+@@ -697,6 +702,7 @@ reentry:
+                 if (ttistable(rb) && ttisnumber(rc))
+                 {
+                     LuaTable* h = hvalue(rb);
++                    luaC_touch(L, h);
+ 
+                     double indexd = nvalue(rc);
+                     int index = int(indexd);
+@@ -728,6 +734,7 @@ reentry:
+                 if (ttistable(rb))
+                 {
+                     LuaTable* h = hvalue(rb);
++                    luaC_touch(L, h);
+ 
+                     if (LUAU_LIKELY(unsigned(c) < unsigned(h->sizearray) && !h->metatable))
+                     {
+@@ -756,6 +763,7 @@ reentry:
+                 if (ttistable(rb))
+                 {
+                     LuaTable* h = hvalue(rb);
++                    luaC_touch(L, h);
+ 
+                     if (LUAU_LIKELY(unsigned(c) < unsigned(h->sizearray) && !h->metatable && !h->readonly))
+                     {
+@@ -829,6 +837,7 @@ reentry:
+                 if (LUAU_LIKELY(ttistable(rb)))
+                 {
+                     LuaTable* h = hvalue(rb);
++                    luaC_touch(L, h);
+                     // note: we can't use nodemask8 here because we need to query the main position of the table, and 8-bit nodemask8 only works
+                     // for predictive lookups
+                     LuaNode* n = &h->node[tsvalue(kv)->hash & (sizenode(h) - 1)];
+@@ -988,6 +997,8 @@ reentry:
+                         L->global->work.hostcalls++;
+                     cl = ccl;
+                     workops = luaE_workops(L, cl);
++                    luaC_touch(L, cl);
++                    luaC_touch(L, p);
+                     base = L->base;
+                     k = p->k;
+                     VM_NEXT();
+@@ -2173,6 +2184,7 @@ reentry:
+                 if (LUAU_LIKELY(ttistable(rb)))
+                 {
+                     LuaTable* h = hvalue(rb);
++                    luaC_touch(L, h);
+ 
+                     if (fastnotm(h->metatable, TM_LEN))
+                     {
+@@ -2387,6 +2399,7 @@ reentry:
+                 if (ttisnil(ra) && ttistable(ra + 1))
+                 {
+                     LuaTable* h = hvalue(ra + 1);
++                    luaC_touch(L, h);
+                     int index = int(reinterpret_cast<uintptr_t>(pvalue(ra + 2)));
+ 
+                     int sizearray = h->sizearray;
+@@ -2491,6 +2504,8 @@ reentry:
+                             L->global->work.hostcalls++;
+                         cl = ccl;
+                         workops = luaE_workops(L, cl);
++                        luaC_touch(L, cl);
++                        luaC_touch(L, p);
+                         base = L->base;
+                         k = p->k;
+                         VM_NEXT();
+diff --git a/luau/VM/src/lvmutils.cpp b/luau/VM/src/lvmutils.cpp
+index 4b6878e..95075e8 100644
+--- a/luau/VM/src/lvmutils.cpp
++++ b/luau/VM/src/lvmutils.cpp
+@@ -146,6 +146,7 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
+         if (ttistable(t))
+         { // `t' is a table?
+             LuaTable* h = hvalue(t);
++            luaC_touch(L, h);
+ 
+             const TValue* res = luaH_get(h, key); // do a primitive get
+ 
+@@ -184,6 +185,7 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
+         if (ttistable(t))
+         { // `t' is a table?
+             LuaTable* h = hvalue(t);
++            luaC_touch(L, h);
+ 
+             const TValue* oldval = luaH_get(h, key);
+ 

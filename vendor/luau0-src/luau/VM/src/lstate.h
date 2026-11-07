@@ -175,6 +175,7 @@ typedef struct global_State
 
     uint8_t currentwhite;
     uint8_t gcstate; // state of garbage collector
+    uint8_t coldon; // cold touches are tracked (lua_coldtracking; in the padding before gray: the state keeps its size)
 
 
     GCObject* gray;      // list of gray objects
@@ -187,6 +188,7 @@ typedef struct global_State
     int gcgoal;                               // see LUAI_GCGOAL
     int gcstepmul;                            // see LUAI_GCSTEPMUL
     int gcstepsize;                          // see LUAI_GCSTEPSIZE
+    unsigned int coldslot; // the state's ColdState in lgc.cpp's table, 0 for none (in the padding before freepages)
 
     struct lua_Page* freepages[LUA_SIZECLASSES]; // free page linked list for each size class for non-collectable objects
     struct lua_Page* freegcopages[LUA_SIZECLASSES]; // free page linked list for each size class for collectable objects

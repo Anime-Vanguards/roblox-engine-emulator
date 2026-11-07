@@ -450,6 +450,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             "outside_instructions_ms": ms(vm_results.engine_work),
             "per_second_ms": if seconds > 0.0 { ms(total_work) / seconds } else { 0.0 },
             "per_frame_ms": ms(total_work) / frames,
+            "fidelity": crate::cost::FIDELITY,
             "script_insns": script_insns,
             "engine_insns": engine_insns,
             "native_functions": natives.iter().map(|f| json!({"name": f.name, "module": module_name(&f.source), "line": f.line, "entries": f.native_entries, "work_ms": ms(f.native_work)})).collect::<Vec<_>>(),
@@ -463,6 +464,8 @@ pub fn write(input: &Input) -> Result<String, String> {
             ms(total_work) / frames,
             ms(vm_results.engine_work)
         );
+        // (what the clock is beside a client's own time: read before taking its milliseconds as a client's)
+        let _ = writeln!(summary, "{}", crate::cost::FIDELITY);
         let _ = writeln!(summary, "instructions: {} by scripts, {} by the engine's own Luau", group_digits(script_insns), group_digits(engine_insns));
         if natives.is_empty() {
             let _ = writeln!(summary, "natively compiled functions: none ran natively (every instruction is counted)");

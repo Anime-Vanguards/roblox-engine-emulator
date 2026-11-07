@@ -6,6 +6,7 @@
 #include "ldo.h"
 #include "ldebug.h"
 #include "lprofile.h"
+#include "lgc.h"
 
 #include <string.h>
 
@@ -313,7 +314,17 @@ static void freepage(lua_State* L, lua_Page** pageset, lua_Page* page)
             *pageset = page->listnext;
     }
 
+    // a page of collected objects waits for the next frame while cold touches are tracked: the list of marked objects may point into it
+    if (pageset == &g->allgcopages && luaC_colddefer(L, page))
+        return;
+
     // so long
+    (*g->frealloc)(g->ud, page, page->pageSize, 0);
+}
+
+void luaM_releasepage(lua_State* L, lua_Page* page)
+{
+    global_State* g = L->global;
     (*g->frealloc)(g->ud, page, page->pageSize, 0);
 }
 

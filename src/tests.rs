@@ -4167,6 +4167,163 @@ fn a_gui_objects_first_touch_in_a_frame_costs_what_a_drawn_gui_pays() {
     );
 }
 
+/// Cold per-frame Luau (cost.rs LUAU_COLD_TABLE and below): a table, Luau closure or function a frame's script work touches first
+/// costs what a client pays for finding it out of its caches, once a frame; a table made in the frame is not cold, and a walk run
+/// twice in a frame pays it once. Two runs of the same script read the same clock.
+#[test]
+fn a_frames_first_touch_of_a_table_or_function_costs_what_a_client_pays_once_a_frame() {
+    fn walks() -> Vec<String> {
+        let (lua, engine) = start();
+        engine_lua::modules::interpret_all(&lua, &engine);
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        run(
+            &lua,
+            &engine,
+            r#"
+            _G.Records = {}
+            for Index = 1, 200 do
+                _G.Records[Index] = { A = Index, B = true }
+            end
+            _G.Walk = function()
+                local Sum = 0
+                for _, Record in _G.Records do
+                    Sum += Record.A
+                end
+                return Sum
+            end
+            "#,
+        );
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let source = r#"
+            local function Per(Body)
+                local Start = os.clock()
+                Body()
+                return (os.clock() - Start) / 200 * 1e9
+            end
+            local Cold = Per(_G.Walk)
+            local Hot = Per(_G.Walk)
+            local Fresh = {}
+            for Index = 1, 200 do
+                Fresh[Index] = { A = Index, B = true }
+            end
+            local Made = Per(function()
+                local Sum = 0
+                for _, Record in Fresh do
+                    Sum += Record.A
+                end
+            end)
+            print(string.format("%.6f %.6f %.6f", Cold, Hot, Made))
+        "#;
+        let first = run(&lua, &engine, source);
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let mut next = run(&lua, &engine, source);
+        next.drain(..first.len());
+        [first, next].concat()
+    }
+    let one = walks();
+    assert_eq!(one, walks(), "the same script reads the same clock in every run");
+    for line in &one {
+        let values: Vec<f64> = line.split_once(": ").unwrap().1.split(' ').map(|v| v.parse().unwrap()).collect();
+        let (cold, hot, made) = (values[0], values[1], values[2]);
+        // 200 records, the list and the walk's closure and function cold: 200 ns a record and about 1.3 ns of the rest
+        let extra = cold - hot;
+        assert!((200.0..205.0).contains(&extra), "a cold record {extra:.1} ns over the hot walk, a client 140-210");
+        assert!((made - hot).abs() < 3.0, "a table made in the frame is hot: {made:.1} against {hot:.1} ns");
+    }
+}
+
+/// Counting cold touches marks a bit of each object's header and keeps its lists off the VM's heap: what a script reads of memory
+/// (collectgarbage("count"), gcinfo) is the same with it on and off, frame by frame, while tables are made and collected.
+#[test]
+fn counting_cold_touches_leaves_what_a_script_reads_of_memory_as_it_was() {
+    fn readings(tracking: bool) -> Vec<String> {
+        let (lua, engine) = start();
+        engine_lua::modules::interpret_all(&lua, &engine);
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        if !tracking {
+            crate::cost::cold_tracking(&lua, false);
+        }
+        run(&lua, &engine, "_G.Kept = {} _G.Readings = {}");
+        for frame in 0..40 {
+            run(
+                &lua,
+                &engine,
+                &format!(
+                    r#"
+                    for Index = 1, 400 do
+                        local Record = {{ A = Index, B = {{ Index }} }}
+                        if Index % 3 == 0 then
+                            table.insert(_G.Kept, Record)
+                        end
+                    end
+                    for _, Record in _G.Kept do
+                        Record.A += 1
+                    end
+                    if {frame} % 10 == 9 then
+                        table.clear(_G.Kept)
+                    end
+                    table.insert(_G.Readings, collectgarbage("count") .. "/" .. gcinfo())
+                    "#
+                ),
+            );
+            crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        }
+        run(&lua, &engine, r#"print(table.concat(_G.Readings, " "))"#)
+    }
+    let on = readings(true);
+    assert_eq!(on, readings(false), "memory readings with cold touches counted and without");
+    assert_eq!(on.last().unwrap().split_once(": ").unwrap().1.split(' ').count(), 40);
+}
+
+/// A member's first use in a frame (cost.rs FIRST_READ, FIRST_WRITE, FIRST_CALL): the engine's code for a property or method runs
+/// cold after the frame's render and physics steps, so the first write, read or call of it in a frame costs a client more than the
+/// next one on another instance; in the next frame the first one pays again.
+#[test]
+fn a_members_first_use_in_a_frame_costs_the_engines_code_running_cold() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Gui = Instance.new("ScreenGui")
+        Gui.Parent = game:GetService("StarterGui")
+        _G.A, _G.B = Instance.new("Frame"), Instance.new("Frame")
+        _G.A.Parent, _G.B.Parent = Gui, Gui
+        "#,
+    );
+    let source = r#"
+        local A, B = _G.A, _G.B
+        -- (both instances touched first, so neither use below pays an instance's first touch)
+        local _, _ = A.Name, B.Name
+        local function Two(Use)
+            local T0 = os.clock()
+            Use(A)
+            local T1 = os.clock()
+            Use(B)
+            local T2 = os.clock()
+            return ((T1 - T0) - (T2 - T1)) * 1e6
+        end
+        local Write = Two(function(F) F.BackgroundTransparency = F.BackgroundTransparency + 0.25 end)
+        local Read = Two(function(F) local _ = F.Size end)
+        local Call = Two(function(F) local _ = F:GetAttribute("Missing") end)
+        print(string.format("%.4f %.4f %.4f", Write, Read, Call))
+    "#;
+    // (a first frame for what is done once: a member's lookup, its value's first conversion)
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, source);
+    for _ in 0..2 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let output = run(&lua, &engine, source);
+        let values: Vec<f64> = output.last().unwrap().split_once(": ").unwrap().1.split(' ').map(|v| v.parse().unwrap()).collect();
+        eprintln!("first use over the second (us): write {:.3}, read {:.3}, call {:.3}", values[0], values[1], values[2]);
+        // (the write's own read of BackgroundTransparency is a first read too: a write's first use 1.4 us and a read's 0.5)
+        assert!((values[0] - 1.9).abs() < 0.05, "a property's first write in a frame {:.2} us over the second, a client 1.1-1.65 (+ its read)", values[0]);
+        assert!((values[1] - 0.5).abs() < 0.05, "a property's first read in a frame {:.2} us over the second, a client 0.3-1.5", values[1]);
+        assert!((values[2] - 0.8).abs() < 0.05, "a method's first call in a frame {:.2} us over the second, a client 0.6-0.95", values[2]);
+    }
+}
+
 /// Vector3 members and methods on the work clock (the op_cost probe's `datatype` rows in a lobby playtest's client, the
 /// medians of its runs): Magnitude 10.4 ns, Unit 12.3, Dot 9.4, Cross 9.6,
 /// Max 12.2, Lerp 13.3, FuzzyEq 13.5. ree charged every one a function call to the engine's Luau (Magnitude and Unit 18,

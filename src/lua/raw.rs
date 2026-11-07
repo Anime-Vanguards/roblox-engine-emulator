@@ -1123,11 +1123,20 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
             class = engine.state.borrow().dom.at(id).class;
         }
         crate::cost::tally_member("read", &engine.reflection.class(class).name, || std::ffi::CStr::from_ptr(key).to_string_lossy().into_owned());
-        api.cross(crate::boundary::Kind::Get, class, name, id, cost, true);
         let read = match name {
             Some(name) => api.member(class, name),
             None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: 0.0 },
         };
+        // (the engine's code for the member, cold at the frame's first use: cost.rs FIRST_READ)
+        let used = match name {
+            Some(name) if !matches!(read.read, Read::Child) => name,
+            _ => crate::cost::CHILD_LOOKUP,
+        };
+        let first = api.touched.borrow_mut().first_use(crate::cost::MemberUse::Read, used);
+        if first > 0.0 {
+            api.charge(first);
+        }
+        api.cross(crate::boundary::Kind::Get, class, name, id, cost + first, true);
         match read.read {
             Read::Plain => {
                 let name = name.unwrap_or_default();
@@ -1546,7 +1555,11 @@ unsafe fn namecall_fast(state: *mut ffi::lua_State) -> Out {
         }
         let member = api.member(class, name);
         crate::cost::tally_member("call", &engine.reflection.class(class).name, || engine.reflection.name(name).to_string());
-        let cost = member.cost as f64 + api.touched.borrow_mut().touch(id.index, class);
+        let cost = {
+            let mut touched = api.touched.borrow_mut();
+            // (the method's code, cold at its first call in the frame: cost.rs FIRST_CALL)
+            member.cost as f64 + touched.touch(id.index, class) + touched.first_use(crate::cost::MemberUse::Call, name)
+        };
         api.charge(cost);
         api.cross(crate::boundary::Kind::Method, class, Some(name), id, cost, true);
         match member.call {

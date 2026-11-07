@@ -146,6 +146,7 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
         if (ttistable(t))
         { // `t' is a table?
             LuaTable* h = hvalue(t);
+            luaC_touch(L, h);
 
             const TValue* res = luaH_get(h, key); // do a primitive get
 
@@ -184,6 +185,7 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
         if (ttistable(t))
         { // `t' is a table?
             LuaTable* h = hvalue(t);
+            luaC_touch(L, h);
 
             const TValue* oldval = luaH_get(h, key);
 

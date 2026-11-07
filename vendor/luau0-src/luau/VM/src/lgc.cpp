@@ -2,6 +2,10 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lgc.h"
 
+#include <mutex>
+#include <stdlib.h>
+#include <stddef.h>
+
 #include "lobject.h"
 #include "lstate.h"
 #include "ltable.h"
@@ -1327,4 +1331,181 @@ const char* luaC_statename(int state)
     default:
         return NULL;
     }
+}
+
+/*
+** Cold touches (lua_coldtracking). A client runs a frame's engine work (layout, rendering, physics) between two frames' scripts, so a
+** table, Luau closure or function a frame's script work touches first is out of the CPU's caches: once a frame over many such objects
+** costs a client several cache misses each, which a hot loop never pays. The first touch in a frame marks the object (COLDBIT, a bit of
+** its header no other use has) and, if the object was made before the frame began and the work is a script's, counts it; lua_coldframe
+** clears the marks of every object marked since the last one. The marked objects' list and the state live outside the VM's heap, so the
+** heap's size, the collector's pace and every value a script reads stay the same. A collected object's page goes back to the allocator
+** only after the marks are cleared (luaC_colddefer), so the list never points into freed memory.
+*/
+struct ColdState
+{
+    GCObject** touched;
+    size_t touchedcount;
+    size_t touchedcapacity;
+    lua_Page** pages;
+    size_t pagecount;
+    size_t pagecapacity;
+};
+
+// the states that track cold touches, by global_State::coldslot (0: none); slots are taken and given back under the lock, and each
+// state reads only its own slot
+static const unsigned int kColdSlots = 4096;
+static ColdState* coldstates[kColdSlots];
+static std::mutex coldlock;
+
+#if UINTPTR_MAX == 0xffffffffffffffffull
+// coldon and coldslot sit in padding: the state's size (counted in totalbytes) is the stock one
+static_assert(offsetof(global_State, gray) == 40 && offsetof(global_State, freepages) == 96, "the cold fields must not move global_State's layout");
+#endif
+
+static bool coldgrow(void** items, size_t* capacity, size_t itemsize)
+{
+    size_t wanted = *capacity ? *capacity * 2 : 4096;
+    void* grown = realloc(*items, wanted * itemsize);
+    if (!grown)
+        return false;
+    *items = grown;
+    *capacity = wanted;
+    return true;
+}
+
+static void coldpush(global_State* g, GCObject* o)
+{
+    ColdState* c = coldstates[g->coldslot];
+    if (c->touchedcount == c->touchedcapacity && !coldgrow((void**)&c->touched, &c->touchedcapacity, sizeof(GCObject*)))
+    {
+        // (out of memory: stop tracking; the marks already set stay, so those objects read touched from now on)
+        g->coldon = 0;
+        return;
+    }
+    c->touched[c->touchedcount++] = o;
+}
+
+void luaC_coldtouch(lua_State* L, GCObject* o)
+{
+    l_setbit(o->gch.marked, COLDBIT);
+    global_State* g = L->global;
+    if (!g->coldon)
+        return;
+    coldpush(g, o);
+    // counted for a script's work: its instruction (or a C function it called) touched the table, or the function it runs is a script's
+    if (!luaE_scriptwork(L))
+        return;
+    switch (o->gch.tt)
+    {
+    case LUA_TTABLE:
+        g->work.coldtables++;
+        break;
+    case LUA_TFUNCTION:
+        g->work.coldclosures++;
+        break;
+    case LUA_TPROTO:
+        g->work.coldprotos++;
+        g->work.coldcode += uint64_t(gco2p(o)->sizecode);
+        break;
+    }
+}
+
+void luaC_coldmade(lua_State* L, GCObject* o)
+{
+    l_setbit(o->gch.marked, COLDBIT);
+    global_State* g = L->global;
+    if (g->coldon)
+        coldpush(g, o);
+}
+
+bool luaC_colddefer(lua_State* L, lua_Page* page)
+{
+    global_State* g = L->global;
+    if (!g->coldon)
+        return false;
+    ColdState* c = coldstates[g->coldslot];
+    if (c->pagecount == c->pagecapacity && !coldgrow((void**)&c->pages, &c->pagecapacity, sizeof(lua_Page*)))
+        return false;
+    c->pages[c->pagecount++] = page;
+    return true;
+}
+
+// clears the marks of the objects marked since the last frame and returns the pages freed since then to the allocator
+static void coldclear(lua_State* L, ColdState* c)
+{
+    // (a marked object may have been collected since: its block is still in a page of the VM's, kept by luaC_colddefer, and a mark
+    // written into a free block or a new object of another kind means nothing)
+    for (size_t i = 0; i < c->touchedcount; ++i)
+        c->touched[i]->gch.marked &= cast_byte(~bitmask(COLDBIT));
+    c->touchedcount = 0;
+    for (size_t i = 0; i < c->pagecount; ++i)
+        luaM_releasepage(L, c->pages[i]);
+    c->pagecount = 0;
+}
+
+void luaC_coldfree(lua_State* L)
+{
+    global_State* g = L->global;
+    if (!g->coldslot)
+        return;
+    ColdState* c = coldstates[g->coldslot];
+    coldclear(L, c);
+    free(c->touched);
+    free(c->pages);
+    free(c);
+    {
+        std::lock_guard<std::mutex> guard(coldlock);
+        coldstates[g->coldslot] = NULL;
+    }
+    g->coldslot = 0;
+    g->coldon = 0;
+}
+
+static bool coldunmark(void* context, lua_Page* page, GCObject* gco)
+{
+    gco->gch.marked &= cast_byte(~bitmask(COLDBIT));
+    return false;
+}
+
+LUA_API void lua_coldtracking(lua_State* L, int on)
+{
+    global_State* g = L->global;
+    if (on && !g->coldon)
+    {
+        if (!g->coldslot)
+        {
+            ColdState* c = (ColdState*)calloc(1, sizeof(ColdState));
+            if (!c)
+                return;
+            std::lock_guard<std::mutex> guard(coldlock);
+            for (unsigned int slot = 1; slot < kColdSlots; ++slot)
+                if (!coldstates[slot])
+                {
+                    coldstates[slot] = c;
+                    g->coldslot = slot;
+                    break;
+                }
+            if (!g->coldslot)
+            {
+                free(c);
+                return;
+            }
+        }
+        // every object is cold: the marks set while tracking was off are not in the list
+        luaM_visitgco(L, NULL, coldunmark);
+        g->coldon = 1;
+    }
+    else if (!on && g->coldon)
+    {
+        coldclear(L, coldstates[g->coldslot]);
+        g->coldon = 0;
+    }
+}
+
+LUA_API void lua_coldframe(lua_State* L)
+{
+    global_State* g = L->global;
+    if (g->coldon)
+        coldclear(L, coldstates[g->coldslot]);
 }
