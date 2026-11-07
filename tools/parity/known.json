@@ -55,10 +55,6 @@
 	],
 	"changed": [
 		{
-			"line": "size-min 0.00100000005 0.00100000005 0.00100000005",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "size-clamped part.Changed(Size),part.Size#0,part.Changed(AssemblyMass),part.Changed(Mass)",
 			"why": "not fixed yet"
 		},

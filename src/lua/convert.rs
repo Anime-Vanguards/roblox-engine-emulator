@@ -168,6 +168,11 @@ fn whole_text_size_owner(engine: &Engine, info: &PropertyInfo) -> bool {
     matches!(owner, "TextLabel" | "TextButton" | "TextBox")
 }
 
+/// BasePart.Size (a part of any class).
+fn part_size_owner(engine: &Engine, info: &PropertyInfo) -> bool {
+    engine.reflection.class_id("BasePart").is_some_and(|base| engine.reflection.class(info.owner).is_a(base))
+}
+
 /// UIScale.Scale stays within [float32(1e-7), 1000] (measured, tools/studio/layout-probe-zeroscale2:
 /// 0, 1e-9, -1 and -inf read back as 1.0000000116860974e-07, inf and 1e30 as 1000, NaN stays NaN).
 const MIN_UI_SCALE: f64 = 1e-7_f32 as f64;
@@ -283,6 +288,13 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
         _ => {
             // Native vectors are Vector3 values in Roblox; properties store the datatype form
             if let (ScriptType::Vector3, LuaValue::Vector(v)) = (info.script_type, value) {
+                if info.name == crate::K::Size as crate::NameId && part_size_owner(engine, info) {
+                    // A part is at least 0.001 on every axis (measured in a playing client, Studio 0.744,
+                    // tools/parity/probes/changed.luau: Size = (0, 0, 0) reads 0.00100000005 each; negative axes
+                    // not measured)
+                    let least = |axis: f32| axis.max(0.001);
+                    return Ok(Value::Vector3(dom::Vector3::new(least(v.x()), least(v.y()), least(v.z()))));
+                }
                 return Ok(Value::Vector3(dom::Vector3::new(v.x(), v.y(), v.z())));
             }
             let converted = from_lua(value);
@@ -302,6 +314,11 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
                 _ => false,
             };
             if matches {
+                if let Value::Vector3(v) = &converted {
+                    if info.name == crate::K::Size as crate::NameId && part_size_owner(engine, info) {
+                        return Ok(Value::Vector3(dom::Vector3::new(v.x.max(0.001), v.y.max(0.001), v.z.max(0.001))));
+                    }
+                }
                 return Ok(converted);
             }
             // nil clears custom physical properties, another type raises (measured in Studio 2026-10-12:

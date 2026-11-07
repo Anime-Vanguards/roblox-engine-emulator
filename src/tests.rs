@@ -368,6 +368,25 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
 }
 
 #[test]
+fn a_part_is_at_least_a_thousandth_of_a_stud_on_every_axis() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/changed.luau): Size = (0, 0, 0) reads 0.001 each
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Part = Instance.new("Part")
+        Part.Size = Vector3.new(0, 0, 0)
+        print(string.format("%.9g %.9g %.9g", Part.Size.X, Part.Size.Y, Part.Size.Z))
+        local Wedge = Instance.new("WedgePart")
+        Wedge.Size = Vector3.new(4, 0, 2)
+        print(Wedge.Size.X, string.format("%.9g", Wedge.Size.Y), Wedge.Size.Z)
+        "#,
+    );
+    assert_eq!(lines(&engine), vec!["print: 0.00100000005 0.00100000005 0.00100000005", "print: 4 0.00100000005 2"]);
+}
+
+#[test]
 fn writing_nan_over_nan_fires_changed_again() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/changed.luau): a property, a NumberValue and an
     // attribute alike
