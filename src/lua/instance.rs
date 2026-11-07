@@ -855,6 +855,11 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         instance_list(lua, engine, &descendants)
     }));
     let find_first_child_method = method(|lua, engine, id, args| {
+        // A missing name raises (measured in a playing client, Studio 0.744, tools/parity/probes/instances.luau; no
+        // position): FindFirstChild(nil) is a script's bug in Roblox, not a miss
+        if args.get(1).is_nil() {
+            return raise("Argument 1 missing or nil");
+        }
         let name = name_arg(args.get(1));
         let found = find_first_child(engine, id, name.as_ref().map(|s| s.as_bytes()).as_deref(), args.boolean(2));
         optional_instance(lua, engine, found)
@@ -872,11 +877,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         let found = find_first_child_which_is_a(engine, id, name.as_ref().map(|s| s.as_bytes()).as_deref(), args.boolean(2));
         optional_instance(lua, engine, found)
     }));
-    behaviors.add_method(base, K::FindFirstDescendant as NameId, method(|lua, engine, id, args| {
-        let name = name_arg(args.get(1));
-        let found = find_first_child(engine, id, name.as_ref().map(|s| s.as_bytes()).as_deref(), true);
-        optional_instance(lua, engine, found)
-    }));
+    // (not enabled in Roblox: measured likewise, `FindFirstDescendant is not enabled`)
+    behaviors.add_method(base, K::FindFirstDescendant as NameId, method(|_, _, _, _| raise("FindFirstDescendant is not enabled")));
     behaviors.add_method(base, K::FindFirstAncestor as NameId, method(|lua, engine, id, args| {
         let found = {
             let state = engine.state.borrow();
@@ -943,7 +945,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     let is_descendant_of = method(|_, engine, id, args| {
         let result = match args.instance(1) {
             Some(ancestor) => engine.state.borrow().dom.is_descendant_of(id, ancestor),
-            None => false,
+            // every instance is a descendant of nil (measured likewise: IsDescendantOf(nil) is true)
+            None => args.get(1).is_nil(),
         };
         Ok(values([LuaValue::Boolean(result)]))
     });
@@ -959,7 +962,18 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     behaviors.add_method(base, K::GetFullName as NameId, method(|lua, engine, id, _| {
         Ok(values([LuaValue::String(lua.create_string(full_name(engine, id))?)]))
     }));
-    let clone_method = method(|lua, engine, id, _| optional_instance(lua, engine, clone(engine, id)));
+    let clone_method = method(|lua, engine, id, _| {
+        // A service cannot be cloned (measured likewise: `Lighting cannot be cloned`, `Players cannot be cloned`)
+        let (class, name) = {
+            let state = engine.state.borrow();
+            let instance = state.dom.at(id);
+            (instance.class, instance.name.to_str_lossy().into_owned())
+        };
+        if engine.reflection.class(class).service {
+            return raise(format!("{name} cannot be cloned"));
+        }
+        optional_instance(lua, engine, clone(engine, id))
+    });
     behaviors.add_method(base, K::Clone as NameId, clone_method.clone());
     behaviors.add_method(base, K::clone as NameId, clone_method);
     let destroy_method = method(|lua, engine, id, _| {
@@ -994,7 +1008,13 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         Ok(values([signal_value(lua, engine, signal)?]))
     }));
     behaviors.add_method(base, K::GetAttribute as NameId, method(|lua, engine, id, args| {
-        let Some(name) = string_arg(args, 1) else { return Ok(values([LuaValue::Nil])) };
+        // (a number names the attribute of its text, as SetAttribute takes it: measured likewise, GetAttribute(5) reads
+        // what SetAttribute(5, 1) set)
+        let name = match args.get(1) {
+            LuaValue::Number(_) | LuaValue::Integer(_) => lua.coerce_string(args.get(1).clone())?.map(|s| Str::new(&s.as_bytes())),
+            _ => string_arg(args, 1),
+        };
+        let Some(name) = name else { return Ok(values([LuaValue::Nil])) };
         let value = engine.state.borrow().dom.at(id).attribute(name.as_bytes()).cloned();
         Ok(values([match value {
             Some(value) => convert::to_lua(lua, engine, &value)?,

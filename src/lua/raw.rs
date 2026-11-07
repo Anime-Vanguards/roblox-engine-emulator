@@ -1584,6 +1584,10 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
     unsafe {
         match base {
             Base::FindFirstChild => {
+                // (a missing name raises in the behaviour: `Argument 1 missing or nil`)
+                if ffi::lua_type(state, 2) <= ffi::LUA_TNIL {
+                    return Out::General;
+                }
                 let found = find_first_child(engine, id, arg_bytes(state, 2), ffi::lua_toboolean(state, 3) != 0);
                 push_optional_instance(state, api, engine, found)
             }
@@ -1685,7 +1689,8 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
             Base::IsDescendantOf => {
                 let result = match arg_instance(state, 2) {
                     Some(ancestor) => engine.state.borrow().dom.is_descendant_of(id, ancestor),
-                    None => false,
+                    // (every instance is a descendant of nil, as in Roblox: lua/instance.rs)
+                    None => ffi::lua_type(state, 2) <= ffi::LUA_TNIL,
                 };
                 ffi::lua_pushboolean(state, result as c_int);
                 Out::Ret(1)
@@ -1716,6 +1721,10 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
             }
             Base::GetAttribute => {
                 let Some(name) = arg_bytes(state, 2) else {
+                    // (a number names the attribute of its text, as SetAttribute takes it: the behaviour)
+                    if ffi::lua_type(state, 2) == ffi::LUA_TNUMBER {
+                        return Out::General;
+                    }
                     ffi::lua_pushnil(state);
                     return Out::Ret(1);
                 };

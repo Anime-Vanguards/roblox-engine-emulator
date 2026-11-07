@@ -368,6 +368,37 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
 }
 
 #[test]
+fn instance_methods_answer_and_raise_as_roblox_does() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/instances.luau), with `:` and read with `.`
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        print(pcall(Folder.FindFirstChild, Folder, nil))
+        print(pcall(function() return Folder:FindFirstChild(nil) end))
+        print(Folder:IsDescendantOf(nil), Folder.IsDescendantOf(Folder, nil), Folder:IsDescendantOf(workspace))
+        print(pcall(function() return Folder:FindFirstDescendant("x") end))
+        print(pcall(function() return game:GetService("Lighting"):Clone() end))
+        Folder:SetAttribute(5, 1)
+        print(Folder:GetAttribute(5), Folder.GetAttribute(Folder, 5), Folder:GetAttribute("5"))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: false Argument 1 missing or nil",
+            "print: false Argument 1 missing or nil",
+            "print: true true false",
+            "print: false FindFirstDescendant is not enabled",
+            "print: false Lighting cannot be cloned",
+            "print: 1 1 1",
+        ]
+    );
+}
+
+#[test]
 fn a_part_is_at_least_a_thousandth_of_a_stud_on_every_axis() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/changed.luau): Size = (0, 0, 0) reads 0.001 each
     let (lua, engine) = start();

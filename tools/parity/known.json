@@ -729,10 +729,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "error method-missing-arg | Argument 1 missing or nil",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "error instance-new-number | Unable to create an Instance of type \"5\"",
 			"why": "not fixed yet"
 		},
@@ -887,27 +883,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "findfirstdescendant -> error FindFirstDescendant is not enabled",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "isdescendantof true true self false nil ok true",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "fullname Folder.b.deep.target | Workspace | game is its name true",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "findfirstchild-nil error Argument 1 missing or nil",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "clone-service error Lighting cannot be cloned",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "clone-player-service error Players cannot be cloned",
 			"why": "not fixed yet"
 		},
 		{
@@ -964,10 +940,6 @@
 		},
 		{
 			"line": "attribute-name \"$x\" error Attribute name contains illegal character '$' (\"$x\")",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "getattribute-nonstring ok 1",
 			"why": "not fixed yet"
 		},
 		{
