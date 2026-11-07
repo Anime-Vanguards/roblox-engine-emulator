@@ -705,8 +705,16 @@ pub fn attribute_name_error(name: &[u8]) -> Option<String> {
 /// The attribute datatypes SetAttribute accepts (by typeof).
 const ATTRIBUTE_TYPES: &[&str] = &[
     "string", "boolean", "number", "UDim", "UDim2", "BrickColor", "Color3", "Vector2", "Vector3", "CFrame", "EnumItem",
-    "NumberSequence", "ColorSequence", "NumberRange", "Rect", "Font",
+    "NumberSequence", "ColorSequence", "NumberRange", "Rect", "Font", "Instance",
 ];
+
+/// An attribute's value as a script reads it: an Instance as an InstanceHandle (types.rs), anything else as itself
+fn attribute_to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> {
+    match value {
+        Value::Instance(target) => super::types::instance_handle(lua, engine, *target),
+        other => convert::to_lua(lua, engine, other),
+    }
+}
 
 /// WaitForChild: the existing child, or yields until a child with the name is added (a
 /// ChildAdded connection resumes the thread), the timeout passes, or forever (with the
@@ -1102,7 +1110,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         let Some(name) = name else { return Ok(values([LuaValue::Nil])) };
         let value = engine.state.borrow().dom.at(id).attribute(name.as_bytes()).cloned();
         Ok(values([match value {
-            Some(value) => convert::to_lua(lua, engine, &value)?,
+            Some(value) => attribute_to_lua(lua, engine, &value)?,
             None => LuaValue::Nil,
         }]))
     }));
@@ -1113,13 +1121,15 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         crate::boundary::add_cost(listed);
         let table = lua.create_table()?;
         for (name, value) in attributes {
-            table.raw_set(lua.create_string(name.as_bytes())?, convert::to_lua(lua, engine, &value)?)?;
+            table.raw_set(lua.create_string(name.as_bytes())?, attribute_to_lua(lua, engine, &value)?)?;
         }
         Ok(values([LuaValue::Table(table)]))
     }));
     behaviors.add_method(base, K::SetAttribute as NameId, method(|lua, engine, id, args| {
         let value = args.get(2);
-        if !value.is_nil() {
+        // (an Instance, or the InstanceHandle a read gave, is kept by reference: Studio 0.744 takes both)
+        let handle = super::types::instance_handle_of(value);
+        if !value.is_nil() && handle.is_none() {
             let kind = typeof_value(engine, value);
             if !ATTRIBUTE_TYPES.contains(&kind.as_str()) {
                 // (Roblox names a table an Array and a function a Function: measured, {} and print; other values by
@@ -1140,7 +1150,10 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         if let Some(message) = attribute_name_error(name.as_bytes()) {
             return raise(message);
         }
-        let converted = convert::from_lua(value);
+        let converted = match handle {
+            Some(target) => Value::Instance(target),
+            None => convert::from_lua(value),
+        };
         set_attribute(engine, id, name, converted);
         Ok(none())
     }));

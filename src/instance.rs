@@ -640,6 +640,10 @@ fn copy_tree(
 /// attribute's own signal when the value changed.
 pub fn set_attribute(state: &mut State, reflection: &Reflection, id: InstanceId, name: Str, value: Value) {
     let instance = state.dom.at_mut(id);
+    // (an Instance attribute keeps its instance as an instance property does: lua::raw's collector walks both)
+    if value.references_instance() {
+        instance.flags |= flags::HOLDS_REFS;
+    }
     let index = instance.attributes.iter().position(|(n, _)| *n == name);
     match (index, value.is_nil()) {
         (Some(index), _) if instance.attributes.as_slice()[index].1.same(&value) => return,

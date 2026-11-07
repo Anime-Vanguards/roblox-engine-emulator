@@ -251,120 +251,18 @@
 			"why": "not fixed yet"
 		}
 	],
-	"instance_attributes": [
-		{
-			"line": "set ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "read typeof=InstanceHandle type=userdata tostring=ParityTarget equal=false rawequal=false",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "member Name error Name is not a valid member of InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "member Parent error Parent is not a valid member of InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "member ClassName error ClassName is not a valid member of InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "member Instance error Instance is not a valid member of InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "member Value error Value is not a valid member of InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "member Target error Target is not a valid member of InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "member IsA error IsA is not a valid member of InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "method error IsA is not a valid member of InstanceHandle | error GetFullName is not a valid member of InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "same-read true false",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "listed typeof=InstanceHandle tostring=ParityTarget",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "as-key ok nil nil",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "changed Ref",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "after-rename Renamed",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "after-unparent Renamed InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "after-destroy Renamed InstanceHandle",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "loose ok  Folder",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "self ok  Folder",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "service ok  Lighting",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "clone Folder false Lighting",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "handle-attribute ok  InstanceHandle",
-			"why": "not fixed yet"
-		}
-	],
 	"instances": [
 		{
-			"line": "default BindableEvent Name=string(Event) Archivable=boolean(true)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "default Model PrimaryPart=nil(nil) LevelOfDetail=error:The current thread cannot read 'LevelOfDetail' (lacking capability PluginOrOpenCloud) ModelStreamingMode=EnumItem(Enum.ModelStreamingMode.Default) WorldPivot=CF(0 0 0 1 0 0 0 1 0 0 0 1) Name=string(Model)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "fullname Folder.b.deep.target | Workspace | game is its name true",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute Instance ok  -> InstanceHandle(Workspace)",
-			"why": "not fixed yet"
+			"why": "error text: a client refuses LevelOfDetail to a game script for lacking a capability (PluginOrOpenCloud); ree does not model capabilities and calls it no member"
 		},
 		{
 			"line": "attribute-name \"Ünï\" error Attribute name contains illegal character '\\xC3' (\"Ünï\")",
-			"why": "not fixed yet"
+			"why": "error text: a client names the first illegal byte of a non-ASCII name (a lone UTF-8 lead byte, Ã); ree's messages are UTF-8 text and name the whole character"
 		},
 		{
 			"line": "tags a,b has true false",
-			"why": "not fixed yet"
+			"why": "GetTags order: a client listed b then a as a,b (sorted or hashed: two tags do not tell); ree lists them in the order added"
 		}
 	],
 	"lifetime": [

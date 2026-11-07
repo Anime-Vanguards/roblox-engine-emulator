@@ -1179,7 +1179,10 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
                 match instance.stored(K::Name as NameId) {
                     Some(Value::String(name)) => push_bytes(state, name.as_bytes()),
                     Some(_) => push_bytes(state, b""),
-                    None => push_bytes(state, engine.reflection.class(instance.class).name.as_bytes()),
+                    // the class's default name, which is not always the class's own (a BoolValue is "Value", a
+                    // BindableEvent "Event", a WedgePart "Wedge": Studio's defaults in data/reflection.json; measured in a
+                    // playing client for BindableEvent, tools/parity/probes/instances.luau)
+                    None => push_bytes(state, instance.name.as_bytes()),
                 }
                 Out::Ret(1)
             }
@@ -2270,6 +2273,10 @@ fn find_garbage(engine: &Engine, api: &Api, state: &State, dead: &[u32], orphans
         for (_, value) in state.dom.at(id).props.iter() {
             value.visit_instances(&mut |target| targets.push(target));
         }
+        // (an attribute holding an Instance keeps it too)
+        for (_, value) in state.dom.at(id).attributes.iter() {
+            value.visit_instances(&mut |target| targets.push(target));
+        }
         for target in targets {
             keep(target, &mut candidate_root, &mut pending);
         }
@@ -2277,6 +2284,9 @@ fn find_garbage(engine: &Engine, api: &Api, state: &State, dead: &[u32], orphans
     while let Some(id) = pending.pop() {
         let mut targets = Vec::new();
         for (_, value) in state.dom.at(id).props.iter() {
+            value.visit_instances(&mut |target| targets.push(target));
+        }
+        for (_, value) in state.dom.at(id).attributes.iter() {
             value.visit_instances(&mut |target| targets.push(target));
         }
         for target in targets {

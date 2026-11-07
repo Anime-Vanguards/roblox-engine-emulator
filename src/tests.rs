@@ -605,6 +605,73 @@ fn set_attribute_checks_names_and_types_as_roblox_does() {
     );
 }
 
+/// An attribute can hold an Instance (Studio 0.744 takes one; measured in a playing client,
+/// tools/parity/probes/instance_attributes.luau): a read gives a new InstanceHandle that prints the instance's current
+/// name and has no members, the attribute keeps a destroyed or loose instance, and a handle can be stored again.
+#[test]
+fn an_attribute_holds_an_instance_as_a_handle() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Holder = Instance.new("Folder")
+        Holder.Parent = workspace
+        local Target = Instance.new("Part")
+        Target.Name = "Target"
+        Target.Parent = workspace
+        Holder:SetAttribute("Ref", Target)
+        local Read = Holder:GetAttribute("Ref")
+        print(typeof(Read), type(Read), tostring(Read), Read == Target, Holder:GetAttribute("Ref") == Read, rawequal(Holder:GetAttribute("Ref"), Read))
+        print(pcall(function() return Read.Name end))
+        print(pcall(function() return Read:IsA("Part") end))
+        print(typeof(Holder:GetAttributes().Ref), ({ [Read] = true })[Holder:GetAttribute("Ref")])
+        Target.Name = "Renamed"
+        Target:Destroy()
+        print(tostring(Holder:GetAttribute("Ref")))
+        Holder:SetAttribute("Loose", Instance.new("Folder"))
+        Holder:SetAttribute("Again", Holder:GetAttribute("Ref"))
+        print(tostring(Holder:GetAttribute("Loose")), typeof(Holder:GetAttribute("Again")), tostring(Holder:GetAttribute("Again")))
+        "#,
+    );
+    // the loose folder and the destroyed part are kept by the attributes alone (the Lua values made above are gone)
+    lua.gc_collect().unwrap();
+    lua.gc_collect().unwrap();
+    engine_lua::raw::collect(&lua, &engine).unwrap();
+    run(&lua, &engine, r#"print(tostring(workspace.Folder:GetAttribute("Loose")), tostring(workspace.Folder:GetAttribute("Ref")))"#);
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: InstanceHandle userdata Target false true false",
+            "print: false Name is not a valid member of InstanceHandle",
+            "print: false IsA is not a valid member of InstanceHandle",
+            "print: InstanceHandle nil",
+            "print: Renamed",
+            "print: Folder InstanceHandle Renamed",
+            "print: Folder Renamed",
+        ]
+    );
+}
+
+/// A new instance reads its class's default name, which Studio does not always make the class's own (a BindableEvent
+/// is "Event", measured in a playing client; a BoolValue "Value" and a WedgePart "Wedge" from Studio's defaults), and
+/// the DataModel's full name is its Name (measured: tools/parity/probes/instances.luau).
+#[test]
+fn new_instances_read_their_default_names_and_the_data_model_its_full_name() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Value = Instance.new("BoolValue")
+        print(Instance.new("BindableEvent").Name, Value.Name, Instance.new("WedgePart").Name, Instance.new("Folder").Name, Value:GetFullName())
+        Value.Name = "Named"
+        print(Value.Name, game:GetFullName() == game.Name, workspace:GetFullName())
+        "#,
+    );
+    assert_eq!(lines(&engine), vec!["print: Event Value Wedge Folder Value", "print: Named true Workspace"]);
+}
+
 #[test]
 fn instance_methods_answer_and_raise_as_roblox_does() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/instances.luau), with `:` and read with `.`

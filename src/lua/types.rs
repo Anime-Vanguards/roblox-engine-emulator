@@ -162,7 +162,65 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     register_tween_info(lua, engine)?;
     register_random(lua, engine)?;
     register_date_time(lua, engine)?;
+    register_instance_handle(lua, engine)?;
     Ok(())
+}
+
+// InstanceHandle
+
+/// An attribute's Instance as GetAttribute and GetAttributes hand it back (Studio 0.744, measured in a playing client:
+/// tools/parity/probes/instance_attributes.luau): a userdata of type InstanceHandle, a new one at every read (never
+/// rawequal to another, so a table key of one is not found by the next), that prints the instance's current Name (after
+/// a rename, an unparenting and a Destroy alike), has no members (`Name is not a valid member of InstanceHandle`, for
+/// methods too) and equals a handle of the same instance but never the instance. It keeps its instance's userdata as its
+/// user value, so the instance lives while a script keeps the handle.
+pub struct LInstanceHandle(pub crate::InstanceId);
+
+pub fn instance_handle(lua: &Lua, engine: &Engine, id: crate::InstanceId) -> LuaResult<LuaValue> {
+    if engine.state.borrow().dom.get(id).is_none() {
+        return Ok(LuaValue::Nil);
+    }
+    let handle = lua.create_any_userdata(LInstanceHandle(id))?;
+    handle.set_user_value(super::instance_value(lua, engine, id)?)?;
+    Ok(LuaValue::UserData(handle))
+}
+
+/// The instance an InstanceHandle refers to
+pub fn instance_handle_of(value: &LuaValue) -> Option<crate::InstanceId> {
+    match value {
+        LuaValue::UserData(ud) => ud.borrow::<LInstanceHandle>().ok().map(|handle| handle.0),
+        _ => None,
+    }
+}
+
+fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    // (an assignment raises the same text: not measured)
+    let no_member = |lua: &Lua, engine: &Rc<Engine>| {
+        wrapped(lua, engine, |_, args| {
+            let args = Args::new(args);
+            raise(format!("{} is not a valid member of InstanceHandle", key_text(args.get(1))))
+        })
+    };
+    let index = no_member(lua, engine)?;
+    let newindex = no_member(lua, engine)?;
+    let e = engine.clone();
+    let tostring = lua.create_function(move |_, this: LuaValue| {
+        let state = e.state.borrow();
+        let name = instance_handle_of(&this).and_then(|id| state.dom.get(id)).map(|instance| instance.name.to_str_lossy().into_owned());
+        Ok(name.unwrap_or_default())
+    })?;
+    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| {
+        Ok(matches!((instance_handle_of(&a), instance_handle_of(&b)), (Some(a), Some(b)) if a == b))
+    })?;
+    lua.register_userdata_type::<LInstanceHandle>(|registry| {
+        registry.add_meta_field("__type", "InstanceHandle");
+        registry.add_meta_field("__index", index);
+        registry.add_meta_field("__newindex", newindex);
+        registry.add_meta_field("__tostring", tostring);
+        registry.add_meta_field("__eq", eq);
+    })?;
+    let sample = lua.create_any_userdata(LInstanceHandle(crate::InstanceId { index: u32::MAX, generation: u32::MAX }))?;
+    lock_metatable(lua, &sample)
 }
 
 // Enums
