@@ -1,12 +1,13 @@
 //! The CPU's side of a profile (`--profile cpu`): the run thread's CPU cycles, the process's CPU time, page faults and
-//! peak memory, and the CPU's hardware counters (cache misses, branch misses, instructions retired) where the process may
-//! read them. Nothing here is estimated: a counter the process cannot read is reported as missing, with what it needs.
+//! peak memory. Nothing here is estimated. The CPU's hardware counters (cache misses, branch misses, instructions retired)
+//! are the `hw` kind's ([`super::hw`]): this report lists the ones the CPU offers and points there.
 //!
 //! On Windows a user process cannot read the performance counters itself: `rdpmc` faults (the kernel leaves CR4.PCE
-//! off), and ETW's PMC sources (the `TraceProfileSourceListInfo` list, which any process may read) are only sampled by a
-//! kernel trace session, which needs an elevated process (an Administrator's full token, or SeSystemProfilePrivilege).
-//! The cycles come from QueryThreadCycleTime (the thread's share of the timestamp counter, which runs at a constant
-//! rate: reference cycles, not core cycles).
+//! off), and ETW's PMC sources (the `TraceProfileSourceListInfo` list, which any process may read) are only counted by a
+//! kernel trace session, which needs the system's profiling right (an Administrator's full token, or a service):
+//! `--profile hw` reads them through the counter service (tools/hw-counters). The cycles here come from
+//! QueryThreadCycleTime (the thread's share of the timestamp counter, which runs at a constant rate: reference cycles,
+//! not core cycles).
 
 /// What the CPU did over a profile
 #[derive(Clone, Debug, Default)]
@@ -65,17 +66,10 @@ fn pmc_missing(sources: &[String]) -> String {
     if !cfg!(windows) {
         return format!("hardware counters are read on Windows only so far ({offered})");
     }
-    if elevated() {
-        format!(
-            "hardware counters need a kernel trace session with PMC sources (ETW), which this build does not start yet; {offered}. \
-             Record them around the run with Windows Performance Recorder (wpr -start with a profile that lists the counters, from an elevated shell) and read the trace in WPA"
-        )
-    } else {
-        format!(
-            "hardware counters (cache misses, branch misses, instructions retired) need an elevated process: user mode cannot read them (rdpmc faults) and ETW samples them only in a kernel trace session. \
-             This process runs without elevation; {offered}"
-        )
-    }
+    format!(
+        "hardware counters (instructions, cycles, cache and branch misses) are the hw kind's: --profile hw reads them through ree's counter service, \
+         which tools/hw-counters/setup.ps1 installs once from an elevated PowerShell (docs/cli.md \"Hardware counters\"); {offered}"
+    )
 }
 
 #[cfg(windows)]

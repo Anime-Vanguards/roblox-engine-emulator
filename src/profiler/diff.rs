@@ -58,6 +58,7 @@ impl Figure {
             "bytes" => bytes(value),
             "ms" => format!("{value:.3} ms"),
             "%" => format!("{value:.1} %"),
+            "ratio" => format!("{value:.2}"),
             _ => format!("{value:.0}"),
         }
     }
@@ -181,6 +182,17 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
     }
     if before["time"].is_object() || after["time"].is_object() {
         add("host time sampled (noisy)", num(&before["time"]["sampled_ms"]), num(&after["time"]["sampled_ms"]), "ms");
+    }
+    // the hardware counters both profiles read (the run thread's; the CPU's own, so they move a little run to run)
+    if let (Some(b), Some(a)) = (before["counters"]["run"]["counts"].as_object(), after["counters"]["run"]["counts"].as_object()) {
+        for (name, value) in b {
+            if let Some(after_value) = a.get(name) {
+                add(&format!("{name} (hardware counter)"), num(value), num(after_value), "");
+            }
+        }
+        if let (Some(b), Some(a)) = (before["counters"]["run"]["rates"]["IPC"].as_f64(), after["counters"]["run"]["rates"]["IPC"].as_f64()) {
+            add("IPC (hardware counters)", b, a, "ratio");
+        }
     }
     if let (Some(b), Some(a)) = (timeline_stats(before), timeline_stats(after)) {
         add("work a frame, mean", b.0, a.0, "ms");

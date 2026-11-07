@@ -205,6 +205,12 @@ const PROFILE = /*PROFILE_DATA*/null;
 	}
 	if (P.heap && P.heap.gc) tiles.push(["Collector", fmt(P.heap.gc.cycles) + " cycles", `${bytes(P.heap.gc.freed)} freed, ${fmt(P.heap.gc.ms, 1)} ms`]);
 	if (P.time) tiles.push(["Host time sampled", fmt(P.time.sampled_ms, 1) + " ms", "1 ms ticks at safepoints"]);
+	if (P.counters && P.counters.run && !P.counters.error) {
+		const names = P.counters.names || [];
+		const lead = names.includes("cycles") ? "cycles" : names[0];
+		if (P.counters.run.rates && P.counters.run.rates.IPC != null) tiles.push(["IPC", fmt(P.counters.run.rates.IPC, 2), "instructions a cycle, run thread"]);
+		if (lead) tiles.push([lead[0].toUpperCase() + lead.slice(1), compact(P.counters.run.counts[lead] || 0), P.counters.source === "mock" ? "made-up counts (mock)" : "the run thread, counted by the CPU"]);
+	}
 	tiles.push(["Frames", fmt(run.frames), `${fmt(run.seconds, 2)} s emulated`]);
 	for (const [label, value, sub] of tiles) $("tiles").append(el("div", { class: "tile" }, el("div", { class: "label" }, label), el("div", { class: "value" }, value), el("div", { class: "sub" }, sub)));
 
@@ -227,7 +233,7 @@ const PROFILE = /*PROFILE_DATA*/null;
 	// a sortable table: columns [{key, label, text?, fmt?, bar?}]
 	const table = (rows, columns, options) => {
 		options = options || {};
-		let sortKey = options.sort || columns[1].key;
+		let sortKey = options.sort || (columns[1] || columns[0]).key;
 		let descending = true;
 		const wrap = el("div", { class: "card" });
 		const render = () => {
@@ -270,7 +276,8 @@ const PROFILE = /*PROFILE_DATA*/null;
 		if (hasAlloc) columns.push({ key: "self_alloc", label: "allocated", value: (f) => f.self.alloc_bytes, fmt: (v) => bytes(v), bar: !hasWork && !hasTime }, { key: "total_alloc", label: "total allocated", value: (f) => f.total.alloc_bytes, fmt: (v) => bytes(v) });
 		const detail = el("div");
 		const rows = functions.filter((f) => f.kind !== "engine Luau" && (f.self.work_ms > 0 || f.total.work_ms > 0 || f.self.time_ms > 0 || f.total.time_ms > 0 || f.self.alloc_bytes > 0 || f.calls > 0));
-		section.append(table(rows, columns, { sort: columns[1].key, limit: 300, onpick: (f) => showFunction(f, detail) }));
+		// (a profile with no work, time or allocations has the name column alone)
+		section.append(table(rows, columns, { sort: (columns[1] || columns[0]).key, limit: 300, onpick: (f) => showFunction(f, detail) }));
 		section.append(detail);
 		if (P.work && P.work.native_functions && P.work.native_functions.length) {
 			section.append(el("div", { class: "warn" }, `${P.work.native_functions.length} natively compiled functions seen: their instructions are not counted (their entries from interpreted code and the work booked while they ran are), and a call from native code into native code is not seen.`));
@@ -566,17 +573,90 @@ const PROFILE = /*PROFILE_DATA*/null;
 		}
 	})();
 
+	// a line chart of one value a row, with a tip at the pointer (the CPU tab's frames)
+	const svgNode = (tag, attrs) => { const node = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v); return node; };
+	const lineChart = (title, values, show, labels) => {
+		const svg = svgNode("svg", { viewBox: "0 0 400 150", preserveAspectRatio: "none" });
+		const max = Math.max(1e-9, ...values), min = Math.min(0, ...values);
+		const x = (i) => 36 + (i / Math.max(1, values.length - 1)) * 356, y = (v) => 128 - (v - min) / (max - min) * 112;
+		for (const tick of [min, (min + max) / 2, max]) {
+			svg.append(svgNode("line", { x1: 36, x2: 392, y1: y(tick), y2: y(tick), stroke: "var(--grid)", "stroke-width": 1, "vector-effect": "non-scaling-stroke" }));
+			const label = svgNode("text", { x: 32, y: y(tick) + 4, "text-anchor": "end", "font-size": 10, fill: "var(--muted)" });
+			label.textContent = compact(tick);
+			svg.append(label);
+		}
+		svg.append(svgNode("path", { d: values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(""), fill: "none", stroke: "var(--s1)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }));
+		svg.addEventListener("mousemove", (event) => {
+			const box = svg.getBoundingClientRect();
+			const index = Math.max(0, Math.min(values.length - 1, Math.round(((event.clientX - box.left) / box.width * 400 - 36) / 356 * (values.length - 1))));
+			showTip(event, () => [el("strong", {}, labels[index]), el("div", {}, `${show(values[index])}  `, el("span", { class: "muted" }, title))]);
+		});
+		svg.addEventListener("mouseleave", hideTip);
+		return el("div", { class: "card chart" }, el("div", { class: "title" }, title), svg);
+	};
+
+	// the hardware counters (`--profile hw`): the run's totals and rates, by phase and thread, functions, lines, frames
+	const counterSection = (section, k) => {
+		section.append(el("h2", {}, "Hardware counters"));
+		if (k.error) { section.append(el("div", { class: "warn" }, "Hardware counters not read: " + k.error)); return; }
+		const names = k.names || [];
+		const lead = names.includes("cycles") ? "cycles" : names[0];
+		section.append(el("p", { class: "lead" }, "What the CPU counted while the run thread ran, read at the profile's start and end, at each frame's start and end, at phase marks, around the engine's own steps and at the VM's safepoints once a millisecond. A function's self counts are what was counted since the sample before one that found it innermost; its total, since the samples that found it anywhere on the stack." + (k.source === "mock" ? " These counts are made up (REE_HW_COUNTERS=mock): the thread's cycle count and fixed shares of it." : "")));
+		for (const note of k.notes || []) section.append(el("p", { class: "muted" }, note));
+		const runCounts = (k.run && k.run.counts) || {};
+		const totals = names.map((name, i) => el("tr", {}, el("td", { class: "text" }, name), el("td", { class: "num" }, fmt(runCounts[name])), el("td", { class: "text muted" }, (k.about || [])[i] || (k.sources || [])[i] || "")));
+		for (const [label, value] of Object.entries((k.run && k.run.rates) || {})) totals.push(el("tr", {}, el("td", { class: "text" }, label), el("td", { class: "num" }, label.includes("rate") ? (value * 100).toFixed(1) + " %" : fmt(value, 2)), el("td", { class: "text muted" }, "")));
+		section.append(el("div", { class: "card" }, el("table", {}, el("tbody", {}, ...totals))));
+		const readings = k.readings || {};
+		section.append(el("p", { class: "muted" }, `${fmt(readings.count)} readings (${fmt(readings.samples)} samples at safepoints) over ${fmt((k.run || {}).seconds, 2)} s; ${fmt(readings.matched)} found their own switch.` + (readings.own_counts ? ` A reading's own counts, counted with the run's: ${names.map((n) => `${n} ${compact(readings.own_counts[n] || 0)}`).join(", ")}.` : "")));
+		const trace = k.trace || {};
+		if (trace.lost_events || trace.lost_buffers || trace.without_counters) section.append(el("div", { class: "warn" }, `The trace session lost ${fmt(trace.lost_events)} events and ${fmt(trace.lost_buffers)} buffers; ${fmt(trace.without_counters)} switches came without counter values: some counts are missing.`));
+		const ipcOf = (counts) => counts && counts.instructions != null && counts.cycles ? counts.instructions / counts.cycles : 0;
+		const counterColumns = (get, prefix) => names.map((name) => ({ key: name, label: prefix + name, value: (row) => (get(row) || {})[name] || 0, fmt: (v) => compact(v), bar: name === lead }));
+		if ((k.phases || []).length) {
+			section.append(el("h3", {}, "By phase"));
+			section.append(table(k.phases, [{ key: "phase", label: "phase", text: true, value: (p) => p.phase }, ...counterColumns((p) => p.counts, ""), { key: "ipc", label: "IPC", value: (p) => ipcOf(p.counts), fmt: (v) => fmt(v, 2) }], { sort: lead }));
+		}
+		if ((k.threads || []).length) {
+			section.append(el("h3", {}, "By thread"));
+			section.append(table(k.threads, [{ key: "thread", label: "thread", text: true, value: (t) => t.run_thread ? "the run thread" + (t.name ? ` (${t.name})` : "") : t.name || `thread ${t.id}` }, ...counterColumns((t) => t.counts, ""), { key: "slices", label: "slices", value: (t) => t.slices, fmt: (v) => fmt(v) }], { sort: lead }));
+		}
+		section.append(el("h3", {}, "Functions"));
+		const label = (f) => f.module ? `${f.name || "anonymous"}  ${shortModule(f.module)}:${f.line}` : f.name;
+		section.append(table(k.functions || [], [{ key: "name", label: "function", text: true, value: label }, ...counterColumns((f) => f.self, "self "), { key: "total", label: "total " + lead, value: (f) => (f.total || {})[lead] || 0, fmt: (v) => compact(v) }, { key: "ipc", label: "self IPC", value: (f) => ipcOf(f.self), fmt: (v) => fmt(v, 2) }], { sort: lead, limit: 300 }));
+		if ((k.lines || []).length) {
+			section.append(el("h3", {}, "Lines"));
+			section.append(table(k.lines, [{ key: "line", label: "line", text: true, value: (l) => `${shortModule(l.module || "")}:${l.line}` }, { key: "fn", label: "function", text: true, value: (l) => l.name || "anonymous" }, ...counterColumns((l) => l.self, "self "), { key: "ipc", label: "self IPC", value: (l) => ipcOf(l.self), fmt: (v) => fmt(v, 2) }], { sort: lead, limit: 200 }));
+		}
+		const frames = k.frames;
+		if (frames && frames.rows && frames.rows.length) {
+			section.append(el("h3", {}, "Per frame"));
+			const col = (name) => frames.columns.indexOf(name);
+			const labels = frames.rows.map((r) => `frame ${r[col("frame")]} · ${(P.phases || [])[r[col("phase")]] || ""}`);
+			const series = [[lead + " a frame", frames.rows.map((r) => r[col(lead)]), (v) => compact(v)]];
+			if (col("instructions") >= 0 && col("cycles") >= 0) series.push(["IPC", frames.rows.map((r) => r[col("cycles")] ? r[col("instructions")] / r[col("cycles")] : 0), (v) => fmt(v, 2)]);
+			for (const name of names.filter((n) => n.endsWith("-misses"))) series.push([name + " a frame", frames.rows.map((r) => r[col(name)]), (v) => compact(v)]);
+			const grid = el("div", { class: "charts" });
+			for (const [title, values, show] of series) grid.append(lineChart(title, values, show, labels));
+			section.append(grid);
+			section.append(table(frames.rows.map((r) => ({ r })), frames.columns.map((name, i) => ({ key: name, label: name.replace(/_/g, " "), value: (x) => x.r[i], fmt: name === "phase" ? (v) => (P.phases || [])[v] || String(v) : name === "host_ms" ? (v) => fmt(v, 3) : (v) => fmt(v) })), { sort: lead, limit: 400 }));
+		}
+	};
+
 	// CPU
 	(function cpu() {
 		const section = $("tab-cpu");
 		const c = P.cpu;
-		if (!c) { section.append(el("p", { class: "muted" }, "No CPU profile: run with --profile cpu.")); return; }
-		section.append(el("h2", {}, "CPU"));
-		const rows = [["Run thread cycles (reference cycles)", c.thread_cycles == null ? "-" : fmt(c.thread_cycles)], ["Process CPU", c.process_cpu_s ? `${fmt(c.process_cpu_s.user, 2)} s user, ${fmt(c.process_cpu_s.kernel, 2)} s kernel` : "-"], ["Page faults", c.page_faults == null ? "-" : fmt(c.page_faults)], ["Peak working set", c.peak_working_set == null ? "-" : bytes(c.peak_working_set)], ["Private bytes", c.private_bytes == null ? "-" : bytes(c.private_bytes)]];
-		section.append(el("div", { class: "card" }, el("table", {}, el("tbody", {}, ...rows.map(([k, v]) => el("tr", {}, el("td", { class: "text" }, k), el("td", { class: "num" }, v)))))));
-		if (c.pmc) section.append(table(c.pmc, [{ key: "counter", label: "counter", text: true, value: (x) => x.counter }, { key: "value", label: "value", value: (x) => x.value, fmt: (v) => fmt(v) }]));
-		if (c.pmc_missing) section.append(el("div", { class: "warn" }, "Hardware counters not read: " + c.pmc_missing));
-		if (c.pmc_sources && c.pmc_sources.length) section.append(el("p", { class: "muted" }, "Counters this CPU offers to ETW: " + c.pmc_sources.join(", ")));
+		if (!c && !P.counters) { section.append(el("p", { class: "muted" }, "No CPU profile: run with --profile cpu, or --profile hw for the CPU's hardware counters.")); return; }
+		if (c) {
+			section.append(el("h2", {}, "CPU"));
+			const rows = [["Run thread cycles (reference cycles)", c.thread_cycles == null ? "-" : fmt(c.thread_cycles)], ["Process CPU", c.process_cpu_s ? `${fmt(c.process_cpu_s.user, 2)} s user, ${fmt(c.process_cpu_s.kernel, 2)} s kernel` : "-"], ["Page faults", c.page_faults == null ? "-" : fmt(c.page_faults)], ["Peak working set", c.peak_working_set == null ? "-" : bytes(c.peak_working_set)], ["Private bytes", c.private_bytes == null ? "-" : bytes(c.private_bytes)]];
+			section.append(el("div", { class: "card" }, el("table", {}, el("tbody", {}, ...rows.map(([k, v]) => el("tr", {}, el("td", { class: "text" }, k), el("td", { class: "num" }, v)))))));
+			if (c.pmc) section.append(table(c.pmc, [{ key: "counter", label: "counter", text: true, value: (x) => x.counter }, { key: "value", label: "value", value: (x) => x.value, fmt: (v) => fmt(v) }]));
+			if (c.pmc_missing && !P.counters) section.append(el("div", { class: "warn" }, "Hardware counters not read: " + c.pmc_missing));
+			if (c.pmc_sources && c.pmc_sources.length) section.append(el("p", { class: "muted" }, "Counters this CPU offers to ETW: " + c.pmc_sources.join(", ")));
+		}
+		if (P.counters) counterSection(section, P.counters);
 	})();
 
 	$("tab-text").append(el("div", { class: "card" }, el("pre", { class: "summary" }, P.summary || "")));

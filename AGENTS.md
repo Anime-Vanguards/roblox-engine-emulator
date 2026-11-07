@@ -22,6 +22,7 @@ cargo build --release                 # target/release/ree(.exe); Rust 1.90+, a 
 cargo test --release                  # every test: the engine's, the patched VM's, the process guards
 cargo test --release <name>           # one test, by (part of) its name
 cargo clippy --release --all-targets  # lints (no project-wide clippy config)
+cargo test --release --manifest-path tools/hw-counters/Cargo.toml   # the counter service --profile hw reads through
 node tools/vendor.mjs                 # rebuild vendor/ after changing a file in patches/ (downloads two pinned archives)
 node tools/vendor.mjs --check         # vendor/ is exactly the pinned archives plus patches/
 node tools/parity/run.mjs [--diff]    # differential probes: ree against the real engine's captured output
@@ -40,7 +41,7 @@ nearly every file.
   stubs in services.luau / server.luau / prelude.luau), `src/project*` (Rojo mounting, models, bundles, model plans).
 - `src/world/` and `src/record/` (the 3D world and the recorder), `src/animation/`, `src/meshes.rs`, `src/images.rs`.
 - `src/serve/` (`ree serve`), `src/watchdog.rs` (script timeout and process guards), the profilers (`src/profiler/`, `src/luau_profile.rs`,
-  `src/boundary.rs`).
+  `src/boundary.rs`; the hardware counters' Windows service in `tools/hw-counters/`, a crate of its own).
 - Tests: `src/tests.rs` (script API), `src/scheduler_tests.rs`, `src/lua/datatype_tests.rs`, `src/world/tests.rs`,
   `src/record/tests.rs`, `src/emulator.rs`, tests beside their modules, `tests/luau_vm.rs` (the patched VM),
   `tests/process_guards.rs` (the built `ree`).

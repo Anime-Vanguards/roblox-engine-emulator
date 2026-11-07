@@ -247,23 +247,25 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     work (steps, cycles, bytes freed, host time).
   - `timeline`: a row a frame: work, host time, instructions, the heap, allocations, the collector,
     live instances, connections and threads.
-  - `cpu`: the run thread's CPU cycles, the process's CPU time, page faults and peak memory. Hardware
-    counters (cache and branch misses, instructions retired) need an elevated process on Windows; without
-    one the summary says so and lists the counters the CPU offers. Nothing is estimated.
+  - `cpu`: the run thread's CPU cycles, the process's CPU time, page faults and peak memory. Nothing is
+    estimated. The CPU's hardware counters are `hw`'s.
+  - `hw`: the CPU's hardware counters on the run thread ("Hardware counters" below): instructions, cycles
+    and IPC, the L1 data cache's misses, the L2's and the last-level cache's, branch mispredictions and
+    their rates; for the run, each thread, each phase and frame, and each Luau function and line.
   - `phases`: the wall-time phases of plain `--profile`.
   - `time`: host time sampled every millisecond at the VM's calls, returns and loop edges (a line's time
     lands on its next safepoint). `boundary`: the boundary profiler, its report in the summary and its data
     in `boundary.json` in the profile's folder.
-  - `all`: `work`, `caches`, `alloc`, `heap`, `timeline`, `cpu` and `phases`. `time` and `boundary` are
-    asked for apart: counting every instruction slows the interpreter several times over, so host time is
-    read in a run of its own.
+  - `all`: `work`, `caches`, `alloc`, `heap`, `timeline`, `cpu` and `phases`. `time`, `hw` and `boundary`
+    are asked for apart: counting every instruction slows the interpreter several times over, so host time
+    and the CPU's counters are read in runs of their own.
 - A profile writes, in `--profile-out` (default `<out>/profile` for `record`, `ree-profile` for `run`):
   `summary.txt` (also printed on stderr), `profile.json` (everything), folded stacks for flame graph tools
   (`work.folded` in microseconds, `instructions.folded`, `time.folded`, `alloc.folded` and
-  `alloc.counts.folded`, `heap.folded`), `profile.speedscope.json` (speedscope.app) and `report.html`, one
-  self-contained page (hot paths with callers, callees and annotated source, a call tree, memory, the
-  timeline, caches). `--profile-top <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases
-  the boundary profiler reports.
+  `alloc.counts.folded`, `heap.folded`, `counters.<counter>.folded`), `profile.speedscope.json`
+  (speedscope.app) and `report.html`, one self-contained page (hot paths with callers, callees and
+  annotated source, a call tree, memory, the timeline, caches, the CPU and its counters). `--profile-top
+  <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases the boundary profiler reports.
 - `ree profile diff <before> <after> [--out <dir>]` compares two profile directories: the headline
   figures (the reachable heap at the end, and apart from it the garbage not swept yet), the functions
   whose work, calls, instructions or allocations moved, the lines of modules whose source is the same in
@@ -273,8 +275,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
 - With no profile the engine pays nothing measurable (a thread-local read where each profiler hooks in),
   and a profile changes nothing a script sees: the work clock, os.clock and a recording are the same with
   and without it (it allocates nothing on the VM's heap). A profiled command runs in its own process,
-  never through `--service`. `REE_PROFILE=<kinds>` (and `REE_PROFILE_OUT=<dir>`) asks for a profile where
-  a command line cannot.
+  never through `--service`. `REE_PROFILE=<kinds>` (and `REE_PROFILE_OUT=<dir>`, `REE_PROFILE_COUNTERS=<a,b>`)
+  asks for a profile where a command line cannot.
 - Caches in the state dir: `animations/` (downloaded animation assets, `<id>.rbxm`; delete a file to
   fetch it again), `model-bundles/` (bundle files as uploaded, `asset-<AssetId>-v<Version>.rbxm`, named by
   the asset version they hold and shared by every project that pins it, and the manifest's catalog: the
@@ -289,10 +291,65 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   next run of the scene decodes them ahead the same way; its first run decodes the mount's), `services/`, `bin/` and `serve.log` (the service). All are guesses that only
   save time: a stale one is noticed and the file is read as usual.
 
+## Hardware counters
+
+`--profile hw` reads what the CPU counted while the run thread ran. A process cannot read the CPU's counters on
+Windows (`rdpmc` faults in user mode), and the kernel trace session that can record them needs the system's profiling
+right, which an account's ordinary processes never hold (User Account Control takes it out of their token). So a small
+Windows service reads them on a profile's behalf (tools/hw-counters):
+
+- **Install it once**, from an elevated PowerShell: `& <checkout>\tools\hw-counters\setup.ps1`. It builds the service
+  (a Rust program with no dependencies) in a temporary folder, installs it in `%ProgramFiles%\ree-hw-counters` and
+  checks every counter (the probe, below). `-User <name>` installs it for another account, `-Binary <exe>` installs a
+  built one, `-Uninstall` removes it.
+- **What it grants.** The service runs as LocalSystem holding two privileges only: the system's profiling right and
+  folder traversal. It starts on demand and stops itself after a minute with no client. The account it was installed
+  for may start it and read its status, nothing else. Its pipe opens only for that account (and SYSTEM), from this
+  machine; the client process must run as that account and gets counts for its own threads only, never another
+  process's. While a profile counts (30 minutes at most) it runs one kernel trace session of context switches that
+  carry the counters' values. On AMD Family 1Ah processors it registers four events with Windows until the next
+  restart, through Windows Performance Recorder (`wpr.exe`, part of Windows). No driver is installed and no protection
+  is turned off.
+- **The counters**: `instructions` (retired), `cycles` (core clock cycles while the thread ran), `branches`,
+  `branch-misses` (mispredicted), `l1d-accesses` (loads and stores dispatched to the L1 data cache), `l1d-misses`
+  (lines the L1 data cache filled for demand loads and stores), `l2-misses` (of those, lines filled from beyond the
+  core's L2) and `llc-misses` (of those, lines filled from beyond the core complex's L3: another complex's cache or
+  memory). The four cache counters are AMD Family 1Ah events (event 0x29, and the demand fills by source, event 0x43,
+  unit masks 0xFF, 0xFE and 0xDC); the rest are the CPU's built-in sources. Any other name is taken for a Windows
+  profile source as `ree-hw-counters sources` (or `wpr -pmcsources`) lists it. The CPU counts six at once:
+  `--profile-counters a,b,...` chooses them (default `instructions,cycles,l1d-misses,l2-misses,llc-misses,branch-misses`;
+  `l1d-accesses` in place of one of them gives the L1 miss rate). The profile adds IPC, the miss rates the counts allow
+  (L2 misses of L1 misses, last-level misses of L2 misses, branch misses of branches) and misses per thousand
+  instructions.
+- **How it counts.** The kernel records the counters at every context switch, so the service hands back each of the
+  process's threads' stretches on a CPU with what was counted in each. The run thread takes a reading (it makes itself
+  switch out, about 3 us) at the profile's start and end, when the VM starts, at each frame's start and end, at each
+  phase mark, around the engine's own steps (Animator, joints, physics) and at the VM's safepoints once a millisecond:
+  the counts between two readings are exact, so the run, its phases and its frames add up. A safepoint's reading books
+  what was counted since the one before to the Luau stack it finds, as `time` books host time, so a function's and a
+  line's figures are a sample in the same way; what ran before the VM (the mount) and after a phase's last sample get
+  frames of their own. A reading's own cost (a few thousand cycles) is counted with the run's: the profile measures it
+  at its start and says what share of the run the readings took. The process's other threads are totalled per thread.
+  The counters count in user and kernel mode (the interrupts the thread's CPU took meanwhile included), as Windows
+  Performance Analyzer's counter tables do.
+- **Where it shows**: the summary's hardware counter lines and its top functions and lines by self counts,
+  profile.json's `counters` (the run, rates, readings, threads, phases, frames, functions, lines), a folded file a
+  counter, the report's CPU tab, and `ree profile diff`'s headline. With `work`, `caches`, `alloc` or `heap` in the
+  same run the counts include those profilers' own work (the profile warns).
+- **Checking it**: `ree-hw-counters probe` (`%ProgramFiles%\ree-hw-counters\ree-hw-counters.exe probe`) counts
+  kernels whose counts are known through the service: a loop of four instructions and a branch an iteration, random
+  branches half of which mispredict, loads that hit the L1 data cache, and chases through random cycles of cache lines
+  that fit the L1, the L2 and the L3, and fit none. Each counter must count what its name says (exit 0).
+- Without the service (not installed, counting for another profile, the CPU's counters held by another tool) the run
+  goes on and the profile says why. `REE_HW_COUNTERS=mock` counts without it (the run thread's cycle count at each
+  reading and fixed shares of it: for tests, never a measurement); `REE_HW_COUNTERS=console` reads from
+  `ree-hw-counters serve` run in a console (a pipe of its own; it counts only with the profiling right, so from an
+  elevated shell). Windows only.
+
 ## Environment
 
-Environment (the variables keep the names they had in rur, whose tools set them; `REE_PROFILE` and `REE_PROFILE_OUT` are
-the profile's, above; the guards' `REE_SCRIPT_TIMEOUT`,
+Environment (the variables keep the names they had in rur, whose tools set them; `REE_PROFILE`, `REE_PROFILE_OUT` and
+`REE_PROFILE_COUNTERS` are the profile's, above, and `REE_HW_COUNTERS` its counters' source; the guards' `REE_SCRIPT_TIMEOUT`,
 `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS` and `REE_PARENT_WATCH` are above; docs/engine.md "Environment"
 lists them all): `RUR_STATE_DIR`
 (caches; default `.cache`), `RUR_VERBOSE=1` (script output on stderr), `RUR_ENGINE_TIMINGS=1` (mount

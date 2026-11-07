@@ -1,0 +1,20 @@
+[package]
+name = "ree-hw-counters"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+license = "GPL-2.0-or-later"
+repository = "https://github.com/Anime-Vanguards/roblox-engine-emulator"
+description = "The Windows service ree's --profile hw reads the CPU's hardware counters through: counts them for the asking process's own threads"
+
+[[bin]]
+name = "ree-hw-counters"
+path = "src/main.rs"
+
+# A workspace of its own, with no dependencies: setup.ps1 builds it from an elevated shell in a temporary folder, and
+# nothing is fetched or written outside it. It shares the wire format and the client with ree (src/profiler/hw).
+[workspace]
+
+[profile.release]
+opt-level = 3

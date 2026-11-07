@@ -12,7 +12,7 @@ use std::{
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{Value as Json, json};
 
-use super::{Config, Mark, Row, Run, Source, caches::Counts, cpu, memory, vm};
+use super::{Config, Mark, Row, Run, Source, caches::Counts, cpu, hw, memory, vm};
 
 /// What a profile collected
 pub struct Input<'a> {
@@ -29,6 +29,7 @@ pub struct Input<'a> {
     pub collector: &'a memory::Collector,
     pub caches: &'a [(&'static str, &'static str, Counts)],
     pub cpu: &'a cpu::Report,
+    pub hw: Option<&'a hw::Report>,
     pub sources: &'a FxHashMap<String, Source>,
     /// The work clock's reading when the profile was collected (the last phase's end)
     pub end_work: f64,
@@ -40,8 +41,13 @@ pub struct Input<'a> {
 /// The engine's own steps get function ids of their own (below every C function's)
 const ENGINE_STEP_BASE: i32 = -1_000_000_000;
 
+/// Frames for counts no Luau stack took (hw.rs: what ran before the VM, after a phase's last sample), below the engine
+/// steps' ids
+const OUTSIDE_BASE: i32 = -2_000_000_000;
+
 thread_local! {
     static ENGINE_STEPS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static OUTSIDE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The function id of an engine step's frame in host time samples
@@ -53,6 +59,18 @@ pub fn engine_step_function(name: &str) -> i32 {
             steps.len() - 1
         });
         ENGINE_STEP_BASE - index as i32
+    })
+}
+
+/// The function id of a frame that names where counts outside any Luau stack came from (`(label)`)
+pub fn outside_function(label: &str) -> i32 {
+    OUTSIDE.with(|outside| {
+        let mut outside = outside.borrow_mut();
+        let index = outside.iter().position(|known| known == label).unwrap_or_else(|| {
+            outside.push(label.to_string());
+            outside.len() - 1
+        });
+        OUTSIDE_BASE - index as i32
     })
 }
 
@@ -71,6 +89,7 @@ pub fn short_module(module: &str) -> &str {
 struct Names<'a> {
     vm: Option<&'a vm::Results>,
     steps: Vec<String>,
+    outside: Vec<String>,
 }
 
 impl Names<'_> {
@@ -85,6 +104,9 @@ impl Names<'_> {
                 Some(f) => format!("{} {}:{}", if f.name.is_empty() { "anonymous" } else { &f.name }, module_name(&f.source), f.line),
                 None => format!("function #{id}"),
             };
+        }
+        if id <= OUTSIDE_BASE {
+            return format!("({})", self.outside.get((OUTSIDE_BASE - id) as usize).map_or("?", String::as_str));
         }
         if id <= ENGINE_STEP_BASE {
             return format!("(ree engine step: {})", self.steps.get((ENGINE_STEP_BASE - id) as usize).map_or("?", String::as_str));
@@ -308,7 +330,7 @@ fn listing(input: &Input, function: &vm::Function, model: &Model, id: i32) -> Op
 pub fn write(input: &Input) -> Result<String, String> {
     let out = &input.config.out;
     std::fs::create_dir_all(out).map_err(|error| format!("--profile-out {}: {error}", out.display()))?;
-    let names = Names { vm: input.vm, steps: ENGINE_STEPS.with(|steps| steps.borrow().clone()) };
+    let names = Names { vm: input.vm, steps: ENGINE_STEPS.with(|steps| steps.borrow().clone()), outside: OUTSIDE.with(|outside| outside.borrow().clone()) };
     let mut model = input.vm.map(tree_model).unwrap_or(Model { functions: FxHashMap::default(), lines: FxHashMap::default(), edges: FxHashMap::default(), subtree: Vec::new(), node_phase: Vec::new() });
 
     // host time samples (ms: a tick is a millisecond) and allocations (bytes) into the same model
@@ -745,7 +767,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             cpu.page_faults.map_or("-".into(), group_digits),
             cpu.peak_working_set.map_or("-".into(), |peak| bytes(peak as f64))
         );
-        if let Some(missing) = &cpu.pmc_missing {
+        if let Some(missing) = cpu.pmc_missing.as_ref().filter(|_| input.hw.is_none()) {
             let _ = writeln!(summary, "hardware counters: not read: {missing}");
         }
         json["cpu"] = json!({
@@ -754,6 +776,12 @@ pub fn write(input: &Input) -> Result<String, String> {
             "pmc_sources": cpu.pmc_sources, "pmc": cpu.pmc.as_ref().map(|counters| counters.iter().map(|(name, value)| json!({"counter": name, "value": value})).collect::<Vec<_>>()),
             "pmc_missing": cpu.pmc_missing,
         });
+    }
+
+    // the hardware counters
+    let mut counter_folded: Vec<(String, Vec<(String, u64)>)> = Vec::new();
+    if let Some(hw) = input.hw {
+        json["counters"] = counters(input, hw, &names, &mut summary, &mut counter_folded);
     }
 
     if let Some(text) = input.phase_timing {
@@ -789,18 +817,18 @@ pub fn write(input: &Input) -> Result<String, String> {
     json["source_hashes"] = Json::Object(input.sources.iter().map(|(name, source)| (name.clone(), json!(format!("{:016x}", fxhash(&source.text))))).collect());
 
     // folded stacks
-    let mut folded_files: Vec<(&str, Vec<(String, u64)>)> = Vec::new();
+    let mut folded_files: Vec<(String, Vec<(String, u64)>)> = Vec::new();
     if let Some(vm_results) = input.vm.filter(|vm| !vm.nodes.is_empty()) {
         let (work, insns) = fold_tree(vm_results, &names, input.phases);
-        folded_files.push(("work.folded", work));
-        folded_files.push(("instructions.folded", insns));
+        folded_files.push(("work.folded".into(), work));
+        folded_files.push(("instructions.folded".into(), insns));
     }
     if let Some((stacks, samples, _)) = input.time {
         let mut lines: HashMap<String, u64> = HashMap::new();
         for (&(phase, stack), &ticks) in samples {
             *lines.entry(fold(&names, input.phases, phase, &stacks.stacks[stack as usize])).or_default() += ticks;
         }
-        folded_files.push(("time.folded", lines.into_iter().collect()));
+        folded_files.push(("time.folded".into(), lines.into_iter().collect()));
     }
     if let Some(allocations) = input.allocations {
         let mut by_bytes: HashMap<String, f64> = HashMap::new();
@@ -810,16 +838,17 @@ pub fn write(input: &Input) -> Result<String, String> {
             *by_bytes.entry(key.clone()).or_default() += amount.bytes;
             *by_count.entry(key).or_default() += amount.count;
         }
-        folded_files.push(("alloc.folded", by_bytes.into_iter().map(|(key, value)| (key, value.round() as u64)).collect()));
-        folded_files.push(("alloc.counts.folded", by_count.into_iter().map(|(key, value)| (key, value.round() as u64)).collect()));
+        folded_files.push(("alloc.folded".into(), by_bytes.into_iter().map(|(key, value)| (key, value.round() as u64)).collect()));
+        folded_files.push(("alloc.counts.folded".into(), by_count.into_iter().map(|(key, value)| (key, value.round() as u64)).collect()));
         if let Some(last) = input.snapshots.last() {
             let mut live: HashMap<String, u64> = HashMap::new();
             for (stack, _, _, size) in &last.by_stack {
                 *live.entry(fold(&names, &[], u32::MAX, &allocations.stacks.stacks[*stack as usize])).or_default() += size.round() as u64;
             }
-            folded_files.push(("heap.folded", live.into_iter().collect()));
+            folded_files.push(("heap.folded".into(), live.into_iter().collect()));
         }
     }
+    folded_files.extend(counter_folded);
     for (name, mut rows) in folded_files.clone() {
         rows.retain(|row| row.1 > 0);
         rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -827,8 +856,8 @@ pub fn write(input: &Input) -> Result<String, String> {
         for (stack, weight) in rows {
             let _ = writeln!(text, "{stack} {weight}");
         }
-        write_file(&out.join(name), text.as_bytes())?;
-        files.push(name.into());
+        write_file(&out.join(&name), text.as_bytes())?;
+        files.push(name);
     }
 
     // speedscope: one sampled profile per folded file
@@ -847,6 +876,198 @@ pub fn write(input: &Input) -> Result<String, String> {
     write_file(&out.join("summary.txt"), summary.as_bytes())?;
     write_file(&out.join("report.html"), html(&text).as_bytes())?;
     Ok(summary)
+}
+
+/// `1.23G`, `45.6M`, `789K` (whole numbers below ten thousand)
+fn compact(value: u64) -> String {
+    let value = value as f64;
+    if value >= 1e9 {
+        format!("{:.2}G", value / 1e9)
+    } else if value >= 1e6 {
+        format!("{:.1}M", value / 1e6)
+    } else if value >= 1e4 {
+        format!("{:.0}K", value / 1e3)
+    } else {
+        format!("{value:.0}")
+    }
+}
+
+/// The hardware counters' part of the summary and of profile.json (`counters`), and their folded stacks: one file a
+/// counter (`counters.<name>.folded`), each stack weighted by what was counted since the sample before it
+fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String, folded: &mut Vec<(String, Vec<(String, u64)>)>) -> Json {
+    use hw::readings::{Counts, add};
+    let n = hw.names.len();
+    let object = |counts: &Counts| -> Json { Json::Object(hw.names.iter().zip(counts).map(|(name, value)| (name.clone(), json!(value))).collect()) };
+    let rates = |counts: &Counts| -> Json { Json::Object(hw::rates(&hw.names, counts).into_iter().map(|(label, value, _)| (label, json!(round(value, 6)))).collect()) };
+    let mut out = json!({
+        "source": hw.source,
+        "names": hw.names,
+        "sources": hw.sources,
+        "about": hw.names.iter().map(|name| hw::protocol::known(name).map(|known| known.about)).collect::<Vec<_>>(),
+        "error": hw.error,
+        "notes": hw.notes,
+    });
+    let _ = writeln!(summary);
+    if let Some(error) = &hw.error {
+        let _ = writeln!(summary, "hardware counters: not read: {error}");
+        for note in &hw.notes {
+            let _ = writeln!(summary, "  note: {note}");
+        }
+        return out;
+    }
+    let listed = |counts: &Counts| hw.names.iter().zip(counts).map(|(name, value)| format!("{name} {}", group_digits(*value))).collect::<Vec<_>>().join(", ");
+    let derived = |counts: &Counts| hw::rates(&hw.names, counts).into_iter().map(|(label, _, shown)| format!("{label} {shown}")).collect::<Vec<_>>().join(", ");
+    // the counter tables sort by: cycles when counted, else the first
+    let lead = hw.names.iter().position(|name| name == "cycles").unwrap_or(0);
+    let lead_name = &hw.names[lead];
+    let _ = writeln!(
+        summary,
+        "hardware counters ({}; the run thread over {:.2} s; {} readings, {} of them samples at the VM's safepoints): {}",
+        if hw.source == "mock" { "REE_HW_COUNTERS=mock: made-up counts from the thread's cycle count" } else { "read by the counter service" },
+        hw.run_seconds,
+        group_digits(hw.readings as u64),
+        group_digits(hw.samples as u64),
+        listed(&hw.run)
+    );
+    let run_rates = derived(&hw.run);
+    if !run_rates.is_empty() {
+        let _ = writeln!(summary, "  {run_rates}");
+    }
+    if let Some(per_reading) = &hw.per_reading {
+        let share = per_reading[lead] as f64 * hw.readings as f64 / hw.run[lead].max(1) as f64;
+        let _ = writeln!(summary, "  a reading's own counts (counted with the run's): {}; the readings' share of the run's {lead_name}: {}", listed(per_reading), percent(share, 1.0));
+    }
+    if hw.matched + 2 < hw.readings {
+        let _ = writeln!(summary, "  warning: {} of {} readings found no switch of their own: their windows were merged into the next ones", hw.readings - hw.matched, hw.readings);
+    }
+    if hw.lost_events > 0 || hw.lost_buffers > 0 || hw.without_counters > 0 {
+        let _ = writeln!(summary, "  warning: the trace session lost {} events and {} buffers; {} switches came without counter values: some counts are missing", group_digits(hw.lost_events as u64), group_digits(hw.lost_buffers as u64), group_digits(hw.without_counters));
+    }
+    for note in &hw.notes {
+        let _ = writeln!(summary, "  note: {note}");
+    }
+    let phase_name = |phase: u32| input.phases.get(phase as usize).cloned().unwrap_or_else(|| format!("phase {phase}"));
+    if !hw.phases.is_empty() {
+        let parts: Vec<String> = hw.phases.iter().map(|(phase, counts)| {
+            let ipc = hw::rates(&hw.names, counts).into_iter().find(|rate| rate.0 == "IPC").map(|rate| format!(", IPC {}", rate.2)).unwrap_or_default();
+            format!("{} {lead_name} {}{ipc}", phase_name(*phase), compact(counts[lead]))
+        }).collect();
+        let _ = writeln!(summary, "  by phase: {}", parts.join("; "));
+    }
+    let thread_label = |thread: &hw::ThreadCounts| match (&thread.name, thread.run_thread) {
+        (Some(name), true) => format!("the run thread ({name})"),
+        (None, true) => "the run thread".to_string(),
+        (Some(name), false) => name.clone(),
+        (None, false) => format!("thread {}", thread.id),
+    };
+    if !hw.threads.is_empty() {
+        let mut parts: Vec<String> = hw.threads.iter().take(6).map(|thread| format!("{} {}", thread_label(thread), compact(thread.counts[lead]))).collect();
+        if hw.threads.len() > 6 {
+            let mut rest = [0u64; hw::protocol::MAX_COUNTERS];
+            for thread in &hw.threads[6..] {
+                add(&mut rest, &thread.counts);
+            }
+            parts.push(format!("{} others {}", hw.threads.len() - 6, compact(rest[lead])));
+        }
+        let _ = writeln!(summary, "  {lead_name} by thread: {}", parts.join("; "));
+    }
+    if !hw.frames.is_empty() {
+        let values: Vec<u64> = hw.frames.iter().map(|frame| frame.counts[lead]).collect();
+        let worst = values.iter().enumerate().max_by_key(|(_, value)| **value).map_or(0, |(index, _)| index);
+        let _ = writeln!(
+            summary,
+            "  frames: {}, {lead_name} a frame mean {}, max {} (frame {})",
+            hw.frames.len(),
+            compact(values.iter().sum::<u64>() / values.len() as u64),
+            compact(values[worst]),
+            hw.frames[worst].frame
+        );
+    }
+
+    // per function and line: the innermost frame is self, every frame on the stack total (once a stack)
+    let mut functions: FxHashMap<i32, (Counts, Counts)> = FxHashMap::default();
+    let mut lines: FxHashMap<(i32, i32), (Counts, Counts)> = FxHashMap::default();
+    let mut by_counter: Vec<HashMap<String, u64>> = vec![HashMap::new(); n];
+    for (&(phase, stack), counts) in &hw.by_stack {
+        let frames = &hw.stacks.stacks[stack as usize];
+        if let Some(&(function, line)) = frames.first() {
+            add(&mut functions.entry(function).or_default().0, counts);
+            if function >= 0 && line >= 0 {
+                add(&mut lines.entry((function, line)).or_default().0, counts);
+            }
+        }
+        let mut seen_functions: FxHashSet<i32> = FxHashSet::default();
+        let mut seen_lines: FxHashSet<(i32, i32)> = FxHashSet::default();
+        for &(function, line) in frames.iter() {
+            if seen_functions.insert(function) {
+                add(&mut functions.entry(function).or_default().1, counts);
+            }
+            if function >= 0 && line >= 0 && seen_lines.insert((function, line)) {
+                add(&mut lines.entry((function, line)).or_default().1, counts);
+            }
+        }
+        let key = fold(names, input.phases, phase, frames);
+        for (index, rows) in by_counter.iter_mut().enumerate() {
+            *rows.entry(key.clone()).or_default() += counts[index];
+        }
+    }
+    for (index, rows) in by_counter.into_iter().enumerate() {
+        let file: String = hw.names[index].chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        folded.push((format!("counters.{file}.folded"), rows.into_iter().collect()));
+    }
+    let kind = |id: i32| -> &'static str {
+        match names.function(id) {
+            Some(f) if f.exempt() => "engine Luau",
+            Some(_) => "Luau",
+            None if id <= OUTSIDE_BASE => "outside Luau",
+            None if id <= ENGINE_STEP_BASE => "engine step",
+            None => "C",
+        }
+    };
+    let mut function_rows: Vec<(i32, (Counts, Counts))> = functions.into_iter().collect();
+    function_rows.sort_by(|a, b| b.1.0[lead].cmp(&a.1.0[lead]).then(b.1.1[lead].cmp(&a.1.1[lead])).then(a.0.cmp(&b.0)));
+    let ipc_of = |counts: &Counts| hw::rates(&hw.names, counts).into_iter().find(|rate| rate.0 == "IPC").map(|rate| rate.2);
+    let _ = writeln!(summary, "\ntop functions by self {lead_name} (what was counted since the sample before, booked to the stack each sample found; total includes callees)");
+    let _ = writeln!(summary, "{}  {:>5}  function", hw.names.iter().map(|name| format!(" {name:>13}")).collect::<Vec<_>>().join(""), "IPC");
+    for (id, (own, _)) in function_rows.iter().filter(|(_, (own, _))| own[lead] > 0).take(input.config.top) {
+        let _ = writeln!(summary, "{}  {:>5}  {}", own[..n].iter().map(|value| format!(" {:>13}", compact(*value))).collect::<Vec<_>>().join(""), ipc_of(own).unwrap_or_else(|| "-".into()), names.label(*id));
+    }
+    let mut line_rows: Vec<((i32, i32), (Counts, Counts))> = lines.into_iter().collect();
+    line_rows.sort_by(|a, b| b.1.0[lead].cmp(&a.1.0[lead]).then(a.0.cmp(&b.0)));
+    let _ = writeln!(summary, "\ntop lines by self {lead_name}");
+    for ((function, line), (own, _)) in line_rows.iter().filter(|(_, (own, _))| own[lead] > 0).take(input.config.top.min(15)) {
+        let module = names.function(*function).map_or(String::new(), |f| short_module(module_name(&f.source)).to_string());
+        let _ = writeln!(summary, "{}  {:>5}  {module}:{line}", own[..n].iter().map(|value| format!(" {:>13}", compact(*value))).collect::<Vec<_>>().join(""), ipc_of(own).unwrap_or_else(|| "-".into()));
+    }
+
+    out["run"] = json!({"counts": object(&hw.run), "rates": rates(&hw.run), "seconds": hw.run_seconds});
+    out["readings"] = json!({"count": hw.readings, "matched": hw.matched, "samples": hw.samples, "own_counts": hw.per_reading.as_ref().map(object)});
+    out["trace"] = json!({"switches": hw.switches, "without_counters": hw.without_counters, "lost_events": hw.lost_events, "lost_buffers": hw.lost_buffers});
+    out["threads"] = Json::Array(hw.threads.iter().map(|thread| json!({"id": thread.id, "name": thread.name, "run_thread": thread.run_thread, "slices": thread.slices, "counts": object(&thread.counts)})).collect());
+    out["phases"] = Json::Array(hw.phases.iter().map(|(phase, counts)| json!({"phase": phase_name(*phase), "counts": object(counts), "rates": rates(counts)})).collect());
+    let mut columns = vec!["frame".to_string(), "phase".to_string(), "host_ms".to_string()];
+    columns.extend(hw.names.iter().cloned());
+    out["frames"] = json!({
+        "columns": columns,
+        "rows": hw.frames.iter().map(|frame| {
+            let mut row = vec![json!(frame.frame), json!(frame.phase), json!(round(frame.host_ms, 4))];
+            row.extend(frame.counts[..n].iter().map(|value| json!(value)));
+            Json::Array(row)
+        }).collect::<Vec<_>>(),
+    });
+    out["functions"] = Json::Array(function_rows.iter().take(2000).map(|(id, (own, total))| {
+        let function = names.function(*id);
+        json!({
+            "id": id, "key": function_key(names, *id), "name": function.map_or_else(|| names.frame(*id), |f| f.name.clone()),
+            "module": function.map(|f| module_name(&f.source).to_string()), "line": function.map(|f| f.line), "kind": kind(*id),
+            "self": object(own), "total": object(total), "self_rates": rates(own),
+        })
+    }).collect());
+    out["lines"] = Json::Array(line_rows.iter().take(2000).map(|((function, line), (own, total))| {
+        let f = names.function(*function);
+        json!({"function": function, "name": f.map(|f| f.name.clone()), "module": f.map(|f| module_name(&f.source).to_string()), "line": line, "self": object(own), "total": object(total), "self_rates": rates(own)})
+    }).collect());
+    out
 }
 
 /// A stable key for a function across runs (its module and name, and its line for anonymous ones)
@@ -908,12 +1129,12 @@ fn fold_tree(vm: &vm::Results, names: &Names, phases: &[String]) -> (Vec<(String
 }
 
 /// speedscope's file format: shared frames, one sampled profile per folded file
-fn speedscope(files: &[(&str, Vec<(String, u64)>)], name: &str) -> Json {
+fn speedscope(files: &[(String, Vec<(String, u64)>)], name: &str) -> Json {
     let mut frames: Vec<String> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut profiles = Vec::new();
     for (file, rows) in files {
-        let unit = match *file {
+        let unit = match file.as_str() {
             "work.folded" => "microseconds",
             "time.folded" => "milliseconds",
             "alloc.folded" | "heap.folded" => "bytes",

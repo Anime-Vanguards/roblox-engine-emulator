@@ -620,7 +620,7 @@ fn profile_options_keep_the_old_forms() {
 fn a_kind_the_suite_does_not_know_is_refused() {
     let args = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
     let none = || std::path::PathBuf::from("default");
-    let kinds = "(kinds: work, caches, alloc, heap, timeline, cpu, phases, time, boundary, all)";
+    let kinds = "(kinds: work, caches, alloc, heap, timeline, cpu, hw, phases, time, boundary, all)";
     let error = Config::from_args(&args(&["--harness", "x.luau", "--profile", "memroy", "--seconds", "2"]), none).unwrap_err();
     assert!(error.contains("no kind \"memroy\"") && error.contains(kinds), "{error}");
     let error = Config::from_args(&args(&["--profile", "work,memroy"]), none).unwrap_err();
@@ -740,4 +740,105 @@ fn stacks_and_types_intern_once() {
     assert_eq!((types.id("table"), types.id("string"), types.id("table")), (0, 1, 0));
     assert_eq!(memory::group("table storage"), "table");
     assert_eq!(memory::group("userdata: Instance Part"), "userdata");
+}
+
+/// Hardware counters (`hw`) with the mock source (each reading takes the thread's cycle count, QueryThreadCycleTime,
+/// and the other counters are fixed shares of it): every window between readings is booked once, so the run's cycles
+/// are the thread's own cycles between its start and end readings, inside what the test reads around the profile; the
+/// phases and the stacks add up to the run exactly, every frame has its row, and the busy function holds most of it.
+#[test]
+fn hardware_counters_are_booked_to_the_run_its_phases_frames_and_stacks() {
+    let _lock = lock();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
+    // (a playing client: one Heartbeat a frame)
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    engine_lua::modules::interpret_all(&lua, &engine);
+    let config = Config { print: false, ..Config::new(Kinds::HW, temp_dir("hw")) };
+    let before = profiler::cpu::thread_cycles();
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    run(&lua, &engine, "busy", "local M = {}\nfunction M.spin(n)\n\tlocal x = 0\n\tfor i = 1, n do\n\t\tx += i % 7\n\tend\n\treturn x\nend\nlocal total = 0\nfor round = 1, 300 do\n\ttotal += M.spin(50000)\nend\nresult = total\nlocal RunService = game:GetService(\"RunService\")\nRunService.Heartbeat:Connect(function()\n\tlocal y = 0\n\tfor i = 1, 20000 do\n\t\ty += i\n\tend\nend)\n");
+    for _ in 0..5 {
+        scheduler::step(&lua, &engine, Some(1.0 / 60.0)).unwrap();
+    }
+    profiler::phase("steady");
+    for _ in 0..5 {
+        scheduler::step(&lua, &engine, Some(1.0 / 60.0)).unwrap();
+    }
+    profiler::collect(&lua);
+    let after = profiler::cpu::thread_cycles();
+    let summary = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), frames: 10, ..Default::default() }).unwrap();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(None));
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let folded = std::fs::read_to_string(config.out.join("counters.cycles.folded")).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let counters = &json["counters"];
+    assert_eq!(counters["source"], "mock", "{summary}");
+    let names: Vec<&str> = counters["names"].as_array().unwrap().iter().map(|name| name.as_str().unwrap()).collect();
+    assert_eq!(names, profiler::hw::protocol::DEFAULT_COUNTERS);
+    let cycles = counters["run"]["counts"]["cycles"].as_u64().unwrap();
+    let span = after - before;
+    assert!(cycles > 0 && cycles <= span && cycles as f64 >= 0.8 * span as f64, "the run's cycles {cycles}, the thread's around the profile {span}");
+    assert_eq!(counters["run"]["counts"]["instructions"].as_u64().unwrap(), 2 * cycles, "the mock's instructions are twice its cycles, window by window");
+    assert_eq!(counters["run"]["rates"]["IPC"].as_f64().unwrap(), 2.0);
+    assert_eq!(counters["readings"]["matched"], counters["readings"]["count"], "every reading has its switch");
+    assert!(counters["readings"]["samples"].as_u64().unwrap() >= 20, "a sample a millisecond: {}", counters["readings"]);
+    // the phases add up to the run
+    let phases = counters["phases"].as_array().unwrap();
+    assert_eq!(phases.iter().map(|phase| phase["counts"]["cycles"].as_u64().unwrap()).sum::<u64>(), cycles);
+    assert!(phases.iter().any(|phase| phase["phase"] == "steady"), "{phases:?}");
+    // a row a frame, each with its counts
+    let columns: Vec<&str> = counters["frames"]["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+    let column = columns.iter().position(|c| *c == "cycles").unwrap();
+    let rows = counters["frames"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 10);
+    assert!(rows.iter().all(|row| row[column].as_u64().unwrap() > 0), "{rows:?}");
+    assert!(rows.iter().map(|row| row[column].as_u64().unwrap()).sum::<u64>() < cycles);
+    // every count is some frame's self: the stacks add up to the run, and the busy function holds most of it
+    let functions = counters["functions"].as_array().unwrap();
+    assert_eq!(functions.iter().map(|f| f["self"]["cycles"].as_u64().unwrap()).sum::<u64>(), cycles, "{summary}");
+    let spin = functions.iter().find(|f| f["name"].as_str().is_some_and(|name| name.ends_with("spin"))).unwrap_or_else(|| panic!("{summary}"));
+    assert!(spin["self"]["cycles"].as_u64().unwrap() as f64 >= 0.5 * cycles as f64, "{spin}\n{summary}");
+    assert!(functions.iter().any(|f| f["kind"] == "engine step"), "the engine's own steps have frames of their own");
+    let folded_total: u64 = folded.lines().map(|line| line.rsplit(' ').next().unwrap().parse::<u64>().unwrap()).sum();
+    assert_eq!(folded_total, cycles, "the folded stacks hold the run");
+    assert!(summary.contains("hardware counters") && summary.contains("IPC 2.00"), "{summary}");
+}
+
+/// Without the counter service the profile says why and the run goes on: no counts, a warning naming what is missing
+#[test]
+fn hardware_counters_say_why_they_were_not_read() {
+    let _lock = lock();
+    // (a service run in a console that is not running: deterministic on any machine)
+    profiler::hw::TEST_MODE.with(|mode| mode.set(Some("console")));
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::HW, temp_dir("hw-missing")) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    run(&lua, &engine, "quick", "result = 1 + 1\n");
+    profiler::collect(&lua);
+    let summary = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(None));
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let error = json["counters"]["error"].as_str().unwrap_or_else(|| panic!("{}", json["counters"]));
+    assert!(error.contains("serve") || error.contains("Windows"), "{error}");
+    assert!(json["warnings"].as_array().unwrap().iter().any(|warning| warning.as_str().unwrap().starts_with("hardware counters not read")), "{}", json["warnings"]);
+    assert!(summary.contains("hardware counters: not read"), "{summary}");
+}
+
+/// `hw` is a kind of its own (not in `all`: stepping would be counted with the run), and `--profile-counters` names
+/// the counters
+#[test]
+fn hardware_counter_options_parse() {
+    let args = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    assert!(Kinds::parse("hw").unwrap().has(Kinds::HW));
+    assert!(!Kinds::ALL.has(Kinds::HW));
+    let none = || std::path::PathBuf::from("default");
+    let config = Config::from_args(&args(&["--profile", "hw,timeline", "--profile-counters", "instructions, cycles,DcacheMisses"]), none).unwrap().unwrap();
+    assert_eq!(config.counters, ["instructions", "cycles", "DcacheMisses"]);
+    assert_eq!(Config::from_args(&args(&["--profile", "hw"]), none).unwrap().unwrap().counters, profiler::hw::protocol::DEFAULT_COUNTERS);
+    assert!(Config::from_args(&args(&["--profile", "hw", "--profile-counters", "cycles,cycles"]), none).unwrap_err().contains("twice"));
 }

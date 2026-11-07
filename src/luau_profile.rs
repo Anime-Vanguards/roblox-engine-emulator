@@ -310,8 +310,13 @@ unsafe extern "C-unwind" fn allocating(state: *mut mlua::ffi::lua_State, old: us
 /// itself is left as it is.
 pub fn engine_step<R>(name: &str, step: impl FnOnce() -> R) -> R {
     if SUITE_TIME.load(Ordering::Relaxed) {
+        // (the hardware counters' readings around the step: its counts are its own)
+        let counted = crate::profiler::hw_step(Some(name));
         let start = TICKS.load(Ordering::Relaxed);
         let result = step();
+        if counted {
+            crate::profiler::hw_step(None);
+        }
         let ticks = TICKS.load(Ordering::Relaxed) - start;
         if ticks > 0 {
             crate::profiler::engine_step(name, ticks);

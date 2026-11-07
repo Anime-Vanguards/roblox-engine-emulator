@@ -25,12 +25,14 @@ src/animation/         AnimationTracks: the Animator's step, clips (KeyframeSequ
 src/meshes.rs          EditableMesh: meshes scripts build or load, their MeshParts' FileMesh snapshots
 src/profile.rs microprofile.rs luau_profile.rs   simulation profile, MicroProfiler scopes, Luau sampler
 src/profiler/          the profiling suite (`--profile <kinds>`): the VM's instruction profile, memory, caches,
-                       the timeline, the CPU, the report's files and `ree profile diff`
+                       the timeline, the CPU, the report's files and `ree profile diff`; hw/ the hardware
+                       counters' client (the counter service's wire format, readings, how counts are booked)
 src/trace.rs                                     Context.TraceWrites: Luau call sites of Parent / property writes
 src/census.rs                                    Context.Census: live threads, connections, timers, instances by their Luau line
 data/                  reflection.json (Studio's dump; tools/dump-reflection.luau), font-enums.json, text metrics
 vendor/ patches/ tools/vendor.mjs   the patched Luau VM and Lune datatypes
 tools/luau-cost/       the work clock's Luau calibration (run in ree and in Studio, fitted by fit.py)
+tools/hw-counters/     the counter service `--profile hw` reads through (a crate of its own) and setup.ps1, its install
 tests/                 the patched VM's tests and the process guards
 docs/engine.md         the contract: architecture, rules and formats
 ```

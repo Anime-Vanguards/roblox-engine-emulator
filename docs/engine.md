@@ -492,14 +492,26 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
 - **The collector**: the VM's interrupt runs at each collector step's start and end (steps, cycles, bytes
   freed, host time by the state a step began in). **The timeline**: `scheduler::step` takes a row a frame.
   **ree's caches**: counters at each cache (`profiler::caches`, process-wide). **The CPU**: the run thread's
-  cycles (QueryThreadCycleTime: reference cycles), the process's CPU time, page faults, peak memory; hardware
-  counters need an elevated process on Windows (user mode cannot run `rdpmc`; ETW samples them only in a
-  kernel trace session), and without one the profile says so and lists the counters the CPU offers.
+  cycles (QueryThreadCycleTime: reference cycles), the process's CPU time, page faults, peak memory.
+- **Hardware counters** (`hw`, `profiler::hw`, tools/hw-counters). User mode cannot run `rdpmc`, and a kernel trace
+  session needs the system's profiling right, so a service installed once (docs/cli.md "Hardware counters") runs a
+  session that records the CPU's counters at every context switch, for the asking process's threads only, and hands
+  back each thread's slices: from being switched in to being switched out on one CPU, with what each counter counted
+  (`hw::protocol`, shared with the service). The run thread's readings make it switch out (`hw::client::Reader`), so
+  the slices split exactly at them (`hw::readings::split`: a slice is the window of the first reading whose switch is
+  at or after its end, the last such reading's when a switch was not seen). Readings come at the profile's start and
+  end, when the VM is installed, at each frame's start and end, at phase marks, around the engine's own steps and at
+  safepoints once the 1 ms ticker moved; a safepoint's reading books what was counted since the one before to the
+  stack it finds. What ran before the VM and after a phase's last sample gets frames of their own, so the stacks, the
+  phases and the run add up to the same counts. `REE_HW_COUNTERS=mock` takes the thread's cycle time at each reading
+  instead (tests).
 - **Host time** (`time`, luau_profile.rs): a 1 ms ticker, sampled at the VM's calls, returns and loop edges;
   the engine's own steps (the Animator, joints, physics) get frames of their own.
 
 Off, a profiler costs a thread-local read where it hooks in (the interpreter: one per entry), a thread-local
-store where the VM allocates table storage, and a bit test where the collector frees an object. On, nothing a
+store where the VM allocates table storage, and a bit test where the collector frees an object. The hardware
+counters add no hook of their own: their readings sit behind the frame hook's read, the interrupt a profile
+installs and the engine steps' check of the ticker. On, nothing a
 script sees changes: the profile allocates nothing on the VM's heap and leaves the VM's counts as they are,
 so the work clock, os.clock and a recording are the same (a sim recorded with every kind on, a frozen clock
 and a pinned epoch is byte for byte the unprofiled recording). Stepping makes the interpreter about five
@@ -662,5 +674,5 @@ rur, whose tools set them.
 - `REE_SCRIPT_TIMEOUT`, `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS`, `REE_PARENT_WATCH`,
   `REE_SERVE_WORKERS`, `REE_FROZEN_CLOCK`, `REE_RANDOM_SEED`, `REE_WORK_COUNTERS`, `REE_HASH_SEED`,
   `REE_HASH_ADDRESS`, `REE_LOCALIZED_PLACES`, `REE_MATCH_PLACES`, `REE_ASSET_WORKER`, `REE_PROFILE`,
-  `REE_PROFILE_OUT`.
+  `REE_PROFILE_OUT`, `REE_PROFILE_COUNTERS`, `REE_HW_COUNTERS`.
 - Others: `RAYON_NUM_THREADS`, `MIMALLOC_EAGER_COMMIT`, `MIMALLOC_PURGE_DELAY`.
