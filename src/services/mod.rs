@@ -613,7 +613,7 @@ pub fn install(engine: &Rc<Engine>) {
             }
             Ok(())
         }));
-        state.sched.add_hook(Phase::PreRender, Rc::new(move |lua, engine, delta| {
+        state.sched.add_hook(Phase::RenderEvents, Rc::new(move |lua, engine, delta| {
             if server {
                 return Ok(());
             }

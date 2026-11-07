@@ -364,9 +364,11 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
 A playing client's frame (`--mode play`, measured in a real client): wait / delay / spawn threads resume
 (then a full flush of deferred work), PreAnimation, Stepped / PreSimulation, PostSimulation, every due
 task.wait / task.delay thread in the order they were scheduled (then one pass over the deferred queue:
-what that work defers waits), Heartbeat, then the render step (BindToRenderStep callbacks, one pass,
-RenderStepped / PreRender, a full flush). Edit mode keeps Studio's edit order (a flush after each
-resumption).
+what that work defers waits), Heartbeat, then the render step (BindToRenderStep callbacks, RenderStepped /
+PreRender, the tween step, then one resumption point: the tween step's events first, then what the
+callbacks and handlers deferred, a full flush). A RenderStepped or PreRender handler reads a tween's value
+from before the frame's step, and a tween played there takes its first step that frame. Edit mode keeps
+Studio's edit order (a flush after each resumption; the tween step right after the callbacks).
 
 `scheduler::step(lua, engine, Some(dt))`, `run_until(lua, engine, t)`, `step_display_duration(d)` /
 `step_display(n)` (a display's cadence: edit-mode Heartbeats keep their own 240 Hz deadlines),
