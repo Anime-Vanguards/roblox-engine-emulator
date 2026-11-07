@@ -32,11 +32,20 @@ pub struct MetricInfo {
     pub better: String,
     pub exact: bool,
     pub about: String,
+    /// A call's figure (else the run's, as the heap it keeps)
+    pub per_call: bool,
 }
 
 impl MetricInfo {
+    /// Whether less is better (a cost); not for a figure that is better higher, nor one that names no winner
     pub fn lower_is_better(&self) -> bool {
-        self.better != "higher"
+        self.better == "lower" || self.better.is_empty()
+    }
+
+    /// Whether the figure names a better side: `better` "none" (a median beside the best round, the collector's
+    /// host time, cache hits) only describes
+    pub fn ranked(&self) -> bool {
+        self.better != "none"
     }
 
     pub fn show(&self, value: f64) -> String {
@@ -93,8 +102,17 @@ pub struct Part {
 #[serde(default)]
 pub struct Levels {
     pub min: f64,
+    pub median: f64,
     pub max: f64,
     pub hist: Vec<(f64, f64)>,
+}
+
+/// A count of tables and their bytes
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Totals {
+    pub count: f64,
+    pub bytes: f64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -130,6 +148,9 @@ pub struct Tables {
     pub count: f64,
     pub bytes: f64,
     pub sites: Vec<TableSite>,
+    /// The setup's tables (the input, the same for every variant) and the run's (the variant's own layout)
+    pub setup: Option<Totals>,
+    pub run: Option<Totals>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -203,6 +224,8 @@ pub struct Winner {
     pub ratio: Option<f64>,
     pub vs_baseline: Option<f64>,
     pub clear: bool,
+    /// False when the figure is a count too small beside the run's instructions to matter
+    pub material: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -280,7 +303,7 @@ impl Compare {
             let mut keys: Vec<String> = compare.runs.iter().flat_map(|run| run.run.keys().cloned()).collect();
             keys.sort();
             keys.dedup();
-            compare.metrics = keys.into_iter().map(|key| MetricInfo { label: key.replace('_', " "), unit: if key.ends_with("_ms") { "ms".into() } else if key.contains("bytes") { "bytes".into() } else { "count".into() }, better: "lower".into(), exact: !key.starts_with("host") && !key.starts_with("hw_"), key, about: String::new() }).collect();
+            compare.metrics = keys.into_iter().map(|key| MetricInfo { label: key.replace('_', " "), unit: if key.ends_with("_ms") { "ms".into() } else if key.contains("bytes") { "bytes".into() } else { "count".into() }, better: "lower".into(), exact: !key.starts_with("host") && !key.starts_with("hw_"), per_call: key != "heap_bytes", key, about: String::new() }).collect();
         }
         Ok(compare)
     }

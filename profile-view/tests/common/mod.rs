@@ -312,14 +312,14 @@ pub fn write_comparison(dir: &Path) -> PathBuf {
             "profile": if n == 1000.0 { json!(format!("runs/{slug}/1000")) } else { Value::Null }, "hw_profile": null,
             "digest": "9f3c0a21", "check": {"ok": true, "message": null},
             "setup": {"work_ms": work / 2.0},
-            "run": {"work_ms": work, "insns": work * 10000.0, "alloc_bytes": alloc, "allocs": alloc / 64.0, "heap_bytes": alloc, "host_ms": host, "cache_hit_rate": hit, "rehashes": n / 10.0},
+            "run": {"work_ms": work, "insns": work * 10000.0, "alloc_bytes": alloc, "allocs": alloc / 64.0, "heap_bytes": alloc, "host_ms": host, "cache_hit_rate": hit, "rehashes": n / 10.0, "gc_ms": host / 4.0},
             "host": {"ms": [host, host * 1.02], "cycles": [5200.0, 5310.0], "reps": 2500},
             "heap": {"before": 1_052_672.0, "after_setup": 1_060_864.0 + alloc, "after_run": 1_061_888.0 + alloc},
             "tables": tables,
             "hot": [{"key": format!("{slug}:build"), "name": "build", "module": slug, "line": 14, "work_ms": work * 0.8, "insns": work * 8000.0}],
         })
     };
-    let kv_tables = |n: f64| json!({"count": n + 1.0, "bytes": n * 120.0, "sites": [{"site": "tkv:14 < tkv:30", "frames": [{"module": "tkv", "name": "build", "line": 14, "path": "tkv.luau"}], "phase": "run", "count": n, "bytes": n * 112.0, "header_bytes": n * 56.0, "array_bytes": 0.0, "hash_bytes": n * 56.0, "array": {"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, n]]}, "hash": {"slots": n * 2.0, "used": n * 2.0, "min": 2, "median": 2, "max": 2, "hist": [[2, n]]}, "levels": {"min": 1, "max": 1, "hist": [[1, n]]}, "rehashes": n, "rehash_keys": n * 3.0}]});
+    let kv_tables = |n: f64| json!({"count": n + 2.0, "bytes": n * 120.0 + 640.0, "setup": {"count": 1.0, "bytes": 640.0}, "run": {"count": n + 1.0, "bytes": n * 120.0}, "sites": [{"site": "input:5", "frames": [{"module": "input", "name": "setup", "line": 5, "path": "input.luau"}], "phase": "setup", "count": 1.0, "bytes": 640.0, "header_bytes": 56.0, "array_bytes": 584.0, "hash_bytes": 0.0, "array": {"slots": 64, "used": 64, "min": 64, "median": 64, "max": 64, "hist": [[64, 1]]}, "hash": {"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, 1]]}, "levels": {"min": 1, "median": 1, "max": 1, "hist": [[1, 1]]}, "rehashes": 0.0, "rehash_keys": 0.0}, {"site": "tkv:14 < tkv:30", "frames": [{"module": "tkv", "name": "build", "line": 14, "path": "tkv.luau"}], "phase": "run", "count": n, "bytes": n * 112.0, "header_bytes": n * 56.0, "array_bytes": 0.0, "hash_bytes": n * 56.0, "array": {"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, n]]}, "hash": {"slots": n * 2.0, "used": n * 2.0, "min": 2, "median": 2, "max": 2, "hist": [[2, n]]}, "levels": {"min": 1, "max": 1, "hist": [[1, n]]}, "rehashes": n, "rehash_keys": n * 3.0}]});
     let vk_tables = |n: f64| json!({"count": 3.0, "bytes": n * 40.0, "sites": [{"site": "tvk:20 < tvk:30", "frames": [{"module": "tvk", "name": "build", "line": 20, "path": "tvk.luau"}], "phase": "run", "count": 2.0, "bytes": n * 32.0, "header_bytes": 112.0, "array_bytes": 0.0, "hash_bytes": n * 32.0, "array": {"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, 2]]}, "hash": {"slots": n * 2.0, "used": n * 2.0, "min": n, "median": n, "max": n, "hist": [[n, 2]]}, "levels": {"min": 1, "max": 1, "hist": [[1, 2]]}, "rehashes": 22.0, "rehash_keys": n * 4.0}]});
     let mut runs = Vec::new();
     for n in [10.0, 100.0, 1000.0] {
@@ -336,14 +336,15 @@ pub fn write_comparison(dir: &Path) -> PathBuf {
         "frames": 1,
         "fidelity": "fidelity: a fixture",
         "metrics": [
-            {"key": "work_ms", "label": "work clock", "unit": "ms", "better": "lower", "exact": true, "about": ""},
+            {"key": "work_ms", "label": "work clock", "unit": "ms", "better": "lower", "exact": true, "about": "the work clock a call took: the same every run"},
             {"key": "insns", "label": "instructions", "unit": "count", "better": "lower", "exact": true, "about": ""},
             {"key": "alloc_bytes", "label": "allocated", "unit": "bytes", "better": "lower", "exact": true, "about": ""},
             {"key": "heap_bytes", "label": "heap kept", "unit": "bytes", "better": "lower", "exact": true, "about": ""},
-            {"key": "host_ms", "label": "host time", "unit": "ms", "better": "lower", "exact": false, "about": ""},
+            {"key": "host_ms", "label": "host time", "unit": "ms", "better": "lower", "exact": false, "about": "the fastest of the timed rounds"},
             {"key": "cache_hit_rate", "label": "cache hit rate", "unit": "ratio", "better": "higher", "exact": true, "about": ""},
             {"key": "rehashes", "label": "rehashes", "unit": "count", "better": "lower", "exact": true, "about": ""},
-            {"key": "hw_cycles", "label": "cycles", "unit": "count", "better": "lower", "exact": false, "about": ""}
+            {"key": "hw_cycles", "label": "cycles", "unit": "count", "better": "lower", "exact": false, "about": ""},
+            {"key": "gc_ms", "label": "collector host time", "unit": "ms", "better": "none", "exact": false, "per_call": true, "about": ""}
         ],
         "runs": runs,
         "scaling": [
@@ -355,7 +356,8 @@ pub fn write_comparison(dir: &Path) -> PathBuf {
             {"metric": "work_ms", "size": 10, "winner": "t[v][k]", "value": 0.001, "runner_up": "t[k][v]", "ratio": 2.0, "vs_baseline": 2.0, "clear": true},
             {"metric": "work_ms", "size": 100, "winner": "t[v][k]", "value": 0.01, "runner_up": "t[k][v]", "ratio": 2.0, "vs_baseline": 2.0, "clear": true},
             {"metric": "work_ms", "size": 1000, "winner": "t[k][v]", "value": 0.2, "runner_up": "t[v][k]", "ratio": 1.0, "vs_baseline": 1.0, "clear": false},
-            {"metric": "alloc_bytes", "size": 1000, "winner": "t[v][k]", "value": 40000.0, "runner_up": "t[k][v]", "ratio": 3.0, "vs_baseline": 3.0, "clear": true}
+            {"metric": "alloc_bytes", "size": 1000, "winner": "t[v][k]", "value": 40000.0, "runner_up": "t[k][v]", "ratio": 3.0, "vs_baseline": 3.0, "clear": true},
+            {"metric": "rehashes", "size": 10, "winner": "t[k][v]", "value": 1.0, "runner_up": "t[v][k]", "ratio": 1.0, "vs_baseline": 1.0, "clear": true, "material": false}
         ],
         "aa": [{"size": 1000, "ratio": 1.01, "spread": 0.03}],
         "hw": {"read": false, "why": "the counter service is not installed"},

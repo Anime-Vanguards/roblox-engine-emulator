@@ -51,10 +51,19 @@ fn size_label(n: f64) -> String {
 
 /// The ratio of a value to the baseline's, oriented so that above 1 is worse
 fn worse_ratio(m: &MetricInfo, value: f64, base: f64) -> Option<f64> {
-    if base <= 0.0 || value <= 0.0 {
+    if base <= 0.0 || value <= 0.0 || !m.ranked() {
         return None;
     }
     Some(if m.lower_is_better() { value / base } else { base / value })
+}
+
+/// A variant's figure over the baseline's: oriented so above 1 is worse when the figure names a better side, else as
+/// it is (above 1 is more)
+fn ratio_of(m: &MetricInfo, value: f64, base: f64) -> Option<f64> {
+    if base <= 0.0 || value <= 0.0 {
+        return None;
+    }
+    if m.ranked() { worse_ratio(m, value, base) } else { Some(value / base) }
 }
 
 fn selected(app: &App, compare: &Compare) -> (usize, usize) {
@@ -79,7 +88,9 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     let variants_height = (compare.variants.len() as u16 + 5).min(area.height / 3);
     let parts = kit::rows(area, &[variants_height, 0]);
     // the variants: a row each, a column a size
-    let block = kit::note_right(kit::panel(theme, &compare.title, &compare.about, true), theme, &format!("{}{}", m.label, if m.exact { " · exact" } else { " · measured, medians" }));
+    let what = format!("{}{}{}{}", m.label, if m.per_call { " a call" } else { "" }, if m.exact { " · exact" } else { " · measured" }, if m.ranked() { "" } else { " · names no winner" });
+    let legend = Line::from(Span::styled(" ◆ best · ≈ best within noise, or too small to matter · underlined: the run below ", Style::new().fg(theme.muted)));
+    let block = kit::bottom(kit::note_right(kit::panel(theme, &compare.title, &compare.about, true), theme, &what), legend);
     let inner = kit::draw_panel(buf, parts[0], block);
     let sizes: Vec<String> = compare.sizes.iter().map(|n| fmt::grouped(*n)).collect();
     let calls = if compare.frames > 1.0 { format!("{} calls each", fmt::grouped(compare.frames)) } else { "one call each".to_string() };
@@ -96,6 +107,11 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     ];
     first.extend(check);
     Paragraph::new(Line::from(first)).render(Rect { height: 1, ..inner }, buf);
+    // (what the figure is, in the comparison's own words: which round a measured figure takes, what it leaves out)
+    if !m.about.is_empty() && inner.height > 1 {
+        let about = Line::from(vec![Span::styled("◇ ", Style::new().fg(theme.accent)), Span::styled(fmt::fit(&format!("{}: {}", m.label, m.about), inner.width.saturating_sub(2) as usize), Style::new().fg(theme.muted))]);
+        Paragraph::new(about).render(Rect { y: inner.y + 1, height: 1, ..inner }, buf);
+    }
     let largest = compare.sizes.iter().copied().fold(0.0, f64::max);
     let mut cols = vec![col("variant", 26)];
     for n in &compare.sizes {
@@ -125,7 +141,7 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
                 };
                 let winner = compare.winner(&m.key, *n).filter(|w| w.winner == variant.name);
                 let (mark, mark_color) = match winner {
-                    Some(w) if w.clear => (" ◆", theme.good),
+                    Some(w) if w.clear && w.material != Some(false) => (" ◆", theme.good),
                     Some(_) => (" ≈", theme.muted),
                     None => ("  ", theme.muted),
                 };
@@ -140,8 +156,9 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
             let base = compare.run(&compare.baseline, largest).and_then(|r| r.value(&m.key));
             let value = compare.run(&variant.name, largest).and_then(|r| r.value(&m.key));
             cells.push(match (variant.name == compare.baseline, base, value) {
-                (false, Some(base), Some(value)) => match worse_ratio(&m, value, base) {
-                    Some(ratio) => ratio_cell(ratio, theme),
+                (false, Some(base), Some(value)) => match ratio_of(&m, value, base) {
+                    Some(ratio) if m.ranked() => ratio_cell(ratio, theme),
+                    Some(ratio) => neutral_cell(ratio, theme),
                     None => Item::empty(),
                 },
                 _ => Item::empty(),
@@ -188,6 +205,13 @@ fn ratio_cell(ratio: f64, theme: &Theme) -> Item {
         Span::styled(format!("{} ", times_text(times)), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
         Span::styled(format!("{arrow} {word}"), Style::new().fg(color)),
     ]))
+}
+
+/// A figure that names no winner over the baseline's: more or less, in no colour
+fn neutral_cell(ratio: f64, theme: &Theme) -> Item {
+    let word = if ratio > 1.0005 { "more" } else if ratio < 0.9995 { "less" } else { "same" };
+    let times = if ratio >= 1.0 { ratio } else { 1.0 / ratio };
+    Item::Spans(Line::from(vec![Span::styled(format!("{} ", times_text(times)), Style::new().fg(theme.ink2)), Span::styled(word, Style::new().fg(theme.muted))]))
 }
 
 /// `1.06x`, `27.1x`, `1667x`
@@ -262,7 +286,7 @@ fn plot(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, sel_siz
 
 /// Each variant's figure over the baseline's by n (above 1 is worse), the baseline flat at 1
 fn plot_ratio(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, sel_size: usize, theme: &Theme) {
-    let block = kit::panel(theme, &format!("over {}", compare.baseline), "by n · above 1 is worse", false);
+    let block = kit::panel(theme, &format!("over {}", compare.baseline), if m.ranked() { "by n · above 1 is worse" } else { "by n · above 1 is more" }, false);
     let inner = kit::draw_panel(buf, area, block);
     let lines: Vec<(usize, Vec<(f64, f64)>)> = compare
         .variants
@@ -277,7 +301,7 @@ fn plot_ratio(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, s
                 .filter_map(|n| {
                     let value = compare.run(&variant.name, *n).and_then(|r| r.value(&m.key))?;
                     let base = compare.run(&compare.baseline, *n).and_then(|r| r.value(&m.key))?;
-                    worse_ratio(m, value, base).map(|ratio| (n.log10(), ratio))
+                    ratio_of(m, value, base).map(|ratio| (n.log10(), ratio))
                 })
                 .collect();
             (index, points)
@@ -390,27 +414,29 @@ fn draw_detail(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, 
         let title = format!("{} vs {}", other.name, compare.baseline);
         let inner = kit::draw_panel(buf, parts[1], kit::panel(theme, &title, &format!("each figure at n = {}", fmt::grouped(n)), false));
         let run = compare.run(&other.name, n);
-        let mut rows: Vec<(String, f64)> = compare
+        let mut rows: Vec<(String, f64, bool)> = compare
             .measured()
             .into_iter()
             .filter_map(|metric| {
                 let (Some(value), Some(base)) = (run.and_then(|r| r.value(&metric.key)), base.value(&metric.key)) else { return None };
-                worse_ratio(metric, value, base).map(|ratio| (metric.label.clone(), ratio))
+                ratio_of(metric, value, base).map(|ratio| (metric.label.clone(), ratio, metric.ranked()))
             })
             .collect();
-        rows.sort_by(|a, b| b.1.ln().abs().total_cmp(&a.1.ln().abs()).then(a.0.cmp(&b.0)));
+        rows.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.ln().abs().total_cmp(&a.1.ln().abs())).then(a.0.cmp(&b.0)));
         let cols = [col_fill("figure", 2), col_r("", 16), col_fill("", 3)];
         let bar_width = kit::widths(&cols, inner.width)[2];
         // (the bars on a log scale: the largest ratio shown fills an arm)
-        let widest = rows.iter().map(|(_, r)| r.ln().abs()).fold(0.0, f64::max).max(2f64.ln());
+        let widest = rows.iter().filter(|row| row.2).map(|(_, r, _)| r.ln().abs()).fold(0.0, f64::max).max(2f64.ln());
         let items = rows
             .iter()
             .take(kit::rows_shown(inner))
-            .map(|(label, ratio)| {
-                let mut cells = vec![Item::text(label.clone(), Style::new().fg(theme.ink2))];
-                cells.push(ratio_cell(*ratio, theme));
-                cells.push(Item::Spans(kit::diverging(ratio.ln() / widest, bar_width, theme)));
-                cells
+            .map(|(label, ratio, ranked)| {
+                if *ranked {
+                    vec![Item::text(label.clone(), Style::new().fg(theme.ink2)), ratio_cell(*ratio, theme), Item::Spans(kit::diverging(ratio.ln() / widest, bar_width, theme))]
+                } else {
+                    // (no better side: no bar)
+                    vec![Item::text(label.clone(), Style::new().fg(theme.muted)), neutral_cell(*ratio, theme), Item::empty()]
+                }
             })
             .collect();
         let grid = kit::table(buf, inner, theme, &cols, items, None, 0);
@@ -422,9 +448,16 @@ fn draw_detail(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, 
     // the tables the run's result keeps
     if tables_height > 0 {
         if let Some(tables) = compare.run(&info.name, n).and_then(|r| r.tables.as_ref()) {
-            let inner = kit::draw_panel(buf, parts[2], kit::panel(theme, &format!("Tables kept · {}", info.name), &format!("{} · {}", fmt::grouped(tables.count), fmt::bytes(tables.bytes)), false));
+            // (a site's phase says whose it is: the run's are the variant's own layout, the setup's the input every
+            // variant shares; a comparison without phases lists them all)
+            let own: Vec<&crate::compare::TableSite> = tables.sites.iter().filter(|site| site.phase != "setup").collect();
+            let (count, bytes) = tables.run.map_or((tables.count, tables.bytes), |run| (run.count, run.bytes));
+            let note = if tables.run.is_some() { format!("its own: {} · {}", fmt::grouped(count), fmt::bytes(bytes)) } else { format!("{} · {}", fmt::grouped(count), fmt::bytes(bytes)) };
+            let inner = kit::draw_panel(buf, parts[2], kit::panel(theme, &format!("Tables kept · {}", info.name), &note, false));
+            let input = tables.setup.filter(|setup| setup.count > 0.0);
+            let room = (inner.height as usize).saturating_sub(usize::from(input.is_some()));
             let mut lines = Vec::new();
-            for site in tables.sites.iter().take(inner.height as usize) {
+            for site in own.iter().take(room) {
                 let each = if site.count > 0.0 { site.bytes / site.count } else { 0.0 };
                 let mut spans = vec![
                     Span::styled(format!("{:>7} × ", fmt::grouped(site.count)), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
@@ -436,6 +469,9 @@ fn draw_detail(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, 
                     spans.push(Span::styled(format!("  grew {}×", fmt::grouped(site.rehashes)), Style::new().fg(theme.serious)));
                 }
                 lines.push(Line::from(spans));
+            }
+            if let Some(setup) = input {
+                lines.push(Line::from(Span::styled(format!("{:>7}   the setup's input (all variants'): {} tables, {}", "", fmt::grouped(setup.count), fmt::bytes(setup.bytes)), Style::new().fg(theme.muted))));
             }
             Paragraph::new(lines).render(inner, buf);
         }

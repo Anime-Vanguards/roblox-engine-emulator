@@ -579,7 +579,9 @@ border in the accent.
   - `c` Compare, of a what-if folder: each variant at each size in the comparison's metric, how it grows with n (a
     log-log plot, a line a variant) and each variant over the baseline by n, the best of each size, each variant's
     figure at the selected size as bars, every figure of a variant over the baseline's (worse to the right, on a log
-    scale), and the run's table shapes. Enter opens the run in the other views, `D` diffs it against the baseline's.
+    scale; a figure that names no winner, as `better` "none", as it is, in no colour), and the variant's own table
+    shapes (its run's, the setup's input apart). A winner that is clear and material is marked ◆, one within noise or
+    too small to matter ≈. Enter opens the run in the other views, `D` diffs it against the baseline's.
 - **Keys**: arrows or hjkl move, enter goes in, esc or backspace comes back out; `m` and `M` the metric (Studio work,
   host time, instructions, allocated bytes, allocations, Luau cache misses, each hardware counter the profile read);
   `s` sort; `f` scripts only (C functions and the engine's own Luau fold into the script that called them); `/` search,
