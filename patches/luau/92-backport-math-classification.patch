@@ -1,0 +1,250 @@
+# Topic: backport: math.isnan, math.isinf and math.isfinite
+#
+# What it does: Luau's number classifiers, as library functions and as fast-called builtins (the compiler's builtin
+# ids, constant folding and type inference, the native code's analysis).
+#
+# Upstream: 0.708 (behind FFlagLuauMathIsNanInfFinite from 0.701)
+
+diff --git a/luau/CodeGen/src/BytecodeAnalysis.cpp b/luau/CodeGen/src/BytecodeAnalysis.cpp
+index 3ea22f3..627f967 100644
+--- a/luau/CodeGen/src/BytecodeAnalysis.cpp
++++ b/luau/CodeGen/src/BytecodeAnalysis.cpp
+@@ -560,6 +560,18 @@ static void applyBuiltinCall(LuauBuiltinFunction bfid, BytecodeTypes& types)
+         types.b = LBC_TYPE_NUMBER;
+         types.c = LBC_TYPE_NUMBER;
+         break;
++    case LBF_MATH_ISNAN:
++        types.result = LBC_TYPE_BOOLEAN;
++        types.a = LBC_TYPE_NUMBER;
++        break;
++    case LBF_MATH_ISINF:
++        types.result = LBC_TYPE_BOOLEAN;
++        types.a = LBC_TYPE_NUMBER;
++        break;
++    case LBF_MATH_ISFINITE:
++        types.result = LBC_TYPE_BOOLEAN;
++        types.a = LBC_TYPE_NUMBER;
++        break;
+     }
+ }
+ 
+diff --git a/luau/CodeGen/src/OptimizeConstProp.cpp b/luau/CodeGen/src/OptimizeConstProp.cpp
+index fde68d9..deed4b8 100644
+--- a/luau/CodeGen/src/OptimizeConstProp.cpp
++++ b/luau/CodeGen/src/OptimizeConstProp.cpp
+@@ -649,6 +649,9 @@ static void handleBuiltinEffects(ConstPropState& state, LuauBuiltinFunction bfid
+     case LBF_VECTOR_MAX:
+     case LBF_VECTOR_LERP:
+     case LBF_MATH_LERP:
++    case LBF_MATH_ISNAN:
++    case LBF_MATH_ISINF:
++    case LBF_MATH_ISFINITE:
+         break;
+     case LBF_TABLE_INSERT:
+         state.invalidateHeap();
+diff --git a/luau/Common/include/Luau/Bytecode.h b/luau/Common/include/Luau/Bytecode.h
+index 8fce28f..3858a44 100644
+--- a/luau/Common/include/Luau/Bytecode.h
++++ b/luau/Common/include/Luau/Bytecode.h
+@@ -637,7 +637,13 @@ enum LuauBuiltinFunction
+     // math.lerp
+     LBF_MATH_LERP,
+ 
++    // vector.lerp
+     LBF_VECTOR_LERP,
++
++    // math.
++    LBF_MATH_ISNAN,
++    LBF_MATH_ISINF,
++    LBF_MATH_ISFINITE,
+ };
+ 
+ // Capture type, used in LOP_CAPTURE
+diff --git a/luau/Compiler/src/BuiltinFolding.cpp b/luau/Compiler/src/BuiltinFolding.cpp
+index 69a3040..ebc7871 100644
+--- a/luau/Compiler/src/BuiltinFolding.cpp
++++ b/luau/Compiler/src/BuiltinFolding.cpp
+@@ -522,6 +522,33 @@ Constant foldBuiltin(int bfid, const Constant* args, size_t count)
+             return cnum(v);
+         }
+         break;
++
++    case LBF_MATH_ISNAN:
++        if (count == 1 && args[0].type == Constant::Type_Number)
++        {
++            double x = args[0].valueNumber;
++
++            return cbool(isnan(x));
++        }
++        break;
++
++    case LBF_MATH_ISINF:
++        if (count == 1 && args[0].type == Constant::Type_Number)
++        {
++            double x = args[0].valueNumber;
++
++            return cbool(isinf(x));
++        }
++        break;
++
++    case LBF_MATH_ISFINITE:
++        if (count == 1 && args[0].type == Constant::Type_Number)
++        {
++            double x = args[0].valueNumber;
++
++            return cbool(isfinite(x));
++        }
++        break;
+     }
+ 
+     return cvar();
+diff --git a/luau/Compiler/src/Builtins.cpp b/luau/Compiler/src/Builtins.cpp
+index c6ae9b7..c645c3b 100644
+--- a/luau/Compiler/src/Builtins.cpp
++++ b/luau/Compiler/src/Builtins.cpp
+@@ -141,6 +141,12 @@ static int getBuiltinFunctionId(const Builtin& builtin, const CompileOptions& op
+             return LBF_MATH_ROUND;
+         if (builtin.method == "lerp")
+             return LBF_MATH_LERP;
++        if (builtin.method == "isnan")
++            return LBF_MATH_ISNAN;
++        if (builtin.method == "isinf")
++            return LBF_MATH_ISINF;
++        if (builtin.method == "isfinite")
++            return LBF_MATH_ISFINITE;
+     }
+ 
+     if (builtin.object == "bit32")
+@@ -561,6 +567,12 @@ BuiltinInfo getBuiltinInfo(int bfid)
+ 
+     case LBF_MATH_LERP:
+         return {3, 1, BuiltinInfo::Flag_NoneSafe};
++    case LBF_MATH_ISNAN:
++        return {1, 1, BuiltinInfo::Flag_NoneSafe};
++    case LBF_MATH_ISINF:
++        return {1, 1, BuiltinInfo::Flag_NoneSafe};
++    case LBF_MATH_ISFINITE:
++        return {1, 1, BuiltinInfo::Flag_NoneSafe};
+     }
+ 
+     LUAU_UNREACHABLE();
+diff --git a/luau/Compiler/src/Types.cpp b/luau/Compiler/src/Types.cpp
+index 4fcd984..b6559d5 100644
+--- a/luau/Compiler/src/Types.cpp
++++ b/luau/Compiler/src/Types.cpp
+@@ -757,6 +757,9 @@ struct TypeMapVisitor : AstVisitor
+                 recordResolvedType(node, &builtinTypes.stringType);
+                 break;
+ 
++            case LBF_MATH_ISNAN:
++            case LBF_MATH_ISINF:
++            case LBF_MATH_ISFINITE:
+             case LBF_RAWEQUAL:
+                 recordResolvedType(node, &builtinTypes.booleanType);
+                 break;
+diff --git a/luau/VM/src/lbuiltins.cpp b/luau/VM/src/lbuiltins.cpp
+index 4de0f24..59c7249 100644
+--- a/luau/VM/src/lbuiltins.cpp
++++ b/luau/VM/src/lbuiltins.cpp
+@@ -1759,6 +1759,45 @@ static int luauF_lerp(lua_State* L, StkId res, TValue* arg0, int nresults, StkId
+     return -1;
+ }
+ 
++static int luauF_isnan(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
++{
++    if (nparams >= 1 && nresults <= 1 && ttisnumber(arg0))
++    {
++        double x = nvalue(arg0);
++
++        setbvalue(res, isnan(x));
++        return 1;
++    }
++
++    return -1;
++}
++
++static int luauF_isinf(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
++{
++    if (nparams >= 1 && nresults <= 1 && ttisnumber(arg0))
++    {
++        double x = nvalue(arg0);
++
++        setbvalue(res, isinf(x));
++        return 1;
++    }
++
++    return -1;
++}
++
++static int luauF_isfinite(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
++{
++    if (nparams >= 1 && nresults <= 1 && ttisnumber(arg0))
++    {
++        double x = nvalue(arg0);
++
++        setbvalue(res, isfinite(x));
++        return 1;
++    }
++
++    return -1;
++}
++
+ static int luauF_missing(lua_State* L, StkId res, TValue* arg0, int nresults, StkId args, int nparams)
+ {
+     return -1;
+@@ -1958,6 +1997,10 @@ const luau_FastFunction luauF_table[256] = {
+ 
+     luauF_vectorlerp,
+ 
++    luauF_isnan,
++    luauF_isinf,
++    luauF_isfinite,
++
+ // When adding builtins, add them above this line; what follows is 64 "dummy" entries with luauF_missing fallback.
+ // This is important so that older versions of the runtime that don't support newer builtins automatically fall back via luauF_missing.
+ // Given the builtin addition velocity this should always provide a larger compatibility window than bytecode versions suggest.
+diff --git a/luau/VM/src/lmathlib.cpp b/luau/VM/src/lmathlib.cpp
+index 5f4f21a..85b8bfd 100644
+--- a/luau/VM/src/lmathlib.cpp
++++ b/luau/VM/src/lmathlib.cpp
+@@ -428,6 +428,30 @@ static int math_lerp(lua_State* L)
+     return 1;
+ }
+ 
++static int math_isnan(lua_State* L)
++{
++    double x = luaL_checknumber(L, 1);
++
++    lua_pushboolean(L, isnan(x));
++    return 1;
++}
++
++static int math_isinf(lua_State* L)
++{
++    double x = luaL_checknumber(L, 1);
++
++    lua_pushboolean(L, isinf(x));
++    return 1;
++}
++
++static int math_isfinite(lua_State* L)
++{
++    double x = luaL_checknumber(L, 1);
++
++    lua_pushboolean(L, isfinite(x));
++    return 1;
++}
++
+ static const luaL_Reg mathlib[] = {
+     {"abs", math_abs},
+     {"acos", math_acos},
+@@ -463,6 +487,9 @@ static const luaL_Reg mathlib[] = {
+     {"round", math_round},
+     {"map", math_map},
+     {"lerp", math_lerp},
++    {"isnan", math_isnan},
++    {"isinf", math_isinf},
++    {"isfinite", math_isfinite},
+     {NULL, NULL},
+ };
+ 

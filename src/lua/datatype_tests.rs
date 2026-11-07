@@ -366,7 +366,7 @@ assert(DateTime.fromIsoDate("2023-02-30T00:00:00Z") == nil and DateTime.fromIsoD
     );
 }
 
-/// Vector3 Magnitude and Unit are answered by the VM (patches/luau.patch, luaV_vectormember) and are what the single
+/// Vector3 Magnitude and Unit are answered by the VM (patches/luau/05-vector-members.patch, luaV_vectormember) and are what the single
 /// precision sums of squares give: Magnitude is `sqrtf(x*x + y*y + z*z)` widened to a double and Unit scales each component
 /// by `1.0f / sqrtf(...)`, bit for bit, as the `vector` library computes them.
 #[test]

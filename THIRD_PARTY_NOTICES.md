@@ -8,8 +8,8 @@ the third-party components below, each under its own license.
 
 | Component | Where | License | License text | Changes |
 |---|---|---|---|---|
-| [Luau](https://github.com/luau-lang/luau) 0.694 (Copyright Roblox Corporation), including code from Lua 5.1 (Copyright Lua.org, PUC-Rio) | `vendor/luau0-src/luau/` | MIT | [vendor/luau0-src/LICENSE](vendor/luau0-src/LICENSE) | modified by [patches/luau.patch](patches/luau.patch) |
-| [luau0-src](https://github.com/mlua-rs/luau-src-rs) 0.15.9 (Copyright Aleksandr Orlenko), the crate that builds Luau | `vendor/luau0-src/` | MIT | [vendor/luau0-src/LICENSE](vendor/luau0-src/LICENSE) | its build script and manifest, by the same patch |
+| [Luau](https://github.com/luau-lang/luau) 0.694 (Copyright Roblox Corporation), including code from Lua 5.1 (Copyright Lua.org, PUC-Rio) | `vendor/luau0-src/luau/` | MIT | [vendor/luau0-src/LICENSE](vendor/luau0-src/LICENSE) | modified by the topic series in [patches/luau/](patches/luau/) |
+| [luau0-src](https://github.com/mlua-rs/luau-src-rs) 0.15.9 (Copyright Aleksandr Orlenko), the crate that builds Luau | `vendor/luau0-src/` | MIT | [vendor/luau0-src/LICENSE](vendor/luau0-src/LICENSE) | its build script and manifest, by the same series |
 | [Lune](https://github.com/lune-org/lune) 0.10.4: the `lune-roblox` crate | `vendor/lune-roblox/` | MPL-2.0 | [vendor/lune-roblox/LICENSE.txt](vendor/lune-roblox/LICENSE.txt) | modified by [patches/lune.patch](patches/lune.patch) |
 | [Lune](https://github.com/lune-org/lune) 0.10.4: the `lune-utils` crate | `vendor/lune-utils/` | MPL-2.0 | [vendor/lune-utils/LICENSE.txt](vendor/lune-utils/LICENSE.txt) | modified by [patches/lune.patch](patches/lune.patch) |
 

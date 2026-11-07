@@ -1,0 +1,8 @@
+{
+	"luau": "0.694",
+	"crate": {
+		"file": "luau0-src-0.15.9+luau694.crate",
+		"url": "https://static.crates.io/crates/luau0-src/luau0-src-0.15.9+luau694.crate",
+		"sha256": "71a02a835f81c2bbf5edd17b595a7927fa0c91002b11f5bc1d2402d0ac392ed7"
+	}
+}

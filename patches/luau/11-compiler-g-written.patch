@@ -1,0 +1,34 @@
+# Topic: the compiler never imports _G
+#
+# What it does: the compiler treats _G, and any mutable global a host names, as written: it is read with GETGLOBAL and
+# never resolved by GETIMPORT.
+#
+# Why upstream lacks it: upstream imports _G itself (blocking only chains through it), resolved at load from the loading
+# thread's globals. The first host of this VM loaded each script on one thread with an environment of its own, where
+# that resolved the thread's _G, not the script's. 07-import-environment may make this unneeded; it stays because
+# dropping it changes the bytecode of every _G read, which moves the work clock.
+
+diff --git a/luau/Compiler/src/ValueTracking.cpp b/luau/Compiler/src/ValueTracking.cpp
+index 5896422..90aa28c 100644
+--- a/luau/Compiler/src/ValueTracking.cpp
++++ b/luau/Compiler/src/ValueTracking.cpp
+@@ -93,12 +93,12 @@ struct ValueVisitor : AstVisitor
+ void assignMutable(DenseHashMap<AstName, Global>& globals, const AstNameTable& names, const char* const* mutableGlobals)
+ {
+     if (AstName name = names.get("_G"); name.value)
+-        globals[name] = Global::Mutable;
++        globals[name] = Global::Written;
+ 
+     if (mutableGlobals)
+         for (const char* const* ptr = mutableGlobals; *ptr; ++ptr)
+             if (AstName name = names.get(*ptr); name.value)
+-                globals[name] = Global::Mutable;
++                globals[name] = Global::Written;
+ }
+ 
+ void trackValues(DenseHashMap<AstName, Global>& globals, DenseHashMap<AstLocal*, Variable>& variables, AstNode* root)
+@@ -109,3 +109,4 @@ void trackValues(DenseHashMap<AstName, Global>& globals, DenseHashMap<AstLocal*,
+ 
+ } // namespace Compile
+ } // namespace Luau
++

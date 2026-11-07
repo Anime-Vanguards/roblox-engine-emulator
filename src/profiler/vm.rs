@@ -1,4 +1,4 @@
-//! The VM's own profile (patches/luau.patch, lprofile.cpp): while it steps, every instruction the interpreter dispatches
+//! The VM's own profile (patches/luau/12-profiling.patch, lprofile.cpp): while it steps, every instruction the interpreter dispatches
 //! is counted, what the work clock charged since the previous instruction is booked to that instruction (the VM's work
 //! counters priced by [`crate::cost::luau`], and the engine's own charges), a calling-context tree is kept, and the
 //! instructions with an inline cache record what it did. Without stepping it only names functions for [`stack`].

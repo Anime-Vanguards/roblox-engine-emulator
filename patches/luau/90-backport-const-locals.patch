@@ -1,0 +1,22 @@
+# Topic: backport: const locals
+#
+# What it does: parses `const Name = ...` as a local, as a Roblox client parses it (code that runs reassigns none).
+#
+# Upstream: 0.727 (behind FFlagLuauConst2 from 0.723)
+
+diff --git a/luau/Ast/src/Parser.cpp b/luau/Ast/src/Parser.cpp
+index d8ee89b..217a513 100644
+--- a/luau/Ast/src/Parser.cpp
++++ b/luau/Ast/src/Parser.cpp
+@@ -415,6 +415,11 @@ AstStat* Parser::parseStat()
+     default:;
+     }
+ 
++    // `const Name = ...` declares a local that is never reassigned, as Roblox's Luau parses it; code that runs reassigns
++    // none, so it compiles as `local`
++    if (lexer.current().type == Lexeme::Name && AstName(lexer.current().name) == "const" && lexer.lookahead().type == Lexeme::Name)
++        return parseLocal(AstArray<AstAttr*>({nullptr, 0}));
++
+     Location start = lexer.current().location;
+ 
+     // we need to disambiguate a few cases, primarily assignment (lvalue = ...) vs statements-that-are calls

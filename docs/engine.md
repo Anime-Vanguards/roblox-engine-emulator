@@ -75,11 +75,12 @@ vendor/ patches/ tools/vendor.mjs   the patched Luau VM and Lune's datatypes
   (tests/luau_vm.rs), plus the process guards (tests/process_guards.rs, which run the built `ree`).
   Tests build their own scenes in temporary directories; none needs Roblox Studio, a game checkout, a
   GPU or the network.
-- `node tools/vendor.mjs --check`: vendor/ is exactly the pinned archives with patches/ applied.
+- `node tools/vendor.mjs --check`: vendor/ is exactly the pinned archives with patches/ applied (the VM's patches are a
+  topic series, patches/luau/; docs/building.md "Updating Luau").
 - Recordings are deterministic: the same harness and project give byte-identical `scene.rbxm`,
   `playback.json`, `events.json`, `camera.json` and summary files. Two runs of one scene make the same
   writes: tables keyed by Instances, tables, functions or threads are visited in an order fixed by the
-  objects' creation, not their addresses (patches/luau.patch, `REE_HASH_SEED`).
+  objects' creation, not their addresses (patches/luau/04-deterministic-hash.patch, `REE_HASH_SEED`).
 - Downstream: roblox-ui-renderer runs its fixtures, stories and Studio comparison replays through this
   engine and compares their output with recordings made in Studio. A change to script-visible
   behaviour is checked there too; an intended change of output is re-recorded only after a comparison
@@ -265,7 +266,7 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   names it: error positions, tracebacks and `debug.info(f, "s")` read `ReplicatedStorage.Module:3:`
   (measured in a playing client; tools/parity/probes/chunknames.luau). Roblox keeps one compiled chunk per
   source text, so a module whose source equals an earlier one's carries that module's name; ree does not.
-- **The Luau library**: the VM is Luau 0.694 (`vendor/luau0-src`) with patches/luau.patch, which also backports
+- **The Luau library**: the VM is Luau 0.694 (`vendor/luau0-src`) with the topic series in patches/luau/, which also backports
   Luau 0.701's `math.isnan`, `math.isinf` and `math.isfinite` as upstream has them: builtins (fast calls, a
   constant argument folded by the compiler) that take a number or a string Luau reads as one (`"1"`, `"inf"`,
   `"nan"`, `"1e400"`) and raise `invalid argument #1 to 'isnan' (number expected, got nil)` for anything
@@ -407,7 +408,7 @@ reached by its lower-case first letter 40 ns more, `LOWER_FIRST`), write and met
 Destroy, the lists methods return (per element), a find's walk (per child or node looked at), a ray's path
 and a spatial query's results (per part), signals and threads, and EditableMesh's own work are charged what
 they cost in a client, as measured with os.clock (cost.rs gives each price with its measurement). A script's
-own Luau is charged too, from the VM's work counters (patches/luau.patch `lua_workcounters`: instructions
+own Luau is charged too, from the VM's work counters (patches/luau/02-work-counters.patch `lua_workcounters`: instructions
 by opcode, a `--!native` module's apart, objects and table storage allocated, keys moved as tables grow, C
 calls and calls into the engine's own Luau, imports looked up, and the library's own loops: numbers made
 strings, new strings, sorting, table.create / clone / concat, string.split and string.format). Each
@@ -513,7 +514,7 @@ The same script is charged the same in every run. Luau's garbage collector paces
 they took, and on the wall clock it stepped at other points in each run on a loaded machine: an allocating
 builtin's fast path gives way to its C function while a step is due, a string is found alive or made
 again, and what the VM counts moved with it, so a budgeted loop could take other frames. The collector
-paces itself by the scripts' own work on this clock instead (patches/luau.patch `lua_setgcclock`,
+paces itself by the scripts' own work on this clock instead (patches/luau/03-gc-clock.patch `lua_setgcclock`,
 cost.rs `install_gc_clock`), so a run collects at the same points however fast the host runs, one-shot
 or through `ree serve`.
 
@@ -535,7 +536,7 @@ scales the script work the clock charges by 2.77, a sim-to-phone calibration for
 profile asks for; `profiler::report` writes its files and `ree profile diff` compares two; the profile viewer
 (profile-view/, docs/cli.md "The profile viewer") reads them and nothing else. What each one measures:
 
-- **The VM's instruction profile** (patches/luau.patch, `lprofile.cpp`, `lua_profilestart`). While a profile
+- **The VM's instruction profile** (patches/luau/12-profiling.patch, `lprofile.cpp`, `lua_profilestart`). While a profile
   steps, `luau_execute` runs its single-step variant on every thread of the VM, and the dispatch calls the
   profile before each instruction. It counts the instruction; it books to the previous instruction what moved
   since it: the VM's work counters (`lua_workcounters`), priced slot by slot with `cost::luau`'s own prices (the

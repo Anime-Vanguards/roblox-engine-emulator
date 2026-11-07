@@ -1158,7 +1158,7 @@ pub const ANIMATION_FETCH: f64 = 0.45;
 /// not modelled is named, so nobody reads the clock as a client's where it is not one.
 pub const FIDELITY: &str = "fidelity: prices measured in a client, with a frame's cold first touches of tables, functions, engine members and instances (one touched alone costs more) and the first run in a frame of each engine path a script takes (an effect's clone, workspace entry, destroy, pivot, bulk move, emit and query; a library or datatype function; a function not run the frame before); a game's per-frame code reads 0.6-1.2x a client (most 0.8-1.1x), an attack's cast 0.5-1.1x (most 0.6-0.8x). Not modelled: the rest of a cast's cold cost, in its own Luau (0.3-1.0x a client, most 0.5-0.7x) and its engine calls (0.5-0.9x), code and data a client finds cold after frames unused; where data lies in memory (made together in one loop it reads dear), what a layout leaves warm, and the cold of each node a large walk visits (priced once a call). Size a cut in a client";
 
-/// What the Luau VM did since it started (vendor/luau0-src, patches/luau.patch: lua_workcounters)
+/// What the Luau VM did since it started (vendor/luau0-src, patches/luau/02-work-counters.patch: lua_workcounters)
 #[repr(C)]
 pub struct VmCounters {
     /// Instructions the interpreter dispatched for scripts, by opcode (Luau's Bytecode.h order)
@@ -1227,7 +1227,7 @@ unsafe extern "C-unwind" {
     fn lua_coldframe(state: *mut mlua::ffi::lua_State);
 }
 
-/// Turns the VM's cold touches on or off (patches/luau.patch `lua_coldtracking`): on, the first touch in a frame of a table, Luau closure
+/// Turns the VM's cold touches on or off (patches/luau/13-cold-touches.patch `lua_coldtracking`): on, the first touch in a frame of a table, Luau closure
 /// or function made before the frame is counted (VmCounters `coldtables` and below) and priced ([`luau`]). A host that charges scripts'
 /// Luau (it interprets them) turns it on; nothing a script reads changes either way.
 pub fn cold_tracking(lua: &mlua::Lua, on: bool) {
@@ -1344,7 +1344,7 @@ pub fn luau(c: &VmCounters) -> f64 {
 }
 
 /// The slots of [`VmCounters`]'s hostops no opcode reaches, where the VM counts a script's first call in a frame of a C function
-/// and of a function of the engine's own Luau (patches/luau.patch LUA_WORK_COLDCFUNCS, LUA_WORK_COLDHOSTFUNCS): the counters keep
+/// and of a function of the engine's own Luau (patches/luau/13-cold-touches.patch LUA_WORK_COLDCFUNCS, LUA_WORK_COLDHOSTFUNCS): the counters keep
 /// their size, since the VM state's size counts in what collectgarbage("count") reads.
 pub const COLD_CFUNCS_SLOT: usize = 255;
 pub const COLD_HOSTFUNCS_SLOT: usize = 254;
@@ -1359,7 +1359,7 @@ pub fn host_instructions(c: &VmCounters) -> u64 {
 
 
 /// Cold per-frame Luau, in nanoseconds: what a client pays the first time in a frame a script touches a table, calls a Luau closure or
-/// runs a function made before the frame (VmCounters `coldtables` and below; patches/luau.patch `lua_coldframe`), beyond the hot
+/// runs a function made before the frame (VmCounters `coldtables` and below; patches/luau/13-cold-touches.patch `lua_coldframe`), beyond the hot
 /// prices above. A client runs its engine work (layout, rendering, physics) between two frames' scripts, so code that runs once a
 /// frame over data it made over time finds both out of the CPU's caches, which a hot loop never does. Measured in rendered clients of
 /// a game's lobby and match place (roblox-sim, Studio 0.744; notes/macro coldprobe, six sessions): records walked once a frame cost
@@ -1485,7 +1485,7 @@ pub const LUAU_CCALL: f64 = 5.0;
 /// a datatype's operation the engine's Luau serves (CFrame * CFrame 62, CFrame.new 64, Color3.new 61,
 /// cf * v 18, cf.Position + cf.LookVector 15, v.Magnitude / Unit / Dot 62 for three)
 pub const LUAU_HOSTCALL: f64 = 15.0;
-/// `.Magnitude` and `.Unit` on a Vector3, which the VM answers itself (patches/luau.patch, luaV_vectormember):
+/// `.Magnitude` and `.Unit` on a Vector3, which the VM answers itself (patches/luau/05-vector-members.patch, luaV_vectormember):
 /// Studio's client reads `local _ = a.Magnitude` at 10.4 ns and `a.Unit` at 12.3 (the op_cost probe's rows, minus the
 /// 3.2 ns of instructions the loop line counts). The rig frame, where a script reads it from a vector it just took from an
 /// instance, is dearer (a match place's client, six runs of six readings: median 15.4 ns whole, 14.2 in the first three, range

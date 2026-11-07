@@ -1,4 +1,4 @@
-//! Patched Luau VM behaviour (tools/native-host/luau.patch, applied to luau0-src via [patch.crates-io]).
+//! Patched Luau VM behaviour (patches/luau/, applied to luau0-src via [patch.crates-io]).
 //!
 //! Ported from the Lune-hosted runtime/tests/table_find.luau and runtime/tests/native_builtins.luau.
 //! The Luau sources live in tests/luau/ and run through mlua directly, so they exercise the same VM
@@ -211,7 +211,7 @@ fn an_interpreted_iterator_yields_and_const_declares_a_local() -> Result<()> {
     Ok(())
 }
 
-/// `math.isnan`, `math.isinf` and `math.isfinite`, Luau 0.701's number classifiers (patches/luau.patch backports them to 0.694): the
+/// `math.isnan`, `math.isinf` and `math.isfinite`, Luau 0.701's number classifiers (patches/luau/92-backport-math-classification.patch backports them to 0.694): the
 /// results, the strings `luaL_checknumber` takes, the errors, one result, and a constant argument folded by the compiler, with the
 /// same answers interpreted, natively compiled and through a plain C call (a table's field, never a fast call).
 #[test]

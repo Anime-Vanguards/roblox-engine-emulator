@@ -23,8 +23,9 @@ cargo test --release                  # every test: the engine's, the patched VM
 cargo test --release <name>           # one test, by (part of) its name
 cargo clippy --release --all-targets  # lints (no project-wide clippy config)
 cargo test --release --manifest-path tools/hw-counters/Cargo.toml   # the counter service --profile hw reads through
-node tools/vendor.mjs                 # rebuild vendor/ after changing a file in patches/ (downloads two pinned archives)
+node tools/vendor.mjs                 # rebuild vendor/ after changing a file in patches/ (downloads the pinned archives)
 node tools/vendor.mjs --check         # vendor/ is exactly the pinned archives plus patches/
+node tools/vendor.mjs bump client     # move the VM to the Luau release a live client runs (docs/building.md "Updating Luau")
 node tools/parity/run.mjs [--diff]    # differential probes: ree against the real engine's captured output
 ```
 
@@ -72,7 +73,8 @@ nearly every file.
 - **The GUI stays out of the core.** No layout, text measurement, input or scene export here. A host adds them as a
   `Layer` with an `Extension` (docs/engine.md "Layers and extensions"); the core keeps the static answers Roblox gives
   without them.
-- **The VM is vendored.** The Luau VM and Lune's datatypes come from pinned archives plus patches/: change a patch, run
+- **The VM is vendored.** The Luau VM and Lune's datatypes come from pinned archives plus patches/ (the VM's are a topic
+  series, patches/luau/NN-<topic>.patch): change a patch (`node tools/vendor.mjs edit` for a topic in the middle), run
   `node tools/vendor.mjs`, commit both; never edit vendor/ by hand (`node tools/vendor.mjs --check`).
 - **Hot paths** read properties by interned id (`K::...`, `reflection.name_id` once), never by string, and allocate
   nothing per frame; the Instance API's fast paths stay in C metamethods (lua/raw.rs).
