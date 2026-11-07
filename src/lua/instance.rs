@@ -380,9 +380,34 @@ fn write_touch(state: &State, id: InstanceId, name: NameId, property: &str, chan
     }
 }
 
+/// A CFrame a script writes to a part's CFrame or a joint's C0 / C1, as a client stores it: its rotation orthonormalized once it
+/// is off by more than the client lets pass (world::frame::stored_rotation). Other values, and CFrames written elsewhere (a
+/// model's WorldPivot keeps a scaled rotation, measured), pass as they are.
+fn cframe_as_stored(engine: &Engine, id: InstanceId, name: NameId, value: Value) -> Value {
+    use rbx_dom_weak::types::{self as dom, Variant};
+    let Value::Dom(variant) = &value else { return value };
+    let Variant::CFrame(cframe) = &**variant else { return value };
+    let class = engine.state.borrow().dom.at(id).class;
+    let property = engine.reflection.name(name);
+    let held = (name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "BasePart"))
+        || (matches!(property, "C0" | "C1") && engine.reflection.is_a(class, "JointInstance"));
+    if !held {
+        return value;
+    }
+    let o = &cframe.orientation;
+    let rows = [[o.x.x, o.x.y, o.x.z], [o.y.x, o.y.y, o.y.z], [o.z.x, o.z.y, o.z.z]];
+    let stored = crate::world::frame::stored_rotation(rows);
+    if stored == rows {
+        return value;
+    }
+    let row = |r: [f32; 3]| dom::Vector3::new(r[0], r[1], r[2]);
+    Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2]))))))
+}
+
 /// A script's property write: [`set_property`], charged to the work clock by what Studio spends on it
 /// (crate::cost::write: the property, whether it changed, whether the instance is in the workspace).
 pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value: Value) -> bool {
+    let value = cframe_as_stored(engine, id, name, value);
     // (a client looks a Text write up for translation: AutoLocalize on and a letter in it)
     let client = !engine.options.edit_mode() && !engine.options.server();
     let looked_up = match &value {

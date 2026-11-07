@@ -268,7 +268,10 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   string as Luau reads a number and anything else as 0; `int` properties truncate (the minimum when out
   of range or not finite), `int64` ones round half away from zero (0 when out of range); a boolean
   property takes Lua truth; a string property takes strings and numbers. A Vector3 or CFrame property keeps
-  the script value's float32s as they are (a client reads back `CFrame.Angles(0.001, 0, 0)` exactly).
+  the script value's float32s as they are (a client reads back `CFrame.Angles(0.001, 0, 0)` exactly). A part's
+  CFrame, a joint's C0 / C1 and a BulkMoveTo keep the rotation while every entry of RᵀR - I is within 1e-5, and
+  otherwise store it as `CFrame:Orthonormalize()` gives it (identity for a zero column); a model's WorldPivot keeps
+  any rotation (`world::frame::stored_rotation`, measured in a playing client).
 - **Scripts' chunk names**: a script or module compiles as a chunk named by its full name, as Roblox
   names it: error positions, tracebacks and `debug.info(f, "s")` read `ReplicatedStorage.Module:3:`
   (measured in a playing client; tools/parity/probes/chunknames.luau). Roblox keeps one compiled chunk per
@@ -681,7 +684,9 @@ record/prepare.rs runs prepared ahead by `ree serve`
   (Part0 * C0 * Transform = Part1 * C1) and WeldConstraint carry the parts they join. Each assembly hangs
   from its root (an anchored part, else by Massless, RootPriority, then the documented size formula). A
   part's CFrame write moves its whole assembly rigidly; Position / Orientation / Rotation move the part
-  alone and rewrite its joints. Model:PivotTo and ScaleTo write their parts as one batch.
+  alone and rewrite its joints. Model:PivotTo and ScaleTo write their parts as one batch. After PivotTo a
+  model whose pivot is its own (no PrimaryPart) has the target as its pivot exactly, every call, as in a client;
+  composing the move onto the old pivot compounded float error until a model pivoted every frame lost its rotation.
   Motor6D.Transform applies after PreSimulation (edit mode: at each Heartbeat's start).
 - **Free flight** (measured in playing clients): in play mode an assembly in the Workspace with no
   anchored part, nothing that can collide, no Humanoid and no constraint flies from its first simulation

@@ -478,7 +478,8 @@ pub fn install(engine: &Rc<Engine>) {
                             }
                         }
                     }
-                    set_cframe(engine, id, &target);
+                    // (a part stores the rotation as a client does: frame::stored_rotation, measured through BulkMoveTo too)
+                    set_cframe(engine, id, &frame::stored_transform(&target));
                     engine.state.borrow().sched.charge(each);
                     // (booked to the call, so a boundary profile shows what BulkMoveTo's parts cost)
                     crate::boundary::add_cost(each);

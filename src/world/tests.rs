@@ -1359,3 +1359,136 @@ fn a_streaming_place_holds_an_assembly_to_its_focus_reach() {
         2.0,
     );
 }
+
+/// A model pivoted every frame, as an attack effect's spin pivots one (`PivotTo(originalPivot * CFrame.fromOrientation(0, yaw, 0))`),
+/// keeps its rotation: the pivot is the target after each PivotTo, as a client keeps it. ree stored `Delta * Stored`, whose float
+/// error the transposed inverse squared each call, and such an effect lost its rotation in about 25 frames: its start part read
+/// [0 0 0; 0 1 0; 0 0 0] and the bezier parts it emits went NaN. Measured in a playing client (roblox-sim, Studio 0.746,
+/// 2026-11-07): the pivot equals the target after all 120 steps, the parts stay orthonormal within 1.2e-7.
+#[test]
+fn a_model_pivoted_every_frame_keeps_its_rotation() {
+    check(
+        r#"
+        local Model = Instance.new("Model")
+        -- the effect's start part as its bundle stores it (rotation id 0: a quarter turn about Y in floats)
+        local Start = Instance.new("Part")
+        Start.Anchored = true
+        Start.CFrame = CFrame.new(-9.346, 0.5, -121.796, -4.37113883e-08, 0, 1, 0, 1, 0, -1, 0, -4.37113883e-08)
+        Start.Parent = Model
+        local Other = Instance.new("Part")
+        Other.Anchored = true
+        Other.CFrame = CFrame.new(-9.346, 0.5, -121.796)
+        Other.Parent = Model
+        Model.WorldPivot = CFrame.new(-9.346, 0.5, -121.796)
+        Model.Parent = workspace
+        local Origin = Model:GetPivot()
+        for Step = 1, 120 do
+            local Target = Origin * CFrame.fromOrientation(0, math.rad(720) * Step / 60, 0)
+            Model:PivotTo(Target)
+            assert(Model:GetPivot() == Target, `step {Step}: the pivot is not the target`)
+            local Right = Start.CFrame.RightVector.Magnitude
+            assert(math.abs(Right - 1) < 1e-6, `step {Step}: Start's rotation scaled to {Right}`)
+        end
+        assert(math.abs(Start.Position.Y - 0.5) < 1e-3, `Start moved to {Start.Position}`)
+        -- a part pivoted every frame: its pivot is the target, its rotation stays one
+        local Part = Instance.new("Part")
+        Part.PivotOffset = CFrame.new(0, 1, 0)
+        Part.Parent = workspace
+        for Step = 1, 120 do
+            local Target = CFrame.new(1, 2, 3) * CFrame.fromOrientation(0, math.rad(720) * Step / 60, 0)
+            Part:PivotTo(Target)
+            assert((Part:GetPivot().Position - Target.Position).Magnitude < 1e-4, `step {Step}: {Part:GetPivot()}`)
+            assert(math.abs(Part.CFrame.RightVector.Magnitude - 1) < 1e-6, `step {Step}: the part's rotation scaled`)
+        end
+        "#,
+    );
+}
+
+/// What a script writes is stored as a client stores it: Vector3s and CFrames exactly (lune's own conversion rounded each
+/// fraction to 1/65536), and a part's CFrame, a joint's C0 and a BulkMoveTo orthonormalized as `CFrame:Orthonormalize()` gives
+/// it once it is off by more than 1e-5 (a mirror kept), identity for a rotation with a zero column; a model's WorldPivot keeps
+/// what is written. The expected values are what a playing client read back (roblox-sim, Studio 0.746, 2026-11-07).
+#[test]
+fn a_parts_cframe_is_orthonormalized_as_a_client_stores_it() {
+    check(
+        r#"
+        local Part = Instance.new("Part")
+        Part.Anchored = true
+        Part.Parent = workspace
+        local function rows(cf)
+            local c = { cf:GetComponents() }
+            return { table.unpack(c, 4, 12) }
+        end
+        local function near(a, b)
+            for i = 1, 9 do
+                if math.abs(a[i] - b[i]) > 2e-7 then
+                    return false
+                end
+            end
+            return true
+        end
+        -- written exactly: a Vector3, and a CFrame already orthonormal (to the bit, its position too)
+        Part.Size = Vector3.new(0.123456789, 1.987654321, 2.3)
+        assert(Part.Size == Vector3.new(0.123456789, 1.987654321, 2.3), `size {Part.Size}`)
+        local Exact = CFrame.new(0.123456789, 0.987654321, -3.1) * CFrame.fromOrientation(0.3, 1.1, -0.7)
+        Part.CFrame = Exact
+        assert(Part.CFrame == Exact, `a written CFrame read back {Part.CFrame}`)
+        -- the tolerance: a column stretched by 2e-6 or leaning 5e-6 is kept, by 5e-6 or 2e-5 orthonormalized
+        local r = { CFrame.fromOrientation(0.3, 1.1, -0.7):GetComponents() }
+        local function kept(m)
+            local cf = CFrame.new(1, 2, 3, table.unpack(m))
+            Part.CFrame = cf
+            return Part.CFrame == cf
+        end
+        local function stretched(d)
+            return { r[4] * (1 + d), r[5], r[6], r[7] * (1 + d), r[8], r[9], r[10] * (1 + d), r[11], r[12] }
+        end
+        local function leaning(d)
+            return { r[4], r[5] + d * r[4], r[6], r[7], r[8] + d * r[7], r[9], r[10], r[11] + d * r[10], r[12] }
+        end
+        assert(kept(stretched(2e-6)) and not kept(stretched(5e-6)), "a stretched column")
+        assert(kept(leaning(5e-6)) and not kept(leaning(2e-5)), "a leaning column")
+        local function written(...)
+            Part.CFrame = CFrame.new(1, 2, 3, ...)
+            assert(Part.CFrame.Position == Vector3.new(1, 2, 3), "the position moved")
+            return rows(Part.CFrame)
+        end
+        local function expect(got, want, what)
+            assert(near(got, want), `{what}: {table.concat(got, " ")}`)
+        end
+        expect(written(0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5), { 1, 0, 0, 0, 1, 0, 0, 0, 1 }, "scaled")
+        expect(written(0.9, 0.3, -0.2, 0.1, 1.2, 0.4, -0.3, 0.2, 0.8), {
+            0.9434563517570496, -0.0218996349722147, 0.3307726979255676,
+            0.10482849180698395, 0.9663204550743103, -0.23502254486083984,
+            -0.31448549032211304, 0.2564079761505127, 0.9139769673347473,
+        }, "skewed")
+        expect(written(1, 0, 0, 0, 1, 0, 0.5, 0.5, 1), {
+            0.8944271802902222, -0.18257418274879456, -0.40824827551841736,
+            0, 0.9128710031509399, -0.4082483649253845,
+            0.4472135901451111, 0.3651483952999115, 0.8164965510368347,
+        }, "sheared")
+        expect(written(1, 0, 0, 0, 1, 0, 0, 0, -2), { 1, 0, 0, 0, 1, 0, 0, 0, -1 }, "mirrored")
+        expect(written(0, 0, 0, 0, 1, 0, 0, 0, 0), { 1, 0, 0, 0, 1, 0, 0, 0, 1 }, "degenerate")
+        expect(written(0, 0, 1, 0, 1, 0, 0, 0, 0), { 1, 0, 0, 0, 1, 0, 0, 0, 1 }, "no right vector")
+        -- a Motor6D's C0 and a BulkMoveTo store it as the part does
+        local Skewed = CFrame.new(1, 2, 3, 0.9, 0.3, -0.2, 0.1, 1.2, 0.4, -0.3, 0.2, 0.8)
+        local Client = {
+            0.9434563517570496, -0.0218996349722147, 0.3307726979255676,
+            0.10482849180698395, 0.9663204550743103, -0.23502254486083984,
+            -0.31448549032211304, 0.2564079761505127, 0.9139769673347473,
+        }
+        local Motor = Instance.new("Motor6D")
+        Motor.C0 = Skewed
+        expect(rows(Motor.C0), Client, "a Motor6D's C0")
+        local Other = Instance.new("Part")
+        Other.Anchored = true
+        Other.Parent = workspace
+        workspace:BulkMoveTo({ Other }, { Skewed }, Enum.BulkMoveMode.FireCFrameChanged)
+        expect(rows(Other.CFrame), Client, "BulkMoveTo")
+        -- a model's pivot keeps a scaled rotation
+        local Model = Instance.new("Model")
+        Model.WorldPivot = CFrame.new(0, 0, 0, 0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5)
+        expect(rows(Model:GetPivot()), { 0.5, 0, 0, 0, 0.5, 0, 0, 0, 0.5 }, "the pivot")
+        "#,
+    );
+}
