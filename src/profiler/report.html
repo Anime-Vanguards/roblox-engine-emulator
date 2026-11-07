@@ -126,13 +126,13 @@ section[hidden] { display: none; }
 <div id="warnings"></div>
 <div class="tiles" id="tiles"></div>
 <nav id="nav"></nav>
-<section id="hot" data-tab="Hot paths"></section>
-<section id="flame" data-tab="Flame graph" hidden></section>
-<section id="memory" data-tab="Memory" hidden></section>
-<section id="timeline" data-tab="Timeline" hidden></section>
-<section id="caches" data-tab="Caches" hidden></section>
-<section id="cpu" data-tab="CPU" hidden></section>
-<section id="text" data-tab="Summary text" hidden></section>
+<section id="tab-hot" data-tab="Hot paths"></section>
+<section id="tab-flame" data-tab="Flame graph" hidden></section>
+<section id="tab-memory" data-tab="Memory" hidden></section>
+<section id="tab-timeline" data-tab="Timeline" hidden></section>
+<section id="tab-caches" data-tab="Caches" hidden></section>
+<section id="tab-cpu" data-tab="CPU" hidden></section>
+<section id="tab-text" data-tab="Summary text" hidden></section>
 </main>
 <div class="tip" id="tip"></div>
 <script>
@@ -205,15 +205,18 @@ const PROFILE = /*PROFILE_DATA*/null;
 	for (const [label, value, sub] of tiles) $("tiles").append(el("div", { class: "tile" }, el("div", { class: "label" }, label), el("div", { class: "value" }, value), el("div", { class: "sub" }, sub)));
 
 	// tabs
+	// (a tab's name is its section's id without "tab-": a link names it, report.html#memory, and an id of the same name
+	// would scroll the page past its header)
 	const sections = [...document.querySelectorAll("section[data-tab]")];
-	const select = (id) => {
-		for (const section of sections) section.hidden = section.id !== id;
-		for (const button of $("nav").children) button.setAttribute("aria-selected", String(button.dataset.id === id));
-		try { localStorage.setItem("ree-profile-tab", id); } catch (_) {}
+	const tabName = (section) => section.id.slice(4);
+	const select = (name) => {
+		for (const section of sections) section.hidden = tabName(section) !== name;
+		for (const button of $("nav").children) button.setAttribute("aria-selected", String(button.dataset.id === name));
+		try { localStorage.setItem("ree-profile-tab", name); } catch (_) {}
 	};
 	for (const section of sections) {
-		const button = el("button", { "data-id": section.id, onclick: () => select(section.id) }, section.dataset.tab);
-		button.dataset.id = section.id;
+		const button = el("button", { "data-id": tabName(section), onclick: () => select(tabName(section)) }, section.dataset.tab);
+		button.dataset.id = tabName(section);
 		$("nav").append(button);
 	}
 
@@ -249,7 +252,7 @@ const PROFILE = /*PROFILE_DATA*/null;
 
 	// Hot paths: functions, then the selected one's callers, callees and lines
 	(function hot() {
-		const section = $("hot");
+		const section = $("tab-hot");
 		const hasWork = !!P.work, hasTime = !!P.time, hasAlloc = !!P.alloc;
 		section.append(el("h2", {}, "Functions"));
 		section.append(el("p", { class: "lead" }, hasWork ? "Work is the work clock: what Studio would take for the same code, booked to the instruction that caused it; the same every run. Self is the function's own instructions; total includes what it called. Click a function for its callers, callees and annotated source." : "Click a function for its callers, callees and annotated source."));
@@ -266,7 +269,7 @@ const PROFILE = /*PROFILE_DATA*/null;
 		section.append(table(rows, columns, { sort: columns[1].key, limit: 300, onpick: (f) => showFunction(f, detail) }));
 		section.append(detail);
 		if (P.work && P.work.native_functions && P.work.native_functions.length) {
-			section.append(el("div", { class: "warn" }, `${P.work.native_functions.length} natively compiled functions ran natively: their instructions are not counted (entries and the work booked while they ran are).`));
+			section.append(el("div", { class: "warn" }, `${P.work.native_functions.length} natively compiled functions seen: their instructions are not counted (their entries from interpreted code and the work booked while they ran are), and a call from native code into native code is not seen.`));
 		}
 		section.append(el("h2", {}, "Lines"));
 		const lines = (P.lines || []).filter((l) => byId.has(l.function) && byId.get(l.function).kind !== "engine Luau");
@@ -337,7 +340,7 @@ const PROFILE = /*PROFILE_DATA*/null;
 
 	// Flame graph (icicle) of the call tree's work or instructions
 	(function flame() {
-		const section = $("flame");
+		const section = $("tab-flame");
 		const tree = P.tree || [];
 		if (!tree.length) { section.append(el("p", { class: "muted" }, "No call tree: run with --profile work.")); return; }
 		section.append(el("h2", {}, "Call tree"));
@@ -393,7 +396,7 @@ const PROFILE = /*PROFILE_DATA*/null;
 
 	// Memory
 	(function memory() {
-		const section = $("memory");
+		const section = $("tab-memory");
 		if (!P.alloc && !snapshots.length) { section.append(el("p", { class: "muted" }, "No memory profile: run with --profile alloc,heap.")); return; }
 		if (P.alloc) {
 			section.append(el("h2", {}, `Allocations: ${bytes(P.alloc.bytes)} in ${fmt(P.alloc.objects)} objects`));
@@ -452,7 +455,7 @@ const PROFILE = /*PROFILE_DATA*/null;
 
 	// Timeline: one small chart per measure, a shared crosshair
 	(function timeline() {
-		const section = $("timeline");
+		const section = $("tab-timeline");
 		const t = P.timeline;
 		if (!t) { section.append(el("p", { class: "muted" }, "No timeline: run with --profile timeline.")); return; }
 		const col = (name) => t.columns.indexOf(name);
@@ -512,12 +515,13 @@ const PROFILE = /*PROFILE_DATA*/null;
 			chart.svg.addEventListener("mouseleave", () => { hideTip(); for (const c of charts) { c.cross.setAttribute("visibility", "hidden"); c.dot.setAttribute("visibility", "hidden"); } });
 		}
 		section.append(el("h3", {}, "Frames (table)"));
-		section.append(table(rows.map((r) => ({ r })), t.columns.map((name, i) => ({ key: name, label: name.replace(/_/g, " "), value: (x) => x.r[i], fmt: (v) => typeof v === "number" ? (Number.isInteger(v) ? fmt(v) : fmt(v, 3)) : String(v) })), { sort: "work_ms", limit: 400 }));
+		const cell = (name) => name === "phase" ? (v) => (P.phases || [])[v] || String(v) : (v) => typeof v === "number" ? (Number.isInteger(v) ? fmt(v) : fmt(v, 3)) : String(v);
+		section.append(table(rows.map((r) => ({ r })), t.columns.map((name, i) => ({ key: name, label: name.replace(/_/g, " "), value: (x) => x.r[i], fmt: cell(name) })), { sort: "work_ms", limit: 400 }));
 	})();
 
 	// Caches
 	(function caches() {
-		const section = $("caches");
+		const section = $("tab-caches");
 		if (!P.luau_caches && !P.ree_caches) { section.append(el("p", { class: "muted" }, "No cache profile: run with --profile caches.")); return; }
 		if (P.luau_caches) {
 			section.append(el("h2", {}, "Luau inline caches"));
@@ -552,7 +556,7 @@ const PROFILE = /*PROFILE_DATA*/null;
 
 	// CPU
 	(function cpu() {
-		const section = $("cpu");
+		const section = $("tab-cpu");
 		const c = P.cpu;
 		if (!c) { section.append(el("p", { class: "muted" }, "No CPU profile: run with --profile cpu.")); return; }
 		section.append(el("h2", {}, "CPU"));
@@ -563,13 +567,13 @@ const PROFILE = /*PROFILE_DATA*/null;
 		if (c.pmc_sources && c.pmc_sources.length) section.append(el("p", { class: "muted" }, "Counters this CPU offers to ETW: " + c.pmc_sources.join(", ")));
 	})();
 
-	$("text").append(el("div", { class: "card" }, el("pre", { class: "summary" }, P.summary || "")));
+	$("tab-text").append(el("div", { class: "card" }, el("pre", { class: "summary" }, P.summary || "")));
 	// (a link may name the tab: report.html#memory)
 	let start = location.hash.slice(1);
-	if (!sections.some((s) => s.id === start)) {
+	if (!sections.some((s) => tabName(s) === start)) {
 		try { start = localStorage.getItem("ree-profile-tab") || "hot"; } catch (_) { start = "hot"; }
 	}
-	select(sections.some((s) => s.id === start) ? start : "hot");
+	select(sections.some((s) => tabName(s) === start) ? start : "hot");
 })();
 </script>
 </body>

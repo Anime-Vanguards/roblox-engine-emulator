@@ -404,7 +404,8 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   the FASTCALL family (the builtin's fast path taken, or the call it falls back to). `Context.ProfilePhase`
   starts a phase: the frames hang from a node of the phase's. Natively compiled code keeps running natively:
   a function's entries into its native code and the work booked while it ran are its own, and its
-  instructions are not counted (the summary names such functions). Luau's `-O2` inlines small local
+  instructions are not counted (the summary names such functions); a call from native code into natively
+  compiled code is not seen, so the callee's work stays with its caller. Luau's `-O2` inlines small local
   functions: their instructions count on the caller's function, on their own source lines.
 - **Allocations** (`profiler::memory`): the VM's `onallocate` callback sees every allocation; `lua_allocblock`
   gives a collectable object's block (its type is read at the next callback, once the VM set it; an Instance's

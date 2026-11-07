@@ -311,12 +311,11 @@ pub fn write(input: &Input) -> Result<String, String> {
     let names = Names { vm: input.vm, steps: ENGINE_STEPS.with(|steps| steps.borrow().clone()) };
     let mut model = input.vm.map(tree_model).unwrap_or(Model { functions: FxHashMap::default(), lines: FxHashMap::default(), edges: FxHashMap::default(), subtree: Vec::new(), node_phase: Vec::new() });
 
-    // host time samples (ms) and allocations (bytes) into the same model
-    let tick = 1e-3;
+    // host time samples (ms: a tick is a millisecond) and allocations (bytes) into the same model
     let mut time_total = 0.0;
     if let Some((stacks, samples, _)) = input.time {
         for (&(_, stack), &ticks) in samples {
-            let weight = ticks as f64 * tick;
+            let weight = ticks as f64;
             time_total += weight;
             add_samples(&mut model, &stacks.stacks[stack as usize], weight, |f, own| if own { &mut f.self_time } else { &mut f.total_time }, |l, own| if own { &mut l.time } else { &mut l.total_time }, false);
         }
@@ -473,11 +472,12 @@ pub fn write(input: &Input) -> Result<String, String> {
             let named: Vec<String> = natives.iter().take(6).map(|f| format!("{}:{}", short_module(module_name(&f.source)), f.line)).collect();
             let _ = writeln!(
                 summary,
-                "natively compiled functions: {} ran natively ({}{}; {} entries, {:.3} ms of work booked while they ran): their instructions are not counted, only their entries",
+                "natively compiled functions: {} seen ({}{}): {} {} from interpreted code, {:.3} ms of work booked while they ran; their instructions are not counted, and a call from native code into native code is not seen (its work stays with the caller)",
                 natives.len(),
                 named.join(", "),
                 if natives.len() > named.len() { ", ..." } else { "" },
                 group_digits(entries),
+                if entries == 1 { "entry" } else { "entries" },
                 ms(work)
             );
         }

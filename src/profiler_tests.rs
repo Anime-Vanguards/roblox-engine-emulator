@@ -292,6 +292,31 @@ fn the_timeline_has_a_row_a_frame() {
     assert!(rows.iter().all(|row| row[column("work_ms")].as_f64().unwrap() > 0.0), "each frame's handler did work");
 }
 
+/// Host time (`time`): the ticker's ticks are milliseconds, booked to the function that ran when they passed, and they
+/// add up to about the wall time the run took.
+#[test]
+fn host_time_is_booked_in_milliseconds_where_it_was_spent() {
+    let _lock = lock();
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::TIME, temp_dir("time")) };
+    let started = std::time::Instant::now();
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    // (a table's function: -O2 inlines a small local function into its caller)
+    run(&lua, &engine, "busy", "local M = {}\nfunction M.spin(n)\n\tlocal x = 0\n\tfor i = 1, n do\n\t\tx += i % 7\n\tend\n\treturn x\nend\nlocal total = 0\nfor round = 1, 400 do\n\ttotal += M.spin(50000)\nend\nresult = total\n");
+    profiler::collect(&lua);
+    let wall = started.elapsed().as_secs_f64() * 1000.0;
+    session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let sampled = json["time"]["sampled_ms"].as_f64().unwrap();
+    assert!(wall > 20.0, "the script ran long enough to measure: {wall:.1} ms");
+    assert!(sampled >= 0.5 * wall - 5.0 && sampled <= wall + 2.0, "sampled {sampled} ms of a {wall:.1} ms run");
+    let functions = json["functions"].as_array().unwrap();
+    let spin = functions.iter().find(|f| f["name"].as_str().is_some_and(|name| name.ends_with("spin"))).unwrap_or_else(|| panic!("{}", json["functions"]));
+    assert!(spin["self"]["time_ms"].as_f64().unwrap() >= 0.8 * sampled, "the loop's function holds the time: {spin}");
+}
+
 /// ree's own caches are counted while a profile asks: a property read twice hits the member dispatch the second time,
 /// and an Instance pushed again hits its userdata.
 #[test]
