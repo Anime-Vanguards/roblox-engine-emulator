@@ -54,12 +54,15 @@ impl LuaUserData for Ray {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("Origin", |_, this| Ok(Vector3(this.origin)));
         fields.add_field_method_get("Direction", |_, this| Ok(Vector3(this.direction)));
-        fields.add_field_method_get("Unit", |_, this| {
-            Ok(Ray {
-                origin: this.origin,
-                direction: this.direction.normalize(),
-            })
-        });
+        // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        for name in ["Unit", "unit"] {
+            fields.add_field_method_get(name, |_, this| {
+                Ok(Ray {
+                    origin: this.origin,
+                    direction: this.direction.normalize(),
+                })
+            });
+        }
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {

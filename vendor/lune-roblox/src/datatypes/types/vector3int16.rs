@@ -54,6 +54,10 @@ impl LuaUserData for Vector3int16 {
         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
         fields.add_field_method_get("Y", |_, this| Ok(this.0.y));
         fields.add_field_method_get("Z", |_, this| Ok(this.0.z));
+        // (Roblox's lowercase names, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        fields.add_field_method_get("x", |_, this| Ok(this.0.x));
+        fields.add_field_method_get("y", |_, this| Ok(this.0.y));
+        fields.add_field_method_get("z", |_, this| Ok(this.0.z));
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {

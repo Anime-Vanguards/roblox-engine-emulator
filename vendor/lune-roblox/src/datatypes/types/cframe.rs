@@ -349,18 +349,25 @@ impl LuaUserData for CFrame {
                 Vec3::ZERO.extend(1.0),
             )))
         });
-        fields.add_field_method_get("X", |lua, this| {
-            charge_host_nanos(lua, price::MEMBER);
-            Ok(this.position().x)
-        });
-        fields.add_field_method_get("Y", |lua, this| {
-            charge_host_nanos(lua, price::MEMBER);
-            Ok(this.position().y)
-        });
-        fields.add_field_method_get("Z", |lua, this| {
-            charge_host_nanos(lua, price::MEMBER);
-            Ok(this.position().z)
-        });
+        // (and the lowercase x / y / z, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        for name in ["X", "x"] {
+            fields.add_field_method_get(name, |lua, this| {
+                charge_host_nanos(lua, price::MEMBER);
+                Ok(this.position().x)
+            });
+        }
+        for name in ["Y", "y"] {
+            fields.add_field_method_get(name, |lua, this| {
+                charge_host_nanos(lua, price::MEMBER);
+                Ok(this.position().y)
+            });
+        }
+        for name in ["Z", "z"] {
+            fields.add_field_method_get(name, |lua, this| {
+                charge_host_nanos(lua, price::MEMBER);
+                Ok(this.position().z)
+            });
+        }
         for name in ["XVector", "RightVector", "rightVector"] {
             fields.add_field_method_get(name, |lua, this| {
                 charge_host_nanos(lua, price::MEMBER);
@@ -501,14 +508,15 @@ impl LuaUserData for CFrame {
         aliased!(methods, price::EULER, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |_, this, ()| {
             Ok(Quat::from_mat4(&this.0).to_euler(EulerRot::XYZ))
         });
-        methods.add_method("ToEulerAnglesYXZ", charged_method(price::EULER, |_, this, ()| {
+        // (and their lowercase names, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        aliased!(methods, price::EULER, ["ToEulerAnglesYXZ", "toEulerAnglesYXZ"], |_, this, ()| {
             let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
             Ok((rx, ry, rz))
-        }));
-        methods.add_method("ToOrientation", charged_method(price::EULER, |_, this, ()| {
+        });
+        aliased!(methods, price::EULER, ["ToOrientation", "toOrientation"], |_, this, ()| {
             let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
             Ok((rx, ry, rz))
-        }));
+        });
         // ToEulerAngles(order = Enum.RotationOrder.XYZ): the three angles in x, y, z order for the rotation order named
         aliased!(methods, price::EULER, ["ToEulerAngles", "toEulerAngles"], |_, this, order: Option<LuaValue>| {
             let (name, rotation) = rotation_order(order.as_ref(), "ToEulerAngles")?;

@@ -130,24 +130,27 @@ impl LuaUserData for Color3 {
         fields.add_field_method_get("R", |_, this| Ok(this.r));
         fields.add_field_method_get("G", |_, this| Ok(this.g));
         fields.add_field_method_get("B", |_, this| Ok(this.b));
+        // (Roblox's deprecated lowercase names, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        fields.add_field_method_get("r", |_, this| Ok(this.r));
+        fields.add_field_method_get("g", |_, this| Ok(this.g));
+        fields.add_field_method_get("b", |_, this| Ok(this.b));
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         // Methods
-        methods.add_method(
-            "Lerp",
-            |lua, this, (rhs, alpha): (LuaUserDataRef<Color3>, f32)| {
-                super::charge_host_nanos(lua, super::datatype_price::COLOR3_LERP);
-                let v3_this = Vec3::new(this.r, this.g, this.b);
-                let v3_rhs = Vec3::new(rhs.r, rhs.g, rhs.b);
-                let v3 = v3_this.lerp(v3_rhs, alpha);
-                Ok(Color3 {
-                    r: v3.x,
-                    g: v3.y,
-                    b: v3.z,
-                })
-            },
-        );
+        let lerp = |lua: &Lua, this: &Color3, (rhs, alpha): (LuaUserDataRef<Color3>, f32)| {
+            super::charge_host_nanos(lua, super::datatype_price::COLOR3_LERP);
+            let v3_this = Vec3::new(this.r, this.g, this.b);
+            let v3_rhs = Vec3::new(rhs.r, rhs.g, rhs.b);
+            let v3 = v3_this.lerp(v3_rhs, alpha);
+            Ok(Color3 {
+                r: v3.x,
+                g: v3.y,
+                b: v3.z,
+            })
+        };
+        methods.add_method("Lerp", lerp);
+        methods.add_method("lerp", lerp);
         methods.add_method("ToHSV", |_, this, ()| {
             // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c
             let (r, g, b) = (this.r, this.g, this.b);

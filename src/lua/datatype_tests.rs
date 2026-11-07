@@ -444,6 +444,50 @@ fn vector3_members_methods_and_errors_follow_studio() {
     );
 }
 
+/// The lowercase names a client's datatypes answer and those it does not (a headless roblox-sim client, Studio 0.744: every member
+/// of every datatype by its other first-letter case; tools/parity/probes/camelcase.luau): no rule as instances have, a list per type.
+#[test]
+fn datatypes_answer_the_lowercase_names_a_client_lists() {
+    assert_script(
+        r#"
+        local CF = CFrame.new(1, 2, 3) * CFrame.Angles(0.1, 0.2, 0.3)
+        assert(CF.x == CF.X and CF.y == CF.Y and CF.z == CF.Z)
+        local function Same(F, G)
+            local A, B = { F() }, { G() }
+            return #A == 3 and table.concat(A, ",") == table.concat(B, ",")
+        end
+        assert(Same(function() return CF:toOrientation() end, function() return CF:ToOrientation() end))
+        assert(Same(function() return CF:toEulerAnglesYXZ() end, function() return CF:ToEulerAnglesYXZ() end))
+        local C3 = Color3.new(0.25, 0.5, 0.75)
+        assert(C3.r == C3.R and C3.g == C3.G and C3.b == C3.B)
+        assert(C3:lerp(Color3.new(1, 1, 1), 0.5) == C3:Lerp(Color3.new(1, 1, 1), 0.5))
+        local V2 = Vector2.new(3, 4)
+        assert(V2:lerp(Vector2.zero, 0.5) == V2:Lerp(Vector2.zero, 0.5))
+        local U2 = UDim2.new(0.5, 10, 0.25, 20)
+        assert(U2:lerp(UDim2.new(), 0.5) == U2:Lerp(UDim2.new(), 0.5))
+        local R = Ray.new(Vector3.zero, Vector3.new(0, 0, 2))
+        assert(R.unit.Direction == R.Unit.Direction and R.unit.Direction.Z == 1)
+        local I3, I2 = Vector3int16.new(1, 2, 3), Vector2int16.new(4, 5)
+        assert(I3.x == 1 and I3.y == 2 and I3.z == 3 and I2.x == 4 and I2.y == 5)
+        local Bricks = BrickColor.new("Bright red")
+        assert(Bricks.name == "Bright red" and Bricks.number == 21 and Bricks.r == Bricks.Color.R)
+        assert(BrickColor.New("Bright red") == Bricks)
+        -- (BrickColor answers r / g / b in lower case only)
+        for _, Key in { "R", "G", "B" } do
+            assert(not pcall(function() return Bricks[Key] end), Key)
+        end
+        local Connection = game.Changed:connect(function() end)
+        assert(Connection.connected == true)
+        Connection:disconnect()
+        assert(Connection.connected == false and Connection.Connected == false)
+        assert(typeof(game.Changed.connectParallel) == "function" and typeof(game.Changed.wait) == "function")
+        -- and the names a client refuses
+        assert(not pcall(function() return game.Changed:once(function() end) end))
+        assert(not pcall(function() return Vector3.new(1, 2, 3):dot(Vector3.one) end))
+        "#,
+    );
+}
+
 /// Every CFrame constructor, member, method, deprecated alias and operator gives the bits it gave when the
 /// engine's Luau served it (cframe_golden/ops.txt, printed with %.17g by the build before CFrame took and
 /// returned native vectors itself), and a misuse gives the same error text. Three misuse texts differ from

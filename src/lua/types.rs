@@ -410,11 +410,14 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     members.set("Connect", connect_fn.clone())?;
     let e = engine.clone();
     let connect_parallel_fn = wrapped(lua, engine, move |lua, args| connect_as(lua, &e, args, false, true))?;
-    members.set("ConnectParallel", connect_parallel_fn)?;
+    members.set("ConnectParallel", connect_parallel_fn.clone())?;
     members.set("Once", once_fn)?;
     members.set("Wait", wait_fn.clone())?;
+    // The lowercase names a client answers (measured: connect, wait and connectParallel, not once;
+    // tools/parity/probes/camelcase.luau)
     members.set("connect", connect_fn)?;
     members.set("wait", wait_fn)?;
+    members.set("connectParallel", connect_parallel_fn)?;
     engine.lua.borrow_mut().signal_members = Some(members.clone());
     let index = wrapped(lua, engine, move |_, args| {
         let args = Args::new(args);
@@ -469,7 +472,8 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid connection") };
         let connection = ud.borrow::<LConnection>()?.0;
         if let LuaValue::String(key) = args.get(1) {
-            if &*key.as_bytes() == b"Connected" {
+            // (and the lowercase `connected` a client answers: tools/parity/probes/camelcase.luau)
+            if matches!(&*key.as_bytes(), b"Connected" | b"connected") {
                 let connected = e.state.borrow().signals.is_connected(connection);
                 return Ok(values([LuaValue::Boolean(connected)]));
             }
@@ -512,6 +516,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     for (name, function) in [
         ("Connect", &raw_connect),
         ("ConnectParallel", &raw_connect_parallel),
+        ("connectParallel", &raw_connect_parallel),
         ("connect", &raw_connect),
         ("Once", &raw_once),
         ("Wait", &raw_wait),
@@ -525,6 +530,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     connection_calls.raw_set("disconnect", members.raw_get::<LuaValue>("disconnect")?)?;
     let connection_properties = lua.create_table()?;
     connection_properties.raw_set("Connected", "boolean")?;
+    connection_properties.raw_set("connected", "boolean")?;
 
     // Lock both metatables
     let signal = engine.state.borrow_mut().signals.create(Str::from("Probe"));

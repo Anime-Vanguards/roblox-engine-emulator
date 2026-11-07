@@ -113,11 +113,10 @@ Line("unknown",
 	P.try(function() return Part:fooBar() end),
 	P.try(function() Part.fooBar = 1 end))
 
--- 7. datatypes: the lower-case names each lists, and Roblox's error for the rest
+-- 7. datatypes: the lower-case names each lists ("-unknown" lines: Roblox's error for the rest)
 local V = Vector3.new(1, 2, 3)
-Line("vector3",
-	P.try(function() return V.x, V.y, V.z, V.magnitude == V.Magnitude, V.unit == V.Unit, V:lerp(Vector3.zero, 0.5) == V:Lerp(Vector3.zero, 0.5) end),
-	P.try(function() return V:dot(V) end))
+Line("vector3", P.try(function() return V.x, V.y, V.z, V.magnitude == V.Magnitude, V.unit == V.Unit, V:lerp(Vector3.zero, 0.5) == V:Lerp(Vector3.zero, 0.5) end))
+Line("vector3-unknown", P.try(function() return V:dot(V) end))
 local V2 = Vector2.new(3, 4)
 Line("vector2", P.try(function() return V2.x, V2.y, V2.magnitude, V2.unit == V2.Unit, V2:lerp(V2, 0) == V2 end))
 Line("int16", P.try(function() local I = Vector3int16.new(1, 2, 3) return I.x, I.y, I.z end), P.try(function() local I = Vector2int16.new(4, 5) return I.x, I.y end))
@@ -125,17 +124,20 @@ local CF = CFrame.new(1, 2, 3)
 Line("cframe",
 	P.try(function() return CF.p == CF.Position, CF.x, CF.y, CF.z, CF.lookVector == CF.LookVector, CF.rightVector == CF.RightVector, CF.upVector == CF.UpVector end),
 	P.try(function() return CF:inverse() == CF:Inverse(), CF:lerp(CF, 1) == CF, CF:toObjectSpace(CF) == CFrame.identity, CF:pointToObjectSpace(V) == CF:PointToObjectSpace(V) end),
-	P.try(function() return P.nums(CF:toOrientation()) == P.nums(CF:ToOrientation()), P.nums(CF:toEulerAnglesYXZ()) == P.nums(CF:ToEulerAnglesYXZ()), P.nums(CF:toEulerAnglesXYZ()) == P.nums(CF:ToEulerAnglesXYZ()), #{ CF:components() } end),
-	P.try(function() return CF.position end),
-	P.try(function() return CF:fuzzyEq(CF) end))
+	P.try(function() return P.nums(CF:toOrientation()) == P.nums(CF:ToOrientation()), P.nums(CF:toEulerAnglesYXZ()) == P.nums(CF:ToEulerAnglesYXZ()), P.nums(CF:toEulerAnglesXYZ()) == P.nums(CF:ToEulerAnglesXYZ()), #{ CF:components() } end))
+Line("cframe-unknown", P.try(function() return CF.position end), P.try(function() return CF:fuzzyEq(CF) end))
 local C3 = Color3.new(0.25, 0.5, 0.75)
-Line("color3", P.try(function() return C3.r, C3.g, C3.b, C3:lerp(C3, 1) == C3 end), P.try(function() return C3:toHSV() end))
+Line("color3", P.try(function() return C3.r, C3.g, C3.b, C3:lerp(C3, 1) == C3 end))
+Line("color3-unknown", P.try(function() return C3:toHSV() end))
 local U2 = UDim2.new(1, 2, 3, 4)
-Line("udim", P.try(function() return U2:lerp(U2, 1) == U2 end), P.try(function() return U2.x end), P.try(function() return UDim.new(1, 2).scale end))
+Line("udim2", P.try(function() return U2:lerp(U2, 1) == U2 end))
+Line("udim-unknown", P.try(function() return U2.x end), P.try(function() return UDim.new(1, 2).scale end))
 local Bricks = BrickColor.new("Bright red")
-Line("brickcolor", P.try(function() return Bricks.name, Bricks.number, Bricks.r == Bricks.Color.R end), P.try(function() return Bricks.R end), P.try(function() return Bricks.color end))
-Line("ray", P.try(function() return Ray.new(Vector3.zero, Vector3.new(0, 0, 2)).unit.Direction.Z end), P.try(function() return Ray.new(Vector3.zero, Vector3.one).origin end))
-Line("other-datatypes",
+Line("brickcolor", P.try(function() return Bricks.name, Bricks.number, Bricks.r == Bricks.Color.R end))
+Line("brickcolor-unknown", P.try(function() return Bricks.R end), P.try(function() return Bricks.color end))
+Line("ray", P.try(function() return Ray.new(Vector3.zero, Vector3.new(0, 0, 2)).unit.Direction.Z end))
+Line("ray-unknown", P.try(function() return Ray.new(Vector3.zero, Vector3.one).origin end))
+Line("datatype-unknown",
 	P.try(function() return Random.new(1):nextNumber() end),
 	P.try(function() return TweenInfo.new(1).time end),
 	P.try(function() return NumberRange.new(1, 2).min end),
@@ -144,9 +146,9 @@ Line("other-datatypes",
 local Signal = Part.Changed
 Line("signal",
 	P.try(function() local C = Signal:connect(function() end) local Was = C.connected C:disconnect() return Was, C.Connected end),
-	P.try(function() return typeof(Signal.wait), typeof(Signal.connectParallel) end),
-	P.try(function() return Signal:once(function() end) end))
-Line("enum",
+	P.try(function() return typeof(Signal.wait), typeof(Signal.connectParallel) end))
+Line("signal-unknown", P.try(function() return Signal:once(function() end) end))
+Line("enum-unknown",
 	P.try(function() return Enum.KeyCode.A.name end),
 	P.try(function() return Enum.KeyCode:getEnumItems() end),
 	P.try(function() return Enum.keyCode end))

@@ -97,31 +97,31 @@ impl LuaUserData for UDim2 {
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         // Methods
-        methods.add_method(
-            "Lerp",
-            |lua, this, (goal, alpha): (LuaUserDataRef<UDim2>, f32)| {
-                super::charge_host_nanos(lua, super::datatype_price::UDIM2_LERP);
-                let this_x = Vec2::new(this.x.scale, this.x.offset as f32);
-                let goal_x = Vec2::new(goal.x.scale, goal.x.offset as f32);
+        // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        let lerp = |lua: &Lua, this: &UDim2, (goal, alpha): (LuaUserDataRef<UDim2>, f32)| {
+            super::charge_host_nanos(lua, super::datatype_price::UDIM2_LERP);
+            let this_x = Vec2::new(this.x.scale, this.x.offset as f32);
+            let goal_x = Vec2::new(goal.x.scale, goal.x.offset as f32);
 
-                let this_y = Vec2::new(this.y.scale, this.y.offset as f32);
-                let goal_y = Vec2::new(goal.y.scale, goal.y.offset as f32);
+            let this_y = Vec2::new(this.y.scale, this.y.offset as f32);
+            let goal_y = Vec2::new(goal.y.scale, goal.y.offset as f32);
 
-                let x = this_x.lerp(goal_x, alpha);
-                let y = this_y.lerp(goal_y, alpha);
+            let x = this_x.lerp(goal_x, alpha);
+            let y = this_y.lerp(goal_y, alpha);
 
-                Ok(UDim2 {
-                    x: UDim {
-                        scale: x.x,
-                        offset: x.y.clamp(i32::MIN as f32, i32::MAX as f32).round() as i32,
-                    },
-                    y: UDim {
-                        scale: y.x,
-                        offset: y.y.clamp(i32::MIN as f32, i32::MAX as f32).round() as i32,
-                    },
-                })
-            },
-        );
+            Ok(UDim2 {
+                x: UDim {
+                    scale: x.x,
+                    offset: x.y.clamp(i32::MIN as f32, i32::MAX as f32).round() as i32,
+                },
+                y: UDim {
+                    scale: y.x,
+                    offset: y.y.clamp(i32::MIN as f32, i32::MAX as f32).round() as i32,
+                },
+            })
+        };
+        methods.add_method("Lerp", lerp);
+        methods.add_method("lerp", lerp);
         // Metamethods
         methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
             super::charge_host_nanos(lua, super::datatype_price::EQ);

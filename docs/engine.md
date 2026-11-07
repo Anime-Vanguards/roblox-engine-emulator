@@ -304,9 +304,14 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
   not a valid member of Part "Part"`). A method call finds methods only: a property, event, callback or
   child by either spelling raises the same not-a-member error. Measured in a playing client and a server
   (every method, event and readable property of the API dump answers so on reads, none on writes;
-  tools/parity/probes/camelcase.luau). Datatypes, enums, libraries and globals have no such rule: they
-  answer the lower-case names each lists (Vector3 `x` / `magnitude` / `lerp`, CFrame `p` / `lookVector` /
-  `inverse`, RBXScriptSignal `connect` / `wait`, ...) and nothing else.
+  tools/parity/probes/camelcase.luau). Datatypes, enums, libraries and globals have no such rule: each
+  datatype answers the lower-case names it lists and nothing else (Vector3 and Vector2 `x` / `y` / `z`,
+  `magnitude`, `unit`, `lerp`; CFrame `p`, `x` / `y` / `z`, `lookVector` / `rightVector` / `upVector`,
+  `components`, `inverse`, `lerp`, `toEulerAnglesXYZ` / `YXZ`, `toEulerAngles`, `toOrientation`, `toAxisAngle`,
+  `toObjectSpace` / `toWorldSpace` and the point and vector forms; Color3 `r` / `g` / `b`, `lerp`; UDim2
+  `lerp`; Ray `unit`; Vector3int16 / Vector2int16 `x` / `y` / `z`; BrickColor `name`, `number`, `r` / `g` / `b`
+  (not `R` / `G` / `B`); RBXScriptSignal `connect`, `wait`, `connectParallel` (not `once`); RBXScriptConnection
+  `connected`, `disconnect`), enums and libraries answer exact names (`BrickColor.New` is the library's own).
 - What holds an instance is what holds it in Roblox (measured in Studio 0.740): a connected handler that
   references the instance keeps it; Destroy (which disconnects the instance and its descendants,
   deferred) or Disconnect releases it; a destroyed tree nothing references is freed whole.
@@ -670,6 +675,9 @@ A print of exactly `@done` ends `ree run` / `ree record` at the end of that fram
   would do the same. GetPropertiesOfClass, GetMethodsOfClass and GetEventsOfClass need fields the dump
   does not record (a reference type's InstanceType, a parameter's DefaultValue, member display data) and
   are not emulated.
+- A member a datatype does not have raises another message than Roblox's `<key> is not a valid member of
+  <Type>` (some types quote the key), and reads nil on CFrame, Color3, UDim2, Vector2, Ray and the raycast
+  and overlap params, where Roblox raises (tools/parity/known.json, probe camelcase).
 - The engine is developed and tested on Windows. Other systems build and run, but some fallbacks are
   weak: off Windows a `ree serve` record of a dead process is not detected (`alive()` always answers
   true), and memory is read from `/proc/meminfo` (Linux only).

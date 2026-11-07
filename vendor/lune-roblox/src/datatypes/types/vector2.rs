@@ -78,13 +78,13 @@ impl LuaUserData for Vector2 {
                 Ok(eq_x && eq_y)
             },
         );
-        methods.add_method(
-            "Lerp",
-            |lua, this, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
-                charge_host_nanos(lua, price::VECTOR2_LERP);
-                Ok(Vector2(this.0.lerp(rhs.0, alpha)))
-            },
-        );
+        // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        let lerp = |lua: &Lua, this: &Vector2, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
+            charge_host_nanos(lua, price::VECTOR2_LERP);
+            Ok(Vector2(this.0.lerp(rhs.0, alpha)))
+        };
+        methods.add_method("Lerp", lerp);
+        methods.add_method("lerp", lerp);
         methods.add_method("Max", |_, this, rhs: LuaUserDataRef<Vector2>| {
             Ok(Vector2(this.0.max(rhs.0)))
         });

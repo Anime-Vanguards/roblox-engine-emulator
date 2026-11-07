@@ -68,8 +68,10 @@ impl LuaExportsTable for BrickColor {
             Ok(color_from_number(*number.unwrap()))
         };
 
+        // (a client's library answers New too: measured, ree's tools/parity/probes/camelcase.luau)
         let mut builder = TableBuilder::new(lua)?
             .with_function("new", brick_color_new)?
+            .with_function("New", brick_color_new)?
             .with_function("palette", brick_color_palette)?
             .with_function("random", brick_color_random)?;
 
@@ -84,11 +86,12 @@ impl LuaExportsTable for BrickColor {
 
 impl LuaUserData for BrickColor {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // Roblox answers Number / Name and the deprecated number / name, and only the lowercase r / g / b ('R' is not a valid
+        // member of BrickColor): measured in a client, ree's tools/parity/probes/camelcase.luau
         fields.add_field_method_get("Number", |_, this| Ok(this.number));
+        fields.add_field_method_get("number", |_, this| Ok(this.number));
         fields.add_field_method_get("Name", |_, this| Ok(this.name));
-        fields.add_field_method_get("R", |_, this| Ok(this.rgb.0 as f32 / 255f32));
-        fields.add_field_method_get("G", |_, this| Ok(this.rgb.1 as f32 / 255f32));
-        fields.add_field_method_get("B", |_, this| Ok(this.rgb.2 as f32 / 255f32));
+        fields.add_field_method_get("name", |_, this| Ok(this.name));
         fields.add_field_method_get("r", |_, this| Ok(this.rgb.0 as f32 / 255f32));
         fields.add_field_method_get("g", |_, this| Ok(this.rgb.1 as f32 / 255f32));
         fields.add_field_method_get("b", |_, this| Ok(this.rgb.2 as f32 / 255f32));

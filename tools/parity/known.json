@@ -15,44 +15,28 @@
 	],
 	"camelcase": [
 		{
-			"line": "vector2 | ok 3 4 5 true true",
-			"why": "not fixed yet"
+			"line": "cframe-unknown | error position is not a valid member of CFrame | error fuzzyEq is not a valid member of CFrame",
+			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		},
 		{
-			"line": "int16 | ok 1 2 3 | ok 4 5",
-			"why": "not fixed yet"
+			"line": "color3-unknown | error toHSV is not a valid member of Color3",
+			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		},
 		{
-			"line": "cframe | ok true 1 2 3 true true true | ok true true true true | ok true true true 12 | error position is not a valid member of CFrame | error fuzzyEq is not a valid member of CFrame",
-			"why": "not fixed yet"
+			"line": "udim-unknown | error x is not a valid member of UDim2 | error 'scale' is not a valid member of UDim",
+			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		},
 		{
-			"line": "color3 | ok 0.25 0.5 0.75 true | error toHSV is not a valid member of Color3",
-			"why": "not fixed yet"
+			"line": "brickcolor-unknown | error 'R' is not a valid member of BrickColor | error 'color' is not a valid member of BrickColor",
+			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		},
 		{
-			"line": "udim | ok true | error x is not a valid member of UDim2 | error 'scale' is not a valid member of UDim",
-			"why": "not fixed yet"
+			"line": "ray-unknown | error origin is not a valid member of Ray",
+			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		},
 		{
-			"line": "brickcolor | ok Bright red 21 true | error 'R' is not a valid member of BrickColor | error 'color' is not a valid member of BrickColor",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "ray | ok 1 | error origin is not a valid member of Ray",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "other-datatypes | error nextNumber is not a valid member of Random | error 'time' is not a valid member of TweenInfo | error 'min' is not a valid member of NumberRange | error 'width' is not a valid member of Rect | error 'top' is not a valid member of Faces",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "signal | ok true false | ok function function | error once is not a valid member of RBXScriptSignal",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "library | ok nil nil nil nil nil function",
-			"why": "not fixed yet"
+			"line": "datatype-unknown | error nextNumber is not a valid member of Random | error 'time' is not a valid member of TweenInfo | error 'min' is not a valid member of NumberRange | error 'width' is not a valid member of Rect | error 'top' is not a valid member of Faces",
+			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		}
 	],
 	"cframe_order": [
