@@ -681,6 +681,11 @@ record/prepare.rs runs prepared ahead by `ree serve`
   tweens for properties that change frame after frame, motion tracks, emits and clears, reparenting and
   references written later; `events.json` holds prints, warnings, errors and sounds with their times.
   Values are rounded to 1e-5, motion keys within 2e-4, and keys a straight line reproduces are dropped.
+  A Studio-only placeholder is the place's own: it has a class and a name and no values, and it is made
+  when a script first lists its parent, so drawing it drew default effects and parts, and a run that
+  looked at more of the place recorded more of it than one that did not. One that draws (an effect, a
+  part, a highlight, a sky) is never drawn, in the Workspace or in Lighting; a placeholder folder or model
+  is drawn once something the run made is under it, as that appears.
 - **EditableMesh and EditableImage** (src/meshes.rs, src/images.rs, measured in Studio): ids carry their
   kind in the high bits; AddTriangle gives each corner a new automatic normal, a white opaque colour
   and a (0, 0) uv; CreateEditableMeshAsync of a mesh asset (feature `meshes`, decoded by ror's ror-mesh)
