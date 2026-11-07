@@ -204,7 +204,8 @@ pub fn find_child_where(engine: &Engine, id: InstanceId, matches: impl Fn(&State
     }
 }
 
-/// `instance[key]` (InstanceMeta.__index).
+/// `instance[key]` (InstanceMeta.__index): a member by its exact name, else a child by that name, else (a client's rule,
+/// docs/engine.md "Member names") the member the key names with its first letter upper-cased.
 pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Result<LuaValue, Flow> {
     let LuaValue::String(key_string) = key else {
         return raise_at_caller(format!("invalid argument #2 (string expected, got {})", typeof_value(engine, key)));
@@ -214,29 +215,10 @@ pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Re
         reveal_bundle(engine, id);
     }
     let class = engine.state.borrow().dom.at(id).class;
-    if let Some(name) = engine.reflection.name_id_bytes(&key_bytes) {
-        match engine.resolve_member(class, name) {
-            Member::Property { getter: true, .. } => {
-                let getter = engine.behaviors.borrow().find_getter(&engine.reflection, class, name).cloned();
-                if let Some(getter) = getter {
-                    return getter(lua, engine, id);
-                }
-            }
-            Member::Property { .. } => return read_property(lua, engine, id, name),
-            Member::Method { .. } => return Ok(method_function(lua, engine, class, name)?),
-            Member::Event => {
-                let signal = core::event_signal(&mut engine.state.borrow_mut(), &engine.reflection, id, name);
-                return Ok(signal_value(lua, engine, signal)?);
-            }
-            Member::Callback => {
-                return raise(format!(
-                    "{} is a callback member of {}; you can only set the callback value, get is not available",
-                    key_string.to_string_lossy(),
-                    class_name(engine, id)
-                ));
-            }
-            Member::None => {}
-        }
+    if let Some(name) = engine.reflection.name_id_bytes(&key_bytes)
+        && let Some(value) = get_member(lua, engine, id, class, name)
+    {
+        return value;
     }
     materialize(engine, id);
     let child = engine.state.borrow().dom.find_child(id, &key_bytes);
@@ -247,7 +229,41 @@ pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Re
     if let Some(child) = super::globals::missing_child(lua, engine, id, &key_bytes)? {
         return Ok(instance_value(lua, engine, child)?);
     }
+    if let Some(name) = engine.reflection.upper_first_id(&key_bytes)
+        && let Some(value) = get_member(lua, engine, id, class, name)
+    {
+        return value;
+    }
     Err(not_a_member(engine, id, key))
+}
+
+/// A read of member `name` of an instance of `class`; `None` when the class has no such member a script can read.
+fn get_member(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, class: ClassId, name: NameId) -> Option<Result<LuaValue, Flow>> {
+    Some(match engine.resolve_member(class, name) {
+        Member::Property { getter: true, .. } => {
+            let getter = engine.behaviors.borrow().find_getter(&engine.reflection, class, name).cloned()?;
+            getter(lua, engine, id)
+        }
+        Member::Property { .. } => read_property(lua, engine, id, name),
+        Member::Method { .. } => method_function(lua, engine, class, name).map_err(Flow::from),
+        Member::Event => {
+            let signal = core::event_signal(&mut engine.state.borrow_mut(), &engine.reflection, id, name);
+            signal_value(lua, engine, signal).map_err(Flow::from)
+        }
+        // (the member's own name, also when the key spelled it with a lower-case first letter: measured, `onInvoke`)
+        Member::Callback => raise(format!(
+            "{} is a callback member of {}; you can only set the callback value, get is not available",
+            engine.reflection.name(name),
+            class_name(engine, id)
+        )),
+        Member::None => return None,
+    })
+}
+
+/// The error a client raises for a key that names nothing on an instance: no member, no child (and for a method call, no
+/// method), with the key as the script wrote it.
+pub fn not_a_member_message(engine: &Engine, id: InstanceId, key: &[u8]) -> String {
+    format!("{} is not a valid member of {} \"{}\"", String::from_utf8_lossy(key), class_name(engine, id), full_name(engine, id))
 }
 
 /// A property read. Immutable datatype values (UDim2, Color3, ...) keep one userdata while the

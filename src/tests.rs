@@ -157,6 +157,146 @@ fn not_scriptable_properties_are_no_members() {
     );
 }
 
+/// A key with its first letter lower-cased reaches the member it spells otherwise: a client resolves a read by the exact member,
+/// then a child of that name, then the member named with the first letter upper-cased (every method, property, event and callback
+/// of the API dump answers so: 2,175 methods, 802 events, 2,352 readable properties, a headless client of roblox-sim, Studio 0.744);
+/// a method call by the exact method, then the upper-cased one, and nothing else; a write by the exact name only.
+/// tools/parity/probes/camelcase.luau holds the same cases against the client's output.
+#[test]
+fn lower_case_first_letters_reach_members_on_reads_and_calls() {
+    assert_script(
+        r#"
+        local function Message(Callback)
+            local Ok, Err = pcall(Callback)
+            assert(not Ok and type(Err) == "string", "expected an error")
+            return (string.gsub(Err, "^Test:%d+: ", "@: "))
+        end
+        local Holder = Instance.new("Folder")
+        Holder.Name = "Holder"
+        local Part = Instance.new("Part")
+        Part.Name = "P"
+        Part.Parent = Holder
+
+        -- reads: the same method function, the same signal, the property's value, inherited members, services
+        assert(rawequal(Part.getPropertyChangedSignal, Part.GetPropertyChangedSignal))
+        assert(rawequal(Part.getFullName, Part.GetFullName) and rawequal(Part.isAncestorOf, Part.IsAncestorOf))
+        assert(Part.anchored == false and Part.name == "P" and Part.parent == Holder and Part.position == Part.Position)
+        assert(Part.touched == Part.Touched and tostring(Part.touched) == "Signal Touched")
+        assert(tostring(Part.changed) == "Signal Changed" and tostring(Part.destroying) == "Signal Destroying")
+        assert(Instance.new("MeshPart").canCollide == true and Instance.new("Frame").visible == true)
+        assert(workspace.gravity == workspace.Gravity)
+        -- (BasePart.size, the dump's own lower-case name, permits no script: the read finds Size)
+        assert(Part.size == Part.Size)
+
+        -- writes take exact names only, and change nothing
+        assert(Message(function() Part.anchored = true end) == 'anchored is not a valid member of Part "Holder.P"')
+        assert(Message(function() Part.name = "Q" end) == 'name is not a valid member of Part "Holder.P"')
+        assert(Message(function() Part.size = Vector3.one end) == 'size is not a valid member of Part "Holder.P"')
+        assert(Part.Anchored == false and Part.Name == "P" and Part.Size.Y == 1.2000000476837158)
+
+        -- a child with the key's own name comes first; children answer to their own names only; the exact member beats a child
+        local Box = Instance.new("Part")
+        Box.Name = "Box"
+        for _, Name in { "anchored", "getPropertyChangedSignal", "Anchored", "foo" } do
+            local Child = Instance.new("Folder")
+            Child.Name = Name
+            Child.Parent = Box
+        end
+        assert(Box.anchored.ClassName == "Folder" and Box.getPropertyChangedSignal.ClassName == "Folder")
+        assert(Box.Anchored == false)
+        assert(Message(function() return Box.Foo end) == 'Foo is not a valid member of Part "Box"')
+
+        -- method calls: the method by either spelling; children and other members are no methods
+        assert(tostring(Part:getPropertyChangedSignal("Name")) == "Signal NameChanged")
+        assert(Part:getPropertyChangedSignal("Name") == Part:GetPropertyChangedSignal("Name"))
+        assert(Part:getFullName() == "Holder.P" and Holder:findFirstChildOfClass("Part") == Part)
+        assert(tostring(Box:getPropertyChangedSignal("Name")) == "Signal NameChanged")
+        Part:setAttribute("A", 5)
+        assert(Part:getAttribute("A") == 5)
+        assert(Message(function() return Part:Anchored() end) == 'Anchored is not a valid member of Part "Holder.P"')
+        assert(Message(function() return Part:anchored() end) == 'anchored is not a valid member of Part "Holder.P"')
+        assert(Message(function() return Part:touched() end) == 'touched is not a valid member of Part "Holder.P"')
+        assert(Message(function() return Box:anchored() end) == 'anchored is not a valid member of Part "Box"')
+        assert(Message(function() return Box:foo() end) == 'foo is not a valid member of Part "Box"')
+        assert(Message(function() return Part.getPropertyChangedSignal("Name") end) == "Expected ':' not '.' calling member function GetPropertyChangedSignal")
+
+        -- the first letter only, towards upper case only; the error names the key as written
+        local Http = game:GetService("HttpService")
+        assert(Http:jSONEncode({ 1 }) == "[1]")
+        assert(Message(function() return Http:jsonEncode({ 1 }) end) == 'jsonEncode is not a valid member of HttpService "HttpService"')
+        assert(Message(function() return Part.ANCHORED end) == 'ANCHORED is not a valid member of Part "Holder.P"')
+        assert(Message(function() return Part.cframe end) == 'cframe is not a valid member of Part "Holder.P"')
+        assert(Message(function() return Part.fooBar end) == 'fooBar is not a valid member of Part "Holder.P"')
+        assert(Message(function() return Part:fooBar() end) == 'fooBar is not a valid member of Part "Holder.P"')
+
+        -- callbacks: a read names the callback by its own name; a write and a call need their exact names
+        local Function = Instance.new("BindableFunction")
+        Function.Name = "F"
+        local Callback = "OnInvoke is a callback member of BindableFunction; you can only set the callback value, get is not available"
+        assert(Message(function() return Function.onInvoke end) == Callback)
+        assert(Message(function() Function.onInvoke = function() end end) == 'onInvoke is not a valid member of BindableFunction "F"')
+        assert(Message(function() return Function:onInvoke() end) == 'onInvoke is not a valid member of BindableFunction "F"')
+        Function.OnInvoke = function()
+            return 8
+        end
+        assert(Function:invoke() == 8)
+        "#,
+    );
+}
+
+/// The report's case: a property signal by its lower-case method name, both handlers run, the newest connection first (as the
+/// report's Studio output and a client print them).
+#[test]
+fn a_property_signal_by_a_lower_case_method_name_fires() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local part = Instance.new("Part")
+        part:GetPropertyChangedSignal("Position"):Connect(function()
+            print("one")
+        end)
+        part:getPropertyChangedSignal("Position"):Connect(function()
+            print("two")
+        end)
+        part.Position += Vector3.new(0, 1, 0)
+        "#,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    assert_eq!(lines(&engine), vec!["print: two".to_string(), "print: one".to_string()]);
+}
+
+/// What reaching a member by its lower-case first letter costs on the work clock: the member's own price and cost.rs LOWER_FIRST
+/// (a client, +33 to +47 ns over the exact name for reads and calls alike).
+#[test]
+fn a_lower_case_first_letter_costs_a_second_lookup() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Part = Instance.new("Part")
+        local function Per(Body)
+            local start = os.clock()
+            for _ = 1, 1000 do
+                Body()
+            end
+            return (os.clock() - start) / 1000 * 1e9
+        end
+        -- (each spelling once first: a member's first use in a frame costs more)
+        local _, _, _ = Part.Anchored, Part.anchored, Part:isAncestorOf(Part)
+        local Exact = Per(function() return Part.Anchored end)
+        local Lower = Per(function() return Part.anchored end)
+        assert(math.abs(Lower - Exact - 40) < 0.5, string.format("a read: %.2f ns more", Lower - Exact))
+        local ExactCall = Per(function() return Part:IsAncestorOf(Part) end)
+        local LowerCall = Per(function() return Part:isAncestorOf(Part) end)
+        assert(math.abs(LowerCall - ExactCall - 40) < 0.5, string.format("a call: %.2f ns more", LowerCall - ExactCall))
+        "#,
+    );
+}
+
 /// (A parent change fires DescendantAdded, then ChildAdded, then AncestryChanged, then the instance's own Changed("Parent"):
 /// measured in Studio, see a_model_arriving_in_a_folder_fires_its_events_in_studios_order; the order here was ChildAdded first and
 /// Changed before both.)

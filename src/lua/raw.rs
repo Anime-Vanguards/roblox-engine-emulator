@@ -1123,10 +1123,32 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
             class = engine.state.borrow().dom.at(id).class;
         }
         crate::cost::tally_member("read", &engine.reflection.class(class).name, || std::ffi::CStr::from_ptr(key).to_string_lossy().into_owned());
-        let read = match name {
+        let mut name = name;
+        let mut read = match name {
             Some(name) => api.member(class, name),
             None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: 0.0 },
         };
+        // A key that names no member and no child reads the member it names with its first letter upper-cased
+        // (`part.anchored`, instance.rs `get`): only after the child lookup has missed, so exact names never pay for it
+        let mut child = None;
+        let mut lower_first = 0.0;
+        if matches!(read.read, Read::Child) {
+            let bytes = arg_bytes(state, 2).unwrap_or_default();
+            materialize(engine, id);
+            child = engine.state.borrow().dom.find_child(id, bytes);
+            if child.is_none()
+                && let Some(target) = engine.reflection.upper_first_id(bytes)
+            {
+                let member = api.member(class, target);
+                if !matches!(member.read, Read::Child) {
+                    // (the child lookup that missed is the engine's code too: its first use in the frame is charged)
+                    lower_first = crate::cost::LOWER_FIRST + api.touched.borrow_mut().first_use(crate::cost::MemberUse::Read, crate::cost::CHILD_LOOKUP);
+                    api.charge(lower_first);
+                    name = Some(target);
+                    read = member;
+                }
+            }
+        }
         // (the engine's code for the member, cold at the frame's first use: cost.rs FIRST_READ)
         let used = match name {
             Some(name) if !matches!(read.read, Read::Child) => name,
@@ -1136,7 +1158,7 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
         if first > 0.0 {
             api.charge(first);
         }
-        api.cross(crate::boundary::Kind::Get, class, name, id, cost + first, true);
+        api.cross(crate::boundary::Kind::Get, class, name, id, cost + lower_first + first, true);
         match read.read {
             Read::Plain => {
                 let name = name.unwrap_or_default();
@@ -1190,9 +1212,6 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
                 Out::Ret(1)
             }
             Read::Child => {
-                let bytes = arg_bytes(state, 2).unwrap_or_default();
-                materialize(engine, id);
-                let child = engine.state.borrow().dom.find_child(id, bytes);
                 let Some(child) = child else { return Out::Slow };
                 read_extra(api, crate::cost::READ_CHILD_EXTRA);
                 linstance::reached(engine, child);
@@ -1406,12 +1425,11 @@ unsafe fn namecall_general(state: *mut ffi::lua_State) -> c_int {
         if key.is_null() {
             raise(state, "invalid namecall".into(), 0)
         }
-        let slot = match name_of(api, key, atom) {
-            Some(name) => {
-                let class = api.engine().state.borrow().dom.at(id).class;
-                api.member(class, name).call_fn
-            }
-            None => 0,
+        // (the method namecall_fast found: by the key, or by the key with its first letter upper-cased)
+        let class = api.engine().state.borrow().dom.at(id).class;
+        let (name, slot) = match method_member(api, class, key, name_of(api, key, atom)) {
+            Some((name, member, _)) => (Some(name), member.call_fn),
+            None => (None, 0),
         };
         if slot != 0 {
             ffi::lua_rawgeti_(state, REGISTRY, api.refs.functions);
@@ -1420,7 +1438,10 @@ unsafe fn namecall_general(state: *mut ffi::lua_State) -> c_int {
         } else {
             ffi::lua_rawgeti_(state, REGISTRY, api.refs.resolve_call);
             ffi::lua_pushvalue(state, 1);
-            ffi::lua_pushstring_(state, key);
+            match name {
+                Some(name) => push_bytes(state, api.engine().reflection.name(name).as_bytes()),
+                None => ffi::lua_pushstring_(state, key),
+            }
             ffi::lua_call(state, 2, 1);
             if ffi::lua_type(state, -1) == ffi::LUA_TNIL {
                 ffi::lua_pop(state, 1);
@@ -1465,73 +1486,44 @@ unsafe fn namecall_finish(state: *mut ffi::lua_State, api: Option<&Api>) -> c_in
     }
 }
 
-/// `instance[key](instance, ...)` for a key that is not a method (Luau's errors when the value
-/// is nil or not callable).
+/// A method call whose key names no method of the instance, by its own name or with its first letter upper-cased: a client
+/// raises `<key> is not a valid member of <Class> "<full name>"` for a property, an event, a callback or a child as for an
+/// unknown key (measured: `part:Anchored()`, `part:touched()`, a child's name; tools/parity/probes/camelcase.luau).
 unsafe fn namecall_index(state: *mut ffi::lua_State) -> c_int {
     unsafe {
-        let Some((api, _)) = this(state) else { raise(state, "invalid Instance".into(), 0) };
+        let Some((api, id)) = this(state) else { raise(state, "invalid Instance".into(), 0) };
         let key = ffi::lua_namecallatom(state, std::ptr::null_mut());
         if key.is_null() {
             raise(state, "invalid namecall".into(), 0)
         }
-        // instance[key] (the fallback raises its errors at this, the calling line)
-        ffi::lua_rawgeti_(state, REGISTRY, api.refs.slow_index);
-        ffi::lua_pushvalue(state, 1);
-        ffi::lua_pushstring_(state, key);
-        ffi::lua_call(state, 2, 3);
-        if ffi::lua_type(state, -2) != ffi::LUA_TNIL {
-            let level = ffi::lua_tonumberx(state, -1, std::ptr::null_mut()) as c_int;
-            ffi::lua_pop(state, 1);
-            ffi::lua_remove(state, -2);
-            raise_top(state, level)
+        let engine = api.engine();
+        if engine.state.borrow().dom.at(id).has(flags::BUNDLE_ROOT) {
+            linstance::reveal_bundle(engine, id);
         }
-        ffi::lua_pop(state, 2);
-        let kind = ffi::lua_type(state, -1);
-        if kind == ffi::LUA_TNIL {
-            let name = std::ffi::CStr::from_ptr(key).to_string_lossy().into_owned();
-            ffi::lua_pop(state, 1);
-            raise(state, format!("attempt to call missing method '{name}' of Instance"), 1)
-        }
-        let callable = kind == ffi::LUA_TFUNCTION || {
-            let has_call = ffi::luaL_getmetafield(state, -1, c"__call".as_ptr()) != 0;
-            if has_call {
-                ffi::lua_pop(state, 1);
-            }
-            has_call
-        };
-        if !callable {
-            let type_name = type_name_at(state, -1);
-            ffi::lua_pop(state, 1);
-            raise(state, format!("attempt to call a {type_name} value"), 1)
-        }
-        ffi::lua_insert(state, 1);
-        let count = ffi::lua_gettop(state) - 1;
-        ffi::lua_call(state, count, ffi::LUA_MULTRET);
-        if ffi::lua_status(state) != ffi::LUA_OK {
-            return -1;
-        }
-        sync_if_moved(state, api);
-        ffi::lua_gettop(state)
+        let message = linstance::not_a_member_message(engine, id, std::ffi::CStr::from_ptr(key).to_bytes());
+        raise(state, message, 0)
     }
 }
 
-/// luaT_objtypename: a userdata's `__type`, else the basic type name.
-unsafe fn type_name_at(state: *mut ffi::lua_State, index: c_int) -> String {
-    unsafe {
-        let index = ffi::lua_absindex(state, index);
-        if ffi::lua_type(state, index) == ffi::LUA_TUSERDATA
-            && ffi::luaL_getmetafield(state, index, c"__type".as_ptr()) != 0
-        {
-            if ffi::lua_type(state, -1) == ffi::LUA_TSTRING {
-                let name = arg_bytes(state, -1).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
-                ffi::lua_pop(state, 1);
-                return name;
-            }
-            ffi::lua_pop(state, 1);
-        }
-        let name = ffi::lua_typename(state, ffi::lua_type(state, index));
-        std::ffi::CStr::from_ptr(name).to_string_lossy().into_owned()
+/// The member a method call `instance:key(...)` runs: the exact name's, else (a key that names no method of the class) the
+/// method the key names with its first letter upper-cased (`part:getPropertyChangedSignal`, docs/engine.md "Member names"),
+/// with what finding it that way adds to the call's price (cost.rs LOWER_FIRST); else the exact name's member that is no
+/// method, if any.
+unsafe fn method_member(api: &Api, class: ClassId, key: *const c_char, exact: Option<NameId>) -> Option<(NameId, Member, f64)> {
+    let exact = exact.map(|name| (name, api.member(class, name)));
+    if let Some((name, member)) = exact
+        && !matches!(member.call, Call::NotMethod)
+    {
+        return Some((name, member, 0.0));
     }
+    let bytes = unsafe { std::ffi::CStr::from_ptr(key) }.to_bytes();
+    if let Some(target) = api.engine().reflection.upper_first_id(bytes) {
+        let member = api.member(class, target);
+        if !matches!(member.call, Call::NotMethod) {
+            return Some((target, member, crate::cost::LOWER_FIRST));
+        }
+    }
+    exact.map(|(name, member)| (name, member, 0.0))
 }
 
 unsafe fn namecall_fast(state: *mut ffi::lua_State) -> Out {
@@ -1542,7 +1534,10 @@ unsafe fn namecall_fast(state: *mut ffi::lua_State) -> Out {
         if key.is_null() {
             return Out::Raise("invalid namecall".into(), 0);
         }
-        let Some(name) = name_of(api, key, atom) else { return Out::NotMethod };
+        let exact = name_of(api, key, atom);
+        if exact.is_none() && !(*key as u8).is_ascii_lowercase() {
+            return Out::NotMethod;
+        }
         let engine = api.engine();
         let (mut class, placeholder) = {
             let dom_state = engine.state.borrow();
@@ -1553,12 +1548,12 @@ unsafe fn namecall_fast(state: *mut ffi::lua_State) -> Out {
             linstance::reveal_bundle(engine, id);
             class = engine.state.borrow().dom.at(id).class;
         }
-        let member = api.member(class, name);
+        let Some((name, member, lower_first)) = method_member(api, class, key, exact) else { return Out::NotMethod };
         crate::cost::tally_member("call", &engine.reflection.class(class).name, || engine.reflection.name(name).to_string());
         let cost = {
             let mut touched = api.touched.borrow_mut();
             // (the method's code, cold at its first call in the frame: cost.rs FIRST_CALL)
-            member.cost as f64 + touched.touch(id.index, class) + touched.first_use(crate::cost::MemberUse::Call, name)
+            member.cost as f64 + touched.touch(id.index, class) + touched.first_use(crate::cost::MemberUse::Call, name) + lower_first
         };
         api.charge(cost);
         api.cross(crate::boundary::Kind::Method, class, Some(name), id, cost, true);

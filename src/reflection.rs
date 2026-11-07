@@ -884,6 +884,26 @@ impl Reflection {
         std::str::from_utf8(name).ok().and_then(|name| self.name_id(name))
     }
 
+    /// The id of the member name `key` spells with its first letter upper-cased, when that letter is a lower-case ASCII
+    /// one (`getPropertyChangedSignal` -> GetPropertyChangedSignal): the member an instance's read or method call
+    /// reaches by a key that names no member of the class itself (lua/instance.rs `get`, docs/engine.md "Member names").
+    pub fn upper_first_id(&self, key: &[u8]) -> Option<NameId> {
+        let (&first, rest) = key.split_first()?;
+        if !first.is_ascii_lowercase() {
+            return None;
+        }
+        let mut buffer = [0u8; 64];
+        if key.len() <= buffer.len() {
+            buffer[0] = first.to_ascii_uppercase();
+            buffer[1..key.len()].copy_from_slice(rest);
+            self.name_id_bytes(&buffer[..key.len()])
+        } else {
+            let mut upper = key.to_vec();
+            upper[0] = first.to_ascii_uppercase();
+            self.name_id_bytes(&upper)
+        }
+    }
+
     #[inline]
     pub fn name(&self, id: NameId) -> &str {
         &self.names[id as usize]

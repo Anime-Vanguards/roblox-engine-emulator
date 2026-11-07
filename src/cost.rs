@@ -314,6 +314,12 @@ pub const READ_STRING_EXTRA: f64 = 10.0e-9;
 pub const READ_INSTANCE_EXTRA: f64 = 13.0e-9;
 /// A child found by name as a member (`part.Attachment`: 40.0 ns in all)
 pub const READ_CHILD_EXTRA: f64 = 11.0e-9;
+/// What reaching a member by its name with the first letter lower-cased (`part.anchored`, `part:getFullName()`) adds to
+/// the member's own price: the engine looks the key up, finds no member and no child, and looks again (a headless client,
+/// roblox-sim, Studio 0.744, the minimum of 7 rounds of 200,000, less the exact name's: reads of a property, an event and a
+/// method and a method call +33 to +47 ns on a part without children; a read pays 2.4 ns more for each child the failed
+/// child lookup passes, not charged, as no child lookup is charged by its children)
+pub const LOWER_FIRST: f64 = 40.0e-9;
 /// A property write nothing in the engine reacts to, and a write of the value it holds (client: CFrame written
 /// to what it holds 52 ns, Bone.Transform and Motor6D.Transform 55-68 ns)
 pub const WRITE_QUIET: f64 = 0.055e-6;

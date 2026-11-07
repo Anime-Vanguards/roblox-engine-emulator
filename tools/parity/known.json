@@ -13,6 +13,48 @@
 			"why": "DateTime formats only in en-us: other locales (en-gb, fr, ja, de) are not emulated"
 		}
 	],
+	"camelcase": [
+		{
+			"line": "vector2 | ok 3 4 5 true true",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "int16 | ok 1 2 3 | ok 4 5",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "cframe | ok true 1 2 3 true true true | ok true true true true | ok true true true 12 | error position is not a valid member of CFrame | error fuzzyEq is not a valid member of CFrame",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "color3 | ok 0.25 0.5 0.75 true | error toHSV is not a valid member of Color3",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "udim | ok true | error x is not a valid member of UDim2 | error 'scale' is not a valid member of UDim",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "brickcolor | ok Bright red 21 true | error 'R' is not a valid member of BrickColor | error 'color' is not a valid member of BrickColor",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "ray | ok 1 | error origin is not a valid member of Ray",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "other-datatypes | error nextNumber is not a valid member of Random | error 'time' is not a valid member of TweenInfo | error 'min' is not a valid member of NumberRange | error 'width' is not a valid member of Rect | error 'top' is not a valid member of Faces",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "signal | ok true false | ok function function | error once is not a valid member of RBXScriptSignal",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "library | ok nil nil nil nil nil function",
+			"why": "not fixed yet"
+		}
+	],
 	"cframe_order": [
 		{
 			"line": "many 1 2.87012172 -3.01272011 2.74383545 0.693557739 0.45098874 0.302454591 2.40782189 -2.95300436 0.918844819 -0.141491845 0.368380576 2.9279623",

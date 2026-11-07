@@ -293,6 +293,20 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
   the child of that name (so `part.Origin` finds a child named Origin, as in Roblox). Callbacks a game
   script may assign (BindableFunction.OnInvoke, RemoteFunction.OnClientInvoke / OnServerInvoke,
   MarketplaceService.ProcessReceipt, ...) are kept; a read raises Studio's message.
+- Member names: a key that names no member and no child, and starts with a lower-case ASCII letter, reads
+  the member it spells with that letter upper-cased (`part.anchored`, `part.touched`,
+  `part.getPropertyChangedSignal`: the same value, signal and function as the exact name; a callback's
+  read error names the callback), and a method call that names no method calls the method so spelled
+  (`part:getPropertyChangedSignal("Position")`). Only the first letter (`HttpService:jSONEncode` answers,
+  `jsonEncode` does not), only towards upper case, members only (children answer to their exact names),
+  and the API dump's own lower-case names (`findFirstChild`, `childAdded`, `Fire.size`) are members of
+  their own, found first. A write takes the exact name only (`part.anchored = true` raises `anchored is
+  not a valid member of Part "Part"`). A method call finds methods only: a property, event, callback or
+  child by either spelling raises the same not-a-member error. Measured in a playing client and a server
+  (every method, event and readable property of the API dump answers so on reads, none on writes;
+  tools/parity/probes/camelcase.luau). Datatypes, enums, libraries and globals have no such rule: they
+  answer the lower-case names each lists (Vector3 `x` / `magnitude` / `lerp`, CFrame `p` / `lookVector` /
+  `inverse`, RBXScriptSignal `connect` / `wait`, ...) and nothing else.
 - What holds an instance is what holds it in Roblox (measured in Studio 0.740): a connected handler that
   references the instance keeps it; Destroy (which disconnects the instance and its descendants,
   deferred) or Disconnect releases it; a destroyed tree nothing references is freed whole.
@@ -358,8 +372,8 @@ ending the run.
 ### Work clock (`src/cost.rs`)
 
 `os.clock` (and `tick`, `DateTime`, `elapsedTime`, `GetServerTimeNow`) reads the frame's virtual time
-plus the script work charged since the frame began. Every Instance read (by what the value is), write and
-method call, Instance.new, Clone (per instance), a subtree entering or leaving the DataModel (per instance),
+plus the script work charged since the frame began. Every Instance read (by what the value is; a member
+reached by its lower-case first letter 40 ns more, `LOWER_FIRST`), write and method call, Instance.new, Clone (per instance), a subtree entering or leaving the DataModel (per instance),
 Destroy, the lists methods return (per element), a find's walk (per child or node looked at), a ray's path
 and a spatial query's results (per part), signals and threads, and EditableMesh's own work are charged what
 they cost in a client, as measured with os.clock (cost.rs gives each price with its measurement). A script's
