@@ -483,6 +483,14 @@ alone the casts 0.22-0.67x. With all of them a GUI scroll reads 0.82x, a gradien
 rest of a cast's cold cost (code and data a client finds cold after frames unused), where data lies, what a
 layout leaves warm, and the cold of each node a large walk visits. Size a cut in a client.
 
+Within one instruction kind the clock charges an average, so it cannot tell some ways of writing the same thing
+apart where the interpreter does (`ree profile try`, tools/what-if, host time against the clock, 9 interleaved rounds):
+a lookup by a number in a table's array part and by a string in its hash part cost the same on the clock and 1.5-1.8x
+apart in host time (10,000 keys, read 40,000 times); a numeric `for i = 1, #t` over an array reads 1.04x a generalized
+loop on the clock and 1.3-1.7x in host time. Growing a list costs more on the clock than in this machine's interpreter
+(appending 10,000 values to `{}` against `table.create(n)`: 5.5-5.8x on the clock, 1.4-1.9x in host time): the clock's
+prices for the keys a rehash moves and the bytes it stores are a client's.
+
 A script's environment is safe, as Roblox makes every script's: its imports (`game`, `Vector3.new`,
 `math.floor`) are resolved when it loads and read as constants, builtins (`math.*`, `type`, `typeof`, ...)
 take the VM's fast calls, and getfenv / setfenv end both for that environment, as there (the bench: two
@@ -559,6 +567,21 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   over those roots it finds each object's dominator (Cooper, Harvey and Kennedy's algorithm), so an object's
   retained size is what would be freed with it, and a breadth-first holder path (a path through the
   registry's array part is a reference the engine itself holds: a handler, a thread it will resume).
+  Each reachable table's shape is read during the walk (`lua_profiletable`: its array part's slots and those holding a
+  value, its hash part's nodes and those holding one; `lua_profiletablebytes` the bytes of a table, a slot and a node),
+  and its nesting level comes from the references between tables (a metatable's aside): one more than the deepest table
+  it holds, the tables of a cycle sharing theirs (strongly connected components, levelled in reverse topological order).
+  The tables the profile followed are grouped by the stack that allocated them (`memory::Tables`).
+- **Table growth**: a table grows only by rehashing (ltable.cpp `rehash`, when a new key finds no free slot), which
+  moves every key it holds into its new parts; the VM's work counters count those keys for a script's own instruction
+  (`rehashed`, which the work clock prices). With a profile, `rehash` also calls the profile's hook
+  (`lua_setprofilerehash`: the table, its parts' sizes before and after, the keys, whether a script's instruction made
+  it), behind the same thread-local check as the rest of the profile; the allocation profile books each rehash to the
+  stack that made it and to the stack that made the table.
+- **Marks**: each `Context.ProfilePhase` mark, and the run's end, take the counts so far (the work clock, host time, the
+  run thread's cycles, instructions, the VM's work counters, the allocation profile's totals and rehashes, the collector,
+  and the inline caches' outcomes summed by kind: `lua_profilecachetotals`), so a phase's figures are differences of
+  marks. `ree profile try` (docs/cli.md "What-if comparisons") reads its phases this way.
 - **The collector**: the VM's interrupt runs at each collector step's start and end (steps, cycles, bytes
   freed, host time by the state a step began in). **The timeline**: `scheduler::step` takes a row a frame.
   **ree's caches**: counters at each cache (`profiler::caches`, process-wide). **The CPU**: the run thread's
@@ -578,8 +601,10 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
 - **Host time** (`time`, luau_profile.rs): a 1 ms ticker, sampled at the VM's calls, returns and loop edges;
   the engine's own steps (the Animator, joints, physics) get frames of their own.
 
-Off, a profiler costs a thread-local read where it hooks in (the interpreter: one per entry), a thread-local
-store where the VM allocates table storage, and a bit test where the collector frees an object. The hardware
+Off, a profiler costs a thread-local read where it hooks in (the interpreter: one per entry; a table's rehash: one), a
+thread-local store where the VM allocates table storage, and a bit test where the collector frees an object. A profile's
+hooks are written straight into the VM's callbacks, allocating nothing on its heap (a protected call to set them made a
+closure there, and the collector's later cycles then began elsewhere: what a script read of memory moved). The hardware
 counters add no hook of their own: their readings sit behind the frame hook's read, the interrupt a profile
 installs and the engine steps' check of the ticker. On, nothing a
 script sees changes: the profile allocates nothing on the VM's heap and leaves the VM's counts as they are,

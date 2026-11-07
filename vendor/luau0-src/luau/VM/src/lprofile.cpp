@@ -190,6 +190,9 @@ struct lua_ProfileState
     // objects marked with lua_profilemark
     void (*freed)(void* ud, void* block) = NULL;
     void* freedud = NULL;
+    // tables that rehashed (lua_setprofilerehash)
+    void (*rehash)(void* ud, lua_State* L, void* table, int oldarray, int oldnodes, int newarray, int newnodes, int keys, int script) = NULL;
+    void* rehashud = NULL;
 };
 
 static lua_ProfileState* stateof(lua_State* L)
@@ -842,6 +845,112 @@ void lua_setprofilefreed(lua_State* L, void (*freed)(void* ud, void* block), voi
         s->freed = freed;
         s->freedud = ud;
     }
+}
+
+void lua_setprofilerehash(
+    lua_State* L,
+    void (*rehash)(void* ud, lua_State* L, void* table, int oldarray, int oldnodes, int newarray, int newnodes, int keys, int script),
+    void* ud
+)
+{
+    if (lua_ProfileState* s = stateof(L))
+    {
+        s->rehash = rehash;
+        s->rehashud = ud;
+    }
+}
+
+void luaP_rehash(lua_State* L, LuaTable* t, int oldarray, int oldnodes, int keys)
+{
+    lua_ProfileState* s = stateof(L);
+    if (!s || !s->rehash)
+        return;
+    int nodes = t->node == &luaH_dummynode ? 0 : sizenode(t);
+    s->rehash(s->rehashud, L, t, oldarray, oldnodes, t->sizearray, nodes, keys, luaE_scriptinsn(L) ? 1 : 0);
+}
+
+int lua_profiletable(void* ptr, int* arrayslots, int* arrayused, int* nodes, int* nodesused)
+{
+    GCObject* o = (GCObject*)ptr;
+    if (o->gch.tt != LUA_TTABLE)
+        return 0;
+    LuaTable* h = gco2h(o);
+    int used = 0;
+    for (int i = 0; i < h->sizearray; ++i)
+        if (!ttisnil(&h->array[i]))
+            used++;
+    int size = h->node == &luaH_dummynode ? 0 : sizenode(h);
+    int nodeused = 0;
+    for (int i = 0; i < size; ++i)
+        if (!ttisnil(gval(&h->node[i])))
+            nodeused++;
+    if (arrayslots)
+        *arrayslots = h->sizearray;
+    if (arrayused)
+        *arrayused = used;
+    if (nodes)
+        *nodes = size;
+    if (nodesused)
+        *nodesused = nodeused;
+    return 1;
+}
+
+void lua_profiletablebytes(size_t* header, size_t* slot, size_t* node)
+{
+    if (header)
+        *header = sizeof(LuaTable);
+    if (slot)
+        *slot = sizeof(TValue);
+    if (node)
+        *node = sizeof(LuaNode);
+}
+
+// the cache kind of an instruction with an inline cache (lua_profilecachetotals' order), -1 for the others
+static int cachekind(int op)
+{
+    switch (op)
+    {
+    case LOP_FASTCALL:
+    case LOP_FASTCALL1:
+    case LOP_FASTCALL2:
+    case LOP_FASTCALL2K:
+    case LOP_FASTCALL3:
+        return 0;
+    case LOP_GETGLOBAL:
+    case LOP_SETGLOBAL:
+        return 1;
+    case LOP_GETIMPORT:
+        return 2;
+    case LOP_NAMECALL:
+        return 3;
+    case LOP_GETTABLEKS:
+    case LOP_SETTABLEKS:
+        return 4;
+    }
+    return -1;
+}
+
+int lua_profilecachetotals(lua_State* L, uint64_t* out)
+{
+    for (int i = 0; i < 5 * LUA_PROFILE_CACHES; ++i)
+        out[i] = 0;
+    lua_ProfileState* s = stateof(L);
+    if (!s)
+        return 0;
+    for (const ProfFunction& f : s->functions)
+    {
+        if (f.caches.empty() || (f.flags & LUA_PROFILE_EXEMPT))
+            continue;
+        for (size_t pc = 0; pc < f.code.size(); ++pc)
+        {
+            int kind = cachekind(LUAU_INSN_OP(f.code[pc]));
+            if (kind < 0)
+                continue;
+            for (int outcome = 0; outcome < LUA_PROFILE_CACHES; ++outcome)
+                out[kind * LUA_PROFILE_CACHES + outcome] += f.caches[pc * LUA_PROFILE_CACHES + outcome];
+        }
+    }
+    return 1;
 }
 
 // The heap as the collector sees it: luaC_enumheap's nodes (lgcdebug.cpp: the same sizes and names) and every reference

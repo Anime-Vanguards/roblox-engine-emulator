@@ -374,20 +374,13 @@ pub fn cli(args: &[String]) -> i32 {
             return 1;
         }
     };
-    let (text, json) = compare(&before, &after, top);
     let out = value("--out").map(PathBuf::from).unwrap_or_else(|| {
         let after = Path::new(after_dir);
         if after.is_file() { after.parent().map(Path::to_path_buf).unwrap_or_default() } else { after.to_path_buf() }
     });
-    let write = || -> Result<(), String> {
-        std::fs::create_dir_all(&out).map_err(|error| format!("{}: {error}", out.display()))?;
-        std::fs::write(out.join("diff.txt"), &text).map_err(|error| error.to_string())?;
-        let data = serde_json::to_string(&json).map_err(|error| error.to_string())?;
-        std::fs::write(out.join("diff.json"), &data).map_err(|error| error.to_string())?;
-        std::fs::write(out.join("diff.html"), html(&data)).map_err(|error| error.to_string())
-    };
+    let (text, written) = write(&before, &after, top, &out);
     print!("{text}");
-    match write() {
+    match written {
         Ok(()) => {
             println!("\nfiles in {}: diff.txt, diff.json, diff.html", out.display());
             0
@@ -397,6 +390,25 @@ pub fn cli(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// Two profiles compared ([`compare`]) into `out`: diff.txt, diff.json and diff.html; the text, and whether the files were
+/// written
+pub fn write(before: &Json, after: &Json, top: usize, out: &Path) -> (String, Result<(), String>) {
+    let (text, json) = compare(before, after, top);
+    let written = (|| -> Result<(), String> {
+        std::fs::create_dir_all(out).map_err(|error| format!("{}: {error}", out.display()))?;
+        std::fs::write(out.join("diff.txt"), &text).map_err(|error| error.to_string())?;
+        let data = serde_json::to_string(&json).map_err(|error| error.to_string())?;
+        std::fs::write(out.join("diff.json"), &data).map_err(|error| error.to_string())?;
+        std::fs::write(out.join("diff.html"), html(&data)).map_err(|error| error.to_string())
+    })();
+    (text, written)
+}
+
+/// A profile directory's profile.json (or the file itself)
+pub fn load_profile(dir: &Path) -> Result<Json, String> {
+    load(dir)
 }
 
 /// `ree profile report <dir>`: the summary of a profile directory printed again, and its report page rewritten from its

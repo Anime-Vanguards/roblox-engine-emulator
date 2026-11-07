@@ -150,13 +150,49 @@ struct Deferred {
     sampled: Option<(u32, f64)>,
 }
 
-/// A sampled object still alive: the stack that allocated it, its type and weight
+/// A sampled object still alive: the stack that allocated it, its type and weight, and the phase it was allocated in
 #[derive(Clone, Copy, Debug)]
 pub struct Live {
     pub stack: u32,
     pub ty: u32,
     pub weight: f64,
+    pub phase: u32,
 }
+
+/// Tables that rehashed to fit a new key (the VM's rehash hook, lua_setprofilerehash): a table grows (or, emptied, shrinks)
+/// only there, moving every key it holds into its new parts
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Rehash {
+    pub events: u64,
+    /// Keys the tables held at their rehashes, the new ones included: what the rehashes moved (the VM's work counters count
+    /// them as `rehashed` when a script's own instruction made the rehash)
+    pub keys: u64,
+    /// Of those, the rehashes a script's own instruction made, and their keys
+    pub script_events: u64,
+    pub script_keys: u64,
+    /// Rehashes that left the table's parts bigger
+    pub grew: u64,
+    /// The parts' bytes (array slots and hash nodes; the table itself aside) before and after the rehashes
+    pub bytes_before: u64,
+    pub bytes_after: u64,
+}
+
+impl Rehash {
+    fn add(&mut self, keys: u64, script: bool, before: u64, after: u64) {
+        self.events += 1;
+        self.keys += keys;
+        if script {
+            self.script_events += 1;
+            self.script_keys += keys;
+        }
+        self.grew += (after > before) as u64;
+        self.bytes_before += before;
+        self.bytes_after += after;
+    }
+}
+
+/// No stack: a table the profile did not follow (made before it began, or not sampled)
+pub const NO_STACK: u32 = u32::MAX;
 
 /// What the instance userdata's payload names (lua/raw.rs Payload: slot index, generation)
 pub type Resolver = Box<dyn Fn(u32, u32) -> Option<String>>;
@@ -180,6 +216,13 @@ pub struct Allocations {
     pub live: FxHashMap<usize, Live>,
     resolver: Option<Resolver>,
     instance_tag: i32,
+    /// Rehashes by (phase, the stack that made the table rehash, the stack that allocated the table: [`NO_STACK`] when the
+    /// profile did not follow it), and their totals
+    pub rehash: FxHashMap<(u32, u32, u32), Rehash>,
+    pub rehashes: Rehash,
+    /// The bytes of an array slot and of a hash node (vm::table_bytes)
+    slot_bytes: u64,
+    node_bytes: u64,
 }
 
 /// The type of the table storage the engine's own bookkeeping grows ([`bookkeeping`]): ree's cache of the Instance userdata scripts
@@ -220,6 +263,10 @@ impl Allocations {
             live: FxHashMap::default(),
             resolver,
             instance_tag: crate::lua::raw::INSTANCE_TAG,
+            rehash: FxHashMap::default(),
+            rehashes: Rehash::default(),
+            slot_bytes: vm::table_bytes().1,
+            node_bytes: vm::table_bytes().2,
         }
     }
 
@@ -253,7 +300,7 @@ impl Allocations {
         self.book(pending.phase, ty, pending.size, pending.sampled);
         if let (true, Some((stack, weight))) = (self.track_live, pending.sampled) {
             unsafe { vm::mark(pending.block as *mut c_void) };
-            self.live.insert(pending.block, Live { stack, ty, weight });
+            self.live.insert(pending.block, Live { stack, ty, weight, phase: pending.phase });
         }
         // (the name alone is not enough: any userdata whose metatable's __type is "Instance" gets it too, and only an
         // Instance's own userdata has a slot to read)
@@ -386,12 +433,31 @@ unsafe extern "C-unwind" fn freed(_ud: *mut c_void, block: *mut c_void) {
     });
 }
 
+/// The VM's rehash hook: a table rehashed to fit a new key. Booked by the stack that made it rehash and the stack that
+/// allocated the table (when the profile follows it: the heap kind's live objects).
+unsafe extern "C-unwind" fn rehashing(_ud: *mut c_void, state: *mut lua_State, table: *mut c_void, old_array: c_int, old_nodes: c_int, new_array: c_int, new_nodes: c_int, keys: c_int, script: c_int) {
+    ALLOCATIONS.with(|cell| {
+        let Ok(mut allocations) = cell.try_borrow_mut() else { return };
+        let Some(allocations) = allocations.as_mut() else { return };
+        // (a table made by the last allocation is booked first, so that it is followed)
+        allocations.resolve_pending();
+        let stack = allocations.stacks.of(state);
+        let made = allocations.live.get(&(table as usize)).map_or(NO_STACK, |live| live.stack);
+        let parts = |array: c_int, nodes: c_int| array.max(0) as u64 * allocations.slot_bytes + nodes.max(0) as u64 * allocations.node_bytes;
+        let (before, after) = (parts(old_array, old_nodes), parts(new_array, new_nodes));
+        let (keys, script) = (keys.max(0) as u64, script != 0);
+        allocations.rehash.entry((allocations.phase, stack, made)).or_default().add(keys, script, before, after);
+        allocations.rehashes.add(keys, script, before, after);
+    });
+}
+
 /// Starts the allocation profile of `state`'s VM (the VM's profile must have started: its function ids name the stacks).
 pub fn start(state: *mut lua_State, step: u64, track_live: bool, resolver: Option<Resolver>) {
     ALLOCATIONS.with(|cell| *cell.borrow_mut() = Some(Allocations::new(step, track_live, resolver)));
     if track_live {
         vm::set_freed(state, Some(freed), std::ptr::null_mut());
     }
+    vm::set_rehash(state, Some(rehashing), std::ptr::null_mut());
     unsafe { (*mlua::ffi::lua_callbacks(state)).onallocate = Some(allocating) };
 }
 
@@ -399,6 +465,7 @@ pub fn start(state: *mut lua_State, step: u64, track_live: bool, resolver: Optio
 pub fn stop(state: *mut lua_State) -> Option<Allocations> {
     unsafe { (*mlua::ffi::lua_callbacks(state)).onallocate = None };
     vm::set_freed(state, None, std::ptr::null_mut());
+    vm::set_rehash(state, None, std::ptr::null_mut());
     ALLOCATIONS.with(|cell| {
         let mut allocations = cell.borrow_mut().take()?;
         allocations.resolve_pending();
@@ -480,6 +547,145 @@ pub struct Snapshot {
     pub by_stack: Vec<(u32, String, f64, f64)>,
     /// Of the reachable objects, those the run allocated (followed since the profile began), weighted
     pub allocated_since: (f64, f64),
+    /// The reachable tables and their shapes, by the site that allocated them
+    pub tables: Tables,
+}
+
+/// A size over a set of tables: its total and how much of it holds a value (a part's slots), its least, median and
+/// greatest, and how many tables fall in each bucket, as (upper bound, tables): powers of two for a part's slots (a part
+/// of 3 slots counts under 4), each value for nesting levels
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Distribution {
+    pub total: u64,
+    pub used: u64,
+    pub min: u32,
+    pub median: u32,
+    pub max: u32,
+    pub hist: Vec<(u32, u64)>,
+}
+
+impl Distribution {
+    /// Of (size, used) pairs; `powers` buckets sizes by the next power of two
+    pub fn of(values: &mut [(u32, u32)], powers: bool) -> Distribution {
+        if values.is_empty() {
+            return Distribution::default();
+        }
+        values.sort_unstable();
+        let mut hist: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
+        for &(size, _) in values.iter() {
+            *hist.entry(if powers && size > 0 { size.next_power_of_two() } else { size }).or_default() += 1;
+        }
+        Distribution {
+            total: values.iter().map(|&(size, _)| size as u64).sum(),
+            used: values.iter().map(|&(_, used)| used as u64).sum(),
+            min: values[0].0,
+            median: values[(values.len() - 1) / 2].0,
+            max: values[values.len() - 1].0,
+            hist: hist.into_iter().collect(),
+        }
+    }
+}
+
+/// A snapshot's reachable tables: their totals, and those the run allocated by the site that allocated them
+#[derive(Clone, Debug, Default)]
+pub struct Tables {
+    pub count: u64,
+    /// Each table with its array and hash parts, as the VM counts them (gcinfo), and those apart
+    pub bytes: u64,
+    pub header_bytes: u64,
+    pub array_bytes: u64,
+    pub hash_bytes: u64,
+    /// The bytes of a table itself, an array slot, a hash node
+    pub sizes: (u64, u64, u64),
+    /// The reachable tables the profile followed, by (phase, stack) of their allocation, most bytes first
+    pub sites: Vec<TableSite>,
+}
+
+/// The reachable tables one site allocated: how many, their bytes, and the distributions of their array parts, hash parts
+/// and nesting levels (how many levels of tables a table is with those it holds: 1 holds no table; tables in a cycle share
+/// one level; a metatable is not held). Counts and bytes are weighted as the allocation stacks are; the distributions
+/// count the tables followed.
+#[derive(Clone, Debug, Default)]
+pub struct TableSite {
+    pub phase: u32,
+    pub stack: u32,
+    pub count: f64,
+    pub bytes: f64,
+    pub header_bytes: f64,
+    pub array_bytes: f64,
+    pub hash_bytes: f64,
+    pub array: Distribution,
+    pub hash: Distribution,
+    pub levels: Distribution,
+}
+
+/// Each table's nesting level (`n` tables; `successors(t)` the tables table t holds as a key or a value): 1 for a table
+/// that holds none, else one more than the deepest it holds; the tables of a cycle share their level (Tarjan's strongly
+/// connected components, finished after every component they reach).
+pub fn table_levels(n: usize, offsets: &[u32], targets: &[u32]) -> Vec<u32> {
+    const NONE: u32 = u32::MAX;
+    let edges = |node: u32| offsets[node as usize] as usize..offsets[node as usize + 1] as usize;
+    let (mut order, mut low, mut component) = (vec![NONE; n], vec![0u32; n], vec![NONE; n]);
+    let mut on_stack = vec![false; n];
+    let mut levels_of: Vec<u32> = Vec::new();
+    let mut stack: Vec<u32> = Vec::new();
+    let mut counter = 0u32;
+    for root in 0..n as u32 {
+        if order[root as usize] != NONE {
+            continue;
+        }
+        let mut calls: Vec<(u32, usize)> = vec![(root, edges(root).start)];
+        order[root as usize] = counter;
+        low[root as usize] = counter;
+        counter += 1;
+        stack.push(root);
+        on_stack[root as usize] = true;
+        while let Some(&mut (node, ref mut next)) = calls.last_mut() {
+            if *next < edges(node).end {
+                let to = targets[*next];
+                *next += 1;
+                if order[to as usize] == NONE {
+                    order[to as usize] = counter;
+                    low[to as usize] = counter;
+                    counter += 1;
+                    stack.push(to);
+                    on_stack[to as usize] = true;
+                    calls.push((to, edges(to).start));
+                } else if on_stack[to as usize] {
+                    low[node as usize] = low[node as usize].min(order[to as usize]);
+                }
+                continue;
+            }
+            calls.pop();
+            if let Some(&(parent, _)) = calls.last() {
+                low[parent as usize] = low[parent as usize].min(low[node as usize]);
+            }
+            if low[node as usize] != order[node as usize] {
+                continue;
+            }
+            let id = levels_of.len() as u32;
+            let mut members: Vec<u32> = Vec::new();
+            while let Some(member) = stack.pop() {
+                on_stack[member as usize] = false;
+                component[member as usize] = id;
+                members.push(member);
+                if member == node {
+                    break;
+                }
+            }
+            let mut level = 1;
+            for &member in &members {
+                for at in edges(member) {
+                    let other = component[targets[at] as usize];
+                    if other != id && other != NONE {
+                        level = level.max(levels_of[other as usize] + 1);
+                    }
+                }
+            }
+            levels_of.push(level);
+        }
+    }
+    component.iter().map(|&id| levels_of[id as usize]).collect()
 }
 
 /// One of the biggest objects: what it keeps alive (its dominated size) and the path that holds it
@@ -513,9 +719,16 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
     let mut pending_edges: Vec<(usize, usize, u32)> = Vec::new();
     let mut root_edges: Vec<(usize, u32)> = Vec::new();
     let mut dead: FxHashMap<u8, (u64, u64)> = FxHashMap::default();
+    // (each table's shape, read while the walk holds it: (node, shape))
+    let mut shapes: Vec<(u32, vm::TableShape)> = Vec::new();
     vm::enum_heap(
         state,
         |ptr, tt, size, name| {
+            if tt == 6 {
+                if let Some(shape) = unsafe { vm::table_shape(ptr as *mut c_void) } {
+                    shapes.push((ptrs.len() as u32, shape));
+                }
+            }
             index.insert(ptr, ptrs.len() as u32);
             ptrs.push(ptr);
             tts.push(tt);
@@ -798,6 +1011,68 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
     let mut by_stack: Vec<(u32, String, f64, f64)> = by_stack.into_iter().map(|((stack, ty), (count, bytes))| (stack, type_names.get(ty as usize).cloned().unwrap_or_default(), count, bytes)).collect();
     by_stack.sort_by(|a, b| b.3.total_cmp(&a.3).then(a.0.cmp(&b.0)));
 
+    // the reachable tables: their shapes, nesting levels (over the references between tables, a metatable's aside) and
+    // the sites that allocated them
+    let tables = {
+        let metatable = edge_names.id("metatable");
+        let reachable: Vec<(u32, vm::TableShape)> = shapes.into_iter().filter(|&(node, _)| visited[node as usize]).collect();
+        let mut table_of = vec![NONE; count];
+        for (at, &(node, _)) in reachable.iter().enumerate() {
+            table_of[node as usize] = at as u32;
+        }
+        let mut table_offsets = vec![0u32; reachable.len() + 1];
+        let mut table_edges: Vec<(u32, u32)> = edges
+            .iter()
+            .filter(|&&(from, to, name)| name != metatable && table_of[from as usize] != NONE && table_of[to as usize] != NONE)
+            .map(|&(from, to, _)| (table_of[from as usize], table_of[to as usize]))
+            .collect();
+        table_edges.sort_unstable();
+        table_edges.dedup();
+        for &(from, _) in &table_edges {
+            table_offsets[from as usize + 1] += 1;
+        }
+        for at in 0..reachable.len() {
+            table_offsets[at + 1] += table_offsets[at];
+        }
+        let table_targets: Vec<u32> = table_edges.iter().map(|&(_, to)| to).collect();
+        let levels = table_levels(reachable.len(), &table_offsets, &table_targets);
+        let (header, slot, node_bytes) = vm::table_bytes();
+        let mut tables = Tables { sizes: (header, slot, node_bytes), ..Tables::default() };
+        type Shapes = (Vec<(u32, u32)>, Vec<(u32, u32)>, Vec<(u32, u32)>);
+        let mut sites: FxHashMap<(u32, u32), (TableSite, Shapes)> = FxHashMap::default();
+        for (at, &(node, shape)) in reachable.iter().enumerate() {
+            let (array, hash) = (shape.array as u64 * slot, shape.nodes as u64 * node_bytes);
+            let size = sizes[node as usize];
+            tables.count += 1;
+            tables.bytes += size;
+            tables.header_bytes += size.saturating_sub(array + hash);
+            tables.array_bytes += array;
+            tables.hash_bytes += hash;
+            let Some(followed) = live.get(&block_of(node as usize)) else { continue };
+            let (site, (arrays, hashes, nests)) = sites.entry((followed.phase, followed.stack)).or_insert_with(|| (TableSite { phase: followed.phase, stack: followed.stack, ..TableSite::default() }, Shapes::default()));
+            let weight = followed.weight;
+            site.count += weight;
+            site.bytes += weight * size as f64;
+            site.header_bytes += weight * size.saturating_sub(array + hash) as f64;
+            site.array_bytes += weight * array as f64;
+            site.hash_bytes += weight * hash as f64;
+            arrays.push((shape.array, shape.array_used));
+            hashes.push((shape.nodes, shape.nodes_used));
+            nests.push((levels[at], 0));
+        }
+        tables.sites = sites
+            .into_values()
+            .map(|(mut site, (mut arrays, mut hashes, mut nests))| {
+                site.array = Distribution::of(&mut arrays, true);
+                site.hash = Distribution::of(&mut hashes, true);
+                site.levels = Distribution::of(&mut nests, false);
+                site
+            })
+            .collect();
+        tables.sites.sort_by(|a, b| b.bytes.total_cmp(&a.bytes).then(a.phase.cmp(&b.phase)).then(a.stack.cmp(&b.stack)));
+        tables
+    };
+
     Snapshot {
         label: label.to_string(),
         frame,
@@ -812,6 +1087,7 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         biggest,
         by_stack,
         allocated_since,
+        tables,
     }
 }
 

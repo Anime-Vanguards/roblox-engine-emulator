@@ -122,7 +122,7 @@ static GLOBAL: dhat::Alloc = dhat::Alloc;
 // (mimalloc: the allocator above, and the service's idle collection)
 extern crate mimalloc;
 
-const USAGE: &str = "usage: ree record --harness <file.luau> --out <dir> [--seconds 3] [--fps 60] [--context <json|file>]\n                  [--assets-at <Service.Path>] [--assets <prefix>,...] [engine options]\n       ree run --harness <file.luau> [--seconds 3] [--fps 60] [--context <json|file>] [engine options]\n       ree record|run --service ...   (run by the warm service, started when missing; --profile prints timings)\n       ree run ... --profile boundary [--profile-out <file.json>] [--profile-phase <a,b|all>] [--profile-top <n>]\n                   (Luau-to-engine crossings per call site, priced; not through --service)\n       ree record|run ... --profile <kinds> [--profile-out <dir>] [--profile-top <n>] [--profile-phase <a,b|all>] [--profile-counters <a,b>]\n                   kinds: work, caches, alloc, heap, timeline, cpu, phases, time, hw, boundary, all (docs/cli.md)\n       ree profile diff <before dir> <after dir> [--out <dir>]   |   ree profile report <dir>\n       ree serve [--status | --stop] [--idle <s>] [--workers <n>]\nengine options: --roots \"<dir>;<dir>\" [--project <dir>] [--place <name>], --mount Service/Name=<dir|file>,\n                --instance Service/Name=<ClassName>, --snapshot-dir <dir>, --mode play|edit, --player <name>,\n                --place-id <n>, --streaming <radius>, --viewport WxH, --offline, --verbose (docs/cli.md)";
+const USAGE: &str = "usage: ree record --harness <file.luau> --out <dir> [--seconds 3] [--fps 60] [--context <json|file>]\n                  [--assets-at <Service.Path>] [--assets <prefix>,...] [engine options]\n       ree run --harness <file.luau> [--seconds 3] [--fps 60] [--context <json|file>] [engine options]\n       ree record|run --service ...   (run by the warm service, started when missing; --profile prints timings)\n       ree run ... --profile boundary [--profile-out <file.json>] [--profile-phase <a,b|all>] [--profile-top <n>]\n                   (Luau-to-engine crossings per call site, priced; not through --service)\n       ree record|run ... --profile <kinds> [--profile-out <dir>] [--profile-top <n>] [--profile-phase <a,b|all>] [--profile-counters <a,b>]\n                   kinds: work, caches, alloc, heap, timeline, cpu, phases, time, hw, boundary, all (docs/cli.md)\n       ree profile diff <before dir> <after dir> [--out <dir>]   |   ree profile report <dir>\n       ree profile try <file.luau> [--sizes a,b] [--variants a,b] [--out <dir>]   (variants side by side)\n       ree serve [--status | --stop] [--idle <s>] [--workers <n>]\nengine options: --roots \"<dir>;<dir>\" [--project <dir>] [--place <name>], --mount Service/Name=<dir|file>,\n                --instance Service/Name=<ClassName>, --snapshot-dir <dir>, --mode play|edit, --player <name>,\n                --place-id <n>, --streaming <radius>, --viewport WxH, --offline, --verbose (docs/cli.md)";
 
 #[cfg(feature = "dhat-heap")]
 static PROFILER: std::sync::Mutex<Option<dhat::Profiler>> = std::sync::Mutex::new(None);
@@ -201,10 +201,12 @@ fn run_command(argv: &[String], service: bool) -> i32 {
             Some("diff") => roblox_engine_emulator::profiler::diff::cli(&argv[3..]),
             Some("report") => roblox_engine_emulator::profiler::diff::report_cli(&argv[3..]),
             Some("view" | "render") => profile_viewer(&argv[2..]),
+            Some("try") => roblox_engine_emulator::profiler::whatif::cli(&argv[3..]),
             _ => {
                 eprintln!("usage: ree profile diff <before dir> <after dir> [--out <dir>] [--top <n>]
        ree profile report <profile dir>
-       ree profile view <dir> [<dir2>]   |   ree profile render <dir> [<dir2>] --view <name|all> --out <file|dir>");
+       ree profile view <dir> [<dir2>]   |   ree profile render <dir> [<dir2>] --view <name|all> --out <file|dir>
+       ree profile try <file.luau> [--sizes a,b] [--variants a,b] [--out <dir>]   (docs/cli.md \"What-if comparisons\")");
                 2
             }
         },

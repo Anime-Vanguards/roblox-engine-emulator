@@ -570,8 +570,15 @@ static void rehash(lua_State* L, LuaTable* t, const TValue* ek)
     if (luaE_scriptinsn(L))
         L->global->work.rehashed += totaluse;
 
+    // (the sizes before, for a profile's rehash hook)
+    int oldasize = t->sizearray;
+    int oldnodes = t->node == dummynode ? 0 : sizenode(t);
+
     // resize the table to new computed sizes
     resize(L, t, nasize, nh);
+
+    if (luaP_state)
+        luaP_rehash(L, t, oldasize, oldnodes, totaluse);
 }
 
 /*

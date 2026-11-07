@@ -443,6 +443,19 @@ LUA_API size_t lua_profileudataoffset(void);
 // marks an object: the profile's `freed` hook is called when the collector frees it
 LUA_API void lua_profilemark(void* block);
 LUA_API void lua_setprofilefreed(lua_State* L, void (*freed)(void* ud, void* block), void* ud);
+// a table rehashed to fit a new key: the table, its array and hash sizes (nodes, 0 for none) before and after, the keys it
+// holds with the new one (what the work counters' `rehashed` counts) and whether a script's own instruction made it
+LUA_API void lua_setprofilerehash(lua_State* L,
+    void (*rehash)(void* ud, lua_State* L, void* table, int oldarray, int oldnodes, int newarray, int newnodes, int keys, int script), void* ud);
+// a table's shape (ptr as lua_enumheap names it: the table): its array part's slots and how many hold a value, its hash part's
+// nodes (0: none) and how many hold a value; 0 when ptr is not a table
+LUA_API int lua_profiletable(void* ptr, int* arrayslots, int* arrayused, int* nodes, int* nodesused);
+// the bytes of a table itself, of an array slot and of a hash node
+LUA_API void lua_profiletablebytes(size_t* header, size_t* slot, size_t* node);
+// the outcomes of the instructions with an inline cache, summed over the profile's functions (a host's own aside) by kind:
+// builtin fast path (the FASTCALL family), global slot (GETGLOBAL, SETGLOBAL), import (GETIMPORT), method slot (NAMECALL),
+// table key slot (GETTABLEKS, SETTABLEKS); LUA_PROFILE_CACHES outcomes each, into out[5 * LUA_PROFILE_CACHES]
+LUA_API int lua_profilecachetotals(lua_State* L, uint64_t* out);
 // every collectable object (as luaC_enumheap gives them, lgcdebug.cpp) and every reference the collector follows between
 // them, with the collector's roots as edges from NULL (the main thread, the registry, the basic types' metatables, the
 // fixed objects): what no edge reaches is garbage the next collection frees. Objects a sweep has yet to free go to `dead`

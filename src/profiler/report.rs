@@ -33,6 +33,8 @@ pub struct Input<'a> {
     pub sources: &'a FxHashMap<String, Source>,
     /// The work clock's reading when the profile was collected (the last phase's end)
     pub end_work: f64,
+    /// The profile's end as a mark: the last phase's end, with the counts then
+    pub end: Option<&'a Mark>,
     pub boundary: Option<&'a str>,
     pub phase_timing: Option<&'a str>,
     pub warnings: &'a [String],
@@ -362,7 +364,8 @@ pub fn write(input: &Input) -> Result<String, String> {
             "seconds": input.run.seconds, "fps": input.run.fps, "elapsed": input.elapsed,
         },
         "phases": input.phases,
-        "marks": input.marks.iter().map(|mark| json!({"phase": mark.phase, "frame": mark.frame, "seconds": mark.seconds, "work_ms": ms(mark.work)})).collect::<Vec<_>>(),
+        "marks": input.marks.iter().map(mark_json).collect::<Vec<_>>(),
+        "end": input.end.map(mark_json),
         "warnings": input.warnings,
     });
 
@@ -653,9 +656,52 @@ pub fn write(input: &Input) -> Result<String, String> {
                 "type": allocations.types.names[*ty as usize], "bytes": amount.bytes.round(), "count": amount.count.round(),
             })).collect::<Vec<_>>(),
         });
+        // tables that rehashed to grow: by the line that made them rehash and the site that made the table
+        let total = &allocations.rehashes;
+        if total.events > 0 {
+            let _ = writeln!(
+                summary,
+                "table rehashes: {} ({} grew the table), {} keys moved; by scripts' own instructions {} rehashes, {} keys",
+                group_digits(total.events),
+                group_digits(total.grew),
+                group_digits(total.keys),
+                group_digits(total.script_events),
+                group_digits(total.script_keys)
+            );
+            let mut rows: Vec<(&(u32, u32, u32), &memory::Rehash)> = allocations.rehash.iter().collect();
+            rows.sort_by(|a, b| b.1.keys.cmp(&a.1.keys).then(b.1.events.cmp(&a.1.events)).then(a.0.cmp(b.0)));
+            let _ = writeln!(summary, "{:>10} {:>12}  rehashed at  (the table made at)", "rehashes", "keys moved");
+            for ((_, stack, made), rehash) in rows.iter().filter(|(key, _)| key.1 != memory::NO_STACK).take(input.config.top.min(10)) {
+                let made = if *made == memory::NO_STACK { "not followed".to_string() } else { describe(*made) };
+                let _ = writeln!(summary, "{:>10} {:>12}  {}  ({made})", group_digits(rehash.events), group_digits(rehash.keys), describe(*stack));
+            }
+            let frames = |stack: u32| -> Json {
+                if stack == memory::NO_STACK { Json::Null } else { Json::Array(allocations.stacks.stacks[stack as usize].iter().map(|&(f, l)| json!([f, l])).collect()) }
+            };
+            json["alloc"]["rehash"] = json!({
+                "events": total.events, "keys": total.keys, "script_events": total.script_events, "script_keys": total.script_keys, "grew": total.grew,
+                "bytes_before": total.bytes_before, "bytes_after": total.bytes_after,
+                "sites": rows.iter().take(500).map(|((phase, stack, made), rehash)| json!({
+                    "phase": input.phases.get(*phase as usize), "frames": frames(*stack), "table_frames": frames(*made),
+                    "events": rehash.events, "keys": rehash.keys, "script_events": rehash.script_events, "script_keys": rehash.script_keys,
+                    "grew": rehash.grew, "bytes_before": rehash.bytes_before, "bytes_after": rehash.bytes_after,
+                })).collect::<Vec<_>>(),
+            });
+        }
     }
 
     // heap snapshots and the collector
+    // (each table site's rehashes over the run: (rehashes, keys moved) by the stack that made the tables)
+    let mut rehash_by_site: FxHashMap<u32, (u64, u64)> = FxHashMap::default();
+    if let Some(allocations) = input.allocations {
+        for (&(_, _, made), rehash) in &allocations.rehash {
+            if made != memory::NO_STACK {
+                let entry = rehash_by_site.entry(made).or_default();
+                entry.0 += rehash.events;
+                entry.1 += rehash.keys;
+            }
+        }
+    }
     if !input.snapshots.is_empty() {
         let last = input.snapshots.last().unwrap();
         let _ = writeln!(
@@ -684,6 +730,52 @@ pub fn write(input: &Input) -> Result<String, String> {
                 input.snapshots.iter().map(|s| format!("{} {} (+{})", s.label, bytes(s.reachable.1 as f64), bytes(s.unswept.1 as f64))).collect::<Vec<_>>().join(" -> ")
             );
         }
+        // the reachable tables' shapes by the site that made them
+        let tables = &last.tables;
+        if tables.count > 0 {
+            let whole = tables.bytes.max(1) as f64;
+            let _ = writeln!(
+                summary,
+                "  tables at {}: {} reachable, {} (the tables {}, array parts {}, hash parts {}); the run's own by the site that made them:",
+                last.label,
+                group_digits(tables.count),
+                bytes(tables.bytes as f64),
+                percent(tables.header_bytes as f64, whole),
+                percent(tables.array_bytes as f64, whole),
+                percent(tables.hash_bytes as f64, whole)
+            );
+            let _ = writeln!(summary, "  {:>9} {:>10} {:>8} {:>16} {:>16} {:>6}  site", "tables", "bytes", "each", "array slots", "hash nodes", "levels");
+            let site_of = |stack: u32| -> String {
+                let Some(allocations) = input.allocations else { return String::new() };
+                let frames = &allocations.stacks.stacks[stack as usize];
+                let luau: Vec<String> = frames.iter().filter(|frame| frame.0 >= 0 && !names.engine(frame.0)).take(3).map(|&(function, line)| {
+                    let module = names.function(function).map_or(String::new(), |f| short_module(module_name(&f.source)).to_string());
+                    format!("{module}:{line}")
+                }).collect();
+                if luau.is_empty() { "(engine)".into() } else { luau.join(" < ") }
+            };
+            let shape = |distribution: &memory::Distribution| -> String {
+                if distribution.min == distribution.max {
+                    format!("{} ({})", group_digits(distribution.min as u64), group_digits(distribution.used))
+                } else {
+                    format!("{}-{} ({})", group_digits(distribution.min as u64), group_digits(distribution.max as u64), group_digits(distribution.used))
+                }
+            };
+            for site in tables.sites.iter().take(input.config.top.min(8)) {
+                let levels = if site.levels.min == site.levels.max { site.levels.min.to_string() } else { format!("{}-{}", site.levels.min, site.levels.max) };
+                let _ = writeln!(
+                    summary,
+                    "  {:>9} {:>10} {:>8} {:>16} {:>16} {:>6}  {}",
+                    group_digits(site.count.round() as u64),
+                    bytes(site.bytes),
+                    bytes(site.bytes / site.count.max(1e-9)),
+                    shape(&site.array),
+                    shape(&site.hash),
+                    levels,
+                    site_of(site.stack)
+                );
+            }
+        }
         let collector = input.collector;
         let _ = writeln!(
             summary,
@@ -707,6 +799,22 @@ pub fn write(input: &Input) -> Result<String, String> {
                 "by_stack": snapshot.by_stack.iter().take(300).map(|(stack, ty, count, size)| json!({
                     "frames": input.allocations.map(|allocations| allocations.stacks.stacks[*stack as usize].iter().map(|&(f, l)| json!([f, l])).collect::<Vec<_>>()),
                     "type": ty, "count": count.round(), "bytes": size.round()})).collect::<Vec<_>>(),
+                "tables": {
+                    "count": snapshot.tables.count, "bytes": snapshot.tables.bytes, "header_bytes": snapshot.tables.header_bytes,
+                    "array_bytes": snapshot.tables.array_bytes, "hash_bytes": snapshot.tables.hash_bytes,
+                    "sizes": {"table": snapshot.tables.sizes.0, "slot": snapshot.tables.sizes.1, "node": snapshot.tables.sizes.2},
+                    "sites": snapshot.tables.sites.iter().take(300).map(|site| {
+                        let (events, keys) = rehash_by_site.get(&site.stack).copied().unwrap_or((0, 0));
+                        json!({
+                            "phase": input.phases.get(site.phase as usize),
+                            "frames": input.allocations.map(|allocations| allocations.stacks.stacks[site.stack as usize].iter().map(|&(f, l)| json!([f, l])).collect::<Vec<_>>()),
+                            "count": site.count.round(), "bytes": site.bytes.round(), "header_bytes": site.header_bytes.round(),
+                            "array_bytes": site.array_bytes.round(), "hash_bytes": site.hash_bytes.round(),
+                            "array": distribution_json(&site.array), "hash": distribution_json(&site.hash), "levels": levels_json(&site.levels),
+                            "rehashes": events, "rehash_keys": keys,
+                        })
+                    }).collect::<Vec<_>>(),
+                },
             })).collect::<Vec<_>>(),
             "gc": {"cycles": collector.cycles, "steps": collector.steps, "freed": collector.freed, "ms": ms(collector.seconds),
                 "by_state": memory::GC_STATES.iter().zip(collector.by_state.iter()).map(|(state, (steps, seconds))| json!({"state": state, "steps": steps, "ms": ms(*seconds)})).collect::<Vec<_>>()},
@@ -876,6 +984,44 @@ pub fn write(input: &Input) -> Result<String, String> {
     write_file(&out.join("summary.txt"), summary.as_bytes())?;
     write_file(&out.join("report.html"), html(&text).as_bytes())?;
     Ok(summary)
+}
+
+/// A mark with its running counts (a phase's figures are the difference between two marks')
+fn mark_json(mark: &Mark) -> Json {
+    let mut json = json!({"phase": mark.phase, "frame": mark.frame, "seconds": mark.seconds, "work_ms": ms(mark.work), "host_ms": mark.host * 1e3, "cycles": mark.cycles});
+    if let Some(totals) = &mark.totals {
+        json["insns"] = json!(totals.insns);
+        json["vm"] = json!({
+            "objects": totals.objects, "allocated": totals.allocated, "stored": totals.stored, "rehashed": totals.rehashed,
+            "cold_tables": totals.cold_tables, "cold_closures": totals.cold_closures, "cold_protos": totals.cold_protos, "cold_code": totals.cold_code,
+        });
+        if let (Some(bytes), Some(count)) = (totals.alloc_bytes, totals.allocs) {
+            json["alloc_bytes"] = json!(bytes);
+            json["allocs"] = json!(count);
+        }
+        if let Some((events, keys, script_events, script_keys)) = totals.rehashes {
+            json["rehashes"] = json!(events);
+            json["rehash_keys"] = json!(keys);
+            json["script_rehashes"] = json!(script_events);
+            json["script_rehash_keys"] = json!(script_keys);
+        }
+        json["gc"] = json!({"steps": totals.gc.0, "cycles": totals.gc.1, "freed": totals.gc.2, "ms": ms(totals.gc.3)});
+        if let Some(caches) = &totals.caches {
+            json["caches"] = Json::Object(vm::CACHE_KINDS.iter().zip(caches.iter()).map(|(kind, outcomes)| (kind.to_string(), json!(outcomes))).collect());
+        }
+    }
+    json
+}
+
+/// A distribution of a table part's size: its slots, those holding a value, the least, median and greatest part, and how
+/// many tables fall in each power-of-two bucket
+fn distribution_json(distribution: &memory::Distribution) -> Json {
+    json!({"slots": distribution.total, "used": distribution.used, "min": distribution.min, "median": distribution.median, "max": distribution.max, "hist": distribution.hist})
+}
+
+/// A distribution of nesting levels
+fn levels_json(distribution: &memory::Distribution) -> Json {
+    json!({"min": distribution.min, "median": distribution.median, "max": distribution.max, "hist": distribution.hist})
 }
 
 /// `1.23G`, `45.6M`, `789K` (whole numbers below ten thousand)

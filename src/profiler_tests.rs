@@ -842,3 +842,183 @@ fn hardware_counter_options_parse() {
     assert_eq!(Config::from_args(&args(&["--profile", "hw"]), none).unwrap().unwrap().counters, profiler::hw::protocol::DEFAULT_COUNTERS);
     assert!(Config::from_args(&args(&["--profile", "hw", "--profile-counters", "cycles,cycles"]), none).unwrap_err().contains("twice"));
 }
+
+/// One heap profile of `source` (chunk `=shapes`): its profile.json
+fn shape_profile(name: &str, source: &str) -> serde_json::Value {
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::HEAP.with(Kinds::ALLOC), temp_dir(name)) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    run(&lua, &engine, "shapes", source);
+    profiler::collect(&lua);
+    session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    json
+}
+
+/// The site of a snapshot's tables whose stack's innermost Luau frame is `line` of the `shapes` chunk
+fn site_at<'a>(json: &serde_json::Value, snapshot: &'a serde_json::Value, line: i64) -> &'a serde_json::Value {
+    let functions = json["functions"].as_array().unwrap();
+    let in_chunk = |id: i64| functions.iter().any(|f| f["id"].as_i64() == Some(id) && f["module"] == "shapes");
+    snapshot["tables"]["sites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|site| {
+            let innermost = site["frames"].as_array().and_then(|frames| frames.iter().find(|frame| frame[0].as_i64().is_some_and(|id| id >= 0)).cloned());
+            innermost.is_some_and(|frame| in_chunk(frame[0].as_i64().unwrap()) && frame[1].as_i64() == Some(line))
+        })
+        .unwrap_or_else(|| panic!("no table site at shapes:{line}: {:#}", snapshot["tables"]))
+}
+
+/// A part's (or the levels') distribution: (total, used, min, median, max, histogram)
+fn distribution(part: &serde_json::Value) -> (f64, f64, f64, f64, f64, Vec<(u64, u64)>) {
+    let hist = part["hist"].as_array().unwrap().iter().map(|pair| (pair[0].as_u64().unwrap(), pair[1].as_u64().unwrap())).collect();
+    (part["slots"].as_f64().unwrap_or(0.0), part["used"].as_f64().unwrap_or(0.0), part["min"].as_f64().unwrap(), part["median"].as_f64().unwrap(), part["max"].as_f64().unwrap(), hist)
+}
+
+/// A heap snapshot's tables, exactly: how many each line made, their array and hash parts (slots, and those holding a
+/// value), their bytes as the VM counts them, how many levels of tables each is (a cycle shares one), and the rehashes
+/// that grew them, by the line that made them and the line that grew them
+#[test]
+fn table_shapes_are_counted_exactly_by_the_line_that_made_them() {
+    let _lock = lock();
+    let source = [
+        "local function records()",                                        // 1
+        "\tlocal list = table.create(100)",                                // 2
+        "\tfor i = 1, 100 do",                                             // 3
+        "\t\tlist[i] = { a = i, b = i, c = i }",                           // 4
+        "\tend",                                                           // 5
+        "\treturn list",                                                   // 6
+        "end",                                                             // 7
+        "local function grown()",                                          // 8
+        "\tlocal t = {}",                                                  // 9
+        "\tfor _, key in { \"k1\", \"k2\", \"k3\", \"k4\", \"k5\" } do",   // 10
+        "\t\tt[key] = true",                                               // 11
+        "\tend",                                                           // 12
+        "\treturn t",                                                      // 13
+        "end",                                                             // 14
+        "local a, b = {}, {}",                                             // 15
+        "a.other, b.other = b, a",                                         // 16
+        "_G.Held = { records = records(), grown = grown(), cycle = a }",   // 17
+    ]
+    .join("\n");
+    let json = shape_profile("shapes", &source);
+    let snapshot = json["heap"]["snapshots"].as_array().unwrap().last().unwrap();
+    assert_eq!(snapshot["label"], "end");
+    let sizes = &snapshot["tables"]["sizes"];
+    let (header, slot, node) = (sizes["table"].as_f64().unwrap(), sizes["slot"].as_f64().unwrap(), sizes["node"].as_f64().unwrap());
+    assert_eq!((slot, node), (16.0, 32.0), "a TValue and a LuaNode");
+    // 100 records of three fields: a hash part of 4 nodes, 3 used, each; tables that hold no table
+    let records = site_at(&json, snapshot, 4);
+    assert_eq!(records["count"], 100.0);
+    assert_eq!(records["bytes"], 100.0 * (header + 4.0 * node));
+    assert_eq!((records["hash_bytes"].as_f64(), records["array_bytes"].as_f64(), records["header_bytes"].as_f64()), (Some(100.0 * 4.0 * node), Some(0.0), Some(100.0 * header)));
+    assert_eq!(distribution(&records["hash"]), (400.0, 300.0, 4.0, 4.0, 4.0, vec![(4, 100)]));
+    assert_eq!(distribution(&records["array"]), (0.0, 0.0, 0.0, 0.0, 0.0, vec![(0, 100)]));
+    assert_eq!(distribution(&records["levels"]).5, vec![(1, 100)]);
+    assert_eq!((records["rehashes"].as_u64(), records["rehash_keys"].as_u64()), (Some(0), Some(0)), "made whole from a template");
+    // their list: an array of 100 slots, all used, holding tables: two levels
+    let list = site_at(&json, snapshot, 2);
+    assert_eq!(list["count"], 1.0);
+    assert_eq!(list["bytes"], header + 100.0 * slot);
+    assert_eq!(distribution(&list["array"]), (100.0, 100.0, 100.0, 100.0, 100.0, vec![(128, 1)]));
+    assert_eq!(distribution(&list["levels"]).5, vec![(2, 1)]);
+    // a table grown key by key to five keys: 1, 2, 4 and 8 nodes, four rehashes moving 1 + 2 + 3 + 5 keys
+    let grown = site_at(&json, snapshot, 9);
+    assert_eq!(distribution(&grown["hash"]), (8.0, 5.0, 8.0, 8.0, 8.0, vec![(8, 1)]));
+    assert_eq!((grown["rehashes"].as_u64(), grown["rehash_keys"].as_u64()), (Some(4), Some(11)));
+    // two tables that hold each other: one level, one node each, each grew once
+    let cycle = site_at(&json, snapshot, 15);
+    assert_eq!(cycle["count"], 2.0);
+    assert_eq!(distribution(&cycle["hash"]), (2.0, 2.0, 1.0, 1.0, 1.0, vec![(1, 2)]));
+    assert_eq!(distribution(&cycle["levels"]).5, vec![(1, 2)]);
+    assert_eq!((cycle["rehashes"].as_u64(), cycle["rehash_keys"].as_u64()), (Some(2), Some(2)));
+    // what holds them all: three levels above the records' (it, the list, a record)
+    let holder = site_at(&json, snapshot, 17);
+    assert_eq!(distribution(&holder["levels"]).5, vec![(3, 1)]);
+    assert_eq!(distribution(&holder["hash"]), (4.0, 3.0, 4.0, 4.0, 4.0, vec![(4, 1)]));
+    // the snapshot's totals cover every reachable table, the engine's own among them
+    let tables = &snapshot["tables"];
+    assert!(tables["count"].as_u64().unwrap() >= 105);
+    assert_eq!(tables["bytes"].as_u64().unwrap(), tables["header_bytes"].as_u64().unwrap() + tables["array_bytes"].as_u64().unwrap() + tables["hash_bytes"].as_u64().unwrap());
+    // the rehashes by the line that made them grow and the line that made the table: the grown table's four, exactly
+    let rehash = &json["alloc"]["rehash"];
+    let functions = json["functions"].as_array().unwrap();
+    let grown_id = functions.iter().find(|f| f["name"] == "grown").and_then(|f| f["id"].as_i64()).unwrap();
+    let grown_site = rehash["sites"].as_array().unwrap().iter().find(|site| site["frames"][0][0].as_i64() == Some(grown_id) && site["frames"][0][1] == 11).unwrap_or_else(|| panic!("{rehash:#}"));
+    assert_eq!(grown_site["table_frames"][0][1], 9, "the table made at line 9");
+    let counts = |site: &serde_json::Value| ["events", "keys", "script_events", "script_keys", "grew"].map(|key| site[key].as_u64().unwrap());
+    assert_eq!(counts(grown_site), [4, 11, 4, 11, 4]);
+    assert_eq!((grown_site["bytes_before"].as_f64(), grown_site["bytes_after"].as_f64()), (Some((1.0 + 2.0 + 4.0) * node), Some((1.0 + 2.0 + 4.0 + 8.0) * node)));
+    assert!(rehash["keys"].as_u64().unwrap() >= rehash["script_keys"].as_u64().unwrap() && rehash["script_keys"].as_u64().unwrap() >= 13, "{rehash}");
+}
+
+/// Each phase mark carries the counts so far, so that a phase's figures are the difference of two marks': the objects a
+/// script's own instructions allocated, the keys its tables' growth moved (the VM's counter and the rehash hook agree),
+/// the inline caches
+#[test]
+fn a_phase_is_the_difference_of_its_marks_counts() {
+    let _lock = lock();
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::ALL, temp_dir("marks")) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    crate::luau_profile::set_phase("before");
+    run(&lua, &engine, "warm", "_G.Warm = {}\n");
+    crate::luau_profile::set_phase("grow");
+    // (a bound the compiler cannot see: with a constant one it sizes the table ahead and nothing rehashes)
+    run(&lua, &engine, "grow", "local n = tonumber(\"10\")\nlocal t = {}\nfor i = 1, n do\n\tt[i] = {}\nend\n");
+    crate::luau_profile::set_phase("after");
+    profiler::collect(&lua);
+    session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let marks = json["marks"].as_array().unwrap();
+    let mark = |phase: &str| marks.iter().find(|mark| mark["phase"] == phase).unwrap_or_else(|| panic!("{marks:#?}"));
+    let (grow, after) = (mark("grow"), mark("after"));
+    let delta = |path: &[&str]| -> f64 {
+        let read = |mark: &serde_json::Value| path.iter().fold(mark, |value, key| &value[*key]).as_f64().unwrap_or_else(|| panic!("{path:?} in {mark}"));
+        read(after) - read(grow)
+    };
+    // 11 tables: the list and its ten; the list grew to 1, 2, 4, 8 and 16 slots, moving 1 + 2 + 3 + 5 + 9 keys
+    assert_eq!(delta(&["vm", "objects"]), 11.0);
+    assert_eq!(delta(&["vm", "rehashed"]), 20.0);
+    assert_eq!(delta(&["script_rehash_keys"]), 20.0, "the rehash hook sees the keys the VM counts");
+    assert_eq!(delta(&["script_rehashes"]), 5.0);
+    assert!(delta(&["rehash_keys"]) >= 20.0 && delta(&["rehashes"]) >= 5.0);
+    assert!(delta(&["allocs"]) >= 11.0 && delta(&["alloc_bytes"]) > 0.0);
+    // (three instructions a step of the loop: NEWTABLE, SETTABLE, FORNLOOP)
+    assert!(delta(&["insns"]) >= 30.0 && delta(&["work_ms"]) > 0.0, "{} instructions, {} ms of work", delta(&["insns"]), delta(&["work_ms"]));
+    assert!(after["host_ms"].as_f64().unwrap() >= grow["host_ms"].as_f64().unwrap());
+    assert!(after["caches"]["table key slot"].is_array(), "{after}");
+    let end = &json["end"];
+    assert_eq!(end["phase"], "end");
+    assert!(end["insns"].as_f64().unwrap() >= after["insns"].as_f64().unwrap());
+    // what the what-if runner reads of them
+    let figures = profiler::whatif::phase_figures(&json, "grow", "after", 1.0);
+    assert!(figures["allocs"] >= 11.0);
+    assert_eq!((figures["rehash_keys"], figures["rehashes"]), (20.0, 5.0));
+}
+
+/// A level is one more than the deepest table a table holds; the tables of a cycle share theirs
+#[test]
+fn nesting_levels_follow_what_a_table_holds() {
+    // 0 holds 1 and 2; 1 holds 3; 3 and 4 hold each other (a cycle) and 4 holds 5; 6 holds nothing
+    let edges: [(u32, u32); 6] = [(0, 1), (0, 2), (1, 3), (3, 4), (4, 3), (4, 5)];
+    let n = 7;
+    let mut offsets = vec![0u32; n + 1];
+    for &(from, _) in &edges {
+        offsets[from as usize + 1] += 1;
+    }
+    for at in 0..n {
+        offsets[at + 1] += offsets[at];
+    }
+    let targets: Vec<u32> = edges.iter().map(|&(_, to)| to).collect();
+    assert_eq!(memory::table_levels(n, &offsets, &targets), vec![4, 3, 1, 2, 2, 1, 1]);
+    let mut sizes = vec![(3, 3), (0, 0), (16, 9), (4, 1)];
+    let distribution = memory::Distribution::of(&mut sizes, true);
+    assert_eq!((distribution.total, distribution.used, distribution.min, distribution.median, distribution.max), (23, 13, 0, 3, 16));
+    assert_eq!(distribution.hist, vec![(0, 1), (4, 2), (16, 1)]);
+}

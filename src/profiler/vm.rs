@@ -53,6 +53,9 @@ struct RawNode {
     work: f64,
 }
 
+/// lua.h `lua_setprofilerehash`'s hook: (ud, the thread, the table, array slots and hash nodes before, after, the keys it holds
+/// with the new one, whether a script's own instruction made it)
+pub type RehashHook = unsafe extern "C-unwind" fn(*mut c_void, *mut lua_State, *mut c_void, c_int, c_int, c_int, c_int, c_int, c_int);
 type HeapNode = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void, u8, u8, usize, *const c_char);
 type HeapEdge = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void, *mut c_void, *const c_char);
 type HeapDead = unsafe extern "C-unwind" fn(*mut c_void, u8, usize);
@@ -72,6 +75,10 @@ unsafe extern "C-unwind" {
     fn lua_profilemark(block: *mut c_void);
     fn lua_profileudataoffset() -> usize;
     fn lua_setprofilefreed(state: *mut lua_State, freed: Option<unsafe extern "C-unwind" fn(*mut c_void, *mut c_void)>, ud: *mut c_void);
+    fn lua_setprofilerehash(state: *mut lua_State, rehash: Option<RehashHook>, ud: *mut c_void);
+    fn lua_profiletable(ptr: *mut c_void, arrayslots: *mut c_int, arrayused: *mut c_int, nodes: *mut c_int, nodesused: *mut c_int) -> c_int;
+    fn lua_profiletablebytes(header: *mut usize, slot: *mut usize, node: *mut usize);
+    fn lua_profilecachetotals(state: *mut lua_State, out: *mut u64) -> c_int;
     fn lua_enumheap(state: *mut lua_State, context: *mut c_void, node: HeapNode, edge: HeapEdge, dead: Option<HeapDead>);
     fn lua_gcstate(state: *mut lua_State) -> c_int;
     fn lua_totalbytes(state: *mut lua_State, category: c_int) -> usize;
@@ -274,6 +281,48 @@ pub unsafe fn mark(block: *mut c_void) {
 
 pub fn set_freed(state: *mut lua_State, freed: Option<unsafe extern "C-unwind" fn(*mut c_void, *mut c_void)>, ud: *mut c_void) {
     unsafe { lua_setprofilefreed(state, freed, ud) }
+}
+
+/// The hook told of each table that rehashed to fit a new key (the profile's own thread's VM), or none
+pub fn set_rehash(state: *mut lua_State, rehash: Option<RehashHook>, ud: *mut c_void) {
+    unsafe { lua_setprofilerehash(state, rehash, ud) }
+}
+
+/// A table's shape: its array part's slots and those holding a value, its hash part's nodes (0: none) and those holding one
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TableShape {
+    pub array: u32,
+    pub array_used: u32,
+    pub nodes: u32,
+    pub nodes_used: u32,
+}
+
+/// The shape of the table at `ptr` (a heap walk's pointer for a table), None when it is not a table
+///
+/// # Safety
+/// `ptr` is a live collectable object: a heap walk's node, read during the walk or before the VM runs again.
+pub unsafe fn table_shape(ptr: *mut c_void) -> Option<TableShape> {
+    let (mut array, mut array_used, mut nodes, mut nodes_used): (c_int, c_int, c_int, c_int) = (0, 0, 0, 0);
+    let table = unsafe { lua_profiletable(ptr, &mut array, &mut array_used, &mut nodes, &mut nodes_used) } != 0;
+    table.then(|| TableShape { array: array.max(0) as u32, array_used: array_used.max(0) as u32, nodes: nodes.max(0) as u32, nodes_used: nodes_used.max(0) as u32 })
+}
+
+/// The bytes of a table itself, of an array slot and of a hash node (a table's size is the first plus its parts)
+pub fn table_bytes() -> (u64, u64, u64) {
+    let (mut header, mut slot, mut node) = (0usize, 0usize, 0usize);
+    unsafe { lua_profiletablebytes(&mut header, &mut slot, &mut node) };
+    (header as u64, slot as u64, node as u64)
+}
+
+/// The inline caches' kinds, in [`cache_totals`]' order (the names [`cache_kind`] gives)
+pub const CACHE_KINDS: [&str; 5] = ["builtin fast path", "global slot", "import", "method slot", "table key slot"];
+
+/// What the instructions with an inline cache did so far, summed over the profile's functions (the engine's own Luau aside),
+/// by kind ([`CACHE_KINDS`]): hit, miss, slow, other each
+pub fn cache_totals(state: *mut lua_State) -> [[u64; CACHE_OUTCOMES]; 5] {
+    let mut out = [0u64; 5 * CACHE_OUTCOMES];
+    unsafe { lua_profilecachetotals(state, out.as_mut_ptr()) };
+    std::array::from_fn(|kind| std::array::from_fn(|outcome| out[kind * CACHE_OUTCOMES + outcome]))
 }
 
 /// Walks the heap as the collector sees it: `node(ptr, tt, size, name)` for every collectable object (a userdata's ptr
