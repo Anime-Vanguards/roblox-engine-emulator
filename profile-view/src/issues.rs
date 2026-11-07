@@ -1,0 +1,508 @@
+//! The Issues list: code-flow and allocation problems named from measured patterns only. Each issue states the
+//! numbers it rests on and links to the view and line that show them; a pattern the profile's kinds cannot show is
+//! listed as not checked, never guessed at.
+
+use crate::{
+    fmt,
+    model::{Kind, Profile},
+    sites::{AllocSite, ENGINE, site_label},
+    tree::{Frame, Tree},
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    Critical,
+    Serious,
+    Warning,
+    Info,
+}
+
+impl Severity {
+    /// The icon beside the word (status colours never carry meaning alone)
+    pub fn icon(self) -> &'static str {
+        match self {
+            Severity::Critical => "■",
+            Severity::Serious => "▲",
+            Severity::Warning => "●",
+            Severity::Info => "○",
+        }
+    }
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Severity::Critical => "critical",
+            Severity::Serious => "serious",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
+        }
+    }
+}
+
+/// Where an issue's evidence is
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    None,
+    /// A function (Calls)
+    Func(u32),
+    /// A line of a function (Source)
+    Line(u32, i64),
+    /// A timeline row (Timeline)
+    Frame(usize),
+    /// An allocation site (Allocations)
+    Site(u32, i64),
+    /// A Luau inline cache site, by its index in `luau_caches.sites` (Caches)
+    Cache(usize),
+    /// A heap snapshot (Heap)
+    Snapshot(usize),
+    /// A variant of a comparison (Compare)
+    Variant(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct Issue {
+    pub severity: Severity,
+    /// Which detector: `sort every frame`, `repeat reads`, ...
+    pub kind: &'static str,
+    pub title: String,
+    /// The measured numbers, a line each
+    pub evidence: Vec<String>,
+    /// What would remove it, said as a condition where the profile cannot see the cause
+    pub advice: String,
+    pub target: Target,
+    /// Ranks issues of one severity (a share of the run's cost, a rate)
+    pub weight: f64,
+}
+
+/// A site's allocation a frame below which it is not listed
+const SMALL_BYTES: f64 = 256.0;
+
+/// The profile's issues, most severe first, and the patterns its kinds could not check
+pub fn detect(p: &Profile, work: Option<&Tree>, sites: &[AllocSite]) -> (Vec<Issue>, Vec<String>) {
+    let mut issues = Vec::new();
+    let mut unchecked = Vec::new();
+    let steady = p.steady_phase();
+    let steady_name = steady.map(|(phase, _)| p.phase_name(phase).to_string()).unwrap_or_default();
+
+    match work {
+        Some(tree) => sorts_every_frame(p, tree, steady, &steady_name, &mut issues),
+        None => unchecked.push("sorts every frame: needs work".into()),
+    }
+    if p.raw.alloc.is_some() {
+        steady_allocation(p, sites, steady, &steady_name, &mut issues);
+        table_growth(p, sites, &mut issues);
+    } else {
+        unchecked.push("allocation and table growth: need alloc".into());
+    }
+    if p.raw.timeline.is_some() {
+        spikes(p, &mut issues);
+        growth(p, steady, &steady_name, &mut issues);
+    } else {
+        unchecked.push("spikes and growing counts: need timeline".into());
+    }
+    if p.raw.heap.is_some() {
+        heap_growth(p, &mut issues);
+    }
+    if p.raw.luau_caches.is_some() {
+        cache_misses(p, &mut issues);
+    }
+    match &p.boundary {
+        Some(boundary) => repeat_reads(p, boundary, &mut issues),
+        None => unchecked.push("repeat reads and unchanged writes: need boundary, in a run of its own".into()),
+    }
+    issues.sort_by(|a, b| a.severity.cmp(&b.severity).then(b.weight.total_cmp(&a.weight)).then(a.title.cmp(&b.title)));
+    (issues, unchecked)
+}
+
+/// The steady phase's work (ms), from the work tree's phase node
+fn phase_work(tree: &Tree, phase: u32) -> f64 {
+    tree.node(crate::tree::ROOT).children.iter().map(|&c| tree.node(c)).find(|n| n.frame == Frame::Phase(phase)).map_or(0.0, |n| n.total)
+}
+
+/// `table.sort` called about once a frame or more through the steady state, by the function that calls it
+fn sorts_every_frame(p: &Profile, tree: &Tree, steady: Option<(u32, u64)>, steady_name: &str, issues: &mut Vec<Issue>) {
+    let Some((phase, frames)) = steady else { return };
+    if frames < 10 || !tree.has_calls {
+        return;
+    }
+    let Some(phase_node) = tree.node(crate::tree::ROOT).children.iter().copied().find(|&c| tree.node(c).frame == Frame::Phase(phase)) else { return };
+    let phase_total = phase_work(tree, phase);
+    // caller -> (sorts, work in them)
+    let mut by_caller: std::collections::BTreeMap<u32, (u64, f64)> = std::collections::BTreeMap::new();
+    for index in tree.preorder(phase_node) {
+        let node = tree.node(index);
+        let Frame::Func(func) = node.frame else { continue };
+        let f = &p.funcs[func as usize];
+        if f.kind != Kind::C || !(f.name == "sort [C]" || f.name == "sort") {
+            continue;
+        }
+        let caller = tree.path(index).iter().rev().skip(1).find_map(|&up| match tree.node(up).frame {
+            Frame::Func(g) if p.funcs[g as usize].kind != Kind::C => Some(g),
+            _ => None,
+        });
+        let Some(caller) = caller else { continue };
+        let entry = by_caller.entry(caller).or_default();
+        entry.0 += node.calls;
+        entry.1 += node.total;
+    }
+    for (caller, (sorts, work)) in by_caller {
+        let per_frame = sorts as f64 / frames as f64;
+        if per_frame < 0.9 {
+            continue;
+        }
+        let share = if phase_total > 0.0 { work / phase_total } else { 0.0 };
+        let f = &p.funcs[caller as usize];
+        issues.push(Issue {
+            severity: if share >= 0.25 {
+                Severity::Critical
+            } else if share >= 0.10 {
+                Severity::Serious
+            } else {
+                Severity::Warning
+            },
+            kind: "sort every frame",
+            title: format!("Sorted every frame: {}", f.label()),
+            evidence: vec![
+                format!("table.sort ran {} times in the {} frames of {steady_name}, {per_frame:.1} a frame", fmt::grouped(sorts as f64), fmt::grouped(frames as f64)),
+                format!("{} a frame in the sorts, {} of the phase's work", fmt::ms(work / frames as f64), fmt::share(work, phase_total)),
+            ],
+            advice: "Keep the sorted list and sort again only when an item changes".into(),
+            target: Target::Func(caller),
+            weight: share,
+        });
+    }
+}
+
+fn median(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    sorted[sorted.len() / 2]
+}
+
+/// The bytes the phase's frames allocated in all, (smallest, median, largest), from the timeline. (Its `allocations`
+/// column counts objects without their table storage, so counts are not compared with a site's.)
+fn frame_allocation(p: &Profile, phase: u32) -> Option<(f64, f64, f64)> {
+    let timeline = p.raw.timeline.as_ref()?;
+    let phases = timeline.values("phase")?;
+    let bytes = timeline.values("allocated_bytes")?;
+    let rows: Vec<f64> = (0..phases.len()).filter(|&i| phases[i] as u32 == phase).map(|i| bytes[i]).collect();
+    if rows.is_empty() {
+        return None;
+    }
+    let smallest = rows.iter().copied().fold(f64::INFINITY, f64::min);
+    let largest = rows.iter().copied().fold(0.0, f64::max);
+    Some((smallest, median(&rows), largest))
+}
+
+/// Sites that allocate through the steady state. A site whose average a frame is more than the phase's smallest frame
+/// allocates in all cannot allocate that every frame: it comes in bursts
+fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)>, steady_name: &str, issues: &mut Vec<Issue>) {
+    let Some((phase, frames)) = steady else { return };
+    if frames < 10 {
+        return;
+    }
+    let frame_bytes = frame_allocation(p, phase);
+    let mut rows: Vec<(&AllocSite, f64, f64)> = sites
+        .iter()
+        .filter(|site| site.func != ENGINE)
+        .map(|site| {
+            let (bytes, count) = site.per_frame(phase, frames);
+            (site, bytes, count)
+        })
+        .filter(|(_, bytes, count)| *count >= 1.0 && *bytes >= SMALL_BYTES)
+        .collect();
+    rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(b.2.total_cmp(&a.2)));
+    let all_bytes: f64 = sites.iter().map(|site| site.per_frame(phase, frames).0).sum();
+    for (site, bytes, count) in rows.into_iter().take(6) {
+        let types: Vec<String> = site.types.iter().take(3).map(|(ty, b, _)| format!("{ty} {}", fmt::share(*b, site.bytes.max(1.0)))).collect();
+        let types = if types.is_empty() { String::new() } else { format!("; {}", types.join(", ")) };
+        let target = if site.line >= 0 { Target::Site(site.func, site.line) } else { Target::Func(site.func) };
+        let label = site_label(p, site);
+        let (total, objects) = site.phases.get(&phase).copied().unwrap_or_default();
+        if let Some((smallest, median_frame, largest)) = frame_bytes.filter(|(smallest, _, _)| bytes > *smallest) {
+            issues.push(Issue {
+                severity: if total >= 8.0 * 1024.0 * 1024.0 { Severity::Serious } else { Severity::Warning },
+                kind: "allocation bursts",
+                title: format!("Allocation bursts: {label}"),
+                evidence: vec![
+                    format!("{} in the {} frames of {steady_name}, {} a frame on average, but some frames allocate {} in all", fmt::bytes(total), fmt::grouped(frames as f64), fmt::bytes(bytes), fmt::bytes(smallest)),
+                    format!("frames allocate {} in the median, {} at most · {} objects{types}", fmt::bytes(median_frame), fmt::bytes(largest), fmt::grouped(objects)),
+                ],
+                advice: "A burst is collector work a few frames later: make less of it, or spread it over frames".into(),
+                target,
+                weight: total,
+            });
+            continue;
+        }
+        issues.push(Issue {
+            severity: if bytes >= 1024.0 * 1024.0 {
+                Severity::Critical
+            } else if bytes >= 64.0 * 1024.0 {
+                Severity::Serious
+            } else {
+                Severity::Warning
+            },
+            kind: "steady allocation",
+            title: format!("{} allocated a frame: {label}", fmt::bytes(bytes)),
+            evidence: vec![
+                format!("{} objects, {} a frame on average over the {} frames of {steady_name}; {} of the phase's allocation", fmt::grouped(count), fmt::bytes(bytes), fmt::grouped(frames as f64), fmt::share(bytes, all_bytes)),
+                format!("over the run{}", if types.is_empty() { ": types not in the kept stacks".to_string() } else { types }),
+            ],
+            advice: "Reuse them between frames (clear and refill a kept table), or build them only when the input changes".into(),
+            target,
+            weight: bytes,
+        });
+    }
+}
+
+/// Table storage allocated past the new tables' own: tables grown a step at a time (each growth rehashes the keys)
+fn table_growth(p: &Profile, sites: &[AllocSite], issues: &mut Vec<Issue>) {
+    let frames = p.raw.run.frames.max(1) as f64;
+    let mut rows: Vec<(&AllocSite, f64, f64, f64)> = sites
+        .iter()
+        .filter(|site| site.func != ENGINE)
+        .map(|site| {
+            let (_, tables) = site.of_type("table");
+            let (storage_bytes, storage) = site.of_type("table storage");
+            (site, (storage - tables).max(0.0), tables, storage_bytes)
+        })
+        .filter(|(_, excess, _, _)| *excess >= frames.max(10.0))
+        .collect();
+    rows.sort_by(|a, b| b.1.total_cmp(&a.1));
+    for (site, excess, tables, storage_bytes) in rows.into_iter().take(4) {
+        let per_frame = excess / frames;
+        issues.push(Issue {
+            severity: if per_frame >= 100.0 {
+                Severity::Serious
+            } else if per_frame >= 5.0 {
+                Severity::Warning
+            } else {
+                Severity::Info
+            },
+            kind: "table growth",
+            title: format!("Tables regrown: {}", site_label(p, site)),
+            evidence: vec![
+                format!("{} table storage allocations past the {} tables' first: {per_frame:.1} regrowths a frame over {} frames", fmt::grouped(excess), fmt::grouped(tables), fmt::grouped(frames)),
+                format!("{} of table storage; each regrowth moves every key", fmt::bytes(storage_bytes)),
+            ],
+            advice: "Make the table at its final size (table.create(n), or a constructor with every field), or keep it between frames".into(),
+            target: if site.line >= 0 { Target::Site(site.func, site.line) } else { Target::Func(site.func) },
+            weight: excess,
+        });
+    }
+}
+
+/// Frames whose collector time or work stands far above the run's typical frame
+fn spikes(p: &Profile, issues: &mut Vec<Issue>) {
+    let Some(timeline) = &p.raw.timeline else { return };
+    let frames = timeline.values("frame").unwrap_or_default();
+    let frame = |i: usize| frames.get(i).copied().unwrap_or(i as f64);
+    let list = |rows: &[usize]| rows.iter().take(8).map(|&i| format!("{}", frame(i))).collect::<Vec<_>>().join(", ");
+    if let (Some(gc), Some(freed), Some(steps)) = (timeline.values("gc_ms"), timeline.values("gc_freed"), timeline.values("gc_steps")) {
+        let typical = median(&gc);
+        let floor = (typical * 5.0).max(0.5);
+        let spikes: Vec<usize> = (0..gc.len()).filter(|&i| gc[i] >= floor).collect();
+        if let Some(&worst) = spikes.iter().max_by(|&&a, &&b| gc[a].total_cmp(&gc[b]).then(b.cmp(&a))) {
+            issues.push(Issue {
+                severity: if gc[worst] >= 4.0 { Severity::Serious } else { Severity::Warning },
+                kind: "gc spike",
+                title: format!("Collector spikes: {}, worst {} (frame {})", frames_text(spikes.len()), fmt::ms(gc[worst]), frame(worst)),
+                evidence: vec![
+                    format!("frame {}: {} collecting ({} steps, {} freed); median frame {}", frame(worst), fmt::ms(gc[worst]), fmt::grouped(steps[worst]), fmt::bytes(freed[worst]), fmt::ms(typical)),
+                    format!("frames at {} or more: {}", fmt::ms(floor), list(&spikes)),
+                ],
+                advice: "The collector works off what was allocated: see the allocation issues".into(),
+                target: Target::Frame(worst),
+                weight: gc[worst],
+            });
+        }
+    }
+    if let Some(work) = timeline.values("work_ms") {
+        let typical = median(&work);
+        let floor = (typical * 3.0).max(0.5);
+        let spikes: Vec<usize> = (0..work.len()).filter(|&i| work[i] >= floor).collect();
+        if let Some(&worst) = spikes.iter().max_by(|&&a, &&b| work[a].total_cmp(&work[b]).then(b.cmp(&a))) {
+            issues.push(Issue {
+                severity: if work[worst] >= 16.7 {
+                    Severity::Critical
+                } else if work[worst] >= 4.0 {
+                    Severity::Serious
+                } else {
+                    Severity::Warning
+                },
+                kind: "frame spike",
+                title: format!("Frame spikes: {}, worst {} (frame {})", frames_text(spikes.len()), fmt::ms(work[worst]), frame(worst)),
+                evidence: vec![format!("frame {}: {} of work; median frame {}", frame(worst), fmt::ms(work[worst]), fmt::ms(typical)), format!("frames at {} or more: {}", fmt::ms(floor), list(&spikes))],
+                advice: "Spread the work over frames, or do it ahead".into(),
+                target: Target::Frame(worst),
+                weight: work[worst],
+            });
+        }
+    }
+}
+
+/// Instances, connections or threads that keep growing through the steady state
+fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_name: &str, issues: &mut Vec<Issue>) {
+    let (Some(timeline), Some((phase, frames))) = (&p.raw.timeline, steady) else { return };
+    if frames < 10 {
+        return;
+    }
+    let phases = timeline.values("phase").unwrap_or_default();
+    let rows: Vec<usize> = (0..phases.len()).filter(|&i| phases[i] as u32 == phase).collect();
+    let (Some(&first), Some(&last)) = (rows.first(), rows.last()) else { return };
+    for what in ["connections", "instances", "threads"] {
+        let Some(values) = timeline.values(what) else { continue };
+        let delta = values[last] - values[first];
+        let per_frame = delta / (rows.len().max(2) - 1) as f64;
+        if delta < 20.0 || per_frame < 0.5 {
+            continue;
+        }
+        // (growth in most frames, not one step: a leak keeps adding)
+        let rising = rows.windows(2).filter(|pair| values[pair[1]] > values[pair[0]]).count();
+        if rising * 4 < rows.len() {
+            continue;
+        }
+        issues.push(Issue {
+            severity: if per_frame >= 10.0 { Severity::Serious } else { Severity::Warning },
+            kind: "growth",
+            title: format!("{} keep growing: +{} in {steady_name}", capitalize(what), fmt::grouped(delta)),
+            evidence: vec![format!(
+                "{} at frame {} → {} at frame {}: {per_frame:+.1} a frame, up in {rising} of {} frames",
+                fmt::grouped(values[first]),
+                timeline.value(first, "frame").unwrap_or(0.0),
+                fmt::grouped(values[last]),
+                timeline.value(last, "frame").unwrap_or(0.0),
+                rows.len() - 1
+            )],
+            advice: format!("Frames add {what} that nothing removes: disconnect or destroy what a frame makes"),
+            target: Target::Frame(last),
+            weight: per_frame,
+        });
+    }
+}
+
+/// `1 frame`, `4 frames`
+fn frames_text(count: usize) -> String {
+    if count == 1 { "1 frame".into() } else { format!("{count} frames") }
+}
+
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    chars.next().map_or(String::new(), |first| first.to_uppercase().collect::<String>() + chars.as_str())
+}
+
+/// The reachable heap growing from the first snapshot past startup to the last
+fn heap_growth(p: &Profile, issues: &mut Vec<Issue>) {
+    let Some(heap) = &p.raw.heap else { return };
+    let snapshots = &heap.snapshots;
+    if snapshots.len() < 3 {
+        return;
+    }
+    // (from the first mark after the start, so the mount's own memory is not counted as growth)
+    let (from, to) = (1, snapshots.len() - 1);
+    let (before, _, _) = snapshots[from].split();
+    let (after, _, _) = snapshots[to].split();
+    let delta = after - before;
+    if delta < 256.0 * 1024.0 || delta < before * 0.25 {
+        return;
+    }
+    issues.push(Issue {
+        severity: if delta >= 8.0 * 1024.0 * 1024.0 { Severity::Serious } else { Severity::Warning },
+        kind: "heap growth",
+        title: format!("Reachable heap grows: +{} from {} to {}", fmt::bytes(delta), snapshots[from].label, snapshots[to].label),
+        evidence: vec![format!("{} at {} (frame {}) → {} at {} (frame {})", fmt::bytes(before), snapshots[from].label, snapshots[from].frame, fmt::bytes(after), snapshots[to].label, snapshots[to].frame)],
+        advice: "Heap's biggest holders say what keeps it".into(),
+        target: Target::Snapshot(to),
+        weight: delta,
+    });
+}
+
+/// Luau inline cache sites that miss often
+fn cache_misses(p: &Profile, issues: &mut Vec<Issue>) {
+    let Some(caches) = &p.raw.luau_caches else { return };
+    let frames = p.raw.run.frames.max(1) as f64;
+    let all: f64 = caches.sites.iter().map(|site| site.missed()).sum();
+    let mut rows: Vec<(usize, f64, f64)> = caches.sites.iter().enumerate().map(|(index, site)| (index, site.missed(), site.runs())).filter(|(_, missed, runs)| *missed >= 1000.0 && *missed >= 0.2 * *runs).collect();
+    rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    for (index, missed, runs) in rows.into_iter().take(4) {
+        let site = &caches.sites[index];
+        let Some(func) = p.func_of_id(site.function) else { continue };
+        let f = &p.funcs[func];
+        if f.kind == Kind::Engine {
+            continue;
+        }
+        let slow_mostly = site.slow > site.misses;
+        issues.push(Issue {
+            severity: if missed / frames >= 1000.0 { Severity::Serious } else { Severity::Warning },
+            kind: "cache misses",
+            title: format!("{} at {}:{} misses {} of its lookups", site.op, f.short, site.line, fmt::share(missed, runs)),
+            evidence: vec![format!(
+                "{} of {} missed ({} predicted wrong, {} slow), {:.0} a frame; {} of all misses",
+                fmt::grouped(missed),
+                fmt::grouped(runs),
+                fmt::grouped(site.misses),
+                fmt::grouped(site.slow),
+                missed / frames,
+                fmt::share(missed, all)
+            )],
+            advice: if slow_mostly {
+                "A metatable or an unsafe environment serves the lookup: a plain field avoids it".into()
+            } else {
+                "The tables here differ in shape (keys added in other orders, or other keys): build them alike".into()
+            },
+            target: Target::Cache(index),
+            weight: missed,
+        });
+    }
+}
+
+/// The function a boundary site names (its script and line)
+fn boundary_func(p: &Profile, script: &str, line: i64) -> Option<u32> {
+    let short = crate::model::short_module(crate::model::module_name(script));
+    p.funcs
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.kind == Kind::Script && (f.module == script || f.short == short) && f.line <= line && line <= f.last_line.max(f.line))
+        .max_by_key(|(_, f)| f.line)
+        .map(|(index, _)| index as u32)
+}
+
+/// The boundary profile's repeat table and unchanged writes
+fn repeat_reads(p: &Profile, boundary: &crate::model::Boundary, issues: &mut Vec<Issue>) {
+    let frames = boundary.frames.max(1.0);
+    let mut rows: Vec<&crate::model::BoundarySite> = boundary.repeat_reads.iter().filter(|site| site.repeat_reads / frames >= 10.0).collect();
+    rows.sort_by(|a, b| b.repeat_reads.total_cmp(&a.repeat_reads));
+    for site in rows.into_iter().take(5) {
+        let per_frame = site.repeat_reads / frames;
+        let cost_per_read = if site.per_s > 0.0 { site.cost_ms_per_s / site.per_s } else { 0.0 };
+        let func = boundary_func(p, &site.script, site.line);
+        issues.push(Issue {
+            severity: if per_frame >= 200.0 { Severity::Serious } else { Severity::Warning },
+            kind: "repeat reads",
+            title: format!("{} read again in the frame: {per_frame:.0} a frame at {}:{}", site.member, crate::model::short_module(&site.script), site.line),
+            evidence: vec![
+                format!("{} repeat reads in {} frames, of {} reads: the same instance's {} read again by the same function", fmt::grouped(site.repeat_reads), fmt::grouped(frames), fmt::grouped(site.count), site.member),
+                format!("{} a read: {} a frame", fmt::ms(cost_per_read), fmt::ms(cost_per_read * per_frame)),
+            ],
+            advice: "Read it once into a local".into(),
+            target: func.map_or(Target::None, |f| Target::Line(f, site.line)),
+            weight: site.repeat_reads,
+        });
+    }
+    let mut writes: Vec<&crate::model::BoundarySite> = boundary.by_site_count.iter().filter(|site| site.unchanged_writes / frames >= 10.0).collect();
+    writes.sort_by(|a, b| b.unchanged_writes.total_cmp(&a.unchanged_writes));
+    for site in writes.into_iter().take(3) {
+        let func = boundary_func(p, &site.script, site.line);
+        issues.push(Issue {
+            severity: Severity::Warning,
+            kind: "unchanged writes",
+            title: format!("{} set to its own value: {:.0} a frame at {}:{}", site.member, site.unchanged_writes / frames, crate::model::short_module(&site.script), site.line),
+            evidence: vec![format!("{} of {} writes in {} frames changed nothing", fmt::grouped(site.unchanged_writes), fmt::grouped(site.count), fmt::grouped(frames))],
+            advice: "Write only when the value changes".into(),
+            target: func.map_or(Target::None, |f| Target::Line(f, site.line)),
+            weight: site.unchanged_writes,
+        });
+    }
+}

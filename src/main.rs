@@ -171,6 +171,24 @@ fn main() {
     std::process::exit(code);
 }
 
+/// `ree profile view|render ...`: the profile viewer, a binary of its own beside this one (profile-view/, which
+/// `cargo build --release` builds with ree), so the engine's crate carries no terminal UI. Its standard streams are
+/// this process's: the terminal UI runs in this terminal.
+fn profile_viewer(args: &[String]) -> i32 {
+    let name = format!("ree-profile-view{}", std::env::consts::EXE_SUFFIX);
+    let Some(exe) = std::env::current_exe().ok().map(|exe| exe.with_file_name(&name)).filter(|exe| exe.is_file()) else {
+        eprintln!("ree profile {}: the profile viewer ({name}) is not beside ree: `cargo build --release` in the checkout builds both", args[0]);
+        return 2;
+    };
+    match std::process::Command::new(&exe).args(args).status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(error) => {
+            eprintln!("ree profile {}: {}: {error}", args[0], exe.display());
+            1
+        }
+    }
+}
+
 fn run_command(argv: &[String], service: bool) -> i32 {
     let host = Host::default();
     let code = match argv.get(1).map(String::as_str) {
@@ -182,9 +200,11 @@ fn run_command(argv: &[String], service: bool) -> i32 {
         Some("profile") => match argv.get(2).map(String::as_str) {
             Some("diff") => roblox_engine_emulator::profiler::diff::cli(&argv[3..]),
             Some("report") => roblox_engine_emulator::profiler::diff::report_cli(&argv[3..]),
+            Some("view" | "render") => profile_viewer(&argv[2..]),
             _ => {
                 eprintln!("usage: ree profile diff <before dir> <after dir> [--out <dir>] [--top <n>]
-       ree profile report <profile dir>");
+       ree profile report <profile dir>
+       ree profile view <dir> [<dir2>]   |   ree profile render <dir> [<dir2>] --view <name|all> --out <file|dir>");
                 2
             }
         },

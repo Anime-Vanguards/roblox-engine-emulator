@@ -18,6 +18,8 @@ ree run ... --profile boundary [--profile-out f.json]  # Luau-to-engine crossing
 ree record ... --profile work,alloc,heap [--profile-out dir]  # the profiling suite: summary, JSON, flame graphs, a report page
 ree profile diff before/profile after/profile        # two profiles compared
 ree profile try tools/what-if/nested-keys.luau       # variants of the same code side by side ("What-if comparisons")
+ree profile view before/profile after/profile        # explore one in the terminal ("The profile viewer")
+ree profile render out/scene/profile --view all --out shots   # every view as a PNG, for screenshots
 ree serve --status                                   # the running services; --stop asks them to exit
 ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bundles --assets Models
                                                      # start the service and read in what a first recording reads
@@ -272,7 +274,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   whose work, calls, instructions or allocations moved, the lines of modules whose source is the same in
   both, caches, memory by type and the timeline; it writes `diff.txt` (also printed), `diff.json` and
   `diff.html`. `ree profile report <dir>` prints a profile's summary again and
-  rewrites its page from its profile.json.
+  rewrites its page from its profile.json. `ree profile view` explores one in the terminal and `ree profile render`
+  draws its screens to files ("The profile viewer").
 - With no profile the engine pays nothing measurable (a thread-local read where each profiler hooks in),
   and a profile changes nothing a script sees: the work clock, os.clock and a recording are the same with
   and without it (it allocates nothing on the VM's heap). A profiled command runs in its own process,
@@ -482,6 +485,64 @@ write.)
   and its spread (the relative interquartile range of the baseline's rounds).
 - `notes`: what to keep in mind reading this comparison: the fidelity line's limits where they bear on it (cold first
   touches of many small tables, natively compiled modules), failed runs, a check that failed.
+
+## The profile viewer
+
+`ree profile view <dir> [<dir2>]` opens a profile in the terminal: one profile, a before and after pair, or a what-if
+folder (`compare.json`). `ree profile render ...` draws the same screens headless to a PNG, an SVG or text. Both only
+read profile folders. They run `ree-profile-view`, a binary of its own beside `ree` that `cargo build --release` builds
+with it (profile-view/: the engine's crate has no terminal UI).
+
+- **What it opens**: a profile folder (it holds profile.json), the folder of a run made with `--profile` (profile/ in
+  it), or a what-if folder. Two folders are a pair, before and after, and open on Diff. A what-if folder opens on
+  Compare, with the baseline's run at the largest size open in the other views.
+- **Views**, a key each:
+  - `1` Overview: the run's totals, the work clock's fidelity line, the run frame by frame, the issues and the hottest
+    functions.
+  - `2` Flame: the call tree as an icicle, the run at the top; each node as wide as its total and coloured by its own
+    share. Enter zooms into a node, esc comes back out.
+  - `3` Calls: a function between its callers and its callees, what it cost under each, and its hottest lines.
+  - `4` Source: a module's lines with their heat, instructions, allocations and Luau cache misses, and the selected
+    line's opcodes.
+  - `5` Allocations: the sites (the Luau line that allocated), their bytes, objects, object size, bytes a frame in the
+    steady state and types, and each site's stacks.
+  - `6` Heap: the reachable heap at each snapshot, the biggest holders and what they keep alive, the heap by type, the
+    run's own objects still reachable by allocating stack, and the collector.
+  - `7` Timeline: a column a frame, by phase; pick a frame to see each of its figures beside its phase's median frame.
+  - `8` Caches: Luau's inline caches by kind and by call site, and ree's own.
+  - `9` Issues: what the profile's numbers show to fix (below).
+  - `d` Diff, of a pair: the headline figures, then the functions, lines and allocation sites that moved.
+  - `c` Compare, of a what-if folder: each variant at each size in the comparison's metric, how it grows with n (a
+    log-log plot), the best of each size, and the selected run's figures, table shapes and hot functions. Enter opens
+    the run in the other views, `D` diffs it against the baseline's.
+- **Keys**: arrows or hjkl move, enter goes in, esc or backspace comes back out; `m` and `M` the metric (Studio work,
+  host time, instructions, allocated bytes, allocations, Luau cache misses, each hardware counter the profile read);
+  `s` sort; `f` scripts only (C functions and the engine's own Luau fold into the script that called them); `/` search,
+  `n` and `N` the next and previous match; `y` copy the selected name or path (through the terminal); `x` the other
+  side of a pair; `t` light or dark; `?` help; `q` quit.
+- **Colour**: one orange heat scale for a figure's share of the run (brighter is more, grey under 0.1 %), its legend
+  under the views that use it; red ▲ and blue ▼ for more and less than before; an issue's severity as an icon and a
+  word.
+- **Issues** come from measured patterns only, each with its numbers and a link (enter) to the view and line that show
+  it: `table.sort` about once a frame or more in the steady state (the last phase holding most of the frames); a site
+  that allocates through the steady state, or in bursts (more a frame on average than some frames allocate in all);
+  tables regrown (table storage allocated past their first); collector and frame spikes; connections, instances or
+  threads that keep growing; the reachable heap growing; an inline cache that misses; a property read again in the
+  same frame, and writes that change nothing (the boundary profile's, `--profile boundary`); in a comparison, cost that
+  grows faster than n and a variant whose result differs. What the profile's kinds cannot show is listed as not checked.
+- `ree profile render <dir> [<dir2>] --out <file|dir|-> [--view <name>|all|<a,b>] [--metric <m>] [--select
+  <function|file:line>] [--keys "<keys>"] [--size <cols>x<rows>] [--theme dark|light] [--scale <n>] [--format
+  png|svg|txt]` draws exactly what the terminal shows at that size (default 160x48), the same on every machine:
+  `--out x.png` (the cells rasterized with the bundled JetBrains Mono, 9x20 pixels a cell at `--scale 1`), `.svg` or
+  `.txt`. A folder takes a file a view (`--view all`: every view the input has, `<folder>/<view>.png`), and `-` prints
+  text. `--select` picks a function by its name, or a line as `Module:line` or `file.luau:line`, before anything is
+  drawn; `--keys` then plays keys as typed (`"2 up enter"`: the Flame, up to the caller, zoomed in; named keys enter,
+  esc, backspace, up, down, left, right, pgup, pgdn, home, end, tab, backtab, space; `/text` searches). It prints each
+  file it wrote, a PNG with its Markdown image line.
+- **For agents**: `ree profile render <dir> --view issues --out -` is the quickest read of what to fix; `--view all
+  --out <folder>` gives a screenshot of every view in one command, and the printed Markdown line shows a PNG to the
+  user. To show one finding, `--select` its function or line and render the view its issue links to (Calls for a
+  function, Source for a line, Allocations for a site, Timeline for a frame).
 
 ## Environment
 

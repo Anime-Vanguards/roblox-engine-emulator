@@ -28,6 +28,14 @@ own license (most are MIT or Apache-2.0; tools such as `cargo about` list them).
 [roblox-object-renderer](https://github.com/Anime-Vanguards/roblox-object-renderer), which is GPL-2.0-or-later like
 this project.
 
+## Fonts
+
+| Font | Where | License | License text |
+|---|---|---|---|
+| [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) 2.304, Regular and Bold (Copyright 2020 The JetBrains Mono Project Authors) | `profile-view/fonts/` | SIL Open Font License 1.1 | [profile-view/fonts/OFL.txt](profile-view/fonts/OFL.txt) |
+
+The profile viewer draws its PNG screenshots with them, unmodified and compiled into its binary.
+
 ## Distributing a binary
 
 ree's own code is GPL-2.0-or-later. A built ree also links Rust crates that are licensed under Apache-2.0 alone
@@ -44,8 +52,8 @@ notices. The source itself can be used under version 2 or later.
   its API dump; it contains no Roblox code. The engine merges it over
   [rbx_reflection_database](https://github.com/rojo-rbx/rbx-dom) (MIT), a crates.io dependency.
 - `data/text-advances.json` and `data/fredoka-sizes.json` are text metrics measured in Studio (glyph advances and
-  kerning by font and size); `data/font-enums.json` maps Enum.Font to Roblox's font family names. No font files are
-  included.
+  kerning by font and size); `data/font-enums.json` maps Enum.Font to Roblox's font family names. They hold no font
+  files.
 
 ## Stand-ins
 

@@ -494,7 +494,8 @@ scales the script work the clock charges by 2.77, a sim-to-phone calibration for
 ## Profiling (`src/profiler`, `src/luau_profile.rs`, `src/boundary.rs`)
 
 `--profile <kinds>` (docs/cli.md "Profiles and caches") or a host's `profiler::Session` runs the profilers a
-profile asks for; `profiler::report` writes its files and `ree profile diff` compares two. What each one measures:
+profile asks for; `profiler::report` writes its files and `ree profile diff` compares two; the profile viewer
+(profile-view/, docs/cli.md "The profile viewer") reads them and nothing else. What each one measures:
 
 - **The VM's instruction profile** (patches/luau.patch, `lprofile.cpp`, `lua_profilestart`). While a profile
   steps, `luau_execute` runs its single-step variant on every thread of the VM, and the dispatch calls the

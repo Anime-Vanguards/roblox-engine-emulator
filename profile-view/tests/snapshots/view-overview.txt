@@ -1,0 +1,40 @@
+ ree profile │ run ok · Fixture.luau · 120 frames · 2.00 s                                         Studio work 13.20 ms
+  1 Overview  2 Flame  3 Calls  4 Source  5 Allocations  6 Heap  7 Timeline  8 Caches  9 Issues  d Diff  c Compare
+
+ 60 fps · kinds work, caches, alloc, heap, timeline, cpu, phases · 0.50 s wall
+
+ Studio work   a frame    instructions   allocated   objects   reachable at end   collections
+ 13.20 ms      0.110 ms   40.8K          2.63 MB     49.0K     3.50 MB            3
+
+ fidelity: a fixture's numbers, chosen for the tests
+
+ Work a frame 120 frames · mean 0.121 ms · max 2.000 ms ───────────────────────────────────────────────────────────────
+                                                           █
+                                                           █
+ ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+ ▏frames             ▏steady
+
+ Issues 11 ────────────────────────────────────────────────  Hottest functions own Studio work ────────────────────────
+ ▌ ■ critical Sorted every frame: rank  Main:20                                          own  share
+   ▲ serious  Part.Size read again in the frame: 200 a fra…  anonymous  Main:22     4.800 ms  36.4% ███████████████████
+   ● warning  Reachable heap grows: +2.50 MB from steady t…  rank  Main:20          3.600 ms  27.3% ██████████████▎····
+   ● warning  21.9 KB allocated a frame: rank  Main:21       layout  Main:30        2.400 ms  18.2% █████████▌·········
+   ● warning  GETTABLEKS at Main:31 misses 83.3% of its lo…  update  Main:10        1.200 ms   9.1% ████▊··············
+   ● warning  Part.Position set to its own value: 30 a fra…  anonymous  Main:1      0.500 ms   3.8% ██·················
+   ● warning  Tables regrown: layout  Main:32                __index [C]            0.300 ms   2.3% █▎·················
+   ● warning  512 B allocated a frame: layout  Main:32       sort [C]               0.240 ms   1.8% █··················
+   ● warning  Collector spikes: 1 frame, worst 3.000 ms (f…
+   ● warning  Frame spikes: 1 frame, worst 2.000 ms (frame…
+   ● warning  Connections keep growing: +99 in steady
+
+
+
+
+
+
+
+
+
+
+ share of Studio work  <0.1%  ██ 0.1-1%  ██ 1-3%  ██ 3-10%  ██ 10-30%  ██ >=30%
+ ↑↓ issue  enter open  │ m metric  f scripts  / find  y copy  t theme  ? help  q quit

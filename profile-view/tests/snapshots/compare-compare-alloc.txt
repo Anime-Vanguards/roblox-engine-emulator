@@ -1,0 +1,40 @@
+ ree profile │ run ok · Fixture.luau · 120 frames · 2.00 s                                         Studio work 13.20 ms
+  1 Overview  2 Flame  3 Calls  4 Source  5 Allocations  6 Heap  7 Timeline  8 Caches  9 Issues  d Diff  c Compare
+
+ t[k][v] or t[v][k] two keys, many values each ────────────────────────────────────────────────────────────────────────
+ baseline t[k][v] · n 10, 100, 1000 · allocated (exact)
+ note: a fixture: the numbers are made up
+
+   variant                       n=10       n=100      n=1000   scaling n=1000 vs baseline
+ ▌ ■ t[k][v] (baseline)       1.2 KB     11.7 KB    117.2 KB
+   ■ t[v][k]                   400 B      3.9 KB     39.1 KB◆             3.00x ▼ better
+
+ ◆ best · ≈ best, within noise · underlined: the run below
+
+ allocated by n log scales ───────────────────────────  t[k][v] at n=1,000 check ✓ ────────────────────────────────────
+   147.0 KB│                                         ⢀  work clock          0.200 ms
+           │                                       ⢀⠔⠛  instructions            2000
+           │                                    ⢀⡠⠊⠁    allocated           117.2 KB
+           │                                  ⡠⠔⠁       heap kept           117.2 KB
+           │                               ⣀⠔⠉       ⣠  host time           0.110 ms
+           │                            ⢀⠤⠊       ⢀⡠⠊⠉  cache hit rate         95.0%
+           │                         ⢀⡠⠊⠁       ⡠⠔⠁     rehashes                 100
+           │                       ⡠⠔⠁       ⣀⠔⠊
+           │                    ⣠⣶⠊       ⢀⠤⠊           Tables kept 1,001 · 117.2 KB ──────────────────────────────────
+           │                 ⢀⠤⠊       ⢀⡠⠒⠁              1,000 × {hash 2} slots · 112 B each · tkv:14 < tkv:30
+     6.8 KB│              ⢀⡠⠊⠁       ⡠⠔⠁                   grew 1,000 times, moving 3,000 keys
+           │            ⡠⠒⠁       ⢀⠔⠊
+           │         ⡠⠔⠉       ⢀⠴⠿⠁                     Hottest ───────────────────────────────────────────────────────
+           │      ⣀⠔⠊       ⢀⡠⠒⠁                           0.160 ms      1600 insns  build  t-k-v:14
+           │   ⢀⠤⠊        ⡠⠔⠁
+           │⣀⡠⠊⠁       ⣀⠔⠉
+           │⠛       ⢀⠔⠊
+           │     ⢀⠤⠊⠁
+           │  ⢀⡠⠒⠁
+           │⣤⠔⠁
+      319 B│⠉
+            ┬────────────────────┬───────────────────┬
+            10                  100               1000
+            ━━ t[k][v]
+            ━━ t[v][k]
+ ↑↓ variant  ←→ size  enter open  D diff  │ m metric  f scripts  / find  y copy  t theme  ?…  metric: allocated (exact)

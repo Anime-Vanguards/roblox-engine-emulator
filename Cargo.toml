@@ -65,6 +65,10 @@ base64 = "=0.13.1"
 
 [workspace]
 resolver = "3"
+# profile-view: the profile viewer (`ree profile view|render` runs its binary), a crate of its own so the engine's has
+# no terminal UI; a plain `cargo build` or `cargo test` here covers both
+members = ["profile-view"]
+default-members = [".", "profile-view"]
 exclude = ["vendor"]
 
 # The patched Luau VM (vendor/luau0-src). Only a workspace root's [patch] applies: a crate that
