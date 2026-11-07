@@ -592,7 +592,10 @@ border in the accent.
     leads, and the harness's own code (under ReplicatedStorage.RURFixtures, and the engine's `rur.record` that calls it,
     with the C functions, the engine's Luau and mlua's helpers they called) comes in a panel of its own, with a card for
     the two sides' work; a run whose code is all the harness's (under 1% on the game's side: code measured by
-    `--harness` alone) is shown whole.
+    `--harness` alone) is shown whole. A line under the fidelity line counts what those phases' scripts asked the
+    engine to do (instances cloned, made, destroyed and taken into the Workspace, property writes and the moves among
+    them, pivots, bulk moves, emits, queries: profile.json's marks, from ree 64fb6e6), every script's, the harness's
+    too: the engine's side of a cast, which the work clock reads lower than a client pays.
   - `2` Flame: the call tree as an icicle, the run at the top; each node as wide as its total and coloured by its own
     share. It opens on the run's heaviest phase; down follows the heaviest callee, enter zooms into a node, esc comes
     back out.
@@ -609,7 +612,9 @@ border in the accent.
   - `9` Issues: what the profile's numbers show to fix (below).
   - `d` Diff, of a pair: the headline figures, then the functions, lines and allocation sites that moved. When both
     profiles report the same phases, or both marked steady, it leads with the game's code and the harness's in them,
-    and the functions' work covers those phases, the harness's functions last and greyed, as `ree profile diff`.
+    and the functions' work covers those phases, the harness's functions last and greyed, as `ree profile diff`. The
+    engine's counts in the same phases follow (instances made and destroyed, property writes, parts moved, pivots,
+    emits), in ree profile diff's groups.
   - `c` Compare, of a what-if folder: each variant at each size in the comparison's metric, how it grows with n (a
     log-log plot, a line a variant) and each variant over the baseline by n, the best of each size, each variant's
     figure at the selected size as bars, every figure of a variant over the baseline's (worse to the right, on a log
