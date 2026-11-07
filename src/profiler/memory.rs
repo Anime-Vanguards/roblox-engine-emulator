@@ -255,9 +255,12 @@ impl Allocations {
             unsafe { vm::mark(pending.block as *mut c_void) };
             self.live.insert(pending.block, Live { stack, ty, weight });
         }
+        // (the name alone is not enough: any userdata whose metatable's __type is "Instance" gets it too, and only an
+        // Instance's own userdata has a slot to read)
         if name == UNRESOLVED_INSTANCE {
-            let (index, generation) = unsafe { instance_slot(object.data) };
-            self.deferred.push(Deferred { index, generation, block: pending.block, size: pending.size, phase: pending.phase, sampled: pending.sampled });
+            if let Some((index, generation)) = instance_slot(&object, self.instance_tag) {
+                self.deferred.push(Deferred { index, generation, block: pending.block, size: pending.size, phase: pending.phase, sampled: pending.sampled });
+            }
         }
     }
 
@@ -300,10 +303,16 @@ impl Allocations {
 /// The type an Instance's userdata is booked under until its class can be read
 pub const UNRESOLVED_INSTANCE: &str = "userdata: Instance";
 
-/// An Instance userdata's slot and generation (lua/raw.rs Payload)
-unsafe fn instance_slot(data: *mut c_void) -> (u32, u32) {
+/// An Instance userdata's slot and generation (lua/raw.rs Payload): None for any other object, a userdata of another
+/// tag (whatever its metatable's __type says) or one without data
+fn instance_slot(object: &vm::Object, instance_tag: i32) -> Option<(u32, u32)> {
+    let data = object.data;
+    if object.tt != 8 || object.tag != instance_tag || data.is_null() {
+        return None;
+    }
     let words = data as *const u32;
-    unsafe { (words.read_unaligned(), words.add(1).read_unaligned()) }
+    // SAFETY: a userdata of the Instance tag holds a Payload (lua/raw.rs), which starts with its slot and generation
+    Some(unsafe { (words.read_unaligned(), words.add(1).read_unaligned()) })
 }
 
 /// An object's type as the profile names it: `userdata: Instance Part` for an Instance (its class), `userdata: CFrame`
@@ -312,8 +321,7 @@ pub fn object_name(object: &vm::Object, instance_tag: i32, resolver: Option<&dyn
     if object.tt != 8 {
         return type_name(object.tt).to_string();
     }
-    if object.tag == instance_tag && !object.data.is_null() {
-        let (index, generation) = unsafe { instance_slot(object.data) };
+    if let Some((index, generation)) = instance_slot(object, instance_tag) {
         return match resolver.and_then(|resolve| resolve(index, generation)) {
             Some(class) => format!("userdata: Instance {class}"),
             None => UNRESOLVED_INSTANCE.into(),
@@ -804,5 +812,29 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         biggest,
         by_stack,
         allocated_since,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only a userdata of the Instance tag, with data, has a slot to read: another userdata whose metatable's __type is
+    /// "Instance" (or one with no data) is named like an Instance still waiting for its class, but nothing is read from it
+    #[test]
+    fn only_an_instances_own_userdata_has_a_slot_read() {
+        let tag = crate::lua::raw::INSTANCE_TAG;
+        let impostor = vm::Object { tt: 8, tag: tag + 1, data: std::ptr::null_mut(), type_name: Some("Instance".into()) };
+        assert_eq!(object_name(&impostor, tag, None), UNRESOLVED_INSTANCE);
+        assert_eq!(instance_slot(&impostor, tag), None);
+        let empty = vm::Object { tt: 8, tag, data: std::ptr::null_mut(), type_name: None };
+        assert_eq!(instance_slot(&empty, tag), None);
+        assert_eq!(instance_slot(&vm::Object { tt: 5, tag, data: std::ptr::null_mut(), type_name: None }, tag), None);
+        let mut payload = [7u32, 3, 0, 0];
+        let real = vm::Object { tt: 8, tag, data: payload.as_mut_ptr() as *mut c_void, type_name: None };
+        assert_eq!(instance_slot(&real, tag), Some((7, 3)));
+        let resolve = |index: u32, generation: u32| (index == 7 && generation == 3).then(|| "Part".to_string());
+        assert_eq!(object_name(&real, tag, Some(&resolve)), "userdata: Instance Part");
+        assert_eq!(object_name(&real, tag, None), UNRESOLVED_INSTANCE);
     }
 }
