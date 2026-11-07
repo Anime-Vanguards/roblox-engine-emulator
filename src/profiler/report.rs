@@ -940,8 +940,13 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
     if hw.matched + 2 < hw.readings {
         let _ = writeln!(summary, "  warning: {} of {} readings found no switch of their own: their windows were merged into the next ones", hw.readings - hw.matched, hw.readings);
     }
-    if hw.lost_events > 0 || hw.lost_buffers > 0 || hw.without_counters > 0 {
-        let _ = writeln!(summary, "  warning: the trace session lost {} events and {} buffers; {} switches came without counter values: some counts are missing", group_digits(hw.lost_events as u64), group_digits(hw.lost_buffers as u64), group_digits(hw.without_counters));
+    if hw.lost_events > 0 || hw.lost_buffers > 0 {
+        let _ = writeln!(summary, "  warning: the trace session lost {} events and {} buffers: some of the threads' stretches are missing", group_digits(hw.lost_events as u64), group_digits(hw.lost_buffers as u64));
+    }
+    // (a switch without values matters where it cost a reading its switch, which the readings' warning says; a service
+    // before this one also counted every CPU's switches from before its counters were set)
+    if hw.without_counters > 0 {
+        let _ = writeln!(summary, "  note: {} context switches came without counter values", group_digits(hw.without_counters));
     }
     for note in &hw.notes {
         let _ = writeln!(summary, "  note: {note}");

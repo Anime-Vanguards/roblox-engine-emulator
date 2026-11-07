@@ -610,7 +610,8 @@ const PROFILE = /*PROFILE_DATA*/null;
 		const readings = k.readings || {};
 		section.append(el("p", { class: "muted" }, `${fmt(readings.count)} readings (${fmt(readings.samples)} samples at safepoints) over ${fmt((k.run || {}).seconds, 2)} s; ${fmt(readings.matched)} found their own switch.` + (readings.own_counts ? ` A reading's own counts, counted with the run's: ${names.map((n) => `${n} ${compact(readings.own_counts[n] || 0)}`).join(", ")}.` : "")));
 		const trace = k.trace || {};
-		if (trace.lost_events || trace.lost_buffers || trace.without_counters) section.append(el("div", { class: "warn" }, `The trace session lost ${fmt(trace.lost_events)} events and ${fmt(trace.lost_buffers)} buffers; ${fmt(trace.without_counters)} switches came without counter values: some counts are missing.`));
+		if (trace.lost_events || trace.lost_buffers) section.append(el("div", { class: "warn" }, `The trace session lost ${fmt(trace.lost_events)} events and ${fmt(trace.lost_buffers)} buffers: some of the threads' stretches are missing.`));
+		if (trace.without_counters) section.append(el("p", { class: "muted" }, `${fmt(trace.without_counters)} context switches came without counter values.`));
 		const ipcOf = (counts) => counts && counts.instructions != null && counts.cycles ? counts.instructions / counts.cycles : 0;
 		const counterColumns = (get, prefix) => names.map((name) => ({ key: name, label: prefix + name, value: (row) => (get(row) || {})[name] || 0, fmt: (v) => compact(v), bar: name === lead }));
 		if ((k.phases || []).length) {

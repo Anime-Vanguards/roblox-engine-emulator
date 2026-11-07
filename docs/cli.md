@@ -343,7 +343,12 @@ Windows service reads them on a profile's behalf (tools/hw-counters):
 - **Checking it**: `ree-hw-counters probe` (`%ProgramFiles%\ree-hw-counters\ree-hw-counters.exe probe`) counts
   kernels whose counts are known through the service: a loop of four instructions and a branch an iteration, random
   branches half of which mispredict, loads that hit the L1 data cache, and chases through random cycles of cache lines
-  that fit the L1, the L2 and the L3, and fit none. Each counter must count what its name says (exit 0).
+  that fit the L1, the L2 and the L3, and fit none. Each counter must count what its name says (exit 0). The L3 chase
+  runs three times and its last-level misses are read against the fastest try's own speed: on a busy machine other
+  programs push the buffer out of the shared L3, and at memory speed nearly every step must miss it (between L3 and
+  memory speed it is not checked). The probe is the client's: a build's own (`cargo build --release --manifest-path
+  tools/hw-counters/Cargo.toml`) checks the installed service; a change to the service itself takes effect when
+  setup.ps1 runs again.
 - Without the service (not installed, counting for another profile, the CPU's counters held by another tool) the run
   goes on and the profile says why. `REE_HW_COUNTERS=mock` counts without it (the run thread's cycle count at each
   reading and fixed shares of it: for tests, never a measurement); `REE_HW_COUNTERS=console` reads from
