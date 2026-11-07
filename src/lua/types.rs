@@ -471,7 +471,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let connection = ud.borrow::<LConnection>()?.0;
         if let LuaValue::String(key) = args.get(1) {
             if &*key.as_bytes() == b"Connected" {
-                let connected = e.state.borrow().signals.connection(connection).is_some();
+                let connected = e.state.borrow().signals.is_connected(connection);
                 return Ok(values([LuaValue::Boolean(connected)]));
             }
             let member: LuaValue = connection_members.raw_get(key.clone())?;

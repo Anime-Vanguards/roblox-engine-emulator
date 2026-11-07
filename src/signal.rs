@@ -59,6 +59,9 @@ pub struct ConnectionData {
     /// The handler while connected, when it is not in the handler table (`Signals::handlers`)
     callback: Option<mlua::Function>,
     pub once: bool,
+    /// A :Once() connection whose signal fired: it reads disconnected and left the signal's handlers, and its queued
+    /// handler still runs once (then the slot goes)
+    fired: bool,
     /// Connected with ConnectParallel: runs in the parallel phase, after the signal's serial handlers (actors.rs)
     pub parallel: bool,
     pub signal: SignalId,
@@ -150,6 +153,12 @@ impl Signals {
         self.connections.get(id.index as usize).filter(|data| data.generation == id.generation && data.connected)
     }
 
+    /// RBXScriptConnection.Connected: false from the fire on for a :Once() connection (measured in a playing client,
+    /// Studio 0.744: tools/parity/probes/signals.luau), while its queued handler is still to run.
+    pub fn is_connected(&self, id: ConnectionId) -> bool {
+        self.connection(id).is_some_and(|data| !data.fired)
+    }
+
     pub fn connect(&mut self, signal: SignalId, callback: mlua::Function, once: bool) -> ConnectionId {
         self.connect_with(signal, callback, once, false)
     }
@@ -158,7 +167,7 @@ impl Signals {
         let index = match self.free_connections.pop() {
             Some(index) => index,
             None => {
-                self.connections.push(ConnectionData { connected: false, callback: None, once: false, parallel: false, signal: 0, generation: 0 });
+                self.connections.push(ConnectionData { connected: false, callback: None, once: false, fired: false, parallel: false, signal: 0, generation: 0 });
                 (self.connections.len() - 1) as u32
             }
         };
@@ -168,6 +177,7 @@ impl Signals {
         };
         let data = &mut self.connections[index as usize];
         (data.connected, data.callback, data.once, data.parallel, data.signal) = (true, callback, once, parallel, signal);
+        data.fired = false;
         self.parallel_connections += usize::from(parallel);
         let id = ConnectionId { index, generation: data.generation };
         self.signals[signal as usize].handlers.push(Handler::Connection(id));
@@ -180,6 +190,7 @@ impl Signals {
         let data = &mut self.connections[index as usize];
         self.parallel_connections -= usize::from(data.parallel && data.connected);
         data.connected = false;
+        data.fired = false;
         data.generation = data.generation.wrapping_add(1);
         if data.callback.take().is_none() {
             if let Some(table) = &self.handlers {
@@ -196,9 +207,15 @@ impl Signals {
     }
 
     pub fn disconnect(&mut self, connection: ConnectionId) {
-        let Some(signal) = self.connection(connection).map(|data| data.signal) else {
+        let Some(data) = self.connection(connection) else {
             return;
         };
+        // (a :Once() connection that fired is disconnected already; its queued handler still runs. Not measured: a
+        // Disconnect between the fire and that run)
+        if data.fired {
+            return;
+        }
+        let signal = data.signal;
         let handlers = &mut self.signals[signal as usize].handlers;
         if let Some(index) = handlers
             .iter()
@@ -215,11 +232,22 @@ impl Signals {
     }
 
     /// The handlers of one fire, newest first, the ConnectParallel ones (also newest first) after the others; waiting
-    /// threads leave the chain.
+    /// threads leave the chain, and so do :Once() connections (they read disconnected from the fire on, and a second
+    /// fire before their handler runs does not reach them: measured, Studio 0.744, tools/parity/probes/signals.luau).
     pub fn take_handlers(&mut self, signal: SignalId) -> Vec<Handler> {
+        let connections = &mut self.connections;
         let handlers = &mut self.signals[signal as usize].handlers;
         let mut result: Vec<Handler> = handlers.iter().rev().cloned().collect();
-        handlers.retain(|h| matches!(h, Handler::Connection(_)));
+        handlers.retain(|handler| match handler {
+            Handler::Connection(id) => match connections.get_mut(id.index as usize) {
+                Some(data) if data.once && data.connected && data.generation == id.generation => {
+                    data.fired = true;
+                    false
+                }
+                _ => true,
+            },
+            Handler::Thread(_) => false,
+        });
         if self.parallel_connections > 0 {
             let parallel = |handler: &Handler| matches!(handler, Handler::Connection(id) if self.connection(*id).is_some_and(|data| data.parallel));
             if result.iter().any(parallel) {
@@ -250,9 +278,12 @@ impl Signals {
     /// connection disconnects here, as RunHandler does), its callback and its signal.
     pub fn begin_handler(&mut self, connection: ConnectionId) -> Option<(mlua::Function, SignalId)> {
         let data = self.connection(connection)?;
-        let (once, held, signal) = (data.once, data.callback.clone(), data.signal);
+        let (once, fired, held, signal) = (data.once, data.fired, data.callback.clone(), data.signal);
         let callback = held.or_else(|| self.handlers.as_ref()?.raw_get::<Option<mlua::Function>>(connection.index as i64 + 1).ok()?);
-        if once {
+        if fired {
+            // (it left the signal's handlers when the signal fired)
+            self.release(connection.index);
+        } else if once {
             self.disconnect(connection);
         }
         callback.map(|callback| (callback, signal))

@@ -1143,10 +1143,6 @@
 	],
 	"signals": [
 		{
-			"line": "once-connected-after-fire false",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "connect-nil-fire connected false logged 4 Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function",
 			"why": "not fixed yet"
 		}

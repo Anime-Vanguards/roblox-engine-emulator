@@ -368,6 +368,31 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
 }
 
 #[test]
+fn a_once_connection_reads_disconnected_from_the_fire_on() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/signals.luau): Connected is false right after the
+    // Fire, the handler still runs once, and a second Fire before it runs does not reach it
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Event = Instance.new("BindableEvent")
+        local Connection = Event.Event:Once(function(Value) print("once", Value) end)
+        Event.Event:Connect(function(Value) print("normal", Value) end)
+        print("before", Connection.Connected)
+        Event:Fire(1)
+        Event:Fire(2)
+        print("after-fire", Connection.Connected)
+        task.defer(function() print("later", Connection.Connected) end)
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec!["print: before true", "print: after-fire false", "print: normal 1", "print: once 1", "print: normal 2", "print: later false"]
+    );
+}
+
+#[test]
 fn connecting_a_value_that_is_not_a_function_logs_and_gives_a_disconnected_connection() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/signals.luau): Connect(nil) and Connect(5) raise
     // nothing; the message is logged, the connection is not connected and firing the signal skips it
