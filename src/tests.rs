@@ -368,6 +368,34 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
 }
 
 #[test]
+fn writing_nan_over_nan_fires_changed_again() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/changed.luau): a property, a NumberValue and an
+    // attribute alike
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Part = Instance.new("Part")
+        local Value = Instance.new("NumberValue")
+        local Fired = { Part = 0, Value = 0, Attribute = 0 }
+        Part:GetPropertyChangedSignal("Transparency"):Connect(function() Fired.Part += 1 end)
+        Value.Changed:Connect(function() Fired.Value += 1 end)
+        Part:GetAttributeChangedSignal("A"):Connect(function() Fired.Attribute += 1 end)
+        for _ = 1, 2 do
+            Part.Transparency = 0 / 0
+            Value.Value = 0 / 0
+            Part:SetAttribute("A", 0 / 0)
+        end
+        Part.Transparency = 0.5
+        Part.Transparency = 0.5
+        task.defer(function() print(Fired.Part, Fired.Value, Fired.Attribute) end)
+        "#,
+    );
+    assert_eq!(lines(&engine), vec!["print: 3 2 2"]);
+}
+
+#[test]
 fn random_draws_unit_vectors_shuffles_and_bounds_as_measured() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/random.luau, seed 0 and Random.new(9))
     let (lua, engine) = start();

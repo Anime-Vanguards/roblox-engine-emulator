@@ -236,14 +236,16 @@ impl Value {
         }
     }
 
-    /// Luau `==` as RawSet compares old and new values (userdata by value through their `__eq`,
-    /// interned enums and instances by identity, tables by reference). NaN numbers compare equal
-    /// here: RawSet treats `Old ~= Old and New ~= New` as unchanged.
+    /// Luau `==` as Roblox compares old and new values to decide whether a write changed anything
+    /// (userdata by value through their `__eq`, interned enums and instances by identity, tables by
+    /// reference). A NaN is never the same: writing NaN over NaN fires Changed again, for a property,
+    /// a NumberValue and an attribute alike (measured in a playing client, Studio 0.744:
+    /// tools/parity/probes/changed.luau).
     pub fn same(&self, other: &Value) -> bool {
         match (self, other) {
             (Value::Nil, Value::Nil) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Number(a), Value::Number(b)) => a == b || (a.is_nan() && b.is_nan()),
+            (Value::Number(a), Value::Number(b)) => a == b,
             (Value::String(a), Value::String(b)) => a == b,
             (Value::EnumItem(a), Value::EnumItem(b)) => a == b,
             (Value::Instance(a), Value::Instance(b)) => a == b,
@@ -602,7 +604,9 @@ mod tests {
         assert_eq!(mode.as_enum(), reflection.enum_item("BorderMode", "Outline"));
         let size = decode_default(&reflection, &defaults[&(K::Size as NameId)]).unwrap();
         assert!(size.as_udim2().is_some());
-        assert!(Value::Number(f64::NAN).same(&Value::Number(f64::NAN)));
+        // (writing NaN over NaN fires Changed again in Roblox: tools/parity/probes/changed.luau)
+        assert!(!Value::Number(f64::NAN).same(&Value::Number(f64::NAN)));
+        assert!(Value::Number(0.0).same(&Value::Number(-0.0)));
         assert!(!Value::Number(0.0).same(&Value::Bool(false)));
     }
 }

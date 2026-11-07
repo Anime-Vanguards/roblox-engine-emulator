@@ -55,10 +55,6 @@
 	],
 	"changed": [
 		{
-			"line": "nan-again part.Changed(Transparency),part.Transparency#0",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "size-min 0.00100000005 0.00100000005 0.00100000005",
 			"why": "not fixed yet"
 		},
@@ -84,14 +80,6 @@
 		},
 		{
 			"line": "write-brickcolor d.Changed(BrickColor),d.BrickColor#0,d.Changed(Color),d.Color#0",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numbervalue-nan value.signal,value.Changed 1 nan,value.signal,value.Changed 1 nan",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-nan AttributeChanged A,A-signal,AttributeChanged A,A-signal",
 			"why": "not fixed yet"
 		}
 	],
