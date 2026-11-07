@@ -91,9 +91,10 @@ pub fn short_module(module: &str) -> &str {
 /// not the code it measures
 pub const HARNESS_FOLDER: &str = "ReplicatedStorage.RURFixtures";
 
-/// Whether a module is the harness's own code (under [`HARNESS_FOLDER`])
+/// Whether a module is the harness's own code: under [`HARNESS_FOLDER`], or the engine's chunks that drive it
+/// (`rur.record`, which calls the harness, compiled as script code; the engine's own Luau is apart, `exempt`)
 pub fn harness_module(module: &str) -> bool {
-    module.strip_prefix(HARNESS_FOLDER).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    module.strip_prefix(HARNESS_FOLDER).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')) || module.starts_with("rur.") || module.starts_with("ree.")
 }
 
 /// The phases the summary reports, as indices into the run's phases: `--profile-phase a,b`, or `all`; by default

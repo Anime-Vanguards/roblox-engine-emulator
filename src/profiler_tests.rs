@@ -836,6 +836,8 @@ fn harness_profile(name: &str, watched: u32, phases: Option<&str>) -> (String, s
     profiler::phase("steady");
     run(&lua, &engine, "ReplicatedStorage.Scene.Attack", &spin("attack", 20000));
     run(&lua, &engine, "ReplicatedStorage.RURFixtures.Clip", &spin("watch", watched));
+    // (the engine's chunk that calls a harness, as `ree record` names it)
+    run(&lua, &engine, "rur.record", &spin("drive", 3000));
     profiler::phase("after");
     run(&lua, &engine, "ReplicatedStorage.Scene.Idle", &spin("idle", 5000));
     profiler::collect(&lua);
@@ -862,7 +864,8 @@ fn the_summary_reports_the_steady_phase_with_the_harnesss_code_apart() {
     let game = section(&summary, "top functions by self work: the game's code, phase steady");
     assert!(game.contains("attack") && !game.contains("watch") && !game.contains("mount") && !game.contains("idle"), "{summary}");
     let harness = section(&summary, "the harness's code, phase steady");
-    assert!(harness.contains("watch") && !harness.contains("attack"), "{summary}");
+    assert!(harness.contains("watch") && harness.contains("drive") && !harness.contains("attack"), "{summary}");
+    assert!(!game.contains("drive"), "{summary}");
     // profile.json: the harness's functions are marked, every function has its phases, the scope has each side's work
     let function = |name: &str| {
         let suffix = format!(".{name}");

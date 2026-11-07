@@ -280,7 +280,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases the summary's function tables and
   the boundary profiler report: by default `steady` when the run marked one (`Context.ProfilePhase`), else
   every phase. The summary's tables are the game's code: the harness's own (`--harness` modules are
-  mounted under `ReplicatedStorage.RURFixtures`) and what it called are set apart, with their total on the
+  mounted under `ReplicatedStorage.RURFixtures`; the engine's `rur.record`, which calls the harness, is
+  counted with it) and what it called are set apart, with their total on the
   summary's `reported below:` line and their top functions in a table of their own. Lines are counted for
   the whole run, not per phase. In profile.json each function has `harness` and its figures per phase
   (`phases`, with `harness_self_work_ms`, the part done for the harness's code), and `scope` names the
