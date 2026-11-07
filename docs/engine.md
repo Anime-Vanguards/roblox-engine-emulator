@@ -272,6 +272,17 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   CFrame, a joint's C0 / C1 and a BulkMoveTo keep the rotation while every entry of RᵀR - I is within 1e-5, and
   otherwise store it as `CFrame:Orthonormalize()` gives it (identity for a zero column); a model's WorldPivot keeps
   any rotation (`world::frame::stored_rotation`, measured in a playing client).
+- **Models as a client receives them** (`project::received`). A playing client gets models, snapshots and bundles
+  from the server, so ree loads every stored rotation as the client reads it after the server's load and the
+  network. This was measured in a playing client on 2,347 rotations of the game's bundles: 2,328 come out to the
+  bit, 18 bones within 5e-7, and one pivot whose quaternion had near-equal components 1.7e-4 off.
+  - **The server's load.** It stores a part's CFrame as a script's write does (orthonormalized past 1e-5), and
+    orthonormalizes a joint's C0 / C1 and an attachment's or bone's CFrame. It keeps a PivotOffset or a model's
+    pivot as stored.
+  - **The network.** A rotation that is not axis-aligned then crosses as a 15-bit quaternion: the largest
+    component is dropped, and the other three, times √2, cross in steps of 1/16383. So the client's rotation is
+    orthonormal to float precision, and within about 1e-4 of the server's.
+  - **What crosses exactly.** Positions and axis-aligned rotations. A `Clone` also copies a rotation exactly.
 - **Scripts' chunk names**: a script or module compiles as a chunk named by its full name, as Roblox
   names it: error positions, tracebacks and `debug.info(f, "s")` read `ReplicatedStorage.Module:3:`
   (measured in a playing client; tools/parity/probes/chunknames.luau). Roblox keeps one compiled chunk per

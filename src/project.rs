@@ -24,6 +24,7 @@ pub mod json_model;
 #[cfg(feature = "bundles")]
 pub mod model_assets;
 pub mod plan;
+pub mod received;
 
 pub use plan::{LazyImport, ModelPlan, PlanProps, PlanPropsIter, Unmodeled, before_method, convert_instances, find_unmade, materialize_lazy, materialize_lazy_subtree, materialize_region};
 
@@ -841,20 +842,23 @@ fn instantiate_model(engine: &Engine, plan: &ModelPlan, name: Option<&str>, pare
 }
 
 /// A model file's instances: a Studio model (.rbxm / .rbxmx), or Rojo's JSON model (.model.json),
-/// whose top instance is named after the file (one Rojo would reject is reported here). None when
-/// it does not decode or holds nothing.
+/// whose top instance is named after the file (one Rojo would reject is reported here). Their rotations
+/// are as a client receives them (received.rs). None when it does not decode or holds nothing.
 fn decode_model_file(engine: &Engine, path: &str, bytes: &[u8]) -> Option<WeakDom> {
     let file_name = Path::new(path).file_name()?.to_string_lossy();
-    if !file_name.to_ascii_lowercase().ends_with(".model.json") {
-        return decode_model(bytes).ok();
-    }
-    match json_model::decode(bytes, &file_name[..file_name.len() - ".model.json".len()]) {
-        Ok(dom) => dom,
-        Err(message) => {
-            engine.warn(format!("{path}: {message}; not mounted"));
-            None
+    let mut dom = if !file_name.to_ascii_lowercase().ends_with(".model.json") {
+        decode_model(bytes).ok()?
+    } else {
+        match json_model::decode(bytes, &file_name[..file_name.len() - ".model.json".len()]) {
+            Ok(dom) => dom?,
+            Err(message) => {
+                engine.warn(format!("{path}: {message}; not mounted"));
+                return None;
+            }
         }
-    }
+    };
+    received::as_received(&mut dom);
+    Some(dom)
 }
 
 /// A mounted model file converted: read, decoded and converted, or, in a process that keeps compiled
@@ -1520,11 +1524,12 @@ pub fn convert_model(engine: &Engine, dom: &WeakDom, parent: Option<InstanceId>)
 }
 
 /// Loads a Studio snapshot whose top-level instances become children of `parent` (a service
-/// root's children merge into the existing service).
+/// root's children merge into the existing service), with rotations as a client receives them.
 pub fn load_snapshot(engine: &Engine, path: &Path, parent: InstanceId) -> Result<Vec<InstanceId>, String> {
     crate::files::note(path);
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let dom = decode_model(&bytes)?;
+    let mut dom = decode_model(&bytes)?;
+    received::as_received(&mut dom);
     let mut result = Vec::new();
     for &root in dom.root().children() {
         let source = dom.get_by_ref(root).unwrap();
@@ -1544,11 +1549,12 @@ pub fn load_snapshot(engine: &Engine, path: &Path, parent: InstanceId) -> Result
     Ok(result)
 }
 
-/// Deserializes a model file into detached instances.
+/// Deserializes a model file into detached instances, with rotations as a client receives them.
 pub fn load_model(engine: &Engine, path: &Path) -> Result<Vec<InstanceId>, String> {
     crate::files::note(path);
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let dom = decode_model(&bytes)?;
+    let mut dom = decode_model(&bytes)?;
+    received::as_received(&mut dom);
     Ok(convert_model(engine, &dom, None))
 }
 

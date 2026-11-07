@@ -501,8 +501,10 @@ fn convert_file(reflection: &Reflection, path: &Path) -> Result<ModelPlan, Strin
     }
     crate::profiler::caches::miss(crate::profiler::caches::Cache::BundlePlans);
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let dom = decode_model(&bytes)?;
+    let mut dom = decode_model(&bytes)?;
     drop(bytes);
+    // (the server loads a bundle and sends it: its rotations as a client receives them)
+    super::received::as_received(&mut dom);
     let plan = ModelPlan::new(reflection, &dom, dom.root().children());
     drop(dom);
     if let Some(key) = &key {
