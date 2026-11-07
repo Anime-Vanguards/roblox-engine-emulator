@@ -1416,6 +1416,17 @@ fn step_recorded(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<bool> {
 /// recorded clock replays its next frame instead while it has one; after its capture nothing
 /// runs.
 pub fn step(lua: &Lua, engine: &Rc<Engine>, duration: Option<f64>) -> LuaResult<()> {
+    // (a profile's timeline: one row a frame; off, one thread-local read)
+    if crate::profiler::active() {
+        crate::profiler::frame_begin(engine);
+        let result = step_frame(lua, engine, duration);
+        crate::profiler::frame_end(engine);
+        return result;
+    }
+    step_frame(lua, engine, duration)
+}
+
+fn step_frame(lua: &Lua, engine: &Rc<Engine>, duration: Option<f64>) -> LuaResult<()> {
     {
         let state = engine.state.borrow();
         if state.sched.captured {

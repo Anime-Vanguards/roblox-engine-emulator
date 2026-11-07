@@ -34,6 +34,7 @@ pub mod microprofile;
 pub mod mount;
 pub mod output;
 pub mod profile;
+pub mod profiler;
 pub mod project;
 pub mod record;
 pub mod reflection;
@@ -57,6 +58,8 @@ mod scheduler_tests;
 mod server_tests;
 #[cfg(test)]
 mod luau_profile_tests;
+#[cfg(test)]
+mod profiler_tests;
 
 use std::{
     any::Any,

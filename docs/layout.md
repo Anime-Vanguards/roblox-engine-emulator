@@ -16,7 +16,7 @@ src/project.rs project/   Rojo mounting, models and snapshots, Studio-only place
                        model plans and lazy imports (project/plan.rs), their files (plan/codec.rs),
                        Rojo's JSON models (project/json_model.rs)
 src/serve/             `ree serve` and its client (`--service`)
-src/timing.rs files.rs `--profile`; file stamps for the caches
+src/timing.rs files.rs `--profile`'s phases; file stamps for the caches
 src/watchdog.rs        Roblox's script timeout, the wall-clock cap, the exit when the parent is gone
 build.rs               the conversion digest: the key of the bundle plan files (`<bundle>.plan`)
 src/lua/               the Luau-facing API: Instance userdata, datatypes, globals, require, stubs
@@ -24,6 +24,8 @@ src/world/ src/record/ the 3D world and the recorder
 src/animation/         AnimationTracks: the Animator's step, clips (KeyframeSequences) and where they load from
 src/meshes.rs          EditableMesh: meshes scripts build or load, their MeshParts' FileMesh snapshots
 src/profile.rs microprofile.rs luau_profile.rs   simulation profile, MicroProfiler scopes, Luau sampler
+src/profiler/          the profiling suite (`--profile <kinds>`): the VM's instruction profile, memory, caches,
+                       the timeline, the CPU, the report's files and `ree profile diff`
 src/trace.rs                                     Context.TraceWrites: Luau call sites of Parent / property writes
 src/census.rs                                    Context.Census: live threads, connections, timers, instances by their Luau line
 data/                  reflection.json (Studio's dump; tools/dump-reflection.luau), font-enums.json, text metrics

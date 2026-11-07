@@ -146,8 +146,10 @@ unsafe fn thread_function(co: *mut ffi::lua_State) -> String {
     }
 }
 
-/// Luau's `userthread` callback: a thread made (`parent` set) or about to be freed.
-unsafe extern "C-unwind" fn userthread(parent: *mut ffi::lua_State, child: *mut ffi::lua_State) {
+/// Luau's `userthread` callback: a thread made (`parent` set) or about to be freed. A profile's timeline counts the live
+/// threads through the same callback (profiler.rs).
+pub(crate) unsafe extern "C-unwind" fn userthread(parent: *mut ffi::lua_State, child: *mut ffi::lua_State) {
+    crate::profiler::thread_event(!parent.is_null());
     LOG.with(|log| {
         let Ok(mut log) = log.try_borrow_mut() else { return };
         let Some(log) = log.as_mut() else { return };
@@ -163,6 +165,11 @@ unsafe extern "C-unwind" fn userthread(parent: *mut ffi::lua_State, child: *mut 
         log.threads.insert(child as usize, site);
         *log.made.entry(site).or_default() += 1;
     });
+}
+
+/// Whether a census was installed on this thread (its callback stays when a profile ends)
+pub(crate) fn installed() -> bool {
+    ACTIVE.with(Cell::get)
 }
 
 /// Whether this engine's census is on (callers skip the work of [`connected`] when it is not).

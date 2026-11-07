@@ -15,6 +15,8 @@ ree run --harness path/to/Server.luau --run-context server --seconds 60   # a Pl
 ree record --service ...                             # the same, run by the warm service (started when missing)
 ree record ... --profile                             # where the time went, on stderr
 ree run ... --profile boundary [--profile-out f.json]  # Luau-to-engine crossings per call site, priced (src/boundary.rs)
+ree record ... --profile work,alloc,heap [--profile-out dir]  # the profiling suite: summary, JSON, flame graphs, a report page
+ree profile diff before/profile after/profile        # two profiles compared
 ree serve --status                                   # the running services; --stop asks them to exit
 ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bundles --assets Models
                                                      # start the service and read in what a first recording reads
@@ -212,9 +214,57 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
 
 ## Profiles and caches
 
-- `--profile` prints where the command's time went on stderr: the mount phases, the harness start,
+- `--profile` alone prints where the command's time went on stderr: the mount phases, the harness start,
   module loads, bundle imports, the frames and the files (`prepared: used`, or why a prepared run was
-  stale, when a service's worker held one).
+  stale, when a service's worker held one). `--profile boundary` alone is the boundary profiler of before
+  (Luau-to-engine crossings per call site, priced; `--profile-out <file.json>`).
+- `--profile <kinds> [--profile-out <dir>]` profiles the run (docs/engine.md "Profiling"); kinds are
+  comma-separated:
+  - `work` (also `instructions`, `lines`): every instruction the VM runs is counted on its own line, and
+    what the work clock charges (the instruction's own cost, the engine calls it makes, what it allocates)
+    is booked to the instruction that caused it. Per function and per line, self and total: instructions,
+    work in milliseconds of Studio time, calls, by opcode; callers and callees; the hottest functions'
+    source annotated. Exact, and the same every run of the same code.
+  - `caches`: Luau's inline caches per call site (a table key's or a global's predicted slot, a method's
+    slot, a resolved import, a builtin's fast path: hit, miss, slow path) and ree's own caches (member
+    atoms and dispatch, datatype values, Instance userdata, require results, module bytecode, spatial
+    query solids, bundle plans), with hits, misses and evictions.
+  - `alloc`: bytes and counts allocated, by type (table, its storage, function, string, userdata by
+    Instance class or datatype, thread and its stack, buffer, function prototypes) and by the Luau stack
+    that allocated them. Every allocation is counted by type; stacks are taken for every allocation unless
+    `--profile-alloc-step <bytes>` samples them (weighted by the inverse of the chance).
+  - `heap`: a snapshot of what the VM holds at the start, at every `Context.ProfilePhase` mark and at the
+    end: by type and Instance class, the biggest objects by what they keep alive (their dominated size)
+    with the path that holds them, the run's own live objects by the stack that allocated them, garbage
+    not swept yet; and the collector's work (steps, cycles, bytes freed, host time).
+  - `timeline`: a row a frame: work, host time, instructions, the heap, allocations, the collector,
+    live instances, connections and threads.
+  - `cpu`: the run thread's CPU cycles, the process's CPU time, page faults and peak memory. Hardware
+    counters (cache and branch misses, instructions retired) need an elevated process on Windows; without
+    one the summary says so and lists the counters the CPU offers. Nothing is estimated.
+  - `phases`: the wall-time phases of plain `--profile`.
+  - `time`: host time sampled every millisecond at the VM's calls, returns and loop edges (a line's time
+    lands on its next safepoint). `boundary`: the boundary profiler.
+  - `all`: `work`, `caches`, `alloc`, `heap`, `timeline`, `cpu` and `phases`. `time` and `boundary` are
+    asked for apart: counting every instruction slows the interpreter several times over, so host time is
+    read in a run of its own.
+- A profile writes, in `--profile-out` (default `<out>/profile` for `record`, `ree-profile` for `run`):
+  `summary.txt` (also printed on stderr), `profile.json` (everything), folded stacks for flame graph tools
+  (`work.folded` in microseconds, `instructions.folded`, `time.folded`, `alloc.folded` and
+  `alloc.counts.folded`, `heap.folded`), `profile.speedscope.json` (speedscope.app) and `report.html`, one
+  self-contained page (hot paths with callers, callees and annotated source, a call tree, memory, the
+  timeline, caches). `--profile-top <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases
+  the boundary profiler reports.
+- `ree profile diff <before> <after> [--out <dir>]` compares two profile directories: the headline
+  figures, the functions whose work, calls, instructions or allocations moved, the lines of modules whose
+  source is the same in both, caches, memory by type and the timeline; it writes `diff.txt` (also
+  printed), `diff.json` and `diff.html`. `ree profile report <dir>` prints a profile's summary again and
+  rewrites its page from its profile.json.
+- With no profile the engine pays nothing measurable (a thread-local read where each profiler hooks in),
+  and a profile changes nothing a script sees: the work clock, os.clock and a recording are the same with
+  and without it (it allocates nothing on the VM's heap). A profiled command runs in its own process,
+  never through `--service`. `REE_PROFILE=<kinds>` (and `REE_PROFILE_OUT=<dir>`) asks for a profile where
+  a command line cannot.
 - Caches in the state dir: `animations/` (downloaded animation assets, `<id>.rbxm`; delete a file to
   fetch it again), `model-bundles/` (bundle files as uploaded, `asset-<AssetId>-v<Version>.rbxm`, named by
   the asset version they hold and shared by every project that pins it, and the manifest's catalog: the
@@ -231,7 +281,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
 
 ## Environment
 
-Environment (the variables keep the names they had in rur, whose tools set them; the guards' `REE_SCRIPT_TIMEOUT`,
+Environment (the variables keep the names they had in rur, whose tools set them; `REE_PROFILE` and `REE_PROFILE_OUT` are
+the profile's, above; the guards' `REE_SCRIPT_TIMEOUT`,
 `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS` and `REE_PARENT_WATCH` are above; docs/engine.md "Environment"
 lists them all): `RUR_STATE_DIR`
 (caches; default `.cache`), `RUR_VERBOSE=1` (script output on stderr), `RUR_ENGINE_TIMINGS=1` (mount

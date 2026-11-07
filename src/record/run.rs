@@ -116,20 +116,50 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
         eprintln!("{} {command}: {error}", host.name);
         return 1;
     }
-    if crate::boundary::timing_requested(&args) {
-        crate::timing::begin(std::time::Instant::now());
+    // the profiling suite (`--profile <kinds>`, profiler.rs); `--profile` alone (the phases) and `--profile boundary` alone keep
+    // their own forms
+    let suite = match crate::profiler::Config::from_args(&args, || default_profile_dir(&args, record)) {
+        Ok(suite) => suite,
+        Err(error) => {
+            eprintln!("{} {command}: {error}", host.name);
+            return 2;
+        }
+    };
+    if suite.is_none() {
+        if crate::profiler::phases_requested(&args) {
+            crate::timing::begin(std::time::Instant::now());
+        }
+        if let Some(config) = crate::boundary::parse(&args) {
+            crate::boundary::begin(config);
+        }
     }
-    if let Some(config) = crate::boundary::parse(&args) {
-        crate::boundary::begin(config);
-    }
+    let session = suite.map(crate::profiler::Session::begin);
     let luau_profile = crate::luau_profile::begin();
+    let mut profiled_run = crate::profiler::Run { command: command.into(), ..Default::default() };
     let result = parse(&args, record).and_then(|args| {
+        profiled_run.harness = Some(args.harness.clone());
+        profiled_run.seconds = args.seconds;
+        profiled_run.fps = args.fps;
         let (done, emulator) = execute_with(&args, host, record, true)?;
         release(emulator);
         Ok(done)
     });
     drop(luau_profile);
-    if let Some(report) = crate::boundary::finish() {
+    if let Some(session) = session {
+        if let Ok(done) = &result {
+            profiled_run.status = done.summary["status"].as_str().unwrap_or("?").to_string();
+            profiled_run.frames = done.summary["frames"].as_u64().unwrap_or(0);
+            if let Some(frames) = done.summary["frames"].as_u64().filter(|_| profiled_run.fps > 0.0) {
+                profiled_run.seconds = profiled_run.seconds.min(frames.saturating_sub(1) as f64 / profiled_run.fps).max(0.0);
+            }
+        } else {
+            profiled_run.status = "failed".into();
+        }
+        match session.finish(profiled_run) {
+            Ok(summary) => eprint!("{summary}"),
+            Err(error) => eprintln!("{} {command}: profile: {error}", host.name),
+        }
+    } else if let Some(report) = crate::boundary::finish() {
         eprintln!("{report}");
     }
     match result {
@@ -154,6 +184,15 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
             eprintln!("{} {command}: {error}", host.name);
             1
         }
+    }
+}
+
+/// A profile's directory when `--profile-out` names none: `<out>/profile` for a recording, `ree-profile` here for a run
+fn default_profile_dir(args: &[String], record: bool) -> PathBuf {
+    let value = |key: &str| args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned();
+    match value("--out").or_else(|| value("--dir")).filter(|_| record) {
+        Some(out) => PathBuf::from(out).join("profile"),
+        None => PathBuf::from("ree-profile"),
     }
 }
 
@@ -303,6 +342,8 @@ pub(crate) fn execute_with(args: &RecordArgs, host: &Host, record: bool, spool: 
     }
     let done = if record { record_in(&emulator, args, host)? } else { run_in(&emulator, args, host)? };
     finished(&emulator, &history);
+    // (a profile reads the VM while it still runs)
+    crate::profiler::collect(&emulator.lua);
     Ok((done, emulator))
 }
 

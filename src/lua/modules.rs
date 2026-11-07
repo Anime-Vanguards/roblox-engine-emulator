@@ -167,6 +167,7 @@ impl CompiledSources {
         let known = self.entries.lock().ok().and_then(|entries| entries.get(path).cloned());
         if let Some((known_stamp, entry, home)) = known {
             if known_stamp == stamp {
+                crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
                 if lasting && !home {
                     let copy = kept(&entry.0, entry.1.as_deref());
                     if let Ok(mut entries) = self.entries.lock() {
@@ -176,6 +177,7 @@ impl CompiledSources {
                 return Ok((entry.0.clone(), entry.1.clone()));
             }
         }
+        crate::profiler::caches::miss(crate::profiler::caches::Cache::Bytecode);
         let source = std::fs::read(path)?;
         let lua_source = path.ends_with(".lua") || path.ends_with(".luau");
         let bytecode = if lua_source { compiler().compile(&source).ok() } else { None };
@@ -232,7 +234,9 @@ pub fn precompile_now(paths: &[String]) -> usize {
 pub fn forget_stale_modules() {
     let Some(compiled) = COMPILED.get() else { return };
     let Ok(mut entries) = compiled.entries.lock() else { return };
+    let before = entries.len();
     entries.retain(|path, (stamp, _, _)| crate::files::stamp(std::path::Path::new(path)) == Some(*stamp));
+    crate::profiler::caches::evicted(crate::profiler::caches::Cache::Bytecode, (before - entries.len()) as u64);
 }
 
 /// Whether [`reuse_compiled_modules`] is on.
@@ -387,6 +391,11 @@ pub fn compile(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[u8]
 pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[u8], vm: Vm) -> LuaResult<LuaFunction> {
     let env = environment_in(lua, engine, script, vm)?;
     let name = engine.state.borrow().dom.full_name(&engine.reflection, script);
+    // (a profile's annotated listing reads the chunk's source: profiler.rs)
+    if crate::profiler::active() {
+        let path = engine.state.borrow().dom.at(script).source_path().map(|path| path.to_string());
+        crate::profiler::source_loaded(&name, path.as_deref(), &std::rc::Rc::from(source));
+    }
     let source = deterministic_source(&name, source);
     let bytecode = engine.modules.borrow_mut().bytecode.remove(&script);
     let chunk = match (bytecode, &source) {
@@ -562,6 +571,7 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         if let Some(record) = refs.records.get_mut(&(vm, module)) {
             match record.status {
                 Status::Done => {
+                    crate::profiler::caches::hit(crate::profiler::caches::Cache::Requires);
                     return Ok(LuaMultiValue::from_iter([LuaValue::Integer(0), record.result.clone().unwrap_or(LuaValue::Nil)]));
                 }
                 Status::Error => {
@@ -578,6 +588,7 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         }
     }
 
+    crate::profiler::caches::miss(crate::profiler::caches::Cache::Requires);
     // JSON modules (Rojo `.json`) evaluate to the decoded value
     let (json, path, studio_only) = {
         let state = engine.state.borrow();

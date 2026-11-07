@@ -399,8 +399,10 @@ impl Api {
     #[inline]
     fn member(&self, class: ClassId, name: NameId) -> Member {
         if let Some(member) = self.members.borrow().get(&(class, name)) {
+            crate::profiler::caches::hit(crate::profiler::caches::Cache::Members);
             return *member;
         }
+        crate::profiler::caches::miss(crate::profiler::caches::Cache::Members);
         let member = compute_member(self.engine(), class, name);
         self.members.borrow_mut().insert((class, name), member);
         member
@@ -427,7 +429,9 @@ impl Api {
     }
 
     pub fn clear_members(&self) {
-        self.members.borrow_mut().clear();
+        let mut members = self.members.borrow_mut();
+        crate::profiler::caches::evicted(crate::profiler::caches::Cache::Members, members.len() as u64);
+        members.clear();
     }
 }
 
@@ -448,11 +452,14 @@ unsafe extern "C-unwind" fn user_atom(s: *const c_char, len: usize) -> i16 {
 #[inline]
 unsafe fn name_of(api: &Api, s: *const c_char, atom: c_int) -> Option<NameId> {
     if api.atoms && atom >= 0 {
+        crate::profiler::caches::hit(crate::profiler::caches::Cache::Atoms);
         return Some(atom as NameId);
     }
     if api.atoms && atom == -1 {
+        crate::profiler::caches::hit(crate::profiler::caches::Cache::Atoms);
         return None;
     }
+    crate::profiler::caches::miss(crate::profiler::caches::Cache::Atoms);
     let bytes = unsafe { std::ffi::CStr::from_ptr(s) }.to_bytes();
     api.engine().reflection.name_id_bytes(bytes)
 }
@@ -701,9 +708,11 @@ pub fn instance_value(lua: &Lua, engine: &Engine, id: InstanceId) -> LuaResult<L
     let api = api(engine).expect("raw Instance API not installed");
     if let LuaValue::UserData(ud) = api.instances.raw_get::<LuaValue>(id.index as i64 + 1)? {
         if instance_of_ud(&ud) == Some(id) {
+            crate::profiler::caches::hit(crate::profiler::caches::Cache::Wrappers);
             return Ok(LuaValue::UserData(ud));
         }
     }
+    crate::profiler::caches::miss(crate::profiler::caches::Cache::Wrappers);
     let create = api.create.borrow().clone().expect("instance factory");
     create.call::<LuaValue>((id.index, id.generation))
 }
@@ -897,9 +906,11 @@ unsafe fn push_instance_with(state: *mut ffi::lua_State, api: &Api, dom_state: O
         if ffi::lua_rawgeti_(state, cache, slot) == ffi::LUA_TUSERDATA {
             let payload = ffi::lua_touserdatatagged(state, -1, INSTANCE_TAG) as *const Payload;
             if !payload.is_null() && (*payload).generation == id.generation {
+                crate::profiler::caches::hit(crate::profiler::caches::Cache::Wrappers);
                 return;
             }
         }
+        crate::profiler::caches::miss(crate::profiler::caches::Cache::Wrappers);
         ffi::lua_pop(state, 1);
         let payload = ffi::lua_newuserdatataggedwithmetatable(state, PAYLOAD_SIZE, INSTANCE_TAG) as *mut Payload;
         let serial = match dom_state {
@@ -995,6 +1006,7 @@ unsafe extern "C" fn instance_dtor(_state: *mut ffi::lua_State, data: *mut c_voi
     unsafe {
         let payload = &*(data as *const Payload);
         let api = &*payload.api;
+        crate::profiler::caches::evicted(crate::profiler::caches::Cache::Wrappers, 1);
         if let Ok(mut gc) = api.gc.try_borrow_mut() {
             let index = payload.index as usize;
             if let Some(count) = gc.live.get_mut(index) {
@@ -1048,8 +1060,12 @@ unsafe fn push_value(state: *mut ffi::lua_State, api: &Api, dom_state: &State, i
                 let version = dom_state.dom.at(id).version;
                 let slot = match api.values.borrow().map.get(&(id, name)) {
                     Some(&(cached, slot)) if cached == version => slot,
-                    _ => return false,
+                    _ => {
+                        crate::profiler::caches::miss(crate::profiler::caches::Cache::Values);
+                        return false;
+                    }
                 };
+                crate::profiler::caches::hit(crate::profiler::caches::Cache::Values);
                 ffi::lua_rawgeti_(state, REGISTRY, api.refs.values);
                 ffi::lua_rawgeti_(state, -1, slot);
                 ffi::lua_remove(state, -2);

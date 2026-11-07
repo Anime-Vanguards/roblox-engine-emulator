@@ -287,14 +287,18 @@ fn cached_solids(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
     };
     let cache = query_cache(engine);
     if let Some(found) = cache.entries.borrow().iter().find(|entry| entry.stamp == stamp && entry.filter.sees_as(filter)) {
+        crate::profiler::caches::hit(crate::profiler::caches::Cache::Queries);
         return found.solids.clone();
     }
+    crate::profiler::caches::miss(crate::profiler::caches::Cache::Queries);
     let made: Rc<[Solid]> = solids(engine, filter).into();
     let mut entries = cache.entries.borrow_mut();
+    let before = entries.len();
     entries.retain(|entry| entry.stamp == stamp);
     if entries.len() >= CACHED_FILTERS {
         entries.remove(0);
     }
+    crate::profiler::caches::evicted(crate::profiler::caches::Cache::Queries, (before - entries.len()) as u64);
     entries.push(CachedSolids { filter: filter.clone(), stamp, solids: made.clone() });
     made
 }

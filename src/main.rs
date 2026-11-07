@@ -122,7 +122,7 @@ static GLOBAL: dhat::Alloc = dhat::Alloc;
 // (mimalloc: the allocator above, and the service's idle collection)
 extern crate mimalloc;
 
-const USAGE: &str = "usage: ree record --harness <file.luau> --out <dir> [--seconds 3] [--fps 60] [--context <json|file>]\n                  [--assets-at <Service.Path>] [--assets <prefix>,...] [engine options]\n       ree run --harness <file.luau> [--seconds 3] [--fps 60] [--context <json|file>] [engine options]\n       ree record|run --service ...   (run by the warm service, started when missing; --profile prints timings)\n       ree run ... --profile boundary [--profile-out <file.json>] [--profile-phase <a,b|all>] [--profile-top <n>]\n                   (Luau-to-engine crossings per call site, priced; not through --service)\n       ree serve [--status | --stop] [--idle <s>] [--workers <n>]\nengine options: --roots \"<dir>;<dir>\" [--project <dir>] [--place <name>], --mount Service/Name=<dir|file>,\n                --instance Service/Name=<ClassName>, --snapshot-dir <dir>, --mode play|edit, --player <name>,\n                --place-id <n>, --streaming <radius>, --viewport WxH, --offline, --verbose (docs/cli.md)";
+const USAGE: &str = "usage: ree record --harness <file.luau> --out <dir> [--seconds 3] [--fps 60] [--context <json|file>]\n                  [--assets-at <Service.Path>] [--assets <prefix>,...] [engine options]\n       ree run --harness <file.luau> [--seconds 3] [--fps 60] [--context <json|file>] [engine options]\n       ree record|run --service ...   (run by the warm service, started when missing; --profile prints timings)\n       ree run ... --profile boundary [--profile-out <file.json>] [--profile-phase <a,b|all>] [--profile-top <n>]\n                   (Luau-to-engine crossings per call site, priced; not through --service)\n       ree record|run ... --profile <kinds> [--profile-out <dir>] [--profile-top <n>] [--profile-phase <a,b|all>]\n                   kinds: work, caches, alloc, heap, timeline, cpu, phases, time, boundary, all (docs/cli.md)\n       ree profile diff <before dir> <after dir> [--out <dir>]   |   ree profile report <dir>\n       ree serve [--status | --stop] [--idle <s>] [--workers <n>]\nengine options: --roots \"<dir>;<dir>\" [--project <dir>] [--place <name>], --mount Service/Name=<dir|file>,\n                --instance Service/Name=<ClassName>, --snapshot-dir <dir>, --mode play|edit, --player <name>,\n                --place-id <n>, --streaming <radius>, --viewport WxH, --offline, --verbose (docs/cli.md)";
 
 #[cfg(feature = "dhat-heap")]
 static PROFILER: std::sync::Mutex<Option<dhat::Profiler>> = std::sync::Mutex::new(None);
@@ -179,6 +179,15 @@ fn run_command(argv: &[String], service: bool) -> i32 {
         Some("record") => record::run::cli(&argv[2..], &host, true),
         Some("run") => record::run::cli(&argv[2..], &host, false),
         Some("serve") => serve::cli(&argv[2..]),
+        Some("profile") => match argv.get(2).map(String::as_str) {
+            Some("diff") => roblox_engine_emulator::profiler::diff::cli(&argv[3..]),
+            Some("report") => roblox_engine_emulator::profiler::diff::report_cli(&argv[3..]),
+            _ => {
+                eprintln!("usage: ree profile diff <before dir> <after dir> [--out <dir>] [--top <n>]
+       ree profile report <profile dir>");
+                2
+            }
+        },
         Some("--version" | "-V" | "version") => {
             println!("ree {}", env!("CARGO_PKG_VERSION"));
             0

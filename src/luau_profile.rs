@@ -83,6 +83,39 @@ fn release() {}
 static TICKS: AtomicU64 = AtomicU64::new(0);
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static WORK_CLOCK: AtomicBool = AtomicBool::new(false);
+/// The profiling suite samples host time (profiler.rs `time`): the ticker runs for it, and the interrupt samples for it
+static SUITE_TIME: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    static SUITE_TICKER: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// Starts the ticker for the profiling suite's host time samples (profiler.rs): the ticks it starts from
+pub(crate) fn start_suite_ticker() -> u64 {
+    let stop = Arc::new(AtomicBool::new(false));
+    let ticker_stop = stop.clone();
+    let (base, started) = (TICKS.load(Ordering::Relaxed), Instant::now());
+    let spawned = thread::Builder::new().name("ree-profile-ticker".into()).spawn(move || {
+        while !ticker_stop.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(1));
+            TICKS.fetch_max(base + started.elapsed().as_millis() as u64, Ordering::Relaxed);
+        }
+    });
+    if spawned.is_ok() {
+        SUITE_TICKER.with(|ticker| *ticker.borrow_mut() = Some(stop));
+        SUITE_TIME.store(true, Ordering::Relaxed);
+    }
+    base
+}
+
+pub(crate) fn stop_suite_ticker() {
+    SUITE_TIME.store(false, Ordering::Relaxed);
+    SUITE_TICKER.with(|ticker| {
+        if let Some(stop) = ticker.borrow_mut().take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+    });
+}
 
 /// The work clock's cost for a sample: a stack is recorded once this much Studio time has been charged
 /// since the last one, so the samples follow the model's cost, not the host's
@@ -225,6 +258,7 @@ pub fn mark_frames() {
 /// set, so a harness can read its steady state apart from its setup.
 pub fn set_phase(name: &str) {
     crate::boundary::set_phase(name);
+    crate::profiler::phase(name);
     SAMPLES.with(|samples| {
         if let Some(samples) = samples.borrow_mut().as_mut() {
             samples.phase = name.into();
@@ -275,6 +309,15 @@ unsafe extern "C-unwind" fn allocating(state: *mut mlua::ffi::lua_State, old: us
 /// (the same time with no springs and no enemies). A step that reached a Luau safepoint
 /// itself is left as it is.
 pub fn engine_step<R>(name: &str, step: impl FnOnce() -> R) -> R {
+    if SUITE_TIME.load(Ordering::Relaxed) {
+        let start = TICKS.load(Ordering::Relaxed);
+        let result = step();
+        let ticks = TICKS.load(Ordering::Relaxed) - start;
+        if ticks > 0 {
+            crate::profiler::engine_step(name, ticks);
+        }
+        return result;
+    }
     if !ENABLED.load(Ordering::Relaxed) || WORK_CLOCK.load(Ordering::Relaxed) {
         return step();
     }
@@ -389,9 +432,15 @@ fn folded_stack(state: *mut mlua::ffi::lua_State, phase: &str, line_under_native
 unsafe extern "C-unwind" fn sampling_interrupt(state: *mut mlua::ffi::lua_State, gc: i32) {
     if gc < 0 {
         sample(state);
+        if SUITE_TIME.load(Ordering::Relaxed) {
+            crate::profiler::safepoint(state, TICKS.load(Ordering::Relaxed));
+        }
         crate::boundary::safepoint(state);
         // (a profile holds the interrupt slot: the script timeout checks from here)
         unsafe { crate::watchdog::check(state) };
+    } else {
+        // (a collector step's start and end)
+        crate::profiler::gc_interrupt(state);
     }
 }
 
@@ -402,18 +451,28 @@ pub fn install(lua: &mlua::Lua) {
     let time = ENABLED.load(Ordering::Relaxed);
     let allocations = ALLOC_ENABLED.load(Ordering::Relaxed);
     let boundary = crate::boundary::active();
-    if !time && !allocations && !boundary {
+    // the profiling suite (profiler.rs): its interrupt work (host time samples, the collector's steps) and its own
+    // allocation callback, which takes the place of this one
+    let suite = crate::profiler::active();
+    let suite_interrupt = suite && crate::profiler::wants_interrupt();
+    let suite_allocations = suite && crate::profiler::wants_allocations();
+    if !time && !allocations && !boundary && !suite {
         return;
     }
-    if time || boundary {
+    if time || boundary || suite_interrupt {
         unsafe {
             let _ = lua.exec_raw::<()>((), |state| {
                 (*mlua::ffi::lua_callbacks(state)).interrupt = Some(sampling_interrupt);
             });
         }
     }
-    if allocations {
+    if allocations && !suite_allocations {
         hook_allocations(lua);
+    } else if allocations {
+        eprintln!("RUR_LUAU_ALLOC_PROFILE is not written: the profile's own allocation profile (--profile alloc) takes the VM's allocation callback");
+    }
+    if suite {
+        crate::profiler::install(lua);
     }
 }
 

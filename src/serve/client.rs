@@ -28,7 +28,8 @@ pub fn cli(argv: &[String], record: bool) -> i32 {
         eprintln!("{} {}: {error}", host.name, if record { "record" } else { "run" });
         return 1;
     }
-    if ["RUR_LUAU_PROFILE", "RUR_LUAU_ALLOC_PROFILE"].iter().any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty())) {
+    // (a profile is of this process: the client runs the command itself)
+    if ["RUR_LUAU_PROFILE", "RUR_LUAU_ALLOC_PROFILE"].iter().any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty())) || crate::profiler::requested(&args) {
         return command::cli(&args, &host, record);
     }
     let state_dir = crate::state_dir(&crate::default_repo());

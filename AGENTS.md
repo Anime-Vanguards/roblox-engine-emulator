@@ -39,7 +39,8 @@ nearly every file.
 - `src/services/`, `src/lua/` (the Luau-facing API: Instance userdata in raw.rs, datatypes, globals, require, Luau
   stubs in services.luau / server.luau / prelude.luau), `src/project*` (Rojo mounting, models, bundles, model plans).
 - `src/world/` and `src/record/` (the 3D world and the recorder), `src/animation/`, `src/meshes.rs`, `src/images.rs`.
-- `src/serve/` (`ree serve`), `src/watchdog.rs` (script timeout and process guards), the profilers.
+- `src/serve/` (`ree serve`), `src/watchdog.rs` (script timeout and process guards), the profilers (`src/profiler/`, `src/luau_profile.rs`,
+  `src/boundary.rs`).
 - Tests: `src/tests.rs` (script API), `src/scheduler_tests.rs`, `src/lua/datatype_tests.rs`, `src/world/tests.rs`,
   `src/record/tests.rs`, `src/emulator.rs`, tests beside their modules, `tests/luau_vm.rs` (the patched VM),
   `tests/process_guards.rs` (the built `ree`).

@@ -60,6 +60,12 @@ for line in emulator.output() { println!("{} {}", line.kind, line.message) }
   "Project mount"); `instantiate_lazy_as(.., target)` makes a plan's one root as an instance that stood in
   its place (a bundle's placeholder), and `instantiate_lazy_members(.., parent)` that root's children. A process running many engines keeps compiled modules
   (`lua::modules::reuse_compiled_modules`) and converted bundles (`project::model_assets::keep_bundles`).
+- **Profiling** (`src/profiler`): `profiler::Config::from_args(args, default_dir)` (or `Config::new(kinds, dir)`)
+  and `profiler::Session::begin(config)` before the engine starts; `luau_profile::install(&lua)` hooks the VM
+  (it calls `profiler::install`), `scheduler::step` feeds the timeline and `luau_profile::set_phase` marks
+  phases; `profiler::collect(&lua)` reads the VM's profile before the VM goes, and `session.finish(Run {..})`
+  writes the files and returns the summary. A host counts its own caches with `profiler::caches::named(name,
+  about)` and `named_hit` / `named_miss` / `named_evicted`.
 - **A program running `ree`'s commands** passes a `launch::Host` (its name, checkout and engine
   constructor): `record::run::cli(argv, &host, true)` is how rur's `rur-native record` runs the recorder
   with its own engines.

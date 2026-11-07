@@ -28,8 +28,10 @@ impl Engine {
     /// or a getter-only behaviour property.
     pub fn resolve_member(&self, class: ClassId, name: NameId) -> Member {
         if let Some(member) = self.member_cache.borrow().get(&(class, name)) {
+            crate::profiler::caches::hit(crate::profiler::caches::Cache::Resolve);
             return *member;
         }
+        crate::profiler::caches::miss(crate::profiler::caches::Cache::Resolve);
         let reflection = &self.reflection;
         let behaviors = self.behaviors.borrow();
         let info = reflection.class(class);

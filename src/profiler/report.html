@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ree profile</title>
+<style>
+:root {
+	color-scheme: light;
+	--page: #f9f9f7;
+	--surface: #fcfcfb;
+	--ink: #0b0b0b;
+	--ink-2: #52514e;
+	--muted: #898781;
+	--grid: #e1e0d9;
+	--axis: #c3c2b7;
+	--ring: rgba(11, 11, 11, 0.10);
+	--wash: rgba(42, 120, 214, 0.10);
+	--s1: #2a78d6;
+	--s2: #eb6834;
+	--s3: #1baf7a;
+	--gray: #c3c2b7;
+	--seq-1: #cde2fb;
+	--seq-2: #86b6ef;
+	--seq-3: #3987e5;
+	--seq-4: #1c5cab;
+	--good: #0ca30c;
+	--warn: #fab219;
+}
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme="light"]) {
+		color-scheme: dark;
+		--page: #0d0d0d;
+		--surface: #1a1a19;
+		--ink: #f0efec;
+		--ink-2: #c3c2b7;
+		--muted: #898781;
+		--grid: #2c2c2a;
+		--axis: #383835;
+		--ring: rgba(255, 255, 255, 0.10);
+		--wash: rgba(57, 135, 229, 0.16);
+		--s1: #3987e5;
+		--s2: #d95926;
+		--s3: #199e70;
+		--gray: #52514e;
+		--seq-1: #104281;
+		--seq-2: #1c5cab;
+		--seq-3: #3987e5;
+		--seq-4: #86b6ef;
+	}
+}
+:root[data-theme="dark"] {
+	color-scheme: dark;
+	--page: #0d0d0d;
+	--surface: #1a1a19;
+	--ink: #f0efec;
+	--ink-2: #c3c2b7;
+	--muted: #898781;
+	--grid: #2c2c2a;
+	--axis: #383835;
+	--ring: rgba(255, 255, 255, 0.10);
+	--wash: rgba(57, 135, 229, 0.16);
+	--s1: #3987e5;
+	--s2: #d95926;
+	--s3: #199e70;
+	--gray: #52514e;
+	--seq-1: #104281;
+	--seq-2: #1c5cab;
+	--seq-3: #3987e5;
+	--seq-4: #86b6ef;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1280px; margin: 0 auto; padding: 20px 16px 48px; }
+h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
+h2 { font-size: 16px; margin: 28px 0 10px; font-weight: 600; }
+h3 { font-size: 14px; margin: 18px 0 8px; font-weight: 600; color: var(--ink-2); }
+p.lead { margin: 0 0 14px; color: var(--ink-2); }
+.warn { border-left: 3px solid var(--warn); padding: 6px 10px; margin: 8px 0; background: var(--surface); color: var(--ink-2); }
+nav { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0 6px; position: sticky; top: 0; background: var(--page); padding: 8px 0; z-index: 5; }
+nav button { font: inherit; background: var(--surface); color: var(--ink); border: 1px solid var(--ring); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+nav button[aria-selected="true"] { border-color: var(--s1); box-shadow: inset 0 -2px 0 var(--s1); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 10px 12px; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+.tile .sub { color: var(--muted); font-size: 12px; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 12px; margin: 10px 0; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 4px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+th { color: var(--ink-2); font-weight: 600; cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--surface); }
+th.text, td.text { text-align: left; }
+td.text { max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
+td.num { font-variant-numeric: tabular-nums; }
+tr.pick { cursor: pointer; }
+tr.pick:hover td { background: var(--wash); }
+tr.sel td { background: var(--wash); }
+.bar { display: inline-block; height: 8px; border-radius: 0 4px 4px 0; background: var(--s1); vertical-align: middle; }
+.muted { color: var(--muted); }
+.code { font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.code td { border: none; padding: 0 8px; }
+.code td.src { text-align: left; white-space: pre; color: var(--ink); }
+.code tr.hot td.src { background: var(--wash); }
+pre.summary { font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; overflow-x: auto; margin: 0; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 860px) { .cols { grid-template-columns: 1fr; } }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; margin: 4px 0 8px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--key); }
+.flame { position: relative; width: 100%; }
+.flame div.f { position: absolute; height: 17px; border-radius: 2px; font-size: 11px; line-height: 17px; padding: 0 4px; overflow: hidden; white-space: nowrap; color: #fff; cursor: pointer; }
+.flame div.f:hover { filter: brightness(1.12); }
+.tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--ring); border-radius: 6px; padding: 6px 9px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.18); z-index: 20; display: none; max-width: 520px; }
+.tip strong { font-size: 13px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+.chart svg { width: 100%; height: 150px; display: block; }
+.chart .title { font-size: 12px; color: var(--ink-2); margin-bottom: 2px; }
+section[hidden] { display: none; }
+.controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 6px 0; color: var(--ink-2); font-size: 13px; }
+.controls select, .controls input { font: inherit; background: var(--surface); color: var(--ink); border: 1px solid var(--ring); border-radius: 6px; padding: 3px 6px; }
+</style>
+</head>
+<body>
+<main>
+<h1>ree profile</h1>
+<p class="lead" id="lead"></p>
+<div id="warnings"></div>
+<div class="tiles" id="tiles"></div>
+<nav id="nav"></nav>
+<section id="hot" data-tab="Hot paths"></section>
+<section id="flame" data-tab="Flame graph" hidden></section>
+<section id="memory" data-tab="Memory" hidden></section>
+<section id="timeline" data-tab="Timeline" hidden></section>
+<section id="caches" data-tab="Caches" hidden></section>
+<section id="cpu" data-tab="CPU" hidden></section>
+<section id="text" data-tab="Summary text" hidden></section>
+</main>
+<div class="tip" id="tip"></div>
+<script>
+const PROFILE = /*PROFILE_DATA*/null;
+(function () {
+	"use strict";
+	const P = PROFILE || {};
+	const $ = (id) => document.getElementById(id);
+	const el = (tag, attrs, ...children) => {
+		const node = document.createElement(tag);
+		for (const [key, value] of Object.entries(attrs || {})) {
+			if (key === "class") node.className = value;
+			else if (key === "style") node.style.cssText = value;
+			else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+			else node.setAttribute(key, value);
+		}
+		for (const child of children) node.append(child instanceof Node ? child : document.createTextNode(child == null ? "" : String(child)));
+		return node;
+	};
+	const fmt = (value, digits) => value == null || Number.isNaN(value) ? "-" : Number(value).toLocaleString("en-US", { minimumFractionDigits: digits || 0, maximumFractionDigits: digits || 0 });
+	const bytes = (value) => {
+		value = Math.max(0, value || 0);
+		if (value >= 1048576) return (value / 1048576).toFixed(2) + " MB";
+		if (value >= 1024) return (value / 1024).toFixed(1) + " KB";
+		return Math.round(value) + " B";
+	};
+	const compact = (value) => {
+		const a = Math.abs(value);
+		if (a >= 1e9) return (value / 1e9).toFixed(1) + "G";
+		if (a >= 1e6) return (value / 1e6).toFixed(1) + "M";
+		if (a >= 1e4) return (value / 1e3).toFixed(0) + "K";
+		return fmt(value, a < 10 && a % 1 ? 2 : 0);
+	};
+	const pct = (part, whole) => whole > 0 ? (part / whole * 100).toFixed(1) + " %" : "-";
+	const tip = $("tip");
+	const showTip = (event, build) => {
+		tip.replaceChildren(...build());
+		tip.style.display = "block";
+		const x = Math.min(event.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+		const y = Math.min(event.clientY + 14, window.innerHeight - tip.offsetHeight - 8);
+		tip.style.left = x + "px";
+		tip.style.top = y + "px";
+	};
+	const hideTip = () => { tip.style.display = "none"; };
+
+	const functions = P.functions || [];
+	const byId = new Map(functions.map((f) => [f.id, f]));
+	const shortModule = (module) => module ? module.split(/[.\/\\]/).pop() : "";
+	const fname = (f) => f ? (f.module ? `${f.name || "anonymous"}  ${shortModule(f.module)}:${f.line}` : f.name) : "?";
+	// a stack's script lines, innermost first (the engine's own Luau and C frames left out)
+	const stackText = (frames) => (frames || []).filter((fr) => fr[0] >= 0 && byId.has(fr[0]) && byId.get(fr[0]).kind !== "engine Luau").slice(0, 4).map((fr) => `${shortModule(byId.get(fr[0]).module)}:${fr[1] >= 0 ? fr[1] : "native"}`).join(" < ") || "(engine)";
+	const run = P.run || {};
+
+	$("lead").textContent = `${run.command || "run"} ${run.status || ""}: ${fmt(run.frames)} frames, ${fmt(run.seconds, 2)} s emulated${run.fps ? " at " + run.fps + " fps" : ""}; kinds ${(P.kinds || []).join(", ")}; ${fmt(run.elapsed, 2)} s wall${run.harness ? "; " + run.harness : ""}`;
+	for (const warning of P.warnings || []) $("warnings").append(el("div", { class: "warn" }, warning));
+
+	// stat tiles
+	const tiles = [];
+	if (P.work) tiles.push(["Work clock", fmt(P.work.total_ms, 2) + " ms", `${fmt(P.work.per_frame_ms, 3)} ms a frame`]);
+	if (P.work) tiles.push(["Script instructions", compact(P.work.script_insns), `${compact(P.work.engine_insns)} by the engine's Luau`]);
+	if (P.alloc) tiles.push(["Allocated", bytes(P.alloc.bytes), `${compact(P.alloc.objects)} objects`]);
+	const snapshots = (P.heap && P.heap.snapshots) || [];
+	if (snapshots.length) {
+		const last = snapshots[snapshots.length - 1];
+		tiles.push(["Live heap at " + last.label, bytes(last.object_bytes), `${compact(last.objects)} objects`]);
+	}
+	if (P.heap && P.heap.gc) tiles.push(["Collector", fmt(P.heap.gc.cycles) + " cycles", `${bytes(P.heap.gc.freed)} freed, ${fmt(P.heap.gc.ms, 1)} ms`]);
+	if (P.time) tiles.push(["Host time sampled", fmt(P.time.sampled_ms, 1) + " ms", "1 ms ticks at safepoints"]);
+	tiles.push(["Frames", fmt(run.frames), `${fmt(run.seconds, 2)} s emulated`]);
+	for (const [label, value, sub] of tiles) $("tiles").append(el("div", { class: "tile" }, el("div", { class: "label" }, label), el("div", { class: "value" }, value), el("div", { class: "sub" }, sub)));
+
+	// tabs
+	const sections = [...document.querySelectorAll("section[data-tab]")];
+	const select = (id) => {
+		for (const section of sections) section.hidden = section.id !== id;
+		for (const button of $("nav").children) button.setAttribute("aria-selected", String(button.dataset.id === id));
+		try { localStorage.setItem("ree-profile-tab", id); } catch (_) {}
+	};
+	for (const section of sections) {
+		const button = el("button", { "data-id": section.id, onclick: () => select(section.id) }, section.dataset.tab);
+		button.dataset.id = section.id;
+		$("nav").append(button);
+	}
+
+	// a sortable table: columns [{key, label, text?, fmt?, bar?}]
+	const table = (rows, columns, options) => {
+		options = options || {};
+		let sortKey = options.sort || columns[1].key;
+		let descending = true;
+		const wrap = el("div", { class: "card" });
+		const render = () => {
+			const sorted = rows.slice().sort((a, b) => {
+				const x = columns.find((c) => c.key === sortKey).value(a), y = columns.find((c) => c.key === sortKey).value(b);
+				return (typeof x === "string" ? x.localeCompare(y) : x - y) * (descending ? -1 : 1);
+			}).slice(0, options.limit || 200);
+			const max = Math.max(1e-12, ...sorted.map((row) => columns.find((c) => c.bar) ? columns.find((c) => c.bar).value(row) : 0));
+			const head = el("tr", {}, ...columns.map((c) => el("th", { class: c.text ? "text" : "", onclick: () => { descending = sortKey === c.key ? !descending : true; sortKey = c.key; render(); } }, c.label + (sortKey === c.key ? (descending ? " ↓" : " ↑") : ""))));
+			const body = sorted.map((row) => {
+				const tr = el("tr", { class: options.onpick ? "pick" : "" }, ...columns.map((c) => {
+					const value = c.value(row);
+					const cell = el("td", { class: c.text ? "text" : "num", title: c.text ? String(value) : "" });
+					if (c.bar) cell.append(el("span", { class: "bar", style: `width:${Math.max(1, value / max * 70)}px;margin-right:6px` }));
+					cell.append(c.fmt ? c.fmt(value, row) : String(value));
+					return cell;
+				}));
+				if (options.onpick) tr.addEventListener("click", () => { for (const other of tr.parentNode.children) other.classList.remove("sel"); tr.classList.add("sel"); options.onpick(row); });
+				return tr;
+			});
+			wrap.replaceChildren(el("table", {}, el("thead", {}, head), el("tbody", {}, ...body)));
+		};
+		render();
+		return wrap;
+	};
+
+	// Hot paths: functions, then the selected one's callers, callees and lines
+	(function hot() {
+		const section = $("hot");
+		const hasWork = !!P.work, hasTime = !!P.time, hasAlloc = !!P.alloc;
+		section.append(el("h2", {}, "Functions"));
+		section.append(el("p", { class: "lead" }, hasWork ? "Work is the work clock: what Studio would take for the same code, booked to the instruction that caused it; the same every run. Self is the function's own instructions; total includes what it called. Click a function for its callers, callees and annotated source." : "Click a function for its callers, callees and annotated source."));
+		const columns = [{ key: "name", label: "function", text: true, value: (f) => fname(f) }];
+		if (hasWork) columns.push(
+			{ key: "self_work", label: "self work ms", value: (f) => f.self.work_ms, fmt: (v) => fmt(v, 3), bar: true },
+			{ key: "total_work", label: "total work ms", value: (f) => f.total.work_ms, fmt: (v) => fmt(v, 3) },
+			{ key: "calls", label: "calls", value: (f) => f.calls, fmt: (v) => fmt(v) },
+			{ key: "insns", label: "self insns", value: (f) => f.self.insns, fmt: (v) => compact(v) });
+		if (hasTime) columns.push({ key: "self_time", label: "self host ms", value: (f) => f.self.time_ms, fmt: (v) => fmt(v, 1), bar: !hasWork }, { key: "total_time", label: "total host ms", value: (f) => f.total.time_ms, fmt: (v) => fmt(v, 1) });
+		if (hasAlloc) columns.push({ key: "self_alloc", label: "allocated", value: (f) => f.self.alloc_bytes, fmt: (v) => bytes(v), bar: !hasWork && !hasTime }, { key: "total_alloc", label: "total allocated", value: (f) => f.total.alloc_bytes, fmt: (v) => bytes(v) });
+		const detail = el("div");
+		const rows = functions.filter((f) => f.kind !== "engine Luau" && (f.self.work_ms > 0 || f.total.work_ms > 0 || f.self.time_ms > 0 || f.total.time_ms > 0 || f.self.alloc_bytes > 0 || f.calls > 0));
+		section.append(table(rows, columns, { sort: columns[1].key, limit: 300, onpick: (f) => showFunction(f, detail) }));
+		section.append(detail);
+		if (P.work && P.work.native_functions && P.work.native_functions.length) {
+			section.append(el("div", { class: "warn" }, `${P.work.native_functions.length} natively compiled functions ran natively: their instructions are not counted (entries and the work booked while they ran are).`));
+		}
+		section.append(el("h2", {}, "Lines"));
+		const lines = (P.lines || []).filter((l) => byId.has(l.function) && byId.get(l.function).kind !== "engine Luau");
+		const lineColumns = [
+			{ key: "line", label: "line", text: true, value: (l) => `${shortModule(byId.get(l.function).module)}:${l.line >= 0 ? l.line : "native"}` },
+			{ key: "function", label: "function", text: true, value: (l) => byId.get(l.function).name || "anonymous" }];
+		if (hasWork) lineColumns.push(
+			{ key: "work", label: "self work ms", value: (l) => l.work_ms, fmt: (v) => fmt(v, 3), bar: true },
+			{ key: "total", label: "total work ms", value: (l) => l.total_work_ms, fmt: (v) => fmt(v, 3) },
+			{ key: "insns", label: "insns", value: (l) => l.insns, fmt: (v) => compact(v) },
+			{ key: "ops", label: "opcodes", text: true, value: (l) => Object.entries(l.ops || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([op, n]) => `${op} ${compact(n)}`).join(", ") });
+		if (hasTime) lineColumns.push({ key: "time", label: "self host ms", value: (l) => l.time_ms, fmt: (v) => fmt(v, 1), bar: !hasWork });
+		if (hasAlloc) lineColumns.push({ key: "alloc", label: "allocated", value: (l) => l.alloc_bytes, fmt: (v) => bytes(v) });
+		section.append(table(lines, lineColumns, { sort: lineColumns[2] ? lineColumns[2].key : "line", limit: 200, onpick: (l) => showFunction(byId.get(l.function), detail, l.line) }));
+		if (P.work && P.work.opcodes) {
+			section.append(el("h2", {}, "Opcodes"));
+			section.append(table(P.work.opcodes, [
+				{ key: "op", label: "opcode", text: true, value: (o) => o.op },
+				{ key: "count", label: "executed", value: (o) => o.count, fmt: (v) => fmt(v), bar: true },
+				{ key: "work", label: "work ms", value: (o) => o.work_ms, fmt: (v) => fmt(v, 3) },
+				{ key: "share", label: "share", value: (o) => o.count, fmt: (v) => pct(v, P.work.script_insns) }], { sort: "count", limit: 100 }));
+		}
+		const first = rows.slice().sort((a, b) => (b.self.work_ms - a.self.work_ms) || (b.self.time_ms - a.self.time_ms) || (b.self.alloc_bytes - a.self.alloc_bytes))[0];
+		if (first) showFunction(first, detail);
+	})();
+
+	function showFunction(f, target, focusLine) {
+		if (!f) return;
+		const edges = P.edges || [];
+		const callers = edges.filter((e) => e.callee === f.id).map((e) => ({ ...e, other: e.caller }));
+		const callees = edges.filter((e) => e.caller === f.id).map((e) => ({ ...e, other: e.callee }));
+		const otherColumns = [
+			{ key: "name", label: "function", text: true, value: (e) => fname(byId.get(e.other)) || "?" },
+			{ key: "calls", label: "calls", value: (e) => e.calls, fmt: (v) => fmt(v) },
+			{ key: "work", label: "work ms", value: (e) => e.work_ms, fmt: (v) => fmt(v, 3), bar: true },
+			{ key: "insns", label: "insns", value: (e) => e.insns, fmt: (v) => compact(v) }];
+		const nodes = [el("h2", {}, fname(f)),
+			el("p", { class: "lead" }, `${f.module || ""}${f.native ? " · natively compiled: " + fmt(f.native_entries) + " native entries, instructions not counted" : ""} · ${fmt(f.calls)} calls · self ${fmt(f.self.work_ms, 3)} ms / total ${fmt(f.total.work_ms, 3)} ms of work`)];
+		if (P.edges) nodes.push(el("div", { class: "cols" },
+			el("div", {}, el("h3", {}, "Callers"), callers.length ? table(callers, otherColumns, { sort: "work", limit: 30 }) : el("p", { class: "muted" }, "none recorded")),
+			el("div", {}, el("h3", {}, "Callees"), callees.length ? table(callees, otherColumns, { sort: "work", limit: 30 }) : el("p", { class: "muted" }, "none recorded"))));
+		const listing = (P.listings || {})[String(f.id)];
+		if (listing) {
+			const lineFigures = new Map((P.lines || []).filter((l) => l.function === f.id).map((l) => [l.line, l]));
+			const maxWork = Math.max(1e-12, ...[...lineFigures.values()].map((l) => l.work_ms || l.time_ms || 0));
+			const rows = listing.lines.map(([line, text]) => {
+				const figures = lineFigures.get(line);
+				const heat = figures ? (figures.work_ms || figures.time_ms || 0) / maxWork : 0;
+				const tr = el("tr", { class: heat > 0.15 || line === focusLine ? "hot" : "" },
+					el("td", { class: "num muted" }, String(line)),
+					el("td", { class: "num" }, figures && P.work ? fmt(figures.work_ms, 3) : ""),
+					el("td", { class: "num muted" }, figures && P.work ? compact(figures.insns) : ""),
+					el("td", { class: "num muted" }, figures && P.time ? fmt(figures.time_ms, 1) : ""),
+					el("td", { class: "num muted" }, figures && P.alloc && figures.alloc_bytes ? bytes(figures.alloc_bytes) : ""),
+					el("td", { class: "src" }, text));
+				if (line === focusLine) setTimeout(() => tr.scrollIntoView({ block: "center" }), 0);
+				return tr;
+			});
+			nodes.push(el("h3", {}, "Annotated source: " + listing.path),
+				el("div", { class: "card", style: "max-height:520px;overflow:auto" }, el("table", { class: "code" },
+					el("thead", {}, el("tr", {}, el("th", {}, "line"), el("th", {}, "work ms"), el("th", {}, "insns"), el("th", {}, "host ms"), el("th", {}, "allocated"), el("th", { class: "text" }, "source"))),
+					el("tbody", {}, ...rows))));
+		} else {
+			nodes.push(el("p", { class: "muted" }, "No source listing for this function (listings are kept for the hottest functions whose source the run loaded)."));
+		}
+		target.replaceChildren(...nodes);
+	}
+
+	// Flame graph (icicle) of the call tree's work or instructions
+	(function flame() {
+		const section = $("flame");
+		const tree = P.tree || [];
+		if (!tree.length) { section.append(el("p", { class: "muted" }, "No call tree: run with --profile work.")); return; }
+		section.append(el("h2", {}, "Call tree"));
+		section.append(el("p", { class: "lead" }, "Each box is a function reached by one path of calls; its width is what it and its callees took. Click a box to zoom in, the top row to zoom out."));
+		const control = el("select", {}, el("option", { value: "work" }, "work clock"), el("option", { value: "insns" }, "instructions"));
+		section.append(el("div", { class: "controls" }, el("label", {}, "Width: ", control)));
+		section.append(el("div", { class: "legend" }, el("span", { style: "--key: var(--s1)" }, "script Luau"), el("span", { style: "--key: var(--s3)" }, "engine Luau"), el("span", { style: "--key: var(--gray)" }, "C function or phase"), el("span", { style: "--key: var(--s2)" }, "natively compiled")));
+		const box = el("div", { class: "flame card" });
+		section.append(box);
+		// tree rows: [parent, function, calls, work_us, insns, label]
+		const children = tree.map(() => []);
+		tree.forEach((node, index) => { if (node[0] >= 0) children[node[0]].push(index); });
+		let measure = "work";
+		const totals = new Float64Array(tree.length);
+		const compute = () => {
+			for (let index = tree.length - 1; index >= 0; index--) {
+				totals[index] = (measure === "work" ? tree[index][3] : tree[index][4]) + children[index].reduce((sum, child) => sum + totals[child], 0);
+			}
+		};
+		let rootIndex = 0;
+		const draw = () => {
+			compute();
+			box.replaceChildren();
+			const width = box.clientWidth - 24 || 900;
+			const rows = [];
+			const place = (index, x, depth, scale) => {
+				if (totals[index] * scale < 1.5 || depth > 60) return;
+				rows.push([index, x, depth, totals[index] * scale]);
+				let offset = x;
+				const ordered = children[index].slice().sort((a, b) => totals[b] - totals[a]);
+				for (const child of ordered) { place(child, offset, depth + 1, scale); offset += totals[child] * scale; }
+			};
+			if (totals[rootIndex] <= 0) { box.append(el("p", { class: "muted" }, "Nothing was booked.")); return; }
+			place(rootIndex, 0, 0, width / totals[rootIndex]);
+			const depth = Math.max(...rows.map((row) => row[2])) + 1;
+			box.style.height = (depth * 19 + 24) + "px";
+			for (const [index, x, level, w] of rows) {
+				const node = tree[index];
+				const f = byId.get(node[1]);
+				const color = node[1] < 0 ? "var(--gray)" : f && f.kind === "engine Luau" ? "var(--s3)" : f && f.native ? "var(--s2)" : "var(--s1)";
+				const label = node[5] || fname(f);
+				const div = el("div", { class: "f", style: `left:${x + 12}px;top:${level * 19 + 12}px;width:${Math.max(1, w - 2)}px;background:${color};${node[1] < 0 ? "color:var(--ink)" : ""}` }, w > 40 ? label : "");
+				div.addEventListener("mousemove", (event) => showTip(event, () => [el("strong", {}, measure === "work" ? fmt(totals[index] / 1000, 3) + " ms" : compact(totals[index]) + " instructions"), el("div", {}, label), el("div", { class: "muted" }, `${pct(totals[index], totals[0])} of all · ${fmt(node[2])} calls · self ${measure === "work" ? fmt(node[3] / 1000, 3) + " ms" : compact(node[4])}`)]));
+				div.addEventListener("mouseleave", hideTip);
+				div.addEventListener("click", () => { rootIndex = index === rootIndex ? (tree[index][0] >= 0 ? tree[index][0] : 0) : index; draw(); });
+				box.append(div);
+			}
+		};
+		control.addEventListener("change", () => { measure = control.value; draw(); });
+		new ResizeObserver(() => { if (!section.hidden) draw(); }).observe(box);
+		draw();
+	})();
+
+	// Memory
+	(function memory() {
+		const section = $("memory");
+		if (!P.alloc && !snapshots.length) { section.append(el("p", { class: "muted" }, "No memory profile: run with --profile alloc,heap.")); return; }
+		if (P.alloc) {
+			section.append(el("h2", {}, `Allocations: ${bytes(P.alloc.bytes)} in ${fmt(P.alloc.objects)} objects`));
+			section.append(el("p", { class: "lead" }, "Every allocation the VM made during the run, by type (exact) and by the Luau stack that made it" + (P.alloc.step > 1 ? ` (sampled every ${P.alloc.step} bytes on average, weighted)` : " (every allocation)") + "."));
+			section.append(table(P.alloc.by_type, [
+				{ key: "type", label: "type", text: true, value: (t) => t.type },
+				{ key: "bytes", label: "bytes", value: (t) => t.bytes, fmt: (v) => bytes(v), bar: true },
+				{ key: "count", label: "allocations", value: (t) => t.count, fmt: (v) => fmt(v) },
+				{ key: "share", label: "share", value: (t) => t.bytes, fmt: (v) => pct(v, P.alloc.bytes) }], { sort: "bytes" }));
+			section.append(el("h3", {}, "By allocating stack (innermost Luau lines first)"));
+			section.append(table(P.alloc.by_stack, [
+				{ key: "stack", label: "stack", text: true, value: (s) => stackText(s.frames) },
+				{ key: "type", label: "type", text: true, value: (s) => s.type },
+				{ key: "bytes", label: "bytes", value: (s) => s.bytes, fmt: (v) => bytes(v), bar: true },
+				{ key: "count", label: "count", value: (s) => s.count, fmt: (v) => fmt(v) }], { sort: "bytes", limit: 150 }));
+		}
+		if (snapshots.length) {
+			const picker = el("select", {}, ...snapshots.map((s, i) => el("option", { value: String(i) }, `${s.label} (frame ${s.frame})`)));
+			picker.value = String(snapshots.length - 1);
+			const holder = el("div");
+			section.append(el("h2", {}, "Live heap"), el("div", { class: "controls" }, el("label", {}, "Snapshot: ", picker)), holder);
+			const show = () => {
+				const s = snapshots[Number(picker.value)];
+				holder.replaceChildren(
+					el("p", { class: "lead" }, `${bytes(s.object_bytes)} in ${fmt(s.objects)} objects (gcinfo() ${fmt(s.gcinfo_kb)} KB). Allocated by the run and still alive: ${bytes(s.allocated_since.bytes)}. Not reachable, awaiting collection: ${bytes(s.unreachable.bytes)} in ${fmt(s.unreachable.count)} objects.`),
+					el("div", { class: "cols" },
+						el("div", {}, el("h3", {}, "By type"), table(s.by_type, [
+							{ key: "type", label: "type", text: true, value: (t) => t.type },
+							{ key: "bytes", label: "bytes", value: (t) => t.bytes, fmt: (v) => bytes(v), bar: true },
+							{ key: "count", label: "objects", value: (t) => t.count, fmt: (v) => fmt(v) }], { sort: "bytes", limit: 60 })),
+						el("div", {}, el("h3", {}, "Biggest by what they keep alive"), table(s.biggest, [
+							{ key: "what", label: "object", text: true, value: (b) => b.name ? `${b.type} ${b.name}` : b.type },
+							{ key: "retained", label: "keeps alive", value: (b) => b.retained, fmt: (v) => bytes(v), bar: true },
+							{ key: "size", label: "own", value: (b) => b.size, fmt: (v) => bytes(v) },
+							{ key: "path", label: "held by", text: true, value: (b) => b.path }], { sort: "retained", limit: 40 }))),
+					el("h3", {}, "The run's live objects by allocating stack"),
+					table(s.by_stack, [
+						{ key: "stack", label: "stack", text: true, value: (x) => stackText(x.frames) },
+						{ key: "type", label: "type", text: true, value: (x) => x.type },
+						{ key: "bytes", label: "bytes now", value: (x) => x.bytes, fmt: (v) => bytes(v), bar: true },
+						{ key: "count", label: "objects", value: (x) => x.count, fmt: (v) => fmt(v) }], { sort: "bytes", limit: 100 }));
+			};
+			picker.addEventListener("change", show);
+			show();
+			const gc = P.heap.gc;
+			if (gc) {
+				section.append(el("h2", {}, "Collector"));
+				section.append(el("p", { class: "lead" }, `${fmt(gc.cycles)} cycles, ${fmt(gc.steps)} steps, ${bytes(gc.freed)} freed, ${fmt(gc.ms, 1)} ms of host time.`));
+				section.append(table(gc.by_state, [
+					{ key: "state", label: "step began in", text: true, value: (s) => s.state },
+					{ key: "steps", label: "steps", value: (s) => s.steps, fmt: (v) => fmt(v), bar: true },
+					{ key: "ms", label: "host ms", value: (s) => s.ms, fmt: (v) => fmt(v, 2) }], { sort: "steps" }));
+			}
+		}
+	})();
+
+	// Timeline: one small chart per measure, a shared crosshair
+	(function timeline() {
+		const section = $("timeline");
+		const t = P.timeline;
+		if (!t) { section.append(el("p", { class: "muted" }, "No timeline: run with --profile timeline.")); return; }
+		const col = (name) => t.columns.indexOf(name);
+		const rows = t.rows;
+		section.append(el("h2", {}, "Per frame"));
+		section.append(el("p", { class: "lead" }, "One value a frame. Work is the work clock's charge in the frame; host is the frame's wall time in this process; heap is the VM's heap at the frame's end."));
+		const measures = [
+			["Work clock (ms a frame)", (r) => r[col("work_ms")], (v) => fmt(v, 3) + " ms"],
+			["Host time (ms a frame)", (r) => r[col("host_ms")], (v) => fmt(v, 2) + " ms"],
+			["Luau heap (MB)", (r) => r[col("heap_bytes")] / 1048576, (v) => fmt(v, 2) + " MB"],
+			["Allocated (KB a frame)", (r) => r[col("allocated_bytes")] / 1024, (v) => fmt(v, 1) + " KB"],
+			["Instructions a frame", (r) => r[col("instructions")], (v) => compact(v)],
+			["Collector (ms a frame)", (r) => r[col("gc_ms")], (v) => fmt(v, 3) + " ms"],
+			["Instances", (r) => r[col("instances")], (v) => fmt(v)],
+			["Connections", (r) => r[col("connections")], (v) => fmt(v)],
+			["Threads (change since start)", (r) => r[col("threads")], (v) => fmt(v)],
+		];
+		const grid = el("div", { class: "charts" });
+		section.append(grid);
+		const charts = [];
+		const ns = "http://www.w3.org/2000/svg";
+		const svgEl = (tag, attrs) => { const node = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v); return node; };
+		for (const [title, get, show] of measures) {
+			const values = rows.map(get);
+			if (values.every((v) => !v)) continue;
+			const svg = svgEl("svg", { viewBox: "0 0 400 150", preserveAspectRatio: "none" });
+			const max = Math.max(1e-9, ...values), min = Math.min(0, ...values);
+			const x = (i) => 36 + (i / Math.max(1, rows.length - 1)) * 356, y = (v) => 128 - (v - min) / (max - min) * 112;
+			for (const tick of [min, (min + max) / 2, max]) {
+				svg.append(svgEl("line", { x1: 36, x2: 392, y1: y(tick), y2: y(tick), stroke: "var(--grid)", "stroke-width": 1, "vector-effect": "non-scaling-stroke" }));
+				const label = svgEl("text", { x: 32, y: y(tick) + 4, "text-anchor": "end", "font-size": 10, fill: "var(--muted)" });
+				label.textContent = compact(tick);
+				svg.append(label);
+			}
+			svg.append(svgEl("path", { d: values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(""), fill: "none", stroke: "var(--s1)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }));
+			const cross = svgEl("line", { y1: 12, y2: 128, stroke: "var(--axis)", "stroke-width": 1, visibility: "hidden", "vector-effect": "non-scaling-stroke" });
+			const dot = svgEl("circle", { r: 4, fill: "var(--s1)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" });
+			svg.append(cross, dot);
+			const card = el("div", { class: "card chart" }, el("div", { class: "title" }, title), svg);
+			grid.append(card);
+			charts.push({ svg, cross, dot, x, y, values, title, show });
+		}
+		const point = (index, event) => {
+			for (const chart of charts) {
+				chart.cross.setAttribute("x1", chart.x(index)); chart.cross.setAttribute("x2", chart.x(index)); chart.cross.setAttribute("visibility", "visible");
+				chart.dot.setAttribute("cx", chart.x(index)); chart.dot.setAttribute("cy", chart.y(chart.values[index])); chart.dot.setAttribute("visibility", "visible");
+			}
+			const row = rows[index];
+			showTip(event, () => [el("strong", {}, `frame ${row[col("frame")]}`), el("div", { class: "muted" }, `${fmt(row[col("seconds")], 3)} s · ${(P.phases || [])[row[col("phase")]] || ""}`), ...charts.map((c) => el("div", {}, `${c.show(c.values[index])}  `, el("span", { class: "muted" }, c.title)))]);
+		};
+		for (const chart of charts) {
+			chart.svg.addEventListener("mousemove", (event) => {
+				const box = chart.svg.getBoundingClientRect();
+				const fraction = ((event.clientX - box.left) / box.width * 400 - 36) / 356;
+				point(Math.max(0, Math.min(rows.length - 1, Math.round(fraction * (rows.length - 1)))), event);
+			});
+			chart.svg.addEventListener("mouseleave", () => { hideTip(); for (const c of charts) { c.cross.setAttribute("visibility", "hidden"); c.dot.setAttribute("visibility", "hidden"); } });
+		}
+		section.append(el("h3", {}, "Frames (table)"));
+		section.append(table(rows.map((r) => ({ r })), t.columns.map((name, i) => ({ key: name, label: name.replace(/_/g, " "), value: (x) => x.r[i], fmt: (v) => typeof v === "number" ? (Number.isInteger(v) ? fmt(v) : fmt(v, 3)) : String(v) })), { sort: "work_ms", limit: 400 }));
+	})();
+
+	// Caches
+	(function caches() {
+		const section = $("caches");
+		if (!P.luau_caches && !P.ree_caches) { section.append(el("p", { class: "muted" }, "No cache profile: run with --profile caches.")); return; }
+		if (P.luau_caches) {
+			section.append(el("h2", {}, "Luau inline caches"));
+			section.append(el("p", { class: "lead" }, "Read before each instruction runs. Hit: the predicted slot (or the resolved import, the builtin's fast path) served it. Miss: the VM looked the key up and repredicted the slot. Slow: a metatable's path, or an environment that is not safe. Other: not a table (an Instance's or a datatype's own __index or __namecall)."));
+			section.append(table(P.luau_caches.by_kind, [
+				{ key: "kind", label: "cache", text: true, value: (k) => k.kind },
+				{ key: "rate", label: "hit rate", value: (k) => k.hits / Math.max(1, k.hits + k.misses + k.slow), fmt: (v) => (v * 100).toFixed(1) + " %", bar: true },
+				{ key: "hits", label: "hits", value: (k) => k.hits, fmt: (v) => fmt(v) },
+				{ key: "misses", label: "misses", value: (k) => k.misses, fmt: (v) => fmt(v) },
+				{ key: "slow", label: "slow", value: (k) => k.slow, fmt: (v) => fmt(v) },
+				{ key: "other", label: "other", value: (k) => k.other, fmt: (v) => fmt(v) }], { sort: "hits" }));
+			section.append(el("h3", {}, "Call sites"));
+			section.append(table(P.luau_caches.sites, [
+				{ key: "site", label: "site", text: true, value: (s) => { const f = byId.get(s.function); return `${f ? shortModule(f.module) : "?"}:${s.line}`; } },
+				{ key: "op", label: "opcode", text: true, value: (s) => s.op },
+				{ key: "misses", label: "misses", value: (s) => s.misses, fmt: (v) => fmt(v), bar: true },
+				{ key: "slow", label: "slow", value: (s) => s.slow, fmt: (v) => fmt(v) },
+				{ key: "hits", label: "hits", value: (s) => s.hits, fmt: (v) => fmt(v) },
+				{ key: "other", label: "other", value: (s) => s.other, fmt: (v) => fmt(v) }], { sort: "misses", limit: 200 }));
+		}
+		if (P.ree_caches) {
+			section.append(el("h2", {}, "ree's caches"));
+			section.append(table(P.ree_caches.filter((c) => c.hits + c.misses + c.evictions > 0), [
+				{ key: "name", label: "cache", text: true, value: (c) => c.name },
+				{ key: "rate", label: "hit rate", value: (c) => c.hits / Math.max(1, c.hits + c.misses), fmt: (v) => (v * 100).toFixed(1) + " %", bar: true },
+				{ key: "hits", label: "hits", value: (c) => c.hits, fmt: (v) => fmt(v) },
+				{ key: "misses", label: "misses", value: (c) => c.misses, fmt: (v) => fmt(v) },
+				{ key: "evictions", label: "evicted", value: (c) => c.evictions, fmt: (v) => fmt(v) },
+				{ key: "about", label: "what it keeps", text: true, value: (c) => c.about }], { sort: "hits" }));
+		}
+	})();
+
+	// CPU
+	(function cpu() {
+		const section = $("cpu");
+		const c = P.cpu;
+		if (!c) { section.append(el("p", { class: "muted" }, "No CPU profile: run with --profile cpu.")); return; }
+		section.append(el("h2", {}, "CPU"));
+		const rows = [["Run thread cycles (reference cycles)", c.thread_cycles == null ? "-" : fmt(c.thread_cycles)], ["Process CPU", c.process_cpu_s ? `${fmt(c.process_cpu_s.user, 2)} s user, ${fmt(c.process_cpu_s.kernel, 2)} s kernel` : "-"], ["Page faults", c.page_faults == null ? "-" : fmt(c.page_faults)], ["Peak working set", c.peak_working_set == null ? "-" : bytes(c.peak_working_set)], ["Private bytes", c.private_bytes == null ? "-" : bytes(c.private_bytes)]];
+		section.append(el("div", { class: "card" }, el("table", {}, el("tbody", {}, ...rows.map(([k, v]) => el("tr", {}, el("td", { class: "text" }, k), el("td", { class: "num" }, v)))))));
+		if (c.pmc) section.append(table(c.pmc, [{ key: "counter", label: "counter", text: true, value: (x) => x.counter }, { key: "value", label: "value", value: (x) => x.value, fmt: (v) => fmt(v) }]));
+		if (c.pmc_missing) section.append(el("div", { class: "warn" }, "Hardware counters not read: " + c.pmc_missing));
+		if (c.pmc_sources && c.pmc_sources.length) section.append(el("p", { class: "muted" }, "Counters this CPU offers to ETW: " + c.pmc_sources.join(", ")));
+	})();
+
+	$("text").append(el("div", { class: "card" }, el("pre", { class: "summary" }, P.summary || "")));
+	// (a link may name the tab: report.html#memory)
+	let start = location.hash.slice(1);
+	if (!sections.some((s) => s.id === start)) {
+		try { start = localStorage.getItem("ree-profile-tab") || "hot"; } catch (_) { start = "hot"; }
+	}
+	select(sections.some((s) => s.id === start) ? start : "hot");
+})();
+</script>
+</body>
+</html>

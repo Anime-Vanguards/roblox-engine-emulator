@@ -113,7 +113,8 @@ fn without(args: &[String], skip: &[&str]) -> Vec<String> {
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--profile" => index += 1,
+            "--profile" => index += crate::profiler::profile_arguments(&args, index),
+            "--profile-out" | "--profile-top" | "--profile-phase" | "--profile-alloc-step" => index += 2,
             option if skip.contains(&option) => index += 2,
             _ => {
                 key.push(args[index].clone());

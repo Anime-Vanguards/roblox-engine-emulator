@@ -480,6 +480,7 @@ fn kept_plans() -> bool {
 /// converted now.
 fn plan_for(engine: &Engine, path: &Path) -> Result<Arc<ModelPlan>, String> {
     if let Some(plan) = kept_plan(path) {
+        crate::profiler::caches::hit(crate::profiler::caches::Cache::BundlePlans);
         return Ok(plan);
     }
     let plan = crate::timing::time("bundles: convert", || convert_file(&engine.reflection, path))?;
@@ -495,8 +496,10 @@ fn convert_file(reflection: &Reflection, path: &Path) -> Result<ModelPlan, Strin
     let cache = converted_path(path);
     let key = converted_key(path);
     if let Some(plan) = key.as_ref().and_then(|key| read_plan(&cache, key)) {
+        crate::profiler::caches::hit(crate::profiler::caches::Cache::BundlePlans);
         return Ok(plan);
     }
+    crate::profiler::caches::miss(crate::profiler::caches::Cache::BundlePlans);
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let dom = decode_model(&bytes)?;
     drop(bytes);

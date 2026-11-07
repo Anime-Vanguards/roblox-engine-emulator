@@ -356,6 +356,70 @@ The engine lists no places by default. A command line adds them with `REE_LOCALI
 id>[=<us for a one-letter text>],...`, 61.2 us by default) and `REE_MATCH_PLACES` (`<place id>,...`); an
 embedding host sets `Options::place_prices`.
 
+## Profiling (`src/profiler`, `src/luau_profile.rs`, `src/boundary.rs`)
+
+`--profile <kinds>` (docs/cli.md "Profiles and caches") or a host's `profiler::Session` runs the profilers a
+profile asks for; `profiler::report` writes its files and `ree profile diff` compares two. What each one measures:
+
+- **The VM's instruction profile** (patches/luau.patch, `lprofile.cpp`, `lua_profilestart`). While a profile
+  steps, `luau_execute` runs its single-step variant on every thread of the VM, and the dispatch calls the
+  profile before each instruction. It counts the instruction; it books to the previous instruction what moved
+  since it: the VM's work counters (`lua_workcounters`), priced slot by slot with `cost::luau`'s own prices (the
+  profile checks the model is a weighted sum of the counts), and the engine's charges (the Instance API's,
+  event dispatch), so the work booked to the lines adds up to the work clock; and it keeps a calling-context
+  tree from the frames each thread shows (call counts, inclusive figures, callers and callees). The engine's
+  own Luau books to the script instruction that called it; what is charged while no instruction runs (an
+  event's dispatch, a thread's resumption) is booked as outside any instruction. The instructions with an
+  inline cache record what the cache will do, read before the instruction runs as the interpreter reads it:
+  GETGLOBAL / SETGLOBAL, GETTABLEKS / SETTABLEKS (the predicted hash slot), NAMECALL (the method's slot, or the
+  type's own `__namecall`), GETIMPORT (the import resolved when the chunk loaded, in a safe environment) and
+  the FASTCALL family (the builtin's fast path taken, or the call it falls back to). `Context.ProfilePhase`
+  starts a phase: the frames hang from a node of the phase's. Natively compiled code keeps running natively:
+  a function's entries into its native code and the work booked while it ran are its own, and its
+  instructions are not counted (the summary names such functions). Luau's `-O2` inlines small local
+  functions: their instructions count on the caller's function, on their own source lines.
+- **Allocations** (`profiler::memory`): the VM's `onallocate` callback sees every allocation; `lua_allocblock`
+  gives a collectable object's block (its type is read at the next callback, once the VM set it; an Instance's
+  userdata names its class) and what other memory is for (a table's array and hash parts, a thread's stack
+  and frames, the string table, a loaded function's arrays). A sampled object is marked in its header
+  (`lua_profilemark`), and the collector calls the profile when it frees one, so the run's live objects are
+  known by the stack that allocated them.
+- **Heap snapshots**: `lua_enumheap` walks every object and reference as `luaC_enumheap` does, without the
+  objects a sweep has yet to free (a dead closure can hold a prototype already freed). From a root holding the
+  registry and the main thread it finds each object's dominator (Cooper, Harvey and Kennedy's algorithm), so
+  an object's retained size is what would be freed with it, and a breadth-first holder path (a path through
+  the registry's array part is a reference the engine itself holds: a handler, a thread it will resume).
+  Objects nothing reachable holds are garbage the collector has not swept yet.
+- **The collector**: the VM's interrupt runs at each collector step's start and end (steps, cycles, bytes
+  freed, host time by the state a step began in). **The timeline**: `scheduler::step` takes a row a frame.
+  **ree's caches**: counters at each cache (`profiler::caches`, process-wide). **The CPU**: the run thread's
+  cycles (QueryThreadCycleTime: reference cycles), the process's CPU time, page faults, peak memory; hardware
+  counters need an elevated process on Windows (user mode cannot run `rdpmc`; ETW samples them only in a
+  kernel trace session), and without one the profile says so and lists the counters the CPU offers.
+- **Host time** (`time`, luau_profile.rs): a 1 ms ticker, sampled at the VM's calls, returns and loop edges;
+  the engine's own steps (the Animator, joints, physics) get frames of their own.
+
+Off, a profiler costs a thread-local read where it hooks in (the interpreter: one per entry), a plain store
+where the VM allocates table storage, and a bit test where the collector frees an object. On, nothing a
+script sees changes: the profile allocates nothing on the VM's heap and leaves the VM's counts as they are,
+so the work clock, os.clock and a recording are the same (a sim recorded with every kind on, a frozen clock
+and a pinned epoch is byte for byte the unprofiled recording). Stepping makes the interpreter about five
+times slower (allocation stacks about twice; the timeline and host time sampling a tenth or two).
+
+What the memory figures are, beside Roblox's:
+
+- `gcinfo()` and `collectgarbage("count")` read the VM's whole heap in KB, as on Roblox (the profile's
+  `gcinfo` column). ree's `collectgarbage("count")` returns whole KB (gcinfo's), where Roblox's has a fraction.
+- The VM holds the engine's own Luau too (its prelude, services and datatype tables), which Roblox keeps in
+  C++: the `start` snapshot is that baseline. Compare a run's growth, or the run's own live objects, not
+  totals. Instances live in the engine on both; each has a Luau userdata (48 bytes here).
+- `Stats:GetMemoryUsageMbForTag` is not emulated. The Developer Console's Luau heap view splits memory by
+  memory category (one per script); the profile splits it by the stack that allocated it, by type and by
+  Instance class, and gives the biggest objects with their holders, as its snapshot view does.
+- Imports: the engine loads a chunk before it gives it its environment, so imports are never resolved at
+  load and every GETIMPORT looks its global up (the cache profile reports them as misses); Roblox resolves
+  them at load. The work clock charges a GETIMPORT as one instruction either way.
+
 ## World and recorder (`src/world`, `src/record`)
 
 The 3D side of the engine and the recorder behind `ree record`. They use the dom, reflection, values,
@@ -497,5 +561,6 @@ rur, whose tools set them.
   `RUR_LUAU_ALLOC_STEP`, `RUR_BOUNDARY_PROFILE`, `RUR_CHARGE_TALLY`.
 - `REE_SCRIPT_TIMEOUT`, `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS`, `REE_PARENT_WATCH`,
   `REE_SERVE_WORKERS`, `REE_FROZEN_CLOCK`, `REE_RANDOM_SEED`, `REE_WORK_COUNTERS`, `REE_HASH_SEED`,
-  `REE_HASH_ADDRESS`, `REE_LOCALIZED_PLACES`, `REE_MATCH_PLACES`, `REE_ASSET_WORKER`.
+  `REE_HASH_ADDRESS`, `REE_LOCALIZED_PLACES`, `REE_MATCH_PLACES`, `REE_ASSET_WORKER`, `REE_PROFILE`,
+  `REE_PROFILE_OUT`.
 - Others: `RAYON_NUM_THREADS`, `MIMALLOC_EAGER_COMMIT`, `MIMALLOC_PURGE_DELAY`.
