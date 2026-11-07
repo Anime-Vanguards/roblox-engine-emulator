@@ -8,6 +8,7 @@
 //! (never mlua's userdata errors), and yields never cross a Rust frame.
 
 pub mod actors;
+pub mod bindable;
 pub mod convert;
 pub mod globals;
 pub mod holders;

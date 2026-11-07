@@ -844,10 +844,17 @@ pub fn install(engine: &Rc<Engine>) {
         }
     }
     if let Some(bindable) = class(&reflection, "BindableEvent") {
-        behaviors.add_method(bindable, K::Fire as NameId, method(|_, engine, id, args| {
-            // (raw.rs fires one without table, function or thread arguments, which hold nothing for later)
+        behaviors.add_method(bindable, K::Fire as NameId, method(|lua, engine, id, args| {
+            // (raw.rs fires one without table, function or thread arguments, which hold nothing for later; tables and
+            // buffers are copied as Roblox copies them, threads arrive as nil: lua/bindable.rs)
             super::lua::refs::admit(engine, super::lua::refs::Hold::Work, "Fire")?;
-            let arguments: Vec<Value> = args.0.iter().skip(1).map(convert::from_lua).collect();
+            let mut arguments: Vec<Value> = Vec::with_capacity(args.0.len().saturating_sub(1));
+            for argument in args.0.iter().skip(1) {
+                match super::lua::bindable::sent_value(lua, engine, argument) {
+                    Ok(value) => arguments.push(value),
+                    Err(message) => return super::lua::raise(message),
+                }
+            }
             core::fire_event_measured(&mut engine.state.borrow_mut(), id, K::Event as NameId, arguments, crate::cost::SignalKind::Bindable);
             Ok(none())
         }));

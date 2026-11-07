@@ -298,6 +298,12 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
   Destroy returned and see the instance unparented and its Parent locked.
 - Signals and connections reuse slots; a connection id is (slot, generation), so a stale
   RBXScriptConnection value or queued handler never reaches the slot's next connection.
+- BindableEvent:Fire and BindableFunction:Invoke copy what they pass as Roblox does (measured in a
+  playing client, tools/parity/probes/signals.luau; `src/lua/bindable.rs`): tables once when sent and
+  again for each handler, waiting thread or caller, without metatables; a table with `#t > 0` as the
+  array 1..`#t`, any other as a dictionary with string keys (`1.5` -> `"1"`, an Instance key
+  `<Instance> (Name)`); boolean and thread keys and cyclic tables are errors; threads arrive as nil and
+  buffers as copies.
 
 ## Scheduler API (`src/scheduler.rs`)
 

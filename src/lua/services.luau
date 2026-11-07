@@ -1160,7 +1160,8 @@ Method("BindableFunction", "Invoke", function(Self, ...)
 	if Self:GetActor() then
 		Charge(Cost.ActorInvoke) -- (a call into an Actor's VM: 1.0 us in Studio)
 	end
-	return Callback(...)
+	-- (the arguments and results are copied as Roblox copies them: tables, buffers, threads; lua/bindable.rs)
+	return R.Copied(Callback(R.Copied(...)))
 end)
 
 return true

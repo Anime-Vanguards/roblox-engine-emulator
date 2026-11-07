@@ -369,6 +369,82 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
 }
 
 #[test]
+fn bindables_copy_tables_for_every_receiver_as_roblox_does() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/signals.luau): lua/bindable.rs
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Event = Instance.new("BindableEvent")
+        local Got = {}
+        Event.Event:Connect(function(...) table.insert(Got, table.pack(...)) end)
+        Event.Event:Connect(function(...) table.insert(Got, table.pack(...)) end)
+        local Sent = setmetatable({ 1, 2, Key = "dropped", Nested = { 3 } }, { __index = function() return "meta" end })
+        Event:Fire(Sent)
+        Sent[1] = "changed after the fire"
+        task.wait()
+        local A, B = Got[1][1], Got[2][1]
+        print(#Got, A == Sent, A == B, getmetatable(A), A[1], A[2], A.Key, A.Missing)
+        local function Keys(Value)
+            local Out = {}
+            for Key, Item in Value do
+                table.insert(Out, typeof(Key) .. ":" .. string.gsub(tostring(Key), "0x%x+", "ADDR") .. "=" .. tostring(Item))
+            end
+            table.sort(Out)
+            return table.concat(Out, " ")
+        end
+        table.clear(Got)
+        Event:Fire({ [1.5] = "a", [-2.7] = "b", [1e20] = "c", Name = "d" }, coroutine.create(function() end), { Part = Instance.new("Part") })
+        task.wait()
+        local Args = Got[1]
+        print(Keys(Args[1]), Args.n, Args[2], typeof(Args[3].Part))
+        table.clear(Got)
+        Event:Fire({ [{}] = 1 })
+        Event:Fire({ [Enum.Material.Plastic] = 1, [Vector3.new(1, 2, 3)] = 2 })
+        task.wait()
+        print(Keys(Got[1][1]), "|", Keys(Got[3][1]))
+        local Cyclic = {}
+        Cyclic.Self = Cyclic
+        print(pcall(Event.Fire, Event, Cyclic))
+        print(pcall(Event.Fire, Event, { [true] = 1 }))
+        local Bytes = buffer.create(1)
+        local Arrived
+        Event.Event:Once(function(_, Value) Arrived = Value end)
+        Event:Fire(nil, Bytes)
+        task.wait()
+        print(Arrived ~= Bytes, buffer.len(Arrived))
+        local Function = Instance.new("BindableFunction")
+        local Inside
+        Function.OnInvoke = function(Value)
+            Inside = Value
+            return Value, setmetatable({ 1, Key = "k" }, {})
+        end
+        local Argument = { 1, Key = "k" }
+        local Back, Second = Function:Invoke(Argument)
+        print(Inside == Argument, Back == Inside, Inside.Key, Back[1], getmetatable(Second), Second.Key, Second[1])
+        print(pcall(Function.Invoke, Function, Cyclic))
+        "##,
+    );
+    for _ in 0..12 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: 2 false false nil 1 2 nil nil",
+            "print: string:-2=b string:-9223372036854775808=c string:1=a string:Name=d 3 nil Instance",
+            "print: string:<Table> (table: ADDR)=1 | string:<Vector3> (1, 2, 3)=2 string:<token> (Enum.Material.Plastic)=1",
+            "print: false tables cannot be cyclic",
+            "print: false Invalid table key type used",
+            "print: true 1",
+            "print: false false nil 1 nil nil 1",
+            "print: false tables cannot be cyclic",
+        ]
+    );
+}
+
+#[test]
 fn number_and_boolean_properties_take_any_value_as_in_roblox() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/coercion.luau)
     assert_script(
