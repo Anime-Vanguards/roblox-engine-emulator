@@ -48,6 +48,55 @@ fn number(engine: &Engine, name: &str) -> f64 {
 }
 
 #[test]
+fn a_playing_clients_resumption_points_run_as_measured() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/deferred_points.luau, deferred_flush.luau): every
+    // due task.wait / task.delay thread resumes first, then one pass over the deferred queue, then the Heartbeat
+    // handlers; the render-step bindings get one pass too; wait / spawn threads resume after PreRender, before
+    // PreAnimation, followed by a full flush.
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    engine.state.borrow_mut().sched.set_main_thread(&lua.current_thread());
+    run(
+        &lua,
+        &engine,
+        r#"
+        local RunService = game:GetService("RunService")
+        _G.Log = {}
+        local function Note(Text) table.insert(_G.Log, Text) end
+        local function Chain(Tag)
+            Note(Tag .. "0")
+            task.defer(function()
+                Note(Tag .. "1")
+                task.defer(function() Note(Tag .. "2") end)
+            end)
+        end
+        for _, Name in { "PreRender", "PreAnimation", "Heartbeat" } do
+            RunService[Name]:Connect(function() Note("|" .. Name) end)
+        end
+        task.delay(0, function() Chain("d") end)
+        task.spawn(function() task.wait() Chain("w") end)
+        spawn(function() Chain("s") end)
+        RunService:BindToRenderStep("chain", 100, function()
+            RunService:UnbindFromRenderStep("chain")
+            Chain("b")
+        end)
+        "#,
+    );
+    for _ in 0..3 {
+        scheduler::step(&lua, &engine, Some(1.0 / 60.0)).unwrap();
+    }
+    let log: Vec<String> = match global(&engine, "Log") {
+        LuaValue::Table(table) => table.sequence_values::<String>().map(Result::unwrap).collect(),
+        other => panic!("{other:?}"),
+    };
+    let log = log.join(" ");
+    assert!(log.contains("d0 w0 d1 w1 |Heartbeat d2 w2"), "{log}");
+    assert!(log.contains("b0 b1 |PreRender b2"), "{log}");
+    assert!(log.contains("|PreRender b2 s0 s1 s2 |PreAnimation"), "{log}");
+}
+
+#[test]
 fn deferred_budget_and_errors() {
     let (lua, engine) = start();
     // The emergency flush budget leaves the next job pending instead of silently losing it

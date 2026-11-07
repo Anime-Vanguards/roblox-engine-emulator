@@ -721,79 +721,7 @@
 			"why": "not fixed yet"
 		}
 	],
-	"deferred_chains": [
-		{
-			"line": "defer-chain steps 40: 1 |Hear 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "self-firing-event steps 80: 1 |Hear 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "changed-chain steps 80: 1 |Hear 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "ping-pong-events steps 80: 1 |Hear 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73 74 75 76 77 78 79 80 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "event-then-defer steps 40: 1 |Hear 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "spawn-in-defer-chain steps 30: 1 |Hear 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		}
-	],
-	"deferred_flush": [
-		{
-			"line": "defer-chain start,d1,[Heartbeat],d2,d3,[PreAnimation],[PreSimulation],[PostSimulation],[Heartbeat],[PreAnimation],[PreSimulation],[PostSimulation]",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "event-chain start,e1,[Heartbeat],e2,e3,[PreAnimation],[PreSimulation],[PostSimulation],[Heartbeat],[PreAnimation],[PreSimulation],[PostSimulation]",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "mixed start,d,f1,[Heartbeat],f1,f1-defer,f2,f1-defer,f2,[PreAnimation],[PreSimulation],[PostSimulation],[Heartbeat],[PreAnimation],[PreSimulation],[PostSimulation]",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "property start,changed1,[Heartbeat],defer-from-changed,changed2,[PreAnimation],[PreSimulation],[PostSimulation],[Heartbeat],[PreAnimation],[PreSimulation],[PostSimulation]",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "spawn-and-wait start,d,spawned,d-end,[Heartbeat],handler,waiter,waiter-defer,[PreAnimation],[PreSimulation],[PostSimulation],[Heartbeat],[PreAnimation],[PreSimulation],[PostSimulation]",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "due-together start,[Heartbeat],[PreAnimation],[PreSimulation],[PostSimulation],delay-a,wait-a,delay-b,wait-b,delay-a-defer,wait-a-defer,[Heartbeat],legacy-wait,legacy-delay,legacy-spawn,[PreAnimation],[PreSimulation],[PostSimulation]",
-			"why": "not fixed yet"
-		}
-	],
 	"deferred_points": [
-		{
-			"line": "from-delay c0 c1 |Hear c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "from-wait c0 c1 |Hear c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "from-legacy-wait c0 c1 c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "from-legacy-spawn c0 c1 c2 c3 c4 c5 c6 |PreA |PreS |Post |Hear |PreA |PreS |Post",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "defer-chain-1000 steps 80 per-frame 0:1,1:79",
-			"why": "not fixed yet"
-		},
 		{
 			"line": "cut-event count 80 messages 1 Enum.MessageType.MessageError Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function on line @133 in <probe>",
 			"why": "not fixed yet"
@@ -906,10 +834,6 @@
 		}
 	],
 	"frame_phases": [
-		{
-			"line": "simulation-step PreAnimation,d<PreAnimation,Stepped,PreSimulation,d<Stepped,d<PreSimulation,PostSimulation,d<PostSimulation,wait,delay,d<wait,Heartbeat,d<Heartbeat",
-			"why": "not fixed yet"
-		},
 		{
 			"line": "render-step errors error Unable to cast string to int",
 			"why": "not fixed yet"
@@ -1372,10 +1296,6 @@
 		}
 	],
 	"task_order": [
-		{
-			"line": "nesting start,spawn1,spawn-in-spawn1,spawn1-end,end-of-block,defer-in-spawn1,spawn-in-defer,defer1,defer2,hb1,defer-in-defer,defer-in-defer2,delay0,wait-in-spawn,after-wait-1,wait-in-defer,hb2,after-wait-2",
-			"why": "not fixed yet"
-		},
 		{
 			"line": "cancel-self error cannot cancel thread",
 			"why": "not fixed yet"

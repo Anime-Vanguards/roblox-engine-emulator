@@ -8,7 +8,10 @@
 //! then the render step: BindToRenderStep callbacks, the TweenService step, RenderStepped,
 //! PreRender, layout. The Heartbeat dts replay a fixed two-frame pattern of float32 beats whose
 //! sum exceeds 1/60 by the smallest step. Running games (Mode ~= "edit") get one Heartbeat per
-//! frame, preceded by PreAnimation / Stepped / PreSimulation / PostSimulation.
+//! frame, as a playing client runs it (measured, Studio 0.744, tools/parity): wait / delay / spawn
+//! resumptions (then a full flush), PreAnimation, Stepped / PreSimulation, PostSimulation, the due
+//! task.wait / task.delay threads (then one pass over the deferred queue), Heartbeat, then the
+//! render step (bindings, one pass, RenderStepped / PreRender, a full flush).
 //!
 //! A render is a pure function of its inputs and the hour: the wall clock starts at the current
 //! whole hour and math.random at a fixed seed. A recorded Studio clock (RUR_CLOCK, written by
@@ -1171,9 +1174,31 @@ pub fn flush_deferred(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     result
 }
 
+/// One pass over the deferred queue: the jobs queued before it began run; what they queue waits for the next
+/// resumption point. A playing client resumes this way after its task.wait / task.delay step and after the
+/// render-step bindings (measured, Studio 0.744: a task.defer chain started there runs its first step there and
+/// the rest after the Heartbeat or PreRender handlers; tools/parity/probes/deferred_points.luau).
+pub fn flush_deferred_once(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    profile::enter("deferred");
+    profile::count("deferredFlushes", 1);
+    let queued = engine.state.borrow().sched.deferred.len();
+    let mut processed = 0usize;
+    let result = flush_deferred_upto(lua, engine, &mut processed, Some(queued));
+    profile::count("deferredJobs", processed as u64);
+    profile::leave();
+    result
+}
+
 fn flush_deferred_jobs(lua: &Lua, engine: &Rc<Engine>, processed: &mut usize) -> LuaResult<()> {
+    flush_deferred_upto(lua, engine, processed, None)
+}
+
+fn flush_deferred_upto(lua: &Lua, engine: &Rc<Engine>, processed: &mut usize, upto: Option<usize>) -> LuaResult<()> {
     engine.state.borrow_mut().sched.flushing += 1;
     loop {
+        if upto.is_some_and(|upto| *processed >= upto) {
+            break;
+        }
         let job = {
             let mut state = engine.state.borrow_mut();
             if state.sched.deferred.is_empty() {
@@ -1207,16 +1232,27 @@ fn flush_deferred_jobs(lua: &Lua, engine: &Rc<Engine>, processed: &mut usize) ->
     Ok(())
 }
 
+/// How a timer step lets the deferred work of the threads it resumed run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TimerFlush {
+    /// a full flush after each resumption (edit mode, as measured in Studio's edit DataModel)
+    EachResumption,
+    /// every due timer first, then one pass (a playing client's task.wait / task.delay step)
+    OncePass,
+    /// every due timer first, then a full flush (a playing client's wait / delay / spawn step)
+    AfterAll,
+}
+
 /// RunTimers: resumes timers due at this Heartbeat (only those due by `limit`); timers scheduled
 /// while this runs wait for the next Heartbeat.
-fn run_timers(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64>) -> LuaResult<()> {
+fn run_timers(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64>, flush: TimerFlush) -> LuaResult<()> {
     profile::enter("timers");
-    let result = run_timers_in(lua, engine, legacy, limit);
+    let result = run_timers_in(lua, engine, legacy, limit, flush);
     profile::leave();
     result
 }
 
-fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64>) -> LuaResult<()> {
+fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64>, flush: TimerFlush) -> LuaResult<()> {
     let (cutoff, until) = {
         let state = engine.state.borrow();
         let mut until = state.sched.now + 1e-9;
@@ -1248,9 +1284,15 @@ fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64
             TimerKind::Delay => job_args(lua, engine, &timer.args)?,
         };
         resume(lua, engine, &timer.thread, args);
-        flush_deferred(lua, engine)?;
+        if flush == TimerFlush::EachResumption {
+            flush_deferred(lua, engine)?;
+        }
     }
-    Ok(())
+    match flush {
+        TimerFlush::EachResumption => Ok(()),
+        TimerFlush::OncePass => flush_deferred_once(lua, engine),
+        TimerFlush::AfterAll => flush_deferred(lua, engine),
+    }
 }
 
 fn run_hooks(lua: &Lua, engine: &Rc<Engine>, phase: Phase, delta: f64) -> LuaResult<()> {
@@ -1301,16 +1343,22 @@ fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: 
     };
     flush_deferred(lua, engine)?;
     if !edit_mode {
+        // A playing client (measured, Studio 0.744: tools/parity/probes/deferred_points.luau and a wait / spawn
+        // chain probe) resumes wait / delay / spawn threads after the render step's PreRender handlers and before
+        // PreAnimation, every due one first and then a full flush; then the simulation events; then every due
+        // task.wait / task.delay thread, in the order they were scheduled, and one pass over the deferred queue
+        // before the Heartbeat handlers.
+        run_timers(lua, engine, true, None, TimerFlush::AfterAll)?;
         run_hooks(lua, engine, Phase::Simulation, delta)?;
-    } else {
-        // Edit mode has no simulation step: Motor6D.Transform changes apply where it would run
-        // (world::joints; play mode applies them after PreSimulation)
-        super::world::joints::step_transforms(engine);
-        // (animation assets still arrive: crate::animation)
-        crate::animation::arrivals(engine);
+        return run_timers(lua, engine, false, limit, TimerFlush::OncePass);
     }
-    run_timers(lua, engine, true, None)?;
-    run_timers(lua, engine, false, limit)
+    // Edit mode has no simulation step: Motor6D.Transform changes apply where it would run
+    // (world::joints; play mode applies them after PreSimulation)
+    super::world::joints::step_transforms(engine);
+    // (animation assets still arrive: crate::animation)
+    crate::animation::arrivals(engine);
+    run_timers(lua, engine, true, None, TimerFlush::EachResumption)?;
+    run_timers(lua, engine, false, limit, TimerFlush::EachResumption)
 }
 
 /// A Heartbeat's handlers (after its resumptions), with delta `delta` (float32).
@@ -1355,7 +1403,13 @@ fn render(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
     profile::leave();
     result?;
     engine.state.borrow_mut().sched.holding = false;
-    flush_deferred(lua, engine)?;
+    // (a playing client runs one pass here: what the bindings' deferred work defers waits for the PreRender
+    // handlers' flush; measured, Studio 0.744, tools/parity/probes/deferred_points.luau)
+    if engine.state.borrow().sched.edit_mode {
+        flush_deferred(lua, engine)?;
+    } else {
+        flush_deferred_once(lua, engine)?;
+    }
     {
         let mut state = engine.state.borrow_mut();
         let held = std::mem::take(&mut state.sched.held);

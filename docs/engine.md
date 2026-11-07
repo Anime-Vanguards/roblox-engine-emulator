@@ -301,6 +301,13 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
 
 ## Scheduler API (`src/scheduler.rs`)
 
+A playing client's frame (`--mode play`, measured in a real client): wait / delay / spawn threads resume
+(then a full flush of deferred work), PreAnimation, Stepped / PreSimulation, PostSimulation, every due
+task.wait / task.delay thread in the order they were scheduled (then one pass over the deferred queue:
+what that work defers waits), Heartbeat, then the render step (BindToRenderStep callbacks, one pass,
+RenderStepped / PreRender, a full flush). Edit mode keeps Studio's edit order (a flush after each
+resumption).
+
 `scheduler::step(lua, engine, Some(dt))`, `run_until(lua, engine, t)`, `step_display_duration(d)` /
 `step_display(n)` (a display's cadence: edit-mode Heartbeats keep their own 240 Hz deadlines),
 `use_recorded_clock(engine, Some(&json))` (`RUR_CLOCK`: a Studio session's recorded Heartbeats, render
