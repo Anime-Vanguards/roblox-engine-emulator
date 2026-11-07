@@ -455,6 +455,9 @@ reentry:
                 {
                     uint32_t aux = *pc++;
 
+                    // (a host's work counters: the lookup a resolved import saves)
+                    if (!(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+                        L->global->work.slowimports++;
                     VM_PROTECT(luaV_getimport(L, cl->env, k, ra, aux, /* propagatenil= */ false));
                     VM_NEXT();
                 }

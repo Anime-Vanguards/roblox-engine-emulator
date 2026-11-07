@@ -232,6 +232,9 @@ typedef struct global_State
 
     double (*gcclock)(void* ud); // the clock the collector paces itself by (lua_setgcclock; NULL: lua_clock)
     void* gcclockud;
+
+    struct LuaTable* typeofnames; // a host's names for its values, for the builtin typeof (lua_settypeofnames; NULL: none)
+    TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
 } global_State;
 // clang-format on
 

@@ -722,6 +722,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
                 result.raw_set("stored", counters.stored as f64)?;
                 result.raw_set("rehashed", counters.rehashed as f64)?;
                 result.raw_set("hostops", counters.hostops.iter().sum::<u64>() as f64)?;
+                result.raw_set("slowimports", counters.slowimports as f64)?;
                 Ok(LuaValue::Table(result))
             })?,
         )?;

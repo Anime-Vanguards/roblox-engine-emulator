@@ -1191,6 +1191,14 @@ void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud)
     L->global->gcclockud = ud;
 }
 
+void lua_settypeofnames(lua_State* L, int idx, const char* vectorname)
+{
+    const TValue* names = index2addr(L, idx);
+    api_check(L, ttistable(names));
+    L->global->typeofnames = hvalue(names);
+    L->global->vectortypename = vectorname ? luaS_new(L, vectorname) : NULL;
+}
+
 int lua_gc(lua_State* L, int what, int data)
 {
     int res = 0;

@@ -755,6 +755,11 @@ static void markroot(lua_State* L)
     markobject(g, g->mainthread->gt);
     markvalue(g, registry(L));
     markmt(g);
+    // (a host's typeof names: lua_settypeofnames)
+    if (g->typeofnames)
+        markobject(g, g->typeofnames);
+    if (g->vectortypename)
+        markobject(g, g->vectortypename);
     g->gcstate = GCSpropagate;
 }
 

@@ -365,6 +365,14 @@ engine's own Luau) at costs fitted to Studio on 46 workloads (tools/luau-cost): 
 call 8.5 more, an object 22. The engine's own Luau (prelude, services, vector3.luau) stands in for
 Studio's C++ and is not charged.
 
+A script's environment is safe, as Roblox makes every script's: its imports (`game`, `Vector3.new`,
+`math.floor`) are resolved when it loads and read as constants, builtins (`math.*`, `type`, `typeof`, ...)
+take the VM's fast calls, and getfenv / setfenv end both for that environment, as there (a client: two
+imports a loop step 4.4 ns in a module, 21.7 after getfenv; `typeof(x)` 4.8 and 26). The VM's builtin
+`typeof` names ree's own values as ree's `typeof` does (`lua_settypeofnames`: Instances, the registered
+proxies and tables, vectors as Vector3), and the compiler leaves a constant vector's typeof to it (Luau's
+`LuauCompileTypeofFold`).
+
 So a loop that slices its work by an os.clock budget per Heartbeat takes as many frames as in Studio, and
 a frozen clock (`REE_FROZEN_CLOCK=1`: the clock follows the frames only) makes runs of code that differs
 in speed write the same values. The clock never runs backwards and never falls behind the frame's time.

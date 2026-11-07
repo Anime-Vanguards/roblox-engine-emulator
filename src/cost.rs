@@ -552,6 +552,9 @@ pub struct VmCounters {
     pub vectorunits: u64,
     /// Method calls a script's own instruction made on a vector (NAMECALL)
     pub vectormethods: u64,
+    /// GETIMPORTs of a script's instructions that looked their global up: an environment getfenv / setfenv made unsafe, or an import
+    /// that was nil when the script loaded (a safe environment's imports are resolved at load, as in Roblox); not priced yet
+    pub slowimports: u64,
 }
 
 unsafe extern "C-unwind" {

@@ -155,6 +155,7 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
 {
     struct ResolveImport
     {
+        LuaTable* env;
         TValue* k;
         uint32_t id;
 
@@ -170,12 +171,15 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
             setnilvalue(L->top);
             L->top++;
 
-            luaV_getimport(L, L->gt, self->k, L->top - 1, self->id, /* propagatenil= */ true);
+            luaV_getimport(L, self->env, self->k, L->top - 1, self->id, /* propagatenil= */ true);
         }
     };
 
-    ResolveImport ri = {k, id};
-    if (L->gt->safeenv)
+    // imports resolve in the environment the chunk is loaded into, when it is safe: a host that loads each script into an
+    // environment of its own (luau_load's env) resolves them as one that loads each script on a thread whose globals are that
+    // environment (Roblox's sandboxed script threads), where upstream's L->gt is that table
+    ResolveImport ri = {env, k, id};
+    if (env->safeenv)
     {
         // luaD_pcall will make sure that if any C/Lua calls during import resolution fail, the thread state is restored back
         int oldTop = lua_gettop(L);

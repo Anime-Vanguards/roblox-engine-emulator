@@ -321,6 +321,7 @@ typedef struct lua_WorkCounters
     uint64_t vectormagnitudes; // .Magnitude reads the VM answered on a vector for a script's own instruction
     uint64_t vectorunits; // .Unit reads the same way
     uint64_t vectormethods; // method calls (NAMECALL) a script's own instruction made on a vector
+    uint64_t slowimports; // GETIMPORTs of a script's instructions that looked the global up (an unsafe environment's, an unresolved import)
 } lua_WorkCounters;
 
 LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
@@ -337,6 +338,11 @@ LUA_API void lua_workmute(lua_State* L, int on);
 // set the next cycle's trigger): the wall clock (lua_clock) by default, so where it steps depends on how fast the host ran; a host
 // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
 LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
+
+// the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
+// `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names
+// every vector. The table is held for the collector (a weak-keyed one keeps its weak keys).
+LUA_API void lua_settypeofnames(lua_State* L, int idx, const char* vectorname);
 
 /*
 ** profiling (lprofile.cpp): a host's profile of this thread's VM. Off, the interpreter pays one thread-local load per entry.

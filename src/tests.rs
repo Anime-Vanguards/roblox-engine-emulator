@@ -4895,10 +4895,12 @@ fn the_boundary_profiler_counts_crossings_per_call_site() {
     let host = "VM.host call (datatype op or engine function)";
     let datatype = row("datatype", host, 9);
     assert!(datatype["count"].as_u64().unwrap() >= 1 && datatype["cost_ms_per_s"].as_f64().unwrap() > 0.0, "{datatype}");
-    // (the engine function GetAttribute and the prelude's task.spawn are host calls too: counted apart from the crossings)
-    assert_eq!(row("datatype", host, 8)["count"].as_u64(), Some(1));
+    // (the prelude's task.spawn is a host call too, counted apart from the crossings; the line before CFrame.new has none, as the
+    // import is resolved when the script loads: it used to be looked up through the engine's globals at each run)
     assert_eq!(report["crossings"].as_u64(), Some(report["by_site_count"].as_array().unwrap().iter().filter(|row| row["kind"] != "datatype").map(|row| row["count"].as_u64().unwrap()).sum()));
-    assert!(report["host_calls"].as_u64().unwrap() >= 3);
+    // (the prelude's task.spawn and the datatype operations; an import's lookup through the engine's globals made one more before
+    // imports were resolved at load)
+    assert!(report["host_calls"].as_u64().unwrap() >= 2);
     // the Instance API's charges are accounted for, by member and by module, over one frame of 1/60 s
     assert!(report["attributed_share_of_instance_api_charges"].as_f64().unwrap() > 0.9, "{text}");
     assert!((report["emulated_seconds"].as_f64().unwrap() - 1.0 / 60.0).abs() < 1e-9);
@@ -5226,4 +5228,61 @@ fn an_executable_belongs_to_the_nearest_checkout_above_it_wherever_it_runs() {
     // a service copy in a state dir outside any checkout has none: serve takes its starter's (--source)
     assert_eq!(super::checkout_of(&root.join("state/bin/ree-0.1.0-1-2.exe")), None);
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// The VM's work counts so far (a copy: the counters are plain numbers)
+fn vm_counts(engine: &Engine) -> crate::cost::VmCounters {
+    let pointer = engine.state.borrow().sched.vm_counters.expect("VM counters");
+    unsafe { std::ptr::read(pointer) }
+}
+
+/// A script's environment is safe, as Roblox makes every script's (the parity bench, tools/cost-parity: two imports a loop step
+/// 4.6 ns in a module, 21.4 in one that called getfenv first; `typeof(x)` 4.7 and 25.9): its imports are resolved when it loads,
+/// `typeof` is the VM's fast call, which names ree's values as ree's typeof does (a constant Vector3, an Instance, a proxy datatype,
+/// SharedTable), and getfenv ends both for its environment. ree loaded each script on a thread whose globals were not its
+/// environment, so every import was looked up at each run, and its compiler kept typeof off the fast path (a C call, 23 ns).
+#[test]
+fn a_scripts_environment_resolves_imports_at_load_and_takes_fast_calls() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let source = |prefix: &str| {
+        format!(
+            "{prefix}local M = {{}}\nfunction M.Run(N) local s = 0 for i = 1, N do local g, v = game, Vector3.new if typeof(i) == \"number\" and g and v then s += 1 end end return s end\n\
+             function M.Names() return typeof(Vector3.new(1, 2, 3)), typeof(workspace), typeof(RaycastParams.new()), typeof(SharedTable.new()), typeof({{}}), typeof(newproxy(true)) end\nreturn M\n"
+        )
+    };
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+            local Folder = Instance.new("Folder")
+            local Safe, Unsafe = Instance.new("ModuleScript"), Instance.new("ModuleScript")
+            Safe.Parent, Unsafe.Parent = Folder, Folder
+            __setSource(Safe, {safe:?})
+            __setSource(Unsafe, {unsafe:?})
+            _G.Safe, _G.Unsafe = require(Safe), require(Unsafe)
+            "#,
+            safe = source(""),
+            unsafe = source("local _ = getfenv()\n")
+        ),
+    );
+    let sample = |module: &str| {
+        let before = vm_counts(&engine);
+        run(&lua, &engine, &format!("_G.{module}.Run(1000)"));
+        let after = vm_counts(&engine);
+        (after.ops[21] - before.ops[21], after.ops[73] - before.ops[73], after.slowimports - before.slowimports)
+    };
+    // (CALL is opcode 21, FASTCALL1 73; the snippet that calls Run makes a call of its own)
+    let (calls, fast, slow) = sample("Safe");
+    assert!(calls < 10 && fast >= 1000 && slow == 0, "a safe environment: {calls} calls, {fast} fast calls, {slow} imports looked up");
+    let (calls, slow) = {
+        let (calls, _, slow) = sample("Unsafe");
+        (calls, slow)
+    };
+    assert!(calls >= 1000 && slow >= 3000, "after getfenv: {calls} calls, {slow} imports looked up");
+    let output = run(&lua, &engine, "print(_G.Safe.Names()) print(_G.Unsafe.Names())");
+    let names = "print: Vector3 Instance RaycastParams SharedTable table userdata";
+    assert_eq!(output.iter().filter(|line| line.as_str() == names).count(), 2, "{output:?}");
 }

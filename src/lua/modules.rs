@@ -320,7 +320,15 @@ pub fn required_files(engine: &Engine) -> Vec<String> {
 /// the compiler must not fold or fast-call the builtin.
 /// Vector3.new compiles as the VM's vector constructor (a fast call), as Roblox compiles it.
 pub fn compiler() -> Compiler {
-    engine_compiler().set_vector_ctor("Vector3.new").set_vector_type("Vector3")
+    // (typeof is a builtin, as in Roblox, whose client runs a script's `typeof(x)` as a fast call: the VM's builtin names ree's
+    // values as ree's typeof does, raw.rs typeof_function; measured in tools/cost-parity's env rows. The compiler leaves the
+    // typeof of a constant vector to the VM, which names it Vector3, rather than folding it to "vector": Luau's
+    // LuauCompileTypeofFold, a process-wide flag)
+    static TYPEOF_FOLD: std::sync::Once = std::sync::Once::new();
+    TYPEOF_FOLD.call_once(|| {
+        let _ = Lua::set_fflag("LuauCompileTypeofFold", true);
+    });
+    Compiler::new().set_optimization_level(2).set_vector_ctor("Vector3.new").set_vector_type("Vector3")
 }
 
 /// The engine's own Luau (the prelude, services, vector3.luau), whose `Vector3` is Lune's.

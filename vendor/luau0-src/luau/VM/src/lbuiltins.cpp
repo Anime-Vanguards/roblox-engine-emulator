@@ -889,6 +889,23 @@ static int luauF_typeof(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
 {
     if (nparams >= 1 && nresults <= 1)
     {
+        // (a host's names for its own values come first, as its typeof gives them: lua_settypeofnames)
+        global_State* g = L->global;
+        if (g->typeofnames && (ttistable(arg0) || ttisuserdata(arg0)))
+        {
+            const TValue* name = luaH_get(g->typeofnames, arg0);
+            if (ttisstring(name))
+            {
+                setobj2s(L, res, name);
+                return 1;
+            }
+        }
+        if (g->vectortypename && ttisvector(arg0))
+        {
+            setsvalue(L, res, g->vectortypename);
+            return 1;
+        }
+
         const TString* ttname = luaT_objtypenamestr(L, arg0);
 
         setsvalue(L, res, ttname);

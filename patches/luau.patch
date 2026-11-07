@@ -2764,3 +2764,162 @@ index fccccfe..85f3bcd 100644
              p->upvalues = luaM_newarray(L, sizeupvalues, TString*, p->memcat);
              p->sizeupvalues = sizeupvalues;
  
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index 0436bfd..b3e2666 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -321,6 +321,7 @@ typedef struct lua_WorkCounters
+     uint64_t vectormagnitudes; // .Magnitude reads the VM answered on a vector for a script's own instruction
+     uint64_t vectorunits; // .Unit reads the same way
+     uint64_t vectormethods; // method calls (NAMECALL) a script's own instruction made on a vector
++    uint64_t slowimports; // GETIMPORTs of a script's instructions that looked the global up (an unsafe environment's, an unresolved import)
+ } lua_WorkCounters;
+ 
+ LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
+@@ -338,6 +339,11 @@ LUA_API void lua_workmute(lua_State* L, int on);
+ // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
+ LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
+ 
++// the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
++// `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names
++// every vector. The table is held for the collector (a weak-keyed one keeps its weak keys).
++LUA_API void lua_settypeofnames(lua_State* L, int idx, const char* vectorname);
++
+ /*
+ ** profiling (lprofile.cpp): a host's profile of this thread's VM. Off, the interpreter pays one thread-local load per entry.
+ ** While a profile steps, every thread runs the interpreter's single-step variant: each instruction it dispatches is counted,
+diff --git a/luau/VM/src/lapi.cpp b/luau/VM/src/lapi.cpp
+index 5eab724..7eac5ef 100644
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -1191,6 +1191,14 @@ void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud)
+     L->global->gcclockud = ud;
+ }
+ 
++void lua_settypeofnames(lua_State* L, int idx, const char* vectorname)
++{
++    const TValue* names = index2addr(L, idx);
++    api_check(L, ttistable(names));
++    L->global->typeofnames = hvalue(names);
++    L->global->vectortypename = vectorname ? luaS_new(L, vectorname) : NULL;
++}
++
+ int lua_gc(lua_State* L, int what, int data)
+ {
+     int res = 0;
+diff --git a/luau/VM/src/lbuiltins.cpp b/luau/VM/src/lbuiltins.cpp
+index 4c1a3c3..a46789f 100644
+--- a/luau/VM/src/lbuiltins.cpp
++++ b/luau/VM/src/lbuiltins.cpp
+@@ -889,6 +889,23 @@ static int luauF_typeof(lua_State* L, StkId res, TValue* arg0, int nresults, Stk
+ {
+     if (nparams >= 1 && nresults <= 1)
+     {
++        // (a host's names for its own values come first, as its typeof gives them: lua_settypeofnames)
++        global_State* g = L->global;
++        if (g->typeofnames && (ttistable(arg0) || ttisuserdata(arg0)))
++        {
++            const TValue* name = luaH_get(g->typeofnames, arg0);
++            if (ttisstring(name))
++            {
++                setobj2s(L, res, name);
++                return 1;
++            }
++        }
++        if (g->vectortypename && ttisvector(arg0))
++        {
++            setsvalue(L, res, g->vectortypename);
++            return 1;
++        }
++
+         const TString* ttname = luaT_objtypenamestr(L, arg0);
+ 
+         setsvalue(L, res, ttname);
+diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
+index 0726c32..ddb9691 100644
+--- a/luau/VM/src/lgc.cpp
++++ b/luau/VM/src/lgc.cpp
+@@ -755,6 +755,11 @@ static void markroot(lua_State* L)
+     markobject(g, g->mainthread->gt);
+     markvalue(g, registry(L));
+     markmt(g);
++    // (a host's typeof names: lua_settypeofnames)
++    if (g->typeofnames)
++        markobject(g, g->typeofnames);
++    if (g->vectortypename)
++        markobject(g, g->vectortypename);
+     g->gcstate = GCSpropagate;
+ }
+ 
+diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
+index 09418b4..b8b9c4d 100644
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -236,6 +236,8 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
+     g->work = lua_WorkCounters();
+     g->gcclock = NULL;
+     g->gcclockud = NULL;
++    g->typeofnames = NULL;
++    g->vectortypename = NULL;
+ 
+ #ifdef LUAI_GCMETRICS
+     g->gcmetrics = GCMetrics();
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index b6aeed7..faa33eb 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -232,6 +232,9 @@ typedef struct global_State
+ 
+     double (*gcclock)(void* ud); // the clock the collector paces itself by (lua_setgcclock; NULL: lua_clock)
+     void* gcclockud;
++
++    struct LuaTable* typeofnames; // a host's names for its values, for the builtin typeof (lua_settypeofnames; NULL: none)
++    TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
+ } global_State;
+ // clang-format on
+ 
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index e0e5f1c..cc1f685 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -455,6 +455,9 @@ reentry:
+                 {
+                     uint32_t aux = *pc++;
+ 
++                    // (a host's work counters: the lookup a resolved import saves)
++                    if (!(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                        L->global->work.slowimports++;
+                     VM_PROTECT(luaV_getimport(L, cl->env, k, ra, aux, /* propagatenil= */ false));
+                     VM_NEXT();
+                 }
+diff --git a/luau/VM/src/lvmload.cpp b/luau/VM/src/lvmload.cpp
+index 85f3bcd..f105f6d 100644
+--- a/luau/VM/src/lvmload.cpp
++++ b/luau/VM/src/lvmload.cpp
+@@ -155,6 +155,7 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
+ {
+     struct ResolveImport
+     {
++        LuaTable* env;
+         TValue* k;
+         uint32_t id;
+ 
+@@ -170,12 +171,15 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
+             setnilvalue(L->top);
+             L->top++;
+ 
+-            luaV_getimport(L, L->gt, self->k, L->top - 1, self->id, /* propagatenil= */ true);
++            luaV_getimport(L, self->env, self->k, L->top - 1, self->id, /* propagatenil= */ true);
+         }
+     };
+ 
+-    ResolveImport ri = {k, id};
+-    if (L->gt->safeenv)
++    // imports resolve in the environment the chunk is loaded into, when it is safe: a host that loads each script into an
++    // environment of its own (luau_load's env) resolves them as one that loads each script on a thread whose globals are that
++    // environment (Roblox's sandboxed script threads), where upstream's L->gt is that table
++    ResolveImport ri = {env, k, id};
++    if (env->safeenv)
+     {
+         // luaD_pcall will make sure that if any C/Lua calls during import resolution fail, the thread state is restored back
+         int oldTop = lua_gettop(L);

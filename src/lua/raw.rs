@@ -1854,6 +1854,7 @@ pub fn set_table_namecall(lua: &Lua, sample: &LuaAnyUserData, methods: LuaTable,
 
 unsafe extern "C-unwind" {
     fn lua_clonetable(state: *mut ffi::lua_State, index: c_int);
+    fn lua_settypeofnames(state: *mut ffi::lua_State, index: c_int, vectorname: *const c_char);
 }
 
 const UTAG_PROXY: c_int = ffi::LUA_UTAG_LIMIT + 1;
@@ -1891,9 +1892,13 @@ unsafe extern "C-unwind" fn typeof_c(state: *mut ffi::lua_State) -> c_int {
     }
 }
 
+/// [`typeof_c`] as the `typeof` global; the VM's builtin typeof, which a script's `typeof(x)` calls directly in a safe
+/// environment (a fast call, as in Roblox), is given the same names: the registry, and Vector3 for vectors (Instances and the
+/// engine's other userdata carry their `__type`)
 pub fn typeof_function(lua: &Lua, registry: LuaTable) -> LuaResult<LuaFunction> {
     unsafe {
         lua.exec_raw((registry, "Instance"), |state| {
+            lua_settypeofnames(state, -2, c"Vector3".as_ptr());
             ffi::lua_pushcclosurek(state, typeof_c, c"typeof".as_ptr(), 2, None);
         })
     }
