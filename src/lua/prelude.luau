@@ -285,7 +285,7 @@ local LibraryExtras = {
 	},
 	CFrame = {
 		lookAlong = function(At, Direction, Up)
-			return Datatypes.CFrame.lookAt(At, At + Direction, Up or vector.create(0, 1, 0))
+			return Datatypes.CFrame.lookAlong(At, Direction, Up)
 		end,
 	},
 	BrickColor = {

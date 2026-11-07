@@ -3,7 +3,6 @@
 use core::fmt;
 use std::ops;
 
-use glam::Vec3;
 use mlua::prelude::*;
 use rbx_dom_weak::types::{Color3 as DomColor3, Color3uint8 as DomColor3uint8};
 
@@ -43,7 +42,9 @@ impl LuaExportsTable for Color3 {
 
         let color3_from_hsv = |lua: &Lua, (h, s, v): (f32, f32, f32)| {
             super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
-            // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c
+            // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c, in floats, the hue clamped to 0..1 first
+            // (fromHSV(1.5, 1, 1) is fromHSV(1, 1, 1) and -0.25 is 0: Studio 0.744, tools/parity/probes/datatypes.luau)
+            let h = h.clamp(0.0, 1.0);
             let i = (h * 6.0).floor();
             let f = h * 6.0 - i;
             let p = v * (1.0 - s);
@@ -138,43 +139,21 @@ impl LuaUserData for Color3 {
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         // Methods
+        // a + (b - a) * t per channel in floats (Studio 0.744, tools/parity/probes/datatypes.luau)
         let lerp = |lua: &Lua, this: &Color3, (rhs, alpha): (LuaUserDataRef<Color3>, f32)| {
             super::charge_host_nanos(lua, super::datatype_price::COLOR3_LERP);
-            let v3_this = Vec3::new(this.r, this.g, this.b);
-            let v3_rhs = Vec3::new(rhs.r, rhs.g, rhs.b);
-            let v3 = v3_this.lerp(v3_rhs, alpha);
+            let lerp = super::float32::lerp;
             Ok(Color3 {
-                r: v3.x,
-                g: v3.y,
-                b: v3.z,
+                r: lerp(this.r, rhs.r, alpha),
+                g: lerp(this.g, rhs.g, alpha),
+                b: lerp(this.b, rhs.b, alpha),
             })
         };
         methods.add_method("Lerp", lerp);
         methods.add_method("lerp", lerp);
-        methods.add_method("ToHSV", |_, this, ()| {
-            // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c
-            let (r, g, b) = (this.r, this.g, this.b);
-            let min = r.min(g).min(b);
-            let max = r.max(g).max(b);
-            let diff = max - min;
-
-            #[allow(clippy::float_cmp)]
-            let hue = (match max {
-                max if max == min => 0.0,
-                max if max == r => (g - b) / diff + (if g < b { 6.0 } else { 0.0 }),
-                max if max == g => (b - r) / diff + 2.0,
-                max if max == b => (r - g) / diff + 4.0,
-                _ => unreachable!(),
-            }) / 6.0;
-
-            let sat = if max == 0.0 {
-                0.0
-            } else {
-                (diff / max).clamp(0.0, 1.0)
-            };
-
-            Ok((hue, sat, max))
-        });
+        // G3D's (Foley and van Dam) in floats: pure red's hue is 1 (Studio 0.744, tools/parity/probes/datatypes.luau,
+        // cframe_order.luau)
+        methods.add_method("ToHSV", |_, this, ()| Ok(super::float32::to_hsv(this.r, this.g, this.b)));
         // Lower-case hex of each channel times 255, rounded half away from zero and clamped to 0..255: 0.5 is 80,
         // 0.5 / 255 is 01, 2.5 / 255 is 03, -0.1 is 00 (Studio 0.744)
         methods.add_method("ToHex", |_, this, ()| {

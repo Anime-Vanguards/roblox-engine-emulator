@@ -100,7 +100,7 @@ local Normalize = vector.normalize
 local Dot = vector.dot
 local Cross = vector.cross
 
-local Charge, LerpCost, FuzzyEqCost = R.Charge, R.VectorLerpCost, R.VectorFuzzyEqCost
+local Charge, LerpCost, FuzzyEqCost, Atan2f = R.Charge, R.VectorLerpCost, R.VectorFuzzyEqCost, R.Atan2f
 
 local function Lerp(Self, Goal, Alpha)
 	Charge(LerpCost)
@@ -126,7 +126,7 @@ local VectorMethods = {
 	end,
 	Angle = function(Self, Other, Axis)
 		local Normal = Cross(Self, Other)
-		local Angle = math.atan2(Magnitude(Normal), Dot(Self, Other))
+		local Angle = Atan2f(Magnitude(Normal), Dot(Self, Other)) -- atan2f in floats, as a playing client (cframe_order probe)
 		if Axis ~= nil and Dot(Normal, Axis) < 0 then
 			return -Angle
 		end

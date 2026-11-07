@@ -3,7 +3,7 @@
 use core::fmt;
 use std::{ops, sync::Arc};
 
-use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 use mlua::{Variadic, prelude::*};
 use rbx_dom_weak::types::{CFrame as DomCFrame, Matrix3 as DomMatrix3, Vector3 as DomVector3};
 
@@ -11,7 +11,7 @@ use lune_utils::TableBuilder;
 
 use crate::exports::LuaExportsTable;
 
-use super::{super::*, Vector3, VectorArg, charge_host_nanos, native_vector};
+use super::{super::*, Vector3, VectorArg, charge_host_nanos, float32 as f32m, native_vector};
 
 /**
     An implementation of the [CFrame](https://create.roblox.com/docs/reference/engine/datatypes/CFrame)
@@ -112,19 +112,19 @@ fn charged_method<A, R>(
 }
 
 /// An Enum.RotationOrder argument (the host's Enum items print as "Enum.RotationOrder.XYZ"; nil is XYZ):
-/// the order's name and glam's rotation for it. Angles go by the letters of the name, x y z.
-fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<(&'static str, EulerRot)> {
+/// the order's name. Angles go by the letters of the name, x y z.
+fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<&'static str> {
     let text = match order {
         None | Some(LuaValue::Nil) => String::from("Enum.RotationOrder.XYZ"),
         Some(item) => item.to_string()?,
     };
     Ok(match text.strip_prefix("Enum.RotationOrder.") {
-        Some("XYZ") => ("XYZ", EulerRot::XYZ),
-        Some("XZY") => ("XZY", EulerRot::XZY),
-        Some("YXZ") => ("YXZ", EulerRot::YXZ),
-        Some("YZX") => ("YZX", EulerRot::YZX),
-        Some("ZXY") => ("ZXY", EulerRot::ZXY),
-        Some("ZYX") => ("ZYX", EulerRot::ZYX),
+        Some("XYZ") => "XYZ",
+        Some("XZY") => "XZY",
+        Some("YXZ") => "YXZ",
+        Some("YZX") => "YZX",
+        Some("ZXY") => "ZXY",
+        Some("ZYX") => "ZYX",
         // (Studio's message for a string: "Invalid value for enum 'RotationOrder'")
         _ => {
             let _ = function;
@@ -133,6 +133,13 @@ fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<(&'stat
     })
 }
 
+fn array(v: Vec3) -> f32m::Vec3 {
+    [v.x, v.y, v.z]
+}
+
+/// CFrame's operations run in a playing client's float order (types::float32): products and spaces take each row dot
+/// a column left to right and add the translation last, the inverse's position is `(-r0 p0 + -r1 p1) + -r2 p2` per
+/// column, PointToObjectSpace is `R^T (v - p)` (not the inverse times v), ToObjectSpace the inverse times the frame.
 impl CFrame {
     pub const IDENTITY: Self = Self(Mat4::IDENTITY);
 
@@ -148,8 +155,47 @@ impl CFrame {
         )
     }
 
+    /// The rotation by rows
+    fn rot(&self) -> f32m::Rot {
+        let (x, y, z) = (self.0.x_axis, self.0.y_axis, self.0.z_axis);
+        [[x.x, y.x, z.x], [x.y, y.y, z.y], [x.z, y.z, z.z]]
+    }
+
+    fn pos(&self) -> f32m::Vec3 {
+        array(self.position())
+    }
+
+    fn from_parts(p: f32m::Vec3, r: f32m::Rot) -> Self {
+        CFrame(Mat4::from_cols(
+            Vec4::new(r[0][0], r[1][0], r[2][0], 0.0),
+            Vec4::new(r[0][1], r[1][1], r[2][1], 0.0),
+            Vec4::new(r[0][2], r[1][2], r[2][2], 0.0),
+            Vec4::new(p[0], p[1], p[2], 1.0),
+        ))
+    }
+
     fn inverse(&self) -> Self {
-        Self(self.0.inverse())
+        let (p, t) = (self.pos(), f32m::transpose(&self.rot()));
+        let position = [0, 1, 2].map(|i| (-t[i][0] * p[0] + -t[i][1] * p[1]) + -t[i][2] * p[2]);
+        Self::from_parts(position, t)
+    }
+
+    fn point_to_world(&self, v: Vec3) -> Vec3 {
+        let (p, rv) = (self.pos(), f32m::mat_vec(&self.rot(), array(v)));
+        Vec3::new(rv[0] + p[0], rv[1] + p[1], rv[2] + p[2])
+    }
+
+    fn point_to_object(&self, v: Vec3) -> Vec3 {
+        let p = self.pos();
+        Vec3::from_array(f32m::mat_t_vec(&self.rot(), [v.x - p[0], v.y - p[1], v.z - p[2]]))
+    }
+
+    fn vector_to_world(&self, v: Vec3) -> Vec3 {
+        Vec3::from_array(f32m::mat_vec(&self.rot(), array(v)))
+    }
+
+    fn vector_to_object(&self, v: Vec3) -> Vec3 {
+        Vec3::from_array(f32m::mat_t_vec(&self.rot(), array(v)))
     }
 }
 
@@ -160,32 +206,28 @@ impl LuaExportsTable for CFrame {
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
         let cframe_angles = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
             charge_host_nanos(lua, price::ANGLES);
-            Ok(CFrame(Mat4::from_euler(EulerRot::XYZ, rx, ry, rz)))
+            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("XYZ", rx, ry, rz)))
         };
 
         let cframe_from_axis_angle = |lua: &Lua, (v, r): (VectorArg, f32)| {
             charge_host_nanos(lua, price::FROM_AXIS_ANGLE);
-            Ok(CFrame(Mat4::from_axis_angle(v.0, r)))
+            Ok(CFrame::from_parts([0.0; 3], f32m::from_axis_angle(array(v.0), r)))
         };
 
         let cframe_from_euler_angles_xyz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
             charge_host_nanos(lua, price::ANGLES);
-            Ok(CFrame(Mat4::from_euler(EulerRot::XYZ, rx, ry, rz)))
+            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("XYZ", rx, ry, rz)))
         };
 
         let cframe_from_euler_angles = |lua: &Lua, (rx, ry, rz, order): (f32, f32, f32, Option<LuaValue>)| {
             charge_host_nanos(lua, price::ANGLES);
-            let (name, rotation) = rotation_order(order.as_ref(), "fromEulerAngles")?;
-            let by_axis = [rx, ry, rz];
-            let [a, b, c] = name.chars().map(|axis| by_axis[(axis as usize) - ('X' as usize)]).collect::<Vec<_>>()[..] else {
-                unreachable!()
-            };
-            Ok(CFrame(Mat4::from_euler(rotation, a, b, c)))
+            let name = rotation_order(order.as_ref(), "fromEulerAngles")?;
+            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler(name, rx, ry, rz)))
         };
 
         let cframe_from_euler_angles_yxz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
             charge_host_nanos(lua, price::ANGLES);
-            Ok(CFrame(Mat4::from_euler(EulerRot::YXZ, ry, rx, rz)))
+            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
         };
 
         let cframe_from_matrix = |lua: &Lua,
@@ -196,27 +238,29 @@ impl LuaExportsTable for CFrame {
             Option<VectorArg>,
         )| {
             charge_host_nanos(lua, price::NEW_MATRIX);
-            Ok(CFrame(Mat4::from_cols(
-                rx.0.extend(0.0),
-                ry.0.extend(0.0),
-                rz.map_or_else(|| rx.0.cross(ry.0).normalize(), |r| r.0)
-                    .extend(0.0),
-                pos.0.extend(1.0),
-            )))
+            // (a missing Z column is X cross Y made a unit vector; not measured)
+            let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx.0), array(ry.0))), |r| array(r.0));
+            Ok(CFrame::from_parts(array(pos.0), f32m::from_columns(array(rx.0), array(ry.0), z)))
         };
 
         let cframe_from_orientation = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
             charge_host_nanos(lua, price::ANGLES);
-            Ok(CFrame(Mat4::from_euler(EulerRot::YXZ, ry, rx, rz)))
+            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
         };
 
         let cframe_look_at = |lua: &Lua, (from, to, up): (VectorArg, VectorArg, Option<VectorArg>)| {
             charge_host_nanos(lua, price::LOOK_AT);
-            Ok(CFrame(look_at(
-                from.0,
-                to.0,
-                up.map_or(Vec3::Y, |up| up.0),
-            )))
+            Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
+        };
+
+        // lookAlong takes the direction itself: far from the origin it is not lookAt(at, at + direction), whose sum
+        // rounds (Studio 0.744, tools/parity/probes/cframe_order.luau)
+        let cframe_look_along = |lua: &Lua, (at, direction, up): (VectorArg, VectorArg, Option<VectorArg>)| {
+            charge_host_nanos(lua, price::LOOK_AT);
+            Ok(CFrame::from_parts(
+                array(at.0),
+                f32m::look_along(array(direction.0), array(up.map_or(Vec3::Y, |up| up.0))),
+            ))
         };
 
         // Dynamic args constructor
@@ -245,7 +289,7 @@ impl LuaExportsTable for CFrame {
                 Err(err) => Err(err),
             },
 
-            // Roblox's CFrame.new(from, to): looking at `to`
+            // Roblox's CFrame.new(from, to): looking at `to`, as G3D's CoordinateFrame looks (types::float32)
             2 => {
                 let vector = |index: usize| {
                     ArgsPos::from_lua(args[index].clone(), lua).map_err(|cause| {
@@ -257,7 +301,8 @@ impl LuaExportsTable for CFrame {
                         }
                     })
                 };
-                Ok(CFrame(look_at(vector(0)?.0, vector(1)?.0, Vec3::Y)))
+                let (from, to) = (vector(0)?.0, vector(1)?.0);
+                Ok(CFrame::from_parts(array(from), f32m::look_g3d(array(to - from))))
             }
 
             3 => {
@@ -270,11 +315,7 @@ impl LuaExportsTable for CFrame {
                 if let (Some(x), Some(y), Some(z)) = (number(0), number(1), number(2)) {
                     Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
                 } else if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua) {
-                    Ok(CFrame(look_at(
-                        from.0,
-                        to.0,
-                        up.map_or(Vec3::Y, |up| up.0),
-                    )))
+                    Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
                 } else if let Ok((x, y, z)) = ArgsPosXYZ::from_lua_multi(args, lua) {
                     Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
                 } else {
@@ -321,6 +362,7 @@ impl LuaExportsTable for CFrame {
             .with_function("fromEulerAnglesYXZ", cframe_from_euler_angles_yxz)?
             .with_function("fromMatrix", cframe_from_matrix)?
             .with_function("fromOrientation", cframe_from_orientation)?
+            .with_function("lookAlong", cframe_look_along)?
             .with_function("lookAt", cframe_look_at)?
             .with_function("new", cframe_new)?
             .build_readonly()
@@ -401,27 +443,13 @@ impl LuaUserData for CFrame {
             price::LERP,
             ["Lerp", "lerp"],
             |_, this, (goal, alpha): (LuaUserDataRef<CFrame>, f32)| {
-                let quat_this = Quat::from_mat4(&this.0);
-                let quat_goal = Quat::from_mat4(&goal.0);
-                let translation = this
-                    .0
-                    .w_axis
-                    .truncate()
-                    .lerp(goal.0.w_axis.truncate(), alpha);
-                let rotation = quat_this.slerp(quat_goal, alpha);
-                Ok(CFrame(Mat4::from_rotation_translation(
-                    rotation,
-                    translation,
-                )))
+                let (a, b) = (this.pos(), goal.pos());
+                let position = [0, 1, 2].map(|i| f32m::lerp(a[i], b[i], alpha));
+                Ok(CFrame::from_parts(position, f32m::lerp_rotation(&this.rot(), &goal.rot(), alpha)))
             }
         );
         methods.add_method("Orthonormalize", charged_method(price::ORTHONORMALIZE, |_, this, ()| {
-            let rotation = Quat::from_mat4(&this.0);
-            let translation = this.0.w_axis.truncate();
-            Ok(CFrame(Mat4::from_rotation_translation(
-                rotation.normalize(),
-                translation,
-            )))
+            Ok(CFrame::from_parts(this.pos(), f32m::orthonormalize(&this.rot())))
         }));
         aliased!(
             methods,
@@ -453,7 +481,7 @@ impl LuaUserData for CFrame {
             |_, this, rhs: Variadic<VectorArg>| {
                 Ok(rhs
                     .into_iter()
-                    .map(|v3| native_vector((*this * Vector3(v3.0)).0))
+                    .map(|v3| native_vector(this.point_to_world(v3.0)))
                     .collect::<Variadic<_>>())
             }
         );
@@ -462,10 +490,9 @@ impl LuaUserData for CFrame {
             price::POINT_TO_OBJECT,
             ["PointToObjectSpace", "pointToObjectSpace"],
             |_, this, rhs: Variadic<VectorArg>| {
-                let inverse = this.inverse();
                 Ok(rhs
                     .into_iter()
-                    .map(|v3| native_vector((inverse * Vector3(v3.0)).0))
+                    .map(|v3| native_vector(this.point_to_object(v3.0)))
                     .collect::<Variadic<_>>())
             }
         );
@@ -474,10 +501,9 @@ impl LuaUserData for CFrame {
             price::VECTOR_TO_WORLD,
             ["VectorToWorldSpace", "vectorToWorldSpace"],
             |_, this, rhs: Variadic<VectorArg>| {
-                let result = *this - Vector3(this.position());
                 Ok(rhs
                     .into_iter()
-                    .map(|v3| native_vector((result * Vector3(v3.0)).0))
+                    .map(|v3| native_vector(this.vector_to_world(v3.0)))
                     .collect::<Variadic<_>>())
             }
         );
@@ -486,11 +512,9 @@ impl LuaUserData for CFrame {
             price::VECTOR_TO_OBJECT,
             ["VectorToObjectSpace", "vectorToObjectSpace"],
             |_, this, rhs: Variadic<VectorArg>| {
-                let inverse = this.inverse();
-                let result = inverse - Vector3(inverse.position());
                 Ok(rhs
                     .into_iter()
-                    .map(|v3| native_vector((result * Vector3(v3.0)).0))
+                    .map(|v3| native_vector(this.vector_to_object(v3.0)))
                     .collect::<Variadic<_>>())
             }
         );
@@ -506,30 +530,23 @@ impl LuaUserData for CFrame {
             ))
         });
         aliased!(methods, price::EULER, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |_, this, ()| {
-            Ok(Quat::from_mat4(&this.0).to_euler(EulerRot::XYZ))
+            Ok(f32m::to_euler("XYZ", &this.rot()))
         });
         // (and their lowercase names, measured in a client: ree's tools/parity/probes/camelcase.luau)
         aliased!(methods, price::EULER, ["ToEulerAnglesYXZ", "toEulerAnglesYXZ"], |_, this, ()| {
-            let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
-            Ok((rx, ry, rz))
+            Ok(f32m::to_euler("YXZ", &this.rot()))
         });
         aliased!(methods, price::EULER, ["ToOrientation", "toOrientation"], |_, this, ()| {
-            let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
-            Ok((rx, ry, rz))
+            Ok(f32m::to_euler("YXZ", &this.rot()))
         });
         // ToEulerAngles(order = Enum.RotationOrder.XYZ): the three angles in x, y, z order for the rotation order named
         aliased!(methods, price::EULER, ["ToEulerAngles", "toEulerAngles"], |_, this, order: Option<LuaValue>| {
-            let (name, rotation) = rotation_order(order.as_ref(), "ToEulerAngles")?;
-            let (a, b, c) = Quat::from_mat4(&this.0).to_euler(rotation);
-            let mut angles = [0.0f32; 3];
-            for (angle, axis) in [a, b, c].into_iter().zip(name.chars()) {
-                angles[(axis as usize) - ('X' as usize)] = angle;
-            }
-            Ok((angles[0], angles[1], angles[2]))
+            let name = rotation_order(order.as_ref(), "ToEulerAngles")?;
+            Ok(f32m::to_euler(name, &this.rot()))
         });
         aliased!(methods, price::AXIS_ANGLE, ["ToAxisAngle", "toAxisAngle"], |_, this, ()| {
-            let (axis, angle) = Quat::from_mat4(&this.0).to_axis_angle();
-            Ok((native_vector(axis), angle))
+            let (axis, angle) = f32m::to_axis_angle(&this.rot());
+            Ok((native_vector(Vec3::from_array(axis)), angle))
         });
         // Metamethods
         methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, other: LuaValue| {
@@ -603,14 +620,16 @@ impl fmt::Display for CFrame {
 impl ops::Mul for CFrame {
     type Output = Self;
     fn mul(self, rhs: Self) -> Self::Output {
-        CFrame(self.0 * rhs.0)
+        let (p, r) = (self.pos(), self.rot());
+        let rv = f32m::mat_vec(&r, rhs.pos());
+        CFrame::from_parts([rv[0] + p[0], rv[1] + p[1], rv[2] + p[2]], f32m::mat_mul(&r, &rhs.rot()))
     }
 }
 
 impl ops::Mul<Vector3> for CFrame {
     type Output = Vector3;
     fn mul(self, rhs: Vector3) -> Self::Output {
-        Vector3(self.0.project_point3(rhs.0))
+        Vector3(self.point_to_world(rhs.0))
     }
 }
 
@@ -664,23 +683,10 @@ impl From<CFrame> for DomCFrame {
     }
 }
 
-/**
-    Creates a matrix at the position `from`, looking towards `to`.
-
-    [`glam`] does provide functions such as [`look_at_lh`], [`look_at_rh`] and more but
-    they all create view matrices for camera transforms which is not what we want here.
-*/
-fn look_at(from: Vec3, to: Vec3, up: Vec3) -> Mat4 {
-    let back = (from - to).normalize_or(Vec3::Z);
-    let xaxis = up.cross(back).normalize_or(Vec3::X);
-    let yaxis = back.cross(xaxis).normalize();
-
-    Mat4::from_cols(
-        xaxis.extend(0.0),
-        yaxis.extend(0.0),
-        back.extend(0.0),
-        from.extend(1.0),
-    )
+/// CFrame.lookAt(from, to, up): at `from`, looking along `to - from` (types::float32 `look_along`; looking at itself
+/// is not-a-number, as in Roblox)
+fn look_at(from: Vec3, to: Vec3, up: Vec3) -> CFrame {
+    CFrame::from_parts(array(from), f32m::look_along(array(to - from), array(up)))
 }
 
 #[cfg(test)]

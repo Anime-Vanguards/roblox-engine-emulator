@@ -92,9 +92,9 @@ impl LuaUserData for BrickColor {
         fields.add_field_method_get("number", |_, this| Ok(this.number));
         fields.add_field_method_get("Name", |_, this| Ok(this.name));
         fields.add_field_method_get("name", |_, this| Ok(this.name));
-        fields.add_field_method_get("r", |_, this| Ok(this.rgb.0 as f32 / 255f32));
-        fields.add_field_method_get("g", |_, this| Ok(this.rgb.1 as f32 / 255f32));
-        fields.add_field_method_get("b", |_, this| Ok(this.rgb.2 as f32 / 255f32));
+        fields.add_field_method_get("r", |_, this| Ok(this.rgb.0 as f32 * (1.0 / 255.0)));
+        fields.add_field_method_get("g", |_, this| Ok(this.rgb.1 as f32 * (1.0 / 255.0)));
+        fields.add_field_method_get("b", |_, this| Ok(this.rgb.2 as f32 * (1.0 / 255.0)));
         fields.add_field_method_get("Color", |_, this| Ok(Color3::from(*this)));
     }
 
@@ -126,9 +126,11 @@ impl From<Color3> for BrickColor {
 impl From<BrickColor> for Color3 {
     fn from(value: BrickColor) -> Self {
         Self {
-            r: (value.rgb.0 as f32) / 255.0,
-            g: (value.rgb.1 as f32) / 255.0,
-            b: (value.rgb.2 as f32) / 255.0,
+            // n * (1 / 255) in floats: Bright red's R is 0.768627524, not 196 / 255's 0.768627465 (Studio 0.744,
+            // tools/parity/probes/datatypes.luau)
+            r: (value.rgb.0 as f32) * (1.0 / 255.0),
+            g: (value.rgb.1 as f32) * (1.0 / 255.0),
+            b: (value.rgb.2 as f32) * (1.0 / 255.0),
         }
     }
 }

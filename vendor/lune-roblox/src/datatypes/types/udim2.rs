@@ -3,7 +3,6 @@
 use core::fmt;
 use std::ops;
 
-use glam::Vec2;
 use mlua::prelude::*;
 use rbx_dom_weak::types::UDim2 as DomUDim2;
 
@@ -98,26 +97,15 @@ impl LuaUserData for UDim2 {
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         // Methods
         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        // Each scale is a + (b - a) * t in floats, each offset the same rounded half away from zero (Studio 0.744,
+        // tools/parity/probes/datatypes.luau)
         let lerp = |lua: &Lua, this: &UDim2, (goal, alpha): (LuaUserDataRef<UDim2>, f32)| {
             super::charge_host_nanos(lua, super::datatype_price::UDIM2_LERP);
-            let this_x = Vec2::new(this.x.scale, this.x.offset as f32);
-            let goal_x = Vec2::new(goal.x.scale, goal.x.offset as f32);
-
-            let this_y = Vec2::new(this.y.scale, this.y.offset as f32);
-            let goal_y = Vec2::new(goal.y.scale, goal.y.offset as f32);
-
-            let x = this_x.lerp(goal_x, alpha);
-            let y = this_y.lerp(goal_y, alpha);
-
+            let lerp = super::float32::lerp;
+            let offset = |a: i32, b: i32| lerp(a as f32, b as f32, alpha).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
             Ok(UDim2 {
-                x: UDim {
-                    scale: x.x,
-                    offset: x.y.clamp(i32::MIN as f32, i32::MAX as f32).round() as i32,
-                },
-                y: UDim {
-                    scale: y.x,
-                    offset: y.y.clamp(i32::MIN as f32, i32::MAX as f32).round() as i32,
-                },
+                x: UDim { scale: lerp(this.x.scale, goal.x.scale, alpha), offset: offset(this.x.offset, goal.x.offset) },
+                y: UDim { scale: lerp(this.y.scale, goal.y.scale, alpha), offset: offset(this.y.offset, goal.y.offset) },
             })
         };
         methods.add_method("Lerp", lerp);

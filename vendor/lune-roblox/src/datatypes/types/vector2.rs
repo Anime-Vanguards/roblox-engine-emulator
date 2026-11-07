@@ -59,8 +59,12 @@ impl LuaUserData for Vector2 {
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         // Methods
-        methods.add_method("Angle", |_, this, rhs: LuaUserDataRef<Vector2>| {
-            Ok(this.0.angle_to(rhs.0))
+        // atan2f(a x b, a . b) in floats, signed only when asked (Studio 0.744, tools/parity/probes/cframe_order.luau
+        // measures the signed form; the unsigned one is its absolute value, as Roblox documents)
+        methods.add_method("Angle", |_, this, (rhs, signed): (LuaUserDataRef<Vector2>, Option<bool>)| {
+            let (a, b) = (this.0, rhs.0);
+            let angle = (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y);
+            Ok(if signed.unwrap_or(false) { angle } else { angle.abs() })
         });
         methods.add_method("Cross", |_, this, rhs: LuaUserDataRef<Vector2>| {
             let this_v3 = Vec3::new(this.0.x, this.0.y, 0f32);
@@ -79,9 +83,11 @@ impl LuaUserData for Vector2 {
             },
         );
         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
+        // a + (b - a) * t in floats (Studio 0.744, tools/parity/probes/cframe_order.luau)
         let lerp = |lua: &Lua, this: &Vector2, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
             charge_host_nanos(lua, price::VECTOR2_LERP);
-            Ok(Vector2(this.0.lerp(rhs.0, alpha)))
+            let lerp = super::float32::lerp;
+            Ok(Vector2(Vec2::new(lerp(this.0.x, rhs.0.x, alpha), lerp(this.0.y, rhs.0.y, alpha))))
         };
         methods.add_method("Lerp", lerp);
         methods.add_method("lerp", lerp);

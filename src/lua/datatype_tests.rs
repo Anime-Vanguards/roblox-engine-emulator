@@ -488,11 +488,49 @@ fn datatypes_answer_the_lowercase_names_a_client_lists() {
     );
 }
 
-/// Every CFrame constructor, member, method, deprecated alias and operator gives the bits it gave when the
-/// engine's Luau served it (cframe_golden/ops.txt, printed with %.17g by the build before CFrame took and
-/// returned native vectors itself), and a misuse gives the same error text. Three misuse texts differ from
-/// that build's: a table where a Vector3 is expected names the type as 'Vector3' (it named the Rust type),
-/// and an integral number is a "number" (it was an "integer").
+/// CFrame, Vector2 and Color3 compute in a playing client's float order (types::float32): values a Studio 0.744
+/// playing client printed (tools/parity/probes/datatypes.luau, cframe_order.luau; tests/parity.rs guards every
+/// matching line of those probes).
+#[test]
+fn cframe_and_colour_math_follow_a_playing_clients_float_order() {
+    assert_script(
+        r#"
+local function F(...)
+	local Out = {}
+	for _, Value in { ... } do
+		table.insert(Out, string.format("%.9g", Value))
+	end
+	return table.concat(Out, " ")
+end
+local function Is(Got, Want)
+	assert(Got == Want, `got "{Got}", expected "{Want}"`)
+end
+Is(F(CFrame.Angles(0, 0.753655374, 0):GetComponents()), "0 0 0 0.729192317 -0 0.684308827 0 1 -0 -0.684308827 0 0.729192317")
+Is(tostring(CFrame.Angles(0.1, 0.2, 0.3)), "0, 0, 0, 0.936293423, -0.289629489, 0.198669329, 0.312991828, 0.944702566, -0.0978434011, -0.159345075, 0.153791994, 0.975170374")
+local Order = CFrame.fromEulerAngles(0.7, -1.3, 2.1, Enum.RotationOrder.XZY)
+Is(F(Order:GetComponents()), "0 0 0 -0.135045752 -0.863209426 0.486448526 -0.444133341 -0.386127561 -0.808486938 0.885724723 -0.325230747 -0.33123523")
+Is(F(Order:ToEulerAngles(Enum.RotationOrder.XZY)), "-2.44159269 1.84159267 1.04159284")
+-- lookAlong takes the direction itself; lookAt(at, at + direction) rounds the sum far from the origin
+local Far, Direction = Vector3.new(1000.123, -2000.5, 3000.25), Vector3.new(0.3, 0.2, -0.9)
+Is(F(CFrame.lookAlong(Far, Direction):GetComponents()), "1000.12299 -2000.5 3000.25 0.948683321 -0.0652328208 -0.309426397 -0 0.9784922 -0.20628427 0.316227794 0.19569844 0.928279161")
+Is(F(CFrame.lookAt(Far, Far + Direction):GetComponents()), "1000.12299 -2000.5 3000.25 0.948676825 -0.0652278885 -0.30944714 -0 0.978498042 -0.206256106 0.316247076 0.195670381 0.928278446")
+Is(F(CFrame.lookAt(Vector3.zero, Vector3.new(0, 10, 0)):GetComponents()), "0 0 0 0 1 -0 0 -0 -1 -1 0 -0")
+-- Color3.fromRGB divides by 255, BrickColor multiplies by 1/255; pure red's hue is 1; fromHSV clamps the hue
+Is(F(Color3.fromRGB(196, 40, 3).R, Color3.fromRGB(196, 40, 3).G, Color3.fromRGB(98, 37, 209).B), "0.768627465 0.156862751 0.819607854")
+Is(F(BrickColor.new("Bright red").Color.R), "0.768627524")
+Is(F(Color3.new(1, 0, 0):ToHSV()), "1 1 1")
+Is(F(Color3.fromHSV(1, 1, 1).R, Color3.fromHSV(1.5, 1, 1).G, Color3.fromHSV(-0.25, 1, 1).B), "1 0 0")
+"#,
+    );
+}
+
+/// Every CFrame constructor, member, method, deprecated alias and operator gives the same bits run after run
+/// (cframe_golden/ops.txt, printed with %.17g), and a misuse gives the same error text. Three misuse texts differ
+/// from the build before CFrame took and returned native vectors itself: a table where a Vector3 is expected names
+/// the type as 'Vector3' (it named the Rust type), and an integral number is a "number" (it was an "integer").
+/// The values are a playing client's order of float operations since 2026-11-07 (types::float32; 22 lines moved in
+/// their last digits from glam's quaternion and 4x4 forms: the Euler and look constructors, Inverse, Lerp,
+/// Orthonormalize, the spaces and the decompositions).
 #[test]
 fn cframe_operations_keep_their_values_bit_for_bit() {
     let lines = assert_script(include_str!("cframe_golden/ops.luau"));

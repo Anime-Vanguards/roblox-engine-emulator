@@ -3181,3 +3181,893 @@
          fields.add_field_method_get("r", |_, this| Ok(this.rgb.0 as f32 / 255f32));
          fields.add_field_method_get("g", |_, this| Ok(this.rgb.1 as f32 / 255f32));
          fields.add_field_method_get("b", |_, this| Ok(this.rgb.2 as f32 / 255f32));
+--- a/crates/lune-roblox/src/datatypes/types/brick_color.rs
++++ b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+@@ -92,9 +92,9 @@ impl LuaUserData for BrickColor {
+         fields.add_field_method_get("number", |_, this| Ok(this.number));
+         fields.add_field_method_get("Name", |_, this| Ok(this.name));
+         fields.add_field_method_get("name", |_, this| Ok(this.name));
+-        fields.add_field_method_get("r", |_, this| Ok(this.rgb.0 as f32 / 255f32));
+-        fields.add_field_method_get("g", |_, this| Ok(this.rgb.1 as f32 / 255f32));
+-        fields.add_field_method_get("b", |_, this| Ok(this.rgb.2 as f32 / 255f32));
++        fields.add_field_method_get("r", |_, this| Ok(this.rgb.0 as f32 * (1.0 / 255.0)));
++        fields.add_field_method_get("g", |_, this| Ok(this.rgb.1 as f32 * (1.0 / 255.0)));
++        fields.add_field_method_get("b", |_, this| Ok(this.rgb.2 as f32 * (1.0 / 255.0)));
+         fields.add_field_method_get("Color", |_, this| Ok(Color3::from(*this)));
+     }
+ 
+@@ -126,9 +126,11 @@ impl From<Color3> for BrickColor {
+ impl From<BrickColor> for Color3 {
+     fn from(value: BrickColor) -> Self {
+         Self {
+-            r: (value.rgb.0 as f32) / 255.0,
+-            g: (value.rgb.1 as f32) / 255.0,
+-            b: (value.rgb.2 as f32) / 255.0,
++            // n * (1 / 255) in floats: Bright red's R is 0.768627524, not 196 / 255's 0.768627465 (Studio 0.744,
++            // tools/parity/probes/datatypes.luau)
++            r: (value.rgb.0 as f32) * (1.0 / 255.0),
++            g: (value.rgb.1 as f32) * (1.0 / 255.0),
++            b: (value.rgb.2 as f32) * (1.0 / 255.0),
+         }
+     }
+ }
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -3,7 +3,7 @@
+ use core::fmt;
+ use std::{ops, sync::Arc};
+ 
+-use glam::{EulerRot, Mat3, Mat4, Quat, Vec3};
++use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
+ use mlua::{Variadic, prelude::*};
+ use rbx_dom_weak::types::{CFrame as DomCFrame, Matrix3 as DomMatrix3, Vector3 as DomVector3};
+ 
+@@ -11,7 +11,7 @@ use lune_utils::TableBuilder;
+ 
+ use crate::exports::LuaExportsTable;
+ 
+-use super::{super::*, Vector3, VectorArg, charge_host_nanos, native_vector};
++use super::{super::*, Vector3, VectorArg, charge_host_nanos, float32 as f32m, native_vector};
+ 
+ /**
+     An implementation of the [CFrame](https://create.roblox.com/docs/reference/engine/datatypes/CFrame)
+@@ -112,19 +112,19 @@ fn charged_method<A, R>(
+ }
+ 
+ /// An Enum.RotationOrder argument (the host's Enum items print as "Enum.RotationOrder.XYZ"; nil is XYZ):
+-/// the order's name and glam's rotation for it. Angles go by the letters of the name, x y z.
+-fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<(&'static str, EulerRot)> {
++/// the order's name. Angles go by the letters of the name, x y z.
++fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<&'static str> {
+     let text = match order {
+         None | Some(LuaValue::Nil) => String::from("Enum.RotationOrder.XYZ"),
+         Some(item) => item.to_string()?,
+     };
+     Ok(match text.strip_prefix("Enum.RotationOrder.") {
+-        Some("XYZ") => ("XYZ", EulerRot::XYZ),
+-        Some("XZY") => ("XZY", EulerRot::XZY),
+-        Some("YXZ") => ("YXZ", EulerRot::YXZ),
+-        Some("YZX") => ("YZX", EulerRot::YZX),
+-        Some("ZXY") => ("ZXY", EulerRot::ZXY),
+-        Some("ZYX") => ("ZYX", EulerRot::ZYX),
++        Some("XYZ") => "XYZ",
++        Some("XZY") => "XZY",
++        Some("YXZ") => "YXZ",
++        Some("YZX") => "YZX",
++        Some("ZXY") => "ZXY",
++        Some("ZYX") => "ZYX",
+         // (Studio's message for a string: "Invalid value for enum 'RotationOrder'")
+         _ => {
+             let _ = function;
+@@ -133,6 +133,13 @@ fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<(&'stat
+     })
+ }
+ 
++fn array(v: Vec3) -> f32m::Vec3 {
++    [v.x, v.y, v.z]
++}
++
++/// CFrame's operations run in a playing client's float order (types::float32): products and spaces take each row dot
++/// a column left to right and add the translation last, the inverse's position is `(-r0 p0 + -r1 p1) + -r2 p2` per
++/// column, PointToObjectSpace is `R^T (v - p)` (not the inverse times v), ToObjectSpace the inverse times the frame.
+ impl CFrame {
+     pub const IDENTITY: Self = Self(Mat4::IDENTITY);
+ 
+@@ -148,8 +155,47 @@ impl CFrame {
+         )
+     }
+ 
++    /// The rotation by rows
++    fn rot(&self) -> f32m::Rot {
++        let (x, y, z) = (self.0.x_axis, self.0.y_axis, self.0.z_axis);
++        [[x.x, y.x, z.x], [x.y, y.y, z.y], [x.z, y.z, z.z]]
++    }
++
++    fn pos(&self) -> f32m::Vec3 {
++        array(self.position())
++    }
++
++    fn from_parts(p: f32m::Vec3, r: f32m::Rot) -> Self {
++        CFrame(Mat4::from_cols(
++            Vec4::new(r[0][0], r[1][0], r[2][0], 0.0),
++            Vec4::new(r[0][1], r[1][1], r[2][1], 0.0),
++            Vec4::new(r[0][2], r[1][2], r[2][2], 0.0),
++            Vec4::new(p[0], p[1], p[2], 1.0),
++        ))
++    }
++
+     fn inverse(&self) -> Self {
+-        Self(self.0.inverse())
++        let (p, t) = (self.pos(), f32m::transpose(&self.rot()));
++        let position = [0, 1, 2].map(|i| (-t[i][0] * p[0] + -t[i][1] * p[1]) + -t[i][2] * p[2]);
++        Self::from_parts(position, t)
++    }
++
++    fn point_to_world(&self, v: Vec3) -> Vec3 {
++        let (p, rv) = (self.pos(), f32m::mat_vec(&self.rot(), array(v)));
++        Vec3::new(rv[0] + p[0], rv[1] + p[1], rv[2] + p[2])
++    }
++
++    fn point_to_object(&self, v: Vec3) -> Vec3 {
++        let p = self.pos();
++        Vec3::from_array(f32m::mat_t_vec(&self.rot(), [v.x - p[0], v.y - p[1], v.z - p[2]]))
++    }
++
++    fn vector_to_world(&self, v: Vec3) -> Vec3 {
++        Vec3::from_array(f32m::mat_vec(&self.rot(), array(v)))
++    }
++
++    fn vector_to_object(&self, v: Vec3) -> Vec3 {
++        Vec3::from_array(f32m::mat_t_vec(&self.rot(), array(v)))
+     }
+ }
+ 
+@@ -160,32 +206,28 @@ impl LuaExportsTable for CFrame {
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         let cframe_angles = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
+             charge_host_nanos(lua, price::ANGLES);
+-            Ok(CFrame(Mat4::from_euler(EulerRot::XYZ, rx, ry, rz)))
++            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("XYZ", rx, ry, rz)))
+         };
+ 
+         let cframe_from_axis_angle = |lua: &Lua, (v, r): (VectorArg, f32)| {
+             charge_host_nanos(lua, price::FROM_AXIS_ANGLE);
+-            Ok(CFrame(Mat4::from_axis_angle(v.0, r)))
++            Ok(CFrame::from_parts([0.0; 3], f32m::from_axis_angle(array(v.0), r)))
+         };
+ 
+         let cframe_from_euler_angles_xyz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
+             charge_host_nanos(lua, price::ANGLES);
+-            Ok(CFrame(Mat4::from_euler(EulerRot::XYZ, rx, ry, rz)))
++            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("XYZ", rx, ry, rz)))
+         };
+ 
+         let cframe_from_euler_angles = |lua: &Lua, (rx, ry, rz, order): (f32, f32, f32, Option<LuaValue>)| {
+             charge_host_nanos(lua, price::ANGLES);
+-            let (name, rotation) = rotation_order(order.as_ref(), "fromEulerAngles")?;
+-            let by_axis = [rx, ry, rz];
+-            let [a, b, c] = name.chars().map(|axis| by_axis[(axis as usize) - ('X' as usize)]).collect::<Vec<_>>()[..] else {
+-                unreachable!()
+-            };
+-            Ok(CFrame(Mat4::from_euler(rotation, a, b, c)))
++            let name = rotation_order(order.as_ref(), "fromEulerAngles")?;
++            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler(name, rx, ry, rz)))
+         };
+ 
+         let cframe_from_euler_angles_yxz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
+             charge_host_nanos(lua, price::ANGLES);
+-            Ok(CFrame(Mat4::from_euler(EulerRot::YXZ, ry, rx, rz)))
++            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
+         };
+ 
+         let cframe_from_matrix = |lua: &Lua,
+@@ -196,27 +238,29 @@ impl LuaExportsTable for CFrame {
+             Option<VectorArg>,
+         )| {
+             charge_host_nanos(lua, price::NEW_MATRIX);
+-            Ok(CFrame(Mat4::from_cols(
+-                rx.0.extend(0.0),
+-                ry.0.extend(0.0),
+-                rz.map_or_else(|| rx.0.cross(ry.0).normalize(), |r| r.0)
+-                    .extend(0.0),
+-                pos.0.extend(1.0),
+-            )))
++            // (a missing Z column is X cross Y made a unit vector; not measured)
++            let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx.0), array(ry.0))), |r| array(r.0));
++            Ok(CFrame::from_parts(array(pos.0), f32m::from_columns(array(rx.0), array(ry.0), z)))
+         };
+ 
+         let cframe_from_orientation = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
+             charge_host_nanos(lua, price::ANGLES);
+-            Ok(CFrame(Mat4::from_euler(EulerRot::YXZ, ry, rx, rz)))
++            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
+         };
+ 
+         let cframe_look_at = |lua: &Lua, (from, to, up): (VectorArg, VectorArg, Option<VectorArg>)| {
+             charge_host_nanos(lua, price::LOOK_AT);
+-            Ok(CFrame(look_at(
+-                from.0,
+-                to.0,
+-                up.map_or(Vec3::Y, |up| up.0),
+-            )))
++            Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
++        };
++
++        // lookAlong takes the direction itself: far from the origin it is not lookAt(at, at + direction), whose sum
++        // rounds (Studio 0.744, tools/parity/probes/cframe_order.luau)
++        let cframe_look_along = |lua: &Lua, (at, direction, up): (VectorArg, VectorArg, Option<VectorArg>)| {
++            charge_host_nanos(lua, price::LOOK_AT);
++            Ok(CFrame::from_parts(
++                array(at.0),
++                f32m::look_along(array(direction.0), array(up.map_or(Vec3::Y, |up| up.0))),
++            ))
+         };
+ 
+         // Dynamic args constructor
+@@ -245,7 +289,7 @@ impl LuaExportsTable for CFrame {
+                 Err(err) => Err(err),
+             },
+ 
+-            // Roblox's CFrame.new(from, to): looking at `to`
++            // Roblox's CFrame.new(from, to): looking at `to`, as G3D's CoordinateFrame looks (types::float32)
+             2 => {
+                 let vector = |index: usize| {
+                     ArgsPos::from_lua(args[index].clone(), lua).map_err(|cause| {
+@@ -257,7 +301,8 @@ impl LuaExportsTable for CFrame {
+                         }
+                     })
+                 };
+-                Ok(CFrame(look_at(vector(0)?.0, vector(1)?.0, Vec3::Y)))
++                let (from, to) = (vector(0)?.0, vector(1)?.0);
++                Ok(CFrame::from_parts(array(from), f32m::look_g3d(array(to - from))))
+             }
+ 
+             3 => {
+@@ -270,11 +315,7 @@ impl LuaExportsTable for CFrame {
+                 if let (Some(x), Some(y), Some(z)) = (number(0), number(1), number(2)) {
+                     Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
+                 } else if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua) {
+-                    Ok(CFrame(look_at(
+-                        from.0,
+-                        to.0,
+-                        up.map_or(Vec3::Y, |up| up.0),
+-                    )))
++                    Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
+                 } else if let Ok((x, y, z)) = ArgsPosXYZ::from_lua_multi(args, lua) {
+                     Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
+                 } else {
+@@ -321,6 +362,7 @@ impl LuaExportsTable for CFrame {
+             .with_function("fromEulerAnglesYXZ", cframe_from_euler_angles_yxz)?
+             .with_function("fromMatrix", cframe_from_matrix)?
+             .with_function("fromOrientation", cframe_from_orientation)?
++            .with_function("lookAlong", cframe_look_along)?
+             .with_function("lookAt", cframe_look_at)?
+             .with_function("new", cframe_new)?
+             .build_readonly()
+@@ -401,27 +443,13 @@ impl LuaUserData for CFrame {
+             price::LERP,
+             ["Lerp", "lerp"],
+             |_, this, (goal, alpha): (LuaUserDataRef<CFrame>, f32)| {
+-                let quat_this = Quat::from_mat4(&this.0);
+-                let quat_goal = Quat::from_mat4(&goal.0);
+-                let translation = this
+-                    .0
+-                    .w_axis
+-                    .truncate()
+-                    .lerp(goal.0.w_axis.truncate(), alpha);
+-                let rotation = quat_this.slerp(quat_goal, alpha);
+-                Ok(CFrame(Mat4::from_rotation_translation(
+-                    rotation,
+-                    translation,
+-                )))
++                let (a, b) = (this.pos(), goal.pos());
++                let position = [0, 1, 2].map(|i| f32m::lerp(a[i], b[i], alpha));
++                Ok(CFrame::from_parts(position, f32m::lerp_rotation(&this.rot(), &goal.rot(), alpha)))
+             }
+         );
+         methods.add_method("Orthonormalize", charged_method(price::ORTHONORMALIZE, |_, this, ()| {
+-            let rotation = Quat::from_mat4(&this.0);
+-            let translation = this.0.w_axis.truncate();
+-            Ok(CFrame(Mat4::from_rotation_translation(
+-                rotation.normalize(),
+-                translation,
+-            )))
++            Ok(CFrame::from_parts(this.pos(), f32m::orthonormalize(&this.rot())))
+         }));
+         aliased!(
+             methods,
+@@ -453,7 +481,7 @@ impl LuaUserData for CFrame {
+             |_, this, rhs: Variadic<VectorArg>| {
+                 Ok(rhs
+                     .into_iter()
+-                    .map(|v3| native_vector((*this * Vector3(v3.0)).0))
++                    .map(|v3| native_vector(this.point_to_world(v3.0)))
+                     .collect::<Variadic<_>>())
+             }
+         );
+@@ -462,10 +490,9 @@ impl LuaUserData for CFrame {
+             price::POINT_TO_OBJECT,
+             ["PointToObjectSpace", "pointToObjectSpace"],
+             |_, this, rhs: Variadic<VectorArg>| {
+-                let inverse = this.inverse();
+                 Ok(rhs
+                     .into_iter()
+-                    .map(|v3| native_vector((inverse * Vector3(v3.0)).0))
++                    .map(|v3| native_vector(this.point_to_object(v3.0)))
+                     .collect::<Variadic<_>>())
+             }
+         );
+@@ -474,10 +501,9 @@ impl LuaUserData for CFrame {
+             price::VECTOR_TO_WORLD,
+             ["VectorToWorldSpace", "vectorToWorldSpace"],
+             |_, this, rhs: Variadic<VectorArg>| {
+-                let result = *this - Vector3(this.position());
+                 Ok(rhs
+                     .into_iter()
+-                    .map(|v3| native_vector((result * Vector3(v3.0)).0))
++                    .map(|v3| native_vector(this.vector_to_world(v3.0)))
+                     .collect::<Variadic<_>>())
+             }
+         );
+@@ -486,11 +512,9 @@ impl LuaUserData for CFrame {
+             price::VECTOR_TO_OBJECT,
+             ["VectorToObjectSpace", "vectorToObjectSpace"],
+             |_, this, rhs: Variadic<VectorArg>| {
+-                let inverse = this.inverse();
+-                let result = inverse - Vector3(inverse.position());
+                 Ok(rhs
+                     .into_iter()
+-                    .map(|v3| native_vector((result * Vector3(v3.0)).0))
++                    .map(|v3| native_vector(this.vector_to_object(v3.0)))
+                     .collect::<Variadic<_>>())
+             }
+         );
+@@ -506,30 +530,23 @@ impl LuaUserData for CFrame {
+             ))
+         });
+         aliased!(methods, price::EULER, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |_, this, ()| {
+-            Ok(Quat::from_mat4(&this.0).to_euler(EulerRot::XYZ))
++            Ok(f32m::to_euler("XYZ", &this.rot()))
+         });
+         // (and their lowercase names, measured in a client: ree's tools/parity/probes/camelcase.luau)
+         aliased!(methods, price::EULER, ["ToEulerAnglesYXZ", "toEulerAnglesYXZ"], |_, this, ()| {
+-            let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
+-            Ok((rx, ry, rz))
++            Ok(f32m::to_euler("YXZ", &this.rot()))
+         });
+         aliased!(methods, price::EULER, ["ToOrientation", "toOrientation"], |_, this, ()| {
+-            let (ry, rx, rz) = Quat::from_mat4(&this.0).to_euler(EulerRot::YXZ);
+-            Ok((rx, ry, rz))
++            Ok(f32m::to_euler("YXZ", &this.rot()))
+         });
+         // ToEulerAngles(order = Enum.RotationOrder.XYZ): the three angles in x, y, z order for the rotation order named
+         aliased!(methods, price::EULER, ["ToEulerAngles", "toEulerAngles"], |_, this, order: Option<LuaValue>| {
+-            let (name, rotation) = rotation_order(order.as_ref(), "ToEulerAngles")?;
+-            let (a, b, c) = Quat::from_mat4(&this.0).to_euler(rotation);
+-            let mut angles = [0.0f32; 3];
+-            for (angle, axis) in [a, b, c].into_iter().zip(name.chars()) {
+-                angles[(axis as usize) - ('X' as usize)] = angle;
+-            }
+-            Ok((angles[0], angles[1], angles[2]))
++            let name = rotation_order(order.as_ref(), "ToEulerAngles")?;
++            Ok(f32m::to_euler(name, &this.rot()))
+         });
+         aliased!(methods, price::AXIS_ANGLE, ["ToAxisAngle", "toAxisAngle"], |_, this, ()| {
+-            let (axis, angle) = Quat::from_mat4(&this.0).to_axis_angle();
+-            Ok((native_vector(axis), angle))
++            let (axis, angle) = f32m::to_axis_angle(&this.rot());
++            Ok((native_vector(Vec3::from_array(axis)), angle))
+         });
+         // Metamethods
+         methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, other: LuaValue| {
+@@ -603,14 +620,16 @@ impl fmt::Display for CFrame {
+ impl ops::Mul for CFrame {
+     type Output = Self;
+     fn mul(self, rhs: Self) -> Self::Output {
+-        CFrame(self.0 * rhs.0)
++        let (p, r) = (self.pos(), self.rot());
++        let rv = f32m::mat_vec(&r, rhs.pos());
++        CFrame::from_parts([rv[0] + p[0], rv[1] + p[1], rv[2] + p[2]], f32m::mat_mul(&r, &rhs.rot()))
+     }
+ }
+ 
+ impl ops::Mul<Vector3> for CFrame {
+     type Output = Vector3;
+     fn mul(self, rhs: Vector3) -> Self::Output {
+-        Vector3(self.0.project_point3(rhs.0))
++        Vector3(self.point_to_world(rhs.0))
+     }
+ }
+ 
+@@ -664,23 +683,10 @@ impl From<CFrame> for DomCFrame {
+     }
+ }
+ 
+-/**
+-    Creates a matrix at the position `from`, looking towards `to`.
+-
+-    [`glam`] does provide functions such as [`look_at_lh`], [`look_at_rh`] and more but
+-    they all create view matrices for camera transforms which is not what we want here.
+-*/
+-fn look_at(from: Vec3, to: Vec3, up: Vec3) -> Mat4 {
+-    let back = (from - to).normalize_or(Vec3::Z);
+-    let xaxis = up.cross(back).normalize_or(Vec3::X);
+-    let yaxis = back.cross(xaxis).normalize();
+-
+-    Mat4::from_cols(
+-        xaxis.extend(0.0),
+-        yaxis.extend(0.0),
+-        back.extend(0.0),
+-        from.extend(1.0),
+-    )
++/// CFrame.lookAt(from, to, up): at `from`, looking along `to - from` (types::float32 `look_along`; looking at itself
++/// is not-a-number, as in Roblox)
++fn look_at(from: Vec3, to: Vec3, up: Vec3) -> CFrame {
++    CFrame::from_parts(array(from), f32m::look_along(array(to - from), array(up)))
+ }
+ 
+ #[cfg(test)]
+--- a/crates/lune-roblox/src/datatypes/types/color3.rs
++++ b/crates/lune-roblox/src/datatypes/types/color3.rs
+@@ -3,7 +3,6 @@
+ use core::fmt;
+ use std::ops;
+ 
+-use glam::Vec3;
+ use mlua::prelude::*;
+ use rbx_dom_weak::types::{Color3 as DomColor3, Color3uint8 as DomColor3uint8};
+ 
+@@ -43,7 +42,9 @@ impl LuaExportsTable for Color3 {
+ 
+         let color3_from_hsv = |lua: &Lua, (h, s, v): (f32, f32, f32)| {
+             super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
+-            // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c
++            // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c, in floats, the hue clamped to 0..1 first
++            // (fromHSV(1.5, 1, 1) is fromHSV(1, 1, 1) and -0.25 is 0: Studio 0.744, tools/parity/probes/datatypes.luau)
++            let h = h.clamp(0.0, 1.0);
+             let i = (h * 6.0).floor();
+             let f = h * 6.0 - i;
+             let p = v * (1.0 - s);
+@@ -138,43 +139,21 @@ impl LuaUserData for Color3 {
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+         // Methods
++        // a + (b - a) * t per channel in floats (Studio 0.744, tools/parity/probes/datatypes.luau)
+         let lerp = |lua: &Lua, this: &Color3, (rhs, alpha): (LuaUserDataRef<Color3>, f32)| {
+             super::charge_host_nanos(lua, super::datatype_price::COLOR3_LERP);
+-            let v3_this = Vec3::new(this.r, this.g, this.b);
+-            let v3_rhs = Vec3::new(rhs.r, rhs.g, rhs.b);
+-            let v3 = v3_this.lerp(v3_rhs, alpha);
++            let lerp = super::float32::lerp;
+             Ok(Color3 {
+-                r: v3.x,
+-                g: v3.y,
+-                b: v3.z,
++                r: lerp(this.r, rhs.r, alpha),
++                g: lerp(this.g, rhs.g, alpha),
++                b: lerp(this.b, rhs.b, alpha),
+             })
+         };
+         methods.add_method("Lerp", lerp);
+         methods.add_method("lerp", lerp);
+-        methods.add_method("ToHSV", |_, this, ()| {
+-            // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c
+-            let (r, g, b) = (this.r, this.g, this.b);
+-            let min = r.min(g).min(b);
+-            let max = r.max(g).max(b);
+-            let diff = max - min;
+-
+-            #[allow(clippy::float_cmp)]
+-            let hue = (match max {
+-                max if max == min => 0.0,
+-                max if max == r => (g - b) / diff + (if g < b { 6.0 } else { 0.0 }),
+-                max if max == g => (b - r) / diff + 2.0,
+-                max if max == b => (r - g) / diff + 4.0,
+-                _ => unreachable!(),
+-            }) / 6.0;
+-
+-            let sat = if max == 0.0 {
+-                0.0
+-            } else {
+-                (diff / max).clamp(0.0, 1.0)
+-            };
+-
+-            Ok((hue, sat, max))
+-        });
++        // G3D's (Foley and van Dam) in floats: pure red's hue is 1 (Studio 0.744, tools/parity/probes/datatypes.luau,
++        // cframe_order.luau)
++        methods.add_method("ToHSV", |_, this, ()| Ok(super::float32::to_hsv(this.r, this.g, this.b)));
+         // Lower-case hex of each channel times 255, rounded half away from zero and clamped to 0..255: 0.5 is 80,
+         // 0.5 / 255 is 01, 2.5 / 255 is 03, -0.1 is 00 (Studio 0.744)
+         methods.add_method("ToHex", |_, this, ()| {
+--- a/crates/lune-roblox/src/datatypes/types/mod.rs
++++ b/crates/lune-roblox/src/datatypes/types/mod.rs
+@@ -87,3 +87,315 @@ pub fn format_g(value: f64, precision: usize) -> String {
+ fn trim_fraction(text: &str) -> &str {
+     if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.') } else { text }
+ }
++
++/// Roblox's single-precision arithmetic for CFrame, Vector2 and Color3, in a playing client's order of operations
++/// (fitted to 5,764 values a Studio 0.744 playing client printed: tools/parity/probes/datatypes.luau and
++/// cframe_order.luau): every step is a float operation, a three-term sum is grouped left to right, the trigonometry is
++/// the C runtime's float functions (sinf, cosf, asinf, acosf, atan2f, which Rust's f32 methods call on Windows), and a
++/// unit vector is `v * (1 / sqrtf(dot(v, v)))`.
++pub mod float32 {
++    /// A vector as three floats
++    pub type Vec3 = [f32; 3];
++    /// A rotation matrix by rows (GetComponents' R00 R01 R02 / R10 R11 R12 / R20 R21 R22)
++    pub type Rot = [[f32; 3]; 3];
++
++    pub const IDENTITY: Rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
++
++    pub fn dot3(a: Vec3, b: Vec3) -> f32 {
++        (a[0] * b[0] + a[1] * b[1]) + a[2] * b[2]
++    }
++
++    pub fn cross3(a: Vec3, b: Vec3) -> Vec3 {
++        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
++    }
++
++    /// Vector3.Unit: `v * (1 / sqrtf((x*x + y*y) + z*z))` (a zero vector gives not-a-number, as in Roblox)
++    pub fn unit3(v: Vec3) -> Vec3 {
++        let reciprocal = 1.0 / dot3(v, v).sqrt();
++        [v[0] * reciprocal, v[1] * reciprocal, v[2] * reciprocal]
++    }
++
++    /// `a + (b - a) * t`: Vector3, Vector2, Color3 and UDim2 Lerp and a CFrame's position
++    pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
++        a + (b - a) * t
++    }
++
++    pub fn column(r: &Rot, j: usize) -> Vec3 {
++        [r[0][j], r[1][j], r[2][j]]
++    }
++
++    pub fn from_columns(x: Vec3, y: Vec3, z: Vec3) -> Rot {
++        [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]
++    }
++
++    pub fn transpose(r: &Rot) -> Rot {
++        from_columns(r[0], r[1], r[2])
++    }
++
++    /// `R v`: each row dotted with v
++    pub fn mat_vec(r: &Rot, v: Vec3) -> Vec3 {
++        [dot3(r[0], v), dot3(r[1], v), dot3(r[2], v)]
++    }
++
++    /// `R^T v`: each column dotted with v
++    pub fn mat_t_vec(r: &Rot, v: Vec3) -> Vec3 {
++        [dot3(column(r, 0), v), dot3(column(r, 1), v), dot3(column(r, 2), v)]
++    }
++
++    pub fn mat_mul(a: &Rot, b: &Rot) -> Rot {
++        let mut out = [[0.0; 3]; 3];
++        for (i, row) in out.iter_mut().enumerate() {
++            for (j, value) in row.iter_mut().enumerate() {
++                *value = dot3(a[i], column(b, j));
++            }
++        }
++        out
++    }
++
++    /// One factor of an Euler product: an exact 1, an exact 0, or a computed value. The client multiplies only the
++    /// non-zero terms and takes a 1 as it is, so `(R_A R_B) R_C` keeps the products and sums those terms make.
++    #[derive(Clone, Copy)]
++    enum Term {
++        Zero,
++        One,
++        Value(f32),
++    }
++
++    fn elementary(axis: u8, s: f32, c: f32) -> [[Term; 3]; 3] {
++        use Term::{One, Value as V, Zero};
++        match axis {
++            b'X' => [[One, Zero, Zero], [Zero, V(c), V(-s)], [Zero, V(s), V(c)]],
++            b'Y' => [[V(c), Zero, V(s)], [Zero, One, Zero], [V(-s), Zero, V(c)]],
++            _ => [[V(c), V(-s), Zero], [V(s), V(c), Zero], [Zero, Zero, One]],
++        }
++    }
++
++    fn sparse_mul(a: &[[Term; 3]; 3], b: &[[Term; 3]; 3]) -> [[Term; 3]; 3] {
++        let mut out = [[Term::Zero; 3]; 3];
++        for i in 0..3 {
++            for j in 0..3 {
++                let mut total: Option<Term> = None;
++                for k in 0..3 {
++                    let term = match (a[i][k], b[k][j]) {
++                        (Term::Zero, _) | (_, Term::Zero) => continue,
++                        (p, Term::One) => p,
++                        (Term::One, q) => q,
++                        (Term::Value(p), Term::Value(q)) => Term::Value(p * q),
++                    };
++                    total = Some(match total {
++                        None => term,
++                        Some(sum) => Term::Value(term_value(sum) + term_value(term)),
++                    });
++                }
++                out[i][j] = total.unwrap_or(Term::Zero);
++            }
++        }
++        out
++    }
++
++    fn term_value(term: Term) -> f32 {
++        match term {
++            Term::Zero => 0.0,
++            Term::One => 1.0,
++            Term::Value(v) => v,
++        }
++    }
++
++    /// fromEulerAngles(x, y, z, order): `(R_A R_B) R_C` for the order's axes A B C, sines and cosines from sinf and
++    /// cosf (CFrame.Angles and fromEulerAnglesXYZ are "XYZ", fromEulerAnglesYXZ and fromOrientation "YXZ")
++    pub fn from_euler(order: &str, x: f32, y: f32, z: f32) -> Rot {
++        let factor = |axis: u8| {
++            let angle = match axis {
++                b'X' => x,
++                b'Y' => y,
++                _ => z,
++            };
++            elementary(axis, angle.sin(), angle.cos())
++        };
++        let axes = order.as_bytes();
++        let product = sparse_mul(&sparse_mul(&factor(axes[0]), &factor(axes[1])), &factor(axes[2]));
++        product.map(|row| row.map(term_value))
++    }
++
++    /// ToEulerAngles(order) as (x, y, z): asinf of the middle axis's term and atan2f for the other two. A term at 1 or
++    /// beyond (gimbal lock) is taken as 1 (not measured: the capture has no such rotation).
++    pub fn to_euler(order: &str, r: &Rot) -> (f32, f32, f32) {
++        let asin = |v: f32| v.clamp(-1.0, 1.0).asin();
++        match order {
++            "XYZ" => ((-r[1][2]).atan2(r[2][2]), asin(r[0][2]), (-r[0][1]).atan2(r[0][0])),
++            "YXZ" => (asin(-r[1][2]), r[0][2].atan2(r[2][2]), r[1][0].atan2(r[1][1])),
++            "ZXY" => (asin(r[2][1]), (-r[2][0]).atan2(r[2][2]), (-r[0][1]).atan2(r[1][1])),
++            "XZY" => (r[2][1].atan2(r[1][1]), r[0][2].atan2(r[0][0]), asin(-r[0][1])),
++            "YZX" => ((-r[1][2]).atan2(r[1][1]), (-r[2][0]).atan2(r[0][0]), asin(r[1][0])),
++            _ => (r[2][1].atan2(r[2][2]), asin(-r[2][0]), r[1][0].atan2(r[0][0])),
++        }
++    }
++
++    /// fromAxisAngle: the axis made a unit vector again, `t = 1 - cosf`, `R = t * (axis outer axis) + cos I + sin [axis]x`
++    pub fn from_axis_angle(axis: Vec3, angle: f32) -> Rot {
++        let [x, y, z] = unit3(axis);
++        let (s, c) = (angle.sin(), angle.cos());
++        let t = 1.0 - c;
++        let (xx, yy, zz) = (x * x, y * y, z * z);
++        let (xy, xz, yz) = (x * y, x * z, y * z);
++        let (xs, ys, zs) = (x * s, y * s, z * s);
++        [
++            [t * xx + c, t * xy - zs, t * xz + ys],
++            [t * xy + zs, t * yy + c, t * yz - xs],
++            [t * xz - ys, t * yz + xs, t * zz + c],
++        ]
++    }
++
++    /// ToAxisAngle: `angle = acosf(0.5 * (((R00 + R11) + R22) - 1))`, `axis = (R21 - R12, R02 - R20, R10 - R01).Unit`.
++    /// At angle 0 the axis is X (not measured: G3D's and glam's choice, and ree's before).
++    pub fn to_axis_angle(r: &Rot) -> (Vec3, f32) {
++        let cos = (0.5 * (((r[0][0] + r[1][1]) + r[2][2]) - 1.0)).clamp(-1.0, 1.0);
++        let angle = cos.acos();
++        if angle == 0.0 {
++            return ([1.0, 0.0, 0.0], 0.0);
++        }
++        (unit3([r[2][1] - r[1][2], r[0][2] - r[2][0], r[1][0] - r[0][1]]), angle)
++    }
++
++    /// lookAt / lookAlong: `look = dir.Unit`, `right = (look x up).Unit`, or `(look x X).Unit` when `|look x up|^2`
++    /// is below 1e-12 (measured to lie in (1e-14, 1e-12]), `up = right x look`; the columns right, up, -look. A zero
++    /// direction gives not-a-number, as in Roblox. (Measured with the default up, Y.)
++    pub fn look_along(direction: Vec3, up: Vec3) -> Rot {
++        let look = unit3(direction);
++        let mut c = cross3(look, up);
++        if dot3(c, c) < 1e-12 {
++            c = cross3(look, [1.0, 0.0, 0.0]);
++        }
++        let right = unit3(c);
++        let up = cross3(right, look);
++        from_columns(right, up, [-look[0], -look[1], -look[2]])
++    }
++
++    /// CFrame.new(position, target): G3D's CoordinateFrame lookAt (`up` is X when `|look . Y| > 0.99`; measured to start
++    /// in (0.98894, 0.99034]): `u = (up - look * (look . up)).Unit`, `z = -look`, `x = -(z x u).Unit`, `y = z x x`.
++    pub fn look_g3d(direction: Vec3) -> Rot {
++        let look = unit3(direction);
++        let mut up = [0.0, 1.0, 0.0];
++        let mut d = dot3(look, up);
++        if d.abs() > 0.99 {
++            up = [1.0, 0.0, 0.0];
++            d = dot3(look, up);
++        }
++        let u = unit3([up[0] - look[0] * d, up[1] - look[1] * d, up[2] - look[2] * d]);
++        let z = [-look[0], -look[1], -look[2]];
++        let c = cross3(z, u);
++        let x = unit3([-c[0], -c[1], -c[2]]);
++        let y = cross3(z, x);
++        from_columns(x, y, z)
++    }
++
++    /// Orthonormalize: Gram-Schmidt over the columns, `q2 = (c2 - (d0 q0 + d1 q1)).Unit` with both dots taken on c2
++    pub fn orthonormalize(r: &Rot) -> Rot {
++        let (c0, c1, c2) = (column(r, 0), column(r, 1), column(r, 2));
++        let q0 = unit3(c0);
++        let d = dot3(q0, c1);
++        let q1 = unit3([c1[0] - d * q0[0], c1[1] - d * q0[1], c1[2] - d * q0[2]]);
++        let (d0, d1) = (dot3(q0, c2), dot3(q1, c2));
++        let q2 = unit3([
++            c2[0] - (d0 * q0[0] + d1 * q1[0]),
++            c2[1] - (d0 * q0[1] + d1 * q1[1]),
++            c2[2] - (d0 * q0[2] + d1 * q1[2]),
++        ]);
++        from_columns(q0, q1, q2)
++    }
++
++    type Quat = [f32; 4];
++
++    /// A rotation's quaternion (x, y, z, w): the trace branch, else the largest diagonal term's, subtracting the other
++    /// two diagonal terms in index order
++    fn quat_from_rot(r: &Rot) -> Quat {
++        let trace = (r[0][0] + r[1][1]) + r[2][2];
++        if trace > 0.0 {
++            let s = (trace + 1.0).sqrt();
++            let k = 0.5 / s;
++            return [(r[2][1] - r[1][2]) * k, (r[0][2] - r[2][0]) * k, (r[1][0] - r[0][1]) * k, s * 0.5];
++        }
++        let mut i = if r[1][1] > r[0][0] { 1 } else { 0 };
++        if r[2][2] > r[i][i] {
++            i = 2;
++        }
++        let (j, k3) = ((i + 1) % 3, (i + 2) % 3);
++        let (first, second) = (j.min(k3), j.max(k3));
++        let s = (((1.0 + r[i][i]) - r[first][first]) - r[second][second]).sqrt();
++        let mut q = [0.0f32; 4];
++        q[i] = s * 0.5;
++        let k = 0.5 / s;
++        q[3] = (r[k3][j] - r[j][k3]) * k;
++        q[j] = (r[j][i] + r[i][j]) * k;
++        q[k3] = (r[k3][i] + r[i][k3]) * k;
++        q
++    }
++
++    fn quat_dot(a: Quat, b: Quat) -> f32 {
++        (a[0] * b[0] + a[1] * b[1]) + (a[2] * b[2] + a[3] * b[3])
++    }
++
++    fn rot_from_quat(q: Quat) -> Rot {
++        let k = 1.0 / quat_dot(q, q).sqrt();
++        let [x, y, z, w] = q.map(|c| c * k);
++        let (x2, y2, z2) = (x + x, y + y, z + z);
++        let (xx, xy, xz) = (x * x2, x * y2, x * z2);
++        let (yy, yz, zz) = (y * y2, y * z2, z * z2);
++        let (wx, wy, wz) = (w * x2, w * y2, w * z2);
++        [
++            [1.0 - (yy + zz), xy - wz, xz + wy],
++            [xy + wz, 1.0 - (xx + zz), yz - wx],
++            [xz - wy, yz + wx, 1.0 - (xx + yy)],
++        ]
++    }
++
++    /// CFrame:Lerp's rotation: the first at t == 0 and the goal at t == 1 exactly, else the slerp of their quaternions
++    /// (the goal's negated when the dot is negative; `sinf((1 - t) w) / sin w` and `sinf(t w) / sin w`, sin w as
++    /// `sqrtf(1 - c*c)`), made a matrix again
++    pub fn lerp_rotation(a: &Rot, b: &Rot, t: f32) -> Rot {
++        if t == 0.0 {
++            return *a;
++        }
++        if t == 1.0 {
++            return *b;
++        }
++        let q0 = quat_from_rot(a);
++        let mut q1 = quat_from_rot(b);
++        let mut c = quat_dot(q0, q1);
++        if c < 0.0 {
++            q1 = q1.map(|v| -v);
++            c = -c;
++        }
++        let sin_omega = (1.0 - c * c).sqrt();
++        let omega = c.acos();
++        let k = 1.0 / sin_omega;
++        let w0 = ((1.0 - t) * omega).sin() * k;
++        let w1 = (t * omega).sin() * k;
++        rot_from_quat([0, 1, 2, 3].map(|i| q0[i] * w0 + q1[i] * w1))
++    }
++
++    /// Color3:ToHSV: G3D's (Foley and van Dam), the hue's sixths divided at the end (pure red's hue is 1)
++    pub fn to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
++        let v = r.max(g).max(b);
++        if v == 0.0 {
++            return (0.0, 0.0, v);
++        }
++        let x = r.min(g).min(b);
++        let s = (v - x) / v;
++        if s == 0.0 {
++            return (0.0, s, v);
++        }
++        let d = v - x;
++        let (rn, gn, bn) = ((v - r) / d, (v - g) / d, (v - b) / d);
++        let h = if r == v {
++            if g == x { 5.0 + bn } else { 1.0 - gn }
++        } else if g == v {
++            if b == x { 1.0 + rn } else { 3.0 - bn }
++        } else if r == x {
++            3.0 + gn
++        } else {
++            5.0 - rn
++        };
++        (h / 6.0, s, v)
++    }
++}
+--- a/crates/lune-roblox/src/datatypes/types/udim2.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim2.rs
+@@ -3,7 +3,6 @@
+ use core::fmt;
+ use std::ops;
+ 
+-use glam::Vec2;
+ use mlua::prelude::*;
+ use rbx_dom_weak::types::UDim2 as DomUDim2;
+ 
+@@ -98,26 +97,15 @@ impl LuaUserData for UDim2 {
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+         // Methods
+         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
++        // Each scale is a + (b - a) * t in floats, each offset the same rounded half away from zero (Studio 0.744,
++        // tools/parity/probes/datatypes.luau)
+         let lerp = |lua: &Lua, this: &UDim2, (goal, alpha): (LuaUserDataRef<UDim2>, f32)| {
+             super::charge_host_nanos(lua, super::datatype_price::UDIM2_LERP);
+-            let this_x = Vec2::new(this.x.scale, this.x.offset as f32);
+-            let goal_x = Vec2::new(goal.x.scale, goal.x.offset as f32);
+-
+-            let this_y = Vec2::new(this.y.scale, this.y.offset as f32);
+-            let goal_y = Vec2::new(goal.y.scale, goal.y.offset as f32);
+-
+-            let x = this_x.lerp(goal_x, alpha);
+-            let y = this_y.lerp(goal_y, alpha);
+-
++            let lerp = super::float32::lerp;
++            let offset = |a: i32, b: i32| lerp(a as f32, b as f32, alpha).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+             Ok(UDim2 {
+-                x: UDim {
+-                    scale: x.x,
+-                    offset: x.y.clamp(i32::MIN as f32, i32::MAX as f32).round() as i32,
+-                },
+-                y: UDim {
+-                    scale: y.x,
+-                    offset: y.y.clamp(i32::MIN as f32, i32::MAX as f32).round() as i32,
+-                },
++                x: UDim { scale: lerp(this.x.scale, goal.x.scale, alpha), offset: offset(this.x.offset, goal.x.offset) },
++                y: UDim { scale: lerp(this.y.scale, goal.y.scale, alpha), offset: offset(this.y.offset, goal.y.offset) },
+             })
+         };
+         methods.add_method("Lerp", lerp);
+--- a/crates/lune-roblox/src/datatypes/types/vector2.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2.rs
+@@ -59,8 +59,12 @@ impl LuaUserData for Vector2 {
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+         // Methods
+-        methods.add_method("Angle", |_, this, rhs: LuaUserDataRef<Vector2>| {
+-            Ok(this.0.angle_to(rhs.0))
++        // atan2f(a x b, a . b) in floats, signed only when asked (Studio 0.744, tools/parity/probes/cframe_order.luau
++        // measures the signed form; the unsigned one is its absolute value, as Roblox documents)
++        methods.add_method("Angle", |_, this, (rhs, signed): (LuaUserDataRef<Vector2>, Option<bool>)| {
++            let (a, b) = (this.0, rhs.0);
++            let angle = (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y);
++            Ok(if signed.unwrap_or(false) { angle } else { angle.abs() })
+         });
+         methods.add_method("Cross", |_, this, rhs: LuaUserDataRef<Vector2>| {
+             let this_v3 = Vec3::new(this.0.x, this.0.y, 0f32);
+@@ -79,9 +83,11 @@ impl LuaUserData for Vector2 {
+             },
+         );
+         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
++        // a + (b - a) * t in floats (Studio 0.744, tools/parity/probes/cframe_order.luau)
+         let lerp = |lua: &Lua, this: &Vector2, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
+             charge_host_nanos(lua, price::VECTOR2_LERP);
+-            Ok(Vector2(this.0.lerp(rhs.0, alpha)))
++            let lerp = super::float32::lerp;
++            Ok(Vector2(Vec2::new(lerp(this.0.x, rhs.0.x, alpha), lerp(this.0.y, rhs.0.y, alpha))))
+         };
+         methods.add_method("Lerp", lerp);
+         methods.add_method("lerp", lerp);
