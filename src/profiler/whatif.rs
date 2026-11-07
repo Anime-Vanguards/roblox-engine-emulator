@@ -92,9 +92,9 @@ const fn metric(key: &'static str, label: &'static str, unit: &'static str, bett
 pub const METRICS: &[Metric] = &[
     metric("work_ms", "work clock", "ms", "lower", true, true, true, "the work clock: ms of a client's time for the scripts' work (docs/engine.md \"Work clock\")"),
     metric("warm_ms", "work clock, warm", "ms", "lower", true, true, true, "the work clock without the frame's cold first touches: what the same work costs when its data is in the CPU's caches, as in a hot loop"),
-    metric("host_ms", "host time", "ms", "lower", false, true, true, "this machine's time a call took in ree's interpreter: the median of the timed rounds"),
-    metric("host_ms_min", "host time, fastest round", "ms", "none", false, false, true, "the fastest timed round's"),
-    metric("host_cycles", "host cycles", "count", "lower", false, false, true, "the run thread's CPU cycles a call took (reference cycles): the median of the timed rounds"),
+    metric("host_ms", "host time", "ms", "lower", false, true, true, "this machine's time a call took in ree's interpreter: the fastest of the timed rounds (whatever else runs on the machine only ever slows a round)"),
+    metric("host_ms_median", "host time, median round", "ms", "none", false, false, true, "the median of the timed rounds: above host time by what slowed the rounds"),
+    metric("host_cycles", "host cycles", "count", "lower", false, false, true, "the run thread's CPU cycles a call took (reference cycles): the fastest of the timed rounds"),
     metric("insns", "instructions", "count", "lower", true, true, true, "Luau instructions dispatched"),
     metric("alloc_bytes", "allocated", "bytes", "lower", true, true, true, "bytes the VM allocated: objects, table parts, stacks"),
     metric("allocs", "allocations", "count", "lower", true, true, true, "objects the VM allocated: tables, closures, strings, userdata, threads"),
@@ -739,15 +739,15 @@ pub fn paired(a: &[Option<f64>], b: &[Option<f64>]) -> Vec<f64> {
     a.iter().zip(b.iter()).filter_map(|(a, b)| Some((a.filter(|a| *a > 0.0)?, (*b)?))).map(|(a, b)| b / a).collect()
 }
 
-/// Whether a measured winner is clear of the runner-up: faster (or better) in at least 80 % of the rounds both ran, by a
-/// median ratio further from 1 than the A/A pair's (two runs of the same code); `ratios` are the runner-up's figure over the
-/// winner's, round by round. The rounds won and the rounds paired.
-pub fn clear_of_noise(ratios: &[f64], aa: Option<f64>) -> (bool, usize, usize) {
-    let won = ratios.iter().filter(|ratio| **ratio > 1.0).count();
-    let Some((median, _)) = median_spread(ratios) else { return (false, 0, 0) };
-    let noise = aa.map_or(0.0, |aa| (aa.ln()).abs());
-    let clear = ratios.len() >= 3 && won as f64 >= 0.8 * ratios.len() as f64 && median.ln() > noise;
-    (clear, won, ratios.len())
+/// Whether a host-time winner is clear of another variant: its fastest round is faster by more than the A/A pair's fastest
+/// rounds differ (two runs of the same code: `aa`, their ratio), and by 3 % at least, and its median round is faster too.
+/// The fastest round is the figure because whatever else runs on the machine only ever slows a round: on a shared machine
+/// a scheduler can slow whole stretches of rounds several times over, so that the rounds' medians, and the rounds won pair
+/// by pair, can follow the stretches instead of the code. `min_ratio` and `median_ratio` are the other's figure over the
+/// winner's.
+pub fn host_clear(min_ratio: f64, median_ratio: f64, aa: Option<f64>) -> bool {
+    let noise = aa.map_or(0.0, |aa| (aa - 1.0).abs()).max(0.03);
+    min_ratio >= 1.0 + noise && median_ratio > 1.0
 }
 
 /// The median and the relative interquartile range of some samples
@@ -1155,12 +1155,12 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
         for run in runs.iter_mut() {
             let samples: Vec<f64> = run.host_ms.iter().flatten().copied().collect();
             if let Some((median, _)) = median_spread(&samples) {
-                run.run.insert("host_ms", median);
-                run.run.insert("host_ms_min", samples.iter().copied().fold(f64::INFINITY, f64::min));
+                run.run.insert("host_ms", samples.iter().copied().fold(f64::INFINITY, f64::min));
+                run.run.insert("host_ms_median", median);
             }
             let cycles: Vec<f64> = run.host_cycles.iter().flatten().copied().collect();
-            if let Some((median, _)) = median_spread(&cycles) {
-                run.run.insert("host_cycles", median);
+            if !cycles.is_empty() {
+                run.run.insert("host_cycles", cycles.iter().copied().fold(f64::INFINITY, f64::min));
             }
         }
         for size in 0..sizes.len() {
@@ -1171,7 +1171,10 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
             if let Some((ratio, spread)) = median_spread(&ratios) {
                 // (the rounds where both runs of the pair finished)
                 let (first, twin): (Vec<f64>, Vec<f64>) = base.host_ms.iter().zip(second.iter()).filter_map(|(a, b)| Some(((*a)?, (*b)?))).unzip();
-                aa.push(json!({"size": sizes[size], "ratio": ratio, "spread": spread, "first_ms": first, "second_ms": twin}));
+                // (the pair's fastest rounds, as host time is read)
+                let fastest = |values: &[f64]| values.iter().copied().fold(f64::INFINITY, f64::min);
+                let min_ratio = fastest(&twin) / fastest(&first);
+                aa.push(json!({"size": sizes[size], "ratio": ratio, "min_ratio": min_ratio, "spread": spread, "first_ms": first, "second_ms": twin}));
             }
         }
         host_note = json!({"rounds": options.rounds, "time_ms": options.time_ms, "reps": sizes.iter().zip(reps.iter()).map(|(size, reps)| json!([size, reps])).collect::<Vec<_>>(), "groups": sizes.iter().zip(groups.iter()).map(|(size, group)| json!([size, group])).collect::<Vec<_>>()});
@@ -1247,7 +1250,7 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, aa
     }
     // the winners: an exact figure by 1 % or more; host time when it won the rounds (clear_of_noise); a figure of one run
     // each (the hardware counters) by 10 % or more
-    let aa_at = |size: usize| aa.iter().find(|entry| entry["size"].as_f64() == Some(sizes[size])).and_then(|entry| entry["ratio"].as_f64());
+    let aa_at = |size: usize| aa.iter().find(|entry| entry["size"].as_f64() == Some(sizes[size])).and_then(|entry| entry["min_ratio"].as_f64());
     let mut winners = Vec::new();
     for size in 0..sizes.len() {
         // (what makes a count or a size material: against the work the run did)
@@ -1271,9 +1274,15 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, aa
                     _ if !material => (false, Json::Null),
                     None => (true, Json::Null),
                     Some(ratio) if metric.exact => (ratio >= 1.01, Json::Null),
-                    Some(_) if matches!(metric.key, "host_ms" | "host_cycles") => {
-                        let (clear, won, paired) = clear_of_noise(&paired(&samples(best), &samples(other)), aa_at(size));
-                        (clear, json!({"won": won, "of": paired}))
+                    Some(ratio) if matches!(metric.key, "host_ms" | "host_cycles") => {
+                        let ratios = paired(&samples(best), &samples(other));
+                        let won = ratios.iter().filter(|ratio| **ratio > 1.0).count();
+                        let median = |variant: usize| median_spread(&samples(variant).into_iter().flatten().collect::<Vec<_>>()).map(|(median, _)| median);
+                        let median_ratio = match (median(best), median(other)) {
+                            (Some(best), Some(other)) if best > 0.0 => other / best,
+                            _ => 0.0,
+                        };
+                        (host_clear(ratio, median_ratio, aa_at(size)), json!({"won": won, "of": ratios.len()}))
                     }
                     // (the counters' rounds: every round won, by 5 % or more)
                     Some(ratio) if metric.key.starts_with("hw_") => {
@@ -1405,6 +1414,20 @@ fn notes(spec: &Spec, runs: &[Run], hw: &Json) -> Vec<String> {
     // the collector: the work clock does not charge it
     let steps: Vec<(&Run, f64, f64)> = at.iter().filter_map(|run| Some((*run, *run.run.get("gc_steps")?, run.run.get("gc_ms").copied().unwrap_or(0.0)))).collect();
     let (most_steps, least_steps) = (steps.iter().map(|s| s.1).fold(0.0f64, f64::max), steps.iter().map(|s| s.1).fold(f64::INFINITY, f64::min));
+    // rounds that ran several times slower than their fastest: the machine slowed them, not the code
+    let slowed = at.iter().filter_map(|run| {
+        let samples: Vec<f64> = run.host_ms.iter().flatten().copied().collect();
+        let fastest = samples.iter().copied().fold(f64::INFINITY, f64::min);
+        let slowest = samples.iter().copied().fold(0.0f64, f64::max);
+        (fastest > 0.0 && samples.len() >= 3).then(|| slowest / fastest)
+    }).fold(0.0f64, f64::max);
+    if slowed >= 2.0 {
+        notes.push(format!(
+            "some timed rounds at n = {} ran up to {:.1}x slower than the same variant's fastest: something else on the machine slowed them (a shared machine's other work, a scheduler that throttles background processes). Host time is each variant's fastest round, which such slowing does not reach; the hardware counters' cycles count the core's own clock and are steadier",
+            size_label(sizes[largest]),
+            slowed
+        ));
+    }
     if most_steps >= 10.0 && most_steps >= least_steps * 2.0 {
         if let Some((run, count, ms)) = steps.iter().find(|s| s.1 == most_steps) {
             notes.push(format!(
@@ -1614,8 +1637,8 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
     }
     let _ = writeln!(out, "\nexact (the same every run): work clock, instructions, allocations, heap, collector steps, tables, rehashes, cold touches, cache counts.");
     let host = if options.time {
-        let aa = json["aa"].as_array().and_then(|aa| aa.last()).map_or(String::new(), |entry| format!(", A/A {:.3} at n = {}", entry["ratio"].as_f64().unwrap_or(1.0), grouped(entry["size"].as_f64().unwrap_or(0.0))));
-        format!("host time: median of {} interleaved rounds{aa}", options.rounds)
+        let aa = json["aa"].as_array().and_then(|aa| aa.last()).map_or(String::new(), |entry| format!(", A/A {:.3} at n = {}", entry["min_ratio"].as_f64().unwrap_or(1.0), grouped(entry["size"].as_f64().unwrap_or(0.0))));
+        format!("host time: the fastest of {} interleaved rounds (the median beside it in compare.json){aa}", options.rounds)
     } else {
         "host time: not timed (--no-time)".to_string()
     };
@@ -1721,6 +1744,24 @@ mod tests {
         let (best, _, _, ratio, _) = winner(&[(0, 5.0), (1, 0.0)], false, 0).unwrap();
         assert_eq!((best, ratio), (1, None));
         assert!(winner(&[(0, 1.0)], false, 0).is_none());
+    }
+
+    /// Host time ranks by the fastest round: clear only beyond the A/A pair's own gap (3 % at least) and with the median
+    /// agreeing, so rounds a busy machine slowed in a stretch decide nothing
+    #[test]
+    fn a_host_time_winner_is_clear_by_its_fastest_round() {
+        assert!(host_clear(1.40, 1.30, Some(1.01)));
+        assert!(!host_clear(1.02, 1.30, Some(1.00)), "within 3 %");
+        assert!(!host_clear(1.06, 1.30, Some(1.08)), "within the A/A pair's own gap");
+        assert!(!host_clear(1.06, 1.30, Some(0.92)), "the gap counts either way");
+        assert!(!host_clear(1.40, 0.90, None), "a median that disagrees");
+        assert!(host_clear(1.05, 1.10, None));
+        // (slowed stretches: the fastest rounds of two equal variants agree, their medians need not)
+        let a = [0.112, 0.113, 0.403, 0.114, 0.568, 0.116, 0.113, 0.116, 0.720];
+        let b = [0.447, 0.113, 0.579, 0.730, 0.825, 0.223, 0.965, 1.289, 1.521];
+        let fastest = |values: &[f64]| values.iter().copied().fold(f64::INFINITY, f64::min);
+        let (median_a, median_b) = (median_spread(&a).unwrap().0, median_spread(&b).unwrap().0);
+        assert!(!host_clear(fastest(&b) / fastest(&a), median_b / median_a, None), "equal by their fastest rounds");
     }
 
     #[test]

@@ -416,7 +416,8 @@ reused, ways to iterate, Vector3 or numbers) and what they show.
   prepares in groups of about 1 MB (what a CPU's L2 cache holds); each group's calls run back to back and only they are
   timed, by the run thread's cycles and the host's clock. With the hardware counter service installed, three more rounds
   of such runs read `--profile hw` alone (a new order each round; the first round's profiles in `runs/<variant>/<n>/hw/`),
-  and each counter's figure is the median of its rounds. One more engine runs every variant at every size for the check. The profiled runs take `--jobs` (default 4) processes at a time; the timed ones run one at a time.
+  and each counter's figure is the median of its rounds. One more engine runs every variant at every size for the
+  check. The profiled runs take `--jobs` (default 4) processes at a time; the timed ones run one at a time.
 - **Options**: `--out <dir>` (default `what-if/<file name>` here; a folder holding anything a comparison does not write
   is refused), `--sizes a,b`, `--variants a,b` (some of them, the first the baseline), `--frames <n>`, `--rounds <n>`,
   `--time-ms <ms>`, `--jobs <n>`, `--no-time`, `--no-hw`, `--no-check`, `--keep-timed` (keep the timed runs' profile
@@ -425,10 +426,12 @@ reused, ways to iterate, Vector3 or numbers) and what they show.
 - **Which numbers are exact.** The work clock (with and without its cold first touches), instructions, allocations
   (bytes and count), the reachable heap, the collector's steps and bytes freed (it paces itself by the scripts' work),
   table shapes, rehashes, cold first touches and inline cache counts are the same in every run of the same code: one
-  profiled run is enough, and any difference between variants is theirs. Host time and hardware counters are measured:
-  host time is the median of the rounds, and a variant wins on it only where it was faster in at least 80 % of the rounds
-  both ran, by a median ratio further from 1 than the A/A pair's; on a counter, only where it won every round, by 5 % or
-  more. The collector's host time comes from the profiled run
+  profiled run is enough, and any difference between variants is theirs. Host time and hardware counters are measured.
+  Host time is each variant's fastest round, since whatever else runs on the machine only ever slows a round (a shared
+  machine's scheduler can slow whole stretches of rounds several times over, which moves medians and round-by-round
+  wins); a variant wins on it only where its fastest round is faster by more than the A/A pair's fastest rounds differ,
+  3 % at least, and its median round agrees. On a counter (the median of its rounds: a core's own cycles, which such
+  slowing hardly moves), only where it won every round, by 5 % or more. The collector's host time comes from the profiled run
   (its profilers slow it) and is a guide, not a measure.
 - **The summary** (`compare.txt`, also printed): the check; a table of each variant at each n by the main figures; the
   setup's cost; the exponent of each figure against n; at the largest n the best variant on each figure with every other
@@ -475,7 +478,7 @@ reused, ways to iterate, Vector3 or numbers) and what they show.
                "ratio": 1.77, "vs_baseline": null, "clear": true, "material": true, "rounds": {"won": 9, "of": 9},
                "ranking": [{"variant": "t[k][v]", "value": 3.3, "ratio": 1.0, "clear": false, "rounds": null},
                            {"variant": "t[v][k]", "value": 5.8, "ratio": 1.77, "clear": true, "rounds": {"won": 9, "of": 9}}]}],
-  "aa": [{"size": 10, "ratio": 1.02, "spread": 0.03, "first_ms": [0.0011, 0.0012], "second_ms": [0.0012, 0.0011]}],
+  "aa": [{"size": 10, "ratio": 1.02, "min_ratio": 1.01, "spread": 0.03, "first_ms": [0.0011, 0.0012], "second_ms": [0.0012, 0.0011]}],
   "host": {"rounds": 9, "time_ms": 10, "reps": [[10, 2500]], "groups": [[10, 133]]},
   "hw": {"read": true, "why": null, "rounds": 3},
   "check": {"ran": true, "ok": true, "failures": []},
@@ -502,8 +505,8 @@ reused, ways to iterate, Vector3 or numbers) and what they show.
     start (what the phase still holds); `gc_steps`, `gc_freed` (bytes) and `gc_ms` the collector's work; `cache_hits`,
     `cache_misses` (misses and slow paths) and `cache_hit_rate` Luau's inline caches; `cold_tables` and `cold_ms` the
     frame's first touches of tables made before it and the work they were charged; `rehashes` and `rehash_keys` the
-    rehashes a script's own instructions made tables do to grow, and the keys they moved; `host_ms` (median), `host_ms_min`
-    and `host_cycles` (median, the run thread's reference cycles) from the timed runs; `hw_instructions`, `hw_cycles`,
+    rehashes a script's own instructions made tables do to grow, and the keys they moved; `host_ms` (the fastest round),
+    `host_ms_median` and `host_cycles` (the fastest round, the run thread's reference cycles) from the timed runs; `hw_instructions`, `hw_cycles`,
     `hw_ipc`, `hw_l1d_misses`, `hw_l2_misses`, `hw_llc_misses` and `hw_branch_misses` from the hw run.
   - `host`: the timed runs' figures a call, one per round whose run finished (`rounds` names those rounds: a failed run
     leaves its round out), the calls a timed run made (`reps`) and how many it prepared and ran at a time (`group`).
@@ -531,17 +534,17 @@ reused, ways to iterate, Vector3 or numbers) and what they show.
 - `winners`: per metric with a `better` and size, the variant with the best figure, the runner-up, `ratio` (the
   runner-up's figure over the winner's, the other way for `better: higher`; null when only the runner-up is above 0) and
   `vs_baseline`; `ranking` every variant from the best, each with its figure over the best's and whether that gap is
-  `clear`: an exact figure by 1 % or more, host time when it won at least 80 % of the rounds both ran by a median ratio
-  further from 1 than the A/A pair's (`rounds`: won of paired), a hardware counter when it won every round by 5 % or
+  `clear`: an exact figure by 1 % or more, host time by the rule above (`rounds`: the rounds it won, of those both ran), a hardware counter when it won every round by 5 % or
   more (`rounds` too). `clear` at the top is the runner-up's. `material` is false for a count too small to matter beside the run's work
   (under a thousandth of its instructions, or 10) and for bytes under 1 KB; such a winner is no finding. `aa`: per size,
-  the A/A pair's median ratio round by round (the second run over the first), `spread` the relative interquartile range
-  of those ratios, and both runs' figures in the rounds where both finished. `host`: the timing's settings and the calls
+  the A/A pair's median ratio round by round (the second run over the first), `min_ratio` the ratio of their fastest
+  rounds (the host-time rule's noise), `spread` the relative interquartile range of the round-by-round ratios, and both
+  runs' figures in the rounds where both finished. `host`: the timing's settings and the calls
   per size. `check.ok` is there only when something was checked (`ran`); fields with no value are null, but `about`, a
   frame's `path` and the samples' lists hold no nulls.
 - `notes`: what to keep in mind reading this comparison: where the work clock's model bears on it (a large share of
-  cold first touches, a gap host time sees and the clock does not), the collector's work, failed runs and checks, why the
-  hardware counters were not read.
+  cold first touches, a gap host time sees and the clock does not), rounds the machine slowed (twice a variant's fastest
+  or more), the collector's work, failed runs and checks, why the hardware counters were not read.
 
 ## The profile viewer
 
