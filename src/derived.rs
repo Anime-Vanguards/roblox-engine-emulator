@@ -48,6 +48,31 @@ pub struct DerivedView {
 pub struct DerivedViews {
     by_class: FxHashMap<(ClassId, NameId), Vec<Rc<DerivedView>>>,
     cache: RefCell<FxHashMap<(ClassId, NameId), Rc<[Rc<DerivedView>]>>>,
+    /// BasePart, and the events a part fires beside a change of each source ([`Companions`])
+    part: Option<ClassId>,
+    part_companions: FxHashMap<NameId, Rc<Companions>>,
+}
+
+/// The Changed events (and property signals) a part fires beside a change of one of its properties, each whether or not
+/// its own value changed, in this order around the source's own: measured in a playing client (Studio 0.744,
+/// tools/parity/probes/derived_changed.luau), for a part outside the DataModel, in the Workspace, anchored or not, a
+/// MeshPart and a WedgePart alike (a part welded to it hears nothing):
+/// - CFrame (any write that moves the part: Position, Orientation, Rotation, PivotTo): then Position,
+///   AssemblyCenterOfMass, Orientation and Rotation, even when only the position or only the rotation changed;
+/// - Size: then AssemblyMass and Mass, even at the same volume;
+/// - Color: BrickColor first, even when the nearest palette colour stays the same (a BrickColor write changes Color);
+/// - Material: then CurrentPhysicalProperties, even at the same density;
+/// - CustomPhysicalProperties: CurrentPhysicalProperties first, then AssemblyMass and AssemblyCenterOfMass;
+/// - Massless: then AssemblyMass; Anchored: then AssemblyMass and AssemblyCenterOfMass.
+pub struct Companions {
+    pub before: Vec<NameId>,
+    pub after: Vec<NameId>,
+}
+
+impl Companions {
+    fn lists(&self, name: NameId) -> bool {
+        self.before.contains(&name) || self.after.contains(&name)
+    }
 }
 
 impl DerivedViews {
@@ -76,6 +101,33 @@ impl DerivedViews {
 
     pub fn is_empty(&self) -> bool {
         self.by_class.is_empty()
+    }
+
+    /// The events an instance of `class` fires beside a change of `source`, if it is a part with some.
+    pub fn companions_for(&self, reflection: &Reflection, class: ClassId, source: NameId) -> Option<Rc<Companions>> {
+        if self.part_companions.is_empty() || !self.part.is_some_and(|part| reflection.class(class).is_a(part)) {
+            return None;
+        }
+        self.part_companions.get(&source).cloned()
+    }
+
+    fn add_part_companions(&mut self, reflection: &Reflection) {
+        let id = |name: &str| reflection.name_id(name);
+        let names = |list: &[&str]| list.iter().filter_map(|name| id(name)).collect::<Vec<_>>();
+        self.part = reflection.class_id("BasePart");
+        for (source, before, after) in [
+            ("CFrame", &[][..], &["Position", "AssemblyCenterOfMass", "Orientation", "Rotation"][..]),
+            ("Size", &[], &["AssemblyMass", "Mass"]),
+            ("Color", &["BrickColor"], &[]),
+            ("Material", &[], &["CurrentPhysicalProperties"]),
+            ("CustomPhysicalProperties", &["CurrentPhysicalProperties"], &["AssemblyMass", "AssemblyCenterOfMass"]),
+            ("Massless", &[], &["AssemblyMass"]),
+            ("Anchored", &[], &["AssemblyMass", "AssemblyCenterOfMass"]),
+        ] {
+            if let Some(source) = id(source) {
+                self.part_companions.insert(source, Rc::new(Companions { before: names(before), after: names(after) }));
+            }
+        }
     }
 }
 
@@ -194,6 +246,10 @@ pub fn install(engine: &Rc<Engine>) {
     }
     color_view(&mut derive_wrapper(&mut views, &mut derive), "GuiObject", "BackgroundColor", "BackgroundColor3", &reflection);
     color_view(&mut derive_wrapper(&mut views, &mut derive), "GuiObject", "BorderColor", "BorderColor3", &reflection);
+    // A part's BrickColor is the nearest palette colour to its Color, and writing it sets Color (measured in a playing
+    // client, Studio 0.744: either write fires BrickColor's events and then Color's, tools/parity/probes/changed.luau and
+    // derived_changed.luau; ree kept the two apart, so a BrickColor write never reached the part's colour)
+    color_view(&mut derive_wrapper(&mut views, &mut derive), "BasePart", "BrickColor", "Color", &reflection);
 
     // Measured: Transparency reads BackgroundTransparency; on text objects writing it also sets
     // TextTransparency (events: TextTransparency, BackgroundTransparency; none for Transparency).
@@ -296,6 +352,7 @@ pub fn install(engine: &Rc<Engine>) {
         behaviors.add_setter(class, name, setter);
     }
     drop(behaviors);
+    views.add_part_companions(&reflection);
     engine.hooks.borrow_mut().derived = views;
     engine.clear_member_cache();
 }
@@ -367,7 +424,8 @@ fn color_view(wrapper: &mut DeriveWrapper, class_name: &str, name: &str, source:
 }
 
 /// NotifyChanged's view pass: which views of `source` fire (those someone listens to whose value
-/// changed), split into those before and after the source's own events.
+/// changed), split into those before and after the source's own events. A view a part's companion events list
+/// (`companions`) fires there instead, whatever its value.
 pub fn changed_views(
     state: &State,
     reflection: &Reflection,
@@ -375,6 +433,7 @@ pub fn changed_views(
     id: InstanceId,
     source: NameId,
     old: Option<&Value>,
+    companions: Option<&Companions>,
 ) -> (Vec<NameId>, Vec<NameId>) {
     if hooks.derived.is_empty() {
         return (Vec::new(), Vec::new());
@@ -392,6 +451,9 @@ pub fn changed_views(
     let new = state.dom.raw_get(id, source);
     let (mut before, mut after) = (Vec::new(), Vec::new());
     for view in views.iter() {
+        if companions.is_some_and(|companions| companions.lists(view.name)) {
+            continue;
+        }
         let listening = view.events != ViewEvents::None
             && (changed_signal || handled(signals.and_then(|s| s.property(view.name))));
         let mut fires = listening;

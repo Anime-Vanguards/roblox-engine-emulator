@@ -308,12 +308,25 @@ pub fn notify_changed(
 /// NotifyChanged's events (Changed and the property signals, with the derived views').
 fn notify_changed_events(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: InstanceId, name: NameId, old: Option<&Value>) {
     // Derived views (Font of FontFace, Transparency of BackgroundTransparency, ...): those someone
-    // listens to fire when their value changed, before or after the source's events
-    let (before, after) = super::derived::changed_views(state, reflection, hooks, id, name, old);
+    // listens to fire when their value changed, before or after the source's events; a part's companion events
+    // (derived::Companions: Position, Orientation and Rotation beside CFrame, AssemblyMass beside Size, ...) fire
+    // whatever their values
+    let companions = hooks.derived.companions_for(reflection, state.dom.at(id).class, name);
+    let (before, after) = super::derived::changed_views(state, reflection, hooks, id, name, old, companions.as_deref());
+    if let Some(companions) = &companions {
+        for &companion in &companions.before {
+            fire_changed(state, reflection, id, companion);
+        }
+    }
     for view in before {
         fire_changed(state, reflection, id, view);
     }
     fire_changed(state, reflection, id, name);
+    if let Some(companions) = &companions {
+        for &companion in &companions.after {
+            fire_changed(state, reflection, id, companion);
+        }
+    }
     for view in after {
         fire_changed(state, reflection, id, view);
     }

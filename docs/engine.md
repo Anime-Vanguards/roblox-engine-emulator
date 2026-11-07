@@ -216,7 +216,10 @@ reflection.rs   Reflection (compiled in, shared per process: Reflection::shared(
 value.rs        Value, Str, FontValue, ContentValue; JSON / rbx-dom default decoding
 instance.rs     script semantics without Luau calls: create, set_parent (event order), raw_set /
                 raw_set_silent / notify_changed, clone, attributes, tags, fire
-derived.rs      derived property views (Font of FontFace, Transparency, *Content, ...)
+derived.rs      derived property views (Font of FontFace, Transparency, *Content, a part's BrickColor of Color, ...)
+                and the Changed events a part fires beside a write whatever their values, as a playing client
+                fires them (Position, AssemblyCenterOfMass, Orientation, Rotation beside CFrame; AssemblyMass and
+                Mass beside Size; BrickColor before Color; ...)
 scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resume, step, run_until)
 ```
 

@@ -5456,6 +5456,64 @@ fn a_playing_clients_message_out_arrives_after_the_frames_heartbeat() {
     assert!(output.contains(&want.to_string()), "{output:?}");
 }
 
+/// A part fires the Changed events Roblox fires beside a write, whatever their own values (measured in a playing client,
+/// Studio 0.744: tools/parity/probes/derived_changed.luau), and its BrickColor is a view of its Color.
+#[test]
+fn a_part_fires_the_events_roblox_fires_beside_a_write() {
+    let (lua, engine) = start();
+    // the writes in one call, the events (deferred, run at its flush) read in the next
+    run(
+        &lua,
+        &engine,
+        r##"
+        _G.Logs = {}
+        local function Case(Write)
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            local Log = {}
+            table.insert(_G.Logs, Log)
+            Part.Changed:Connect(function(Name)
+                table.insert(Log, Name)
+            end)
+            Write(Part)
+        end
+        Case(function(Part) Part.Position = Vector3.new(1, 2, 3) end)
+        Case(function(Part) Part.Size = Vector3.new(2, 2.4, 2) end)
+        Case(function(Part) Part.Color = Color3.fromRGB(163, 162, 166) end)
+        Case(function(Part) Part.Material = Enum.Material.SmoothPlastic end)
+        Case(function(Part) Part.CustomPhysicalProperties = PhysicalProperties.new(2, 0.3, 0.5) end)
+        Case(function(Part) Part.Anchored = false end)
+        "##,
+    );
+    let output = run(
+        &lua,
+        &engine,
+        r##"
+        for _, Log in _G.Logs do
+            print(table.concat(Log, ","))
+        end
+        local Part = Instance.new("Part")
+        Part.BrickColor = BrickColor.new("Bright blue")
+        Part.Color = Color3.new(1, 0, 0)
+        print(tostring(Part.BrickColor), (Part.Color:ToHex()))
+        Part.BrickColor = BrickColor.new("Bright blue")
+        print(tostring(Part.BrickColor), (Part.Color:ToHex()))
+        "##,
+    );
+    for want in [
+        "print: CFrame,Position,AssemblyCenterOfMass,Orientation,Rotation",
+        "print: Size,AssemblyMass,Mass",
+        "print: BrickColor,Color",
+        "print: Material,CurrentPhysicalProperties",
+        "print: CurrentPhysicalProperties,CustomPhysicalProperties,AssemblyMass,AssemblyCenterOfMass",
+        "print: Anchored,AssemblyMass,AssemblyCenterOfMass",
+        "print: Really red ff0000",
+        "print: Bright blue 0d69ac",
+    ] {
+        assert!(output.contains(&want.to_string()), "{want}: {output:?}");
+    }
+}
+
 /// Lowers the engine's limits on held slots (lua/refs.rs) to what it holds now plus `work` / `wait`.
 fn limit_held(engine: &Engine, work: i32, wait: i32) {
     let refs = engine.lua.borrow();
