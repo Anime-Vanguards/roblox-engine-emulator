@@ -1147,31 +1147,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "connect-nonfunction ok Connection",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "connect-nil ok Connection",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "connect-nil-fire connected false logged 4 Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "connect-nil-handlers function-handler",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "bad-property-signal error NotAProperty is not a valid property name.",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "signal-equal true true",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "handler-error second-handler-still-runs",
 			"why": "not fixed yet"
 		}
 	],

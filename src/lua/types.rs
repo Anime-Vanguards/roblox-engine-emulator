@@ -360,7 +360,11 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
         return raise("Expected ':' not '.' calling member function Connect");
     };
     let LuaValue::Function(callback) = args.get(1).clone() else {
-        return raise_plain("Attempt to connect failed: Passed value is not a function");
+        // Roblox raises nothing: it logs the message and returns a connection that is not connected, which firing the
+        // signal skips (measured in a playing client, Studio 0.744: tools/parity/probes/signals.luau)
+        engine.output("error", "Attempt to connect failed: Passed value is not a function", None);
+        let userdata = lua.create_any_userdata(LConnection(ConnectionId::DISCONNECTED))?;
+        return Ok(values([LuaValue::UserData(userdata)]));
     };
     if parallel && !super::actors::runs_in_actor(&callback) {
         // (Studio's message for a call from the mux, which is no script: "Function Event.ConnectParallel can only be used inside scripts";

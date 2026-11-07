@@ -122,7 +122,6 @@ fn instances_properties_and_errors() {
         assert(Message(function() return Instance.new("NotAClass") end) == 'Unable to create an Instance of type "NotAClass"')
         assert(Message(function() return F:GetPropertyChangedSignal("Nope") end) == "Nope is not a valid property name.")
         assert(Message(function() F:SetAttribute("A", {}) end) == "table is not a supported attribute type")
-        assert(Message(function() F.Changed:Connect(5) end) == "Attempt to connect failed: Passed value is not a function")
         assert(Message(function() return F.Changed.Nope end) == "Nope is not a valid member of RBXScriptSignal")
         assert(Message(function() return F[1] end) == "@: invalid argument #2 (string expected, got number)")
         assert(Message(function() return game:GetService("Nope") end) == "'Nope' is not a valid Service name")
@@ -366,6 +365,27 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
         "##,
     );
     assert_eq!(lines(&engine), vec!["print: 0 0 0", "print: 1 1"]);
+}
+
+#[test]
+fn connecting_a_value_that_is_not_a_function_logs_and_gives_a_disconnected_connection() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/signals.luau): Connect(nil) and Connect(5) raise
+    // nothing; the message is logged, the connection is not connected and firing the signal skips it
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Event = Instance.new("BindableEvent")
+        local Connection = Event.Event:Connect(nil)
+        print(typeof(Connection), Connection.Connected)
+        Event.Event:Once(5)
+        Event.Event:Connect(function() print("handler") end)
+        Event:Fire()
+        "#,
+    );
+    let message = "error: Attempt to connect failed: Passed value is not a function";
+    assert_eq!(lines(&engine), vec![message, "print: RBXScriptConnection false", message, "print: handler"]);
 }
 
 #[test]
