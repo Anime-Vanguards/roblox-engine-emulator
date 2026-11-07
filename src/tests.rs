@@ -5314,7 +5314,8 @@ fn a_luau_iterator_of_a_generic_for_can_yield() {
     assert!(!output.iter().any(|line| line.starts_with("error")), "{output:?}");
 }
 
-/// HttpService:JSONEncode writes an empty table as an array, "[]", as Roblox's does, at the top and inside.
+/// HttpService:JSONEncode writes an empty table as an array, "[]", as Roblox's does, at the top and inside (an object's keys
+/// in the table's own iteration order, as a playing client writes them: tools/parity/probes/json_more.luau).
 #[test]
 fn json_encode_writes_an_empty_table_as_an_array() {
     let (lua, engine) = start();
@@ -5327,11 +5328,12 @@ fn json_encode_writes_an_empty_table_as_an_array() {
         print(HttpService:JSONEncode(HttpService:JSONDecode("{}")), #HttpService:JSONDecode("[]"))
         "#,
     );
-    assert!(output.contains(&r#"print: [] {"A":[],"B":[1],"C":{"D":[]}}"#.to_string()), "{output:?}");
+    assert!(output.contains(&r#"print: [] {"A":[],"C":{"D":[]},"B":[1]}"#.to_string()), "{output:?}");
     assert!(output.contains(&"print: [] 0".to_string()), "{output:?}");
 }
 
-/// HttpService:JSONEncode of a table inside itself, or nested past 256 levels, is the script's error (the copy
+/// HttpService:JSONEncode of a table inside itself, or nested past 300 levels, is the script's error, with Roblox's
+/// messages (measured in a playing client, Studio 0.744: tools/parity/probes/json_limits.luau; an unbounded copy once
 /// recursed until the stack overflowed and the process ended).
 #[test]
 fn json_encode_refuses_cycles_and_deep_nesting() {
@@ -5355,15 +5357,65 @@ fn json_encode_refuses_cycles_and_deep_nesting() {
             end
             return Root
         end
-        print(#HttpService:JSONEncode(Nest(256)), pcall(function() return HttpService:JSONEncode(Nest(257)) end))
+        print(#HttpService:JSONEncode(Nest(300)), pcall(function() return HttpService:JSONEncode(Nest(301)) end))
         print(pcall(function() return HttpService:JSONEncode(Nest(100000)) end))
         "#,
     );
     assert!(output.contains(&"print: false tables cannot be cyclic".to_string()), "{output:?}");
     assert!(output.contains(&r#"print: {"A":[1],"B":[1]}"#.to_string()), "{output:?}");
-    let deep = "tables nested more than 256 levels deep cannot be encoded";
-    assert!(output.contains(&format!("print: 512 false {deep}")), "{output:?}");
+    let deep = "Max lua stack size reached";
+    assert!(output.contains(&format!("print: 600 false {deep}")), "{output:?}");
     assert!(output.contains(&format!("print: false {deep}")), "{output:?}");
+}
+
+/// HttpService:JSONEncode and JSONDecode as a playing client runs them (Studio 0.744, tools/parity/probes/json.luau,
+/// json_numbers.luau, json_more.luau, json_limits.luau): arrays to the border with holes as null, object keys named as a
+/// bindable names them, unsupported values as null, numbers in Grisu2's digits with the client's rounding, a buffer and
+/// non-finite numbers as Roblox's objects; a strict decoder with correctly rounded numbers and Roblox's nesting limits.
+#[test]
+fn json_encodes_and_decodes_as_a_playing_client_does() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Http = game:GetService("HttpService")
+        local function Is(Got, Want)
+            assert(Got == Want, `{Want} came out as {Got}`)
+        end
+        Is(Http:JSONEncode({ 1, nil, 3 }), "[1,null,3]")
+        Is(Http:JSONEncode({ 1, 2, Key = 3 }), "[1,2]")
+        Is(Http:JSONEncode({ [0] = "z" }), '{"0":"z"}')
+        Is(Http:JSONEncode({ [1.5] = "x" }), '{"1":"x"}')
+        Is(Http:JSONEncode({ [-0.5] = 1 }), '{"0":1}')
+        Is(Http:JSONEncode({ [workspace] = 1 }), '{"<Instance> (Workspace)":1}')
+        Is(Http:JSONEncode({ print, workspace, Vector3.new(1, 2, 3), Enum.Material.Plastic }), "[null,null,null,null]")
+        Is(Http:JSONEncode({ a = workspace }), '{"a":null}')
+        Is(Http:JSONEncode(buffer.create(2)), '{"m":null,"t":"buffer","base64":"AAA="}')
+        Is(Http:JSONEncode({ math.huge, -math.huge, 0 / 0 }), '[{"m":null,"t":"numeric","v":"inf"},{"m":null,"t":"numeric","v":"-inf"},{"m":null,"t":"numeric","v":"nan"}]')
+        Is(Http:JSONEncode({ -0, 1e20, 1e21, 2 ^ 63, 1e-7, 0.1 + 0.2 }), "[-0,100000000000000000000,1e21,9223372036854776000,1e-7,0.30000000000000007]")
+        Is(Http:JSONEncode("\b\f\v\0\27\127/"), '"\\b\\f\\u000B\\u0000\\u001B\127/"')
+        assert(not pcall(Http.JSONEncode, Http, "\255"))
+        Is(select(2, pcall(Http.JSONEncode, Http, { [true] = 1 })), "Invalid table key type used")
+        Is(1 / Http:JSONDecode("-0"), math.huge)
+        Is(1 / Http:JSONDecode("-0.0"), -math.huge)
+        Is(Http:JSONDecode("195.66666666666666"), 195.66666666666666)
+        for _, Bad in { "1e400", '"\\ud83d"', '"tab\tin"', "[1,]", "01", ".5", "5.", "NaN", "" } do
+            local Decoded, Error = pcall(Http.JSONDecode, Http, Bad)
+            assert(not Decoded and Error == "Can't parse JSON", Bad)
+        end
+        Is(Http:JSONDecode('"\255"'), "\255")
+        local Holes = Http:JSONDecode("[null,1]")
+        assert(Holes[1] == nil and Holes[2] == 1)
+        Is(Http:JSONDecode('{"1":"x"}')["1"], "x")
+        assert(pcall(Http.JSONDecode, Http, string.rep("[", 401) .. string.rep("]", 401)))
+        Is(select(2, pcall(Http.JSONDecode, Http, string.rep("[", 402) .. string.rep("]", 402))), "WebParser conversion stack overflow")
+        Is(select(2, pcall(Http.JSONDecode, Http, string.rep("[", 1025) .. string.rep("]", 1025))), "Can't parse JSON")
+        assert(next(Http:JSONDecode({ 1, 2 })) == nil)
+        Is(Http:JSONDecode(12.5), 12.5)
+        "#,
+    );
+    assert!(!output.iter().any(|line| line.starts_with("error")), "{output:?}");
 }
 
 /// Lowers the engine's limits on held slots (lua/refs.rs) to what it holds now plus `work` / `wait`.

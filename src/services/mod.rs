@@ -14,6 +14,7 @@
 //! runtime's own file (runtime/engine/packages/ui-labs.luau, mounted by project.rs).
 
 pub mod encoding;
+pub mod json;
 pub mod query;
 pub mod tween;
 
@@ -876,27 +877,30 @@ pub fn install(engine: &Rc<Engine>) {
                 Ok(values([string_value(lua, &text)?]))
             }));
         }
-        // JSONEncode / JSONDecode (Lune's serde: sorted keys, non-JSON values dropped, Lune's float
-        // parsing) and the disabled requests; errors are positioned at the script's line
+        // JSONEncode / JSONDecode as a playing client runs them (json.rs), and the disabled requests; their errors carry
+        // no position, as Roblox raises them
         if let Some(n) = name(&reflection, "JSONEncode") {
-            behaviors.add_method(http, n, method(|lua, _, _, args| {
-                let safe = json_safe(lua, args.get(1), &mut Vec::new())?;
-                // (an empty table encodes as "[]", as Roblox's does)
-                let options = LuaDeserializeOptions::new().sort_keys(true).deny_recursive_tables(false).deny_unsupported_types(true).encode_empty_tables_as_array(true);
-                let json: serde_json::Value = lua.from_value_with(safe, options)?;
-                let text = serde_json::to_string(&json).map_err(LuaError::external)?;
-                Ok(values([string_value(lua, &text)?]))
+            behaviors.add_method(http, n, method(|lua, engine, _, args| match json::encode(lua, engine, args.get(1)) {
+                Ok(text) => Ok(values([string_value(lua, &text)?])),
+                Err(message) => raise(message),
             }));
         }
         if let Some(n) = name(&reflection, "JSONDecode") {
             behaviors.add_method(http, n, method(|lua, _, _, args| {
-                let decoded = match args.get(1) {
-                    LuaValue::String(text) => std::str::from_utf8(&text.as_bytes()).ok().and_then(|text| super::lune_json::decode(text).ok()),
-                    _ => None,
+                // a number or boolean is read as its text (12.5, true; measured); nil is a missing argument
+                let text = match args.get(1) {
+                    LuaValue::String(text) => text.as_bytes().to_vec(),
+                    LuaValue::Nil => return raise("Argument 1 missing or nil"),
+                    number @ (LuaValue::Number(_) | LuaValue::Integer(_)) => lua.coerce_string(number.clone())?.map(|text| text.as_bytes().to_vec()).unwrap_or_default(),
+                    LuaValue::Boolean(flag) => if *flag { b"true".to_vec() } else { b"false".to_vec() },
+                    // a table, array or dictionary, decodes to a new empty table (json_limits.luau)
+                    LuaValue::Table(_) => return Ok(values([LuaValue::Table(lua.create_table()?)])),
+                    _ => return raise("Can't parse JSON"),
                 };
-                let Some(decoded) = decoded else { return raise("Can't parse JSON") };
-                let options = LuaSerializeOptions::new().set_array_metatable(false).serialize_none_to_null(false).serialize_unit_to_null(false);
-                Ok(values([lua.to_value_with(&decoded, options)?]))
+                match json::decode(lua, &text) {
+                    Ok(value) => Ok(values([value])),
+                    Err(message) => raise(message),
+                }
             }));
         }
         for member in ["GetAsync", "PostAsync", "RequestAsync"] {
@@ -909,7 +913,8 @@ pub fn install(engine: &Rc<Engine>) {
                 let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
                 let mut encoded = String::new();
                 for byte in text {
-                    if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                    // (`~` is encoded too: "%7E", measured in a playing client, Studio 0.744)
+                    if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
                         encoded.push(byte as char);
                     } else {
                         encoded.push_str(&format!("%{byte:02X}"));

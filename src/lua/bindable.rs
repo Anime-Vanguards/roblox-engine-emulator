@@ -96,8 +96,9 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut
     Ok(entries)
 }
 
-/// A dictionary key as the receiver sees it (always a string).
-fn key_name(lua: &Lua, engine: &Engine, key: &LuaValue) -> Result<Vec<u8>, String> {
+/// A dictionary key as the receiver sees it (always a string). HttpService:JSONEncode names its object keys the same
+/// way (services/json.rs).
+pub(crate) fn key_name(lua: &Lua, engine: &Engine, key: &LuaValue) -> Result<Vec<u8>, String> {
     let text = match key {
         LuaValue::String(text) => return Ok(text.as_bytes().to_vec()),
         LuaValue::Integer(number) => return Ok(number.to_string().into_bytes()),

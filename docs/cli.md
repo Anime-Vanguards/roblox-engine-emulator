@@ -129,7 +129,7 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
 - What a script exhausts is that script's error and the run goes on: past 900,000 threads and values held for scripts
   (mlua's reference stack holds a million) task.spawn / defer / delay and the calls like them raise
   `<call>: too many threads and values held for scripts (...)` at the caller, and waits past 950,000 (docs/engine.md
-  "Held values"); HttpService:JSONEncode refuses a cyclic table and nesting past 256 levels; the command runs on a 64 MiB
+  "Held values"); HttpService:JSONEncode refuses a cyclic table and nesting past 300 levels, as Roblox does; the command runs on a 64 MiB
   stack, as the service's workers do.
 
 ## What a recording holds
