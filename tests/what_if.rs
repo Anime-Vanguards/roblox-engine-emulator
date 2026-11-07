@@ -251,7 +251,10 @@ fn hardware_counters_join_the_figures_when_they_count() {
     let (done, compare) = try_file(&root, "nested.luau", NESTED, "out", &["--no-time", "--no-check", "--sizes", "8"], true);
     assert_eq!(done.status.code(), Some(0), "{}", text(&done));
     assert_eq!(compare["hw"]["read"], true, "{}", compare["hw"]);
+    let summary = std::fs::read_to_string(root.join("out").join("compare.txt")).unwrap();
+    assert!(summary.contains("hardware counters: median of 3 rounds"), "{summary}");
     for run in compare["runs"].as_array().unwrap() {
+        assert_eq!(run["hw"]["rounds"], serde_json::json!([0, 1, 2]), "{run}");
         assert!(run["hw_profile"].as_str().is_some_and(|dir| root.join("out").join(dir).join("profile.json").is_file()), "{run}");
         assert!(run["run"]["hw_cycles"].as_f64().unwrap() > 0.0, "{run}");
         assert!(run["run"]["hw_instructions"].as_f64().is_some(), "{run}");

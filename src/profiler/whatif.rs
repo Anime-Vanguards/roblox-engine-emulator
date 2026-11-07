@@ -1619,7 +1619,7 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
     } else {
         "host time: not timed (--no-time)".to_string()
     };
-    let hw = if json["hw"]["read"] == true { "hardware counters: one run each".to_string() } else { "hardware counters: not read".to_string() };
+    let hw = if json["hw"]["read"] == true { format!("hardware counters: median of {} rounds", json["hw"]["rounds"].as_u64().unwrap_or(HW_ROUNDS as u64)) } else { "hardware counters: not read".to_string() };
     let _ = writeln!(out, "measured: {host}; {hw}; the collector's host time.");
     let _ = writeln!(out, "{}", crate::cost::FIDELITY);
     let _ = writeln!(
@@ -1652,9 +1652,12 @@ fn site_line(site: &Json) -> String {
     let levels = &site["levels"];
     let level = if levels["min"] == levels["max"] { levels["min"].to_string() } else { format!("{}-{}", levels["min"], levels["max"]) };
     let rehash = site["rehashes"].as_f64().filter(|events| *events > 0.0).map_or(String::new(), |events| format!(", {} rehashes moved {} keys", grouped(events), grouped(site["rehash_keys"].as_f64().unwrap_or(0.0))));
+    // (a table with neither part is an empty one)
+    let empty = if site["array"]["max"].as_f64().unwrap_or(0.0) == 0.0 && site["hash"]["max"].as_f64().unwrap_or(0.0) == 0.0 { "empty, " } else { "" };
     format!(
-        "    {:>8} x {}{}{} level{}, {} each{}  [{}]",
+        "    {:>8} x {}{}{}{} level{}, {} each{}  [{}]",
         grouped(count),
+        empty,
         part("array", "slots"),
         part("hash", "nodes"),
         level,
