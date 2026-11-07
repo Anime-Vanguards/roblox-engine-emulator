@@ -59,6 +59,8 @@
 #define FIXEDBIT 3
 // the object has an id in ltable.cpp's hash map (luaH_forgetid when it is freed)
 #define HASHIDBIT 4
+// a host's profile marked the object (lua_profilemark): freeing it calls the profile's hook (lprofile.cpp luaP_freed)
+#define PROFBIT 5
 #define WHITEBITS bit2mask(WHITE0BIT, WHITE1BIT)
 
 #define iswhite(x) test2bits((x)->gch.marked, WHITE0BIT, WHITE1BIT)

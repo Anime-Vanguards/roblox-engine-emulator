@@ -32,6 +32,7 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lnumutils.h"
+#include "lprofile.h"
 
 #include <string.h>
 
@@ -400,6 +401,7 @@ static void setarrayvector(lua_State* L, LuaTable* t, int size)
         luaG_runerror(L, "table overflow");
     if (size > t->sizearray)
         countstored(L, size * sizeof(TValue));
+    luaP_allockind = LUA_ALLOC_TABLE;
     luaM_reallocarray(L, t->array, t->sizearray, size, TValue, t->memcat);
     TValue* array = t->array;
     for (int i = t->sizearray; i < size; i++)
@@ -423,6 +425,7 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
             luaG_runerror(L, "table overflow");
         size = twoto(lsize);
         countstored(L, size * sizeof(LuaNode));
+        luaP_allockind = LUA_ALLOC_TABLE;
         t->node = luaM_newarray(L, size, LuaNode, t->memcat);
         for (i = 0; i < size; i++)
         {
@@ -480,6 +483,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
             }
         }
         // shrink array
+        luaP_allockind = LUA_ALLOC_TABLE;
         luaM_reallocarray(L, t->array, oldasize, nasize, TValue, t->memcat);
     }
     // used for the migration check at the end
@@ -894,6 +898,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
     if (tt->sizearray)
     {
         countstored(L, tt->sizearray * sizeof(TValue));
+        luaP_allockind = LUA_ALLOC_TABLE;
         t->array = luaM_newarray(L, tt->sizearray, TValue, t->memcat);
         maybesetaboundary(t, getaboundary(tt));
         t->sizearray = tt->sizearray;
@@ -905,6 +910,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
     {
         int size = 1 << tt->lsizenode;
         countstored(L, size * sizeof(LuaNode));
+        luaP_allockind = LUA_ALLOC_TABLE;
         t->node = luaM_newarray(L, size, LuaNode, t->memcat);
         t->lsizenode = tt->lsizenode;
         t->nodemask8 = tt->nodemask8;

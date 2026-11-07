@@ -11,6 +11,7 @@
 #include "lmem.h"
 #include "ludata.h"
 #include "lbuffer.h"
+#include "lprofile.h"
 
 #include <string.h>
 
@@ -640,6 +641,8 @@ static void freeobj(lua_State* L, GCObject* o, lua_Page* page)
 {
     if (o->gch.marked & bitmask(HASHIDBIT))
         luaH_forgetid(o);
+    if (o->gch.marked & bitmask(PROFBIT))
+        luaP_freed(L, o);
 
     switch (o->gch.tt)
     {

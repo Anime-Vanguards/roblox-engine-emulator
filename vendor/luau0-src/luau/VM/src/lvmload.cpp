@@ -10,6 +10,7 @@
 #include "lmem.h"
 #include "lbytecode.h"
 #include "lapi.h"
+#include "lprofile.h"
 
 #include <string.h>
 
@@ -43,6 +44,7 @@ struct TempBuffer
     {
         LUAU_ASSERT(this->L == nullptr);
         this->L = L;
+        luaP_allockind = LUA_ALLOC_PROTO;
         this->data = luaM_newarray(L, count, T, 0);
         this->count = count;
     }
@@ -375,6 +377,7 @@ static int loadsafe(
                     // transform v1 into v2 format
                     int headersize = typesize > 127 ? 4 : 3;
 
+                    luaP_allockind = LUA_ALLOC_PROTO;
                     p->typeinfo = luaM_newarray(L, headersize + typesize, uint8_t, p->memcat);
                     p->sizetypeinfo = headersize + typesize;
 
@@ -405,6 +408,7 @@ static int loadsafe(
                 {
                     uint8_t* types = (uint8_t*)data + offset;
 
+                    luaP_allockind = LUA_ALLOC_PROTO;
                     p->typeinfo = luaM_newarray(L, typesize, uint8_t, p->memcat);
                     p->sizetypeinfo = typesize;
                     memcpy(p->typeinfo, types, typesize);
@@ -419,6 +423,7 @@ static int loadsafe(
         }
 
         const int sizecode = readVarInt(data, size, offset);
+        luaP_allockind = LUA_ALLOC_PROTO;
         p->code = luaM_newarray(L, sizecode, Instruction, p->memcat);
         p->sizecode = sizecode;
 
@@ -428,6 +433,7 @@ static int loadsafe(
         p->codeentry = p->code;
 
         const int sizek = readVarInt(data, size, offset);
+        luaP_allockind = LUA_ALLOC_PROTO;
         p->k = luaM_newarray(L, sizek, TValue, p->memcat);
         p->sizek = sizek;
 
@@ -517,6 +523,7 @@ static int loadsafe(
         }
 
         const int sizep = readVarInt(data, size, offset);
+        luaP_allockind = LUA_ALLOC_PROTO;
         p->p = luaM_newarray(L, sizep, Proto*, p->memcat);
         p->sizep = sizep;
 
@@ -539,6 +546,7 @@ static int loadsafe(
             int absoffset = (p->sizecode + 3) & ~3;
 
             const int sizelineinfo = absoffset + intervals * sizeof(int);
+            luaP_allockind = LUA_ALLOC_PROTO;
             p->lineinfo = luaM_newarray(L, sizelineinfo, uint8_t, p->memcat);
             p->sizelineinfo = sizelineinfo;
 
@@ -564,6 +572,7 @@ static int loadsafe(
         if (debuginfo)
         {
             const int sizelocvars = readVarInt(data, size, offset);
+            luaP_allockind = LUA_ALLOC_PROTO;
             p->locvars = luaM_newarray(L, sizelocvars, LocVar, p->memcat);
             p->sizelocvars = sizelocvars;
 
@@ -578,6 +587,7 @@ static int loadsafe(
             const int sizeupvalues = readVarInt(data, size, offset);
             LUAU_ASSERT(sizeupvalues == p->nups);
 
+            luaP_allockind = LUA_ALLOC_PROTO;
             p->upvalues = luaM_newarray(L, sizeupvalues, TString*, p->memcat);
             p->sizeupvalues = sizeupvalues;
 

@@ -5,6 +5,7 @@
 #include "lstate.h"
 #include "ldo.h"
 #include "ldebug.h"
+#include "lprofile.h"
 
 #include <string.h>
 
@@ -520,6 +521,7 @@ void* luaM_new_(lua_State* L, size_t nsize, uint8_t memcat)
     if (LUAU_UNLIKELY(!!g->cb.onallocate))
     {
         g->cb.onallocate(L, 0, nsize);
+        luaP_allockind = 0;
     }
 
     return block;
@@ -560,7 +562,11 @@ GCObject* luaM_newgco_(lua_State* L, size_t nsize, uint8_t memcat)
 
     if (LUAU_UNLIKELY(!!g->cb.onallocate))
     {
+        // (lua_allocblock: the callback can name the object once it is initialized)
+        luaP_allocblock = block;
         g->cb.onallocate(L, 0, nsize);
+        luaP_allocblock = NULL;
+        luaP_allockind = 0;
     }
 
     return (GCObject*)block;
@@ -647,6 +653,7 @@ void* luaM_realloc_(lua_State* L, void* block, size_t osize, size_t nsize, uint8
     if (LUAU_UNLIKELY(!!g->cb.onallocate) && block != (void*)L->stack && block != (void*)L->base_ci)
     {
         g->cb.onallocate(L, osize, nsize);
+        luaP_allockind = 0;
     }
 
     return result;

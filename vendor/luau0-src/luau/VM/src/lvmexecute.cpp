@@ -13,8 +13,10 @@
 #include "lbuiltins.h"
 #include "lnumutils.h"
 #include "lbytecode.h"
+#include "lprofile.h"
 
 #include <string.h>
+#include <type_traits>
 
 // Disable c99-designator to avoid the warning in CGOTO dispatch table
 #ifdef __clang__
@@ -214,14 +216,20 @@ static void luau_execute(lua_State* L)
     LUAU_ASSERT(L->isactive);
     LUAU_ASSERT(!isblack(obj2gco(L))); // we don't use luaC_threadbarrier because active threads never turn black
 
+    // a host's profile follows the stepping interpreter's nesting (lprofile.cpp)
+    typename std::conditional<SingleStep, luaP_Execute, luaP_NoExecute>::type profiled(L);
+
     if ((clvalue(L->ci->func)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && luaE_scriptframe(L, L->ci - 1))
         L->global->work.hostcalls++;
 
 #if VM_HAS_NATIVE
-    if ((L->ci->flags & LUA_CALLINFO_NATIVE) && !SingleStep)
+    // (native code runs natively while a profile steps the rest)
+    if ((L->ci->flags & LUA_CALLINFO_NATIVE) && (!SingleStep || luaP_native(L)))
     {
         Proto* p = clvalue(L->ci->func)->l.p;
         LUAU_ASSERT(p->execdata);
+        if (SingleStep)
+            luaP_nativeenter(L, clvalue(L->ci->func));
 
         if (L->global->ecb.enter(L, p) == 0)
             return;
@@ -258,6 +266,10 @@ reentry:
                 if (L->status != 0)
                     goto exit;
             }
+
+            // a host's profile counts and books this instruction (lprofile.cpp)
+            if (luaP_state)
+                luaP_step(L, cl, pc);
 
 #if VM_USE_CGOTO
             VM_COUNT_OP(LUAU_INSN_OP(*pc));
@@ -968,7 +980,7 @@ reentry:
                     // codeentry may point to NATIVECALL instruction when proto is compiled to native code
                     // this will result in execution continuing in native code, and is equivalent to if (p->execdata) but has no additional overhead
                     // note that p->codeentry may point *outside* of p->code..p->code+p->sizecode, but that pointer never gets saved to savedpc.
-                    pc = SingleStep ? p->code : p->codeentry;
+                    pc = (SingleStep && !luaP_native(L)) ? p->code : p->codeentry;
                     if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
                         L->global->work.hostcalls++;
                     cl = ccl;
@@ -1076,8 +1088,10 @@ reentry:
                 }
 
 #if VM_HAS_NATIVE
-                if (LUAU_UNLIKELY((cip->flags & LUA_CALLINFO_NATIVE) && !SingleStep))
+                if (LUAU_UNLIKELY((cip->flags & LUA_CALLINFO_NATIVE) && (!SingleStep || luaP_native(L))))
                 {
+                    if (SingleStep)
+                        luaP_nativeenter(L, nextcl);
                     if (L->global->ecb.enter(L, nextproto) == 1)
                         goto reentry;
                     else
@@ -3120,7 +3134,8 @@ exit:;
 
 void luau_execute(lua_State* L)
 {
-    if (L->singlestep)
+    // (a host's profile steps every thread of its VM: lprofile.cpp)
+    if (L->singlestep || (luaP_state && luaP_stepping(L)))
         luau_execute<true>(L);
     else
         luau_execute<false>(L);

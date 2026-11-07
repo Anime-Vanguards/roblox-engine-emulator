@@ -7,6 +7,7 @@
 #include "lgc.h"
 #include "lmem.h"
 #include "lvm.h"
+#include "lprofile.h"
 
 #if LUA_USE_LONGJMP
 #include <setjmp.h>
@@ -191,7 +192,9 @@ static void reportthreadalloc(lua_State* L, size_t osize, size_t nsize, int forn
 
     if (fornewci)
         L->ci--;
+    luaP_allockind = LUA_ALLOC_THREAD;
     L->global->cb.onallocate(L, osize, nsize);
+    luaP_allockind = 0;
     if (fornewci)
         L->ci++;
 }

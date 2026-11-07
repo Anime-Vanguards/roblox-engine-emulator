@@ -339,6 +339,82 @@ LUA_API void lua_workmute(lua_State* L, int on);
 LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
 
 /*
+** profiling (lprofile.cpp): a host's profile of this thread's VM. Off, the interpreter pays one thread-local load per entry.
+** While a profile steps, every thread runs the interpreter's single-step variant: each instruction it dispatches is counted,
+** what the work counters (priced by `prices`, one price per 8-byte slot of lua_WorkCounters) and the host's own charges
+** (`*hostwork + *hostdrained`) moved since the previous instruction is booked to that instruction, a calling-context tree
+** is kept, and the instructions with an inline cache record its outcome. Native code keeps running natively, unseen.
+*/
+#define LUA_PROFILE_EXEMPT 1 // a host's own function (lua_setworkexempt)
+#define LUA_PROFILE_NATIVE 2 // compiled to native code
+#define LUA_PROFILE_CACHES 4 // outcomes per instruction: hit, miss (repredicted), slow (metatable path, unsafe environment), other (not a table)
+
+typedef struct lua_ProfileFunction
+{
+    const char* source; // the chunk's name as lua_getinfo's short_src gives it
+    const char* name; // "" when anonymous
+    int linedefined;
+    int flags; // LUA_PROFILE_EXEMPT, LUA_PROFILE_NATIVE
+    int sizecode;
+    const uint32_t* code; // its instructions as first seen
+    const int* lines; // the line of each instruction
+    const uint64_t* counts; // dispatches per instruction (NULL without stepping)
+    const double* work; // what was booked to each instruction, in the prices' unit
+    const uint64_t* caches; // LUA_PROFILE_CACHES outcomes per instruction, NULL when none ran
+    uint64_t nativeentries; // entries into its native code
+    double nativework; // booked while its native code ran
+} lua_ProfileFunction;
+
+typedef struct lua_ProfileNode
+{
+    int parent; // -1 for the root (0)
+    int function; // >= 0 a lua_ProfileFunction; -1 the root; < -1 the C function -2 - index (lua_profilecfunction)
+    int callpc; // the parent function's instruction that made the call, -1 when not known (a C or native caller)
+    uint64_t calls;
+    uint64_t insns; // instructions this node executed itself
+    double work; // booked to this node itself
+} lua_ProfileNode;
+
+// starts a profile of L's VM on this thread (0: one runs already). Without `stepping` it only names functions for lua_profilestack
+LUA_API int lua_profilestart(lua_State* L, int stepping, const double* prices, int nprices, const double* hostwork, const double* hostdrained);
+// stops stepping (the last instruction's booking is made); the results stay until lua_profilefree
+LUA_API void lua_profilestop(lua_State* L);
+LUA_API int lua_profilefunctions(lua_State* L, void (*each)(void* ud, int id, const lua_ProfileFunction* f), void* ud);
+LUA_API int lua_profilenodes(lua_State* L, void (*each)(void* ud, int id, const lua_ProfileNode* n), void* ud);
+LUA_API const char* lua_profilecfunction(lua_State* L, int index);
+// the phase what follows belongs to: frames hang from a node of their own (function -1, callpc the phase; phase 0 is the root)
+LUA_API void lua_profilephase(lua_State* L, int phase);
+// what was charged while no instruction ran (between resumptions)
+LUA_API double lua_profileengine(lua_State* L);
+LUA_API void lua_profilefree(lua_State* L);
+// the frames of L, innermost first: function ids as lua_ProfileNode's, and their current lines (-1 for C and native frames)
+LUA_API int lua_profilestack(lua_State* L, int* functions, int* lines, int max);
+
+// what the memory an onallocate callback reports is for (lua_allocblock)
+#define LUA_ALLOC_OTHER 0
+#define LUA_ALLOC_OBJECT 1 // a collectable object: lua_allocblock returns its block
+#define LUA_ALLOC_TABLE 2 // a table's array or hash part
+#define LUA_ALLOC_THREAD 3 // a thread's stack or call frames
+#define LUA_ALLOC_STRINGS 4 // the string table
+#define LUA_ALLOC_PROTO 5 // a loaded function's arrays (code, constants, line info)
+
+// during an onallocate callback: the collectable object allocated (NULL for other memory) and what the memory is for
+LUA_API void* lua_allocblock(lua_State* L, int* kind);
+// an object's type (LUA_T*), and for a userdata its tag, its data and its metatable's __type
+LUA_API int lua_profileobject(void* block, int* tag, void** data, const char** type);
+// where a userdata's data starts in its block (lua_enumheap names a userdata by its data)
+LUA_API size_t lua_profileudataoffset(void);
+// marks an object: the profile's `freed` hook is called when the collector frees it
+LUA_API void lua_profilemark(void* block);
+LUA_API void lua_setprofilefreed(lua_State* L, void (*freed)(void* ud, void* block), void* ud);
+// every live collectable object and every reference between them, as luaC_enumheap gives them (lgcdebug.cpp), without the
+// objects a sweep has yet to free
+LUA_API void lua_enumheap(lua_State* L, void* context, void (*node)(void* context, void* ptr, uint8_t tt, uint8_t memcat, size_t size, const char* name),
+    void (*edge)(void* context, void* from, void* to, const char* name));
+// the collector's state: GCSpause 0, GCSpropagate 1, GCSpropagateagain 2, GCSatomic 3, GCSsweep 4 (lgc.h)
+LUA_API int lua_gcstate(lua_State* L);
+
+/*
 ** memory statistics
 ** all allocated bytes are attributed to the memory category of the running thread (0..LUA_MEMORY_CATEGORIES-1)
 */

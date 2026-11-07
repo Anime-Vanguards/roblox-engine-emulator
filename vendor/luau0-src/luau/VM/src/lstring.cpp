@@ -4,6 +4,7 @@
 
 #include "lgc.h"
 #include "lmem.h"
+#include "lprofile.h"
 
 #include <string.h>
 
@@ -44,6 +45,7 @@ unsigned int luaS_hash(const char* str, size_t len)
 
 void luaS_resize(lua_State* L, int newsize)
 {
+    luaP_allockind = LUA_ALLOC_STRINGS;
     TString** newhash = luaM_newarray(L, newsize, TString*, 0);
     stringtable* tb = &L->global->strt;
     for (int i = 0; i < newsize; i++)

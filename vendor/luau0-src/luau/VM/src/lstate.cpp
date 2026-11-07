@@ -9,6 +9,7 @@
 #include "lgc.h"
 #include "ldo.h"
 #include "ldebug.h"
+#include "lprofile.h"
 
 /*
 ** Main thread combines a thread state and the global state
@@ -22,11 +23,13 @@ typedef struct LG
 static void stack_init(lua_State* L1, lua_State* L)
 {
     // initialize CallInfo array
+    luaP_allockind = LUA_ALLOC_THREAD;
     L1->base_ci = luaM_newarray(L, BASIC_CI_SIZE, CallInfo, L1->memcat);
     L1->ci = L1->base_ci;
     L1->size_ci = BASIC_CI_SIZE;
     L1->end_ci = L1->base_ci + L1->size_ci - 1;
     // initialize stack array
+    luaP_allockind = LUA_ALLOC_THREAD;
     L1->stack = luaM_newarray(L, BASIC_STACK_SIZE + EXTRA_STACK, TValue, L1->memcat);
     L1->stacksize = BASIC_STACK_SIZE + EXTRA_STACK;
     TValue* stack = L1->stack;
@@ -125,12 +128,16 @@ void luaE_freethread(lua_State* L, lua_State* L1, lua_Page* page)
     global_State* g = L->global;
     if (g->cb.userthread)
         g->cb.userthread(NULL, L1);
+    if (luaP_state)
+        luaP_threadgone(L, L1);
     freestack(L, L1);
     luaM_freegco(L, L1, sizeof(lua_State), L1->memcat, page);
 }
 
 void lua_resetthread(lua_State* L)
 {
+    if (luaP_state)
+        luaP_threadgone(L, L);
     // close upvalues before clearing anything
     luaF_close(L, L->stack);
     // clear call frames
