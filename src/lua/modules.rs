@@ -572,6 +572,11 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         }
         LuaValue::Number(_) | LuaValue::Integer(_) => {
             let text = lua.coerce_string(target.clone())?.map(|s| s.to_string_lossy()).unwrap_or_default();
+            // (a playing client's text, measured, Studio 0.744: tools/parity/probes/errors.luau; a server downloads the asset,
+            // which ree cannot offline)
+            if !engine.options.server() {
+                return error_result(lua, format!("require(assetId) cannot be called from a client.  assetId = {text}"), 0);
+            }
             return error_result(lua, format!("require(assetId) is not supported offline (asset {text})"), 0);
         }
         LuaValue::UserData(ud) if instance_of_ud(ud).is_some() => instance_of_ud(ud).unwrap(),

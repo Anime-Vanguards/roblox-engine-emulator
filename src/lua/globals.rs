@@ -497,6 +497,9 @@ fn missing_child_in(lua: &Lua, engine: &Rc<Engine>, parent: InstanceId, name: &[
 pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     lua.set_app_data(engine.clone());
     lua.set_compiler(modules::compiler());
+    // The string metatable is locked: getmetatable("") is a string in a playing client (measured, Studio 0.744:
+    // tools/parity/probes/values.luau; the text is the lock text Roblox's other metatables give, not measured here)
+    lua.load(r#"getmetatable("").__metatable = "The metatable is locked""#).set_name("=ree.strings").exec()?;
     // Luau native code generation (feature `jit`; a WebAssembly build has none: an interpreting VM),
     // unless the VM interprets everything (modules::interpret_all)
     #[cfg(feature = "jit")]
@@ -793,6 +796,9 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
         })?,
     )?;
     shared.raw_set("os", os)?;
+    // (a string in a playing client's and a server's scripts, measured: tools/parity/probes/errors.luau; "Luau" is Luau's own
+    // base library value, the text is not measured)
+    shared.raw_set("_VERSION", "Luau")?;
 
     let game = engine.world().game;
     let workspace = engine.world().workspace;

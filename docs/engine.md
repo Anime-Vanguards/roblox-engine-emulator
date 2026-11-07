@@ -715,12 +715,15 @@ KeyframeSequence pages); how a track behaves before its asset arrives is measure
 
 ## Server run context (`--run-context server`, `src/lua/server.luau`)
 
-A server is a Studio Play-mode server as Roblox's RunService documentation tabulates it: `IsServer`,
-`IsStudio` and `IsRunning` true; `IsClient`, `IsRunMode` and `IsEdit` false. It needs `--mode play` and
-refuses `--player`.
+A server is a Studio Play-mode server as Roblox's RunService documentation tabulates it, and as a server's game
+script measured it (`node tools/parity/run.mjs --server`): `IsServer`, `IsStudio` and `IsRunning` true; `IsClient`
+and `IsRunMode` false; `IsEdit` is refused to game scripts, as on a client. It needs `--mode play` and refuses
+`--player`.
 
 - No local player: Players starts empty and a harness adds players with `Instance.new("Player")`.
-  Nothing renders: BindToRenderStep, RenderStepped and PreRender never run.
+  Nothing renders: connecting to RenderStepped raises `RenderStepped event can only be used from local scripts`;
+  PreRender connects and BindToRenderStep binds, and neither runs. Tweens step after the task.wait resumptions and
+  before the Heartbeat handlers (a client steps them in its render step).
 - In-memory DataStoreService (GetAsync, SetAsync, UpdateAsync, IncrementAsync, RemoveAsync, versions,
   keys, OrderedDataStore pages), MemoryStoreService (sorted maps, hash maps, queues) and MessagingService
   (this server's own subscribers), all empty at the start of every run. Limits and error codes follow
@@ -739,8 +742,8 @@ A print of exactly `@done` ends `ree run` / `ree record` at the end of that fram
 Every line a run outputs has a kind: `print`, `info` (LogService:Info, and Log with MessageInfo), `warn` or
 `error`. LogService.MessageOut gets each line after the frame's Heartbeat handlers and the deferred work they
 leave, on a playing client and on a server alike, with three arguments: the text, its MessageType and a context
-table (a copy of the one a LogService method was given, else an empty table). A playing client's script error
-carries its stack lines (`Stack Begin`, `Script '<name>', Line <n> - function <f>`, `Stack End`); a line a
+table (a copy of the one a LogService method was given, else an empty table). A script error, a playing client's
+and a server's alike, carries its stack lines (`Stack Begin`, `Script '<name>', Line <n> - function <f>`, `Stack End`); a line a
 MessageOut handler logs reaches no handler. Measured in a playing client and in a server game script.
 
 LogService's Output, Info, Warn, Error and Log log a line of their MessageType with the message's `{key}`

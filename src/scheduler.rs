@@ -1398,7 +1398,15 @@ fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: 
         // before the Heartbeat handlers.
         run_timers(lua, engine, true, None, TimerFlush::AfterAll)?;
         run_hooks(lua, engine, Phase::Simulation, delta)?;
-        return run_timers(lua, engine, false, limit, TimerFlush::OncePass);
+        run_timers(lua, engine, false, limit, TimerFlush::OncePass)?;
+        // A server has no render step: it steps its tweens after the task.wait resumptions and before the Heartbeat
+        // handlers (measured, a Studio 0.744 server's game script: tools/parity/probes/tween.luau; a tween played at a
+        // resumption point has moved by the first Heartbeat and a 0.09 s tween ends at the sixth, a frame before a
+        // client's), its events delivered after the Heartbeat handlers. Not measured: where among the simulation events.
+        if engine.options.server() {
+            step_tweens(lua, engine, delta)?;
+        }
+        return Ok(());
     }
     // Edit mode has no simulation step: Motor6D.Transform changes apply where it would run
     // (world::joints; play mode applies them after PreSimulation)
@@ -1407,6 +1415,15 @@ fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: 
     crate::animation::arrivals(engine);
     run_timers(lua, engine, true, None, TimerFlush::EachResumption)?;
     run_timers(lua, engine, false, limit, TimerFlush::EachResumption)
+}
+
+/// A server's tween step (heartbeat_timers): the tween hooks, their events queued as deferred work.
+fn step_tweens(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
+    profile::enter("tweens");
+    let tweens = engine.state.borrow().sched.hooks_of(Phase::Tween);
+    let result = tweens.into_iter().try_for_each(|hook| hook(lua, engine, delta));
+    profile::leave();
+    result
 }
 
 /// A Heartbeat's handlers (after its resumptions), with delta `delta` (float32).
@@ -1501,13 +1518,16 @@ fn render(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
     let result = bindings.into_iter().try_for_each(|hook| hook(lua, engine, delta));
     profile::leave();
     result?;
-    profile::enter("tweens");
-    engine.state.borrow_mut().sched.holding = true;
-    let tweens = engine.state.borrow().sched.hooks_of(Phase::Tween);
-    let result = tweens.into_iter().try_for_each(|hook| hook(lua, engine, delta));
-    profile::leave();
-    result?;
-    engine.state.borrow_mut().sched.holding = false;
+    // (a server's tweens step before its Heartbeat handlers instead: heartbeat_timers)
+    if !engine.options.server() {
+        profile::enter("tweens");
+        engine.state.borrow_mut().sched.holding = true;
+        let tweens = engine.state.borrow().sched.hooks_of(Phase::Tween);
+        let result = tweens.into_iter().try_for_each(|hook| hook(lua, engine, delta));
+        profile::leave();
+        result?;
+        engine.state.borrow_mut().sched.holding = false;
+    }
     // (a playing client runs one pass here: what the bindings' deferred work defers waits for the PreRender
     // handlers' flush; measured, Studio 0.744, tools/parity/probes/deferred_points.luau)
     if engine.state.borrow().sched.edit_mode {

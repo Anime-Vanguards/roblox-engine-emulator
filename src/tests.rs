@@ -107,8 +107,9 @@ fn instances_properties_and_errors() {
         end
         assert(Message(function() return F.Nope end) == 'Nope is not a valid member of Frame "Frame"')
         assert(Message(function() F.Size = 5 end) == "Unable to assign property Size. UDim2 expected, got number")
-        assert(Message(function() F.BorderMode = "Nope" end) == "Unable to assign property BorderMode. EnumItem of type BorderMode expected, got string")
-        assert(Message(function() F.BorderMode = Enum.Font.Arial end) == "Unable to assign property BorderMode. EnumItem of type BorderMode expected, got Enum.Font.Arial")
+        -- (a name the enum lacks: measured, tools/parity/probes/values.luau's `Invalid value "wood" for enum Material`)
+        assert(Message(function() F.BorderMode = "Nope" end) == 'Unable to assign property BorderMode. Invalid value "Nope" for enum BorderMode')
+        assert(Message(function() F.BorderMode = Enum.Font.Arial end) == "Unable to assign property BorderMode. EnumItem of type BorderMode expected, got an EnumItem of type Font")
         assert(Message(function() F.AbsoluteSize = Vector2.new() end) == "Unable to assign property AbsoluteSize. Property is read only")
         -- (any value goes into a boolean or number property, as in a playing client: Lua truth, Luau's number reading or 0)
         F.Visible = 0
@@ -118,7 +119,8 @@ fn instances_properties_and_errors() {
         F.BackgroundTransparency = "x"
         assert(F.BackgroundTransparency == 0)
         assert(Message(function() F.Parent = 5 end) == "@: invalid argument #3 (Instance expected, got number)")
-        assert(Message(function() F.Parent = F end) == "Attempt to set parent of Frame to Frame would result in circular reference")
+        -- (measured, tools/parity/probes/hierarchy.luau)
+        assert(Message(function() F.Parent = F end) == "Attempt to set Frame as its own parent")
         assert(Message(function() return Instance.new("NotAClass") end) == 'Unable to create an Instance of type "NotAClass"')
         assert(Message(function() return F:GetPropertyChangedSignal("Nope") end) == "Nope is not a valid property name.")
         assert(Message(function() F:SetAttribute("A", {}) end) == "Array is not a supported attribute type")
@@ -653,6 +655,54 @@ fn an_attribute_holds_an_instance_as_a_handle() {
     );
 }
 
+/// Texts and forms measured in a playing client (Studio 0.744; tools/parity/probes/hierarchy.luau, values.luau,
+/// coercion.luau, frame_phases.luau, lifetime.luau).
+#[test]
+fn parents_enums_and_casts_answer_as_a_playing_client_does() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(F) local Ok, Message = pcall(F) return if Ok then "ok" else Message end
+        local Self = Instance.new("Folder")
+        Self.Name = "Self"
+        print(Try(function() Self.Parent = Self end))
+        print(Try(function() game:GetService("Lighting").Parent = workspace end), Try(function() game:GetService("Lighting"):Destroy() end))
+        print(game:GetService("Lighting").Parent == game, (string.gsub(Try(function() game.Parent = workspace end), game.Name, "<game>")))
+        local Part = Instance.new("Part")
+        for _, Value in { "512", 512.5, "wood" } do
+            print(Try(function() Part.Material = Value end), tostring(Part.Material))
+        end
+        print(Try(function() Part.CFrame = Vector3.zero end))
+        print(Try(function() typeof() end), type(getmetatable("")))
+        print(Try(function() game:GetService("RunService"):BindToRenderStep("x", "high", function() end) end))
+        local Debris = game:GetService("Debris")
+        print(Try(function() Debris:AddItem({}, 1) end), Try(function() Debris:AddItem(nil, 1) end), Try(function() Debris:AddItem(Part, "x") end))
+        local Gone = Instance.new("Part")
+        Gone.Parent = workspace
+        Debris:AddItem(Gone, 0)
+        print(Gone.Parent)
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: Attempt to set Self as its own parent",
+            "print: Cannot change Parent of type Lighting The Parent property of Lighting is locked",
+            "print: true The Parent property of <game> is locked, current parent: NULL, new parent Workspace",
+            "print: ok Enum.Material.Wood",
+            "print: ok Enum.Material.Wood",
+            "print: Unable to assign property Material. Invalid value \"wood\" for enum Material Enum.Material.Wood",
+            "print: Unable to assign property CFrame. CoordinateFrame expected, got Vector3",
+            "print: missing argument #1 string",
+            "print: Unable to cast string to int",
+            "print: Unable to cast value to Object ok Unable to cast string to double",
+            "print: nil",
+        ]
+    );
+}
+
 /// A new instance reads its class's default name, which Studio does not always make the class's own (a BindableEvent
 /// is "Event", measured in a playing client; a BoolValue "Value" and a WedgePart "Wedge" from Studio's defaults), and
 /// the DataModel's full name is its Name (measured: tools/parity/probes/instances.luau).
@@ -1114,7 +1164,8 @@ fn modules_require_and_environments() {
     assert!(output[2].ends_with("Module code did not return exactly one value"), "{output:?}");
     assert_eq!(output[3], "print: false boom");
     assert!(output[4].ends_with("Requested module experienced an error while loading"), "{output:?}");
-    assert!(output[5].ends_with("require(assetId) is not supported offline (asset 5)"), "{output:?}");
+    // (a playing client's text: measured, tools/parity/probes/errors.luau)
+    assert!(output[5].ends_with("require(assetId) cannot be called from a client.  assetId = 5"), "{output:?}");
     assert!(output.contains(&"print: first late".to_string()) && output.contains(&"print: second late".to_string()), "{output:?}");
 }
 

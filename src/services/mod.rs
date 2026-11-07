@@ -542,8 +542,9 @@ pub fn install(engine: &Rc<Engine>) {
     // per render step the BindToRenderStep callbacks, the tween step, then RenderStepped before
     // PreRender. PreAnimation / Stepped / PreSimulation / PostSimulation never fire in edit mode.
     // A server (--run-context server) answers as Roblox's RunService documentation's table gives a Play-mode
-    // server: IsServer, IsStudio and IsRunning true, IsClient, IsRunMode and IsEdit false. It renders nothing:
-    // no BindToRenderStep callbacks, RenderStepped or PreRender (client-only, by the same documentation).
+    // server: IsServer, IsStudio and IsRunning true, IsClient and IsRunMode false (IsEdit is refused to game scripts:
+    // below). It renders nothing: BindToRenderStep callbacks and PreRender never run, and RenderStepped refuses a
+    // connection (measured in a server's game script, Studio 0.744: tools/parity/probes/run_service_sides.luau).
     // `--studio false` answers IsStudio as a live game does (false), on either side.
     if let Some(run_service) = class(&reflection, "RunService") {
         let mode_edit = options.edit_mode();
@@ -554,7 +555,15 @@ pub fn install(engine: &Rc<Engine>) {
         behaviors.add_method(run_service, K::IsServer as NameId, constant(move |_| Ok(LuaValue::Boolean(server))));
         behaviors.add_method(run_service, K::IsRunning as NameId, constant(move |_| Ok(LuaValue::Boolean(!mode_edit))));
         behaviors.add_method(run_service, K::IsRunMode as NameId, constant(|_| Ok(LuaValue::Boolean(false))));
-        behaviors.add_method(run_service, K::IsEdit as NameId, constant(move |_| Ok(LuaValue::Boolean(mode_edit))));
+        // (a game script may not ask: "The current thread cannot call 'IsEdit' (lacking capability PluginOrOpenCloud)" on a
+        // playing client and on a server, measured, Studio 0.744: tools/parity/probes/run_service_sides.luau; edit mode, where
+        // a plugin's story runs, answers)
+        behaviors.add_method(run_service, K::IsEdit as NameId, method(move |_, _, _, _| {
+            if !mode_edit {
+                return raise("The current thread cannot call 'IsEdit' (lacking capability PluginOrOpenCloud)");
+            }
+            Ok(values([LuaValue::Boolean(true)]))
+        }));
 
         let steps: Rc<RefCell<Vec<Rc<RenderStep>>>> = Rc::default();
         let sequence = Rc::new(std::cell::Cell::new(0u64));
@@ -563,8 +572,16 @@ pub fn install(engine: &Rc<Engine>) {
             let LuaValue::Function(callback) = args.get(3).clone() else {
                 return raise("Argument 3 missing or nil");
             };
+            // (a priority that is no number raises "Unable to cast string to int": measured in a playing client, Studio 0.744,
+            // tools/parity/probes/frame_phases.luau, with "high"; a numeric string is read as its number)
+            let level = match args.get(2) {
+                LuaValue::String(_) => match lua.coerce_number(args.get(2).clone())? {
+                    Some(level) => level,
+                    None => return raise("Unable to cast string to int"),
+                },
+                _ => args.number(2).unwrap_or(0.0),
+            };
             sequence.set(sequence.get() + 1);
-            let level = args.number(2).unwrap_or(0.0);
             let level = if level >= 0.0 { level.floor() } else { level.ceil() };
             let name = lua.coerce_string(args.get(1).clone())?.map(|s| s.to_string_lossy()).unwrap_or_else(|| "nil".into());
             let mut list = bind_steps.borrow_mut();
@@ -825,7 +842,25 @@ pub fn install(engine: &Rc<Engine>) {
     }
     if let (Some(debris), Some(n)) = (class(&reflection, "Debris"), name(&reflection, "AddItem")) {
         behaviors.add_method(debris, n, method(|lua, engine, _, args| {
-            let lifetime = args.number(2).unwrap_or(10.0);
+            // Measured in a playing client (Studio 0.744, tools/parity/probes/lifetime.luau): an item that is no Instance
+            // raises "Unable to cast value to Object" (nil is ignored), a lifetime that is no number "Unable to cast string to
+            // double", and a lifetime of 0 or less removes the item before the next Heartbeat (here at once; whether the
+            // client does it in the call is not measured)
+            let item_value = args.get(1);
+            if !item_value.is_nil() && args.instance(1).is_none() {
+                return raise("Unable to cast value to Object");
+            }
+            let lifetime = match args.get(2) {
+                LuaValue::String(_) => match lua.coerce_number(args.get(2).clone())? {
+                    Some(lifetime) => lifetime,
+                    None => return raise("Unable to cast string to double"),
+                },
+                _ => args.number(2).unwrap_or(10.0),
+            };
+            if let (Some(item), true) = (args.instance(1), lifetime <= 0.0) {
+                super::lua::instance::destroy(lua, engine, item)?;
+                return Ok(none());
+            }
             if let Some(item) = args.instance(1) {
                 super::lua::refs::admit(engine, super::lua::refs::Hold::Work, "AddItem")?;
                 // The item rides along as the timer's argument: queued work keeps it alive

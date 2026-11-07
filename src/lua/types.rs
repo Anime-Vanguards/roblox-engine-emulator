@@ -406,6 +406,15 @@ fn signal_of(engine: &Engine, value: &LuaValue) -> Option<Option<SignalId>> {
     }
 }
 
+/// `Signal.Wait()`: "missing argument #1 to 'Wait' (RBXScriptSignal expected)" at the caller (measured,
+/// tools/parity/probes/errors.luau); with a value that is no signal, the invalid-argument text Connect gives (not measured)
+fn wait_misuse<T>(engine: &Engine, value: &LuaValue) -> Result<T, Flow> {
+    if value.is_nil() {
+        return super::raise_at_caller("missing argument #1 to 'Wait' (RBXScriptSignal expected)");
+    }
+    super::raise_at_caller(format!("invalid argument #1 to 'Wait' (RBXScriptSignal expected, got {})", typeof_value(engine, value)))
+}
+
 fn connect(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool) -> Ret {
     connect_as(lua, engine, args, once, false)
 }
@@ -414,8 +423,22 @@ fn connect(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool) -> R
 fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, parallel: bool) -> Ret {
     let args = Args::new(args);
     let Some(signal) = signal_of(engine, args.get(0)) else {
-        return raise("Expected ':' not '.' calling member function Connect");
+        // `Signal.Connect(f)`: "invalid argument #1 to 'Connect' (RBXScriptSignal expected, got function)" at the caller
+        // (measured, tools/parity/probes/errors.luau)
+        let verb = if parallel { "ConnectParallel" } else if once { "Once" } else { "Connect" };
+        return super::raise_at_caller(format!(
+            "invalid argument #1 to '{verb}' (RBXScriptSignal expected, got {})",
+            typeof_value(engine, args.get(0))
+        ));
     };
+    // A server's scripts may read RunService.RenderStepped but not connect to it (Connect and Once measured, a Studio 0.744
+    // server's game script: tools/parity/probes/run_service_sides.luau; ConnectParallel takes the same path, Wait is not
+    // measured and waits). PreRender and BindToRenderStep are taken there and never run, as here.
+    if let Some(id) = signal {
+        if engine.options.server() && engine.state.borrow().signals.get(id).label.as_bytes() == b"RunService.RenderStepped" {
+            return raise("RenderStepped event can only be used from local scripts");
+        }
+    }
     let LuaValue::Function(callback) = args.get(1).clone() else {
         // Roblox raises nothing: it logs the message and returns a connection that is not connected, which firing the
         // signal skips (measured in a playing client, Studio 0.744: tools/parity/probes/signals.luau)
@@ -457,7 +480,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let wait_fn = wrapped(lua, engine, move |lua, args| {
         let args = Args::new(args);
         let Some(signal) = signal_of(&e, args.get(0)) else {
-            return raise("Expected ':' not '.' calling member function Wait");
+            return wait_misuse(&e, args.get(0));
         };
         if let Some(signal) = signal {
             refs::admit(&e, Hold::Wait, "Wait")?;
@@ -565,7 +588,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 Err(Flow::Yield)
             }),
             Some(None) => Err(Flow::Yield),
-            None => raise("Expected ':' not '.' calling member function Wait"),
+            None => wait_misuse(&e, args.get(0)),
         };
         super::encode(lua, outcome)
     })?;
