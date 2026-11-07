@@ -987,28 +987,40 @@ impl RandomState {
         (high * TWO32 + low) / 18446744073709551616.0
     }
 
+    /// NextNumber: the bounds in order, then `min * (1 - u) + max * u` (measured in a playing client, Studio 0.744,
+    /// tools/parity/probes/random.luau: 30 of 30 draws, where `min + (max - min) * u` matched 22; NextNumber(5, 1)
+    /// draws from [1, 5]).
     fn next_number(&mut self, min: f64, max: f64) -> f64 {
-        min + (max - min) * self.next_unit()
+        let (low, high) = if min > max { (max, min) } else { (min, max) };
+        let unit = self.next_unit();
+        low * (1.0 - unit) + high * unit
     }
 
+    /// NextInteger: the floored bounds as 64-bit integers (a C cast on x86-64: out of range, the least one), in order;
+    /// a range under 2^32 draws once, as math.random does, a wider one is `floor(min * (1 - u) + max * u)` (measured
+    /// likewise: NextInteger(-2^40, 2^40) for 10 seeds, where a 64-bit multiply gave one more for 7; NextInteger(-2^63,
+    /// 2^63) is -2^63. Not measured: where between 2^32 and 2^41 the wider draw starts).
     fn next_integer(&mut self, min: f64, max: f64) -> f64 {
-        let (mut low, mut high) = (min.floor(), max.floor());
+        let (mut low, mut high) = (int64_cast(min.floor()), int64_cast(max.floor()));
         if low > high {
             std::mem::swap(&mut low, &mut high);
         }
-        let range = high - low + 1.0;
-        if range <= 2097152.0 {
-            return low + ((range * self.next_u32() as f64) / TWO32).floor();
-        }
-        if range < TWO32 {
+        let range = high as i128 - low as i128 + 1;
+        if range < 1i128 << 32 {
             let product = (range as u64) * (self.next_u32() as u64);
-            return low + (product >> 32) as f64;
+            return (low as i128 + (product >> 32) as i128) as f64;
         }
-        let draw_low = self.next_u32() as u64;
-        let draw_high = self.next_u32() as u64;
-        let x = draw_low | (draw_high << 32);
-        let product = (x as u128) * (range as u64 as u128);
-        low + ((product >> 64) as u64) as f64
+        let unit = self.next_unit();
+        (low as f64 * (1.0 - unit) + high as f64 * unit).floor()
+    }
+}
+
+/// A double as a C cast to a 64-bit integer makes it on x86-64: toward zero, the least integer when out of range.
+fn int64_cast(value: f64) -> i64 {
+    if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&value) {
+        value as i64
+    } else {
+        i64::MIN
     }
 }
 
@@ -1107,16 +1119,18 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "NextUnitVector",
         wrapped(lua, engine, move |_, args| {
             let args = Args::new(args);
-            let Some((z, angle)) = with_random(args.get(0), |r| {
-                let z = r.next_number(-1.0, 1.0);
-                let angle = r.next_number(0.0, std::f64::consts::PI * 2.0);
-                (z, angle)
-            }) else {
+            // Two 32-bit draws in float arithmetic: the angle from the first, z from the second (measured in a playing
+            // client, Studio 0.744, tools/parity/probes/random.luau: every component for 10 seeds; ree drew two
+            // 64-bit numbers, which also moved every draw after it)
+            let Some((first, second)) = with_random(args.get(0), |r| (r.next_u32(), r.next_u32())) else {
                 return raise("Expected ':' not '.' calling member function NextUnitVector");
             };
-            let radius = (1.0 - z * z).sqrt();
-            let vector = dom::Vector3::new((radius * angle.cos()) as f32, (radius * angle.sin()) as f32, z as f32);
-            Ok(values([LuaValue::Vector(mlua::Vector::new(vector.x, vector.y, vector.z))]))
+            let (u, v) = ((first as f64 / TWO32) as f32, (second as f64 / TWO32) as f32);
+            let angle = std::f32::consts::TAU * u;
+            let z = 2.0f32 * v - 1.0;
+            let radius = (1.0f32 - z * z).max(0.0).sqrt();
+            let (x, y) = (radius * ((angle as f64).cos() as f32), radius * ((angle as f64).sin() as f32));
+            Ok(values([LuaValue::Vector(mlua::Vector::new(x, y, z))]))
         })?,
     )?;
     methods.set(
@@ -1127,6 +1141,12 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 return raise_plain("invalid argument #1 to 'Shuffle' (table expected)");
             };
             let length = list.len()? as i64;
+            // (measured likewise: Shuffle({1, nil, 3}) raises this, without a position, and draws nothing)
+            for index in 1..=length {
+                if list.get::<LuaValue>(index)?.is_nil() {
+                    return raise_plain("Attempted to shuffle table containing nil values. This is not allowed because the table length may change.");
+                }
+            }
             let mut index = length;
             while index >= 2 {
                 let Some(other) = with_random(args.get(0), |r| r.next_integer(1.0, index as f64)) else {
@@ -1568,16 +1588,17 @@ mod tests {
 
     #[test]
     fn random_matches_the_luau_oracle() {
-        // runtime/tests/random.luau vectors
+        // runtime/tests/random.luau vectors; the wide NextInteger as measured in a playing client (Studio 0.744:
+        // floor(min * (1 - u) + max * u), one less than that oracle's 64-bit multiply for seeds 7, -1.9 and -2^53 + 1)
         let vectors: &[(f64, [f64; 3], f64, f64)] = &[
             (0.0, [0.5514556904749074, 0.01723102436113014, 0.883376920906403], 73.0, 72384586732.0),
-            (7.0, [0.8737085924861333, 0.4321572161309693, 0.3089922198934871], 5.0, 482964445447.0),
+            (7.0, [0.8737085924861333, 0.4321572161309693, 0.3089922198934871], 5.0, 482964445446.0),
             (-3.0, [0.23554798859579634, 0.32381286642224644, 0.14705557445875167], 28.0, -493285887950.0),
             (1.9, [0.9484344206192203, 0.061285879733742145, 0.8770159548057006], 9.0, -497511649161.0),
-            (-1.9, [0.0037155688242635435, 0.5469862230236278, 0.31011551315193603], 67.0, 1062967531247.0),
+            (-1.9, [0.0037155688242635435, 0.5469862230236278, 0.31011551315193603], 67.0, 1062967531246.0),
             (4294967303.0, [0.9971430285879401, 0.5584106571948971, 0.05136057646030647], 58.0, -943718980273.0),
             (9007199254740991.0, [0.027684032073451197, 0.09103798432822455, 0.9869885996197573], 53.0, 502533245394.0),
-            (-9007199254740991.0, [0.22788703655698744, 0.9425859688069043, 0.06775640206431996], 38.0, -518359285892.0),
+            (-9007199254740991.0, [0.22788703655698744, 0.9425859688069043, 0.06775640206431996], 38.0, -518359285893.0),
         ];
         for (seed, doubles, small, large) in vectors {
             let mut random = seed_random(*seed);

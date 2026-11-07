@@ -368,6 +368,43 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
 }
 
 #[test]
+fn random_draws_unit_vectors_shuffles_and_bounds_as_measured() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/random.luau, seed 0 and Random.new(9))
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Generator = Random.new(0)
+        for _ = 1, 3 do Generator:NextNumber() end
+        for _ = 1, 3 do Generator:NextNumber(-10, 10) end
+        for _ = 1, 3 do Generator:NextInteger(1, 1000) end
+        print(Generator:NextInteger(-2 ^ 40, 2 ^ 40))
+        local Unit = Generator:NextUnitVector()
+        print(string.format("%.9g %.9g %.9g", Unit.X, Unit.Y, Unit.Z))
+        local List = { 1, 2, 3, 4, 5, 6, 7, 8 }
+        Generator:Shuffle(List)
+        print(table.concat(List, ","))
+        local Other = Random.new(9)
+        print(Other:NextInteger(5, 1), string.format("%.17g", Other:NextNumber(5, 1)), Other:NextInteger(1.5, 2.5))
+        print(pcall(Other.Shuffle, Other, { 1, nil, 3 }))
+        print(string.format("%.17g", Other:NextInteger(-2 ^ 63, 2 ^ 63)))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: 290622939254",
+            "print: -0.245626748 -0.670917571 0.699669242",
+            "print: 8,6,2,4,7,5,1,3",
+            "print: 4 2.5745788259440792 2",
+            "print: false Attempted to shuffle table containing nil values. This is not allowed because the table length may change.",
+            "print: -9.2233720368547758e+18",
+        ]
+    );
+}
+
+#[test]
 fn the_task_library_raises_robloxs_errors() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/task_order.luau): no position on any of them,
     // and a thread queued twice is refused the second time and resumes once
