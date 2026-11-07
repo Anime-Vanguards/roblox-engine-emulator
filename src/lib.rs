@@ -126,6 +126,10 @@ pub struct Options {
     /// The places whose clients pay more than ree's default prices (a Text write's localization lookup, a match place's
     /// geometry writes): cost.rs's list, plus `REE_LOCALIZED_PLACES` / `REE_MATCH_PLACES` on a command line (launch.rs)
     pub place_prices: cost::PlacePrices,
+    /// A sub-frame timing check's second run (`ree record --timing-check`, record/run.rs): the in-frame clock moves, on twice
+    /// the modelled work and never frozen (a frozen run's wall clock stays pinned), so a recording that changes with it hinges
+    /// on when within a frame a script reads os.clock
+    pub clock_moved: bool,
 }
 
 impl Default for Options {
@@ -155,6 +159,7 @@ impl Default for Options {
             repo: default_repo(),
             project: None,
             place_prices: cost::PlacePrices::default(),
+            clock_moved: false,
         }
     }
 }

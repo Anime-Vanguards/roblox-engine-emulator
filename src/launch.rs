@@ -215,6 +215,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         project: project_dir,
         streaming_target_radius: args.streaming.or_else(|| project::project_setting(&roots, "streamingTargetRadius").and_then(|v| v.as_f64())),
         place_prices,
+        clock_moved: false,
         device,
         ..Options::default()
     };
