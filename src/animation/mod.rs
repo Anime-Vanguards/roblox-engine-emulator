@@ -172,7 +172,7 @@ fn set(state: &mut State, reflection: &Reflection, id: InstanceId, name: NameId,
 }
 
 fn track_of(args: &Args) -> Result<InstanceId, Flow> {
-    args.instance(0).ok_or_else(|| Flow::Error(ScriptError::at_caller("Expected ':' not '.' calling member function")))
+    args.instance(0).ok_or_else(|| Flow::Error(ScriptError::plain("Expected ':' not '.' calling member function")))
 }
 
 /// The Animator of a Humanoid or AnimationController: its Animator child, else a new one (as
@@ -240,7 +240,7 @@ pub fn preload(engine: &Rc<Engine>, items: &[InstanceId]) -> f64 {
 fn load(lua: &Lua, engine: &Rc<Engine>, shared: &Shared, names: &Names, owner: InstanceId, args: &Args) -> Result<LuaMultiValue, Flow> {
     let animation = args.instance(1).filter(|&id| engine.state.borrow().dom.at(id).class == names.animation_class);
     let Some(animation) = animation else {
-        return Err(Flow::Error(ScriptError::at_caller("LoadAnimation requires an Animation object")));
+        return Err(Flow::Error(ScriptError::plain("LoadAnimation requires an Animation object")));
     };
     let animator = animator_of(engine, names, owner, true)?.expect("made");
     let (uri, animation_name) = {
@@ -519,11 +519,11 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         // Documented: it errors before the animation loaded and for a name no keyframe has
         // (messages not measured)
         let Some(clip) = clip.filter(|clip| clip.length > 0.0 || !clip.names.is_empty()) else {
-            return Err(Flow::Error(ScriptError::at_caller("GetTimeOfKeyframe: the animation has not loaded")));
+            return Err(Flow::Error(ScriptError::plain("GetTimeOfKeyframe: the animation has not loaded")));
         };
         match clip.time_of(&name) {
             Some(time) => Ok(values([LuaValue::Number(time as f64)])),
-            None => Err(Flow::Error(ScriptError::at_caller(format!("Could not find a keyframe by the name of {name}")))),
+            None => Err(Flow::Error(ScriptError::plain(format!("Could not find a keyframe by the name of {name}")))),
         }
     }));
 
@@ -534,7 +534,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             let state = engine.state.borrow();
             engine.reflection.class(state.dom.at(id).class).name.as_ref() == "KeyframeSequence"
         }) else {
-            return Err(Flow::Error(ScriptError::at_caller("RegisterKeyframeSequence requires a KeyframeSequence")));
+            return Err(Flow::Error(ScriptError::plain("RegisterKeyframeSequence requires a KeyframeSequence")));
         };
         let uri = {
             let mut loader = source::loader(engine).borrow_mut();

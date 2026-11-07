@@ -458,7 +458,8 @@ fn alpha(value: f64) -> f32 {
 }
 
 fn err(message: impl Into<String>) -> Flow {
-    Flow::Error(ScriptError::at_caller(message))
+    // (an engine method's error: no script position, as Roblox raises them)
+    Flow::Error(ScriptError::plain(message))
 }
 
 fn vec3_of(value: &LuaValue) -> Option<Vec3> {

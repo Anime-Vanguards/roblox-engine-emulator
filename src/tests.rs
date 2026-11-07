@@ -105,21 +105,21 @@ fn instances_properties_and_errors() {
             -- a script position prefix is kept as "@: "
             return (string.gsub(Err, "^Test:%d+: ", "@: "))
         end
-        assert(Message(function() return F.Nope end) == '@: Nope is not a valid member of Frame "Frame"')
+        assert(Message(function() return F.Nope end) == 'Nope is not a valid member of Frame "Frame"')
         assert(Message(function() F.Size = 5 end) == "Unable to assign property Size. UDim2 expected, got number")
         assert(Message(function() F.BorderMode = "Nope" end) == "Unable to assign property BorderMode. EnumItem of type BorderMode expected, got string")
         assert(Message(function() F.BorderMode = Enum.Font.Arial end) == "Unable to assign property BorderMode. EnumItem of type BorderMode expected, got Enum.Font.Arial")
-        assert(Message(function() F.AbsoluteSize = Vector2.new() end) == "@: Unable to assign property AbsoluteSize. Property is read only")
+        assert(Message(function() F.AbsoluteSize = Vector2.new() end) == "Unable to assign property AbsoluteSize. Property is read only")
         assert(Message(function() F.Visible = 5 end) == "Unable to assign property Visible. boolean expected, got number")
-        assert(Message(function() F.Parent = 5 end) == "@: Unable to assign property Parent. Instance expected, got number")
+        assert(Message(function() F.Parent = 5 end) == "@: invalid argument #3 (Instance expected, got number)")
         assert(Message(function() F.Parent = F end) == "Attempt to set parent of Frame to Frame would result in circular reference")
         assert(Message(function() return Instance.new("NotAClass") end) == 'Unable to create an Instance of type "NotAClass"')
-        assert(Message(function() return F:GetPropertyChangedSignal("Nope") end) == "@: Nope is not a valid property name.")
-        assert(Message(function() F:SetAttribute("A", {}) end) == "@: table is not a supported attribute type")
+        assert(Message(function() return F:GetPropertyChangedSignal("Nope") end) == "Nope is not a valid property name.")
+        assert(Message(function() F:SetAttribute("A", {}) end) == "table is not a supported attribute type")
         assert(Message(function() F.Changed:Connect(5) end) == "Attempt to connect failed: Passed value is not a function")
-        assert(Message(function() return F.Changed.Nope end) == "@: Nope is not a valid member of RBXScriptSignal")
+        assert(Message(function() return F.Changed.Nope end) == "Nope is not a valid member of RBXScriptSignal")
         assert(Message(function() return F[1] end) == "@: invalid argument #2 (string expected, got number)")
-        assert(Message(function() return game:GetService("Nope") end) == "@: 'Nope' is not a valid Service name")
+        assert(Message(function() return game:GetService("Nope") end) == "'Nope' is not a valid Service name")
         F.BorderMode = "Inset"
         assert(F.BorderMode == Enum.BorderMode.Inset)
         F.BorderMode = 0
@@ -4624,11 +4624,11 @@ fn json_encode_refuses_cycles_and_deep_nesting() {
         print(pcall(function() return HttpService:JSONEncode(Nest(100000)) end))
         "#,
     );
-    assert!(output.contains(&"print: false Test:5: tables cannot be cyclic".to_string()), "{output:?}");
+    assert!(output.contains(&"print: false tables cannot be cyclic".to_string()), "{output:?}");
     assert!(output.contains(&r#"print: {"A":[1],"B":[1]}"#.to_string()), "{output:?}");
     let deep = "tables nested more than 256 levels deep cannot be encoded";
-    assert!(output.contains(&format!("print: 512 false Test:17: {deep}")), "{output:?}");
-    assert!(output.contains(&format!("print: false Test:18: {deep}")), "{output:?}");
+    assert!(output.contains(&format!("print: 512 false {deep}")), "{output:?}");
+    assert!(output.contains(&format!("print: false {deep}")), "{output:?}");
 }
 
 /// Lowers the engine's limits on held slots (lua/refs.rs) to what it holds now plus `work` / `wait`.

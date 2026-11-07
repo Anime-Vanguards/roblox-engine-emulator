@@ -7,7 +7,7 @@ use std::{cell::Cell, rc::Rc};
 use mlua::prelude::*;
 
 use super::{
-    Args, Flow, Ret, convert, encode, instance_id, instance_value, none, raise, raw, signal_value, typeof_value,
+    Args, Flow, Ret, convert, encode, instance_id, instance_value, none, raise, raise_at_caller, raw, signal_value, typeof_value,
     values, wrapped,
 };
 use crate::{
@@ -48,7 +48,7 @@ fn full_name(engine: &Engine, id: InstanceId) -> String {
 }
 
 fn not_a_member(engine: &Engine, id: InstanceId, key: &LuaValue) -> Flow {
-    Flow::Error(crate::ScriptError::at_caller(format!(
+    Flow::Error(crate::ScriptError::plain(format!(
         "{} is not a valid member of {} \"{}\"",
         key_text(key),
         class_name(engine, id),
@@ -207,7 +207,7 @@ pub fn find_child_where(engine: &Engine, id: InstanceId, matches: impl Fn(&State
 /// `instance[key]` (InstanceMeta.__index).
 pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Result<LuaValue, Flow> {
     let LuaValue::String(key_string) = key else {
-        return raise(format!("invalid argument #2 (string expected, got {})", typeof_value(engine, key)));
+        return raise_at_caller(format!("invalid argument #2 (string expected, got {})", typeof_value(engine, key)));
     };
     let key_bytes = key_string.as_bytes();
     if engine.state.borrow().dom.at(id).has(flags::BUNDLE_ROOT) {
@@ -712,7 +712,7 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
 /// Registers the Instance userdata type (raw tagged userdata with C metamethods, lua/raw.rs) and
 /// the base Instance behaviours.
 pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
-    let iter = wrapped(lua, engine, |_, _| raise("attempt to iterate over a Instance value"))?;
+    let iter = wrapped(lua, engine, |_, _| raise_at_caller("attempt to iterate over a Instance value"))?;
     let metatable = lua.create_table()?;
     metatable.raw_set("__type", "Instance")?;
     metatable.raw_set("__metatable", "The metatable is locked")?;
@@ -753,10 +753,9 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             LuaValue::Nil => None,
             LuaValue::UserData(_) if instance_id(&value).is_some() => instance_id(&value),
             _ => {
-                return raise(format!(
-                    "Unable to assign property Parent. Instance expected, got {}",
-                    typeof_value(engine, &value)
-                ));
+                // Measured in a playing client (Studio 0.744, tools/parity/probes/hierarchy.luau): Luau's own
+                // argument error of the __newindex call, at the script line.
+                return raise_at_caller(format!("invalid argument #3 (Instance expected, got {})", typeof_value(engine, &value)));
             }
         };
         set_parent(engine, id, parent)?;

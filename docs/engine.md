@@ -275,8 +275,12 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
   GetDescendants, FindFirstChildOfClass / WhichIsA, FindFirstAncestor*, IsDescendantOf / IsAncestorOf,
   GetPropertyChangedSignal, Get/SetAttribute, GetFullName, WaitForChild hits, HasTag),
   BindableEvent:Fire and `Instance.new`.
-- Everything else calls mlua functions from C. Errors are raised with the calling script line's
-  position, after every Rust value is dropped.
+- Everything else calls mlua functions from C. Errors are raised after every Rust value is dropped,
+  as Roblox raises them (measured in a playing client, tools/parity/probes/errors.luau): the engine's
+  own member errors carry no script position (`NotAMember is not a valid member of Part "Part"`,
+  `Unable to assign property ClassName. Property is read only`, `'X' is not a valid Service name`,
+  require's errors); errors Luau's own checks would raise keep the calling line's (`invalid argument
+  #3 (Instance expected, got number)` for a bad Parent, `attempt to call a nil value`).
 - What a key is: a property scripts can read (Studio's dump permits Read; NotScriptable ones such as
   PVInstance.Origin permit nothing), else a behaviour's getter, method, event or callback, otherwise
   the child of that name (so `part.Origin` finds a child named Origin, as in Roblox). Callbacks a game

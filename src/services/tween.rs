@@ -226,7 +226,7 @@ fn lerp(_lua: &Lua, kind: Kind, number: NumberKind, a: &LuaValue, b: &LuaValue, 
 }
 
 fn tween_of(args: &super::Args) -> Result<InstanceId, Flow> {
-    args.instance(0).ok_or_else(|| Flow::Error(crate::ScriptError::at_caller("Expected ':' not '.' calling member function")))
+    args.instance(0).ok_or_else(|| Flow::Error(crate::ScriptError::plain("Expected ':' not '.' calling member function")))
 }
 
 fn state_name(engine: &Engine, tween: InstanceId) -> String {

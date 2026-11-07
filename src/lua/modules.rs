@@ -549,23 +549,23 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
     let module = match &target {
         LuaValue::String(path) => {
             let Some(caller) = caller_id else {
-                return error_result(lua, "require by string needs a calling script".into(), 1);
+                return error_result(lua, "require by string needs a calling script".into(), 0);
             };
             match resolve_path(engine, &path.as_bytes(), caller) {
                 Ok(module) => module,
-                Err(message) => return error_result(lua, message, 1),
+                Err(message) => return error_result(lua, message, 0),
             }
         }
         LuaValue::Number(_) | LuaValue::Integer(_) => {
             let text = lua.coerce_string(target.clone())?.map(|s| s.to_string_lossy()).unwrap_or_default();
-            return error_result(lua, format!("require(assetId) is not supported offline (asset {text})"), 1);
+            return error_result(lua, format!("require(assetId) is not supported offline (asset {text})"), 0);
         }
         LuaValue::UserData(ud) if instance_of_ud(ud).is_some() => instance_of_ud(ud).unwrap(),
-        _ => return error_result(lua, "Attempted to call require with invalid argument(s).".into(), 1),
+        _ => return error_result(lua, "Attempted to call require with invalid argument(s).".into(), 0),
     };
     let module_script = engine.class_id("ModuleScript");
     if Some(engine.state.borrow().dom.at(module).class) != module_script {
-        return error_result(lua, "Attempted to call require with invalid argument(s).".into(), 1);
+        return error_result(lua, "Attempted to call require with invalid argument(s).".into(), 0);
     }
 
     let current = lua.current_thread();
@@ -578,11 +578,11 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
                     return Ok(LuaMultiValue::from_iter([LuaValue::Integer(0), record.result.clone().unwrap_or(LuaValue::Nil)]));
                 }
                 Status::Error => {
-                    return error_result(lua, "Requested module experienced an error while loading".into(), 1);
+                    return error_result(lua, "Requested module experienced an error while loading".into(), 0);
                 }
                 Status::Loading => {
                     if record.owner.as_ref().map(thread_key) == Some(thread_key(&current)) {
-                        return error_result(lua, "Requested module was required recursively".into(), 1);
+                        return error_result(lua, "Requested module was required recursively".into(), 0);
                     }
                     record.waiting.push(current);
                     return Ok(LuaMultiValue::from_iter([LuaValue::Integer(2)]));
@@ -627,7 +627,7 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
                 refs.records.insert((vm, module), Record { status: Status::Error, result: None, waiting: Vec::new(), owner: None });
                 drop(refs);
                 let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
-                error_result(lua, format!("{name}: invalid JSON module ({message})"), 1)
+                error_result(lua, format!("{name}: invalid JSON module ({message})"), 0)
             }
         };
     }
@@ -639,7 +639,7 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         } else {
             format!("Module {name} has no source")
         };
-        return error_result(lua, message, 1);
+        return error_result(lua, message, 0);
     };
 
     engine.modules.borrow_mut().records.insert(
@@ -696,7 +696,7 @@ pub fn require_finish(lua: &Lua, engine: &Rc<Engine>, (module, results, vm): (Lu
         return Ok(LuaMultiValue::from_iter([
             LuaValue::Boolean(false),
             LuaValue::String(lua.create_string("Module code did not return exactly one value")?),
-            LuaValue::Integer(1),
+            LuaValue::Integer(0),
         ]));
     }
     let value: LuaValue = results.get(2)?;

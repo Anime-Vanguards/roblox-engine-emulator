@@ -1807,15 +1807,16 @@ unsafe extern "C-unwind" fn table_namecall(state: *mut ffi::lua_State) -> c_int 
         ffi::lua_pop(state, 1);
         let name = std::ffi::CStr::from_ptr(key).to_string_lossy().into_owned();
         ffi::lua_pushstring_(state, key);
-        let message = if ffi::lua_rawget(state, ffi::lua_upvalueindex(3)) == ffi::LUA_TSTRING {
-            format!("attempt to call a {} value", arg_bytes(state, -1).map(String::from_utf8_lossy).unwrap_or_default())
+        let (message, level) = if ffi::lua_rawget(state, ffi::lua_upvalueindex(3)) == ffi::LUA_TSTRING {
+            (format!("attempt to call a {} value", arg_bytes(state, -1).map(String::from_utf8_lossy).unwrap_or_default()), 1)
         } else {
+            // (a member error: Roblox raises it without the script's position)
             let type_name = arg_bytes(state, ffi::lua_upvalueindex(2)).map(String::from_utf8_lossy).unwrap_or_default();
-            format!("{name} is not a valid member of {type_name}")
+            (format!("{name} is not a valid member of {type_name}"), 0)
         };
         drop(name);
         ffi::lua_pop(state, 1);
-        raise(state, message, 1)
+        raise(state, message, level)
     }
 }
 

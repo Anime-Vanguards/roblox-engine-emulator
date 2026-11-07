@@ -5,10 +5,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "vector-index error w is not a valid member of Vector3 | ok 3.7416574954986572 | ok 0.26726123690605164, 0.5345224738121033, 0.8017836809158325",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "vector-format error invalid argument #2 to 'format' (string expected, got Vector3) ok 1, 2, 3 concat error @86: attempt to concatenate string with Vector3",
 			"why": "not fixed yet"
 		},
@@ -117,10 +113,6 @@
 	],
 	"chunknames": [
 		{
-			"line": "nested member NotAMember is not a valid member of Workspace \"Workspace\"",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "odd-names info ReplicatedStorage.ParityProbes.Chunk",
 			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
@@ -131,10 +123,6 @@
 		{
 			"line": "odd-names index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
 			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "odd-names member NotAMember is not a valid member of Workspace \"Workspace\"",
-			"why": "not fixed yet"
 		},
 		{
 			"line": "odd-names trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
@@ -153,10 +141,6 @@
 			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
-			"line": "loose member NotAMember is not a valid member of Workspace \"Workspace\"",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "loose trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
 			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
@@ -171,10 +155,6 @@
 		{
 			"line": "long index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
 			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "long member NotAMember is not a valid member of Workspace \"Workspace\"",
-			"why": "not fixed yet"
 		},
 		{
 			"line": "long trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
@@ -827,23 +807,7 @@
 	],
 	"errors": [
 		{
-			"line": "error invalid-member | NotAMember is not a valid member of Part \"Part\"",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error invalid-member-write | NotAMember is not a valid member of Part \"Part\"",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "error wrong-type-write-string | no error",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error readonly-write | Unable to assign property ClassName. Property is read only",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error readonly-write-abs | Unable to assign property AbsoluteSize. Property is read only",
 			"why": "not fixed yet"
 		},
 		{
@@ -859,18 +823,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "error method-on-wrong-class | GetPlayers is not a valid member of Part \"Part\"",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error method-with-dot | Expected ':' not '.' calling member function FindFirstChild",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error method-bad-self | Expected ':' not '.' calling member function FindFirstChild",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "error method-missing-arg | Argument 1 missing or nil",
 			"why": "not fixed yet"
 		},
@@ -879,15 +831,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "error getservice-bad | 'NotAService' is not a valid Service name",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "error vector3-arith-bad | @88: attempt to perform arithmetic (add) on Vector3 and number",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error vector3-index | W is not a valid member of Vector3",
 			"why": "not fixed yet"
 		},
 		{
@@ -907,14 +851,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "error enum-index | NotThere is not a valid member of \"Enum.Material\"",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error enums-index | NotAnEnum is not a valid member of \"Enum\"",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "error enumitem-newindex | Value is not a valid member of EnumItem",
 			"why": "not fixed yet"
 		},
@@ -923,19 +859,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "error require-nonmodule | Attempted to call require with invalid argument(s).",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "error require-number | require(assetId) cannot be called from a client.  assetId = 5",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error require-nil | Attempted to call require with invalid argument(s).",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error fire-nonbindable | Fire is not a valid member of RBXScriptSignal",
 			"why": "not fixed yet"
 		},
 		{
@@ -948,10 +872,6 @@
 		},
 		{
 			"line": "error attribute-bad | Array is not a supported attribute type",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "error getattribute-dot | Expected ':' not '.' calling member function GetAttribute",
 			"why": "not fixed yet"
 		},
 		{
@@ -1024,10 +944,6 @@
 		},
 		{
 			"line": "parent-to-self error Attempt to set Self as its own parent",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "parent-to-number error @144: invalid argument #3 (Instance expected, got number)",
 			"why": "not fixed yet"
 		},
 		{

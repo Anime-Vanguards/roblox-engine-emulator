@@ -27,7 +27,7 @@ use std::{cell::Cell, ffi::c_int, sync::Once};
 
 use mlua::{ffi, prelude::*};
 
-use super::{Flow, raise};
+use super::{Flow, raise_at_caller};
 use crate::Engine;
 
 /// mlua's slots for held values: Luau's LUAI_MAXCSTACK as mlua-sys builds it (its LUA_REGISTRYINDEX is
@@ -128,7 +128,8 @@ pub fn admit(engine: &Engine, hold: Hold, call: &str) -> Result<(), Flow> {
     }
     let held = gauge.held.get();
     drop(refs);
-    raise(format!("{call}: too many threads and values held for scripts ({held}; ree holds at most {SLOTS})"))
+    // (a task-library-style error: at the calling script line)
+    raise_at_caller(format!("{call}: too many threads and values held for scripts ({held}; ree holds at most {SLOTS})"))
 }
 
 /// The error of a script whose resumption ran mlua's reference stack full.

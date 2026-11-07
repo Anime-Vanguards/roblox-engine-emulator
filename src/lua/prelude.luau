@@ -85,7 +85,7 @@ end
 -- Userdata helper: a proxy with a locked metatable whose members come from `Index`.
 
 local function ReadOnlyMember(_, Key)
-	error(`{Key} cannot be assigned to`, 2)
+	error(`{Key} cannot be assigned to`, 0)
 end
 
 local function Proxy(TypeName, Index, NewIndex, Extra)
@@ -340,7 +340,7 @@ local function ScriptLibrary(Name)
 	local Result = setmetatable({}, {
 		__index = Members,
 		__newindex = function(_, Key)
-			error(`{Key} cannot be assigned to`, 2)
+			error(`{Key} cannot be assigned to`, 0)
 		end,
 		__metatable = "The metatable is locked",
 	})
@@ -390,7 +390,7 @@ local function FlagSet(TypeName, Names, Resolve)
 		local Object = Proxy(TypeName, function(Self, Key)
 			local Value = Info[Self][Key]
 			if Value == nil then
-				error(`{Key} is not a valid member of {TypeName}`, 2)
+				error(`{Key} is not a valid member of {TypeName}`, 0)
 			end
 			return Value
 		end, nil, Meta)
@@ -437,7 +437,7 @@ function Path2DControlPoint.new(Position, LeftTangent, RightTangent)
 	return Proxy("Path2DControlPoint", function(_, Key)
 		local Value = Fields[Key]
 		if Value == nil then
-			error(`{Key} is not a valid member of Path2DControlPoint`, 2)
+			error(`{Key} is not a valid member of Path2DControlPoint`, 0)
 		end
 		return Value
 	end)

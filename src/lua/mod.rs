@@ -85,12 +85,22 @@ pub fn encode(lua: &Lua, outcome: Ret) -> LuaResult<LuaMultiValue> {
     }
 }
 
+/// An error of the engine's own members (properties, methods, events, services): Roblox raises them without the
+/// script's position (`NotAMember is not a valid member of Part "Part"`, `Unable to assign property ClassName.
+/// Property is read only`, `'X' is not a valid Service name`; measured in a playing client, Studio 0.744:
+/// tools/parity/probes/errors.luau).
 pub fn raise<T>(message: impl Into<String>) -> Result<T, Flow> {
-    Err(Flow::Error(ScriptError::at_caller(message)))
+    Err(Flow::Error(ScriptError::plain(message)))
 }
 
 pub fn raise_plain<T>(message: impl Into<String>) -> Result<T, Flow> {
     Err(Flow::Error(ScriptError::plain(message)))
+}
+
+/// An error Luau's own checks would raise, at the calling script line: `invalid argument #2 (string expected, got
+/// number)`, `attempt to iterate over a Instance value` (Roblox's are positioned like the VM's).
+pub fn raise_at_caller<T>(message: impl Into<String>) -> Result<T, Flow> {
+    Err(Flow::Error(ScriptError::at_caller(message)))
 }
 
 pub fn values<const N: usize>(items: [LuaValue; N]) -> LuaMultiValue {

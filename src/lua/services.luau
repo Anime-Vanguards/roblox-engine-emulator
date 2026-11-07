@@ -820,7 +820,7 @@ Method("AssetService", "CreateSurfaceAppearanceAsync", function(_, Maps)
 			continue
 		end
 		if typeof(Map) ~= "Content" or Map.SourceType ~= Enum.ContentSourceType.Object then
-			error(`CreateSurfaceAppearanceAsync: {Key} must be an EditableImage's Content`, ScriptLevel(2))
+			error(`CreateSurfaceAppearanceAsync: {Key} must be an EditableImage's Content`, 0)
 		end
 		local Image = Map.Object
 		local Data = Extra(Image)
@@ -972,7 +972,7 @@ end)
 -- is Rust: animation/mod.rs)
 Method("KeyframeSequenceProvider", "GetKeyframeSequenceAsync", function(_, AssetId)
 	if AssetId == nil then
-		error("Argument 1 missing or nil", ScriptLevel(2))
+		error("Argument 1 missing or nil", 0)
 	end
 	task.wait()
 	local Sequence, Message = R.KeyframeSequence(tostring(AssetId))

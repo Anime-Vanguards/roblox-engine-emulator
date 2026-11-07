@@ -408,7 +408,7 @@ fn vector3_members_methods_and_errors_follow_studio() {
             { "Magnitudes", function() return V.Magnitudes end },
         } do
             local Ok, Message = pcall(Case[2])
-            assert(not Ok and string.find(tostring(Message), "^Test:%d+: " .. Case[1] .. " is not a valid member of Vector3$"), tostring(Message))
+            assert(not Ok and string.find(tostring(Message), "^" .. Case[1] .. " is not a valid member of Vector3$"), tostring(Message))
         end
         "#,
     );

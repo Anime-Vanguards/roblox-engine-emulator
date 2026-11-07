@@ -141,7 +141,7 @@ local VectorMethods = {
 R.SetVectorMetatable({
 	__index = setmetatable(VectorMethods, {
 		__index = function(_, Key)
-			error(`{Key} is not a valid member of Vector3`, 2)
+			error(`{Key} is not a valid member of Vector3`, 0)
 		end,
 	}),
 	__metatable = "The metatable is locked",
