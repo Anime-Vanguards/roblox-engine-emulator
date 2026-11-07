@@ -1509,6 +1509,60 @@ fn explicit_mounts() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A directory holding `default.project.json` mounts as that project, as Rojo syncs it (Wally's
+/// `Packages/_Index/<package>/<name>/`): the tree's `$path` (a directory or a file), ahead of an `init`
+/// script beside it, or a `$className` root with child nodes; named by the project's `name`, else by the
+/// directory, and by the mount's own name when the directory is mounted itself.
+#[test]
+fn nested_default_projects_mount_as_their_tree() {
+    use super::project::{Mount, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-nested-project-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let write = |relative: &str, text: &str| {
+        let file = dir.join(relative);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    };
+    write("Packages/lib.lua", r#"return require(script.Parent._Index["scope_lib@1.0.0"]["lib"])"#);
+    write("Packages/_Index/scope_lib@1.0.0/lib/default.project.json", r#"{ "name": "lib", "tree": { "$path": "src" } }"#);
+    write("Packages/_Index/scope_lib@1.0.0/lib/src/init.luau", r#"return "lib""#);
+    write("Packages/_Index/scope_lib@1.0.0/lib/src/Util.luau", "return 1");
+    write("Packages/_Index/scope_lib@1.0.0/lib/build.project.json", r#"{ "tree": { "$path": "src" } }"#);
+    write("Packages/_Index/scope_file@1.0.0/file/default.project.json", r#"{ "tree": { "$path": "src/file.luau" } }"#);
+    write("Packages/_Index/scope_named@1.0.0/named/default.project.json", r#"{ "name": "Renamed", "tree": { "$path": "src" } }"#);
+    write("Packages/_Index/scope_named@1.0.0/named/src/init.luau", r#"return "renamed""#);
+    write("Packages/_Index/scope_file@1.0.0/file/src/file.luau", r#"return "file""#);
+    write("Packages/_Index/scope_both@1.0.0/both/default.project.json", r#"{ "name": "both", "tree": { "$path": "src" } }"#);
+    write("Packages/_Index/scope_both@1.0.0/both/init.luau", r#"return "root init""#);
+    write("Packages/_Index/scope_both@1.0.0/both/src/init.luau", r#"return "src""#);
+    write("Packages/_Index/scope_tree@1.0.0/tree/default.project.json", r#"{ "name": "tree", "tree": { "$className": "Folder", "A": { "$path": "a.luau" } } }"#);
+    write("Packages/_Index/scope_tree@1.0.0/tree/a.luau", r#"return "a""#);
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Packages={}", dir.join("Packages").to_string_lossy()), false).unwrap()).unwrap();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Direct={}", dir.join("Packages/_Index/scope_named@1.0.0/named").to_string_lossy()), false).unwrap()).unwrap();
+    let output = run(&lua, &engine, r#"
+        local Packages = game:GetService("ReplicatedStorage").Packages
+        local Index = Packages._Index
+        local Lib = Index["scope_lib@1.0.0"].lib
+        assert(Lib.ClassName == "ModuleScript", Lib.ClassName)
+        assert(require(Packages.lib) == "lib")
+        assert(require(Lib.Util) == 1)
+        assert(Lib:FindFirstChild("src") == nil and Lib:FindFirstChild("default.project") == nil and Lib:FindFirstChild("build.project") == nil)
+        local File = Index["scope_file@1.0.0"].file
+        assert(File.ClassName == "ModuleScript" and require(File) == "file")
+        local Named = Index["scope_named@1.0.0"]
+        assert(Named:FindFirstChild("named") == nil and require(Named.Renamed) == "renamed", "the project's name")
+        assert(require(game:GetService("ReplicatedStorage").Direct) == "renamed", "a mounted directory keeps the mount's name")
+        assert(require(Index["scope_both@1.0.0"].both) == "src", "the project file wins over init.luau")
+        local Tree = Index["scope_tree@1.0.0"].tree
+        assert(Tree.ClassName == "Folder" and require(Tree.A) == "a")
+        assert(Tree:FindFirstChild("a") == nil, "only the tree's nodes")
+    "#);
+    assert!(output.iter().all(|line| !line.starts_with("error")), "{output:?}");
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Rojo's JSON models (`*.model.json`, Rojo 7's format: rojo.space/docs/v7/sync-details/#json-models
 /// and its json_model.rs): one instance named after the file (its own top-level name ignored) or by
 /// its project node, lowercase or legacy capitalized keys, a child without a name taking its class's,

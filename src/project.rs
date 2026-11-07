@@ -729,7 +729,16 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
         }
         if let Some(child_node) = node.dirs.get(entry) {
             let child_relative = if relative.is_empty() { entry.clone() } else { format!("{relative}/{entry}") };
-            mount_directory_as(engine, child_node, instance, entry, mount, &child_relative);
+            match nested_project(child_node) {
+                // Named by the project's `name`, else by its directory (Rojo's src/project.rs, Project::set_file_name)
+                Some(project) => {
+                    let name = project.get("name").and_then(serde_json::Value::as_str).unwrap_or(entry);
+                    mount_nested_project(engine, child_node, &project, instance, name, mount, &child_relative);
+                }
+                None => {
+                    mount_plain_directory_as(engine, child_node, instance, entry, mount, &child_relative);
+                }
+            }
         } else {
             let lower = entry.to_ascii_lowercase();
             if lower.starts_with("init.") || lower.ends_with(".meta.json") {
@@ -743,9 +752,73 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
     }
 }
 
+/// A scanned directory mounted as the child `name` of `parent` (a project node's name, which Rojo keeps for a
+/// `$path` target): as the project its `default.project.json` holds, else by its own init scripts and contents.
+fn mount_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> InstanceId {
+    match nested_project(node) {
+        Some(project) => mount_nested_project(engine, node, &project, parent, name, mount, relative),
+        None => mount_plain_directory_as(engine, node, parent, name, mount, relative),
+    }
+}
+
+/// A directory's `default.project.json`: Rojo mounts the directory as that project "instead of anything else in the
+/// directory" (rojo.space/docs/v7/sync-details/#projects), init scripts included. Wally packages each ship one.
+fn nested_project(node: &ScanNode) -> Option<serde_json::Value> {
+    let file = node.entries.iter().find(|entry| entry.eq_ignore_ascii_case("default.project.json"))?;
+    read_json(&format!("{}/{file}", node.path)).filter(|project| project.get("tree").is_some_and(serde_json::Value::is_object))
+}
+
+/// A nested project's tree mounted as the child `name` of `parent`; one whose `$path` names nothing mounts the directory as it is.
+fn mount_nested_project(engine: &Engine, node: &ScanNode, project: &serde_json::Value, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> InstanceId {
+    let mounted = project.get("tree").and_then(serde_json::Value::as_object).and_then(|tree| mount_project_node(engine, node, tree, parent, name, mount, relative));
+    match mounted {
+        Some(instance) => instance,
+        None => mount_plain_directory_as(engine, node, parent, name, mount, relative),
+    }
+}
+
+/// A node of a nested project's tree (`$path`s relative to `base`, the project file's directory) mounted as the child
+/// `name` of `parent`, then its child nodes; `$properties` and `$attributes` are ignored, as cli/rojo.mjs does. None when
+/// its `$path` names nothing.
+fn mount_project_node(engine: &Engine, base: &ScanNode, tree: &serde_json::Map<String, serde_json::Value>, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> Option<InstanceId> {
+    let path = tree.get("$path").and_then(|value| value.as_str().or_else(|| value.get("optional")?.as_str()));
+    let instance = match path {
+        Some(path) => {
+            let segments: Vec<&str> = path.split(['/', '\\']).filter(|segment| !segment.is_empty() && *segment != ".").collect();
+            let target = format!("{}/{}", base.path, segments.join("/"));
+            if segments.is_empty() {
+                mount_plain_directory_as(engine, base, parent, name, mount, relative)
+            } else if let Some(dir) = segments.iter().try_fold(base, |dir, segment| dir.dirs.get(*segment)) {
+                mount_directory_as(engine, dir, parent, name, mount, relative)
+            } else if Path::new(&target).is_dir() {
+                let dir = listed(target);
+                let instance = mount_directory_as(engine, &dir, parent, name, mount, relative);
+                keep_listing(engine, dir);
+                instance
+            } else if Path::new(&target).is_file() {
+                mount_file(engine, &target, segments.last()?, Some(name), parent, mount);
+                find_child(&engine.state.borrow(), parent, name)?
+            } else {
+                return None;
+            }
+        }
+        None => {
+            let reflection = &engine.reflection;
+            let class_name = tree.get("$className").and_then(|value| value.as_str()).filter(|class_name| reflection.class_id(class_name).is_some_and(|class| !reflection.class(class).service)).unwrap_or("Folder");
+            ensure_child(&mut engine.state.borrow_mut(), reflection, parent, name, class_name, mount)
+        }
+    };
+    for (child_name, child) in tree {
+        if let (false, Some(child)) = (child_name.starts_with('$'), child.as_object()) {
+            mount_project_node(engine, base, child, instance, child_name, mount, &format!("{relative}/{child_name}"));
+        }
+    }
+    Some(instance)
+}
+
 /// A scanned directory mounted as the child `name` of `parent` (init scripts and init.meta.json
 /// className decide its class; a Folder otherwise), then its contents.
-fn mount_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> InstanceId {
+fn mount_plain_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> InstanceId {
     let reflection = &engine.reflection;
     let full_path = &node.path;
     let present: FxHashMap<String, &String> = node.entries.iter().map(|name| (name.to_ascii_lowercase(), name)).collect();

@@ -126,8 +126,10 @@ pool while Engine.Start runs (`project::Prescan`). `begin_project` stops after t
 there).
 
 - **Rojo roots**: `<root>/<Service>/...` with `init.luau`, `*.server.luau`, `*.client.luau`,
-  `init.meta.json`, JSON modules and `*.model.json` models. A root's folder is the project folder that
-  the conventions below are read from.
+  `init.meta.json`, JSON modules and `*.model.json` models. A directory holding `default.project.json`
+  mounts as that project's tree (its `$path`, `$className` and child nodes; Wally packages ship one
+  each), ahead of any init script, named by the project's `name` (else the directory's), as Rojo nests
+  it. A root's folder is the project folder that the conventions below are read from.
 - **Project settings**: `rur.json` at the project folder, keyed by the root folder's name (the first
   root with a value wins): `placeIds`, `modelAssets` (`mount`, `prefixes`), `clientGui`,
   `streamingTargetRadius`. The name is kept from rur, which wrote these files first.
