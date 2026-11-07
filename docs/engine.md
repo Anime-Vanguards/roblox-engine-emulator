@@ -261,6 +261,11 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   names it: error positions, tracebacks and `debug.info(f, "s")` read `ReplicatedStorage.Module:3:`
   (measured in a playing client; tools/parity/probes/chunknames.luau). Roblox keeps one compiled chunk per
   source text, so a module whose source equals an earlier one's carries that module's name; ree does not.
+- **The Luau library**: the VM is Luau 0.694 (`vendor/luau0-src`) with patches/luau.patch, which also backports
+  Luau 0.701's `math.isnan`, `math.isinf` and `math.isfinite` as upstream has them: builtins (fast calls, a
+  constant argument folded by the compiler) that take a number or a string Luau reads as one (`"1"`, `"inf"`,
+  `"nan"`, `"1e400"`) and raise `invalid argument #1 to 'isnan' (number expected, got nil)` for anything
+  else, as a playing client does (tools/parity/probes/math_classify.luau).
 - **Lifetime**: instances a script can reach keep their userdata identity; unreachable parentless
   subtrees are freed by `lua::raw::collect` (run from the render step). Rust code that holds an
   `InstanceId` outside the tree across frames keeps it reachable with `state.dom.pin(id)` / `unpin(id)`,

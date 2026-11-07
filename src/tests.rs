@@ -6106,6 +6106,50 @@ fn a_scripts_environment_resolves_imports_at_load_and_takes_fast_calls() {
     assert_eq!(output.iter().filter(|line| line.as_str() == names).count(), 2, "{output:?}");
 }
 
+/// `math.isnan`, `math.isinf` and `math.isfinite` (Luau 0.701, backported in patches/luau.patch) are builtins a script calls as fast
+/// calls, as a client does (the parity bench's `arith.isnan` rows: a loop step calling one 4.9-6.2 ns in a module, 20-22 after
+/// getfenv), and getfenv makes them plain C calls; the answers are the same either way.
+#[test]
+fn a_scripts_number_classifiers_are_fast_calls() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let source = |prefix: &str| {
+        format!(
+            "{prefix}return function(N) local s = 0 for i = 1, N do local x = i * 0.5 if math.isnan(x) then s += 1 end if math.isinf(x) then s += 2 end if math.isfinite(x) then s += 4 end end return s end\n"
+        )
+    };
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+            local Folder = Instance.new("Folder")
+            local Safe, Unsafe = Instance.new("ModuleScript"), Instance.new("ModuleScript")
+            Safe.Parent, Unsafe.Parent = Folder, Folder
+            __setSource(Safe, {safe:?})
+            __setSource(Unsafe, {unsafe:?})
+            _G.Safe, _G.Unsafe = require(Safe), require(Unsafe)
+            "#,
+            safe = source(""),
+            unsafe = source("local _ = getfenv()\n")
+        ),
+    );
+    let sample = |module: &str| {
+        let before = vm_counts(&engine);
+        let output = run(&lua, &engine, &format!("print(_G.{module}(1000))"));
+        let after = vm_counts(&engine);
+        (output, after.ops[21] - before.ops[21], after.ops[73] - before.ops[73], after.ccalls - before.ccalls)
+    };
+    // (CALL is opcode 21, FASTCALL1 73; the snippet that calls the module makes a call or two of its own, and print one C call)
+    let (output, calls, fast, ccalls) = sample("Safe");
+    assert!(output.contains(&"print: 4000".to_string()), "{output:?}");
+    assert!(calls < 10 && fast >= 3000 && ccalls < 10, "a safe environment: {calls} calls, {fast} fast calls, {ccalls} C calls");
+    let (output, calls, _, ccalls) = sample("Unsafe");
+    assert!(output.contains(&"print: 4000".to_string()), "{output:?}");
+    assert!(calls >= 3000 && ccalls >= 3000, "after getfenv: {calls} calls, {ccalls} C calls");
+}
+
 /// A `--!native` module's instructions are priced as a client's machine code takes them (cost.rs NATIVE_OPS: a keyed table read or
 /// write 0.42 ns, an addition or loop step 0.43; interpreted 2.45 and 0.48), whether or not this VM compiles the module: the parity
 /// bench's native rows run 0.8-7.8x faster than the same loops interpreted.
