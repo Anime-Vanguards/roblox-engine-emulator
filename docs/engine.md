@@ -266,6 +266,18 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   constant argument folded by the compiler) that take a number or a string Luau reads as one (`"1"`, `"inf"`,
   `"nan"`, `"1e400"`) and raise `invalid argument #1 to 'isnan' (number expected, got nil)` for anything
   else, as a playing client does (tools/parity/probes/math_classify.luau).
+- **CFrame:FuzzyEq(other, eps = 1e-5)** (measured in a playing client, Studio 0.744: about 25,000 pairs at its
+  thresholds; tools/parity/probes/cframe_fuzzyeq.luau): single precision, eps taken as a float and its size
+  used. Position component by component: self's `a` and the other's `b` are equal, or `|a - b| <= |eps| *
+  (|a| + 1)` (the tolerance grows with self's component only; `|eps|` once `|a| + 1` is infinite). Rotation:
+  `sqrt(sum of (Ra^T Rb - I)^2) / sqrt(2) <= |eps|`, the relative rotation's column dot products and the sum
+  taken in order without a fused multiply-add (the angle between them for small turns; for matrices that are
+  not rotations, their distance: a stretched axis passes up to `sqrt(2) * eps`). An eps over 0.1 in size raises
+  `The eps value provided to FuzzyEq should be a small positive value <= 0.1` (NaN does not, and compares
+  false); a numeric string is an eps. The argument errors are the client's: `invalid argument #1 to 'FuzzyEq'
+  (CFrame expected, got number)`, `invalid argument #2 (CFrame expected, got nil)` and `#3 (number expected,
+  ...)` at the calling line (an eps of nil given is an error), `Invalid number of arguments: 1, CFrame.FuzzyEq
+  expects 2 or 3.` without one.
 - **Lifetime**: instances a script can reach keep their userdata identity; unreachable parentless
   subtrees are freed by `lua::raw::collect` (run from the render step). Rust code that holds an
   `InstanceId` outside the tree across frames keeps it reachable with `state.dom.pin(id)` / `unpin(id)`,

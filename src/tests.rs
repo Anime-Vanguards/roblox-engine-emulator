@@ -4247,6 +4247,10 @@ fn the_work_clock_prices_datatype_operations_as_the_studio_bench_measured() {
         Within("CFrame:ToEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _, _, _ = A:ToEulerAnglesXYZ() end end), 15, 29)
         Within("CFrame.Rotation", Per(function(N) for _ = 1, N do local _ = A.Rotation end end), 13, 24)
         Within("CFrame + Vector3", Per(function(N) for _ = 1, N do local _ = A + V end end), 16, 29)
+        -- FuzzyEq compares both parts of a pair a micro-stud apart (the bench: 26.5) and stops at the position of one a stud
+        -- apart (15.5)
+        Within("CFrame:FuzzyEq near", Per(function(N) local C = A * CFrame.new(1e-6, 0, 0) for _ = 1, N do local _ = A:FuzzyEq(C) end end), 20, 34)
+        Within("CFrame:FuzzyEq moved", Per(function(N) for _ = 1, N do local _ = A:FuzzyEq(B) end end), 11, 21)
         Within("CFrame.Angles", Per(function(N) for _ = 1, N do local _ = CFrame.Angles(0.1, 0.2, 0.3) end end), 30, 54)
         -- (fromEulerAnglesXYZ has no row: Angles' price)
         Within("CFrame.fromEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _ = CFrame.fromEulerAnglesXYZ(0.1, 0.2, 0.3) end end), 30, 54)
