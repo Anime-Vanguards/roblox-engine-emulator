@@ -289,6 +289,9 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
 - What holds an instance is what holds it in Roblox (measured in Studio 0.740): a connected handler that
   references the instance keeps it; Destroy (which disconnects the instance and its descendants,
   deferred) or Disconnect releases it; a destroyed tree nothing references is freed whole.
+- Destroy queues each instance's Destroying handlers like any deferred event, just before that
+  instance's removal events and after its parent's (measured in a playing client): they run after
+  Destroy returned and see the instance unparented and its Parent locked.
 - Signals and connections reuse slots; a connection id is (slot, generation), so a stale
   RBXScriptConnection value or queued handler never reaches the slot's next connection.
 

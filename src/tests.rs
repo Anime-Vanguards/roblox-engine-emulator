@@ -266,13 +266,15 @@ fn destroy_and_clone() {
         "#,
     );
     let output = lines(&engine);
+    // Destroying is deferred like every event (measured in a playing client, Studio 0.744): its handler runs after
+    // Destroy returned, sees the instance unparented, and comes before the instance's own removal events.
     assert_eq!(
         output,
         vec![
-            "print: destroying true",
             "print: parent nil",
             "print: false The Parent property of Frame is locked, current parent: NULL, new parent Folder",
             "print: clone nil",
+            "print: destroying false",
             "print: changed after destroy Parent",
         ]
     );

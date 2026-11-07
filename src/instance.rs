@@ -1,7 +1,7 @@
 //! Script-visible instance semantics that never run Luau code (port of the state side of
 //! `runtime/engine/instance.luau`): creation, parenting with its event order, raw property access
 //! with change notification, clone, attributes, tags and signal firing. Operations that run
-//! scripts (Destroy's immediate Destroying handlers, WaitForChild) are in `engine::lua`.
+//! scripts (Destroy, WaitForChild) are in `engine::lua`.
 
 use crate::cost::SignalKind;
 use super::{
@@ -643,7 +643,7 @@ pub fn remove_tag(state: &mut State, id: InstanceId, tag: &Str) {
     super::services::tag_removed(state, id, tag);
 }
 
-/// The first half of Destroy (after the Destroying handlers ran): marks the instance destroyed,
+/// The first half of Destroy (after its Destroying handlers were queued): marks the instance destroyed,
 /// unparents it and locks its parent. Returns the children to destroy next.
 pub fn begin_destroy(
     state: &mut State,

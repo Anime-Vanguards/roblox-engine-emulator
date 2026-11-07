@@ -927,15 +927,7 @@
 	],
 	"hierarchy": [
 		{
-			"line": "destroy after-destroy parent nil A1 parent nil A21 parent nil,A.Destroying sees parent nil,A.Destroying,Root.DescendantRemoving(A),Root.DescendantRemoving(A1),Root.DescendantRemoving(A2),Root.DescendantRemoving(A21),Root.ChildRemoved(A),A1.AncestryChanged(A,nil),A21.AncestryChanged(A,nil),A2.AncestryChanged(A,nil),A.AncestryChanged(A,nil),A.Parent,A1.Destroying,A.DescendantRemoving(A1),A.ChildRemoved(A1),A1.AncestryChanged(A1,nil),A1.Parent,A2.Destroying,A.DescendantRemoving(A2),A.DescendantRemoving(A21),A.ChildRemoved(A2),A21.AncestryChanged(A2,nil),A2.AncestryChanged(A2,nil),A2.Parent,A21.Destroying,A2.DescendantRemoving(A21),A2.ChildRemoved(A21),A21.AncestryChanged(A21,nil),A21.Parent",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "destroy-twice ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "destroy-tree Root.DescendantAdded(T),Root.ChildAdded(T),Root.DescendantAdded(T1),Root.DescendantAdded(T11),Root.DescendantAdded(T2),returned,T.Destroying parent=nil,Root.DescendantRemoving(T),Root.DescendantRemoving(T1),Root.DescendantRemoving(T11),Root.DescendantRemoving(T2),Root.ChildRemoved(T),T1.Destroying parent=nil,T11.Destroying parent=nil,T2.Destroying parent=nil",
 			"why": "not fixed yet"
 		},
 		{

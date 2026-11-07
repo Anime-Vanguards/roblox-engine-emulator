@@ -1,6 +1,6 @@
 //! Instance userdata: `__index` / `__newindex` (port of instance.luau InstanceMeta), the base
 //! Instance behaviours (Methods, Getters, Setters of class Instance) and the operations that run
-//! scripts (Destroy's immediate Destroying handlers, WaitForChild).
+//! scripts (Destroy, WaitForChild).
 
 use std::{cell::Cell, rc::Rc};
 
@@ -427,8 +427,8 @@ pub fn set_parent(engine: &Engine, id: InstanceId, parent: Option<InstanceId>) -
     core::set_parent(&mut state, &engine.reflection, &hooks, id, parent).map_err(Flow::Error)
 }
 
-/// Signal.FireImmediate: runs handlers now, each on a fresh thread (engine callbacks that must
-/// not defer: Destroying, RunService frame events).
+/// Signal.FireImmediate: runs handlers now, each on a fresh thread (engine callbacks that do not
+/// defer: RunService frame events).
 pub fn fire_immediate(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, args: &[Value]) -> LuaResult<()> {
     fire_immediate_costing(lua, engine, signal, args, 0.0)
 }
@@ -494,7 +494,10 @@ pub fn destroy(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flo
         instance.signals.as_ref().and_then(|s| s.event(K::Destroying as NameId))
     };
     if let Some(signal) = destroying {
-        fire_immediate(lua, engine, signal, &[])?;
+        // Deferred like every other event (measured in a playing client, Studio 0.744, SignalBehavior Deferred:
+        // tools/parity/probes/hierarchy.luau): the handlers run after Destroy returned and see the instance
+        // unparented; each instance's are queued just before its own removal events, a child's after its parent's.
+        core::fire(&mut engine.state.borrow_mut(), signal, Vec::new());
     }
     let children = {
         let hooks = engine.hooks.borrow();
