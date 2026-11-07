@@ -248,7 +248,10 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   - `caches`: Luau's inline caches per call site (a table key's or a global's predicted slot, a method's
     slot, a resolved import, a builtin's fast path: hit, miss, slow path) and ree's own caches (member
     atoms and dispatch, datatype values, Instance userdata, require results, module bytecode, spatial
-    query solids, bundle plans), with hits, misses and evictions.
+    query solids, bundle plans), with hits, misses and evictions. These are software caches, counted
+    exactly by the patched VM: before each instruction with an inline cache runs, it makes the check the
+    interpreter is about to make (patches/luau/12-profiling.patch). They are not the CPU's caches, and no
+    CPU counter is involved: the CPU's cache misses are the `hw` kind's (Hardware counters, below).
   - `alloc`: bytes and counts allocated, by type (table, its storage, function, string, userdata by
     Instance class or datatype, thread and its stack, buffer, function prototypes) and by the Luau stack
     that allocated them. Every allocation is counted by type; stacks are taken for every allocation unless
@@ -369,7 +372,11 @@ Windows service reads them on a profile's behalf (tools/hw-counters):
   (lines the L1 data cache filled for demand loads and stores), `l2-misses` (of those, lines filled from beyond the
   core's L2) and `llc-misses` (of those, lines filled from beyond the core complex's L3: another complex's cache or
   memory). The four cache counters are AMD Family 1Ah events (event 0x29, and the demand fills by source, event 0x43,
-  unit masks 0xFF, 0xFE and 0xDC); the rest are the CPU's built-in sources. Any other name is taken for a Windows
+  unit masks 0xFF, 0xFE and 0xDC); the rest are the CPU's built-in sources. In AMD's Processor Programming Reference
+  for Family 1Ah, and in Linux perf's Zen 5 event list, they are `ls_dispatch.all` and `ls_dmnd_fills_from_sys`:
+  `all`; every source but `local_l2`; and `near_cache`, `dram_io_near`, `far_cache`, `dram_io_far` and
+  `alternate_memories`, the sources beyond the core complex. They count demand data fills, one a line: prefetches and
+  instruction fetches are not in them, and a dispatched load or store may be one the CPU later discards. Any other name is taken for a Windows
   profile source as `ree-hw-counters sources` (or `wpr -pmcsources`) lists it. The CPU counts six at once:
   `--profile-counters a,b,...` chooses them (default `instructions,cycles,l1d-misses,l2-misses,llc-misses,branch-misses`;
   `l1d-accesses` in place of one of them gives the L1 miss rate). The profile adds IPC, the miss rates the counts allow
