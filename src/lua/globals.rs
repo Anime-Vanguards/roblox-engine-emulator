@@ -55,11 +55,45 @@ fn vm_of(value: &LuaValue) -> modules::Vm {
     }
 }
 
-fn to_thread(lua: &Lua, value: &LuaValue) -> Result<LuaThread, Flow> {
+/// The thread task.spawn / defer / delay (`call`) runs: a thread as it is, a function in a new thread. Roblox's errors
+/// (measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau; raised without a position):
+/// `invalid argument #1 to 'spawn' (function or thread expected)` (#2 for delay), and for a thread an earlier
+/// task.defer or task.delay queued that has not resumed yet, `Cannot call task.spawn on a thread that is already
+/// 'deferred' in the task library`.
+fn to_thread(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, call: &str) -> Result<LuaThread, Flow> {
+    match value {
+        LuaValue::Thread(thread) => {
+            if let Some(state) = engine.state.borrow().sched.task_state(thread) {
+                return raise_plain(format!("Cannot call task.{call} on a thread that is already '{state}' in the task library"));
+            }
+            Ok(thread.clone())
+        }
+        LuaValue::Function(function) => Ok(lua.create_thread(function.clone())?),
+        _ => raise_plain(format!("invalid argument #{index} to '{call}' (function or thread expected)")),
+    }
+}
+
+/// The thread the legacy spawn / delay run (their errors were not measured).
+fn legacy_thread(lua: &Lua, value: &LuaValue) -> Result<LuaThread, Flow> {
     match value {
         LuaValue::Thread(thread) => Ok(thread.clone()),
         LuaValue::Function(function) => Ok(lua.create_thread(function.clone())?),
         _ => raise_plain("invalid argument #1 (function or thread expected)"),
+    }
+}
+
+/// task.delay's and task.wait's seconds: nil is none; a number, or a string Luau reads as one, goes; anything else is
+/// `invalid argument #1 to 'delay' (number expected, got string)` (measured likewise; raised without a position).
+fn task_seconds(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) -> Result<Option<f64>, Flow> {
+    match value {
+        LuaValue::Nil => Ok(None),
+        LuaValue::Number(number) => Ok(Some(*number)),
+        LuaValue::Integer(number) => Ok(Some(*number as f64)),
+        LuaValue::String(_) => match lua.coerce_number(value.clone())? {
+            Some(number) => Ok(Some(number)),
+            None => raise_plain(format!("invalid argument #1 to '{call}' (number expected, got string)")),
+        },
+        other => raise_plain(format!("invalid argument #1 to '{call}' (number expected, got {})", super::typeof_value(engine, other))),
     }
 }
 
@@ -151,7 +185,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         primitive(lua, engine, |lua, engine, args| {
             super::encode(lua, (|| {
                 let args = Args::new(args);
-                let thread = to_thread(lua, args.get(0))?;
+                let thread = to_thread(lua, engine, args.get(0), 1, "spawn")?;
                 refs::admit(engine, Hold::Work, "task.spawn")?;
                 charge_thread(lua, engine, args.get(0), "spawn");
                 scheduler::resume(lua, engine, &thread, args.rest(1));
@@ -164,12 +198,14 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         primitive(lua, engine, |lua, engine, args| {
             super::encode(lua, (|| {
                 let args = Args::new(args);
-                let thread = to_thread(lua, args.get(0))?;
+                let thread = to_thread(lua, engine, args.get(0), 1, "defer")?;
                 refs::admit(engine, Hold::Work, "task.defer")?;
                 charge_thread(lua, engine, args.get(0), "defer");
                 let rest: Vec<Value> = args.0.iter().skip(1).map(super::convert::from_lua).collect();
                 if engine.state.borrow().sched.can_defer_event() {
-                    engine.state.borrow_mut().sched.defer_task(scheduler::JobTarget::Thread(thread.clone()), rest);
+                    let mut state = engine.state.borrow_mut();
+                    state.sched.defer_task(scheduler::JobTarget::Thread(thread.clone()), rest);
+                    state.sched.set_task_state(&thread, "deferred");
                 } else {
                     // Past the cut of a chain the thread is not queued; the call returns and Roblox logs an error
                     // (measured in a playing client, Studio 0.744: pcall(task.defer, f) is ok, the chain stops)
@@ -185,12 +221,14 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         primitive(lua, engine, |lua, engine, args| {
             super::encode(lua, (|| {
                 let args = Args::new(args);
-                let delay = args.number(0).unwrap_or(0.0);
-                let thread = to_thread(lua, args.get(1))?;
+                let delay = task_seconds(lua, engine, args.get(0), "delay")?.unwrap_or(0.0);
+                let thread = to_thread(lua, engine, args.get(1), 2, "delay")?;
                 refs::admit(engine, Hold::Work, "task.delay")?;
                 charge_thread(lua, engine, args.get(1), "delay");
                 let rest: Vec<Value> = args.0.iter().skip(2).map(super::convert::from_lua).collect();
-                engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, delay, thread.clone(), rest);
+                let mut state = engine.state.borrow_mut();
+                state.sched.schedule_task(TimerKind::Delay, delay, thread.clone(), rest);
+                state.sched.set_task_state(&thread, "delayed");
                 Ok(values([LuaValue::Thread(thread)]))
             })())
         })?,
@@ -201,7 +239,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         primitive(lua, engine, |lua, engine, args| {
             super::encode(lua, (|| {
                 let args = Args::new(args);
-                let delay = args.number(0).unwrap_or(0.0);
+                let delay = task_seconds(lua, engine, args.get(0), "wait")?.unwrap_or(0.0);
                 refs::admit(engine, Hold::Wait, "task.wait")?;
                 engine.state.borrow_mut().sched.schedule_task(TimerKind::Wait, delay, lua.current_thread(), Vec::new());
                 Ok(none())
@@ -223,8 +261,13 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set(
         "TaskCancel",
         primitive(lua, engine, |lua, engine, args| {
-            let args = Args::new(args);
-            if let LuaValue::Thread(thread) = args.get(0) {
+            super::encode(lua, (|| {
+                let args = Args::new(args);
+                // (the running thread and one that resumed it raise `cannot cancel thread` in the prelude's task.cancel)
+                let LuaValue::Thread(thread) = args.get(0) else {
+                    let got = super::typeof_value(engine, args.get(0));
+                    return raise_plain(format!("invalid argument #1 to 'cancel' (thread expected, got {got})"));
+                };
                 if thread.status() == LuaThreadStatus::Resumable {
                     let close = engine.lua.borrow().coroutine_close.clone();
                     if let Some(close) = close {
@@ -232,10 +275,11 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                     }
                 }
                 // (after the close: only a thread that is still alive is listed)
-                engine.state.borrow_mut().sched.cancel(thread);
-            }
-            let _ = lua;
-            Ok(none())
+                let mut state = engine.state.borrow_mut();
+                state.sched.cancel(thread);
+                state.sched.clear_task_state(thread);
+                Ok(none())
+            })())
         })?,
     )?;
     r.set(
@@ -757,7 +801,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let e = engine.clone();
     let legacy_spawn = wrapped(lua, engine, move |lua, args| {
         let args = Args::new(args);
-        let thread = to_thread(lua, args.get(0))?;
+        let thread = legacy_thread(lua, args.get(0))?;
         refs::admit(&e, Hold::Work, "spawn")?;
         e.state.borrow_mut().sched.schedule_legacy(TimerKind::Delay, Some(0.0), thread);
         Ok(none())
@@ -768,7 +812,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let legacy_delay = wrapped(lua, engine, move |lua, args| {
         let args = Args::new(args);
         let duration = args.number(0);
-        let thread = to_thread(lua, args.get(1))?;
+        let thread = legacy_thread(lua, args.get(1))?;
         refs::admit(&e, Hold::Work, "delay")?;
         e.state.borrow_mut().sched.schedule_legacy(TimerKind::Delay, duration, thread);
         Ok(none())

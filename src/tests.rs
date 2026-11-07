@@ -368,6 +368,67 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
 }
 
 #[test]
+fn the_task_library_raises_robloxs_errors() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/task_order.luau): no position on any of them,
+    // and a thread queued twice is refused the second time and resumes once
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(...)
+            local Ok, Message = pcall(...)
+            print(Ok, Message)
+        end
+        Try(task.spawn, 5)
+        Try(task.defer, "x")
+        Try(task.delay, 0, nil)
+        Try(task.delay, "x", function() end)
+        Try(task.wait, "x")
+        Try(task.cancel, 5)
+        Try(task.cancel, coroutine.running())
+        local Normal
+        Normal = coroutine.create(function()
+            coroutine.resume(coroutine.create(function() Try(task.cancel, Normal) end))
+        end)
+        coroutine.resume(Normal)
+        local Twice = coroutine.create(function(Value)
+            print("twice", Value)
+            coroutine.yield()
+            print("twice-second")
+        end)
+        task.defer(Twice, "a")
+        Try(task.defer, Twice, "b")
+        Try(task.spawn, Twice, "c")
+        local Delayed = coroutine.create(function() end)
+        task.delay(0, Delayed)
+        Try(task.defer, Delayed)
+        Try(task.delay, 0, Delayed)
+        print((pcall(task.delay, "0.5", function() end)))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: false invalid argument #1 to 'spawn' (function or thread expected)",
+            "print: false invalid argument #1 to 'defer' (function or thread expected)",
+            "print: false invalid argument #2 to 'delay' (function or thread expected)",
+            "print: false invalid argument #1 to 'delay' (number expected, got string)",
+            "print: false invalid argument #1 to 'wait' (number expected, got string)",
+            "print: false invalid argument #1 to 'cancel' (thread expected, got number)",
+            "print: false cannot cancel thread",
+            "print: false cannot cancel thread",
+            "print: false Cannot call task.defer on a thread that is already 'deferred' in the task library",
+            "print: false Cannot call task.spawn on a thread that is already 'deferred' in the task library",
+            "print: false Cannot call task.defer on a thread that is already 'delayed' in the task library",
+            "print: false Cannot call task.delay on a thread that is already 'delayed' in the task library",
+            "print: true",
+            "print: twice a",
+        ]
+    );
+}
+
+#[test]
 fn a_once_connection_reads_disconnected_from_the_fire_on() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/signals.luau): Connected is false right after the
     // Fire, the handler still runs once, and a second Fire before it runs does not reach it

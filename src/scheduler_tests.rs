@@ -168,9 +168,10 @@ fn deferred_threads_survive_collected_cancelled_ones() {
                 task.wait()
             end
         end)
-        -- A thread that cancels itself is still never resumed again
+        -- A thread cannot cancel itself: Roblox raises `cannot cancel thread` and the thread goes on (measured in a
+        -- playing client, Studio 0.744, tools/parity/probes/task_order.luau)
         task.spawn(function()
-            task.cancel(coroutine.running())
+            _G.SelfCancel = select(2, pcall(task.cancel, coroutine.running()))
             task.wait()
             _G.SelfResumed = true
         end)
@@ -180,7 +181,8 @@ fn deferred_threads_survive_collected_cancelled_ones() {
     assert_eq!(number(&engine, "Queued"), 200.0);
     assert_eq!(number(&engine, "Ran"), 200.0);
     assert_eq!(global(&engine, "InOrder"), LuaValue::Boolean(true));
-    assert_eq!(global(&engine, "SelfResumed"), LuaValue::Boolean(false));
+    assert_eq!(global(&engine, "SelfResumed"), LuaValue::Boolean(true));
+    assert_eq!(global(&engine, "SelfCancel").to_string().unwrap(), "cannot cancel thread");
 }
 
 #[test]

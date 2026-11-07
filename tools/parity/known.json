@@ -1147,64 +1147,6 @@
 			"why": "not fixed yet"
 		}
 	],
-	"task_order": [
-		{
-			"line": "cancel-self error cannot cancel thread",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "cancel-normal error cannot cancel thread",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "cancel-nonthread error invalid argument #1 to 'cancel' (thread expected, got number)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "defer-twice-second error Cannot call task.defer on a thread that is already 'deferred' in the task library",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "spawn-deferred error Cannot call task.spawn on a thread that is already 'deferred' in the task library",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "delay-then-defer error Cannot call task.defer on a thread that is already 'delayed' in the task library",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "delay-twice error Cannot call task.delay on a thread that is already 'delayed' in the task library",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "cancel-log hb11,hb12,self-cancel-before,self-cancel-after,twice 1 a,hb13,hb14",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "spawn-nonfunction error invalid argument #1 to 'spawn' (function or thread expected)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "defer-nonfunction error invalid argument #1 to 'defer' (function or thread expected)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "delay-nonfunction error invalid argument #2 to 'delay' (function or thread expected)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "delay-string-time error invalid argument #1 to 'delay' (number expected, got string)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "wait-string error invalid argument #1 to 'wait' (number expected, got string)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "log hb15,hb16,co x y,co resumed z",
-			"why": "not fixed yet"
-		}
-	],
 	"tween": [
 		{
 			"line": "ease Bezier In E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier) E(TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier)",

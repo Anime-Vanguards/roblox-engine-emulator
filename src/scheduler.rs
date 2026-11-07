@@ -259,6 +259,9 @@ pub struct Scheduler {
     /// Cancelled threads task.cancel could not close (the running thread and the ones it resumed), held so their
     /// address is not reused by a new thread while it is listed (a closed thread is dead: [`resume`] skips it).
     cancelled: FxHashMap<usize, LuaThread>,
+    /// Threads task.defer or task.delay queued that have not resumed since, by address, with their task-library state
+    /// ('deferred', 'delayed'); the queued job or timer holds each one alive while it is listed
+    task_states: FxHashMap<usize, &'static str>,
     pattern_cache: Vec<(f64, Vec<Vec<f64>>)>,
     hooks: Vec<(Phase, PhaseHook)>,
 
@@ -385,6 +388,7 @@ impl Scheduler {
             legacy_timers: BinaryHeap::new(),
             timer_sequence: 0,
             cancelled: FxHashMap::default(),
+            task_states: FxHashMap::default(),
             pattern_cache: Vec::new(),
             hooks: Vec::new(),
             main_thread: None,
@@ -817,6 +821,28 @@ impl Scheduler {
         }
     }
 
+    /// The task-library state of a thread task.defer or task.delay queued and that has not resumed since: Roblox
+    /// refuses to queue it again, `Cannot call task.defer on a thread that is already 'deferred' in the task library`
+    /// (task.spawn, task.defer and task.delay alike; measured in a playing client, Studio 0.744:
+    /// tools/parity/probes/task_order.luau).
+    pub fn task_state(&self, thread: &LuaThread) -> Option<&'static str> {
+        if self.task_states.is_empty() {
+            return None;
+        }
+        self.task_states.get(&(thread.to_pointer() as usize)).copied()
+    }
+
+    pub fn set_task_state(&mut self, thread: &LuaThread, state: &'static str) {
+        self.task_states.insert(thread.to_pointer() as usize, state);
+    }
+
+    /// The thread resumes (or was cancelled): it may be queued again.
+    pub fn clear_task_state(&mut self, thread: &LuaThread) {
+        if !self.task_states.is_empty() {
+            self.task_states.remove(&(thread.to_pointer() as usize));
+        }
+    }
+
     pub fn is_cancelled(&self, thread: &LuaThread) -> bool {
         !self.cancelled.is_empty() && self.cancelled.contains_key(&(thread.to_pointer() as usize))
     }
@@ -1110,6 +1136,7 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
     }
     match job.target {
         JobTarget::Thread(thread) => {
+            engine.state.borrow_mut().sched.clear_task_state(&thread);
             let args = job_args(lua, engine, &job.args)?;
             let _scope = crate::microprofile::scope("Resume thread");
             resume(lua, engine, &thread, args);
@@ -1281,7 +1308,10 @@ fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64
                 let clock = engine.state.borrow_mut().sched.clock();
                 LuaMultiValue::from_iter([LuaValue::Number(elapsed), LuaValue::Number(clock)])
             }
-            TimerKind::Delay => job_args(lua, engine, &timer.args)?,
+            TimerKind::Delay => {
+                engine.state.borrow_mut().sched.clear_task_state(&timer.thread);
+                job_args(lua, engine, &timer.args)?
+            }
         };
         resume(lua, engine, &timer.thread, args);
         if flush == TimerFlush::EachResumption {

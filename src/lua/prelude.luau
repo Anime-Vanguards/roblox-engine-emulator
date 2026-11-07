@@ -613,7 +613,18 @@ local Task = {
 		Pass(ScheduleWait(Duration))
 		return yield()
 	end,
-	cancel = Wrap(R.TaskCancel),
+	-- (the running thread, and one waiting on a coroutine it resumed, cannot be cancelled: Roblox raises this without a
+	-- position; measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau)
+	cancel = function(...)
+		local Thread = ...
+		if type(Thread) == "thread" then
+			local Status = coroutine.status(Thread)
+			if Status == "running" or Status == "normal" then
+				error("cannot cancel thread", 0)
+			end
+		end
+		return Pass(R.TaskCancel(...))
+	end,
 	synchronize = function() if R.ParallelPark(true) then yield() end end, -- (a parallel handler's thread leaves the phase: actors.rs)
 	desynchronize = function() if R.ParallelPark(false) then yield() end end,
 }
