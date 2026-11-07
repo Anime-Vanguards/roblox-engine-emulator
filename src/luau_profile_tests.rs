@@ -130,6 +130,63 @@ fn the_engine_step_has_its_own_row_in_the_host_time_profile() {
     assert!(control >= 20, "the control, native time in the handler's own call, carries {control} ticks\n{text}");
 }
 
+/// What a script reads of memory (collectgarbage("count"), gcinfo) frame by frame, while tables are made and collected, in an
+/// engine whose VM is hooked for a profile of `kinds` (none: no profile)
+fn memory_readings(kinds: Option<crate::profiler::Kinds>) -> Vec<String> {
+    use crate::lua as engine_lua;
+    let engine = crate::Engine::new(crate::Options::default()).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    engine_lua::modules::interpret_all(&lua, &engine);
+    let out = std::env::temp_dir().join(format!("ree-hook-readings-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let session = kinds.map(|kinds| crate::profiler::Session::begin(crate::profiler::Config { print: false, ..crate::profiler::Config::new(kinds, out.clone()) }));
+    luau_profile::install(&lua);
+    let run = |source: &str| {
+        let script = {
+            let mut state = engine.state.borrow_mut();
+            let class = engine.reflection.class_id("ModuleScript").unwrap();
+            crate::instance::create_named(&mut state, &engine.reflection, class, "Readings")
+        };
+        let env = engine_lua::modules::environment(&lua, &engine, script).expect("environment");
+        let function = lua.load(source).set_name("=readings").set_environment(env).into_function().expect("compile");
+        let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
+        if let engine_lua::globals::CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+            panic!("{message}");
+        }
+    };
+    run("_G.Kept = {} _G.Readings = {}");
+    for frame in 0..30 {
+        run(&format!(
+            "for Index = 1, 300 do\n\tlocal Record = {{ A = Index, B = {{ Index }} }}\n\tif Index % 3 == 0 then\n\t\ttable.insert(_G.Kept, Record)\n\tend\nend\nif {frame} % 10 == 9 then\n\ttable.clear(_G.Kept)\nend\ntable.insert(_G.Readings, collectgarbage(\"count\") .. \"/\" .. gcinfo())\n"
+        ));
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    // (the readings, printed by a last script)
+    engine.state.borrow_mut().output.entries.clear();
+    run("print(table.concat(_G.Readings, \" \"))");
+    if let Some(session) = session {
+        crate::profiler::collect(&lua);
+        let _ = session.finish(crate::profiler::Run::default());
+        let _ = std::fs::remove_dir_all(&out);
+    }
+    engine.state.borrow().output.entries.iter().map(|entry| entry.message.clone()).collect()
+}
+
+/// Hooking the VM for a profile (its interrupt, its allocation callback) allocates nothing on the VM's heap, so what a script
+/// reads of memory is the same with a profile that takes the interrupt as without one: the hooks were written through an
+/// mlua `exec_raw`, whose protected call made a closure on the heap, and the collector's later cycles then began elsewhere
+/// (collectgarbage("count") read 1 KB more at some frames with --profile heap, timeline, time, boundary or hw).
+#[test]
+fn hooking_the_vm_for_a_profile_leaves_what_a_script_reads_of_memory_as_it_was() {
+    let _lock = luau_profile::TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let plain = memory_readings(None);
+    assert_eq!(plain.len(), 1);
+    assert_eq!(plain[0].split(' ').count(), 30, "{plain:?}");
+    for kinds in [crate::profiler::Kinds::TIMELINE, crate::profiler::Kinds::HEAP.with(crate::profiler::Kinds::ALLOC)] {
+        assert_eq!(memory_readings(Some(kinds)), plain, "memory readings with a profile of {:?}", kinds.names());
+    }
+}
+
 /// The profiles share process-wide switches, and a guard's drop turns all of them off: a test that started one while
 /// another ran its own (record/tests.rs's allocation profile, which took no lock) switched the work-clock profile
 /// off under it, and that test read 0 microseconds profiled. Starting a profile now takes `TEST_LOCK` until
