@@ -61,52 +61,59 @@ impl fmt::Display for Vector2int16 {
     }
 }
 
+/// Arithmetic results overflow the 16-bit integer as the constructor's components do: `Vector3int16.new(1, 2, 3) +
+/// Vector3int16.new(32767, 0, 0)` is (-32768, 2, 3) in a playing client (Studio 0.744; addition measured, the other
+/// operators taken to be the same 16-bit arithmetic).
+fn wrap16(v: IVec2) -> IVec2 {
+    IVec2 { x: v.x as i16 as i32, y: v.y as i16 as i32 }
+}
+
 impl ops::Neg for Vector2int16 {
     type Output = Self;
     fn neg(self) -> Self::Output {
-        Vector2int16(-self.0)
+        Vector2int16(wrap16(-self.0))
     }
 }
 
 impl ops::Add for Vector2int16 {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        Vector2int16(self.0 + rhs.0)
+        Vector2int16(wrap16(self.0 + rhs.0))
     }
 }
 
 impl ops::Sub for Vector2int16 {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        Vector2int16(self.0 - rhs.0)
+        Vector2int16(wrap16(self.0 - rhs.0))
     }
 }
 
 impl ops::Mul for Vector2int16 {
     type Output = Vector2int16;
     fn mul(self, rhs: Self) -> Self::Output {
-        Self(self.0 * rhs.0)
+        Self(wrap16(self.0 * rhs.0))
     }
 }
 
 impl ops::Mul<i32> for Vector2int16 {
     type Output = Vector2int16;
     fn mul(self, rhs: i32) -> Self::Output {
-        Self(self.0 * rhs)
+        Self(wrap16(self.0 * rhs))
     }
 }
 
 impl ops::Div for Vector2int16 {
     type Output = Vector2int16;
     fn div(self, rhs: Self) -> Self::Output {
-        Self(self.0 / rhs.0)
+        Self(wrap16(self.0 / rhs.0))
     }
 }
 
 impl ops::Div<i32> for Vector2int16 {
     type Output = Vector2int16;
     fn div(self, rhs: i32) -> Self::Output {
-        Self(self.0 / rhs)
+        Self(wrap16(self.0 / rhs))
     }
 }
 

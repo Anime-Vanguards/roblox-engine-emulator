@@ -576,16 +576,19 @@ impl LuaUserData for CFrame {
 
 impl fmt::Display for CFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // the twelve components in GetComponents' order, 9 significant digits each ("0, 0, 0, -4.37113883e-08, ...";
+        // Studio 0.744)
         let pos = self.position();
         let transposed = self.orientation().transpose();
-        write!(
-            f,
-            "{}, {}, {}, {}",
-            Vector3(pos),
-            Vector3(transposed.x_axis),
-            Vector3(transposed.y_axis),
-            Vector3(transposed.z_axis)
-        )
+        let mut first = true;
+        for value in [pos, transposed.x_axis, transposed.y_axis, transposed.z_axis].iter().flat_map(|v| [v.x, v.y, v.z]) {
+            if !first {
+                f.write_str(", ")?;
+            }
+            first = false;
+            f.write_str(&super::format_g(f64::from(value), 9))?;
+        }
+        Ok(())
     }
 }
 

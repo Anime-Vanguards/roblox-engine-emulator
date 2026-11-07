@@ -79,7 +79,10 @@ impl LuaUserData for Ray {
 
 impl fmt::Display for Ray {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}", Vector3(self.origin), Vector3(self.direction))
+        // "{origin}, {direction}", 9 significant digits each (Studio 0.744)
+        let g = |value: f32| super::format_g(f64::from(value), 9);
+        let (o, d) = (self.origin, self.direction);
+        write!(f, "{{{}, {}, {}}}, {{{}, {}, {}}}", g(o.x), g(o.y), g(o.z), g(d.x), g(d.y), g(d.z))
     }
 }
 

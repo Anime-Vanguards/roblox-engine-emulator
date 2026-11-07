@@ -64,7 +64,9 @@ impl LuaUserData for NumberSequenceKeypoint {
 
 impl fmt::Display for NumberSequenceKeypoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} > {}", self.time, self.value)
+        // "time value envelope " with 6 significant digits and a trailing space (Studio 0.744)
+        let g = |value: f32| super::format_g(f64::from(value), 6);
+        write!(f, "{} {} {} ", g(self.time), g(self.value), g(self.envelope))
     }
 }
 

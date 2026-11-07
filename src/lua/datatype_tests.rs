@@ -297,8 +297,10 @@ assert(Near(Plain.Density, 0.7) and Near(Plain.Friction, 0.3) and Plain.Friction
 
 local Wrapped = Vector3int16.new(32768, 40000, -32769)
 assert(Wrapped.X == -32768 and Wrapped.Y == -25536 and Wrapped.Z == 32767, "components overflow 16 bits")
-local Floored = Vector2int16.new(1.9, -1.5)
-assert(Floored.X == 1 and Floored.Y == -2, "components are rounded down")
+-- (truncated toward zero, as a playing client measures: Studio 0.744; the documentation says rounded down)
+local Truncated = Vector2int16.new(1.9, -1.5)
+assert(Truncated.X == 1 and Truncated.Y == -1, "components are truncated toward zero")
+assert(Vector3int16.new(1, 2, 3) + Vector3int16.new(32767, 0, 0) == Vector3int16.new(-32768, 2, 3), "sums overflow 16 bits")
 assert(Vector3int16.new().X == 0 and tostring(Vector3int16.new(5, 6, 7)) == "5, 6, 7")
 
 -- a Vector3 component by a key known only at run time (the compiler folds constant keys)
@@ -556,4 +558,71 @@ fn cframe_operations_run_natively_and_keep_their_work_clock_charge() {
     // row outside its held-out third (cframe.rs `price`), the rig frame's for the others
     assert_eq!(hundred_calls - none_calls, 100 * (1 + 1 + 21 + 11 + 21 + 26 + 10 + 8 + 10 + 66));
     assert_eq!(hundred_ops - none_ops, 0, "a CFrame operation ran engine Luau");
+}
+
+/// tostring of each datatype, Color3's hex and arithmetic, and the constructors whose results it shows, as a playing client
+/// prints them (Studio 0.744, tools/parity/probes/tostring.luau): 9 significant digits for UDim, Vector2, CFrame, Rect, Ray,
+/// Region3 and PhysicalProperties, 6 for Color3, NumberRange, the sequences and TweenInfo's times, Faces by NormalId value,
+/// Axes by axis only, a DateTime as its milliseconds.
+#[test]
+fn datatypes_print_as_a_playing_client_does() {
+    assert_script(
+        r##"
+        local function Is(Value, Text)
+            local Got = tostring(Value)
+            assert(Got == Text, `{Text} printed as {Got}`)
+        end
+        local Third = 1 / 3
+        Is(UDim.new(Third, 7), "0.333333343, 7")
+        Is(UDim2.new(Third, 7, -2.5, -9), "{0.333333343, 7}, {-2.5, -9}")
+        Is(UDim2.new(1e-7, 0, -0, 1), "{1.00000001e-07, 0}, {-0, 1}")
+        Is(Vector2.new(1e-7, 1e20), "1.00000001e-07, 1.00000002e+20")
+        Is(Vector3int16.new(1.5, -1.5, 2.7), "1, -1, 2")
+        Is(Vector3int16.new(32768, -32769, 65537), "-32768, 32767, 1")
+        Is(CFrame.new(Third, -2.5, 1e20), "0.333333343, -2.5, 1.00000002e+20, 1, 0, 0, 0, 1, 0, 0, 0, 1")
+        Is(Color3.new(Third, 0.1, 2 / 3), "0.333333, 0.1, 0.666667")
+        Is(Color3.new(1e-7, 0.123456789, 1e-20), "1e-07, 0.123457, 1e-20")
+        Is(Rect.new(Third, -2.5, 0.1, 1e20), "0.100000001, -2.5, 0.333333343, 1.00000002e+20")
+        Is(NumberRange.new(Third, 2.5), "0.333333 2.5 ")
+        Is(NumberSequence.new({ NumberSequenceKeypoint.new(0, Third, 0.1), NumberSequenceKeypoint.new(1, -2.5, 0) }), "0 0.333333 0.1 1 -2.5 0 ")
+        Is(NumberSequenceKeypoint.new(0.25, Third, 0.5), "0.25 0.333333 0.5 ")
+        Is(ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(Third, 0.1, 2 / 3)), ColorSequenceKeypoint.new(1, Color3.new(1, 0, 0.25)) }),
+            "0 0.333333 0.1 0.666667 0 1 1 0 0.25 0 ")
+        Is(Ray.new(Vector3.new(Third, -2.5, 0.1), Vector3.new(1e20, -0, 1e-7)), "{0.333333343, -2.5, 0.100000001}, {1.00000002e+20, -0, 1.00000001e-07}")
+        Is(Region3.new(Vector3.new(-Third, -2.5, 0), Vector3.new(1, 2.25, 0.1)), "0.333333313, -0.125, 0.0500000007, 1, 0, 0, 0, 1, 0, 0, 0, 1; 1.33333337, 4.75, 0.100000001")
+        Is(Region3int16.new(Vector3int16.new(-1, 2, 3), Vector3int16.new(4, 5, 6)), "-1, 2, 3; 4, 5, 6")
+        Is(TweenInfo.new(0.1, Enum.EasingStyle.Sine, Enum.EasingDirection.In, -1, true, Third), "Time:0.1 DelayTime:0.333333 RepeatCount:-1 Reverses:True EasingDirection:In EasingStyle:Sine")
+        Is(Axes.new(Enum.NormalId.Left, Enum.NormalId.Top), "X, Y")
+        Is(Faces.new(Enum.NormalId.Top, Enum.NormalId.Left, Enum.NormalId.Back), "Top, Back, Left")
+        Is(PhysicalProperties.new(Enum.Material.Wood), "0.349999994, 0.479999989, 0.200000003, 1, 1, 0.25")
+        Is(PhysicalProperties.new(Third, 0.1, 0.25, 2, 3), "0.333333343, 0.100000001, 0.25, 2, 3, 1")
+        Is(DateTime.fromUnixTimestampMillis(1700000000123), "1700000000123")
+        Is(PathWaypoint.new(Vector3.new(Third, 2, 3), Enum.PathWaypointAction.Jump, "label"), "{0.333333343, 2, 3}, Jump, label")
+        Is(PathWaypoint.new(), "{0, 0, 0}, Walk, ")
+        local Params = RaycastParams.new()
+        Params.FilterDescendantsInstances = { workspace }
+        Params.IgnoreWater = true
+        Is(Params, "RaycastParams{IgnoreWater=true, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={Workspace}}")
+        local Overlap = OverlapParams.new()
+        Overlap.FilterDescendantsInstances = { workspace, workspace }
+        Is(Overlap, "OverlapParams{MaxParts=0, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={2 instances...}}")
+        Is(CatalogSearchParams.new(), "CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}")
+        Is(Path2DControlPoint.new(), "Path2DControlPoint { Position = {0, 0}, {0, 0}, LeftTangent = {0, 0}, {0, 0}, RightTangent = {0, 0}, {0, 0} }")
+        -- Color3: lower-case hex rounded half away from zero, one message for every malformed hex string, no arithmetic
+        local Hexes = {}
+        for _, Color in { Color3.new(0.5, 0.5, 0.5), Color3.new(Third, 2 / 3, 1), Color3.new(-0.1, 1.5, 0.5), Color3.new(0.5 / 255, 1.5 / 255, 2.5 / 255) } do
+            table.insert(Hexes, Color:ToHex())
+        end
+        assert(table.concat(Hexes, " ") == "808080 55aaff 00ff80 010203", table.concat(Hexes, " "))
+        for _, Text in { "ZZZ", "#12", "1234567", "", " #ABC", "#GGGGGG", "\195\132BC" } do
+            local Ok, Message = pcall(Color3.fromHex, Text)
+            assert(not Ok and Message == "Unable to convert characters to hex value", tostring(Message))
+        end
+        for _, Case in { { "add", function(A, B) return A + B end }, { "sub", function(A, B) return A - B end }, { "mul", function(A, B) return A * B end } } do
+            local Ok, Message = pcall(Case[2], Color3.new(0.5, 0.25, 1), Color3.new(0.25, 0.5, 0))
+            assert(not Ok and string.find(tostring(Message), `attempt to perform arithmetic %({Case[1]}%) on Color3$`), tostring(Message))
+        end
+        assert(not pcall(function() return -Color3.new() end) and not pcall(function() return Color3.new() * 2 end))
+        "##,
+    );
 }

@@ -21,12 +21,12 @@ use super::super::*;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vector3int16(pub IVec3);
 
-/// A constructor component as Roblox's documentation describes it: rounded down, and a value
-/// outside [-32768, 32768) overflows the 16-bit integer (32768 is -32768) instead of raising.
-/// Non-finite values are 0 (not measured in Studio).
+/// A constructor component: truncated toward zero (1.5, -1.5, 2.7 make 1, -1, 2), and a value outside
+/// [-32768, 32768) overflows the 16-bit integer (32768 is -32768, 65537 is 1) instead of raising (measured in a playing
+/// client, Studio 0.744). Non-finite values are 0 (not measured in Studio).
 pub(crate) fn int16_component(value: Option<f64>) -> i32 {
     match value {
-        Some(value) if value.is_finite() => i32::from(value.floor() as i64 as i16),
+        Some(value) if value.is_finite() => i32::from(value.trunc() as i64 as i16),
         _ => 0,
     }
 }
@@ -73,52 +73,59 @@ impl fmt::Display for Vector3int16 {
     }
 }
 
+/// Arithmetic results overflow the 16-bit integer as the constructor's components do: `Vector3int16.new(1, 2, 3) +
+/// Vector3int16.new(32767, 0, 0)` is (-32768, 2, 3) in a playing client (Studio 0.744; addition measured, the other
+/// operators taken to be the same 16-bit arithmetic).
+fn wrap16(v: IVec3) -> IVec3 {
+    IVec3 { x: v.x as i16 as i32, y: v.y as i16 as i32, z: v.z as i16 as i32 }
+}
+
 impl ops::Neg for Vector3int16 {
     type Output = Self;
     fn neg(self) -> Self::Output {
-        Vector3int16(-self.0)
+        Vector3int16(wrap16(-self.0))
     }
 }
 
 impl ops::Add for Vector3int16 {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
-        Vector3int16(self.0 + rhs.0)
+        Vector3int16(wrap16(self.0 + rhs.0))
     }
 }
 
 impl ops::Sub for Vector3int16 {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        Vector3int16(self.0 - rhs.0)
+        Vector3int16(wrap16(self.0 - rhs.0))
     }
 }
 
 impl ops::Mul for Vector3int16 {
     type Output = Vector3int16;
     fn mul(self, rhs: Self) -> Self::Output {
-        Self(self.0 * rhs.0)
+        Self(wrap16(self.0 * rhs.0))
     }
 }
 
 impl ops::Mul<i32> for Vector3int16 {
     type Output = Vector3int16;
     fn mul(self, rhs: i32) -> Self::Output {
-        Self(self.0 * rhs)
+        Self(wrap16(self.0 * rhs))
     }
 }
 
 impl ops::Div for Vector3int16 {
     type Output = Vector3int16;
     fn div(self, rhs: Self) -> Self::Output {
-        Self(self.0 / rhs.0)
+        Self(wrap16(self.0 / rhs.0))
     }
 }
 
 impl ops::Div<i32> for Vector3int16 {
     type Output = Vector3int16;
     fn div(self, rhs: i32) -> Self::Output {
-        Self(self.0 / rhs)
+        Self(wrap16(self.0 / rhs))
     }
 }
 

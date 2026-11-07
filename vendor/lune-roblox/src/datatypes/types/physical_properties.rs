@@ -113,14 +113,17 @@ impl LuaUserData for PhysicalProperties {
 
 impl fmt::Display for PhysicalProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // six fields with AcousticAbsorption last, 9 significant digits each ("1, 0.300000012, 0.5, 1, 1, 1"; Studio 0.744)
+        let g = |value: f32| super::format_g(f64::from(value), 9);
         write!(
             f,
-            "{}, {}, {}, {}, {}",
-            self.density,
-            self.friction,
-            self.elasticity,
-            self.friction_weight,
-            self.elasticity_weight
+            "{}, {}, {}, {}, {}, {}",
+            g(self.density),
+            g(self.friction),
+            g(self.elasticity),
+            g(self.friction_weight),
+            g(self.elasticity_weight),
+            g(self.acoustic_absorption)
         )
     }
 }
@@ -153,56 +156,58 @@ impl From<PhysicalProperties> for DomCustomPhysicalProperties {
 
 /*
 
-    NOTE: The material definitions below are generated using the
-    physical_properties_enum_map script in the scripts dir next
-    to src, which can be ran in the Roblox Studio command bar
+    NOTE: The material definitions below are each material's values as a playing Roblox client reads them
+    (PhysicalProperties.new(material) for every Enum.Material item, Studio 0.744: tools/parity/probes/
+    physical_materials.luau in roblox-engine-emulator), each written as the shortest decimal that rounds to the
+    float the client printed. (The table was generated with the physical_properties_enum_map script and rounded
+    to two decimals, which put Basalt's density at 2.69 where Roblox has 2.691 and Water's friction at 0.)
 
 */
 #[rustfmt::skip]
 const MATERIAL_ENUM_MAP: &[(&str, f32, f32, f32, f32, f32, f32)] = &[
-    ("Plastic",       0.70, 0.30, 0.50, 1.00, 1.00, 0.30),
-    ("SmoothPlastic", 0.70, 0.20, 0.50, 1.00, 1.00, 0.20),
-    ("Neon",          0.70, 0.30, 0.20, 1.00, 1.00, 0.30),
-    ("Wood",          0.35, 0.48, 0.20, 1.00, 1.00, 0.25),
-    ("WoodPlanks",    0.35, 0.48, 0.20, 1.00, 1.00, 0.25),
-    ("Marble",        2.56, 0.20, 0.17, 1.00, 1.00, 0.01),
-    ("Slate",         2.69, 0.40, 0.20, 1.00, 1.00, 0.03),
-    ("Concrete",      2.40, 0.70, 0.20, 0.30, 1.00, 0.05),
-    ("Granite",       2.69, 0.40, 0.20, 1.00, 1.00, 0.20),
-    ("Brick",         1.92, 0.80, 0.15, 0.30, 1.00, 0.35),
-    ("Pebble",        2.40, 0.40, 0.17, 1.00, 1.50, 0.40),
-    ("Cobblestone",   2.69, 0.50, 0.17, 1.00, 1.00, 0.45),
-    ("Rock",          2.69, 0.50, 0.17, 1.00, 1.00, 0.15),
-    ("Sandstone",     2.69, 0.50, 0.15, 5.00, 1.00, 0.20),
-    ("Basalt",        2.69, 0.70, 0.15, 0.30, 1.00, 0.20),
-    ("CrackedLava",   2.69, 0.65, 0.15, 1.00, 1.00, 0.35),
-    ("Limestone",     2.69, 0.50, 0.15, 1.00, 1.00, 0.15),
-    ("Pavement",      2.69, 0.50, 0.17, 0.30, 1.00, 0.60),
-    ("CorrodedMetal", 7.85, 0.70, 0.20, 1.00, 1.00, 0.15),
-    ("DiamondPlate",  7.85, 0.35, 0.25, 1.00, 1.00, 0.05),
-    ("Foil",          2.70, 0.40, 0.25, 1.00, 1.00, 0.10),
-    ("Metal",         7.85, 0.40, 0.25, 1.00, 1.00, 0.10),
-    ("Grass",         0.90, 0.40, 0.10, 1.00, 1.50, 0.70),
-    ("LeafyGrass",    0.90, 0.40, 0.10, 2.00, 2.00, 0.75),
-    ("Sand",          1.60, 0.50, 0.05, 5.00, 2.50, 0.55),
-    ("Fabric",        0.70, 0.35, 0.05, 1.00, 1.00, 0.65),
-    ("Snow",          0.90, 0.30, 0.03, 3.00, 4.00, 0.80),
-    ("Mud",           0.90, 0.30, 0.07, 3.00, 4.00, 0.65),
-    ("Ground",        0.90, 0.45, 0.10, 1.00, 1.00, 0.60),
-    ("Asphalt",       2.36, 0.80, 0.20, 0.30, 1.00, 0.40),
-    ("Salt",          2.16, 0.50, 0.05, 1.00, 1.00, 0.15),
-    ("Ice",           0.92, 0.02, 0.15, 3.00, 1.00, 0.20),
-    ("Glacier",       0.92, 0.05, 0.15, 2.00, 1.00, 0.70),
-    ("Glass",         2.40, 0.25, 0.20, 1.00, 1.00, 0.10),
-    ("ForceField",    2.40, 0.25, 0.20, 1.00, 1.00, 0.00),
-    ("Air",           0.01, 0.01, 0.01, 1.00, 1.00, 0.01),
-    ("Water",         1.00, 0.00, 0.01, 1.00, 1.00, 0.01),
-    ("Cardboard",     0.70, 0.50, 0.05, 1.00, 2.00, 0.55),
-    ("Carpet",        1.10, 0.40, 0.25, 1.00, 2.00, 0.65),
-    ("CeramicTiles",  2.40, 0.51, 0.20, 1.00, 1.00, 0.04),
-    ("ClayRoofTiles", 2.00, 0.51, 0.20, 1.00, 1.00, 0.30),
-    ("RoofShingles",  2.36, 0.80, 0.20, 0.30, 1.00, 0.30),
-    ("Leather",       0.86, 0.35, 0.25, 1.00, 1.00, 0.65),
-    ("Plaster",       0.75, 0.60, 0.20, 0.30, 1.00, 0.30),
-    ("Rubber",        1.30, 1.50, 0.95, 3.00, 2.00, 0.50),
+    ("Plastic",          0.7,    0.3,    0.5,    1.0,    1.0,    0.3),
+    ("SmoothPlastic",    0.7,    0.2,    0.5,    1.0,    1.0,    0.2),
+    ("Neon",             0.7,    0.3,    0.2,    1.0,    1.0,    0.3),
+    ("Wood",            0.35,   0.48,    0.2,    1.0,    1.0,   0.25),
+    ("WoodPlanks",      0.35,   0.48,    0.2,    1.0,    1.0,   0.25),
+    ("Marble",         2.563,    0.2,   0.17,    1.0,    1.0,   0.01),
+    ("Basalt",         2.691,    0.7,   0.15,    0.3,    1.0,    0.2),
+    ("Slate",          2.691,    0.4,    0.2,    1.0,    1.0,   0.03),
+    ("CrackedLava",    2.691,   0.65,   0.15,    1.0,    1.0,   0.35),
+    ("Concrete",       2.403,    0.7,    0.2,    0.3,    1.0,   0.05),
+    ("Limestone",      2.691,    0.5,   0.15,    1.0,    1.0,   0.15),
+    ("Granite",        2.691,    0.4,    0.2,    1.0,    1.0,    0.2),
+    ("Pavement",       2.691,    0.5,   0.17,    0.3,    1.0,    0.6),
+    ("Brick",          1.922,    0.8,   0.15,    0.3,    1.0,   0.35),
+    ("Pebble",         2.403,    0.4,   0.17,    1.0,    1.5,    0.4),
+    ("Cobblestone",    2.691,    0.5,   0.17,    1.0,    1.0,   0.45),
+    ("Rock",           2.691,    0.5,   0.17,    1.0,    1.0,   0.15),
+    ("Sandstone",      2.691,    0.5,   0.15,    5.0,    1.0,    0.2),
+    ("CorrodedMetal",   7.85,    0.7,    0.2,    1.0,    1.0,   0.15),
+    ("DiamondPlate",    7.85,   0.35,   0.25,    1.0,    1.0,   0.05),
+    ("Foil",             2.7,    0.4,   0.25,    1.0,    1.0,    0.1),
+    ("Metal",           7.85,    0.4,   0.25,    1.0,    1.0,    0.1),
+    ("Grass",            0.9,    0.4,    0.1,    1.0,    1.5,    0.7),
+    ("LeafyGrass",       0.9,    0.4,    0.1,    2.0,    2.0,   0.75),
+    ("Sand",           1.602,    0.5,   0.05,    5.0,    2.5,   0.55),
+    ("Fabric",           0.7,   0.35,   0.05,    1.0,    1.0,   0.65),
+    ("Snow",             0.9,    0.3,   0.03,    3.0,    4.0,    0.8),
+    ("Mud",              0.9,    0.3,   0.07,    3.0,    4.0,   0.65),
+    ("Ground",           0.9,   0.45,    0.1,    1.0,    1.0,    0.6),
+    ("Asphalt",         2.36,    0.8,    0.2,    0.3,    1.0,    0.4),
+    ("Salt",           2.165,    0.5,   0.05,    1.0,    1.0,   0.15),
+    ("Ice",            0.919,   0.02,   0.15,    3.0,    1.0,    0.2),
+    ("Glacier",        0.919,   0.05,   0.15,    2.0,    1.0,    0.7),
+    ("Glass",          2.403,   0.25,    0.2,    1.0,    1.0,    0.1),
+    ("ForceField",     2.403,   0.25,    0.2,    1.0,    1.0,    0.0),
+    ("Air",             0.01,   0.01,   0.01,    1.0,    1.0,   0.01),
+    ("Water",            1.0,  0.005,   0.01,    1.0,    1.0,   0.01),
+    ("Cardboard",        0.7,    0.5,   0.05,    1.0,    2.0,   0.55),
+    ("Carpet",           1.1,    0.4,   0.25,    1.0,    2.0,   0.65),
+    ("CeramicTiles",     2.4,   0.51,    0.2,    1.0,    1.0,   0.04),
+    ("ClayRoofTiles",    2.0,   0.51,    0.2,    1.0,    1.0,    0.3),
+    ("RoofShingles",    2.36,    0.8,    0.2,    0.3,    1.0,    0.3),
+    ("Leather",         0.86,   0.35,   0.25,    1.0,    1.0,   0.65),
+    ("Plaster",         0.75,    0.6,    0.2,    0.3,    1.0,    0.3),
+    ("Rubber",           1.3,    1.5,   0.95,    3.0,    2.0,    0.5),
 ];

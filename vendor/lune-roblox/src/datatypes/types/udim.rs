@@ -83,7 +83,8 @@ impl Default for UDim {
 
 impl fmt::Display for UDim {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}", self.scale, self.offset)
+        // Roblox prints the scale with 9 significant digits ("0.333333343, 7"; Studio 0.744)
+        write!(f, "{}, {}", super::format_g(f64::from(self.scale), 9), self.offset)
     }
 }
 

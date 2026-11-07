@@ -65,7 +65,9 @@ impl LuaExportsTable for Color3 {
 
         let color3_from_hex = |_: &Lua, hex: String| {
             let trimmed = hex.trim_start_matches('#').to_ascii_uppercase();
-            let chars = if trimmed.len() == 3 {
+            let chars = if !trimmed.is_ascii() {
+                return Err(LuaError::RuntimeError("Unable to convert characters to hex value".to_string()));
+            } else if trimmed.len() == 3 {
                 (
                     u8::from_str_radix(&trimmed[..1].repeat(2), 16),
                     u8::from_str_radix(&trimmed[1..2].repeat(2), 16),
@@ -78,11 +80,8 @@ impl LuaExportsTable for Color3 {
                     u8::from_str_radix(&trimmed[4..6], 16),
                 )
             } else {
-                return Err(LuaError::RuntimeError(format!(
-                    "Hex color string must be 3 or 6 characters long, got {} character{}",
-                    trimmed.len(),
-                    if trimmed.len() == 1 { "" } else { "s" }
-                )));
+                // every malformed string, of any length, is this one message in Roblox (Studio 0.744)
+                return Err(LuaError::RuntimeError("Unable to convert characters to hex value".to_string()));
             };
             match chars {
                 (Ok(r), Ok(g), Ok(b)) => Ok(Color3 {
@@ -90,9 +89,7 @@ impl LuaExportsTable for Color3 {
                     g: (g as f32) / 255f32,
                     b: (b as f32) / 255f32,
                 }),
-                _ => Err(LuaError::RuntimeError(format!(
-                    "Hex color string '{trimmed}' contains invalid character",
-                ))),
+                _ => Err(LuaError::RuntimeError("Unable to convert characters to hex value".to_string())),
             }
         };
 
@@ -175,25 +172,19 @@ impl LuaUserData for Color3 {
 
             Ok((hue, sat, max))
         });
+        // Lower-case hex of each channel times 255, rounded half away from zero and clamped to 0..255: 0.5 is 80,
+        // 0.5 / 255 is 01, 2.5 / 255 is 03, -0.1 is 00 (Studio 0.744)
         methods.add_method("ToHex", |_, this, ()| {
-            Ok(format!(
-                "{:02X}{:02X}{:02X}",
-                (this.r * 255.0).clamp(u8::MIN as f32, u8::MAX as f32) as u8,
-                (this.g * 255.0).clamp(u8::MIN as f32, u8::MAX as f32) as u8,
-                (this.b * 255.0).clamp(u8::MIN as f32, u8::MAX as f32) as u8,
-            ))
+            let byte = |value: f32| (value * 255.0).round().clamp(u8::MIN as f32, u8::MAX as f32) as u8;
+            Ok(format!("{:02x}{:02x}{:02x}", byte(this.r), byte(this.g), byte(this.b)))
         });
-        // Metamethods
+        // Metamethods (Color3 has no arithmetic in Roblox: `a + b`, `a * 2` and `-a` raise "attempt to perform
+        // arithmetic (add) on Color3", measured in Studio 0.744)
         methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
             super::charge_host_nanos(lua, super::datatype_price::EQ);
             userdata_impl_eq(lua, this, value)
         });
         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
-        methods.add_meta_method(LuaMetaMethod::Mul, userdata_impl_mul_f32);
-        methods.add_meta_method(LuaMetaMethod::Div, userdata_impl_div_f32);
     }
 }
 
@@ -209,7 +200,9 @@ impl Default for Color3 {
 
 impl fmt::Display for Color3 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}, {}", self.r, self.g, self.b)
+        // 6 significant digits ("0.333333, 0.1, 0.666667"; Studio 0.744)
+        let g = |value: f32| super::format_g(f64::from(value), 6);
+        write!(f, "{}, {}, {}", g(self.r), g(self.g), g(self.b))
     }
 }
 

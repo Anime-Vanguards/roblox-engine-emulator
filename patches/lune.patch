@@ -2316,3 +2316,607 @@
      pub const FROM_AXIS_ANGLE: i32 = 48;
      pub const LOOK_AT: i32 = 55;
  }
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -576,16 +576,19 @@ impl LuaUserData for CFrame {
+ 
+ impl fmt::Display for CFrame {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        // the twelve components in GetComponents' order, 9 significant digits each ("0, 0, 0, -4.37113883e-08, ...";
++        // Studio 0.744)
+         let pos = self.position();
+         let transposed = self.orientation().transpose();
+-        write!(
+-            f,
+-            "{}, {}, {}, {}",
+-            Vector3(pos),
+-            Vector3(transposed.x_axis),
+-            Vector3(transposed.y_axis),
+-            Vector3(transposed.z_axis)
+-        )
++        let mut first = true;
++        for value in [pos, transposed.x_axis, transposed.y_axis, transposed.z_axis].iter().flat_map(|v| [v.x, v.y, v.z]) {
++            if !first {
++                f.write_str(", ")?;
++            }
++            first = false;
++            f.write_str(&super::format_g(f64::from(value), 9))?;
++        }
++        Ok(())
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/color3.rs
++++ b/crates/lune-roblox/src/datatypes/types/color3.rs
+@@ -65,7 +65,9 @@ impl LuaExportsTable for Color3 {
+ 
+         let color3_from_hex = |_: &Lua, hex: String| {
+             let trimmed = hex.trim_start_matches('#').to_ascii_uppercase();
+-            let chars = if trimmed.len() == 3 {
++            let chars = if !trimmed.is_ascii() {
++                return Err(LuaError::RuntimeError("Unable to convert characters to hex value".to_string()));
++            } else if trimmed.len() == 3 {
+                 (
+                     u8::from_str_radix(&trimmed[..1].repeat(2), 16),
+                     u8::from_str_radix(&trimmed[1..2].repeat(2), 16),
+@@ -78,11 +80,8 @@ impl LuaExportsTable for Color3 {
+                     u8::from_str_radix(&trimmed[4..6], 16),
+                 )
+             } else {
+-                return Err(LuaError::RuntimeError(format!(
+-                    "Hex color string must be 3 or 6 characters long, got {} character{}",
+-                    trimmed.len(),
+-                    if trimmed.len() == 1 { "" } else { "s" }
+-                )));
++                // every malformed string, of any length, is this one message in Roblox (Studio 0.744)
++                return Err(LuaError::RuntimeError("Unable to convert characters to hex value".to_string()));
+             };
+             match chars {
+                 (Ok(r), Ok(g), Ok(b)) => Ok(Color3 {
+@@ -90,9 +89,7 @@ impl LuaExportsTable for Color3 {
+                     g: (g as f32) / 255f32,
+                     b: (b as f32) / 255f32,
+                 }),
+-                _ => Err(LuaError::RuntimeError(format!(
+-                    "Hex color string '{trimmed}' contains invalid character",
+-                ))),
++                _ => Err(LuaError::RuntimeError("Unable to convert characters to hex value".to_string())),
+             }
+         };
+ 
+@@ -175,25 +172,19 @@ impl LuaUserData for Color3 {
+ 
+             Ok((hue, sat, max))
+         });
++        // Lower-case hex of each channel times 255, rounded half away from zero and clamped to 0..255: 0.5 is 80,
++        // 0.5 / 255 is 01, 2.5 / 255 is 03, -0.1 is 00 (Studio 0.744)
+         methods.add_method("ToHex", |_, this, ()| {
+-            Ok(format!(
+-                "{:02X}{:02X}{:02X}",
+-                (this.r * 255.0).clamp(u8::MIN as f32, u8::MAX as f32) as u8,
+-                (this.g * 255.0).clamp(u8::MIN as f32, u8::MAX as f32) as u8,
+-                (this.b * 255.0).clamp(u8::MIN as f32, u8::MAX as f32) as u8,
+-            ))
++            let byte = |value: f32| (value * 255.0).round().clamp(u8::MIN as f32, u8::MAX as f32) as u8;
++            Ok(format!("{:02x}{:02x}{:02x}", byte(this.r), byte(this.g), byte(this.b)))
+         });
+-        // Metamethods
++        // Metamethods (Color3 has no arithmetic in Roblox: `a + b`, `a * 2` and `-a` raise "attempt to perform
++        // arithmetic (add) on Color3", measured in Studio 0.744)
+         methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
+             super::charge_host_nanos(lua, super::datatype_price::EQ);
+             userdata_impl_eq(lua, this, value)
+         });
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
+-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
+-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
+-        methods.add_meta_method(LuaMetaMethod::Mul, userdata_impl_mul_f32);
+-        methods.add_meta_method(LuaMetaMethod::Div, userdata_impl_div_f32);
+     }
+ }
+ 
+@@ -209,7 +200,9 @@ impl Default for Color3 {
+ 
+ impl fmt::Display for Color3 {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}, {}", self.r, self.g, self.b)
++        // 6 significant digits ("0.333333, 0.1, 0.666667"; Studio 0.744)
++        let g = |value: f32| super::format_g(f64::from(value), 6);
++        write!(f, "{}, {}, {}", g(self.r), g(self.g), g(self.b))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence.rs
+@@ -106,12 +106,9 @@ impl LuaUserData for ColorSequence {
+ 
+ impl fmt::Display for ColorSequence {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        for (index, keypoint) in self.keypoints.iter().enumerate() {
+-            if index < self.keypoints.len() - 1 {
+-                write!(f, "{keypoint}, ")?;
+-            } else {
+-                write!(f, "{keypoint}")?;
+-            }
++        // each keypoint as it prints alone, one after another (Studio 0.744)
++        for keypoint in &self.keypoints {
++            write!(f, "{keypoint}")?;
+         }
+         Ok(())
+     }
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
+@@ -57,7 +57,9 @@ impl LuaUserData for ColorSequenceKeypoint {
+ 
+ impl fmt::Display for ColorSequenceKeypoint {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{} > {}", self.time, self.color)
++        // "time r g b 0 " with 6 significant digits, an envelope of 0 and a trailing space (Studio 0.744)
++        let g = |value: f32| super::format_g(f64::from(value), 6);
++        write!(f, "{} {} {} {} 0 ", g(self.time), g(self.color.r), g(self.color.g), g(self.color.b))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/mod.rs
++++ b/crates/lune-roblox/src/datatypes/types/mod.rs
+@@ -53,3 +53,37 @@ pub use vector2::Vector2;
+ pub use vector2int16::Vector2int16;
+ pub use vector3::{Vector3, VectorArg, charge_host_calls, charge_host_nanos, datatype_price, native_vector};
+ pub use vector3int16::Vector3int16;
++
++/// A number as C's `printf("%.*g", precision, value)` writes it, the way Roblox's datatypes print their components in
++/// `tostring`: `precision` significant digits rounded from the exact value, trailing zeros dropped, the exponent form
++/// (`1.00000002e+20`, `1e-07`, two exponent digits at least) when the exponent is below -4 or at least `precision`,
++/// and `-0` for negative zero. Measured in a playing client (Studio 0.744): CFrame, Vector2, UDim, Rect, Ray and
++/// PhysicalProperties print 9 digits (`0.333333343`), Color3, NumberRange, the sequences and TweenInfo's times 6
++/// (`0.333333`). Not-a-number and infinities print as Luau's tostring does.
++pub fn format_g(value: f64, precision: usize) -> String {
++    let precision = precision.max(1);
++    if value.is_nan() {
++        return if value.is_sign_negative() { "-nan".into() } else { "nan".into() };
++    }
++    if value.is_infinite() {
++        return if value < 0.0 { "-inf".into() } else { "inf".into() };
++    }
++    if value == 0.0 {
++        return if value.is_sign_negative() { "-0".into() } else { "0".into() };
++    }
++    // the exponent of the value rounded to `precision` digits decides the style, as C's %g does
++    let scientific = format!("{:.*e}", precision - 1, value);
++    let (mantissa, exponent) = scientific.split_once('e').expect("an exponent");
++    let exponent: i32 = exponent.parse().expect("a decimal exponent");
++    if exponent < -4 || exponent >= precision as i32 {
++        let mantissa = trim_fraction(mantissa);
++        let sign = if exponent < 0 { '-' } else { '+' };
++        return format!("{mantissa}e{sign}{:02}", exponent.unsigned_abs());
++    }
++    let decimals = (precision as i32 - 1 - exponent).max(0) as usize;
++    trim_fraction(&format!("{value:.decimals$}")).to_string()
++}
++
++fn trim_fraction(text: &str) -> &str {
++    if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.') } else { text }
++}
+--- a/crates/lune-roblox/src/datatypes/types/number_range.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_range.rs
+@@ -54,7 +54,8 @@ impl LuaUserData for NumberRange {
+ 
+ impl fmt::Display for NumberRange {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", self.min, self.max)
++        // "min max " with 6 significant digits and a trailing space (Studio 0.744)
++        write!(f, "{} {} ", super::format_g(f64::from(self.min), 6), super::format_g(f64::from(self.max), 6))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence.rs
+@@ -157,12 +157,9 @@ impl LuaUserData for NumberSequence {
+ 
+ impl fmt::Display for NumberSequence {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        for (index, keypoint) in self.keypoints.iter().enumerate() {
+-            if index < self.keypoints.len() - 1 {
+-                write!(f, "{keypoint}, ")?;
+-            } else {
+-                write!(f, "{keypoint}")?;
+-            }
++        // each keypoint as it prints alone, one after another ("0 0.333333 0.1 0.5 1e-07 1e+20 "; Studio 0.744)
++        for keypoint in &self.keypoints {
++            write!(f, "{keypoint}")?;
+         }
+         Ok(())
+     }
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
+@@ -64,7 +64,9 @@ impl LuaUserData for NumberSequenceKeypoint {
+ 
+ impl fmt::Display for NumberSequenceKeypoint {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{} > {}", self.time, self.value)
++        // "time value envelope " with 6 significant digits and a trailing space (Studio 0.744)
++        let g = |value: f32| super::format_g(f64::from(value), 6);
++        write!(f, "{} {} {} ", g(self.time), g(self.value), g(self.envelope))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/physical_properties.rs
++++ b/crates/lune-roblox/src/datatypes/types/physical_properties.rs
+@@ -113,14 +113,17 @@ impl LuaUserData for PhysicalProperties {
+ 
+ impl fmt::Display for PhysicalProperties {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        // six fields with AcousticAbsorption last, 9 significant digits each ("1, 0.300000012, 0.5, 1, 1, 1"; Studio 0.744)
++        let g = |value: f32| super::format_g(f64::from(value), 9);
+         write!(
+             f,
+-            "{}, {}, {}, {}, {}",
+-            self.density,
+-            self.friction,
+-            self.elasticity,
+-            self.friction_weight,
+-            self.elasticity_weight
++            "{}, {}, {}, {}, {}, {}",
++            g(self.density),
++            g(self.friction),
++            g(self.elasticity),
++            g(self.friction_weight),
++            g(self.elasticity_weight),
++            g(self.acoustic_absorption)
+         )
+     }
+ }
+@@ -153,56 +156,58 @@ impl From<PhysicalProperties> for DomCustomPhysicalProperties {
+ 
+ /*
+ 
+-    NOTE: The material definitions below are generated using the
+-    physical_properties_enum_map script in the scripts dir next
+-    to src, which can be ran in the Roblox Studio command bar
++    NOTE: The material definitions below are each material's values as a playing Roblox client reads them
++    (PhysicalProperties.new(material) for every Enum.Material item, Studio 0.744: tools/parity/probes/
++    physical_materials.luau in roblox-engine-emulator), each written as the shortest decimal that rounds to the
++    float the client printed. (The table was generated with the physical_properties_enum_map script and rounded
++    to two decimals, which put Basalt's density at 2.69 where Roblox has 2.691 and Water's friction at 0.)
+ 
+ */
+ #[rustfmt::skip]
+ const MATERIAL_ENUM_MAP: &[(&str, f32, f32, f32, f32, f32, f32)] = &[
+-    ("Plastic",       0.70, 0.30, 0.50, 1.00, 1.00, 0.30),
+-    ("SmoothPlastic", 0.70, 0.20, 0.50, 1.00, 1.00, 0.20),
+-    ("Neon",          0.70, 0.30, 0.20, 1.00, 1.00, 0.30),
+-    ("Wood",          0.35, 0.48, 0.20, 1.00, 1.00, 0.25),
+-    ("WoodPlanks",    0.35, 0.48, 0.20, 1.00, 1.00, 0.25),
+-    ("Marble",        2.56, 0.20, 0.17, 1.00, 1.00, 0.01),
+-    ("Slate",         2.69, 0.40, 0.20, 1.00, 1.00, 0.03),
+-    ("Concrete",      2.40, 0.70, 0.20, 0.30, 1.00, 0.05),
+-    ("Granite",       2.69, 0.40, 0.20, 1.00, 1.00, 0.20),
+-    ("Brick",         1.92, 0.80, 0.15, 0.30, 1.00, 0.35),
+-    ("Pebble",        2.40, 0.40, 0.17, 1.00, 1.50, 0.40),
+-    ("Cobblestone",   2.69, 0.50, 0.17, 1.00, 1.00, 0.45),
+-    ("Rock",          2.69, 0.50, 0.17, 1.00, 1.00, 0.15),
+-    ("Sandstone",     2.69, 0.50, 0.15, 5.00, 1.00, 0.20),
+-    ("Basalt",        2.69, 0.70, 0.15, 0.30, 1.00, 0.20),
+-    ("CrackedLava",   2.69, 0.65, 0.15, 1.00, 1.00, 0.35),
+-    ("Limestone",     2.69, 0.50, 0.15, 1.00, 1.00, 0.15),
+-    ("Pavement",      2.69, 0.50, 0.17, 0.30, 1.00, 0.60),
+-    ("CorrodedMetal", 7.85, 0.70, 0.20, 1.00, 1.00, 0.15),
+-    ("DiamondPlate",  7.85, 0.35, 0.25, 1.00, 1.00, 0.05),
+-    ("Foil",          2.70, 0.40, 0.25, 1.00, 1.00, 0.10),
+-    ("Metal",         7.85, 0.40, 0.25, 1.00, 1.00, 0.10),
+-    ("Grass",         0.90, 0.40, 0.10, 1.00, 1.50, 0.70),
+-    ("LeafyGrass",    0.90, 0.40, 0.10, 2.00, 2.00, 0.75),
+-    ("Sand",          1.60, 0.50, 0.05, 5.00, 2.50, 0.55),
+-    ("Fabric",        0.70, 0.35, 0.05, 1.00, 1.00, 0.65),
+-    ("Snow",          0.90, 0.30, 0.03, 3.00, 4.00, 0.80),
+-    ("Mud",           0.90, 0.30, 0.07, 3.00, 4.00, 0.65),
+-    ("Ground",        0.90, 0.45, 0.10, 1.00, 1.00, 0.60),
+-    ("Asphalt",       2.36, 0.80, 0.20, 0.30, 1.00, 0.40),
+-    ("Salt",          2.16, 0.50, 0.05, 1.00, 1.00, 0.15),
+-    ("Ice",           0.92, 0.02, 0.15, 3.00, 1.00, 0.20),
+-    ("Glacier",       0.92, 0.05, 0.15, 2.00, 1.00, 0.70),
+-    ("Glass",         2.40, 0.25, 0.20, 1.00, 1.00, 0.10),
+-    ("ForceField",    2.40, 0.25, 0.20, 1.00, 1.00, 0.00),
+-    ("Air",           0.01, 0.01, 0.01, 1.00, 1.00, 0.01),
+-    ("Water",         1.00, 0.00, 0.01, 1.00, 1.00, 0.01),
+-    ("Cardboard",     0.70, 0.50, 0.05, 1.00, 2.00, 0.55),
+-    ("Carpet",        1.10, 0.40, 0.25, 1.00, 2.00, 0.65),
+-    ("CeramicTiles",  2.40, 0.51, 0.20, 1.00, 1.00, 0.04),
+-    ("ClayRoofTiles", 2.00, 0.51, 0.20, 1.00, 1.00, 0.30),
+-    ("RoofShingles",  2.36, 0.80, 0.20, 0.30, 1.00, 0.30),
+-    ("Leather",       0.86, 0.35, 0.25, 1.00, 1.00, 0.65),
+-    ("Plaster",       0.75, 0.60, 0.20, 0.30, 1.00, 0.30),
+-    ("Rubber",        1.30, 1.50, 0.95, 3.00, 2.00, 0.50),
++    ("Plastic",          0.7,    0.3,    0.5,    1.0,    1.0,    0.3),
++    ("SmoothPlastic",    0.7,    0.2,    0.5,    1.0,    1.0,    0.2),
++    ("Neon",             0.7,    0.3,    0.2,    1.0,    1.0,    0.3),
++    ("Wood",            0.35,   0.48,    0.2,    1.0,    1.0,   0.25),
++    ("WoodPlanks",      0.35,   0.48,    0.2,    1.0,    1.0,   0.25),
++    ("Marble",         2.563,    0.2,   0.17,    1.0,    1.0,   0.01),
++    ("Basalt",         2.691,    0.7,   0.15,    0.3,    1.0,    0.2),
++    ("Slate",          2.691,    0.4,    0.2,    1.0,    1.0,   0.03),
++    ("CrackedLava",    2.691,   0.65,   0.15,    1.0,    1.0,   0.35),
++    ("Concrete",       2.403,    0.7,    0.2,    0.3,    1.0,   0.05),
++    ("Limestone",      2.691,    0.5,   0.15,    1.0,    1.0,   0.15),
++    ("Granite",        2.691,    0.4,    0.2,    1.0,    1.0,    0.2),
++    ("Pavement",       2.691,    0.5,   0.17,    0.3,    1.0,    0.6),
++    ("Brick",          1.922,    0.8,   0.15,    0.3,    1.0,   0.35),
++    ("Pebble",         2.403,    0.4,   0.17,    1.0,    1.5,    0.4),
++    ("Cobblestone",    2.691,    0.5,   0.17,    1.0,    1.0,   0.45),
++    ("Rock",           2.691,    0.5,   0.17,    1.0,    1.0,   0.15),
++    ("Sandstone",      2.691,    0.5,   0.15,    5.0,    1.0,    0.2),
++    ("CorrodedMetal",   7.85,    0.7,    0.2,    1.0,    1.0,   0.15),
++    ("DiamondPlate",    7.85,   0.35,   0.25,    1.0,    1.0,   0.05),
++    ("Foil",             2.7,    0.4,   0.25,    1.0,    1.0,    0.1),
++    ("Metal",           7.85,    0.4,   0.25,    1.0,    1.0,    0.1),
++    ("Grass",            0.9,    0.4,    0.1,    1.0,    1.5,    0.7),
++    ("LeafyGrass",       0.9,    0.4,    0.1,    2.0,    2.0,   0.75),
++    ("Sand",           1.602,    0.5,   0.05,    5.0,    2.5,   0.55),
++    ("Fabric",           0.7,   0.35,   0.05,    1.0,    1.0,   0.65),
++    ("Snow",             0.9,    0.3,   0.03,    3.0,    4.0,    0.8),
++    ("Mud",              0.9,    0.3,   0.07,    3.0,    4.0,   0.65),
++    ("Ground",           0.9,   0.45,    0.1,    1.0,    1.0,    0.6),
++    ("Asphalt",         2.36,    0.8,    0.2,    0.3,    1.0,    0.4),
++    ("Salt",           2.165,    0.5,   0.05,    1.0,    1.0,   0.15),
++    ("Ice",            0.919,   0.02,   0.15,    3.0,    1.0,    0.2),
++    ("Glacier",        0.919,   0.05,   0.15,    2.0,    1.0,    0.7),
++    ("Glass",          2.403,   0.25,    0.2,    1.0,    1.0,    0.1),
++    ("ForceField",     2.403,   0.25,    0.2,    1.0,    1.0,    0.0),
++    ("Air",             0.01,   0.01,   0.01,    1.0,    1.0,   0.01),
++    ("Water",            1.0,  0.005,   0.01,    1.0,    1.0,   0.01),
++    ("Cardboard",        0.7,    0.5,   0.05,    1.0,    2.0,   0.55),
++    ("Carpet",           1.1,    0.4,   0.25,    1.0,    2.0,   0.65),
++    ("CeramicTiles",     2.4,   0.51,    0.2,    1.0,    1.0,   0.04),
++    ("ClayRoofTiles",    2.0,   0.51,    0.2,    1.0,    1.0,    0.3),
++    ("RoofShingles",    2.36,    0.8,    0.2,    0.3,    1.0,    0.3),
++    ("Leather",         0.86,   0.35,   0.25,    1.0,    1.0,   0.65),
++    ("Plaster",         0.75,    0.6,    0.2,    0.3,    1.0,    0.3),
++    ("Rubber",           1.3,    1.5,   0.95,    3.0,    2.0,    0.5),
+ ];
+--- a/crates/lune-roblox/src/datatypes/types/ray.rs
++++ b/crates/lune-roblox/src/datatypes/types/ray.rs
+@@ -79,7 +79,10 @@ impl LuaUserData for Ray {
+ 
+ impl fmt::Display for Ray {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", Vector3(self.origin), Vector3(self.direction))
++        // "{origin}, {direction}", 9 significant digits each (Studio 0.744)
++        let g = |value: f32| super::format_g(f64::from(value), 9);
++        let (o, d) = (self.origin, self.direction);
++        write!(f, "{{{}, {}, {}}}, {{{}, {}, {}}}", g(o.x), g(o.y), g(o.z), g(d.x), g(d.y), g(d.z))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/rect.rs
++++ b/crates/lune-roblox/src/datatypes/types/rect.rs
+@@ -85,7 +85,9 @@ impl LuaUserData for Rect {
+ 
+ impl fmt::Display for Rect {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", self.min, self.max)
++        // "min.X, min.Y, max.X, max.Y" with 9 significant digits each (Studio 0.744)
++        let g = |value: f32| super::format_g(f64::from(value), 9);
++        write!(f, "{}, {}, {}, {}", g(self.min.x), g(self.min.y), g(self.max.x), g(self.max.y))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/region3.rs
++++ b/crates/lune-roblox/src/datatypes/types/region3.rs
+@@ -64,7 +64,12 @@ impl LuaUserData for Region3 {
+ 
+ impl fmt::Display for Region3 {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", Vector3(self.min), Vector3(self.max))
++        // its CFrame (the centre, (min + max) * 0.5 in floats, no rotation) and its Size (max - min), 9 significant
++        // digits each: "0.333333313, -0.125, 0.0500000007, 1, 0, 0, 0, 1, 0, 0, 0, 1; 1.33333337, 4.75, 0.100000001" for
++        // Region3.new((-1/3, -2.5, 0), (1, 2.25, 0.1)) (Studio 0.744)
++        let g = |value: f32| super::format_g(f64::from(value), 9);
++        let (center, size) = ((self.min + self.max) * 0.5, self.max - self.min);
++        write!(f, "{}, {}, {}, 1, 0, 0, 0, 1, 0, 0, 0, 1; {}, {}, {}", g(center.x), g(center.y), g(center.z), g(size.x), g(size.y), g(size.z))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/region3int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/region3int16.rs
+@@ -54,7 +54,8 @@ impl LuaUserData for Region3int16 {
+ 
+ impl fmt::Display for Region3int16 {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", Vector3int16(self.min), Vector3int16(self.max))
++        // "min; max" ("-1, 2, 3; 4, 5, 6"; Studio 0.744)
++        write!(f, "{}; {}", Vector3int16(self.min), Vector3int16(self.max))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/udim.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim.rs
+@@ -83,7 +83,8 @@ impl Default for UDim {
+ 
+ impl fmt::Display for UDim {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", self.scale, self.offset)
++        // Roblox prints the scale with 9 significant digits ("0.333333343, 7"; Studio 0.744)
++        write!(f, "{}, {}", super::format_g(f64::from(self.scale), 9), self.offset)
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/udim2.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim2.rs
+@@ -145,7 +145,8 @@ impl LuaUserData for UDim2 {
+ 
+ impl fmt::Display for UDim2 {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", self.x, self.y)
++        // "{0.333333343, 7}, {-2.5, -9}" (Studio 0.744)
++        write!(f, "{{{}}}, {{{}}}", self.x, self.y)
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/vector2.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2.rs
+@@ -168,7 +168,8 @@ fn number_first(lhs: &LuaValue, rhs: &LuaValue) -> LuaResult<Option<(f32, Vector
+ 
+ impl fmt::Display for Vector2 {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "{}, {}", self.0.x, self.0.y)
++        // 9 significant digits ("0.333333343, -2.5"; Studio 0.744)
++        write!(f, "{}, {}", super::format_g(f64::from(self.0.x), 9), super::format_g(f64::from(self.0.y), 9))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/vector2int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2int16.rs
+@@ -61,52 +61,59 @@ impl fmt::Display for Vector2int16 {
+     }
+ }
+ 
++/// Arithmetic results overflow the 16-bit integer as the constructor's components do: `Vector3int16.new(1, 2, 3) +
++/// Vector3int16.new(32767, 0, 0)` is (-32768, 2, 3) in a playing client (Studio 0.744; addition measured, the other
++/// operators taken to be the same 16-bit arithmetic).
++fn wrap16(v: IVec2) -> IVec2 {
++    IVec2 { x: v.x as i16 as i32, y: v.y as i16 as i32 }
++}
++
+ impl ops::Neg for Vector2int16 {
+     type Output = Self;
+     fn neg(self) -> Self::Output {
+-        Vector2int16(-self.0)
++        Vector2int16(wrap16(-self.0))
+     }
+ }
+ 
+ impl ops::Add for Vector2int16 {
+     type Output = Self;
+     fn add(self, rhs: Self) -> Self::Output {
+-        Vector2int16(self.0 + rhs.0)
++        Vector2int16(wrap16(self.0 + rhs.0))
+     }
+ }
+ 
+ impl ops::Sub for Vector2int16 {
+     type Output = Self;
+     fn sub(self, rhs: Self) -> Self::Output {
+-        Vector2int16(self.0 - rhs.0)
++        Vector2int16(wrap16(self.0 - rhs.0))
+     }
+ }
+ 
+ impl ops::Mul for Vector2int16 {
+     type Output = Vector2int16;
+     fn mul(self, rhs: Self) -> Self::Output {
+-        Self(self.0 * rhs.0)
++        Self(wrap16(self.0 * rhs.0))
+     }
+ }
+ 
+ impl ops::Mul<i32> for Vector2int16 {
+     type Output = Vector2int16;
+     fn mul(self, rhs: i32) -> Self::Output {
+-        Self(self.0 * rhs)
++        Self(wrap16(self.0 * rhs))
+     }
+ }
+ 
+ impl ops::Div for Vector2int16 {
+     type Output = Vector2int16;
+     fn div(self, rhs: Self) -> Self::Output {
+-        Self(self.0 / rhs.0)
++        Self(wrap16(self.0 / rhs.0))
+     }
+ }
+ 
+ impl ops::Div<i32> for Vector2int16 {
+     type Output = Vector2int16;
+     fn div(self, rhs: i32) -> Self::Output {
+-        Self(self.0 / rhs)
++        Self(wrap16(self.0 / rhs))
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/vector3int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector3int16.rs
+@@ -21,12 +21,12 @@ use super::super::*;
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ pub struct Vector3int16(pub IVec3);
+ 
+-/// A constructor component as Roblox's documentation describes it: rounded down, and a value
+-/// outside [-32768, 32768) overflows the 16-bit integer (32768 is -32768) instead of raising.
+-/// Non-finite values are 0 (not measured in Studio).
++/// A constructor component: truncated toward zero (1.5, -1.5, 2.7 make 1, -1, 2), and a value outside
++/// [-32768, 32768) overflows the 16-bit integer (32768 is -32768, 65537 is 1) instead of raising (measured in a playing
++/// client, Studio 0.744). Non-finite values are 0 (not measured in Studio).
+ pub(crate) fn int16_component(value: Option<f64>) -> i32 {
+     match value {
+-        Some(value) if value.is_finite() => i32::from(value.floor() as i64 as i16),
++        Some(value) if value.is_finite() => i32::from(value.trunc() as i64 as i16),
+         _ => 0,
+     }
+ }
+@@ -73,52 +73,59 @@ impl fmt::Display for Vector3int16 {
+     }
+ }
+ 
++/// Arithmetic results overflow the 16-bit integer as the constructor's components do: `Vector3int16.new(1, 2, 3) +
++/// Vector3int16.new(32767, 0, 0)` is (-32768, 2, 3) in a playing client (Studio 0.744; addition measured, the other
++/// operators taken to be the same 16-bit arithmetic).
++fn wrap16(v: IVec3) -> IVec3 {
++    IVec3 { x: v.x as i16 as i32, y: v.y as i16 as i32, z: v.z as i16 as i32 }
++}
++
+ impl ops::Neg for Vector3int16 {
+     type Output = Self;
+     fn neg(self) -> Self::Output {
+-        Vector3int16(-self.0)
++        Vector3int16(wrap16(-self.0))
+     }
+ }
+ 
+ impl ops::Add for Vector3int16 {
+     type Output = Self;
+     fn add(self, rhs: Self) -> Self::Output {
+-        Vector3int16(self.0 + rhs.0)
++        Vector3int16(wrap16(self.0 + rhs.0))
+     }
+ }
+ 
+ impl ops::Sub for Vector3int16 {
+     type Output = Self;
+     fn sub(self, rhs: Self) -> Self::Output {
+-        Vector3int16(self.0 - rhs.0)
++        Vector3int16(wrap16(self.0 - rhs.0))
+     }
+ }
+ 
+ impl ops::Mul for Vector3int16 {
+     type Output = Vector3int16;
+     fn mul(self, rhs: Self) -> Self::Output {
+-        Self(self.0 * rhs.0)
++        Self(wrap16(self.0 * rhs.0))
+     }
+ }
+ 
+ impl ops::Mul<i32> for Vector3int16 {
+     type Output = Vector3int16;
+     fn mul(self, rhs: i32) -> Self::Output {
+-        Self(self.0 * rhs)
++        Self(wrap16(self.0 * rhs))
+     }
+ }
+ 
+ impl ops::Div for Vector3int16 {
+     type Output = Vector3int16;
+     fn div(self, rhs: Self) -> Self::Output {
+-        Self(self.0 / rhs.0)
++        Self(wrap16(self.0 / rhs.0))
+     }
+ }
+ 
+ impl ops::Div<i32> for Vector3int16 {
+     type Output = Vector3int16;
+     fn div(self, rhs: i32) -> Self::Output {
+-        Self(self.0 / rhs)
++        Self(wrap16(self.0 / rhs))
+     }
+ }
+ 

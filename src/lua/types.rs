@@ -900,15 +900,22 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         raise(format!("{} is not a valid member of TweenInfo", key_text(args.get(1))))
     })?;
+    // "Time:0.1 DelayTime:0.333333 RepeatCount:-1 Reverses:True ..." (Studio 0.744): the times with 6 significant digits,
+    // the flag capitalized
     let tostring = lua.create_function(|lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
         let info = this.borrow::<LTweenInfo>()?;
+        let time = |value: &LuaValue| match value {
+            LuaValue::Number(n) => Ok(lune_roblox::datatypes::types::format_g(*n, 6)),
+            LuaValue::Integer(n) => Ok(lune_roblox::datatypes::types::format_g(*n as f64, 6)),
+            other => string_of(lua, other),
+        };
         Ok(format!(
             "Time:{} DelayTime:{} RepeatCount:{} Reverses:{} EasingDirection:{} EasingStyle:{}",
-            string_of(lua, &info.time)?,
-            string_of(lua, &info.delay_time)?,
+            time(&info.time)?,
+            time(&info.delay_time)?,
             string_of(lua, &info.repeat_count)?,
-            info.reverses,
+            if info.reverses { "True" } else { "False" },
             engine.reflection.enum_item_info(info.easing_direction).name,
             engine.reflection.enum_item_info(info.easing_style).name,
         ))
@@ -1501,7 +1508,8 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let eq = lua.create_function(compare(|a, b| a == b))?;
     let lt = lua.create_function(compare(|a, b| a < b))?;
     let le = lua.create_function(compare(|a, b| a <= b))?;
-    let tostring = lua.create_function(|_, this: LuaValue| Ok(iso_date(date_time_of(&this).unwrap_or(0.0))))?;
+    // tostring is the instant's UnixTimestampMillis ("1700000000123", "-1500"; Studio 0.744)
+    let tostring = lua.create_function(|_, this: LuaValue| Ok(format!("{}", date_time_of(&this).unwrap_or(0.0) as i64)))?;
     lua.register_userdata_type::<LDateTime>(|registry| {
         registry.add_meta_field("__type", "DateTime");
         registry.add_meta_field("__index", index);

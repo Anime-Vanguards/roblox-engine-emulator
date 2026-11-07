@@ -157,12 +157,9 @@ impl LuaUserData for NumberSequence {
 
 impl fmt::Display for NumberSequence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, keypoint) in self.keypoints.iter().enumerate() {
-            if index < self.keypoints.len() - 1 {
-                write!(f, "{keypoint}, ")?;
-            } else {
-                write!(f, "{keypoint}")?;
-            }
+        // each keypoint as it prints alone, one after another ("0 0.333333 0.1 0.5 1e-07 1e+20 "; Studio 0.744)
+        for keypoint in &self.keypoints {
+            write!(f, "{keypoint}")?;
         }
         Ok(())
     }

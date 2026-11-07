@@ -168,7 +168,8 @@ fn number_first(lhs: &LuaValue, rhs: &LuaValue) -> LuaResult<Option<(f32, Vector
 
 impl fmt::Display for Vector2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}", self.0.x, self.0.y)
+        // 9 significant digits ("0.333333343, -2.5"; Studio 0.744)
+        write!(f, "{}, {}", super::format_g(f64::from(self.0.x), 9), super::format_g(f64::from(self.0.y), 9))
     }
 }
 

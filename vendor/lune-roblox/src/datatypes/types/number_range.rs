@@ -54,7 +54,8 @@ impl LuaUserData for NumberRange {
 
 impl fmt::Display for NumberRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}", self.min, self.max)
+        // "min max " with 6 significant digits and a trailing space (Studio 0.744)
+        write!(f, "{} {} ", super::format_g(f64::from(self.min), 6), super::format_g(f64::from(self.max), 6))
     }
 }
 

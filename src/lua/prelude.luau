@@ -353,7 +353,7 @@ end
 
 -- Faces / Axes (Lune's versions only accept Lune's own EnumItems)
 
-local function FlagSet(TypeName, Names, Resolve)
+local function FlagSet(TypeName, Names, Resolve, Shown)
 	local Library = {}
 	local Info = setmetatable({}, { __mode = "k" })
 	local Meta = {
@@ -369,9 +369,9 @@ local function FlagSet(TypeName, Names, Resolve)
 			end
 			return true
 		end,
-		__tostring = function(Self)
+		__tostring = function(Self) -- (the names in Shown's order: Roblox prints Faces by NormalId value, Axes as X, Y, Z only)
 			local Parts = {}
-			for _, Name in Names do
+			for _, Name in Shown or Names do
 				if Info[Self][Name] then
 					table.insert(Parts, Name)
 				end
@@ -409,7 +409,7 @@ local AxisFaces = { X = { "Left", "Right" }, Y = { "Top", "Bottom" }, Z = { "Bac
 local Faces = FlagSet("Faces", FaceNames, function(Item)
 	local Name = EnumItemName(Item)
 	return if Name and EnumItemType(Item) == "NormalId" then { Name } else {}
-end)
+end, { "Right", "Top", "Back", "Left", "Bottom", "Front" })
 
 local Axes = FlagSet("Axes", { "X", "Y", "Z", "Top", "Bottom", "Left", "Right", "Back", "Front" }, function(Item)
 	local Name = EnumItemName(Item)
@@ -424,7 +424,7 @@ local Axes = FlagSet("Axes", { "X", "Y", "Z", "Top", "Bottom", "Left", "Right", 
 		end
 	end
 	return {}
-end)
+end, { "X", "Y", "Z" })
 
 -- datatypes.luau replaces Lune's Faces / Axes with these before the script libraries wrap them
 Datatypes.Faces = Faces
@@ -443,10 +443,10 @@ function Path2DControlPoint.new(Position, LeftTangent, RightTangent)
 			error(`{Key} is not a valid member of Path2DControlPoint`, 0)
 		end
 		return Value
-	end)
+	end, nil, { __tostring = function() return `Path2DControlPoint \{ Position = {Fields.Position}, LeftTangent = {Fields.LeftTangent}, RightTangent = {Fields.RightTangent} \}` end })
 end
 
-local function ParamsType(TypeName, Defaults, Methods)
+local function ParamsType(TypeName, Defaults, Methods, Meta)
 	return {
 		new = function(Initial)
 			local Data = table.clone(Defaults)
@@ -457,7 +457,7 @@ local function ParamsType(TypeName, Defaults, Methods)
 				return if Methods and Methods[Key] then function(_Self, ...) return Methods[Key](Data, ...) end else Data[Key]
 			end, function(_, Key, Value)
 				Data[Key] = Value
-			end)
+			end, Meta and Meta(Data))
 		end,
 	}
 end
@@ -754,7 +754,7 @@ local FilterLists = { FilterDescendantsInstances = true, ExcludeInstances = true
 local function ListCopy(Value)
 	return if type(Value) == "table" then table.move(Value, 1, #Value, 1, table.create(#Value)) else Value
 end
-local function FilterParamsType(TypeName, Defaults)
+local function FilterParamsType(TypeName, Defaults, Meta)
 	return {
 		new = function(Initial)
 			local Data = table.clone(Defaults)
@@ -772,7 +772,7 @@ local function FilterParamsType(TypeName, Defaults)
 				return if FilterLists[Key] then ListCopy(Value) else Value
 			end, function(_, Key, Value)
 				Data[Key] = if FilterLists[Key] then ListCopy(Value) else Value
-			end)
+			end, Meta and Meta(Data))
 			ParamsData[Object] = Data
 			return Object
 		end,
@@ -794,6 +794,93 @@ do
 	end
 end
 
+-- tostring of the parameter objects as a playing client prints them (Studio 0.744): Roblox's fields in its order, an
+-- instance list as {Name} for one instance and {N instances...} for more, an empty enum list as nothing, numbers with 9
+-- significant digits. (A list of enum items with members is printed by name, comma-separated: not measured.)
+local function ParamsText(TypeName, Fields)
+	return function(Data)
+		return {
+			__tostring = function()
+				local Parts = {}
+				for _, Field in Fields do
+					local Name, Value = Field[1], Data[Field[1]]
+					if Value == nil then
+						Value = Field[2]
+					end
+					local Text
+					if type(Value) == "table" and Name == "FilterDescendantsInstances" then
+						Text = if #Value == 0 then "{}" elseif #Value == 1 then `\{{Value[1]}\}` else `\{{#Value} instances...\}`
+					elseif type(Value) == "table" then
+						local Names = {}
+						for _, Item in Value do
+							table.insert(Names, EnumItemName(Item) or tostring(Item))
+						end
+						Text = table.concat(Names, ", ")
+					elseif type(Value) == "number" then
+						Text = string.format("%.9g", Value)
+					else
+						Text = EnumItemName(Value) or tostring(Value)
+					end
+					table.insert(Parts, `{Name}={Text}`)
+				end
+				return `{TypeName}\{{table.concat(Parts, ", ")}\}`
+			end,
+		}
+	end
+end
+local RaycastParamsText = ParamsText("RaycastParams", { { "IgnoreWater", false }, { "Margin", 0 }, { "SizeGradient", 0 }, { "BruteForceAllSlow", false },
+	{ "RespectCanCollide", false }, { "CollisionGroup", "Default" }, { "FilterDescendantsInstances", {} } })
+local OverlapParamsText = ParamsText("OverlapParams", { { "MaxParts", 0 }, { "Tolerance", 0 }, { "BruteForceAllSlow", false }, { "RespectCanCollide", false },
+	{ "CollisionGroup", "Default" }, { "FilterDescendantsInstances", {} } })
+-- CatalogSearchParams.new(): Roblox's defaults as its tostring shows them (made at the first call, once the enums exist)
+local CatalogSearchParamsType
+local CatalogSearchParamsLibrary = {
+	new = function(Initial)
+		if not CatalogSearchParamsType then
+			local Fields = { { "SearchKeyword", "" }, { "CategoryFilter", GetEnumItem("CatalogCategoryFilter", "None") }, { "SortType", GetEnumItem("CatalogSortType", "Relevance") },
+				{ "SortAggregation", GetEnumItem("CatalogSortAggregation", "AllTime") }, { "SalesTypeFilter", GetEnumItem("SalesTypeFilter", "All") }, { "CreatorName", "" },
+				{ "Limit", 30 }, { "CreatorType", GetEnumItem("CreatorTypeFilter", "All") }, { "BundleTypes", {} }, { "AssetTypes", {} }, { "IncludeOffSale", false } }
+			local Defaults = {}
+			for _, Field in Fields do
+				Defaults[Field[1]] = Field[2]
+			end
+			CatalogSearchParamsType = ParamsType("CatalogSearchParams", Defaults, nil, ParamsText("CatalogSearchParams", Fields))
+		end
+		return CatalogSearchParamsType.new(Initial)
+	end,
+}
+-- PathWaypoint.new(Position, Action, Label): tostring "{0.333333343, 2, 3}, Jump, label" (Studio 0.744)
+local PathWaypointType = ParamsType("PathWaypoint", {}, nil, function(Data)
+	return {
+		__tostring = function()
+			local Position = Data.Position
+			return `\{{string.format("%.9g", Position.X)}, {string.format("%.9g", Position.Y)}, {string.format("%.9g", Position.Z)}\}, {EnumItemName(Data.Action) or tostring(Data.Action)}, {Data.Label}`
+		end,
+	}
+end)
+local PathWaypointLibrary = {
+	new = function(Position, Action, Label)
+		return PathWaypointType.new({ Position = Position or vector.zero, Action = Action or GetEnumItem("PathWaypointAction", "Walk"), Label = Label or "" })
+	end,
+}
+-- PhysicalProperties.new(Enum.Material.X) as in Roblox (a playing client, Studio 0.744: Wood is 0.35, 0.48, 0.2, 1, 1,
+-- 0.25): Lune's constructor takes only its own EnumItems, so the material goes by name
+do
+	local LunePhysical = Datatypes.PhysicalProperties
+	local LuneMaterials = Roblox.Enum.Material
+	ConstructorOverrides.PhysicalProperties = {
+		new = function(First, ...)
+			if EnumItemType(First) == "Material" then
+				local Name = EnumItemName(First)
+				return PassResults("new", pcall(function()
+					return LunePhysical.new(LuneMaterials[Name])
+				end))
+			end
+			return PassResults("new", pcall(LunePhysical.new, First, ...))
+		end,
+	}
+end
+
 return {
 	Wrap = Wrap,
 	WrapIndex = WrapIndex,
@@ -808,11 +895,11 @@ return {
 	Faces = Faces,
 	Axes = Axes,
 	Path2DControlPoint = Path2DControlPoint,
-	RaycastParams = FilterParamsType("RaycastParams", { FilterDescendantsInstances = {}, IgnoreWater = false, RespectCanCollide = false, CollisionGroup = "Default" }),
-	OverlapParams = FilterParamsType("OverlapParams", { FilterDescendantsInstances = {}, MaxParts = 0, RespectCanCollide = false, CollisionGroup = "Default" }),
+	RaycastParams = FilterParamsType("RaycastParams", { FilterDescendantsInstances = {}, IgnoreWater = false, RespectCanCollide = false, CollisionGroup = "Default" }, RaycastParamsText),
+	OverlapParams = FilterParamsType("OverlapParams", { FilterDescendantsInstances = {}, MaxParts = 0, RespectCanCollide = false, CollisionGroup = "Default" }, OverlapParamsText),
 	ParamsData = ParamsData,
-	CatalogSearchParams = ParamsType("CatalogSearchParams", {}),
-	PathWaypoint = ParamsType("PathWaypoint", {}),
+	CatalogSearchParams = CatalogSearchParamsLibrary,
+	PathWaypoint = PathWaypointLibrary,
 	InertLibrary = InertLibrary,
 	SharedTable = SharedTable,
 	MakeStubTree = MakeStubTree,

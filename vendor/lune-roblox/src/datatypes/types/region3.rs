@@ -64,7 +64,12 @@ impl LuaUserData for Region3 {
 
 impl fmt::Display for Region3 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}", Vector3(self.min), Vector3(self.max))
+        // its CFrame (the centre, (min + max) * 0.5 in floats, no rotation) and its Size (max - min), 9 significant
+        // digits each: "0.333333313, -0.125, 0.0500000007, 1, 0, 0, 0, 1, 0, 0, 0, 1; 1.33333337, 4.75, 0.100000001" for
+        // Region3.new((-1/3, -2.5, 0), (1, 2.25, 0.1)) (Studio 0.744)
+        let g = |value: f32| super::format_g(f64::from(value), 9);
+        let (center, size) = ((self.min + self.max) * 0.5, self.max - self.min);
+        write!(f, "{}, {}, {}, 1, 0, 0, 0, 1, 0, 0, 0, 1; {}, {}, {}", g(center.x), g(center.y), g(center.z), g(size.x), g(size.y), g(size.z))
     }
 }
 

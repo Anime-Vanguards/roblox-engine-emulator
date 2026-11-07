@@ -145,7 +145,8 @@ impl LuaUserData for UDim2 {
 
 impl fmt::Display for UDim2 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}", self.x, self.y)
+        // "{0.333333343, 7}, {-2.5, -9}" (Studio 0.744)
+        write!(f, "{{{}}}, {{{}}}", self.x, self.y)
     }
 }
 

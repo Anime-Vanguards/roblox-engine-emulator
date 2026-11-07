@@ -85,7 +85,9 @@ impl LuaUserData for Rect {
 
 impl fmt::Display for Rect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}", self.min, self.max)
+        // "min.X, min.Y, max.X, max.Y" with 9 significant digits each (Studio 0.744)
+        let g = |value: f32| super::format_g(f64::from(value), 9);
+        write!(f, "{}, {}, {}, {}", g(self.min.x), g(self.min.y), g(self.max.x), g(self.max.y))
     }
 }
 

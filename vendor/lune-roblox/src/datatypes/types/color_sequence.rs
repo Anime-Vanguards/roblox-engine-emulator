@@ -106,12 +106,9 @@ impl LuaUserData for ColorSequence {
 
 impl fmt::Display for ColorSequence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, keypoint) in self.keypoints.iter().enumerate() {
-            if index < self.keypoints.len() - 1 {
-                write!(f, "{keypoint}, ")?;
-            } else {
-                write!(f, "{keypoint}")?;
-            }
+        // each keypoint as it prints alone, one after another (Studio 0.744)
+        for keypoint in &self.keypoints {
+            write!(f, "{keypoint}")?;
         }
         Ok(())
     }

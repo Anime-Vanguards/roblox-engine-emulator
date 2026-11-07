@@ -57,7 +57,9 @@ impl LuaUserData for ColorSequenceKeypoint {
 
 impl fmt::Display for ColorSequenceKeypoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} > {}", self.time, self.color)
+        // "time r g b 0 " with 6 significant digits, an envelope of 0 and a trailing space (Studio 0.744)
+        let g = |value: f32| super::format_g(f64::from(value), 6);
+        write!(f, "{} {} {} {} 0 ", g(self.time), g(self.color.r), g(self.color.g), g(self.color.b))
     }
 }
 

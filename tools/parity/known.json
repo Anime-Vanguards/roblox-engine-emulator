@@ -47,10 +47,6 @@
 		{
 			"line": "DateTime-locales ok mardi 14 novembre 2023 22:13 | 2023年11月14日 火曜日 22:13 | 14. Nov. 2023 22:13",
 			"why": "not fixed yet"
-		},
-		{
-			"line": "DateTime-tostring 0 typeof DateTime",
-			"why": "not fixed yet"
 		}
 	],
 	"cframe_order": [
@@ -1451,10 +1447,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "v3-int16 -25536, 25536, 1 | -32768, 2, 3",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "v2 1 6.95246696 -37.0192909 -0.497617722 unit -0.831144273 0.556056798 lerp 1.3921814 -0.871124268 angle ok -3.12815142",
 			"why": "not fixed yet"
 		},
@@ -1471,19 +1463,11 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "color 2 hsv 0.529908061 0.735908985 0.629150391 back 0.166152969 0.546066284 0.629150391 lerp 0.472286999 0.632278442 0.523278832 hex 2a8ba0",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "color 3 hsv 0.117418237 0.903546035 0.617919922 back 0.617919922 0.452941895 0.0596008264 lerp 0.768200696 0.428814709 0.126293957 hex 9e740f",
 			"why": "not fixed yet"
 		},
 		{
 			"line": "color 4 hsv 0.738154233 0.798563004 0.993911743 back 0.540649295 0.200210601 0.993911743 lerp 0.409844965 0.131259143 0.668740869 hex 8a33fd",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "color 5 hsv 0.103849731 0.327183902 0.668304443 back 0.668304443 0.585891724 0.449645996 lerp 0.529461682 0.682296753 0.595806897 hex aa9573",
 			"why": "not fixed yet"
 		},
 		{
@@ -1507,19 +1491,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "color-hex ok 1 0.501960814 0 aabbcc | error Unable to convert characters to hex value",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "color-hsv-edges 0 0 0 | 0 0 1 | 1 1 1 | 1 0 0",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "color-tostring 0.333333, 0.5, 1 eq true",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "color-arith error @104: attempt to perform arithmetic (add) on Color3",
 			"why": "not fixed yet"
 		},
 		{
@@ -1544,42 +1516,6 @@
 		},
 		{
 			"line": "udim2 5 add {-1.29351807, -3}, {0.501342773, 86} sub {0.0540771484, -75}, {0.674804688, -40} lerp -0.638647437 -13 0.351892114 37",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "udim2-offset-rounding {0, 1}, {0, -1} | {0, 2}, {0, -2} | 0, 0 | {0, -2147483648}, {0, 0}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "udim2-lerp-offset {0, 5}, {0, 2} | {0, 1}, {0, 1}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "udim2-unm ok {-1, -2}, {-3, -4} udim-arith ok 1.5, 5 0.5, -1",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "rect 1, 2, 4, 3 w 3 h 1",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numberrange 1 1  | error NumberRange: invalid range | 1 2 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numbersequence 0 1 0 0.5 0.25 0.1 1 0 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "colorsequence 0 1 0 0 0 1 0 1 0 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "tweeninfo Time:1 DelayTime:0.5 RepeatCount:2 Reverses:True EasingDirection:InOut EasingStyle:Back ok Time:-1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad ok 1 Enum.EasingStyle.Quad Enum.EasingDirection.Out 0 false 0",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "physicalproperties ok 0.349999994 0.479999989 0.200000003 1 1",
 			"why": "not fixed yet"
 		}
 	],
@@ -2119,19 +2055,7 @@
 	],
 	"instances": [
 		{
-			"line": "default BillboardGui Size=UDim2({0, 0}, {0, 0}) StudsOffset=V3(0 0 0) AlwaysOnTop=boolean(false) MaxDistance=inf LightInfluence=0 Brightness=1 ClipsDescendants=boolean(false) ZIndexBehavior=EnumItem(Enum.ZIndexBehavior.Global)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "default BindableEvent Name=string(Event) Archivable=boolean(true)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "default Frame Size=UDim2({0, 0}, {0, 0}) Position=UDim2({0, 0}, {0, 0}) BackgroundColor3=C3(0.639215708 0.635294139 0.647058845) BackgroundTransparency=0 BorderColor3=C3(0.105882354 0.164705887 0.20784314) BorderSizePixel=1 BorderMode=EnumItem(Enum.BorderMode.Outline) Visible=boolean(true) ZIndex=1 AnchorPoint=V2(0 0) ClipsDescendants=boolean(false) LayoutOrder=0 Rotation=0 AutomaticSize=EnumItem(Enum.AutomaticSize.None) SizeConstraint=EnumItem(Enum.SizeConstraint.RelativeXY) Active=boolean(false) Selectable=boolean(false) Interactable=boolean(true)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "default ImageLabel Image=string() ImageColor3=C3(1 1 1) ImageTransparency=0 ScaleType=EnumItem(Enum.ScaleType.Stretch) SliceCenter=Rect(0, 0, 0, 0) SliceScale=1 TileSize=UDim2({1, 0}, {1, 0}) ResampleMode=EnumItem(Enum.ResamplerMode.Default) ImageRectOffset=V2(0 0) ImageRectSize=V2(0 0)",
 			"why": "not fixed yet"
 		},
 		{
@@ -2139,51 +2063,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "default ParticleEmitter Rate=20 Lifetime=NumberRange(5 10 ) Speed=NumberRange(5 5 ) SpreadAngle=V2(0 0) Enabled=boolean(true) LightEmission=0 Texture=string(rbxasset://textures/particles/sparkles_main.dds) ZOffset=0 Rotation=NumberRange(0 0 ) RotSpeed=NumberRange(0 0 ) Drag=0 TimeScale=1 Orientation=EnumItem(Enum.ParticleOrientation.FacingCamera) EmissionDirection=EnumItem(Enum.NormalId.Top) Shape=EnumItem(Enum.ParticleEmitterShape.Box) Squash=NumberSequence(0 0 0 1 0 0 ) Brightness=1 LockedToPart=boolean(false) VelocityInheritance=0 WindAffectsDrag=boolean(false) FlipbookLayout=EnumItem(Enum.ParticleFlipbookLayout.None)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "default ScrollingFrame CanvasSize=UDim2({0, 0}, {2, 0}) CanvasPosition=V2(0 0) ScrollBarThickness=12 ScrollingDirection=EnumItem(Enum.ScrollingDirection.XY) ElasticBehavior=EnumItem(Enum.ElasticBehavior.WhenScrollable) AutomaticCanvasSize=EnumItem(Enum.AutomaticSize.None) ScrollingEnabled=boolean(true) VerticalScrollBarInset=EnumItem(Enum.ScrollBarInset.None) HorizontalScrollBarPosition=error:HorizontalScrollBarPosition is not a valid member of ScrollingFrame \"ScrollingFrame\" VerticalScrollBarPosition=EnumItem(Enum.VerticalScrollBarPosition.Right) ScrollBarImageColor3=C3(1 1 1) ScrollBarImageTransparency=0",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "default TextButton Text=string(Button) AutoButtonColor=boolean(true) Modal=boolean(false) Selected=boolean(false) Style=EnumItem(Enum.ButtonStyle.Custom) TextSize=8 Size=UDim2({0, 0}, {0, 0})",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "default TextLabel Text=string(Label) TextSize=8 TextColor3=C3(0.105882362 0.164705887 0.207843155) Font=EnumItem(Enum.Font.Legacy) TextScaled=boolean(false) TextWrapped=boolean(false) TextXAlignment=EnumItem(Enum.TextXAlignment.Center) TextYAlignment=EnumItem(Enum.TextYAlignment.Center) RichText=boolean(false) TextTransparency=0 TextStrokeTransparency=1 LineHeight=1 MaxVisibleGraphemes=-1 AutoLocalize=boolean(true) Size=UDim2({0, 0}, {0, 0}) BackgroundColor3=C3(0.639215708 0.635294139 0.647058845)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "default Trail Lifetime=2 MinLength=0.10000000149011612 MaxLength=0 WidthScale=NumberSequence(0 1 0 1 1 0 ) FaceCamera=boolean(false) Enabled=boolean(true) TextureLength=1 TextureMode=EnumItem(Enum.TextureMode.Stretch)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "default UIGridLayout CellSize=UDim2({0, 100}, {0, 100}) CellPadding=UDim2({0, 5}, {0, 5}) FillDirectionMaxCells=0 StartCorner=EnumItem(Enum.StartCorner.TopLeft)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "fullname Folder.b.deep.target | Workspace | game is its name true",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute UDim2 ok  -> UDim2({1, 2}, {3, 4})",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute NumberSequence ok  -> NumberSequence(0 1 0 1 1 0 )",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute ColorSequence ok  -> ColorSequence(0 1 0 0 0 1 1 0 0 0 )",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute NumberRange ok  -> NumberRange(1 2 )",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute Rect ok  -> Rect(1, 2, 3, 4)",
 			"why": "not fixed yet"
 		},
 		{
@@ -2527,40 +2407,6 @@
 			"why": "not fixed yet"
 		}
 	],
-	"physical_materials": [
-		{
-			"line": "materials Plastic=0.699999988, 0.300000012, 0.5, 1, 1, 0.300000012 | SmoothPlastic=0.699999988, 0.200000003, 0.5, 1, 1, 0.200000003 | Neon=0.699999988, 0.300000012, 0.200000003, 1, 1, 0.300000012 | Wood=0.349999994, 0.479999989, 0.200000003, 1, 1, 0.25 | WoodPlanks=0.349999994, 0.479999989, 0.200000003, 1, 1, 0.25 | Marble=2.56299996, 0.200000003, 0.170000002, 1, 1, 0.00999999978",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "materials Basalt=2.69099998, 0.699999988, 0.150000006, 0.300000012, 1, 0.200000003 | Slate=2.69099998, 0.400000006, 0.200000003, 1, 1, 0.0299999993 | CrackedLava=2.69099998, 0.649999976, 0.150000006, 1, 1, 0.349999994 | Concrete=2.40300012, 0.699999988, 0.200000003, 0.300000012, 1, 0.0500000007 | Limestone=2.69099998, 0.5, 0.150000006, 1, 1, 0.150000006 | Granite=2.69099998, 0.400000006, 0.200000003, 1, 1, 0.200000003",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "materials Pavement=2.69099998, 0.5, 0.170000002, 0.300000012, 1, 0.600000024 | Brick=1.92200005, 0.800000012, 0.150000006, 0.300000012, 1, 0.349999994 | Pebble=2.40300012, 0.400000006, 0.170000002, 1, 1.5, 0.400000006 | Cobblestone=2.69099998, 0.5, 0.170000002, 1, 1, 0.449999988 | Rock=2.69099998, 0.5, 0.170000002, 1, 1, 0.150000006 | Sandstone=2.69099998, 0.5, 0.150000006, 5, 1, 0.200000003",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "materials CorrodedMetal=7.8499999, 0.699999988, 0.200000003, 1, 1, 0.150000006 | DiamondPlate=7.8499999, 0.349999994, 0.25, 1, 1, 0.0500000007 | Foil=2.70000005, 0.400000006, 0.25, 1, 1, 0.100000001 | Metal=7.8499999, 0.400000006, 0.25, 1, 1, 0.100000001 | Grass=0.899999976, 0.400000006, 0.100000001, 1, 1.5, 0.699999988 | LeafyGrass=0.899999976, 0.400000006, 0.100000001, 2, 2, 0.75",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "materials Sand=1.602, 0.5, 0.0500000007, 5, 2.5, 0.550000012 | Fabric=0.699999988, 0.349999994, 0.0500000007, 1, 1, 0.649999976 | Snow=0.899999976, 0.300000012, 0.0299999993, 3, 4, 0.800000012 | Mud=0.899999976, 0.300000012, 0.0700000003, 3, 4, 0.649999976 | Ground=0.899999976, 0.449999988, 0.100000001, 1, 1, 0.600000024 | Asphalt=2.3599999, 0.800000012, 0.200000003, 0.300000012, 1, 0.400000006",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "materials Salt=2.16499996, 0.5, 0.0500000007, 1, 1, 0.150000006 | Ice=0.91900003, 0.0199999996, 0.150000006, 3, 1, 0.200000003 | Glacier=0.91900003, 0.0500000007, 0.150000006, 2, 1, 0.699999988 | Glass=2.40300012, 0.25, 0.200000003, 1, 1, 0.100000001 | ForceField=2.40300012, 0.25, 0.200000003, 1, 1, 0 | Air=0.00999999978, 0.00999999978, 0.00999999978, 1, 1, 0.00999999978",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "materials Water=1, 0.00499999989, 0.00999999978, 1, 1, 0.00999999978 | Cardboard=0.699999988, 0.5, 0.0500000007, 1, 2, 0.550000012 | Carpet=1.10000002, 0.400000006, 0.25, 1, 2, 0.649999976 | CeramicTiles=2.4000001, 0.50999999, 0.200000003, 1, 1, 0.0399999991 | ClayRoofTiles=2, 0.50999999, 0.200000003, 1, 1, 0.300000012 | RoofShingles=2.3599999, 0.800000012, 0.200000003, 0.300000012, 1, 0.300000012",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "materials Leather=0.860000014, 0.349999994, 0.25, 1, 1, 0.649999976 | Plaster=0.75, 0.600000024, 0.200000003, 0.300000012, 1, 0.300000012 | Rubber=1.29999995, 1.5, 0.949999988, 3, 2, 0.5",
-			"why": "not fixed yet"
-		}
-	],
 	"require_errors": [
 		{
 			"line": "pcall-broken error Requested module experienced an error while loading",
@@ -2623,175 +2469,7 @@
 	],
 	"tostring": [
 		{
-			"line": "udim 0.333333343, 7",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "udim-neg -0.100000001, -3",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "udim-huge 1.00000002e+20, -2147483648",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "udim2 {0.333333343, 7}, {-2.5, -9}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "udim2-tiny {1.00000001e-07, 0}, {-0, 1}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "vector2 0.333333343, -2.5",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "vector2-edges 1.00000001e-07, 1.00000002e+20",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "vector2-negzero -0, 0.100000001",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "vector3int16-frac 1, -1, 2",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "cframe 0.333333343, -2.5, 1.00000002e+20, 1, 0, 0, 0, 1, 0, 0, 0, 1",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "cframe-rot 0.100000001, 0, 1.00000001e-07, 0.936293423, -0.289629489, 0.198669329, 0.312991828, 0.944702566, -0.0978434011, -0.159345075, 0.153791994, 0.975170374",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "color3 0.333333, 0.1, 0.666667",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "color3-range -1, 2.5, 1e+20",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "color3-tiny 1e-07, 0.123457, 1e-20",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "rect 0.100000001, -2.5, 0.333333343, 1.00000002e+20",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "rect-vectors 1.00000001e-07, -0, 5, 6",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numberrange 0.333333 2.5 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numberrange-one -0.1 -0.1 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numberrange-huge 1e-07 1e+20 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numbersequence 0 0.333333 0.1 0.5 1e-07 1e+20 1 -2.5 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numbersequence-one 0 0.333333 0 1 0.333333 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "numbersequencekeypoint 0.25 0.333333 0.5 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "colorsequence 0 0.333333 0.1 0.666667 0 0.333333 1e-07 1 0.5 0 1 1 0 0.25 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "colorsequencekeypoint 0.25 0.333333 0.1 0.666667 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "ray {0.333333343, -2.5, 0.100000001}, {1.00000002e+20, -0, 1.00000001e-07}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "region3 0.333333313, -0.125, 0.0500000007, 1, 0, 0, 0, 1, 0, 0, 0, 1; 1.33333337, 4.75, 0.100000001",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "region3int16 -1, 2, 3; 4, 5, 6",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "tweeninfo Time:0.1 DelayTime:0.333333 RepeatCount:-1 Reverses:True EasingDirection:In EasingStyle:Sine",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "tweeninfo-default Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "axes-normals X, Y",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "axes-all X, Y, Z",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "faces Top, Back, Left",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "physicalproperties-material 0.349999994, 0.479999989, 0.200000003, 1, 1, 0.25",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "physicalproperties-five 0.333333343, 0.100000001, 0.25, 2, 3, 1",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "datetime-millis 1700000000123",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "datetime-seconds 1700000000000",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "datetime-negative -1500",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "pathwaypoint {0.333333343, 2, 3}, Jump, label",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "raycastparams-set RaycastParams{IgnoreWater=true, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=true, CollisionGroup=Default, FilterDescendantsInstances={Workspace}}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "overlapparams-set OverlapParams{MaxParts=5, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={2 instances...}}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "tohex 808080 55aaff 0001fe 00ff80 0dfeb1 010203",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "fromhex ok 0.666666687 0.733333349 0.800000012 | ok 0.670588255 0.80392158 0.937254906 | error Unable to convert characters to hex value | error Unable to convert characters to hex value | error Unable to convert characters to hex value | error Unable to convert characters to hex value | error Unable to convert characters to hex value | error Unable to convert characters to hex value | error Unable to convert characters to hex value",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "color3-ops error @94: attempt to perform arithmetic (add) on Color3 | error @94: attempt to perform arithmetic (sub) on Color3 | error @94: attempt to perform arithmetic (mul) on Color3 | error @95: attempt to perform arithmetic (mul) on Color3 and number | error @95: attempt to perform arithmetic (div) on Color3 and number | error @95: attempt to perform arithmetic (unm) on Color3 | true false",
 			"why": "not fixed yet"
 		},
 		{
@@ -2893,83 +2571,7 @@
 	],
 	"values": [
 		{
-			"line": "value UDim2 typeof=UDim2 type=userdata tostring={1, 2}, {3, 4}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value Rect typeof=Rect type=userdata tostring=1, 2, 3, 4",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value NumberRange typeof=NumberRange type=userdata tostring=1 2 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value NumberSequence typeof=NumberSequence type=userdata tostring=0 0 0 1 1 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value NumberSequenceKeypoint typeof=NumberSequenceKeypoint type=userdata tostring=0 1 0.5 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value ColorSequence typeof=ColorSequence type=userdata tostring=0 1 0 0 0 1 0 0 1 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value ColorSequenceKeypoint typeof=ColorSequenceKeypoint type=userdata tostring=0 1 0 0 0 ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value Ray typeof=Ray type=userdata tostring={0, 0, 0}, {1, 0, 0}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value Region3 typeof=Region3 type=userdata tostring=0.5, 0.5, 0.5, 1, 0, 0, 0, 1, 0, 0, 0, 1; 1, 1, 1",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value Region3int16 typeof=Region3int16 type=userdata tostring=0, 0, 0; 1, 1, 1",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value TweenInfo typeof=TweenInfo type=userdata tostring=Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value Axes typeof=Axes type=userdata tostring=X",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value PhysicalProperties typeof=PhysicalProperties type=userdata tostring=1, 0.300000012, 0.5, 1, 1, 1",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value DateTime typeof=DateTime type=userdata tostring=0",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value PathWaypoint typeof=PathWaypoint type=userdata tostring={0, 0, 0}, Walk, ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value CatalogSearchParams typeof=CatalogSearchParams type=userdata tostring=CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value RaycastParams typeof=RaycastParams type=userdata tostring=RaycastParams{IgnoreWater=false, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value OverlapParams typeof=OverlapParams type=userdata tostring=OverlapParams{MaxParts=0, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}}",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "value SharedTable typeof=SharedTable type=userdata tostring=SharedTable: ADDR",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "value Path2DControlPoint typeof=Path2DControlPoint type=userdata tostring=Path2DControlPoint { Position = {0, 0}, {0, 0}, LeftTangent = {0, 0}, {0, 0}, RightTangent = {0, 0}, {0, 0} }",
 			"why": "not fixed yet"
 		},
 		{
@@ -2986,10 +2588,6 @@
 		},
 		{
 			"line": "typeof-noarg error missing argument #1 | error missing argument #1",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "tostring-more -0 1e+301 0, 0, 0, -4.37113883e-08, 0, 1, 0, 1, 0, -1, 0, -4.37113883e-08 | 1, 0.501961, 0 | 0.10000000149011612, -0, 100000002004087730000 | {0.5, 0}, {0.25, 0} | Enum.KeyCode.A | has-random",
 			"why": "not fixed yet"
 		},
 		{

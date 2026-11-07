@@ -54,7 +54,8 @@ impl LuaUserData for Region3int16 {
 
 impl fmt::Display for Region3int16 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}, {}", Vector3int16(self.min), Vector3int16(self.max))
+        // "min; max" ("-1, 2, 3; 4, 5, 6"; Studio 0.744)
+        write!(f, "{}; {}", Vector3int16(self.min), Vector3int16(self.max))
     }
 }
 
