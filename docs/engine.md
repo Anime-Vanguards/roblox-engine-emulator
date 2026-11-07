@@ -299,8 +299,12 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
   read error names the callback), and a method call that names no method calls the method so spelled
   (`part:getPropertyChangedSignal("Position")`). Only the first letter (`HttpService:jSONEncode` answers,
   `jsonEncode` does not), only towards upper case, members only (children answer to their exact names),
-  and the API dump's own lower-case names (`findFirstChild`, `childAdded`, `Fire.size`) are members of
-  their own, found first. A write takes the exact name only (`part.anchored = true` raises `anchored is
+  and the API dump's own lower-case names (`findFirstChild`, `getService`, `brickColor`, `childAdded`) are
+  members of their own, found first. Each is the member it stands for (the same name with the first
+  letter upper-cased, or Players' `players` / `playerFromCharacter`): a property alias reads and writes
+  that member's value and its Changed names it (`BrickColor`); a method alias does its work through a
+  function of its own; `childAdded` and a value object's `changed` are signals of their own that fire with
+  ChildAdded and Changed; `game.lighting` is the Lighting service. A write takes the exact name only (`part.anchored = true` raises `anchored is
   not a valid member of Part "Part"`). A method call finds methods only: a property, event, callback or
   child by either spelling raises the same not-a-member error. Measured in a playing client and a server
   (every method, event and readable property of the API dump answers so on reads, none on writes;

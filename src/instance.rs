@@ -33,10 +33,16 @@ impl Engine {
         }
         crate::profiler::caches::miss(crate::profiler::caches::Cache::Resolve);
         let reflection = &self.reflection;
+        // (a deprecated lower-case property is the property it stands for: `brickColor` is BrickColor)
+        if let Some(twin) = reflection.property_alias(class, name) {
+            let member = self.resolve_member(class, twin);
+            self.member_cache.borrow_mut().insert((class, name), member);
+            return member;
+        }
         let behaviors = self.behaviors.borrow();
         let info = reflection.class(class);
         let getter = behaviors.find_getter(reflection, class, name).is_some();
-        let method = behaviors.find_method(reflection, class, name).is_some();
+        let method = behaviors.find_method_or_alias(reflection, class, name).is_some();
         // a property scripts cannot read (NotScriptable: the dump permits nothing) is no member, as in
         // Roblox, unless a behaviour gives it a getter: `part.Origin` finds the part's child named
         // Origin, not PVInstance.Origin (an effect that emits from `Glow.Inner.Origin`, an Attachment)
@@ -66,6 +72,13 @@ impl Engine {
         };
         self.member_cache.borrow_mut().insert((class, name), member);
         member
+    }
+
+    /// The name a member of `class` keeps its value under: a deprecated lower-case property's is the property it stands for
+    /// (`brickColor` -> BrickColor: one value, and Changed names BrickColor), any other member's its own.
+    #[inline]
+    pub fn member_name(&self, class: ClassId, name: NameId) -> NameId {
+        self.reflection.property_alias(class, name).unwrap_or(name)
     }
 
     /// Drops cached member resolutions (after behaviours change).
@@ -350,12 +363,17 @@ fn fire_changed(state: &mut State, reflection: &Reflection, id: InstanceId, name
     let class = state.dom.at(id).class;
     let value_base = reflection.class_id("ValueBase").is_some_and(|base| reflection.class(class).is_a(base));
     if value_base {
+        // (a value object's deprecated `changed` is a signal of its own that fires with Changed, the new value too: measured,
+        // tools/parity/probes/aliases.luau)
+        let changed_alias = reflection.changed_alias.and_then(|alias| signals.event(alias));
         if let Some(signal) = property {
             fire_measured(state, signal, Vec::new(), SignalKind::Property);
         }
-        if let (Some(signal), true) = (changed, name == K::Value as NameId) {
-            let value = state.dom.raw_get(id, K::Value as NameId).cloned().unwrap_or(Value::Nil);
-            fire_measured(state, signal, vec![value], SignalKind::Changed);
+        if name == K::Value as NameId {
+            for signal in [changed, changed_alias].into_iter().flatten() {
+                let value = state.dom.raw_get(id, K::Value as NameId).cloned().unwrap_or(Value::Nil);
+                fire_measured(state, signal, vec![value], SignalKind::Changed);
+            }
         }
         return;
     }
@@ -503,6 +521,13 @@ pub fn set_parent(
         let arriving: Vec<InstanceId> = new_chain.iter().copied().filter(|node| !old_chain.contains(node)).collect();
         fire_descendant_events(state, &arriving, id, K::DescendantAdded as NameId);
         if let Some(signal) = existing_event(state, parent, K::ChildAdded as NameId) {
+            fire_measured(state, signal, vec![Value::Instance(id)], SignalKind::ChildAdded);
+        }
+        // (the dump's deprecated childAdded is a signal of its own that fires with ChildAdded: measured,
+        // tools/parity/probes/aliases.luau)
+        if let Some(alias) = reflection.child_added_alias
+            && let Some(signal) = existing_event(state, parent, alias)
+        {
             fire_measured(state, signal, vec![Value::Instance(id)], SignalKind::ChildAdded);
         }
         if now_inside && !was_inside {

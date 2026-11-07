@@ -244,6 +244,62 @@ fn lower_case_first_letters_reach_members_on_reads_and_calls() {
     );
 }
 
+/// The API dump's own lower-case names (deprecated aliases) are the members they stand for, as a client treats them
+/// (tools/parity/probes/aliases.luau): a property alias reads and writes the other's value and Changed names the other; a method
+/// alias does the other's work through a function of its own; childAdded and a value object's changed are signals of their own
+/// that fire with ChildAdded and Changed.
+#[test]
+fn the_dumps_lower_case_aliases_are_the_members_they_stand_for() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Players = game:GetService("Players")
+        assert(game:getService("Players") == Players and game:service("Players") == Players)
+        assert(typeof(Players:getPlayers()) == "table" and typeof(Players:players()) == "table")
+        assert(not rawequal(game.getService, game.GetService) and not rawequal(Players.getPlayers, Players.GetPlayers))
+        assert(game.workspace == workspace and game.lighting == game:GetService("Lighting"))
+        local Part = Instance.new("Part")
+        Part.brickColor = BrickColor.new("Really red")
+        assert(Part.BrickColor.Name == "Really red")
+        Part.BrickColor = BrickColor.new("Lime green")
+        assert(Part.brickColor.Name == "Lime green")
+        local Humanoid = Instance.new("Humanoid")
+        Humanoid.maxHealth = 50
+        assert(Humanoid.MaxHealth == 50 and Humanoid.maxHealth == 50)
+        local Folder = Instance.new("Folder")
+        Folder.archivable = false
+        assert(Folder.Archivable == false)
+        local Ok, Err = pcall(function() Part.className = "X" end)
+        assert(not Ok and string.find(Err, "Unable to assign property className. Property is read only", 1, true), Err)
+        assert(tostring(Folder.childAdded) == "Signal childAdded" and Folder.childAdded ~= Folder.ChildAdded)
+        _G.Names = {}
+        Part.Changed:Connect(function(Name) table.insert(_G.Names, Name) end)
+        Part.brickColor = BrickColor.new("Really blue")
+        _G.Added = {}
+        Folder.childAdded:Connect(function(Child) table.insert(_G.Added, Child.Name) end)
+        local Value = Instance.new("IntValue")
+        _G.Values = {}
+        Value.changed:Connect(function(New) table.insert(_G.Values, New) end)
+        local Child = Instance.new("Folder")
+        Child.Name = "Kid"
+        Child.Parent = Folder
+        Value.Value = 7
+        "#,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        -- (the property's own names, as for the exact name: a client's Changed names BrickColor and the Color it moves)
+        assert(table.concat(_G.Names, ",") == "BrickColor,Color", table.concat(_G.Names, ","))
+        assert(table.concat(_G.Added, ",") == "Kid" and table.concat(_G.Values, ",") == "7")
+        "#,
+    );
+}
+
 /// The report's case: a property signal by its lower-case method name, both handlers run, the newest connection first (as the
 /// report's Studio output and a client print them).
 #[test]

@@ -165,6 +165,9 @@ struct Member {
     call_fn: c_int,
     /// What a call of it costs Studio (crate::cost), charged to the work clock
     cost: f32,
+    /// The name its value is kept under: the key's own, or for a deprecated lower-case property the property it
+    /// stands for (`brickColor` -> BrickColor, Engine::member_name)
+    name: NameId,
 }
 
 fn base_method(name: NameId) -> Option<Base> {
@@ -195,10 +198,12 @@ fn base_method(name: NameId) -> Option<Base> {
     MAP.iter().find(|(k, _)| *k as NameId == name).map(|(_, base)| *base)
 }
 
-fn compute_member(engine: &Engine, class: ClassId, name: NameId) -> Member {
+fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
     let reflection = &engine.reflection;
     let base_class = reflection.class_id("Instance").expect("Instance class");
-    let mut member = Member { read: Read::Slow, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: crate::cost::method(reflection.name(name)) as f32 };
+    // (a deprecated lower-case property is the property it stands for: its value, setter and Changed)
+    let name = engine.member_name(class, key);
+    let mut member = Member { read: Read::Slow, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: crate::cost::method(reflection.name(name)) as f32, name };
     match engine.resolve_member(class, name) {
         Resolved::Property { property, getter, setter } => {
             let behaviors = engine.behaviors.borrow();
@@ -1126,7 +1131,7 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
         let mut name = name;
         let mut read = match name {
             Some(name) => api.member(class, name),
-            None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: 0.0 },
+            None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: 0.0, name: 0 },
         };
         // A key that names no member and no child reads the member it names with its first letter upper-cased
         // (`part.anchored`, instance.rs `get`): only after the child lookup has missed, so exact names never pay for it
@@ -1161,7 +1166,7 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
         api.cross(crate::boundary::Kind::Get, class, name, id, cost + lower_first + first, true);
         match read.read {
             Read::Plain => {
-                let name = name.unwrap_or_default();
+                let name = read.name;
                 let dom_state = engine.state.borrow();
                 let value = dom_state.dom.raw_get(id, name);
                 read_extra(api, crate::cost::read_value(value));
@@ -1316,7 +1321,7 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
                         None => return Out::Slow,
                     },
                 };
-                linstance::script_set_property(engine, id, name, value);
+                linstance::script_set_property(engine, id, member.name, value);
                 Out::Ret(0)
             }
             Write::Parent => {

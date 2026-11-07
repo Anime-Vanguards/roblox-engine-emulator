@@ -97,6 +97,13 @@ impl Behaviors {
         find(&self.methods, reflection, class, name)
     }
 
+    /// [`Self::find_method`], and for a deprecated lower-case method with no behaviour of its own the behaviour of the method
+    /// it stands for (Reflection::method_alias: `getService` does GetService's work, through a function of its own).
+    pub fn find_method_or_alias(&self, reflection: &Reflection, class: ClassId, name: NameId) -> Option<(ClassId, &Method)> {
+        find(&self.methods, reflection, class, name)
+            .or_else(|| reflection.method_alias(class, name).and_then(|twin| find(&self.methods, reflection, class, twin)))
+    }
+
     pub fn find_getter(&self, reflection: &Reflection, class: ClassId, name: NameId) -> Option<&GetterFn> {
         find(&self.getters, reflection, class, name).map(|(_, f)| f)
     }
@@ -365,6 +372,14 @@ pub fn install(engine: &Rc<Engine>) {
             let service = get_service(engine, id, "Workspace")?;
             Ok(instance_value(lua, engine, service)?)
         }));
+        // (the dump's deprecated `game.lighting` is the Lighting service: measured, tools/parity/probes/aliases.luau;
+        // `game.workspace` reads Workspace through Reflection::property_alias)
+        if let Some(lighting) = reflection.name_id("lighting") {
+            behaviors.add_getter(data_model, lighting, getter(|lua, engine, id| {
+                let service = get_service(engine, id, "Lighting")?;
+                Ok(instance_value(lua, engine, service)?)
+            }));
+        }
         behaviors.add_method(data_model, K::BindToClose as NameId, method(|_, _, _, _| Ok(none())));
         behaviors.add_method(data_model, K::GetJobsInfo as NameId, constant(|lua| Ok(LuaValue::Table(lua.create_table()?))));
         let place_id = options.place_id;

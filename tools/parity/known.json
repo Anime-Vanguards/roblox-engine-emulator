@@ -1,4 +1,10 @@
 {
+	"aliases": [
+		{
+			"line": "method-model | ok false | ok false",
+			"why": "Model:MoveTo itself: a client leaves a model outside the DataModel where it is (the exact name too); ree moves it"
+		}
+	],
 	"buffer_vector_time": [
 		{
 			"line": "vector-angle ok 1.57079633 lerp ok 0.5, 1, 1.5",

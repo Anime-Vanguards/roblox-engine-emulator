@@ -210,6 +210,10 @@ pub struct ClassInfo {
     pub display: Box<[(Box<str>, Box<str>)]>,
     /// Every class whose superclass this is, rbx-dom's included, in name order (ReflectedClass.Subclasses)
     pub subclasses: Box<[ClassId]>,
+    /// The dump's own deprecated lower-case members (inherited) and the member each stands for, by kind
+    /// ([`Reflection::property_alias`], [`Reflection::method_alias`]): `brickColor` is BrickColor, `getService` GetService
+    property_aliases: FxHashMap<NameId, NameId>,
+    method_aliases: FxHashMap<NameId, NameId>,
     own_properties: Vec<u32>,
     own_events: Vec<NameId>,
     own_methods: Vec<NameId>,
@@ -255,6 +259,10 @@ pub struct Reflection {
     enum_ids: FxHashMap<Box<str>, EnumId>,
     /// data/font-enums.json `fromEnum`: Enum.Font name -> (family, weight, style)
     pub font_enum_faces: FxHashMap<Box<str>, (Box<str>, Box<str>, Box<str>)>,
+    /// The dump's deprecated event names that fire with ChildAdded and with a value object's Changed (lua's
+    /// `instance.childAdded`, `IntValue.changed`): signals of their own the engine fires beside the others
+    pub child_added_alias: Option<NameId>,
+    pub changed_alias: Option<NameId>,
 }
 
 /// Members services.luau / query.luau give behaviours that the Studio dump does not list (Player
@@ -634,6 +642,7 @@ impl Reflection {
             list.sort_unstable_by(|&a, &b| reflection.classes[a as usize].name.cmp(&reflection.classes[b as usize].name));
             reflection.classes[id].subclasses = list.into_boxed_slice();
         }
+        reflection.link_aliases();
 
         if let Some(bytes) = font_enums {
             if let Ok(fonts) = serde_json::from_slice::<FontEnums>(bytes) {
@@ -702,6 +711,8 @@ impl Reflection {
             serialized: false,
             display: Box::new([]),
             subclasses: Box::new([]),
+            property_aliases: FxHashMap::default(),
+            method_aliases: FxHashMap::default(),
             own_properties: Vec::new(),
             own_events: Vec::new(),
             own_methods: Vec::new(),
@@ -709,6 +720,70 @@ impl Reflection {
         });
         self.class_ids.insert(name.into(), id);
         id
+    }
+
+    /// Links the dump's own deprecated lower-case members to the members they stand for: a lower-case-first property a
+    /// script can read whose name with the first letter upper-cased is a property of the class too (brickColor, maxHealth,
+    /// archivable, workspace), and such a method (getService, getChildren, takeDamage), plus the two Players methods
+    /// named otherwise. A client treats each as the member itself: an alias property reads and writes the other's value
+    /// and its Changed names the other; an alias method does the other's work through a function of its own (measured in
+    /// a playing client, tools/parity/probes/aliases.luau). Events keep signals of their own (lua/instance.rs fires them).
+    fn link_aliases(&mut self) {
+        const NAMED_OTHERWISE: &[(&str, &str, &str)] =
+            &[("Players", "players", "GetPlayers"), ("Players", "playerFromCharacter", "GetPlayerFromCharacter")];
+        let upper = |names: &Vec<Box<str>>, ids: &FxHashMap<Box<str>, NameId>, name: NameId| -> Option<NameId> {
+            let text = &names[name as usize];
+            let first = text.chars().next()?;
+            if !first.is_ascii_lowercase() {
+                return None;
+            }
+            ids.get(format!("{}{}", first.to_ascii_uppercase(), &text[1..]).as_str()).copied()
+        };
+        for id in 0..self.classes.len() {
+            let class = &self.classes[id];
+            let mut properties = FxHashMap::default();
+            for (&name, &index) in &class.properties {
+                if let Some(twin) = upper(&self.names, &self.name_ids, name)
+                    && self.properties[index as usize].scriptable
+                    && class.properties.get(&twin).is_some_and(|&other| self.properties[other as usize].scriptable)
+                {
+                    properties.insert(name, twin);
+                }
+            }
+            let mut methods = FxHashMap::default();
+            for &name in &class.methods {
+                if let Some(twin) = upper(&self.names, &self.name_ids, name).filter(|twin| class.methods.contains(twin)) {
+                    methods.insert(name, twin);
+                }
+            }
+            for &(class_name, alias, twin) in NAMED_OTHERWISE {
+                if let (Some(owner), Some(alias), Some(twin)) = (self.class_ids.get(class_name), self.name_ids.get(alias), self.name_ids.get(twin))
+                    && class.is_a(*owner)
+                    && class.methods.contains(alias)
+                {
+                    methods.insert(*alias, *twin);
+                }
+            }
+            let class = &mut self.classes[id];
+            class.property_aliases = properties;
+            class.method_aliases = methods;
+        }
+        self.child_added_alias = self.name_ids.get("childAdded").copied();
+        self.changed_alias = self.name_ids.get("changed").copied();
+    }
+
+    /// The property a deprecated lower-case property of `class` is ([`Self::link_aliases`]): `brickColor` -> BrickColor.
+    #[inline]
+    pub fn property_alias(&self, class: ClassId, name: NameId) -> Option<NameId> {
+        let aliases = &self.classes[class as usize].property_aliases;
+        if aliases.is_empty() { None } else { aliases.get(&name).copied() }
+    }
+
+    /// The method whose work a deprecated lower-case method of `class` does ([`Self::link_aliases`]): `getService` -> GetService.
+    #[inline]
+    pub fn method_alias(&self, class: ClassId, name: NameId) -> Option<NameId> {
+        let aliases = &self.classes[class as usize].method_aliases;
+        if aliases.is_empty() { None } else { aliases.get(&name).copied() }
     }
 
     #[allow(clippy::too_many_arguments)]

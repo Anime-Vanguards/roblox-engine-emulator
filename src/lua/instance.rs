@@ -72,7 +72,7 @@ pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameI
     if !matches!(engine.resolve_member(class, name), Member::Method { .. }) {
         return Ok(None);
     }
-    let found = engine.behaviors.borrow().find_method(&engine.reflection, class, name).map(|(owner, f)| (owner, f.clone()));
+    let found = engine.behaviors.borrow().find_method_or_alias(&engine.reflection, class, name).map(|(owner, f)| (owner, f.clone()));
     let Some((owner, method)) = found else {
         return match unimplemented_function(lua, engine, class, name)? {
             LuaValue::Function(function) => Ok(Some(function)),
@@ -104,7 +104,7 @@ pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameI
 }
 
 fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<LuaValue> {
-    let found = engine.behaviors.borrow().find_method(&engine.reflection, class, name).map(|(owner, f)| (owner, f.clone()));
+    let found = engine.behaviors.borrow().find_method_or_alias(&engine.reflection, class, name).map(|(owner, f)| (owner, f.clone()));
     let Some((owner, method)) = found else {
         return unimplemented_function(lua, engine, class, name);
     };
@@ -239,7 +239,10 @@ pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Re
 
 /// A read of member `name` of an instance of `class`; `None` when the class has no such member a script can read.
 fn get_member(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, class: ClassId, name: NameId) -> Option<Result<LuaValue, Flow>> {
-    Some(match engine.resolve_member(class, name) {
+    let member = engine.resolve_member(class, name);
+    // (a deprecated lower-case property reads the property it stands for)
+    let name = engine.member_name(class, name);
+    Some(match member {
         Member::Property { getter: true, .. } => {
             let getter = engine.behaviors.borrow().find_getter(&engine.reflection, class, name).cloned()?;
             getter(lua, engine, id)
@@ -312,7 +315,8 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
     let member = name.map_or(Member::None, |name| engine.resolve_member(class, name));
     let name = match (member, name) {
         (Member::None, _) | (_, None) => return Err(not_a_member(engine, id, key)),
-        (_, Some(name)) => name,
+        // (a deprecated lower-case property writes the property it stands for)
+        (_, Some(name)) => engine.member_name(class, name),
     };
     match member {
         Member::Callback => {
