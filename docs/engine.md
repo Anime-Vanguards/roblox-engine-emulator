@@ -130,7 +130,11 @@ there).
   and `studio-snapshots/<Place>.json` (`{"nodes": [{"name", "className", "parent"}]}`, a node's parent an
   index into the list, -1 for the DataModel) is its hierarchy as Studio holds it. Instances the snapshot
   lists that no root or model provides become Studio-only placeholders, made when a script first looks
-  up or lists children, so `WaitForChild` and `FindFirstChild` see what Studio would.
+  up or lists children, so `WaitForChild` and `FindFirstChild` see what Studio would. A root's directory
+  that names no class of its own (no init script, no `init.meta.json` className) takes the class the
+  snapshot gives its path when that is not a Folder, a script or a service: a directory that holds only
+  the scripts of a Part the place keeps is that Part (Studio-only: its properties are the class's
+  defaults unless place content stores it, and then the stored instance keeps the directory's scripts).
 - **Place content**: a snapshot lists non-script content by name and class only. Files at
   `<repo>/data/place-content/<Place>/<parent path>/*.rbxm` (Studio's own serialization of those
   instances) replace the placeholders of the same names under that parent with the stored instances,

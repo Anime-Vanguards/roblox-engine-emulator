@@ -2785,6 +2785,135 @@ fn place_content_replaces_a_snapshot_placeholder_with_the_stored_instance() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An enum property refuses what it cannot read with a playing client's and a server's texts (Studio 0.744,
+/// tools/parity/probes/enum_assignment.luau): nil and other types "EnumItem, number, or string expected", a value no item
+/// has "Invalid value", truncated and unquoted for a number or a numeric string.
+#[test]
+fn enum_properties_refuse_with_the_measured_texts() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(F) local Ok, Message = pcall(F) return if Ok then "ok" else Message end
+        local Part, Label = Instance.new("Part"), Instance.new("TextLabel")
+        print(Try(function() Part.Material = nil end))
+        print(Try(function() Label.Font = Vector3.zero end))
+        print(Try(function() Label.Font = "256" end))
+        print(Try(function() Label.Font = 512.5 end))
+        print(Try(function() Label.Font = "Wood" end))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: Unable to assign property Material. EnumItem, number, or string expected, got nil",
+            "print: Unable to assign property Font. EnumItem, number, or string expected, got Vector3",
+            "print: Unable to assign property Font. Invalid value 256 for enum Font",
+            "print: Unable to assign property Font. Invalid value 512 for enum Font",
+            "print: Unable to assign property Font. Invalid value \"Wood\" for enum Font",
+        ]
+    );
+}
+
+/// A directory of the source tree that holds only scripts stands for the instance the place keeps them in: the place's
+/// hierarchy lists that path as a Part (a published place holds a Part with its scripts inside while the source tree has
+/// only the scripts), so the directory is a Part, Studio-only, with its scripts and the hierarchy's other children in it,
+/// and a clone of it is a Part a script can move; it was a Folder, and setting its CFrame raised `CFrame is not a valid
+/// member of Folder`. A directory the hierarchy lists as a Folder or a script, or does not list, stays a Folder, and
+/// place content's stored instance keeps the directory's scripts.
+#[test]
+fn a_directory_of_scripts_is_the_instance_the_place_keeps_them_in() {
+    use rbx_dom_weak::{InstanceBuilder, WeakDom, types::{Variant, Vector3}};
+    let dir = std::env::temp_dir().join(format!("ree-dir-classes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (project, repo) = (dir.join("project"), dir.join("repo"));
+    let skill = project.join("place/ReplicatedStorage/Effects/Skill");
+    for sub in ["Frog/Inner", "Plain", "Lonely", "Coded", "Wind"] {
+        std::fs::create_dir_all(skill.join(sub)).unwrap();
+    }
+    std::fs::write(skill.join("Frog/SelfDestruct.server.luau"), "return nil").unwrap();
+    std::fs::write(skill.join("Frog/Inner/Helper.luau"), "return 1").unwrap();
+    std::fs::write(skill.join("Plain/A.luau"), "return 1").unwrap();
+    std::fs::write(skill.join("Lonely/B.luau"), "return 1").unwrap();
+    std::fs::write(skill.join("Coded/C.luau"), "return 1").unwrap();
+    std::fs::write(skill.join("Wind/Textures.server.luau"), "-- the source tree's").unwrap();
+    std::fs::create_dir_all(project.join(super::project::SNAPSHOTS_DIR)).unwrap();
+    std::fs::write(project.join(super::project::PLACES_FILE), r#"{"environments":[{"name":"Lobby","projectFile":"place/default.project.json"}]}"#).unwrap();
+    let node = |name: &str, class: &str, parent: i64| format!(r#"{{"name":"{name}","className":"{class}","parent":{parent}}}"#);
+    let nodes = [
+        node("game", "DataModel", -1),
+        node("ReplicatedStorage", "ReplicatedStorage", 0),
+        node("Effects", "Folder", 1),
+        node("Skill", "Folder", 2),
+        node("Frog", "Part", 3),
+        node("SelfDestruct", "Script", 4),
+        node("Spark", "ParticleEmitter", 4),
+        node("Inner", "Attachment", 4),
+        node("Plain", "Folder", 3),
+        node("Coded", "ModuleScript", 3),
+        node("Wind", "Part", 3),
+    ];
+    std::fs::write(project.join(super::project::SNAPSHOTS_DIR).join("Lobby.json"), format!(r#"{{"nodes":[{}]}}"#, nodes.join(","))).unwrap();
+    // Wind as the place stores it: a sized Part with a mesh, and an older copy of its script
+    let mut place = WeakDom::new(InstanceBuilder::new("DataModel"));
+    let root = place.root_ref();
+    let wind = place.insert(root, InstanceBuilder::new("Part").with_name("Wind").with_property("Size", Vector3::new(2.0, 3.0, 4.0)));
+    place.insert(wind, InstanceBuilder::new("SpecialMesh").with_name("Mesh"));
+    place.insert(wind, InstanceBuilder::new("Script").with_name("Textures").with_property("Source", Variant::String("-- the place's older copy".into())));
+    let content = repo.join("data/place-content/Lobby/ReplicatedStorage/Effects/Skill");
+    std::fs::create_dir_all(&content).unwrap();
+    let mut bytes = Vec::new();
+    rbx_binary::to_writer(&mut bytes, &place, &[wind]).unwrap();
+    std::fs::write(content.join("Wind.rbxm"), bytes).unwrap();
+
+    let engine = Engine::new(Options { repo, ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    let spec = super::mount::ProjectSpec { roots: vec![project.join("place").to_string_lossy().replace('\\', "/")], ..Default::default() };
+    super::mount::mount_project(&lua, &engine, &spec, std::time::Instant::now()).expect("mount");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Skill = game:GetService("ReplicatedStorage").Effects.Skill
+        local Frog = Skill.Frog
+        assert(Frog.ClassName == "Part" and Frog:IsA("BasePart"), "the place's class " .. Frog.ClassName)
+        assert(Frog.SelfDestruct.ClassName == "Script", "its script")
+        assert(Frog.Inner.ClassName == "Attachment" and Frog.Inner.Helper.ClassName == "ModuleScript", "a nested directory takes its class too")
+        assert(Frog:FindFirstChild("Spark") and Frog.Spark.ClassName == "ParticleEmitter", "the hierarchy's other children")
+        local Copy = Frog:Clone()
+        Copy.Parent = workspace
+        Copy.CFrame = CFrame.new(1, 2, 3)
+        assert(Copy.ClassName == "Part" and Copy.Position == Vector3.new(1, 2, 3) and Copy:FindFirstChild("SelfDestruct"), "a clone is a Part with its script")
+        assert(Skill.Plain.ClassName == "Folder" and Skill.Lonely.ClassName == "Folder" and Skill.Coded.ClassName == "Folder", "Folder, unlisted and script paths stay Folders")
+        local Wind = Skill.Wind
+        local Count = 0
+        for _, Child in Skill:GetChildren() do
+            if Child.Name == "Wind" then
+                Count += 1
+            end
+        end
+        assert(Count == 1, "one Wind")
+        assert(Wind.ClassName == "Part" and Wind.Size == Vector3.new(2, 3, 4) and Wind:FindFirstChild("Mesh"), "place content's stored Wind")
+        local Scripts = 0
+        for _, Child in Wind:GetChildren() do
+            if Child.Name == "Textures" then
+                Scripts += 1
+            end
+        end
+        assert(Scripts == 1, "the source tree's script replaces the stored copy")
+        print("ok")
+        "#,
+    );
+    assert!(output.contains(&"print: ok".to_string()), "{output:?}");
+    let state = engine.state.borrow();
+    let textures = state.dom.descendants(engine.world().game).into_iter().find(|&id| state.dom.at(id).name.as_bytes() == b"Textures").expect("Textures");
+    assert!(state.dom.at(textures).source_path().is_some_and(|path| path.ends_with("Wind/Textures.server.luau")), "the source tree's script");
+    drop(state);
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A model file's stored pivot (WorldPivotData) is the model's pivot, not its parts' centre, and a
 /// nested model's stored pivot moves with its ancestor: a scene moved with PivotTo can aim its camera
 /// rig from a nested rig's pivot.
