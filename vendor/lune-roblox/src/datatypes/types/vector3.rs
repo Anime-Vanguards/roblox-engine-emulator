@@ -94,16 +94,57 @@ pub fn charge_host_nanos(lua: &Lua, nanos: i32) {
     }
 }
 
-/// What Studio spends on the other datatypes' operations that cost more than a call (CFrame's are in `cframe::price`):
-/// the lobby playtest client's median of four runs of an op_cost probe less what ree counts for the
-/// loop without a price. The other datatype rows are within 35 % of the client's number without one (Vector2 / UDim /
-/// NumberRange / Ray constructors, Color3.new / fromRGB / fromHSV, UDim2.new, ToHSV), +-15 ns of noise.
+/// What a client spends on the other datatypes' operations (CFrame's are in `cframe::price`) beyond what the work clock counts
+/// for the instructions that reach them (the loads, the call, the loop around them), in nanoseconds: the parity bench
+/// (tools/cost-parity, a rendered client of a game's match place, nine sessions of the whole corpus, the median of 9 rounds each),
+/// each price fitted on the rows that are not held out. A value the operation makes (a new UDim, Vector2 or keypoint) is the engine's
+/// allocation, which a script's own instructions do not count here, and the rows that make one vary 2-3x between sessions with the
+/// collector's phase (CFrame:Inverse 18-65 ns): the figures are the sessions' medians. Rows without a price read within 25 % without one.
 pub mod datatype_price {
-    pub const COLOR3_LERP: i32 = 21;
-    pub const UDIM2_FROM_OFFSET: i32 = 20;
-    pub const UDIM2_LERP: i32 = 17;
-    pub const COLOR_SEQUENCE_NEW: i32 = 50;
-    pub const NUMBER_SEQUENCE_NEW: i32 = 59;
+    /// `+ - * / //` and unary `-` on a Vector2 or UDim, which make a new value (Vector2 + Vector2 15.3 ns whole and unary - 14.9,
+    /// against the 1 ns the instruction counts; held out: Vector2 - * / 13.5-17.4, UDim + 23.0), and on a UDim2 (- 28.0; held out: + 29.6)
+    pub const ARITHMETIC: i32 = 15;
+    pub const UDIM2_ARITHMETIC: i32 = 27;
+    /// `==` / `~=` of two Vector2, UDim, UDim2 or Color3 values, a metamethod call where the VM counts only the instruction
+    /// (Vector2 9.8 ns whole, Color3 10.3; held out: UDim2 10.0)
+    pub const EQ: i32 = 9;
+    /// A member that makes a new value: a ColorSequenceKeypoint's Value (a Color3), a Vector2's Unit, a UDim2's X / Y / Width / Height
+    /// (a UDim): Value 18.5 ns whole, Unit 18.8, UDim2.Y.Scale 21.4 and X.Offset 32.3, where the read counts 2.9 and a UDim's own Scale
+    /// or Offset is 3.3 like any number member (held out: UDim2.X 16.4, Width 17.3)
+    pub const MEMBER_NEW: i32 = 16;
+    /// Vector2:Lerp (20.3 ns whole, a new Vector2) and a Vector2's Magnitude (3.9 ns, against an X read's 3.4)
+    pub const VECTOR2_LERP: i32 = 9;
+    pub const VECTOR2_MAGNITUDE: i32 = 1;
+    /// Color3:Lerp 29.4 ns whole; Color3.new 17.1 and fromHSV 28.0, near what the call counts here (23.2 and 28.6)
+    pub const COLOR3_LERP: i32 = 18;
+    pub const COLOR3_NEW: i32 = -3;
+    /// UDim2.new, fromScale and fromOffset 30.4-32.1 ns whole, UDim2:Lerp 39.9, UDim.new 16.8, Vector2.new 16.9 (the call counts 22.7)
+    pub const UDIM2_NEW: i32 = 8;
+    pub const UDIM2_LERP: i32 = 29;
+    pub const UDIM_NEW: i32 = -6;
+    pub const VECTOR2_NEW: i32 = -6;
+    /// ColorSequence.new of a table of keypoints, by keypoint (five made before the loop 107.9 ns whole; the prelude makes one or two
+    /// colours a table of two: two colours 39.5 ns whole, held out: one colour 70.8), and of colours given to it directly
+    pub const COLOR_SEQUENCE_NEW: i32 = 17;
+    pub const COLOR_SEQUENCE_TABLE: i32 = 0;
+    pub const COLOR_SEQUENCE_TABLE_KEYPOINT: i32 = 16;
+    /// NumberSequence.new of a table of keypoints, which the prelude makes of one or two numbers too (one 63.4 ns whole and two 30.3:
+    /// the collector's phase moves them apart, so the price is their middle), and of numbers given to it directly
+    pub const NUMBER_SEQUENCE_NEW: i32 = 12;
+    pub const NUMBER_SEQUENCE_TABLE: i32 = 28;
+    /// ColorSequenceKeypoint.new and NumberSequenceKeypoint.new (18.1 ns whole each, below what the call counts here: 23.2)
+    pub const KEYPOINT_NEW: i32 = -5;
+    /// A sequence's Keypoints, a new table of new keypoints on every read, by keypoint (ColorSequence of five 145.1 ns whole, of two
+    /// 66.0; NumberSequence of five 105.5, of two 60.5)
+    pub const COLOR_KEYPOINTS: (i32, i32) = (10, 26);
+    pub const NUMBER_KEYPOINTS: (i32, i32) = (28, 15);
+
+    /// What a read of a sequence's Keypoints costs beyond the read, for `count` keypoints at `(base, per keypoint)`
+    pub fn keypoints_read(price: (i32, i32), count: usize) -> i32 {
+        price.0 + price.1 * i32::try_from(count).unwrap_or(i32::MAX / 64)
+    }
+    /// BrickColor.new of a name (48.5 ns whole)
+    pub const BRICK_COLOR_NEW: i32 = 26;
 }
 
 impl LuaExportsTable for Vector3 {

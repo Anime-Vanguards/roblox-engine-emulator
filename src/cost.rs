@@ -82,6 +82,21 @@ pub fn dump_tally() {
 /// is dearer (the bench's CFrame of 100 parts once each, 175 ns, a row held out of the fit; the rig probe's 322): not modelled apart.
 pub const COLD_TOUCH: f64 = 0.045e-6;
 
+/// The first touch in a frame of a GUI object or a UI component ([`COLD_TOUCH`] is a part's): a client lays out and draws every GUI
+/// object every frame, so a script that walks a GUI finds each one out of its caches. Measured in a rendered client of a game's lobby
+/// (roblox-sim, Studio 0.744; a grid of 300 cards laid out in a ScrollingFrame, one loop in a frame of its own each, the median of 15
+/// frames): AbsolutePosition of 300 distinct cards 273 ns a read against 71 for one card read 300 times, a UIGradient's Color read on
+/// 90 distinct gradients 416 against a hot read's 77; Color written on 90 distinct gradients 754 against one gradient's 425, Offset 539
+/// against 178, a Frame's BackgroundColor3 698 against 318. The first touch is 270 ns (the reads' 202 and 339), a write's dirtying
+/// [`cold_write_extra`] on top.
+pub const COLD_TOUCH_GUI: f64 = 0.27e-6;
+
+/// Which first-touch price an instance of `class` pays ([`Touched::touch`]): a GUI object's or UI component's ([`COLD_TOUCH_GUI`]),
+/// else [`COLD_TOUCH`].
+pub fn cold_touch(reflection: &Reflection, class: ClassId) -> f64 {
+    if ColdKind::of(reflection, class) == ColdKind::Gui { COLD_TOUCH_GUI } else { COLD_TOUCH }
+}
+
 /// What a changed write adds to the first touch of an instance in a frame beyond [`COLD_TOUCH`]. A write dirties more of the
 /// instance than a read touches (the property's slot, its change flags, the render or physics structure that hears of it), so a roster
 /// of 100 distinct instances written once each costs more than 100 times the loop's price plus a read's miss: a cold_write probe in
@@ -101,17 +116,44 @@ pub const COLD_TOUCH: f64 = 0.045e-6;
 /// With the first touch at 45 ns ([`COLD_TOUCH`]) each extra below is the cold_write probe's total for the property less that, so the
 /// totals stay what it measured; the parity bench's rosters agree where they were measured (100 parts' CFrame 731 ns over the hot write,
 /// 100 frames' BackgroundTransparency 356: rows held out of the fit), but for a part's Transparency, which it reads at 143 (fitted: 98).
-pub fn cold_write_extra(part: bool, property: &str) -> f64 {
-    1e-9 * match (part, property) {
-        (true, "CFrame" | "Position" | "Orientation" | "Rotation" | "PivotOffset" | "Size") => 735.0,
-        (true, "Color" | "BrickColor" | "Material") => 315.0,
-        (true, "Transparency" | "LocalTransparencyModifier") => 98.0,
-        (false, "Size" | "Position") => 535.0,
-        (false, "BackgroundTransparency" | "TextTransparency" | "ImageTransparency") => 335.0,
+/// A GUI object's first touch is [`COLD_TOUCH_GUI`]'s 270 ns, so its extras are the same totals less that: Size and Position 310, the
+/// transparencies 110, and any other property 75 (the lobby grid's writes on distinct objects above: Color, Offset and
+/// BackgroundColor3 329-380 ns over a hot write).
+pub fn cold_write_extra(kind: ColdKind, property: &str) -> f64 {
+    1e-9 * match (kind, property) {
+        (ColdKind::Part, "CFrame" | "Position" | "Orientation" | "Rotation" | "PivotOffset" | "Size") => 735.0,
+        (ColdKind::Part, "Color" | "BrickColor" | "Material") => 315.0,
+        (ColdKind::Part, "Transparency" | "LocalTransparencyModifier") => 98.0,
+        (ColdKind::Gui, "Size" | "Position") => 310.0,
+        (ColdKind::Gui, "BackgroundTransparency" | "TextTransparency" | "ImageTransparency") => 110.0,
+        (ColdKind::Gui, "Name") => 290.0,
+        (ColdKind::Gui, "SetAttribute") => 560.0,
+        (ColdKind::Gui, _) => 75.0,
         (_, "Name") => 515.0,
         (_, "SetAttribute") => 785.0,
         // (a joint's or bone's Transform and the properties not measured: the first touch alone, as fitted on Motor6D.Transform)
         _ => 0.0,
+    }
+}
+
+/// What an instance's cold costs are priced as ([`cold_touch`], [`cold_write_extra`]): a part, a GUI object or UI component, or any
+/// other instance.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ColdKind {
+    Part,
+    Gui,
+    Other,
+}
+
+impl ColdKind {
+    pub fn of(reflection: &Reflection, class: ClassId) -> Self {
+        if reflection.is_a(class, "BasePart") {
+            ColdKind::Part
+        } else if reflection.is_a(class, "GuiBase2d") || reflection.is_a(class, "UIComponent") {
+            ColdKind::Gui
+        } else {
+            ColdKind::Other
+        }
     }
 }
 
@@ -122,11 +164,27 @@ pub struct Touched {
     stamps: Vec<u32>,
     /// Whether the most recent [`Touched::touch`] found its instance cold
     last_cold: bool,
+    /// The first-touch price of each class ([`cold_touch`]) by ClassId: [`COLD_TOUCH`] for every class until [`Touched::set_prices`]
+    prices: Vec<f64>,
+    /// What each class's cold write extras are priced as ([`ColdKind`]), by ClassId
+    kinds: Vec<ColdKind>,
 }
 
 impl Touched {
     pub fn new() -> Self {
-        Touched { frame: 1, stamps: Vec::new(), last_cold: false }
+        Touched { frame: 1, stamps: Vec::new(), last_cold: false, prices: Vec::new(), kinds: Vec::new() }
+    }
+
+    /// Prices each class's first touch ([`cold_touch`]) and cold writes ([`ColdKind`]).
+    pub fn set_prices(&mut self, reflection: &Reflection) {
+        self.kinds = (0..reflection.class_count() as ClassId).map(|class| ColdKind::of(reflection, class)).collect();
+        self.prices = (0..reflection.class_count() as ClassId).map(|class| cold_touch(reflection, class)).collect();
+    }
+
+    /// What `class`'s cold write extras are priced as ([`cold_write_extra`])
+    #[inline]
+    pub fn kind(&self, class: ClassId) -> ColdKind {
+        self.kinds.get(class as usize).copied().unwrap_or(ColdKind::Other)
     }
 
     /// Whether the most recent touch found its instance cold (a SetAttribute's namecall touches before its body runs); asking clears it,
@@ -140,9 +198,10 @@ impl Touched {
         self.frame = frame as u32 + 1;
     }
 
-    /// [`COLD_TOUCH`] if the instance in slot `index` has not been touched in this frame, else 0; marks it touched.
+    /// The first-touch price of `class` ([`cold_touch`]) if the instance in slot `index` has not been touched in this frame, else 0;
+    /// marks it touched.
     #[inline]
-    pub fn touch(&mut self, index: u32) -> f64 {
+    pub fn touch(&mut self, index: u32, class: ClassId) -> f64 {
         let slot = index as usize;
         if self.stamps.len() <= slot {
             self.stamps.resize(slot + 1 + slot / 2, 0);
@@ -153,7 +212,7 @@ impl Touched {
         } else {
             self.stamps[slot] = self.frame;
             self.last_cold = true;
-            COLD_TOUCH
+            self.prices.get(class as usize).copied().unwrap_or(COLD_TOUCH)
         }
     }
 }
@@ -216,24 +275,31 @@ pub const DESTROYED_PART: f64 = 0.22e-6;
 /// GetDescendants of 110 1.94 us; EditableMesh GetFaces and GetColors 0.01-0.02 us an id in a Studio capture)
 pub const LISTED: f64 = 0.016e-6;
 /// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path crosses, whether
-/// its filter admits them or not: one that crosses any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`] (the parity
-/// bench's rays, on geometry of their own that both sides find the same parts in, in clients that ran the whole corpus: a miss with an
-/// Include filter 0.29 us, an Exclude filter of the one part a ray crosses 0.68, a ray through a stack of 24 parts 4.3 and the same with
-/// an Include filter of one of them 3.4; held out: a miss with no filter 0.17, a hit on one part 0.53). A client that had run only the
-/// method rows read the same rays a third as dear (the stack's 1.5 us): what a client has made and moved before costs its queries.
-pub const RAY_MET: f64 = 0.39e-6;
-pub const RAY_CROSSED: f64 = 0.135e-6;
-/// A part GetPartBoundsInBox or GetPartBoundsInRadius returns (the same geometry and clients: an empty box 0.15 us, a line of 10 parts
-/// 4.3, a radius that touches 2 parts 0.64; held out: a box of 24 parts 11.4), and one GetPartsInPart returns (the 23 others of a stack
-/// 65.5 us; held out: a part that touches nothing 1.9, so the call itself is dearer than modelled)
-pub const QUERY_PART: f64 = 0.31e-6;
-pub const QUERY_PART_EXACT: f64 = 2.84e-6;
+/// its filter admits them or not: one that crosses any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`]. The parity
+/// bench's rays, on geometry of their own that both sides find the same parts in (Meta.queries), beyond the Luau around the call: a
+/// miss with an Include filter 0.27 us, an Exclude filter of the one part a ray crosses 0.45, a ray through a stack of 24 parts 1.50 and
+/// the same with an Include filter of one of them 1.35; held out: a miss with no filter 0.17, a hit on one part 0.41. (The bench's sim
+/// side ran each group of families as a job of one session, and until each job took its scene out again the method rows met every
+/// earlier job's parts too: three stacks of 24, which the first fit read as a ray's or a query's dearness.)
+pub const RAY_MET: f64 = 0.175e-6;
+pub const RAY_CROSSED: f64 = 0.0424e-6;
+/// A part GetPartBoundsInBox returns and one GetPartBoundsInRadius returns (the same geometry: an empty box 0.15 us whether it is 4
+/// studs or 40 across, a line of 10 parts in a box 1.54, a radius that touches 2 parts 0.33; held out: a box of 24 parts 3.80)
+pub const QUERY_BOX_PART: f64 = 0.14e-6;
+pub const QUERY_RADIUS_PART: f64 = 0.09e-6;
+/// A part GetPartsInPart returns (the 23 others of a stack 17.3 us), and its own work by the query part's size: [`method`]'s price for
+/// a part of no size, and [`QUERY_PART_SIZE`] for each stud of the square root of its box's surface area (beyond the Luau around the
+/// call, touching nothing: a 2-stud cube 0.27 us, 12 studs 0.45, 20 studs 0.95, 40 studs 1.26, a 2 x 2 x 40 rod 0.46; held out: a 6-stud
+/// cube 0.25, a 4-stud ball 0.25, a 40 x 2 x 40 slab 0.48, a 2-stud cube with an Include filter 0.45)
+pub const QUERY_PART_EXACT: f64 = 0.74e-6;
+pub const QUERY_PART_SIZE: f64 = 0.011e-6;
 /// FindFirstChild and the other finds: a child looked at past the first (the parity bench: the 20th of 20 children 73 ns, the first 44,
 /// so 1.55 ns a child), and a node a recursive find looks at (a miss over 1,110 nodes 4.2 us: 3.8 ns)
 pub const FIND_CHILD: f64 = 1.55e-9;
 pub const FIND_NODE: f64 = 3.8e-9;
-/// GetTagged: an instance it lists (the parity bench: 10 tagged parts 1.89 us)
-pub const TAGGED_LISTED: f64 = 0.184e-6;
+/// GetTagged: an instance it lists (the parity bench: 10 tagged parts 0.92 us beyond the Luau around the call; the first fit read 1.89,
+/// in a client holding three earlier jobs' tagged parts too)
+pub const TAGGED_LISTED: f64 = 0.086e-6;
 
 /// QueryDescendants: a node it looks at and a node it returns (client: ">>Part" over 100 descendants 3.6 us,
 /// ">>Model > Part#Part3" 1.0 us for 10 matches, edit 2.3 and 1.2)
@@ -604,7 +670,7 @@ pub fn method(name: &str) -> f64 {
         "Fire" => 0.045 + FIRE * 1e6,
         // (the parity bench, beyond the Luau around the call: IsA 25 ns, GetFullName 102, GetPlayers 69, HasTag 41-43, GetTags of a
         // part with none 73, AddTag 393, Emit(1) 383, Camera:WorldToViewportPoint 200, GetAttribute 38-40, TweenService:Create 1.31 us;
-        // a ray and a bounds query by what they meet, [`RAY_MET`] and [`QUERY_PART`]; IsDescendantOf has rows only in the held-out
+        // a ray and a bounds query by what they meet, [`RAY_MET`] and [`QUERY_BOX_PART`]; IsDescendantOf has rows only in the held-out
         // third: a Studio client's 0.015)
         "IsA" => 0.025,
         "IsDescendantOf" | "IsAncestorOf" => 0.015,
@@ -617,10 +683,11 @@ pub fn method(name: &str) -> f64 {
         "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" => 0.20,
         "GetAttribute" => 0.039,
         "Create" => 1.31,
-        "Raycast" => 0.29,
+        "Raycast" => 0.27,
         // (not measured: a ray's)
-        "Blockcast" | "Spherecast" | "Shapecast" => 0.29,
-        "GetPartBoundsInBox" | "GetPartBoundsInRadius" | "GetPartsInPart" => 0.15,
+        "Blockcast" | "Spherecast" | "Shapecast" => 0.27,
+        "GetPartBoundsInBox" | "GetPartBoundsInRadius" => 0.15,
+        "GetPartsInPart" => 0.243,
         // (HttpService:JSONEncode of `{ a = 1, b = "two", c = { 1, 2, 3 } }` 0.69 us; JSONDecode's row, of that table's text, is
         // held out: the same price)
         "JSONEncode" | "JSONDecode" => 0.69,

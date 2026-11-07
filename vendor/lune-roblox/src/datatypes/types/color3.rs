@@ -32,7 +32,8 @@ impl LuaExportsTable for Color3 {
     const EXPORT_NAME: &'static str = "Color3";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        let color3_from_rgb = |_: &Lua, (r, g, b): (Option<u8>, Option<u8>, Option<u8>)| {
+        let color3_from_rgb = |lua: &Lua, (r, g, b): (Option<u8>, Option<u8>, Option<u8>)| {
+            super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
             Ok(Color3 {
                 r: (r.unwrap_or_default() as f32) / 255f32,
                 g: (g.unwrap_or_default() as f32) / 255f32,
@@ -40,7 +41,8 @@ impl LuaExportsTable for Color3 {
             })
         };
 
-        let color3_from_hsv = |_: &Lua, (h, s, v): (f32, f32, f32)| {
+        let color3_from_hsv = |lua: &Lua, (h, s, v): (f32, f32, f32)| {
+            super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
             // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c
             let i = (h * 6.0).floor();
             let f = h * 6.0 - i;
@@ -94,7 +96,8 @@ impl LuaExportsTable for Color3 {
             }
         };
 
-        let color3_new = |_: &Lua, (r, g, b): (Option<f32>, Option<f32>, Option<f32>)| {
+        let color3_new = |lua: &Lua, (r, g, b): (Option<f32>, Option<f32>, Option<f32>)| {
+            super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
             Ok(Color3 {
                 r: r.unwrap_or_default(),
                 g: g.unwrap_or_default(),
@@ -181,7 +184,10 @@ impl LuaUserData for Color3 {
             ))
         });
         // Metamethods
-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
+            super::charge_host_nanos(lua, super::datatype_price::EQ);
+            userdata_impl_eq(lua, this, value)
+        });
         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
         methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
         methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);

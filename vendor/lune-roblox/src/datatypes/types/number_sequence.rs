@@ -85,8 +85,8 @@ impl LuaExportsTable for NumberSequence {
         type ArgsColors = (f32, f32);
 
         let number_sequence_new = |lua: &Lua, args: LuaMultiValue| {
-            super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
             if let Ok(value) = ArgsColor::from_lua_multi(args.clone(), lua) {
+                super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
                 Ok(NumberSequence {
                     keypoints: vec![
                         NumberSequenceKeypoint {
@@ -102,6 +102,7 @@ impl LuaExportsTable for NumberSequence {
                     ],
                 })
             } else if let Ok((v0, v1)) = ArgsColors::from_lua_multi(args.clone(), lua) {
+                super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
                 Ok(NumberSequence {
                     keypoints: vec![
                         NumberSequenceKeypoint {
@@ -117,6 +118,7 @@ impl LuaExportsTable for NumberSequence {
                     ],
                 })
             } else if let Some(LuaValue::Table(table)) = args.front() {
+                super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_TABLE);
                 let mut keypoints: Vec<NumberSequenceKeypoint> =
                     sequence_keypoints(lua, table, "NumberSequence")?;
                 let times: Vec<f32> = keypoints.iter().map(|k| k.time).collect();
@@ -140,7 +142,11 @@ impl LuaExportsTable for NumberSequence {
 
 impl LuaUserData for NumberSequence {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("Keypoints", |_, this| Ok(this.keypoints.clone()));
+        // (a new table of new keypoints on every read)
+        fields.add_field_method_get("Keypoints", |lua, this| {
+            super::charge_host_nanos(lua, super::datatype_price::keypoints_read(super::datatype_price::NUMBER_KEYPOINTS, this.keypoints.len()));
+            Ok(this.keypoints.clone())
+        });
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {

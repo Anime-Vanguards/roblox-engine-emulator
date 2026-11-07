@@ -689,7 +689,7 @@ fn charge_cast(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32) {
     }
 }
 
-/// A spatial query's charge beyond its call's price (cost.rs QUERY_PART, RAY_CROSSED)
+/// A spatial query's charge beyond its call's price (cost.rs QUERY_BOX_PART, RAY_CROSSED)
 fn charge_query(engine: &Engine, seconds: f64) {
     if seconds > 0.0 {
         engine.state.borrow().sched.charge(seconds);
@@ -772,7 +772,7 @@ pub fn install(engine: &Rc<Engine>) {
         };
         let filter = take_filter(engine, args.get(3));
         let parts = overlapping(engine, filter, |s| overlaps_box(s, &frame, size));
-        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_PART);
+        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_BOX_PART);
         parts_table(lua, engine, parts)
     })));
     members.push(("GetPartBoundsInRadius", method(|lua, engine, _, args| {
@@ -781,7 +781,7 @@ pub fn install(engine: &Rc<Engine>) {
         };
         let filter = take_filter(engine, args.get(3));
         let parts = overlapping(engine, filter, |s| overlaps_sphere(s, center, radius as f32));
-        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_PART);
+        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_RADIUS_PART);
         parts_table(lua, engine, parts)
     })));
     members.push(("GetPartsInPart", method(|lua, engine, _, args| {
@@ -795,7 +795,10 @@ pub fn install(engine: &Rc<Engine>) {
                     _ => overlaps_box(s, &query.frame, query.half_extents() * 2.0),
                 }
         });
-        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_PART_EXACT);
+        // (its own work grows with the query part's box: cost.rs QUERY_PART_SIZE)
+        let box_size = query.half_extents() * 2.0;
+        let area = 2.0 * (box_size.x * box_size.y + box_size.y * box_size.z + box_size.z * box_size.x);
+        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_PART_EXACT + f64::from(area.max(0.0)).sqrt() * crate::cost::QUERY_PART_SIZE);
         parts_table(lua, engine, parts)
     })));
     members.push(("FindPartOnRay", method(|lua, engine, _, args| find_part_on_ray(lua, engine, args.get(1), args.get(2), false))));

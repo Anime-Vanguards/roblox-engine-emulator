@@ -175,19 +175,6 @@ local Zero = LuneVector3New(0, 0, 0)
 ConvertMetatable(Datatypes.Ray.new(Zero, Zero))
 ConvertMetatable(Datatypes.Region3.new(Zero, Zero))
 
--- Vector2's deprecated lowercase members (Roblox's PlayerModule reads `ViewportSize.x`): the alias
--- alone, its other members and operators stay Lune's
-do
-	local Aliases = { x = "X", y = "Y", magnitude = "Magnitude", unit = "Unit" }
-	local Meta = R.RawMetatable(Datatypes.Vector2.new(0, 0))
-	local Index = rawget(Meta, "__index")
-	if type(Index) == "function" then
-		rawset(Meta, "__index", function(Self, Key)
-			return Index(Self, Aliases[Key] or Key)
-		end)
-	end
-end
-
 -- The script library's own members (the prelude's ScriptLibrary takes these before Lune's)
 local Library = {
 	zero = vector.zero,

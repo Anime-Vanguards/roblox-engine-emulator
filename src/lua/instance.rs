@@ -316,7 +316,7 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
                     // (a behaviour's setter stores through the engine: priced as a write that changed)
                     let state = engine.state.borrow();
                     let placed = engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of(id, engine.world().workspace);
-                    let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), true, placed) + write_touch(engine, &state, id, engine.reflection.name(name), true);
+                    let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), true, placed) + write_touch(&state, id, engine.reflection.name(name), true);
                     state.sched.charge(price);
                     cross_set(engine, &state, id, name, price, true);
                     return Ok(());
@@ -347,10 +347,12 @@ pub fn set_property(engine: &Engine, id: InstanceId, name: NameId, value: Value)
 /// What a script's write adds to its price for the cache the engine's write path runs in (crate::cost): the first touch of the
 /// instance in the frame (a read's miss), and for a changed write the property's share of a dirtied instance on top of it. A write
 /// that changed nothing pays only the first touch.
-fn write_touch(engine: &Engine, state: &State, id: InstanceId, property: &str, changed: bool) -> f64 {
-    let touch = state.sched.touched.borrow_mut().touch(id.index);
+fn write_touch(state: &State, id: InstanceId, property: &str, changed: bool) -> f64 {
+    let class = state.dom.at(id).class;
+    let mut touched = state.sched.touched.borrow_mut();
+    let touch = touched.touch(id.index, class);
     if changed && touch > 0.0 {
-        touch + crate::cost::cold_write_extra(engine.reflection.is_a(state.dom.at(id).class, "BasePart"), property)
+        touch + crate::cost::cold_write_extra(touched.kind(class), property)
     } else {
         touch
     }
@@ -374,7 +376,7 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
     let placed = changed && engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of(id, engine.world().workspace);
     let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), changed, placed)
         * crate::cost::place_write_scale(&engine.options.place_prices, engine.options.place_id, engine.reflection.name(name), placed);
-    let paid = price + write_touch(engine, &state, id, engine.reflection.name(name), changed);
+    let paid = price + write_touch(&state, id, engine.reflection.name(name), changed);
     state.sched.charge(paid);
     cross_set(engine, &state, id, name, paid, changed);
     crate::cost::tally_write(&engine.reflection.class(class).name, engine.reflection.name(name), changed, placed, price);
@@ -409,7 +411,10 @@ pub fn set_attribute(engine: &Engine, id: InstanceId, name: Str, value: Value) {
     // (the version moves only when the attribute changed)
     if state.dom.at(id).version != version {
         // (the namecall that got here touched the instance first: a cold one pays the dirtied instance's extra, as a property write does)
-        let cold = if state.sched.touched.borrow_mut().take_last_cold() { crate::cost::cold_write_extra(true, "SetAttribute") } else { 0.0 };
+        let cold = {
+            let mut touched = state.sched.touched.borrow_mut();
+            if touched.take_last_cold() { crate::cost::cold_write_extra(touched.kind(state.dom.at(id).class), "SetAttribute") } else { 0.0 }
+        };
         state.sched.charge(crate::cost::ATTRIBUTE_CHANGED + cold);
         let hooks = engine.hooks.borrow();
         if !hooks.attribute_changed.is_empty() {

@@ -551,9 +551,9 @@ fn cframe_operations_run_natively_and_keep_their_work_clock_charge() {
     run(0); // (the libraries resolve their members on first use)
     let (none_calls, none_ops) = run(0);
     let (hundred_calls, hundred_ops) = run(100);
-    // 100 rounds of: Position and LookVector (0), a product of CFrames (21), of a CFrame and a vector (8), a sum (46),
-    // Inverse (9), ToAxisAngle (10), PointToWorldSpace (8), ToWorldSpace (10) and Lerp (49: the rig frame's 66.8 ns; was 91).
-    // Before the rig frame's prices: ToAxisAngle was 3, PointToWorldSpace -4 and ToWorldSpace 55 (the rig frame reads 25.4, 24.4 and 26.6 ns whole)
-    assert_eq!(hundred_calls - none_calls, 100 * (21 + 8 + 46 + 9 + 10 + 8 + 10 + 49));
+    // 100 rounds of: Position and LookVector (1 each), a product of CFrames (21), of a CFrame and a vector (11), a sum (21),
+    // Inverse (26), ToAxisAngle (10), PointToWorldSpace (8), ToWorldSpace (10) and Lerp (66): the parity bench's prices where it has a
+    // row outside its held-out third (cframe.rs `price`), the rig frame's for the others
+    assert_eq!(hundred_calls - none_calls, 100 * (1 + 1 + 21 + 11 + 21 + 26 + 10 + 8 + 10 + 66));
     assert_eq!(hundred_ops - none_ops, 0, "a CFrame operation ran engine Luau");
 }

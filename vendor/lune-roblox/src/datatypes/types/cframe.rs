@@ -53,24 +53,31 @@ pub mod price {
     //! `:ToWorldSpace`, `:PointToWorldSpace` and `:ToAxisAngle` follow (the same bench, a match place's client, six
     //! runs of six readings, medians in ns): ToWorldSpace 26.6 (16-121; the twin of ToObjectSpace, which reads 28.5),
     //! PointToWorldSpace 24.4 with the vector hoisted out of the loop, ToAxisAngle 22.2 here and 26.3 in the earlier three runs.
-    pub const MEMBER: i32 = 0;
-    pub const ROTATION: i32 = 29;
+    //!
+    //! Refitted (2026-11-07) where the parity bench (tools/cost-parity: a rendered client of a game's match place, nine sessions of
+    //! the whole corpus, the median of 9 rounds of a loop each) has a row outside its held-out third, ns whole: GetComponents 22.0 (all
+    //! twelve values taken 26.9), `cf + v` 22.1, Rotation 18.1, Angles 41.3, the twelve-number constructor 35.5, Inverse 36.3, Lerp
+    //! 75.7, PointToObjectSpace 17.9, ToEulerAnglesXYZ 22.1, ToObjectSpace 20.2, `cf * v` 12.3, X / LookVector / RightVector 3.3-3.7.
+    //! Those rows read 0.41-5.9x before (GetComponents 131 ns). `*`, `==`, lookAt and the three-number constructor keep their
+    //! prices: their rows are held out (`*` 41.8, lookAt 43.3, new 18.8).
+    pub const MEMBER: i32 = 1;
+    pub const ROTATION: i32 = 17;
     pub const MUL_CFRAME: i32 = 21;
     /// `CFrame == CFrame` is a metamethod call in Studio (22.2 ns median in the rig frame), where the VM counts only the
     /// instruction
     pub const EQ: i32 = 17;
-    pub const MUL_VECTOR: i32 = 8;
-    pub const ADD_VECTOR: i32 = 46;
-    pub const INVERSE: i32 = 9;
-    pub const LERP: i32 = 49;
+    pub const MUL_VECTOR: i32 = 11;
+    pub const ADD_VECTOR: i32 = 21;
+    pub const INVERSE: i32 = 26;
+    pub const LERP: i32 = 66;
     pub const TO_WORLD: i32 = 10;
-    pub const TO_OBJECT: i32 = 12;
+    pub const TO_OBJECT: i32 = 10;
     pub const POINT_TO_WORLD: i32 = 8;
-    pub const POINT_TO_OBJECT: i32 = 0;
+    pub const POINT_TO_OBJECT: i32 = 7;
     pub const VECTOR_TO_WORLD: i32 = -4;
     pub const VECTOR_TO_OBJECT: i32 = 0;
-    pub const COMPONENTS: i32 = 121;
-    pub const EULER: i32 = 8;
+    pub const COMPONENTS: i32 = 14;
+    pub const EULER: i32 = 12;
     pub const AXIS_ANGLE: i32 = 10;
     /// (not measured)
     pub const ORTHONORMALIZE: i32 = 0;
@@ -79,10 +86,10 @@ pub mod price {
     pub const NEW_LOOK: i32 = 55;
     /// (not measured)
     pub const NEW_QUAT: i32 = 0;
-    /// (not measured)
-    pub const NEW_MATRIX: i32 = 0;
-    /// negative: the constructor's call and the instructions that reach it already count more than Studio's 27-29 ns
-    pub const ANGLES: i32 = -3;
+    /// (the twelve-number constructor)
+    pub const NEW_MATRIX: i32 = 8;
+    /// (a Studio playtest client read Angles at 27-29 ns, below what the call counts here; a client of the match place 49.6)
+    pub const ANGLES: i32 = 18;
     pub const FROM_AXIS_ANGLE: i32 = 48;
     pub const LOOK_AT: i32 = 55;
 }

@@ -33,8 +33,8 @@ impl LuaExportsTable for ColorSequence {
         type ArgsColors = (LuaUserDataRef<Color3>, LuaUserDataRef<Color3>);
 
         let color_sequence_new = |lua: &Lua, args: LuaMultiValue| {
-            super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
             if let Ok(color) = ArgsColor::from_lua_multi(args.clone(), lua) {
+                super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
                 Ok(ColorSequence {
                     keypoints: vec![
                         ColorSequenceKeypoint {
@@ -48,6 +48,7 @@ impl LuaExportsTable for ColorSequence {
                     ],
                 })
             } else if let Ok((c0, c1)) = ArgsColors::from_lua_multi(args.clone(), lua) {
+                super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
                 Ok(ColorSequence {
                     keypoints: vec![
                         ColorSequenceKeypoint {
@@ -63,6 +64,11 @@ impl LuaExportsTable for ColorSequence {
             } else if let Some(LuaValue::Table(table)) = args.front() {
                 let mut keypoints: Vec<ColorSequenceKeypoint> =
                     sequence_keypoints(lua, table, "ColorSequence")?;
+                let count = i32::try_from(keypoints.len()).unwrap_or(i32::MAX / 64);
+                super::charge_host_nanos(
+                    lua,
+                    super::datatype_price::COLOR_SEQUENCE_TABLE + super::datatype_price::COLOR_SEQUENCE_TABLE_KEYPOINT * count,
+                );
                 let times: Vec<f32> = keypoints.iter().map(|k| k.time).collect();
                 check_sequence_times("ColorSequence", &times)?;
                 let last = keypoints.len() - 1;
@@ -85,7 +91,11 @@ impl LuaExportsTable for ColorSequence {
 
 impl LuaUserData for ColorSequence {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("Keypoints", |_, this| Ok(this.keypoints.clone()));
+        // (a new table of new keypoints on every read)
+        fields.add_field_method_get("Keypoints", |lua, this| {
+            super::charge_host_nanos(lua, super::datatype_price::keypoints_read(super::datatype_price::COLOR_KEYPOINTS, this.keypoints.len()));
+            Ok(this.keypoints.clone())
+        });
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {

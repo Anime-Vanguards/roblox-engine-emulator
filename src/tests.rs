@@ -4030,40 +4030,141 @@ fn the_work_clock_prices_datatype_operations_as_the_studio_bench_measured() {
         local V, W = Vector3.new(1, 2, 3), Vector3.new(4, 5, 6)
         local K, L = Color3.new(0.2, 0.4, 0.6), Color3.new(0.8, 0.6, 0.4)
 
-        -- client medians in ns: members 1.3, * CFrame 62, * Vector3 10, Inverse 69, ToAxisAngle 18, Lerp 110, ToObjectSpace 71,
-        -- PointToWorldSpace 12, GetComponents 245, ToEulerAnglesXYZ 22, Rotation 63, + Vector3 47, Angles 87, lookAt 85
+        -- the parity bench's figures (tools/cost-parity, a rendered client of a game's match place, nine sessions: each loop's ns a step,
+        -- the loop included) where it has a row outside its held-out third, bands of about 1.3x around them; the rig frame's (a match
+        -- place's playtest client) for the operations it has no row for
         Within("CFrame.Position", Per(function(N) for _ = 1, N do local _ = A.Position end end), 0, 6)
         -- the product and the inverse are priced as a handler meets them, a few times a frame (rig frame, 24.6 and
         -- 24.5 ns); the op_cost loop of the lobby client reads 62 and 69, an empty test place's 20 and 20
         Within("CFrame * CFrame", Per(function(N) for _ = 1, N do local _ = A * B end end), 17, 40)
-        Within("CFrame * Vector3", Per(function(N) for _ = 1, N do local _ = A * V end end), 6, 14)
+        Within("CFrame * Vector3", Per(function(N) for _ = 1, N do local _ = A * V end end), 8, 17)
         Within("CFrame:Inverse", Per(function(N) for _ = 1, N do local _ = A:Inverse() end end), 17, 40)
         -- ToAxisAngle, ToWorldSpace and PointToWorldSpace from the rig frame as well (25.4, 26.6 and 24.4 ns: six runs of six
         -- readings in a match place's client), bands of 1.3x around them; the lobby client's op_cost loop reads 18, 55 and 12
         Within("CFrame:ToAxisAngle", Per(function(N) for _ = 1, N do local _, _ = A:ToAxisAngle() end end), 19, 33)
         Within("CFrame:ToWorldSpace", Per(function(N) for _ = 1, N do local _ = A:ToWorldSpace(B) end end), 20, 35)
-        -- Lerp, ToObjectSpace, Rotation and Angles likewise come from the rig frame (66.8, 28.9, 30.3 and 28.6 ns), bands
-        -- of 1.3x around them; the lobby client's op_cost loop reads 110, 71, 63 and 87
-        Within("CFrame:Lerp", Per(function(N) for _ = 1, N do local _ = A:Lerp(B, 0.5) end end), 51, 87)
-        Within("CFrame:ToObjectSpace", Per(function(N) for _ = 1, N do local _ = A:ToObjectSpace(B) end end), 22, 38)
+        -- the bench: Lerp 75.7, ToObjectSpace 20.2, GetComponents 22.0, ToEulerAnglesXYZ 22.1, Rotation 18.1, + Vector3 22.1, Angles 41.3
+        Within("CFrame:Lerp", Per(function(N) for _ = 1, N do local _ = A:Lerp(B, 0.5) end end), 58, 98)
+        Within("CFrame:ToObjectSpace", Per(function(N) for _ = 1, N do local _ = A:ToObjectSpace(B) end end), 15, 27)
         Within("CFrame:PointToWorldSpace", Per(function(N) for _ = 1, N do local _ = A:PointToWorldSpace(V) end end), 14, 32)
-        Within("CFrame:GetComponents", Per(function(N) for _ = 1, N do local _ = { A:GetComponents() } end end), 170, 330)
-        Within("CFrame:ToEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _, _, _ = A:ToEulerAnglesXYZ() end end), 15, 30)
-        Within("CFrame.Rotation", Per(function(N) for _ = 1, N do local _ = A.Rotation end end), 23, 39)
-        Within("CFrame + Vector3", Per(function(N) for _ = 1, N do local _ = A + V end end), 32, 65)
-        -- (the instructions around these are priced by kind since, lower: the bench reads CFrame.Angles at 42 ns, a datatype price
-        -- not refitted yet)
-        Within("CFrame.Angles", Per(function(N) for _ = 1, N do local _ = CFrame.Angles(0.1, 0.2, 0.3) end end), 15, 37)
-        Within("CFrame.fromEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _ = CFrame.fromEulerAnglesXYZ(0.1, 0.2, 0.3) end end), 15, 35)
+        Within("CFrame:GetComponents", Per(function(N) for _ = 1, N do local _ = A:GetComponents() end end), 16, 29)
+        Within("CFrame:ToEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _, _, _ = A:ToEulerAnglesXYZ() end end), 15, 29)
+        Within("CFrame.Rotation", Per(function(N) for _ = 1, N do local _ = A.Rotation end end), 13, 24)
+        Within("CFrame + Vector3", Per(function(N) for _ = 1, N do local _ = A + V end end), 16, 29)
+        Within("CFrame.Angles", Per(function(N) for _ = 1, N do local _ = CFrame.Angles(0.1, 0.2, 0.3) end end), 30, 54)
+        -- (fromEulerAnglesXYZ has no row: Angles' price)
+        Within("CFrame.fromEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _ = CFrame.fromEulerAnglesXYZ(0.1, 0.2, 0.3) end end), 30, 54)
+        -- (lookAt's row is held out, 43.3: its price stays the playtest client's)
         Within("CFrame.lookAt", Per(function(N) for _ = 1, N do local _ = CFrame.lookAt(V, W) end end), 60, 115)
-        Within("Color3:Lerp", Per(function(N) for _ = 1, N do local _ = K:Lerp(L, 0.5) end end), 27, 54)
-        Within("UDim2.fromOffset", Per(function(N) for _ = 1, N do local _ = UDim2.fromOffset(10, 10) end end), 32, 68)
-        Within("ColorSequence.new", Per(function(N) for _ = 1, N do local _ = ColorSequence.new(K, L) end end), 52, 110)
-        Within("NumberSequence.new", Per(function(N) for _ = 1, N do local _ = NumberSequence.new(0.5) end end), 56, 118)
+        -- the bench: Color3:Lerp 29.4, UDim2.fromOffset 32.1, ColorSequence.new of two colours 39.5, NumberSequence.new of a number
+        -- 63.4 and of two 30.3 (the collector's phase moves those two apart: a wide band)
+        Within("Color3:Lerp", Per(function(N) for _ = 1, N do local _ = K:Lerp(L, 0.5) end end), 22, 39)
+        Within("UDim2.fromOffset", Per(function(N) for _ = 1, N do local _ = UDim2.fromOffset(10, 10) end end), 24, 42)
+        Within("ColorSequence.new", Per(function(N) for _ = 1, N do local _ = ColorSequence.new(K, L) end end), 30, 52)
+        Within("NumberSequence.new", Per(function(N) for _ = 1, N do local _ = NumberSequence.new(0.5) end end), 28, 82)
         print("ok")
         "#,
     );
     assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
+}
+
+/// Vector2 and UDim2 values cost what a client pays for them (lune-roblox `datatype_price`; the parity bench, tools/cost-parity, a
+/// rendered client of a game's match place, nine sessions, ns a loop step): a Vector2's X read 3.4 ns, its deprecated x the same (ree
+/// served the lowercase names through a Luau wrapper, charged as a host call: 17.9 ns each), `+` 15.3 and `==` 9.8 (ree: 1.0 and 1.4,
+/// the instruction alone), a UDim2's X.Offset 32.3 (a new UDim; ree: 5.4) and `-` 28.0 (ree: 1.0), a ColorSequence's Keypoints of five
+/// 145.1 (a new table of new keypoints; ree: 2.9).
+#[test]
+fn vector2_and_udim2_members_and_arithmetic_cost_what_a_client_pays() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Per(Body)
+            local N = 2000
+            local start = os.clock()
+            Body(N)
+            local middle = os.clock()
+            for _ = 1, N do end
+            return ((middle - start) - (os.clock() - middle)) / N * 1e9
+        end
+        local function Within(Name, Value, Low, High)
+            assert(Value >= Low and Value <= High, string.format("%s: %.1f ns, a client %d-%d", Name, Value, Low, High))
+        end
+        local A, B = Vector2.new(3, 4), Vector2.new(1, 2)
+        assert(A.x == A.X and A.y == A.Y and A.magnitude == A.Magnitude and A.unit == A.Unit, "the lowercase names read the same values")
+        Within("Vector2.X", Per(function(N) for _ = 1, N do local _ = A.X end end), 1, 5)
+        Within("Vector2.x", Per(function(N) for _ = 1, N do local _ = A.x end end), 1, 5)
+        Within("Vector2 + Vector2", Per(function(N) for _ = 1, N do local _ = A + B end end), 11, 21)
+        Within("Vector2 == Vector2", Per(function(N) for _ = 1, N do local _ = A == B end end), 6, 14)
+        local U, V = UDim2.new(0.5, 10, 0.25, 4), UDim2.new(0.1, 2, 0.3, 8)
+        Within("UDim2.X.Offset", Per(function(N) for _ = 1, N do local _ = U.X.Offset end end), 14, 34)
+        Within("UDim2 - UDim2", Per(function(N) for _ = 1, N do local _ = U - V end end), 20, 36)
+        local K = Color3.new(1, 0.5, 0)
+        local S = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, K), ColorSequenceKeypoint.new(0.25, K), ColorSequenceKeypoint.new(0.5, K),
+            ColorSequenceKeypoint.new(0.75, K), ColorSequenceKeypoint.new(1, K),
+        })
+        Within("ColorSequence.Keypoints", Per(function(N) for _ = 1, N do local _ = S.Keypoints end end), 105, 185)
+        print("ok")
+        "#,
+    );
+    assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
+}
+
+/// A GUI object's first touch in a frame costs a laid-out GUI's (cost.rs COLD_TOUCH_GUI): a client lays out and draws every GUI object
+/// every frame, so a walk over many finds each one cold (a rendered client of a game's lobby, a grid of 300 cards: AbsolutePosition of
+/// distinct cards 273 ns against 71 for one card, a UIGradient's Color read on distinct gradients 416 against 77, a Frame's
+/// BackgroundColor3 written on distinct frames 698 against 318). ree charged a part's 45 ns for every class.
+#[test]
+fn a_gui_objects_first_touch_in_a_frame_costs_what_a_drawn_gui_pays() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Gui = Instance.new("ScreenGui")
+        Gui.Name = "Cards"
+        Gui.Parent = game:GetService("StarterGui")
+        for Index = 1, 200 do
+            local Card = Instance.new("Frame")
+            Card.Parent = Gui
+            Instance.new("UIGradient").Parent = Card
+        end
+        "#,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Cards = game:GetService("StarterGui").Cards:GetChildren()
+        local Gradients = {}
+        local function Per(Body)
+            local start = os.clock()
+            Body()
+            return (os.clock() - start) / #Cards * 1e9
+        end
+        local function Within(Name, Value, Low, High)
+            assert(Value >= Low and Value <= High, string.format("%s: %.0f ns, a client %d-%d", Name, Value, Low, High))
+        end
+        -- (GetChildren listed the cards without touching them: each is cold)
+        local Cold = Per(function() for _, Card in Cards do local _ = Card.Visible end end)
+        local Hot = Per(function() for _, Card in Cards do local _ = Card.Visible end end)
+        Within("first read of a Frame", Cold, 230, 400)
+        Within("second read of it", Hot, 20, 80)
+        for Index, Card in Cards do
+            Gradients[Index] = Card:FindFirstChildOfClass("UIGradient")
+        end
+        local Write = Per(function() for _, Gradient in Gradients do Gradient.Offset = Vector2.new(0.5, 0) end end)
+        -- (a UIGradient write 0.20 us, a first touch 0.27, its dirtying 0.075: the grid's Offset on distinct gradients 539 ns)
+        Within("first write of a UIGradient", Write, 420, 720)
+        "#,
+    );
 }
 
 /// Vector3 members and methods on the work clock (the op_cost probe's `datatype` rows in a lobby playtest's client, the
@@ -5342,10 +5443,11 @@ fn a_native_modules_instructions_cost_what_native_code_takes() {
     assert!((1.3..2.2).contains(&native), "native: {native} ns a step");
 }
 
-/// A ray pays for the parts its path crosses, whatever its filter admits, and a bounds query for the parts it returns (cost.rs
-/// RAY_MET, RAY_CROSSED, QUERY_PART: the parity bench's rays and boxes, on geometry both sides find the same parts in, in clients that
-/// ran the whole corpus: a miss with an Include filter 0.29 us, a ray through 24 stacked parts 4.3, an empty box 0.15, a line of 10
-/// parts 4.3). ree charged every one a method call's 45 ns.
+/// A ray pays for the parts its path crosses, whatever its filter admits, a bounds query for the parts it returns, and GetPartsInPart
+/// for the parts it returns and the size of the part it is given (cost.rs RAY_MET, RAY_CROSSED, QUERY_BOX_PART, QUERY_PART_EXACT,
+/// QUERY_PART_SIZE: the parity bench's rays and queries, on geometry both sides find the same parts in, beyond the Luau around the
+/// call: a miss with an Include filter 0.27 us, a ray through 24 stacked parts 1.50, an empty box 0.15, a box of 10 parts 1.54, a
+/// 2-stud part touching nothing 0.27 and a 40-stud one 1.26, the 23 others of a stack 17.3).
 #[test]
 fn a_spatial_query_pays_for_the_parts_it_meets() {
     let (lua, engine) = start();
@@ -5380,16 +5482,32 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
         local Filtered = Per(function() return workspace:Raycast(At + Vector3.new(0, 10, 0), Down, Include) end)
         local Empty = Per(function() return workspace:GetPartBoundsInBox(CFrame.new(Far), Vector3.new(4, 4, 4)) end)
         local Found = Per(function() return workspace:GetPartBoundsInBox(CFrame.new(At), Vector3.new(4, 4, 4)) end)
-        print(string.format("%.0f %.0f %.0f %.0f %.0f", Miss, Through, Filtered, Empty, Found))
+        local function Lone(Side, Z)
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Size = Vector3.new(Side, Side, Side)
+            Part.CFrame = CFrame.new(At + Vector3.new(0, 0, Z))
+            Part.Parent = workspace
+            return Part
+        end
+        local Small, Large = Lone(2, 200), Lone(40, 500)
+        local Alone = Per(function() return workspace:GetPartsInPart(Small) end)
+        local Wide = Per(function() return workspace:GetPartsInPart(Large) end)
+        local Inside = Per(function() return workspace:GetPartsInPart(Stack[1]) end)
+        print(string.format("%.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f", Miss, Through, Filtered, Empty, Found, Alone, Wide, Inside))
         "#,
     );
     let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("{output:?}"));
     let numbers: Vec<f64> = line.split(' ').map(|n| n.parse().unwrap()).collect();
-    // a call 0.29 us; a path through 24 parts 0.39 + 23 x 0.135 more, filtered or not; a box 0.15, and 0.31 a part it returns
-    assert!((270.0..360.0).contains(&numbers[0]), "a miss: {line}");
-    assert!((3500.0..4100.0).contains(&numbers[1]) && (numbers[1] - numbers[2]).abs() < 100.0, "through the stack, filtered or not: {line}");
+    // a call 0.27 us; a path through 24 parts 0.175 + 23 x 0.042 more, filtered or not; a box 0.15, and 0.14 a part it returns;
+    // GetPartsInPart 0.243 + 0.011 a stud of the root of its part's surface area, and 0.74 a part it returns
+    assert!((250.0..330.0).contains(&numbers[0]), "a miss: {line}");
+    assert!((1300.0..1650.0).contains(&numbers[1]) && (numbers[1] - numbers[2]).abs() < 100.0, "through the stack, filtered or not: {line}");
     assert!((140.0..220.0).contains(&numbers[3]), "an empty box: {line}");
-    assert!((7000.0..8300.0).contains(&numbers[4]), "a box of 24 parts: {line}");
+    assert!((3200.0..3900.0).contains(&numbers[4]), "a box of 24 parts: {line}");
+    assert!((270.0..360.0).contains(&numbers[5]), "a 2-stud part touching nothing: {line}");
+    assert!((1200.0..1500.0).contains(&numbers[6]), "a 40-stud part touching nothing: {line}");
+    assert!((16000.0..18600.0).contains(&numbers[7]), "a part among 23 others: {line}");
 }
 
 /// `--device phone` (Options::device) emulates a touch device and scales the script work the clock charges by a sim-to-phone

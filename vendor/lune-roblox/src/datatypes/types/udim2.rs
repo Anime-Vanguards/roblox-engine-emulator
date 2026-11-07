@@ -29,14 +29,15 @@ impl LuaExportsTable for UDim2 {
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
         let udim2_from_offset = |lua: &Lua, (x, y): (Option<i32>, Option<i32>)| {
-            super::charge_host_nanos(lua, super::datatype_price::UDIM2_FROM_OFFSET);
+            super::charge_host_nanos(lua, super::datatype_price::UDIM2_NEW);
             Ok(UDim2 {
                 x: UDim::new(0f32, x.unwrap_or_default()),
                 y: UDim::new(0f32, y.unwrap_or_default()),
             })
         };
 
-        let udim2_from_scale = |_: &Lua, (x, y): (Option<f32>, Option<f32>)| {
+        let udim2_from_scale = |lua: &Lua, (x, y): (Option<f32>, Option<f32>)| {
+            super::charge_host_nanos(lua, super::datatype_price::UDIM2_NEW);
             Ok(UDim2 {
                 x: UDim::new(x.unwrap_or_default(), 0),
                 y: UDim::new(y.unwrap_or_default(), 0),
@@ -46,6 +47,7 @@ impl LuaExportsTable for UDim2 {
         type ArgsUDims = (Option<LuaUserDataRef<UDim>>, Option<LuaUserDataRef<UDim>>);
         type ArgsNums = (Option<f32>, Option<i32>, Option<f32>, Option<i32>);
         let udim2_new = |lua: &Lua, args: LuaMultiValue| {
+            super::charge_host_nanos(lua, super::datatype_price::UDIM2_NEW);
             if let Ok((x, y)) = ArgsUDims::from_lua_multi(args.clone(), lua) {
                 Ok(UDim2 {
                     x: x.map(|x| *x).unwrap_or_default(),
@@ -74,10 +76,23 @@ impl LuaExportsTable for UDim2 {
 
 impl LuaUserData for UDim2 {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("X", |_, this| Ok(this.x));
-        fields.add_field_method_get("Y", |_, this| Ok(this.y));
-        fields.add_field_method_get("Width", |_, this| Ok(this.x));
-        fields.add_field_method_get("Height", |_, this| Ok(this.y));
+        // (each makes a new UDim: datatype_price::MEMBER_NEW)
+        fields.add_field_method_get("X", |lua, this| {
+            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
+            Ok(this.x)
+        });
+        fields.add_field_method_get("Y", |lua, this| {
+            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
+            Ok(this.y)
+        });
+        fields.add_field_method_get("Width", |lua, this| {
+            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
+            Ok(this.x)
+        });
+        fields.add_field_method_get("Height", |lua, this| {
+            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
+            Ok(this.y)
+        });
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
@@ -108,11 +123,23 @@ impl LuaUserData for UDim2 {
             },
         );
         // Metamethods
-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
+            super::charge_host_nanos(lua, super::datatype_price::EQ);
+            userdata_impl_eq(lua, this, value)
+        });
         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
+        methods.add_meta_method(LuaMetaMethod::Unm, |lua, this, ()| {
+            super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
+            userdata_impl_unm(lua, this, ())
+        });
+        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<UDim2>| {
+            super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
+            userdata_impl_add(lua, this, rhs)
+        });
+        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<UDim2>| {
+            super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
+            userdata_impl_sub(lua, this, rhs)
+        });
     }
 }
 

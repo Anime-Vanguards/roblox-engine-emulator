@@ -9,7 +9,7 @@ use lune_utils::TableBuilder;
 
 use crate::exports::LuaExportsTable;
 
-use super::super::*;
+use super::{super::*, charge_host_nanos, datatype_price as price};
 
 /**
     An implementation of the [Vector2](https://create.roblox.com/docs/reference/engine/datatypes/Vector2)
@@ -25,7 +25,8 @@ impl LuaExportsTable for Vector2 {
     const EXPORT_NAME: &'static str = "Vector2";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        let vector2_new = |_: &Lua, (x, y): (Option<f32>, Option<f32>)| {
+        let vector2_new = |lua: &Lua, (x, y): (Option<f32>, Option<f32>)| {
+            charge_host_nanos(lua, price::VECTOR2_NEW);
             Ok(Vector2(Vec2 {
                 x: x.unwrap_or_default(),
                 y: y.unwrap_or_default(),
@@ -44,10 +45,16 @@ impl LuaExportsTable for Vector2 {
 
 impl LuaUserData for Vector2 {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
-        fields.add_field_method_get("Magnitude", |_, this| Ok(this.0.length()));
-        fields.add_field_method_get("Unit", |_, this| Ok(Vector2(this.0.normalize())));
+        fields.add_field_method_get("Magnitude", magnitude);
+        fields.add_field_method_get("Unit", unit);
         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
         fields.add_field_method_get("Y", |_, this| Ok(this.0.y));
+        // Roblox's deprecated lowercase names (Roblox's PlayerModule reads `ViewportSize.x`), as fast as the others in a client:
+        // the parity bench's Vector2.x 3.4 ns, as Vector2.X
+        fields.add_field_method_get("magnitude", magnitude);
+        fields.add_field_method_get("unit", unit);
+        fields.add_field_method_get("x", |_, this| Ok(this.0.x));
+        fields.add_field_method_get("y", |_, this| Ok(this.0.y));
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
@@ -73,7 +80,8 @@ impl LuaUserData for Vector2 {
         );
         methods.add_method(
             "Lerp",
-            |_, this, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
+            |lua, this, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
+                charge_host_nanos(lua, price::VECTOR2_LERP);
                 Ok(Vector2(this.0.lerp(rhs.0, alpha)))
             },
         );
@@ -88,32 +96,57 @@ impl LuaUserData for Vector2 {
         methods.add_method("Floor", |_, this, ()| Ok(Vector2(this.0.floor())));
         methods.add_method("Sign", |_, this, ()| Ok(Vector2(this.0.signum())));
         // Metamethods
-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
+            charge_host_nanos(lua, price::EQ);
+            userdata_impl_eq(lua, this, value)
+        });
         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
+        methods.add_meta_method(LuaMetaMethod::Unm, |lua, this, ()| {
+            charge_host_nanos(lua, price::ARITHMETIC);
+            userdata_impl_unm(lua, this, ())
+        });
+        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<Vector2>| {
+            charge_host_nanos(lua, price::ARITHMETIC);
+            userdata_impl_add(lua, this, rhs)
+        });
+        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<Vector2>| {
+            charge_host_nanos(lua, price::ARITHMETIC);
+            userdata_impl_sub(lua, this, rhs)
+        });
         // Roblox also takes the number first (measured in Studio: 2 * v, 2 / v and 2 // v per
         // component)
         methods.add_meta_function(LuaMetaMethod::Mul, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            charge_host_nanos(lua, price::ARITHMETIC);
             match number_first(&lhs, &rhs)? {
                 Some((n, v)) => Ok(Vector2(v.0 * n)),
                 None => userdata_impl_mul_f32(lua, &*vector2_of(&lhs)?, rhs),
             }
         });
         methods.add_meta_function(LuaMetaMethod::Div, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            charge_host_nanos(lua, price::ARITHMETIC);
             match number_first(&lhs, &rhs)? {
                 Some((n, v)) => Ok(Vector2(Vec2::splat(n) / v.0)),
                 None => userdata_impl_div_f32(lua, &*vector2_of(&lhs)?, rhs),
             }
         });
         methods.add_meta_function(LuaMetaMethod::IDiv, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            charge_host_nanos(lua, price::ARITHMETIC);
             match number_first(&lhs, &rhs)? {
                 Some((n, v)) => Ok(Vector2((Vec2::splat(n) / v.0).floor())),
                 None => userdata_impl_idiv_f32(lua, &*vector2_of(&lhs)?, rhs),
             }
         });
     }
+}
+
+fn magnitude(lua: &Lua, this: &Vector2) -> LuaResult<f32> {
+    charge_host_nanos(lua, price::VECTOR2_MAGNITUDE);
+    Ok(this.0.length())
+}
+
+fn unit(lua: &Lua, this: &Vector2) -> LuaResult<Vector2> {
+    charge_host_nanos(lua, price::MEMBER_NEW);
+    Ok(Vector2(this.0.normalize()))
 }
 
 fn vector2_of(value: &LuaValue) -> LuaResult<LuaUserDataRef<Vector2>> {

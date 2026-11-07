@@ -26,7 +26,8 @@ impl LuaExportsTable for NumberSequenceKeypoint {
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
         let number_sequence_keypoint_new =
-            |_: &Lua, (time, value, envelope): (f32, f32, Option<f32>)| {
+            |lua: &Lua, (time, value, envelope): (f32, f32, Option<f32>)| {
+                super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
                 // Roblox's documentation: "The envelope parameter must be a non-negative number"
                 // (the message is not measured in Studio)
                 let envelope = envelope.unwrap_or_default();

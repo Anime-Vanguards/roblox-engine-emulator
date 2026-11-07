@@ -1774,3 +1774,545 @@
      /// (not measured)
      pub const ORTHONORMALIZE: i32 = 0;
      pub const NEW_VECTOR: i32 = -3;
+--- a/crates/lune-roblox/src/datatypes/types/vector3.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector3.rs
+@@ -94,16 +94,57 @@ pub fn charge_host_nanos(lua: &Lua, nanos: i32) {
+     }
+ }
+ 
+-/// What Studio spends on the other datatypes' operations that cost more than a call (CFrame's are in `cframe::price`):
+-/// the lobby playtest client's median of four runs of an op_cost probe less what ree counts for the
+-/// loop without a price. The other datatype rows are within 35 % of the client's number without one (Vector2 / UDim /
+-/// NumberRange / Ray constructors, Color3.new / fromRGB / fromHSV, UDim2.new, ToHSV), +-15 ns of noise.
++/// What a client spends on the other datatypes' operations (CFrame's are in `cframe::price`) beyond what the work clock counts
++/// for the instructions that reach them (the loads, the call, the loop around them), in nanoseconds: the parity bench
++/// (tools/cost-parity, a rendered client of a game's match place, nine sessions of the whole corpus, the median of 9 rounds each),
++/// each price fitted on the rows that are not held out. A value the operation makes (a new UDim, Vector2 or keypoint) is the engine's
++/// allocation, which a script's own instructions do not count here, and the rows that make one vary 2-3x between sessions with the
++/// collector's phase (CFrame:Inverse 18-65 ns): the figures are the sessions' medians. Rows without a price read within 25 % without one.
+ pub mod datatype_price {
+-    pub const COLOR3_LERP: i32 = 21;
+-    pub const UDIM2_FROM_OFFSET: i32 = 20;
+-    pub const UDIM2_LERP: i32 = 17;
+-    pub const COLOR_SEQUENCE_NEW: i32 = 50;
+-    pub const NUMBER_SEQUENCE_NEW: i32 = 59;
++    /// `+ - * / //` and unary `-` on a Vector2 or UDim, which make a new value (Vector2 + Vector2 15.3 ns whole and unary - 14.9,
++    /// against the 1 ns the instruction counts; held out: Vector2 - * / 13.5-17.4, UDim + 23.0), and on a UDim2 (- 28.0; held out: + 29.6)
++    pub const ARITHMETIC: i32 = 15;
++    pub const UDIM2_ARITHMETIC: i32 = 27;
++    /// `==` / `~=` of two Vector2, UDim, UDim2 or Color3 values, a metamethod call where the VM counts only the instruction
++    /// (Vector2 9.8 ns whole, Color3 10.3; held out: UDim2 10.0)
++    pub const EQ: i32 = 9;
++    /// A member that makes a new value: a ColorSequenceKeypoint's Value (a Color3), a Vector2's Unit, a UDim2's X / Y / Width / Height
++    /// (a UDim): Value 18.5 ns whole, Unit 18.8, UDim2.Y.Scale 21.4 and X.Offset 32.3, where the read counts 2.9 and a UDim's own Scale
++    /// or Offset is 3.3 like any number member (held out: UDim2.X 16.4, Width 17.3)
++    pub const MEMBER_NEW: i32 = 16;
++    /// Vector2:Lerp (20.3 ns whole, a new Vector2) and a Vector2's Magnitude (3.9 ns, against an X read's 3.4)
++    pub const VECTOR2_LERP: i32 = 9;
++    pub const VECTOR2_MAGNITUDE: i32 = 1;
++    /// Color3:Lerp 29.4 ns whole; Color3.new 17.1 and fromHSV 28.0, near what the call counts here (23.2 and 28.6)
++    pub const COLOR3_LERP: i32 = 18;
++    pub const COLOR3_NEW: i32 = -3;
++    /// UDim2.new, fromScale and fromOffset 30.4-32.1 ns whole, UDim2:Lerp 39.9, UDim.new 16.8, Vector2.new 16.9 (the call counts 22.7)
++    pub const UDIM2_NEW: i32 = 8;
++    pub const UDIM2_LERP: i32 = 29;
++    pub const UDIM_NEW: i32 = -6;
++    pub const VECTOR2_NEW: i32 = -6;
++    /// ColorSequence.new of a table of keypoints, by keypoint (five made before the loop 107.9 ns whole; the prelude makes one or two
++    /// colours a table of two: two colours 39.5 ns whole, held out: one colour 70.8), and of colours given to it directly
++    pub const COLOR_SEQUENCE_NEW: i32 = 17;
++    pub const COLOR_SEQUENCE_TABLE: i32 = 0;
++    pub const COLOR_SEQUENCE_TABLE_KEYPOINT: i32 = 16;
++    /// NumberSequence.new of a table of keypoints, which the prelude makes of one or two numbers too (one 63.4 ns whole and two 30.3:
++    /// the collector's phase moves them apart, so the price is their middle), and of numbers given to it directly
++    pub const NUMBER_SEQUENCE_NEW: i32 = 12;
++    pub const NUMBER_SEQUENCE_TABLE: i32 = 28;
++    /// ColorSequenceKeypoint.new and NumberSequenceKeypoint.new (18.1 ns whole each, below what the call counts here: 23.2)
++    pub const KEYPOINT_NEW: i32 = -5;
++    /// A sequence's Keypoints, a new table of new keypoints on every read, by keypoint (ColorSequence of five 145.1 ns whole, of two
++    /// 66.0; NumberSequence of five 105.5, of two 60.5)
++    pub const COLOR_KEYPOINTS: (i32, i32) = (10, 26);
++    pub const NUMBER_KEYPOINTS: (i32, i32) = (28, 15);
++
++    /// What a read of a sequence's Keypoints costs beyond the read, for `count` keypoints at `(base, per keypoint)`
++    pub fn keypoints_read(price: (i32, i32), count: usize) -> i32 {
++        price.0 + price.1 * i32::try_from(count).unwrap_or(i32::MAX / 64)
++    }
++    /// BrickColor.new of a name (48.5 ns whole)
++    pub const BRICK_COLOR_NEW: i32 = 26;
+ }
+ 
+ impl LuaExportsTable for Vector3 {
+--- a/crates/lune-roblox/src/datatypes/types/vector2.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2.rs
+@@ -9,7 +9,7 @@ use lune_utils::TableBuilder;
+ 
+ use crate::exports::LuaExportsTable;
+ 
+-use super::super::*;
++use super::{super::*, charge_host_nanos, datatype_price as price};
+ 
+ /**
+     An implementation of the [Vector2](https://create.roblox.com/docs/reference/engine/datatypes/Vector2)
+@@ -25,7 +25,8 @@ impl LuaExportsTable for Vector2 {
+     const EXPORT_NAME: &'static str = "Vector2";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let vector2_new = |_: &Lua, (x, y): (Option<f32>, Option<f32>)| {
++        let vector2_new = |lua: &Lua, (x, y): (Option<f32>, Option<f32>)| {
++            charge_host_nanos(lua, price::VECTOR2_NEW);
+             Ok(Vector2(Vec2 {
+                 x: x.unwrap_or_default(),
+                 y: y.unwrap_or_default(),
+@@ -44,10 +45,16 @@ impl LuaExportsTable for Vector2 {
+ 
+ impl LuaUserData for Vector2 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+-        fields.add_field_method_get("Magnitude", |_, this| Ok(this.0.length()));
+-        fields.add_field_method_get("Unit", |_, this| Ok(Vector2(this.0.normalize())));
++        fields.add_field_method_get("Magnitude", magnitude);
++        fields.add_field_method_get("Unit", unit);
+         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
+         fields.add_field_method_get("Y", |_, this| Ok(this.0.y));
++        // Roblox's deprecated lowercase names (Roblox's PlayerModule reads `ViewportSize.x`), as fast as the others in a client:
++        // the parity bench's Vector2.x 3.4 ns, as Vector2.X
++        fields.add_field_method_get("magnitude", magnitude);
++        fields.add_field_method_get("unit", unit);
++        fields.add_field_method_get("x", |_, this| Ok(this.0.x));
++        fields.add_field_method_get("y", |_, this| Ok(this.0.y));
+     }
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+@@ -73,7 +80,8 @@ impl LuaUserData for Vector2 {
+         );
+         methods.add_method(
+             "Lerp",
+-            |_, this, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
++            |lua, this, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
++                charge_host_nanos(lua, price::VECTOR2_LERP);
+                 Ok(Vector2(this.0.lerp(rhs.0, alpha)))
+             },
+         );
+@@ -88,26 +96,41 @@ impl LuaUserData for Vector2 {
+         methods.add_method("Floor", |_, this, ()| Ok(Vector2(this.0.floor())));
+         methods.add_method("Sign", |_, this, ()| Ok(Vector2(this.0.signum())));
+         // Metamethods
+-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
++        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
++            charge_host_nanos(lua, price::EQ);
++            userdata_impl_eq(lua, this, value)
++        });
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
+-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
+-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
++        methods.add_meta_method(LuaMetaMethod::Unm, |lua, this, ()| {
++            charge_host_nanos(lua, price::ARITHMETIC);
++            userdata_impl_unm(lua, this, ())
++        });
++        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<Vector2>| {
++            charge_host_nanos(lua, price::ARITHMETIC);
++            userdata_impl_add(lua, this, rhs)
++        });
++        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<Vector2>| {
++            charge_host_nanos(lua, price::ARITHMETIC);
++            userdata_impl_sub(lua, this, rhs)
++        });
+         // Roblox also takes the number first (measured in Studio: 2 * v, 2 / v and 2 // v per
+         // component)
+         methods.add_meta_function(LuaMetaMethod::Mul, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            charge_host_nanos(lua, price::ARITHMETIC);
+             match number_first(&lhs, &rhs)? {
+                 Some((n, v)) => Ok(Vector2(v.0 * n)),
+                 None => userdata_impl_mul_f32(lua, &*vector2_of(&lhs)?, rhs),
+             }
+         });
+         methods.add_meta_function(LuaMetaMethod::Div, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            charge_host_nanos(lua, price::ARITHMETIC);
+             match number_first(&lhs, &rhs)? {
+                 Some((n, v)) => Ok(Vector2(Vec2::splat(n) / v.0)),
+                 None => userdata_impl_div_f32(lua, &*vector2_of(&lhs)?, rhs),
+             }
+         });
+         methods.add_meta_function(LuaMetaMethod::IDiv, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            charge_host_nanos(lua, price::ARITHMETIC);
+             match number_first(&lhs, &rhs)? {
+                 Some((n, v)) => Ok(Vector2((Vec2::splat(n) / v.0).floor())),
+                 None => userdata_impl_idiv_f32(lua, &*vector2_of(&lhs)?, rhs),
+@@ -116,6 +139,16 @@ impl LuaUserData for Vector2 {
+     }
+ }
+ 
++fn magnitude(lua: &Lua, this: &Vector2) -> LuaResult<f32> {
++    charge_host_nanos(lua, price::VECTOR2_MAGNITUDE);
++    Ok(this.0.length())
++}
++
++fn unit(lua: &Lua, this: &Vector2) -> LuaResult<Vector2> {
++    charge_host_nanos(lua, price::MEMBER_NEW);
++    Ok(Vector2(this.0.normalize()))
++}
++
+ fn vector2_of(value: &LuaValue) -> LuaResult<LuaUserDataRef<Vector2>> {
+     match value {
+         LuaValue::UserData(ud) => ud.borrow::<Vector2>(),
+--- a/crates/lune-roblox/src/datatypes/types/udim2.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim2.rs
+@@ -29,14 +29,15 @@ impl LuaExportsTable for UDim2 {
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         let udim2_from_offset = |lua: &Lua, (x, y): (Option<i32>, Option<i32>)| {
+-            super::charge_host_nanos(lua, super::datatype_price::UDIM2_FROM_OFFSET);
++            super::charge_host_nanos(lua, super::datatype_price::UDIM2_NEW);
+             Ok(UDim2 {
+                 x: UDim::new(0f32, x.unwrap_or_default()),
+                 y: UDim::new(0f32, y.unwrap_or_default()),
+             })
+         };
+ 
+-        let udim2_from_scale = |_: &Lua, (x, y): (Option<f32>, Option<f32>)| {
++        let udim2_from_scale = |lua: &Lua, (x, y): (Option<f32>, Option<f32>)| {
++            super::charge_host_nanos(lua, super::datatype_price::UDIM2_NEW);
+             Ok(UDim2 {
+                 x: UDim::new(x.unwrap_or_default(), 0),
+                 y: UDim::new(y.unwrap_or_default(), 0),
+@@ -46,6 +47,7 @@ impl LuaExportsTable for UDim2 {
+         type ArgsUDims = (Option<LuaUserDataRef<UDim>>, Option<LuaUserDataRef<UDim>>);
+         type ArgsNums = (Option<f32>, Option<i32>, Option<f32>, Option<i32>);
+         let udim2_new = |lua: &Lua, args: LuaMultiValue| {
++            super::charge_host_nanos(lua, super::datatype_price::UDIM2_NEW);
+             if let Ok((x, y)) = ArgsUDims::from_lua_multi(args.clone(), lua) {
+                 Ok(UDim2 {
+                     x: x.map(|x| *x).unwrap_or_default(),
+@@ -74,10 +76,23 @@ impl LuaExportsTable for UDim2 {
+ 
+ impl LuaUserData for UDim2 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+-        fields.add_field_method_get("X", |_, this| Ok(this.x));
+-        fields.add_field_method_get("Y", |_, this| Ok(this.y));
+-        fields.add_field_method_get("Width", |_, this| Ok(this.x));
+-        fields.add_field_method_get("Height", |_, this| Ok(this.y));
++        // (each makes a new UDim: datatype_price::MEMBER_NEW)
++        fields.add_field_method_get("X", |lua, this| {
++            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
++            Ok(this.x)
++        });
++        fields.add_field_method_get("Y", |lua, this| {
++            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
++            Ok(this.y)
++        });
++        fields.add_field_method_get("Width", |lua, this| {
++            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
++            Ok(this.x)
++        });
++        fields.add_field_method_get("Height", |lua, this| {
++            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
++            Ok(this.y)
++        });
+     }
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+@@ -108,11 +123,23 @@ impl LuaUserData for UDim2 {
+             },
+         );
+         // Metamethods
+-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
++        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
++            super::charge_host_nanos(lua, super::datatype_price::EQ);
++            userdata_impl_eq(lua, this, value)
++        });
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
+-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
+-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
++        methods.add_meta_method(LuaMetaMethod::Unm, |lua, this, ()| {
++            super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
++            userdata_impl_unm(lua, this, ())
++        });
++        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<UDim2>| {
++            super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
++            userdata_impl_add(lua, this, rhs)
++        });
++        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<UDim2>| {
++            super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
++            userdata_impl_sub(lua, this, rhs)
++        });
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/udim.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim.rs
+@@ -31,7 +31,8 @@ impl LuaExportsTable for UDim {
+     const EXPORT_NAME: &'static str = "UDim";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let udim_new = |_: &Lua, (scale, offset): (Option<f32>, Option<i32>)| {
++        let udim_new = |lua: &Lua, (scale, offset): (Option<f32>, Option<i32>)| {
++            super::charge_host_nanos(lua, super::datatype_price::UDIM_NEW);
+             Ok(UDim {
+                 scale: scale.unwrap_or_default(),
+                 offset: offset.unwrap_or_default(),
+@@ -51,11 +52,23 @@ impl LuaUserData for UDim {
+     }
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
++        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
++            super::charge_host_nanos(lua, super::datatype_price::EQ);
++            userdata_impl_eq(lua, this, value)
++        });
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
+-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
+-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
++        methods.add_meta_method(LuaMetaMethod::Unm, |lua, this, ()| {
++            super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
++            userdata_impl_unm(lua, this, ())
++        });
++        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<UDim>| {
++            super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
++            userdata_impl_add(lua, this, rhs)
++        });
++        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<UDim>| {
++            super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
++            userdata_impl_sub(lua, this, rhs)
++        });
+     }
+ }
+ 
+--- a/crates/lune-roblox/src/datatypes/types/color3.rs
++++ b/crates/lune-roblox/src/datatypes/types/color3.rs
+@@ -32,7 +32,8 @@ impl LuaExportsTable for Color3 {
+     const EXPORT_NAME: &'static str = "Color3";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let color3_from_rgb = |_: &Lua, (r, g, b): (Option<u8>, Option<u8>, Option<u8>)| {
++        let color3_from_rgb = |lua: &Lua, (r, g, b): (Option<u8>, Option<u8>, Option<u8>)| {
++            super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
+             Ok(Color3 {
+                 r: (r.unwrap_or_default() as f32) / 255f32,
+                 g: (g.unwrap_or_default() as f32) / 255f32,
+@@ -40,7 +41,8 @@ impl LuaExportsTable for Color3 {
+             })
+         };
+ 
+-        let color3_from_hsv = |_: &Lua, (h, s, v): (f32, f32, f32)| {
++        let color3_from_hsv = |lua: &Lua, (h, s, v): (f32, f32, f32)| {
++            super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
+             // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c
+             let i = (h * 6.0).floor();
+             let f = h * 6.0 - i;
+@@ -94,7 +96,8 @@ impl LuaExportsTable for Color3 {
+             }
+         };
+ 
+-        let color3_new = |_: &Lua, (r, g, b): (Option<f32>, Option<f32>, Option<f32>)| {
++        let color3_new = |lua: &Lua, (r, g, b): (Option<f32>, Option<f32>, Option<f32>)| {
++            super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
+             Ok(Color3 {
+                 r: r.unwrap_or_default(),
+                 g: g.unwrap_or_default(),
+@@ -181,7 +184,10 @@ impl LuaUserData for Color3 {
+             ))
+         });
+         // Metamethods
+-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
++        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
++            super::charge_host_nanos(lua, super::datatype_price::EQ);
++            userdata_impl_eq(lua, this, value)
++        });
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+         methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
+         methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence.rs
+@@ -33,8 +33,8 @@ impl LuaExportsTable for ColorSequence {
+         type ArgsColors = (LuaUserDataRef<Color3>, LuaUserDataRef<Color3>);
+ 
+         let color_sequence_new = |lua: &Lua, args: LuaMultiValue| {
+-            super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
+             if let Ok(color) = ArgsColor::from_lua_multi(args.clone(), lua) {
++                super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
+                 Ok(ColorSequence {
+                     keypoints: vec![
+                         ColorSequenceKeypoint {
+@@ -48,6 +48,7 @@ impl LuaExportsTable for ColorSequence {
+                     ],
+                 })
+             } else if let Ok((c0, c1)) = ArgsColors::from_lua_multi(args.clone(), lua) {
++                super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
+                 Ok(ColorSequence {
+                     keypoints: vec![
+                         ColorSequenceKeypoint {
+@@ -63,6 +64,11 @@ impl LuaExportsTable for ColorSequence {
+             } else if let Some(LuaValue::Table(table)) = args.front() {
+                 let mut keypoints: Vec<ColorSequenceKeypoint> =
+                     sequence_keypoints(lua, table, "ColorSequence")?;
++                let count = i32::try_from(keypoints.len()).unwrap_or(i32::MAX / 64);
++                super::charge_host_nanos(
++                    lua,
++                    super::datatype_price::COLOR_SEQUENCE_TABLE + super::datatype_price::COLOR_SEQUENCE_TABLE_KEYPOINT * count,
++                );
+                 let times: Vec<f32> = keypoints.iter().map(|k| k.time).collect();
+                 check_sequence_times("ColorSequence", &times)?;
+                 let last = keypoints.len() - 1;
+@@ -85,7 +91,11 @@ impl LuaExportsTable for ColorSequence {
+ 
+ impl LuaUserData for ColorSequence {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+-        fields.add_field_method_get("Keypoints", |_, this| Ok(this.keypoints.clone()));
++        // (a new table of new keypoints on every read)
++        fields.add_field_method_get("Keypoints", |lua, this| {
++            super::charge_host_nanos(lua, super::datatype_price::keypoints_read(super::datatype_price::COLOR_KEYPOINTS, this.keypoints.len()));
++            Ok(this.keypoints.clone())
++        });
+     }
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence.rs
+@@ -85,8 +85,8 @@ impl LuaExportsTable for NumberSequence {
+         type ArgsColors = (f32, f32);
+ 
+         let number_sequence_new = |lua: &Lua, args: LuaMultiValue| {
+-            super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
+             if let Ok(value) = ArgsColor::from_lua_multi(args.clone(), lua) {
++                super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
+                 Ok(NumberSequence {
+                     keypoints: vec![
+                         NumberSequenceKeypoint {
+@@ -102,6 +102,7 @@ impl LuaExportsTable for NumberSequence {
+                     ],
+                 })
+             } else if let Ok((v0, v1)) = ArgsColors::from_lua_multi(args.clone(), lua) {
++                super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
+                 Ok(NumberSequence {
+                     keypoints: vec![
+                         NumberSequenceKeypoint {
+@@ -117,6 +118,7 @@ impl LuaExportsTable for NumberSequence {
+                     ],
+                 })
+             } else if let Some(LuaValue::Table(table)) = args.front() {
++                super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_TABLE);
+                 let mut keypoints: Vec<NumberSequenceKeypoint> =
+                     sequence_keypoints(lua, table, "NumberSequence")?;
+                 let times: Vec<f32> = keypoints.iter().map(|k| k.time).collect();
+@@ -140,7 +142,11 @@ impl LuaExportsTable for NumberSequence {
+ 
+ impl LuaUserData for NumberSequence {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+-        fields.add_field_method_get("Keypoints", |_, this| Ok(this.keypoints.clone()));
++        // (a new table of new keypoints on every read)
++        fields.add_field_method_get("Keypoints", |lua, this| {
++            super::charge_host_nanos(lua, super::datatype_price::keypoints_read(super::datatype_price::NUMBER_KEYPOINTS, this.keypoints.len()));
++            Ok(this.keypoints.clone())
++        });
+     }
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
+@@ -25,7 +25,8 @@ impl LuaExportsTable for ColorSequenceKeypoint {
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         let color_sequence_keypoint_new =
+-            |_: &Lua, (time, color): (f32, LuaUserDataRef<Color3>)| {
++            |lua: &Lua, (time, color): (f32, LuaUserDataRef<Color3>)| {
++                super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
+                 Ok(ColorSequenceKeypoint {
+                     time,
+                     color: *color,
+@@ -41,7 +42,11 @@ impl LuaExportsTable for ColorSequenceKeypoint {
+ impl LuaUserData for ColorSequenceKeypoint {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+         fields.add_field_method_get("Time", |_, this| Ok(this.time));
+-        fields.add_field_method_get("Value", |_, this| Ok(this.color));
++        // (a new Color3: datatype_price::MEMBER_NEW)
++        fields.add_field_method_get("Value", |lua, this| {
++            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
++            Ok(this.color)
++        });
+     }
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
+@@ -26,7 +26,8 @@ impl LuaExportsTable for NumberSequenceKeypoint {
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         let number_sequence_keypoint_new =
+-            |_: &Lua, (time, value, envelope): (f32, f32, Option<f32>)| {
++            |lua: &Lua, (time, value, envelope): (f32, f32, Option<f32>)| {
++                super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
+                 // Roblox's documentation: "The envelope parameter must be a non-negative number"
+                 // (the message is not measured in Studio)
+                 let envelope = envelope.unwrap_or_default();
+--- a/crates/lune-roblox/src/datatypes/types/brick_color.rs
++++ b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+@@ -35,6 +35,7 @@ impl LuaExportsTable for BrickColor {
+ 
+         // three numbers are 0-1 components before one is a number: (1, 0, 0) is Really red, not White
+         let brick_color_new = |lua: &Lua, args: LuaMultiValue| {
++            super::charge_host_nanos(lua, super::datatype_price::BRICK_COLOR_NEW);
+             if let Ok((r, g, b)) = ArgsRgb::from_lua_multi(args.clone(), lua) {
+                 Ok(color_from_rgb(r, g, b))
+             } else if let Ok(number) = ArgsNumber::from_lua_multi(args.clone(), lua) {
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -53,24 +53,31 @@ pub mod price {
+     //! `:ToWorldSpace`, `:PointToWorldSpace` and `:ToAxisAngle` follow (the same bench, a match place's client, six
+     //! runs of six readings, medians in ns): ToWorldSpace 26.6 (16-121; the twin of ToObjectSpace, which reads 28.5),
+     //! PointToWorldSpace 24.4 with the vector hoisted out of the loop, ToAxisAngle 22.2 here and 26.3 in the earlier three runs.
+-    pub const MEMBER: i32 = 0;
+-    pub const ROTATION: i32 = 29;
++    //!
++    //! Refitted (2026-11-07) where the parity bench (tools/cost-parity: a rendered client of a game's match place, nine sessions of
++    //! the whole corpus, the median of 9 rounds of a loop each) has a row outside its held-out third, ns whole: GetComponents 22.0 (all
++    //! twelve values taken 26.9), `cf + v` 22.1, Rotation 18.1, Angles 41.3, the twelve-number constructor 35.5, Inverse 36.3, Lerp
++    //! 75.7, PointToObjectSpace 17.9, ToEulerAnglesXYZ 22.1, ToObjectSpace 20.2, `cf * v` 12.3, X / LookVector / RightVector 3.3-3.7.
++    //! Those rows read 0.41-5.9x before (GetComponents 131 ns). `*`, `==`, lookAt and the three-number constructor keep their
++    //! prices: their rows are held out (`*` 41.8, lookAt 43.3, new 18.8).
++    pub const MEMBER: i32 = 1;
++    pub const ROTATION: i32 = 17;
+     pub const MUL_CFRAME: i32 = 21;
+     /// `CFrame == CFrame` is a metamethod call in Studio (22.2 ns median in the rig frame), where the VM counts only the
+     /// instruction
+     pub const EQ: i32 = 17;
+-    pub const MUL_VECTOR: i32 = 8;
+-    pub const ADD_VECTOR: i32 = 46;
+-    pub const INVERSE: i32 = 9;
+-    pub const LERP: i32 = 49;
++    pub const MUL_VECTOR: i32 = 11;
++    pub const ADD_VECTOR: i32 = 21;
++    pub const INVERSE: i32 = 26;
++    pub const LERP: i32 = 66;
+     pub const TO_WORLD: i32 = 10;
+-    pub const TO_OBJECT: i32 = 12;
++    pub const TO_OBJECT: i32 = 10;
+     pub const POINT_TO_WORLD: i32 = 8;
+-    pub const POINT_TO_OBJECT: i32 = 0;
++    pub const POINT_TO_OBJECT: i32 = 7;
+     pub const VECTOR_TO_WORLD: i32 = -4;
+     pub const VECTOR_TO_OBJECT: i32 = 0;
+-    pub const COMPONENTS: i32 = 121;
+-    pub const EULER: i32 = 8;
++    pub const COMPONENTS: i32 = 14;
++    pub const EULER: i32 = 12;
+     pub const AXIS_ANGLE: i32 = 10;
+     /// (not measured)
+     pub const ORTHONORMALIZE: i32 = 0;
+@@ -79,10 +86,10 @@ pub mod price {
+     pub const NEW_LOOK: i32 = 55;
+     /// (not measured)
+     pub const NEW_QUAT: i32 = 0;
+-    /// (not measured)
+-    pub const NEW_MATRIX: i32 = 0;
+-    /// negative: the constructor's call and the instructions that reach it already count more than Studio's 27-29 ns
+-    pub const ANGLES: i32 = -3;
++    /// (the twelve-number constructor)
++    pub const NEW_MATRIX: i32 = 8;
++    /// (a Studio playtest client read Angles at 27-29 ns, below what the call counts here; a client of the match place 49.6)
++    pub const ANGLES: i32 = 18;
+     pub const FROM_AXIS_ANGLE: i32 = 48;
+     pub const LOOK_AT: i32 = 55;
+ }

@@ -31,7 +31,8 @@ impl LuaExportsTable for UDim {
     const EXPORT_NAME: &'static str = "UDim";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        let udim_new = |_: &Lua, (scale, offset): (Option<f32>, Option<i32>)| {
+        let udim_new = |lua: &Lua, (scale, offset): (Option<f32>, Option<i32>)| {
+            super::charge_host_nanos(lua, super::datatype_price::UDIM_NEW);
             Ok(UDim {
                 scale: scale.unwrap_or_default(),
                 offset: offset.unwrap_or_default(),
@@ -51,11 +52,23 @@ impl LuaUserData for UDim {
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
-        methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+        methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
+            super::charge_host_nanos(lua, super::datatype_price::EQ);
+            userdata_impl_eq(lua, this, value)
+        });
         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
+        methods.add_meta_method(LuaMetaMethod::Unm, |lua, this, ()| {
+            super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
+            userdata_impl_unm(lua, this, ())
+        });
+        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<UDim>| {
+            super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
+            userdata_impl_add(lua, this, rhs)
+        });
+        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<UDim>| {
+            super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
+            userdata_impl_sub(lua, this, rhs)
+        });
     }
 }
 

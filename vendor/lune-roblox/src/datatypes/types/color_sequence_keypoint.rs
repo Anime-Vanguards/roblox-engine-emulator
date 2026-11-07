@@ -25,7 +25,8 @@ impl LuaExportsTable for ColorSequenceKeypoint {
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
         let color_sequence_keypoint_new =
-            |_: &Lua, (time, color): (f32, LuaUserDataRef<Color3>)| {
+            |lua: &Lua, (time, color): (f32, LuaUserDataRef<Color3>)| {
+                super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
                 Ok(ColorSequenceKeypoint {
                     time,
                     color: *color,
@@ -41,7 +42,11 @@ impl LuaExportsTable for ColorSequenceKeypoint {
 impl LuaUserData for ColorSequenceKeypoint {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
         fields.add_field_method_get("Time", |_, this| Ok(this.time));
-        fields.add_field_method_get("Value", |_, this| Ok(this.color));
+        // (a new Color3: datatype_price::MEMBER_NEW)
+        fields.add_field_method_get("Value", |lua, this| {
+            super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
+            Ok(this.color)
+        });
     }
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {

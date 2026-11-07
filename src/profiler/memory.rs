@@ -182,7 +182,23 @@ pub struct Allocations {
     instance_tag: i32,
 }
 
+/// The type of the table storage the engine's own bookkeeping grows ([`bookkeeping`]): ree's cache of the Instance userdata scripts
+/// hold (lua/raw.rs push_instance). A client keeps a cache like it in its Luau heap too (an Instance a script holds is a 48-byte
+/// userdata in both), but its table grows in rare large steps where ree's grows a slot at a time: memory a script's
+/// collectgarbage("count") sees, booked here apart from what the script's own code allocates.
+pub const ENGINE_CACHE: &str = "table storage: ree's Instance cache";
+
+/// Runs `body` with the allocations it makes booked as the engine's own bookkeeping ([`ENGINE_CACHE`]).
+#[inline]
+pub fn bookkeeping<R>(body: impl FnOnce() -> R) -> R {
+    BOOKKEEPING.with(|flag| flag.set(true));
+    let out = body();
+    BOOKKEEPING.with(|flag| flag.set(false));
+    out
+}
+
 thread_local! {
+    static BOOKKEEPING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ALLOCATIONS: RefCell<Option<Allocations>> = const { RefCell::new(None) };
 }
 
@@ -337,6 +353,7 @@ unsafe extern "C-unwind" fn allocating(state: *mut lua_State, old: usize, new: u
             allocations.pending = Some(Pending { block: block as usize, size, phase: allocations.phase, sampled });
         } else {
             let name = match kind {
+                vm::ALLOC_TABLE if BOOKKEEPING.with(|flag| flag.get()) => ENGINE_CACHE,
                 vm::ALLOC_TABLE => "table storage",
                 vm::ALLOC_THREAD => "thread stack",
                 vm::ALLOC_STRINGS => "string table",

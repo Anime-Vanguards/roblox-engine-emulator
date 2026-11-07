@@ -540,6 +540,8 @@ fn registry_function(lua: &Lua, keys: &mut Vec<LuaRegistryKey>, function: LuaFun
 /// Creates the raw API's tables, fallback functions and bookkeeping (Engine.Start, before any
 /// enum item, signal or instance reaches Luau). The metatable is installed by [`set_metatable`].
 pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    // (a first touch is priced by the instance's class: cost.rs COLD_TOUCH_GUI)
+    engine.state.borrow().sched.touched.borrow_mut().set_prices(&engine.reflection);
     let mut keys = Vec::new();
     let (instances, instances_ref) = registry_table(lua, &mut keys, Some("v"))?;
     let (_anchors, anchors_ref) = registry_table(lua, &mut keys, None)?;
@@ -919,7 +921,8 @@ unsafe fn push_instance_with(state: *mut ffi::lua_State, api: &Api, dom_state: O
         };
         payload.write(Payload { index: id.index, generation: id.generation, serial, api });
         ffi::lua_pushvalue(state, -1);
-        ffi::lua_rawseti_(state, cache, slot);
+        // (the cache's growth is the engine's bookkeeping, not the script's: profiler::memory ENGINE_CACHE)
+        crate::profiler::memory::bookkeeping(|| ffi::lua_rawseti_(state, cache, slot));
         api.note_created(id.index);
         // In the DataModel: anchored (identity holds while the instance is reachable)
         let in_game = match dom_state {
@@ -963,7 +966,7 @@ unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
                     if crate::boundary::active() && api.muted.get() == 0 {
                         crate::boundary::record_named(crate::boundary::Kind::Create, "Instance", &format!("new({})", engine.reflection.class(class).name), cost);
                     }
-                    api.touched.borrow_mut().touch(id.index); // (an instance made this frame is hot)
+                    api.touched.borrow_mut().touch(id.index, class); // (an instance made this frame is hot)
                     push_instance(state, api, Some(&dom_state), id);
                 }
                 sync_if_moved(state, api);
@@ -1099,20 +1102,20 @@ fn read_extra(api: &Api, seconds: f64) {
 unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
     unsafe {
         let Some((api, id)) = this(state) else { return Out::Slow };
-        let cost = crate::cost::READ + api.touched.borrow_mut().touch(id.index);
+        let engine = api.engine();
+        let (mut class, placeholder) = {
+            let dom_state = engine.state.borrow();
+            let instance = dom_state.dom.at(id);
+            (instance.class, instance.has(flags::BUNDLE_ROOT))
+        };
+        let cost = crate::cost::READ + api.touched.borrow_mut().touch(id.index, class);
         api.charge(cost);
         let mut atom: c_int = 0;
         let key = ffi::lua_tostringatom(state, 2, &mut atom);
         if key.is_null() {
             return Out::Slow;
         }
-        let engine = api.engine();
         let name = name_of(api, key, atom);
-        let (mut class, placeholder) = {
-            let dom_state = engine.state.borrow();
-            let instance = dom_state.dom.at(id);
-            (instance.class, instance.has(flags::BUNDLE_ROOT))
-        };
         // (a bundle's placeholder a script holds becomes the bundle's instance before anything but
         // its name or parent, which are the instance's too, is read)
         if placeholder && name != Some(K::Name as NameId) && name != Some(K::Parent as NameId) {
@@ -1543,7 +1546,7 @@ unsafe fn namecall_fast(state: *mut ffi::lua_State) -> Out {
         }
         let member = api.member(class, name);
         crate::cost::tally_member("call", &engine.reflection.class(class).name, || engine.reflection.name(name).to_string());
-        let cost = member.cost as f64 + api.touched.borrow_mut().touch(id.index);
+        let cost = member.cost as f64 + api.touched.borrow_mut().touch(id.index, class);
         api.charge(cost);
         api.cross(crate::boundary::Kind::Method, class, Some(name), id, cost, true);
         match member.call {

@@ -365,14 +365,34 @@ by opcode, a `--!native` module's apart, objects and table storage allocated, ke
 calls and calls into the engine's own Luau, imports looked up, and the library's own loops: numbers made
 strings, new strings, sorting, table.create / clone / concat, string.split and string.format). Each
 instruction is priced by its kind, interpreted or native (`INTERPRETED_OPS`, `NATIVE_OPS`). The engine's own
-Luau (prelude, services, vector3.luau) stands in for Studio's C++ and is not charged.
+Luau (prelude, services, vector3.luau) stands in for Studio's C++ and is not charged. Roblox's datatypes are
+priced by operation where a client pays more than the instructions that reach them (lune-roblox
+`datatype_price`, cframe.rs `price`): a Vector2, UDim or UDim2's arithmetic and `==`, a member that makes a new
+value (a UDim2's X, a keypoint's Value, a Vector2's Unit), a sequence's Keypoints (a new table of new keypoints
+on every read), their constructors and CFrame's methods. A Vector2's X / Y and the deprecated lowercase names
+are plain member reads (an instruction).
+
+The first touch of an instance in a frame (a read, a write or a method call) costs more than the next ones:
+45 ns for a part, 270 ns for a GUI object or UI component, which a client lays out and draws every frame
+(`COLD_TOUCH`, `COLD_TOUCH_GUI`), and a write's dirtying on top (`cold_write_extra`).
 
 The prices are measured with the parity bench (`tools/cost-parity`, README there): about 400 workloads that
 run unchanged in ree and in a real client, engine calls by family, the language loops interpreted and as a
 `--!native` module, and a module whose environment getfenv made unsafe; it prints each workload's ree /
 engine ratio and keeps a third of the workloads, by a hash of their names, out of every fit. Its rows that
-measure what a client has done before (a heap of a game's size makes new strings 2-3x dearer; spatial
-queries after many parts were made and moved 3x) are taken in clients that run the whole corpus.
+measure what a client has done before (a heap of a game's size makes new strings 2-3x dearer) are taken in
+clients that run the whole corpus. A client runs the corpus's groups of families as jobs of one session,
+and each job takes its scene out of the DataModel again (`Corpus.Cleanup`): the scenes left behind had made
+the later groups' spatial queries meet three copies of their geometry. A memory row keeps every round's
+objects alive until the row ends and reads its median round.
+
+What the prices compose to on real per-frame code is a second, larger question. Measured on a game's own
+modules timed the same way on both sides (a GUI scroll and gradient step, an effect system's step lists,
+four unit attacks' casts), the work clock reads 0.15-0.5x a client's time: code that runs once a frame over
+many objects finds them out of the CPU's caches (a walk of 900 records allocated over time 227 ns a record
+in a client against 17 ns at the loop prices), and a GUI read after the GUI changed lays it out first (a
+rect read 1.06 us after a scroll, 0.27 us after none). The prices are a hot loop's; per-frame code of a
+game costs more than they say.
 
 A script's environment is safe, as Roblox makes every script's: its imports (`game`, `Vector3.new`,
 `math.floor`) are resolved when it loads and read as constants, builtins (`math.*`, `type`, `typeof`, ...)

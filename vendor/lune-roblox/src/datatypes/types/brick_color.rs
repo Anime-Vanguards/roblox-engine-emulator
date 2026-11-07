@@ -35,6 +35,7 @@ impl LuaExportsTable for BrickColor {
 
         // three numbers are 0-1 components before one is a number: (1, 0, 0) is Really red, not White
         let brick_color_new = |lua: &Lua, args: LuaMultiValue| {
+            super::charge_host_nanos(lua, super::datatype_price::BRICK_COLOR_NEW);
             if let Ok((r, g, b)) = ArgsRgb::from_lua_multi(args.clone(), lua) {
                 Ok(color_from_rgb(r, g, b))
             } else if let Ok(number) = ArgsNumber::from_lua_multi(args.clone(), lua) {
