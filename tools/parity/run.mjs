@@ -216,8 +216,8 @@ function main() {
 		}
 	}
 	if (options.writeKnown) {
-		// every expected line ree does not print, keeping the reason already written for it
-		const next = {};
+		// every expected line ree does not print, keeping the reason already written for it (probes not run keep theirs)
+		const next = Object.fromEntries(Object.entries(known).filter(([name]) => !rows.some(row => row.name === name && row.result)));
 		for (const row of rows) {
 			if (!row.result) continue;
 			const lines = [...row.result.known, ...row.result.unknown];
@@ -227,7 +227,8 @@ function main() {
 				return { line, why: old ? old.why : "not fixed yet" };
 			});
 		}
-		fs.writeFileSync(KNOWN, JSON.stringify(next, null, "\t") + "\n");
+		const sorted = Object.fromEntries(Object.keys(next).sort().map(name => [name, next[name]]));
+		fs.writeFileSync(KNOWN, JSON.stringify(sorted, null, "\t") + "\n");
 		console.log(`parity: wrote ${Object.values(next).reduce((sum, list) => sum + list.length, 0)} known differences to known.json`);
 	}
 	if (options.json) {
