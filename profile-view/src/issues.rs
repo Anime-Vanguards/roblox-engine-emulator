@@ -372,6 +372,13 @@ fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_name: &str, issues: &m
         if rising * 4 < rows.len() {
             continue;
         }
+        // (a thread counts from when it is made to when the collector frees it: with the last heap snapshot, the threads a
+        // full collection keeps say whether the count is held or garbage the collector had not swept yet)
+        let reachable = (what == "threads").then(|| reachable_threads(p)).flatten();
+        if reachable.is_some_and(|kept| kept * 2.0 < values[last]) {
+            continue;
+        }
+        let kept = reachable.map(|kept| format!("; {} reachable at the end, what a full collection keeps", fmt::grouped(kept))).unwrap_or_default();
         issues.push(Issue {
             severity: if per_frame >= 10.0 { Severity::Serious } else { Severity::Warning },
             kind: "growth",
@@ -383,7 +390,7 @@ fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_name: &str, issues: &m
                 fmt::grouped(values[last]),
                 timeline.value(last, "frame").unwrap_or(0.0),
                 rows.len() - 1
-            )],
+            ) + &kept],
             advice: format!("Frames add {what} that nothing removes: disconnect or destroy what a frame makes"),
             target: Target::Frame(last),
             weight: per_frame,
@@ -394,6 +401,13 @@ fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_name: &str, issues: &m
 /// `1 frame`, `4 frames`
 fn frames_text(count: usize) -> String {
     if count == 1 { "1 frame".into() } else { format!("{count} frames") }
+}
+
+/// The threads the last heap snapshot found reachable
+fn reachable_threads(p: &Profile) -> Option<f64> {
+    let snapshot = p.raw.heap.as_ref()?.snapshots.last()?;
+    snapshot.reachable?;
+    Some(snapshot.by_type.iter().filter(|row| row.ty == "thread").map(|row| row.count).sum())
 }
 
 fn capitalize(word: &str) -> String {

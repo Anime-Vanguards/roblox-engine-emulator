@@ -193,3 +193,28 @@ fn a_run_with_no_phase_after_startup_has_no_steady_state() {
     // the spikes are still found, over every frame
     assert_eq!(find(&issues, "gc spike").len(), 1);
 }
+
+#[test]
+fn growing_threads_the_collector_had_not_swept_are_not_a_leak() {
+    // threads 10 at frame 21 to 109 at frame 120 (one more a frame), with the end snapshot's reachable threads at 5
+    // (garbage, not swept yet) and then at 105 (held)
+    for (reachable, leak) in [(5.0, false), (105.0, true)] {
+        let temp = Temp::new("threads");
+        let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
+        let path = dir.join("profile.json");
+        let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        for row in json["timeline"]["rows"].as_array_mut().unwrap() {
+            let frame = row[0].as_f64().unwrap();
+            row[14] = serde_json::json!(if frame >= 21.0 { 10.0 + frame - 21.0 } else { 10.0 });
+        }
+        let snapshots = json["heap"]["snapshots"].as_array_mut().unwrap();
+        snapshots.last_mut().unwrap()["by_type"].as_array_mut().unwrap().push(serde_json::json!({"type": "thread", "count": reachable, "bytes": 6768.0 * reachable}));
+        std::fs::write(&path, json.to_string()).unwrap();
+        let (issues, _, _) = issues_of(&dir);
+        let threads: Vec<&Issue> = find(&issues, "growth").into_iter().filter(|issue| issue.title.starts_with("Threads")).collect();
+        assert_eq!(threads.len(), leak as usize, "{reachable} reachable: {threads:#?}");
+        if leak {
+            assert!(threads[0].evidence[0].ends_with("; 105 reachable at the end, what a full collection keeps"), "{}", threads[0].evidence[0]);
+        }
+    }
+}
