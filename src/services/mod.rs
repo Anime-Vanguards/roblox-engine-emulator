@@ -16,6 +16,7 @@
 pub mod encoding;
 pub mod json;
 pub mod query;
+pub mod reflection_service;
 pub mod tween;
 
 use std::{cell::RefCell, rc::Rc};
@@ -612,6 +613,7 @@ pub fn install(engine: &Rc<Engine>) {
 
     // TweenService, Instance:QueryDescendants, AnimationTracks
     tween::install(engine, &mut behaviors);
+    reflection_service::install(engine, &mut behaviors);
     crate::animation::install(engine, &mut behaviors);
     crate::meshes::install(engine, &mut behaviors);
     query::install(engine, &mut behaviors);

@@ -1771,6 +1771,16 @@
 			"why": "not fixed yet"
 		}
 	],
+	"reflection": [
+		{
+			"line": "count 656 633",
+			"why": "the class list follows the compiled-in API dump, Studio 0.740 (640 classes); the capture's client is 0.744 (656)"
+		},
+		{
+			"line": "Permits held true true nil",
+			"why": "ree emulates no SecurityCapabilities: Permits holds none and reports itself as not emulated (Output missing)"
+		}
+	],
 	"require_errors": [
 		{
 			"line": "pcall-broken error Requested module experienced an error while loading",

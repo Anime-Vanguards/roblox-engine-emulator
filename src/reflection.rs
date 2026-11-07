@@ -201,6 +201,15 @@ pub struct ClassInfo {
     pub callbacks: FxHashSet<NameId>,
     /// Own recorded defaults (`None`: the class has no default table at all)
     pub raw_defaults: Option<FxHashMap<NameId, RawDefault>>,
+    /// The dump lists it: ReflectionService (GetClass, GetClasses) reports it. The classes only rbx-dom describes are the ones a
+    /// script cannot get there (Player, CoreGui, UserGameSettings: GetClass gives nil for them in a playing client)
+    pub reflected: bool,
+    /// The dump's `serialized` (ReflectedClass.Serialized)
+    pub serialized: bool,
+    /// The dump's `display` as (key, text) pairs (ReflectedClass.Display: Category, and DeprecationMessage where the class has one)
+    pub display: Box<[(Box<str>, Box<str>)]>,
+    /// Every class whose superclass this is, rbx-dom's included, in name order (ReflectedClass.Subclasses)
+    pub subclasses: Box<[ClassId]>,
     own_properties: Vec<u32>,
     own_events: Vec<NameId>,
     own_methods: Vec<NameId>,
@@ -547,7 +556,16 @@ impl Reflection {
                 Some(serde_json::Value::Array(_)) => Some(FxHashMap::default()),
                 _ => None,
             };
+            let display: Box<[(Box<str>, Box<str>)]> = match entry.get("display") {
+                Some(serde_json::Value::Object(display)) => {
+                    display.iter().filter_map(|(key, value)| Some((key.as_str().into(), value.as_str()?.into()))).collect()
+                }
+                _ => Box::new([]),
+            };
             let class = &mut reflection.classes[id as usize];
+            class.reflected = true;
+            class.serialized = entry.get("serialized").and_then(|value| value.as_bool()) == Some(true);
+            class.display = display;
             class.creatable = has_key(permits, "New");
             class.service = has_key(permits, "GetService");
             class.own_properties = own_properties;
@@ -603,6 +621,18 @@ impl Reflection {
         let mut resolved = vec![false; count];
         for id in 0..count {
             reflection.resolve(id as ClassId, &mut resolved);
+        }
+        // ReflectedClass.Subclasses names every class whose superclass it is, the ones a script cannot get included (measured in
+        // a playing client, Studio 0.744: BasePlayerGui's are CoreGui, PlayerGui and StarterGui, and GetClass("CoreGui") is nil)
+        let mut subclasses: Vec<Vec<ClassId>> = vec![Vec::new(); count];
+        for class in &reflection.classes {
+            if let Some(superclass) = class.superclass {
+                subclasses[superclass as usize].push(class.id);
+            }
+        }
+        for (id, mut list) in subclasses.into_iter().enumerate() {
+            list.sort_unstable_by(|&a, &b| reflection.classes[a as usize].name.cmp(&reflection.classes[b as usize].name));
+            reflection.classes[id].subclasses = list.into_boxed_slice();
         }
 
         if let Some(bytes) = font_enums {
@@ -668,6 +698,10 @@ impl Reflection {
             methods: FxHashSet::default(),
             callbacks: FxHashSet::default(),
             raw_defaults: None,
+            reflected: false,
+            serialized: false,
+            display: Box::new([]),
+            subclasses: Box::new([]),
             own_properties: Vec::new(),
             own_events: Vec::new(),
             own_methods: Vec::new(),

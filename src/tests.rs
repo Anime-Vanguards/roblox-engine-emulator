@@ -5631,6 +5631,129 @@ fn a_full_reference_stack_is_the_resumed_threads_error() {
     assert!(!output.contains(&"print: never".to_string()), "{output:?}");
 }
 
+/// ReflectionService:GetClasses and GetClass as a game script gets them (measured in a playing client and a server game
+/// script, Studio 0.744): the dump's classes in name order, each call new frozen entries (Name, Superclass, Serialized only when
+/// true, Subclasses only when there are some, those a script cannot get included, Display, Permits); the classes only rbx-dom
+/// describes are nil; the filter's IsA and ExcludeDisplay, and its measured errors. Permits holds no SecurityCapabilities in ree:
+/// reading it reports itself as not emulated.
+#[test]
+fn reflection_service_lists_the_dumps_classes_as_a_game_script_gets_them() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local RS = game:GetService("ReflectionService")
+        local List = RS:GetClasses()
+        local Previous = ""
+        for _, Entry in List do
+            assert(Entry.Name > Previous and table.isfrozen(Entry), Entry.Name)
+            Previous = Entry.Name
+        end
+        print("list", #List > 600, table.isfrozen(List), RS:GetClasses() ~= List, RS:GetClasses()[1] ~= List[1], List[1].Name)
+        local Part = RS:GetClass("Part")
+        print("Part", Part.Name, Part.Superclass, Part.Serialized, table.concat(Part.Subclasses, ","), Part.Display.Category, Part.Display.DeprecationMessage)
+        print("frozen", table.isfrozen(Part), table.isfrozen(Part.Subclasses), table.isfrozen(Part.Display), table.isfrozen(Part.Permits))
+        local Accessory = RS:GetClass("Accessory")
+        print("Accessory", Accessory.Subclasses, Accessory.Serialized, Accessory.Superclass)
+        local Object = RS:GetClass("Object")
+        print("Object", Object.Superclass, Object.Serialized, #Object.Subclasses > 0)
+        print("BasePlayerGui", table.concat(RS:GetClass("BasePlayerGui").Subclasses, ","))
+        print("Glue", RS:GetClass("Glue").Display.DeprecationMessage, RS:GetClass("LogService").Serialized)
+        print("nil", RS:GetClass("Player"), RS:GetClass("CoreGui"), RS:GetClass("UserGameSettings"), RS:GetClass("part"), RS:GetClass("Nope"), RS:GetClass(5))
+        print("IsA", #RS:GetClasses({ IsA = "BasePart" }), #RS:GetClasses({ IsA = "Nope" }), #RS:GetClasses({ IsA = "basepart" }), #RS:GetClasses({ IsA = "Player" }), #RS:GetClasses({ IsA = "Object" }) == #List)
+        local NoDisplay = RS:GetClasses({ ExcludeDisplay = true, Unknown = 1 })
+        print("ExcludeDisplay", #NoDisplay == #List, NoDisplay[1].Display, RS:GetClasses({ ExcludeDisplay = false })[1].Display ~= nil)
+        print("GetClass filtered", RS:GetClass("Part", { IsA = "BasePart" }).Name, RS:GetClass("Part", { IsA = "GuiObject" }), RS:GetClass("Part", { ExcludeDisplay = true }).Display)
+        print("errors", select(2, pcall(RS.GetClasses, RS, 5)))
+        print("errors", select(2, pcall(RS.GetClasses, RS, { "BasePart" })))
+        print("errors", select(2, pcall(RS.GetClasses, RS, { 1, IsA = "BasePart" })))
+        print("errors", select(2, pcall(RS.GetClasses, RS, { IsA = 5 })))
+        print("errors", select(2, pcall(RS.GetClasses, RS, { ExcludeDisplay = 1 })))
+        print("errors", select(2, pcall(RS.GetClasses, RS, { Security = "x" })))
+        print("errors", select(2, pcall(RS.GetClass, RS)))
+        print("errors", select(2, pcall(RS.GetClass, RS, "Part", true)))
+        print("errors", (string.gsub(select(2, pcall(function() List[1] = 1 end)), "^Test:%d+: ", "")))
+        print("errors", select(2, pcall(RS.GetClasses)))
+        for _ in Part.Permits do
+            print("never")
+        end
+        print("Permits", typeof(Part.Permits), Part.Permits.New, next(Part.Permits))
+        "#,
+    );
+    let expected = [
+        "print: list true true true true Accessory",
+        "print: Part Part FormFactorPart true FlagStand,Platform,Seat,SkateboardPlatform,SpawnLocation General nil",
+        "print: frozen true true true true",
+        "print: Accessory nil true Accoutrement",
+        "print: Object nil nil true",
+        "print: BasePlayerGui CoreGui,PlayerGui,StarterGui",
+        "print: Glue Use `WeldConstraint` instead. nil",
+        "print: nil nil nil nil nil nil nil",
+        "print: IsA 19 0 0 0 true",
+        "print: ExcludeDisplay true nil true",
+        "print: GetClass filtered Part nil nil",
+        "print: errors Unable to cast double to Dictionary",
+        "print: errors Unable to cast Array to Dictionary",
+        "print: errors Unable to cast Array to Dictionary",
+        "print: errors ReflectionClassFilter's IsA field is expected to be type string",
+        "print: errors ReflectionClassFilter's ExcludeDisplay field is expected to be type bool",
+        "print: errors ReflectionClassFilter's Security field is expected to be type SecurityCapabilities",
+        "print: errors Argument 2 missing or nil",
+        "print: errors Unable to cast bool to Dictionary",
+        "print: errors attempt to modify a readonly table",
+        "print: errors Expected ':' not '.' calling member function GetClasses",
+        "print: Permits table nil nil",
+    ];
+    assert_eq!(output, expected);
+    let missing = engine.state.borrow().output.missing.clone();
+    assert_eq!(missing, vec![("ReflectedClass.Permits".to_string(), 2)], "{missing:?}");
+    // the dump's classes and no others; IsA counts a class and its subclasses
+    let reflected = engine.reflection.classes.iter().filter(|class| class.reflected).count();
+    assert_eq!(reflected, 640);
+}
+
+/// A vide-like module that builds its element names from ReflectionService:GetClasses() when it is required (stock vide's
+/// jsx.luau maps every lower-cased class name to the class name) loads, and makes instances through that map.
+#[test]
+fn a_module_that_maps_every_class_name_at_require_loads() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r##"
+        local Module = Instance.new("ModuleScript")
+        Module.Name = "jsx"
+        __setSource(Module, [[
+local tags = {}
+if game then
+	for _, class in game:GetService("ReflectionService"):GetClasses() do
+		tags[string.lower(class.Name)] = class.Name
+	end
+end
+local function jsx(tag, props, ...)
+	props = props or {}
+	tag = tags[tag] or tag
+	local instance = Instance.new(tag)
+	for key, value in props do
+		instance[key] = value
+	end
+	for index = 1, select("#", ...) do
+		select(index, ...).Parent = instance
+	end
+	return instance
+end
+return jsx
+]])
+        local jsx = require(Module)
+        local Root = jsx("frame", { Name = "Root" }, jsx("textlabel", { Text = "hi" }), jsx("uicorner", {}))
+        local Label = Root:FindFirstChildOfClass("TextLabel")
+        print("jsx", Root.ClassName, Root.Name, Label.ClassName, Label.Text, Root:FindFirstChildOfClass("UICorner") ~= nil)
+        "##,
+    );
+    assert_eq!(output, vec!["print: jsx Frame Root TextLabel hi true".to_string()]);
+}
+
 #[test]
 fn an_executable_belongs_to_the_nearest_checkout_above_it_wherever_it_runs() {
     let root = std::env::temp_dir().join(format!("ree-checkout-test-{}", std::process::id()));

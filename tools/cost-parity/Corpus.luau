@@ -488,6 +488,26 @@ method("GetPlayers", 10000, function(N)
 		local _ = Players:GetPlayers()
 	end
 end)
+-- ReflectionService: every class's entry, a filtered list, and one class (each call makes new frozen tables)
+method("ReflectionService.GetClasses", 20, function(N)
+	local Reflection = game:GetService("ReflectionService")
+	for _ = 1, N do
+		local _ = Reflection:GetClasses()
+	end
+end)
+method("ReflectionService.GetClasses.IsA", 200, function(N)
+	local Reflection = game:GetService("ReflectionService")
+	local Filter = { IsA = "BasePart" }
+	for _ = 1, N do
+		local _ = Reflection:GetClasses(Filter)
+	end
+end)
+method("ReflectionService.GetClass", 2000, function(N)
+	local Reflection = game:GetService("ReflectionService")
+	for _ = 1, N do
+		local _ = Reflection:GetClass("Part")
+	end
+end)
 method("Model.GetPivot", 10000, function(N, S)
 	local M = S.Model
 	for _ = 1, N do

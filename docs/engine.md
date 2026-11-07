@@ -50,7 +50,7 @@ src/scheduler.rs     virtual clock, task library, Heartbeat / RenderStepped / St
 src/cost.rs          the work clock's prices: what script work costs in Studio
 src/instance.rs derived.rs output.rs lune_json.rs profile.rs microprofile.rs luau_profile.rs
 src/services/        per-class behaviours (mod.rs; tween.rs TweenService, query.rs QueryDescendants,
-                     encoding.rs EncodingService)
+                     encoding.rs EncodingService, reflection_service.rs ReflectionService)
 src/project.rs project/   Rojo mounting, models and snapshots, Studio-only placeholders, asset manifest
                      bundles (model_assets.rs), model plans (plan.rs, plan/codec.rs, plan/store.rs), Rojo
                      JSON models (json_model.rs)
@@ -651,6 +651,11 @@ A print of exactly `@done` ends `ree run` / `ree record` at the end of that fram
 - Physics beyond free fall (collisions, constraints, body movers), particles and the default character
   scripts are not simulated.
 - Script HTTP requests are disabled: no script reaches the network.
+- SecurityCapabilities are not emulated. A ReflectionService entry's `Permits` is a frozen empty table
+  that reports itself (Output `missing`) when a script reads or iterates it, and a filter's `Security`
+  would do the same. GetPropertiesOfClass, GetMethodsOfClass and GetEventsOfClass need fields the dump
+  does not record (a reference type's InstanceType, a parameter's DefaultValue, member display data) and
+  are not emulated.
 - The engine is developed and tested on Windows. Other systems build and run, but some fallbacks are
   weak: off Windows a `ree serve` record of a dead process is not detected (`alive()` always answers
   true), and memory is read from `/proc/meminfo` (Linux only).
@@ -661,6 +666,12 @@ A print of exactly `@done` ends `ree run` / `ree record` at the end of that fram
   serialization) plus the Instance.new defaults of every creatable class, written by
   tools/dump-reflection.luau in Studio and compiled in. It is merged over rbx_reflection_database. It is
   Roblox's public API metadata, as Roblox publishes in its own API dump; it holds no engine code.
+  ReflectionService:GetClasses and GetClass answer from it as a game script gets them (measured in a
+  playing client and a server game script): the dump's classes in name order, each call a new frozen list
+  of new frozen entries (`Name`, `Superclass`, `Serialized` when true, `Subclasses` when there are any,
+  `Display`, `Permits`); a class only rbx_reflection_database describes is nil there, though it is named in
+  its superclass's `Subclasses`. The filter's `IsA` and `ExcludeDisplay` work as measured, with Roblox's
+  errors for a filter that is not a dictionary or a field of the wrong type.
 - `data/text-advances.json`: per-glyph advance fits for each Enum.Font face, measured in Studio (no font
   files are included).
 - `data/fredoka-sizes.json`: FredokaOne advances and kerning at integer sizes 4-100, from Studio.

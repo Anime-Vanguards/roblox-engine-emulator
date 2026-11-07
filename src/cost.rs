@@ -330,6 +330,14 @@ pub const DESTROYED_PART: f64 = 0.22e-6;
 /// One element of a list a method returns (the parity bench: GetChildren of 20 0.34 us,
 /// GetDescendants of 110 1.94 us; EditableMesh GetFaces and GetColors 0.01-0.02 us an id in a Studio capture)
 pub const LISTED: f64 = 0.016e-6;
+/// ReflectionService: a class's entry GetClass or GetClasses makes ([`REFLECTED_CLASS`]), what its Display table adds, and a class
+/// GetClasses tests against its filter. A playing client (roblox-sim, Studio 0.744, a headless client of an empty place; os.clock
+/// around single calls, the median of 15; the parity bench's ReflectionService rows are newer than its reference sessions):
+/// GetClasses() of its 656 classes 1.235 ms, with ExcludeDisplay 0.866 ms, with IsA = "BasePart" (19 entries) 39.5 us;
+/// GetClass("Part") 2.22 us, of which 0.28 is the lookup ([`method`]).
+pub const REFLECTED_CLASS: f64 = 1.32e-6;
+pub const REFLECTED_CLASS_DISPLAY: f64 = 0.56e-6;
+pub const REFLECTED_CLASS_TESTED: f64 = 0.006e-6;
 /// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path crosses, whether
 /// its filter admits them or not: one that crosses any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`]. The parity
 /// bench's rays, on geometry of their own that both sides find the same parts in (Meta.queries), beyond the Luau around the call: a
@@ -749,6 +757,8 @@ pub fn method(name: &str) -> f64 {
         "JSONEncode" | "JSONDecode" => 0.69,
         // (TweenService:GetValue of a linear alpha 51.8 ns whole, 27 beyond the Luau around it)
         "GetValue" => 0.027,
+        // ReflectionService:GetClass's lookup; the entry it makes is [`REFLECTED_CLASS`]'s
+        "GetClass" => 0.28,
         // the Luau-served model queries add their own MODEL_QUERY
         "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo" => 0.0,
         // EditableMesh (capture, a 13,515-vertex mesh; playtest the two weights calls 0.84 us)
