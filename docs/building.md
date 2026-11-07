@@ -18,9 +18,10 @@ cargo build --release        # target/release/ree(.exe)
 cargo test --release         # the engine's tests and the patched VM's
 ```
 
-Nothing else is fetched: the patched Luau VM (`vendor/luau0-src`) and Lune's Roblox datatypes
-(`vendor/lune-roblox`, `vendor/lune-utils`) are vendored. They are the pinned upstream archives with
-the topic series in `patches/luau/` and `patches/lune.patch` applied: `node tools/vendor.mjs` rebuilds
+Nothing else is fetched: the patched Luau VM (`vendor/luau0-src`), the mlua-sys that binds it
+(`vendor/mlua-sys`) and Lune's Roblox datatypes (`vendor/lune-roblox`, `vendor/lune-utils`) are vendored.
+They are the pinned upstream archives with the topic series in `patches/luau/` and `patches/lune.patch`
+applied, and mlua-sys with the VM's bytecode version range: `node tools/vendor.mjs` rebuilds
 `vendor/` after a patch changes, `node tools/vendor.mjs --check` verifies it ([Updating
 Luau](#updating-luau) moves the VM to a newer release). `--release` is the everyday build:
 incremental, linked with rust-lld (`.cargo/config.toml`), and with cargo's ThinLTO across the crate's own
@@ -73,15 +74,19 @@ need it too. After a bump:
    table lookups often need the topic's counters, hooks or hashing too, and a new path that frees
    objects needs the work an object's free does.
 2. If the C API that mlua binds moved (a type tag, a callback's signature), move `mlua` and `mlua-sys` to
-   the versions made for it, pinned exactly in Cargo.toml, and update the engine's declarations of the
-   series' own functions.
-3. `cargo build --release && cargo test --release`, and `node tools/vendor.mjs --check`.
-4. `node tools/parity/run.mjs --diff`: script-visible behaviour against a real client holds or improves.
-5. `tools/cost-parity`: instruction counts and prices against a client; refit what the release moved,
+   the versions made for it, pinned exactly in Cargo.toml (and mlua-sys's archive in `tools/vendor.mjs`,
+   which vendors it with the release's bytecode version range), and update the engine's declarations of
+   the series' own functions.
+3. `node tools/luau-flags.mjs`: the values a live client serves for the release's Luau flags
+   (`data/luau-flags.json`, which the VM applies when it starts); it rebuilds `vendor/`. Run it again
+   whenever Roblox changes them (it prints what changed since the last run).
+4. `cargo build --release && cargo test --release`, and `node tools/vendor.mjs --check`.
+5. `node tools/parity/run.mjs --diff`: script-visible behaviour against a real client holds or improves.
+6. `tools/cost-parity`: instruction counts and prices against a client; refit what the release moved,
    keeping the held-out rows apart.
-6. A crate that depends on this one moves both of its pins (the engine and `luau0-src`) and runs its own
-   checks.
-7. THIRD_PARTY_NOTICES.md names the new release and crate.
+7. A crate that depends on this one moves its pins (the engine, `luau0-src` and `mlua-sys`) and runs its
+   own checks.
+8. THIRD_PARTY_NOTICES.md names the new release and crate.
 
 A weekly workflow (`.github/workflows/luau-upstream.yml`) runs `try latest` and fails when the series no
 longer applies to the newest release.

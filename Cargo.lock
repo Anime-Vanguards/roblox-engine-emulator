@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "luau0-src"
-version = "0.15.9+luau694"
+version = "0.22.0+luau746"
 dependencies = [
  "cc",
 ]
@@ -965,31 +965,30 @@ dependencies = [
 
 [[package]]
 name = "mlua"
-version = "0.11.4"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9be1c2bfc684b8a228fbaebf954af7a47a98ec27721986654a4cc2c40a20cc7e"
+checksum = "7a7ae6b65bf54b7fdd4cf5b6f44f60862350ebf3fe3779b3a9cc005e7fa14f81"
 dependencies = [
  "bstr",
  "either",
  "erased-serde",
  "futures-util",
+ "libc",
  "mlua-sys",
  "num-traits",
  "parking_lot",
  "rustc-hash 2.1.3",
- "rustversion",
  "serde",
  "serde-value",
 ]
 
 [[package]]
 name = "mlua-sys"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d4dc9cfc5a7698899802e97480617d9726f7da78c910db989d4d0fd4991d900"
+version = "0.13.0"
 dependencies = [
  "cc",
  "cfg-if",
+ "libc",
  "luau0-src",
  "pkg-config",
 ]

@@ -4260,3 +4260,35 @@
      }
  
      #[allow(clippy::too_many_lines)]
+--- a/crates/lune-roblox/src/datatypes/types/font.rs
++++ b/crates/lune-roblox/src/datatypes/types/font.rs
+@@ -314,11 +314,9 @@
+     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+         match EnumItem::from_enum_name_and_name("FontWeight", self.to_string()) {
+             Some(enum_item) => Ok(LuaValue::UserData(lua.create_userdata(enum_item)?)),
+-            None => Err(LuaError::ToLuaConversionError {
+-                from: "FontWeight".to_string(),
+-                to: "EnumItem",
+-                message: Some(format!("Found unknown Enum.FontWeight value '{self}'")),
+-            }),
++            None => Err(LuaError::RuntimeError(format!(
++                "Found unknown Enum.FontWeight value '{self}'"
++            ))),
+         }
+     }
+ }
+@@ -408,11 +406,9 @@
+     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+         match EnumItem::from_enum_name_and_name("FontStyle", self.to_string()) {
+             Some(enum_item) => Ok(LuaValue::UserData(lua.create_userdata(enum_item)?)),
+-            None => Err(LuaError::ToLuaConversionError {
+-                from: "FontStyle".to_string(),
+-                to: "EnumItem",
+-                message: Some(format!("Found unknown Enum.FontStyle value '{self}'")),
+-            }),
++            None => Err(LuaError::RuntimeError(format!(
++                "Found unknown Enum.FontStyle value '{self}'"
++            ))),
+         }
+     }
+ }

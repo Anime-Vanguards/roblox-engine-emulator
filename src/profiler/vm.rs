@@ -27,6 +27,20 @@ pub const ALLOC_THREAD: i32 = 3;
 pub const ALLOC_STRINGS: i32 = 4;
 pub const ALLOC_PROTO: i32 = 5;
 
+/// lua.h `LUA_T*`: the type tags of the objects a heap walk or an allocation names. The value types are mlua-sys's (they
+/// bind the same lua.h); Luau 0.746 put LUA_TCLASS and LUA_TOBJECT after LUA_TBUFFER and LUA_TDEADKEY before the
+/// collector's own objects (profiler_tests.rs checks these against the vendored lua.h)
+pub const T_STRING: i32 = mlua::ffi::LUA_TSTRING;
+pub const T_TABLE: i32 = mlua::ffi::LUA_TTABLE;
+pub const T_FUNCTION: i32 = mlua::ffi::LUA_TFUNCTION;
+pub const T_USERDATA: i32 = mlua::ffi::LUA_TUSERDATA;
+pub const T_THREAD: i32 = mlua::ffi::LUA_TTHREAD;
+pub const T_BUFFER: i32 = mlua::ffi::LUA_TBUFFER;
+pub const T_CLASS: i32 = 12;
+pub const T_OBJECT: i32 = 13;
+pub const T_PROTO: i32 = 15;
+pub const T_UPVAL: i32 = 16;
+
 #[repr(C)]
 struct RawFunction {
     source: *const c_char,
@@ -398,15 +412,17 @@ pub fn main_thread(state: *mut lua_State) -> *mut lua_State {
     unsafe { lua_mainthread(state) }
 }
 
-/// Luau's opcode names, in Bytecode.h's order (LOP_NOP = 0 ...)
-pub const OPCODES: [&str; 83] = [
+/// Luau's opcode names, in Bytecode.h's order (LOP_NOP = 0 ...; profiler_tests.rs checks them against the vendored header)
+pub const OPCODES: [&str; 95] = [
     "NOP", "BREAK", "LOADNIL", "LOADB", "LOADN", "LOADK", "MOVE", "GETGLOBAL", "SETGLOBAL", "GETUPVAL", "SETUPVAL", "CLOSEUPVALS", "GETIMPORT",
     "GETTABLE", "SETTABLE", "GETTABLEKS", "SETTABLEKS", "GETTABLEN", "SETTABLEN", "NEWCLOSURE", "NAMECALL", "CALL", "RETURN", "JUMP", "JUMPBACK",
     "JUMPIF", "JUMPIFNOT", "JUMPIFEQ", "JUMPIFLE", "JUMPIFLT", "JUMPIFNOTEQ", "JUMPIFNOTLE", "JUMPIFNOTLT", "ADD", "SUB", "MUL", "DIV", "MOD",
     "POW", "ADDK", "SUBK", "MULK", "DIVK", "MODK", "POWK", "AND", "OR", "ANDK", "ORK", "CONCAT", "NOT", "MINUS", "LENGTH", "NEWTABLE",
     "DUPTABLE", "SETLIST", "FORNPREP", "FORNLOOP", "FORGLOOP", "FORGPREP_INEXT", "FASTCALL3", "FORGPREP_NEXT", "NATIVECALL", "GETVARARGS",
     "DUPCLOSURE", "PREPVARARGS", "LOADKX", "JUMPX", "FASTCALL", "COVERAGE", "CAPTURE", "SUBRK", "DIVRK", "FASTCALL1", "FASTCALL2",
-    "FASTCALL2K", "FORGPREP", "JUMPXEQKNIL", "JUMPXEQKB", "JUMPXEQKN", "JUMPXEQKS", "IDIV", "IDIVK",
+    "FASTCALL2K", "FORGPREP", "JUMPXEQKNIL", "JUMPXEQKB", "JUMPXEQKN", "JUMPXEQKS", "IDIV", "IDIVK", "GETUDATAKS", "SETUDATAKS",
+    "NAMECALLUDATA", "NEWCLASSMEMBER", "CALLFB", "CMPPROTO", "FASTPCALL", "NEWCLASS", "CONSTRUCT", "FINCONSTRUCT", "GETPRIVATEFIELD",
+    "SETPRIVATEFIELD",
 ];
 
 pub fn opcode_name(op: u8) -> &'static str {

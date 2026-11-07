@@ -1397,31 +1397,38 @@ pub const LUAU_COLD_CODE: f64 = 0.85;
 /// The kinds of instruction priced apart (tools/cost-parity/fit.py CLASSES), by opcode (Luau's Bytecode.h order): what a code generator
 /// turns into a few machine instructions (arithmetic, moves, jumps, comparisons), `%` / `//` / `^`, keyed table reads and writes,
 /// dynamic ones, allocations (a table, closure, concatenation, varargs), calls and returns, a generalized loop's step, a builtin's
-/// fast call, and globals and imports.
+/// fast call, globals and imports, and a method call's lookup. The opcodes Luau 0.746 added take their kind's class: CALLFB is the
+/// call a client's compiler emits (LuauEmitCallFeedback), the userdata ones a host's direct member access, the class ones
+/// user-defined classes (a debug flag). NAMECALL is priced apart: 0.746's interpreter dispatches the CALL after it as an instruction
+/// of its own, where 0.694 fell through to it and counted the two as one NAMECALL, the count the call class's interpreted price was
+/// fitted on; so that price is the CALL's, and the lookup's is the rest of what the fit gave a method call (nothing). Native code
+/// always ran the two apart.
 const fn op_class(op: usize) -> usize {
     match op {
         // MOD, POW, MODK, POWK, IDIV, IDIVK
         37 | 38 | 43 | 44 | 81 | 82 => 1,
-        // GETTABLEKS, SETTABLEKS, GETTABLEN, SETTABLEN, LENGTH, SETLIST
-        15..=18 | 52 | 55 => 2,
+        // GETTABLEKS, SETTABLEKS, GETTABLEN, SETTABLEN, LENGTH, SETLIST, GETUDATAKS, SETUDATAKS, GETPRIVATEFIELD, SETPRIVATEFIELD
+        15..=18 | 52 | 55 | 83 | 84 | 93 | 94 => 2,
         // GETTABLE, SETTABLE
         13 | 14 => 3,
-        // NEWCLOSURE, CONCAT, NEWTABLE, DUPTABLE, GETVARARGS, DUPCLOSURE
-        19 | 49 | 53 | 54 | 63 | 64 => 4,
-        // NAMECALL, CALL, RETURN, NATIVECALL
-        20..=22 | 62 => 5,
+        // NEWCLOSURE, CONCAT, NEWTABLE, DUPTABLE, GETVARARGS, DUPCLOSURE, NEWCLASS, CONSTRUCT
+        19 | 49 | 53 | 54 | 63 | 64 | 90 | 91 => 4,
+        // CALL, RETURN, NATIVECALL, NAMECALLUDATA, CALLFB, FASTPCALL
+        21 | 22 | 62 | 85 | 87 | 89 => 5,
         // FORGLOOP, FORGPREP_INEXT, FORGPREP_NEXT, FORGPREP
         58 | 59 | 61 | 76 => 6,
         // FASTCALL3, FASTCALL, FASTCALL1, FASTCALL2, FASTCALL2K
         60 | 68 | 73 | 74 | 75 => 7,
         // GETGLOBAL, SETGLOBAL, GETIMPORT
         7 | 8 | 12 => 8,
+        // NAMECALL
+        20 => 9,
         _ => 0,
     }
 }
 
 /// An opcode's price from its class's ([`op_class`]'s order)
-const fn priced(by_class: [f64; 9]) -> [f64; 256] {
+const fn priced(by_class: [f64; 10]) -> [f64; 256] {
     let mut prices = [0.0; 256];
     let mut op = 0;
     while op < 256 {
@@ -1436,11 +1443,11 @@ const fn priced(by_class: [f64; 9]) -> [f64; 256] {
 /// rendered client of a game's match place, three sessions of the whole corpus) of a price for each kind of instruction, the other
 /// counts at their prices: the 21 fit rows within 7.8 % at the median (the worst a trigonometry loop, 0.62x: math.sin's own work is a
 /// fast call's price here), the 14 held-out rows 22.9 % (the worst a loop that calls a local function, 0.29x). Arithmetic, moves,
-/// jumps and comparisons 0.48 ns; `%` / `//` / `^` 5.5; a keyed table read or write 2.5, a dynamic one 2.2; a call, method call or
-/// return 4.9; a generalized loop's step 2.5; a builtin's fast call 3.8; a global or a resolved import 1.4; an allocation nothing
+/// jumps and comparisons 0.48 ns; `%` / `//` / `^` 5.5; a keyed table read or write 2.5, a dynamic one 2.2; a call or return 4.9 (a
+/// method call's NAMECALL nothing more: its CALL is the call); a generalized loop's step 2.5; a builtin's fast call 3.8; a global or a resolved import 1.4; an allocation nothing
 /// beyond its object ([`LUAU_OBJECT`]). The prices fitted before, on a Studio playtest client (tools/luau-cost: 1.6 an instruction, 8.5
 /// a call more, 2.3 a fast call more), read the bench's interpreted rows 0.45-2.1x (a math loop 2.0x, a recursive call 1.9x).
-pub const INTERPRETED_OPS: [f64; 256] = priced([0.48, 5.46, 2.45, 2.20, 0.0, 4.89, 2.54, 3.75, 1.36]);
+pub const INTERPRETED_OPS: [f64; 256] = priced([0.48, 5.46, 2.45, 2.20, 0.0, 4.89, 2.54, 3.75, 1.36, 0.0]);
 
 /// Nanoseconds an instruction of a native module costs, by opcode: the same fit on the bench's native rows (fit.py luau --native; the
 /// 20 fit rows within 30.5 % at the median, the worst a dynamic key's loop 0.27x; the 9 held-out rows 39 %, the worst a closure's
@@ -1448,7 +1455,7 @@ pub const INTERPRETED_OPS: [f64; 256] = priced([0.48, 5.46, 2.45, 2.20, 0.0, 4.8
 /// key's lookup and `%` / `//` / `^` stay calls into the VM (0.65-0.75), an allocation (a table, closure, concatenation) 1.7 more than
 /// its object, a call or return 3.3 and a generalized loop's step 1.9; imports are resolved at load (0.27) and a builtin's fast call is
 /// inlined (0.19).
-pub const NATIVE_OPS: [f64; 256] = priced([0.43, 0.65, 0.42, 0.75, 1.74, 3.25, 1.93, 0.19, 0.27]);
+pub const NATIVE_OPS: [f64; 256] = priced([0.43, 0.65, 0.42, 0.75, 1.74, 3.25, 1.93, 0.19, 0.27, 3.25]);
 
 /// A GETIMPORT that looks its global up (vm counter `slowimports`): a safe environment's imports are resolved when the script loads,
 /// as Roblox resolves them, and read as a constant ([`INTERPRETED_OPS`]' global class); one getfenv or setfenv made unsafe looks every

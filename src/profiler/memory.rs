@@ -92,17 +92,19 @@ impl Types {
     }
 }
 
-/// Luau's type tags (lua.h)
+/// Luau's type tags (lua.h, [`vm::T_STRING`] and on)
 pub fn type_name(tt: i32) -> &'static str {
     match tt {
-        5 => "string",
-        6 => "table",
-        7 => "function",
-        8 => "userdata",
-        9 => "thread",
-        10 => "buffer",
-        11 => "function prototype",
-        12 => "upvalue",
+        vm::T_STRING => "string",
+        vm::T_TABLE => "table",
+        vm::T_FUNCTION => "function",
+        vm::T_USERDATA => "userdata",
+        vm::T_THREAD => "thread",
+        vm::T_BUFFER => "buffer",
+        vm::T_CLASS => "class",
+        vm::T_OBJECT => "object",
+        vm::T_PROTO => "function prototype",
+        vm::T_UPVAL => "upvalue",
         _ => "other",
     }
 }
@@ -160,12 +162,13 @@ pub struct Live {
 }
 
 /// Tables that rehashed to fit a new key (the VM's rehash hook, lua_setprofilerehash): a table grows (or, emptied, shrinks)
-/// only there, moving every key it holds into its new parts
+/// only there, moving the keys it holds into its new parts (for a new key that is not an integer, its hash part's: the
+/// array part stays)
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rehash {
     pub events: u64,
-    /// Keys the tables held at their rehashes, the new ones included: what the rehashes moved (the VM's work counters count
-    /// them as `rehashed` when a script's own instruction made the rehash)
+    /// Keys the rehashes moved, the new ones included (the VM's work counters count them as `rehashed` when a script's own
+    /// instruction made the rehash)
     pub keys: u64,
     /// Of those, the rehashes a script's own instruction made, and their keys
     pub script_events: u64,
@@ -354,7 +357,7 @@ pub const UNRESOLVED_INSTANCE: &str = "userdata: Instance";
 /// tag (whatever its metatable's __type says) or one without data
 fn instance_slot(object: &vm::Object, instance_tag: i32) -> Option<(u32, u32)> {
     let data = object.data;
-    if object.tt != 8 || object.tag != instance_tag || data.is_null() {
+    if object.tt != vm::T_USERDATA || object.tag != instance_tag || data.is_null() {
         return None;
     }
     let words = data as *const u32;
@@ -365,7 +368,7 @@ fn instance_slot(object: &vm::Object, instance_tag: i32) -> Option<(u32, u32)> {
 /// An object's type as the profile names it: `userdata: Instance Part` for an Instance (its class), `userdata: CFrame`
 /// for a datatype (its metatable's __type)
 pub fn object_name(object: &vm::Object, instance_tag: i32, resolver: Option<&dyn Fn(u32, u32) -> Option<String>>) -> String {
-    if object.tt != 8 {
+    if object.tt != vm::T_USERDATA {
         return type_name(object.tt).to_string();
     }
     if let Some((index, generation)) = instance_slot(object, instance_tag) {
@@ -390,8 +393,9 @@ pub fn resolver(engine: Weak<Engine>) -> Resolver {
     })
 }
 
-/// Luau's `onallocate` callback
-unsafe extern "C-unwind" fn allocating(state: *mut lua_State, old: usize, new: usize) {
+/// Luau's `onallocate` callback (the block, memory category, type and tag it also gives are read through lua_allocblock,
+/// which also says what non-object memory is for)
+unsafe extern "C-unwind" fn allocating(state: *mut lua_State, _block: *mut std::ffi::c_void, old: usize, new: usize, _memcat: u8, _tt: i32, _tag: i32) {
     ALLOCATIONS.with(|cell| {
         let Ok(mut allocations) = cell.try_borrow_mut() else { return };
         let Some(allocations) = allocations.as_mut() else { return };
@@ -724,7 +728,7 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
     vm::enum_heap(
         state,
         |ptr, tt, size, name| {
-            if tt == 6 {
+            if tt as i32 == vm::T_TABLE {
                 if let Some(shape) = unsafe { vm::table_shape(ptr as *mut c_void) } {
                     shapes.push((ptrs.len() as u32, shape));
                 }
@@ -890,9 +894,9 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
     // by type (and Instance class): what is reachable, and the garbage not swept yet (what no root reaches, and what a
     // sweep found dead: its type alone, since its references may be freed)
     let offset = vm::udata_data_offset();
-    let block_of = |node: usize| -> usize { if tts[node] == 8 { ptrs[node].wrapping_sub(offset) } else { ptrs[node] } };
+    let block_of = |node: usize| -> usize { if tts[node] as i32 == vm::T_USERDATA { ptrs[node].wrapping_sub(offset) } else { ptrs[node] } };
     let resolve = |node: usize| -> String {
-        if tts[node] == 8 {
+        if tts[node] as i32 == vm::T_USERDATA {
             // (the node's pointer is the userdata's data; its block holds the tag)
             let object = unsafe { vm::object(block_of(node) as *mut c_void) };
             return object_name(&object, instance_tag, resolver);
@@ -1100,14 +1104,14 @@ mod tests {
     #[test]
     fn only_an_instances_own_userdata_has_a_slot_read() {
         let tag = crate::lua::raw::INSTANCE_TAG;
-        let impostor = vm::Object { tt: 8, tag: tag + 1, data: std::ptr::null_mut(), type_name: Some("Instance".into()) };
+        let impostor = vm::Object { tt: vm::T_USERDATA, tag: tag + 1, data: std::ptr::null_mut(), type_name: Some("Instance".into()) };
         assert_eq!(object_name(&impostor, tag, None), UNRESOLVED_INSTANCE);
         assert_eq!(instance_slot(&impostor, tag), None);
-        let empty = vm::Object { tt: 8, tag, data: std::ptr::null_mut(), type_name: None };
+        let empty = vm::Object { tt: vm::T_USERDATA, tag, data: std::ptr::null_mut(), type_name: None };
         assert_eq!(instance_slot(&empty, tag), None);
-        assert_eq!(instance_slot(&vm::Object { tt: 5, tag, data: std::ptr::null_mut(), type_name: None }, tag), None);
+        assert_eq!(instance_slot(&vm::Object { tt: vm::T_STRING, tag, data: std::ptr::null_mut(), type_name: None }, tag), None);
         let mut payload = [7u32, 3, 0, 0];
-        let real = vm::Object { tt: 8, tag, data: payload.as_mut_ptr() as *mut c_void, type_name: None };
+        let real = vm::Object { tt: vm::T_USERDATA, tag, data: payload.as_mut_ptr() as *mut c_void, type_name: None };
         assert_eq!(instance_slot(&real, tag), Some((7, 3)));
         let resolve = |index: u32, generation: u32| (index == 7 && generation == 3).then(|| "Part".to_string());
         assert_eq!(object_name(&real, tag, Some(&resolve)), "userdata: Instance Part");

@@ -57,6 +57,14 @@ fn profile(step: u64) -> Profile {
     profile
 }
 
+/// The bytes the probe's function `name` allocated: what it holds afterwards (`measured`, with the collector stopped), but
+/// for `growth`, whose array part grows into a new block each time before the old one is freed (DFFlagLuauTableRobustOom,
+/// as a client runs): every size it passed through, twice what it ends with.
+fn allocated(profile: &Profile, name: &str) -> f64 {
+    let measured = profile.measured[name];
+    if name == "growth" { measured * 2.0 } else { measured }
+}
+
 /// What the profile attributes to stacks passing through the function `name` of the probe.
 fn within(rows: &[(String, u64)], name: &str) -> f64 {
     let frame = format!(";{name} probe:");
@@ -67,7 +75,7 @@ fn within(rows: &[(String, u64)], name: &str) -> f64 {
 fn every_allocation_is_attributed_to_its_stack() {
     let exact = profile(1);
     for name in ["tables", "growth", "strings", "depth", "lines"] {
-        let (attributed, measured) = (within(&exact.bytes, name), exact.measured[name]);
+        let (attributed, measured) = (within(&exact.bytes, name), allocated(&exact, name));
         assert!(measured > 10_000.0, "{name} allocates {measured}");
         // (bytes allocated, not net: string.rep's buffer shrinks to the string, which the net count nets off, 1.2 %)
         assert!((attributed - measured).abs() <= measured * 0.02, "{name}: {attributed} attributed, {measured} allocated");
@@ -86,17 +94,32 @@ fn every_allocation_is_attributed_to_its_stack() {
 }
 
 #[test]
-fn sampling_estimates_the_bytes_and_counts_within_five_percent() {
+fn sampling_estimates_the_bytes_within_five_percent_and_the_counts_within_their_spread() {
     let exact = profile(1);
     let sampled = profile(256);
     for name in ["tables", "growth", "strings", "depth", "lines"] {
-        let (attributed, measured) = (within(&sampled.bytes, name), sampled.measured[name]);
+        let (attributed, measured) = (within(&sampled.bytes, name), allocated(&sampled, name));
         println!("{name}: {attributed} sampled bytes of {measured} allocated ({:+.2} %)", (attributed / measured - 1.0) * 100.0);
         assert!((attributed - measured).abs() <= measured * 0.05, "{name}: {attributed} sampled, {measured} allocated");
     }
+    // a count: an allocation of `size` bytes taken with probability size / 256 and weighted by its inverse adds a variance of
+    // 256 / size - 1 (by each stack's average size), about 3 % of the count for the probe's small tables and arrays: within
+    // four standard deviations (a fixed 5 % failed on one draw of 1.75 of them when Luau 0.746 changed the allocations' order)
+    let exact_counts: HashMap<&str, u64> = exact.counts.iter().map(|(stack, count)| (stack.as_str(), *count)).collect();
     for name in ["tables", "lines", "depth"] {
-        let (counted, exact) = (within(&sampled.counts, name), within(&exact.counts, name));
-        assert!((counted - exact).abs() <= exact * 0.05, "{name}: {counted} sampled, {exact} counted");
+        let (counted, exact_count) = (within(&sampled.counts, name), within(&exact.counts, name));
+        let frame = format!(";{name} probe:");
+        let variance: f64 = exact
+            .bytes
+            .iter()
+            .filter(|(stack, _)| stack.contains(&frame))
+            .filter_map(|(stack, bytes)| {
+                let count = *exact_counts.get(stack.as_str())? as f64;
+                Some(count * (256.0 * count / *bytes as f64 - 1.0).max(0.0))
+            })
+            .sum();
+        assert!(variance > 0.0, "{name}: no small allocations");
+        assert!((counted - exact_count).abs() <= 4.0 * variance.sqrt(), "{name}: {counted} sampled, {exact_count} counted (a standard deviation of {:.0})", variance.sqrt());
     }
 }
 

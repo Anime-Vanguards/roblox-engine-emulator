@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use mlua::{Compiler, prelude::*};
+use mlua::{chunk::Compiler, prelude::*};
 use rustc_hash::FxHashMap;
 
 use super::{instance::defer_thread, instance::materialize, instance_value, raw::instance_of_ud};
@@ -328,12 +328,8 @@ pub fn required_files(engine: &Engine) -> Vec<String> {
 pub fn compiler() -> Compiler {
     // (typeof is a builtin, as in Roblox, whose client runs a script's `typeof(x)` as a fast call: the VM's builtin names ree's
     // values as ree's typeof does, raw.rs typeof_function; measured in tools/cost-parity's env rows. The compiler leaves the
-    // typeof of a constant vector to the VM, which names it Vector3, rather than folding it to "vector": Luau's
-    // LuauCompileTypeofFold, a process-wide flag)
-    static TYPEOF_FOLD: std::sync::Once = std::sync::Once::new();
-    TYPEOF_FOLD.call_once(|| {
-        let _ = Lua::set_fflag("LuauCompileTypeofFold", true);
-    });
+    // typeof of a constant vector to the VM, which names it Vector3, rather than folding it to "vector": Luau has done so
+    // since LuauCompileTypeofFold's behaviour became its only one)
     Compiler::new().set_optimization_level(2).set_vector_ctor("Vector3.new").set_vector_type("Vector3")
 }
 
@@ -414,7 +410,7 @@ pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[
     let bytecode = engine.modules.borrow_mut().bytecode.remove(&script);
     let chunk = match (bytecode, &source) {
         // (the prefetcher's compile of this very source: loads as the text would)
-        (Some(bytecode), std::borrow::Cow::Borrowed(_)) => lua.load(bytecode).set_mode(mlua::ChunkMode::Binary),
+        (Some(bytecode), std::borrow::Cow::Borrowed(_)) => lua.load(bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
         _ => lua.load(&*source).set_compiler(compiler()),
     };
     // A script's chunk is its full name as Roblox names it: error positions, tracebacks and debug.info(f, "s") read

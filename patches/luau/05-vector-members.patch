@@ -8,11 +8,11 @@
 # vector metatable.
 
 diff --git a/luau/VM/src/lvmutils.cpp b/luau/VM/src/lvmutils.cpp
-index 1ce4e3b..4b6878e 100644
+index 3ed95eb..aff347b 100644
 --- a/luau/VM/src/lvmutils.cpp
 +++ b/luau/VM/src/lvmutils.cpp
-@@ -95,6 +95,48 @@ static void callTM(lua_State* L, const TValue* f, const TValue* p1, const TValue
-     luaD_call(L, L->top - 4, 0);
+@@ -170,6 +170,48 @@ static LUAU_NOINLINE void callTM(lua_State* L, const TValue* f, const TValue* p1
+     }
  }
  
 +// The members of a Vector3 the VM answers itself, where the engine's Luau used to serve them with a function call: a
@@ -47,10 +47,10 @@ index 1ce4e3b..4b6878e 100644
 +            L->global->work.vectorunits++;
 +#if LUA_VECTOR_SIZE == 4
 +        float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
-+        setvvalue(res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, v[3] * invSqrt);
++        setvvalue(L, res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, v[3] * invSqrt);
 +#else
 +        float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-+        setvvalue(res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, 0.0f);
++        setvvalue(L, res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, 0.0f);
 +#endif
 +        return true;
 +    }
@@ -60,9 +60,9 @@ index 1ce4e3b..4b6878e 100644
  void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
  {
      int loop;
-@@ -118,6 +160,8 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
-             }
-             // t isn't a table, so see if it has an INDEX meta-method to look up the key with
+@@ -242,6 +284,8 @@ void luaV_gettable(lua_State* L, const TValue* t, TValue* key, StkId val)
+             setobj2s(L, val, &lco->staticmembers[offset - lco->numberofinstancemembers]);
+             return;
          }
 +        else if (ttisvector(t) && ttisstring(key) && luaV_vectormember(L, vvalue(t), tsvalue(key), val))
 +            return;

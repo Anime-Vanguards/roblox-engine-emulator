@@ -4,7 +4,7 @@
 //! The Luau sources live in tests/luau/ and run through mlua directly, so they exercise the same VM
 //! build the engine links.
 
-use mlua::{Compiler, Function, Lua, LuaSerdeExt, Result, Table, Value};
+use mlua::{chunk::Compiler, Function, Lua, LuaSerdeExt, Result, Table, Value};
 
 const TABLE_FIND: &str = include_str!("luau/table_find.luau");
 const NATIVE_BUILTINS: &str = include_str!("luau/native_builtins.luau");
@@ -211,7 +211,7 @@ fn an_interpreted_iterator_yields_and_const_declares_a_local() -> Result<()> {
     Ok(())
 }
 
-/// `math.isnan`, `math.isinf` and `math.isfinite`, Luau 0.701's number classifiers (patches/luau/92-backport-math-classification.patch backports them to 0.694): the
+/// `math.isnan`, `math.isinf` and `math.isfinite`, Luau's number classifiers (0.701; upstream's own since the 0.746 bump): the
 /// results, the strings `luaL_checknumber` takes, the errors, one result, and a constant argument folded by the compiler, with the
 /// same answers interpreted, natively compiled and through a plain C call (a table's field, never a fast call).
 #[test]

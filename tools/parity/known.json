@@ -7,10 +7,6 @@
 	],
 	"buffer_vector_time": [
 		{
-			"line": "vector-angle ok 1.57079633 lerp ok 0.5, 1, 1.5",
-			"why": "vector.lerp is newer than ree's Luau VM (0.694): it is nil there"
-		},
-		{
 			"line": "vector-format error invalid argument #2 to 'format' (string expected, got Vector3) ok 1, 2, 3 concat error @86: attempt to concatenate string with Vector3",
 			"why": "the VM names a native vector `vector` in its own errors (string.format, concatenation, arithmetic); a client names it Vector3"
 		},
@@ -270,10 +266,6 @@
 		}
 	],
 	"math_classify": [
-		{
-			"line": "math-keys abs acos asin atan atan2 ceil clamp cos cosh deg e exp floor fmod frexp huge isfinite isinf isnan ldexp lerp log log10 map max min modf nan noise phi pi pow rad random randomseed round sign sin sinh sqrt sqrt2 tan tanh tau",
-			"why": "the client also has newer Luau math constants (e, nan, phi, sqrt2, tau), not backported"
-		},
 		{
 			"line": "math-error Vector3 isnan error @109: invalid argument #1 to 'isnan' (number expected, got Vector3) | isinf error invalid argument #1 to 'isinf' (number expected, got Vector3) | isfinite error @111: invalid argument #1 to 'isfinite' (number expected, got Vector3)",
 			"why": "the VM names a vector `vector` in an argument error (luaT_objtypename), the client Vector3 (as vector-format)"

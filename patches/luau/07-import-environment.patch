@@ -8,10 +8,10 @@
 # load, so every import was a global lookup.
 
 diff --git a/luau/VM/src/lvmload.cpp b/luau/VM/src/lvmload.cpp
-index e2808d2..ee6e5d6 100644
+index 4e95bfd..e8f70c6 100644
 --- a/luau/VM/src/lvmload.cpp
 +++ b/luau/VM/src/lvmload.cpp
-@@ -153,6 +153,7 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
+@@ -190,6 +190,7 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
  {
      struct ResolveImport
      {
@@ -19,7 +19,7 @@ index e2808d2..ee6e5d6 100644
          TValue* k;
          uint32_t id;
  
-@@ -168,12 +169,15 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
+@@ -205,12 +206,15 @@ static void resolveImportSafe(lua_State* L, LuaTable* env, TValue* k, uint32_t i
              setnilvalue(L->top);
              L->top++;
  

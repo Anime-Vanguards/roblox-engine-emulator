@@ -6594,7 +6594,7 @@ fn a_scripts_environment_resolves_imports_at_load_and_takes_fast_calls() {
     assert_eq!(output.iter().filter(|line| line.as_str() == names).count(), 2, "{output:?}");
 }
 
-/// `math.isnan`, `math.isinf` and `math.isfinite` (Luau 0.701, backported in patches/luau/92-backport-math-classification.patch) are builtins a script calls as fast
+/// `math.isnan`, `math.isinf` and `math.isfinite` (Luau's since 0.701) are builtins a script calls as fast
 /// calls, as a client does (the parity bench's `arith.isnan` rows: a loop step calling one 4.9-6.2 ns in a module, 20-22 after
 /// getfenv), and getfenv makes them plain C calls; the answers are the same either way.
 #[test]

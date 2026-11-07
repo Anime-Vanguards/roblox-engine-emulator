@@ -8,13 +8,15 @@ the third-party components below, each under its own license.
 
 | Component | Where | License | License text | Changes |
 |---|---|---|---|---|
-| [Luau](https://github.com/luau-lang/luau) 0.694 (Copyright Roblox Corporation), including code from Lua 5.1 (Copyright Lua.org, PUC-Rio) | `vendor/luau0-src/luau/` | MIT | [vendor/luau0-src/LICENSE](vendor/luau0-src/LICENSE) | modified by the topic series in [patches/luau/](patches/luau/) |
-| [luau0-src](https://github.com/mlua-rs/luau-src-rs) 0.15.9 (Copyright Aleksandr Orlenko), the crate that builds Luau | `vendor/luau0-src/` | MIT | [vendor/luau0-src/LICENSE](vendor/luau0-src/LICENSE) | its build script and manifest, by the same series |
+| [Luau](https://github.com/luau-lang/luau) 0.746 (Copyright Roblox Corporation), including code from Lua 5.1 (Copyright Lua.org, PUC-Rio) | `vendor/luau0-src/luau/` | MIT | [vendor/luau0-src/luau/LICENSE.txt](vendor/luau0-src/luau/LICENSE.txt), [lua_LICENSE.txt](vendor/luau0-src/luau/lua_LICENSE.txt) | modified by the topic series in [patches/luau/](patches/luau/) |
+| [luau0-src](https://github.com/mlua-rs/luau-src-rs) 0.22.0 (Copyright Aleksandr Orlenko), the crate that builds Luau | `vendor/luau0-src/` | MIT | [vendor/luau0-src/LICENSE](vendor/luau0-src/LICENSE) | its build script and manifest, by the same series |
+| [mlua-sys](https://github.com/mlua-rs/mlua) 0.13.0 (Copyright A. Orlenko, rlua), mlua's FFI layer | `vendor/mlua-sys/` | MIT | [vendor/mlua-sys/LICENSE](vendor/mlua-sys/LICENSE) (mlua's: the crate ships none) | its bytecode version range, set to the vendored Luau's by `tools/vendor.mjs` |
 | [Lune](https://github.com/lune-org/lune) 0.10.4: the `lune-roblox` crate | `vendor/lune-roblox/` | MPL-2.0 | [vendor/lune-roblox/LICENSE.txt](vendor/lune-roblox/LICENSE.txt) | modified by [patches/lune.patch](patches/lune.patch) |
 | [Lune](https://github.com/lune-org/lune) 0.10.4: the `lune-utils` crate | `vendor/lune-utils/` | MPL-2.0 | [vendor/lune-utils/LICENSE.txt](vendor/lune-utils/LICENSE.txt) | modified by [patches/lune.patch](patches/lune.patch) |
 
 `vendor/` is generated: `node tools/vendor.mjs` downloads the pinned upstream archives (SHA-256 checked), applies the
-patches in `patches/` and writes the result, and `node tools/vendor.mjs --check` proves `vendor/` is exactly that.
+patches in `patches/` (and the changes the table names) and writes the result, and `node tools/vendor.mjs --check`
+proves `vendor/` is exactly that.
 The Lune files are covered by the Mozilla Public License 2.0, which applies file by file: the modified files stay
 under the MPL-2.0, their source is the files in `vendor/` (and the upstream archive plus `patches/lune.patch`), and
 the rest of this project stays under GPL-2.0-or-later. The MPL-2.0 allows its files to be combined with

@@ -77,6 +77,12 @@ vendor/ patches/ tools/vendor.mjs   the patched Luau VM and Lune's datatypes
   GPU or the network.
 - `node tools/vendor.mjs --check`: vendor/ is exactly the pinned archives with patches/ applied (the VM's patches are a
   topic series, patches/luau/; docs/building.md "Updating Luau").
+- The VM runs with the Luau flag values a live Roblox client serves (data/luau-flags.json, refreshed by
+  `node tools/luau-flags.mjs`; patches/luau/14-client-flags.patch sets them before the first VM starts or chunk
+  compiles). Roblox ships Luau changes behind those flags, so upstream's defaults would run another Luau.
+  `REE_LUAU_FLAGS=off` keeps upstream's defaults; `REE_LUAU_FLAGS=FFlagName=true,FIntName=3` changes some on top.
+  (mlua's `luau-jit` feature, the `jit` build's, turns LuauEmitCallFeedback and LuauPromoteProto on itself, as the
+  client has them: `off` leaves those two on.)
 - Recordings are deterministic: the same harness and project give byte-identical `scene.rbxm`,
   `playback.json`, `events.json`, `camera.json` and summary files. Two runs of one scene make the same
   writes: tables keyed by Instances, tables, functions or threads are visited in an order fixed by the
@@ -266,9 +272,9 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   names it: error positions, tracebacks and `debug.info(f, "s")` read `ReplicatedStorage.Module:3:`
   (measured in a playing client; tools/parity/probes/chunknames.luau). Roblox keeps one compiled chunk per
   source text, so a module whose source equals an earlier one's carries that module's name; ree does not.
-- **The Luau library**: the VM is Luau 0.694 (`vendor/luau0-src`) with the topic series in patches/luau/, which also backports
-  Luau 0.701's `math.isnan`, `math.isinf` and `math.isfinite` as upstream has them: builtins (fast calls, a
-  constant argument folded by the compiler) that take a number or a string Luau reads as one (`"1"`, `"inf"`,
+- **The Luau library**: the VM is Luau 0.746 (`vendor/luau0-src`, the release a live client runs) with the topic
+  series in patches/luau/ and the client's flag values. Its `math.isnan`, `math.isinf` and `math.isfinite` (Luau's
+  since 0.701) are builtins (fast calls, a constant argument folded by the compiler) that take a number or a string Luau reads as one (`"1"`, `"inf"`,
   `"nan"`, `"1e400"`) and raise `invalid argument #1 to 'isnan' (number expected, got nil)` for anything
   else, as a playing client does (tools/parity/probes/math_classify.luau).
 - **CFrame:FuzzyEq(other, eps = 1e-5)** (measured in a playing client, Studio 0.744: about 25,000 pairs at its
@@ -826,6 +832,6 @@ rur, whose tools set them.
 - `REE_SCRIPT_TIMEOUT`, `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS`, `REE_PARENT_WATCH`,
   `REE_SERVE_WORKERS`, `REE_FROZEN_CLOCK`, `REE_RANDOM_SEED`, `REE_WORK_COUNTERS`, `REE_HASH_SEED`,
   `REE_HASH_ADDRESS`, `REE_LOCALIZED_PLACES`, `REE_MATCH_PLACES`, `REE_ASSET_WORKER`, `REE_PROFILE`,
-  `REE_PROFILE_OUT`, `REE_PROFILE_COUNTERS`, `REE_HW_COUNTERS`, `REE_VIEW_COLOR` (the profile viewer's colours:
+  `REE_PROFILE_OUT`, `REE_PROFILE_COUNTERS`, `REE_HW_COUNTERS`, `REE_LUAU_FLAGS`, `REE_VIEW_COLOR` (the profile viewer's colours:
   `truecolor` or `256`), `REE_VIEW_BLESS` (its snapshot tests write their snapshots).
 - Others: `RAYON_NUM_THREADS`, `MIMALLOC_EAGER_COMMIT`, `MIMALLOC_PURGE_DELAY`.

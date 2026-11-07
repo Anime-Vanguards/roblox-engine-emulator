@@ -272,7 +272,7 @@ pub fn set_phase(name: &str) {
 }
 
 /// Luau's `onallocate` callback: `old` bytes became `new` (0 for a new block).
-unsafe extern "C-unwind" fn allocating(state: *mut mlua::ffi::lua_State, old: usize, new: usize) {
+unsafe extern "C-unwind" fn allocating(state: *mut mlua::ffi::lua_State, _block: *mut std::ffi::c_void, old: usize, new: usize, _memcat: u8, _tt: i32, _tag: i32) {
     if new <= old {
         return;
     }

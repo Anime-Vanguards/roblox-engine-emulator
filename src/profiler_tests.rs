@@ -140,14 +140,15 @@ fn booked_work_adds_up_to_the_work_clock_and_leaves_it_unchanged() {
 
 /// The inline caches are read as the interpreter reads them: a table key read from one table hits its slot after its
 /// first miss; a key the table lacks is looked up every time (a miss); a key its metatable's __index gives takes the
-/// slow path; a global hits its slot.
+/// slow path; a global hits its slot. (The table is a clone: a compiler since Luau 0.744 reads a local table that a
+/// constructor built and nothing changes as constants.)
 #[test]
 fn inline_caches_tell_hits_from_misses() {
     let _lock = lock();
     let lua = Lua::new();
     lua.enable_jit(false);
     let state = main_state(&lua);
-    let source = "local same = {a = 1, b = 2, c = 3}\nlocal x = 0\nfor i = 1, 100 do\n\tx += same.c\nend\nlocal empty = {}\nfor i = 1, 100 do\n\tx += empty.c or 0\nend\nlocal inherited = setmetatable({}, {__index = {c = 1}})\nfor i = 1, 100 do\n\tx += inherited.c\nend\nG = 0\nfor i = 1, 100 do\n\tG += 1\nend\nresult = x\n";
+    let source = "local same = table.clone({a = 1, b = 2, c = 3})\nlocal x = 0\nfor i = 1, 100 do\n\tx += same.c\nend\nlocal empty = {}\nfor i = 1, 100 do\n\tx += empty.c or 0\nend\nlocal inherited = setmetatable({}, {__index = {c = 1}})\nfor i = 1, 100 do\n\tx += inherited.c\nend\nG = 0\nfor i = 1, 100 do\n\tG += 1\nend\nresult = x\n";
     let function = lua.load(source).set_name("=caches").into_function().unwrap();
     assert!(vm::start(state, true, None, None));
     function.call::<()>(()).unwrap();
@@ -175,6 +176,53 @@ fn inline_caches_tell_hits_from_misses() {
     assert_eq!(inherited, [0, 0, 100, 0], "a key its metatable gives: the metatable's path");
     let globals = outcomes(16, "GETGLOBAL");
     assert!(globals[0] >= 99 && globals.iter().sum::<u64>() == 100, "{globals:?}");
+}
+
+/// The profiler names opcodes and type tags as the vendored VM numbers them: Bytecode.h's opcodes in order, and lua.h's
+/// type tags (a Luau release that adds an opcode or a type moves the ones after it)
+#[test]
+fn opcode_names_and_type_tags_follow_the_vendored_headers() {
+    let identifier = |text: &str| -> String { text.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect() };
+    let bytecode = include_str!("../vendor/luau0-src/luau/Common/include/Luau/Bytecode.h");
+    let opcodes = &bytecode[bytecode.find("enum LuauOpcode").unwrap()..];
+    let opcodes = &opcodes[..opcodes.find("};").unwrap()];
+    let names: Vec<String> = opcodes.lines().filter_map(|line| line.trim().strip_prefix("LOP_")).map(identifier).filter(|name| name != "_COUNT").collect();
+    assert_eq!(names, vm::OPCODES, "src/profiler/vm.rs OPCODES");
+    // lua.h's lua_Type with float vectors (LUA_VECTOR_DOUBLE 0, the layout mlua-sys binds)
+    let header = include_str!("../vendor/luau0-src/luau/VM/include/lua.h");
+    let types = &header[header.find("enum lua_Type").unwrap()..];
+    let types = &types[..types.find("};").unwrap()];
+    let (mut tags, mut skipping) = (Vec::new(), false);
+    for line in types.lines().map(str::trim) {
+        if line.starts_with("#if") {
+            skipping = line.contains("LUA_VECTOR_DOUBLE == 1");
+        } else if line.starts_with("#endif") {
+            skipping = false;
+        } else if let Some(rest) = line.strip_prefix("LUA_T").filter(|_| !skipping) {
+            let name = identifier(rest);
+            // (LUA_T_ALL, LUA_T_COUNT: counts, not tags)
+            if name.starts_with('_') {
+                break;
+            }
+            tags.push(name);
+        }
+    }
+    let tag = |name: &str| tags.iter().position(|found| found == name).unwrap_or_else(|| panic!("LUA_T{name} in {tags:?}")) as i32;
+    let ours = [
+        ("STRING", vm::T_STRING),
+        ("TABLE", vm::T_TABLE),
+        ("FUNCTION", vm::T_FUNCTION),
+        ("USERDATA", vm::T_USERDATA),
+        ("THREAD", vm::T_THREAD),
+        ("BUFFER", vm::T_BUFFER),
+        ("CLASS", vm::T_CLASS),
+        ("OBJECT", vm::T_OBJECT),
+        ("PROTO", vm::T_PROTO),
+        ("UPVAL", vm::T_UPVAL),
+    ];
+    for (name, value) in ours {
+        assert_eq!(tag(name), value, "LUA_T{name}: {tags:?}");
+    }
 }
 
 /// Allocations are typed exactly (every one), and their stacks name the allocating line; an Instance's userdata
@@ -212,7 +260,7 @@ thread_local! {
     static LAST_ALLOCATION: std::cell::Cell<(usize, i32)> = const { std::cell::Cell::new((0, -1)) };
 }
 
-unsafe extern "C-unwind" fn keep_allocation(state: *mut mlua::ffi::lua_State, _old: usize, _new: usize) {
+unsafe extern "C-unwind" fn keep_allocation(state: *mut mlua::ffi::lua_State, _block: *mut std::ffi::c_void, _old: usize, _new: usize, _memcat: u8, _tt: i32, _tag: i32) {
     let (block, kind) = vm::alloc_block(state);
     LAST_ALLOCATION.with(|last| last.set((block as usize, kind)));
 }

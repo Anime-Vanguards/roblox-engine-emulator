@@ -9,10 +9,10 @@
 # reverse.
 
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index 1aeffde..0c94296 100644
+index 898fa65..7ecf17e 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
-@@ -349,6 +349,11 @@ LUA_API void lua_workhostcalls(lua_State* L, int calls);
+@@ -390,6 +390,11 @@ LUA_API void lua_workhostcalls(lua_State* L, int calls);
  LUA_API void lua_workhostnanos(lua_State* L, int nanos);
  // on: one more level of muting; off: one less (the engine's Luau prices a whole call itself, as Scheduler.muted does for the host's charges)
  LUA_API void lua_workmute(lua_State* L, int on);
@@ -25,10 +25,10 @@ index 1aeffde..0c94296 100644
  ** all allocated bytes are attributed to the memory category of the running thread (0..LUA_MEMORY_CATEGORIES-1)
  */
 diff --git a/luau/VM/src/lapi.cpp b/luau/VM/src/lapi.cpp
-index aa0a77e..5eab724 100644
+index 132d6fa..d591190 100644
 --- a/luau/VM/src/lapi.cpp
 +++ b/luau/VM/src/lapi.cpp
-@@ -1185,6 +1185,12 @@ void lua_workmute(lua_State* L, int on)
+@@ -1466,6 +1466,12 @@ void lua_workmute(lua_State* L, int on)
          --muted;
  }
  
@@ -42,11 +42,11 @@ index aa0a77e..5eab724 100644
  {
      int res = 0;
 diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
-index 873877c..cd9d0cc 100644
+index d480625..16b1fdd 100644
 --- a/luau/VM/src/lgc.cpp
 +++ b/luau/VM/src/lgc.cpp
-@@ -916,6 +916,12 @@ static int sweepgcopage(lua_State* L, lua_Page* page)
-     return int(end - start) / blockSize;
+@@ -1211,6 +1211,12 @@ static size_t sweeppageset(lua_State* L, lua_Page*& pageset, size_t cost, size_t
+     return cost;
  }
  
 +// the collector's clock: the host's (lua_setgcclock) when it gave one, else the wall clock
@@ -58,7 +58,7 @@ index 873877c..cd9d0cc 100644
  static size_t gcstep(lua_State* L, size_t limit)
  {
      size_t cost = 0;
-@@ -974,7 +980,7 @@ static size_t gcstep(lua_State* L, size_t limit)
+@@ -1269,7 +1275,7 @@ static size_t gcstep(lua_State* L, size_t limit)
          g->gcmetrics.currcycle.atomicstarttotalsizebytes = g->totalbytes;
  #endif
  
@@ -67,7 +67,7 @@ index 873877c..cd9d0cc 100644
          g->gcstats.atomicstarttotalsizebytes = g->totalbytes;
  
          cost = atomic(L); // finish mark phase
-@@ -1079,7 +1085,7 @@ size_t luaC_step(lua_State* L, bool assist)
+@@ -1436,7 +1442,7 @@ size_t luaC_step(lua_State* L, bool assist)
  
      // at the start of the new cycle
      if (g->gcstate == GCSpause)
@@ -76,7 +76,7 @@ index 873877c..cd9d0cc 100644
  
  #ifdef LUAI_GCMETRICS
      if (g->gcstate == GCSpause)
-@@ -1108,7 +1114,7 @@ size_t luaC_step(lua_State* L, bool assist)
+@@ -1474,7 +1480,7 @@ size_t luaC_step(lua_State* L, bool assist)
          g->GCthreshold = heaptrigger;
  
          g->gcstats.heapgoalsizebytes = heapgoal;
@@ -85,7 +85,16 @@ index 873877c..cd9d0cc 100644
          g->gcstats.endtotalsizebytes = g->totalbytes;
  
  #ifdef LUAI_GCMETRICS
-@@ -1271,7 +1277,7 @@ int64_t luaC_allocationrate(lua_State* L)
+@@ -1571,7 +1577,7 @@ void luaC_fullgc(lua_State* L)
+     if (DFFlag::LuauGcHeapShrinkFix)
+     {
+         // full collection ends a cycle, so the heap growth is measured from this point
+-        g->gcstats.endtimestamp = lua_clock();
++        g->gcstats.endtimestamp = gcclock(g);
+         g->gcstats.endtotalsizebytes = g->totalbytes;
+     }
+ 
+@@ -1654,7 +1660,7 @@ int64_t luaC_allocationrate(lua_State* L)
  
      if (g->gcstate <= GCSatomic)
      {
@@ -95,23 +104,23 @@ index 873877c..cd9d0cc 100644
          if (duration < durationthreshold)
              return -1;
 diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
-index 3467c88..1acaf49 100644
+index ba899b3..21e3f1e 100644
 --- a/luau/VM/src/lstate.cpp
 +++ b/luau/VM/src/lstate.cpp
-@@ -227,6 +227,8 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
- 
+@@ -228,6 +228,8 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
+     g->ecb = lua_ExecutionCallbacks();
      g->gcstats = GCStats();
      g->work = lua_WorkCounters();
 +    g->gcclock = NULL;
 +    g->gcclockud = NULL;
  
- #ifdef LUAI_GCMETRICS
-     g->gcmetrics = GCMetrics();
+     g->lastprotoid = 1;
+     g->lastclassid = 1;
 diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
-index 632eddd..cef77b0 100644
+index 9965c70..dc61540 100644
 --- a/luau/VM/src/lstate.h
 +++ b/luau/VM/src/lstate.h
-@@ -229,6 +229,9 @@ typedef struct global_State
+@@ -301,6 +301,9 @@ typedef struct global_State
  
      lua_WorkCounters work; // what the interpreter did, for a host that charges its cost (lua_workcounters)
  

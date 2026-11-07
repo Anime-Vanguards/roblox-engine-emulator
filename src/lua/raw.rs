@@ -443,7 +443,7 @@ impl Api {
 static ATOM_REFLECTION: OnceLock<Arc<Reflection>> = OnceLock::new();
 
 /// `useratom`: a string's atom is its member NameId (-1: not a member name, -2: look it up).
-unsafe extern "C-unwind" fn user_atom(s: *const c_char, len: usize) -> i16 {
+unsafe extern "C-unwind" fn user_atom(_state: *mut ffi::lua_State, s: *const c_char, len: usize) -> i16 {
     let Some(reflection) = ATOM_REFLECTION.get() else { return -2 };
     let bytes = unsafe { std::slice::from_raw_parts(s as *const u8, len) };
     match reflection.name_id_bytes(bytes) {

@@ -1,5 +1,5 @@
 // This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
-// A host's profile of the interpreter (lua.h "profiling"; patches/luau.patch). While a profile steps, every thread of its
+// A host's profile of the interpreter (lua.h "profiling"; the engine's patches/luau/12-profiling.patch). While a profile steps, every thread of its
 // VM runs luau_execute's single-step variant, whose dispatch calls luaP_step before each instruction:
 // - it counts the instructions each function executes, by instruction;
 // - it books what the work counters (lua_workcounters, priced by the host) and the host's own charges moved since the
@@ -31,6 +31,11 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+// (the flags under which the collector marks the roots and references the heap walk follows: lgc.cpp)
+LUAU_FASTFLAG(LuauGcTraceUdata)
+LUAU_FASTFLAG(LuauFastpcall)
+LUAU_FASTFLAG(LuauCoroutineFinally)
 
 thread_local lua_ProfileState* luaP_state = NULL;
 thread_local uint8_t luaP_allockind = 0;
@@ -459,11 +464,13 @@ static void enterinlines(lua_ProfileState* s, ProfFunction& f, int at)
 
 static int cfunctionof(lua_ProfileState* s, Closure* cl)
 {
-    CFunctionKey key = {cl->c.f, cl->c.debugname};
+    // (a C function's name is a string object: its characters stay while the closure does)
+    const char* debugname = cl->c.debugname ? getstr(cl->c.debugname) : NULL;
+    CFunctionKey key = {cl->c.f, debugname};
     auto found = s->cfunctionids.find(key);
     if (found != s->cfunctionids.end())
         return found->second;
-    ProfCFunction c = {cl->c.f, cl->c.debugname, cl->c.debugname ? cl->c.debugname : ""};
+    ProfCFunction c = {cl->c.f, debugname, debugname ? debugname : ""};
     s->cfunctions.push_back(c);
     int id = int(s->cfunctions.size() - 1);
     s->cfunctionids.emplace(key, id);
@@ -1308,7 +1315,10 @@ void walkclosure(HeapWalk* w, Closure* cl)
 {
     if (cl->isC)
     {
-        walknode(w, obj2gco(cl), walksize(obj2gco(cl)), cl->c.debugname);
+        walknode(w, obj2gco(cl), walksize(obj2gco(cl)), cl->c.debugname ? getstr(cl->c.debugname) : NULL);
+        // (traverseclosure marks a C function's name)
+        if (cl->c.debugname)
+            walkedge(w, obj2gco(cl), obj2gco(cl->c.debugname), "name");
     }
     else
     {
@@ -1386,6 +1396,8 @@ void walkthread(HeapWalk* w, lua_State* th)
     // (traversestack marks these too)
     if (th->namecall)
         walkedge(w, obj2gco(th), obj2gco(th->namecall), "namecall");
+    if (FFlag::LuauCoroutineFinally && th->finalizers)
+        walkedge(w, obj2gco(th), obj2gco(th->finalizers), "finalizers");
     for (UpVal* uv = th->openupval; uv; uv = uv->u.open.threadnext)
         walkedge(w, obj2gco(th), obj2gco(uv), "open upvalue");
 }
@@ -1414,6 +1426,10 @@ void walkproto(HeapWalk* w, Proto* p)
     for (int i = 0; i < p->sizelocvars; ++i)
         if (p->locvars[i].varname)
             walkedge(w, obj2gco(p), obj2gco(p->locvars[i].varname), "local name");
+    if (p->optimized)
+        walkedge(w, obj2gco(p), obj2gco(p->optimized), "optimized");
+    if (p->deoptimized)
+        walkedge(w, obj2gco(p), obj2gco(p->deoptimized), "deoptimized");
 }
 
 void walkobject(HeapWalk* w, GCObject* o)
@@ -1442,6 +1458,9 @@ void walkobject(HeapWalk* w, GCObject* o)
             walkedge(w, o, gcvalue(uv->v), "value");
         return;
     }
+    default:
+        // (a type the walk does not open: user-defined classes and objects)
+        return walknode(w, o, walksize(o), NULL);
     }
 }
 
@@ -1487,6 +1506,32 @@ void lua_enumheap(
             edge(context, NULL, walkpointer(obj2gco(g->mt[i])), buf);
         }
     }
+    // (the rest of markroot's and atomic's roots, under the flags that mark them)
+    if (FFlag::LuauGcTraceUdata && iscollectable(&g->weakregistry))
+        edge(context, NULL, walkpointer(gcvalue(&g->weakregistry)), "weak registry");
+    for (int i = 0; i < LUA_UTAG_LIMIT; ++i)
+        if (g->udatamt[i])
+            edge(context, NULL, walkpointer(obj2gco(g->udatamt[i])), "userdata metatable");
+    for (int i = 0; i < UTAG_INTERNAL_LIMIT; ++i)
+    {
+        const lua_UdataDirectAccessData& direct = g->udatadirect[i];
+        for (const TValue* tm : {&direct.indextm, &direct.newindextm, &direct.namecalltm})
+            if (iscollectable(tm))
+                edge(context, NULL, walkpointer(gcvalue(tm)), "userdata direct access");
+        if (g->udatadirectfields[i])
+            edge(context, NULL, walkpointer(obj2gco(g->udatadirectfields[i])), "userdata direct fields");
+    }
+    if (FFlag::LuauFastpcall)
+    {
+        if (g->builtinPcall)
+            edge(context, NULL, walkpointer(obj2gco(g->builtinPcall)), "pcall");
+        if (g->builtinXpcall)
+            edge(context, NULL, walkpointer(obj2gco(g->builtinXpcall)), "xpcall");
+    }
+    if (g->typeofnames)
+        edge(context, NULL, walkpointer(obj2gco(g->typeofnames)), "typeof names");
+    if (g->vectortypename)
+        edge(context, NULL, walkpointer(obj2gco(g->vectortypename)), "typeof names");
     luaM_visitgco(L, &w, walkvisit);
 }
 

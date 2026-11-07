@@ -9,10 +9,10 @@
 # dropping it changes the bytecode of every _G read, which moves the work clock.
 
 diff --git a/luau/Compiler/src/ValueTracking.cpp b/luau/Compiler/src/ValueTracking.cpp
-index 5896422..90aa28c 100644
+index cf306d6..4c80c65 100644
 --- a/luau/Compiler/src/ValueTracking.cpp
 +++ b/luau/Compiler/src/ValueTracking.cpp
-@@ -93,12 +93,12 @@ struct ValueVisitor : AstVisitor
+@@ -225,12 +225,12 @@ struct ValueVisitor : AstVisitor
  void assignMutable(DenseHashMap<AstName, Global>& globals, const AstNameTable& names, const char* const* mutableGlobals)
  {
      if (AstName name = names.get("_G"); name.value)
@@ -26,8 +26,8 @@ index 5896422..90aa28c 100644
 +                globals[name] = Global::Written;
  }
  
- void trackValues(DenseHashMap<AstName, Global>& globals, DenseHashMap<AstLocal*, Variable>& variables, AstNode* root)
-@@ -109,3 +109,4 @@ void trackValues(DenseHashMap<AstName, Global>& globals, DenseHashMap<AstLocal*,
+ void trackValues(
+@@ -252,3 +252,4 @@ void trackValues_DEPRECATED(DenseHashMap<AstName, Global>& globals, DenseHashMap
  
  } // namespace Compile
  } // namespace Luau

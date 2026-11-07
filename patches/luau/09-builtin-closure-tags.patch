@@ -6,10 +6,10 @@
 # Why upstream lacks it: in a safe environment the compiler's FASTCALL already covers these calls.
 
 diff --git a/luau/CodeGen/src/CodeGenUtils.cpp b/luau/CodeGen/src/CodeGenUtils.cpp
-index 05d9847..1839620 100644
+index c5b20e0..1353aa7 100644
 --- a/luau/CodeGen/src/CodeGenUtils.cpp
 +++ b/luau/CodeGen/src/CodeGenUtils.cpp
-@@ -177,6 +177,20 @@ Closure* callProlog(lua_State* L, TValue* ra, StkId argtop, int nresults)
+@@ -208,6 +208,20 @@ Closure* callProlog(lua_State* L, TValue* ra, StkId argtop, int nresults)
  
      Closure* ccl = clvalue(ra);
  
@@ -28,13 +28,13 @@ index 05d9847..1839620 100644
 +    }
 +
      CallInfo* ci = incr_ci(L);
+     ci->p = getproto(ccl);
      ci->func = ra;
-     ci->base = ra + 1;
 diff --git a/luau/CodeGen/src/CodeGenUtils.h b/luau/CodeGen/src/CodeGenUtils.h
-index 14c3595..85bb829 100644
+index 9fa3090..d770297 100644
 --- a/luau/CodeGen/src/CodeGenUtils.h
 +++ b/luau/CodeGen/src/CodeGenUtils.h
-@@ -14,6 +14,7 @@ bool forgLoopNonTableFallback(lua_State* L, int insnA, int aux);
+@@ -15,6 +15,7 @@ bool forgLoopNonTableFallback_DEPRECATED(lua_State* L, int insnA, int aux);
  
  void forgPrepXnextFallback(lua_State* L, TValue* ra, int pc);
  
@@ -43,11 +43,11 @@ index 14c3595..85bb829 100644
  void callEpilogC(lua_State* L, int nresults, int n);
  
 diff --git a/luau/CodeGen/src/EmitInstructionX64.cpp b/luau/CodeGen/src/EmitInstructionX64.cpp
-index 207f7f5..99a6d9d 100644
+index da18130..19cec9c 100644
 --- a/luau/CodeGen/src/EmitInstructionX64.cpp
 +++ b/luau/CodeGen/src/EmitInstructionX64.cpp
-@@ -36,6 +36,10 @@ void emitInstCall(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, int
-     build.call(qword[rNativeContext + offsetof(NativeContext, callProlog)]);
+@@ -34,6 +34,10 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
+     callWrapper.call(qword[rNativeContext + offsetof(NativeContext, callProlog)]);
      RegisterX64 ccl = rax; // Returned from callProlog
  
 +    Label builtinDone;
@@ -57,15 +57,15 @@ index 207f7f5..99a6d9d 100644
      emitUpdateBase(build);
  
      Label cFuncCall;
-@@ -131,6 +135,7 @@ void emitInstCall(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, int
-             build.call(qword[rNativeContext + offsetof(NativeContext, callEpilogC)]);
- 
+@@ -132,6 +136,7 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
+             callWrapper.addArgument(SizeX64::dword, results);
+             callWrapper.call(qword[rNativeContext + offsetof(NativeContext, callEpilogC)]);
              emitUpdateBase(build);
 +            build.setLabel(builtinDone);
              return;
          }
  
-@@ -170,6 +175,7 @@ void emitInstCall(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, int
+@@ -171,6 +176,7 @@ void emitInstCall(IrRegAllocX64& regs, AssemblyBuilderX64& build, ModuleHelpers&
          build.mov(rax, qword[cip + offsetof(CallInfo, top)]);
          build.mov(qword[rState + offsetof(lua_State, top)], rax);
      }
@@ -74,10 +74,10 @@ index 207f7f5..99a6d9d 100644
  
  void emitInstReturn(AssemblyBuilderX64& build, ModuleHelpers& helpers, int ra, int actualResults, bool functionVariadic)
 diff --git a/luau/VM/src/lfunc.cpp b/luau/VM/src/lfunc.cpp
-index b172d0a..09c8472 100644
+index 0bcf0f0..0379f8a 100644
 --- a/luau/VM/src/lfunc.cpp
 +++ b/luau/VM/src/lfunc.cpp
-@@ -64,6 +64,7 @@ Closure* luaF_newLclosure(lua_State* L, int nelems, LuaTable* e, Proto* p)
+@@ -151,6 +151,7 @@ Closure* luaF_newLclosure(lua_State* L, int nelems, LuaTable* e, Proto* p)
      c->nupvalues = cast_byte(nelems);
      c->stacksize = p->maxstacksize;
      c->preload = 0;
@@ -85,7 +85,7 @@ index b172d0a..09c8472 100644
      c->l.p = p;
      for (int i = 0; i < nelems; ++i)
          setnilvalue(&c->l.uprefs[i]);
-@@ -79,6 +80,7 @@ Closure* luaF_newCclosure(lua_State* L, int nelems, LuaTable* e)
+@@ -166,6 +167,7 @@ Closure* luaF_newCclosure(lua_State* L, int nelems, LuaTable* e)
      c->nupvalues = cast_byte(nelems);
      c->stacksize = LUA_MINSTACK;
      c->preload = 0;
@@ -94,7 +94,7 @@ index b172d0a..09c8472 100644
      c->c.cont = NULL;
      c->c.debugname = NULL;
 diff --git a/luau/VM/src/lmathlib.cpp b/luau/VM/src/lmathlib.cpp
-index 546725c..5f4f21a 100644
+index aa9b00e..6b0d414 100644
 --- a/luau/VM/src/lmathlib.cpp
 +++ b/luau/VM/src/lmathlib.cpp
 @@ -1,6 +1,7 @@
@@ -105,23 +105,22 @@ index 546725c..5f4f21a 100644
  
  #include "lstate.h"
  
-@@ -477,6 +478,11 @@ int luaopen_math(lua_State* L)
-     pcg32_seed(&L->global->rngstate, seed);
+@@ -524,6 +525,10 @@ int luaopen_math(lua_State* L)
  
      luaL_register(L, LUA_MATHLIBNAME, mathlib);
-+
+ 
 +    lua_getfield(L, -1, "floor");
 +    if (iscfunction(L->top - 1) && clvalue(L->top - 1)->c.f == math_floor)
 +        clvalue(L->top - 1)->builtin = LBF_MATH_FLOOR;
 +    lua_pop(L, 1);
-     lua_pushnumber(L, PI);
+     lua_pushnumber(L, LUAU_PI);
      lua_setfield(L, -2, "pi");
      lua_pushnumber(L, HUGE_VAL);
 diff --git a/luau/VM/src/lobject.h b/luau/VM/src/lobject.h
-index de24ee2..cf6a2a2 100644
+index 7fe12bd..de9d176 100644
 --- a/luau/VM/src/lobject.h
 +++ b/luau/VM/src/lobject.h
-@@ -388,6 +388,7 @@ typedef struct Closure
+@@ -494,6 +494,7 @@ typedef struct Closure
      uint8_t nupvalues;
      uint8_t stacksize;
      uint8_t preload;
@@ -129,7 +128,7 @@ index de24ee2..cf6a2a2 100644
  
      GCObject* gclist;
      struct LuaTable* env;
-@@ -410,6 +411,9 @@ typedef struct Closure
+@@ -516,6 +517,9 @@ typedef struct Closure
      };
  } Closure;
  
@@ -140,7 +139,7 @@ index de24ee2..cf6a2a2 100644
  #define isLfunction(o) (ttype(o) == LUA_TFUNCTION && !clvalue(o)->isC)
  
 diff --git a/luau/VM/src/lstrlib.cpp b/luau/VM/src/lstrlib.cpp
-index c84b608..72e3076 100644
+index 7e0df60..e618e4a 100644
 --- a/luau/VM/src/lstrlib.cpp
 +++ b/luau/VM/src/lstrlib.cpp
 @@ -1,6 +1,8 @@
@@ -152,7 +151,7 @@ index c84b608..72e3076 100644
  
  #include "lstring.h"
  
-@@ -1680,6 +1682,11 @@ static void createmetatable(lua_State* L)
+@@ -1873,6 +1875,11 @@ static void createmetatable(lua_State* L)
  int luaopen_string(lua_State* L)
  {
      luaL_register(L, LUA_STRLIBNAME, strlib);
@@ -165,7 +164,7 @@ index c84b608..72e3076 100644
  
      return 1;
 diff --git a/luau/VM/src/ltablib.cpp b/luau/VM/src/ltablib.cpp
-index 076ca3b..aafe3a3 100644
+index b5492c2..f303e8f 100644
 --- a/luau/VM/src/ltablib.cpp
 +++ b/luau/VM/src/ltablib.cpp
 @@ -1,6 +1,7 @@
@@ -176,7 +175,7 @@ index 076ca3b..aafe3a3 100644
  
  #include "lapi.h"
  #include "lnumutils.h"
-@@ -638,6 +639,11 @@ int luaopen_table(lua_State* L)
+@@ -751,6 +752,11 @@ int luaopen_table(lua_State* L)
  {
      luaL_register(L, LUA_TABLIBNAME, tab_funcs);
  

@@ -3,6 +3,8 @@
 //
 //   vendor/luau0-src      the Luau release pinned in patches/luau/upstream.json (the sources mlua-sys compiles, with
 //                         luau0-src's build logic) and the topic series patches/luau/NN-<topic>.patch
+//   vendor/mlua-sys       mlua-sys, the FFI layer under mlua, as Cargo.toml pins it, with the vendored Luau's bytecode
+//                         version range
 //   vendor/lune-roblox    Lune 0.10.4's lune-roblox (Roblox datatypes as Luau values) with patches/lune.patch
 //   vendor/lune-utils     its lune-utils, with the same patch
 //
@@ -24,9 +26,11 @@
 // topic at a time, and stops at a topic that conflicts, naming its files and lines; once they are resolved,
 // `bump --continue` goes on. The patches carry their history from roblox-ui-renderer's tools/native-host.
 //
-// The vendored manifests lose `[lints] workspace = true` (Lune's workspace lints, not ours), and each Lune crate gets
-// Lune's license text (MPL-2.0, the archive's LICENSE.txt) beside it, since its files are modified copies. luau0-src's
-// crate carries its own LICENSE (MIT: Luau's and Lua's notices).
+// The vendored manifests lose `[lints] workspace = true` (Lune's workspace lints, not ours) and take the engine's mlua
+// version, and each Lune crate gets Lune's license text (MPL-2.0, the archive's LICENSE.txt) beside it, since its files
+// are modified copies. luau0-src's crate carries its own LICENSE (MIT: Luau's and Lua's notices); mlua-sys's has none, so
+// mlua's (the same repository's MIT license) goes beside it. The VM's ClientFlagValues.h is written from
+// data/luau-flags.json (tools/luau-flags.mjs).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +55,20 @@ const LUNE = {
 	file: "lune-0.10.4.tar.gz",
 	url: "https://github.com/lune-org/lune/archive/refs/tags/v0.10.4.tar.gz",
 	sha256: "151b7b738b210920297b8afa560f440877662e02a48c64c28ce95baaefc96c95",
+};
+
+// mlua-sys tells Luau bytecode from source text by the chunk's version byte, checked against its own copy of Bytecode.h's
+// range, so it reads the bytecode of a Luau newer than the one it binds as text (and mlua refuses it in binary mode). The
+// vendored copy takes the range of the Luau it builds. The mlua crate supplies the license text mlua-sys's crate lacks.
+const MLUA_SYS = {
+	file: "mlua-sys-0.13.0.crate",
+	url: "https://static.crates.io/crates/mlua-sys/mlua-sys-0.13.0.crate",
+	sha256: "1631cda17bd6486410ab751d91f5fd4484f441589278cdad879eb3afc721a285",
+};
+const MLUA = {
+	file: "mlua-0.12.2.crate",
+	url: "https://static.crates.io/crates/mlua/mlua-0.12.2.crate",
+	sha256: "7a7ae6b65bf54b7fdd4cf5b6f44f60862350ebf3fe3779b3a9cc005e7fa14f81",
 };
 
 // Directories of a Luau release that luau0-src never builds (the type checker, the command line tools, tests)
@@ -143,6 +161,9 @@ async function luauTree(pin, out) {
 			if (entry.isDirectory() && !built.includes(entry.name) && !UNBUILT.has(entry.name) && fs.existsSync(path.join(upstream, entry.name, "src")))
 				console.error(`vendor: Luau ${pin.luau} has a library directory ${entry.name}/ that the crate does not build`);
 		}
+		// the release's own notices beside its sources (the sources point at LICENSE.txt; the crate's LICENSE lags them)
+		for (const notice of ["LICENSE.txt", "lua_LICENSE.txt"])
+			fs.copyFileSync(path.join(upstream, notice), path.join(out, "luau", notice));
 	} finally {
 		fs.rmSync(upstream, { recursive: true, force: true });
 	}
@@ -158,6 +179,61 @@ function stripWorkspaceLints(manifest) {
 	fs.writeFileSync(manifest, text.replace(/\n\[lints\]\nworkspace = true\n/, "\n"));
 }
 
+// A vendored Lune crate builds against the engine's mlua (Cargo.toml's exact version), whatever Lune's release asked for
+function pinMlua(manifest) {
+	const engine = /^mlua = \{ version = "([^"]+)"/m.exec(fs.readFileSync(path.join(ROOT, "Cargo.toml"), "utf8"))?.[1];
+	if (!engine) throw new Error("Cargo.toml names no mlua version");
+	const text = fs.readFileSync(manifest, "utf8");
+	if (!/^mlua = \{ version = "[^"]*"/m.test(text)) throw new Error(`${manifest}: no mlua dependency`);
+	fs.writeFileSync(manifest, text.replace(/^(mlua = \{ version = )"[^"]*"/m, (_, start) => `${start}"${engine}"`));
+}
+
+// The client's flag values (data/luau-flags.json, tools/luau-flags.mjs) as the VM's ClientFlagValues.h, when the series has
+// the topic that applies them (14-client-flags)
+const FLAGS = path.join(ROOT, "data", "luau-flags.json");
+const FLAG_VALUES = path.join("luau", "Common", "include", "Luau", "ClientFlagValues.h");
+
+function writeFlagValues(luau) {
+	const target = path.join(luau, FLAG_VALUES);
+	if (!fs.existsSync(target) || !fs.existsSync(FLAGS))
+		return;
+	const data = JSON.parse(fs.readFileSync(FLAGS, "utf8"));
+	const lines = Object.entries(data.flags).map(([key, value]) => {
+		const match = /^(D?)F(Flag|Int)(\w+)$/.exec(key);
+		if (!match) throw new Error(`data/luau-flags.json: a flag name this tool does not read: ${key}`);
+		const int = match[2] === "Int";
+		if (int ? !Number.isInteger(value) : typeof value !== "boolean") throw new Error(`data/luau-flags.json: ${key} has the wrong kind of value`);
+		return `LUAU_CLIENT_FLAG(${match[3]}, ${match[1] ? "true" : "false"}, ${int}, ${int ? value : value ? 1 : 0})`;
+	});
+	fs.writeFileSync(target,
+		"// The flag values ClientFlags.h applies, one LUAU_CLIENT_FLAG(name, dynamic, isint, value) a flag: what a live Roblox client\n" +
+		`// (${data.client}) served on ${data.fetched}. Written by the engine's tools/vendor.mjs from its data/luau-flags.json.\n` +
+		lines.join("\n") + "\n");
+}
+
+// vendor/mlua-sys: the crate Cargo.toml pins, its bytecode version range the vendored Luau's (`luau`, the luau0-src tree)
+async function mluaSysTree(luau, out) {
+	const pinned = /^mlua-sys = "=([^"]+)"/m.exec(fs.readFileSync(path.join(ROOT, "Cargo.toml"), "utf8"))?.[1];
+	const version = /^mlua-sys-(.+)\.crate$/.exec(MLUA_SYS.file)[1];
+	if (pinned !== version) throw new Error(`Cargo.toml pins mlua-sys ${pinned ?? "(no exact version)"} but tools/vendor.mjs vendors ${version}: move MLUA_SYS with it`);
+	fs.mkdirSync(out, { recursive: true });
+	run(TAR, ["-xzf", await archive(MLUA_SYS), "--strip-components=1", "-C", out], out);
+	run(TAR, ["-xzf", await archive(MLUA), "--strip-components=1", "-C", out, `${MLUA.file.replace(/\.crate$/, "")}/LICENSE`], out);
+	// cargo never reads a dependency's lockfile
+	fs.rmSync(path.join(out, "Cargo.lock"), { force: true });
+	const header = fs.readFileSync(path.join(luau, "luau", "Common", "include", "Luau", "Bytecode.h"), "utf8");
+	const compat = path.join(out, "src", "luau", "compat.rs");
+	let text = fs.readFileSync(compat, "utf8");
+	for (const name of ["LBC_VERSION_MAX", "LBC_TYPE_VERSION_MIN", "LBC_TYPE_VERSION_MAX"]) {
+		const value = new RegExp(`^\\s*${name} = (\\d+),`, "m").exec(header)?.[1];
+		const constant = new RegExp(`^const ${name}: u8 = \\d+;`, "m");
+		if (!value || !constant.test(text))
+			throw new Error(`${name} is not in the vendored Bytecode.h or not in mlua-sys's src/luau/compat.rs: see how this mlua-sys detects bytecode`);
+		text = text.replace(constant, `const ${name}: u8 = ${value};`);
+	}
+	fs.writeFileSync(compat, text);
+}
+
 // The vendored tree, built in `work`
 async function build(work, pin = readPin(), series = readSeries()) {
 	const lune = await archive(LUNE);
@@ -167,12 +243,15 @@ async function build(work, pin = readPin(), series = readSeries()) {
 	await luauTree(pin, luau);
 	for (const topic of series)
 		applyPatchText(topic.body, luau, `patches/luau/${topic.name}.patch`);
+	writeFlagValues(luau);
 	const out = path.join(work, "vendor");
 	fs.mkdirSync(out, { recursive: true });
 	fs.cpSync(luau, path.join(out, "luau0-src"), { recursive: true });
+	await mluaSysTree(luau, path.join(out, "mlua-sys"));
 	for (const crate of ["lune-roblox", "lune-utils"]) {
 		fs.cpSync(path.join(work, "lune-0.10.4", "crates", crate), path.join(out, crate), { recursive: true });
 		stripWorkspaceLints(path.join(out, crate, "Cargo.toml"));
+		pinMlua(path.join(out, crate, "Cargo.toml"));
 		fs.copyFileSync(path.join(work, "lune-0.10.4", "LICENSE.txt"), path.join(out, crate, "LICENSE.txt"));
 	}
 	return out;

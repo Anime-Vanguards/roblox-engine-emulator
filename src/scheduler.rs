@@ -1024,6 +1024,8 @@ pub fn error_message(error: &LuaError) -> String {
         LuaError::CallbackError { cause, .. } => error_message(cause),
         LuaError::SyntaxError { message, .. } => message.clone(),
         LuaError::WithContext { cause, .. } => error_message(cause),
+        // mlua's reference stack could not hold a callback's arguments: mlua 0.12 returns this where 0.11 panicked (lua/refs.rs)
+        LuaError::StackError => super::lua::refs::message(),
         other => other.to_string(),
     }
 }
