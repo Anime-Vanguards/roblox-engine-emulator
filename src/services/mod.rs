@@ -707,7 +707,8 @@ pub fn install(engine: &Rc<Engine>) {
     }
     if let Some(input) = class(&reflection, "UserInputService") {
         let device = options.device.clone();
-        let touch = device == "touch";
+        // (a phone is a touch device: cost.rs device_scale gives it its prices too)
+        let touch = device == "touch" || device == "phone";
         let pad = device == "gamepad";
         for (member, value) in [
             ("TouchEnabled", touch),

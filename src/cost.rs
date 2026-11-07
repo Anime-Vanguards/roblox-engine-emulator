@@ -663,6 +663,18 @@ pub fn moved(reflection: &Reflection, class: ClassId) -> f64 {
 }
 pub const MOVE_BASE: f64 = 0.47e-6;
 
+/// What a device's client takes for a script's work, against the desktop prices above (`--device phone`): a conversion, not a measurement.
+/// Every price in this file is a desktop client's (the parity bench's client, a Studio 0.744 engine on a desktop CPU); a phone's is that
+/// times a sim-to-phone calibration of script time (phones' captured script milliseconds against the same scenes' desktop client: 2.77,
+/// ranging 2.13-4.16 over the phones and scenes compared; weighted to live frames, 1.94). Its GUI figure (4.09) is the engine's layout
+/// and drawing, which runs outside a script's os.clock and which the work clock does not charge.
+pub const PHONE_SCRIPTS: f64 = 2.77;
+
+/// The factor the work clock scales script work by for `device` (Options::device): [`PHONE_SCRIPTS`] for a phone, else 1.
+pub fn device_scale(device: &str) -> f64 {
+    if device == "phone" { PHONE_SCRIPTS } else { 1.0 }
+}
+
 /// An EditableMesh's own work, per vertex of the mesh, none of it yielding: RemoveUnused
 /// (capture: 1.07-1.36 ms on 13,515 vertices), CreateMeshPartAsync with Box collision (playtest:
 /// 1.9 ms on 13,515; capture 0.1 ms on 1,487) and CreateEditableMeshAsync of an EditableMesh's

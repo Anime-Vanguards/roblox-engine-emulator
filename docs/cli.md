@@ -88,6 +88,9 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   `RunService:IsStudio()` false, as on a live game's server or client, so the game takes its live
   branches (TeleportData from `Player:GetJoinData()`, live costs and cooldowns); the default is true.
   It is part of a prepared run's key.
+- `--device desktop|touch|gamepad|phone` (or `REE_DEVICE`) is the device the client emulates (UserInputService's inputs;
+  desktop by default). `phone` is a touch device whose work clock charges a phone's prices: the desktop prices times a
+  sim-to-phone calibration of script time, 2.77 (docs/engine.md "Work clock"): a conversion, not a measurement.
 
 ## Engine options
 

@@ -40,6 +40,7 @@ pub struct Args {
     pub run_context: Option<String>,
     pub studio: Option<bool>,
     pub player: Option<String>,
+    pub device: Option<String>,
     pub place_id: Option<f64>,
     pub streaming: Option<f64>,
     pub camera: Option<(f64, f64)>,
@@ -84,6 +85,7 @@ impl Args {
                 })
             }
             "--player" => self.player = Some(need()?),
+            "--device" => self.device = Some(need()?),
             "--place-id" => self.place_id = Some(number(need()?)?),
             "--streaming" => self.streaming = Some(number(need()?)?),
             "--rotation-clipping" => self.rotation_clipping = Some(need()?),
@@ -170,6 +172,11 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         return Err("rotation-clipping must be enabled or disabled".into());
     }
     let mode = args.mode.clone().unwrap_or_else(|| "edit".into());
+    // the device the client emulates (UserInputService's inputs), and for a phone its prices too (cost.rs device_scale)
+    let device = args.device.clone().or_else(|| std::env::var("REE_DEVICE").ok().filter(|v| !v.is_empty())).unwrap_or_else(|| "desktop".into());
+    if !["desktop", "touch", "gamepad", "phone"].contains(&device.as_str()) {
+        return Err(format!("--device must be desktop, touch, gamepad or phone, not {device}"));
+    }
     let run_context = args.run_context.as_deref().map(RunContext::parse).transpose()?.unwrap_or_default();
     let place_prices = crate::cost::PlacePrices::default().with(std::env::var("REE_LOCALIZED_PLACES").ok().as_deref(), std::env::var("REE_MATCH_PLACES").ok().as_deref())?;
     // A Studio Play-mode server: no local player, and no edit-mode server (Studio's edit DataModel is
@@ -208,6 +215,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         project: project_dir,
         streaming_target_radius: args.streaming.or_else(|| project::project_setting(&roots, "streamingTargetRadius").and_then(|v| v.as_f64())),
         place_prices,
+        device,
         ..Options::default()
     };
     let mounts = args

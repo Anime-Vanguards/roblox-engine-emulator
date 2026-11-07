@@ -404,6 +404,10 @@ server pay nothing). A place can carry prices of its own (`cost::PlacePrices`, `
 playtest clients of a game's match place read it. The engine lists no places by default; an embedding host
 sets `Options::place_prices`.
 
+The prices are a desktop client's. `--device phone` (or `REE_DEVICE=phone`) emulates a touch device and
+scales the script work the clock charges by 2.77, a sim-to-phone calibration for scripts (range
+2.13-4.16): a conversion of the desktop prices, not a measurement on a phone.
+
 ## Profiling (`src/profiler`, `src/luau_profile.rs`, `src/boundary.rs`)
 
 `--profile <kinds>` (docs/cli.md "Profiles and caches") or a host's `profiler::Session` runs the profilers a

@@ -297,6 +297,8 @@ pub struct Scheduler {
     // Display cadence
     display_interval_index: Option<u64>,
     display_beat_clock: Option<BeatClock>,
+    /// What the clock's script work is scaled by for the device the run prices (cost.rs device_scale: 1 on a desktop)
+    price_scale: f64,
 }
 
 /// The run's random seed: 1, or `REE_RANDOM_SEED` (another seed shows what a run draws at random:
@@ -410,6 +412,7 @@ impl Scheduler {
             randoms: Default::default(),
             display_interval_index: None,
             display_beat_clock: None,
+            price_scale: crate::cost::device_scale(&options.device),
         };
         scheduler.edit_mode = options.edit_mode();
         // Scheduler.Configure: RUR_EPOCH=<Unix seconds or ms> pins the wall clock's start
@@ -503,7 +506,8 @@ impl Scheduler {
         self.work.set(self.work.get() + seconds);
     }
 
-    /// The work charged since the last take: the engine calls' and the VM's own since then.
+    /// The work charged since the last take: the engine calls' and the VM's own since then, in the clock's seconds (the device's
+    /// scale on it: cost.rs device_scale; the totals, work_total, stay the desktop prices').
     fn take_work(&mut self) -> f64 {
         let mut work = self.work.replace(0.0);
         self.work_drained.set(self.work_drained.get() + work);
@@ -512,7 +516,7 @@ impl Scheduler {
             work += total - self.vm_charged;
             self.vm_charged = total;
         }
-        work
+        work * self.price_scale
     }
 
     /// A frame begins: its first read starts from its own time, unless the work before it ran past

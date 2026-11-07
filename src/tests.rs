@@ -5249,6 +5249,12 @@ fn vm_counts(engine: &Engine) -> crate::cost::VmCounters {
     unsafe { std::ptr::read(pointer) }
 }
 
+/// The first number of the first `print` line `run` collected
+fn printed_number(output: &[String]) -> f64 {
+    let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("a result: {output:?}"));
+    line.split(' ').next().unwrap().parse().unwrap_or_else(|_| panic!("a number: {line}"))
+}
+
 /// A script's environment is safe, as Roblox makes every script's (the parity bench, tools/cost-parity: two imports a loop step
 /// 4.6 ns in a module, 21.4 in one that called getfenv first; `typeof(x)` 4.7 and 25.9): its imports are resolved when it loads,
 /// `typeof` is the VM's fast call, which names ree's values as ree's typeof does (a constant Vector3, an Instance, a proxy datatype,
@@ -5386,3 +5392,28 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
     assert!((7000.0..8300.0).contains(&numbers[4]), "a box of 24 parts: {line}");
 }
 
+/// `--device phone` (Options::device) emulates a touch device and scales the script work the clock charges by a sim-to-phone
+/// calibration of script time (cost.rs PHONE_SCRIPTS, 2.77): a conversion of the desktop prices, not a measurement on a phone.
+#[test]
+fn a_phone_run_pays_the_calibrated_factor_on_its_script_work() {
+    let per = |device: &str| -> (f64, String) {
+        let (lua, engine) = start_with(Options { device: device.into(), ..Options::default() });
+        engine_lua::modules::interpret_all(&lua, &engine);
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let output = run(
+            &lua,
+            &engine,
+            r#"
+            local start = os.clock()
+            for _ = 1, 1000 do Instance.new("Folder") end
+            print(string.format("%.1f %s", (os.clock() - start) / 1000 * 1e9, tostring(game:GetService("UserInputService").TouchEnabled)))
+            "#,
+        );
+        let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("{output:?}")).to_string();
+        (printed_number(&output), line.split(' ').nth(1).unwrap().to_string())
+    };
+    let (desktop, desktop_touch) = per("desktop");
+    let (phone, phone_touch) = per("phone");
+    assert!((phone / desktop - crate::cost::PHONE_SCRIPTS).abs() < 0.02, "a phone {phone} ns a Folder, a desktop {desktop}");
+    assert_eq!((desktop_touch.as_str(), phone_touch.as_str()), ("false", "true"));
+}
