@@ -457,7 +457,8 @@ pub fn set_parent(
     // the work clock (crate::cost): Studio's cost of a subtree entering or leaving the DataModel
     let inside = |state: &State, parent: Option<InstanceId>| parent.is_some_and(|parent| super::services::in_data_model(state, parent));
     if inside(state, old_parent) != inside(state, new_parent) {
-        let work: f64 = std::iter::once(id).chain(state.dom.descendants(id)).map(|node| crate::cost::moved(reflection, state.dom.at(node).class)).sum();
+        let work: f64 = crate::cost::MOVE_BASE
+            + std::iter::once(id).chain(state.dom.descendants(id)).map(|node| crate::cost::moved(reflection, state.dom.at(node).class)).sum::<f64>();
         state.sched.charge(work);
         crate::boundary::add_cost(work);
     } else {

@@ -355,20 +355,29 @@ ending the run.
 ### Work clock (`src/cost.rs`)
 
 `os.clock` (and `tick`, `DateTime`, `elapsedTime`, `GetServerTimeNow`) reads the frame's virtual time
-plus the script work charged since the frame began. Every Instance read, write and method call, Instance.new,
-Clone (per instance), a subtree entering or leaving the DataModel (per instance), Destroy, the lists
-methods return (per element) and EditableMesh's own work are charged what they cost in a Studio
-playtest client, as measured with os.clock (cost.rs gives each price with its measurement). A script's
+plus the script work charged since the frame began. Every Instance read (by what the value is), write and
+method call, Instance.new, Clone (per instance), a subtree entering or leaving the DataModel (per instance),
+Destroy, the lists methods return (per element), a find's walk (per child or node looked at), a ray's path
+and a spatial query's results (per part), signals and threads, and EditableMesh's own work are charged what
+they cost in a client, as measured with os.clock (cost.rs gives each price with its measurement). A script's
 own Luau is charged too, from the VM's work counters (patches/luau.patch `lua_workcounters`: instructions
-by opcode, objects and table storage allocated, keys moved as tables grow, C calls and calls into the
-engine's own Luau) at costs fitted to Studio on 46 workloads (tools/luau-cost): an instruction 1.6 ns, a
-call 8.5 more, an object 22. The engine's own Luau (prelude, services, vector3.luau) stands in for
-Studio's C++ and is not charged.
+by opcode, a `--!native` module's apart, objects and table storage allocated, keys moved as tables grow, C
+calls and calls into the engine's own Luau, imports looked up, and the library's own loops: numbers made
+strings, new strings, sorting, table.create / clone / concat, string.split and string.format). Each
+instruction is priced by its kind, interpreted or native (`INTERPRETED_OPS`, `NATIVE_OPS`). The engine's own
+Luau (prelude, services, vector3.luau) stands in for Studio's C++ and is not charged.
+
+The prices are measured with the parity bench (`tools/cost-parity`, README there): about 400 workloads that
+run unchanged in ree and in a real client, engine calls by family, the language loops interpreted and as a
+`--!native` module, and a module whose environment getfenv made unsafe; it prints each workload's ree /
+engine ratio and keeps a third of the workloads, by a hash of their names, out of every fit. Its rows that
+measure what a client has done before (a heap of a game's size makes new strings 2-3x dearer; spatial
+queries after many parts were made and moved 3x) are taken in clients that run the whole corpus.
 
 A script's environment is safe, as Roblox makes every script's: its imports (`game`, `Vector3.new`,
 `math.floor`) are resolved when it loads and read as constants, builtins (`math.*`, `type`, `typeof`, ...)
-take the VM's fast calls, and getfenv / setfenv end both for that environment, as there (a client: two
-imports a loop step 4.4 ns in a module, 21.7 after getfenv; `typeof(x)` 4.8 and 26). The VM's builtin
+take the VM's fast calls, and getfenv / setfenv end both for that environment, as there (the bench: two
+imports a loop step 4.6 ns in a module, 21.4 after getfenv; `typeof(x)` 4.7 and 25.9). The VM's builtin
 `typeof` names ree's own values as ree's `typeof` does (`lua_settypeofnames`: Instances, the registered
 proxies and tables, vectors as Vector3), and the compiler leaves a constant vector's typeof to it (Luau's
 `LuauCompileTypeofFold`).
@@ -387,16 +396,13 @@ paces itself by the scripts' own work on this clock instead (patches/luau.patch 
 cost.rs `install_gc_clock`), so a run collects at the same points however fast the host runs, one-shot
 or through `ree serve`.
 
-Some places cost more than others (`cost::PlacePrices`, `Options::place_prices`):
-
-- a Text write with AutoLocalize on and letters in the text pays a localization lookup in a place whose
-  experience has a localization table (about 56-61 us for a one-letter text, 0.43 us a character more;
-  an empty place pays nothing);
-- a match place's client pays 1.55 times the default price for a part's geometry write in the workspace.
-
-The engine lists no places by default. A command line adds them with `REE_LOCALIZED_PLACES` (`<place
-id>[=<us for a one-letter text>],...`, 61.2 us by default) and `REE_MATCH_PLACES` (`<place id>,...`); an
-embedding host sets `Options::place_prices`.
+A client looks a Text write up for translation when AutoLocalize is on and the text has a letter in it,
+whatever the place holds: about 33 us for a one-letter text, 0.43 us a letter more (an edit DataModel and a
+server pay nothing). A place can carry prices of its own (`cost::PlacePrices`, `Options::place_prices`):
+`REE_LOCALIZED_PLACES` (`<place id>[=<us for a one-letter text>],...`) gives a place its own lookup, and
+`REE_MATCH_PLACES` (`<place id>,...`) scales a part's geometry write in the workspace by 1.55, as Studio
+playtest clients of a game's match place read it. The engine lists no places by default; an embedding host
+sets `Options::place_prices`.
 
 ## Profiling (`src/profiler`, `src/luau_profile.rs`, `src/boundary.rs`)
 

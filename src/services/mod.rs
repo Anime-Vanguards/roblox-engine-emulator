@@ -626,6 +626,10 @@ pub fn install(engine: &Rc<Engine>) {
                 let tag = args.string(1).map(|s| Str::new(&s.as_bytes())).unwrap_or_default();
                 let game = engine.world().game;
                 let tagged = tagged_below(&mut engine.state.borrow_mut(), game, &tag);
+                // (an instance it lists: cost.rs TAGGED_LISTED)
+                let listed = tagged.len() as f64 * crate::cost::TAGGED_LISTED;
+                engine.state.borrow().sched.charge(listed);
+                crate::boundary::add_cost(listed);
                 let table = lua.create_table()?;
                 for id in tagged {
                     table.raw_push(instance_value(lua, engine, id)?)?;

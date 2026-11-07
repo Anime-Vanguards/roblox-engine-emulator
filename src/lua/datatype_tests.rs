@@ -489,11 +489,11 @@ fn the_work_clock_profile_weighs_stacks_by_the_charge() {
     };
     let total: f64 = text.lines().map(|line| line.rsplit_once(' ').unwrap().1.parse::<f64>().unwrap()).sum();
     assert!((total - charged).abs() <= charged * 0.02, "{total} microseconds profiled, {charged} charged");
-    // a loop step is about 4 ns of instructions (cost.rs LUAU_OP 1.6 each); the product adds the 21 ns of
+    // a loop step is about 1.5 ns of instructions (cost.rs INTERPRETED_OPS: 0.48 an ADD or FORNLOOP); the product adds the 21 ns of
     // cframe.rs price::MUL_CFRAME: 20-35 ns a step, whatever the host takes
     let (reads, adds) = (weight("Reads") / 20.0, weight("Adds") / 20.0); // nanoseconds a step
     assert!((20.0..35.0).contains(&reads), "a CFrame * CFrame charges {reads} ns\n{text}");
-    assert!((3.0..9.0).contains(&adds), "an addition step charges {adds} ns\n{text}");
+    assert!((1.0..3.0).contains(&adds), "an addition step charges {adds} ns\n{text}");
 }
 
 /// CFrame math is native code, as in Roblox: reading a member, calling a method or an operator runs no

@@ -359,9 +359,10 @@ fn write_touch(engine: &Engine, state: &State, id: InstanceId, property: &str, c
 /// A script's property write: [`set_property`], charged to the work clock by what Studio spends on it
 /// (crate::cost::write: the property, whether it changed, whether the instance is in the workspace).
 pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value: Value) -> bool {
-    // (a Text write looks the text up for translation in a localized place: AutoLocalize on and a letter in it)
+    // (a client looks a Text write up for translation: AutoLocalize on and a letter in it)
+    let client = !engine.options.edit_mode() && !engine.options.server();
     let looked_up = match &value {
-        Value::String(text) if crate::cost::text_localization_in(&engine.options.place_prices, engine.options.place_id, 1).is_some() && engine.reflection.name(name) == "Text" => {
+        Value::String(text) if crate::cost::text_localization_in(&engine.options.place_prices, engine.options.place_id, 1, client).is_some() && engine.reflection.name(name) == "Text" => {
             let text = String::from_utf8_lossy(text.as_bytes());
             text.chars().any(char::is_alphabetic).then(|| text.chars().count())
         }
@@ -379,7 +380,7 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
     crate::cost::tally_write(&engine.reflection.class(class).name, engine.reflection.name(name), changed, placed, price);
     if let (true, Some(characters)) = (changed, looked_up) {
         let auto_localize = engine.reflection.name_id("AutoLocalize").and_then(|auto| state.dom.boolean(id, auto)).unwrap_or(true);
-        if let (true, Some(lookup)) = (auto_localize, crate::cost::text_localization_in(&engine.options.place_prices, engine.options.place_id, characters)) {
+        if let (true, Some(lookup)) = (auto_localize, crate::cost::text_localization_in(&engine.options.place_prices, engine.options.place_id, characters, client)) {
             state.sched.charge(lookup);
             crate::boundary::add_cost(lookup);
         }
@@ -417,6 +418,8 @@ pub fn set_attribute(engine: &Engine, id: InstanceId, name: Str, value: Value) {
                 hook(&mut state, id, &text);
             }
         }
+    } else {
+        state.sched.charge(crate::cost::ATTRIBUTE_SAME);
     }
 }
 
@@ -493,6 +496,17 @@ pub fn destroy(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flo
         }
         instance.signals.as_ref().and_then(|s| s.event(K::Destroying as NameId))
     };
+    // (a GUI object or a part in the DataModel pays more to destroy than its leaving: cost.rs DESTROYED_GUI, DESTROYED_PART)
+    let extra = {
+        let state = engine.state.borrow();
+        let class = state.dom.at(id).class;
+        let placed = state.dom.at(id).parent.is_some_and(|parent| crate::services::in_data_model(&state, parent));
+        match placed {
+            true if engine.reflection.is_a(class, "GuiObject") => crate::cost::DESTROYED_GUI,
+            true if engine.reflection.is_a(class, "BasePart") => crate::cost::DESTROYED_PART,
+            _ => 0.0,
+        }
+    };
     if let Some(signal) = destroying {
         // Deferred like every other event (measured in a playing client, Studio 0.744, SignalBehavior Deferred:
         // tools/parity/probes/hierarchy.luau): the handlers run after Destroy returned and see the instance
@@ -508,8 +522,8 @@ pub fn destroy(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flo
         destroy(lua, engine, child)?;
     }
     let mut state = engine.state.borrow_mut();
-    state.sched.charge(crate::cost::DESTROYED);
-    crate::boundary::add_cost(crate::cost::DESTROYED);
+    state.sched.charge(crate::cost::DESTROYED + extra);
+    crate::boundary::add_cost(crate::cost::DESTROYED + extra);
     core::finish_destroy(&mut state, id);
     Ok(())
 }
@@ -544,6 +558,11 @@ fn name_arg(value: &LuaValue) -> Option<LuaString> {
 
 /// FindFirstChild (recursive: each child's subtree in turn, after the direct children).
 pub fn find_first_child(engine: &Engine, id: InstanceId, name: Option<&[u8]>, recursive: bool) -> Option<InstanceId> {
+    find_first_child_counting(engine, id, name, recursive, &mut 0)
+}
+
+/// [`find_first_child`], adding to `looked` the instances whose names it compared (a script's find pays for them: [`charge_find`])
+pub fn find_first_child_counting(engine: &Engine, id: InstanceId, name: Option<&[u8]>, recursive: bool, looked: &mut usize) -> Option<InstanceId> {
     if recursive {
         // (a lazily imported instance whose children are not made: searched in its plan)
         let unmade = project::find_unmade(&mut engine.state.borrow_mut(), &engine.reflection, id, |child, _| Some(child) == name);
@@ -554,7 +573,10 @@ pub fn find_first_child(engine: &Engine, id: InstanceId, name: Option<&[u8]>, re
     materialize(engine, id);
     let found = {
         let state = engine.state.borrow();
-        state.dom.at(id).children.iter().copied().find(|&child| name_equals(&state, child, name))
+        let children = &state.dom.at(id).children;
+        let index = children.iter().position(|&child| name_equals(&state, child, name));
+        *looked += index.map_or(children.len(), |index| index + 1);
+        index.map(|index| children[index])
     };
     if let Some(child) = found {
         return Some(reached(engine, child));
@@ -562,12 +584,22 @@ pub fn find_first_child(engine: &Engine, id: InstanceId, name: Option<&[u8]>, re
     if recursive {
         let children = engine.state.borrow().dom.at(id).children.clone();
         for child in children {
-            if let Some(found) = find_first_child(engine, child, name, true) {
+            if let Some(found) = find_first_child_counting(engine, child, name, true, looked) {
                 return Some(found);
             }
         }
     }
     None
+}
+
+/// What a script's FindFirstChild pays for the instances it looked at beyond the call's price (cost.rs FIND_CHILD past the first
+/// child, FIND_NODE for each node of a recursive find)
+pub fn charge_find(engine: &Engine, looked: usize, recursive: bool) {
+    let seconds = if recursive { looked as f64 * crate::cost::FIND_NODE } else { looked.saturating_sub(1) as f64 * crate::cost::FIND_CHILD };
+    if seconds > 0.0 {
+        engine.state.borrow().sched.charge(seconds);
+        crate::boundary::add_cost(seconds);
+    }
 }
 
 fn class_is_a(engine: &Engine, class: ClassId, name: Option<&[u8]>) -> bool {
@@ -885,7 +917,9 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             return raise("Argument 1 missing or nil");
         }
         let name = name_arg(args.get(1));
-        let found = find_first_child(engine, id, name.as_ref().map(|s| s.as_bytes()).as_deref(), args.boolean(2));
+        let (recursive, mut looked) = (args.boolean(2), 0);
+        let found = find_first_child_counting(engine, id, name.as_ref().map(|s| s.as_bytes()).as_deref(), recursive, &mut looked);
+        charge_find(engine, looked, recursive);
         optional_instance(lua, engine, found)
     });
     behaviors.add_method(base, K::FindFirstChild as NameId, find_first_child_method.clone());
@@ -1047,6 +1081,9 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     }));
     behaviors.add_method(base, K::GetAttributes as NameId, method(|lua, engine, id, _| {
         let attributes = engine.state.borrow().dom.at(id).attributes.as_slice().to_vec();
+        let listed = attributes.len() as f64 * crate::cost::ATTRIBUTE_LISTED;
+        engine.state.borrow().sched.charge(listed);
+        crate::boundary::add_cost(listed);
         let table = lua.create_table()?;
         for (name, value) in attributes {
             table.raw_set(lua.create_string(name.as_bytes())?, convert::to_lua(lua, engine, &value)?)?;

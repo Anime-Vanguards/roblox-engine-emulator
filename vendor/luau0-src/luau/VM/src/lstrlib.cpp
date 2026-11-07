@@ -1066,6 +1066,11 @@ static int str_format(lua_State* L)
             luaL_addlstring(&b, buff, strlen(buff));
         }
     }
+    if (luaE_scriptwork(L))
+    {
+        L->global->work.formats++;
+        L->global->work.formatspecs += arg - 1;
+    }
     luaL_pushresult(&b);
     return 1;
 }
@@ -1115,6 +1120,8 @@ static int str_split(lua_State* L)
         lua_settable(L, -3);
     }
 
+    if (luaE_scriptwork(L))
+        L->global->work.splitparts += numMatches;
     return 1;
 }
 

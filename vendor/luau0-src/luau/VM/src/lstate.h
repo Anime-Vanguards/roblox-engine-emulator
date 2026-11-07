@@ -315,7 +315,8 @@ union GCObject
 #define obj2gco(v) check_exp(iscollectable(v), cast_to(GCObject*, (v) + 0))
 
 // the work counts a Luau closure's instructions go to (lua_WorkCounters)
-#define luaE_workops(L, cl) (((cl)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) ? (L)->global->work.hostops : (L)->global->work.ops)
+// (a native module's functions count apart, in nativeops: LUAU_PROTO_WORK_NATIVE, set by luau_load)
+#define luaE_workops(L, cl) (((cl)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) ? (L)->global->work.hostops : ((cl)->l.p->flags & LUAU_PROTO_WORK_NATIVE) ? (L)->global->work.nativeops : (L)->global->work.ops)
 
 // whose work L does from frame ci down: 1 when the innermost Luau frame is a script's (not exempt), 2 when it is
 // exempt and a script's frame is below it (the host's work for a script), else 0
@@ -336,6 +337,9 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
 
 // whether a script function's own instruction is running (the innermost frame is a script's Luau frame, not a C function's)
 #define luaE_scriptinsn(L) ((L)->stack && isLua((L)->ci) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+
+// the same, for an interpreted function only: a vector's members and methods are instructions of their own in native code (nativeops)
+#define luaE_interpretedinsn(L) (luaE_scriptinsn(L) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_NATIVE))
 
 #define luaE_scriptframe(L, ci) (luaE_workframe(L, ci) == 1)
 #define luaE_scriptwork(L) luaE_scriptframe(L, (L)->ci)

@@ -76,8 +76,11 @@ pub fn dump_tally() {
 /// 28 R15 rigs in an empty test place's client, a handler bracketed with os.clock, the median of 210 frames less the empty
 /// handler, per operation: a read of Part.CFrame touching 5 parts per rig once 322 ns, twice each 205, eight times each 80; Part.Size
 /// 281 / - / 63; IsA 313 / - / 72; a Motor6D.Transform write 344 / - / 92; three properties of one part, three parts, twice 99:
-/// the miss belongs to the instance, not the property). The hot price of a read is 35-45 ns, so the first touch adds about this.
-pub const COLD_TOUCH: f64 = 0.28e-6;
+/// the miss belongs to the instance, not the property). That probe ran in a Studio playtest client on animated rigs; the parity bench
+/// (tools/cost-parity) reads one static part of 100 once each a frame at 74.6 ns where a hot read of the same property is 29.4, in a
+/// rendered client of a game's match place (roblox-sim, Studio 0.744): a static instance's first touch adds 45 ns. A cold geometry read
+/// is dearer (the bench's CFrame of 100 parts once each, 175 ns, a row held out of the fit; the rig probe's 322): not modelled apart.
+pub const COLD_TOUCH: f64 = 0.045e-6;
 
 /// What a changed write adds to the first touch of an instance in a frame beyond [`COLD_TOUCH`]. A write dirties more of the
 /// instance than a read touches (the property's slot, its change flags, the render or physics structure that hears of it), so a roster
@@ -94,15 +97,19 @@ pub const COLD_TOUCH: f64 = 0.28e-6;
 /// A GuiObject (`part` false; the same bench's `Frame` rows, five runs: Size +475..525, Position +600, BackgroundTransparency +380 over
 /// the hot write, noisier than the Parts': Position's n100 readings span 781-1550 ns) is dearer on Size and Position and close on the
 /// transparencies.
+///
+/// With the first touch at 45 ns ([`COLD_TOUCH`]) each extra below is the cold_write probe's total for the property less that, so the
+/// totals stay what it measured; the parity bench's rosters agree where they were measured (100 parts' CFrame 731 ns over the hot write,
+/// 100 frames' BackgroundTransparency 356: rows held out of the fit), but for a part's Transparency, which it reads at 143 (fitted: 98).
 pub fn cold_write_extra(part: bool, property: &str) -> f64 {
     1e-9 * match (part, property) {
-        (true, "CFrame" | "Position" | "Orientation" | "Rotation" | "PivotOffset" | "Size") => 500.0,
-        (true, "Color" | "BrickColor" | "Material") => 80.0,
-        (true, "Transparency" | "LocalTransparencyModifier") => 110.0,
-        (false, "Size" | "Position") => 300.0,
-        (false, "BackgroundTransparency" | "TextTransparency" | "ImageTransparency") => 100.0,
-        (_, "Name") => 280.0,
-        (_, "SetAttribute") => 550.0,
+        (true, "CFrame" | "Position" | "Orientation" | "Rotation" | "PivotOffset" | "Size") => 735.0,
+        (true, "Color" | "BrickColor" | "Material") => 315.0,
+        (true, "Transparency" | "LocalTransparencyModifier") => 98.0,
+        (false, "Size" | "Position") => 535.0,
+        (false, "BackgroundTransparency" | "TextTransparency" | "ImageTransparency") => 335.0,
+        (_, "Name") => 515.0,
+        (_, "SetAttribute") => 785.0,
         // (a joint's or bone's Transform and the properties not measured: the first touch alone, as fitted on Motor6D.Transform)
         _ => 0.0,
     }
@@ -156,37 +163,97 @@ impl Touched {
 // a lobby playtest's client (a game's real runtime, the figures used
 // where they differ; a property write in a running place costs about 60 % of an edit write). Every figure
 // below that says "client" is that bench's number.
+//
+// Third pass (2026-11-07): "the parity bench" is tools/cost-parity, whose workloads run unchanged in ree and in a rendered client of a
+// game's match place in roblox-sim (Studio 0.744.0.7441077, Deferred signals, two sessions, the median of 9 rounds), each figure less
+// the Luau around the call at these prices (fit.py residuals). A third of its rows, chosen by a hash of their names, is held out: no
+// price is set from them, and a figure quoted from one says so. Studio playtest clients, where most prices were measured before, read
+// many engine calls 1.3-4x dearer: their Explorer, Properties window and script debugger listen to the DataModel.
 
-/// A property or member read (client: Part.CFrame / Position / Size / Transparency 26-40 ns, Name 40, Parent 41,
-/// GuiObject.Size 31-69; the VM's own GETTABLEKS comes on top)
-pub const READ: f64 = 0.033e-6;
+/// A property or member read: a number, bool or Vector3 property of a part, a frame or an effect, 25.5-30.4 ns (median 29.4) beyond the
+/// Luau that reads it, in the parity bench. What the value is adds to it: [`read_value`].
+pub const READ: f64 = 0.029e-6;
+
+/// What a read of `value` adds to [`READ`]: the engine makes a new value for most types on each read (the same bench: a CFrame
+/// 45.8-53.6 ns in all, a Color3 40.5-42.5, a NumberSequence or ColorSequence 61.4-66.1, a UDim2 41.0, a Vector2 40.3, a string 37.5-40.3,
+/// an Instance 35.1-46.9, an EnumItem 40.0; a Vector3 is the VM's own value and costs nothing more).
+pub fn read_value(value: Option<&crate::Value>) -> f64 {
+    use crate::Value;
+    match value {
+        None | Some(Value::Nil | Value::Bool(_) | Value::Number(_) | Value::Vector3(_) | Value::Lua(_)) => 0.0,
+        Some(Value::String(_)) => READ_STRING_EXTRA,
+        Some(Value::EnumItem(_)) => 11.0e-9,
+        Some(Value::Instance(_)) => READ_INSTANCE_EXTRA,
+        Some(Value::Vector2(_)) => 11.0e-9,
+        Some(Value::Color3(_)) => 12.5e-9,
+        Some(Value::UDim(_) | Value::UDim2(_) | Value::Rect(_) | Value::NumberRange(_) | Value::Font(_) | Value::Content(_)) => 12.0e-9,
+        Some(Value::NumberSequence(_) | Value::ColorSequence(_)) => 35.0e-9,
+        // (a CFrame, BrickColor, PhysicalProperties and the other rbx-dom datatypes)
+        Some(Value::Dom(_)) => 20.0e-9,
+    }
+}
+
+/// What a string read adds (Name, ClassName, Text, Image: 37.5-40.3 ns in all) and an Instance read (Parent, PrimaryPart,
+/// LocalPlayer: 35.1-46.9): [`read_value`]'s, and the Name, ClassName and Parent reads the Instance API serves itself
+pub const READ_STRING_EXTRA: f64 = 10.0e-9;
+pub const READ_INSTANCE_EXTRA: f64 = 13.0e-9;
+/// A child found by name as a member (`part.Attachment`: 40.0 ns in all)
+pub const READ_CHILD_EXTRA: f64 = 11.0e-9;
 /// A property write nothing in the engine reacts to, and a write of the value it holds (client: CFrame written
 /// to what it holds 52 ns, Bone.Transform and Motor6D.Transform 55-68 ns)
 pub const WRITE_QUIET: f64 = 0.055e-6;
-/// A method call the table below does not name (client: IsA 35, IsDescendantOf 46, FindFirstChild miss 56,
-/// GetAttribute 62-67, FindFirstChildOfClass 61, HasTag 75, FindFirstChild hit of 20 children 93 ns, with the
-/// namecall's VM cost)
-pub const CALL: f64 = 0.045e-6;
-/// An instance destroyed (playtest: a grass patch in Workspace 4.9 us an instance, with leaving
-/// the DataModel, [`moved`]; client: Destroy of a Part out of the tree 0.6-0.9 us)
-pub const DESTROYED: f64 = 1.0e-6;
-/// One element of a list a method returns (client: GetChildren of 20 0.64 us, GetDescendants of 100 2.5 us;
-/// EditableMesh GetFaces and GetColors 0.01-0.02 us an id)
-pub const LISTED: f64 = 0.02e-6;
+/// A method call the table below does not name, beyond the Luau around it (the parity bench, its whole-corpus sessions: FindFirstChild's
+/// first of 20 children 58 ns, FindFirstAncestorOfClass 60; a Studio playtest client read 45 over the Luau of the older prices)
+pub const CALL: f64 = 0.058e-6;
+/// An instance destroyed, beyond leaving the DataModel ([`moved`]): a Folder out of the tree 0.41 us with the call, in the parity bench.
+/// The Studio capture's 1.0 (a grass patch 4.9 us an instance with its leaving) had the Explorer's work in it.
+pub const DESTROYED: f64 = 0.36e-6;
+/// What a GUI object in the DataModel adds when destroyed (the same bench: a Frame under a ScreenGui 2.51 us, of which leaving 1.17), and a
+/// part (a Part in the workspace 2.14, leaving 1.47)
+pub const DESTROYED_GUI: f64 = 0.89e-6;
+pub const DESTROYED_PART: f64 = 0.22e-6;
+/// One element of a list a method returns (the parity bench: GetChildren of 20 0.34 us,
+/// GetDescendants of 110 1.94 us; EditableMesh GetFaces and GetColors 0.01-0.02 us an id in a Studio capture)
+pub const LISTED: f64 = 0.016e-6;
+/// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path crosses, whether
+/// its filter admits them or not: one that crosses any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`] (the parity
+/// bench's rays, on geometry of their own that both sides find the same parts in, in clients that ran the whole corpus: a miss with an
+/// Include filter 0.29 us, an Exclude filter of the one part a ray crosses 0.68, a ray through a stack of 24 parts 4.3 and the same with
+/// an Include filter of one of them 3.4; held out: a miss with no filter 0.17, a hit on one part 0.53). A client that had run only the
+/// method rows read the same rays a third as dear (the stack's 1.5 us): what a client has made and moved before costs its queries.
+pub const RAY_MET: f64 = 0.39e-6;
+pub const RAY_CROSSED: f64 = 0.135e-6;
+/// A part GetPartBoundsInBox or GetPartBoundsInRadius returns (the same geometry and clients: an empty box 0.15 us, a line of 10 parts
+/// 4.3, a radius that touches 2 parts 0.64; held out: a box of 24 parts 11.4), and one GetPartsInPart returns (the 23 others of a stack
+/// 65.5 us; held out: a part that touches nothing 1.9, so the call itself is dearer than modelled)
+pub const QUERY_PART: f64 = 0.31e-6;
+pub const QUERY_PART_EXACT: f64 = 2.84e-6;
+/// FindFirstChild and the other finds: a child looked at past the first (the parity bench: the 20th of 20 children 73 ns, the first 44,
+/// so 1.55 ns a child), and a node a recursive find looks at (a miss over 1,110 nodes 4.2 us: 3.8 ns)
+pub const FIND_CHILD: f64 = 1.55e-9;
+pub const FIND_NODE: f64 = 3.8e-9;
+/// GetTagged: an instance it lists (the parity bench: 10 tagged parts 1.89 us)
+pub const TAGGED_LISTED: f64 = 0.184e-6;
+
 /// QueryDescendants: a node it looks at and a node it returns (client: ">>Part" over 100 descendants 3.6 us,
 /// ">>Model > Part#Part3" 1.0 us for 10 matches, edit 2.3 and 1.2)
 pub const QUERIED: f64 = 0.010e-6;
 pub const QUERY_FOUND: f64 = 0.015e-6;
-/// An attribute set to another value (client: SetAttribute number 0.77 us, string 0.79, a new key and its
-/// removal 0.83 per call; to the value it holds 0.09, which [`CALL`] covers)
-pub const ATTRIBUTE_CHANGED: f64 = 0.70e-6;
-/// Signal:Connect and Connection:Disconnect (client: Connect + Disconnect 0.78 us, Part.Changed 0.58-0.84;
-/// split 60/40), GetPropertyChangedSignal beyond them (1.2-1.3 us in all)
-pub const CONNECT: f64 = 0.45e-6;
-pub const DISCONNECT: f64 = 0.30e-6;
-pub const PROPERTY_SIGNAL: f64 = 0.45e-6;
-/// BindableEvent:Fire with nothing connected, beyond the call (client 161 ns, edit 183)
-pub const FIRE: f64 = 0.10e-6;
+/// An attribute set to another value, beyond the call: SetAttribute of a string 0.43 us, a new key and its removal 0.43 a call, in
+/// the parity bench (a Studio playtest read 0.77-0.83: its Properties window listens); to the value it holds 0.077
+/// in all ([`ATTRIBUTE_SAME`] beyond the call)
+pub const ATTRIBUTE_CHANGED: f64 = 0.38e-6;
+pub const ATTRIBUTE_SAME: f64 = 0.032e-6;
+/// One attribute GetAttributes lists (the same bench: five 0.205 us beyond the luau)
+pub const ATTRIBUTE_LISTED: f64 = 0.032e-6;
+/// Signal:Connect and Connection:Disconnect (the parity bench: Connect and Disconnect of a
+/// BindableEvent, a part's Changed and a Once 0.50-0.51 us together; split 60/40 as a Studio playtest's 0.78 was),
+/// GetPropertyChangedSignal beyond the call (0.42 us in all)
+pub const CONNECT: f64 = 0.31e-6;
+pub const DISCONNECT: f64 = 0.20e-6;
+pub const PROPERTY_SIGNAL: f64 = 0.38e-6;
+/// BindableEvent:Fire with nothing connected, beyond the call (the same bench: 52 ns in all; a Studio playtest client read 161)
+pub const FIRE: f64 = 0.007e-6;
 /// A property write that fires Changed or a GetPropertyChangedSignal signal someone is connected to, per signal fired (the
 /// op_cost probe's signal rows, a match place's client, two sessions, over the same write with nothing connected: Changed +227..354
 /// ns (the lobby client 318, edit 474), the property signal +79..213, both together +365..410). The handler runs later, deferred,
@@ -224,11 +291,13 @@ pub enum SignalKind {
 /// the 0.20 [`SIGNAL_FIRED`]) and each handler's thread cost 0.87-1.04 us (median 0.95) where a lone handler's cost 1.6-2.8, so the first
 /// handler pays the dispatch of the fire and the others only their thread. A lone handler is still priced as the earlier probes had
 /// it: their hot loop of two writes read the queueing 0.23-0.35 us, this one and the first handler_cost probe's 100 instances a frame 0.5-0.8.
-pub const EXTRA_HANDLER_QUEUED: f64 = 0.45e-6;
-pub const EXTRA_HANDLER_THREAD: f64 = 0.95e-6;
+/// (Studio's figures scaled by [`signal_costs`]'s quarter: no row of the parity bench has several handlers)
+pub const EXTRA_HANDLER_QUEUED: f64 = 0.45e-6 * 0.247;
+pub const EXTRA_HANDLER_THREAD: f64 = 0.95e-6 * 0.247;
 /// One more handler of a frame event (PreSimulation, Heartbeat, PreRender, ...): 100 handlers on one event, the span from the first
 /// handler's first line to the last, over 99 (a match place's client, three runs: PreSimulation 0.73, Heartbeat 0.63, PreRender 0.71 us).
-pub const FRAME_HANDLER: f64 = 0.69e-6;
+/// The parity bench (tools/cost-parity, a rendered client of a game's match place in roblox-sim): 100 Heartbeat handlers 0.49-0.51 us apart.
+pub const FRAME_HANDLER: f64 = 0.50e-6;
 
 /// What a fire of `kind` with a handler connected costs the firer, and what each handler's thread costs when it runs (seconds). Queueing,
 /// per fire (the trigger less the trigger with nothing connected, medians of three runs): Changed and the property signal keep
@@ -238,9 +307,16 @@ pub const FRAME_HANDLER: f64 = 0.69e-6;
 /// own instructions): Changed 1.97 / 1.89 / 2.24 (1.83 as the median of the property signal's 1.87 too), AttributeChanged 1.71 / 1.62 /
 /// 2.06 and GetAttributeChangedSignal 1.86 / 1.72 / 1.93 (1.78), ChildAdded 1.53 / 1.46 / 1.89 (1.50), DescendantAdded 1.46 / 1.45 /
 /// 1.69 (1.44).
+///
+/// Those were Studio playtest clients, whose handler threads carry Studio's script hooks. The parity bench (a rendered client of a game's
+/// match place in roblox-sim, Deferred signals) reads a heard BindableEvent:Fire through its handler at 0.64 us, of which the call is
+/// 0.05: 0.57 for the queueing and the thread, a quarter of Studio's 2.31. Its other kinds' rows are in the held-out third, so every
+/// kind's pair is Studio's scaled by that quarter (`STUDIO_HOOKS`), but Changed's queueing, which the bench reads directly (a heard
+/// Transparency write 0.20 us over the write: [`SIGNAL_FIRED`]).
 pub fn signal_costs(kind: SignalKind) -> (f64, f64) {
-    match kind {
-        SignalKind::Changed | SignalKind::Property => (SIGNAL_FIRED, 1.83e-6),
+    const STUDIO_HOOKS: f64 = 0.247;
+    let (queue, thread) = match kind {
+        SignalKind::Changed | SignalKind::Property => return (SIGNAL_FIRED, 1.83e-6 * STUDIO_HOOKS),
         SignalKind::Attribute => (0.55e-6, 1.78e-6),
         SignalKind::ChildAdded => (0.40e-6, 1.50e-6),
         SignalKind::DescendantAdded => (0.27e-6, 1.44e-6),
@@ -251,20 +327,26 @@ pub fn signal_costs(kind: SignalKind) -> (f64, f64) {
         SignalKind::AncestryChanged => (0.65e-6, 2.17e-6),
         SignalKind::Bindable => (0.58e-6, 1.73e-6),
         SignalKind::Unmeasured => (0.0, 0.0),
-    }
+    };
+    (queue * STUDIO_HOOKS, thread * STUDIO_HOOKS)
 }
-/// A thread made for task.spawn / defer / delay (client: task.spawn(noop) 1.15 us, coroutine.wrap(noop)() 1.03)
-pub const THREAD: f64 = 1.0e-6;
+/// A thread made for task.spawn / defer / delay (the parity bench: task.spawn(noop) 0.72 us,
+/// task.delay 0.86 (the timer: [`DELAYED`] more); a Studio playtest client read 1.15)
+pub const THREAD: f64 = 0.72e-6;
+pub const DELAYED: f64 = 0.14e-6;
 /// BulkMoveTo, a part in the call (client, 100 parts: FireCFrameChanged 0.42 us a part, FireAllEvents 1.03; a
 /// loop of CFrame writes 1.10)
-pub const BULK_MOVED: f64 = 0.42e-6;
-pub const BULK_MOVED_ALL_EVENTS: f64 = 1.03e-6;
+/// (the parity bench: BulkMoveTo of 10 parts with FireCFrameChanged 1.05 us a part; the events'
+/// share kept as the playtest measured it)
+pub const BULK_MOVED: f64 = 1.05e-6;
+pub const BULK_MOVED_ALL_EVENTS: f64 = 2.58e-6;
 /// Model:PivotTo, a part it moves (client: 0.48 us in the workspace; 0.15 a call), a Part:PivotTo 1.14 us
-pub const PIVOT_PART: f64 = 0.48e-6;
+/// (the parity bench, a rendered client of a game's match place: Model:PivotTo of 10 parts 10.65 us, Part:PivotTo 1.44)
+pub const PIVOT_PART: f64 = 1.05e-6;
 pub const PIVOT_BASE: f64 = 0.15e-6;
 /// ... out of the workspace, a part (a CFrame write there 0.16 us, and the walk)
 pub const PIVOT_LOOSE: f64 = 0.20e-6;
-pub const PIVOT_SINGLE: f64 = 1.14e-6;
+pub const PIVOT_SINGLE: f64 = 1.44e-6;
 /// Model:ScaleTo, an instance it looks at, and what a real rescale adds for the ones it rewrites (client, 100
 /// Parts: to the scale they have 0.19 us each; a rescale in the workspace 1.16, out of the DataModel 0.28; a
 /// fallback rig's 225 ScaleTo(1) out of it: a rig of 1 MeshPart, 7 Bones and 19
@@ -277,22 +359,23 @@ pub const SCALE_ATTACHMENT: f64 = 0.35e-6;
 pub const SCALE_JOINT: f64 = 1.8e-6;
 /// Model:GetPivot / GetScale / GetBoundingBox (client: 31-60 ns, cached by the engine)
 pub const MODEL_QUERY: f64 = 0.015e-6;
-/// A Parent change that neither enters nor leaves the DataModel (client: a Part into another Folder and back
-/// 0.94 us a move, edit 1.24); one between two places outside it costs little (not measured)
-pub const REPARENTED: f64 = 1.0e-6;
+/// A Parent change that neither enters nor leaves the DataModel (the parity bench: a Part into
+/// another Folder of the workspace and back 0.51 us a move); one between two places outside it costs little
+pub const REPARENTED: f64 = 0.51e-6;
 pub const REPARENTED_LOOSE: f64 = 0.15e-6;
 /// The parallel bridge's machinery (an empty test place's client, an actor_cost probe, one session, 2026-10-23): BindableFunction:Invoke into an
 /// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5), SharedTable.increment 370-429 (counts 31.5); reads (29 ns) are close to a table's
 /// and writes (298 ns) are not priced: a SharedTable is a plain table here. Charged on top of what the instructions count.
 pub const ACTOR_INVOKE: f64 = 0.94e-6;
 pub const SHARED_INCREMENT: f64 = 0.37e-6;
-/// TextService:GetTextSize (client and edit: "Hello" 14 FredokaOne 6.7-6.9 us)
-pub const TEXT_MEASURED: f64 = 6.7e-6;
+/// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 11.8 us; a
+/// Studio client and edit DataModel 6.7-6.9 for FredokaOne)
+pub const TEXT_MEASURED: f64 = 11.7e-6;
 
 /// A Text write on a TextLabel, TextButton or TextBox (a lobby client: 0.72-0.80 us with AutoLocalize off or digits only, 0.07
 /// when the text is the one it has). With AutoLocalize on and letters in the text it also looks the text up for translation in a
 /// place that has a localization table: [`text_localization_in`].
-pub const TEXT_WRITE: f64 = 0.75e-6;
+pub const TEXT_WRITE: f64 = 0.45e-6;
 
 /// The places whose localization table Studio searches on a Text write (AutoLocalize on, letters in the text), by default
 /// ([`PlacePrices::localized`]). Measured in a lobby's playtest client (the op_cost probe's `TextLabel.Text write`: 56.6-62.2 us
@@ -303,15 +386,23 @@ pub const TEXT_WRITE: f64 = 0.75e-6;
 /// experience with one is listed. A test place's playtest client paid 32-47 us (its own table); its edit DataModel, which the
 /// 1.0 us above was read in, pays none, and ree's place 0 stays priced as that. `(place id, us of the lookup for a one-letter
 /// text)`: the lobby 56.1, the match places 61.2 (five sessions, median: [`LOCALIZATION_LOOKUP`]).
+///
+/// The parity bench (tools/cost-parity) reads "Hello" / "World" written with AutoLocalize on at 35.0 us in a rendered client of a game's
+/// match place and 35.1-36.2 in a client of an empty place with no localization table, headless or rendered: a client looks every lettered
+/// AutoLocalize text up, whatever the place holds, at 32.8 us for one letter ([`LOCALIZATION_LOOKUP`]) and, as the lobby measured,
+/// 0.43 us a letter more. The Studio playtests' 56-61 us carried Studio's own text capture, and the 1.0 us of an empty place was its edit
+/// DataModel's (no translator). So every client run pays it ([`text_localization_in`]); a place listed here pays its own figure.
 pub const LOCALIZED_PLACES: &[(f64, f64)] = &[];
 
-/// The lookup of a one-letter text, in microseconds, of a localized place given without its own figure (`REE_LOCALIZED_PLACES`
-/// `<place id>`): the match places' median.
-pub const LOCALIZATION_LOOKUP: f64 = 61.2;
+/// The lookup of a one-letter text in a client, in microseconds (above); `REE_LOCALIZED_PLACES <place id>=<us>` gives a place its own.
+pub const LOCALIZATION_LOOKUP: f64 = 32.8;
 
-/// The lookup a changed Text write adds in `place_id` (None: the place has no localization table in `prices`).
-pub fn text_localization_in(prices: &PlacePrices, place_id: f64, characters: usize) -> Option<f64> {
-    let (_, one_letter) = prices.localized.iter().find(|(place, _)| *place == place_id && place_id != 0.0)?;
+/// The lookup a changed Text write adds in `place_id`: every client's (an edit DataModel and a server have no translator: None).
+pub fn text_localization_in(prices: &PlacePrices, place_id: f64, characters: usize, client: bool) -> Option<f64> {
+    if !client {
+        return None;
+    }
+    let one_letter = prices.localized.iter().find(|(place, _)| *place == place_id && place_id != 0.0).map_or(LOCALIZATION_LOOKUP, |(_, us)| *us);
     Some((one_letter + 0.4286 * (characters as f64 - 1.0)) * 1e-6)
 }
 
@@ -323,6 +414,9 @@ pub fn text_localization_in(prices: &PlacePrices, place_id: f64, characters: usi
 /// playtest client pays 1.5x the Edit DataModel for a part that is in the workspace. A lobby's client reads 1.10 (an op_cost run)
 /// and keeps ree's price, as does every place not listed. Position, Orientation and Rotation share CFrame's write path and are
 /// scaled with it (not measured apart).
+///
+/// The parity bench measures the default prices in a match place's rendered client, and a headless client of that match place paid what
+/// one of an empty place paid (CFrame 0.93 us against 0.88): no place is listed by default; `REE_MATCH_PLACES` still scales one.
 pub const MATCH_PLACES: &[f64] = &[];
 pub const MATCH_GEOMETRY_SCALE: f64 = 1.55;
 
@@ -380,79 +474,120 @@ pub fn place_write_scale(prices: &PlacePrices, place_id: f64, property: &str, pl
 
 /// What the lookup adds to a changed Text write with AutoLocalize on and letters in the text, `characters` long (a line through
 /// the five- and forty-character rows: 55.7 us and 0.43 us a character), in a place [`PlacePrices`] lists: [`text_localization_in`].
-/// A property write by what Studio does for it (client): a part's geometry in the workspace is dear (CFrame
-/// and Position 1.10 us, Size 0.85, Color 0.55; out of the DataModel CFrame 0.16), a transparency or a UI
-/// property 0.25-0.34, a joint's C0 0.25, Name 0.79, a Bone's or Motor6D's Transform 0.06. Nothing changed:
+/// A property write by what the engine does for it, in the parity bench: a part's geometry in the
+/// workspace is dear (CFrame 1.43 us, Position 1.42; Size 1.10, from Studio's ratio to CFrame: no row of its own outside the
+/// held-out third), BrickColor 0.55, Material 0.38, Transparency 0.25, CanCollide / CastShadow / Reflectance 0.22-0.26; out of the
+/// workspace geometry 0.145-0.165 and the rest 0.057; an effect's property (a Beam's, ParticleEmitter's, light's or Highlight's)
+/// 0.17-0.19; a GUI object's 0.17-0.22, its Size 0.25, a Color3 0.32, an image 0.78, a Text 0.45; a UI modifier's (UIGradient,
+/// UIStroke, UIScale) 0.16-0.24; an Attachment's 0.115; a joint's C0 0.14; a Camera's CFrame 0.34; Name 0.30; a Bone's or
+/// Motor6D's Transform 0.06. A Studio playtest client, where these were measured before, read most of them 1.3-2.6x dearer and a
+/// part's geometry 0.77x: its Explorer and Properties window listen, and only a rendered client pays for what is drawn. Nothing changed:
 /// [`WRITE_QUIET`]. `placed` is whether the instance is in the workspace.
 pub fn write(reflection: &Reflection, class: ClassId, property: &str, changed: bool, placed: bool) -> f64 {
     if !changed {
         return WRITE_QUIET;
     }
     if property == "Name" {
-        return 0.79e-6;
+        return 0.30e-6;
     }
     let part = reflection.is_a(class, "BasePart");
     if part {
         return 1e-6
-            * match property {
-                "CFrame" | "Position" | "Orientation" | "Rotation" | "PivotOffset" => {
-                    if placed { 1.10 } else { 0.165 }
-                }
-                "Size" => {
-                    if placed { 0.85 } else { 0.17 }
-                }
-                "Color" | "BrickColor" | "Material" => 0.55,
-                "Transparency" | "LocalTransparencyModifier" => 0.25,
-                _ => 0.28,
+            * match (placed, property) {
+                (true, "CFrame" | "Position" | "Orientation" | "Rotation" | "PivotOffset") => 1.43,
+                (true, "Size") => 1.10,
+                (true, "Color" | "BrickColor") => 0.55,
+                (true, "Material") => 0.385,
+                (true, "Transparency" | "LocalTransparencyModifier") => 0.25,
+                (true, _) => 0.246,
+                (false, "CFrame" | "Position" | "Orientation" | "Rotation" | "PivotOffset") => 0.165,
+                (false, "Size") => 0.145,
+                (false, _) => 0.057,
             };
     }
     if property == "Transform" && (reflection.is_a(class, "Motor6D") || reflection.is_a(class, "Bone")) {
         return 0.06e-6;
     }
     if (property == "C0" || property == "C1") && reflection.is_a(class, "JointInstance") {
-        return 0.25e-6;
+        return 0.14e-6;
     }
-    if property == "Text" && matches!(&*reflection.class(class).name, "TextLabel" | "TextButton" | "TextBox") {
+    let name = &*reflection.class(class).name;
+    if property == "Text" && matches!(name, "TextLabel" | "TextButton" | "TextBox") {
         return TEXT_WRITE;
+    }
+    if name == "Camera" && property == "CFrame" {
+        return 0.345e-6;
+    }
+    if reflection.is_a(class, "Attachment") {
+        return 0.115e-6;
+    }
+    if reflection.is_a(class, "GuiObject") {
+        return 1e-6
+            * match property {
+                "Size" => 0.245,
+                "Image" => 0.78,
+                "BackgroundColor3" | "BorderColor3" | "TextColor3" | "TextStrokeColor3" => 0.318,
+                _ => 0.203,
+            };
+    }
+    if reflection.is_a(class, "UIComponent") {
+        return 1e-6 * if matches!(property, "Color" | "Transparency") { 0.218 } else { 0.20 };
+    }
+    if ["ParticleEmitter", "Beam", "Trail", "Light", "Highlight", "Fire", "Smoke", "Sparkles"].iter().any(|kind| reflection.is_a(class, kind)) {
+        return 0.176e-6;
     }
     0.30e-6
 }
 
-/// Instance.new by class (client and edit: a Part 1.1-1.3 us, a Folder or Attachment 0.4-0.5, a Frame 1.1-1.5, a
-/// TextLabel 2.9-3.2; the others are Instance.new + Destroy less [`DESTROYED`] in the edit place).
+/// Instance.new by class, in the parity bench: a Part 0.83 us, a MeshPart 1.89, a Model 0.58, a
+/// Frame 1.07, an ImageLabel 0.65 and ImageButton 1.07, a TextButton 1.44, a ScreenGui 1.54, a BillboardGui 1.18, a UIListLayout 1.41,
+/// a UIGradient 0.92, UIPadding and UIScale 0.72-0.78, a Motor6D 0.91, a Weld 0.52, and a Folder, Attachment, Bone, BindableEvent,
+/// NumberValue, light, Highlight, Trail, Sparkles or WeldConstraint 0.32-0.38 (median 0.36). Humanoid, Animator and SurfaceAppearance keep a
+/// Studio client's figures (no row).
 pub fn created(reflection: &Reflection, class: ClassId) -> f64 {
     1e-6 * match &*reflection.class(class).name {
         "Humanoid" => 4.3,
-        "TextLabel" | "TextButton" | "TextBox" => 2.9,
-        "MeshPart" => 2.2,
-        "BillboardGui" | "ScreenGui" => 1.9,
+        "TextLabel" | "TextButton" | "TextBox" => 1.44,
+        "MeshPart" => 1.89,
+        "ScreenGui" => 1.54,
+        "BillboardGui" | "SurfaceGui" => 1.18,
         "Animator" => 1.6,
-        "Motor6D" | "ImageLabel" | "ImageButton" | "CanvasGroup" | "ScrollingFrame" | "UIListLayout" => 1.4,
+        "UIListLayout" | "UIGridLayout" | "UITableLayout" | "UIPageLayout" => 1.41,
+        "ImageButton" => 1.07,
+        "ImageLabel" => 0.65,
+        "UIGradient" => 0.92,
+        "Motor6D" => 0.91,
+        "Model" => 0.58,
+        "Weld" => 0.52,
         "SurfaceAppearance" => 1.2,
-        _ if reflection.is_a(class, "BasePart") => 1.3,
-        _ if reflection.is_a(class, "GuiObject") => 1.3,
-        _ if reflection.is_a(class, "Constraint") => 0.35,
-        _ => 0.5,
+        _ if reflection.is_a(class, "BasePart") => 0.83,
+        _ if reflection.is_a(class, "GuiObject") => 1.07,
+        _ if reflection.is_a(class, "UIComponent") => 0.75,
+        _ => 0.36,
     }
 }
 
-/// An instance copied by Clone (edit, a Model of 50: the copy and its Destroy per instance less [`DESTROYED`]: a
-/// Part 4.2 us (3.4-4.9 by the copy's size), MeshPart 5.4, Humanoid 9.5, TextButton 6.5, ScrollingFrame 5.6, ImageLabel
-/// 3.6, Model / Motor6D / ParticleEmitter 2.0-2.7, Decal / UIGradient / UIStroke / UICorner / Beam / Trail / Highlight
-/// 1.7-1.9, the Value classes, WeldConstraint, lights 1.2-1.3).
+/// An instance copied by Clone, in the parity bench: a Part 3.46 us alone, 3.44 a part in a Folder or
+/// Model of parts (the Folder or Model 0.48), a MeshPart 5.83, a ParticleEmitter 3.04, a TextLabel 4.69, a UIGradient 2.47, an Attachment
+/// or Beam inside an effect's part 1.27; a GUI card's frames, image and UI modifiers are the old edit table's figures scaled to the
+/// card's 21.9 us. Humanoid, Motor6D, Sound, ScrollingFrame and the Value, Constraint and light classes keep the edit place's figures.
 pub fn cloned(reflection: &Reflection, class: ClassId) -> f64 {
     1e-6 * match &*reflection.class(class).name {
         "Humanoid" => 9.5,
-        "TextLabel" | "TextButton" | "TextBox" => 6.5,
-        "MeshPart" => 5.4,
+        "TextLabel" | "TextButton" | "TextBox" => 4.69,
+        "MeshPart" => 5.83,
         "ScrollingFrame" => 5.6,
-        "ImageLabel" | "ImageButton" => 3.6,
-        "Model" | "ParticleEmitter" => 2.7,
+        "ImageLabel" | "ImageButton" => 3.0,
+        "ParticleEmitter" => 3.04,
+        "UIGradient" => 2.47,
+        "Model" | "Folder" => 0.48,
         "Motor6D" => 2.3,
+        "Attachment" | "Beam" => 1.27,
         "UIListLayout" | "ScreenGui" | "CanvasGroup" | "BillboardGui" | "SurfaceGui" => 3.3,
         "Sound" => 2.5,
-        _ if reflection.is_a(class, "BasePart") => 4.2,
-        _ if reflection.is_a(class, "GuiObject") => 3.5,
+        _ if reflection.is_a(class, "BasePart") => 3.44,
+        _ if reflection.is_a(class, "GuiObject") => 2.9,
+        _ if reflection.is_a(class, "UIComponent") => 1.5,
         _ if reflection.is_a(class, "ValueBase") || reflection.is_a(class, "Constraint") || reflection.is_a(class, "Light") => 1.25,
         _ => 1.8,
     }
@@ -466,11 +601,31 @@ pub fn method(name: &str) -> f64 {
         // playtest: grass patches out of the DataModel 1.8 us; capture: a Part in Workspace 3.1-3.9 us
         // (Model:PivotTo, ScaleTo, GetPivot and the rest of the Luau-served model methods price themselves,
         // services.luau Priced; a Part's PivotTo too)
-        "Fire" => 0.045 + 0.10,
-        // (client: IsA 35 ns, IsDescendantOf 46, GetFullName 100 against the 62 of a call the table does not name)
-        "IsA" => 0.0,
+        "Fire" => 0.045 + FIRE * 1e6,
+        // (the parity bench, beyond the Luau around the call: IsA 25 ns, GetFullName 102, GetPlayers 69, HasTag 41-43, GetTags of a
+        // part with none 73, AddTag 393, Emit(1) 383, Camera:WorldToViewportPoint 200, GetAttribute 38-40, TweenService:Create 1.31 us;
+        // a ray and a bounds query by what they meet, [`RAY_MET`] and [`QUERY_PART`]; IsDescendantOf has rows only in the held-out
+        // third: a Studio client's 0.015)
+        "IsA" => 0.025,
         "IsDescendantOf" | "IsAncestorOf" => 0.015,
-        "GetFullName" => 0.080,
+        "GetFullName" => 0.102,
+        "GetPlayers" => 0.069,
+        "HasTag" => 0.042,
+        "GetTags" => 0.073,
+        "AddTag" => 0.39,
+        "Emit" => 0.383,
+        "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" => 0.20,
+        "GetAttribute" => 0.039,
+        "Create" => 1.31,
+        "Raycast" => 0.29,
+        // (not measured: a ray's)
+        "Blockcast" | "Spherecast" | "Shapecast" => 0.29,
+        "GetPartBoundsInBox" | "GetPartBoundsInRadius" | "GetPartsInPart" => 0.15,
+        // (HttpService:JSONEncode of `{ a = 1, b = "two", c = { 1, 2, 3 } }` 0.69 us; JSONDecode's row, of that table's text, is
+        // held out: the same price)
+        "JSONEncode" | "JSONDecode" => 0.69,
+        // (TweenService:GetValue of a linear alpha 51.8 ns whole, 27 beyond the Luau around it)
+        "GetValue" => 0.027,
         // the Luau-served model queries add their own MODEL_QUERY
         "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo" => 0.0,
         // EditableMesh (capture, a 13,515-vertex mesh; playtest the two weights calls 0.84 us)
@@ -490,13 +645,23 @@ pub fn method(name: &str) -> f64 {
     }
 }
 
-/// An instance of a subtree entering or leaving the DataModel (playtest: a grass patch of a
-/// MeshPart and two children 11.5 us into a Folder in Workspace; capture, anchored: a Part or
-/// MeshPart 9.7-14.0 us in, 7.6-9.5 out, a Folder 5.0-7.1 in, 2.7-4.0 out). An unanchored part
+/// A subtree entering or leaving the DataModel: [`MOVE_BASE`] once and an instance of it by class, in the parity bench
+/// (a move in and a move out, averaged): a Folder 0.52 us, a Folder of 10 NumberValues 0.96 (so 0.044 an instance), a Part 1.47, a
+/// Model of 3 parts 4.12 (so 1.10 a part, the lone Part 1.0), a Frame into a ScreenGui 1.17, an Attachment into a part 0.58. A Studio
+/// capture read these 5-60x dearer (2.7-14.0 us an instance): its Explorer adds and removes a row for each. An unanchored part
 /// resting on others costs far more to take out (capture: 0.5-1.3 ms), which is not modelled.
 pub fn moved(reflection: &Reflection, class: ClassId) -> f64 {
-    if reflection.is_a(class, "BasePart") { 6e-6 } else { 3e-6 }
+    1e-6 * if reflection.is_a(class, "BasePart") {
+        1.10
+    } else if reflection.is_a(class, "GuiObject") {
+        0.70
+    } else if reflection.is_a(class, "Attachment") {
+        0.10
+    } else {
+        0.044
+    }
 }
+pub const MOVE_BASE: f64 = 0.47e-6;
 
 /// An EditableMesh's own work, per vertex of the mesh, none of it yielding: RemoveUnused
 /// (capture: 1.07-1.36 ms on 13,515 vertices), CreateMeshPartAsync with Box collision (playtest:
@@ -553,8 +718,26 @@ pub struct VmCounters {
     /// Method calls a script's own instruction made on a vector (NAMECALL)
     pub vectormethods: u64,
     /// GETIMPORTs of a script's instructions that looked their global up: an environment getfenv / setfenv made unsafe, or an import
-    /// that was nil when the script loaded (a safe environment's imports are resolved at load, as in Roblox); not priced yet
+    /// that was nil when the script loaded (a safe environment's imports are resolved at load, as in Roblox)
     pub slowimports: u64,
+    /// Instructions of the functions a code generator would compile (a `--!native` module's but its cold ones, `@native` ones),
+    /// by opcode: counted here and not in `ops`, whether or not this VM compiles them
+    pub nativeops: [u64; 256],
+    /// Numbers a script's work turned into strings (concatenation, tostring)
+    pub numtostr: u64,
+    /// Comparisons `table.sort` made for a script, and its calls of a script's comparison function
+    pub sortcompares: u64,
+    pub sortcalls: u64,
+    /// Elements `table.create` filled, slots `table.clone` copied, items `table.concat` joined, parts `string.split` made
+    pub createitems: u64,
+    pub cloneitems: u64,
+    pub concatitems: u64,
+    pub splitparts: u64,
+    /// `string.format` calls (an interpolated string is one) and the specifiers they formatted
+    pub formats: u64,
+    pub formatspecs: u64,
+    /// Strings a script's work made that the VM did not hold already
+    pub newstrings: u64,
 }
 
 unsafe extern "C-unwind" {
@@ -564,7 +747,7 @@ unsafe extern "C-unwind" {
     fn lua_setgcclock(state: *mut mlua::ffi::lua_State, clock: Option<unsafe extern "C" fn(*mut std::ffi::c_void) -> f64>, ud: *mut std::ffi::c_void);
 }
 
-/// The garbage collector's clock: the scripts' own Luau work so far, in seconds of Studio's time ([`luau`] of the VM's counters).
+/// The garbage collector's clock: the scripts' own Luau work so far, measured at fixed prices ([`collector_work`]).
 /// Luau paces its collector by the time a cycle took (lgc.cpp getheaptrigger: the allocation rate and the mark phase's length set
 /// the next cycle's trigger), read from the wall clock, so on a busy machine the collector stepped at other points in every run:
 /// `string.sub` and the other allocating fast calls give way to their C function while a step is due, a string is made again or
@@ -579,7 +762,32 @@ struct GcClock {
 unsafe extern "C" fn gc_clock(ud: *mut std::ffi::c_void) -> f64 {
     // (called from inside an allocation: reads the VM's own counters, nothing that could be borrowed or raise)
     let clock = unsafe { &*(ud as *const GcClock) };
-    luau(unsafe { &*clock.counters })
+    collector_work(unsafe { &*clock.counters })
+}
+
+/// The scripts' work as the collector's clock measures it: the counters at the prices the work clock had when the collector took
+/// this clock (an instruction 1.6 ns, a call 8.5 more, a fast call 2.3 more, an object 22, ...; a native module's instructions as
+/// interpreted ones), not [`luau`]'s, so that a price measured anew does not move where the collector steps: its points move what
+/// the counters see (an allocating fast call gives way to its C function while a step is due) and every memory reading a script
+/// takes. (Priced at [`luau`]'s, the parity bench's 24 new strings read -208 bytes: a step fell inside every round.)
+pub fn collector_work(c: &VmCounters) -> f64 {
+    const CALLS: [usize; 2] = [20, 21];
+    const FASTCALLS: [usize; 5] = [60, 68, 73, 74, 75];
+    let ops: u64 = c.ops.iter().sum::<u64>() + c.nativeops.iter().sum::<u64>();
+    let calls: u64 = CALLS.iter().map(|&op| c.ops[op] + c.nativeops[op]).sum();
+    let fastcalls: u64 = FASTCALLS.iter().map(|&op| c.ops[op] + c.nativeops[op]).sum();
+    1e-9 * (ops as f64 * 1.6
+        + calls as f64 * 8.5
+        + fastcalls as f64 * 2.3
+        + c.objects as f64 * 22.0
+        + c.stored as f64 * 0.4
+        + c.rehashed as f64 * 12.0
+        + c.ccalls as f64 * 5.0
+        + c.hostcalls as f64 * 15.0
+        + c.hostnanos as f64
+        + c.vectormagnitudes as f64 * 12.5
+        + c.vectorunits as f64 * 9.1
+        - c.vectormethods as f64 * 9.0)
 }
 
 /// The VM's collector paces itself by the scripts' work (`GcClock`); the clock is owned by the Lua state (its app data), so it lives
@@ -605,25 +813,16 @@ pub fn engine_luau(lua: &mlua::Lua, function: mlua::Function) -> mlua::Result<ml
     Ok(function)
 }
 
-/// The Studio seconds scripts' own Luau work so far cost. Measured with os.clock over 46 workloads
-/// (tools/luau-cost: loops of arithmetic, table reads and writes, calls, methods, constructors,
-/// closures, builtins, generic and ipairs loops, Vector3 / CFrame / Color3 math, and seven workloads
-/// of a game's own code: an effect's ground-wave fill and outer radius, object, registry and mesh-slice
-/// loops) in a capture Studio's playtest client (a LocalScript, median of 7) against these counts
-/// of the same code: a weighted fit, rounded (tools/luau-cost/fit.py), puts 31 of 39 within
-/// 0.6-1.6x (cf.Position-style reads 2.8x and typeof 1.9x; CFrame * CFrame and a concatenated key's
-/// lookup 0.3x, other CFrame / Color3 constructors 0.5x), not counting library calls
-/// (string.format, string.find, .. on numbers, table.sort / concat / clone are 2-10x dearer, not
-/// modelled: the game's preparation code hardly calls them), and the game's code within 0.5-1.2x
-/// (the wave fill 349 us against Studio's 327, its 204,000 instructions a fill; the game's seven
-/// workloads together 432 us against 443).
+/// The seconds scripts' own Luau work so far cost: each instruction by its kind ([`INTERPRETED_OPS`], and [`NATIVE_OPS`] for a
+/// `--!native` module's, which a client compiles to machine code and runs 0.8-7.8x faster), the objects and table storage it makes,
+/// the C and engine functions it calls, the imports it looks up ([`LUAU_SLOW_IMPORT`]) and the library's own loops (sorting, string
+/// making, formatting: [`LUAU_NUMBER_STRING`] and below), which no instruction count sees. Linear in the counts (the profiler books
+/// them count by count: profiler/vm.rs `prices`).
 pub fn luau(c: &VmCounters) -> f64 {
-    let ops: u64 = c.ops.iter().sum();
-    let calls = c.ops[LOP_NAMECALL] + c.ops[LOP_CALL];
-    let fastcalls: u64 = LOP_FASTCALLS.iter().map(|&op| c.ops[op]).sum();
-    1e-9 * (ops as f64 * LUAU_OP
-        + calls as f64 * LUAU_CALL
-        + fastcalls as f64 * LUAU_FASTCALL
+    let interpreted: f64 = c.ops.iter().zip(INTERPRETED_OPS.iter()).map(|(&count, &price)| count as f64 * price).sum();
+    let native: f64 = c.nativeops.iter().zip(NATIVE_OPS.iter()).map(|(&count, &price)| count as f64 * price).sum();
+    1e-9 * (interpreted
+        + native
         + c.objects as f64 * LUAU_OBJECT
         + c.stored as f64 * LUAU_STORED
         + c.rehashed as f64 * LUAU_REHASHED
@@ -632,19 +831,99 @@ pub fn luau(c: &VmCounters) -> f64 {
         + c.hostnanos as f64
         + c.vectormagnitudes as f64 * VECTOR_MAGNITUDE
         + c.vectorunits as f64 * VECTOR_UNIT
-        + c.vectormethods as f64 * VECTOR_METHOD)
+        + c.vectormethods as f64 * VECTOR_METHOD
+        + c.slowimports as f64 * LUAU_SLOW_IMPORT
+        + c.numtostr as f64 * LUAU_NUMBER_STRING
+        + c.newstrings as f64 * LUAU_NEW_STRING
+        + c.sortcompares as f64 * LUAU_SORT_COMPARE
+        + c.sortcalls as f64 * LUAU_SORT_CALL
+        + c.createitems as f64 * LUAU_CREATE_ITEM
+        + c.cloneitems as f64 * LUAU_CLONE_ITEM
+        + c.concatitems as f64 * LUAU_CONCAT_ITEM
+        + c.splitparts as f64 * LUAU_SPLIT_PART
+        + c.formats as f64 * LUAU_FORMAT)
 }
 
-const LOP_NAMECALL: usize = 20;
-const LOP_CALL: usize = 21;
-const LOP_FASTCALLS: [usize; 5] = [60, 68, 73, 74, 75];
+/// The kinds of instruction priced apart (tools/cost-parity/fit.py CLASSES), by opcode (Luau's Bytecode.h order): what a code generator
+/// turns into a few machine instructions (arithmetic, moves, jumps, comparisons), `%` / `//` / `^`, keyed table reads and writes,
+/// dynamic ones, allocations (a table, closure, concatenation, varargs), calls and returns, a generalized loop's step, a builtin's
+/// fast call, and globals and imports.
+const fn op_class(op: usize) -> usize {
+    match op {
+        // MOD, POW, MODK, POWK, IDIV, IDIVK
+        37 | 38 | 43 | 44 | 81 | 82 => 1,
+        // GETTABLEKS, SETTABLEKS, GETTABLEN, SETTABLEN, LENGTH, SETLIST
+        15..=18 | 52 | 55 => 2,
+        // GETTABLE, SETTABLE
+        13 | 14 => 3,
+        // NEWCLOSURE, CONCAT, NEWTABLE, DUPTABLE, GETVARARGS, DUPCLOSURE
+        19 | 49 | 53 | 54 | 63 | 64 => 4,
+        // NAMECALL, CALL, RETURN, NATIVECALL
+        20..=22 | 62 => 5,
+        // FORGLOOP, FORGPREP_INEXT, FORGPREP_NEXT, FORGPREP
+        58 | 59 | 61 | 76 => 6,
+        // FASTCALL3, FASTCALL, FASTCALL1, FASTCALL2, FASTCALL2K
+        60 | 68 | 73 | 74 | 75 => 7,
+        // GETGLOBAL, SETGLOBAL, GETIMPORT
+        7 | 8 | 12 => 8,
+        _ => 0,
+    }
+}
 
-/// Nanoseconds: any instruction (a bare numeric loop 2.4 a step, arithmetic and table reads 1.4-1.9)
-pub const LUAU_OP: f64 = 1.6;
-/// a CALL or NAMECALL beyond its instruction (a Luau function call and return 17 a loop step, a method 24)
-pub const LUAU_CALL: f64 = 8.5;
-/// a builtin's fast call (math.floor / sin / max 22 for three)
-pub const LUAU_FASTCALL: f64 = 2.3;
+/// An opcode's price from its class's ([`op_class`]'s order)
+const fn priced(by_class: [f64; 9]) -> [f64; 256] {
+    let mut prices = [0.0; 256];
+    let mut op = 0;
+    while op < 256 {
+        prices[op] = by_class[op_class(op)];
+        op += 1;
+    }
+    prices
+}
+
+/// Nanoseconds an interpreted instruction costs, by opcode: a fit on the parity bench's interpreted language rows (31 workloads and
+/// the same loops in a module getfenv deoptimized; non-negative least squares on relative error, fit.py luau --free slowimport; a
+/// rendered client of a game's match place, three sessions of the whole corpus) of a price for each kind of instruction, the other
+/// counts at their prices: the 21 fit rows within 7.8 % at the median (the worst a trigonometry loop, 0.62x: math.sin's own work is a
+/// fast call's price here), the 14 held-out rows 22.9 % (the worst a loop that calls a local function, 0.29x). Arithmetic, moves,
+/// jumps and comparisons 0.48 ns; `%` / `//` / `^` 5.5; a keyed table read or write 2.5, a dynamic one 2.2; a call, method call or
+/// return 4.9; a generalized loop's step 2.5; a builtin's fast call 3.8; a global or a resolved import 1.4; an allocation nothing
+/// beyond its object ([`LUAU_OBJECT`]). The prices fitted before, on a Studio playtest client (tools/luau-cost: 1.6 an instruction, 8.5
+/// a call more, 2.3 a fast call more), read the bench's interpreted rows 0.45-2.1x (a math loop 2.0x, a recursive call 1.9x).
+pub const INTERPRETED_OPS: [f64; 256] = priced([0.48, 5.46, 2.45, 2.20, 0.0, 4.89, 2.54, 3.75, 1.36]);
+
+/// Nanoseconds an instruction of a native module costs, by opcode: the same fit on the bench's native rows (fit.py luau --native; the
+/// 20 fit rows within 30.5 % at the median, the worst a dynamic key's loop 0.27x; the 9 held-out rows 39 %, the worst a closure's
+/// loop 1.7x). A code generator turns arithmetic, moves, jumps and keyed table reads into a few machine instructions (0.42 ns), a dynamic
+/// key's lookup and `%` / `//` / `^` stay calls into the VM (0.65-0.75), an allocation (a table, closure, concatenation) 1.7 more than
+/// its object, a call or return 3.3 and a generalized loop's step 1.9; imports are resolved at load (0.27) and a builtin's fast call is
+/// inlined (0.19).
+pub const NATIVE_OPS: [f64; 256] = priced([0.43, 0.65, 0.42, 0.75, 1.74, 3.25, 1.93, 0.19, 0.27]);
+
+/// A GETIMPORT that looks its global up (vm counter `slowimports`): a safe environment's imports are resolved when the script loads,
+/// as Roblox resolves them, and read as a constant ([`INTERPRETED_OPS`]' global class); one getfenv or setfenv made unsafe looks every
+/// import up again, and so does an import that was nil at load (the parity bench: two imports a loop step 4.6 ns in a module, 21.4 in
+/// one that called getfenv first; the fit above gives a looked-up import 7.9 more than a resolved one).
+pub const LUAU_SLOW_IMPORT: f64 = 7.9;
+
+/// The library's own work, in nanoseconds, beyond its C call and the objects it makes: a fit on the parity bench's 25 fit rows that do
+/// such work (the same sessions; fit.py library: within 4.1 % at the median; the 10 held-out rows 17.3 %, the worst table.clone of a
+/// hash 0.59x). A number made a string (tostring(n), `..` on a number) 18; a string no live string equals (Luau interns strings) 171
+/// (`tostring` of a new number 219 ns in all, `"n" .. i` 412: a client that has run a game's worth of work pays that, and one that has
+/// run only these rows a third of it, 83 and 140); table.sort's comparison 1.1 (100 numbers 1.25 us) and its call of a comparison
+/// function 9.7 (50 elements 4.7 us); table.create's element 4.3 (100: 0.43 us), table.clone's slot 4.3 (an array of 10: 56 ns),
+/// table.concat's item 7.1 (20: 154 ns); string.split's part 25.4 (five: 140 ns) and string.format's call 102 (an interpolated string is
+/// one: 280 ns with two values, a float's %.2f 335; the specifiers' kinds differ too much for a price by count, and the fit gives them none).
+pub const LUAU_NUMBER_STRING: f64 = 18.0;
+pub const LUAU_NEW_STRING: f64 = 171.0;
+pub const LUAU_SORT_COMPARE: f64 = 1.06;
+pub const LUAU_SORT_CALL: f64 = 9.7;
+pub const LUAU_CREATE_ITEM: f64 = 4.3;
+pub const LUAU_CLONE_ITEM: f64 = 4.3;
+pub const LUAU_CONCAT_ITEM: f64 = 7.1;
+pub const LUAU_SPLIT_PART: f64 = 25.4;
+pub const LUAU_FORMAT: f64 = 102.0;
+
 /// an object a script's instruction makes ({} 36, a closure 29, a record of three 54)
 pub const LUAU_OBJECT: f64 = 22.0;
 /// a byte of table storage (array and hash parts)
@@ -663,12 +942,13 @@ pub const LUAU_HOSTCALL: f64 = 15.0;
 /// 0-62 with the cold read of the vector's source), so it is priced 12.5, which reads about 14 here: 1.1x the rig frame, 1.2x the loop.
 pub const VECTOR_MAGNITUDE: f64 = 12.5;
 pub const VECTOR_UNIT: f64 = 9.1;
-/// A method call on a Vector3 (`a:Dot(b)`): the NAMECALL and CALL charges above are fitted on Luau function calls, and
-/// Studio's `Dot`, `Cross` and `Max` cost 9.4-12.2 ns whole where a C builtin called that way reads 18 (8.5 + 5 + the
-/// instructions); negative, a correction to what they count
-pub const VECTOR_METHOD: f64 = -9.0;
-/// `Vector3:Lerp` and `:FuzzyEq` are still Luau functions of the engine (a host call each, src/lua/vector3.luau), which counted 19.3
-/// ns where Studio's rig frame (the bridge_ops probe, a match place's client, three runs, six readings each) reads 31.2 and 35.9
-/// (medians; the lobby client's op_cost loop 13.3 and 13.5): charged on top, in seconds as the other `R.Charge` figures
-pub const VECTOR_LERP: f64 = 12.0e-9;
+/// A method call on a Vector3 (`a:Dot(b)`) beyond what its instructions and C call count: nothing. Its NAMECALL and CALL at
+/// [`INTERPRETED_OPS`]' call price and the C call read `Dot` at about 11 ns, as Studio's client (`Dot`, `Cross` and `Max` 9.4-12.2 ns
+/// whole) and the parity bench (Dot 11.7, Cross 12.0: held-out rows) do; the older call price (8.5 ns more a call) needed -9 here.
+pub const VECTOR_METHOD: f64 = 0.0;
+/// `Vector3:Lerp` and `:FuzzyEq` are still Luau functions of the engine (a host call each, src/lua/vector3.luau), charged on top of what
+/// they count, in seconds as the other `R.Charge` figures: Lerp nothing (the parity bench reads it at 14.9 ns whole, below what its
+/// calls count here: 22), FuzzyEq what Studio's rig frame read over the counts then (the bridge_ops probe, a match place's client,
+/// three runs, six readings each: 35.9 ns against 19.3; no bench row)
+pub const VECTOR_LERP: f64 = 0.0;
 pub const VECTOR_FUZZY_EQ: f64 = 16.5e-9;

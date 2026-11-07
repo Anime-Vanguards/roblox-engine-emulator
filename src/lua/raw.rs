@@ -1088,6 +1088,14 @@ unsafe extern "C-unwind" fn meta_index(state: *mut ffi::lua_State) -> c_int {
     }
 }
 
+/// What a read's value adds to its price (cost.rs `read_value`), charged and booked to the read's boundary crossing
+fn read_extra(api: &Api, seconds: f64) {
+    if seconds > 0.0 {
+        api.charge(seconds);
+        crate::boundary::add_cost(seconds);
+    }
+}
+
 unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
     unsafe {
         let Some((api, id)) = this(state) else { return Out::Slow };
@@ -1122,9 +1130,11 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
                 let name = name.unwrap_or_default();
                 let dom_state = engine.state.borrow();
                 let value = dom_state.dom.raw_get(id, name);
+                read_extra(api, crate::cost::read_value(value));
                 if push_value(state, api, &dom_state, id, name, value) { Out::Ret(1) } else { Out::Slow }
             }
             Read::Name => {
+                read_extra(api, crate::cost::READ_STRING_EXTRA);
                 let dom_state = engine.state.borrow();
                 let instance = dom_state.dom.at(id);
                 match instance.stored(K::Name as NameId) {
@@ -1137,12 +1147,16 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
             Read::Parent => {
                 let dom_state = engine.state.borrow();
                 match dom_state.dom.at(id).parent {
-                    Some(parent) => push_instance(state, api, Some(&dom_state), parent),
+                    Some(parent) => {
+                        read_extra(api, crate::cost::READ_INSTANCE_EXTRA);
+                        push_instance(state, api, Some(&dom_state), parent)
+                    }
                     None => ffi::lua_pushnil(state),
                 }
                 Out::Ret(1)
             }
             Read::ClassName => {
+                read_extra(api, crate::cost::READ_STRING_EXTRA);
                 push_bytes(state, engine.reflection.class(class).name.as_bytes());
                 Out::Ret(1)
             }
@@ -1168,6 +1182,7 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
                 materialize(engine, id);
                 let child = engine.state.borrow().dom.find_child(id, bytes);
                 let Some(child) = child else { return Out::Slow };
+                read_extra(api, crate::cost::READ_CHILD_EXTRA);
                 linstance::reached(engine, child);
                 let dom_state = engine.state.borrow();
                 push_instance(state, api, Some(&dom_state), child);
@@ -1588,7 +1603,9 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 if ffi::lua_type(state, 2) <= ffi::LUA_TNIL {
                     return Out::General;
                 }
-                let found = find_first_child(engine, id, arg_bytes(state, 2), ffi::lua_toboolean(state, 3) != 0);
+                let (recursive, mut looked) = (ffi::lua_toboolean(state, 3) != 0, 0);
+                let found = linstance::find_first_child_counting(engine, id, arg_bytes(state, 2), recursive, &mut looked);
+                linstance::charge_find(engine, looked, recursive);
                 push_optional_instance(state, api, engine, found)
             }
             Base::IsA => {

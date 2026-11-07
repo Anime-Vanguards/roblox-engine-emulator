@@ -871,7 +871,7 @@ reentry:
                     LuaTable* mt = ttisuserdata(rb) ? uvalue(rb)->metatable : L->global->mt[ttype(rb)];
                     const TValue* tmi = 0;
 
-                    if (ttisvector(rb) && luaE_scriptinsn(L))
+                    if (ttisvector(rb) && luaE_interpretedinsn(L))
                         L->global->work.vectormethods++;
 
                     // fast-path: metatable with __namecall

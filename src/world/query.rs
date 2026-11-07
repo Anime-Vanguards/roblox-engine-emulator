@@ -680,6 +680,23 @@ fn limited(max_parts: usize, parts: Vec<InstanceId>) -> Vec<InstanceId> {
     if max_parts > 0 { parts.into_iter().take(max_parts).collect() } else { parts }
 }
 
+/// What a cast pays for the parts its path crosses, whatever its filter admits (cost.rs RAY_MET, RAY_CROSSED): the engine's
+/// broadphase meets them all before the filter is asked
+fn charge_cast(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32) {
+    let crossed = cached_solids(engine, &Filter::default()).iter().filter(|solid| ray_solid(solid, origin, direction, grow).is_some()).count();
+    if crossed > 0 {
+        charge_query(engine, crate::cost::RAY_MET + (crossed - 1) as f64 * crate::cost::RAY_CROSSED);
+    }
+}
+
+/// A spatial query's charge beyond its call's price (cost.rs QUERY_PART, RAY_CROSSED)
+fn charge_query(engine: &Engine, seconds: f64) {
+    if seconds > 0.0 {
+        engine.state.borrow().sched.charge(seconds);
+        crate::boundary::add_cost(seconds);
+    }
+}
+
 /// The parts of `filter`'s solids `keep` holds for, at most MaxParts of them.
 fn overlapping(engine: &Engine, filter: Filter, keep: impl Fn(&Solid) -> bool) -> Vec<InstanceId> {
     let parts = cached_solids(engine, &filter).iter().filter(|s| keep(s)).map(|s| s.part).collect();
@@ -698,6 +715,7 @@ pub fn install(engine: &Rc<Engine>) {
         let filter = take_filter(engine, args.get(3));
         let hit = cast_ray(&cached_solids(engine, &filter), origin, direction, 0.0, None);
         keep_filter(engine, filter);
+        charge_cast(engine, origin, direction, 0.0);
         hit_values(lua, engine, hit)
     })));
     members.push(("Spherecast", method(|lua, engine, _, args| {
@@ -707,6 +725,7 @@ pub fn install(engine: &Rc<Engine>) {
         let filter = take_filter(engine, args.get(4));
         let hit = cast_ray(&cached_solids(engine, &filter), center, direction, radius.max(0.0) as f32, None);
         keep_filter(engine, filter);
+        charge_cast(engine, center, direction, radius.max(0.0) as f32);
         hit_values(lua, engine, hit)
     })));
     members.push(("Blockcast", method(|lua, engine, _, args| {
@@ -716,6 +735,8 @@ pub fn install(engine: &Rc<Engine>) {
         let filter = take_filter(engine, args.get(4));
         let hit = cast_box(&cached_solids(engine, &filter), &frame, size, direction, None);
         keep_filter(engine, filter);
+        // (a box's path counted as its centre's, grown by its half diagonal)
+        charge_cast(engine, frame::translation(&frame), direction, size.length() * 0.5);
         hit_values(lua, engine, hit)
     })));
     members.push(("Shapecast", method(|lua, engine, _, args| {
@@ -750,14 +771,18 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("GetPartBoundsInBox: cframe and size expected");
         };
         let filter = take_filter(engine, args.get(3));
-        parts_table(lua, engine, overlapping(engine, filter, |s| overlaps_box(s, &frame, size)))
+        let parts = overlapping(engine, filter, |s| overlaps_box(s, &frame, size));
+        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_PART);
+        parts_table(lua, engine, parts)
     })));
     members.push(("GetPartBoundsInRadius", method(|lua, engine, _, args| {
         let (Some(center), Some(radius)) = (vector_arg(args.get(1)), args.number(2)) else {
             return raise("GetPartBoundsInRadius: position and radius expected");
         };
         let filter = take_filter(engine, args.get(3));
-        parts_table(lua, engine, overlapping(engine, filter, |s| overlaps_sphere(s, center, radius as f32)))
+        let parts = overlapping(engine, filter, |s| overlaps_sphere(s, center, radius as f32));
+        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_PART);
+        parts_table(lua, engine, parts)
     })));
     members.push(("GetPartsInPart", method(|lua, engine, _, args| {
         let Some(part) = args.instance(1) else { return raise("GetPartsInPart: part expected") };
@@ -770,6 +795,7 @@ pub fn install(engine: &Rc<Engine>) {
                     _ => overlaps_box(s, &query.frame, query.half_extents() * 2.0),
                 }
         });
+        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_PART_EXACT);
         parts_table(lua, engine, parts)
     })));
     members.push(("FindPartOnRay", method(|lua, engine, _, args| find_part_on_ray(lua, engine, args.get(1), args.get(2), false))));

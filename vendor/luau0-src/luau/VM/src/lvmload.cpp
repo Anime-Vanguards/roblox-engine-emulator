@@ -608,6 +608,17 @@ static int loadsafe(
     uint32_t mainid = readVarInt(data, size, offset);
     Proto* main = protos[mainid];
 
+    // the functions a code generator compiles natively count apart (lua_WorkCounters nativeops), whether or not this VM compiles
+    // them: a --!native module's but the cold ones (CodeGenLower.h gatherFunctions), else those with the native attribute
+    for (unsigned int i = 0; i < protoCount; ++i)
+    {
+        Proto* p = protos[i];
+        bool native = (main->flags & LPF_NATIVE_MODULE) ? (p->flags & LPF_NATIVE_COLD) == 0
+                                                         : p != main && (main->flags & LPF_NATIVE_FUNCTION) && (p->flags & LPF_NATIVE_FUNCTION);
+        if (native)
+            p->flags |= LUAU_PROTO_WORK_NATIVE;
+    }
+
     luaC_threadbarrier(L);
 
     Closure* cl = luaF_newLclosure(L, 0, envt, main);

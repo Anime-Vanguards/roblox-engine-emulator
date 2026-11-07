@@ -225,6 +225,9 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let thread = to_thread(lua, engine, args.get(1), 2, "delay")?;
                 refs::admit(engine, Hold::Work, "task.delay")?;
                 charge_thread(lua, engine, args.get(1), "delay");
+                // (its timer, a thread or a function's: cost.rs DELAYED)
+                engine.state.borrow().sched.charge(crate::cost::DELAYED);
+                crate::boundary::add_cost(crate::cost::DELAYED);
                 let rest: Vec<Value> = args.0.iter().skip(2).map(super::convert::from_lua).collect();
                 let mut state = engine.state.borrow_mut();
                 state.sched.schedule_task(TimerKind::Delay, delay, thread.clone(), rest);
@@ -698,7 +701,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
         os.raw_set("realclock", lua.create_function(move |_, ()| Ok(start.elapsed().as_secs_f64()))?)?;
     }
     if std::env::var("REE_WORK_COUNTERS").as_deref() == Ok("1") {
-        // calibration (cost.rs): the VM's work counters, { ops = {[opcode + 1] = n}, allocated, ccalls, tmcalls }
+        // calibration (cost.rs, tools/cost-parity): the VM's work counters, { ops = {[opcode + 1] = n}, nativeops, allocated, ccalls, ... }
         let e = engine.clone();
         os.raw_set(
             "workcounters",
@@ -711,8 +714,15 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
                         ops.raw_set(op + 1, *count as f64)?;
                     }
                 }
+                let nativeops = lua.create_table()?;
+                for (op, count) in counters.nativeops.iter().enumerate() {
+                    if *count > 0 {
+                        nativeops.raw_set(op + 1, *count as f64)?;
+                    }
+                }
                 let result = lua.create_table()?;
                 result.raw_set("ops", ops)?;
+                result.raw_set("nativeops", nativeops)?;
                 result.raw_set("allocated", counters.allocated as f64)?;
                 result.raw_set("ccalls", counters.ccalls as f64)?;
                 result.raw_set("tmcalls", counters.tmcalls as f64)?;
@@ -722,7 +732,24 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
                 result.raw_set("stored", counters.stored as f64)?;
                 result.raw_set("rehashed", counters.rehashed as f64)?;
                 result.raw_set("hostops", counters.hostops.iter().sum::<u64>() as f64)?;
-                result.raw_set("slowimports", counters.slowimports as f64)?;
+                for (key, value) in [
+                    ("vectormagnitudes", counters.vectormagnitudes),
+                    ("vectorunits", counters.vectorunits),
+                    ("vectormethods", counters.vectormethods),
+                    ("numtostr", counters.numtostr),
+                    ("sortcompares", counters.sortcompares),
+                    ("sortcalls", counters.sortcalls),
+                    ("createitems", counters.createitems),
+                    ("cloneitems", counters.cloneitems),
+                    ("concatitems", counters.concatitems),
+                    ("splitparts", counters.splitparts),
+                    ("formats", counters.formats),
+                    ("formatspecs", counters.formatspecs),
+                    ("newstrings", counters.newstrings),
+                    ("slowimports", counters.slowimports),
+                ] {
+                    result.raw_set(key, value as f64)?;
+                }
                 Ok(LuaValue::Table(result))
             })?,
         )?;

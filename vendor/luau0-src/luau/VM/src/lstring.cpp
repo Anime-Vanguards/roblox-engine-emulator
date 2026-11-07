@@ -133,6 +133,9 @@ TString* luaS_buffinish(lua_State* L, TString* ts)
 
     LUAU_ASSERT(ts->next == NULL);
 
+    if (luaE_scriptwork(L))
+        L->global->work.newstrings++;
+
     ts->hash = h;
     ts->data[ts->len] = '\0'; // ending 0
     ts->atom = ATOM_UNDEF;
@@ -159,6 +162,8 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
             return el;
         }
     }
+    if (luaE_scriptwork(L))
+        L->global->work.newstrings++;
     return newlstr(L, str, l, h); // not found
 }
 

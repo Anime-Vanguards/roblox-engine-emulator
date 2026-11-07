@@ -133,6 +133,7 @@ static_assert(sizeof(lua_WorkCounters) % sizeof(uint64_t) == 0, "the work counte
 const int kWorkSlots = int(sizeof(lua_WorkCounters) / sizeof(uint64_t));
 const int kOpsSlot = int(offsetof(lua_WorkCounters, ops) / sizeof(uint64_t));
 const int kHostOpsSlot = int(offsetof(lua_WorkCounters, hostops) / sizeof(uint64_t));
+const int kNativeOpsSlot = int(offsetof(lua_WorkCounters, nativeops) / sizeof(uint64_t));
 
 } // namespace
 
@@ -149,9 +150,10 @@ struct lua_ProfileState
     const double* hostdrained = NULL;
     double lasthost = 0;
     lua_WorkCounters last;
-    // the instruction dispatched last, and whether its function is a script's (its dispatch is in ops, not hostops)
+    // the instruction dispatched last, and the counts its dispatch is in: ops for a script's function, nativeops for one a code
+    // generator would compile (LUAU_PROTO_WORK_NATIVE), hostops for a host's own
     int lastop = -1;
-    bool lastcharged = false;
+    int lastbase = 0;
     // where the next booking goes: an instruction of a function (pc -1: its native code) and its tree node, or the
     // engine (target -1: what was charged while no instruction ran)
     int target = -1;
@@ -358,7 +360,7 @@ static void book(lua_ProfileState* s, lua_State* L)
         // (native code may have run since the last step and moved any instruction count)
         for (int i = 0; i < 256; ++i)
         {
-            for (int base : {kOpsSlot, kHostOpsSlot})
+            for (int base : {kOpsSlot, kHostOpsSlot, kNativeOpsSlot})
             {
                 int slot = base + i;
                 if (now[slot] != last[slot])
@@ -371,7 +373,7 @@ static void book(lua_ProfileState* s, lua_State* L)
     }
     else if (s->lastop >= 0)
     {
-        int slot = (s->lastcharged ? kOpsSlot : kHostOpsSlot) + s->lastop;
+        int slot = s->lastbase + s->lastop;
         if (now[slot] != last[slot])
         {
             delta += s->prices[slot] * double(int64_t(now[slot] - last[slot]));
@@ -563,7 +565,7 @@ void luaP_step(lua_State* L, Closure* cl, const Instruction* pc)
         s->targetnode = node;
     }
     s->lastop = op;
-    s->lastcharged = !exempt;
+    s->lastbase = exempt ? kHostOpsSlot : (p->flags & LUAU_PROTO_WORK_NATIVE) ? kNativeOpsSlot : kOpsSlot;
 }
 
 void luaP_nativeenter(lua_State* L, Closure* cl)
@@ -650,7 +652,8 @@ int lua_profilestart(lua_State* L, int stepping, const double* prices, int npric
         s->prices.assign(prices, prices + nprices);
         for (int slot = 0; slot < kWorkSlots; ++slot)
         {
-            bool ops = (slot >= kOpsSlot && slot < kOpsSlot + 256) || (slot >= kHostOpsSlot && slot < kHostOpsSlot + 256);
+            bool ops = (slot >= kOpsSlot && slot < kOpsSlot + 256) || (slot >= kHostOpsSlot && slot < kHostOpsSlot + 256) ||
+                       (slot >= kNativeOpsSlot && slot < kNativeOpsSlot + 256);
             if (!ops)
                 s->scalars.push_back(slot);
         }

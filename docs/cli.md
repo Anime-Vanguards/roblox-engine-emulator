@@ -294,5 +294,5 @@ instead of host time, `RUR_LUAU_PROFILE_UNIT=us` writes microseconds), `RUR_LUAU
 folded, with the allocation counts in `<file>.counts`; a native function's allocations end the stack in it;
 `RUR_LUAU_ALLOC_STEP=<bytes>` sets the sampling step, default 1024, 1 records every allocation; a harness
 names the phase of both profiles with `Context.ProfilePhase(Name)`; see src/luau_profile.rs),
-`REE_LOCALIZED_PLACES` / `REE_MATCH_PLACES` (places whose clients pay a localization lookup on Text
+`REE_LOCALIZED_PLACES` / `REE_MATCH_PLACES` (places whose clients pay a localization lookup of their own on Text
 writes, or more for part geometry writes: docs/engine.md "Work clock").

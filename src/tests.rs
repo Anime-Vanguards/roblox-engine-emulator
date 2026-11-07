@@ -2971,8 +2971,8 @@ fn the_work_clock_charges_what_studio_spends() {
         end
         local t2 = os.clock()
         print(string.format("folder %.1f parts %.1f", (t1 - t0) * 1e6, (t2 - t1) * 1e6))
-        -- 3,000 more parts (25 ms) run past the frame: the next frame reads on from there
-        for _ = 1, 3000 do
+        -- 10,000 more parts (24 ms) run past the frame: the next frame reads on from there
+        for _ = 1, 10000 do
             Instance.new("Part").Parent = folder
         end
         local t4 = os.clock()
@@ -2983,7 +2983,8 @@ fn the_work_clock_charges_what_studio_spends() {
         end)
         "#,
     );
-    assert!(output.contains(&"print: folder 3.5 parts 730.0".to_string()), "{output:?}");
+    // (the parity bench: a Folder 0.36 us to make, 0.52 to enter the workspace; a Part 0.83 and 1.47)
+    assert!(output.contains(&"print: folder 0.9 parts 240.0".to_string()), "{output:?}");
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     assert!(lines(&engine).contains(&"print: next frame true".to_string()), "{:?}", lines(&engine));
 }
@@ -3148,10 +3149,10 @@ fn instance_keys_are_visited_in_the_same_order_whatever_their_slots() {
     assert_eq!(outputs[0], outputs[1], "the scene's instances took other slots and were visited in another order");
 }
 
-/// The first touch of an instance in a frame costs about 280 ns more than the next ones (a bridge_ops probe in an empty test
-/// place's client, 28 R15 rigs: a read of Part.CFrame touching five parts a rig once 322 ns, eight times each 80; IsA
-/// 313 / 72; a Motor6D.Transform write 344 / 92; three properties of one part, three parts, twice 99). A loop on one instance
-/// (op_cost.luau) never pays it, so the bands above stay; a bridge over 28 rigs pays it on every instance, every frame.
+/// The first touch of an instance in a frame costs more than the next ones: 45 ns for a static instance (the parity bench,
+/// tools/cost-parity: a part of 100 read once each a frame 74.6 ns against 29.4 hot), where a Studio playtest's animated rigs read
+/// about 280 more (a bridge_ops probe, 28 R15 rigs: Part.CFrame touching five parts a rig once 322 ns, eight times each 80; a
+/// Motor6D.Transform write 344 / 92). A loop on one instance never pays it; a bridge over many instances pays it on each, every frame.
 #[test]
 fn the_work_clock_charges_the_first_touch_of_an_instance_in_a_frame() {
     let (lua, engine) = start();
@@ -3194,7 +3195,7 @@ fn the_work_clock_charges_the_first_touch_of_an_instance_in_a_frame() {
         -- (the Part:FindFirstChildOfClass above touched every Part and the Motors are cold)
         local Cold = Per(function() for _, Motor in Motors do local _ = Motor.C0 end end)
         local Hot = Per(function() for _, Motor in Motors do local _ = Motor.C0 end end)
-        Within("first read of a Motor6D.C0", Cold, 260, 400)
+        Within("first read of a Motor6D.C0", Cold, 70, 150)
         Within("second read of it", Hot, 25, 80)
         local Write = Per(function() for _, Motor in Motors do Motor.Transform = CFrame.identity end end)
         Within("a write to an instance read this frame", Write, 40, 110)
@@ -3216,7 +3217,7 @@ fn the_work_clock_charges_the_first_touch_of_an_instance_in_a_frame() {
             Motor.Transform = CFrame.identity
         end
         local Cold = (os.clock() - start) / #Motors * 1e9
-        assert(Cold >= 300 and Cold <= 450, string.format("a Motor6D.Transform write to a cold Motor6D: %.0f ns, Studio 344", Cold))
+        assert(Cold >= 80 and Cold <= 160, string.format("a Motor6D.Transform write to a cold Motor6D: %.0f ns, the bench's 60 + 45", Cold))
         -- an instance made in this frame is hot: its writes cost the hot price
         local Made = {}
         for Index = 1, #Motors do
@@ -3237,7 +3238,8 @@ fn the_work_clock_charges_the_first_touch_of_an_instance_in_a_frame() {
 /// one Part as often, the difference per write is Transparency +388 ns, Color +357, CFrame +773, Name +559, SetAttribute +830, and on a
 /// Frame Size +475..525, Position +600, BackgroundTransparency +380 (noisier). ree charged
 /// the first touch's 280 for every one (a roster of 100 Parts was priced at about half of Studio), so the roster read 100-550 ns a
-/// write low. Bands of 1.3x around Studio's differences.
+/// write low. Bands of 1.3x around Studio's differences, but Transparency's: the parity bench (tools/cost-parity, a rendered client
+/// of a game's match place) reads a roster of 100 parts' Transparency +143 ns over the hot write (cost.rs cold_write_extra).
 #[test]
 fn a_write_to_a_cold_instance_costs_what_a_dirtied_instance_costs() {
     let (lua, engine) = start();
@@ -3267,7 +3269,7 @@ fn a_write_to_a_cold_instance_costs_what_a_dirtied_instance_costs() {
     // (each kind in a frame of its own: the Parts a kind wrote are warm for the next one). The Frames' bands are wider: Studio's
     // GUI readings spread more (Position 781-1550 ns at 100 writes).
     let kinds: [(&str, &str, u32, u32, &str); 8] = [
-        ("Transparency", "Roster", 300, 500, "Part.Transparency = 0.25 + (Index % 2) * 0.5"),
+        ("Transparency", "Roster", 100, 200, "Part.Transparency = 0.25 + (Index % 2) * 0.5"),
         ("Color", "Roster", 300, 470, "Part.Color = Color3.new((Index % 2) * 0.5, 0.25, 0.75)"),
         ("CFrame", "Roster", 600, 1000, "Part.CFrame = CFrame.new(Index % 2 + 1, 0, 0)"),
         ("Name", "Roster", 430, 730, "Part.Name = 'N' .. (Index % 2)"),
@@ -3308,10 +3310,10 @@ fn a_write_to_a_cold_instance_costs_what_a_dirtied_instance_costs() {
     }
 }
 
-/// The work clock prices instance operations from Studio's own numbers: an op_cost probe
-/// run in a lobby playtest's client (the median of seven rounds less an empty loop, 2026-10-23), bands of about
-/// +-25 % around them. Before, every property write cost a flat 0.5 us, every read 0.06, a Clone 7 us an
-/// instance, and ScaleTo, Connect, task.spawn, BulkMoveTo and QueryDescendants almost nothing or far too much
+/// The work clock prices instance operations from a client's own numbers: the parity bench (tools/cost-parity, a rendered client
+/// of a game's match place) where it has a row, else an op_cost probe run in a lobby playtest's client (the median of seven rounds
+/// less an empty loop, 2026-10-23), bands of about +-25 % around them. Before, every property write cost a flat 0.5 us, every read
+/// 0.06, a Clone 7 us an instance, and ScaleTo, Connect, task.spawn, BulkMoveTo and QueryDescendants almost nothing or far too much
 /// (a ScaleTo to the scale a model has cost as much as a rescale).
 #[test]
 fn the_work_clock_prices_instance_operations_as_the_studio_bench_measured() {
@@ -3338,35 +3340,35 @@ fn the_work_clock_prices_instance_operations_as_the_studio_bench_measured() {
         local Motor, Bone = Instance.new("Motor6D"), Instance.new("Bone")
         Motor.Parent, Bone.Parent = Placed, Placed
 
-        -- property writes (client: CFrame in the workspace 1,104, loose 163, same value 52, Size 851, Color 547,
-        -- Transparency 254, Name 788, Motor6D.C0 247, Bone.Transform 68)
-        Within("CFrame write placed", Per(2000, function(N) for _ = 1, N / 2 do Placed.CFrame = A Placed.CFrame = B end end), 900, 1300)
+        -- property writes (the bench: CFrame in the workspace 1,430, Size 1,100 from Studio's ratio to it, Name 300, Motor6D.C0 140;
+        -- a lobby client: loose 163, same value 52, Color 547, Transparency 254, Bone.Transform 68)
+        Within("CFrame write placed", Per(2000, function(N) for _ = 1, N / 2 do Placed.CFrame = A Placed.CFrame = B end end), 1100, 1800)
         Within("CFrame write loose", Per(2000, function(N) for _ = 1, N / 2 do Loose.CFrame = A Loose.CFrame = B end end), 110, 260)
         Within("CFrame write same value", Per(2000, function(N) for _ = 1, N do Placed.CFrame = B end end), 30, 110)
-        Within("Size write placed", Per(2000, function(N) for _ = 1, N / 2 do Placed.Size = Vector3.one Placed.Size = Vector3.new(1, 1, 2) end end), 700, 1050)
+        Within("Size write placed", Per(2000, function(N) for _ = 1, N / 2 do Placed.Size = Vector3.one Placed.Size = Vector3.new(1, 1, 2) end end), 850, 1400)
         Within("Color write", Per(2000, function(N) for _ = 1, N / 2 do Placed.Color = Color3.new(1, 0, 0) Placed.Color = Color3.new(0, 1, 0) end end), 430, 700)
         Within("Transparency write", Per(2000, function(N) for _ = 1, N / 2 do Placed.Transparency = 0.25 Placed.Transparency = 0.75 end end), 190, 330)
-        Within("Name write", Per(2000, function(N) for _ = 1, N / 2 do Placed.Name = "A" Placed.Name = "B" end end), 650, 950)
-        Within("Motor6D.C0 write", Per(2000, function(N) for _ = 1, N / 2 do Motor.C0 = A Motor.C0 = B end end), 190, 330)
+        Within("Name write", Per(2000, function(N) for _ = 1, N / 2 do Placed.Name = "A" Placed.Name = "B" end end), 230, 400)
+        Within("Motor6D.C0 write", Per(2000, function(N) for _ = 1, N / 2 do Motor.C0 = A Motor.C0 = B end end), 110, 190)
         Within("Bone.Transform write", Per(2000, function(N) for _ = 1, N / 2 do Bone.Transform = A Bone.Transform = B end end), 40, 110)
         Within("property read", Per(2000, function(N) for _ = 1, N do local _ = Placed.Transparency end end), 25, 60)
 
-        -- attributes (client: a changed value 774-788, the same 93)
-        Within("SetAttribute changes", Per(2000, function(N) for _ = 1, N / 2 do Placed:SetAttribute("A", 1) Placed:SetAttribute("A", 2) end end), 620, 950)
+        -- attributes (the bench: a changed value 0.43 us with the call, the same 77 ns)
+        Within("SetAttribute changes", Per(2000, function(N) for _ = 1, N / 2 do Placed:SetAttribute("A", 1) Placed:SetAttribute("A", 2) end end), 340, 580)
         Within("SetAttribute same", Per(2000, function(N) for _ = 1, N do Placed:SetAttribute("A", 2) end end), 50, 130)
 
-        -- Clone, by class (edit: a Model of 50 MeshParts 311 us with its Destroy, of 50 Parts 215)
+        -- Clone, by class (the bench: a MeshPart 5.83 us, a Part 3.44)
         local Many = Instance.new("Model")
         for _ = 1, 50 do Instance.new("MeshPart").Parent = Many end
         Within("Clone of 50 MeshParts", Per(20, function(N) for _ = 1, N do Many:Clone() end end), 240000, 310000)
         local Parts = Instance.new("Model")
         for _ = 1, 50 do Instance.new("Part").Parent = Parts end
-        Within("Clone of 50 Parts", Per(20, function(N) for _ = 1, N do Parts:Clone() end end), 190000, 245000)
+        Within("Clone of 50 Parts", Per(20, function(N) for _ = 1, N do Parts:Clone() end end), 140000, 215000)
 
-        -- Instance.new (client: Folder 407, Part 1,111, TextLabel 3,177)
-        Within("Instance.new Folder", Per(1000, function(N) for _ = 1, N do Instance.new("Folder") end end), 350, 650)
-        Within("Instance.new Part", Per(1000, function(N) for _ = 1, N do Instance.new("Part") end end), 950, 1500)
-        Within("Instance.new TextLabel", Per(1000, function(N) for _ = 1, N do Instance.new("TextLabel") end end), 2400, 3600)
+        -- Instance.new (the bench: Folder 0.36 us, Part 0.83, TextLabel 1.44)
+        Within("Instance.new Folder", Per(1000, function(N) for _ = 1, N do Instance.new("Folder") end end), 300, 650)
+        Within("Instance.new Part", Per(1000, function(N) for _ = 1, N do Instance.new("Part") end end), 650, 1100)
+        Within("Instance.new TextLabel", Per(1000, function(N) for _ = 1, N do Instance.new("TextLabel") end end), 1100, 1900)
 
         -- ScaleTo of 29 parts (client: a rescale in the workspace 35.0 us, out of it 9.0, to the scale it has 6.0)
         local function Model(Count, Parent)
@@ -3384,7 +3386,8 @@ fn the_work_clock_prices_instance_operations_as_the_studio_bench_measured() {
         Within("ScaleTo placed", Per(100, function(N) for _ = 1, N / 2 do Standing:ScaleTo(2) Standing:ScaleTo(1) end end), 28000, 44000)
         Within("ScaleTo loose", Per(100, function(N) for _ = 1, N / 2 do Held:ScaleTo(2) Held:ScaleTo(1) end end), 7000, 12000)
         Within("ScaleTo same scale", Per(100, function(N) for _ = 1, N do Standing:ScaleTo(1) end end), 4500, 9000)
-        Within("Model:PivotTo", Per(100, function(N) for _ = 1, N / 2 do Standing:PivotTo(A) Standing:PivotTo(B) end end), 11000, 18000)
+        -- (the bench: Model:PivotTo of 10 parts 10.65 us, 1.05 a part)
+        Within("Model:PivotTo", Per(100, function(N) for _ = 1, N / 2 do Standing:PivotTo(A) Standing:PivotTo(B) end end), 24000, 38000)
         Within("Model:GetPivot", Per(1000, function(N) for _ = 1, N do Standing:GetPivot() end end), 20, 150)
 
         -- a fallback rig's ScaleTo(1) from its stored scale 0.43, out of the DataModel (in Studio: a rig of 1 MeshPart,
@@ -3422,32 +3425,32 @@ fn the_work_clock_prices_instance_operations_as_the_studio_bench_measured() {
         Within("lobby rig ScaleTo(1)", Per(1, function() Lobby:ScaleTo(1) end), 11000, 19000)
         Within("match rig ScaleTo(1)", Per(1, function() Match:ScaleTo(1) end), 21000, 33000)
 
-        -- BulkMoveTo of 100 parts (client: FireCFrameChanged 42.0 us, every event 102.9)
+        -- BulkMoveTo of 100 parts (the bench: FireCFrameChanged 1.05 us a part; every event 2.58, the events' share a lobby client's)
         local List, Here, There = {}, {}, {}
         for Index = 1, 100 do
             List[Index] = Instance.new("Part")
             List[Index].Parent = workspace
             Here[Index], There[Index] = CFrame.new(Index, 0, 0), CFrame.new(Index, 1, 0)
         end
-        Within("BulkMoveTo", Per(20, function(N) for _ = 1, N / 2 do workspace:BulkMoveTo(List, Here, Enum.BulkMoveMode.FireCFrameChanged) workspace:BulkMoveTo(List, There, Enum.BulkMoveMode.FireCFrameChanged) end end), 36000, 50000)
-        Within("BulkMoveTo all events", Per(20, function(N) for _ = 1, N / 2 do workspace:BulkMoveTo(List, Here) workspace:BulkMoveTo(List, There) end end), 90000, 118000)
+        Within("BulkMoveTo", Per(20, function(N) for _ = 1, N / 2 do workspace:BulkMoveTo(List, Here, Enum.BulkMoveMode.FireCFrameChanged) workspace:BulkMoveTo(List, There, Enum.BulkMoveMode.FireCFrameChanged) end end), 85000, 130000)
+        Within("BulkMoveTo all events", Per(20, function(N) for _ = 1, N / 2 do workspace:BulkMoveTo(List, Here) workspace:BulkMoveTo(List, There) end end), 200000, 320000)
 
         -- QueryDescendants over 50 parts (client 3.6 us for 100, edit 2.3)
         Within("QueryDescendants", Per(200, function(N) for _ = 1, N do Many:QueryDescendants(">>MeshPart") end end), 900, 2400)
 
-        -- signals and threads (client: Connect + Disconnect 784, task.spawn 1,148, coroutine.wrap 1,030, Fire 161)
+        -- signals and threads (the bench: Connect + Disconnect 0.50 us, task.spawn 0.72 a thread, Fire with nothing connected 52 ns)
         local Event = Instance.new("BindableEvent")
         local function Noop() end
-        Within("Connect + Disconnect", Per(1000, function(N) for _ = 1, N do Event.Event:Connect(Noop):Disconnect() end end), 650, 950)
-        Within("task.spawn", Per(1000, function(N) for _ = 1, N do task.spawn(Noop) end end), 850, 1400)
-        Within("coroutine.wrap", Per(1000, function(N) for _ = 1, N do coroutine.wrap(Noop)() end end), 800, 1300)
-        Within("BindableEvent:Fire", Per(1000, function(N) for _ = 1, N do Event:Fire(1) end end), 110, 260)
+        Within("Connect + Disconnect", Per(1000, function(N) for _ = 1, N do Event.Event:Connect(Noop):Disconnect() end end), 450, 720)
+        Within("task.spawn", Per(1000, function(N) for _ = 1, N do task.spawn(Noop) end end), 600, 950)
+        Within("coroutine.wrap", Per(1000, function(N) for _ = 1, N do coroutine.wrap(Noop)() end end), 600, 950)
+        Within("BindableEvent:Fire", Per(1000, function(N) for _ = 1, N do Event:Fire(1) end end), 40, 100)
 
-        -- parenting inside the DataModel (client: a Part from one Folder to another 939 ns, edit 1,240)
+        -- parenting inside the DataModel (the bench: a Part from one Folder of the workspace to another 0.51 us)
         local One, Two = Instance.new("Folder"), Instance.new("Folder")
         One.Parent, Two.Parent = workspace, workspace
         Loose.Parent = One
-        Within("Parent between folders", Per(1000, function(N) for _ = 1, N / 2 do Loose.Parent = Two Loose.Parent = One end end), 800, 1400)
+        Within("Parent between folders", Per(1000, function(N) for _ = 1, N / 2 do Loose.Parent = Two Loose.Parent = One end end), 400, 650)
         print("priced")
         "#,
     );
@@ -3534,8 +3537,9 @@ fn the_work_clock_charges_a_scripts_luau() {
     );
     // (the cframes loop was 58.5 with every datatype operation a flat 15 ns; CFrame.new, `*` and Vector3.new were priced from the
     // lobby client's op_cost loop (101.5: `*` 60 ns), and `*` from a rig frame since (21 ns, 39 us less over the 1,000 products):
-    // lune-roblox cframe.rs `price`)
-    assert!(output.contains(&"print: loop 32.0 tables 66.8 cframes 62.5".to_string()), "{output:?}");
+    // lune-roblox cframe.rs `price`. The instructions are priced by kind since (cost.rs INTERPRETED_OPS: an ADD or FORNLOOP 0.48 ns,
+    // where every instruction cost 1.6: the loop 32.0 then))
+    assert!(output.contains(&"print: loop 9.6 tables 65.5 cframes 47.9".to_string()), "{output:?}");
 }
 
 /// The collector steps at the same points however fast the host runs. Luau paces it by how long a cycle took (lgc.cpp: the allocation
@@ -4042,13 +4046,15 @@ fn the_work_clock_prices_datatype_operations_as_the_studio_bench_measured() {
         -- of 1.3x around them; the lobby client's op_cost loop reads 110, 71, 63 and 87
         Within("CFrame:Lerp", Per(function(N) for _ = 1, N do local _ = A:Lerp(B, 0.5) end end), 51, 87)
         Within("CFrame:ToObjectSpace", Per(function(N) for _ = 1, N do local _ = A:ToObjectSpace(B) end end), 22, 38)
-        Within("CFrame:PointToWorldSpace", Per(function(N) for _ = 1, N do local _ = A:PointToWorldSpace(V) end end), 19, 32)
+        Within("CFrame:PointToWorldSpace", Per(function(N) for _ = 1, N do local _ = A:PointToWorldSpace(V) end end), 14, 32)
         Within("CFrame:GetComponents", Per(function(N) for _ = 1, N do local _ = { A:GetComponents() } end end), 170, 330)
         Within("CFrame:ToEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _, _, _ = A:ToEulerAnglesXYZ() end end), 15, 30)
         Within("CFrame.Rotation", Per(function(N) for _ = 1, N do local _ = A.Rotation end end), 23, 39)
         Within("CFrame + Vector3", Per(function(N) for _ = 1, N do local _ = A + V end end), 32, 65)
-        Within("CFrame.Angles", Per(function(N) for _ = 1, N do local _ = CFrame.Angles(0.1, 0.2, 0.3) end end), 22, 37)
-        Within("CFrame.fromEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _ = CFrame.fromEulerAnglesXYZ(0.1, 0.2, 0.3) end end), 21, 35)
+        -- (the instructions around these are priced by kind since, lower: the bench reads CFrame.Angles at 42 ns, a datatype price
+        -- not refitted yet)
+        Within("CFrame.Angles", Per(function(N) for _ = 1, N do local _ = CFrame.Angles(0.1, 0.2, 0.3) end end), 15, 37)
+        Within("CFrame.fromEulerAnglesXYZ", Per(function(N) for _ = 1, N do local _ = CFrame.fromEulerAnglesXYZ(0.1, 0.2, 0.3) end end), 15, 35)
         Within("CFrame.lookAt", Per(function(N) for _ = 1, N do local _ = CFrame.lookAt(V, W) end end), 60, 115)
         Within("Color3:Lerp", Per(function(N) for _ = 1, N do local _ = K:Lerp(L, 0.5) end end), 27, 54)
         Within("UDim2.fromOffset", Per(function(N) for _ = 1, N do local _ = UDim2.fromOffset(10, 10) end end), 32, 68)
@@ -4096,7 +4102,8 @@ fn vector3_members_and_methods_cost_what_studio_spent() {
         Within("Max", Per(function(N) for _ = 1, N do local _ = V:Max(W) end end), 8, 16)
         -- Lerp and FuzzyEq from the rig frame (a match place's client, medians of three runs: 31.2 and 35.9 ns; the op_cost
         -- loop of the lobby client reads 13.3 and 13.5), bands of 1.3x around them
-        Within("Lerp", Per(function(N) for _ = 1, N do local _ = V:Lerp(W, 0.5) end end), 24, 41)
+        -- (the parity bench: Lerp 14.9 ns whole, where its counts read about 21)
+        Within("Lerp", Per(function(N) for _ = 1, N do local _ = V:Lerp(W, 0.5) end end), 12, 28)
         Within("FuzzyEq", Per(function(N) for _ = 1, N do local _ = V:FuzzyEq(W) end end), 28, 47)
         print("ok")
         "#,
@@ -4290,10 +4297,12 @@ fn a_presimulation_writes_deferred_handlers_run_before_postsimulation_and_the_mo
     assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
 }
 
-/// A signal's firer and its handlers' threads on the work clock (a handler_cost probe, a match place's client, three
+/// A signal's firer and its handlers' threads on the work clock (a handler_cost probe, a match place's playtest client, three
 /// runs, 100 instances triggered a frame, one handler each): Changed queues for 0.2 us and its handler's thread costs 1.83 us,
-/// AttributeChanged 0.55 and 1.78, ChildAdded 0.40 and 1.50, DescendantAdded 0.27 and 1.44. ree charged the thread nothing, so a
-/// handler-heavy frame (a roster rebuild on every ChildAdded) read 1.5-1.9 us a handler low. Bands are +-35 % of Studio's medians.
+/// AttributeChanged 0.55 and 1.78, ChildAdded 0.40 and 1.50, DescendantAdded 0.27 and 1.44, each scaled by the quarter the parity
+/// bench's client reads them at (cost.rs signal_costs: a heard BindableEvent:Fire through its handler 0.64 us) but Changed's
+/// queueing, which it reads directly. ree charged the thread nothing before, so a handler-heavy frame (a roster rebuild on every
+/// ChildAdded) read low. Bands are +-35 %.
 #[test]
 fn signals_cost_their_firer_the_queueing_and_each_handler_its_thread() {
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
@@ -4376,13 +4385,13 @@ fn signals_cost_their_firer_the_queueing_and_each_handler_its_thread() {
         end
         local R = _G.Rows
         Within("Changed queued", R.Changed.Queued, 150, 400)
-        Within("Changed handler thread", R.Changed.Run, 1400, 2400)
-        Within("AttributeChanged queued", R.AttributeChanged.Queued, 400, 750)
-        Within("AttributeChanged handler thread", R.AttributeChanged.Run, 1400, 2300)
-        Within("ChildAdded queued", R.ChildAdded.Queued, 280, 520)
-        Within("ChildAdded handler thread", R.ChildAdded.Run, 1150, 1950)
-        Within("DescendantAdded queued", R.DescendantAdded.Queued, 190, 360)
-        Within("DescendantAdded handler thread", R.DescendantAdded.Run, 1100, 1900)
+        Within("Changed handler thread", R.Changed.Run, 295, 610)
+        Within("AttributeChanged queued", R.AttributeChanged.Queued, 90, 185)
+        Within("AttributeChanged handler thread", R.AttributeChanged.Run, 290, 595)
+        Within("ChildAdded queued", R.ChildAdded.Queued, 65, 135)
+        Within("ChildAdded handler thread", R.ChildAdded.Run, 240, 500)
+        Within("DescendantAdded queued", R.DescendantAdded.Queued, 44, 90)
+        Within("DescendantAdded handler thread", R.DescendantAdded.Run, 230, 480)
         print("ok")
         "##,
     );
@@ -4448,10 +4457,10 @@ fn priced_places() -> crate::cost::PlacePrices {
     crate::cost::PlacePrices { localized: vec![(LOBBY, 55.66 + 0.4286), (MATCH, 61.2), (TEST_MATCH, 61.2)], matched: vec![MATCH, TEST_MATCH] }
 }
 
-/// What a Text write costs in `place_id` with `prices`, in us a write: letters with AutoLocalize on, AutoLocalize off,
-/// digits only, forty characters
-fn text_write_prices(place_id: f64, prices: crate::cost::PlacePrices) -> Vec<f64> {
-    let engine = Engine::new(Options { place_id, place_prices: prices, ..Options::default() }).expect("engine");
+/// What a Text write costs in `place_id` with `prices` in a client (`mode` "play") or an edit DataModel ("edit"), in us a write:
+/// letters with AutoLocalize on, AutoLocalize off, digits only, forty characters
+fn text_write_prices(place_id: f64, prices: crate::cost::PlacePrices, mode: &str) -> Vec<f64> {
+    let engine = Engine::new(Options { place_id, place_prices: prices, mode: mode.into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
     engine_lua::modules::interpret_all(&lua, &engine);
@@ -4479,21 +4488,24 @@ fn text_write_prices(place_id: f64, prices: crate::cost::PlacePrices) -> Vec<f64
     line.split(' ').map(|number| number.parse::<f64>().unwrap()).collect::<Vec<f64>>()
 }
 
-/// A Text write on a TextLabel costs 0.75 us in a Studio client, and 58 us more when the place has a localization table,
-/// AutoLocalize is on and the text has a letter in it (a lobby playtest client, three sessions: 58.4-62.2 us for
-/// "Hello" / "World", 71.7-75.5 for forty characters, 0.72-0.80 with AutoLocalize off or digits only, 71-83 ns for the text
-/// it already has; an empty test place, which has no table, 1.0 us). ree charged 0.30 us for every Text write whatever the
-/// place, so a HUD that rewrites its text each frame cost 1/200 of its Studio price in a lobby. [`crate::cost::PlacePrices`]
-/// names the places that pay the lookup.
+/// A client looks a Text write up for translation when AutoLocalize is on and the text has a letter in it, whatever the place holds
+/// (the parity bench, tools/cost-parity: "Hello" / "World" 35.0 us a write in a rendered client of a game's match place, 35.1-36.2 in
+/// clients of an empty place with no localization table, headless or rendered; 0.47 with digits only), so every client pays
+/// cost.rs LOCALIZATION_LOOKUP (32.8 us for one letter, 0.43 a letter more, as a lobby playtest client measured: 58.4-62.2 us for
+/// "Hello" / "World" and 71.7-75.5 for forty characters there, with Studio's own text capture in it); a place [`crate::cost::PlacePrices`]
+/// lists pays its own figure. An edit DataModel (an empty place's measured 1.0 us) and a server have no translator. ree charged the
+/// lookup only in the listed places, so a client of any other place paid 1/75 of a lettered HUD's rewrite.
 #[test]
-fn text_writes_pay_the_autolocalize_lookup_in_a_localized_place() {
-    let lobby = text_write_prices(LOBBY, priced_places());
-    let unlisted = text_write_prices(0.0, priced_places());
-    assert!((50.0..68.0).contains(&lobby[0]), "lobby, letters: {lobby:?}");
-    assert!((0.5..1.2).contains(&lobby[1]), "lobby, AutoLocalize off: {lobby:?}");
-    assert!((0.5..1.2).contains(&lobby[2]), "lobby, digits: {lobby:?}");
-    assert!((63.0..84.0).contains(&lobby[3]), "lobby, forty characters: {lobby:?}");
-    assert!(unlisted.iter().all(|us| (0.5..1.5).contains(us)), "a place with no localization table: {unlisted:?}");
+fn a_client_pays_the_autolocalize_lookup_on_a_lettered_text_write() {
+    let any = text_write_prices(0.0, crate::cost::PlacePrices::default(), "play");
+    assert!((30.0..40.0).contains(&any[0]), "a client, letters: {any:?}");
+    assert!((0.3..1.2).contains(&any[1]), "a client, AutoLocalize off: {any:?}");
+    assert!((0.3..1.2).contains(&any[2]), "a client, digits: {any:?}");
+    assert!((45.0..56.0).contains(&any[3]), "a client, forty characters: {any:?}");
+    let lobby = text_write_prices(LOBBY, priced_places(), "play");
+    assert!((50.0..68.0).contains(&lobby[0]) && (63.0..84.0).contains(&lobby[3]), "a listed place pays its own lookup: {lobby:?}");
+    let edit = text_write_prices(LOBBY, priced_places(), "edit");
+    assert!(edit.iter().all(|us| (0.3..1.5).contains(us)), "an edit DataModel looks nothing up: {edit:?}");
 }
 
 /// `REE_LOCALIZED_PLACES` / `REE_MATCH_PLACES` (launch.rs) add places to the prices: `<id>[=<us>]` and `<id>`, a place
@@ -4634,10 +4646,10 @@ fn social_and_group_services_answer_as_studio_does_for_an_offline_player() {
     assert!(output.contains(&"print: studio's answers".to_string()), "{output:?}");
 }
 
-/// A one-letter Text write's and a workspace part's CFrame write's price in `place_id` with `prices` and `parts` parts in the
-/// workspace, in us a write
+/// A one-letter Text write's and a workspace part's CFrame write's price in a client of `place_id` with `prices` and `parts` parts
+/// in the workspace, in us a write
 fn place_write_prices(place_id: f64, parts: usize, prices: crate::cost::PlacePrices) -> Vec<f64> {
-    let engine = Engine::new(Options { place_id, place_prices: prices, ..Options::default() }).expect("engine");
+    let engine = Engine::new(Options { place_id, place_prices: prices, mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
     engine_lua::modules::interpret_all(&lua, &engine);
@@ -4675,22 +4687,21 @@ fn place_write_prices(place_id: f64, parts: usize, prices: crate::cost::PlacePri
     line.split(' ').map(|number| number.parse::<f64>().unwrap()).collect::<Vec<f64>>()
 }
 
-/// The match places pay the AutoLocalize lookup on a Text write like the lobby (a place_size_writes probe, a match place's
-/// playtest client, five sessions: a one-letter text 56-59 us a write, against the lobby's 56 for the same). ree charged
-/// 0.75 us there, so a HUD in a match that rewrites its text each frame cost 1/75 of its Studio price. A part count or a GUI tree size does not
-/// move any write price (same probe, 0 to 20,000 parts and 0 to 6,000 frames: CFrame 1.58-1.72 us, Size 0.31-0.37, flat).
+/// A listed place pays its own lookup (a place_size_writes probe, a match place's playtest client, five sessions: a one-letter text
+/// 56-59 us a write), and a listed match place scales a part's geometry write in the workspace (`REE_MATCH_PLACES`: Studio playtests
+/// read 1.69-1.83 us there against a lobby's 1.10; the parity bench's match-place client 1.43, ree's default price). A part count or a GUI
+/// tree size does not move any write price (same probe, 0 to 20,000 parts and 0 to 6,000 frames: CFrame 1.58-1.72 us, Size 0.31-0.37, flat).
 #[test]
-fn the_match_places_pay_the_text_lookup_and_a_bigger_place_costs_no_more() {
+fn a_listed_place_pays_its_own_prices_and_a_bigger_place_costs_no_more() {
     for place in [MATCH, TEST_MATCH] {
         let small = place_write_prices(place, 0, priced_places());
         assert!((50.0..68.0).contains(&small[0]), "place {place}, Text: {small:?}");
     }
     let (small, big) = (place_write_prices(MATCH, 0, priced_places()), place_write_prices(MATCH, 3000, priced_places()));
     assert!((small[1] - big[1]).abs() < 0.05 * small[1], "a CFrame write in a place of 3,000 parts: {big:?}, of none: {small:?}");
-    // a playtest client of a match place pays 1.7 us for a part in the workspace (Studio 1.69-1.83), the lobby's keeps 1.1
-    assert!((1.5..2.1).contains(&small[1]), "match place, CFrame: {small:?}");
+    assert!((1.9..2.6).contains(&small[1]), "a listed match place, CFrame: {small:?}");
     let lobby = place_write_prices(LOBBY, 0, priced_places());
-    assert!((0.9..1.4).contains(&lobby[1]), "lobby, CFrame: {lobby:?}");
+    assert!((1.2..1.7).contains(&lobby[1]), "lobby, CFrame: {lobby:?}");
 }
 
 
@@ -4815,10 +4826,12 @@ fn bindable_removal_ancestry_and_many_handler_signals_cost_what_studio_measured(
         &engine,
         r##"
         assert(_G.Done, "the probe did not finish")
-        -- ns: Studio's medians, queued per fire and run per handler thread
+        -- ns: Studio's medians, queued per fire and run per handler thread, at the quarter the parity bench reads them at (cost.rs
+        -- signal_costs; a Changed fire's own queueing 200 ns, unscaled)
+        local Q = 0.247
         local Studio = {
-            Bindable = { 580, 1730 }, ChildRemoved = { 420, 1500 }, DescendantRemoving = { 350, 1580 }, AncestryChanged = { 650, 2170 },
-            ["Changed x10"] = { 4610, 950 }, ["Changed x100"] = { 44970, 943 },
+            Bindable = { 580 * Q, 1730 * Q }, ChildRemoved = { 420 * Q, 1500 * Q }, DescendantRemoving = { 350 * Q, 1580 * Q },
+            AncestryChanged = { 650 * Q, 2170 * Q }, ["Changed x10"] = { 200 + 9 * 450 * Q, 950 * Q }, ["Changed x100"] = { 200 + 99 * 450 * Q, 943 * Q },
         }
         for Name, Row in _G.Rows do
             local Want = Studio[Name]
@@ -5286,3 +5299,90 @@ fn a_scripts_environment_resolves_imports_at_load_and_takes_fast_calls() {
     let names = "print: Vector3 Instance RaycastParams SharedTable table userdata";
     assert_eq!(output.iter().filter(|line| line.as_str() == names).count(), 2, "{output:?}");
 }
+
+/// A `--!native` module's instructions are priced as a client's machine code takes them (cost.rs NATIVE_OPS: a keyed table read or
+/// write 0.42 ns, an addition or loop step 0.43; interpreted 2.45 and 0.48), whether or not this VM compiles the module: the parity
+/// bench's native rows run 0.8-7.8x faster than the same loops interpreted.
+#[test]
+fn a_native_modules_instructions_cost_what_native_code_takes() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let source = |prefix: &str| {
+        format!(
+            "{prefix}return function(N) local t = {{ x = 0 }} local t0 = os.clock() for i = 1, N do t.x = t.x + i end return (os.clock() - t0) / N * 1e9 end\n"
+        )
+    };
+    let output = run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+            local Interpreted, Native = Instance.new("ModuleScript"), Instance.new("ModuleScript")
+            __setSource(Interpreted, {interpreted:?})
+            __setSource(Native, {native:?})
+            print(string.format("%.2f %.2f", require(Interpreted)(10000), require(Native)(10000)))
+            "#,
+            interpreted = source(""),
+            native = source("--!native\n")
+        ),
+    );
+    let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("{output:?}"));
+    let (interpreted, native): (f64, f64) = {
+        let mut numbers = line.split(' ').map(|n| n.parse::<f64>().unwrap());
+        (numbers.next().unwrap(), numbers.next().unwrap())
+    };
+    assert!((5.0..7.0).contains(&interpreted), "interpreted: {interpreted} ns a step");
+    assert!((1.3..2.2).contains(&native), "native: {native} ns a step");
+}
+
+/// A ray pays for the parts its path crosses, whatever its filter admits, and a bounds query for the parts it returns (cost.rs
+/// RAY_MET, RAY_CROSSED, QUERY_PART: the parity bench's rays and boxes, on geometry both sides find the same parts in, in clients that
+/// ran the whole corpus: a miss with an Include filter 0.29 us, a ray through 24 stacked parts 4.3, an empty box 0.15, a line of 10
+/// parts 4.3). ree charged every one a method call's 45 ns.
+#[test]
+fn a_spatial_query_pays_for_the_parts_it_meets() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local At = Vector3.new(1000, 500, 0)
+        local Stack = {}
+        for Index = 1, 24 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Size = Vector3.new(2, 2, 2)
+            Part.CFrame = CFrame.new(At)
+            Part.Parent = workspace
+            Stack[Index] = Part
+        end
+        local function Per(Body)
+            local N = 200
+            local start = os.clock()
+            for _ = 1, N do Body() end
+            return (os.clock() - start) / N * 1e9
+        end
+        local Down, Far = Vector3.new(0, -20, 0), Vector3.new(5000, 5000, 5000)
+        local Include = RaycastParams.new()
+        Include.FilterType = Enum.RaycastFilterType.Include
+        Include.FilterDescendantsInstances = { Stack[1] }
+        local Miss = Per(function() return workspace:Raycast(Far, Down, Include) end)
+        local Through = Per(function() return workspace:Raycast(At + Vector3.new(0, 10, 0), Down) end)
+        local Filtered = Per(function() return workspace:Raycast(At + Vector3.new(0, 10, 0), Down, Include) end)
+        local Empty = Per(function() return workspace:GetPartBoundsInBox(CFrame.new(Far), Vector3.new(4, 4, 4)) end)
+        local Found = Per(function() return workspace:GetPartBoundsInBox(CFrame.new(At), Vector3.new(4, 4, 4)) end)
+        print(string.format("%.0f %.0f %.0f %.0f %.0f", Miss, Through, Filtered, Empty, Found))
+        "#,
+    );
+    let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("{output:?}"));
+    let numbers: Vec<f64> = line.split(' ').map(|n| n.parse().unwrap()).collect();
+    // a call 0.29 us; a path through 24 parts 0.39 + 23 x 0.135 more, filtered or not; a box 0.15, and 0.31 a part it returns
+    assert!((270.0..360.0).contains(&numbers[0]), "a miss: {line}");
+    assert!((3500.0..4100.0).contains(&numbers[1]) && (numbers[1] - numbers[2]).abs() < 100.0, "through the stack, filtered or not: {line}");
+    assert!((140.0..220.0).contains(&numbers[3]), "an empty box: {line}");
+    assert!((7000.0..8300.0).contains(&numbers[4]), "a box of 24 parts: {line}");
+}
+

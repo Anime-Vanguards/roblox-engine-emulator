@@ -2923,3 +2923,320 @@ index 85f3bcd..f105f6d 100644
      {
          // luaD_pcall will make sure that if any C/Lua calls during import resolution fail, the thread state is restored back
          int oldTop = lua_gettop(L);
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index b3e2666..1118ee0 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -322,6 +322,17 @@ typedef struct lua_WorkCounters
+     uint64_t vectorunits; // .Unit reads the same way
+     uint64_t vectormethods; // method calls (NAMECALL) a script's own instruction made on a vector
+     uint64_t slowimports; // GETIMPORTs of a script's instructions that looked the global up (an unsafe environment's, an unresolved import)
++    uint64_t nativeops[256]; // instructions of the functions a code generator would compile (a --!native module's but its cold ones, @native ones): counted apart from ops
++    uint64_t numtostr; // numbers a script's work turned into strings (concatenation, tostring)
++    uint64_t sortcompares; // comparisons table.sort made for a script
++    uint64_t sortcalls; // calls table.sort made to a script's comparison function
++    uint64_t createitems; // elements table.create filled for a script
++    uint64_t cloneitems; // array and hash slots table.clone copied for a script
++    uint64_t concatitems; // items table.concat joined for a script
++    uint64_t splitparts; // parts string.split made for a script
++    uint64_t formats; // string.format calls for a script (an interpolated string is one)
++    uint64_t formatspecs; // the % specifiers they formatted
++    uint64_t newstrings; // strings a script's work made that the VM did not hold already (an equal string alive is reused)
+ } lua_WorkCounters;
+ 
+ LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);
+diff --git a/luau/VM/src/lbuiltins.cpp b/luau/VM/src/lbuiltins.cpp
+index a46789f..4de0f24 100644
+--- a/luau/VM/src/lbuiltins.cpp
++++ b/luau/VM/src/lbuiltins.cpp
+@@ -1332,6 +1332,8 @@ static int luauF_tostring(lua_State* L, StkId res, TValue* arg0, int nresults, S
+             char s[LUAI_MAXNUM2STR];
+             char* e = luai_num2str(s, nvalue(arg0));
+             setsvalue(L, res, luaS_newlstr(L, s, e - s));
++            if (luaE_scriptwork(L))
++                L->global->work.numtostr++;
+             return 1;
+         }
+         case LUA_TSTRING:
+diff --git a/luau/VM/src/lobject.h b/luau/VM/src/lobject.h
+index cae25bd..cf6a2a2 100644
+--- a/luau/VM/src/lobject.h
++++ b/luau/VM/src/lobject.h
+@@ -284,6 +284,9 @@ typedef struct LuauBuffer
+ */
+ // Proto flags bit of a host's own function (lua_setworkexempt): its work is not counted as a script's
+ #define LUAU_PROTO_WORK_EXEMPT (1 << 7)
++// Proto flags bit of a function a code generator would compile natively (luau_load: a --!native module's but its cold ones, an
++// @native one): its instructions count in nativeops (lua_WorkCounters)
++#define LUAU_PROTO_WORK_NATIVE (1 << 6)
+ 
+ // clang-format off
+ typedef struct Proto
+diff --git a/luau/VM/src/lprofile.cpp b/luau/VM/src/lprofile.cpp
+index 64bc879..90dcccf 100644
+--- a/luau/VM/src/lprofile.cpp
++++ b/luau/VM/src/lprofile.cpp
+@@ -133,6 +133,7 @@ static_assert(sizeof(lua_WorkCounters) % sizeof(uint64_t) == 0, "the work counte
+ const int kWorkSlots = int(sizeof(lua_WorkCounters) / sizeof(uint64_t));
+ const int kOpsSlot = int(offsetof(lua_WorkCounters, ops) / sizeof(uint64_t));
+ const int kHostOpsSlot = int(offsetof(lua_WorkCounters, hostops) / sizeof(uint64_t));
++const int kNativeOpsSlot = int(offsetof(lua_WorkCounters, nativeops) / sizeof(uint64_t));
+ 
+ } // namespace
+ 
+@@ -149,9 +150,10 @@ struct lua_ProfileState
+     const double* hostdrained = NULL;
+     double lasthost = 0;
+     lua_WorkCounters last;
+-    // the instruction dispatched last, and whether its function is a script's (its dispatch is in ops, not hostops)
++    // the instruction dispatched last, and the counts its dispatch is in: ops for a script's function, nativeops for one a code
++    // generator would compile (LUAU_PROTO_WORK_NATIVE), hostops for a host's own
+     int lastop = -1;
+-    bool lastcharged = false;
++    int lastbase = 0;
+     // where the next booking goes: an instruction of a function (pc -1: its native code) and its tree node, or the
+     // engine (target -1: what was charged while no instruction ran)
+     int target = -1;
+@@ -358,7 +360,7 @@ static void book(lua_ProfileState* s, lua_State* L)
+         // (native code may have run since the last step and moved any instruction count)
+         for (int i = 0; i < 256; ++i)
+         {
+-            for (int base : {kOpsSlot, kHostOpsSlot})
++            for (int base : {kOpsSlot, kHostOpsSlot, kNativeOpsSlot})
+             {
+                 int slot = base + i;
+                 if (now[slot] != last[slot])
+@@ -371,7 +373,7 @@ static void book(lua_ProfileState* s, lua_State* L)
+     }
+     else if (s->lastop >= 0)
+     {
+-        int slot = (s->lastcharged ? kOpsSlot : kHostOpsSlot) + s->lastop;
++        int slot = s->lastbase + s->lastop;
+         if (now[slot] != last[slot])
+         {
+             delta += s->prices[slot] * double(int64_t(now[slot] - last[slot]));
+@@ -563,7 +565,7 @@ void luaP_step(lua_State* L, Closure* cl, const Instruction* pc)
+         s->targetnode = node;
+     }
+     s->lastop = op;
+-    s->lastcharged = !exempt;
++    s->lastbase = exempt ? kHostOpsSlot : (p->flags & LUAU_PROTO_WORK_NATIVE) ? kNativeOpsSlot : kOpsSlot;
+ }
+ 
+ void luaP_nativeenter(lua_State* L, Closure* cl)
+@@ -650,7 +652,8 @@ int lua_profilestart(lua_State* L, int stepping, const double* prices, int npric
+         s->prices.assign(prices, prices + nprices);
+         for (int slot = 0; slot < kWorkSlots; ++slot)
+         {
+-            bool ops = (slot >= kOpsSlot && slot < kOpsSlot + 256) || (slot >= kHostOpsSlot && slot < kHostOpsSlot + 256);
++            bool ops = (slot >= kOpsSlot && slot < kOpsSlot + 256) || (slot >= kHostOpsSlot && slot < kHostOpsSlot + 256) ||
++                       (slot >= kNativeOpsSlot && slot < kNativeOpsSlot + 256);
+             if (!ops)
+                 s->scalars.push_back(slot);
+         }
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index faa33eb..da0657a 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -315,7 +315,8 @@ union GCObject
+ #define obj2gco(v) check_exp(iscollectable(v), cast_to(GCObject*, (v) + 0))
+ 
+ // the work counts a Luau closure's instructions go to (lua_WorkCounters)
+-#define luaE_workops(L, cl) (((cl)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) ? (L)->global->work.hostops : (L)->global->work.ops)
++// (a native module's functions count apart, in nativeops: LUAU_PROTO_WORK_NATIVE, set by luau_load)
++#define luaE_workops(L, cl) (((cl)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) ? (L)->global->work.hostops : ((cl)->l.p->flags & LUAU_PROTO_WORK_NATIVE) ? (L)->global->work.nativeops : (L)->global->work.ops)
+ 
+ // whose work L does from frame ci down: 1 when the innermost Luau frame is a script's (not exempt), 2 when it is
+ // exempt and a script's frame is below it (the host's work for a script), else 0
+@@ -337,6 +338,9 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
+ // whether a script function's own instruction is running (the innermost frame is a script's Luau frame, not a C function's)
+ #define luaE_scriptinsn(L) ((L)->stack && isLua((L)->ci) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+ 
++// the same, for an interpreted function only: a vector's members and methods are instructions of their own in native code (nativeops)
++#define luaE_interpretedinsn(L) (luaE_scriptinsn(L) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_NATIVE))
++
+ #define luaE_scriptframe(L, ci) (luaE_workframe(L, ci) == 1)
+ #define luaE_scriptwork(L) luaE_scriptframe(L, (L)->ci)
+ 
+diff --git a/luau/VM/src/lstring.cpp b/luau/VM/src/lstring.cpp
+index 65012d1..a43aece 100644
+--- a/luau/VM/src/lstring.cpp
++++ b/luau/VM/src/lstring.cpp
+@@ -133,6 +133,9 @@ TString* luaS_buffinish(lua_State* L, TString* ts)
+ 
+     LUAU_ASSERT(ts->next == NULL);
+ 
++    if (luaE_scriptwork(L))
++        L->global->work.newstrings++;
++
+     ts->hash = h;
+     ts->data[ts->len] = '\0'; // ending 0
+     ts->atom = ATOM_UNDEF;
+@@ -159,6 +162,8 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
+             return el;
+         }
+     }
++    if (luaE_scriptwork(L))
++        L->global->work.newstrings++;
+     return newlstr(L, str, l, h); // not found
+ }
+ 
+diff --git a/luau/VM/src/lstrlib.cpp b/luau/VM/src/lstrlib.cpp
+index fc95712..72e3076 100644
+--- a/luau/VM/src/lstrlib.cpp
++++ b/luau/VM/src/lstrlib.cpp
+@@ -1066,6 +1066,11 @@ static int str_format(lua_State* L)
+             luaL_addlstring(&b, buff, strlen(buff));
+         }
+     }
++    if (luaE_scriptwork(L))
++    {
++        L->global->work.formats++;
++        L->global->work.formatspecs += arg - 1;
++    }
+     luaL_pushresult(&b);
+     return 1;
+ }
+@@ -1115,6 +1120,8 @@ static int str_split(lua_State* L)
+         lua_settable(L, -3);
+     }
+ 
++    if (luaE_scriptwork(L))
++        L->global->work.splitparts += numMatches;
+     return 1;
+ }
+ 
+diff --git a/luau/VM/src/ltablib.cpp b/luau/VM/src/ltablib.cpp
+index 04e253f..ca5b25c 100644
+--- a/luau/VM/src/ltablib.cpp
++++ b/luau/VM/src/ltablib.cpp
+@@ -254,6 +254,8 @@ static int tconcat(lua_State* L)
+     int last = luaL_opt(L, luaL_checkinteger, 4, lua_objlen(L, 1));
+ 
+     LuaTable* t = hvalue(L->base);
++    if (last >= i && luaE_scriptwork(L))
++        L->global->work.concatitems += unsigned(last - i + 1);
+ 
+     luaL_Strbuf b;
+     luaL_buffinit(L, &b);
+@@ -329,6 +331,7 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
+     setobj2s(L, L->top + 1, l);
+     setobj2s(L, L->top + 2, r);
+     L->top += 3; // safe because of LUA_MINSTACK guarantee
++    L->global->work.sortcalls++;
+     luaD_call(L, L->top - 3, 1);
+     L->top -= 1; // maintain stack depth
+ 
+@@ -354,6 +357,7 @@ inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred
+     int n = t->sizearray;
+     LUAU_ASSERT(unsigned(i) < unsigned(n) && unsigned(j) < unsigned(n)); // contract maintained in sort_less after predicate call
+ 
++    L->global->work.sortcompares++;
+     int res = pred(L, &arr[i], &arr[j]);
+ 
+     // predicate call may resize the table, which is invalid
+@@ -491,7 +495,17 @@ static int tsort(lua_State* L)
+     lua_settop(L, 2); // make sure there are two arguments
+ 
+     if (n > 0)
++    {
++        // (sort_less and sort_func count as they go: a sort no script asked for gives its counts back)
++        uint64_t compares = L->global->work.sortcompares, calls = L->global->work.sortcalls;
++        bool counted = luaE_scriptwork(L);
+         sort_rec(L, t, 0, n - 1, n, pred);
++        if (!counted)
++        {
++            L->global->work.sortcompares = compares;
++            L->global->work.sortcalls = calls;
++        }
++    }
+     return 0;
+ }
+ 
+@@ -500,6 +514,8 @@ static int tcreate(lua_State* L)
+     int size = luaL_checkinteger(L, 1);
+     if (size < 0)
+         luaL_argerror(L, 1, "size out of range");
++    if (luaE_scriptwork(L))
++        L->global->work.createitems += unsigned(size);
+ 
+     if (!lua_isnoneornil(L, 2))
+     {
+@@ -608,7 +624,10 @@ static int tclone(lua_State* L)
+     luaL_checktype(L, 1, LUA_TTABLE);
+     luaL_argcheck(L, !luaL_getmetafield(L, 1, "__metatable"), 1, "table has a protected metatable");
+ 
+-    LuaTable* tt = luaH_clone(L, hvalue(L->base));
++    LuaTable* source = hvalue(L->base);
++    if (luaE_scriptwork(L))
++        L->global->work.cloneitems += unsigned(source->sizearray) + (source->node == &luaH_dummynode ? 0u : unsigned(sizenode(source)));
++    LuaTable* tt = luaH_clone(L, source);
+ 
+     TValue v;
+     sethvalue(L, &v, tt);
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index cc1f685..77252b3 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -871,7 +871,7 @@ reentry:
+                     LuaTable* mt = ttisuserdata(rb) ? uvalue(rb)->metatable : L->global->mt[ttype(rb)];
+                     const TValue* tmi = 0;
+ 
+-                    if (ttisvector(rb) && luaE_scriptinsn(L))
++                    if (ttisvector(rb) && luaE_interpretedinsn(L))
+                         L->global->work.vectormethods++;
+ 
+                     // fast-path: metatable with __namecall
+diff --git a/luau/VM/src/lvmload.cpp b/luau/VM/src/lvmload.cpp
+index f105f6d..fee0776 100644
+--- a/luau/VM/src/lvmload.cpp
++++ b/luau/VM/src/lvmload.cpp
+@@ -608,6 +608,17 @@ static int loadsafe(
+     uint32_t mainid = readVarInt(data, size, offset);
+     Proto* main = protos[mainid];
+ 
++    // the functions a code generator compiles natively count apart (lua_WorkCounters nativeops), whether or not this VM compiles
++    // them: a --!native module's but the cold ones (CodeGenLower.h gatherFunctions), else those with the native attribute
++    for (unsigned int i = 0; i < protoCount; ++i)
++    {
++        Proto* p = protos[i];
++        bool native = (main->flags & LPF_NATIVE_MODULE) ? (p->flags & LPF_NATIVE_COLD) == 0
++                                                         : p != main && (main->flags & LPF_NATIVE_FUNCTION) && (p->flags & LPF_NATIVE_FUNCTION);
++        if (native)
++            p->flags |= LUAU_PROTO_WORK_NATIVE;
++    }
++
+     luaC_threadbarrier(L);
+ 
+     Closure* cl = luaF_newLclosure(L, 0, envt, main);
+diff --git a/luau/VM/src/lvmutils.cpp b/luau/VM/src/lvmutils.cpp
+index fe2ae3f..4b6878e 100644
+--- a/luau/VM/src/lvmutils.cpp
++++ b/luau/VM/src/lvmutils.cpp
+@@ -39,6 +39,8 @@ int luaV_tostring(lua_State* L, StkId obj)
+         char* e = luai_num2str(s, n);
+         LUAU_ASSERT(e < s + sizeof(s));
+         setsvalue(L, obj, luaS_newlstr(L, s, e - s));
++        if (luaE_scriptwork(L))
++            L->global->work.numtostr++;
+         return 1;
+     }
+ }
+@@ -110,7 +112,7 @@ static bool luaV_vectormember(lua_State* L, const float* v, const TString* name,
+     }
+     if (strcmp(s + 1, "agnitude") == 0 && (s[0] == 'M' || s[0] == 'm'))
+     {
+-        if (luaE_scriptinsn(L))
++        if (luaE_interpretedinsn(L))
+             L->global->work.vectormagnitudes++;
+ #if LUA_VECTOR_SIZE == 4
+         setnvalue(res, sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]));
+@@ -121,7 +123,7 @@ static bool luaV_vectormember(lua_State* L, const float* v, const TString* name,
+     }
+     if (strcmp(s + 1, "nit") == 0 && (s[0] == 'U' || s[0] == 'u'))
+     {
+-        if (luaE_scriptinsn(L))
++        if (luaE_interpretedinsn(L))
+             L->global->work.vectorunits++;
+ #if LUA_VECTOR_SIZE == 4
+         float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);

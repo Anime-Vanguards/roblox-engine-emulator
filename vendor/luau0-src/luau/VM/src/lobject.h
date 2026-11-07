@@ -284,6 +284,9 @@ typedef struct LuauBuffer
 */
 // Proto flags bit of a host's own function (lua_setworkexempt): its work is not counted as a script's
 #define LUAU_PROTO_WORK_EXEMPT (1 << 7)
+// Proto flags bit of a function a code generator would compile natively (luau_load: a --!native module's but its cold ones, an
+// @native one): its instructions count in nativeops (lua_WorkCounters)
+#define LUAU_PROTO_WORK_NATIVE (1 << 6)
 
 // clang-format off
 typedef struct Proto

@@ -471,7 +471,8 @@ pub fn wants_allocations() -> bool {
 }
 
 fn instructions(counters: &crate::cost::VmCounters) -> u64 {
-    counters.ops.iter().sum()
+    // (a native module's functions count apart: nativeops)
+    counters.ops.iter().sum::<u64>() + counters.nativeops.iter().sum::<u64>()
 }
 
 /// What the profile reads from the VM, taken while it still runs: the VM's stepping profile, the allocation profile, a

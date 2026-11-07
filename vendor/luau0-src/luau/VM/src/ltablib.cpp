@@ -254,6 +254,8 @@ static int tconcat(lua_State* L)
     int last = luaL_opt(L, luaL_checkinteger, 4, lua_objlen(L, 1));
 
     LuaTable* t = hvalue(L->base);
+    if (last >= i && luaE_scriptwork(L))
+        L->global->work.concatitems += unsigned(last - i + 1);
 
     luaL_Strbuf b;
     luaL_buffinit(L, &b);
@@ -329,6 +331,7 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
     setobj2s(L, L->top + 1, l);
     setobj2s(L, L->top + 2, r);
     L->top += 3; // safe because of LUA_MINSTACK guarantee
+    L->global->work.sortcalls++;
     luaD_call(L, L->top - 3, 1);
     L->top -= 1; // maintain stack depth
 
@@ -354,6 +357,7 @@ inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred
     int n = t->sizearray;
     LUAU_ASSERT(unsigned(i) < unsigned(n) && unsigned(j) < unsigned(n)); // contract maintained in sort_less after predicate call
 
+    L->global->work.sortcompares++;
     int res = pred(L, &arr[i], &arr[j]);
 
     // predicate call may resize the table, which is invalid
@@ -491,7 +495,17 @@ static int tsort(lua_State* L)
     lua_settop(L, 2); // make sure there are two arguments
 
     if (n > 0)
+    {
+        // (sort_less and sort_func count as they go: a sort no script asked for gives its counts back)
+        uint64_t compares = L->global->work.sortcompares, calls = L->global->work.sortcalls;
+        bool counted = luaE_scriptwork(L);
         sort_rec(L, t, 0, n - 1, n, pred);
+        if (!counted)
+        {
+            L->global->work.sortcompares = compares;
+            L->global->work.sortcalls = calls;
+        }
+    }
     return 0;
 }
 
@@ -500,6 +514,8 @@ static int tcreate(lua_State* L)
     int size = luaL_checkinteger(L, 1);
     if (size < 0)
         luaL_argerror(L, 1, "size out of range");
+    if (luaE_scriptwork(L))
+        L->global->work.createitems += unsigned(size);
 
     if (!lua_isnoneornil(L, 2))
     {
@@ -608,7 +624,10 @@ static int tclone(lua_State* L)
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_argcheck(L, !luaL_getmetafield(L, 1, "__metatable"), 1, "table has a protected metatable");
 
-    LuaTable* tt = luaH_clone(L, hvalue(L->base));
+    LuaTable* source = hvalue(L->base);
+    if (luaE_scriptwork(L))
+        L->global->work.cloneitems += unsigned(source->sizearray) + (source->node == &luaH_dummynode ? 0u : unsigned(sizenode(source)));
+    LuaTable* tt = luaH_clone(L, source);
 
     TValue v;
     sethvalue(L, &v, tt);

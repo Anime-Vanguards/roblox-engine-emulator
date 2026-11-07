@@ -322,6 +322,17 @@ typedef struct lua_WorkCounters
     uint64_t vectorunits; // .Unit reads the same way
     uint64_t vectormethods; // method calls (NAMECALL) a script's own instruction made on a vector
     uint64_t slowimports; // GETIMPORTs of a script's instructions that looked the global up (an unsafe environment's, an unresolved import)
+    uint64_t nativeops[256]; // instructions of the functions a code generator would compile (a --!native module's but its cold ones, @native ones): counted apart from ops
+    uint64_t numtostr; // numbers a script's work turned into strings (concatenation, tostring)
+    uint64_t sortcompares; // comparisons table.sort made for a script
+    uint64_t sortcalls; // calls table.sort made to a script's comparison function
+    uint64_t createitems; // elements table.create filled for a script
+    uint64_t cloneitems; // array and hash slots table.clone copied for a script
+    uint64_t concatitems; // items table.concat joined for a script
+    uint64_t splitparts; // parts string.split made for a script
+    uint64_t formats; // string.format calls for a script (an interpolated string is one)
+    uint64_t formatspecs; // the % specifiers they formatted
+    uint64_t newstrings; // strings a script's work made that the VM did not hold already (an equal string alive is reused)
 } lua_WorkCounters;
 
 LUA_API const lua_WorkCounters* lua_workcounters(lua_State* L);

@@ -39,6 +39,8 @@ int luaV_tostring(lua_State* L, StkId obj)
         char* e = luai_num2str(s, n);
         LUAU_ASSERT(e < s + sizeof(s));
         setsvalue(L, obj, luaS_newlstr(L, s, e - s));
+        if (luaE_scriptwork(L))
+            L->global->work.numtostr++;
         return 1;
     }
 }
@@ -110,7 +112,7 @@ static bool luaV_vectormember(lua_State* L, const float* v, const TString* name,
     }
     if (strcmp(s + 1, "agnitude") == 0 && (s[0] == 'M' || s[0] == 'm'))
     {
-        if (luaE_scriptinsn(L))
+        if (luaE_interpretedinsn(L))
             L->global->work.vectormagnitudes++;
 #if LUA_VECTOR_SIZE == 4
         setnvalue(res, sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]));
@@ -121,7 +123,7 @@ static bool luaV_vectormember(lua_State* L, const float* v, const TString* name,
     }
     if (strcmp(s + 1, "nit") == 0 && (s[0] == 'U' || s[0] == 'u'))
     {
-        if (luaE_scriptinsn(L))
+        if (luaE_interpretedinsn(L))
             L->global->work.vectorunits++;
 #if LUA_VECTOR_SIZE == 4
         float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
