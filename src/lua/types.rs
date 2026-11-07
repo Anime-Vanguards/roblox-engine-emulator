@@ -9,7 +9,6 @@ use std::{
 };
 
 use mlua::prelude::*;
-use rbx_dom_weak::types as dom;
 
 use super::{
     Args, Flow, Ret, enum_item_value, enum_value, lock_metatable, none, raise, raise_plain,
