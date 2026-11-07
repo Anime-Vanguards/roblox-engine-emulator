@@ -57,3 +57,22 @@ for Index = 1, 12 do
 end
 Report("long", Make("Chunk", Deep, Source))
 Folder:Destroy()
+
+-- require's own errors
+local Requires = Instance.new("Folder")
+Requires.Name = "ParityRequires"
+Requires.Parent = game:GetService("ReplicatedStorage")
+local Broken = Make("Broken", Requires, "error('module failed')")
+local BrokenZero = Make("BrokenZero", Requires, "error('module failed plainly', 0)")
+local Two = Make("Two", Requires, "return 1, 2")
+local None = Make("None", Requires, "local x = 1")
+local Cycle = Make("Cycle", Requires, "return require(script)")
+local Yielding = Make("Yielding", Requires, "task.wait() return 'later'")
+for _, Case in { { "broken", Broken }, { "broken-again", Broken }, { "broken-zero", BrokenZero }, { "two", Two }, { "none", None }, { "cycle", Cycle } } do
+	local Ok, Result = pcall(require, Case[2])
+	print("require-" .. Case[1] .. " " .. tostring(Ok) .. " " .. P.err(tostring(Result)))
+end
+print("require-yielding " .. tostring(select(2, pcall(require, Yielding))))
+print("require-string " .. P.try(require, "ReplicatedStorage.ParityRequires.Two"))
+print("require-folder " .. P.try(require, Requires))
+Requires:Destroy()

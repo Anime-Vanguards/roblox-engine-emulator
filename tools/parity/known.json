@@ -117,36 +117,20 @@
 	],
 	"chunknames": [
 		{
-			"line": "nested info ReplicatedStorage.ParityProbes.Chunk",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "nested fail ReplicatedStorage.ParityProbes.Chunk:3: inside",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "nested index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "nested member NotAMember is not a valid member of Workspace \"Workspace\"",
 			"why": "not fixed yet"
 		},
 		{
-			"line": "nested trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "odd-names info ReplicatedStorage.ParityProbes.Chunk",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "odd-names fail ReplicatedStorage.ParityProbes.Chunk:3: inside",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "odd-names index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "odd-names member NotAMember is not a valid member of Workspace \"Workspace\"",
@@ -154,19 +138,19 @@
 		},
 		{
 			"line": "odd-names trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "loose info ReplicatedStorage.ParityProbes.Chunk",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "loose fail ReplicatedStorage.ParityProbes.Chunk:3: inside",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "loose index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "loose member NotAMember is not a valid member of Workspace \"Workspace\"",
@@ -174,19 +158,19 @@
 		},
 		{
 			"line": "loose trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "long info ReplicatedStorage.ParityProbes.Chunk",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "long fail ReplicatedStorage.ParityProbes.Chunk:3: inside",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "long index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
-			"why": "not fixed yet"
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
 		},
 		{
 			"line": "long member NotAMember is not a valid member of Workspace \"Workspace\"",
@@ -194,6 +178,22 @@
 		},
 		{
 			"line": "long trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
+			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
+		},
+		{
+			"line": "require-broken false Requested module experienced an error while loading",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "require-broken-zero false Requested module experienced an error while loading",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "require-cycle false Requested module experienced an error while loading",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "require-string error error requiring \"ReplicatedStorage.ParityRequires.Two\": require path must start with a valid prefix: ./, ../, or @",
 			"why": "not fixed yet"
 		}
 	],
@@ -955,6 +955,18 @@
 			"why": "not fixed yet"
 		},
 		{
+			"line": "xpcall-traceback @119: deep error / @123 / @119 function Deep / @121 / @117 / @0 / @-192 function __run / @253 / @253",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "traceback-plain msg / @126 / @0 / @-192 function __run / @253 / @253",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "traceback-level msg / @0 / @-192 function __run / @253 / @253",
+			"why": "not fixed yet"
+		},
+		{
 			"line": "getfenv ok table table script false",
 			"why": "not fixed yet"
 		},
@@ -976,18 +988,6 @@
 		},
 		{
 			"line": "settings error The current thread cannot call 'settings' (lacking capability Plugin) | ok Instance",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "xpcall-traceback @119: deep error / @123 / @119 function Deep / @121 / @117 / @0 / @-192 function __run / @253 / @253",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "traceback-plain msg / @126 / @0 / @-192 function __run / @253 / @253",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "traceback-level msg / @0 / @-192 function __run / @253 / @253",
 			"why": "not fixed yet"
 		}
 	],
@@ -1035,11 +1035,11 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "destroy-service error The Parent property of Lighting is locked",
+			"line": "parent-of-datamodel error The Parent property of <game> is locked, current parent: NULL, new parent Workspace",
 			"why": "not fixed yet"
 		},
 		{
-			"line": "parent-of-datamodel error The Parent property of <game> is locked, current parent: NULL, new parent Workspace",
+			"line": "destroy-service error The Parent property of Lighting is locked",
 			"why": "not fixed yet"
 		}
 	],
@@ -1094,6 +1094,10 @@
 		},
 		{
 			"line": "isdescendantof true true self false nil ok true",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "fullname Folder.b.deep.target | Workspace | game is its name true",
 			"why": "not fixed yet"
 		},
 		{
@@ -1278,10 +1282,6 @@
 		},
 		{
 			"line": "addtag-empty ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "fullname Folder.b.deep.target | Workspace | game is its name true",
 			"why": "not fixed yet"
 		}
 	],

@@ -250,6 +250,10 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
 - **Values to and from Luau**: `lua::convert::to_lua`, `from_lua`, `coerce` (assignment rules and
   errors); `lua::instance_value(lua, engine, id)` (the one userdata of an instance) and
   `lua::instance_id(&LuaValue)`.
+- **Scripts' chunk names**: a script or module compiles as a chunk named by its full name, as Roblox
+  names it: error positions, tracebacks and `debug.info(f, "s")` read `ReplicatedStorage.Module:3:`
+  (measured in a playing client; tools/parity/probes/chunknames.luau). Roblox keeps one compiled chunk per
+  source text, so a module whose source equals an earlier one's carries that module's name; ree does not.
 - **Lifetime**: instances a script can reach keep their userdata identity; unreachable parentless
   subtrees are freed by `lua::raw::collect` (run from the render step). Rust code that holds an
   `InstanceId` outside the tree across frames keeps it reachable with `state.dom.pin(id)` / `unpin(id)`,

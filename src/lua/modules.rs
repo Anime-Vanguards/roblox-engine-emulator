@@ -403,7 +403,10 @@ pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[
         (Some(bytecode), std::borrow::Cow::Borrowed(_)) => lua.load(bytecode).set_mode(mlua::ChunkMode::Binary),
         _ => lua.load(&*source).set_compiler(compiler()),
     };
-    let chunk = chunk.set_name(name).set_environment(env);
+    // A script's chunk is its full name as Roblox names it: error positions, tracebacks and debug.info(f, "s") read
+    // `ReplicatedStorage.Module:3:`, not Luau's `[string "ReplicatedStorage.Module"]:3:` for an unmarked name
+    // (measured in a playing client, Studio 0.744: tools/parity/probes/chunknames.luau).
+    let chunk = chunk.set_name(format!("={name}")).set_environment(env);
     let (deferred, interpreted, interpret_all) = {
         let modules = engine.modules.borrow();
         (modules.deferred.is_some(), modules.interpreted, modules.interpret_all)

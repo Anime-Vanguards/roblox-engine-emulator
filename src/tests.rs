@@ -318,6 +318,38 @@ fn enums_and_engine_datatypes() {
 }
 
 #[test]
+fn a_modules_chunk_is_named_by_its_full_name_as_in_roblox() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/chunknames.luau): debug.info, error positions
+    // and tracebacks name a module by its full name, without Luau's `[string "..."]` wrapping.
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        Folder.Name = "Probes"
+        Folder.Parent = game:GetService("ReplicatedStorage")
+        local M = Instance.new("ModuleScript")
+        M.Name = "Chunk"
+        __setSource(M, [[local M = {}
+function M.info() return debug.info(1, 's') end
+function M.fail() error('inside') end
+function M.trace() return debug.traceback('t') end
+return M]])
+        M.Parent = Folder
+        local Module = require(M)
+        print(Module.info())
+        print(select(2, pcall(Module.fail)))
+        print((string.split(Module.trace(), "\n"))[2])
+        "#,
+    );
+    let output = lines(&engine);
+    assert_eq!(output[0], "print: ReplicatedStorage.Probes.Chunk");
+    assert_eq!(output[1], "print: ReplicatedStorage.Probes.Chunk:3: inside");
+    assert_eq!(output[2], "print: ReplicatedStorage.Probes.Chunk:4 function trace");
+}
+
+#[test]
 fn modules_require_and_environments() {
     let (lua, engine) = start();
     run(
