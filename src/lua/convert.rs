@@ -165,16 +165,39 @@ fn whole_text_size_owner(engine: &Engine, info: &PropertyInfo) -> bool {
 const MIN_UI_SCALE: f64 = 1e-7_f32 as f64;
 const MAX_UI_SCALE: f64 = 1000.0;
 
-/// The number a numeric property stores for an assigned number (integer properties truncate,
-/// float properties round to float32, TextSize of text objects is whole and clamped, UIScale.Scale
-/// clamped).
+/// An `int` property's value for an assigned number, as a C cast to a 32-bit integer gives it: toward zero, and the
+/// minimum for a number out of range or not finite (measured in a playing client, Studio 0.744,
+/// tools/parity/probes/coercion.luau: ZIndex = 2.7, -2.7, 2^31, 1e20, NaN, inf read 2, -2, then -2147483648).
+#[inline]
+fn int32_for(number: f64) -> f64 {
+    // (+ 0.0: an integer has no negative zero; -0.5 reads 0)
+    let truncated = number.trunc() + 0.0;
+    if truncated >= i32::MIN as f64 && truncated <= i32::MAX as f64 { truncated } else { i32::MIN as f64 }
+}
+
+/// An `int64` property's value for an assigned number: rounded half away from zero, zero for a number out of range or
+/// not finite (measured likewise: IntValue.Value = 2.5, -2.5, 0.5, 1e20, NaN read 3, -3, 1, 0, 0).
+#[inline]
+fn int64_for(number: f64) -> f64 {
+    let rounded = number.round() + 0.0;
+    if rounded >= -9.223372036854775808e18 && rounded < 9.223372036854775808e18 { rounded } else { 0.0 }
+}
+
+/// The number a numeric property stores for an assigned number (`int` properties truncate, `int64` ones round,
+/// float properties round to float32, TextSize of text objects is whole and clamped, BorderSizePixel clamped,
+/// UIScale.Scale clamped).
 #[inline]
 pub fn number_for(engine: &Engine, info: &PropertyInfo, number: f64) -> f64 {
-    if info.engine_type == EngineType::Integer && number.is_finite() {
-        number.trunc()
+    if info.engine_type == EngineType::Integer {
+        let whole = int32_for(number);
+        // GuiObject.BorderSizePixel stays within [0, 100] (measured: -2.7, 2^31 and "1e3" read 0, 0 and 100)
+        if info.name == crate::K::BorderSizePixel as crate::NameId { whole.clamp(0.0, 100.0) } else { whole }
+    } else if info.engine_type == EngineType::Int64 {
+        int64_for(number)
     } else if info.engine_type == EngineType::Float {
-        if info.name == crate::K::TextSize as crate::NameId && whole_text_size_owner(engine, info) && !number.is_nan() {
-            number.floor().clamp(1.0, 100.0)
+        if info.name == crate::K::TextSize as crate::NameId && whole_text_size_owner(engine, info) {
+            // a whole number as an int property takes it, then 1 to 100 (2^31 and NaN read 1)
+            int32_for(number).clamp(1.0, 100.0)
         } else if info.name == crate::K::Scale as crate::NameId
             && !number.is_nan()
             && &*engine.reflection.class(info.owner).name == "UIScale"
@@ -193,14 +216,14 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
     let name = engine.reflection.name(info.name);
     match info.script_type {
         ScriptType::Number => {
+            // Any value goes: a string as Luau reads a number, anything else (and a string that is no number) as 0
+            // (measured in a playing client, Studio 0.744, tools/parity/probes/coercion.luau: "0x10" reads 16,
+            // "five", true, {}, a Vector3 and nil read 0)
             let number = match value {
-                LuaValue::Number(n) => Some(*n),
-                LuaValue::Integer(n) => Some(*n as f64),
-                LuaValue::String(_) => lua.coerce_number(value.clone())?,
-                _ => None,
-            };
-            let Some(number) = number else {
-                return Err(type_error(info, engine, name, "number", value));
+                LuaValue::Number(n) => *n,
+                LuaValue::Integer(n) => *n as f64,
+                LuaValue::String(_) => lua.coerce_number(value.clone())?.unwrap_or(0.0),
+                _ => 0.0,
             };
             Ok(Value::Number(number_for(engine, info, number)))
         }
@@ -216,11 +239,8 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
             }
             _ => Err(type_error(info, engine, name, "string", value)),
         },
-        ScriptType::Boolean => match value {
-            LuaValue::Boolean(b) => Ok(Value::Bool(*b)),
-            LuaValue::Nil => Ok(Value::Bool(false)),
-            _ => Err(type_error(info, engine, name, "boolean", value)),
-        },
+        // Lua truth: only nil and false are false (measured likewise: 0, "" and {} read true)
+        ScriptType::Boolean => Ok(Value::Bool(!matches!(value, LuaValue::Nil | LuaValue::Boolean(false)))),
         ScriptType::EnumItem => {
             let Some(enum_name) = &info.enum_name else {
                 return Ok(from_lua(value));

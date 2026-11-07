@@ -148,8 +148,10 @@ impl ScriptType {
 /// Engine storage kinds `Coerce` treats specially.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EngineType {
-    /// int, int64, int32, Int32, Int64: truncated toward zero
+    /// int, int32, Int32: truncated toward zero, out of range (or not finite) the minimum
     Integer,
+    /// int64, Int64: rounded half away from zero, out of range (or not finite) zero
+    Int64,
     /// float: single precision (TextSize of text objects: whole 1..100)
     Float,
     ContentId,
@@ -362,7 +364,8 @@ struct FontEnums {
 
 fn engine_type(name: &str) -> EngineType {
     match name {
-        "int" | "int64" | "int32" | "Int32" | "Int64" => EngineType::Integer,
+        "int" | "int32" | "Int32" => EngineType::Integer,
+        "int64" | "Int64" => EngineType::Int64,
         "float" => EngineType::Float,
         "ContentId" => EngineType::ContentId,
         _ => EngineType::Other,

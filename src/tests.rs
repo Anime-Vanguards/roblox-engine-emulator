@@ -110,7 +110,13 @@ fn instances_properties_and_errors() {
         assert(Message(function() F.BorderMode = "Nope" end) == "Unable to assign property BorderMode. EnumItem of type BorderMode expected, got string")
         assert(Message(function() F.BorderMode = Enum.Font.Arial end) == "Unable to assign property BorderMode. EnumItem of type BorderMode expected, got Enum.Font.Arial")
         assert(Message(function() F.AbsoluteSize = Vector2.new() end) == "Unable to assign property AbsoluteSize. Property is read only")
-        assert(Message(function() F.Visible = 5 end) == "Unable to assign property Visible. boolean expected, got number")
+        -- (any value goes into a boolean or number property, as in a playing client: Lua truth, Luau's number reading or 0)
+        F.Visible = 0
+        assert(F.Visible == true)
+        F.BackgroundTransparency = "0.5"
+        assert(F.BackgroundTransparency == 0.5)
+        F.BackgroundTransparency = "x"
+        assert(F.BackgroundTransparency == 0)
         assert(Message(function() F.Parent = 5 end) == "@: invalid argument #3 (Instance expected, got number)")
         assert(Message(function() F.Parent = F end) == "Attempt to set parent of Frame to Frame would result in circular reference")
         assert(Message(function() return Instance.new("NotAClass") end) == 'Unable to create an Instance of type "NotAClass"')
@@ -299,6 +305,39 @@ fn clear_all_children_destroys_the_last_child_first() {
         "#,
     );
     assert_eq!(lines(&engine), vec!["print: C3", "print: C2", "print: C1"]);
+}
+
+#[test]
+fn number_and_boolean_properties_take_any_value_as_in_roblox() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/coercion.luau)
+    assert_script(
+        r#"
+        local Int = Instance.new("IntValue")
+        local function IntOf(Value) Int.Value = Value return Int.Value end
+        assert(IntOf(2.5) == 3 and IntOf(-2.5) == -3 and IntOf(2.7) == 3 and IntOf(-0.5) == -1)
+        assert(IntOf(1e20) == 0 and IntOf(0 / 0) == 0 and IntOf(math.huge) == 0)
+        assert(IntOf("0x10") == 16 and IntOf(" 5 ") == 5 and IntOf("five") == 0 and IntOf(true) == 0 and IntOf(nil) == 0)
+        local Frame = Instance.new("Frame")
+        local function ZOf(Value) Frame.ZIndex = Value return Frame.ZIndex end
+        assert(ZOf(2.7) == 2 and ZOf(-2.7) == -2 and ZOf(2 ^ 31) == -2147483648 and ZOf(0 / 0) == -2147483648)
+        assert(1 / ZOf(-0.5) == math.huge, "an integer reads no -0")
+        Frame.BorderSizePixel = 1000
+        assert(Frame.BorderSizePixel == 100)
+        Frame.BorderSizePixel = -3
+        assert(Frame.BorderSizePixel == 0)
+        local Label = Instance.new("TextLabel")
+        Label.TextSize = 2 ^ 31
+        assert(Label.TextSize == 1)
+        local Bool = Instance.new("BoolValue")
+        for _, Truthy in { 0, "", {}, Vector3.zero } do
+            Bool.Value = false
+            Bool.Value = Truthy
+            assert(Bool.Value == true)
+        end
+        Bool.Value = nil
+        assert(Bool.Value == false)
+        "#,
+    );
 }
 
 #[test]

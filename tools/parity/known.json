@@ -91,22 +91,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "intvalue-rounding int 3,int -3,int 9007199254740992",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "bool-assign-number ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "int-assign-badstring ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-new int 5,int 0,AttributeChanged A,A-signal",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute-nan AttributeChanged A,A-signal,AttributeChanged A,A-signal",
 			"why": "not fixed yet"
 		}
@@ -174,6 +158,16 @@
 		},
 		{
 			"line": "require-string error error requiring \"ReplicatedStorage.ParityRequires.Two\": require path must start with a valid prefix: ./, ../, or @",
+			"why": "not fixed yet"
+		}
+	],
+	"coercion": [
+		{
+			"line": "datatype-write CFrame=Vector3 error Unable to assign property CFrame. CoordinateFrame expected, got Vector3",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "datatype-write Material=string-number ok ",
 			"why": "not fixed yet"
 		}
 	],
@@ -806,10 +800,6 @@
 		}
 	],
 	"errors": [
-		{
-			"line": "error wrong-type-write-string | no error",
-			"why": "not fixed yet"
-		},
 		{
 			"line": "error enum-wrong | Unable to assign property Material. Invalid value \"NotAMaterial\" for enum Material",
 			"why": "not fixed yet"

@@ -179,7 +179,7 @@ pub fn untyped_variant(engine: &Engine, value: &Value, engine_type: crate::refle
     Some(match value {
         Value::Bool(b) => Variant::Bool(*b),
         Value::Number(n) => match engine_type {
-            EngineType::Integer => Variant::Int32(*n as i32),
+            EngineType::Integer | EngineType::Int64 => Variant::Int32(*n as i32),
             EngineType::Float => Variant::Float32(*n as f32),
             _ => Variant::Float64(*n),
         },
