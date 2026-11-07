@@ -225,6 +225,33 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// A script error as a playing client's LogService.MessageOut gets it: the message, then the stack between `Stack Begin`
+/// and `Stack End`, a line per frame of the script's own code (`Script '<chunk>', Line <n> - function <name>`, or no
+/// function for an anonymous one), each indented four spaces. Measured in a playing client (Studio 0.744,
+/// tools/parity/probes/logservice_text.luau): `task.spawn(error, "x")` has no frame between the two. `trace` is the
+/// Luau traceback the scheduler took (`<chunk>:<line>[ function <name>]` a line); the engine's own Luau (`rur.*`) is
+/// Roblox's C++ and has no frame. (ree compiles scripts with inlining, so a function inlined into its caller has no frame
+/// of its own; Studio's playing client keeps one per call.)
+fn client_error_text(message: &str, trace: &str) -> String {
+    let mut text = format!("{message}\n    Stack Begin");
+    for line in trace.lines() {
+        let (place, function) = match line.split_once(" function ") {
+            Some((place, function)) => (place, Some(function)),
+            None => (line, None),
+        };
+        let Some((chunk, number)) = place.rsplit_once(':') else { continue };
+        if chunk.starts_with("rur.") || chunk.starts_with('[') || number.parse::<u32>().is_err() {
+            continue;
+        }
+        text.push_str(&format!("\n    Script '{chunk}', Line {number}"));
+        if let Some(function) = function {
+            text.push_str(&format!(" - function {function}"));
+        }
+    }
+    text.push_str("\n    Stack End");
+    text
+}
+
 /// The side a run's scripts are on ([`Options::run_context`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RunContext {
@@ -518,6 +545,13 @@ impl Engine {
         let message = message.into();
         if self.options.server() {
             self.fire_log_events(&mut state, kind, &message, trace.as_deref());
+        } else if !self.options.edit_mode() && !state.sched.delivering_log {
+            // a playing client's LogService.MessageOut gets the line later in the frame (scheduler::deliver_log)
+            let text = match &trace {
+                Some(trace) if kind == "error" => client_error_text(&message, trace),
+                _ => message.clone(),
+            };
+            state.sched.log_queue.push((kind, text));
         }
         state.output.add(kind, message, trace, now);
     }

@@ -193,6 +193,11 @@ pub struct ReplayStatus {
 pub struct Scheduler {
     pub now: f64,
     pub frame: u64,
+    /// A playing client's output lines waiting for LogService.MessageOut (kind, text): it gets them after the frame's
+    /// Heartbeat handlers and the deferred work they leave ([`deliver_log`])
+    pub log_queue: Vec<(&'static str, String)>,
+    /// While MessageOut's handlers run: a line they log reaches no handler (measured)
+    pub delivering_log: bool,
     pub heartbeat_count: u64,
     pub frame_duration: f64,
     /// Heartbeats per second when Heartbeat has its own clock (edit mode)
@@ -350,6 +355,8 @@ impl Scheduler {
         let mut scheduler = Scheduler {
             now: 0.0,
             frame: 0,
+            log_queue: Vec::new(),
+            delivering_log: false,
             heartbeat_count: 0,
             frame_duration: 1.0 / 60.0,
             heartbeat_rate: Some(240.0),
@@ -1186,9 +1193,8 @@ fn refuse(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
         message = format!("{message} when calling {name} on line {} in {source}", info.line_defined.unwrap_or(0));
     }
     let _ = lua;
-    let mut state = engine.state.borrow_mut();
-    let now = state.sched.now;
-    state.output.add("error", message, None, now);
+    // (through Engine::output, so LogService.MessageOut gets it as Roblox's does: tools/parity/probes/deferred_points.luau)
+    engine.output("error", message, None);
     Ok(())
 }
 
@@ -1401,7 +1407,43 @@ fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: 
 /// A Heartbeat's handlers (after its resumptions), with delta `delta` (float32).
 fn heartbeat_handlers(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
     run_hooks(lua, engine, Phase::Heartbeat, delta)?;
-    flush_deferred(lua, engine)
+    flush_deferred(lua, engine)?;
+    deliver_log(lua, engine)
+}
+
+/// A playing client's LogService.MessageOut: the lines logged since the last delivery, each with its MessageType, after
+/// the frame's Heartbeat handlers and the deferred work they leave, handlers called later-connected first. Measured in a
+/// playing client (Studio 0.744, tools/parity/probes/logservice.luau): a warning logged at a resumption point, in a
+/// deferred thread or in a Heartbeat handler arrives after that frame's Heartbeat handlers, after the deferred events
+/// queued beside it; a line a MessageOut handler logs reaches no handler. (A server fires MessageOut when the line is
+/// logged: Engine::fire_log_events.)
+pub fn deliver_log(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    let lines = std::mem::take(&mut engine.state.borrow_mut().sched.log_queue);
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let Some(log) = crate::services::find_service(engine, engine.world().game, "LogService") else { return Ok(()) };
+    let signal = {
+        let state = engine.state.borrow();
+        engine.reflection.name_id("MessageOut").and_then(|event| state.dom.at(log).signals.as_ref().and_then(|signals| signals.event(event)))
+    };
+    let Some(signal) = signal else { return Ok(()) };
+    engine.state.borrow_mut().sched.delivering_log = true;
+    let mut result = Ok(());
+    for (kind, text) in lines {
+        let item = engine.reflection.enum_item("MessageType", match kind {
+            "warn" => "MessageWarning",
+            "error" => "MessageError",
+            _ => "MessageOutput",
+        });
+        let Some(item) = item else { continue };
+        result = crate::lua::instance::fire_immediate(lua, engine, signal, &[Value::String(crate::value::Str::from(text.as_str())), Value::EnumItem(item)]);
+        if result.is_err() {
+            break;
+        }
+    }
+    engine.state.borrow_mut().sched.delivering_log = false;
+    result
 }
 
 /// One Heartbeat at virtual time `at` with delta `delta` (float32).

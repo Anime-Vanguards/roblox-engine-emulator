@@ -632,7 +632,10 @@ refuses `--player`.
   Roblox's documentation where it gives them.
 - Remotes: FireClient / FireAllClients reach no client; InvokeClient waits until its player leaves.
 - EncodingService (Zstd compression and Base64) in a server; a client keeps it unemulated.
-- LogService.MessageOut and ScriptContext.Error fire for a server's own output.
+- LogService.MessageOut and ScriptContext.Error fire for a server's own output. A playing client's
+  LogService.MessageOut gets each line after the frame's Heartbeat handlers and the deferred work they leave, a
+  script error with its stack lines (`Stack Begin`, `Script '<name>', Line <n> - function <f>`, `Stack End`), as a
+  playing client does; a line a MessageOut handler logs reaches no handler.
 - `--studio false` makes `RunService:IsStudio()` false, as on a live server, so a game takes its live
   branches.
 

@@ -356,7 +356,9 @@ fn a_server_compresses_and_encodes_buffers() {
 }
 
 /// A server's output reaches its scripts: LogService.MessageOut (message, MessageType) for each line and ScriptContext.Error
-/// (message, stack trace, nil) for a script error, deferred; a client fires neither.
+/// (message, stack trace, nil) for a script error, deferred. A playing client's MessageOut gets them after the frame's
+/// Heartbeat, an error with its stack lines (measured: tools/parity/probes/logservice.luau); its ScriptContext.Error is
+/// not emulated.
 #[test]
 fn a_server_hears_its_output_through_log_service_and_script_context() {
     for run_context in [RunContext::Server, RunContext::Client] {
@@ -392,7 +394,8 @@ fn a_server_hears_its_output_through_log_service_and_script_context() {
             assert!(has(&lines, "print: heard MessageOutput=one 2;MessageWarning=careful;MessageError=boom"), "{lines:?}");
             assert!(has(&lines, "print: errors boom|true|nil"), "{lines:?}");
         } else {
-            assert!(has(&lines, "print: heard ") && has(&lines, "print: errors "), "{lines:?}");
+            let heard = "print: heard MessageOutput=one 2;MessageWarning=careful;MessageError=boom\n    Stack Begin\n    Script 'Test', Line 11\n    Stack End";
+            assert!(has(&lines, heard) && has(&lines, "print: errors "), "{lines:?}");
         }
     }
 }

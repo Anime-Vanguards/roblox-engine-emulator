@@ -64,11 +64,27 @@ function defaultRee() {
 	return fs.existsSync(exe) ? exe : null;
 }
 
+// The probe's print collects its lines and the harness prints them when the probe has ended, as a real engine's test runner
+// does (capture_sim.py: the job's own print is a collector), so the probe's lines never reach LogService.MessageOut, which
+// a probe may be listening to. tests/parity.rs wraps the same way.
+export const HARNESS_PRINT = `local __ParityLines, __ParityRealPrint = {}, print
+local function print(...)
+	local Parts = table.pack(...)
+	for Index = 1, Parts.n do
+		Parts[Index] = tostring(Parts[Index])
+	end
+	table.insert(__ParityLines, table.concat(Parts, " ", 1, Parts.n))
+end`;
+export const HARNESS_FLUSH = `for _, Line in __ParityLines do
+	__ParityRealPrint(Line)
+end
+__ParityRealPrint("@done")`;
+
 // One probe through `ree run`: its printed lines (the run's own `@done` dropped), the errors and warnings scripts and the
 // engine reported (output, not failures: a real engine reports them too), and why the run failed if it did.
 export function runInRee(name, ree, scratch) {
 	const harness = path.join(scratch, `${name}.luau`);
-	fs.writeFileSync(harness, `return function(Context)\n${body(name)}\nprint("@done")\nend\n`);
+	fs.writeFileSync(harness, `return function(Context)\n${HARNESS_PRINT}\n${body(name)}\n${HARNESS_FLUSH}\nend\n`);
 	const empty = path.join(scratch, "empty");
 	fs.mkdirSync(empty, { recursive: true });
 	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "120"], {
@@ -96,7 +112,7 @@ export function runInRee(name, ree, scratch) {
 // top-bar inset, as a probe's coordinates line prints it). RUR_NATIVE_ENGINE picks a rur-native build, as for rur itself.
 export function runInRur(name, checkout, scratch) {
 	const fixture = path.join(scratch, `${name}.luau`);
-	fs.writeFileSync(fixture, `return function(Target)\n${body(name)}\nprint("@done")\nend\n`);
+	fs.writeFileSync(fixture, `return function(Target)\n${HARNESS_PRINT}\n${body(name)}\n${HARNESS_FLUSH}\nend\n`);
 	const out = path.join(scratch, `${name}-rur`);
 	const device = String(probeOptions(name).device || "desktop");
 	const result = spawnSync(process.execPath, [path.join(checkout, "cli", "rur.mjs"), "render", "--fixture", fixture, "--mode", "play",

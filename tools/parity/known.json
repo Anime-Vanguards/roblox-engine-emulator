@@ -1669,16 +1669,6 @@
 			"why": "not fixed yet"
 		}
 	],
-	"deferred_points": [
-		{
-			"line": "cut-event count 80 messages 1 Enum.MessageType.MessageError Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function on line @133 in <probe>",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "logged 3 Maximum re-entrancy depth (80) exceeded calling task.defer | Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function on line @205 in <probe> | Maximum event re-entrancy depth exceeded for Object.ValueChanged when calling OnValue on line @218 in <probe>",
-			"why": "not fixed yet"
-		}
-	],
 	"derived_changed": [
 		{
 			"line": "loose size a:Size,a:AssemblyMass,a:Mass",
@@ -2095,22 +2085,6 @@
 	],
 	"logservice": [
 		{
-			"line": "warn after-call,end-of-step,deferred,event,|Hear,out(MessageWarning:parity-log warn one)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "print-and-warns after-calls,|Hear,out(MessageOutput:parity-log print 1 nil true),out(MessageWarning:parity-log warn two),out(MessageWarning:parity-log warn three)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "from-heartbeat hb-after-call,|Hear,out(MessageWarning:parity-log from heartbeat)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "from-defer defer-after-call,|Hear,out(MessageWarning:parity-log from defer)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "spawned-error after-spawn,error(parity-log spawned error;nil),|Hear,out(MessageError:parity-log spawned error +2 lines)",
 			"why": "not fixed yet"
 		},
@@ -2128,10 +2102,6 @@
 		},
 		{
 			"line": "deferred-error |Hear,error(parity-log deferred error;nil),out(MessageError:parity-log deferred error +2 lines)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "nested |Hear,nested-after-call,out(MessageWarning:parity-log outer)",
 			"why": "not fixed yet"
 		},
 		{
@@ -2170,10 +2140,6 @@
 		},
 		{
 			"line": "coroutine-wrap out MessageError[@77: parity-text wrapped /     Stack Begin /     Stack End] trace []",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "warn-print out MessageWarning[parity-text warn 1 nil] MessageOutput[parity-text print\twith tab] trace ",
 			"why": "not fixed yet"
 		}
 	],
@@ -2228,12 +2194,6 @@
 		},
 		{
 			"line": "shared-clone ReplicatedStorage.ParityRequireLog.Second",
-			"why": "not fixed yet"
-		}
-	],
-	"signals": [
-		{
-			"line": "connect-nil-fire connected false logged 4 Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function | Attempt to connect failed: Passed value is not a function",
 			"why": "not fixed yet"
 		}
 	],

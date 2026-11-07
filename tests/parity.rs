@@ -48,9 +48,15 @@ fn missing(expected: &[String], actual: &[String]) -> Vec<String> {
     out
 }
 
+/// The probe's print collects its lines and the harness prints them when the probe has ended, as the real engine's test
+/// runner does, so they never reach LogService.MessageOut (tools/parity/run.mjs HARNESS_PRINT and HARNESS_FLUSH: the same
+/// text).
+const HARNESS_PRINT: &str = "local __ParityLines, __ParityRealPrint = {}, print\nlocal function print(...)\n\tlocal Parts = table.pack(...)\n\tfor Index = 1, Parts.n do\n\t\tParts[Index] = tostring(Parts[Index])\n\tend\n\ttable.insert(__ParityLines, table.concat(Parts, \" \", 1, Parts.n))\nend";
+const HARNESS_FLUSH: &str = "for _, Line in __ParityLines do\n\t__ParityRealPrint(Line)\nend\n__ParityRealPrint(\"@done\")";
+
 fn run_probe(scratch: &Path, name: &str, source: &str) -> Vec<String> {
     let harness = scratch.join(format!("{name}.luau"));
-    std::fs::write(&harness, format!("return function(Context)\n{source}\nprint(\"@done\")\nend\n")).unwrap();
+    std::fs::write(&harness, format!("return function(Context)\n{HARNESS_PRINT}\n{source}\n{HARNESS_FLUSH}\nend\n")).unwrap();
     let empty = scratch.join("empty");
     std::fs::create_dir_all(&empty).unwrap();
     let done = Command::new(env!("CARGO_BIN_EXE_ree"))

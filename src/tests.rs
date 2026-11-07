@@ -5418,6 +5418,44 @@ fn json_encodes_and_decodes_as_a_playing_client_does() {
     assert!(!output.iter().any(|line| line.starts_with("error")), "{output:?}");
 }
 
+/// A playing client's LogService.MessageOut gets each line after the frame's Heartbeat handlers and the deferred work
+/// they leave, with its MessageType, a script error with its stack lines; a line a MessageOut handler logs reaches no
+/// handler (measured in a playing client, Studio 0.744: tools/parity/probes/logservice.luau, logservice_text.luau).
+#[test]
+fn a_playing_clients_message_out_arrives_after_the_frames_heartbeat() {
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Log = {}
+        _G.Log = Log
+        game:GetService("RunService").Heartbeat:Connect(function()
+            table.insert(Log, "|hb")
+        end)
+        game:GetService("LogService").MessageOut:Connect(function(Message, Kind)
+            table.insert(Log, Kind.Name .. "[" .. table.concat(string.split(Message, "\n"), "/") .. "]")
+            if Message == "outer" then
+                warn("inner")
+            end
+        end)
+        warn("outer")
+        table.insert(Log, "after-call")
+        task.defer(table.insert, Log, "deferred")
+        task.spawn(error, "spawned")
+        "##,
+    );
+    for _ in 0..2 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let output = run(&lua, &engine, r#"print(table.concat(_G.Log, ","))"#);
+    let want = "print: after-call,deferred,|hb,MessageWarning[outer],MessageError[spawned/    Stack Begin/    Stack End],|hb";
+    assert!(output.contains(&want.to_string()), "{output:?}");
+}
+
 /// Lowers the engine's limits on held slots (lua/refs.rs) to what it holds now plus `work` / `wait`.
 fn limit_held(engine: &Engine, work: i32, wait: i32) {
     let refs = engine.lua.borrow();
