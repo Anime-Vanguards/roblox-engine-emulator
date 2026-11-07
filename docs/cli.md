@@ -356,10 +356,14 @@ Windows service reads them on a profile's behalf (tools/hw-counters):
   folder traversal. It starts on demand and stops itself after a minute with no client. The account it was installed
   for may start it and read its status, nothing else. Its pipe opens only for that account (and SYSTEM), from this
   machine; the client process must run as that account and gets counts for its own threads only, never another
-  process's. While a profile counts (30 minutes at most) it runs one kernel trace session of context switches that
-  carry the counters' values. On AMD Family 1Ah processors it registers four events with Windows until the next
-  restart, through Windows Performance Recorder (`wpr.exe`, part of Windows). No driver is installed and no protection
-  is turned off.
+  process's. While any client counts (each 30 minutes at most) it runs one kernel trace session of context switches
+  that carry the counters' values. Only one session at a time may hold the CPU's counters, so up to eight clients
+  share it: a ree profile, roblox-sim's frame logs, two arms of an A/B side by side. The first client starts it with
+  its counters, later ones count those or some of them (one that asks for others is told the service is busy, with
+  what it counts), each gets only its own process's threads, and the last one out stops it. A client that leaves while
+  others count waits a little over a second for the trace's last buffers. On AMD Family 1Ah processors it registers
+  four events with Windows until the next restart, through Windows Performance Recorder (`wpr.exe`, part of Windows).
+  No driver is installed and no protection is turned off.
 - **The counters**: `instructions` (retired), `cycles` (core clock cycles while the thread ran), `branches`,
   `branch-misses` (mispredicted), `l1d-accesses` (loads and stores dispatched to the L1 data cache), `l1d-misses`
   (lines the L1 data cache filled for demand loads and stores), `l2-misses` (of those, lines filled from beyond the
