@@ -3329,3 +3329,39 @@ index fe2ae3f..4b6878e 100644
              L->global->work.vectorunits++;
  #if LUA_VECTOR_SIZE == 4
          float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
+diff --git a/luau/VM/src/lprofile.cpp b/luau/VM/src/lprofile.cpp
+index c21d972..d7a1212 100644
+--- a/luau/VM/src/lprofile.cpp
++++ b/luau/VM/src/lprofile.cpp
+@@ -32,8 +32,8 @@
+ #include <vector>
+ 
+ thread_local lua_ProfileState* luaP_state = NULL;
+-uint8_t luaP_allockind = 0;
+-void* luaP_allocblock = NULL;
++thread_local uint8_t luaP_allockind = 0;
++thread_local void* luaP_allocblock = NULL;
+ 
+ namespace
+ {
+diff --git a/luau/VM/src/lprofile.h b/luau/VM/src/lprofile.h
+index 1e27fb6..7dc3b92 100644
+--- a/luau/VM/src/lprofile.h
++++ b/luau/VM/src/lprofile.h
+@@ -10,11 +10,12 @@ struct lua_ProfileState;
+ extern thread_local lua_ProfileState* luaP_state;
+ 
+ // set right before a storage allocation (a table's array or hash part, a thread's stack, the string table, a function's
+-// prototype arrays) and read by the allocation callback (lua_allocblock): what the memory is for. A plain store when no
+-// profile runs.
+-extern uint8_t luaP_allockind;
++// prototype arrays) and read by the allocation callback (lua_allocblock): what the memory is for; only the store when no
++// profile runs. Both are the allocating thread's, as luaP_state is: VMs on other threads allocate at the same time, and a
++// callback that read another thread's block would read, and mark, an object of that VM's heap.
++extern thread_local uint8_t luaP_allockind;
+ // the collectable object an allocation callback reports (NULL for other memory)
+-extern void* luaP_allocblock;
++extern thread_local void* luaP_allocblock;
+ 
+ // whether L's VM runs the stepping interpreter for a profile (luau_execute)
+ LUAI_FUNC bool luaP_stepping(lua_State* L);

@@ -32,8 +32,8 @@
 #include <vector>
 
 thread_local lua_ProfileState* luaP_state = NULL;
-uint8_t luaP_allockind = 0;
-void* luaP_allocblock = NULL;
+thread_local uint8_t luaP_allockind = 0;
+thread_local void* luaP_allocblock = NULL;
 
 namespace
 {

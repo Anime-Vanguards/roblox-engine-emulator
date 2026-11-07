@@ -207,6 +207,87 @@ fn allocations_are_typed_and_found_by_their_stack() {
     assert_eq!(at("strings", 9, "string"), 300.0);
 }
 
+thread_local! {
+    /// What this thread's allocation callback was last told by lua_allocblock: the block's address and the kind
+    static LAST_ALLOCATION: std::cell::Cell<(usize, i32)> = const { std::cell::Cell::new((0, -1)) };
+}
+
+unsafe extern "C-unwind" fn keep_allocation(state: *mut mlua::ffi::lua_State, _old: usize, _new: usize) {
+    let (block, kind) = vm::alloc_block(state);
+    LAST_ALLOCATION.with(|last| last.set((block as usize, kind)));
+}
+
+/// Two VMs allocating at once on two threads, each with an allocation callback (two profiled runs in one process, as a
+/// host's parallel tests make): what lua_allocblock tells a callback is its own thread's allocation, the object and the
+/// kind. The VM kept both in process-wide variables, so a callback could read the object another thread was
+/// allocating, and the memory profile then read and marked it in that VM's heap: two profiled renders at once crashed
+/// one run in three (access violations in lua_profileobject, the collector's asserts on objects it found dead).
+#[test]
+fn an_allocation_callback_is_told_its_own_threads_allocation() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    };
+    let _lock = lock();
+    let stop = Arc::new(AtomicBool::new(false));
+    let rounds = Arc::new(AtomicU64::new(0));
+    let other = {
+        let (stop, rounds) = (stop.clone(), rounds.clone());
+        std::thread::spawn(move || {
+            let lua = Lua::new();
+            let state = main_state(&lua);
+            unsafe {
+                (*mlua::ffi::lua_callbacks(state)).onallocate = Some(keep_allocation);
+                // (a round allocates a table, then its array part: the object and the kind both change)
+                lua.exec_raw::<()>((), |state| {
+                    while !stop.load(Ordering::Relaxed) {
+                        mlua::ffi::lua_createtable(state, 4, 0);
+                        mlua::ffi::lua_pop(state, 1);
+                        rounds.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .unwrap();
+                (*mlua::ffi::lua_callbacks(state)).onallocate = None;
+            }
+        })
+    };
+    while rounds.load(Ordering::Relaxed) == 0 {
+        std::thread::yield_now();
+    }
+    let lua = Lua::new();
+    let state = main_state(&lua);
+    let (mut checked, mut wrong_object, mut wrong_kind) = (0u64, 0u64, 0u64);
+    let started = rounds.load(Ordering::Relaxed);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    unsafe {
+        (*mlua::ffi::lua_callbacks(state)).onallocate = Some(keep_allocation);
+        lua.exec_raw::<()>((), |state| {
+            // 100,000 rounds here, and until the other thread has made as many beside them
+            while checked < 100_000 || (rounds.load(Ordering::Relaxed) - started < 100_000 && std::time::Instant::now() < deadline) {
+                // a table with no parts is one allocation: the table, an object
+                mlua::ffi::lua_createtable(state, 0, 0);
+                if LAST_ALLOCATION.with(|last| last.get()) != (mlua::ffi::lua_topointer(state, -1) as usize, vm::ALLOC_OBJECT) {
+                    wrong_object += 1;
+                }
+                mlua::ffi::lua_pop(state, 1);
+                // with an array part, the last allocation is the array's storage
+                mlua::ffi::lua_createtable(state, 8, 0);
+                if LAST_ALLOCATION.with(|last| last.get()) != (0, vm::ALLOC_TABLE) {
+                    wrong_kind += 1;
+                }
+                mlua::ffi::lua_pop(state, 1);
+                checked += 1;
+            }
+        })
+        .unwrap();
+        (*mlua::ffi::lua_callbacks(state)).onallocate = None;
+    }
+    stop.store(true, Ordering::Relaxed);
+    other.join().unwrap();
+    let beside = rounds.load(Ordering::Relaxed) - started;
+    assert_eq!((wrong_object, wrong_kind), (0, 0), "{checked} rounds, {beside} on the other thread at the same time: (callbacks told another object, told another kind)");
+}
+
 /// A heap snapshot sees what a script holds: by type, the biggest by what they keep alive with the path that holds
 /// them, the run's own objects by the stack that made them (a freed object leaves), and garbage not collected yet.
 #[test]

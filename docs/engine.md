@@ -456,7 +456,8 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   userdata names its class) and what other memory is for (a table's array and hash parts, a thread's stack
   and frames, the string table, a loaded function's arrays). A sampled object is marked in its header
   (`lua_profilemark`), and the collector calls the profile when it frees one, so the run's live objects are
-  known by the stack that allocated them.
+  known by the stack that allocated them. What `lua_allocblock` reports is the calling thread's allocation:
+  VMs allocating on other threads at the same time never show in it.
 - **Heap snapshots**: `lua_enumheap` walks every object and every reference the collector follows (those
   `luaC_enumheap` gives, and what it leaves out: a prototype's source, debug name, upvalue and local names, a
   thread's namecall and open upvalues, a weak table's strings, which the collector never clears), from the
@@ -477,8 +478,8 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
 - **Host time** (`time`, luau_profile.rs): a 1 ms ticker, sampled at the VM's calls, returns and loop edges;
   the engine's own steps (the Animator, joints, physics) get frames of their own.
 
-Off, a profiler costs a thread-local read where it hooks in (the interpreter: one per entry), a plain store
-where the VM allocates table storage, and a bit test where the collector frees an object. On, nothing a
+Off, a profiler costs a thread-local read where it hooks in (the interpreter: one per entry), a thread-local
+store where the VM allocates table storage, and a bit test where the collector frees an object. On, nothing a
 script sees changes: the profile allocates nothing on the VM's heap and leaves the VM's counts as they are,
 so the work clock, os.clock and a recording are the same (a sim recorded with every kind on, a frozen clock
 and a pinned epoch is byte for byte the unprofiled recording). Stepping makes the interpreter about five

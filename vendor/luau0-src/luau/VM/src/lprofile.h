@@ -10,11 +10,12 @@ struct lua_ProfileState;
 extern thread_local lua_ProfileState* luaP_state;
 
 // set right before a storage allocation (a table's array or hash part, a thread's stack, the string table, a function's
-// prototype arrays) and read by the allocation callback (lua_allocblock): what the memory is for. A plain store when no
-// profile runs.
-extern uint8_t luaP_allockind;
+// prototype arrays) and read by the allocation callback (lua_allocblock): what the memory is for; only the store when no
+// profile runs. Both are the allocating thread's, as luaP_state is: VMs on other threads allocate at the same time, and a
+// callback that read another thread's block would read, and mark, an object of that VM's heap.
+extern thread_local uint8_t luaP_allockind;
 // the collectable object an allocation callback reports (NULL for other memory)
-extern void* luaP_allocblock;
+extern thread_local void* luaP_allocblock;
 
 // whether L's VM runs the stepping interpreter for a profile (luau_execute)
 LUAI_FUNC bool luaP_stepping(lua_State* L);
