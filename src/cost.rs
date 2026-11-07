@@ -92,10 +92,156 @@ pub const COLD_TOUCH: f64 = 0.045e-6;
 pub const COLD_TOUCH_GUI: f64 = 0.27e-6;
 
 /// Which first-touch price an instance of `class` pays ([`Touched::touch`]): a GUI object's or UI component's ([`COLD_TOUCH_GUI`]),
-/// else [`COLD_TOUCH`].
+/// else [`COLD_TOUCH`] (one made right after or right before the instance touched cold before it: [`COLD_TOUCH_ALONE`] when not).
 pub fn cold_touch(reflection: &Reflection, class: ClassId) -> f64 {
     if ColdKind::of(reflection, class) == ColdKind::Gui { COLD_TOUCH_GUI } else { COLD_TOUCH }
 }
+
+/// The first touch in a frame of an instance touched by itself: one not made right after (or right before) the instance touched cold
+/// before it. [`COLD_TOUCH`] is what a client pays for instances made together, one after another, and touched in that order (the
+/// hardware fetches the next one ahead); an effect's instances, cloned over many frames between other work and touched among other
+/// code's, are each a miss of their own. Measured in rendered and headless clients of a game's match place (roblox-sim, Studio 0.744;
+/// notes/macro castprobe, four rendered sessions, the median of 15 frames): 48 parts, each from a clone made a frame apart with other
+/// clones and allocations between, touched once each in a frame (after a first touch of the kind, so the member's code is warm),
+/// against 48 parts made together in one loop: GetAttribute 0.52 us against 0.10, FindFirstChild 0.78 / 0.11, IsA 0.30 / 0.10, a Size
+/// read 0.40 / 0.11, a Transparency write 0.40 / 0.13, a CFrame write 0.78 / 0.41, an emitter's TimeScale read 0.35 (hot 0.04): 0.29 us
+/// more at the median. The engine has no view of where an instance lies, so "made together" is creation order: the instance's serial
+/// next to the last cold one's. An instance a script touches every frame pays the plain first touch whatever its order: an effect
+/// system's step lists reading every emitter of four waves of effects once a frame read 0.85-1.17x a client with it (notes/macro vfx)
+/// and 1.2-2.0x with these touches priced alone; the probe's lone instances were last touched two frames before.
+pub const COLD_TOUCH_ALONE: f64 = 0.32e-6;
+
+/// The engine paths whose code a client runs cold at their first use in a frame, beyond a member's first use ([`FIRST_CALL`] and the
+/// rest): a frame runs render, physics and animation work between two frames' scripts, so the first clone, destroy, move or emit of a
+/// frame runs the engine's code for it, and for each class it handles, out of the CPU's caches. Measured in rendered clients of a
+/// game's match place (roblox-sim, Studio 0.744; notes/macro castprobe, four sessions, each case in a frame of its own after a few
+/// engine calls every frame makes anyway, the median of 15 rounds), as the frame's first such call less a second one on another cold
+/// copy, less what the member's first use already costs here: a clone 25 us and each class it holds that the frame has not cloned yet
+/// ([`first_cloned`]: a part 55 us in all, a part with 4 emitters 96, a model of 5 parts each with an attachment and 2 emitters 128,
+/// a folder of 10 values 40); a destroy 10 us and its classes ([`first_destroyed`]: a part 47, a folder of 10 values 22); entering the
+/// Workspace 13.5 us (a folder 13.5, anything with a part 25-31: [`ENTER_PART_FIRST`]); a PivotTo 17-23, a part's CFrame write 10-12,
+/// BulkMoveTo 25-30, Emit 5.2, QueryDescendants 7.4, GetDescendants 4.8 (with its call), an emitter's Enabled write 3.8. Headless
+/// clients read the same within 20 % (a frame's first entry 21 for a part). Once a path ran in a frame, a second use costs only what
+/// a cold instance adds ([`clone_cold`], [`PIVOT_COLD_PART`] and the rest) over the hot prices.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Path {
+    Clone = 0,
+    Destroy = 1,
+    Enter = 2,
+    EnterPart = 3,
+    Pivot = 4,
+    BulkMove = 5,
+    Geometry = 6,
+    Emit = 7,
+    Query = 8,
+    Descendants = 9,
+    Toggle = 10,
+}
+const PATHS: usize = 11;
+pub const PATH_FIRST: [f64; PATHS] = [25.0e-6, 10.0e-6, 13.5e-6, ENTER_PART_FIRST, 16.0e-6, 28.0e-6, 9.5e-6, 4.4e-6, 6.6e-6, 3.6e-6, 2.4e-6];
+/// What the first part entering the Workspace in a frame adds to [`Path::Enter`]'s (a part 26 us, a folder 13.5)
+pub const ENTER_PART_FIRST: f64 = 12.5e-6;
+
+/// What the frame's first clone of an instance of `class` adds beyond [`Path::Clone`] (castprobe, each template's first clone in a
+/// frame less its twin's: a part 30 us, a MeshPart 55, a model 32, an attachment 12, a particle emitter 35, a beam 11, a trail 10, a
+/// light 12, a decal 27, a mesh 17, a folder or a value 7; a class the probe has no template of 10). Once a class was cloned in a
+/// frame, more of it cost what the clone prices say.
+pub fn first_cloned(reflection: &Reflection, class: ClassId) -> f64 {
+    1e-6 * match &*reflection.class(class).name {
+        "MeshPart" => 55.0,
+        "Model" => 32.0,
+        "Attachment" => 12.0,
+        "ParticleEmitter" => 35.0,
+        "Beam" => 11.0,
+        "Trail" => 10.0,
+        "Decal" | "Texture" => 27.0,
+        "Folder" => 7.0,
+        _ if reflection.is_a(class, "BasePart") => 30.0,
+        _ if reflection.is_a(class, "Light") => 12.0,
+        _ if reflection.is_a(class, "DataModelMesh") => 17.0,
+        _ if reflection.is_a(class, "ValueBase") => 7.0,
+        _ => 10.0,
+    }
+}
+
+/// What the frame's first destroy of an instance of `class` adds beyond [`Path::Destroy`] (castprobe, the frame's first destroy of each
+/// template's copy less the second: a part 36 us, a MeshPart 40, a model 15, an attachment 11, a particle emitter 11, a beam 1, a trail
+/// 4, a light 14, a decal 6.5, a mesh 6.5, a folder or a value 5.5; another class 6).
+pub fn first_destroyed(reflection: &Reflection, class: ClassId) -> f64 {
+    1e-6 * match &*reflection.class(class).name {
+        "MeshPart" => 40.0,
+        "Model" => 15.0,
+        "Attachment" => 11.0,
+        "ParticleEmitter" => 11.0,
+        "Beam" => 1.0,
+        "Trail" => 4.0,
+        "Decal" | "Texture" => 6.5,
+        "Folder" => 5.5,
+        _ if reflection.is_a(class, "BasePart") => 36.0,
+        _ if reflection.is_a(class, "Light") => 14.0,
+        _ if reflection.is_a(class, "DataModelMesh") => 6.5,
+        _ if reflection.is_a(class, "ValueBase") => 5.5,
+        _ => 6.0,
+    }
+}
+
+/// What cloning an instance a frame has not touched adds to [`cloned`]: the copy reads every property of a template no code has
+/// touched since an earlier frame (castprobe: a twin template's clone less the same template cloned again, per instance it holds: a
+/// part 1.8 us, a MeshPart 4.0, a particle emitter 1.8, a beam 1.5, a trail 1.7, a decal 1.9, a mesh 0.9, a light 0.5, an
+/// attachment 0.1, a folder or a value 0.4).
+pub fn clone_cold(reflection: &Reflection, class: ClassId) -> f64 {
+    1e-6 * match &*reflection.class(class).name {
+        "MeshPart" => 4.0,
+        "ParticleEmitter" => 1.8,
+        "Beam" => 1.5,
+        "Trail" => 1.7,
+        "Decal" | "Texture" => 1.9,
+        "Attachment" => 0.1,
+        _ if reflection.is_a(class, "BasePart") => 1.8,
+        _ if reflection.is_a(class, "DataModelMesh") => 0.9,
+        _ if reflection.is_a(class, "Light") => 0.5,
+        _ => 0.4,
+    }
+}
+
+/// What destroying an instance that has been in the Workspace since an earlier frame adds to [`DESTROYED`] and its leaving: the
+/// engine took it into its render, physics and particle work, which a destroy undoes (castprobe: a template's copy parented two
+/// frames before, destroyed third in a frame, against ree's price for the same: a part 6.65 us in all against 2.28, so 4.4 more, a
+/// MeshPart 4.5, an attachment 1.4, a particle emitter 2.1, a beam 0.7, a trail 1.0, a light 2.1, a decal 1.6, a mesh 0.8, a model 1.3,
+/// a folder or a value 0.5). The parity corpus destroys what it made in the same frame, which pays none of this.
+pub fn destroy_live(reflection: &Reflection, class: ClassId) -> f64 {
+    1e-6 * match &*reflection.class(class).name {
+        "MeshPart" => 4.5,
+        "Model" => 1.3,
+        "Attachment" => 1.4,
+        "ParticleEmitter" => 2.1,
+        "Beam" => 0.7,
+        "Trail" => 1.0,
+        "Decal" | "Texture" => 1.6,
+        _ if reflection.is_a(class, "BasePart") => 4.4,
+        _ if reflection.is_a(class, "Light") => 2.1,
+        _ if reflection.is_a(class, "DataModelMesh") => 0.8,
+        _ => 0.5,
+    }
+}
+
+/// What moving a part no code touched in this frame or the one before adds, by PivotTo (castprobe: a second PivotTo on another kept
+/// copy, untouched for about 20 frames, less the first again: a part 0.9-1.4 us, a part with 4 emitters 3.35, a model of 5 parts 7.0,
+/// of 5 parts with 15 attachments and emitters 16.4) and by BulkMoveTo (a second call's 8 parts less the first's again: 1.29 us a part,
+/// 2.41 with 4 emitters): a part, and each emitter under it (PivotTo every attachment or effect under it). A part a script moves every
+/// frame pays none: a game's attack cast that moves 35 rocks a frame by BulkMoveTo, timed in a client, pays about 1.4 us a part-move in all.
+pub const PIVOT_COLD_PART: f64 = 1.2e-6;
+pub const PIVOT_COLD_ATTACHED: f64 = 0.6e-6;
+pub const BULK_COLD_PART: f64 = 1.25e-6;
+pub const BULK_COLD_EMITTER: f64 = 0.28e-6;
+/// What an emit from an emitter the frame has not touched adds (castprobe: a second Emit(4) on another emitter less the first again,
+/// 1.7 us against ree's touch), what switching one on adds (0.9 against 0.2), and what a query from a root the frame has not touched
+/// adds (QueryDescendants of a model of 21 instances two frames old, the second query less the first again, 5.0 us). That one is
+/// priced by the call, not by the nodes: a walk of a whole service's static instances costs a client less a node than a fresh
+/// model's, and ree's services can hold far more than a client's place (a game's mounted asset tree under ReplicatedStorage).
+pub const EMIT_COLD: f64 = 1.45e-6;
+pub const TOGGLE_COLD: f64 = 0.7e-6;
+pub const QUERY_COLD: f64 = 4.6e-6;
 
 /// What a changed write adds to the first touch of an instance in a frame beyond [`COLD_TOUCH`]. A write dirties more of the
 /// instance than a read touches (the property's slot, its change flags, the render or physics structure that hears of it), so a roster
@@ -180,7 +326,8 @@ pub const FIRST_WRITE: f64 = 1.4e-6;
 pub const FIRST_CALL: f64 = 0.8e-6;
 
 /// The frame each instance slot was last touched in (one per engine: the scheduler owns it, the Instance API's C metamethods
-/// share it like the work cell), and the frame each member was last used in ([`Touched::first_use`]).
+/// share it like the work cell), the frame each member was last used in ([`Touched::first_use`]), each engine path and each class
+/// was last cloned or destroyed in ([`Touched::first_path`]), and the frame each instance entered the Workspace in.
 pub struct Touched {
     frame: u32,
     stamps: Vec<u32>,
@@ -194,6 +341,25 @@ pub struct Touched {
     prices: Vec<f64>,
     /// What each class's cold write extras are priced as ([`ColdKind`]), by ClassId
     kinds: Vec<ColdKind>,
+    /// The serial of the last instance a touch found cold ([`COLD_TOUCH_ALONE`]), and the frame it had last been touched in before
+    last_serial: u32,
+    last_prev: u32,
+    /// The frame each [`Path`] was last used in
+    paths: [u32; PATHS],
+    /// By ClassId, the frame a class was last cloned and destroyed in, and what its first clone and destroy of a frame, a cold
+    /// template's clone and a live instance's destroy add ([`first_cloned`], [`first_destroyed`], [`clone_cold`], [`destroy_live`])
+    cloned: Vec<u32>,
+    destroyed: Vec<u32>,
+    class_prices: Vec<[f64; 4]>,
+    /// By slot, the frame its instance entered the Workspace in (0: not in it)
+    entered: Vec<u32>,
+    /// The Workspace, once the world is made (entering it is [`Path::Enter`])
+    pub workspace: Option<crate::InstanceId>,
+    /// By ClassId, whether it hangs on a part a move carries ([`Touched::moved_cold`]) and whether it is a particle emitter
+    hangs: Vec<bool>,
+    emitters: Vec<bool>,
+    /// PivotTo's name, priced by the method call itself ([`Touched::pivot_cold`])
+    pub pivot_to: Option<crate::reflection::NameId>,
 }
 
 impl Touched {
@@ -206,13 +372,150 @@ impl Touched {
             last_cold: false,
             prices: Vec::new(),
             kinds: Vec::new(),
+            last_serial: 0,
+            last_prev: 0,
+            paths: [0; PATHS],
+            cloned: Vec::new(),
+            destroyed: Vec::new(),
+            class_prices: Vec::new(),
+            entered: Vec::new(),
+            workspace: None,
+            hangs: Vec::new(),
+            emitters: Vec::new(),
+            pivot_to: None,
         }
     }
 
-    /// Prices each class's first touch ([`cold_touch`]) and cold writes ([`ColdKind`]).
+    /// Prices each class's first touch ([`cold_touch`]), cold writes ([`ColdKind`]) and its share of a frame's first clones and destroys.
     pub fn set_prices(&mut self, reflection: &Reflection) {
-        self.kinds = (0..reflection.class_count() as ClassId).map(|class| ColdKind::of(reflection, class)).collect();
-        self.prices = (0..reflection.class_count() as ClassId).map(|class| cold_touch(reflection, class)).collect();
+        let classes = 0..reflection.class_count() as ClassId;
+        self.kinds = classes.clone().map(|class| ColdKind::of(reflection, class)).collect();
+        self.prices = classes.clone().map(|class| cold_touch(reflection, class)).collect();
+        self.class_prices = classes
+            .clone()
+            .map(|class| [first_cloned(reflection, class), first_destroyed(reflection, class), clone_cold(reflection, class), destroy_live(reflection, class)])
+            .collect();
+        const HANGS: [&str; 8] = ["Attachment", "ParticleEmitter", "Beam", "Trail", "Light", "Decal", "Texture", "DataModelMesh"];
+        self.hangs = classes.clone().map(|class| HANGS.iter().any(|kind| reflection.is_a(class, kind))).collect();
+        self.emitters = classes.map(|class| reflection.is_a(class, "ParticleEmitter")).collect();
+        self.pivot_to = reflection.name_id("PivotTo");
+    }
+
+    /// What the frame's first use of `path` adds ([`PATH_FIRST`]); later uses in the frame nothing.
+    #[inline]
+    pub fn first_path(&mut self, path: Path) -> f64 {
+        let stamp = &mut self.paths[path as usize];
+        if *stamp == self.frame {
+            0.0
+        } else {
+            *stamp = self.frame;
+            PATH_FIRST[path as usize]
+        }
+    }
+
+    fn class_price(&self, class: ClassId, which: usize) -> f64 {
+        self.class_prices.get(class as usize).map_or(0.0, |prices| prices[which])
+    }
+
+    /// What a cold instance of `class` adds when a move carries it: `part` for a part, `attached` for what hangs on one (an
+    /// attachment, an emitter, a beam, a trail, a light, a decal, a mesh), nothing for a model or folder.
+    pub fn moved_cold(&self, class: ClassId, part: f64, attached: f64) -> f64 {
+        match self.kind(class) {
+            ColdKind::Part => part,
+            _ if self.hangs.get(class as usize).copied().unwrap_or(false) => attached,
+            _ => 0.0,
+        }
+    }
+
+    /// Whether `class` is an emitter BulkMoveTo's cold parts carry ([`BULK_COLD_EMITTER`])
+    pub fn is_emitter(&self, class: ClassId) -> bool {
+        self.emitters.get(class as usize).copied().unwrap_or(false)
+    }
+
+    /// What one instance of a template being cloned adds: its class's first clone in the frame ([`first_cloned`]) and, when no code
+    /// touched it in this frame, a cold template's read ([`clone_cold`]); marks it touched. `cold` says it for the root, which the
+    /// call itself touched.
+    pub fn cloned_source(&mut self, index: u32, class: ClassId, cold: Option<bool>) -> f64 {
+        let mut price = 0.0;
+        let slot = class as usize;
+        if self.cloned.len() <= slot {
+            self.cloned.resize(slot + 1, 0);
+        }
+        if self.cloned[slot] != self.frame {
+            self.cloned[slot] = self.frame;
+            price += self.class_price(class, 0);
+        }
+        let marked = self.mark(index);
+        if cold.unwrap_or(marked) {
+            price += self.class_price(class, 2);
+        }
+        price
+    }
+
+    /// What destroying one instance adds: its class's first destroy in the frame ([`first_destroyed`]) and, when it has been in the
+    /// Workspace since an earlier frame, the engine's work it undoes ([`destroy_live`]). Clears its Workspace stamp.
+    pub fn destroyed(&mut self, index: u32, class: ClassId) -> f64 {
+        let mut price = 0.0;
+        let slot = class as usize;
+        if self.destroyed.len() <= slot {
+            self.destroyed.resize(slot + 1, 0);
+        }
+        if self.destroyed[slot] != self.frame {
+            self.destroyed[slot] = self.frame;
+            price += self.class_price(class, 1);
+        }
+        let live = self.entered.get(index as usize).is_some_and(|&entered| entered != 0 && entered != self.frame);
+        if live {
+            price += self.class_price(class, 3);
+        }
+        if let Some(entered) = self.entered.get_mut(index as usize) {
+            *entered = 0;
+        }
+        price
+    }
+
+    /// The instance in slot `index` entered the Workspace (`inside`) or left it.
+    pub fn set_entered(&mut self, index: u32, inside: bool) {
+        let slot = index as usize;
+        if self.entered.len() <= slot {
+            if !inside {
+                return;
+            }
+            self.entered.resize(slot + 1 + slot / 2, 0);
+        }
+        self.entered[slot] = if inside { self.frame } else { 0 };
+    }
+
+    /// Whether the instance the last cold touch found had been touched in the frame before (moved every frame: [`Touched::mark_moved`])
+    pub fn last_cold_was_recent(&self) -> bool {
+        self.last_prev + 1 >= self.frame
+    }
+
+    /// Marks the instance in slot `index` touched in this frame without a price; whether no code touched it in this frame or the one
+    /// before (a part a script moves every frame keeps the engine's state for it warm: [`PIVOT_COLD_PART`], [`BULK_COLD_PART`]).
+    #[inline]
+    pub fn mark_moved(&mut self, index: u32) -> bool {
+        let slot = index as usize;
+        if self.stamps.len() <= slot {
+            self.stamps.resize(slot + 1 + slot / 2, 0);
+        }
+        let last = std::mem::replace(&mut self.stamps[slot], self.frame);
+        last + 1 < self.frame
+    }
+
+    /// Marks the instance in slot `index` touched in this frame without a price; whether it was cold.
+    #[inline]
+    pub fn mark(&mut self, index: u32) -> bool {
+        let slot = index as usize;
+        if self.stamps.len() <= slot {
+            self.stamps.resize(slot + 1 + slot / 2, 0);
+        }
+        if self.stamps[slot] == self.frame {
+            false
+        } else {
+            self.stamps[slot] = self.frame;
+            true
+        }
     }
 
     /// What `class`'s cold write extras are priced as ([`cold_write_extra`])
@@ -255,9 +558,10 @@ impl Touched {
     }
 
     /// The first-touch price of `class` ([`cold_touch`]) if the instance in slot `index` has not been touched in this frame, else 0;
-    /// marks it touched.
+    /// marks it touched. A part or other non-GUI instance not made next to the last instance a touch found cold (`serial`, its
+    /// creation order) pays [`COLD_TOUCH_ALONE`].
     #[inline]
-    pub fn touch(&mut self, index: u32, class: ClassId) -> f64 {
+    pub fn touch(&mut self, index: u32, class: ClassId, serial: u32) -> f64 {
         let slot = index as usize;
         if self.stamps.len() <= slot {
             self.stamps.resize(slot + 1 + slot / 2, 0);
@@ -266,9 +570,13 @@ impl Touched {
             self.last_cold = false;
             0.0
         } else {
-            self.stamps[slot] = self.frame;
+            self.last_prev = std::mem::replace(&mut self.stamps[slot], self.frame);
             self.last_cold = true;
-            self.prices.get(class as usize).copied().unwrap_or(COLD_TOUCH)
+            // (made next to the last cold one, or touched in the frame before: the plain first touch)
+            let together = serial.abs_diff(self.last_serial) == 1 || self.last_prev + 1 >= self.frame;
+            self.last_serial = serial;
+            let price = self.prices.get(class as usize).copied().unwrap_or(COLD_TOUCH);
+            if together || price != COLD_TOUCH { price } else { COLD_TOUCH_ALONE }
         }
     }
 }
@@ -470,8 +778,13 @@ pub fn signal_costs(kind: SignalKind) -> (f64, f64) {
     (queue * STUDIO_HOOKS, thread * STUDIO_HOOKS)
 }
 /// A thread made for task.spawn / defer / delay (the parity bench: task.spawn(noop) 0.72 us,
-/// task.delay 0.86 (the timer: [`DELAYED`] more); a Studio playtest client read 1.15)
+/// task.delay 0.86 (the timer: [`DELAYED`] more); a Studio playtest client read 1.15), and a thread handed to them: a client resumes a
+/// coroutine parked in a yield through task.spawn at what a new function's thread costs (notes/macro pathprobe, rendered match-place
+/// clients: 1.10 us hot against a function's 0.95)
 pub const THREAD: f64 = 0.72e-6;
+/// The engine's call of a render-step binding (BindToRenderStep): the time between one binding's last line and the next's first, in
+/// rendered match-place clients (notes/macro pathprobe, two sessions: 1.8 us, of which ree counts 0.26 in the resumption)
+pub const RENDER_STEP_DISPATCH: f64 = 1.55e-6;
 pub const DELAYED: f64 = 0.14e-6;
 /// BulkMoveTo, a part in the call (client, 100 parts: FireCFrameChanged 0.42 us a part, FireAllEvents 1.03; a
 /// loop of CFrame writes 1.10)
@@ -843,7 +1156,7 @@ pub const ANIMATION_FETCH: f64 = 0.45;
 /// What the work clock is beside a client's own time, for a profile's summary (profiler/report.rs): the prices are measured one call
 /// at a time and the cold costs of a frame's first touches on the game's own per-frame code (docs/engine.md "Work clock"); what is
 /// not modelled is named, so nobody reads the clock as a client's where it is not one.
-pub const FIDELITY: &str = "fidelity: prices measured in a client, with a frame's cold first touches of tables, functions and engine members; a game's per-frame code reads 0.5-1.1x a client (most 0.75-1.1x), an attack's cast 0.3-0.7x. Not modelled: where data lies in memory (made together in one loop it reads dear), an instance touched alone (a part's first touch in a frame costs a client about 0.4 us, here 0.045), the engine work on an effect's instances in a cast, and what a layout leaves warm. Size a cut in a client";
+pub const FIDELITY: &str = "fidelity: prices measured in a client, with a frame's cold first touches of tables, functions, engine members and instances (one touched alone costs more) and the first run in a frame of each engine path a script takes (an effect's clone, workspace entry, destroy, pivot, bulk move, emit and query; a library or datatype function; a function not run the frame before); a game's per-frame code reads 0.6-1.2x a client (most 0.8-1.1x), an attack's cast 0.5-1.1x (most 0.6-0.8x). Not modelled: the rest of a cast's cold cost, in its own Luau (0.3-1.0x a client, most 0.5-0.7x) and its engine calls (0.5-0.9x), code and data a client finds cold after frames unused; where data lies in memory (made together in one loop it reads dear), what a layout leaves warm, and the cold of each node a large walk visits (priced once a call). Size a cut in a client";
 
 /// What the Luau VM did since it started (vendor/luau0-src, patches/luau.patch: lua_workcounters)
 #[repr(C)]
@@ -1024,7 +1337,23 @@ pub fn luau(c: &VmCounters) -> f64 {
         + c.coldtables as f64 * LUAU_COLD_TABLE
         + c.coldclosures as f64 * LUAU_COLD_CLOSURE
         + c.coldprotos as f64 * LUAU_COLD_PROTO
-        + c.coldcode as f64 * LUAU_COLD_CODE)
+        + c.coldcode as f64 * LUAU_COLD_CODE
+        + c.hostops[COLD_CFUNCS_SLOT] as f64 * LUAU_COLD_CFUNC
+        + c.hostops[COLD_HOSTFUNCS_SLOT] as f64 * LUAU_COLD_HOSTFUNC
+        + c.hostops[RARE_PROTOS_SLOT] as f64 * LUAU_RARE_PROTO)
+}
+
+/// The slots of [`VmCounters`]'s hostops no opcode reaches, where the VM counts a script's first call in a frame of a C function
+/// and of a function of the engine's own Luau (patches/luau.patch LUA_WORK_COLDCFUNCS, LUA_WORK_COLDHOSTFUNCS): the counters keep
+/// their size, since the VM state's size counts in what collectgarbage("count") reads.
+pub const COLD_CFUNCS_SLOT: usize = 255;
+pub const COLD_HOSTFUNCS_SLOT: usize = 254;
+/// ... and the functions of a script whose code ran first in a frame without having run in the frame before (LUA_WORK_RAREPROTOS)
+pub const RARE_PROTOS_SLOT: usize = 253;
+
+/// The engine instructions hostops counted: its sum without the cold-call slots
+pub fn host_instructions(c: &VmCounters) -> u64 {
+    c.hostops.iter().sum::<u64>() - c.hostops[COLD_CFUNCS_SLOT] - c.hostops[COLD_HOSTFUNCS_SLOT] - c.hostops[RARE_PROTOS_SLOT]
 }
 
 
@@ -1043,6 +1372,24 @@ pub fn luau(c: &VmCounters) -> f64 {
 /// hot prices, the per-frame code of a scrolled grid, of an effect system and of a server's enemy loop at 0.76-1.07x a client with
 /// it). Data made together in one loop reads up to 14x dear: the VM does not see where an object lies.
 pub const LUAU_COLD_TABLE: f64 = 200.0;
+/// A script's first call in a frame of a C function (the libraries, the task and coroutine functions) and of an operation of a
+/// datatype the engine serves (a constructor, a method, an operator), made before the frame, in nanoseconds: the engine's code for it
+/// runs cold, as an Instance member's does ([`FIRST_CALL`]). Measured in rendered clients of a game's match place (roblox-sim,
+/// Studio 0.744; notes/macro pathprobe, two sessions, and two headless ones alike: each case in a frame of its own after a few calls
+/// every frame makes anyway, the frame's first call less a second right after, less the 0.7 us its own function's first run adds,
+/// [`LUAU_RARE_PROTO`]): task.spawn of a function 4.0 us, of a parked coroutine 2.0, coroutine.resume 1.9, task.defer 3.0, task.delay
+/// 3.5, string.format 3.3, table.clone 1.1, math.noise 0.9 (the median 2.5); CFrame.new 0.55, CFrame.fromOrientation 0.85, a CFrame
+/// product 1.4, CFrame:Lerp 2.5, Color3.new 0.9, NumberSequence.new 1.5, UDim2.fromOffset 0.8 (the median 0.9). A builtin a script's
+/// fast call runs (table.insert, math.floor, typeof) is the VM's own code here and pays none (a client's table.insert 1.2, typeof 0.6:
+/// not modelled).
+pub const LUAU_COLD_CFUNC: f64 = 2500.0;
+pub const LUAU_COLD_HOSTFUNC: f64 = 900.0;
+/// What a function's first run in a frame adds when its code did not run in the frame before, in nanoseconds: per-frame code finds its
+/// code in a cache the frame before left (the prices above, as the coldprobe measured: a module's function about 16 ns with its
+/// closure), and code a cast runs now and then, an effect's setup, finds it nowhere. The pathprobe's call of a function of 30
+/// instructions whose code last ran about 20 frames before, from a case function that last ran then too: 1.75 us its first call in a
+/// frame, 0.35 the next closure of it: 0.7 us each of the two functions.
+pub const LUAU_RARE_PROTO: f64 = 700.0;
 pub const LUAU_COLD_CLOSURE: f64 = 30.0;
 pub const LUAU_COLD_PROTO: f64 = 5.0;
 pub const LUAU_COLD_CODE: f64 = 0.85;

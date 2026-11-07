@@ -220,7 +220,10 @@ static void luau_execute(lua_State* L)
     typename std::conditional<SingleStep, luaP_Execute, luaP_NoExecute>::type profiled(L);
 
     if ((clvalue(L->ci->func)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && luaE_scriptframe(L, L->ci - 1))
+    {
         L->global->work.hostcalls++;
+        luaC_coldcall(L, clvalue(L->ci->func), 1, NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
+    }
 
 #if VM_HAS_NATIVE
     // (native code runs natively while a profile steps the rest)
@@ -994,7 +997,10 @@ reentry:
                     // note that p->codeentry may point *outside* of p->code..p->code+p->sizecode, but that pointer never gets saved to savedpc.
                     pc = (SingleStep && !luaP_native(L)) ? p->code : p->codeentry;
                     if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+                    {
                         L->global->work.hostcalls++;
+                        luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
+                    }
                     cl = ccl;
                     workops = luaE_workops(L, cl);
                     luaC_touch(L, cl);
@@ -1007,7 +1013,10 @@ reentry:
                 {
                     lua_CFunction func = ccl->c.f;
                     if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                    {
                         L->global->work.ccalls++;
+                        luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
+                    }
                     int n = func(L);
 
                     // yield
@@ -2501,7 +2510,10 @@ reentry:
 
                         pc = p->code;
                         if ((p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+                        {
                             L->global->work.hostcalls++;
+                            luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
+                        }
                         cl = ccl;
                         workops = luaE_workops(L, cl);
                         luaC_touch(L, cl);
@@ -3207,7 +3219,10 @@ int luau_precall(lua_State* L, StkId func, int nresults)
     {
         lua_CFunction func = ccl->c.f;
         if (luaE_scriptwork(L))
+        {
             L->global->work.ccalls++;
+            luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
+        }
         int n = func(L);
 
         // yield

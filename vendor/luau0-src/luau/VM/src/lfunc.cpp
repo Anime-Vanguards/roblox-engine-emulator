@@ -77,6 +77,8 @@ Closure* luaF_newCclosure(lua_State* L, int nelems, LuaTable* e)
 {
     Closure* c = luaM_newgco(L, Closure, sizeCclosure(nelems), L->activememcat);
     luaC_init(L, c, LUA_TFUNCTION);
+    // (a C closure made in the frame reads warm, as a Luau closure or a table made in it does: coroutine.wrap makes one a call)
+    luaC_coldmade(L, obj2gco(c));
     c->isC = 1;
     c->env = e;
     c->nupvalues = cast_byte(nelems);

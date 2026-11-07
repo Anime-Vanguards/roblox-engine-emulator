@@ -361,6 +361,13 @@ LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
 // a touch only sets the mark once. Pages of collected objects are returned to the allocator at the next frame while it is on.
 LUA_API void lua_coldtracking(lua_State* L, int on);
 LUA_API void lua_coldframe(lua_State* L);
+// cold calls: while cold touches are tracked, a script's first call in a frame of a C function and of a function of the host's own
+// Luau (work exempt), made before the frame, is counted in these slots of the work counters' hostops, which no opcode reaches (the
+// counters keep their size: the state's size counts in totalbytes)
+#define LUA_WORK_COLDCFUNCS 255
+#define LUA_WORK_COLDHOSTFUNCS 254
+// and of those functions a script's work ran first in a frame (coldprotos), the ones whose code did not run in the frame before
+#define LUA_WORK_RAREPROTOS 253
 
 // the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
 // `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names

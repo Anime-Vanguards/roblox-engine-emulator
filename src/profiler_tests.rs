@@ -49,7 +49,7 @@ fn main_state(lua: &Lua) -> *mut mlua::ffi::lua_State {
 
 fn ops(lua: &Lua) -> (u64, u64) {
     let counters = unsafe { &*crate::cost::lua_workcounters(main_state(lua)) };
-    (counters.ops.iter().sum(), counters.hostops.iter().sum())
+    (counters.ops.iter().sum(), crate::cost::host_instructions(counters))
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {

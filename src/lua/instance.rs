@@ -369,10 +369,10 @@ pub fn set_property(engine: &Engine, id: InstanceId, name: NameId, value: Value)
 /// that changed nothing pays only the first touch. The property's first write in the frame runs the engine's code for it cold
 /// (cost.rs FIRST_WRITE), changed or not.
 fn write_touch(state: &State, id: InstanceId, name: NameId, property: &str, changed: bool) -> f64 {
-    let class = state.dom.at(id).class;
+    let (class, serial) = (state.dom.at(id).class, state.dom.at(id).serial);
     let mut touched = state.sched.touched.borrow_mut();
     let first = touched.first_use(crate::cost::MemberUse::Write, name);
-    let touch = touched.touch(id.index, class);
+    let touch = touched.touch(id.index, class, serial);
     if changed && touch > 0.0 {
         first + touch + crate::cost::cold_write_extra(touched.kind(class), property)
     } else {
@@ -398,7 +398,19 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
     let placed = changed && engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of(id, engine.world().workspace);
     let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), changed, placed)
         * crate::cost::place_write_scale(&engine.options.place_prices, engine.options.place_id, engine.reflection.name(name), placed);
-    let paid = price + write_touch(&state, id, name, engine.reflection.name(name), changed);
+    let mut paid = price + write_touch(&state, id, name, engine.reflection.name(name), changed);
+    // (the frame's first geometry write on a part in the Workspace, and its first switch of an effect, run the engine's code for
+    // them cold; an effect switched cold reads more: cost.rs Path::Geometry, Path::Toggle, TOGGLE_COLD)
+    if changed {
+        let property = engine.reflection.name(name);
+        let mut touched = state.sched.touched.borrow_mut();
+        let cold = touched.take_last_cold();
+        if placed && matches!(property, "CFrame" | "Position" | "Orientation" | "Rotation" | "Size") {
+            paid += touched.first_path(crate::cost::Path::Geometry);
+        } else if property == "Enabled" && ["ParticleEmitter", "Beam", "Trail"].iter().any(|kind| engine.reflection.is_a(class, kind)) {
+            paid += touched.first_path(crate::cost::Path::Toggle) + if cold { crate::cost::TOGGLE_COLD } else { 0.0 };
+        }
+    }
     state.sched.charge(paid);
     cross_set(engine, &state, id, name, paid, changed);
     crate::cost::tally_write(&engine.reflection.class(class).name, engine.reflection.name(name), changed, placed, price);
@@ -515,6 +527,27 @@ pub fn fire_immediate_costing(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, 
 
 /// InstanceModule.Destroy.
 pub fn destroy(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
+    // (the frame's first destroy, and of each class, runs the engine's code for it cold; an instance in the Workspace since an
+    // earlier frame has render, physics and particle state to undo: cost.rs Path::Destroy, first_destroyed, destroy_live. Priced
+    // for the whole subtree before it leaves.)
+    {
+        let state = engine.state.borrow();
+        if state.dom.at(id).has(flags::DESTROYED) {
+            return Ok(());
+        }
+        let mut touched = state.sched.touched.borrow_mut();
+        let mut cold = touched.first_path(crate::cost::Path::Destroy);
+        for node in std::iter::once(id).chain(state.dom.descendants(id)) {
+            cold += touched.destroyed(node.index, state.dom.at(node).class);
+        }
+        drop(touched);
+        state.sched.charge(cold);
+        crate::boundary::add_cost(cold);
+    }
+    destroy_subtree(lua, engine, id)
+}
+
+fn destroy_subtree(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
     let destroying = {
         let state = engine.state.borrow();
         let instance = state.dom.at(id);
@@ -546,7 +579,7 @@ pub fn destroy(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flo
         core::begin_destroy(&mut state, &engine.reflection, &hooks, id)?
     };
     for child in children {
-        destroy(lua, engine, child)?;
+        destroy_subtree(lua, engine, child)?;
     }
     let mut state = engine.state.borrow_mut();
     state.sched.charge(crate::cost::DESTROYED + extra);
@@ -555,16 +588,53 @@ pub fn destroy(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flo
     Ok(())
 }
 
+/// What a PivotTo of `id` adds for the engine's code and the instances it carries being cold (cost.rs Path::Pivot, PIVOT_COLD_PART,
+/// PIVOT_COLD_ATTACHED): nothing out of the Workspace. Called right after the call's own touch of `id`, which says whether it was cold.
+pub fn pivot_cold(engine: &Engine, id: InstanceId) -> f64 {
+    let state = engine.state.borrow();
+    let mut touched = state.sched.touched.borrow_mut();
+    let root_cold = touched.take_last_cold();
+    if !touched.workspace.is_some_and(|workspace| state.dom.is_descendant_of(id, workspace)) {
+        return 0.0;
+    }
+    let mut seconds = touched.first_path(crate::cost::Path::Pivot);
+    // (the call touched the root: cold then, and not moved the frame before either)
+    if root_cold && !touched.last_cold_was_recent() {
+        seconds += touched.moved_cold(state.dom.at(id).class, crate::cost::PIVOT_COLD_PART, crate::cost::PIVOT_COLD_ATTACHED);
+    }
+    for node in state.dom.descendants(id) {
+        if touched.mark_moved(node.index) {
+            seconds += touched.moved_cold(state.dom.at(node).class, crate::cost::PIVOT_COLD_PART, crate::cost::PIVOT_COLD_ATTACHED);
+        }
+    }
+    seconds
+}
+
 /// InstanceModule.Clone (materializing the subtree first).
 pub fn clone(engine: &Engine, id: InstanceId) -> Option<InstanceId> {
     if matches!(engine.state.borrow().dom.raw_get(id, K::Archivable as NameId), Some(Value::Bool(false))) {
         return None;
     }
+    // (the template's root was touched by the call itself: whether that touch found it cold)
+    let root_cold = engine.state.borrow().sched.touched.borrow_mut().take_last_cold();
     project::materialize_deep(engine, id);
     let mut state = engine.state.borrow_mut();
     let copy = core::clone_instance(&mut state, &engine.reflection, id);
     if let Some(copy) = copy {
-        let work: f64 = std::iter::once(copy).chain(state.dom.descendants(copy)).map(|node| crate::cost::cloned(&engine.reflection, state.dom.at(node).class)).sum();
+        let mut work: f64 = std::iter::once(copy).chain(state.dom.descendants(copy)).map(|node| crate::cost::cloned(&engine.reflection, state.dom.at(node).class)).sum();
+        // (the frame's first clone, and of each class it holds, runs the engine's code for it cold; a template no code touched this
+        // frame is read cold: cost.rs Path::Clone, first_cloned, clone_cold. The copy is made now, so it is hot.)
+        {
+            let mut touched = state.sched.touched.borrow_mut();
+            work += touched.first_path(crate::cost::Path::Clone);
+            work += touched.cloned_source(id.index, state.dom.at(id).class, Some(root_cold));
+            for node in state.dom.descendants(id) {
+                work += touched.cloned_source(node.index, state.dom.at(node).class, None);
+            }
+            for node in std::iter::once(copy).chain(state.dom.descendants(copy)) {
+                touched.mark(node.index);
+            }
+        }
         state.sched.charge(work);
         crate::boundary::add_cost(work);
     }
@@ -943,6 +1013,15 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     behaviors.add_method(base, K::GetDescendants as NameId, method(|lua, engine, id, _| {
         project::materialize_deep(engine, id);
         let descendants = engine.state.borrow().dom.descendants(id);
+        // (the frame's first GetDescendants runs its code cold: cost.rs Path::Descendants)
+        {
+            let state = engine.state.borrow();
+            let first = state.sched.touched.borrow_mut().first_path(crate::cost::Path::Descendants);
+            if first > 0.0 {
+                state.sched.charge(first);
+                crate::boundary::add_cost(first);
+            }
+        }
         instance_list(lua, engine, &descendants)
     }));
     let find_first_child_method = method(|lua, engine, id, args| {

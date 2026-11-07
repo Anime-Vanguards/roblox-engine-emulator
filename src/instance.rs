@@ -497,6 +497,33 @@ pub fn set_parent(
         state.sched.charge(loose);
         crate::boundary::add_cost(loose);
     }
+    // (entering the Workspace: the frame's first entry runs the engine's code for it cold, the first part's more (cost.rs Path::Enter,
+    // EnterPart); each instance's entry is noted, so a destroy knows the engine took it into its frame work: destroy_live)
+    let workspace = state.sched.touched.borrow().workspace;
+    if let Some(workspace) = workspace {
+        let placed = |state: &State, parent: Option<InstanceId>| parent.is_some_and(|parent| parent == workspace || state.dom.is_descendant_of(parent, workspace));
+        let (was_placed, now_placed) = (placed(state, old_parent), placed(state, new_parent));
+        if was_placed != now_placed {
+            let mut touched = state.sched.touched.borrow_mut();
+            let mut first = 0.0;
+            let mut part = false;
+            for node in std::iter::once(id).chain(state.dom.descendants(id)) {
+                touched.set_entered(node.index, now_placed);
+                part = part || touched.kind(state.dom.at(node).class) == crate::cost::ColdKind::Part;
+            }
+            if now_placed {
+                first += touched.first_path(crate::cost::Path::Enter);
+                if part {
+                    first += touched.first_path(crate::cost::Path::EnterPart);
+                }
+            }
+            drop(touched);
+            if first > 0.0 {
+                state.sched.charge(first);
+                crate::boundary::add_cost(first);
+            }
+        }
+    }
     // (an ancestor the subtree keeps is told nothing: Root.DescendantAdded / DescendantRemoving stay quiet when a model moves
     // from Root.Units to Root.Other)
     let old_chain = ancestry(state, old_parent);

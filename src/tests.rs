@@ -3246,8 +3246,9 @@ fn the_work_clock_charges_what_studio_spends() {
         end)
         "#,
     );
-    // (the parity bench: a Folder 0.36 us to make, 0.52 to enter the workspace; a Part 0.83 and 1.47)
-    assert!(output.contains(&"print: folder 0.9 parts 240.0".to_string()), "{output:?}");
+    // (the parity bench: a Folder 0.36 us to make, 0.52 to enter the workspace; a Part 0.83 and 1.47; and the frame's first entry
+    // into the workspace 13.5 more, its first part's 12.5: the engine's code for them running cold, cost.rs PATH_FIRST)
+    assert!(output.contains(&"print: folder 14.4 parts 252.5".to_string()), "{output:?}");
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     assert!(lines(&engine).contains(&"print: next frame true".to_string()), "{:?}", lines(&engine));
 }
@@ -4492,9 +4493,10 @@ fn a_frames_first_touch_of_a_table_or_function_costs_what_a_client_pays_once_a_f
     for line in &one {
         let values: Vec<f64> = line.split_once(": ").unwrap().1.split(' ').map(|v| v.parse().unwrap()).collect();
         let (cold, hot, made) = (values[0], values[1], values[2]);
-        // 200 records, the list and the walk's closure and function cold: 200 ns a record and about 1.3 ns of the rest
+        // 200 records, the list and the walk's closure and function cold: 200 ns a record and about 1.3 ns of the rest (and, the frame
+        // the walk first runs, its code not run the frame before: cost.rs LUAU_RARE_PROTO, 3.5 ns a record)
         let extra = cold - hot;
-        assert!((200.0..205.0).contains(&extra), "a cold record {extra:.1} ns over the hot walk, a client 140-210");
+        assert!((200.0..206.0).contains(&extra), "a cold record {extra:.1} ns over the hot walk, a client 140-210");
         assert!((made - hot).abs() < 3.0, "a table made in the frame is hot: {made:.1} against {hot:.1} ns");
     }
 }
@@ -4522,6 +4524,12 @@ fn counting_cold_touches_leaves_what_a_script_reads_of_memory_as_it_was() {
                         if Index % 3 == 0 then
                             table.insert(_G.Kept, Record)
                         end
+                    end
+                    -- (cold calls: a C function's, a datatype's, a function run every other frame)
+                    local _ = math.noise({frame} * 0.1) + CFrame.new({frame}, 0, 0).X
+                    if {frame} % 2 == 0 then
+                        _G.Every = _G.Every or function(X) return X * 2 end
+                        local _ = _G.Every({frame})
                     end
                     for _, Record in _G.Kept do
                         Record.A += 1
@@ -4589,6 +4597,235 @@ fn a_members_first_use_in_a_frame_costs_the_engines_code_running_cold() {
         assert!((values[1] - 0.5).abs() < 0.05, "a property's first read in a frame {:.2} us over the second, a client 0.3-1.5", values[1]);
         assert!((values[2] - 0.8).abs() < 0.05, "a method's first call in a frame {:.2} us over the second, a client 0.6-0.95", values[2]);
     }
+}
+
+/// The engine paths an effect's cast runs (cost.rs Path, first_cloned, first_destroyed): the frame's first clone, entry into the
+/// Workspace, destroy, PivotTo, BulkMoveTo and Emit run the engine's code cold (a clone and a destroy each class's code too), so they
+/// cost a client more than the same call right after on another instance; in the next frame the first pays again.
+#[test]
+fn an_effects_engine_paths_cost_their_code_running_cold_at_a_frames_first_use() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Template()
+            local P = Instance.new("Part")
+            P.Anchored = true
+            local A = Instance.new("Attachment")
+            A.Parent = P
+            local E = Instance.new("ParticleEmitter")
+            E.Parent = P
+            return P
+        end
+        _G.A, _G.B = Template(), Template()
+        _G.Folder = Instance.new("Folder")
+        _G.Folder.Parent = workspace
+        _G.Moved = {}
+        for I = 1, 4 do
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.Parent = workspace
+            _G.Moved[I] = P
+        end
+        _G.Emitters = { Instance.new("ParticleEmitter"), Instance.new("ParticleEmitter") }
+        _G.Emitters[1].Parent, _G.Emitters[2].Parent = _G.Moved[1], _G.Moved[2]
+        "#,
+    );
+    let source = r#"
+        local function Two(First, Second)
+            local T0 = os.clock()
+            local X = First()
+            local T1 = os.clock()
+            local Y = Second()
+            local T2 = os.clock()
+            return ((T1 - T0) - (T2 - T1)) * 1e6, X, Y
+        end
+        local M, E = _G.Moved, _G.Emitters
+        local Here = CFrame.new(0, 50, 0)
+        local Clone, CA, CB = Two(function() return _G.A:Clone() end, function() return _G.B:Clone() end)
+        local Enter = Two(function() CA.Parent = _G.Folder end, function() CB.Parent = _G.Folder end)
+        local Destroy = Two(function() CA:Destroy() end, function() CB:Destroy() end)
+        local Pivot = Two(function() M[1]:PivotTo(Here) end, function() M[2]:PivotTo(Here) end)
+        local Bulk = Two(function() workspace:BulkMoveTo({ M[3] }, { Here }) end, function() workspace:BulkMoveTo({ M[4] }, { Here }) end)
+        local Emit = Two(function() E[1]:Emit(1) end, function() E[2]:Emit(1) end)
+        print(string.format("%.3f %.3f %.3f %.3f %.3f %.3f", Clone, Enter, Destroy, Pivot, Bulk, Emit))
+    "#;
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, source);
+    for _ in 0..2 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let output = run(&lua, &engine, source);
+        let values: Vec<f64> = output.last().unwrap().split_once(": ").unwrap().1.split(' ').map(|v| v.parse().unwrap()).collect();
+        // (a method's first call 0.8 us more as well: cost.rs FIRST_CALL)
+        assert!((values[0] - (0.8 + 25.0 + 30.0 + 12.0 + 35.0)).abs() < 0.1, "a frame's first clone of a part with an attachment and an emitter {:.2} us over the second, a client 100", values[0]);
+        assert!((values[1] - 26.0).abs() < 0.1, "a frame's first part into the Workspace {:.2} us over the second, a client 26", values[1]);
+        assert!((values[2] - (0.8 + 10.0 + 36.0 + 11.0 + 11.0)).abs() < 0.1, "a frame's first destroy of the same {:.2} us over the second, a client 62", values[2]);
+        assert!((values[3] - 16.8).abs() < 0.1, "a frame's first PivotTo {:.2} us over the second, a client 17-23", values[3]);
+        assert!((values[4] - 28.8).abs() < 0.1, "a frame's first BulkMoveTo {:.2} us over the second, a client 25-30", values[4]);
+        assert!((values[5] - 5.2).abs() < 0.1, "a frame's first Emit {:.2} us over the second, a client 5.2", values[5]);
+    }
+}
+
+/// A destroy undoes the engine's frame work on an instance in the Workspace since an earlier frame (cost.rs destroy_live): a part that
+/// entered it a frame before costs more to destroy than one parented in the same frame, which the parity corpus destroys.
+#[test]
+fn an_instance_in_the_workspace_since_an_earlier_frame_costs_more_to_destroy() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, r#"_G.Old = Instance.new("Part") _G.Old.Parent = workspace"#);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local function Fresh()
+            local P = Instance.new("Part")
+            P.Parent = workspace
+            return P
+        end
+        Fresh():Destroy()
+        local Young = Fresh()
+        local T0 = os.clock()
+        _G.Old:Destroy()
+        local T1 = os.clock()
+        Young:Destroy()
+        local T2 = os.clock()
+        print(string.format("%.3f", ((T1 - T0) - (T2 - T1)) * 1e6))
+        "#,
+    );
+    let extra: f64 = output.last().unwrap().split_once(": ").unwrap().1.parse().unwrap();
+    // (the old part's touch is a first touch of the frame too: cost.rs COLD_TOUCH)
+    assert!((extra - 4.445).abs() < 0.02, "a part a frame old {extra:.3} us dearer to destroy than one parented now, a client 4.4");
+}
+
+/// A lone instance's first touch in a frame (cost.rs COLD_TOUCH_ALONE): parts made one after another and touched in that order pay
+/// the plain first touch; parts made among other instances pay the lone price, unless they were touched the frame before.
+#[test]
+fn a_lone_instances_first_touch_costs_more_than_one_made_with_the_last() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        _G.Together, _G.Lone = {}, {}
+        for I = 1, 21 do
+            _G.Together[I] = Instance.new("Part")
+        end
+        for I = 1, 21 do
+            _G.Lone[I] = Instance.new("Part")
+            for _ = 1, 3 do
+                Instance.new("Folder")
+            end
+        end
+        _G.Other = Instance.new("Folder")
+        "#,
+    );
+    let source = r#"
+        local function Pass(List)
+            local T0 = os.clock()
+            for I = 2, #List do
+                local _ = List[I]:GetAttribute("Missing")
+            end
+            return (os.clock() - T0) / (#List - 1) * 1e6
+        end
+        local _ = _G.Other:GetAttribute("Missing")
+        local _ = _G.Together[1]:GetAttribute("Missing")
+        local Together = Pass(_G.Together)
+        local _ = _G.Lone[1]:GetAttribute("Missing")
+        local Lone = Pass(_G.Lone)
+        print(string.format("%.4f", Lone - Together))
+    "#;
+    for _ in 0..2 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let output = run(&lua, &engine, source);
+    let lone: f64 = output.last().unwrap().split_once(": ").unwrap().1.parse().unwrap();
+    assert!((lone - 0.275).abs() < 0.005, "a lone part's first touch {lone:.3} us over one made with the last, a client 0.29");
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(&lua, &engine, source);
+    let again: f64 = output.last().unwrap().split_once(": ").unwrap().1.parse().unwrap();
+    assert!(again.abs() < 0.005, "touched the frame before, a lone part pays the plain first touch: {again:.3} us more");
+}
+
+/// A move of a part no code touched in this frame or the one before reads it cold (cost.rs BULK_COLD_PART); a part a script moves every
+/// frame pays none.
+#[test]
+fn a_part_moved_every_frame_pays_no_cold_move() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Group()
+            local Parts, Places = {}, {}
+            for I = 1, 8 do
+                local P = Instance.new("Part")
+                P.Anchored = true
+                P.Parent = workspace
+                Parts[I], Places[I] = P, CFrame.new(I * 4, 20, 0)
+            end
+            return { Parts, Places }
+        end
+        _G.Moved, _G.Other = Group(), Group()
+        "#,
+    );
+    let source = r#"
+        workspace:BulkMoveTo(_G.Other[1], _G.Other[2])
+        local T0 = os.clock()
+        workspace:BulkMoveTo(_G.Moved[1], _G.Moved[2])
+        print(string.format("%.3f", (os.clock() - T0) * 1e6))
+    "#;
+    for _ in 0..2 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let output = run(&lua, &engine, source);
+    let cold: f64 = output.last().unwrap().split_once(": ").unwrap().1.parse().unwrap();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(&lua, &engine, source);
+    let warm: f64 = output.last().unwrap().split_once(": ").unwrap().1.parse().unwrap();
+    assert!((cold - warm - 8.0 * 1.25).abs() < 0.01, "8 parts untouched for two frames {:.3} us dearer to move than the same moved the frame before", cold - warm);
+}
+
+/// A script's first call in a frame of a C function and of a datatype's operation (cost.rs LUAU_COLD_CFUNC, LUAU_COLD_HOSTFUNC), and a
+/// function's first run in a frame when its code did not run the frame before (LUAU_RARE_PROTO): the code runs cold.
+#[test]
+fn a_frames_first_calls_of_library_and_datatype_functions_cost_their_code_running_cold() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    // (the prelude makes a library function's wrapper at a script's first use of it, and what a frame makes reads warm in it)
+    run(&lua, &engine, "_G.Rare = function(X) return X + 1 end local _ = CFrame.new(0, 0, 0)");
+    let source = r#"
+        local function Two(First, Second)
+            local T0 = os.clock()
+            First()
+            local T1 = os.clock()
+            Second()
+            local T2 = os.clock()
+            return ((T1 - T0) - (T2 - T1)) * 1e6
+        end
+        local C = Two(function() return math.noise(0.5) end, function() return math.noise(1.5) end)
+        local Host = Two(function() return CFrame.new(1, 2, 3) end, function() return CFrame.new(3, 2, 1) end)
+        local T0 = os.clock()
+        _G.Rare(1)
+        local Rare = (os.clock() - T0) * 1e6
+        print(string.format("%.4f %.4f %.4f", C, Host, Rare))
+    "#;
+    let mut rare = Vec::new();
+    for _ in 0..2 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let output = run(&lua, &engine, source);
+        let values: Vec<f64> = output.last().unwrap().split_once(": ").unwrap().1.split(' ').map(|v| v.parse().unwrap()).collect();
+        assert!((values[0] - 2.5).abs() < 0.02, "a frame's first math.noise {:.3} us over the second, a client 0.9-4.0 for a C function", values[0]);
+        assert!((values[1] - 0.9).abs() < 0.02, "a frame's first CFrame.new {:.3} us over the second, a client 0.55-2.5 for a datatype's", values[1]);
+        rare.push(values[2]);
+    }
+    // (the first frame's call found the function's code not run the frame before; the second's found it run)
+    assert!((rare[0] - rare[1] - 0.7).abs() < 0.01, "a function run first in a frame, not the frame before, {:.3} us dearer", rare[0] - rare[1]);
 }
 
 /// Vector3 members and methods on the work clock (the op_cost probe's `datatype` rows in a lobby playtest's client, the

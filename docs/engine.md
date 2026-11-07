@@ -421,6 +421,29 @@ The first touch of an instance in a frame (a read, a write or a method call) cos
 member in a frame runs the engine's own code for it cold: a property's first write 1.4 us more, its first read
 0.5, a method's first call 0.8 (`FIRST_WRITE`, `FIRST_READ`, `FIRST_CALL`, `Touched::first_use`; a client's
 first GUI write of a frame 1.65 us over the same write later in it, a part's 0.9-2.35, a method's 0.6-0.95).
+Those 45 ns are what instances made together cost, touched in the order they were made: an instance touched by
+itself (not made right before or after the one touched cold before it, and not touched the frame before) costs
+0.32 us more (`COLD_TOUCH_ALONE`; a client's parts cloned a frame apart between other work, touched once each,
+0.29 us more at the median than parts made together in one loop).
+
+An effect's engine work runs each engine path's code cold at its first use in a frame (`Path`, `PATH_FIRST`):
+a clone 25 us and each class the frame has not cloned yet (`first_cloned`: a part 55 us in all), a destroy 10 and
+its classes (`first_destroyed`), entering the Workspace 13.5 (26 with a part), a PivotTo 16, a part's geometry
+write 9.5, BulkMoveTo 28, Emit 4.4, QueryDescendants 6.6, GetDescendants 3.6, an emitter's Enabled 2.4. After
+that a cold instance adds what it adds in a client: a clone of a template the frame has not touched
+(`clone_cold`, a part 1.8 us), a destroy of an instance in the Workspace since an earlier frame (`destroy_live`,
+a part 4.4), a move of a part neither moved nor touched the frame before (`PIVOT_COLD_PART`, `BULK_COLD_PART`,
+1.2-1.25 us, and each emitter or attachment under it), an emit from or a switch of an emitter the frame has not
+touched (1.45, 0.7), a query from a root it has not touched (4.6, once a call: a client walks a large static tree
+for less a node than a fresh model). A script's first call in a frame of a C function costs 2.5 us more, of a
+datatype's operation in the engine's Luau 0.9, and the first run of a function whose code did not run the frame
+before 0.7 (the VM's work counters `LUA_WORK_COLDCFUNCS`, `LUA_WORK_COLDHOSTFUNCS` and
+`LUA_WORK_RAREPROTOS`, priced at `LUAU_COLD_CFUNC` and the rest; a C function the engine's own code calls, one
+dispatched through `__namecall` and a C closure made in the frame are not counted). A render-step binding costs
+1.55 us to dispatch (`RENDER_STEP_DISPATCH`), and a thread handed to task.spawn what a function's new thread
+does. Each was measured in clients of a game's match place as a path's first use in a frame less a second use
+on another cold copy, less what the member's first use already costs (cost.rs gives each); headless clients
+read the same within 20 %.
 
 A client runs its engine work between two frames' scripts, so Luau that runs once a frame over data it made
 earlier finds that out of the caches too. The VM marks each table, Luau closure and function a script touches
@@ -448,14 +471,17 @@ the later groups' spatial queries meet three copies of their geometry. A memory 
 objects alive until the row ends and reads its median round.
 
 What the prices compose to on real per-frame code is a second question, measured on a game's own modules
-timed the same way on both sides (a GUI scroll and gradient step, an effect system's step lists, four unit
-attacks' casts; held out of every fit, a virtualized card grid on its frame scheduler and a server's enemy
-movement loop). Without the cold costs above the work clock read 0.15-0.53x a client; with them a GUI scroll
-0.82x, a gradient step 0.76x, the step lists 0.76-1.05x, the server loop 1.02-1.07x, the card grid 0.48-0.51x
-and the attacks' casts 0.32-0.67x. What is still missing is named in every profile's summary (`cost::FIDELITY`):
-where data lies, an instance touched alone (a part costs a client about 0.4 us on its first touch in a frame
-when touched by itself, 45 ns in a loop over parts made together), the engine work on an effect's instances in
-a cast, and what a layout leaves warm. Size a cut in a client.
+timed the same way on both sides: a GUI scroll and gradient step, an effect system's step lists and twelve
+attacks' casts (each after a warm-up cast, against a client's script time for the same cast: its profiler's
+self time over idle, the median of three casts). The engine paths' prices above were fitted on three of the
+attacks; nine attacks, a virtualized card grid on its frame scheduler and a server's enemy movement loop are
+held out of every fit. Without any cold costs the work clock read 0.15-0.53x a client, with the first touches
+alone the casts 0.22-0.67x. With all of them a GUI scroll reads 0.82x, a gradient step 0.78x, the step lists
+0.85-1.17x, the server loop 1.03-1.08x, the card grid 0.63-0.66x, and the casts 0.73-1.10x fitted and
+0.51-0.81x held out (most 0.6-0.75x): a held-out cast's engine calls read 0.5-0.9x a client and its own Luau
+0.3-1.0x (most 0.5-0.7x). What is still missing is named in every profile's summary (`cost::FIDELITY`): the
+rest of a cast's cold cost (code and data a client finds cold after frames unused), where data lies, what a
+layout leaves warm, and the cold of each node a large walk visits. Size a cut in a client.
 
 A script's environment is safe, as Roblox makes every script's: its imports (`game`, `Vector3.new`,
 `math.floor`) are resolved when it loads and read as constants, builtins (`math.*`, `type`, `typeof`, ...)

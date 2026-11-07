@@ -555,6 +555,7 @@ impl Engine {
 
     pub(crate) fn set_world(&self, world: World) {
         self.world.set(Some(world));
+        self.state.borrow().sched.touched.borrow_mut().workspace = Some(world.workspace);
     }
 
     /// Output.Add with the virtual clock.

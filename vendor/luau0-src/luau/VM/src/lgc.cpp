@@ -3,6 +3,8 @@
 #include "lgc.h"
 
 #include <mutex>
+#include <new>
+#include <unordered_map>
 #include <stdlib.h>
 #include <stddef.h>
 
@@ -1350,6 +1352,9 @@ struct ColdState
     lua_Page** pages;
     size_t pagecount;
     size_t pagecapacity;
+    // the frames lua_coldframe began, and the last of them each function's code ran in (LUA_WORK_RAREPROTOS)
+    uint32_t frame;
+    std::unordered_map<const void*, uint32_t>* protolast;
 };
 
 // the states that track cold touches, by global_State::coldslot (0: none); slots are taken and given back under the lock, and each
@@ -1386,10 +1391,29 @@ static void coldpush(global_State* g, GCObject* o)
     c->touched[c->touchedcount++] = o;
 }
 
+// a function whose code runs first in this frame and did not run in the frame before: a client finds its code out of every cache
+// (LUA_WORK_RAREPROTOS); the stamps live outside the VM's heap
+static void coldrecent(global_State* g, GCObject* o)
+{
+    ColdState* c = coldstates[g->coldslot];
+    if (!c->protolast)
+        c->protolast = new (std::nothrow) std::unordered_map<const void*, uint32_t>();
+    if (!c->protolast)
+        return;
+    uint32_t& last = (*c->protolast)[o];
+    if (last == 0 || last + 1 < c->frame)
+        g->work.hostops[LUA_WORK_RAREPROTOS]++;
+    last = c->frame;
+}
+
 void luaC_coldtouch(lua_State* L, GCObject* o)
 {
-    l_setbit(o->gch.marked, COLDBIT);
     global_State* g = L->global;
+    // a function the host's own Luau runs is not marked: a script's first call of it in the frame finds its code as cold as a client's
+    // script binding does (luaC_coldcall), whatever the host ran before
+    if (g->coldon && o->gch.tt != LUA_TTABLE && !luaE_scriptwork(L))
+        return;
+    l_setbit(o->gch.marked, COLDBIT);
     if (!g->coldon)
         return;
     coldpush(g, o);
@@ -1406,9 +1430,31 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
         break;
     case LUA_TPROTO:
         g->work.coldprotos++;
+        coldrecent(g, o);
         g->work.coldcode += uint64_t(gco2p(o)->sizecode);
         break;
     }
+}
+
+void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, const Proto* caller)
+{
+    global_State* g = L->global;
+    if (!g->coldon || testbit(cl->marked, COLDBIT))
+        return;
+    l_setbit(cl->marked, COLDBIT);
+    coldpush(g, obj2gco(cl));
+    // a C function the host's own code calls (a method its __namecall dispatches to, the binding's calls while it serves a
+    // script's read, a getter its helper chunks call) runs inside an engine path the host prices where the script called it
+    if (!host && (!caller || (caller->source && strncmp(getstr(caller->source), "=__mlua", 7) == 0)))
+        return;
+    // (a method call dispatched by its object's __namecall: the host prices a member's first use itself)
+    if (!host && self && ttisuserdata(self))
+    {
+        const TValue* tm = luaT_gettmbyobj(L, self, TM_NAMECALL);
+        if (ttisfunction(tm) && clvalue(tm) == cl)
+            return;
+    }
+    g->work.hostops[host ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS]++;
 }
 
 void luaC_coldmade(lua_State* L, GCObject* o)
@@ -1453,6 +1499,7 @@ void luaC_coldfree(lua_State* L)
     coldclear(L, c);
     free(c->touched);
     free(c->pages);
+    delete c->protolast;
     free(c);
     {
         std::lock_guard<std::mutex> guard(coldlock);
@@ -1478,6 +1525,7 @@ LUA_API void lua_coldtracking(lua_State* L, int on)
             ColdState* c = (ColdState*)calloc(1, sizeof(ColdState));
             if (!c)
                 return;
+            c->frame = 1;
             std::lock_guard<std::mutex> guard(coldlock);
             for (unsigned int slot = 1; slot < kColdSlots; ++slot)
                 if (!coldstates[slot])
@@ -1507,5 +1555,9 @@ LUA_API void lua_coldframe(lua_State* L)
 {
     global_State* g = L->global;
     if (g->coldon)
-        coldclear(L, coldstates[g->coldslot]);
+    {
+        ColdState* c = coldstates[g->coldslot];
+        coldclear(L, c);
+        c->frame++;
+    }
 }

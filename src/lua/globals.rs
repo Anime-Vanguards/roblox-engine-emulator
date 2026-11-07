@@ -99,7 +99,8 @@ fn task_seconds(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) -> Res
 
 /// A function handed to task.spawn / defer / delay gets a thread of its own (cost::THREAD); a thread is used as it is.
 fn charge_thread(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) {
-    if matches!(value, LuaValue::Function(_)) {
+    // (a thread handed over costs a client what a function's new thread does: cost.rs THREAD)
+    if matches!(value, LuaValue::Function(_) | LuaValue::Thread(_)) {
         let state = engine.state.borrow();
         state.sched.charge(crate::cost::THREAD);
         if crate::boundary::active() && !state.sched.is_muted() {
@@ -734,7 +735,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
                 result.raw_set("objects", counters.objects as f64)?;
                 result.raw_set("stored", counters.stored as f64)?;
                 result.raw_set("rehashed", counters.rehashed as f64)?;
-                result.raw_set("hostops", counters.hostops.iter().sum::<u64>() as f64)?;
+                result.raw_set("hostops", crate::cost::host_instructions(counters) as f64)?;
                 for (key, value) in [
                     ("vectormagnitudes", counters.vectormagnitudes),
                     ("vectorunits", counters.vectorunits),

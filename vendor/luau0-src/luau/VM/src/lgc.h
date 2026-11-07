@@ -152,6 +152,10 @@ LUAI_FUNC const char* luaC_statename(int state);
 
 // cold touches (lua_coldtracking): an object a frame's work touches first is marked (COLDBIT) and, made before the frame, counted
 LUAI_FUNC void luaC_coldtouch(lua_State* L, GCObject* o);
+// a script's call of a C function (host 0) or of the host's own Luau (host 1): its first in a frame is counted (LUA_WORK_COLDCFUNCS);
+// `self` is the call's first argument, when it has one (a userdata's __namecall that dispatches a method call is not a library call)
+// `caller` is the calling function's (NULL: unknown): a call from the binding's own helper chunks (mlua's, "=__mlua...") is the binding's
+LUAI_FUNC void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, const Proto* caller);
 // a new table, closure or function: touched in the frame that made it
 LUAI_FUNC void luaC_coldmade(lua_State* L, GCObject* o);
 // whether a collected object's page waits for the next frame to go back to the allocator (true: the page is kept, lmem.cpp freepage)

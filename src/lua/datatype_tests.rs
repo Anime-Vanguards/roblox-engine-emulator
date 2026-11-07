@@ -620,7 +620,7 @@ fn cframe_operations_run_natively_and_keep_their_work_clock_charge() {
     let counters = || {
         let pointer = engine.state.borrow().sched.vm_counters.expect("VM counters");
         let counters = unsafe { &*pointer };
-        (counters.hostnanos, counters.hostops.iter().sum::<u64>())
+        (counters.hostnanos, crate::cost::host_instructions(counters))
     };
     let run = |loops: u32| {
         let script = {
