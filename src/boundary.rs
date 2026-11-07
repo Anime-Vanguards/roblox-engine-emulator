@@ -725,14 +725,18 @@ impl Recorder {
     }
 }
 
-/// Ends profiling: the report as text, and as JSON in the configured file. None when this thread was not profiling.
+/// Ends profiling: the report as text, and as JSON in the configured file (its folder made when missing). None when
+/// this thread was not profiling.
 pub fn finish() -> Option<String> {
     ACTIVE.with(|active| active.set(false));
     let recorder = RECORDER.with(|recorder| recorder.borrow_mut().take())?;
     let (report, text) = recorder.report();
     match serde_json::to_string_pretty(&report) {
         Ok(json) => {
-            if let Err(error) = std::fs::write(&recorder.config.out, json) {
+            // (the profiling suite's boundary.json goes in the profile's folder, which the suite makes only after this, as
+            // it writes the rest: a new folder lost the file)
+            let folder = recorder.config.out.parent().filter(|folder| !folder.as_os_str().is_empty());
+            if let Err(error) = folder.map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&recorder.config.out, json)) {
                 eprintln!("Writing boundary profile {}: {error}", recorder.config.out.display());
             }
         }

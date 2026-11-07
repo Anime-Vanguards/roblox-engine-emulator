@@ -90,8 +90,10 @@ impl Kinds {
     }
 
     /// `work,alloc`, `all`, `all,time`: the kinds of a `--profile` value. Aliases: `instructions` and `lines` are
-    /// `work`, `memory` is `alloc,heap`, `gc` is `heap`.
+    /// `work`, `memory` is `alloc,heap`, `gc` is `heap`. A word it does not know, or a value that names no kind, is an
+    /// error that lists the kinds.
     pub fn parse(text: &str) -> Result<Kinds, String> {
+        let known = || Kinds::NAMES.iter().map(|(name, _, _)| *name).collect::<Vec<_>>().join(", ");
         let mut kinds = Kinds::default();
         for word in text.split(',').map(str::trim).filter(|word| !word.is_empty()) {
             kinds = kinds.with(match word {
@@ -101,12 +103,12 @@ impl Kinds {
                 "gc" => Kinds::HEAP,
                 _ => match Kinds::NAMES.iter().find(|(name, _, _)| *name == word) {
                     Some((_, kind, _)) => *kind,
-                    None => {
-                        let known: Vec<&str> = Kinds::NAMES.iter().map(|(name, _, _)| *name).collect();
-                        return Err(format!("--profile: no kind {word:?} (kinds: {}, all)", known.join(", ")));
-                    }
+                    None => return Err(format!("--profile: no kind {word:?} (kinds: {}, all)", known())),
                 },
             });
+        }
+        if kinds.is_empty() {
+            return Err(format!("--profile: no kind named in {text:?} (kinds: {}, all)", known()));
         }
         Ok(kinds)
     }
@@ -146,7 +148,8 @@ impl Config {
     }
 
     /// The suite's options of a command line, None when it asks for no profile of the suite: `--profile` alone (the
-    /// phases of before, timing.rs) and `--profile boundary` alone (boundary.rs) keep their own form.
+    /// phases of before, timing.rs) and `--profile boundary` alone (boundary.rs) keep their own form. A value naming a
+    /// kind the suite does not know is an error listing the kinds (`ree record|run` exit 2 before they start).
     ///
     /// `--profile <kinds> [--profile-out <dir>] [--profile-top <n>] [--profile-phase <a,b|all>] [--profile-alloc-step
     /// <bytes>]`; `default_out` is the directory when `--profile-out` is not given.
@@ -178,17 +181,18 @@ impl Config {
     }
 }
 
-/// The value of `--profile` when it names kinds (`--profile` followed by another option or nothing is the phases of before)
+/// The value of `--profile`: the word after it (`--profile` followed by another option or nothing is the phases of
+/// before). Every such word is the value, so [`Kinds::parse`] refuses one that names no kind it knows: it used to be
+/// taken for `--profile` alone, and a misspelt kind ran the command without a profile and exited 0.
 pub fn profile_value(args: &[String]) -> Option<String> {
     let index = args.iter().position(|arg| arg == "--profile")?;
-    let next = args.get(index + 1)?;
-    (!next.starts_with("--") && Kinds::parse(next).is_ok() || next == "boundary").then(|| next.clone())
+    args.get(index + 1).filter(|next| !next.starts_with("--")).cloned()
 }
 
-/// How many arguments `--profile` at `index` takes (1, or 2 with a kinds value): for parsers that skip it
+/// How many arguments `--profile` at `index` takes (1, or 2 with a value): for parsers that skip it
 pub fn profile_arguments(args: &[String], index: usize) -> usize {
     match args.get(index + 1) {
-        Some(next) if !next.starts_with("--") && (next == "boundary" || Kinds::parse(next).is_ok()) => 2,
+        Some(next) if !next.starts_with("--") => 2,
         _ => 1,
     }
 }

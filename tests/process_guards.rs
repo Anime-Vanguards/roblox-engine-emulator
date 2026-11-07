@@ -1,6 +1,7 @@
 //! A `ree run` cannot outlive its job (src/watchdog.rs): the wall-clock cap, the stop after repeated script timeouts and
 //! the exit when the parent process is gone; and what a script exhausts (the held values of src/lua/refs.rs, the run's
-//! stack) is its error, not the end of the run; through the built `ree`.
+//! stack) is its error, not the end of the run; and a profile it cannot take (a kind the profiling suite does not know)
+//! stops a run before it starts; through the built `ree`.
 
 use std::{
     path::{Path, PathBuf},
@@ -152,5 +153,25 @@ fn a_deep_instance_tree_does_not_overflow_a_runs_stack() {
     assert_eq!(done.status.code(), Some(0), "{stderr}");
     let summary: serde_json::Value = serde_json::from_str(stdout.trim()).expect("the summary on stdout");
     assert!(summary["output"].as_array().unwrap().iter().any(|entry| entry["message"] == "3000 true"), "{summary}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_profile_kind_ree_does_not_know_stops_a_recording_before_it_starts() {
+    // it used to be taken for `--profile` alone: the recording ran, wrote no profile and exited 0
+    let root = scratch("profile-kind");
+    let said = harness(&root, "return function() print('ran') end");
+    let out = root.join("out");
+    let mut record = Command::new(env!("CARGO_BIN_EXE_ree"));
+    record.args(["record", "--harness", &said, "--roots", &root.join("empty").to_string_lossy(), "--out", &out.to_string_lossy(), "--profile", "memroy"]).current_dir(&root);
+    for name in ["REE_PROFILE", "REE_PROFILE_OUT", "REE_SCRIPT_TIMEOUT", "REE_MAX_WALL_SECONDS", "REE_MAX_SCRIPT_TIMEOUTS", "REE_PARENT_WATCH"] {
+        record.env_remove(name);
+    }
+    let done = record.output().unwrap();
+    let stderr = String::from_utf8_lossy(&done.stderr);
+    assert_eq!(done.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("no kind \"memroy\" (kinds: work, caches, alloc, heap, timeline, cpu, phases, time, boundary, all)"), "{stderr}");
+    assert!(done.stdout.is_empty(), "nothing ran: {}", String::from_utf8_lossy(&done.stdout));
+    assert!(!out.exists(), "no recording, no profile");
     let _ = std::fs::remove_dir_all(&root);
 }

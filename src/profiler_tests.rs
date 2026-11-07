@@ -532,6 +532,83 @@ fn profile_options_keep_the_old_forms() {
     assert_eq!(profiler::profile_arguments(&args(&["--profile", "--x"]), 0), 1);
 }
 
+/// A word after `--profile` that names no kind the suite knows is refused with the kinds listed, so the command stops
+/// before it starts: it used to be taken for `--profile` alone, and the run printed the phases, wrote no profile and
+/// exited 0. A value that names no kind at all is refused too.
+#[test]
+fn a_kind_the_suite_does_not_know_is_refused() {
+    let args = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    let none = || std::path::PathBuf::from("default");
+    let kinds = "(kinds: work, caches, alloc, heap, timeline, cpu, phases, time, boundary, all)";
+    let error = Config::from_args(&args(&["--harness", "x.luau", "--profile", "memroy", "--seconds", "2"]), none).unwrap_err();
+    assert!(error.contains("no kind \"memroy\"") && error.contains(kinds), "{error}");
+    let error = Config::from_args(&args(&["--profile", "work,memroy"]), none).unwrap_err();
+    assert!(error.contains("no kind \"memroy\""), "{error}");
+    for empty in ["", ",", " , "] {
+        let error = Config::from_args(&args(&["--profile", empty, "--seconds", "2"]), none).unwrap_err();
+        assert!(error.contains("no kind named") && error.contains(kinds), "{empty:?}: {error}");
+    }
+    // the word is the value: skipped with `--profile` by the parsers that skip it, asked for in a process of its own
+    // (the service's client runs the command itself, which refuses it), never the phases of before
+    assert_eq!(profiler::profile_value(&args(&["--profile", "memroy"])).as_deref(), Some("memroy"));
+    assert_eq!(profiler::profile_arguments(&args(&["--profile", "memroy", "--x"]), 0), 2);
+    assert!(profiler::requested(&args(&["--profile", "memroy"])));
+    assert!(!profiler::phases_requested(&args(&["--profile", "memroy"])));
+}
+
+/// A profile of the boundary kind (as rur asks for `--profile boundary`) of a script that writes and reads a part, into
+/// a profile folder that does not exist yet: its summary and the folder
+fn boundary_profile(name: &str) -> (String, std::path::PathBuf) {
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::BOUNDARY, temp_dir(name).join("profile")) };
+    assert!(!config.out.exists());
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    run(&lua, &engine, "crossings", "local part = Instance.new(\"Part\")\nfor i = 1, 10 do\n\tpart.Transparency = i / 10\n\tlocal _ = part.Transparency\nend\n");
+    profiler::collect(&lua);
+    let summary = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    (summary, config.out)
+}
+
+/// The boundary kind writes its boundary.json into the profile's folder when that folder is new: the boundary profiler
+/// wrote it before the suite made the folder, so the file went missing while the summary listed it. The boundary
+/// profiler's own form (`--profile boundary --profile-out <file>`) makes its file's folder too.
+#[test]
+fn the_boundary_kind_writes_its_file_into_a_new_profile_folder() {
+    let _lock = lock();
+    let (summary, dir) = boundary_profile("boundary-file");
+    let written = std::fs::read_to_string(dir.join("boundary.json"));
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    let report: serde_json::Value = serde_json::from_str(&written.expect("boundary.json in the profile folder")).unwrap();
+    assert!(report["crossings"].as_u64().unwrap() >= 21, "a create, 10 writes and 10 reads: {report}");
+    assert!(summary.contains("boundary.json"), "{summary}");
+    let file = temp_dir("boundary-own").join("deeper").join("b.json");
+    let (lua, engine) = start();
+    crate::boundary::begin(crate::boundary::Config { out: file.clone(), top: 5, phase: None });
+    crate::luau_profile::install(&lua);
+    run(&lua, &engine, "own", "local part = Instance.new(\"Part\")\nlocal _ = part.Transparency\n");
+    crate::boundary::finish().expect("report");
+    let made = file.is_file();
+    let _ = std::fs::remove_dir_all(file.parent().unwrap().parent().unwrap());
+    assert!(made, "{}", file.display());
+}
+
+/// The boundary kind's report is in the summary (summary.txt, and the text a command prints) before the files line, as
+/// every other kind's is: it was only in profile.json.
+#[test]
+fn the_summary_holds_the_boundary_report() {
+    let _lock = lock();
+    let (summary, dir) = boundary_profile("boundary-summary");
+    let text = std::fs::read_to_string(dir.join("summary.txt")).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    assert_eq!(text, summary);
+    let report = json["boundary"].as_str().unwrap();
+    assert!(report.starts_with("boundary profile:") && report.contains("BasePart.Transparency"), "{report}");
+    let at = text.find(report.trim_end()).unwrap_or_else(|| panic!("the boundary report is in summary.txt:\n{text}"));
+    assert!(at < text.find("\nfiles in ").unwrap(), "{text}");
+}
+
 /// A run writes every file (summary, JSON, folded stacks, speedscope, the page), the page holds the profile, and a diff
 /// of a profile with itself finds nothing moved while one with more work finds the function that did it.
 #[test]

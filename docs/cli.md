@@ -220,9 +220,10 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
 - `--profile` alone prints where the command's time went on stderr: the mount phases, the harness start,
   module loads, bundle imports, the frames and the files (`prepared: used`, or why a prepared run was
   stale, when a service's worker held one). `--profile boundary` alone is the boundary profiler of before
-  (Luau-to-engine crossings per call site, priced; `--profile-out <file.json>`).
+  (Luau-to-engine crossings per call site, priced; `--profile-out <file.json>`, its folder made when missing).
 - `--profile <kinds> [--profile-out <dir>]` profiles the run (docs/engine.md "Profiling"); kinds are
-  comma-separated:
+  comma-separated, and a word after `--profile` that names no kind (a misspelt one) stops the command before
+  it starts, exit 2, with the kinds listed:
   - `work` (also `instructions`, `lines`): every instruction the VM runs is counted on its own line, and
     what the work clock charges (the instruction's own cost, the engine calls it makes, what it allocates)
     is booked to the instruction that caused it. Per function and per line, self and total: instructions,
@@ -251,7 +252,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     one the summary says so and lists the counters the CPU offers. Nothing is estimated.
   - `phases`: the wall-time phases of plain `--profile`.
   - `time`: host time sampled every millisecond at the VM's calls, returns and loop edges (a line's time
-    lands on its next safepoint). `boundary`: the boundary profiler.
+    lands on its next safepoint). `boundary`: the boundary profiler, its report in the summary and its data
+    in `boundary.json` in the profile's folder.
   - `all`: `work`, `caches`, `alloc`, `heap`, `timeline`, `cpu` and `phases`. `time` and `boundary` are
     asked for apart: counting every instruction slows the interpreter several times over, so host time is
     read in a run of its own.

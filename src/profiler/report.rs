@@ -760,6 +760,7 @@ pub fn write(input: &Input) -> Result<String, String> {
     }
     if let Some(text) = input.boundary {
         json["boundary"] = json!(text);
+        let _ = writeln!(summary, "\n{}", text.trim_end());
         files.push("boundary.json".into());
     }
 
