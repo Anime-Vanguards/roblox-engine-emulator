@@ -754,29 +754,38 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
             })?,
         )?;
     }
+    // Luau's own os.time and os.date on the virtual clock; their errors are Luau's plain messages (`invalid argument #1
+    // to 'time' (table expected, got number)`; Studio 0.744, tools/parity/probes/datetime.luau)
     let native_time: LuaFunction = native_os.get("time")?;
     let e = engine.clone();
     os.raw_set(
         "time",
-        lua.create_function(move |_, date: LuaValue| {
-            if !date.is_nil() {
-                return native_time.call::<LuaValue>(date);
+        wrapped(lua, engine, move |_, args| {
+            let args = Args::new(args);
+            if !args.get(0).is_nil() {
+                return match native_time.call::<LuaValue>(args.get(0).clone()) {
+                    Ok(time) => Ok(values([time])),
+                    Err(error) => raise_plain(scheduler::error_message(&error)),
+                };
             }
             let millis = e.state.borrow_mut().sched.unix_millis();
-            Ok(LuaValue::Number((millis / 1000.0).floor()))
+            Ok(values([LuaValue::Number((millis / 1000.0).floor())]))
         })?,
     )?;
     let native_date: LuaFunction = native_os.get("date")?;
     let e = engine.clone();
     os.raw_set(
         "date",
-        lua.create_function(move |_, (format, time): (LuaValue, LuaValue)| {
-            let time = if time.is_nil() {
-                LuaValue::Number((e.state.borrow_mut().sched.unix_millis() / 1000.0).floor())
-            } else {
-                time
+        wrapped(lua, engine, move |_, args| {
+            let args = Args::new(args);
+            let time = match args.get(1) {
+                LuaValue::Nil => LuaValue::Number((e.state.borrow_mut().sched.unix_millis() / 1000.0).floor()),
+                time => time.clone(),
             };
-            native_date.call::<LuaValue>((format, time))
+            match native_date.call::<LuaValue>((args.get(0).clone(), time)) {
+                Ok(date) => Ok(values([date])),
+                Err(error) => raise_plain(scheduler::error_message(&error)),
+            }
         })?,
     )?;
     shared.raw_set("os", os)?;

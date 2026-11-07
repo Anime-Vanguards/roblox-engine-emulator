@@ -1310,59 +1310,103 @@ const MONTH_NAMES: [&str; 12] = [
 ];
 const DAY_NAMES: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
 
+/// FormatUniversalTime / FormatLocalTime as a playing client formats in en-us (Studio 0.744,
+/// tools/parity/probes/datetime.luau): the longest token at each place, `[...]` copied without its brackets, any other
+/// character as it is. There are no ordinal tokens (`Do` is the day and a literal o, `14o`), and `Y`, `Q`, `w`, `W`,
+/// `e`, `E`, `g`, `G`, `k`, `Z`, `X`, `x` are literals too. `DDD` / `DDDD` are the day of the year, `d` the weekday
+/// (0 Sunday), `dd` its first two letters, `S` / `SS` / `SSS` tenths, hundredths and milliseconds (`SSSS` is `SSS` then
+/// `S`). Other locales are not emulated (the en-us text is returned).
 fn format_parts(t: &Parts, format: &str) -> String {
-    let weekday = DAY_NAMES[luau_mod(days_from_civil(t.year, t.month, t.day), 7.0) as usize];
+    const LOCALE_FORMATS: [(&str, &str); 10] = [
+        ("LLLL", "dddd, MMMM D, YYYY h:mm A"),
+        ("llll", "ddd, MMM D, YYYY h:mm A"),
+        ("LTS", "h:mm:ss A"),
+        ("LLL", "MMMM D, YYYY h:mm A"),
+        ("lll", "MMM D, YYYY h:mm A"),
+        ("LL", "MMMM D, YYYY"),
+        ("ll", "MMM D, YYYY"),
+        ("LT", "h:mm A"),
+        ("L", "MM/DD/YYYY"),
+        ("l", "MM/DD/YYYY"),
+    ];
+    const TOKENS: [&str; 27] = [
+        "YYYY", "MMMM", "DDDD", "dddd", "MMM", "DDD", "ddd", "SSS", "YY", "MM", "DD", "dd", "HH", "hh", "mm", "ss", "SS", "M",
+        "D", "d", "H", "h", "m", "s", "S", "A", "a",
+    ];
+    let days = days_from_civil(t.year, t.month, t.day);
+    let weekday_index = luau_mod(days + 4.0, 7.0); // 1970-01-01 was a Thursday; 0 is Sunday
+    let weekday = DAY_NAMES[luau_mod(days, 7.0) as usize];
+    let day_of_year = days - days_from_civil(t.year, 1.0, 1.0) + 1.0;
     let hour12 = if luau_mod(t.hour, 12.0) == 0.0 { 12.0 } else { luau_mod(t.hour, 12.0) };
     let month = MONTH_NAMES[(t.month as usize).clamp(1, 12) - 1];
-    let n = |v: f64| format!("{}", v as i64);
-    let two = |v: f64| format!("{:02}", v as i64);
-    let tokens: [(&str, String); 19] = [
-        ("YYYY", format!("{:04}", t.year as i64)),
-        ("MMMM", month.to_string()),
-        ("MMM", month[..3].to_string()),
-        ("MM", two(t.month)),
-        ("M", n(t.month)),
-        ("DD", two(t.day)),
-        ("D", n(t.day)),
-        ("dddd", weekday.to_string()),
-        ("ddd", weekday[..3].to_string()),
-        ("HH", two(t.hour)),
-        ("H", n(t.hour)),
-        ("hh", two(hour12)),
-        ("h", n(hour12)),
-        ("mm", two(t.minute)),
-        ("m", n(t.minute)),
-        ("ss", two(t.second)),
-        ("s", n(t.second)),
-        ("A", if t.hour < 12.0 { "AM" } else { "PM" }.to_string()),
-        ("a", if t.hour < 12.0 { "am" } else { "pm" }.to_string()),
-    ];
-    let format = match format {
-        "LT" => "h:mm A",
-        "LTS" => "h:mm:ss A",
-        "L" => "MM/DD/YYYY",
-        "LL" => "MMMM D, YYYY",
-        "LLL" => "MMMM D, YYYY h:mm A",
-        "LLLL" => "dddd, MMMM D, YYYY h:mm A",
-        other => other,
+    let value = |token: &str| -> String {
+        match token {
+            "YYYY" => format!("{:04}", t.year as i64),
+            "YY" => format!("{:02}", (t.year as i64).rem_euclid(100)),
+            "MMMM" => month.to_string(),
+            "MMM" => month[..3].to_string(),
+            "MM" => format!("{:02}", t.month as i64),
+            "M" => format!("{}", t.month as i64),
+            "DDDD" => format!("{:03}", day_of_year as i64),
+            "DDD" => format!("{}", day_of_year as i64),
+            "DD" => format!("{:02}", t.day as i64),
+            "D" => format!("{}", t.day as i64),
+            "dddd" => weekday.to_string(),
+            "ddd" => weekday[..3].to_string(),
+            "dd" => weekday[..2].to_string(),
+            "d" => format!("{}", weekday_index as i64),
+            "HH" => format!("{:02}", t.hour as i64),
+            "H" => format!("{}", t.hour as i64),
+            "hh" => format!("{:02}", hour12 as i64),
+            "h" => format!("{}", hour12 as i64),
+            "mm" => format!("{:02}", t.minute as i64),
+            "m" => format!("{}", t.minute as i64),
+            "ss" => format!("{:02}", t.second as i64),
+            "s" => format!("{}", t.second as i64),
+            "SSS" => format!("{:03}", t.millisecond as i64),
+            "SS" => format!("{:02}", (t.millisecond as i64) / 10),
+            "S" => format!("{}", (t.millisecond as i64) / 100),
+            "A" => if t.hour < 12.0 { "AM" } else { "PM" }.to_string(),
+            "a" => if t.hour < 12.0 { "am" } else { "pm" }.to_string(),
+            _ => String::new(),
+        }
     };
-    let bytes = format.as_bytes();
-    let mut output = String::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        let mut matched = false;
-        for (token, value) in &tokens {
-            if bytes[index..].starts_with(token.as_bytes()) {
-                output.push_str(value);
-                index += token.len();
-                matched = true;
-                break;
+    let simple = |format: &str, output: &mut String| {
+        let mut rest = format;
+        while !rest.is_empty() {
+            if let Some(token) = TOKENS.iter().find(|token| rest.starts_with(**token)) {
+                output.push_str(&value(token));
+                rest = &rest[token.len()..];
+            } else {
+                let character = rest.chars().next().expect("a character");
+                output.push(character);
+                rest = &rest[character.len_utf8()..];
             }
         }
-        if !matched {
-            output.push(bytes[index] as char);
-            index += 1;
+    };
+    let mut output = String::new();
+    let mut rest = format;
+    while !rest.is_empty() {
+        if let Some(escaped) = rest.strip_prefix('[') {
+            if let Some(end) = escaped.find(']') {
+                output.push_str(&escaped[..end]);
+                rest = &escaped[end + 1..];
+                continue;
+            }
         }
+        if let Some((token, expansion)) = LOCALE_FORMATS.iter().find(|(token, _)| rest.starts_with(*token)) {
+            simple(expansion, &mut output);
+            rest = &rest[token.len()..];
+            continue;
+        }
+        if let Some(token) = TOKENS.iter().find(|token| rest.starts_with(**token)) {
+            output.push_str(&value(token));
+            rest = &rest[token.len()..];
+            continue;
+        }
+        let character = rest.chars().next().expect("a character");
+        output.push(character);
+        rest = &rest[character.len_utf8()..];
     }
     output
 }
@@ -1394,10 +1438,15 @@ fn date_time_of(value: &LuaValue) -> Option<f64> {
     }
 }
 
-/// The instants a DateTime can hold (Roblox's documentation: Unix timestamps from -17,987,443,200,000
-/// to 253,402,300,799,999 ms, years 1400 to 9999).
+/// The instants a DateTime can hold: Unix timestamps from -17,987,443,200 to 253,402,300,799 seconds, years 1400 to 9999
+/// (the client's own message gives the bounds; Roblox's documentation the years).
 const DATE_TIME_MIN_MILLIS: f64 = -17_987_443_200_000.0;
 const DATE_TIME_MAX_MILLIS: f64 = 253_402_300_799_999.0;
+/// The messages a playing client raises (Studio 0.744, tools/parity/probes/datetime.luau)
+const TIMESTAMP_OUT_OF_RANGE: &str =
+    "Error interpreting timestamp as a precise point in time. Fields out of range. UnixTimestamp should be between -17987443200 and 253402300799.";
+const FIELDS_OUT_OF_RANGE: &str = "Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.";
+const OVER_THE_MAX: &str = "Over the max DateTime supported: 9999-12-31T23:59:59Z";
 
 /// A DateTime constructor's numeric argument: nil is absent, a number or numeric string is read.
 fn date_time_number(lua: &Lua, args: &Args, index: usize, name: &str) -> Result<Option<f64>, Flow> {
@@ -1416,17 +1465,40 @@ fn date_time_number(lua: &Lua, args: &Args, index: usize, name: &str) -> Result<
     }
 }
 
-/// fromUniversalTime's instant for (year, month, day, hour, minute, second, millisecond), or the
-/// argument number of the date unit that makes the date invalid (an instant outside the DateTime
-/// range blames the year). Time units roll over into the date.
-fn date_time_millis(fields: [Option<f64>; 7]) -> Result<f64, usize> {
-    let [year, month, day, hour, minute, second, millisecond] = fields;
-    let (year, month, day) = (year.unwrap_or(1970.0), month.unwrap_or(1.0), day.unwrap_or(1.0));
-    if !(1400.0..=9999.0).contains(&year) {
-        return Err(1);
+/// A DateTime method's string argument as Luau's checks read it: a string, or a number in its tostring form
+/// (`FormatUniversalTime(5, "en-us")` is "5"); anything else raises (Studio 0.744, tools/parity/probes/datetime.luau:
+/// `invalid argument #3 to 'FormatUniversalTime' (string expected, got nil)`).
+fn date_time_string(lua: &Lua, args: &Args, index: usize, name: &str) -> Result<String, Flow> {
+    let value = args.get(index);
+    let text = match value {
+        LuaValue::String(text) => Some(text.clone()),
+        LuaValue::Number(_) | LuaValue::Integer(_) => lua.coerce_string(value.clone()).ok().flatten(),
+        _ => None,
+    };
+    match text {
+        Some(text) => Ok(text.to_string_lossy()),
+        None => raise_plain(format!(
+            "invalid argument #{} to '{name}' (string expected, got {})",
+            index + 1,
+            value.type_name()
+        )),
     }
-    if !(1.0..=12.0).contains(&month) {
-        return Err(2);
+}
+
+/// fromUniversalTime's instant for (year, month, day, hour, minute, second, millisecond) as a playing client reads them
+/// (Studio 0.744, tools/parity/probes/datetime.luau): each unit truncated toward zero (2021.5, 1.5, 1.5 is 2021-01-01),
+/// absent units 1970, 1, 1, 0, 0, 0, 0; time units roll over into the date (hour 24, minute 60, second 60, millisecond
+/// 1000 and hour -1 measured). A month or day that names no date, or a year before 1400 (measured with -1), raises
+/// FIELDS_OUT_OF_RANGE; a year after 9999 OVER_THE_MAX (measured with 10000). Not measured: an instant rolled over past
+/// 9999-12-31T23:59:59.999Z (OVER_THE_MAX here) or before the year 1400 (FIELDS_OUT_OF_RANGE here).
+fn date_time_millis(fields: [Option<f64>; 7]) -> Result<f64, &'static str> {
+    let [year, month, day, hour, minute, second, millisecond] = fields.map(|field| field.map(f64::trunc));
+    let (year, month, day) = (year.unwrap_or(1970.0), month.unwrap_or(1.0), day.unwrap_or(1.0));
+    if year > 9999.0 {
+        return Err(OVER_THE_MAX);
+    }
+    if !(year >= 1400.0) || !(1.0..=12.0).contains(&month) {
+        return Err(FIELDS_OUT_OF_RANGE);
     }
     let leap = year % 4.0 == 0.0 && (year % 100.0 != 0.0 || year % 400.0 == 0.0);
     let month_days = match month as u32 {
@@ -1436,56 +1508,137 @@ fn date_time_millis(fields: [Option<f64>; 7]) -> Result<f64, usize> {
         _ => 31.0,
     };
     if !(1.0..=month_days).contains(&day) {
-        return Err(3);
+        return Err(FIELDS_OUT_OF_RANGE);
     }
     let millis = days_from_civil(year, month, day) * 86400000.0
         + hour.unwrap_or(0.0) * 3600000.0
         + minute.unwrap_or(0.0) * 60000.0
         + second.unwrap_or(0.0) * 1000.0
         + millisecond.unwrap_or(0.0);
-    if !(DATE_TIME_MIN_MILLIS..=DATE_TIME_MAX_MILLIS).contains(&millis) {
-        return Err(1);
+    if millis > DATE_TIME_MAX_MILLIS {
+        return Err(OVER_THE_MAX);
+    }
+    if !(millis >= DATE_TIME_MIN_MILLIS) {
+        return Err(FIELDS_OUT_OF_RANGE);
     }
     Ok(millis)
 }
 
+/// fromIsoDate as a playing client parses (Studio 0.744, tools/parity/probes/datetime.luau): leading white space
+/// skipped, then `YYYY-MM-DD`, optionally followed by `T`, `t` or a space and `hh:mm`, then `:ss` and a fraction of a
+/// second (its first three digits are the milliseconds, the rest ignored), then `Z`, `z` or an offset `+hh:mm` /
+/// `-hh:mm` (`+0200` is nil; no designator is universal time). A date that does not exist is nil; hour 24 and second 60
+/// roll over into the next day and minute; the basic format (`20200229T123456Z`) and a signed year are nil. Not
+/// measured: trailing text, an hour past 24, a minute past 59 or a second past 60 (all nil here).
+fn parse_iso_date(text: &str) -> Option<f64> {
+    let bytes = text.trim_start().as_bytes();
+    let digits_value = |digits: &[u8]| digits.iter().fold(0.0, |value, digit| value * 10.0 + f64::from(digit - b'0'));
+    let number = |at: &mut usize, count: usize| -> Option<f64> {
+        let digits = bytes.get(*at..*at + count)?;
+        if !digits.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        *at += count;
+        Some(digits_value(digits))
+    };
+    let expect = |at: &mut usize, byte: u8| -> Option<()> {
+        (bytes.get(*at) == Some(&byte)).then(|| *at += 1)
+    };
+    let mut at = 0;
+    let year = number(&mut at, 4)?;
+    expect(&mut at, b'-')?;
+    let month = number(&mut at, 2)?;
+    expect(&mut at, b'-')?;
+    let day = number(&mut at, 2)?;
+    let (mut hour, mut minute, mut second, mut millisecond, mut offset) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    if let Some(b'T' | b't' | b' ') = bytes.get(at) {
+        at += 1;
+        hour = number(&mut at, 2)?;
+        expect(&mut at, b':')?;
+        minute = number(&mut at, 2)?;
+        if expect(&mut at, b':').is_some() {
+            second = number(&mut at, 2)?;
+            if expect(&mut at, b'.').is_some() {
+                let start = at;
+                while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                    at += 1;
+                }
+                if at == start {
+                    return None;
+                }
+                let digits = &bytes[start..at.min(start + 3)];
+                millisecond = digits_value(digits) * 10f64.powi(3 - digits.len() as i32);
+            }
+        }
+        match bytes.get(at) {
+            Some(b'Z' | b'z') => at += 1,
+            Some(&sign @ (b'+' | b'-')) => {
+                at += 1;
+                let hours = number(&mut at, 2)?;
+                expect(&mut at, b':')?;
+                let minutes = number(&mut at, 2)?;
+                offset = (hours * 3600000.0 + minutes * 60000.0) * if sign == b'+' { 1.0 } else { -1.0 };
+            }
+            _ => {}
+        }
+    }
+    if at != bytes.len() || hour > 24.0 || minute > 59.0 || second > 60.0 {
+        return None;
+    }
+    let fields = [Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second), Some(millisecond)];
+    Some(date_time_millis(fields).ok()? - offset)
+}
+
+/// A DateTime at whole milliseconds (-0 is 0: `fromUnixTimestampMillis(-0.5)` prints 0).
 fn make_date_time(lua: &Lua, millis: f64) -> LuaResult<LuaValue> {
-    Ok(LuaValue::UserData(lua.create_any_userdata(LDateTime(millis.floor()))?))
+    Ok(LuaValue::UserData(lua.create_any_userdata(LDateTime(millis.floor() + 0.0))?))
 }
 
 fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let methods = lua.create_table()?;
-    let this_millis = |value: &LuaValue| {
-        date_time_of(value).ok_or_else(|| LuaError::runtime("Expected ':' not '.' calling member function"))
+    let this_millis = |args: &Args| match date_time_of(args.get(0)) {
+        Some(millis) => Ok(millis),
+        None => raise_plain("Expected ':' not '.' calling member function"),
     };
     methods.set(
         "ToUniversalTime",
-        lua.create_function(move |lua, this: LuaValue| parts_table(lua, &universal_parts(this_millis(&this)?)))?,
+        wrapped(lua, engine, move |lua, args| {
+            Ok(values([LuaValue::Table(parts_table(lua, &universal_parts(this_millis(&Args::new(args))?))?)]))
+        })?,
     )?;
     methods.set(
         "ToLocalTime",
-        lua.create_function(move |lua, this: LuaValue| parts_table(lua, &local_parts(this_millis(&this)?)))?,
-    )?;
-    methods.set("ToIsoDate", lua.create_function(move |_, this: LuaValue| Ok(iso_date(this_millis(&this)?)))?)?;
-    methods.set(
-        "FormatUniversalTime",
-        lua.create_function(move |_, (this, format): (LuaValue, String)| {
-            Ok(format_parts(&universal_parts(this_millis(&this)?), &format))
+        wrapped(lua, engine, move |lua, args| {
+            Ok(values([LuaValue::Table(parts_table(lua, &local_parts(this_millis(&Args::new(args))?))?)]))
         })?,
     )?;
     methods.set(
-        "FormatLocalTime",
-        lua.create_function(move |_, (this, format): (LuaValue, String)| {
-            Ok(format_parts(&local_parts(this_millis(&this)?), &format))
+        "ToIsoDate",
+        wrapped(lua, engine, move |lua, args| {
+            Ok(values([LuaValue::String(lua.create_string(iso_date(this_millis(&Args::new(args))?))?)]))
         })?,
     )?;
+    // The locale must be a string; other locales than en-us are not emulated (Studio 0.744 formats `LL` in en-gb as
+    // "14 November 2023"; an unknown locale or "" is en-us)
+    let format = |name: &'static str, parts: fn(f64) -> Parts| {
+        move |lua: &Lua, args: LuaMultiValue| -> Ret {
+            let args = Args::new(args);
+            let millis = this_millis(&args)?;
+            let format = date_time_string(lua, &args, 1, name)?;
+            date_time_string(lua, &args, 2, name)?;
+            Ok(values([LuaValue::String(lua.create_string(format_parts(&parts(millis), &format))?)]))
+        }
+    };
+    methods.set("FormatUniversalTime", wrapped(lua, engine, format("FormatUniversalTime", universal_parts))?)?;
+    methods.set("FormatLocalTime", wrapped(lua, engine, format("FormatLocalTime", local_parts))?)?;
     let index = wrapped(lua, engine, move |_, args| {
         let args = Args::new(args);
         let millis = date_time_of(args.get(0)).unwrap_or(0.0);
         if let LuaValue::String(key) = args.get(1) {
             match &*key.as_bytes() {
                 b"UnixTimestampMillis" => return Ok(values([LuaValue::Number(millis)])),
-                b"UnixTimestamp" => return Ok(values([LuaValue::Number((millis / 1000.0).floor())])),
+                // truncated toward zero: -1 ms is 0 (Studio 0.744, tools/parity/probes/datetime.luau)
+                b"UnixTimestamp" => return Ok(values([LuaValue::Number((millis / 1000.0).trunc() + 0.0)])),
                 _ => {
                     let member: LuaValue = methods.raw_get(key.clone())?;
                     if !member.is_nil() {
@@ -1533,15 +1686,18 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             make_date_time(lua, millis)
         })?,
     )?;
-    // Roblox's documentation: a DateTime lies in years 1400 to 9999 (timestamps outside raise), and
-    // date units that make an invalid date raise; time units roll over (the messages are not measured)
+    // fromUnixTimestamp truncates its seconds toward zero before scaling (0.5 and -0.5 are 0, 1.999 is 1000 ms, -1.5
+    // -1000 ms) and raises TIMESTAMP_OUT_OF_RANGE for a second outside the range, NaN and the infinities included;
+    // fromUnixTimestampMillis truncates its milliseconds (1.5 is 1, -1.5 -1, -0.5 0) (Studio 0.744,
+    // tools/parity/probes/datetime.luau). fromUnixTimestampMillis's out-of-range message is not measured (the seconds'
+    // message here).
     let timestamp = |name: &'static str, scale: f64| {
         move |lua: &Lua, args: LuaMultiValue| -> Ret {
             let args = Args::new(args);
-            let value = date_time_number(lua, &args, 0, name)?.unwrap_or(0.0);
+            let value = date_time_number(lua, &args, 0, name)?.unwrap_or(0.0).trunc();
             let millis = value * scale;
-            if !(DATE_TIME_MIN_MILLIS..DATE_TIME_MAX_MILLIS + 1.0).contains(&millis) {
-                return raise_plain(format!("invalid argument #1 to '{name}' (timestamp out of range)"));
+            if !(DATE_TIME_MIN_MILLIS..=DATE_TIME_MAX_MILLIS).contains(&millis) {
+                return raise_plain(TIMESTAMP_OUT_OF_RANGE);
             }
             Ok(values([make_date_time(lua, millis)?]))
         }
@@ -1557,7 +1713,7 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             }
             match date_time_millis(fields) {
                 Ok(millis) => Ok(values([make_date_time(lua, millis - offset_millis)?])),
-                Err(argument) => raise_plain(format!("invalid argument #{argument} to '{name}' (invalid date)")),
+                Err(message) => raise_plain(message),
             }
         }
     };
@@ -1565,24 +1721,12 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     library.set("fromLocalTime", wrapped(lua, engine, from_units("fromLocalTime", standard_offset_millis))?)?;
     library.set(
         "fromIsoDate",
-        lua.create_function(move |lua, text: String| {
-            let parse = || -> Option<[Option<f64>; 7]> {
-                let (date, time) = text.split_once('T')?;
-                let mut date = date.splitn(3, '-');
-                let year = date.next()?.parse().ok()?;
-                let month = date.next()?.parse().ok()?;
-                let day = date.next()?.parse().ok()?;
-                let digits = |s: &str| s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>();
-                let mut time = time.splitn(3, ':');
-                let hour = digits(time.next()?).parse().ok()?;
-                let minute = digits(time.next()?).parse().ok()?;
-                let second = digits(time.next()?).parse().ok()?;
-                Some([Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second), None])
-            };
-            match parse().map(date_time_millis) {
-                Some(Ok(millis)) => make_date_time(lua, millis),
-                _ => Ok(LuaValue::Nil),
-            }
+        wrapped(lua, engine, |lua, args| {
+            let text = date_time_string(lua, &Args::new(args), 0, "fromIsoDate")?;
+            Ok(values([match parse_iso_date(&text) {
+                Some(millis) => make_date_time(lua, millis)?,
+                None => LuaValue::Nil,
+            }]))
         })?,
     )?;
     engine.lua.borrow_mut().libraries.insert("DateTime", library);

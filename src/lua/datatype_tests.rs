@@ -323,14 +323,40 @@ assert(Font.fromEnum(Enum.Font.Gotham).Family == "rbxasset://fonts/families/Goth
 
 assert(DateTime.fromUnixTimestamp(253402300799):ToIsoDate() == "9999-12-31T23:59:59Z")
 assert(DateTime.fromUnixTimestamp(-17987443200):ToIsoDate() == "1400-01-01T00:00:00Z")
-Fails("invalid argument #1 to 'fromUnixTimestamp' (timestamp out of range)", DateTime.fromUnixTimestamp, 253402300800)
-Fails("invalid argument #1 to 'fromUnixTimestamp' (timestamp out of range)", DateTime.fromUnixTimestamp, -17987443201)
-Fails("invalid argument #1 to 'fromUnixTimestampMillis' (timestamp out of range)", DateTime.fromUnixTimestampMillis, 253402300800000)
+-- the messages a playing client raises (Studio 0.744, tools/parity/probes/datetime.luau; fromUnixTimestampMillis's is
+-- not measured)
+local OutOfRange = "Error interpreting timestamp as a precise point in time. Fields out of range. UnixTimestamp should be between -17987443200 and 253402300799."
+local NoDate = "Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range."
+Fails(OutOfRange, DateTime.fromUnixTimestamp, 253402300800)
+Fails(OutOfRange, DateTime.fromUnixTimestamp, -17987443201)
+Fails(OutOfRange, DateTime.fromUnixTimestamp, 0 / 0)
+Fails(OutOfRange, DateTime.fromUnixTimestampMillis, 253402300800000)
 assert(DateTime.fromUnixTimestampMillis(253402300799999).UnixTimestampMillis == 253402300799999)
-Fails("invalid argument #3 to 'fromUniversalTime' (invalid date)", DateTime.fromUniversalTime, 2023, 2, 29)
-Fails("invalid argument #3 to 'fromUniversalTime' (invalid date)", DateTime.fromUniversalTime, 2023, 1, 32)
-Fails("invalid argument #2 to 'fromLocalTime' (invalid date)", DateTime.fromLocalTime, 2023, 13, 1)
-Fails("invalid argument #1 to 'fromUniversalTime' (invalid date)", DateTime.fromUniversalTime, 1399, 12, 31)
+Fails(NoDate, DateTime.fromUniversalTime, 2023, 2, 29)
+Fails(NoDate, DateTime.fromUniversalTime, 2023, 1, 32)
+Fails(NoDate, DateTime.fromLocalTime, 2023, 13, 1)
+Fails(NoDate, DateTime.fromUniversalTime, -1, 1, 1)
+Fails("Over the max DateTime supported: 9999-12-31T23:59:59Z", DateTime.fromUniversalTime, 10000, 1, 1)
+assert(DateTime.fromUniversalTime(2021.5, 1.5, 1.5).UnixTimestampMillis == 1609459200000, "units are truncated")
+-- timestamps are truncated toward zero; UnixTimestamp too, while the calendar fields count down from the instant
+assert(DateTime.fromUnixTimestamp(-1.5).UnixTimestampMillis == -1000 and DateTime.fromUnixTimestamp(1.999).UnixTimestampMillis == 1000)
+local Before = DateTime.fromUnixTimestampMillis(-1.5)
+assert(Before.UnixTimestampMillis == -1 and Before.UnixTimestamp == 0 and Before:ToUniversalTime().Second == 59)
+assert(tostring(DateTime.fromUnixTimestampMillis(-0.5)) == "0" and tostring(DateTime.fromUnixTimestamp(-0.5)) == "0")
+-- ISO 8601 as a playing client reads it
+assert(DateTime.fromIsoDate("2020-02-29T12:34:56.789+02:00").UnixTimestampMillis == 1582972496789)
+assert(DateTime.fromIsoDate(" 2020-02-29 12:34:56.1234z").UnixTimestampMillis == 1582979696123)
+assert(DateTime.fromIsoDate("2020-02-29").UnixTimestampMillis == 1582934400000 and DateTime.fromIsoDate("2020-02-29T12:34").UnixTimestampMillis == 1582979640000)
+assert(DateTime.fromIsoDate("2020-02-29T24:00:00Z").UnixTimestampMillis == 1583020800000, "hour 24 is the next day")
+assert(DateTime.fromIsoDate("2020-02-29T12:34:56+0200") == nil and DateTime.fromIsoDate("20200229T123456Z") == nil)
+-- formats: no ordinals, `SSSS` is milliseconds then tenths, the locale must be a string
+local Instant = DateTime.fromUnixTimestampMillis(1700000000123)
+assert(Instant:FormatUniversalTime("Do SSSS d [YYYY] LLLL", "en-us") == "14o 1231 2 YYYY Tuesday, November 14, 2023 10:13 PM")
+Fails("invalid argument #3 to 'FormatUniversalTime' (string expected, got nil)", Instant.FormatUniversalTime, Instant, "LL")
+-- os.date and os.time are Luau's, with its plain messages
+Fails("invalid argument #1 to 'date' (invalid conversion specifier)", os.date, "!%D", 0)
+Fails("invalid argument #1 to 'time' (table expected, got number)", os.time, 5)
+assert(os.date("!%c", 1700000000) == "Tue Nov 14 22:13:20 2023" and os.date("!%Y", -1) == "1969")
 Fails("invalid argument #1 to 'fromUniversalTime' (number expected, got table)", DateTime.fromUniversalTime, {})
 assert(DateTime.fromUniversalTime(2024, 2, 29):ToIsoDate() == "2024-02-29T00:00:00Z")
 assert(DateTime.fromUniversalTime(2023, 1, 1, 0, 90, -10):ToIsoDate() == "2023-01-01T01:29:50Z", "time units roll over")
