@@ -1741,6 +1741,10 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
             Base::SetAttribute => {
                 // Primitive values under a string name (others: typeof checks, coercion)
                 let Some(name) = arg_bytes(state, 2) else { return Out::General };
+                // (a name Roblox refuses raises in the behaviour: lua/instance.rs attribute_name_error)
+                if linstance::attribute_name_error(name).is_some() {
+                    return Out::General;
+                }
                 let value = match ffi::lua_type(state, 3) {
                     ffi::LUA_TNIL | ffi::LUA_TNONE => Value::Nil,
                     ffi::LUA_TBOOLEAN => Value::Bool(ffi::lua_toboolean(state, 3) != 0),

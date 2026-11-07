@@ -121,7 +121,7 @@ fn instances_properties_and_errors() {
         assert(Message(function() F.Parent = F end) == "Attempt to set parent of Frame to Frame would result in circular reference")
         assert(Message(function() return Instance.new("NotAClass") end) == 'Unable to create an Instance of type "NotAClass"')
         assert(Message(function() return F:GetPropertyChangedSignal("Nope") end) == "Nope is not a valid property name.")
-        assert(Message(function() F:SetAttribute("A", {}) end) == "table is not a supported attribute type")
+        assert(Message(function() F:SetAttribute("A", {}) end) == "Array is not a supported attribute type")
         assert(Message(function() return F.Changed.Nope end) == "Nope is not a valid member of RBXScriptSignal")
         assert(Message(function() return F[1] end) == "@: invalid argument #2 (string expected, got number)")
         assert(Message(function() return game:GetService("Nope") end) == "'Nope' is not a valid Service name")
@@ -365,6 +365,48 @@ fn an_engine_function_that_returns_nothing_returns_no_values() {
         "##,
     );
     assert_eq!(lines(&engine), vec!["print: 0 0 0", "print: 1 1"]);
+}
+
+#[test]
+fn set_attribute_checks_names_and_types_as_roblox_does() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/instances.luau)
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        for _, Name in { "", "with space", "dash-name", "dot.name", "a/b", "RBXName", "rbxname", "123", string.rep("x", 100), string.rep("x", 101), "$x" } do
+            local Ok, Message = pcall(Folder.SetAttribute, Folder, Name, 1)
+            print(#Name, Ok, Message)
+        end
+        print(pcall(function() Folder:SetAttribute("with space", "fast path") end))
+        print(pcall(Folder.SetAttribute, Folder, "A", {}))
+        print(pcall(Folder.SetAttribute, Folder, "A", print))
+        print(pcall(Folder.SetAttribute, Folder, "A", buffer.create(1)))
+        "#,
+    );
+    let long = "x".repeat(101);
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: 0 false Attribute name cannot be empty (\"\")".to_string(),
+            "print: 10 false Attribute name contains illegal character ' ' (\"with space\")".to_string(),
+            "print: 9 true nil".to_string(),
+            "print: 8 true nil".to_string(),
+            "print: 3 true nil".to_string(),
+            "print: 7 false Attempt to assign attribute RBXName. CoreScript permission required".to_string(),
+            "print: 7 true nil".to_string(),
+            "print: 3 true nil".to_string(),
+            "print: 100 true nil".to_string(),
+            format!("print: 101 false Attribute name exceeds 100 character limit (\"{long}\")"),
+            "print: 2 false Attribute name contains illegal character '$' (\"$x\")".to_string(),
+            "print: false Attribute name contains illegal character ' ' (\"with space\")".to_string(),
+            "print: false Array is not a supported attribute type".to_string(),
+            "print: false Function is not a supported attribute type".to_string(),
+            "print: false buffer is not a supported attribute type".to_string(),
+        ]
+    );
 }
 
 #[test]

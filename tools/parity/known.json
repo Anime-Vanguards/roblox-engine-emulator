@@ -773,10 +773,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "error attribute-bad | Array is not a supported attribute type",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "xpcall-traceback @119: deep error / @123 / @119 function Deep / @121 / @117 / @0 / @-192 function __run / @253 / @253",
 			"why": "not fixed yet"
 		},
@@ -907,43 +903,11 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "attribute table error Array is not a supported attribute type -> nil(nil)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute Instance ok  -> InstanceHandle(Workspace)",
 			"why": "not fixed yet"
 		},
 		{
-			"line": "attribute function error Function is not a supported attribute type -> nil(nil)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"\" error Attribute name cannot be empty (\"\")",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"with space\" error Attribute name contains illegal character ' ' (\"with space\")",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"RBXName\" error Attempt to assign attribute RBXName. CoreScript permission required",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute-name \"Ünï\" error Attribute name contains illegal character '\\xC3' (\"Ünï\")",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" error Attribute name exceeds 100 character limit (\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\")",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"$x\" error Attribute name contains illegal character '$' (\"$x\")",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "getattributes-count 12",
 			"why": "not fixed yet"
 		},
 		{

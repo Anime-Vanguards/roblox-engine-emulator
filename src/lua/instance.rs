@@ -619,6 +619,30 @@ fn string_arg(args: &Args, index: usize) -> Option<Str> {
     args.string(index).map(|s| Str::new(&s.as_bytes()))
 }
 
+/// Why SetAttribute refuses an attribute name, as Roblox words it (measured in a playing client, Studio 0.744,
+/// tools/parity/probes/instances.luau, raised without a position): empty, over 100 characters, a byte other than
+/// letters, digits and `_ - . /` (a space, `$`, the first byte of `Ü`), or the `RBX` prefix (case matters: `rbxname`
+/// goes). Not measured: which check comes first for a name that fails several.
+pub fn attribute_name_error(name: &[u8]) -> Option<String> {
+    let shown = String::from_utf8_lossy(name);
+    if name.is_empty() {
+        return Some("Attribute name cannot be empty (\"\")".into());
+    }
+    if name.len() > 100 {
+        return Some(format!("Attribute name exceeds 100 character limit (\"{shown}\")"));
+    }
+    let legal = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
+    if let Some(illegal) = shown.chars().find(|&c| !legal(c)) {
+        // (Roblox prints the first illegal byte, a lone lead byte for `Ü`; the message here is UTF-8, so it holds the
+        // whole character)
+        return Some(format!("Attribute name contains illegal character '{illegal}' (\"{shown}\")"));
+    }
+    if name.starts_with(b"RBX") {
+        return Some(format!("Attempt to assign attribute {shown}. CoreScript permission required"));
+    }
+    None
+}
+
 /// The attribute datatypes SetAttribute accepts (by typeof).
 const ATTRIBUTE_TYPES: &[&str] = &[
     "string", "boolean", "number", "UDim", "UDim2", "BrickColor", "Color3", "Vector2", "Vector3", "CFrame", "EnumItem",
@@ -1034,6 +1058,14 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         if !value.is_nil() {
             let kind = typeof_value(engine, value);
             if !ATTRIBUTE_TYPES.contains(&kind.as_str()) {
+                // (Roblox names a table an Array and a function a Function: measured, {} and print; other values by
+                // typeof, buffer in lower case. Not measured: a table with string keys, here a Dictionary)
+                let kind = match value {
+                    LuaValue::Table(table) if table.raw_len() > 0 || table.clone().pairs::<LuaValue, LuaValue>().next().is_none() => "Array".to_string(),
+                    LuaValue::Table(_) => "Dictionary".to_string(),
+                    LuaValue::Function(_) => "Function".to_string(),
+                    _ => kind,
+                };
                 return raise(format!("{kind} is not a supported attribute type"));
             }
         }
@@ -1041,6 +1073,9 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             LuaValue::String(s) => Str::new(&s.as_bytes()),
             other => Str::from(lua.coerce_string(other.clone())?.map(|s| s.to_string_lossy()).unwrap_or_default()),
         };
+        if let Some(message) = attribute_name_error(name.as_bytes()) {
+            return raise(message);
+        }
         let converted = convert::from_lua(value);
         set_attribute(engine, id, name, converted);
         Ok(none())
