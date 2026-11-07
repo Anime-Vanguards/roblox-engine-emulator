@@ -854,16 +854,17 @@ impl Profile {
         out
     }
 
-    /// The steady state: the last phase with frames that holds at least a tenth of them (or 10), else the last phase
-    /// past startup. (phase index, frames in it)
+    /// The steady state: the last phase past startup with frames that holds at least a tenth of them (or 10), else the
+    /// last phase past startup. (phase index, frames in it). Never startup (phase 0), which holds the mount: a run that
+    /// marks no phase after it has no steady state the profile can tell apart
     pub fn steady_phase(&self) -> Option<(u32, u64)> {
-        let frames = self.phase_frames();
+        let frames: BTreeMap<u32, (u64, u64, u64)> = self.phase_frames().into_iter().filter(|(phase, _)| *phase > 0).collect();
         let all: u64 = frames.values().map(|entry| entry.0).sum();
         let pick = frames.iter().rev().find(|(_, entry)| entry.0 >= 10.min(all.max(1)) && entry.0 * 10 >= all).or_else(|| frames.iter().next_back());
         if let Some((&phase, entry)) = pick {
             return Some((phase, entry.0));
         }
-        if self.raw.phases.len() > 1 {
+        if self.raw.phases.len() > 1 && self.raw.timeline.is_none() {
             return Some((self.raw.phases.len() as u32 - 1, self.raw.run.frames));
         }
         None

@@ -1,5 +1,5 @@
-//! Allocation sites: the Luau line that allocated (the innermost Luau frame of the stack; a C function's allocation is
-//! its Luau caller's), with what it allocated over the run, by phase and by type.
+//! Allocation sites: the Luau line that allocated (the innermost script frame of the stack; a C function's or the engine's
+//! own Luau's allocation is the script line's that called it), with what it allocated over the run, by phase and by type.
 //!
 //! Two of the profile's views are joined, each exact for what it holds: the folded stacks (`alloc.folded`,
 //! `alloc.counts.folded`) hold every stack by phase but name only the innermost frame's line, and profile.json's
@@ -45,8 +45,10 @@ impl AllocSite {
     }
 }
 
+/// A frame a site can be: a script's Luau line. (The engine's own Luau, its require among it, is passed through like a
+/// C function: what it allocates is the line's that called into it.)
 fn luau(p: &Profile, func: u32) -> bool {
-    p.funcs.get(func as usize).is_some_and(|f| matches!(f.kind, Kind::Script | Kind::Engine) && !f.module.is_empty())
+    p.funcs.get(func as usize).is_some_and(|f| f.kind == Kind::Script && !f.module.is_empty())
 }
 
 /// Every allocation site of a profile, heaviest first

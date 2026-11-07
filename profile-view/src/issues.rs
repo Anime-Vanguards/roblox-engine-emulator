@@ -82,6 +82,9 @@ pub fn detect(p: &Profile, work: Option<&Tree>, sites: &[AllocSite]) -> (Vec<Iss
     let mut unchecked = Vec::new();
     let steady = p.steady_phase();
     let steady_name = steady.map(|(phase, _)| p.phase_name(phase).to_string()).unwrap_or_default();
+    if steady.is_none() && (work.is_some() || p.raw.alloc.is_some() || p.raw.timeline.is_some()) {
+        unchecked.push("the steady state's sorts, allocation and growth: the run marks no phase after startup (the mount)".into());
+    }
 
     match work {
         Some(tree) => sorts_every_frame(p, tree, steady, &steady_name, &mut issues),
@@ -245,7 +248,7 @@ fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)
                 Severity::Warning
             },
             kind: "steady allocation",
-            title: format!("{} allocated a frame: {label}", fmt::bytes(bytes)),
+            title: format!("{} a frame on average: {label}", fmt::bytes(bytes)),
             evidence: vec![
                 format!("{} objects, {} a frame on average over the {} frames of {steady_name}; {} of the phase's allocation", fmt::grouped(count), fmt::bytes(bytes), fmt::grouped(frames as f64), fmt::share(bytes, all_bytes)),
                 format!("over the run{}", if types.is_empty() { ": types not in the kept stacks".to_string() } else { types }),
@@ -299,30 +302,35 @@ fn spikes(p: &Profile, issues: &mut Vec<Issue>) {
     let Some(timeline) = &p.raw.timeline else { return };
     let frames = timeline.values("frame").unwrap_or_default();
     let frame = |i: usize| frames.get(i).copied().unwrap_or(i as f64);
+    // (past the mount when the run marks a phase after startup: the mount's frame is expected to stand out)
+    let phases = timeline.values("phase").unwrap_or_default();
+    let later = phases.iter().any(|phase| *phase > 0.0);
+    let kept = |i: usize| !later || phases.get(i).is_some_and(|phase| *phase > 0.0);
     let list = |rows: &[usize]| rows.iter().take(8).map(|&i| format!("{}", frame(i))).collect::<Vec<_>>().join(", ");
+    // (by the collector's steps, which are the same every run of the same code: its milliseconds are host time)
     if let (Some(gc), Some(freed), Some(steps)) = (timeline.values("gc_ms"), timeline.values("gc_freed"), timeline.values("gc_steps")) {
-        let typical = median(&gc);
-        let floor = (typical * 5.0).max(0.5);
-        let spikes: Vec<usize> = (0..gc.len()).filter(|&i| gc[i] >= floor).collect();
-        if let Some(&worst) = spikes.iter().max_by(|&&a, &&b| gc[a].total_cmp(&gc[b]).then(b.cmp(&a))) {
+        let typical = median(&(0..steps.len()).filter(|&i| kept(i)).map(|i| steps[i]).collect::<Vec<_>>());
+        let floor = (typical * 5.0).max(50.0);
+        let spikes: Vec<usize> = (0..steps.len()).filter(|&i| kept(i) && steps[i] >= floor).collect();
+        if let Some(&worst) = spikes.iter().max_by(|&&a, &&b| steps[a].total_cmp(&steps[b]).then(b.cmp(&a))) {
             issues.push(Issue {
-                severity: if gc[worst] >= 4.0 { Severity::Serious } else { Severity::Warning },
+                severity: if steps[worst] >= 1000.0 { Severity::Serious } else { Severity::Warning },
                 kind: "gc spike",
-                title: format!("Collector spikes: {}, worst {} (frame {})", frames_text(spikes.len()), fmt::ms(gc[worst]), frame(worst)),
+                title: format!("Collector spikes: {}, worst {} steps (frame {})", frames_text(spikes.len()), fmt::grouped(steps[worst]), frame(worst)),
                 evidence: vec![
-                    format!("frame {}: {} collecting ({} steps, {} freed); median frame {}", frame(worst), fmt::ms(gc[worst]), fmt::grouped(steps[worst]), fmt::bytes(freed[worst]), fmt::ms(typical)),
-                    format!("frames at {} or more: {}", fmt::ms(floor), list(&spikes)),
+                    format!("frame {}: {} collector steps, {} freed, {} of host time; a frame's median is {} steps", frame(worst), fmt::grouped(steps[worst]), fmt::bytes(freed[worst]), fmt::ms(gc[worst]), fmt::grouped(typical)),
+                    format!("frames of {} steps or more: {}", fmt::grouped(floor), list(&spikes)),
                 ],
                 advice: "The collector works off what was allocated: see the allocation issues".into(),
                 target: Target::Frame(worst),
-                weight: gc[worst],
+                weight: steps[worst],
             });
         }
     }
     if let Some(work) = timeline.values("work_ms") {
-        let typical = median(&work);
+        let typical = median(&(0..work.len()).filter(|&i| kept(i)).map(|i| work[i]).collect::<Vec<_>>());
         let floor = (typical * 3.0).max(0.5);
-        let spikes: Vec<usize> = (0..work.len()).filter(|&i| work[i] >= floor).collect();
+        let spikes: Vec<usize> = (0..work.len()).filter(|&i| kept(i) && work[i] >= floor).collect();
         if let Some(&worst) = spikes.iter().max_by(|&&a, &&b| work[a].total_cmp(&work[b]).then(b.cmp(&a))) {
             issues.push(Issue {
                 severity: if work[worst] >= 16.7 {

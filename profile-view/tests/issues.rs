@@ -44,7 +44,7 @@ fn each_pattern_is_named_with_its_numbers() {
     let steady = find(&issues, "steady allocation");
     assert_eq!(steady.len(), 2, "rank:21 and layout:32, not the engine's: {steady:#?}");
     assert_eq!(steady[0].target, Target::Site(func_named(&app, "rank"), 21));
-    assert!(steady[0].title.starts_with("21.9 KB allocated a frame: rank  Main:21"), "{}", steady[0].title);
+    assert!(steady[0].title.starts_with("21.9 KB a frame on average: rank  Main:21"), "{}", steady[0].title);
     assert!(all(steady[0]).contains("400 objects, 21.9 KB a frame on average over the 100 frames of steady"), "{}", all(steady[0]));
     assert!(all(steady[0]).contains("table 57.1%, table storage 42.9%"), "{}", all(steady[0]));
     assert_eq!(steady[1].target, Target::Site(func_named(&app, "layout"), 32));
@@ -60,7 +60,8 @@ fn each_pattern_is_named_with_its_numbers() {
     let gc = find(&issues, "gc spike");
     assert_eq!(gc.len(), 1);
     assert_eq!(gc[0].target, Target::Frame(89));
-    assert!(gc[0].title.contains("1 frame, worst 3.000 ms (frame 90)"), "{}", gc[0].title);
+    assert!(gc[0].title.contains("1 frame, worst 400 steps (frame 90)"), "{}", gc[0].title);
+    assert!(gc[0].evidence[0].contains("400 collector steps, 878.9 KB freed, 3.000 ms of host time; a frame's median is 2 steps"), "{}", gc[0].evidence[0]);
     let spike = find(&issues, "frame spike");
     assert!(spike[0].title.contains("worst 2.000 ms (frame 60)"), "{}", spike[0].title);
 
@@ -171,4 +172,24 @@ fn line_allocations_are_the_lines_own() {
     let total: f64 = profile.line_alloc.values().map(|v| v.0).sum();
     assert_eq!(total + 3072.0, profile.raw.alloc.as_ref().unwrap().bytes, "every byte on one line, the engine's apart");
     assert!(profile.line_alloc_complete);
+}
+
+#[test]
+fn a_run_with_no_phase_after_startup_has_no_steady_state() {
+    // (a render that marks no phase after its mount: every frame is startup's, the mount's cost among them)
+    let temp = Temp::new("startup");
+    let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
+    let path = dir.join("profile.json");
+    let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for row in json["timeline"]["rows"].as_array_mut().unwrap() {
+        row[2] = serde_json::json!(0);
+    }
+    std::fs::write(&path, json.to_string()).unwrap();
+    let (issues, unchecked, _) = issues_of(&dir);
+    for kind in ["sort every frame", "steady allocation", "allocation bursts", "growth"] {
+        assert!(find(&issues, kind).is_empty(), "{kind}: {issues:#?}");
+    }
+    assert!(unchecked.iter().any(|note| note.contains("marks no phase after startup")), "{unchecked:?}");
+    // the spikes are still found, over every frame
+    assert_eq!(find(&issues, "gc spike").len(), 1);
 }

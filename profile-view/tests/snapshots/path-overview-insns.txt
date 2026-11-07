@@ -18,12 +18,12 @@
  ▌ ■ critical Sorted every frame: rank  Main:20                                          own  share
    ▲ serious  Part.Size read again in the frame: 200 a fra…  anonymous  Main:22       360.0K 882.4% ███████████████████
    ● warning  Reachable heap grows: +2.50 MB from steady t…  rank  Main:20             24.0K  58.8% █▎·················
-   ● warning  21.9 KB allocated a frame: rank  Main:21       layout  Main:30           12.0K  29.4% ▋··················
+   ● warning  21.9 KB a frame on average: rank  Main:21      layout  Main:30           12.0K  29.4% ▋··················
    ● warning  GETTABLEKS at Main:31 misses 83.3% of its lo…  update  Main:10            6000  14.7% ▍··················
    ● warning  Part.Position set to its own value: 30 a fra…  anonymous  Main:1           400   1.0% ▏··················
    ● warning  Tables regrown: layout  Main:32
-   ● warning  512 B allocated a frame: layout  Main:32
-   ● warning  Collector spikes: 1 frame, worst 3.000 ms (f…
+   ● warning  512 B a frame on average: layout  Main:32
+   ● warning  Collector spikes: 1 frame, worst 400 steps (…
    ● warning  Frame spikes: 1 frame, worst 2.000 ms (frame…
    ● warning  Connections keep growing: +99 in steady
 

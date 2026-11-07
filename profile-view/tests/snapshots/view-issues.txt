@@ -5,12 +5,12 @@
  ▌ ■ critical sort every frame  Sorted every frame: rank  Main:20
    ▲ serious  repeat reads      Part.Size read again in the frame: 200 a frame at Main:31
    ● warning  heap growth       Reachable heap grows: +2.50 MB from steady to end
-   ● warning  steady allocation 21.9 KB allocated a frame: rank  Main:21
+   ● warning  steady allocation 21.9 KB a frame on average: rank  Main:21
    ● warning  cache misses      GETTABLEKS at Main:31 misses 83.3% of its lookups
    ● warning  unchanged writes  Part.Position set to its own value: 30 a frame at Main:33
    ● warning  table growth      Tables regrown: layout  Main:32
-   ● warning  steady allocation 512 B allocated a frame: layout  Main:32
-   ● warning  gc spike          Collector spikes: 1 frame, worst 3.000 ms (frame 90)
+   ● warning  steady allocation 512 B a frame on average: layout  Main:32
+   ● warning  gc spike          Collector spikes: 1 frame, worst 400 steps (frame 90)
    ● warning  frame spike       Frame spikes: 1 frame, worst 2.000 ms (frame 60)
    ● warning  growth            Connections keep growing: +99 in steady
 
