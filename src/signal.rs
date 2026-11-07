@@ -44,8 +44,11 @@ pub enum Handler {
 
 #[derive(Debug)]
 pub struct SignalData {
-    /// Signal name (tostring "Signal <Name>", re-entrancy diagnostics)
+    /// Signal name (tostring "Signal <Name>")
     pub name: Str,
+    /// The name Roblox's diagnostics give it: the declaring class and the event (`IntValue.Changed`,
+    /// `BindableEvent.Event`), `Object.<Property>Changed` for a property's signal, `Instance.<Name>AttributeChanged`
+    pub label: Str,
     pub handlers: Vec<Handler>,
     generation: u32,
 }
@@ -88,11 +91,18 @@ impl Signals {
     }
 
     pub fn create(&mut self, name: Str) -> SignalId {
+        let label = name.clone();
+        self.create_labelled(name, label)
+    }
+
+    /// [`Self::create`] with the name Roblox's diagnostics give the signal
+    pub fn create_labelled(&mut self, name: Str, label: Str) -> SignalId {
         if let Some(id) = self.free_signals.pop() {
             self.signals[id as usize].name = name;
+            self.signals[id as usize].label = label;
             return id;
         }
-        self.signals.push(SignalData { name, handlers: Vec::new(), generation: 0 });
+        self.signals.push(SignalData { name, label, handlers: Vec::new(), generation: 0 });
         (self.signals.len() - 1) as SignalId
     }
 

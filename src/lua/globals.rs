@@ -168,7 +168,14 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 refs::admit(engine, Hold::Work, "task.defer")?;
                 charge_thread(lua, engine, args.get(0), "defer");
                 let rest: Vec<Value> = args.0.iter().skip(1).map(super::convert::from_lua).collect();
-                instance::defer_thread(engine, thread.clone(), rest);
+                if engine.state.borrow().sched.can_defer_event() {
+                    engine.state.borrow_mut().sched.defer_task(scheduler::JobTarget::Thread(thread.clone()), rest);
+                } else {
+                    // Past the cut of a chain the thread is not queued; the call returns and Roblox logs an error
+                    // (measured in a playing client, Studio 0.744: pcall(task.defer, f) is ok, the chain stops)
+                    let message = format!("Maximum re-entrancy depth ({}) exceeded calling task.defer", scheduler::MAX_REENTRANCY);
+                    engine.output("error", message, None);
+                }
                 Ok(values([LuaValue::Thread(thread)]))
             })())
         })?,

@@ -797,6 +797,10 @@
 		{
 			"line": "cut-event count 80 messages 1 Enum.MessageType.MessageError Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function on line @133 in <probe>",
 			"why": "not fixed yet"
+		},
+		{
+			"line": "logged 3 Maximum re-entrancy depth (80) exceeded calling task.defer | Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function on line @205 in <probe> | Maximum event re-entrancy depth exceeded for Object.ValueChanged when calling OnValue on line @218 in <probe>",
+			"why": "not fixed yet"
 		}
 	],
 	"errors": [
@@ -1356,18 +1360,6 @@
 		},
 		{
 			"line": "fire-cyclic error tables cannot be cyclic",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "bindable-reentrant depth 80",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "changed-reentrant writes 80 value 81",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "signal tostring Signal Event | Signal Changed | Signal SizeChanged",
 			"why": "not fixed yet"
 		},
 		{

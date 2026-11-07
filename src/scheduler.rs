@@ -28,6 +28,16 @@ use super::{
     value::Value,
 };
 
+/// Roblox's cut of a chain of deferred work: a handler of an event fired from a deferred handler, or a thread a
+/// deferred thread task.defers, runs one level deeper than it, and nothing deeper than 80 runs. One depth for both
+/// (measured in a playing client, Studio 0.744: a self-firing event, a Changed ping-pong, a task.defer chain and an
+/// event / task.defer alternation all stop at 80 steps; task.spawn and coroutine.wrap carry the depth along;
+/// tools/parity/probes/deferred_chains.luau, deferred_points.luau).
+pub const MAX_REENTRANCY: u32 = 80;
+
+/// A job that belongs to no signal.
+pub const NO_SIGNAL: SignalId = SignalId::MAX;
+
 /// A deferred resumption.
 pub enum JobTarget {
     Thread(LuaThread),
@@ -41,6 +51,8 @@ pub struct Job {
     pub target: JobTarget,
     pub args: Vec<Value>,
     pub event_depth: u32,
+    /// The signal whose handler or waiting thread this is (the refusal names it), else `NO_SIGNAL`
+    pub signal: SignalId,
     /// Seconds of script work the thread's resume costs before its first line (cost.rs HANDLER_THREAD for the handlers of the
     /// signals Studio's bench measured; 0 for a job whose resume is priced elsewhere)
     pub resume_cost: f64,
@@ -666,17 +678,29 @@ impl Scheduler {
 
     // Deferred queue
 
-    /// Roblox caps deferred event chains at depth 10.
+    /// Below Roblox's cut of a chain of deferred work: events fired from deferred handlers and task.defer calls from
+    /// deferred threads share one depth, and nothing deeper than [`MAX_REENTRANCY`] runs.
     pub fn can_defer_event(&self) -> bool {
-        self.event_depth < 10
+        self.event_depth < MAX_REENTRANCY
     }
 
     pub fn defer(&mut self, target: JobTarget, args: Vec<Value>) {
         self.defer_costing(target, args, 0.0);
     }
 
+    /// task.defer: one level deeper than the thread that calls it (a chain of them is cut at [`MAX_REENTRANCY`]).
+    pub fn defer_task(&mut self, target: JobTarget, args: Vec<Value>) {
+        self.event_depth += 1;
+        self.defer_costing(target, args, 0.0);
+        self.event_depth -= 1;
+    }
+
     fn defer_costing(&mut self, target: JobTarget, args: Vec<Value>, resume_cost: f64) {
-        let job = Job { target, args, event_depth: self.event_depth, resume_cost };
+        self.defer_signal(target, args, resume_cost, NO_SIGNAL);
+    }
+
+    fn defer_signal(&mut self, target: JobTarget, args: Vec<Value>, resume_cost: f64, signal: SignalId) {
+        let job = Job { target, args, event_depth: self.event_depth, signal, resume_cost };
         if self.holding {
             self.held.push(job);
         } else {
@@ -692,6 +716,14 @@ impl Scheduler {
     pub fn defer_event_costing(&mut self, target: JobTarget, args: Vec<Value>, resume_cost: f64) {
         self.event_depth += 1;
         self.defer_costing(target, args, resume_cost);
+        self.event_depth -= 1;
+    }
+
+    /// A handler (or waiting thread) of `signal`, one level deeper than what fired it; one past the cut is refused
+    /// when its turn comes (run_job), as Roblox reports it for the handler it would call
+    pub fn defer_handler(&mut self, target: JobTarget, args: Vec<Value>, resume_cost: f64, signal: SignalId) {
+        self.event_depth += 1;
+        self.defer_signal(target, args, resume_cost, signal);
         self.event_depth -= 1;
     }
 
@@ -1067,6 +1099,9 @@ pub(crate) fn end_handler_sample(sample: Option<profile::Sample>, thread: &LuaTh
 }
 
 fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
+    if job.event_depth > MAX_REENTRANCY && job.signal != NO_SIGNAL {
+        return refuse(lua, engine, job);
+    }
     if job.resume_cost != 0.0 {
         engine.state.borrow().sched.charge_dispatch(job.resume_cost);
     }
@@ -1096,6 +1131,27 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
             super::instance::disconnect_all(&mut engine.state.borrow_mut(), id);
         }
     }
+    Ok(())
+}
+
+/// A handler past the cut of a chain does not run; Roblox logs it as an error naming the event and the handler
+/// (measured in a playing client, Studio 0.744: `Maximum event re-entrancy depth exceeded for IntValue.Changed when
+/// calling anonymous function on line 12 in ReplicatedStorage.Module`, the line where the function was defined).
+fn refuse(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
+    let label = engine.state.borrow().signals.get(job.signal).label.to_str_lossy().into_owned();
+    let mut message = format!("Maximum event re-entrancy depth exceeded for {label}");
+    if let JobTarget::Handler(connection) = job.target {
+        let begun = engine.state.borrow_mut().signals.begin_handler(connection);
+        let Some((callback, _)) = begun else { return Ok(()) };
+        let info = callback.info();
+        let name = info.name.filter(|name| !name.is_empty()).unwrap_or_else(|| "anonymous function".into());
+        let source = info.short_src.unwrap_or_default();
+        message = format!("{message} when calling {name} on line {} in {source}", info.line_defined.unwrap_or(0));
+    }
+    let _ = lua;
+    let mut state = engine.state.borrow_mut();
+    let now = state.sched.now;
+    state.output.add("error", message, None, now);
     Ok(())
 }
 

@@ -307,6 +307,12 @@ table) whose metatable holds C functions: `__index`, `__newindex`, `__namecall` 
 dts, clocks and seed), `flush_deferred`, `resume`. `--mode play` runs one Heartbeat and one render step
 per frame with Stepped firing; `--mode edit` runs the edit-mode clock.
 
+Deferred work follows Roblox's Deferred signal behaviour (measured in a playing client): a chain of it,
+events fired from deferred handlers and threads, and task.defer calls from deferred threads alike, runs one
+level deeper at each step and stops at 80; a refused handler is logged as `Maximum event re-entrancy depth
+exceeded for <class>.<event> when calling <function> on line <n> in <chunk>`, a refused task.defer as
+`Maximum re-entrancy depth (80) exceeded calling task.defer`.
+
 ### Script timeout (`src/watchdog.rs`)
 
 A resumption the scheduler makes (a thread, a handler, a harness; nested ones count with the outermost)

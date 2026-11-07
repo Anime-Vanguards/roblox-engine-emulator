@@ -159,3 +159,72 @@ task.wait()
 task.wait()
 Again:Disconnect()
 print("after-cut fires " .. After)
+
+-- the cut of a task.defer chain: does the 81st task.defer raise to its caller, and what is logged?
+P.sync()
+local Logged = {}
+local Watch = LogService.MessageOut:Connect(function(Message, Kind)
+	if Kind == Enum.MessageType.MessageError then
+		local First = (string.split(Message, "\n"))[1]
+		First = string.gsub(First, "on line (%d+) in " .. Escaped, function(Line)
+			return "on line @" .. (tonumber(Line) - P.base) .. " in <probe>"
+		end)
+		table.insert(Logged, First)
+	end
+end)
+local Depth = 0
+local CutResult
+local function DeferStep()
+	Depth += 1
+	if Depth < 200 then
+		local Ok, Message = pcall(task.defer, DeferStep)
+		if not Ok then
+			CutResult = "raised at step " .. Depth .. ": " .. P.err(Message)
+		end
+	end
+end
+task.defer(DeferStep)
+for _ = 1, 3 do
+	task.wait()
+end
+print("defer-cut steps " .. Depth .. " " .. tostring(CutResult))
+-- an event chain through two signals and a defer in between: one counter for all
+local Mixed = 0
+local First, Second = Instance.new("BindableEvent"), Instance.new("BindableEvent")
+First.Event:Connect(function()
+	Mixed += 1
+	if Mixed < 300 then
+		task.defer(function()
+			Mixed += 1
+			if Mixed < 300 then
+				Second:Fire()
+			end
+		end)
+	end
+end)
+Second.Event:Connect(function()
+	Mixed += 1
+	if Mixed < 300 then
+		First:Fire()
+	end
+end)
+First:Fire()
+for _ = 1, 3 do
+	task.wait()
+end
+print("mixed-chain steps " .. Mixed)
+-- a named handler, and a property signal
+local Value = Instance.new("IntValue")
+local function OnValue()
+	if Value.Value < 300 then
+		Value.Value += 1
+	end
+end
+Value:GetPropertyChangedSignal("Value"):Connect(OnValue)
+Value.Value = 1
+for _ = 1, 3 do
+	task.wait()
+end
+print("named-handler-chain value " .. Value.Value)
+Watch:Disconnect()
+print("logged " .. #Logged .. " " .. table.concat(Logged, " | "))

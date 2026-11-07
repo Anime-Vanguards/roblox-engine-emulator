@@ -241,10 +241,52 @@ fn scheduler_chains_depth_and_timers() {
     );
     scheduler::run_until(&lua, &engine, 0.3).unwrap();
     let output = lines(&engine);
-    assert!(output.contains(&"error: Maximum event re-entrancy depth exceeded for Event".to_string()), "{output:?}");
-    assert!(output.contains(&"print: delay 10".to_string()), "{output:?}");
+    // One depth for events and task.defer, cut at 80 (measured in a playing client, Studio 0.744): the self-firing
+    // event's 81st handler is refused for its handler, the task.defer chain's 81st call logs and queues nothing
+    assert!(
+        output.contains(&"error: Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function on line 10 in Test".to_string()),
+        "{output:?}"
+    );
+    assert!(output.contains(&"error: Maximum re-entrancy depth (80) exceeded calling task.defer".to_string()), "{output:?}");
+    assert!(output.contains(&"print: delay 80".to_string()), "{output:?}");
     assert!(output.contains(&"print: waited true".to_string()), "{output:?}");
     assert!(output.iter().any(|l| l.starts_with("print: defers")), "{output:?}");
+}
+
+#[test]
+fn a_chain_of_events_and_defers_shares_one_depth() {
+    // Measured in a playing client (Studio 0.744): an event fired from a deferred thread and a task.defer from a
+    // handler count on one depth, task.spawn carries it along, and the chain stops at 80 steps
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Steps = 0
+        local Event = Instance.new("BindableEvent")
+        local function Next()
+            Steps += 1
+            if Steps < 300 then task.spawn(function() Event:Fire() end) end
+        end
+        Event.Event:Connect(function()
+            Steps += 1
+            if Steps < 300 then task.defer(Next) end
+        end)
+        Event:Fire()
+        task.delay(0.05, function() print("steps " .. Steps) end)
+        local Value = Instance.new("IntValue")
+        Value:GetPropertyChangedSignal("Value"):Connect(function() Value.Value += 1 end)
+        Value.Value = 1
+        task.delay(0.05, function() print("value " .. Value.Value) end)
+        print(tostring(Value:GetPropertyChangedSignal("Value")))
+        "#,
+    );
+    scheduler::run_until(&lua, &engine, 0.2).unwrap();
+    let output = lines(&engine);
+    assert!(output.contains(&"print: steps 80".to_string()), "{output:?}");
+    assert!(output.contains(&"print: value 81".to_string()), "{output:?}");
+    assert!(output.contains(&"print: Signal ValueChanged".to_string()), "{output:?}");
+    assert!(output.iter().any(|line| line.starts_with("error: Maximum event re-entrancy depth exceeded for Object.ValueChanged when calling anonymous function on line 15 in Test")), "{output:?}");
 }
 
 #[test]

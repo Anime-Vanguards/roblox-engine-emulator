@@ -131,7 +131,9 @@ pub fn event_signal(state: &mut State, reflection: &Reflection, id: InstanceId, 
     if let Some(signal) = state.dom.at(id).signals.as_ref().and_then(|s| s.event(name)) {
         return signal;
     }
-    let signal = state.signals.create(Str::from(reflection.name(name)));
+    let declaring = reflection.declaring_class(state.dom.at(id).class, name);
+    let label = format!("{}.{}", reflection.class(declaring).name, reflection.name(name));
+    let signal = state.signals.create_labelled(Str::from(reflection.name(name)), Str::from(label.as_str()));
     state
         .dom
         .at_mut(id)
@@ -147,7 +149,9 @@ pub fn property_signal(state: &mut State, reflection: &Reflection, id: InstanceI
     if let Some(signal) = state.dom.at(id).signals.as_ref().and_then(|s| s.property(name)) {
         return signal;
     }
-    let signal = state.signals.create(Str::from(reflection.name(name)));
+    // tostring reads "Signal SizeChanged" and diagnostics "Object.SizeChanged" (measured in a playing client, Studio 0.744)
+    let changed = format!("{}Changed", reflection.name(name));
+    let signal = state.signals.create_labelled(Str::from(changed.as_str()), Str::from(format!("Object.{changed}").as_str()));
     state
         .dom
         .at_mut(id)
@@ -162,7 +166,8 @@ pub fn attribute_signal(state: &mut State, id: InstanceId, name: &Str) -> Signal
     if let Some(signal) = state.dom.at(id).signals.as_ref().and_then(|s| s.attribute(name.as_bytes())) {
         return signal;
     }
-    let signal = state.signals.create(name.clone());
+    let label = format!("Instance.{}AttributeChanged", name.to_str_lossy());
+    let signal = state.signals.create_labelled(name.clone(), Str::from(label.as_str()));
     state
         .dom
         .at_mut(id)
@@ -189,14 +194,6 @@ fn fire_costing(state: &mut State, signal: SignalId, args: Vec<Value>, queue: f6
         return;
     }
     state.sched.charge_dispatch(queue);
-    if !state.sched.can_defer_event() {
-        let name = state.signals.get(signal).name.to_str_lossy().into_owned();
-        let now = state.sched.now;
-        state
-            .output
-            .add("error", format!("Maximum event re-entrancy depth exceeded for {name}"), None, now);
-        return;
-    }
     let handlers = state.signals.take_handlers(signal);
     // (a measured kind: a handler beyond the first queues and resumes for less than a lone one, cost.rs EXTRA_HANDLER_*)
     if resume > 0.0 && handlers.len() > 1 {
@@ -208,7 +205,7 @@ fn fire_costing(state: &mut State, signal: SignalId, args: Vec<Value>, queue: f6
             Handler::Connection(connection) => JobTarget::Handler(connection),
         };
         let thread = if index == 0 { resume } else { resume.min(crate::cost::EXTRA_HANDLER_THREAD) };
-        state.sched.defer_event_costing(target, args.clone(), thread);
+        state.sched.defer_handler(target, args.clone(), thread, signal);
     }
 }
 
