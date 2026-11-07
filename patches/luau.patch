@@ -4496,3 +4496,330 @@ index 5431119..9b651b9 100644
  }
  
  /*
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index 45d83fb..c1b5b52 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -385,6 +385,17 @@ LUA_API void lua_settypeofnames(lua_State* L, int idx, const char* vectorname);
+ #define LUA_PROFILE_NATIVE 2 // compiled to native code
+ #define LUA_PROFILE_CACHES 4 // outcomes per instruction: hit, miss (repredicted), slow (metatable path, unsafe environment), other (not a table)
+ 
++// a copy of a function Luau's compiler inlined into another (-O2): the function, its instructions there, and the calls it
++// stood for (the times its frame stepped into it from outside it)
++typedef struct lua_ProfileInline
++{
++    int function; // the inlined function, a lua_ProfileFunction id
++    int firstpc; // its first and last instruction in the function it was inlined into
++    int lastpc;
++    int parent; // the copy it sits in (an index into the same inlines; -1 for none), when the copied function had it inlined too
++    uint64_t entries;
++} lua_ProfileInline;
++
+ typedef struct lua_ProfileFunction
+ {
+     const char* source; // the chunk's name as lua_getinfo's short_src gives it
+@@ -399,6 +410,8 @@ typedef struct lua_ProfileFunction
+     const uint64_t* caches; // LUA_PROFILE_CACHES outcomes per instruction, NULL when none ran
+     uint64_t nativeentries; // entries into its native code
+     double nativework; // booked while its native code ran
++    int ninlines; // copies of other functions inlined into it (while stepping)
++    const lua_ProfileInline* inlines;
+ } lua_ProfileFunction;
+ 
+ typedef struct lua_ProfileNode
+diff --git a/luau/VM/src/lprofile.cpp b/luau/VM/src/lprofile.cpp
+index 2bef564..90f5ebf 100644
+--- a/luau/VM/src/lprofile.cpp
++++ b/luau/VM/src/lprofile.cpp
+@@ -25,6 +25,7 @@
+ #include "ludata.h"
+ #include "lbuffer.h"
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <string.h>
+ #include <string>
+@@ -60,6 +61,23 @@ struct ProfFunction
+     std::vector<uint64_t> caches;
+     uint64_t nativeentries = 0;
+     double nativework = 0;
++    // the last line its instructions carry, and its chunk (an index into lua_ProfileState::chunks; -1 when not stepping)
++    int lastline = 0;
++    int chunk = -1;
++    // copies of other functions Luau's compiler inlined into this one (-O2 compiles a small local function's body into its
++    // callers, on the body's own lines): the innermost copy each instruction sits in (index + 1, 0 for none) and the
++    // copies, found at its first step
++    bool inlinesfound = false;
++    std::vector<int> inlineof;
++    std::vector<lua_ProfileInline> inlines;
++};
++
++// the functions of one chunk the profile registered, and the innermost of them that carries each line
++struct ProfChunk
++{
++    std::vector<int> functions;
++    std::vector<int> owner;
++    bool dirty = true;
+ };
+ 
+ struct ProfCFunction
+@@ -85,6 +103,8 @@ struct ProfFrame
+     Closure* cl;
+     int node;
+     bool returning;
++    // the instruction this frame stepped last (kept for a function with inlined copies, to tell an entry into one)
++    int lastpc;
+ };
+ 
+ struct NodeKey
+@@ -187,6 +207,12 @@ struct lua_ProfileState
+     std::vector<ProfNode> nodes;
+     std::unordered_map<NodeKey, int, NodeKeyHash> children;
+     std::unordered_map<lua_State*, std::vector<ProfFrame>> threads;
++    // while stepping, every function of a chunk is registered when the first one is seen (by the chunk's source), so a
++    // function's copies inlined into another are known by the lines they carry even when it never runs itself
++    std::vector<ProfChunk> chunks;
++    std::unordered_map<std::string, int> chunkids;
++    // whether a function's own instructions hold a copy of another's (inlined into it): (function << 32 | other) -> yes
++    std::unordered_map<uint64_t, bool> inlinedin;
+     // objects marked with lua_profilemark
+     void (*freed)(void* ud, void* block) = NULL;
+     void* freedud = NULL;
+@@ -228,16 +254,207 @@ static int functionof(lua_ProfileState* s, Proto* p)
+     f.flags = ((p->flags & LUAU_PROTO_WORK_EXEMPT) ? LUA_PROFILE_EXEMPT : 0) | (p->execdata ? LUA_PROFILE_NATIVE : 0);
+     f.code.assign(p->code, p->code + p->sizecode);
+     f.lines.resize(p->sizecode);
++    f.lastline = p->linedefined;
+     for (int pc = 0; pc < p->sizecode; ++pc)
++    {
+         f.lines[pc] = luaG_getline(p, pc);
++        f.lastline = std::max(f.lastline, f.lines[pc]);
++    }
+     if (s->stepping)
+     {
+         f.counts.assign(p->sizecode, 0);
+         f.work.assign(p->sizecode, 0.0);
++        std::string source = p->source ? std::string(getstr(p->source), p->source->len) : std::string();
++        auto known = s->chunkids.find(source);
++        if (known == s->chunkids.end())
++        {
++            known = s->chunkids.emplace(source, int(s->chunks.size())).first;
++            s->chunks.emplace_back();
++        }
++        f.chunk = known->second;
+     }
+     s->functions.push_back(std::move(f));
+     p->userdata = (void*)uintptr_t(s->functions.size());
+-    return int(s->functions.size() - 1);
++    int index = int(s->functions.size() - 1);
++    if (s->stepping)
++    {
++        ProfChunk& chunk = s->chunks[s->functions[index].chunk];
++        chunk.functions.push_back(index);
++        chunk.dirty = true;
++        // (the functions it defines: one inlined elsewhere is known by its lines before, or without, running itself)
++        for (int i = 0; i < p->sizep; ++i)
++            functionof(s, p->p[i]);
++    }
++    return index;
++}
++
++// the innermost registered function of a chunk carrying each line
++static const std::vector<int>& chunkowners(lua_ProfileState* s, ProfChunk& chunk)
++{
++    if (!chunk.dirty)
++        return chunk.owner;
++    chunk.dirty = false;
++    std::vector<int> bysize = chunk.functions;
++    std::stable_sort(
++        bysize.begin(),
++        bysize.end(),
++        [s](int a, int b)
++        {
++            return s->functions[a].lastline - s->functions[a].linedefined > s->functions[b].lastline - s->functions[b].linedefined;
++        }
++    );
++    int last = 0;
++    for (int id : bysize)
++        last = std::max(last, s->functions[id].lastline);
++    chunk.owner.assign(size_t(last) + 1, -1);
++    // (larger first, so a nested function's lines end as its own)
++    for (int id : bysize)
++        for (int line = std::max(0, s->functions[id].linedefined); line <= s->functions[id].lastline; ++line)
++            chunk.owner[line] = id;
++    return chunk.owner;
++}
++
++static bool closureop(int op)
++{
++    return op == LOP_NEWCLOSURE || op == LOP_DUPCLOSURE || op == LOP_CAPTURE;
++}
++
++// whether `function`'s own instructions carry a line of `other`'s (other than creating its closure): `other` was inlined into
++// it, so a copy of `function` inlined elsewhere holds copies of `other`
++static bool inlinedinto(lua_ProfileState* s, int function, int other)
++{
++    uint64_t key = (uint64_t(uint32_t(function)) << 32) | uint32_t(other);
++    auto known = s->inlinedin.find(key);
++    if (known != s->inlinedin.end())
++        return known->second;
++    const ProfFunction& f = s->functions[function];
++    const ProfFunction& o = s->functions[other];
++    bool inlined = false;
++    for (size_t pc = 0; pc < f.code.size() && !inlined; ++pc)
++        inlined = f.lines[pc] >= o.linedefined && f.lines[pc] <= o.lastline && !closureop(LUAU_INSN_OP(f.code[pc]));
++    s->inlinedin.emplace(key, inlined);
++    return inlined;
++}
++
++// the copies of other functions inlined into `function`: runs of its instructions on another function's lines (a function
++// enclosing it aside). A copy of a function inlined into the copied one sits inside its copy; the same instructions on the
++// same lines again right after a copy are the next copy of that function
++static void findinlines(lua_ProfileState* s, int function)
++{
++    ProfFunction& f = s->functions[function]; // (nothing below registers a function: the reference stays valid)
++    f.inlinesfound = true;
++    if (f.chunk < 0)
++        return;
++    const std::vector<int>& owner = chunkowners(s, s->chunks[f.chunk]);
++    int n = int(f.code.size());
++    std::vector<int> ownerof(n, -1);
++    bool any = false;
++    for (int pc = 0; pc < n; ++pc)
++    {
++        int line = f.lines[pc];
++        if (line < 0 || size_t(line) >= owner.size())
++            continue;
++        int o = owner[line];
++        if (o < 0 || o == function)
++            continue;
++        const ProfFunction& other = s->functions[o];
++        if (other.linedefined <= f.linedefined && f.lastline <= other.lastline)
++            continue;
++        ownerof[pc] = o;
++        any = true;
++    }
++    if (!any)
++        return;
++    // a closure's creation is the defining function's own, and so is the rest of the statement creating it that lies on the
++    // closure's first or last line, next to it (the call it is an argument of, `function a.b()`'s store, a `return function`)
++    for (int pc = 0; pc < n; ++pc)
++    {
++        int op = LUAU_INSN_OP(f.code[pc]);
++        if (op != LOP_NEWCLOSURE && op != LOP_DUPCLOSURE)
++            continue;
++        ownerof[pc] = -1;
++        int d = LUAU_INSN_D(f.code[pc]);
++        Proto* created = NULL;
++        if (op == LOP_NEWCLOSURE && d >= 0 && d < f.proto->sizep)
++            created = f.proto->p[d];
++        else if (op == LOP_DUPCLOSURE && d >= 0 && d < f.proto->sizek && ttisfunction(&f.proto->k[d]) && !clvalue(&f.proto->k[d])->isC)
++            created = clvalue(&f.proto->k[d])->l.p;
++        uintptr_t id = created ? uintptr_t(created->userdata) : 0;
++        if (id == 0 || id > s->functions.size() || s->functions[id - 1].proto != created)
++            continue;
++        int q = int(id - 1);
++        int first = s->functions[q].linedefined;
++        int last = s->functions[q].lastline;
++        for (int k = pc - 1; k >= 0 && ownerof[k] == q && (f.lines[k] == first || f.lines[k] == last); --k)
++            ownerof[k] = -1;
++        for (int k = pc + 1; k < n && (LUAU_INSN_OP(f.code[k]) == LOP_CAPTURE || (ownerof[k] == q && (f.lines[k] == first || f.lines[k] == last))); ++k)
++            ownerof[k] = -1;
++    }
++    std::vector<int> open;
++    for (int pc = 0; pc < n; ++pc)
++    {
++        int o = ownerof[pc];
++        while (!open.empty())
++        {
++            int top = f.inlines[open.back()].function;
++            if (o >= 0 && (o == top || inlinedinto(s, top, o)))
++                break;
++            f.inlines[open.back()].lastpc = pc - 1;
++            open.pop_back();
++        }
++        if (o < 0)
++            continue;
++        if (!open.empty() && f.inlines[open.back()].function == o)
++        {
++            lua_ProfileInline& top = f.inlines[open.back()];
++            int length = pc - top.firstpc;
++            bool again = length > 0 && pc + length <= n;
++            for (int i = 0; again && i < length; ++i)
++                again = LUAU_INSN_OP(f.code[top.firstpc + i]) == LUAU_INSN_OP(f.code[pc + i]) && f.lines[top.firstpc + i] == f.lines[pc + i];
++            if (!again)
++                continue;
++            top.lastpc = pc - 1;
++            int parent = top.parent;
++            open.pop_back();
++            f.inlines.push_back(lua_ProfileInline{o, pc, pc, parent, 0});
++            open.push_back(int(f.inlines.size() - 1));
++            continue;
++        }
++        f.inlines.push_back(lua_ProfileInline{o, pc, pc, open.empty() ? -1 : open.back(), 0});
++        open.push_back(int(f.inlines.size() - 1));
++    }
++    while (!open.empty())
++    {
++        f.inlines[open.back()].lastpc = n - 1;
++        open.pop_back();
++    }
++    if (f.inlines.empty())
++        return;
++    // (a copy comes after the one it sits in, so the innermost is written last)
++    f.inlineof.assign(n, 0);
++    for (size_t i = 0; i < f.inlines.size(); ++i)
++        for (int pc = f.inlines[i].firstpc; pc <= f.inlines[i].lastpc; ++pc)
++            f.inlineof[pc] = int(i + 1);
++}
++
++// counts the copies `at` enters: the ones it sits in that the frame's previous instruction did not (a call made inside a copy
++// returns to its frame's last instruction, still inside; a loop inside a copy jumps within it)
++static void enterinlines(lua_ProfileState* s, ProfFunction& f, int at)
++{
++    ProfFrame* frame = (s->lastframes && !s->lastframes->empty()) ? &s->lastframes->back() : NULL;
++    int prev = frame ? frame->lastpc : -1;
++    if (frame)
++        frame->lastpc = at;
++    int from = (prev >= 0 && size_t(prev) < f.inlineof.size()) ? f.inlineof[prev] : 0;
++    for (int copy = f.inlineof[at]; copy != 0; copy = f.inlines[copy - 1].parent + 1)
++    {
++        bool inside = false;
++        for (int c = from; c != 0 && !inside; c = f.inlines[c - 1].parent + 1)
++            inside = c == copy;
++        if (inside)
++            break;
++        f.inlines[copy - 1].entries++;
++    }
+ }
+ 
+ static int cfunctionof(lua_ProfileState* s, Closure* cl)
+@@ -305,7 +522,7 @@ static void reconcile(lua_ProfileState* s, lua_State* L)
+         }
+         int node = child(s, parent, function, callpc);
+         s->nodes[node].calls++;
+-        frames->push_back(ProfFrame{d, cl, node, false});
++        frames->push_back(ProfFrame{d, cl, node, false, -1});
+         parent = node;
+     }
+     s->lastL = L;
+@@ -518,6 +735,10 @@ void luaP_step(lua_State* L, Closure* cl, const Instruction* pc)
+             return;
+         f.counts[at]++;
+         s->nodes[node].insns++;
++        if (!f.inlinesfound)
++            findinlines(s, function);
++        if (!f.inlineof.empty())
++            enterinlines(s, f, at);
+ 
+         switch (op)
+         {
+@@ -703,6 +924,8 @@ int lua_profilefunctions(lua_State* L, void (*each)(void* ud, int id, const lua_
+         out.caches = f.caches.empty() ? NULL : f.caches.data();
+         out.nativeentries = f.nativeentries;
+         out.nativework = f.nativework;
++        out.ninlines = int(f.inlines.size());
++        out.inlines = f.inlines.empty() ? NULL : f.inlines.data();
+         each(ud, int(i), &out);
+     }
+     return int(s->functions.size());

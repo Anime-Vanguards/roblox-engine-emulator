@@ -144,6 +144,21 @@ struct Figures {
     total_alloc: f64,
     self_allocs: f64,
     total_allocs: f64,
+    /// As a function Luau's `-O2` inlined into others: the times a copy was entered, and the instructions and work on its
+    /// own lines there (the callers' figures, as the VM ran them)
+    inlined_calls: u64,
+    inlined_insns: u64,
+    inlined_work: f64,
+}
+
+/// A function's copies inlined into one caller (the caller, or the function whose copy holds them)
+#[derive(Clone, Copy, Debug, Default)]
+struct Inlined {
+    copies: u64,
+    calls: u64,
+    /// Instructions and work in the copies, the copies inside them included
+    insns: u64,
+    work: f64,
 }
 
 /// Per-line figures (a function's line)
@@ -160,11 +175,16 @@ struct LineFigures {
     ops: BTreeMap<u8, u64>,
 }
 
+#[derive(Default)]
 struct Model {
     functions: FxHashMap<i32, Figures>,
     lines: FxHashMap<(i32, i32), LineFigures>,
     /// (caller, callee) -> (calls, total work, total instructions)
     edges: FxHashMap<(i32, i32), (u64, f64, u64)>,
+    /// (caller, inlined function) -> its copies there
+    inlined: FxHashMap<(i32, i32), Inlined>,
+    /// (function, line) -> the function whose inlined copy the line's instructions are
+    line_inlined: FxHashMap<(i32, i32), i32>,
     /// Per-node subtree totals (work, instructions)
     subtree: Vec<(f64, u64)>,
     /// The phase each node is under
@@ -174,7 +194,7 @@ struct Model {
 /// The call tree's per-function and per-line figures, and its edges
 fn tree_model(vm: &vm::Results) -> Model {
     let nodes = &vm.nodes;
-    let mut model = Model { functions: FxHashMap::default(), lines: FxHashMap::default(), edges: FxHashMap::default(), subtree: vec![(0.0, 0); nodes.len()], node_phase: vec![0; nodes.len()] };
+    let mut model = Model { subtree: vec![(0.0, 0); nodes.len()], node_phase: vec![0; nodes.len()], ..Model::default() };
     // phases: a node under the root with function -1 is a phase's
     for (index, node) in nodes.iter().enumerate() {
         model.node_phase[index] = if node.function == -1 && node.parent == 0 && index != 0 {
@@ -253,7 +273,57 @@ fn tree_model(vm: &vm::Results) -> Model {
             }
         }
     }
+    inlined_model(vm, &mut model);
     model
+}
+
+/// The copies of functions `-O2` inlined into others: each inlined function's calls (entries into its copies), and the
+/// instructions and work on its own lines in them; per caller, the same with the copies inside included
+fn inlined_model(vm: &vm::Results, model: &mut Model) {
+    for (id, function) in vm.functions.iter().enumerate() {
+        if function.inlines.is_empty() {
+            continue;
+        }
+        let caller_of = |copy: &vm::Inline| if copy.parent >= 0 { function.inlines.get(copy.parent as usize).map_or(id as i32, |holder| holder.function) } else { id as i32 };
+        let mut innermost = vec![-1i32; function.code.len()];
+        for (index, copy) in function.inlines.iter().enumerate() {
+            model.functions.entry(copy.function).or_default().inlined_calls += copy.entries;
+            let edge = model.inlined.entry((caller_of(copy), copy.function)).or_default();
+            edge.copies += 1;
+            edge.calls += copy.entries;
+            // (a copy comes after the one it sits in: the innermost is written last)
+            for pc in copy.first_pc.max(0)..=copy.last_pc {
+                if let Some(slot) = innermost.get_mut(pc as usize) {
+                    *slot = index as i32;
+                }
+            }
+        }
+        for (pc, &copy) in innermost.iter().enumerate() {
+            if copy < 0 {
+                continue;
+            }
+            let inline = function.inlines[copy as usize];
+            if let Some(&line) = function.lines.get(pc) {
+                model.line_inlined.insert((id as i32, line), inline.function);
+            }
+            let count = function.counts.get(pc).copied().unwrap_or(0);
+            let work = function.work.get(pc).copied().unwrap_or(0.0);
+            if count == 0 && work == 0.0 {
+                continue;
+            }
+            let figures = model.functions.entry(inline.function).or_default();
+            figures.inlined_insns += count;
+            figures.inlined_work += work;
+            let mut at = copy;
+            while at >= 0 {
+                let holder = function.inlines[at as usize];
+                let edge = model.inlined.entry((caller_of(&holder), holder.function)).or_default();
+                edge.insns += count;
+                edge.work += work;
+                at = holder.parent;
+            }
+        }
+    }
 }
 
 /// Stack samples (innermost first) folded into per-function and per-line self and total figures
@@ -333,7 +403,7 @@ pub fn write(input: &Input) -> Result<String, String> {
     let out = &input.config.out;
     std::fs::create_dir_all(out).map_err(|error| format!("--profile-out {}: {error}", out.display()))?;
     let names = Names { vm: input.vm, steps: ENGINE_STEPS.with(|steps| steps.borrow().clone()), outside: OUTSIDE.with(|outside| outside.borrow().clone()) };
-    let mut model = input.vm.map(tree_model).unwrap_or(Model { functions: FxHashMap::default(), lines: FxHashMap::default(), edges: FxHashMap::default(), subtree: Vec::new(), node_phase: Vec::new() });
+    let mut model = input.vm.map(tree_model).unwrap_or_default();
 
     // host time samples (ms: a tick is a millisecond) and allocations (bytes) into the same model
     let mut time_total = 0.0;
@@ -372,6 +442,14 @@ pub fn write(input: &Input) -> Result<String, String> {
     // functions: every one with figures, keyed so a diff finds it again
     let mut function_rows: Vec<(i32, Figures)> = model.functions.iter().map(|(&id, figures)| (id, *figures)).collect();
     function_rows.sort_by(|a, b| b.1.self_work.total_cmp(&a.1.self_work).then(b.1.total_time.total_cmp(&a.1.total_time)).then(b.1.total_alloc.total_cmp(&a.1.total_alloc)).then(a.0.cmp(&b.0)));
+    // each inlined function's callers, most work first
+    let mut inlined_into: FxHashMap<i32, Vec<(i32, Inlined)>> = FxHashMap::default();
+    for (&(caller, callee), inlined) in &model.inlined {
+        inlined_into.entry(callee).or_default().push((caller, *inlined));
+    }
+    for callers in inlined_into.values_mut() {
+        callers.sort_by(|a, b| b.1.work.total_cmp(&a.1.work).then(b.1.calls.cmp(&a.1.calls)).then(a.0.cmp(&b.0)));
+    }
     let function_json = |id: i32, figures: &Figures| -> Json {
         let function = names.function(id);
         json!({
@@ -388,6 +466,12 @@ pub fn write(input: &Input) -> Result<String, String> {
             "calls": figures.calls,
             "self": {"insns": figures.self_insns, "work_ms": ms(figures.self_work), "time_ms": figures.self_time, "alloc_bytes": figures.self_alloc.round(), "allocs": figures.self_allocs.round()},
             "total": {"insns": figures.total_insns, "work_ms": ms(figures.total_work), "time_ms": figures.total_time, "alloc_bytes": figures.total_alloc.round(), "allocs": figures.total_allocs.round()},
+            // (inlined by -O2 into the functions in `into`: its calls through those copies, and the instructions and work on
+            // its own lines there, which are also theirs)
+            "inlined": inlined_into.get(&id).map(|callers| json!({
+                "calls": figures.inlined_calls, "insns": figures.inlined_insns, "work_ms": ms(figures.inlined_work),
+                "into": callers.iter().map(|(caller, inlined)| json!({"function": caller, "copies": inlined.copies, "calls": inlined.calls, "insns": inlined.insns, "work_ms": ms(inlined.work)})).collect::<Vec<_>>(),
+            })),
         })
     };
     json["functions"] = Json::Array(function_rows.iter().map(|(id, figures)| function_json(*id, figures)).collect());
@@ -403,6 +487,7 @@ pub fn write(input: &Input) -> Result<String, String> {
                     "function": function, "line": line, "insns": figures.insns, "work_ms": ms(figures.work), "total_work_ms": ms(figures.total_work),
                     "total_insns": figures.total_insns, "time_ms": figures.time, "total_time_ms": figures.total_time, "alloc_bytes": figures.alloc.round(), "allocs": figures.allocs.round(),
                     "ops": figures.ops.iter().map(|(op, count)| (vm::opcode_name(*op).to_string(), json!(count))).collect::<serde_json::Map<_, _>>(),
+                    "inlined": model.line_inlined.get(&(*function, *line)),
                 })
             })
             .collect(),
@@ -410,7 +495,12 @@ pub fn write(input: &Input) -> Result<String, String> {
     json["edges"] = Json::Array({
         let mut edges: Vec<_> = model.edges.iter().collect();
         edges.sort_by(|a, b| b.1.1.total_cmp(&a.1.1).then(a.0.cmp(b.0)));
-        edges.iter().map(|((caller, callee), (calls, work, insns))| json!({"caller": caller, "callee": callee, "calls": calls, "work_ms": ms(*work), "insns": insns})).collect()
+        let mut rows: Vec<Json> = edges.iter().map(|((caller, callee), (calls, work, insns))| json!({"caller": caller, "callee": callee, "calls": calls, "work_ms": ms(*work), "insns": insns})).collect();
+        // (calls -O2 compiled into the caller: entries into the callee's copies there)
+        let mut inlined: Vec<_> = model.inlined.iter().collect();
+        inlined.sort_by(|a, b| b.1.work.total_cmp(&a.1.work).then(a.0.cmp(b.0)));
+        rows.extend(inlined.iter().map(|((caller, callee), inlined)| json!({"caller": caller, "callee": callee, "calls": inlined.calls, "work_ms": ms(inlined.work), "insns": inlined.insns, "inlined": true, "copies": inlined.copies})));
+        rows
     });
 
     // the call tree for the flame graph: [parent, function, calls, self work in us, self instructions, label]
@@ -457,7 +547,14 @@ pub fn write(input: &Input) -> Result<String, String> {
         let total_work: f64 = vm_results.nodes.iter().map(|node| node.work).sum::<f64>() + vm_results.engine_work;
         let script_insns: u64 = vm_results.functions.iter().filter(|f| !f.exempt()).flat_map(|f| f.counts.iter()).sum();
         let engine_insns: u64 = vm_results.functions.iter().filter(|f| f.exempt()).flat_map(|f| f.counts.iter()).sum();
-        let natives: Vec<&vm::Function> = vm_results.functions.iter().filter(|f| f.native() && !f.exempt()).collect();
+        // (the ones seen running: entered, booked to, or in a frame; the profile also registers a chunk's functions unrun)
+        let natives: Vec<&vm::Function> = vm_results
+            .functions
+            .iter()
+            .enumerate()
+            .filter(|(id, f)| f.native() && !f.exempt() && (f.native_entries > 0 || f.native_work != 0.0 || model.functions.contains_key(&(*id as i32))))
+            .map(|(_, f)| f)
+            .collect();
         let mut opcodes: BTreeMap<u8, (u64, f64)> = BTreeMap::new();
         for function in vm_results.functions.iter().filter(|f| !f.exempt()) {
             for (pc, &count) in function.counts.iter().enumerate() {
@@ -531,6 +628,35 @@ pub fn write(input: &Input) -> Result<String, String> {
         let _ = writeln!(summary, "{:>9} {:>9} {:>10}  function", "total ms", "self ms", "calls");
         for (id, figures) in by_total.iter().filter(|(_, figures)| figures.total_work >= 5e-7).take(top.min(12)) {
             let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10}  {}", ms(figures.total_work), ms(figures.self_work), group_digits(figures.calls), names.label(*id));
+        }
+        // functions -O2 inlined: no frame of theirs runs there, so the tables above count only their other calls
+        let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, _)| inlined_into.contains_key(id) && !names.engine(*id)).collect();
+        if !inlined.is_empty() {
+            inlined.sort_by(|a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(b.1.inlined_calls.cmp(&a.1.inlined_calls)).then(a.0.cmp(&b.0)));
+            let _ = writeln!(
+                summary,
+                "\ninlined functions (Luau's -O2 compiled their bodies into their callers: a call is counted where a copy was entered; the instructions and work are on their own lines in the callers, counted there too)"
+            );
+            let _ = writeln!(summary, "{:>10} {:>10} {:>12} {:>9}  function  (inlined into)", "inlined", "called", "insns", "work ms");
+            for (id, figures) in inlined.iter().take(top) {
+                let into: Vec<String> = inlined_into[id]
+                    .iter()
+                    .take(3)
+                    .map(|(caller, copies)| format!("{} ({} {})", names.label(*caller).replace("  ", " "), copies.copies, if copies.copies == 1 { "copy" } else { "copies" }))
+                    .collect();
+                let more = inlined_into[id].len().saturating_sub(into.len());
+                let _ = writeln!(
+                    summary,
+                    "{:>10} {:>10} {:>12} {:>9.3}  {}  ({}{})",
+                    group_digits(figures.inlined_calls),
+                    group_digits(figures.calls),
+                    group_digits(figures.inlined_insns),
+                    ms(figures.inlined_work),
+                    names.label(*id),
+                    into.join(", "),
+                    if more > 0 { format!(", {more} more") } else { String::new() }
+                );
+            }
         }
         let _ = writeln!(summary, "\ntop lines by self work");
         let _ = writeln!(summary, "{:>9} {:>11} {:>12}  line  (opcodes)", "self ms", "total ms", "insns");
@@ -913,6 +1039,10 @@ pub fn write(input: &Input) -> Result<String, String> {
             listed.push(*id);
         }
     }
+    // (and the inlined functions with the most work in their copies: the page shows it on their own lines)
+    let mut inlined_hot: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, figures)| *id >= 0 && figures.inlined_work > 0.0 && !listed.contains(id) && !names.engine(*id)).collect();
+    inlined_hot.sort_by(|a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(a.0.cmp(&b.0)));
+    listed.extend(inlined_hot.iter().take(6).map(|(id, _)| *id));
     let mut listings = serde_json::Map::new();
     for id in &listed {
         if let Some(function) = names.function(*id) {

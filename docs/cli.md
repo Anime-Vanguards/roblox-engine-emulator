@@ -231,7 +231,10 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     what the work clock charges (the instruction's own cost, the engine calls it makes, what it allocates)
     is booked to the instruction that caused it. Per function and per line, self and total: instructions,
     work in milliseconds of Studio time, calls, by opcode; callers and callees; the hottest functions'
-    source annotated. Exact, and the same every run of the same code.
+    source annotated. Exact, and the same every run of the same code. ree compiles modules at `-O2`, which
+    inlines small local functions into their callers: such a function has no frame of its own there, so its
+    calls are counted where its inlined copies run, listed under "inlined functions" (docs/engine.md
+    "Profiling").
   - `caches`: Luau's inline caches per call site (a table key's or a global's predicted slot, a method's
     slot, a resolved import, a builtin's fast path: hit, miss, slow path) and ree's own caches (member
     atoms and dispatch, datatype values, Instance userdata, require results, module bytecode, spatial

@@ -551,8 +551,18 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   starts a phase: the frames hang from a node of the phase's. Natively compiled code keeps running natively:
   a function's entries into its native code and the work booked while it ran are its own, and its
   instructions are not counted (the summary names such functions); a call from native code into natively
-  compiled code is not seen, so the callee's work stays with its caller. Luau's `-O2` inlines small local
-  functions: their instructions count on the caller's function, on their own source lines.
+  compiled code is not seen, so the callee's work stays with its caller. Luau's `-O2` (modules compile at
+  it; `--!optimize 2` in a chunk asks for it) inlines small local functions: their bodies are compiled into
+  the callers, which run them in their own frames, so their instructions and work count on the caller's
+  function, on the inlined function's own lines. The profile finds those copies: when it first sees a chunk
+  it registers all of its functions, and a run of a caller's instructions on another function's lines (one
+  enclosing the caller aside, and the instructions creating a closure) is a copy of that function, the same
+  instructions on the same lines again right after it the next copy, and a copy of a function inlined into
+  the copied one sits inside its copy. Each time a frame steps into a copy from outside it counts a call of
+  the inlined function (a call made inside the copy returns into it; a loop inside it stays in it). The
+  summary lists inlined functions with these calls, their other calls, and the instructions and work on
+  their lines in each caller; the callers keep those figures as the VM ran them. Two copies of one function
+  in a row whose code differs (a constant argument folded differently) count as one.
 - **Allocations** (`profiler::memory`): the VM's `onallocate` callback sees every allocation; `lua_allocblock`
   gives a collectable object's block (its type is read at the next callback, once the VM set it; an Instance's
   userdata names its class) and what other memory is for (a table's array and hash parts, a thread's stack

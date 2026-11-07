@@ -385,6 +385,17 @@ LUA_API void lua_settypeofnames(lua_State* L, int idx, const char* vectorname);
 #define LUA_PROFILE_NATIVE 2 // compiled to native code
 #define LUA_PROFILE_CACHES 4 // outcomes per instruction: hit, miss (repredicted), slow (metatable path, unsafe environment), other (not a table)
 
+// a copy of a function Luau's compiler inlined into another (-O2): the function, its instructions there, and the calls it
+// stood for (the times its frame stepped into it from outside it)
+typedef struct lua_ProfileInline
+{
+    int function; // the inlined function, a lua_ProfileFunction id
+    int firstpc; // its first and last instruction in the function it was inlined into
+    int lastpc;
+    int parent; // the copy it sits in (an index into the same inlines; -1 for none), when the copied function had it inlined too
+    uint64_t entries;
+} lua_ProfileInline;
+
 typedef struct lua_ProfileFunction
 {
     const char* source; // the chunk's name as lua_getinfo's short_src gives it
@@ -399,6 +410,8 @@ typedef struct lua_ProfileFunction
     const uint64_t* caches; // LUA_PROFILE_CACHES outcomes per instruction, NULL when none ran
     uint64_t nativeentries; // entries into its native code
     double nativework; // booked while its native code ran
+    int ninlines; // copies of other functions inlined into it (while stepping)
+    const lua_ProfileInline* inlines;
 } lua_ProfileFunction;
 
 typedef struct lua_ProfileNode

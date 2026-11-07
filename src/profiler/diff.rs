@@ -89,7 +89,8 @@ fn functions(profile: &Json) -> BTreeMap<String, (String, FunctionFigures)> {
         let entry: &mut (String, FunctionFigures) = out.entry(key).or_insert_with(|| (label, FunctionFigures::default()));
         entry.1.self_work += num(&f["self"]["work_ms"]);
         entry.1.total_work += num(&f["total"]["work_ms"]);
-        entry.1.calls += num(&f["calls"]);
+        // (calls through copies -O2 inlined count too: a change that inlines a function or stops inlining it keeps its calls)
+        entry.1.calls += num(&f["calls"]) + num(&f["inlined"]["calls"]);
         entry.1.insns += num(&f["self"]["insns"]);
         entry.1.alloc += num(&f["self"]["alloc_bytes"]);
         entry.1.time += num(&f["self"]["time_ms"]);

@@ -569,6 +569,53 @@ fn host_time_is_booked_in_milliseconds_where_it_was_spent() {
     assert!(spin["self"]["time_ms"].as_f64().unwrap() >= 0.8 * sampled, "the loop's function holds the time: {spin}");
 }
 
+/// A small local function `-O2` inlines runs as copies in its callers, with no frame of its own: the profile finds the copies by
+/// the lines they carry and counts a call each time one is entered (two copies in a row count apart, a loop around one counts
+/// each turn), a call that did make a frame stays a call, and the summary, the JSON and a diff show the inlined calls.
+#[test]
+fn inlined_functions_count_their_calls_where_their_copies_run() {
+    let _lock = lock();
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::WORK, temp_dir("inlined")) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    // (middle and twice are a table's: only a local function is inlined, so they keep their frames)
+    let source = "--!optimize 2\nlocal function leaf(x)\n\treturn x * 2 + 1\nend\nlocal M = {}\nfunction M.middle(n)\n\tlocal total = 0\n\tfor i = 1, n do\n\t\ttotal += leaf(i)\n\tend\n\treturn total\nend\nfunction M.twice(n)\n\tlocal total = 0\n\tfor i = 1, n do\n\t\tlocal a = leaf(i)\n\t\tlocal b = leaf(i)\n\t\ttotal += a + b\n\tend\n\treturn total\nend\nlocal sum = 0\nfor round = 1, 10 do\n\tsum += M.middle(100)\nend\nsum += M.twice(50)\nlocal ok, value = pcall(leaf, 3)\nsum += value\nlocal done = pcall(function(step)\n\tsum += step\nend, 1)\nprint(sum)\n";
+    let output = run(&lua, &engine, "inlining", source);
+    assert_eq!(output.last().map(String::as_str), Some("107208"), "{output:?}");
+    profiler::collect(&lua);
+    session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let summary = std::fs::read_to_string(config.out.join("summary.txt")).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let functions = json["functions"].as_array().unwrap();
+    let named = |name: &str| {
+        functions
+            .iter()
+            .find(|f| f["module"] == "inlining" && f["name"].as_str().is_some_and(|n| n == name || n.ends_with(&format!(".{name}"))))
+            .unwrap_or_else(|| panic!("no {name}: {}", json["functions"]))
+    };
+    let (leaf, middle, twice) = (named("leaf"), named("middle"), named("twice"));
+    // (a call through a local holding it is inlined too: pcall's makes a frame)
+    assert_eq!(leaf["calls"], 1, "the call through pcall made a frame: {leaf}");
+    let inlined = &leaf["inlined"];
+    assert_eq!(inlined["calls"], 10 * 100 + 50 * 2, "{inlined}");
+    let into = |caller: &serde_json::Value| inlined["into"].as_array().unwrap().iter().find(|row| row["function"] == caller["id"]).cloned().unwrap_or_else(|| panic!("{inlined}"));
+    let (in_middle, in_twice) = (into(middle), into(twice));
+    assert_eq!((in_middle["copies"].as_u64(), in_middle["calls"].as_u64()), (Some(1), Some(1000)), "{in_middle}");
+    assert_eq!((in_twice["copies"].as_u64(), in_twice["calls"].as_u64()), (Some(2), Some(100)), "two copies side by side: {in_twice}");
+    assert!(inlined["insns"].as_u64().unwrap() >= 1100, "{inlined}");
+    // (the instructions stay their callers' own: the VM ran them in those frames)
+    assert!(middle["self"]["insns"].as_u64().unwrap() >= inlined["insns"].as_u64().unwrap() * 1000 / 1100, "{middle}");
+    let edge = json["edges"].as_array().unwrap().iter().find(|e| e["caller"] == middle["id"] && e["callee"] == leaf["id"] && e["inlined"] == true).unwrap_or_else(|| panic!("{}", json["edges"]));
+    assert_eq!(edge["calls"], 1000);
+    assert!(json["lines"].as_array().unwrap().iter().any(|l| l["function"] == middle["id"] && l["inlined"] == leaf["id"] && l["line"] == 3), "{}", json["lines"]);
+    assert!(summary.contains("inlined functions") && summary.lines().any(|line| line.contains("leaf") && line.contains("1,100")), "{summary}");
+    // (the statement creating a closure on its first and last lines, a call it is an argument of, is not a copy of it)
+    let inlined_here: Vec<&serde_json::Value> = functions.iter().filter(|f| f["module"] == "inlining" && f["inlined"].is_object()).collect();
+    assert_eq!(inlined_here.len(), 1, "only leaf was inlined: {inlined_here:?}");
+}
+
 /// ree's own caches are counted while a profile asks: a property read twice hits the member dispatch the second time,
 /// and an Instance pushed again hits its userdata.
 #[test]

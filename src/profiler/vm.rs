@@ -41,6 +41,18 @@ struct RawFunction {
     caches: *const u64,
     nativeentries: u64,
     nativework: f64,
+    ninlines: c_int,
+    inlines: *const RawInline,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RawInline {
+    function: c_int,
+    firstpc: c_int,
+    lastpc: c_int,
+    parent: c_int,
+    entries: u64,
 }
 
 #[repr(C)]
@@ -148,6 +160,21 @@ pub struct Function {
     pub caches: Vec<u64>,
     pub native_entries: u64,
     pub native_work: f64,
+    /// Copies of other functions Luau's compiler inlined into this one (`-O2`), outermost before the ones inside them
+    pub inlines: Vec<Inline>,
+}
+
+/// A copy of a function inlined into another: its instructions there and the calls it stood for
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Inline {
+    /// The inlined function (an index into [`Results::functions`])
+    pub function: i32,
+    pub first_pc: i32,
+    pub last_pc: i32,
+    /// The copy this one sits in (an index into the same `inlines`), when the copied function had it inlined too
+    pub parent: i32,
+    /// Times its frame stepped into it from outside it
+    pub entries: u64,
 }
 
 impl Function {
@@ -208,6 +235,10 @@ unsafe extern "C-unwind" fn each_function(ud: *mut c_void, _id: c_int, raw: *con
             caches: slice(raw.caches, len * CACHE_OUTCOMES),
             native_entries: raw.nativeentries,
             native_work: raw.nativework,
+            inlines: slice(raw.inlines, raw.ninlines.max(0) as usize)
+                .into_iter()
+                .map(|raw| Inline { function: raw.function, first_pc: raw.firstpc, last_pc: raw.lastpc, parent: raw.parent, entries: raw.entries })
+                .collect(),
         }
     });
 }
