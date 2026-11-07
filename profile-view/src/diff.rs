@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     app::App,
+    fmt,
     metric::{Metric, Unit},
     model::{Kind, Profile},
     sites::ENGINE,
@@ -56,17 +57,22 @@ fn timeline_stats(p: &Profile) -> Option<(f64, f64, f64)> {
     if work.is_empty() {
         return None;
     }
-    let mean = |v: &[f64]| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
-    Some((mean(&work), work.iter().copied().fold(0.0, f64::max), mean(&host)))
+    // (past startup, as the Overview reads a frame: the mount apart)
+    let worst = p.frames_past_startup(&work).into_iter().fold(0.0, f64::max);
+    Some((p.frames_mean(&work), worst, p.frames_mean(&host)))
 }
 
 /// The headline figures both profiles have, and notes on how to read them
 pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
     let mut out = Vec::new();
     let mut add = |name: &str, before: f64, after: f64, unit: Unit, exact: bool, cost: bool| out.push(Figure { name: name.into(), before, after, unit, exact, cost });
+    let frames = (timeline_stats(b), timeline_stats(a));
     if let (Some(wb), Some(wa)) = (&b.raw.work, &a.raw.work) {
-        add("work clock", wb.total_ms, wa.total_ms, Unit::Ms, true, true);
-        add("work clock a frame", wb.per_frame_ms, wa.per_frame_ms, Unit::Ms, true, true);
+        add("Studio work", wb.total_ms, wa.total_ms, Unit::Ms, true, true);
+        // (a frame's from the timeline when both have one, below: the mount apart)
+        if frames.0.is_none() || frames.1.is_none() {
+            add("Studio work a frame", wb.per_frame_ms, wa.per_frame_ms, Unit::Ms, true, true);
+        }
         add("script instructions", wb.script_insns, wa.script_insns, Unit::Count, true, true);
     }
     if let (Some(ab), Some(aa)) = (&b.raw.alloc, &a.raw.alloc) {
@@ -93,15 +99,21 @@ pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
             }
         }
     }
-    if let (Some(sb), Some(sa)) = (timeline_stats(b), timeline_stats(a)) {
-        add("work a frame (mean)", sb.0, sa.0, Unit::Ms, true, true);
-        add("work a frame (worst)", sb.1, sa.1, Unit::Ms, true, true);
+    if let (Some(sb), Some(sa)) = frames {
+        add("Studio work a frame (mean)", sb.0, sa.0, Unit::Ms, true, true);
+        add("Studio work a frame (worst)", sb.1, sa.1, Unit::Ms, true, true);
         add("host time a frame (mean, noisy)", sb.2, sa.2, Unit::Ms, false, true);
     }
     add("frames", b.raw.run.frames as f64, a.raw.run.frames as f64, Unit::Count, true, false);
     let mut notes = Vec::new();
-    if b.raw.run.frames != a.raw.run.frames || b.raw.run.harness != a.raw.run.harness {
-        notes.push("the runs differ in frames or harness: compare figures a frame".to_string());
+    if b.raw.run.frames != a.raw.run.frames {
+        notes.push(format!("the runs ran {} and {} frames: compare figures a frame", fmt::grouped(b.raw.run.frames as f64), fmt::grouped(a.raw.run.frames as f64)));
+    }
+    // (by the harness's file name: a fixed copy of a harness elsewhere is the same harness)
+    if let (Some(hb), Some(ha)) = (b.harness(), a.harness()) {
+        if hb != ha {
+            notes.push(format!("the runs ran other harnesses: {hb} and {ha}"));
+        }
     }
     let changed = changed_modules(b, a);
     if !changed.is_empty() {

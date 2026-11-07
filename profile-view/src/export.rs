@@ -6,7 +6,7 @@
 use std::{collections::HashMap, fmt::Write as _, path::Path};
 
 use fontdue::{Font, FontSettings, Metrics};
-use ratatui_core::{
+use ratatui::{
     buffer::Buffer,
     style::{Color, Modifier},
 };
@@ -101,22 +101,21 @@ struct Look {
     fg: (u8, u8, u8),
     bold: bool,
     underline: bool,
-    /// A bar's or a column chart's cell (Theme::unmark)
+    /// A bar's, a column chart's or a flame graph node's cell (Theme::unmark)
     mark: Mark,
-    /// A flame graph node: a gap above it
-    node: bool,
 }
 
 fn look(buf: &Buffer, x: u16, y: u16, theme: &Theme) -> Look {
     let cell = &buf[(x, y)];
-    let surface = rgb(theme.surface, (26, 26, 25));
-    let ink = rgb(theme.ink, (240, 239, 236));
-    let (bg, mark) = theme.unmark(cell.bg);
-    let (mut bg, mut fg) = (rgb(bg, surface), rgb(cell.fg, ink));
+    let page = rgb(theme.page, (19, 21, 27));
+    let ink = rgb(theme.ink, (233, 235, 241));
+    let (bg, mark) = Theme::unmark(cell.bg);
+    let (fg, _) = Theme::unmark(cell.fg);
+    let (mut bg, mut fg) = (rgb(bg, page), rgb(fg, ink));
     if cell.modifier.contains(Modifier::REVERSED) {
         std::mem::swap(&mut bg, &mut fg);
     }
-    Look { bg, fg, bold: cell.modifier.contains(Modifier::BOLD), underline: cell.modifier.contains(Modifier::UNDERLINED), mark, node: theme.node_bg(cell.bg) }
+    Look { bg, fg, bold: cell.modifier.contains(Modifier::BOLD), underline: cell.modifier.contains(Modifier::UNDERLINED), mark }
 }
 
 /// A block's filled part in pixels, (left, top, right, bottom) within a cell of `w` x `h`: a bar's is a band through
@@ -131,7 +130,7 @@ fn block_px(ch: char, mark: Mark, w: f32, h: f32, scale: f32) -> Option<(f32, f3
             y1 = y1.min(h - inset);
         }
         Mark::Column => x1 = x1.min(w - scale),
-        Mark::None => {}
+        Mark::None | Mark::Node => {}
     }
     if x1 <= x0 || y1 <= y0 {
         return Some((0.0, 0.0, 0.0, 0.0));
@@ -164,8 +163,8 @@ pub fn svg(buf: &Buffer, theme: &Theme, scale: u32) -> String {
     let (width, height) = (area.width as u32 * cell_w, area.height as u32 * cell_h);
     let mut out = String::new();
     let _ = writeln!(out, r#"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" font-family="'JetBrains Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace" font-size="{font_px}">"#);
-    let _ = writeln!(out, r#"<rect width="{width}" height="{height}" fill="{}"/>"#, hex(rgb(theme.surface, (26, 26, 25))));
-    let surface = rgb(theme.surface, (26, 26, 25));
+    let _ = writeln!(out, r#"<rect width="{width}" height="{height}" fill="{}"/>"#, hex(rgb(theme.page, (19, 21, 27))));
+    let surface = rgb(theme.page, (19, 21, 27));
     let gap = scale;
     for y in area.top()..area.bottom() {
         // backgrounds (a flame node's leaves a gap above it)
@@ -175,13 +174,13 @@ pub fn svg(buf: &Buffer, theme: &Theme, scale: u32) -> String {
             let start = x;
             while x < area.right() {
                 let next = look(buf, x, y, theme);
-                if next.bg != first.bg || next.node != first.node {
+                if next.bg != first.bg || (next.mark == Mark::Node) != (first.mark == Mark::Node) {
                     break;
                 }
                 x += 1;
             }
             if first.bg != surface {
-                let top = if first.node { gap } else { 0 };
+                let top = if first.mark == Mark::Node { gap } else { 0 };
                 let _ = writeln!(out, r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#, start as u32 * cell_w, y as u32 * cell_h + top, (x - start) as u32 * cell_w, cell_h - top, hex(first.bg));
             }
         }
@@ -272,9 +271,10 @@ impl CellFont {
     }
 }
 
-/// Characters drawn as lines and dots rather than glyphs: box lines and braille
+/// Characters drawn as lines, arcs and dots rather than glyphs: box lines (a panel's rounded corners among them) and
+/// braille, so borders and plots join up exactly at any cell size
 fn shape(ch: char) -> bool {
-    matches!(ch, '─' | '━' | '│' | '┃' | '┬' | '┴' | '├' | '┤' | '┼' | '└' | '┘' | '┌' | '┐') || ('\u{2800}'..='\u{28ff}').contains(&ch)
+    matches!(ch, '─' | '━' | '│' | '┃' | '┬' | '┴' | '├' | '┤' | '┼' | '└' | '┘' | '┌' | '┐' | '╭' | '╮' | '╰' | '╯') || ('\u{2800}'..='\u{28ff}').contains(&ch)
 }
 
 /// An RGB image
@@ -376,11 +376,43 @@ fn draw_shape(image: &mut Image, ch: char, x0: f32, y0: f32, w: f32, h: f32, sca
             vertical(image, my, y0 + h, thin);
             horizontal(image, x0, mx + thin, thin);
         }
+        '╭' | '╮' | '╰' | '╯' => {
+            // a quarter circle between the two lines it joins, on their centres
+            let (sx, sy) = match ch {
+                '╭' => (1.0, 1.0),
+                '╮' => (-1.0, 1.0),
+                '╰' => (1.0, -1.0),
+                _ => (-1.0, -1.0),
+            };
+            let r = (w * 0.45).round().max(2.0);
+            let (lx, ly) = (mx - (thin / 2.0).floor() + thin / 2.0, my - (thin / 2.0).floor() + thin / 2.0);
+            let (cx, cy) = (lx + sx * r, ly + sy * r);
+            if sx > 0.0 {
+                horizontal(image, cx, x0 + w, thin);
+            } else {
+                horizontal(image, x0, cx, thin);
+            }
+            if sy > 0.0 {
+                vertical(image, cy, y0 + h, thin);
+            } else {
+                vertical(image, y0, cy, thin);
+            }
+            for py in (cy - r - 2.0).floor() as i64..=(cy + r + 2.0).ceil() as i64 {
+                for px in (cx - r - 2.0).floor() as i64..=(cx + r + 2.0).ceil() as i64 {
+                    let (fx, fy) = (px as f32 + 0.5, py as f32 + 0.5);
+                    if (fx - cx) * sx > 0.5 || (fy - cy) * sy > 0.5 {
+                        continue;
+                    }
+                    let d = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
+                    image.blend(px, py, color, (thin / 2.0 + 0.5 - (d - r).abs()).clamp(0.0, 1.0));
+                }
+            }
+        }
         _ => {
             // braille: dots 1-3 and 7 down the left column, 4-6 and 8 down the right
             let bits = ch as u32 - 0x2800;
             const DOTS: [(u32, u32, u32); 8] = [(0x01, 0, 0), (0x02, 0, 1), (0x04, 0, 2), (0x40, 0, 3), (0x08, 1, 0), (0x10, 1, 1), (0x20, 1, 2), (0x80, 1, 3)];
-            let r = (w * 0.17).max(1.0);
+            let r = (w * 0.21).max(1.0);
             for (bit, col, row) in DOTS {
                 if bits & bit != 0 {
                     image.dot(x0 + w * (0.27 + 0.46 * col as f32), y0 + h * (0.125 + 0.25 * row as f32), r, color);
@@ -394,11 +426,12 @@ fn draw_shape(image: &mut Image, ch: char, x0: f32, y0: f32, w: f32, h: f32, sca
 pub fn raster(buf: &Buffer, theme: &Theme, font: &mut CellFont, scale: u32) -> Image {
     let area = buf.area;
     let (cw, ch) = (font.cell_w, font.cell_h);
-    let mut image = Image::new(area.width as u32 * cw, area.height as u32 * ch, rgb(theme.surface, (26, 26, 25)));
+    let mut image = Image::new(area.width as u32 * cw, area.height as u32 * ch, rgb(theme.page, (19, 21, 27)));
     let gap = scale as f32;
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
-            let Look { bg, fg, bold, underline, mark, node } = look(buf, x, y, theme);
+            let Look { bg, fg, bold, underline, mark } = look(buf, x, y, theme);
+            let node = mark == Mark::Node;
             let (x0, y0) = ((x - area.x) as f32 * cw as f32, (y - area.y) as f32 * ch as f32);
             image.rect(x0, y0 + if node { gap } else { 0.0 }, x0 + cw as f32, y0 + ch as f32, bg);
             let c = symbol(buf, x, y);

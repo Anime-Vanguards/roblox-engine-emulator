@@ -19,11 +19,11 @@ path = "src/main.rs"
 
 # Exact versions, as the engine's: a host (rur) resolves the same ones
 [dependencies]
-# The terminal UI's cell buffer, layout and styles, and its terminal (ratatui's core crate, without the widget crate:
-# the views draw their own cells). The buffer is what the terminal shows and what `render` rasterizes
-ratatui-core = { version = "=0.1.2", default-features = false, features = ["std"] }
-# The terminal backend: keys, raw mode and drawing through crossterm (Windows consoles, Unix terminals)
-ratatui-crossterm = { version = "=0.1.2", default-features = false, features = ["crossterm_0_29"] }
+# The terminal UI: its cell buffer, layout and styles, its widgets (panels, tabs, tables, charts, gauges,
+# sparklines) and its terminal through crossterm (Windows consoles, Unix terminals). The buffer the widgets draw is
+# what the terminal shows and what `render` rasterizes. Without its default features: no calendar, macros or layout
+# cache (MIT)
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm_0_29"] }
 # Glyphs rasterized for PNG screenshots from the bundled JetBrains Mono (fonts/, SIL OFL 1.1); pure Rust, no system
 # fonts, so a screenshot is the same on every machine (MIT OR Apache-2.0 OR Zlib)
 fontdue = "=0.9.4"

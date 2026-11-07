@@ -3,9 +3,9 @@
 
 use std::io::{Write as _, stdout};
 
-use ratatui_core::terminal::Terminal;
-use ratatui_crossterm::{
-    CrosstermBackend,
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
     crossterm::{
         cursor,
         event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -14,7 +14,7 @@ use ratatui_crossterm::{
     },
 };
 
-use crate::{app::App, keys::Key, ui};
+use crate::{app::App, keys::Key, theme, ui};
 
 fn restore() {
     let _ = disable_raw_mode();
@@ -78,8 +78,20 @@ pub fn run(app: &mut App) -> Result<(), String> {
     }));
     let result = (|| -> Result<(), String> {
         let mut terminal = Terminal::new(CrosstermBackend::new(stdout())).map_err(|error| error.to_string())?;
+        // (24-bit colour where the terminal shows it, else each colour's nearest of the 256 every terminal has)
+        let truecolor = theme::truecolor();
         loop {
-            terminal.draw(|frame| ui::draw(frame, app)).map_err(|error| error.to_string())?;
+            terminal
+                .draw(|frame| {
+                    ui::draw(frame, app);
+                    if !truecolor {
+                        for cell in frame.buffer_mut().content.iter_mut() {
+                            cell.fg = theme::to_256(cell.fg);
+                            cell.bg = theme::to_256(cell.bg);
+                        }
+                    }
+                })
+                .map_err(|error| error.to_string())?;
             if let Some(text) = app.clipboard.take() {
                 let mut out = stdout();
                 let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));

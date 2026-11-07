@@ -81,24 +81,25 @@ pub fn detect(p: &Profile, work: Option<&Tree>, sites: &[AllocSite]) -> (Vec<Iss
     let mut issues = Vec::new();
     let mut unchecked = Vec::new();
     let steady = p.steady_phase();
-    let steady_name = steady.map(|(phase, _)| p.phase_name(phase).to_string()).unwrap_or_default();
+    // `the 240 frames`, `the 150 frames of the steady phase`
+    let steady_frames = steady.map(|(phase, frames)| format!("the {} frames{}", fmt::grouped(frames as f64), p.phase_words(phase).map(|words| format!(" of {words}")).unwrap_or_default())).unwrap_or_default();
     if steady.is_none() && (work.is_some() || p.raw.alloc.is_some() || p.raw.timeline.is_some()) {
         unchecked.push("the steady state's sorts, allocation and growth: the run marks no phase after startup (the mount)".into());
     }
 
     match work {
-        Some(tree) => sorts_every_frame(p, tree, steady, &steady_name, &mut issues),
+        Some(tree) => sorts_every_frame(p, tree, steady, &steady_frames, &mut issues),
         None => unchecked.push("sorts every frame: needs work".into()),
     }
     if p.raw.alloc.is_some() {
-        steady_allocation(p, sites, steady, &steady_name, &mut issues);
+        steady_allocation(p, sites, steady, &steady_frames, &mut issues);
         table_growth(p, sites, &mut issues);
     } else {
         unchecked.push("allocation and table growth: need alloc".into());
     }
     if p.raw.timeline.is_some() {
         spikes(p, &mut issues);
-        growth(p, steady, &steady_name, &mut issues);
+        growth(p, steady, &steady_frames, &mut issues);
     } else {
         unchecked.push("spikes and growing counts: need timeline".into());
     }
@@ -122,7 +123,7 @@ fn phase_work(tree: &Tree, phase: u32) -> f64 {
 }
 
 /// `table.sort` called about once a frame or more through the steady state, by the function that calls it
-fn sorts_every_frame(p: &Profile, tree: &Tree, steady: Option<(u32, u64)>, steady_name: &str, issues: &mut Vec<Issue>) {
+fn sorts_every_frame(p: &Profile, tree: &Tree, steady: Option<(u32, u64)>, steady_frames: &str, issues: &mut Vec<Issue>) {
     let Some((phase, frames)) = steady else { return };
     if frames < 10 || !tree.has_calls {
         return;
@@ -165,7 +166,7 @@ fn sorts_every_frame(p: &Profile, tree: &Tree, steady: Option<(u32, u64)>, stead
             kind: "sort every frame",
             title: format!("Sorted every frame: {}", f.label()),
             evidence: vec![
-                format!("table.sort ran {} times in the {} frames of {steady_name}, {per_frame:.1} a frame", fmt::grouped(sorts as f64), fmt::grouped(frames as f64)),
+                format!("table.sort ran {} times in {steady_frames}, {per_frame:.1} a frame", fmt::grouped(sorts as f64)),
                 format!("{} a frame in the sorts, {} of the phase's work", fmt::ms(work / frames as f64), fmt::share(work, phase_total)),
             ],
             advice: "Keep the sorted list and sort again only when an item changes".into(),
@@ -201,7 +202,7 @@ fn frame_allocation(p: &Profile, phase: u32) -> Option<(f64, f64, f64)> {
 
 /// Sites that allocate through the steady state. A site whose average a frame is more than the phase's smallest frame
 /// allocates in all cannot allocate that every frame: it comes in bursts
-fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)>, steady_name: &str, issues: &mut Vec<Issue>) {
+fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)>, steady_frames: &str, issues: &mut Vec<Issue>) {
     let Some((phase, frames)) = steady else { return };
     if frames < 10 {
         return;
@@ -230,7 +231,7 @@ fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)
                 kind: "allocation bursts",
                 title: format!("Allocation bursts: {label}"),
                 evidence: vec![
-                    format!("{} in the {} frames of {steady_name}, {} a frame on average, but some frames allocate {} in all", fmt::bytes(total), fmt::grouped(frames as f64), fmt::bytes(bytes), fmt::bytes(smallest)),
+                    format!("{} in {steady_frames}, {} a frame on average, but some frames allocate {} in all", fmt::bytes(total), fmt::bytes(bytes), fmt::bytes(smallest)),
                     format!("frames allocate {} in the median, {} at most · {} objects{types}", fmt::bytes(median_frame), fmt::bytes(largest), fmt::grouped(objects)),
                 ],
                 advice: "A burst is collector work a few frames later: make less of it, or spread it over frames".into(),
@@ -250,7 +251,7 @@ fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)
             kind: "steady allocation",
             title: format!("{} a frame on average: {label}", fmt::bytes(bytes)),
             evidence: vec![
-                format!("{} objects, {} a frame on average over the {} frames of {steady_name}; {} of the phase's allocation", fmt::grouped(count), fmt::bytes(bytes), fmt::grouped(frames as f64), fmt::share(bytes, all_bytes)),
+                format!("{} objects a frame over {steady_frames}; {} of what they allocate", fmt::grouped(count), fmt::share(bytes, all_bytes)),
                 format!("over the run{}", if types.is_empty() { ": types not in the kept stacks".to_string() } else { types }),
             ],
             advice: "Reuse them between frames (clear and refill a kept table), or build them only when the input changes".into(),
@@ -306,7 +307,10 @@ fn spikes(p: &Profile, issues: &mut Vec<Issue>) {
     let phases = timeline.values("phase").unwrap_or_default();
     let later = phases.iter().any(|phase| *phase > 0.0);
     let kept = |i: usize| !later || phases.get(i).is_some_and(|phase| *phase > 0.0);
-    let list = |rows: &[usize]| rows.iter().take(8).map(|&i| format!("{}", frame(i))).collect::<Vec<_>>().join(", ");
+    let list = |rows: &[usize]| {
+        let shown = rows.iter().take(8).map(|&i| format!("{}", frame(i))).collect::<Vec<_>>().join(", ");
+        if rows.len() > 8 { format!("{shown} and {} more", rows.len() - 8) } else { shown }
+    };
     // (by the collector's steps, which are the same every run of the same code: its milliseconds are host time)
     if let (Some(gc), Some(freed), Some(steps)) = (timeline.values("gc_ms"), timeline.values("gc_freed"), timeline.values("gc_steps")) {
         let typical = median(&(0..steps.len()).filter(|&i| kept(i)).map(|i| steps[i]).collect::<Vec<_>>());
@@ -352,7 +356,7 @@ fn spikes(p: &Profile, issues: &mut Vec<Issue>) {
 }
 
 /// Instances, connections or threads that keep growing through the steady state
-fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_name: &str, issues: &mut Vec<Issue>) {
+fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_frames: &str, issues: &mut Vec<Issue>) {
     let (Some(timeline), Some((phase, frames))) = (&p.raw.timeline, steady) else { return };
     if frames < 10 {
         return;
@@ -382,7 +386,7 @@ fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_name: &str, issues: &m
         issues.push(Issue {
             severity: if per_frame >= 10.0 { Severity::Serious } else { Severity::Warning },
             kind: "growth",
-            title: format!("{} keep growing: +{} in {steady_name}", capitalize(what), fmt::grouped(delta)),
+            title: format!("{} keep growing: +{} over {steady_frames}", capitalize(what), fmt::grouped(delta)),
             evidence: vec![format!(
                 "{} at frame {} → {} at frame {}: {per_frame:+.1} a frame, up in {rising} of {} frames",
                 fmt::grouped(values[first]),
@@ -456,6 +460,16 @@ fn cache_misses(p: &Profile, issues: &mut Vec<Issue>) {
             continue;
         }
         let slow_mostly = site.slow > site.misses;
+        // (what a miss is depends on the cache: the profiler reads each as the interpreter will, lprofile.cpp)
+        let advice = match site.op.as_str() {
+            op if slow_mostly && op.starts_with("FASTCALL") => "The script's environment is unsafe (it calls getfenv or setfenv), so no builtin takes its fast path: drop those calls",
+            _ if slow_mostly => "A metatable serves the lookup (__index, __newindex), or the environment is unsafe: a plain field avoids it",
+            op if op.starts_with("FASTCALL") =>"The builtin's fast path turned these arguments down (a type, or a count, it does not take there: string.sub without its end, say), so each call went the full way: pass what the fast path takes",
+            "NAMECALL" => "The method is not where the cache looked: objects of several shapes or classes meet here, or the method sits further up an __index chain",
+            "GETGLOBAL" | "SETGLOBAL" => "A global the cache could not keep its slot for: read it into a local once",
+            "GETIMPORT" => "The import was not resolved when the script loaded: a global the script sets, or one missing then",
+            _ => "The tables here differ in shape (keys added in other orders, or other keys): build them alike",
+        };
         issues.push(Issue {
             severity: if missed / frames >= 1000.0 { Severity::Serious } else { Severity::Warning },
             kind: "cache misses",
@@ -469,11 +483,7 @@ fn cache_misses(p: &Profile, issues: &mut Vec<Issue>) {
                 missed / frames,
                 fmt::share(missed, all)
             )],
-            advice: if slow_mostly {
-                "A metatable or an unsafe environment serves the lookup: a plain field avoids it".into()
-            } else {
-                "The tables here differ in shape (keys added in other orders, or other keys): build them alike".into()
-            },
+            advice: advice.into(),
             target: Target::Cache(index),
             weight: missed,
         });

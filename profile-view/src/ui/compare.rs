@@ -2,20 +2,23 @@
 //! in the chosen metric, how it grows with n, the winner of each size, and the selected run's figures, table shapes and
 //! hot functions. Enter opens a run's own profile in the other views; D diffs it against the baseline's.
 
-use ratatui_core::{buffer::Buffer, layout::Rect, style::Style};
-
-use super::{
-    plot::{Series, log_log},
-    widgets::{Col, MARGIN, cell, header, layout, section, select_row, spans, text},
-    wrap,
+use ratatui::{
+    buffer::Buffer,
+    layout::{Constraint, Rect},
+    style::{Modifier, Style},
+    symbols::Marker,
+    text::{Line, Span},
+    widgets::{Axis, Bar, BarChart, Chart, Dataset, GraphType, LegendPosition, Paragraph, Widget, Wrap},
 };
+
+use super::kit::{self, Item, col, col_fill, col_r};
 use crate::{
     app::{App, View},
     compare::{Compare, MetricInfo, RunInfo},
     fmt,
     keys::Key,
     model::Profile,
-    theme::Theme,
+    theme::{Mark, Theme},
 };
 
 /// The metric shown: the one picked with m, else the work clock, else the first measured
@@ -43,7 +46,7 @@ pub fn cycle_metric(app: &mut App, forward: bool) {
 }
 
 fn size_label(n: f64) -> String {
-    format!("n={}", fmt::compact(n))
+    format!("n={}", si(n))
 }
 
 /// The ratio of a value to the baseline's, oriented so that above 1 is worse
@@ -63,215 +66,384 @@ fn selected(app: &App, compare: &Compare) -> (usize, usize) {
 
 pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     let Some(compare) = app.compare.as_ref() else {
-        text(buf, area.x, area.y, "no comparison: open a folder ree profile try wrote (it holds compare.json)", area.width, theme.dim());
+        let inner = kit::draw_panel(buf, area, kit::panel(theme, "Compare", "", false));
+        kit::empty(buf, inner, theme, "no comparison: open a folder ree profile try wrote (it holds compare.json)");
         return;
     };
     let Some(m) = metric(app) else {
-        text(buf, area.x, area.y, "the comparison measured nothing", area.width, theme.dim());
+        let inner = kit::draw_panel(buf, area, kit::panel(theme, &compare.title, "", false));
+        kit::empty(buf, inner, theme, "the comparison measured nothing");
         return;
     };
     let (sel_variant, sel_size) = selected(app, compare);
-    let mut y = area.y;
-    section(buf, area, y, &compare.title, &compare.about, theme);
-    y += 1;
-    let sizes: Vec<String> = compare.sizes.iter().map(|n| fmt::compact(*n)).collect();
-    let calls = if compare.frames > 1.0 { format!(" · {} calls each", fmt::grouped(compare.frames)) } else { String::new() };
-    let line = format!("baseline {} · n {}{calls} · {} ({})", compare.baseline, sizes.join(", "), m.label, if m.exact { "exact" } else { "measured, medians" });
-    text(buf, area.x, y, &line, area.width, theme.secondary());
-    y += 1;
-    for note in compare.notes.iter().take(2) {
-        text(buf, area.x, y, &format!("note: {note}"), area.width, theme.dim());
-        y += 1;
-    }
-    y += 1;
-    // the table: a row a variant, a column a size
+    let variants_height = (compare.variants.len() as u16 + 5).min(area.height / 3);
+    let parts = kit::rows(area, &[variants_height, 0]);
+    // the variants: a row each, a column a size
+    let block = kit::note_right(kit::panel(theme, &compare.title, &compare.about, true), theme, &format!("{}{}", m.label, if m.exact { " · exact" } else { " · measured, medians" }));
+    let inner = kit::draw_panel(buf, parts[0], block);
+    let sizes: Vec<String> = compare.sizes.iter().map(|n| fmt::grouped(*n)).collect();
+    let calls = if compare.frames > 1.0 { format!("{} calls each", fmt::grouped(compare.frames)) } else { "one call each".to_string() };
+    let check = match &compare.check {
+        Some(check) if check.ran && check.ok => vec![Span::styled("   ✓ ", Style::new().fg(theme.good).add_modifier(Modifier::BOLD)), Span::styled("every result holds against the baseline's", Style::new().fg(theme.ink2))],
+        _ => Vec::new(),
+    };
+    let mut first = vec![
+        Span::styled("baseline ", Style::new().fg(theme.muted)),
+        Span::styled(compare.baseline.clone(), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
+        Span::styled("   n ", Style::new().fg(theme.muted)),
+        Span::styled(sizes.join(" · "), Style::new().fg(theme.ink2)),
+        Span::styled(format!("   {calls}"), Style::new().fg(theme.muted)),
+    ];
+    first.extend(check);
+    Paragraph::new(Line::from(first)).render(Rect { height: 1, ..inner }, buf);
     let largest = compare.sizes.iter().copied().fold(0.0, f64::max);
-    let mut cols = vec![Col::left("variant", 22)];
+    let mut cols = vec![col("variant", 26)];
     for n in &compare.sizes {
-        cols.push(Col::right(&size_label(*n), 11));
+        cols.push(col_r(&size_label(*n), 12));
     }
-    cols.push(Col::right("scaling", 9));
-    cols.push(Col::right(&format!("n={} vs baseline", fmt::compact(largest)), 18));
-    cols.push(Col::left("", 1));
-    let xs = layout(&mut cols, area.x + MARGIN, area.width - MARGIN);
-    header(buf, &cols, &xs, y, theme);
-    y += 1;
-    let table_rows = (compare.variants.len() as u16).min(area.height / 3).max(1);
+    cols.push(col_r("scaling", 8));
+    cols.push(col_fill(&format!("  n={} vs baseline", si(largest)), 1));
+    let table_area = Rect { y: inner.y + 2, height: inner.height.saturating_sub(2), ..inner };
     let mut list = app.compare_view.list;
-    list.fit(compare.variants.len(), table_rows as usize);
-    for (index, variant) in compare.variants.iter().enumerate().skip(list.offset).take(table_rows as usize) {
-        let row_y = y + (index - list.offset) as u16;
-        let swatch = Style::new().fg(theme.series[index % theme.series.len()]).bg(theme.surface);
-        let name = if variant.name == compare.baseline { format!("{} (baseline)", variant.name) } else { variant.name.clone() };
-        let x = spans(buf, xs[0], row_y, xs[0] + cols[0].width, &[("■ ", swatch)]);
-        text(buf, x, row_y, &name, cols[0].width.saturating_sub(2), theme.text());
-        for (s, n) in compare.sizes.iter().enumerate() {
-            let col = &cols[1 + s];
-            let run = compare.run(&variant.name, *n);
-            let value = run.and_then(|r| r.value(&m.key));
-            let shown = match (run, value) {
-                (Some(r), _) if r.status != "ok" && !r.status.is_empty() => r.status.clone(),
-                (_, Some(v)) => m.show(v),
-                _ => "-".into(),
-            };
-            let winner = compare.winner(&m.key, *n).filter(|w| w.winner == variant.name);
-            let mark = match winner {
-                Some(w) if w.clear => "◆",
-                Some(_) => "≈",
-                None => " ",
-            };
-            let failed = run.is_some_and(|r| r.check.as_ref().is_some_and(|c| !c.ok));
-            let style = if failed { Style::new().fg(theme.critical).bg(theme.surface) } else { theme.text() };
-            cell(buf, col, xs[1 + s], row_y, &format!("{shown}{mark}"), style);
-            if s == sel_size && index == sel_variant {
-                let width = col.width;
-                for dx in 0..width {
-                    let c = &mut buf[(xs[1 + s] + dx, row_y)];
-                    c.modifier.insert(ratatui_core::style::Modifier::UNDERLINED);
-                }
-            }
-        }
-        let c = 1 + compare.sizes.len();
-        if let Some(scaling) = compare.scaling(&variant.name, &m.key) {
-            if let Some(exponent) = scaling.exponent {
-                let style = if exponent >= 1.3 && m.lower_is_better() { Style::new().fg(theme.more).bg(theme.surface) } else { theme.text() };
-                cell(buf, &cols[c], xs[c], row_y, &format!("n^{exponent:.2}"), style);
-            }
-        }
-        let base = compare.run(&compare.baseline, largest).and_then(|r| r.value(&m.key));
-        let value = compare.run(&variant.name, largest).and_then(|r| r.value(&m.key));
-        if variant.name != compare.baseline {
-            if let (Some(base), Some(value)) = (base, value) {
-                if let Some(ratio) = worse_ratio(&m, value, base) {
-                    let (arrow, color) = if ratio > 1.0005 { ("▲ worse", theme.more) } else if ratio < 0.9995 { ("▼ better", theme.less) } else { ("  same", theme.muted) };
-                    let times = if ratio >= 1.0 { ratio } else { 1.0 / ratio };
-                    spans(buf, xs[c + 1], row_y, xs[c + 1] + cols[c + 1].width, &[(&format!("{times:>6.2}x "), theme.text()), (arrow, Style::new().fg(color).bg(theme.surface))]);
-                }
-            }
-        }
-        if index == list.selected {
-            select_row(buf, area, row_y, theme);
-        }
-    }
-    app.compare_view.list = list;
-    y += table_rows + 1;
-    text(buf, area.x, y, "◆ best · ≈ best, within noise · underlined: the run below", area.width, theme.dim());
-    y += 2;
-    // below: the scaling plot and the selected run
-    let below = Rect { x: area.x, y, width: area.width, height: area.bottom().saturating_sub(y) };
-    if below.height < 6 {
-        return;
-    }
-    let plot_width = (below.width * 9 / 20).max(30).min(below.width);
-    let plot_area = Rect { x: below.x, y: below.y, width: plot_width, height: below.height };
-    let detail = Rect { x: below.x + plot_width + 2, y: below.y, width: below.width.saturating_sub(plot_width + 2), height: below.height };
-    section(buf, plot_area, plot_area.y, &format!("{} by n", m.label), "log scales", theme);
-    let series: Vec<Series> = compare
+    list.fit(compare.variants.len(), kit::rows_shown(table_area));
+    let rows = compare
         .variants
         .iter()
         .enumerate()
-        .map(|(index, variant)| Series {
-            points: compare.sizes.iter().filter_map(|n| compare.run(&variant.name, *n).and_then(|r| r.value(&m.key)).map(|v| (*n, v))).collect(),
-            color: theme.series[index % theme.series.len()],
+        .map(|(index, variant)| {
+            let mut cells = vec![Item::Spans(Line::from(vec![
+                Span::styled("■ ", Style::new().fg(theme.slot(index))),
+                Span::styled(variant.name.clone(), Style::new().fg(theme.ink)),
+                Span::styled(if variant.name == compare.baseline { "  baseline" } else { "" }, Style::new().fg(theme.muted)),
+            ]))];
+            for n in &compare.sizes {
+                let run = compare.run(&variant.name, *n);
+                let shown = match (run, run.and_then(|r| r.value(&m.key))) {
+                    (Some(r), _) if r.status != "ok" && !r.status.is_empty() => r.status.clone(),
+                    (_, Some(v)) => m.show(v),
+                    _ => "-".into(),
+                };
+                let winner = compare.winner(&m.key, *n).filter(|w| w.winner == variant.name);
+                let (mark, mark_color) = match winner {
+                    Some(w) if w.clear => (" ◆", theme.good),
+                    Some(_) => (" ≈", theme.muted),
+                    None => ("  ", theme.muted),
+                };
+                let failed = run.is_some_and(|r| r.check.as_ref().is_some_and(|c| !c.ok));
+                cells.push(Item::Spans(Line::from(vec![Span::styled(shown, Style::new().fg(if failed { theme.critical } else { theme.ink })), Span::styled(mark, Style::new().fg(mark_color))])));
+            }
+            let scaling = compare.scaling(&variant.name, &m.key).and_then(|s| s.exponent);
+            cells.push(match scaling {
+                Some(e) => Item::text(format!("n^{e:.2}"), Style::new().fg(if e >= 1.3 && m.lower_is_better() { theme.more } else { theme.ink2 })),
+                None => Item::empty(),
+            });
+            let base = compare.run(&compare.baseline, largest).and_then(|r| r.value(&m.key));
+            let value = compare.run(&variant.name, largest).and_then(|r| r.value(&m.key));
+            cells.push(match (variant.name == compare.baseline, base, value) {
+                (false, Some(base), Some(value)) => match worse_ratio(&m, value, base) {
+                    Some(ratio) => ratio_cell(ratio, theme),
+                    None => Item::empty(),
+                },
+                _ => Item::empty(),
+            });
+            cells
         })
         .collect();
-    let legend_rows = compare.variants.len().min(8) as u16;
-    let chart = Rect { x: plot_area.x, y: plot_area.y + 1, width: plot_area.width, height: plot_area.height.saturating_sub(1 + legend_rows) };
-    if compare.sizes.len() >= 2 {
-        let fmt_y = |v: f64| m.show(v);
-        log_log(buf, chart, &series, &|x| fmt::compact(x), &fmt_y, theme);
+    let grid = kit::table(buf, table_area, theme, &cols, rows, Some(list.selected), list.offset);
+    list.offset = grid.offset;
+    app.compare_view.list = list;
+    // (the run below: the selected size's cell underlined in the accent)
+    if sel_variant >= grid.offset && sel_variant < grid.offset + grid.shown {
+        let rect = Rect { y: grid.top + (sel_variant - grid.offset) as u16, height: 1, ..grid.column(1 + sel_size) };
+        buf.set_style(rect, Style::new().fg(theme.accent).add_modifier(Modifier::UNDERLINED | Modifier::BOLD));
+    }
+    let compare = app.compare.as_ref().unwrap();
+    // below: the plot by n, and the selected size's figures
+    let below = parts[1];
+    if below.height < 8 {
+        return;
+    }
+    let (left, right) = kit::split(below, below.width * 11 / 20);
+    if compare.variants.len() >= 2 && left.height >= 20 {
+        let parts = kit::rows(left, &[left.height * 3 / 5, 0]);
+        plot(buf, parts[0], compare, &m, sel_size, theme);
+        plot_ratio(buf, parts[1], compare, &m, sel_size, theme);
     } else {
-        text(buf, chart.x, chart.y + 1, "one input size: nothing to scale", chart.width, theme.dim());
+        plot(buf, left, compare, &m, sel_size, theme);
     }
-    // the legend: a swatch in the series' colour, the name in ink
-    let mut ly = chart.bottom();
-    for (index, variant) in compare.variants.iter().enumerate().take(legend_rows as usize) {
-        let swatch = Style::new().fg(theme.series[index % theme.series.len()]).bg(theme.surface);
-        let exponent = compare.scaling(&variant.name, &m.key).and_then(|s| s.exponent).map(|e| format!("  n^{e:.2}")).unwrap_or_default();
-        spans(buf, plot_area.x + 11, ly, plot_area.right(), &[("━━ ", swatch), (&variant.name, theme.text()), (&exponent, theme.dim())]);
-        ly += 1;
-    }
-    draw_detail(buf, detail, app, compare, &m, sel_variant, sel_size, theme);
+    draw_detail(buf, right, compare, &m, sel_variant, sel_size, theme);
 }
 
-fn draw_detail(buf: &mut Buffer, area: Rect, _app: &App, compare: &Compare, m: &MetricInfo, variant: usize, size: usize, theme: &Theme) {
-    let (Some(info), Some(&n)) = (compare.variants.get(variant), compare.sizes.get(size)) else { return };
-    let Some(run) = compare.run(&info.name, n) else {
-        section(buf, area, area.y, &format!("{} at n={}", info.name, fmt::grouped(n)), "no run", theme);
+/// A variant's figure against the baseline's, worse to the right in red
+fn ratio_cell(ratio: f64, theme: &Theme) -> Item {
+    let (arrow, word, color) = if ratio > 1.0005 {
+        ("▲", "worse", theme.more)
+    } else if ratio < 0.9995 {
+        ("▼", "better", theme.less)
+    } else {
+        ("=", "same", theme.muted)
+    };
+    let times = if ratio >= 1.0 { ratio } else { 1.0 / ratio };
+    Item::Spans(Line::from(vec![
+        Span::styled(format!("{} ", times_text(times)), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("{arrow} {word}"), Style::new().fg(color)),
+    ]))
+}
+
+/// `1.06x`, `27.1x`, `1667x`
+fn times_text(times: f64) -> String {
+    if times >= 100.0 {
+        format!("{times:.0}x")
+    } else if times >= 10.0 {
+        format!("{times:.1}x")
+    } else {
+        format!("{times:.2}x")
+    }
+}
+
+/// The figure by n on log scales: a line a variant in its colour, its measured points, the selected size marked
+fn plot(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, sel_size: usize, theme: &Theme) {
+    let block = kit::panel(theme, &format!("{} by n", m.label), "log-log · a line a variant", false);
+    let inner = kit::draw_panel(buf, area, block);
+    if compare.sizes.len() < 2 {
+        kit::empty(buf, inner, theme, "one input size: nothing to scale");
         return;
+    }
+    let lines: Vec<Vec<(f64, f64)>> = compare
+        .variants
+        .iter()
+        .map(|variant| compare.sizes.iter().filter_map(|n| compare.run(&variant.name, *n).and_then(|r| r.value(&m.key)).filter(|v| *v > 0.0 && *n > 0.0).map(|v| (n.log10(), v.log10()))).collect())
+        .collect();
+    let ys: Vec<f64> = lines.iter().flatten().map(|p| p.1).collect();
+    if ys.is_empty() {
+        kit::empty(buf, inner, theme, "nothing above zero to plot on log scales");
+        return;
+    }
+    // (decades for the bounds, so the axis labels, which sit evenly along it, fall on them)
+    let (ymin, ymax) = ys.iter().fold((f64::MAX, f64::MIN), |(lo, hi), y| (lo.min(*y), hi.max(*y)));
+    let (y0, mut y1) = (ymin.floor(), ymax.ceil());
+    if y1 <= y0 {
+        y1 = y0 + 1.0;
+    }
+    let xs: Vec<f64> = compare.sizes.iter().filter(|n| **n > 0.0).map(|n| n.log10()).collect();
+    let (x0, mut x1) = (xs.iter().copied().fold(f64::MAX, f64::min).floor(), xs.iter().copied().fold(f64::MIN, f64::max).ceil());
+    if x1 <= x0 {
+        x1 = x0 + 1.0;
+    }
+    let label = Style::new().fg(theme.muted);
+    let x_labels: Vec<Span> = (x0 as i32..=x1 as i32).map(|e| Span::styled(si(10f64.powi(e)), label)).collect();
+    let y_labels: Vec<Span> = (y0 as i32..=y1 as i32).map(|e| Span::styled(tick_label(m, 10f64.powi(e)), label)).collect();
+    // the selected size: a faint upright line
+    let selected_x = compare.sizes.get(sel_size).filter(|n| **n > 0.0).map(|n| n.log10());
+    let cursor: Vec<(f64, f64)> = selected_x.map(|x| vec![(x, y0), (x, y1)]).unwrap_or_default();
+    let mut datasets = vec![Dataset::default().marker(Marker::Braille).graph_type(GraphType::Line).style(Style::new().fg(theme.faint)).data(&cursor)];
+    let names: Vec<String> = compare
+        .variants
+        .iter()
+        .map(|variant| {
+            let exponent = compare.scaling(&variant.name, &m.key).and_then(|s| s.exponent).map(|e| format!("  n^{e:.2}")).unwrap_or_default();
+            format!("{}{exponent}", variant.name)
+        })
+        .collect();
+    for (index, points) in lines.iter().enumerate() {
+        let color = theme.slot(index);
+        datasets.push(Dataset::default().name(Line::from(vec![Span::raw("■ "), Span::styled(names[index].clone(), Style::new().fg(theme.ink))])).marker(Marker::Braille).graph_type(GraphType::Line).style(Style::new().fg(color)).data(points));
+        datasets.push(Dataset::default().marker(Marker::Dot).graph_type(GraphType::Scatter).style(Style::new().fg(color)).data(points));
+    }
+    let axis = Style::new().fg(theme.faint);
+    Chart::new(datasets)
+        .style(Style::new().bg(theme.panel).fg(theme.ink2))
+        .x_axis(Axis::default().title(Line::from(Span::styled("n", label))).bounds([x0, x1]).labels(x_labels).style(axis))
+        .y_axis(Axis::default().bounds([y0, y1]).labels(y_labels).style(axis))
+        .legend_position(Some(LegendPosition::TopLeft))
+        .hidden_legend_constraints((Constraint::Ratio(1, 1), Constraint::Ratio(1, 1)))
+        .render(inner, buf);
+}
+
+/// Each variant's figure over the baseline's by n (above 1 is worse), the baseline flat at 1
+fn plot_ratio(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, sel_size: usize, theme: &Theme) {
+    let block = kit::panel(theme, &format!("over {}", compare.baseline), "by n · above 1 is worse", false);
+    let inner = kit::draw_panel(buf, area, block);
+    let lines: Vec<(usize, Vec<(f64, f64)>)> = compare
+        .variants
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.name != compare.baseline)
+        .map(|(index, variant)| {
+            let points = compare
+                .sizes
+                .iter()
+                .filter(|n| **n > 0.0)
+                .filter_map(|n| {
+                    let value = compare.run(&variant.name, *n).and_then(|r| r.value(&m.key))?;
+                    let base = compare.run(&compare.baseline, *n).and_then(|r| r.value(&m.key))?;
+                    worse_ratio(m, value, base).map(|ratio| (n.log10(), ratio))
+                })
+                .collect();
+            (index, points)
+        })
+        .collect();
+    let ys: Vec<f64> = lines.iter().flat_map(|(_, points)| points.iter().map(|p| p.1)).collect();
+    if ys.is_empty() {
+        kit::empty(buf, inner, theme, "no figure the baseline also has");
+        return;
+    }
+    let (lo, hi) = ys.iter().fold((1.0f64, 1.0f64), |(lo, hi), y| (lo.min(*y), hi.max(*y)));
+    let pad = ((hi - lo) * 0.15).max(0.01);
+    let (y0, y1) = (lo - pad, hi + pad);
+    let xs: Vec<f64> = compare.sizes.iter().filter(|n| **n > 0.0).map(|n| n.log10()).collect();
+    let (x0, mut x1) = (xs.iter().copied().fold(f64::MAX, f64::min).floor(), xs.iter().copied().fold(f64::MIN, f64::max).ceil());
+    if x1 <= x0 {
+        x1 = x0 + 1.0;
+    }
+    let label = Style::new().fg(theme.muted);
+    let x_labels: Vec<Span> = (x0 as i32..=x1 as i32).map(|e| Span::styled(si(10f64.powi(e)), label)).collect();
+    let y_labels: Vec<Span> = [y0, (y0 + y1) / 2.0, y1].iter().map(|v| Span::styled(format!("{v:.2}x"), label)).collect();
+    let baseline = vec![(x0, 1.0), (x1, 1.0)];
+    let selected_x = compare.sizes.get(sel_size).filter(|n| **n > 0.0).map(|n| n.log10());
+    let cursor: Vec<(f64, f64)> = selected_x.map(|x| vec![(x, y0), (x, y1)]).unwrap_or_default();
+    let mut datasets = vec![
+        Dataset::default().marker(Marker::Braille).graph_type(GraphType::Line).style(Style::new().fg(theme.faint)).data(&cursor),
+        Dataset::default().name(Line::from(vec![Span::raw("■ "), Span::styled(format!("{} = 1", compare.baseline), Style::new().fg(theme.ink))])).marker(Marker::Braille).graph_type(GraphType::Line).style(Style::new().fg(theme.slot(0))).data(&baseline),
+    ];
+    for (index, points) in &lines {
+        let color = theme.slot(*index);
+        datasets.push(Dataset::default().name(Line::from(vec![Span::raw("■ "), Span::styled(compare.variants[*index].name.clone(), Style::new().fg(theme.ink))])).marker(Marker::Braille).graph_type(GraphType::Line).style(Style::new().fg(color)).data(points));
+        datasets.push(Dataset::default().marker(Marker::Dot).graph_type(GraphType::Scatter).style(Style::new().fg(color)).data(points));
+    }
+    let axis = Style::new().fg(theme.faint);
+    Chart::new(datasets)
+        .style(Style::new().bg(theme.panel).fg(theme.ink2))
+        .x_axis(Axis::default().title(Line::from(Span::styled("n", label))).bounds([x0, x1]).labels(x_labels).style(axis))
+        .y_axis(Axis::default().bounds([y0, y1]).labels(y_labels).style(axis))
+        .legend_position(Some(LegendPosition::TopLeft))
+        .hidden_legend_constraints((Constraint::Ratio(1, 1), Constraint::Ratio(1, 1)))
+        .render(inner, buf);
+}
+
+/// A count in its shortest round form: `10`, `100`, `1K`, `10K`, `1.5M`
+fn si(value: f64) -> String {
+    let (scaled, suffix) = if value >= 1e9 {
+        (value / 1e9, "G")
+    } else if value >= 1e6 {
+        (value / 1e6, "M")
+    } else if value >= 1e3 {
+        (value / 1e3, "K")
+    } else {
+        (value, "")
     };
-    let base = compare.run(&compare.baseline, n);
-    let check = match &run.check {
-        Some(c) if c.ok => "check ✓".to_string(),
-        Some(c) => format!("check ✗ {}", c.message.clone().unwrap_or_else(|| "a different result".into())),
-        None => String::new(),
-    };
-    let status = if run.status.is_empty() || run.status == "ok" { String::new() } else { format!("{} · ", run.status) };
-    section(buf, area, area.y, &format!("{} at n={}", info.name, fmt::grouped(n)), &format!("{status}{check}"), theme);
-    let mut y = area.y + 1;
-    if let Some(error) = &run.error {
-        for chunk in wrap(error, area.width as usize).into_iter().take(2) {
-            text(buf, area.x, y, &chunk, area.width, Style::new().fg(theme.critical).bg(theme.surface));
-            y += 1;
-        }
+    format!("{}{suffix}", trim(scaled))
+}
+
+/// A number without trailing zeros: `10`, `2.5`
+fn trim(value: f64) -> String {
+    let text = format!("{value:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// An axis tick in the metric's unit, round: `10 µs`, `1 ms`, `100 kB`, `1K`
+fn tick_label(m: &MetricInfo, value: f64) -> String {
+    match m.unit.as_str() {
+        "ms" if value >= 1000.0 => format!("{} s", trim(value / 1000.0)),
+        "ms" if value >= 1.0 => format!("{} ms", trim(value)),
+        "ms" if value >= 0.001 => format!("{} µs", trim(value * 1000.0)),
+        "ms" => format!("{} ns", trim(value * 1e6)),
+        "bytes" if value >= 1e6 => format!("{} MB", trim(value / 1e6)),
+        "bytes" if value >= 1e3 => format!("{} kB", trim(value / 1e3)),
+        "bytes" => format!("{} B", trim(value)),
+        "ratio" => format!("{}%", trim(value * 100.0)),
+        _ => si(value),
     }
-    // every figure, a call's, with the baseline beside it
-    let figures: Vec<(&MetricInfo, f64)> = compare.measured().into_iter().filter_map(|metric| run.value(&metric.key).map(|v| (metric, v))).collect();
-    let column_width = 36u16;
-    let per_column = ((figures.len() as u16).div_ceil((area.width / column_width).max(1))).max(1);
-    let rows_for_figures = per_column.min(area.height.saturating_sub(8).max(3));
-    for (index, (metric, value)) in figures.iter().enumerate() {
-        let col = index as u16 / rows_for_figures;
-        let row = index as u16 % rows_for_figures;
-        let x = area.x + col * column_width;
-        if x + 10 > area.right() {
-            break;
-        }
-        // (the arrow is the figure's direction against the baseline; red is worse, blue better)
-        let base_value = base.and_then(|b| b.value(&metric.key));
-        let ratio = base_value.and_then(|b| worse_ratio(metric, *value, b));
-        let (arrow, color) = match (ratio, base_value) {
-            (Some(r), Some(b)) if info.name != compare.baseline && (r - 1.0).abs() > 0.0005 => (if *value > b { "▲" } else { "▼" }, if r > 1.0 { theme.more } else { theme.less }),
-            _ => (" ", theme.muted),
-        };
-        let label_style = if metric.key == m.key { theme.bold() } else { theme.dim() };
-        spans(buf, x, y + row, (x + column_width - 1).min(area.right()), &[
-            (&format!("{:<17}", fmt::fit(&metric.label, 17)), label_style),
-            (&format!("{:>11}", metric.show(*value)), theme.text()),
-            (&format!(" {arrow}"), Style::new().fg(color).bg(theme.surface)),
-        ]);
+}
+
+fn draw_detail(buf: &mut Buffer, area: Rect, compare: &Compare, m: &MetricInfo, variant: usize, size: usize, theme: &Theme) {
+    let (Some(info), Some(&n)) = (compare.variants.get(variant), compare.sizes.get(size)) else { return };
+    let bars_height = (compare.variants.len() as u16 * 2 + 2).min(area.height / 3);
+    let tables_height = if compare.run(&info.name, n).and_then(|r| r.tables.as_ref()).is_some_and(|t| !t.sites.is_empty()) { 7 } else { 0 };
+    let notes_height = if compare.notes.is_empty() { 0 } else { (area.height / 5).clamp(4, 8) };
+    let parts = kit::rows(area, &[bars_height, area.height.saturating_sub(bars_height + tables_height + notes_height), tables_height, notes_height]);
+    // each variant's figure at the size, as bars in its colour
+    let inner = kit::draw_panel(buf, parts[0], kit::panel(theme, &format!("{} at n = {}", m.label, fmt::grouped(n)), "←→ size", false));
+    let values: Vec<Option<f64>> = compare.variants.iter().map(|v| compare.run(&v.name, n).and_then(|r| r.value(&m.key))).collect();
+    let max = values.iter().flatten().copied().fold(0.0, f64::max);
+    let bars: Vec<Bar> = compare
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(index, v)| {
+            let color = theme.slot(index);
+            let value = values[index].unwrap_or(0.0);
+            let scaled = if max > 0.0 { ((value / max) * 1000.0).round() as u64 } else { 0 };
+            Bar::default()
+                .value(scaled)
+                .label(Line::from(Span::styled(v.name.clone(), Style::new().fg(theme.ink2))))
+                .text_value(values[index].map_or("-".into(), |v| format!(" {} ", m.show(v))))
+                .style(Style::new().fg(color))
+                .value_style(Style::new().fg(theme.ink_on(color)).bg(color).add_modifier(Modifier::BOLD))
+        })
+        .collect();
+    BarChart::horizontal(bars).bar_width(1).bar_gap(1).max(1000).style(Style::new().bg(theme.panel)).render(inner, buf);
+    // every figure of a variant over the baseline's at the size (the selected variant, or the first other when the
+    // baseline is selected), the largest differences first
+    let other = if info.name == compare.baseline { compare.variants.iter().find(|v| v.name != compare.baseline) } else { Some(info) };
+    if let (Some(other), Some(base)) = (other, compare.run(&compare.baseline, n)) {
+        let title = format!("{} vs {}", other.name, compare.baseline);
+        let inner = kit::draw_panel(buf, parts[1], kit::panel(theme, &title, &format!("each figure at n = {}", fmt::grouped(n)), false));
+        let run = compare.run(&other.name, n);
+        let mut rows: Vec<(String, f64)> = compare
+            .measured()
+            .into_iter()
+            .filter_map(|metric| {
+                let (Some(value), Some(base)) = (run.and_then(|r| r.value(&metric.key)), base.value(&metric.key)) else { return None };
+                worse_ratio(metric, value, base).map(|ratio| (metric.label.clone(), ratio))
+            })
+            .collect();
+        rows.sort_by(|a, b| b.1.ln().abs().total_cmp(&a.1.ln().abs()).then(a.0.cmp(&b.0)));
+        let cols = [col_fill("figure", 2), col_r("", 16), col_fill("", 3)];
+        let bar_width = kit::widths(&cols, inner.width)[2];
+        // (the bars on a log scale: the largest ratio shown fills an arm)
+        let widest = rows.iter().map(|(_, r)| r.ln().abs()).fold(0.0, f64::max).max(2f64.ln());
+        let items = rows
+            .iter()
+            .take(kit::rows_shown(inner))
+            .map(|(label, ratio)| {
+                let mut cells = vec![Item::text(label.clone(), Style::new().fg(theme.ink2))];
+                cells.push(ratio_cell(*ratio, theme));
+                cells.push(Item::Spans(kit::diverging(ratio.ln() / widest, bar_width, theme)));
+                cells
+            })
+            .collect();
+        let grid = kit::table(buf, inner, theme, &cols, items, None, 0);
+        kit::mark(buf, grid.column(2), Mark::Bar);
+    } else {
+        let inner = kit::draw_panel(buf, parts[1], kit::panel(theme, "vs baseline", "", false));
+        kit::empty(buf, inner, theme, "one variant: nothing to set beside it");
     }
-    y += rows_for_figures + 1;
-    // table shapes: what the run's result keeps, by allocation site
-    if let Some(tables) = &run.tables {
-        if y < area.bottom() {
-            section(buf, area, y, "Tables kept", &format!("{} · {}", fmt::grouped(tables.count), fmt::bytes(tables.bytes)), theme);
-            y += 1;
-        }
-        for site in tables.sites.iter().take(3) {
-            if y >= area.bottom() {
-                break;
+    // the tables the run's result keeps
+    if tables_height > 0 {
+        if let Some(tables) = compare.run(&info.name, n).and_then(|r| r.tables.as_ref()) {
+            let inner = kit::draw_panel(buf, parts[2], kit::panel(theme, &format!("Tables kept · {}", info.name), &format!("{} · {}", fmt::grouped(tables.count), fmt::bytes(tables.bytes)), false));
+            let mut lines = Vec::new();
+            for site in tables.sites.iter().take(inner.height as usize) {
+                let each = if site.count > 0.0 { site.bytes / site.count } else { 0.0 };
+                let mut spans = vec![
+                    Span::styled(format!("{:>7} × ", fmt::grouped(site.count)), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
+                    Span::styled(shape_text(site), Style::new().fg(theme.ink)),
+                    Span::styled(format!("  {} each  ", fmt::bytes(each)), Style::new().fg(theme.ink2)),
+                    Span::styled(site.site.clone(), Style::new().fg(theme.muted)),
+                ];
+                if site.rehashes > 0.0 {
+                    spans.push(Span::styled(format!("  grew {}×", fmt::grouped(site.rehashes)), Style::new().fg(theme.serious)));
+                }
+                lines.push(Line::from(spans));
             }
-            let each = if site.count > 0.0 { site.bytes / site.count } else { 0.0 };
-            let shape = shape_text(site);
-            let line = format!("{} × {shape} · {} each · {}", fmt::grouped(site.count), fmt::bytes(each), site.site);
-            text(buf, area.x + 1, y, &line, area.width - 1, theme.text());
-            y += 1;
-            if site.rehashes > 0.0 && y < area.bottom() {
-                text(buf, area.x + 3, y, &format!("grew {} times, moving {} keys", fmt::grouped(site.rehashes), fmt::grouped(site.rehash_keys)), area.width - 3, theme.dim());
-                y += 1;
-            }
+            Paragraph::new(lines).render(inner, buf);
         }
     }
-    // the hot functions of the run phase
-    if !run.hot.is_empty() && y + 1 < area.bottom() {
-        y += 1;
-        section(buf, area, y, "Hottest", "", theme);
-        y += 1;
-        for hot in run.hot.iter().take((area.bottom() - y) as usize) {
-            text(buf, area.x + 1, y, &format!("{:>10}  {:>8} insns  {}  {}:{}", fmt::ms(hot.work_ms), fmt::compact(hot.insns), hot.name, hot.module, hot.line), area.width - 1, theme.secondary());
-            y += 1;
-        }
+    if notes_height > 0 {
+        let inner = kit::draw_panel(buf, parts[3], kit::panel(theme, "Notes", "", false));
+        let lines: Vec<Line> = compare.notes.iter().map(|note| Line::from(vec![Span::styled("◇ ", Style::new().fg(theme.accent)), Span::styled(note.clone(), Style::new().fg(theme.ink2))])).collect();
+        Paragraph::new(lines).wrap(Wrap { trim: true }).render(inner, buf);
     }
 }
 

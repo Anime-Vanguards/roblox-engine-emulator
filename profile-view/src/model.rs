@@ -622,6 +622,9 @@ impl Profile {
             // (the JSON's module is already the chunk's module name)
             let module = function.module.clone().unwrap_or_default();
             let kind = match function.kind.as_str() {
+                // (mlua's own chunks, a userdata's __index and __newindex in Luau: the engine's, though the profile
+                // names them Luau)
+                "Luau" if module.starts_with("__mlua") => Kind::Engine,
                 "Luau" => Kind::Script,
                 "engine Luau" => Kind::Engine,
                 "engine step" | "outside Luau" => Kind::Step,
@@ -834,6 +837,41 @@ impl Profile {
 
     pub fn phase_name(&self, phase: u32) -> &str {
         self.raw.phases.get(phase as usize).map_or("?", String::as_str)
+    }
+
+    /// A phase as prose names it: `the steady phase`, or nothing for `frames` (ree run's and rur's name for the run
+    /// after the mount, which a frame's figures need no word for)
+    pub fn phase_words(&self, phase: u32) -> Option<String> {
+        let name = self.phase_name(phase);
+        (name != "frames").then(|| format!("the {name} phase"))
+    }
+
+    /// A timeline column's values past startup (all of them when the run marks no phase after it)
+    pub fn frames_past_startup(&self, values: &[f64]) -> Vec<f64> {
+        let phases = self.raw.timeline.as_ref().and_then(|t| t.values("phase")).unwrap_or_default();
+        let later = phases.iter().any(|phase| *phase > 0.0);
+        values.iter().enumerate().filter(|(row, _)| !later || phases.get(*row).is_some_and(|phase| *phase > 0.0)).map(|(_, v)| *v).collect()
+    }
+
+    /// A timeline column's mean a frame past startup
+    pub fn frames_mean(&self, values: &[f64]) -> f64 {
+        let kept = self.frames_past_startup(values);
+        if kept.is_empty() { 0.0 } else { kept.iter().sum::<f64>() / kept.len() as f64 }
+    }
+
+    /// The work clock each marked phase took, from the marks (phase index, milliseconds)
+    pub fn phase_work(&self) -> Vec<(u32, f64)> {
+        let Some(work) = &self.raw.work else { return Vec::new() };
+        let marks = &self.raw.marks;
+        marks
+            .iter()
+            .enumerate()
+            .filter_map(|(at, mark)| {
+                let phase = self.raw.phases.iter().position(|name| *name == mark.phase)? as u32;
+                let end = marks.get(at + 1).map_or(work.total_ms, |next| next.work_ms);
+                Some((phase, (end - mark.work_ms).max(0.0)))
+            })
+            .collect()
     }
 
     /// Frames per phase (from the timeline), by phase index

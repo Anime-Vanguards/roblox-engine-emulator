@@ -1,9 +1,15 @@
 //! Allocations: what the run allocated by site (the Luau line), with each site's share, object size, rate a frame in
 //! the steady state and types; the run's totals by type; the selected site's stacks.
 
-use ratatui_core::{buffer::Buffer, layout::Rect};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Paragraph, Widget},
+};
 
-use super::widgets::{Col, MARGIN, bar, cell, header, layout, section, select_row, text};
+use super::kit::{self, Item, col_fill, col_r};
 use crate::{
     app::{AllocSort, App, Focus, View},
     fmt,
@@ -11,7 +17,7 @@ use crate::{
     metric::Metric,
     model::Kind,
     sites::{AllocSite, ENGINE, site_label},
-    theme::Theme,
+    theme::{Mark, Theme},
 };
 
 /// The sites in the order shown
@@ -49,14 +55,17 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     let mut list = app.alloc.list;
     let p = &app.profiles[app.shown];
     let Some(alloc) = &p.raw.alloc else {
-        text(buf, area.x, area.y, "no allocations in this profile (--profile alloc)", area.width, theme.dim());
+        let inner = kit::draw_panel(buf, area, kit::panel(theme, "Allocations", "", false));
+        kit::empty(buf, inner, theme, "no allocations in this profile (--profile alloc)");
         return;
     };
     let steady = p.steady_phase();
     let by_count = app.metric == Metric::AllocCount;
-    let mut y = area.y;
-    // totals
-    let mut line = format!("{}, {} objects", fmt::bytes(alloc.bytes), fmt::grouped(alloc.objects));
+    let stacks_height = 6u16;
+    let parts = kit::rows(area, &[5, area.height.saturating_sub(5 + stacks_height), stacks_height]);
+    // the totals: a frame's in the steady state, and the shares by type as gauges
+    let inner = kit::draw_panel(buf, parts[0], kit::panel(theme, "Allocated", &format!("{} · {} objects over the run", fmt::bytes(alloc.bytes), fmt::grouped(alloc.objects)), false));
+    let mut line = Vec::new();
     if let (Some((phase, frames)), Some(timeline)) = (steady, &p.raw.timeline) {
         let phases = timeline.values("phase").unwrap_or_default();
         let bytes = timeline.values("allocated_bytes").unwrap_or_default();
@@ -64,15 +73,17 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
         let rows: Vec<usize> = (0..phases.len()).filter(|&i| phases[i] as u32 == phase).collect();
         if !rows.is_empty() {
             let mean = |values: &[f64]| rows.iter().map(|&i| values.get(i).copied().unwrap_or(0.0)).sum::<f64>() / rows.len() as f64;
-            line.push_str(&format!(" · {} ({} frames): {}, {} objects a frame", p.phase_name(phase), fmt::grouped(frames as f64), fmt::bytes(mean(&bytes)), fmt::grouped(mean(&counts))));
+            let of = p.phase_words(phase).map(|words| format!(" of {words}")).unwrap_or_default();
+            line.push(Span::styled(format!("a frame{of}  "), Style::new().fg(theme.muted)));
+            line.push(Span::styled(fmt::bytes(mean(&bytes)), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)));
+            line.push(Span::styled(format!(", {} objects", fmt::grouped(mean(&counts))), Style::new().fg(theme.ink)));
+            line.push(Span::styled(format!("  (mean of {} frames)", fmt::grouped(frames as f64)), Style::new().fg(theme.muted)));
         }
     }
     if alloc.step > 1.0 {
-        line.push_str(&format!(" · stacks sampled every {} bytes", fmt::grouped(alloc.step)));
+        line.push(Span::styled(format!("   stacks sampled every {} bytes", fmt::grouped(alloc.step)), Style::new().fg(theme.serious)));
     }
-    text(buf, area.x, y, &line, area.width, theme.secondary());
-    y += 1;
-    // by type: the largest groups
+    Paragraph::new(Line::from(line)).render(Rect { height: 1, ..inner }, buf);
     let mut groups: Vec<(String, f64, f64)> = Vec::new();
     for row in &alloc.by_type {
         let group = if row.group.is_empty() { row.ty.clone() } else { row.group.clone() };
@@ -85,11 +96,18 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
         }
     }
     groups.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-    let parts: Vec<String> = groups.iter().take(6).map(|(name, bytes, _)| format!("{name} {}", fmt::share(*bytes, alloc.bytes))).collect();
-    text(buf, area.x, y, &parts.join(" · "), area.width, theme.dim());
-    y += 2;
+    let per_row = 3usize;
+    let gauge_width = inner.width / per_row as u16;
+    for (index, (name, bytes, _)) in groups.iter().take(per_row * 2).enumerate() {
+        let x = inner.x + (index % per_row) as u16 * gauge_width;
+        let y = inner.y + 1 + (index / per_row) as u16;
+        if y >= inner.bottom() {
+            break;
+        }
+        let label = Line::from(vec![Span::styled(format!("{:<22}", fmt::fit(name, 22)), Style::new().fg(theme.ink2)), Span::styled(format!("{:>6}", fmt::share(*bytes, alloc.bytes)), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD))]);
+        kit::gauge(buf, Rect { x, y, width: gauge_width.saturating_sub(2), height: 1 }, theme, if alloc.bytes > 0.0 { bytes / alloc.bytes } else { 0.0 }, label, theme.slot(0));
+    }
     // the sites
-    let detail_height = 5u16;
     let sort = match app.alloc.sort {
         AllocSort::Bytes => {
             if by_count {
@@ -102,66 +120,82 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
         AllocSort::SteadyBytes => "bytes a frame",
         AllocSort::Size => "object size",
     };
-    section(buf, area, y, "Sites", &format!("{} · by {sort}", fmt::grouped(order.len() as f64)), theme);
-    y += 1;
-    let steady_label = steady.map(|(phase, _)| format!("a frame, {}", p.phase_name(phase))).unwrap_or_else(|| "a frame".into());
-    let mut cols = vec![
-        Col::left("", 28),
-        Col::right("bytes", 10),
-        Col::right("objects", 9),
-        Col::right("size", 7),
-        Col::right(&fmt::fit(&steady_label, 18), 18),
-        Col::left("types", 26),
-        Col::left("", 12),
+    let block = kit::panel(theme, "Sites", &format!("{} · by {sort}", fmt::grouped(order.len() as f64)), true);
+    let inner_rows = parts[1].height.saturating_sub(3) as usize;
+    list.fit(order.len(), inner_rows);
+    let scroll = if order.len() > inner_rows { format!("{}-{} of {}", fmt::grouped((list.offset + 1) as f64), fmt::grouped((list.offset + inner_rows).min(order.len()) as f64), fmt::grouped(order.len() as f64)) } else { String::new() };
+    let block = kit::bottom(kit::note_right(block, theme, &scroll), super::legend(app, theme, area.width));
+    let inner = kit::draw_panel(buf, parts[1], block);
+    let cols = [
+        col_fill("site", 3),
+        col_r("bytes", 10),
+        col_r("objects", 8),
+        col_r("size", 9),
+        // (the steady state's, which the panel above names; none without one)
+        if steady.is_some() { col_r("a frame: bytes, objects", 23) } else { col_r("", 0) },
+        col_fill("types", 3),
+        col_fill("", 2),
     ];
-    let xs = layout(&mut cols, area.x + MARGIN, area.width - MARGIN);
-    header(buf, &cols, &xs, y, theme);
-    y += 1;
-    let height = area.bottom().saturating_sub(y + detail_height) as usize;
-    list.fit(order.len(), height);
+    let bar_width = kit::widths(&cols, inner.width)[6];
     let total = if by_count { alloc.objects } else { alloc.bytes };
     let max = order.first().map_or(0.0, |&i| if by_count { sites[i].count } else { sites[i].bytes });
-    for (screen, &index) in order.iter().enumerate().skip(list.offset).take(height) {
-        let site = &sites[index];
-        let row_y = y + (screen - list.offset) as u16;
-        let value = if by_count { site.count } else { site.bytes };
-        let share = if total > 0.0 { value / total } else { 0.0 };
-        let style = theme.row(share);
-        cell(buf, &cols[0], xs[0], row_y, &site_label(p, site), style);
-        cell(buf, &cols[1], xs[1], row_y, &fmt::bytes(site.bytes), style);
-        cell(buf, &cols[2], xs[2], row_y, &fmt::compact(site.count), style);
-        cell(buf, &cols[3], xs[3], row_y, &if site.count > 0.0 { fmt::bytes(site.bytes / site.count) } else { "-".into() }, theme.secondary());
-        if let Some((phase, frames)) = steady {
-            let (bytes, count) = site.per_frame(phase, frames);
-            if count > 0.0 {
-                cell(buf, &cols[4], xs[4], row_y, &format!("{}, {}", fmt::bytes(bytes), fmt::compact(count)), style);
-            }
-        }
-        let types: Vec<String> = site.types.iter().take(2).map(|(ty, bytes, _)| format!("{ty} {}", fmt::share(*bytes, site.bytes.max(1.0)))).collect();
-        cell(buf, &cols[5], xs[5], row_y, &types.join(", "), theme.secondary());
-        bar(buf, xs[6], row_y, cols[6].width, if max > 0.0 { value / max } else { 0.0 }, theme.heat_of(share), theme);
-        if screen == list.selected {
-            select_row(buf, area, row_y, theme);
-        }
-    }
-    super::widgets::scroll_note(buf, area, y - 2, list.offset, height, order.len(), theme);
+    let rows = order
+        .iter()
+        .map(|&index| {
+            let site = &sites[index];
+            let value = if by_count { site.count } else { site.bytes };
+            let share = if total > 0.0 { value / total } else { 0.0 };
+            let style = theme.row(share);
+            let frame = steady.map(|(phase, frames)| site.per_frame(phase, frames)).filter(|(_, count)| *count > 0.0).map(|(bytes, count)| format!("{}, {}", fmt::bytes(bytes), fmt::compact(count))).unwrap_or_default();
+            let types: Vec<String> = site.types.iter().take(2).map(|(ty, bytes, _)| format!("{ty} {}", fmt::share(*bytes, site.bytes.max(1.0)))).collect();
+            vec![
+                Item::label(site_label(p, site), style),
+                Item::text(fmt::bytes(site.bytes), style),
+                Item::text(fmt::compact(site.count), style),
+                Item::text(if site.count > 0.0 { fmt::bytes(site.bytes / site.count) } else { "-".into() }, Style::new().fg(theme.ink2)),
+                Item::text(frame, style),
+                Item::text(types.join(", "), Style::new().fg(theme.ink2)),
+                Item::Spans(kit::bar(if max > 0.0 { value / max } else { 0.0 }, bar_width, theme.heat_of(share))),
+            ]
+        })
+        .collect();
+    let grid = kit::table(buf, inner, theme, &cols, rows, Some(list.selected), list.offset);
+    kit::mark(buf, grid.column(6), Mark::Bar);
+    list.offset = grid.offset;
     app.alloc.list = list;
     // the selected site's stacks
-    let y = area.bottom() - detail_height;
     let Some(site) = order.get(list.selected).map(|&i| &sites[i]) else { return };
-    section(buf, area, y, "Stacks", &site_label(p, site), theme);
+    let inner = kit::draw_panel(buf, parts[2], kit::panel(theme, "Stacks", &site_label(p, site), false));
     if site.stacks.is_empty() {
-        text(buf, area.x, y + 1, "not among the 500 stacks the profile kept", area.width, theme.dim());
+        kit::empty(buf, inner, theme, "not among the 500 stacks the profile kept");
+        return;
     }
-    for (row, &stack_index) in site.stacks.iter().take(detail_height as usize - 1).enumerate() {
-        let stack = &alloc.by_stack[stack_index];
-        let frames: Vec<String> = stack.frames.iter().flatten().filter_map(|(id, line)| {
-            let func = p.func_of_id(*id)?;
-            let f = &p.funcs[func];
-            Some(if f.module.is_empty() { f.name.clone() } else { format!("{}:{line}", f.short) })
-        }).take(8).collect();
-        text(buf, area.x, y + 1 + row as u16, &format!("{:>10} {:>8} {:<16} {}", fmt::bytes(stack.bytes), fmt::compact(stack.count), fmt::fit(&stack.ty, 16), frames.join(" < ")), area.width, theme.secondary());
-    }
+    let lines: Vec<Line> = site
+        .stacks
+        .iter()
+        .take(inner.height as usize)
+        .map(|&stack_index| {
+            let stack = &alloc.by_stack[stack_index];
+            let frames: Vec<String> = stack.frames.iter().flatten().filter_map(|(id, line)| {
+                let func = p.func_of_id(*id)?;
+                let f = &p.funcs[func];
+                Some(if f.module.is_empty() { f.name.clone() } else { format!("{}:{line}", f.short) })
+            }).take(8).collect();
+            let mut spans = vec![
+                Span::styled(format!("{:>10} ", fmt::bytes(stack.bytes)), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{:>8} ", fmt::compact(stack.count)), Style::new().fg(theme.ink2)),
+                Span::styled(format!("{:<16} ", fmt::fit(&stack.ty, 16)), Style::new().fg(theme.ink2)),
+            ];
+            for (index, frame) in frames.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::styled(" ‹ ", Style::new().fg(theme.faint)));
+                }
+                spans.push(Span::styled(frame.clone(), Style::new().fg(if index == 0 { theme.ink } else { theme.ink2 })));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    Paragraph::new(lines).render(inner, buf);
 }
 
 pub fn key(app: &mut App, key: Key) {

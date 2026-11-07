@@ -1,28 +1,39 @@
 //! Issues: the problems the measured patterns show, most severe first, each with its numbers, what would remove it
 //! and a link (enter) to the view and line that show it; what the profile's kinds could not check, at the bottom.
 
-use ratatui_core::{buffer::Buffer, layout::Rect, style::Style};
-
-use super::{
-    widgets::{MARGIN, section, select_row, spans, text},
-    wrap,
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Paragraph, Widget, Wrap},
 };
+
+use super::kit::{self, Item, col, col_fill};
 use crate::{
     app::App,
-    issues::{Severity, Target},
+    fmt,
+    issues::{Issue, Severity, Target},
     keys::Key,
     theme::Theme,
 };
 
 /// A severity's colour, for its icon (the word beside it says the same)
-pub fn severity_style(severity: Severity, theme: &Theme) -> Style {
-    let color = match severity {
+pub fn severity_color(severity: Severity, theme: &Theme) -> ratatui::style::Color {
+    match severity {
         Severity::Critical => theme.critical,
         Severity::Serious => theme.serious,
         Severity::Warning => theme.warning,
         Severity::Info => theme.muted,
-    };
-    Style::new().fg(color).bg(theme.surface)
+    }
+}
+
+/// An issue's severity as a cell: its icon in its colour, its word
+pub fn severity_cell(severity: Severity, theme: &Theme) -> Item {
+    Item::Spans(Line::from(vec![
+        Span::styled(format!("{} ", severity.icon()), Style::new().fg(severity_color(severity, theme))),
+        Span::styled(severity.word().to_string(), Style::new().fg(theme.ink2)),
+    ]))
 }
 
 /// Where enter goes, in words
@@ -44,55 +55,51 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     let issues = app.issues();
     let (found, unchecked) = (&issues.0, &issues.1);
     let mut list = app.issues_list;
-    let detail_height = 9u16.min(area.height / 2);
-    let unchecked_height = if unchecked.is_empty() { 0 } else { (unchecked.len() as u16 + 1).min(5) };
-    section(buf, area, area.y, "Issues", &found.len().to_string(), theme);
-    let height = area.height.saturating_sub(1 + detail_height + unchecked_height) as usize;
-    list.fit(found.len(), height);
-    for (index, issue) in found.iter().enumerate().skip(list.offset).take(height) {
-        let y = area.y + 1 + (index - list.offset) as u16;
-        let x = spans(buf, area.x + MARGIN, y, area.right(), &[(&format!("{} ", issue.severity.icon()), severity_style(issue.severity, theme)), (&format!("{:<9}", issue.severity.word()), theme.dim()), (&format!("{:<18}", issue.kind), theme.dim())]);
-        text(buf, x, y, &issue.title, area.right().saturating_sub(x), theme.text());
-        if index == list.selected {
-            select_row(buf, area, y, theme);
-        }
-    }
+    let unchecked_height = if unchecked.is_empty() { 0 } else { (unchecked.len() as u16 + 2).min(6) };
+    let detail_height = 10u16.min(area.height / 2);
+    let parts = kit::rows(area, &[area.height.saturating_sub(detail_height + unchecked_height), detail_height, unchecked_height]);
+    // the issues
+    let block = kit::panel(theme, "Issues", &fmt::grouped(found.len() as f64), true);
+    let inner = kit::draw_panel(buf, parts[0], block);
     if found.is_empty() {
-        text(buf, area.x + MARGIN, area.y + 1, "none found", area.width, theme.dim());
+        kit::empty(buf, inner, theme, "none found");
+    } else {
+        list.fit(found.len(), kit::rows_shown(inner));
+        let rows = found.iter().map(|issue| vec![severity_cell(issue.severity, theme), Item::text(issue.kind, Style::new().fg(theme.muted)), Item::label(&issue.title, Style::new().fg(theme.ink))]).collect();
+        let grid = kit::table(buf, inner, theme, &[col("severity", 10), col("kind", 18), col_fill("issue", 1)], rows, Some(list.selected), list.offset);
+        list.offset = grid.offset;
     }
-    super::widgets::scroll_note(buf, area, area.y, list.offset, height, found.len(), theme);
     app.issues_list = list;
     // the selected issue
-    let y = area.bottom() - detail_height - unchecked_height;
     if let Some(issue) = found.get(list.selected) {
-        let x = spans(buf, area.x, y, area.right(), &[(&format!("{} {} ", issue.severity.icon(), issue.severity.word()), severity_style(issue.severity, theme))]);
-        section(buf, Rect { x, width: area.right() - x, ..area }, y, &issue.title, "", theme);
-        let mut row = y + 1;
-        for line in &issue.evidence {
-            for chunk in wrap(line, area.width as usize - 2) {
-                if row >= y + detail_height - 1 {
-                    break;
-                }
-                text(buf, area.x + 2, row, &chunk, area.width - 2, theme.text());
-                row += 1;
-            }
-        }
-        if !issue.advice.is_empty() && row < y + detail_height - 1 {
-            text(buf, area.x + 2, row, &format!("→ {}", issue.advice), area.width - 2, theme.secondary());
-            row += 1;
-        }
-        let target = target_text(app, &issue.target);
-        if !target.is_empty() && row < y + detail_height {
-            text(buf, area.x + 2, row, &format!("enter → {target}"), area.width - 2, theme.dim());
-        }
+        draw_detail(buf, parts[1], app, issue, theme);
     }
     if unchecked_height > 0 {
-        let y = area.bottom() - unchecked_height;
-        section(buf, area, y, "Not checked", "", theme);
-        for (i, note) in unchecked.iter().take(unchecked_height as usize - 1).enumerate() {
-            text(buf, area.x + 2, y + 1 + i as u16, note, area.width - 2, theme.dim());
-        }
+        let inner = kit::draw_panel(buf, parts[2], kit::panel(theme, "Not checked", "what this profile's kinds cannot show", false));
+        let lines: Vec<Line> = unchecked.iter().map(|note| Line::from(vec![Span::styled("○ ", Style::new().fg(theme.muted)), Span::styled(note.clone(), Style::new().fg(theme.ink2))])).collect();
+        Paragraph::new(lines).render(inner, buf);
     }
+}
+
+/// An issue in full: its numbers, what would remove it and where enter goes
+pub fn draw_detail(buf: &mut Buffer, area: Rect, app: &App, issue: &Issue, theme: &Theme) {
+    let color = severity_color(issue.severity, theme);
+    let title = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(format!("{} {}", issue.severity.icon(), issue.severity.word()), Style::new().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("  {} ", issue.title), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
+    ]);
+    let block = kit::panel_line(theme, title, false);
+    let inner = kit::draw_panel(buf, area, block);
+    let mut lines: Vec<Line> = issue.evidence.iter().map(|line| Line::from(vec![Span::styled("• ", Style::new().fg(theme.muted)), Span::styled(line.clone(), Style::new().fg(theme.ink))])).collect();
+    if !issue.advice.is_empty() {
+        lines.push(Line::from(vec![Span::styled("→ ", Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)), Span::styled(issue.advice.clone(), Style::new().fg(theme.ink2))]));
+    }
+    let target = target_text(app, &issue.target);
+    if !target.is_empty() {
+        lines.push(Line::from(vec![Span::styled("⏎ ", Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)), Span::styled(target, Style::new().fg(theme.muted))]));
+    }
+    Paragraph::new(lines).wrap(Wrap { trim: true }).render(inner, buf);
 }
 
 pub fn key(app: &mut App, key: Key) {

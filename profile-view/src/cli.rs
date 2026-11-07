@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ratatui_core::{buffer::Buffer, layout::Rect};
+use ratatui::{buffer::Buffer, layout::Rect};
 
 use crate::{
     app::{App, View},

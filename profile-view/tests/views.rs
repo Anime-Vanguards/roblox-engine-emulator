@@ -8,7 +8,7 @@ use ree_profile_view::{
     app::View,
     cli,
     export::{self, CellFont, Format},
-    theme::{Theme, ThemeKind},
+    theme::{Mark, Theme, ThemeKind},
 };
 
 const COLS: u16 = 120;
@@ -30,12 +30,12 @@ fn every_view_matches_its_snapshot() {
 const PATHS: &[(&str, &str)] = &[
     // the first issue (a sort every frame) opens its function in Calls
     ("overview-enter", "enter"),
-    // the flame starts on the hottest node; up to its caller, enter zooms in there, esc back out
-    ("flame-zoom", "2 up enter"),
-    ("flame-zoom-out", "2 up enter esc"),
-    // Calls on rank: down to its callee (sort), enter centres on it, esc back to rank
-    ("calls-centre", "2 up 3 down down enter"),
-    ("calls-back", "2 up 3 down down enter esc"),
+    // the flame starts on the heaviest phase; down its heaviest callees twice, enter zooms in there, esc back out
+    ("flame-zoom", "2 down down enter"),
+    ("flame-zoom-out", "2 down down enter esc"),
+    // Calls on rank (found by name): down to its callee (sort), enter centres on it, esc back to rank
+    ("calls-centre", "3 /rank down down enter"),
+    ("calls-back", "3 /rank down down enter esc"),
     // Source lists lines by heat with s
     ("source-hot", "4 s"),
     // Allocations sorted by bytes a frame in the steady state, then enter opens the site's line
@@ -143,22 +143,23 @@ fn the_png_is_the_buffer_rasterized() {
         let at = ((y * info.width + x) * 3) as usize;
         (pixels[at], pixels[at + 1], pixels[at + 2])
     };
-    let rgb = |color: ratatui_core::style::Color| match color {
-        ratatui_core::style::Color::Rgb(r, g, b) => (r, g, b),
+    let rgb = |color: ratatui::style::Color| match color {
+        ratatui::style::Color::Rgb(r, g, b) => (r, g, b),
         _ => panic!("the themes use RGB colours"),
     };
-    // the header bar's background, at its first cell's corner
-    assert_eq!(pixel(0, 0), rgb(theme.bar));
-    // a full bar cell: the bar's colour across the middle of the cell, the surface above and below it
+    // the brand's pill, at the first cell's corner
+    assert_eq!(pixel(0, 0), rgb(theme.accent));
+    // a full bar cell: the bar's colour across the middle of the cell, its row's background above and below it
     let (bx, by) = (0..ROWS)
         .flat_map(|y| (0..COLS).map(move |x| (x, y)))
-        .find(|&(x, y)| buf[(x, y)].symbol() == "█" && buf[(x, y)].bg == theme.bar_mark)
+        .find(|&(x, y)| buf[(x, y)].symbol() == "█" && Theme::unmark(buf[(x, y)].bg).1 == Mark::Bar)
         .expect("a bar on the Overview");
     let fg = rgb(buf[(bx, by)].fg);
+    let row_bg = rgb(Theme::unmark(buf[(bx, by)].bg).0);
     let (x0, y0) = (bx as u32 * cw, by as u32 * ch);
     assert_eq!(pixel(x0 + cw / 2, y0 + ch / 2), fg, "the bar's middle");
-    assert_eq!(pixel(x0 + cw / 2, y0 + 1), rgb(theme.surface), "a gap above the bar");
-    assert_eq!(pixel(x0 + cw / 2, y0 + ch - 2), rgb(theme.surface), "a gap below the bar");
+    assert_eq!(pixel(x0 + cw / 2, y0 + 1), row_bg, "a gap above the bar");
+    assert_eq!(pixel(x0 + cw / 2, y0 + ch - 2), row_bg, "a gap below the bar");
     // a letter's cell has ink in it
     let (lx, ly) = (0..COLS).map(|x| (x, 0)).find(|&(x, y)| buf[(x, y)].symbol() == "r").unwrap();
     let ink = rgb(buf[(lx, ly)].fg);

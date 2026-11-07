@@ -3,16 +3,19 @@
 
 use crate::metric::Unit;
 
-/// Milliseconds with the precision their size needs: `1.23 s`, `123.4 ms`, `12.34 ms`, `1.234 ms`, `0.123 ms`, `12.3 µs`
+/// Milliseconds with the precision their size needs: `1.23 s`, `123.4 ms`, `12.34 ms`, `1.234 ms`, `0.123 ms`, `12.3 µs`,
+/// and `0 ms` for none
 pub fn ms(value: f64) -> String {
     let abs = value.abs();
-    if abs >= 1000.0 {
+    if abs == 0.0 {
+        "0 ms".into()
+    } else if abs >= 1000.0 {
         format!("{:.2} s", value / 1000.0)
     } else if abs >= 100.0 {
         format!("{value:.1} ms")
     } else if abs >= 10.0 {
         format!("{value:.2} ms")
-    } else if abs >= 0.1 || abs == 0.0 {
+    } else if abs >= 0.1 {
         format!("{value:.3} ms")
     } else if abs >= 0.001 {
         format!("{:.1} µs", value * 1000.0)
@@ -148,6 +151,32 @@ pub fn fit_left(text: &str, width: usize) -> String {
     out
 }
 
+/// A label `name  Module:line` cut to `width` columns keeping its line: the name and the module give up columns
+/// before the place's end (`:81`, ` (no line)`) does, so `BuildCard  ScrollingGridPresentation:81` in 30 columns
+/// is `BuildCard  ScrollingGridPr…:81`. Text without the two spaces is cut at its end.
+pub fn fit_label(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let Some(split) = text.rfind("  ") else { return fit(text, width) };
+    let (name, place) = (&text[..split], &text[split + 2..]);
+    // the place's end: `:81`, or a note in brackets
+    let end_at = place.rfind(':').filter(|&at| at + 1 < place.len() && place[at + 1..].bytes().all(|b| b.is_ascii_digit())).or_else(|| place.ends_with(')').then(|| place.rfind(" (")).flatten());
+    let (module, end) = end_at.map_or((place, ""), |at| (&place[..at], &place[at..]));
+    let (name_len, module_len, end_len) = (name.chars().count(), module.chars().count(), end.chars().count());
+    let (min_name, min_module) = (name_len.min(6), module_len.min(4));
+    if min_name + 2 + min_module + end_len > width {
+        return fit(text, width);
+    }
+    // what the name and the module share: the name up to half of it, the module the rest, the name what the module
+    // leaves
+    let room = width - 2 - end_len;
+    let name_take = name_len.min((room / 2).max(min_name)).min(room - min_module);
+    let module_take = (room - name_take).min(module_len);
+    let name_take = (room - module_take).min(name_len);
+    format!("{}  {}{end}", fit(name, name_take), fit(module, module_take))
+}
+
 /// Pads or cuts to exactly `width` columns, right-aligned
 pub fn right(text: &str, width: usize) -> String {
     let text = fit(text, width);
@@ -189,7 +218,7 @@ mod tests {
         assert_eq!(ms(1.2345), "1.234 ms"); // (round half to even on the binary value)
         assert_eq!(ms(0.12345), "0.123 ms");
         assert_eq!(ms(0.012), "12.0 µs");
-        assert_eq!(ms(0.0), "0.000 ms");
+        assert_eq!(ms(0.0), "0 ms");
         assert_eq!(grouped(2974531.0), "2,974,531");
         assert_eq!(grouped(-1000.0), "-1,000");
         assert_eq!(grouped(12.0), "12");
@@ -204,6 +233,11 @@ mod tests {
         assert_eq!(change(1.0, 0.0), "gone");
         assert_eq!(fit("abcdef", 4), "abc…");
         assert_eq!(fit_left("a/b/c/d.luau", 8), "…/d.luau");
+        assert_eq!(fit_label("BuildCard  ScrollingGridPresentation:81", 30), "BuildCard  ScrollingGridPr…:81");
+        assert_eq!(fit_label("ReconcileVisibleRowsAndLayout  Lists:413", 20), "Reconcil…  Lists:413");
+        assert_eq!(fit_label("anonymous  __index (no line)", 22), "anony…  __i… (no line)");
+        assert_eq!(fit_label("rank  Main:21", 30), "rank  Main:21");
+        assert_eq!(fit_label("pcall [C] with a long tail", 10), "pcall [C]…");
         assert_eq!(cells("a\tb"), "a    b");
     }
 }

@@ -2,18 +2,24 @@
 //! and how often it called; its hottest lines at the bottom. Enter re-centres on the selected caller or callee, esc
 //! goes back.
 
-use ratatui_core::{buffer::Buffer, layout::Rect, style::Style};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Paragraph, Widget},
+};
 
 use super::{
+    kit::{self, Item, col, col_fill, col_r},
     overview::{hot, ranked},
-    widgets::{Col, MARGIN, bar, cell, header, hline, layout, section, select_row, spans, text},
 };
 use crate::{
     app::{App, Focus},
     fmt,
     keys::Key,
     metric::Metric,
-    theme::Theme,
+    theme::{Mark, Theme},
     tree::{EdgeStat, Frame},
 };
 
@@ -55,7 +61,8 @@ fn row_name(app: &App, row: &Row) -> String {
 
 pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     let Some(func) = center(app) else {
-        text(buf, area.x, area.y, "no functions", area.width, theme.dim());
+        let inner = kit::draw_panel(buf, area, kit::panel(theme, "Calls", "", false));
+        kit::empty(buf, inner, theme, "no functions");
         return;
     };
     let tree = app.tree();
@@ -69,85 +76,100 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     let f = &p.funcs[func as usize];
     let mut lines: Vec<(i64, f64, &crate::model::LineFig)> = p.lines_of(func as usize).map(|(line, fig)| (line, app.metric.line_self(fig), fig)).filter(|(_, v, _)| *v > 0.0).collect();
     lines.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-    // rows for each part: what it needs, the lines taking what is left
+    // each panel's rows: what it needs, the lines taking what is left (a panel is its rows, a header and two borders)
     let (callers_len, callees_len) = (split, rows.len() - split);
-    let fixed = 2 + 3 + 1 + if lines.is_empty() { 0 } else { 1 };
-    let room = area.height.saturating_sub(fixed) as usize;
-    let callers_height = callers_len.max(1).min((room / 3).max(1));
-    let callees_height = callees_len.max(1).min((room.saturating_sub(callers_height) / 2).max(1));
-    let lines_height = room.saturating_sub(callers_height + callees_height).min(lines.len());
+    let card_height = 4u16;
+    let room = area.height.saturating_sub(card_height + 9) as usize;
+    let callers_rows = callers_len.max(1).min((room / 3).max(1));
+    let callees_rows = callees_len.max(1).min((room.saturating_sub(callers_rows) / 2).max(1));
+    let lines_rows = room.saturating_sub(callers_rows + callees_rows).min(lines.len());
+    let parts = kit::rows(area, &[callers_rows as u16 + 3, card_height, callees_rows as u16 + 3, if lines.is_empty() { 0 } else { lines_rows as u16 + 3 }]);
     list.fit(rows.len(), rows.len().max(1));
-    // each half scrolls on its own
     let sel = list.selected;
-    let callers_offset = if sel < split { sel.saturating_sub(callers_height.saturating_sub(1)) } else { 0 };
-    let callees_offset = if sel >= split { (sel - split).saturating_sub(callees_height.saturating_sub(1)) } else { 0 };
-    let mut cols = vec![Col::left("", 24), Col::right("calls", 10), Col::right(&metric.label(p), 12), Col::right("share", 7), Col::left("", 14)];
-    let xs = layout(&mut cols, area.x + MARGIN, area.width - MARGIN);
-    let mut y = area.y;
-    section(buf, area, y, "Callers", &callers_len.to_string(), theme);
-    y += 1;
-    header(buf, &cols, &xs, y, theme);
-    y += 1;
-    let draw_row = |buf: &mut Buffer, row: &Row, y: u16, selected: bool, whole: f64| {
-        let stat = match row {
-            Row::Caller(_, stat) | Row::Callee(_, stat) => stat,
-        };
-        let share = if run_total > 0.0 { stat.total / run_total } else { 0.0 };
-        let style = theme.row(share);
-        cell(buf, &cols[0], xs[0], y, &row_name(app, row), style);
-        cell(buf, &cols[1], xs[1], y, &if tree.has_calls { fmt::grouped(stat.calls as f64) } else { "-".into() }, style);
-        cell(buf, &cols[2], xs[2], y, &fmt::short(unit, stat.total), style);
-        cell(buf, &cols[3], xs[3], y, &fmt::share(stat.total, whole), style);
-        bar(buf, xs[4], y, cols[4].width, if whole > 0.0 { stat.total / whole } else { 0.0 }, theme.heat_of(share), theme);
-        if selected {
-            select_row(buf, area, y, theme);
-        }
+    let table_rows = |slice: &[Row], whole: f64, width: u16| -> Vec<Vec<Item>> {
+        slice
+            .iter()
+            .map(|row| {
+                let stat = match row {
+                    Row::Caller(_, stat) | Row::Callee(_, stat) => stat,
+                };
+                let share = if run_total > 0.0 { stat.total / run_total } else { 0.0 };
+                let style = theme.row(share);
+                vec![
+                    Item::label(row_name(app, row), style),
+                    Item::text(if tree.has_calls { fmt::grouped(stat.calls as f64) } else { "-".into() }, style),
+                    Item::text(fmt::short(unit, stat.total), style),
+                    Item::text(fmt::share(stat.total, whole), style),
+                    Item::Spans(kit::bar(if whole > 0.0 { stat.total / whole } else { 0.0 }, width, theme.heat_of(share))),
+                ]
+            })
+            .collect()
     };
-    for (index, row) in rows[..split].iter().enumerate().skip(callers_offset).take(callers_height) {
-        draw_row(buf, row, y + (index - callers_offset) as u16, index == list.selected, stat.total);
+    let cols = [col_fill("function", 3), col_r("calls", 10), col_r(&metric.label(p), 12), col_r("share", 7), col_fill("", 2)];
+    // the callers: what this function cost under each
+    let inner = kit::draw_panel(buf, parts[0], kit::panel(theme, "Callers", &fmt::grouped(callers_len as f64), sel < split));
+    if callers_len == 0 {
+        kit::empty(buf, inner, theme, "none: the engine calls it");
+    } else {
+        let width = kit::widths(&cols, inner.width)[4];
+        let offset = if sel < split { sel.saturating_sub(callers_rows.saturating_sub(1)) } else { 0 };
+        let grid = kit::table(buf, inner, theme, &cols, table_rows(&rows[..split], stat.total, width), (sel < split).then_some(sel), offset);
+        kit::mark(buf, grid.column(4), Mark::Bar);
     }
-    if split == 0 {
-        text(buf, xs[0], y, "none", area.width, theme.dim());
-    }
-    y += callers_height as u16;
     // the function itself
-    hline(buf, area.x, y, area.width, Style::new().fg(theme.grid).bg(theme.surface));
     let share = if run_total > 0.0 { stat.own / run_total } else { 0.0 };
-    let calls = if tree.has_calls && stat.calls > 0 { format!(" · {} calls, {} each", fmt::grouped(stat.calls as f64), fmt::short(unit, stat.total / stat.calls as f64)) } else { String::new() };
-    let x = spans(buf, area.x, y + 1, area.right(), &[("● ", Style::new().fg(theme.heat_of(share)).bg(theme.surface)), (&f.label(), theme.bold())]);
-    text(buf, x + 2, y + 1, &format!("own {} ({}) · total {} ({}){calls}", fmt::value(unit, stat.own), fmt::share(stat.own, run_total), fmt::value(unit, stat.total), fmt::share(stat.total, run_total)), area.right().saturating_sub(x + 2), theme.text());
-    hline(buf, area.x, y + 2, area.width, Style::new().fg(theme.grid).bg(theme.surface));
-    y += 3;
-    section(buf, area, y, "Callees", &callees_len.to_string(), theme);
-    y += 1;
-    for (index, row) in rows[split..].iter().enumerate().skip(callees_offset).take(callees_height) {
-        draw_row(buf, row, y + (index - callees_offset) as u16, split + index == list.selected, stat.total);
+    let title = Line::from(vec![Span::raw(" "), Span::styled("■ ", Style::new().fg(theme.node_of(share))), Span::styled(f.label(), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)), Span::raw(" ")]);
+    let inner = kit::draw_panel(buf, parts[1], kit::bottom(kit::panel_line(theme, title, false), super::legend(app, theme, area.width)));
+    let figure = |label: &str, value: f64| vec![Span::styled(format!("{label} "), Style::new().fg(theme.muted)), Span::styled(fmt::value(unit, value), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)), Span::styled(format!(" {}", fmt::share(value, run_total)), Style::new().fg(theme.ink2))];
+    let mut spans = figure("own", stat.own);
+    spans.push(Span::raw("     "));
+    spans.extend(figure("total", stat.total));
+    if tree.has_calls && stat.calls > 0 {
+        spans.push(Span::styled(format!("     {} calls, {} each", fmt::grouped(stat.calls as f64), fmt::short(unit, stat.total / stat.calls as f64)), Style::new().fg(theme.ink2)));
     }
+    Paragraph::new(Line::from(spans)).render(Rect { height: 1, ..inner }, buf);
+    if inner.height >= 2 && stat.total > 0.0 {
+        kit::gauge(buf, Rect { y: inner.y + 1, height: 1, ..inner }, theme, stat.own / stat.total, Line::from(Span::styled(format!("its own {} ", fmt::share(stat.own, stat.total)), Style::new().fg(theme.ink2))), theme.heat_of(share));
+    }
+    // the callees: what each cost under this function
+    let inner = kit::draw_panel(buf, parts[2], kit::panel(theme, "Callees", &fmt::grouped(callees_len as f64), sel >= split));
     if callees_len == 0 {
-        text(buf, xs[0], y, "none", area.width, theme.dim());
+        kit::empty(buf, inner, theme, "none");
+    } else {
+        let width = kit::widths(&cols, inner.width)[4];
+        let offset = if sel >= split { (sel - split).saturating_sub(callees_rows.saturating_sub(1)) } else { 0 };
+        let grid = kit::table(buf, inner, theme, &cols, table_rows(&rows[split..], stat.total, width), (sel >= split).then(|| sel - split), offset);
+        kit::mark(buf, grid.column(4), Mark::Bar);
     }
-    y += callees_height as u16;
-    if lines_height > 0 && y < area.bottom() {
-        section(buf, area, y, "Hottest lines", &format!("own {}", app.metric.label(p)), theme);
-        y += 1;
+    // its hottest lines, with their code and their commonest instructions
+    if !lines.is_empty() && parts[3].height >= 4 {
+        let inner = kit::draw_panel(buf, parts[3], kit::panel(theme, "Hottest lines", &format!("own {}", app.metric.label(p)), false));
         let line_total = Metric::total(app.metric, p);
         let max = lines.first().map_or(0.0, |l| l.1);
-        for (line, value, fig) in lines.iter().take(lines_height) {
-            if y >= area.bottom() {
-                break;
-            }
-            let share = if line_total > 0.0 { value / line_total } else { 0.0 };
-            let mut ops: Vec<(&String, &u64)> = fig.ops.iter().collect();
-            ops.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-            let ops: Vec<String> = ops.iter().take(3).map(|(op, n)| format!("{op} {}", fmt::compact(**n as f64))).collect();
-            let x = area.x + MARGIN;
-            text(buf, x, y, &format!("{}:{line}", f.short), 16, theme.row(share));
-            text(buf, x + 17, y, &fmt::right(&fmt::short(app.metric.unit(), *value), 10), 10, theme.row(share));
-            text(buf, x + 28, y, &fmt::right(&fmt::share(*value, line_total), 6), 6, theme.row(share));
-            bar(buf, x + 36, y, 14, if max > 0.0 { value / max } else { 0.0 }, theme.heat_of(share), theme);
-            text(buf, x + 52, y, &ops.join(" · "), area.width.saturating_sub(52 + MARGIN), theme.dim());
-            y += 1;
-        }
+        let source = p.source(&f.module);
+        let cols = [col_r("line", 6), col_r("own", 10), col_r("share", 6), col("", 14), col_fill("code", 3), col_fill("instructions", 2)];
+        let rows = lines
+            .iter()
+            .take(kit::rows_shown(inner))
+            .map(|(line, value, fig)| {
+                let share = if line_total > 0.0 { value / line_total } else { 0.0 };
+                let style = theme.row(share);
+                let mut ops: Vec<(&String, &u64)> = fig.ops.iter().collect();
+                ops.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+                let ops: Vec<String> = ops.iter().take(3).map(|(op, n)| format!("{op} {}", fmt::compact(**n as f64))).collect();
+                let code = source.as_ref().and_then(|s| s.lines.get(line)).map(|code| code.trim().to_string()).unwrap_or_default();
+                vec![
+                    Item::text(line.to_string(), Style::new().fg(theme.ink2)),
+                    Item::text(fmt::short(app.metric.unit(), *value), style),
+                    Item::text(fmt::share(*value, line_total), style),
+                    Item::Spans(kit::bar(if max > 0.0 { value / max } else { 0.0 }, 14, theme.heat_of(share))),
+                    Item::Spans(super::source::highlight(&code, theme)),
+                    Item::text(ops.join(" · "), Style::new().fg(theme.muted)),
+                ]
+            })
+            .collect();
+        let grid = kit::table(buf, inner, theme, &cols, rows, None, 0);
+        kit::mark(buf, grid.column(3), Mark::Bar);
     }
     app.calls.list = list;
 }

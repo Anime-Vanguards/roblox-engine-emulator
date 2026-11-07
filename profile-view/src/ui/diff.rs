@@ -1,16 +1,22 @@
 //! Diff: two profiles, before and after. The headline figures, then the functions, lines or allocation sites that
 //! moved (tab switches), each with its before, after and change: red ▲ for more, blue ▼ for less, the numbers in ink.
 
-use ratatui_core::{buffer::Buffer, layout::Rect, style::Style};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Paragraph, Tabs, Widget},
+};
 
-use super::widgets::{Col, MARGIN, cell, diverging_bar, header, layout, section, select_row, spans, text};
+use super::kit::{self, Item, col, col_fill, col_r};
 use crate::{
     app::{App, DiffSort, DiffTab, Focus, View},
     diff::{self, Pair},
     fmt,
     keys::Key,
     metric::{Metric, Unit},
-    theme::Theme,
+    theme::{Mark, Theme},
 };
 
 fn rows(app: &App) -> (Vec<Pair>, Unit, String) {
@@ -33,61 +39,57 @@ fn rows(app: &App) -> (Vec<Pair>, Unit, String) {
     (rows, unit, what)
 }
 
-/// The ▲ / ▼ mark of a change in a cost
-fn mark(delta: f64, theme: &Theme) -> (&'static str, Style) {
+/// The ▲ / ▼ mark of a change in a cost, and its colour
+fn mark(delta: f64, theme: &Theme) -> (&'static str, Color) {
     if delta > 0.0 {
-        ("▲", Style::new().fg(theme.more).bg(theme.surface))
+        ("▲", theme.more)
     } else if delta < 0.0 {
-        ("▼", Style::new().fg(theme.less).bg(theme.surface))
+        ("▼", theme.less)
     } else {
-        (" ", theme.dim())
+        (" ", theme.muted)
     }
 }
 
 pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     if app.profiles.len() < 2 {
-        text(buf, area.x, area.y, "Diff needs two profiles: ree profile view <before> <after>", area.width, theme.dim());
+        let inner = kit::draw_panel(buf, area, kit::panel(theme, "Diff", "", false));
+        kit::empty(buf, inner, theme, "Diff needs two profiles: ree profile view <before> <after>");
         return;
     }
     let (figures, notes) = diff::headline(&app.profiles[0], &app.profiles[1]);
-    let mut y = area.y;
     let (before, after) = (app.profiles[0].name(), app.profiles[1].name());
     let names = if before.eq_ignore_ascii_case("before") && after.eq_ignore_ascii_case("after") { String::new() } else { format!("{before} → {after}") };
-    section(buf, area, y, "Before → after", &names, theme);
-    y += 1;
-    for note in &notes {
-        text(buf, area.x, y, &format!("note: {note}"), area.width, theme.dim());
-        y += 1;
-    }
+    let two = area.width >= 150;
+    let per_column = (figures.len() as u16).div_ceil(if two { 2 } else { 1 });
+    let headline_height = per_column + notes.len() as u16 + 3;
+    let parts = kit::rows(area, &[headline_height, 0]);
     // the headline, two columns of figures when the screen is wide
-    let per_column = (figures.len() as u16).div_ceil(if area.width >= 150 { 2 } else { 1 });
-    let column_width = if area.width >= 150 { area.width / 2 } else { area.width };
+    let inner = kit::draw_panel(buf, parts[0], kit::panel(theme, "Before → after", &names, false));
+    let mut lines: Vec<Line> = notes.iter().map(|note| Line::from(vec![Span::styled("◇ ", Style::new().fg(theme.accent)), Span::styled(note.clone(), Style::new().fg(theme.ink2))])).collect();
+    lines.push(Line::default());
+    Paragraph::new(lines).render(inner, buf);
+    let column_width = if two { inner.width / 2 } else { inner.width };
     for (index, figure) in figures.iter().enumerate() {
         let col = index as u16 / per_column;
         let row = index as u16 % per_column;
-        let x = area.x + col * column_width;
+        let x = inner.x + col * column_width;
+        let y = inner.y + notes.len() as u16 + 1 + row;
+        if y >= inner.bottom() {
+            continue;
+        }
         let delta = figure.after - figure.before;
-        let (m, style) = if figure.cost { mark(delta, theme) } else { (" ", theme.dim()) };
-        spans(buf, x, y + row, x + column_width - 1, &[
-            (&format!("{:<34}", fmt::fit(&figure.name, 34)), theme.dim()),
-            (&format!("{:>12} → {:<12}", fmt::short(figure.unit, figure.before), fmt::short(figure.unit, figure.after)), theme.text()),
-            (m, style),
-            (&format!(" {:>9}", fmt::change(figure.before, figure.after)), if figure.exact { theme.text() } else { theme.secondary() }),
+        let (m, color) = if figure.cost { mark(delta, theme) } else { (" ", theme.muted) };
+        let line = Line::from(vec![
+            Span::styled(format!("{:<34}", fmt::fit(&figure.name, 34)), Style::new().fg(theme.ink2)),
+            Span::styled(format!("{:>11}", fmt::short(figure.unit, figure.before)), Style::new().fg(theme.ink2)),
+            Span::styled(" → ", Style::new().fg(theme.muted)),
+            Span::styled(format!("{:<11}", fmt::short(figure.unit, figure.after)), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {m} "), Style::new().fg(color)),
+            Span::styled(format!("{:>9}", fmt::change(figure.before, figure.after)), Style::new().fg(if figure.cost && delta != 0.0 { color } else { theme.muted }).add_modifier(if figure.exact { Modifier::BOLD } else { Modifier::empty() })),
         ]);
+        Paragraph::new(line).render(Rect { x, y, width: column_width.saturating_sub(2), height: 1 }, buf);
     }
-    y += per_column + 1;
-    // the tabs
-    let tabs = [(DiffTab::Functions, "Functions"), (DiffTab::Lines, "Lines"), (DiffTab::Sites, "Allocation sites")];
-    let mut x = area.x;
-    for (tab, name) in tabs {
-        let style = if app.diff.tab == tab { theme.selected() } else { theme.secondary() };
-        let label = format!(" {name} ");
-        x += text(buf, x, y, &label, area.right().saturating_sub(x), style) + 1;
-    }
-    if app.diff.tab == DiffTab::Lines {
-        text(buf, x + 1, y, "where the source is the same", area.right().saturating_sub(x + 1), theme.dim());
-    }
-    y += 1;
+    // the functions, lines or sites that moved, a tab each
     let (rows, unit, what) = rows(app);
     let sort = match app.diff.sort {
         DiffSort::Change => "the largest change",
@@ -95,46 +97,64 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
         DiffSort::Decrease => "what shrank most",
         DiffSort::Name => "name",
     };
-    section(buf, area, y, "Moved", &format!("{} · {what} · by {sort}", rows.len()), theme);
-    y += 1;
-    let show_calls = app.diff.tab == DiffTab::Functions;
-    let mut cols = vec![Col::left("", 28), Col::right("before", 11), Col::right("after", 11), Col::left("", 1), Col::right("change", 11), Col::right("", 8)];
-    if show_calls {
-        cols.push(Col::right("calls", 19));
+    let block = kit::panel(theme, "Moved", &format!("{} · {what} · by {sort}", fmt::grouped(rows.len() as f64)), true);
+    let inner = kit::draw_panel(buf, parts[1], block);
+    let tabs = [(DiffTab::Functions, "Functions"), (DiffTab::Lines, "Lines"), (DiffTab::Sites, "Allocation sites")];
+    let selected = tabs.iter().position(|(tab, _)| *tab == app.diff.tab);
+    Tabs::new(tabs.iter().map(|(_, name)| Line::from(format!(" {name} "))))
+        .select(selected)
+        .style(Style::new().fg(theme.ink2).bg(theme.panel))
+        .highlight_style(Style::new().fg(theme.accent_ink).bg(theme.accent).add_modifier(Modifier::BOLD))
+        .divider(Span::raw(" "))
+        .padding("", "")
+        .render(Rect { height: 1, ..inner }, buf);
+    if app.diff.tab == DiffTab::Lines {
+        let x = inner.x + 46;
+        Paragraph::new(Line::from(Span::styled("where the source is the same", Style::new().fg(theme.muted)))).render(Rect { x, height: 1, width: inner.right().saturating_sub(x), ..inner }, buf);
     }
-    cols.push(Col::left("", 16));
-    let xs = layout(&mut cols, area.x + MARGIN, area.width - MARGIN);
-    header(buf, &cols, &xs, y, theme);
-    y += 1;
-    let height = area.bottom().saturating_sub(y) as usize;
-    let mut list = app.diff.list;
-    list.fit(rows.len(), height);
-    let max = rows.iter().map(|r| r.delta().abs()).fold(0.0, f64::max);
-    for (screen, row) in rows.iter().enumerate().skip(list.offset).take(height) {
-        let row_y = y + (screen - list.offset) as u16;
-        let delta = row.delta();
-        let (m, mark_style) = mark(delta, theme);
-        cell(buf, &cols[0], xs[0], row_y, &row.label, theme.text());
-        cell(buf, &cols[1], xs[1], row_y, &fmt::short(unit, row.before), theme.secondary());
-        cell(buf, &cols[2], xs[2], row_y, &fmt::short(unit, row.after), theme.text());
-        cell(buf, &cols[3], xs[3], row_y, m, mark_style);
-        cell(buf, &cols[4], xs[4], row_y, &fmt::signed(unit, delta), theme.text());
-        cell(buf, &cols[5], xs[5], row_y, &fmt::change(row.before, row.after), theme.secondary());
-        let mut c = 6;
-        if show_calls {
-            if let Some((before, after)) = row.calls {
-                cell(buf, &cols[c], xs[c], row_y, &format!("{} → {}", fmt::compact(before as f64), fmt::compact(after as f64)), theme.secondary());
-            }
-            c += 1;
-        }
-        diverging_bar(buf, xs[c], row_y, cols[c].width, if max > 0.0 { delta / max } else { 0.0 }, theme);
-        if screen == list.selected {
-            select_row(buf, area, row_y, theme);
-        }
-    }
+    let table = Rect { y: inner.y + 2, height: inner.height.saturating_sub(2), ..inner };
     if rows.is_empty() {
-        text(buf, area.x, y, "nothing moved", area.width, theme.dim());
+        kit::empty(buf, table, theme, "nothing moved");
+        app.diff.list = Default::default();
+        return;
     }
+    let show_calls = app.diff.tab == DiffTab::Functions;
+    let mut cols = vec![col_fill("", 3), col_r("before", 11), col_r("after", 11), col("", 1), col_r("change", 11), col_r("", 8)];
+    if show_calls {
+        cols.push(col_r("calls", 17));
+    }
+    cols.push(col_fill("", 2));
+    let bar_col = cols.len() - 1;
+    let bar_width = kit::widths(&cols, table.width)[bar_col];
+    let mut list = app.diff.list;
+    list.fit(rows.len(), kit::rows_shown(table));
+    let max = rows.iter().map(|r| r.delta().abs()).fold(0.0, f64::max);
+    let items = rows
+        .iter()
+        .map(|row| {
+            let delta = row.delta();
+            let (m, color) = mark(delta, theme);
+            let mut cells = vec![
+                Item::label(row.label.clone(), Style::new().fg(theme.ink)),
+                Item::text(fmt::short(unit, row.before), Style::new().fg(theme.ink2)),
+                Item::text(fmt::short(unit, row.after), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
+                Item::Spans(Line::from(Span::styled(m, Style::new().fg(color)))),
+                Item::text(fmt::signed(unit, delta), Style::new().fg(theme.ink)),
+                Item::text(fmt::change(row.before, row.after), Style::new().fg(color)),
+            ];
+            if show_calls {
+                cells.push(match row.calls {
+                    Some((before, after)) => Item::text(format!("{} → {}", fmt::compact(before as f64), fmt::compact(after as f64)), Style::new().fg(theme.ink2)),
+                    None => Item::empty(),
+                });
+            }
+            cells.push(Item::Spans(kit::diverging(if max > 0.0 { delta / max } else { 0.0 }, bar_width, theme)));
+            cells
+        })
+        .collect();
+    let grid = kit::table(buf, table, theme, &cols, items, Some(list.selected), list.offset);
+    kit::mark(buf, grid.column(bar_col), Mark::Bar);
+    list.offset = grid.offset;
     app.diff.list = list;
 }
 

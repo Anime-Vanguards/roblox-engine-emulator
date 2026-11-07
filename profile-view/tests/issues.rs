@@ -6,7 +6,7 @@ mod common;
 use common::*;
 use ree_profile_view::{
     issues::{Issue, Severity, Target},
-    model::Profile,
+    model::{Kind, Profile},
 };
 
 fn issues_of(dir: &std::path::Path) -> (Vec<Issue>, Vec<String>, ree_profile_view::app::App) {
@@ -36,7 +36,7 @@ fn each_pattern_is_named_with_its_numbers() {
     assert_eq!(sorts.len(), 1, "{issues:#?}");
     assert_eq!(sorts[0].severity, Severity::Critical);
     assert_eq!(sorts[0].target, Target::Func(func_named(&app, "rank")));
-    assert!(all(sorts[0]).contains("table.sort ran 100 times in the 100 frames of steady, 1.0 a frame"), "{}", all(sorts[0]));
+    assert!(all(sorts[0]).contains("table.sort ran 100 times in the 100 frames of the steady phase, 1.0 a frame"), "{}", all(sorts[0]));
     assert!(all(sorts[0]).contains("42.0 µs a frame in the sorts, 39.6% of the phase's work"), "{}", all(sorts[0]));
 
     // rank:21 allocates 200 records a frame (64 + 48 bytes each), 22,400 bytes, every frame of the steady state; the
@@ -45,7 +45,7 @@ fn each_pattern_is_named_with_its_numbers() {
     assert_eq!(steady.len(), 2, "rank:21 and layout:32, not the engine's: {steady:#?}");
     assert_eq!(steady[0].target, Target::Site(func_named(&app, "rank"), 21));
     assert!(steady[0].title.starts_with("21.9 KB a frame on average: rank  Main:21"), "{}", steady[0].title);
-    assert!(all(steady[0]).contains("400 objects, 21.9 KB a frame on average over the 100 frames of steady"), "{}", all(steady[0]));
+    assert!(all(steady[0]).contains("400 objects a frame over the 100 frames of the steady phase"), "{}", all(steady[0]));
     assert!(all(steady[0]).contains("table 57.1%, table storage 42.9%"), "{}", all(steady[0]));
     assert_eq!(steady[1].target, Target::Site(func_named(&app, "layout"), 32));
     assert!(find(&issues, "allocation bursts").is_empty());
@@ -68,7 +68,7 @@ fn each_pattern_is_named_with_its_numbers() {
     // connections: 10 at frame 21 to 109 at frame 120, one more every frame
     let growing = find(&issues, "growth");
     assert_eq!(growing.len(), 1, "connections only: {growing:#?}");
-    assert!(growing[0].title.starts_with("Connections keep growing: +99 in steady"), "{}", growing[0].title);
+    assert!(growing[0].title.starts_with("Connections keep growing: +99 over the 100 frames of the steady phase"), "{}", growing[0].title);
     assert!(all(growing[0]).contains("+1.0 a frame, up in 99 of 99 frames"), "{}", all(growing[0]));
 
     // the reachable heap: 1.00 MB at steady to 3.50 MB at the end
@@ -120,7 +120,7 @@ fn an_allocation_that_no_frame_could_hold_is_a_burst() {
     let bursts = find(&issues, "allocation bursts");
     assert_eq!(bursts.len(), 1, "layout:32's 512 bytes a frame fit: {issues:#?}");
     assert!(bursts[0].title.ends_with("rank  Main:21"));
-    assert!(bursts[0].evidence[0].contains("2.14 MB in the 100 frames of steady, 21.9 KB a frame on average, but some frames allocate 10.0 KB in all"), "{}", bursts[0].evidence[0]);
+    assert!(bursts[0].evidence[0].contains("2.14 MB in the 100 frames of the steady phase, 21.9 KB a frame on average, but some frames allocate 10.0 KB in all"), "{}", bursts[0].evidence[0]);
 }
 
 #[test]
@@ -217,4 +217,39 @@ fn growing_threads_the_collector_had_not_swept_are_not_a_leak() {
             assert!(threads[0].evidence[0].ends_with("; 105 reachable at the end, what a full collection keeps"), "{}", threads[0].evidence[0]);
         }
     }
+}
+
+#[test]
+fn each_cache_has_its_own_advice() {
+    // the fixture's missing site (5,000 of 6,000 lookups missed) as each cache: a builtin's fast path turned down, a
+    // method not where the cache looked, a table key slot
+    for (op, says) in [("FASTCALL2K", "fast path turned these arguments down"), ("NAMECALL", "objects of several shapes or classes"), ("GETTABLEKS", "differ in shape")] {
+        let temp = Temp::new("advice");
+        let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
+        let path = dir.join("profile.json");
+        let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["luau_caches"]["sites"][0]["op"] = serde_json::json!(op);
+        std::fs::write(&path, json.to_string()).unwrap();
+        let (issues, _, _) = issues_of(&dir);
+        let misses = find(&issues, "cache misses");
+        assert_eq!(misses.len(), 1, "{op}");
+        assert!(misses[0].title.starts_with(&format!("{op} at Main:31")), "{}", misses[0].title);
+        assert!(misses[0].advice.contains(says), "{op}: {}", misses[0].advice);
+    }
+}
+
+#[test]
+fn mluas_own_chunks_are_the_engines() {
+    // mlua's userdata __index in Luau, which the profile names Luau: the engine's, like its other Luau, so an
+    // allocation in it is the script line's that called it
+    let temp = Temp::new("mlua");
+    let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
+    let path = dir.join("profile.json");
+    let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    json["functions"].as_array_mut().unwrap().push(serde_json::json!({"id": 900, "key": "__mlua_index:anonymous@6", "kind": "Luau", "module": "__mlua_index", "name": "", "line": 6, "last_line": 11, "calls": 10, "self": {}, "total": {}}));
+    std::fs::write(&path, json.to_string()).unwrap();
+    let p = Profile::load(&dir).unwrap();
+    let f = p.funcs.iter().find(|f| f.module == "__mlua_index").unwrap();
+    assert_eq!(f.kind, Kind::Engine);
+    assert!(p.funcs.iter().any(|f| f.kind == Kind::Script), "the fixture's own scripts stay scripts");
 }
