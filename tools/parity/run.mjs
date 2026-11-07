@@ -5,6 +5,7 @@
 //
 //   node tools/parity/run.mjs [probe ...] [--ree <exe>] [--diff] [--json <file>] [--write-known]
 //   node tools/parity/run.mjs --capture [probe ...]          # run the probes in the real engine (REE_PARITY_CAPTURE)
+//   node tools/parity/run.mjs ui_signals --rur <checkout>    # through rur, a host that adds a GUI layout
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -39,6 +40,18 @@ export function readExpected(name) {
 	const lines = text.split("\n");
 	if (lines.at(-1) === "") lines.pop();
 	return { header: lines.filter(line => line.startsWith("# ")), lines: lines.filter(line => !line.startsWith("# ")) };
+}
+
+// A probe's options, from a line "-- parity: identity=4 device=desktop rendered" (capture_sim.py reads the same line).
+export function probeOptions(name) {
+	const probe = fs.readFileSync(path.join(PROBES, `${name}.luau`), "utf8");
+	const match = probe.match(/--\s*parity:([^\r\n]*)/);
+	const options = {};
+	for (const word of match ? match[1].trim().split(/\s+/).filter(Boolean) : []) {
+		const [key, value] = word.split("=");
+		options[key] = value ?? true;
+	}
+	return options;
 }
 
 export function readKnown() {
@@ -76,6 +89,35 @@ export function runInRee(name, ree, scratch) {
 	}
 	if (!summary.done) errors.push(`the probe did not finish (status ${summary.status}${summary.failure ? `: ${summary.failure}` : ""})`);
 	return { lines, messages, errors };
+}
+
+// One probe through rur (roblox-ui-renderer), which adds a GUI layout and a renderer to ree: `rur render` of the body as
+// a fixture, in play mode on the probe's device, on the capture client's screen (1920x1080 at scale 1 under a 58 px
+// top-bar inset, as a probe's coordinates line prints it). RUR_NATIVE_ENGINE picks a rur-native build, as for rur itself.
+export function runInRur(name, checkout, scratch) {
+	const fixture = path.join(scratch, `${name}.luau`);
+	fs.writeFileSync(fixture, `return function(Target)\n${body(name)}\nprint("@done")\nend\n`);
+	const out = path.join(scratch, `${name}-rur`);
+	const device = String(probeOptions(name).device || "desktop");
+	const result = spawnSync(process.execPath, [path.join(checkout, "cli", "rur.mjs"), "render", "--fixture", fixture, "--mode", "play",
+		"--device", device, "--topbar-inset", "58", "--viewport", "1920x1080", "--scale", "1", "--time", "5", "--out", out], {
+		encoding: "utf8", cwd: checkout, maxBuffer: 256 * 1024 * 1024, windowsHide: true,
+	});
+	let scene;
+	try {
+		scene = JSON.parse(fs.readFileSync(path.join(out, "scene.json"), "utf8"));
+	} catch {
+		return { lines: [], messages: [], errors: [`rur exited ${result.status}: ${(result.stderr || "").trim().split("\n").slice(-3).join(" / ")}`] };
+	}
+	const lines = [];
+	const messages = [];
+	let done = false;
+	for (const entry of scene.diagnostics?.output || []) {
+		if (entry.kind === "print" && entry.message === "@done") done = true;
+		else if (entry.kind === "print") lines.push(...String(entry.message).split("\n"));
+		else messages.push(`${entry.kind}: ${String(entry.message).split("\n")[0]}`);
+	}
+	return { lines, messages, errors: done ? [] : ["the probe did not finish within rur's 5 seconds"] };
 }
 
 // A line diff (longest common subsequence), as [kind, expectedIndex, actualIndex] with kind " ", "-" or "+".
@@ -146,7 +188,7 @@ function capture(names) {
 			console.error(`parity: ${name}: not captured (${entry ? entry.error : "missing"})`);
 			continue;
 		}
-		const header = [`# engine: ${captured.engine || "unknown"}`, `# captured: ${captured.date || new Date().toISOString().slice(0, 10)}`];
+		const header = [`# engine: ${entry.engine || captured.engine || "unknown"}`, `# captured: ${captured.date || new Date().toISOString().slice(0, 10)}`];
 		fs.writeFileSync(path.join(EXPECTED, `${name}.txt`), [...header, ...entry.lines].join("\n") + "\n");
 		console.log(`parity: ${name}: ${entry.lines.length} lines`);
 	}
@@ -155,10 +197,11 @@ function capture(names) {
 
 function main() {
 	const args = process.argv.slice(2);
-	const options = { ree: defaultRee(), diff: false, json: null, capture: false, writeKnown: false, names: [] };
+	const options = { ree: defaultRee(), rur: null, diff: false, json: null, capture: false, writeKnown: false, names: [] };
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
 		if (arg === "--ree") options.ree = args[++index];
+		else if (arg === "--rur") options.rur = args[++index];
 		else if (arg === "--diff") options.diff = true;
 		else if (arg === "--json") options.json = args[++index];
 		else if (arg === "--capture") options.capture = true;
@@ -168,14 +211,17 @@ function main() {
 	}
 	const names = options.names.length ? options.names : probeNames();
 	if (options.capture) return capture(names);
-	if (!options.ree) throw new Error("no ree: build it (cargo build --release) or pass --ree <exe>");
-	const known = readKnown();
+	if (!options.ree && !options.rur) throw new Error("no ree: build it (cargo build --release) or pass --ree <exe>");
+	if (options.rur && options.writeKnown) throw new Error("--write-known records ree's differences, not rur's");
+	// (known.json lists ree's differences: through rur every line must match)
+	const known = options.rur ? {} : readKnown();
+	const host = options.rur ? "rur" : "ree";
 	const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ree-parity-"));
 	const rows = [];
 	let failed = 0;
 	for (const name of names) {
 		const expected = readExpected(name);
-		const ran = runInRee(name, options.ree, scratch);
+		const ran = options.rur ? runInRur(name, options.rur, scratch) : runInRee(name, options.ree, scratch);
 		if (!expected) {
 			rows.push({ name, status: "no expected output", ran });
 			continue;
@@ -206,7 +252,7 @@ function main() {
 	if (options.diff) {
 		for (const row of rows) {
 			if (!row.result || (!row.result.unknown.length && !row.result.known.length)) continue;
-			console.log(`\n--- ${row.name} (expected: real engine, -; ree, +)`);
+			console.log(`\n--- ${row.name} (expected: real engine, -; ${host}, +)`);
 			const { diff } = row.result;
 			const expected = readExpected(row.name).lines;
 			for (const [kind, i, j] of diff) {

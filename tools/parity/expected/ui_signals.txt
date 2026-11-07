@@ -1,0 +1,15 @@
+# engine: Roblox Studio 0.744.0.7441077, a rendered desktop playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-07
+mount-read 300,200 10,162 300,600
+mount scroller.AbsolutePosition=10,-38 scroller.AbsoluteSize=300,200 scroller.AbsoluteCanvasSize=300,600 scroller.AbsoluteWindowSize=287,200 list.AbsoluteContentSize=300,600 row5.AbsolutePosition=10,162 row5.AbsoluteSize=300,50
+scroll-read canvas 0,120 row5 10,42
+scroll scroller.CanvasPosition=0,120 row5.AbsolutePosition=10,42
+overscroll-read canvas 0,400
+overscroll scroller.CanvasPosition=0,400 |Hear |PreR row5.AbsolutePosition=10,-238
+overscroll-after canvas 0,400 row5 10,-238
+resize-read size 300,250 window 287,250
+resize scroller.AbsoluteSize=300,250 scroller.CanvasPosition=0,350 scroller.AbsoluteWindowSize=287,250 row5.AbsolutePosition=10,-188
+add-read content 300,650 canvas 300,650
+add scroller.AbsoluteCanvasSize=300,650 list.AbsoluteContentSize=300,650
+scroll-from-heartbeat hb-write |Hear scroller.CanvasPosition=0,60 prerender-read row5 10,102 |PreR row5.AbsolutePosition=10,102
+coordinates inset 0,58/0,0 ignore=true screen 0,-58/1920,1080 box 10,-38/960,540 | ignore=false screen 0,0/1920,1022 box 10,20/960,511

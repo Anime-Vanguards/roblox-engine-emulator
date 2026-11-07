@@ -11,6 +11,8 @@ What checks the engine, and what each check covers.
   signals, instances, the Luau library and datatypes run in ree and in a Roblox client, and
   `node tools/parity/run.mjs` prints which lines differ. Their captured output is checked by
   `cargo test --release --test parity`: a line that matched the real engine must keep matching; the
-  differences not fixed yet are listed, with their reasons, in `tools/parity/known.json`.
+  differences not fixed yet are listed, with their reasons, in `tools/parity/known.json`. Probes that need a
+  GUI layout (when Absolute* properties and CanvasPosition change and fire during a scroll) run through
+  roblox-ui-renderer with `--rur <checkout>`.
 - Recordings: `ree record` of the same harness and project gives byte-identical `scene.rbxm`,
   `playback.json`, `events.json`, `camera.json` and summary.

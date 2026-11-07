@@ -1399,6 +1399,60 @@
 			"why": "not fixed yet"
 		}
 	],
+	"ui_signals": [
+		{
+			"line": "mount-read 300,200 10,162 300,600",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "mount scroller.AbsolutePosition=10,-38 scroller.AbsoluteSize=300,200 scroller.AbsoluteCanvasSize=300,600 scroller.AbsoluteWindowSize=287,200 list.AbsoluteContentSize=300,600 row5.AbsolutePosition=10,162 row5.AbsoluteSize=300,50",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "scroll-read canvas 0,120 row5 10,42",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "scroll scroller.CanvasPosition=0,120 row5.AbsolutePosition=10,42",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "overscroll-read canvas 0,400",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "overscroll scroller.CanvasPosition=0,400 |Hear |PreR row5.AbsolutePosition=10,-238",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "overscroll-after canvas 0,400 row5 10,-238",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "resize-read size 300,250 window 287,250",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "resize scroller.AbsoluteSize=300,250 scroller.CanvasPosition=0,350 scroller.AbsoluteWindowSize=287,250 row5.AbsolutePosition=10,-188",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "add-read content 300,650 canvas 300,650",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "add scroller.AbsoluteCanvasSize=300,650 list.AbsoluteContentSize=300,650",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "scroll-from-heartbeat hb-write |Hear scroller.CanvasPosition=0,60 prerender-read row5 10,102 |PreR row5.AbsolutePosition=10,102",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		},
+		{
+			"line": "coordinates inset 0,58/0,0 ignore=true screen 0,-58/1920,1080 box 10,-38/960,540 | ignore=false screen 0,0/1920,1022 box 10,20/960,511",
+			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		}
+	],
 	"values": [
 		{
 			"line": "value UDim2 typeof=UDim2 type=userdata tostring={1, 2}, {3, 4}",
