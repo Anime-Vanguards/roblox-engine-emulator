@@ -234,6 +234,18 @@ fn percent_decode(text: &str) -> String {
 /// of its own; Studio's playing client keeps one per call.)
 fn client_error_text(message: &str, trace: &str) -> String {
     let mut text = format!("{message}\n    Stack Begin");
+    for frame in stack_frames(trace) {
+        text.push_str("\n    ");
+        text.push_str(&frame);
+    }
+    text.push_str("\n    Stack End");
+    text
+}
+
+/// The frames of a Luau traceback (`<chunk>:<line>[ function <name>]` a line) as Roblox's stack text names them, the script's
+/// own code only: `Script '<chunk>', Line <n>`, with ` - function <name>` for a named function ([`client_error_text`]).
+pub(crate) fn stack_frames(trace: &str) -> Vec<String> {
+    let mut frames = Vec::new();
     for line in trace.lines() {
         let (place, function) = match line.split_once(" function ") {
             Some((place, function)) => (place, Some(function)),
@@ -243,13 +255,20 @@ fn client_error_text(message: &str, trace: &str) -> String {
         if chunk.starts_with("rur.") || chunk.starts_with('[') || number.parse::<u32>().is_err() {
             continue;
         }
-        text.push_str(&format!("\n    Script '{chunk}', Line {number}"));
-        if let Some(function) = function {
-            text.push_str(&format!(" - function {function}"));
-        }
+        frames.push(match function {
+            Some(function) => format!("Script '{chunk}', Line {number} - function {function}"),
+            None => format!("Script '{chunk}', Line {number}"),
+        });
     }
-    text.push_str("\n    Stack End");
-    text
+    frames
+}
+
+/// An output line LogService.MessageOut has yet to get ([`scheduler::deliver_log`]): its kind (print, info, warn, error), its
+/// text, and the converted context a LogService method gave (MessageOut's third argument; a line without one gets an empty table).
+pub struct LogLine {
+    pub kind: &'static str,
+    pub text: String,
+    pub context: Option<Value>,
 }
 
 /// The side a run's scripts are on ([`Options::run_context`]).
@@ -540,43 +559,59 @@ impl Engine {
 
     /// Output.Add with the virtual clock.
     pub fn output(&self, kind: &'static str, message: impl Into<String>, trace: Option<String>) {
+        self.output_with_context(kind, message, trace, None);
+    }
+
+    /// Output.Add with the virtual clock, and the line for LogService.MessageOut, with `context` (a LogService method's converted
+    /// context table) as its third argument. Kinds: print, info (MessageInfo: LogService:Info), warn, error.
+    pub fn output_with_context(&self, kind: &'static str, message: impl Into<String>, trace: Option<String>, context: Option<Value>) {
         let mut state = self.state.borrow_mut();
         let now = state.sched.now;
         let message = message.into();
-        if self.options.server() {
-            self.fire_log_events(&mut state, kind, &message, trace.as_deref());
-        } else if !self.options.edit_mode() && !state.sched.delivering_log {
-            // a playing client's LogService.MessageOut gets the line later in the frame (scheduler::deliver_log)
+        let server = self.options.server();
+        if server && kind == "error" {
+            self.fire_script_error(&mut state, &message, trace.as_deref());
+        }
+        if !self.options.edit_mode() && !state.sched.delivering_log {
+            // LogService.MessageOut gets the line later in the frame, on a playing client and on a server alike
+            // (scheduler::deliver_log; measured in a server game script, Studio 0.744: print, LogService:Info, :Warn and :Error's
+            // lines of one step arrive after that frame's Heartbeat handlers and the deferred work beside them). A client's error,
+            // and an engine warning that carries the script's stack, has its stack lines in the text; a server's keeps the
+            // message alone, as before (not measured).
             let text = match &trace {
-                Some(trace) if kind == "error" => client_error_text(&message, trace),
+                Some(trace) if !server && (kind == "error" || kind == "warn") => client_error_text(&message, trace),
                 _ => message.clone(),
             };
-            state.sched.log_queue.push((kind, text));
+            state.sched.log_queue.push(LogLine { kind, text, context });
         }
         state.output.add(kind, message, trace, now);
     }
 
-    /// A server's LogService.MessageOut (message, MessageType) for every output line, and
-    /// ScriptContext.Error (message, stackTrace, script) for a script error, as Roblox's
-    /// documentation describes them (deferred handlers; the script argument is nil: the engine does
-    /// not track which script a thread belongs to). Only when the service was made and the event
-    /// connected.
-    fn fire_log_events(&self, state: &mut State, kind: &str, message: &str, trace: Option<&str>) {
+    /// A LogService error table no script caught (LogService:Error, or :Log with MessageError): its method logged the message
+    /// when it was called, so the thread's end logs no error line of its own but the stack, each line apart as MessageInfo:
+    /// "Stack Begin", a `Script '<chunk>', Line <n>` line per frame, "Stack End". Measured in a playing client (Studio 0.744):
+    /// so for a spawned thread, a deferred one, an event handler and a caught table thrown again; ScriptContext.Error gets the
+    /// error's text as for any error (fired where ree fires it: a server's).
+    pub fn uncaught_log_error(&self, message: &str, trace: Option<String>) {
+        self.output("info", "Stack Begin", None);
+        for frame in trace.as_deref().map(stack_frames).unwrap_or_default() {
+            self.output("info", frame, None);
+        }
+        self.output("info", "Stack End", None);
+        if self.options.server() {
+            self.fire_script_error(&mut self.state.borrow_mut(), message, trace.as_deref());
+        }
+    }
+
+    /// A server's ScriptContext.Error (message, stackTrace, script) for a script error, as Roblox's documentation describes it
+    /// (deferred handlers; the script argument is nil: the engine does not track which script a thread belongs to). Only when
+    /// the service was made and the event connected.
+    fn fire_script_error(&self, state: &mut State, message: &str, trace: Option<&str>) {
         let Some(world) = self.world.get() else { return };
         let reflection = &self.reflection;
-        let find = |state: &State, class: &str| state.dom.at(world.game).children.iter().copied().find(|&child| &*reflection.class(state.dom.at(child).class).name == class);
-        let item = match kind {
-            "warn" => "MessageWarning",
-            "error" => "MessageError",
-            _ => "MessageOutput",
-        };
-        if let (Some(log), Some(event), Some(item)) = (find(state, "LogService"), reflection.name_id("MessageOut"), reflection.enum_item("MessageType", item)) {
-            instance::fire_event(state, log, event, vec![Value::String(Str::from(message)), Value::EnumItem(item)]);
-        }
-        if kind == "error" {
-            if let (Some(context), Some(event)) = (find(state, "ScriptContext"), reflection.name_id("Error")) {
-                instance::fire_event(state, context, event, vec![Value::String(Str::from(message)), Value::String(Str::from(trace.unwrap_or_default())), Value::Nil]);
-            }
+        let found = state.dom.at(world.game).children.iter().copied().find(|&child| &*reflection.class(state.dom.at(child).class).name == "ScriptContext");
+        if let (Some(context), Some(event)) = (found, reflection.name_id("Error")) {
+            instance::fire_event(state, context, event, vec![Value::String(Str::from(message)), Value::String(Str::from(trace.unwrap_or_default())), Value::Nil]);
         }
     }
 

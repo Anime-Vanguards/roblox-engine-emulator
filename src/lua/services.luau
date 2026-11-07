@@ -1164,4 +1164,223 @@ Method("BindableFunction", "Invoke", function(Self, ...)
 	return R.Copied(Callback(R.Copied(...)))
 end)
 
+-- LogService:Output, Info, Warn, Error and Log: a line of their MessageType (Output: print's, Info: MessageInfo, Warn: warn's,
+-- Error: an error line, then a thrown error table), its `{key}` placeholders filled from the context. Measured in a playing
+-- client (Studio 0.744; a server's game script took the same lines and order) beside Roblox's LogService documentation.
+-- A placeholder runs from `{` to the next `}` and takes the context's value at that text (the table's own lookup: a
+-- metatable's __index answers), written as tostring writes it (an Instance its Name); a key the context lacks keeps its
+-- placeholder; `{{` and `}}` write one brace, and a lone `}` stays. Without a context table (none, or a number, a string, an
+-- Instance) the message is left as it is, braces included.
+local function LogRender(Template, Context)
+	local Out = {}
+	local Index, Length = 1, #Template
+	while Index <= Length do
+		local Next = string.find(Template, "[{}]", Index)
+		if not Next then
+			table.insert(Out, string.sub(Template, Index))
+			break
+		end
+		table.insert(Out, string.sub(Template, Index, Next - 1))
+		local Brace = string.sub(Template, Next, Next)
+		if string.sub(Template, Next + 1, Next + 1) == Brace then
+			table.insert(Out, Brace)
+			Index = Next + 2
+		elseif Brace == "}" then
+			table.insert(Out, "}")
+			Index = Next + 1
+		else
+			local Close = string.find(Template, "}", Next + 1, true)
+			if not Close then
+				table.insert(Out, string.sub(Template, Next))
+				break
+			end
+			local Value = Context[string.sub(Template, Next + 1, Close - 1)]
+			table.insert(Out, if Value == nil then string.sub(Template, Next, Close) else tostring(Value))
+			Index = Close + 1
+		end
+	end
+	return table.concat(Out)
+end
+
+-- The context as MessageOut and a thrown error carry it (measured): a new table each time, the given table's own keys (not a
+-- metatable's) with their values copied. A context whose keys are all strings keeps its values' types: a function becomes
+-- "<function>", an Instance its full name, a table a copy of its own (its keys as they are), and one that holds itself its
+-- tostring text; a thread, an Enum and a plain userdata are left out, other values (numbers, strings, datatypes, EnumItems,
+-- buffers) kept. A context with any other key (an array part, a number key) keeps strings, numbers and booleans and writes
+-- every other value as tostring does (an Instance its Name, a Vector3 "1, 2, 3", a table "table: 0x..."). A number key becomes
+-- its whole part's text (2.7 "2"; past int32's range "-2147483648"), a string key of the same text wins over it, other keys are
+-- left out.
+local function LogContextValue(Value, Path)
+	local Kind = typeof(Value)
+	if Kind == "function" then
+		return "<function>"
+	elseif Kind == "Instance" then
+		return Value:GetFullName()
+	elseif Kind == "table" then
+		if Path[Value] then
+			return nil, true
+		end
+		Path[Value] = true
+		local Copy = {}
+		for Key, Item in next, Value do
+			local Converted, Cycle = LogContextValue(Item, Path)
+			if Cycle then
+				return nil, true
+			end
+			if Converted ~= nil then
+				Copy[Key] = Converted
+			end
+		end
+		Path[Value] = nil
+		return Copy
+	elseif Kind == "thread" or Kind == "Enum" or Kind == "userdata" then
+		return nil
+	end
+	return Value
+end
+local function LogContext(Given)
+	local Mixed = false
+	for Key in next, Given do
+		if type(Key) ~= "string" then
+			Mixed = true
+			break
+		end
+	end
+	local Out, Numbered = {}, {}
+	for Key, Value in next, Given do
+		local Kind = type(Key)
+		if Kind == "string" or Kind == "number" then
+			local Converted, Cycle
+			if Mixed then
+				local ValueKind = type(Value)
+				Converted = if ValueKind == "string" or ValueKind == "number" or ValueKind == "boolean" then Value else tostring(Value)
+			else
+				Converted, Cycle = LogContextValue(Value, {})
+				if Cycle then
+					Converted = tostring(Value)
+				end
+			end
+			if Converted ~= nil then
+				if Kind == "string" then
+					Out[Key] = Converted
+				else
+					local Text = if Key == Key and Key > -2147483649 and Key < 2147483648
+						then string.format("%d", if Key < 0 then math.ceil(Key) else math.floor(Key))
+						else "-2147483648"
+					Numbered[Text] = Converted
+				end
+			end
+		end
+	end
+	for Text, Value in Numbered do
+		if Out[Text] == nil then
+			Out[Text] = Value
+		end
+	end
+	return Out
+end
+
+-- The message as text (measured): a string as it is and a number as tostring writes it; anything else warns with the script's
+-- stack ("argument #1 expects a string, but boolean was passed") and is then written as the engine writes that type: a table
+-- "{}", an Instance "Instance", a function "function", an Enum "nil", the rest as tostring does (a boolean, a Vector3).
+local function LogMessage(Message, Argument)
+	local Kind = type(Message)
+	if Kind == "string" then
+		return Message
+	elseif Kind == "number" then
+		return tostring(Message)
+	end
+	local Type = typeof(Message)
+	R.LogWarn(`argument #{Argument} expects a string, but {Type} was passed`, debug.traceback())
+	if Type == "table" then
+		return "{}"
+	elseif Type == "Instance" then
+		return "Instance"
+	elseif Type == "function" then
+		return "function"
+	elseif Type == "Enum" then
+		return "nil"
+	end
+	return tostring(Message)
+end
+
+local function LogSelf(Self, Member)
+	if typeof(Self) ~= "Instance" or not Self:IsA("LogService") then
+		error(`Expected ':' not '.' calling member function {Member}`, 0)
+	end
+end
+
+-- The thrown error's tostring (measured): its message when that is a string or a number, else "Error occurred"
+local function LogErrorText(Self)
+	local Message = rawget(Self, "message")
+	local Text = if type(Message) == "string" then Message elseif type(Message) == "number" then tostring(Message) else "Error occurred"
+	R.LogErrorText(Text)
+	return Text
+end
+
+-- One line: the message checked (`Position`: its argument's place counting the service, 2 or 3), written and its placeholders
+-- filled; the line logged with a copy of the context. Returns the text and the template.
+local function LogLine(Kind, Message, Given, Position)
+	if Message == nil then
+		error(`Argument {Position} missing or nil`, 0)
+	end
+	local Template = LogMessage(Message, Position - 1)
+	local Context = if type(Given) == "table" then Given else nil
+	local Text = if Context then LogRender(Template, Context) else Template
+	R.LogLine(Kind, Text, if Context then LogContext(Context) else nil)
+	Charge(Cost.LogCall)
+	return Text, Template, Context
+end
+
+-- An error line, then the error table, thrown (measured): `message` (the text), `template` (the message as given), `context`
+-- (a copy of its own; an empty table without one), `stack` ("Stack Begin", a `Script '<chunk>', Line <n>` line per frame of the
+-- calling script, "Stack End"), and a metatable of its own whose __tostring gives the message. Not caught, it logs no other
+-- error line: Engine::uncaught_log_error.
+local function LogError(Message, Given, Position)
+	local Text, Template, Context = LogLine("error", Message, Given, Position)
+	local Thrown = {}
+	Thrown.message = Text
+	Thrown.stack = R.LogStack(debug.traceback())
+	Thrown.template = Template
+	Thrown.context = if Context then LogContext(Context) else {}
+	setmetatable(Thrown, { __tostring = LogErrorText })
+	error(Thrown, 0)
+end
+
+for Member, Kind in { Output = "print", Info = "info", Warn = "warn" } do
+	Method("LogService", Member, Priced(function(Self, Message, Context)
+		LogSelf(Self, Member)
+		LogLine(Kind, Message, Context, 2)
+	end))
+end
+Method("LogService", "Error", Priced(function(Self, Message, Context)
+	LogSelf(Self, "Error")
+	LogError(Message, Context, 2)
+end))
+-- Log(messageType, message, context): an EnumItem of MessageType, its name or its value (measured: "MessageInfo" and 1 are
+-- MessageInfo; another enum's item "Unable to cast Material to MessageType", 7 "Unable to cast double to MessageType")
+local LogKinds = { MessageOutput = "print", MessageInfo = "info", MessageWarning = "warn", MessageError = "error" }
+Method("LogService", "Log", Priced(function(Self, MessageType, Message, Context)
+	LogSelf(Self, "Log")
+	if MessageType == nil then
+		error("Argument 2 missing or nil", 0)
+	end
+	local Item = nil
+	for _, Candidate in Enum.MessageType:GetEnumItems() do
+		if Candidate == MessageType or Candidate.Name == MessageType or Candidate.Value == MessageType then
+			Item = Candidate
+			break
+		end
+	end
+	if not Item then
+		local Type = typeof(MessageType)
+		local Name = if Type == "number" then "double" elseif Type == "EnumItem" then tostring(MessageType.EnumType) else Type
+		error(`Unable to cast {Name} to MessageType`, 0)
+	end
+	if Item.Name == "MessageError" then
+		LogError(Message, Context, 3)
+	end
+	LogLine(LogKinds[Item.Name], Message, Context, 3)
+end))
+
 return true

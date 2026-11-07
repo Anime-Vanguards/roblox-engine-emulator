@@ -344,6 +344,9 @@ pub const LISTED: f64 = 0.016e-6;
 pub const REFLECTED_CLASS: f64 = 1.32e-6;
 pub const REFLECTED_CLASS_DISPLAY: f64 = 0.56e-6;
 pub const REFLECTED_CLASS_TESTED: f64 = 0.006e-6;
+/// A LogService logging call (Output, Info, Warn, Error, Log), whole: the same client, `LogService:Info("L {a}", { a = 1 })` 1.10 us
+/// with the Luau around it (20 calls a sample, the median of 15 samples), the table constructor about 0.1 of that.
+pub const LOG_CALL: f64 = 1.0e-6;
 /// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path crosses, whether
 /// its filter admits them or not: one that crosses any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`]. The parity
 /// bench's rays, on geometry of their own that both sides find the same parts in (Meta.queries), beyond the Luau around the call: a

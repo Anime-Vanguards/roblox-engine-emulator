@@ -658,14 +658,31 @@ refuses `--player`.
   Roblox's documentation where it gives them.
 - Remotes: FireClient / FireAllClients reach no client; InvokeClient waits until its player leaves.
 - EncodingService (Zstd compression and Base64) in a server; a client keeps it unemulated.
-- LogService.MessageOut and ScriptContext.Error fire for a server's own output. A playing client's
-  LogService.MessageOut gets each line after the frame's Heartbeat handlers and the deferred work they leave, a
-  script error with its stack lines (`Stack Begin`, `Script '<name>', Line <n> - function <f>`, `Stack End`), as a
-  playing client does; a line a MessageOut handler logs reaches no handler.
+- LogService.MessageOut gets a server's lines as a playing client's ("Output and LogService" below), and
+  ScriptContext.Error fires for a server's own errors.
 - `--studio false` makes `RunService:IsStudio()` false, as on a live server, so a game takes its live
   branches.
 
 A print of exactly `@done` ends `ree run` / `ree record` at the end of that frame.
+
+## Output and LogService
+
+Every line a run outputs has a kind: `print`, `info` (LogService:Info, and Log with MessageInfo), `warn` or
+`error`. LogService.MessageOut gets each line after the frame's Heartbeat handlers and the deferred work they
+leave, on a playing client and on a server alike, with three arguments: the text, its MessageType and a context
+table (a copy of the one a LogService method was given, else an empty table). A playing client's script error
+carries its stack lines (`Stack Begin`, `Script '<name>', Line <n> - function <f>`, `Stack End`); a line a
+MessageOut handler logs reaches no handler. Measured in a playing client and in a server game script.
+
+LogService's Output, Info, Warn, Error and Log log a line of their MessageType with the message's `{key}`
+placeholders filled from the context (`{{` and `}}` write one brace; a key the context lacks keeps its
+placeholder; a value is written as `tostring` writes it). The context MessageOut and an error carry is a copy:
+with string keys only, a function becomes `"<function>"`, an Instance its full name and a nested table a copy;
+with any other key, every value but strings, numbers and booleans becomes its `tostring` text. Error logs its
+line, then throws a table with `message`, `template`, `context` and `stack` whose `tostring` is the message; one
+no script catches logs its stack as MessageInfo lines and no second error line. A message that is neither a
+string nor a number logs a warning with the script's stack first. These follow Roblox's documentation and
+measurements in a playing client.
 
 ## Known limitations
 

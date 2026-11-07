@@ -18,6 +18,35 @@ const SERVER: &str = include_str!("server.luau");
 /// Context.SetJoinData calls to give a player the join data Player:GetJoinData returns
 pub const SET_JOIN_DATA: &str = "ree.setjoindata";
 
+/// LogService error tables turned into text (their `__tostring`, services.luau ErrorText): how many so far, and the last
+/// one's (thread that asked, text). A thread that ends on such a table has mlua convert it into text on its resumer's
+/// thread before the scheduler sees the error ([`uncaught_log_error`]).
+#[derive(Default)]
+struct LogErrorTexts {
+    count: u64,
+    thread: usize,
+    text: String,
+}
+
+thread_local! {
+    static LOG_ERROR_TEXTS: std::cell::RefCell<LogErrorTexts> = std::cell::RefCell::new(LogErrorTexts::default());
+}
+
+/// How many LogService error tables have been turned into text so far (taken before a thread is resumed).
+pub fn log_error_texts() -> u64 {
+    LOG_ERROR_TEXTS.with(|texts| texts.borrow().count)
+}
+
+/// Whether `thread`, which ended on the error `message`, ended on a LogService error table no script caught: one was turned
+/// into text since `since`, last, on another thread than `thread` (mlua converts the ended thread's error value on the
+/// thread that resumed it; a script's own `tostring` of the table runs on the script's thread), giving `message`.
+pub fn uncaught_log_error(since: u64, thread: &LuaThread, message: &str) -> bool {
+    LOG_ERROR_TEXTS.with(|texts| {
+        let texts = texts.borrow();
+        texts.count > since && texts.thread != thread.to_pointer() as usize && texts.text == message
+    })
+}
+
 fn instance_of(value: &LuaValue) -> LuaResult<crate::InstanceId> {
     match value {
         LuaValue::UserData(ud) => raw::instance_of_ud(ud).ok_or_else(|| LuaError::runtime("Instance expected")),
@@ -173,6 +202,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         ("ActorInvoke", crate::cost::ACTOR_INVOKE),
         ("SharedIncrement", crate::cost::SHARED_INCREMENT),
         ("ModelQuery", crate::cost::MODEL_QUERY),
+        ("LogCall", crate::cost::LOG_CALL),
         ("Thread", crate::cost::THREAD),
         ("PivotSingle", crate::cost::PIVOT_SINGLE),
         ("PivotPart", crate::cost::PIVOT_PART),
@@ -219,6 +249,55 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "Missing",
         lua.create_function(move |_, (class_name, member): (String, String)| {
             e.state.borrow_mut().output.missing(&class_name, &member);
+            Ok(())
+        })?,
+    )?;
+    // LogService's logging methods (services.luau): a line of a kind with the converted context MessageOut passes on
+    let e = engine.clone();
+    r.set(
+        "LogLine",
+        lua.create_function(move |_, (kind, message, context): (LuaString, LuaString, Option<LuaTable>)| {
+            let kind = match &*kind.as_bytes() {
+                b"info" => "info",
+                b"warn" => "warn",
+                b"error" => "error",
+                _ => "print",
+            };
+            let context = context.map(|table| crate::value::Value::Lua(Box::new(LuaValue::Table(table))));
+            e.output_with_context(kind, message.to_string_lossy(), None, context);
+            Ok(())
+        })?,
+    )?;
+    // an engine warning about the calling script's arguments, with its stack (a client's MessageOut text carries the stack lines)
+    let e = engine.clone();
+    r.set(
+        "LogWarn",
+        lua.create_function(move |_, (message, trace): (LuaString, Option<LuaString>)| {
+            e.output("warn", message.to_string_lossy(), trace.map(|trace| trace.to_string_lossy()));
+            Ok(())
+        })?,
+    )?;
+    // a LogService error's `stack`: "Stack Begin", a line per frame of the script's own code, "Stack End"
+    r.set(
+        "LogStack",
+        lua.create_function(|lua, trace: LuaString| {
+            let mut lines = vec!["Stack Begin".to_string()];
+            lines.extend(crate::stack_frames(&trace.to_string_lossy()));
+            lines.push("Stack End".to_string());
+            lua.create_string(lines.join("\n"))
+        })?,
+    )?;
+    // a LogService error table turned into text ([`uncaught_log_error`])
+    r.set(
+        "LogErrorText",
+        lua.create_function(|lua, text: LuaString| {
+            let thread = lua.current_thread().to_pointer() as usize;
+            LOG_ERROR_TEXTS.with(|texts| {
+                let mut texts = texts.borrow_mut();
+                texts.count += 1;
+                texts.thread = thread;
+                texts.text = text.to_string_lossy();
+            });
             Ok(())
         })?,
     )?;

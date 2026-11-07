@@ -5652,6 +5652,81 @@ fn a_playing_clients_message_out_arrives_after_the_frames_heartbeat() {
     assert!(output.contains(&want.to_string()), "{output:?}");
 }
 
+/// LogService's logging methods in a playing client (measured, Studio 0.744: tools/parity/probes/logservice_methods.luau): a
+/// line of the method's MessageType with its {key} placeholders filled ({{ and }} escapes, a missing key kept), which
+/// MessageOut gets after the frame's Heartbeat with a converted copy of the context as its third argument (every line gets
+/// one: an empty table without a context); Error logs its line, then throws a table (message, template, context, stack) whose
+/// tostring is the message, and one nothing catches logs its stack as MessageInfo lines; a message that is not a string warns
+/// first. The run's output keeps a MessageInfo line as kind `info`.
+#[test]
+fn log_service_methods_log_with_their_context_and_error_throws_a_table() {
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Log = {}
+        _G.Log = Log
+        local LogService = game:GetService("LogService")
+        LogService.MessageOut:Connect(function(...)
+            local Message, Kind, Context = ...
+            local Keys = {}
+            for Key, Value in Context do
+                table.insert(Keys, tostring(Key) .. "=" .. tostring(Value))
+            end
+            table.sort(Keys)
+            table.insert(Log, Kind.Name .. "[" .. table.concat(string.split(Message, "\n"), "/") .. "]" .. select("#", ...) .. "{" .. table.concat(Keys, ";") .. "}")
+        end)
+        local Part = Instance.new("Part")
+        Part.Name = "P"
+        Part.Parent = workspace
+        LogService:Info("i a={a} {{x}} }} {missing}", { a = 1 })
+        LogService:Output("o {p}", { p = Part, f = print })
+        LogService:Warn("w {1}", { "x" })
+        LogService:Log(Enum.MessageType.MessageInfo, "l {a}", { a = 2 })
+        print("p")
+        local Ok, Thrown = pcall(LogService.Error, LogService, "e {a}", { a = 3 })
+        print("thrown", Ok, typeof(Thrown), Thrown.message, Thrown.template, Thrown.context.a, tostring(Thrown), string.sub(Thrown.stack, 1, 11))
+        print("errors", select(2, pcall(LogService.Info, LogService)), select(2, pcall(LogService.Log, LogService, 7, "x")))
+        task.spawn(function()
+            LogService:Error("u")
+        end)
+        task.spawn(function()
+            LogService:Info(true)
+        end)
+        "##,
+    );
+    for _ in 0..2 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let output = run(&lua, &engine, r#"print(table.concat(_G.Log, ","))"#);
+    assert!(output.contains(&"print: thrown false table e 3 e {a} 3 e 3 Stack Begin".to_string()), "{output:?}");
+    assert!(output.contains(&"print: errors Argument 2 missing or nil Unable to cast double to MessageType".to_string()), "{output:?}");
+    let heard = output.last().expect("the log").clone();
+    let want = [
+        "MessageInfo[i a=1 {x} } {missing}]3{a=1}",
+        "MessageOutput[o P]3{f=<function>;p=Workspace.P}",
+        "MessageWarning[w {1}]3{1=x}",
+        "MessageInfo[l 2]3{a=2}",
+        "MessageOutput[p]3{}",
+        "MessageError[e 3]3{a=3}",
+        "MessageError[u]3{},MessageInfo[Stack Begin]3{},MessageInfo[Script 'Test', Line 26]3{},MessageInfo[Stack End]3{}",
+        "MessageWarning[argument #1 expects a string, but boolean was passed/    Stack Begin/    Script 'Test', Line 29/    Stack End]3{},MessageInfo[true]3{}",
+    ];
+    for part in want {
+        assert!(heard.contains(part), "{part} in {heard}");
+    }
+    let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|e| format!("{}: {}", e.kind, e.message)).collect();
+    for line in ["info: i a=1 {x} } {missing}", "print: o P", "warn: w {1}", "info: l 2", "error: e 3", "error: u", "info: Stack Begin", "info: Stack End"] {
+        assert!(lines.contains(&line.to_string()), "{line} in {lines:?}");
+    }
+    // (the uncaught error logs no second error line of its own)
+    assert_eq!(lines.iter().filter(|line| line.starts_with("error: u")).count(), 1, "{lines:?}");
+}
+
 /// A part fires the Changed events Roblox fires beside a write, whatever their own values (measured in a playing client,
 /// Studio 0.744: tools/parity/probes/derived_changed.luau), and its BrickColor is a view of its Color.
 #[test]

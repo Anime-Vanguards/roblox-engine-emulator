@@ -193,9 +193,9 @@ pub struct ReplayStatus {
 pub struct Scheduler {
     pub now: f64,
     pub frame: u64,
-    /// A playing client's output lines waiting for LogService.MessageOut (kind, text): it gets them after the frame's
+    /// A playing client's or a server's output lines waiting for LogService.MessageOut: it gets them after the frame's
     /// Heartbeat handlers and the deferred work they leave ([`deliver_log`])
-    pub log_queue: Vec<(&'static str, String)>,
+    pub log_queue: Vec<crate::LogLine>,
     /// While MessageOut's handlers run: a line they log reaches no handler (measured)
     pub delivering_log: bool,
     pub heartbeat_count: u64,
@@ -1052,6 +1052,7 @@ pub fn resume(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMulti
         // (the script timeout times the outermost resumption of a nest: watchdog.rs)
         (top_level, crate::watchdog::enter(sched.timeout.as_ref()))
     };
+    let log_errors = super::lua::stubs::log_error_texts();
     let resumed = {
         let _resuming = super::lua::refs::Resuming::enter();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| thread.resume::<LuaMultiValue>(args)))
@@ -1061,7 +1062,11 @@ pub fn resume(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMulti
         Ok(Err(error)) => {
             let message = error_message(&error);
             let trace = super::lua::traceback(lua, thread);
-            engine.output("error", message, trace);
+            if super::lua::stubs::uncaught_log_error(log_errors, thread, &message) {
+                engine.uncaught_log_error(&message, trace);
+            } else {
+                engine.output("error", message, trace);
+            }
             false
         }
         // mlua's reference stack ran full under this thread (lua/refs.rs): its error, and the run goes on
@@ -1411,12 +1416,13 @@ fn heartbeat_handlers(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<(
     deliver_log(lua, engine)
 }
 
-/// A playing client's LogService.MessageOut: the lines logged since the last delivery, each with its MessageType, after
-/// the frame's Heartbeat handlers and the deferred work they leave, handlers called later-connected first. Measured in a
-/// playing client (Studio 0.744, tools/parity/probes/logservice.luau): a warning logged at a resumption point, in a
-/// deferred thread or in a Heartbeat handler arrives after that frame's Heartbeat handlers, after the deferred events
-/// queued beside it; a line a MessageOut handler logs reaches no handler. (A server fires MessageOut when the line is
-/// logged: Engine::fire_log_events.)
+/// LogService.MessageOut on a playing client and on a server: the lines logged since the last delivery, each with its
+/// MessageType and a context table, after the frame's Heartbeat handlers and the deferred work they leave, handlers called
+/// later-connected first. Measured in a playing client (Studio 0.744, tools/parity/probes/logservice.luau): a warning logged
+/// at a resumption point, in a deferred thread or in a Heartbeat handler arrives after that frame's Heartbeat handlers, after
+/// the deferred events queued beside it; a line a MessageOut handler logs reaches no handler. A server's game script measured
+/// the same order and the same dropped line. The third argument is always a table (measured, client and server: select("#")
+/// is 3 for print and warn too): a LogService method's converted context, else a new empty one.
 pub fn deliver_log(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let lines = std::mem::take(&mut engine.state.borrow_mut().sched.log_queue);
     if lines.is_empty() {
@@ -1430,14 +1436,25 @@ pub fn deliver_log(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let Some(signal) = signal else { return Ok(()) };
     engine.state.borrow_mut().sched.delivering_log = true;
     let mut result = Ok(());
-    for (kind, text) in lines {
-        let item = engine.reflection.enum_item("MessageType", match kind {
+    for line in lines {
+        let item = engine.reflection.enum_item("MessageType", match line.kind {
             "warn" => "MessageWarning",
             "error" => "MessageError",
+            "info" => "MessageInfo",
             _ => "MessageOutput",
         });
         let Some(item) = item else { continue };
-        result = crate::lua::instance::fire_immediate(lua, engine, signal, &[Value::String(crate::value::Str::from(text.as_str())), Value::EnumItem(item)]);
+        let context = match line.context {
+            Some(context) => context,
+            None => match lua.create_table() {
+                Ok(table) => Value::Lua(Box::new(LuaValue::Table(table))),
+                Err(error) => {
+                    result = Err(error);
+                    break;
+                }
+            },
+        };
+        result = crate::lua::instance::fire_immediate(lua, engine, signal, &[Value::String(crate::value::Str::from(line.text.as_str())), Value::EnumItem(item), context]);
         if result.is_err() {
             break;
         }

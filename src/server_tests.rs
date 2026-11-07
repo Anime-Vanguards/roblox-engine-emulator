@@ -400,6 +400,56 @@ fn a_server_hears_its_output_through_log_service_and_script_context() {
     }
 }
 
+/// A server's LogService.MessageOut gets its lines as a playing client's does (measured in a server game script, Studio 0.744):
+/// after the frame's Heartbeat handlers, not when the line is logged, three arguments, the third a table (a LogService
+/// method's converted context, an empty one for print); a line logged in a MessageOut handler reaches no handler. Its
+/// LogService methods log and throw as a client's.
+#[test]
+fn a_servers_message_out_is_queued_with_a_context_argument() {
+    let (lua, engine) = start(RunContext::Server);
+    let script = {
+        let mut state = engine.state.borrow_mut();
+        let class = engine.reflection.class_id("ModuleScript").unwrap();
+        super::instance::create_named(&mut state, &engine.reflection, class, "Test")
+    };
+    let env = engine_lua::modules::environment(&lua, &engine, script).expect("environment");
+    let source = r##"
+        local LogService = game:GetService("LogService")
+        local Marks = {}
+        LogService.MessageOut:Connect(function(...)
+            local Message, Kind, Context = ...
+            local Keys = {}
+            for Key, Value in Context do
+                table.insert(Keys, tostring(Key) .. "=" .. tostring(Value))
+            end
+            table.insert(Marks, Message .. ":" .. Kind.Name .. ":" .. select("#", ...) .. ":" .. table.concat(Keys, ";"))
+            if Message == "outer" then
+                LogService:Info("inner")
+            end
+        end)
+        game:GetService("RunService").Heartbeat:Once(function()
+            table.insert(Marks, "|hb")
+        end)
+        LogService:Info("i {a}", { a = 1 })
+        table.insert(Marks, "after-info")
+        print("p")
+        local Ok, Thrown = pcall(LogService.Error, LogService, "e {a}", { a = 2 })
+        table.insert(Marks, "after-error:" .. typeof(Thrown) .. ":" .. tostring(Thrown))
+        LogService:Info("outer")
+        task.wait(0.05)
+        print("marks " .. table.concat(Marks, ","))
+    "##;
+    let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
+    let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
+    assert!(!matches!(call.outcome().unwrap(), CallOutcome::Failed(..)));
+    let now = engine.state.borrow().sched.now;
+    scheduler::run_until(&lua, &engine, now + 0.1).unwrap();
+    let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|e| format!("{}: {}", e.kind, e.message)).collect();
+    assert!(has(&lines, "print: marks after-info,after-error:table:e 2,|hb,i 1:MessageInfo:3:a=1,p:MessageOutput:3:,e 2:MessageError:3:a=2,outer:MessageInfo:3:"), "{lines:?}");
+    // (the output keeps every line, the one no handler heard included)
+    assert!(has(&lines, "info: i 1") && has(&lines, "error: e 2") && has(&lines, "info: inner"), "{lines:?}");
+}
+
 /// Offline a server makes the default R6 rig for Players:CreateHumanoidModelFromDescription(Async) with an R6 rig type (a
 /// root part, a torso, a head and four limbs joined by the standard Motor6Ds, PrimaryPart the root), R15 a bare Model with
 /// a Humanoid; InsertService:LoadAsset raises after a frame as a failed load does; Player:LoadCharacterAsync is a no-op.
