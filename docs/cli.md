@@ -17,6 +17,7 @@ ree record ... --profile                             # where the time went, on s
 ree run ... --profile boundary [--profile-out f.json]  # Luau-to-engine crossings per call site, priced (src/boundary.rs)
 ree record ... --profile work,alloc,heap [--profile-out dir]  # the profiling suite: summary, JSON, flame graphs, a report page
 ree profile diff before/profile after/profile        # two profiles compared
+ree profile try tools/what-if/nested-keys.luau       # variants of the same code side by side ("What-if comparisons")
 ree serve --status                                   # the running services; --stop asks them to exit
 ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bundles --assets Models
                                                      # start the service and read in what a first recording reads
@@ -345,6 +346,142 @@ Windows service reads them on a profile's behalf (tools/hw-counters):
   reading and fixed shares of it: for tests, never a measurement); `REE_HW_COUNTERS=console` reads from
   `ree-hw-counters serve` run in a console (a pipe of its own; it counts only with the profiling right, so from an
   elevated shell). Windows only.
+
+## What-if comparisons
+
+`ree profile try <file.luau>` measures other ways to write the same thing side by side: every variant at every input
+size runs in a fresh engine under the profiler, and one folder holds the profiles and an index of what they show
+(`compare.json`), which agents and the profile viewer read. (The runner is being built: this is the format it will
+write.)
+
+- **The variant file** is a Luau module:
+
+  ```lua
+  return {
+      title = "t[k][v] or t[v][k]",                  -- optional: the file's name otherwise
+      about = "two keys, many values each",          -- optional, one line
+      sizes = { 10, 100, 1000, 10000 },              -- the n every variant runs at (default { 1 })
+      frames = 1,                                    -- calls of run, one a frame (default 1)
+      setup = function(n) return data end,           -- the input; measured as the setup phase, not the run
+      variants = {
+          ["t[k][v]"] = function(data) return result end,
+          ["t[v][k]"] = { setup = function(n) return layout end, run = function(layout) return result end },
+      },
+      check = function(a, b, n) return a == b end,   -- optional: the baseline's result against another's
+  }
+  ```
+
+  A variant is a function, run with the file's `setup` (which then defaults to returning n), or `{ setup = ..., run = ... }`:
+  its own setup builds its own layout of the input (which the heap figures then show) and `run` uses it. A dictionary of
+  variants runs in name order, a list of `{ name = ..., setup = ..., run = ... }` in its own; the first is the baseline,
+  which the others are measured against. `check(a, b, n)` gets the baseline's result and another variant's at the same size
+  and returns true, or false and a message; `check = true` compares them for deep equality. Results are checked in an
+  engine of their own, never in a profiled run.
+- **Versions of a module**: `versions = { before = "old/Handler.luau", after = "../src/Handler.luau" }` (paths from the
+  variant file's folder) makes each version of one module a variant. With `module = "ReplicatedStorage/Shared/Handler"`
+  each version stands in for that ModuleScript of the project before anything requires it (`Context.StandIn`), so it
+  requires its siblings as the project's own does; without `module` each version is mounted on its own. `setup(n, Module)`
+  and `run(data, Module)` get the version's module. Project options (`--roots`, `--project`, `--place`, `--mount`, and the
+  other engine options above) pass through to every run; without them the runs have no project.
+- **What runs.** For each variant and size, one profiled run: `ree run` of a generated harness with `--profile all`,
+  written to `runs/<variant>/<size>/`, an ordinary profile folder (`ree profile report` and `diff` read it). The harness
+  marks three phases, each with a heap snapshot at its mark: `setup` (the variant's setup, in a frame of its own), `run`
+  (`frames` calls of run, one a frame, from the frame after setup's) and `after` (the result still held). Setup's and
+  run's calls run on threads of their own, so their stacks hang from their phase in the call tree and the folded files.
+  Host time comes from runs of its own whose only profile is the marks' clock (`--profile cpu`): `--rounds` rounds (default
+  9), each running every variant and size once in a fresh process, in an order rotated each round, with the baseline run
+  twice (an A/A pair: how far two runs of the same code differ). Such a run prepares its inputs first, then calls run on
+  them back to back for about `--time-ms` (default 5) ms. With the hardware counter service installed, a run of its own
+  per variant and size reads `--profile hw` (`runs/<variant>/<size>/hw/`). One more engine runs every variant at every
+  size for `check`.
+- **Options**: `--out <dir>` (default `what-if/<file name>` here), `--sizes a,b`, `--variants a,b` (some of them, the
+  first the baseline), `--frames <n>`, `--rounds <n>`, `--time-ms <ms>`, `--no-time`, `--no-hw`, `--no-check`,
+  `--keep-timed` (keep the timed runs' profile folders in `timed/`), and engine options.
+- **Which numbers are exact.** The work clock, instructions, allocations (bytes and count), the reachable heap, the
+  collector's steps and bytes freed (it paces itself by the scripts' work), table shapes, rehashes, cold first touches
+  and inline cache counts are the same in every run of the same code: one profiled run is enough, and any difference
+  between variants is theirs. Host time, the collector's host time and hardware counters are measured: medians over the
+  rounds with their spread, and a winner only where the difference is wider than the A/A pair's.
+- **Files**: `compare.json` (below), `compare.txt` (the text summary, also printed), `runs/<variant>/<size>/`,
+  `diff/<variant>/` (`ree profile diff` of the baseline's profile and the variant's at the largest size) and `harness/`
+  (the generated harness).
+
+### compare.json
+
+```jsonc
+{
+  "format": "ree-what-if", "version": 1,
+  "title": "t[k][v] or t[v][k]", "about": "...", "file": "<the variant file>", "out": "<this folder>",
+  "command": "<the command line>",
+  "baseline": "t[k][v]",
+  "variants": [{"name": "t[k][v]", "slug": "t-k-v", "kind": "function", "source": "tkv.luau:12"}],
+  "sizes": [10, 100, 1000, 10000],
+  "frames": 1,
+  "fidelity": "fidelity: ...",
+  "metrics": [{"key": "work_ms", "label": "work clock", "unit": "ms", "better": "lower", "exact": true, "about": "..."}],
+  "runs": [{
+    "variant": "t[k][v]", "size": 10, "status": "ok", "error": null,
+    "profile": "runs/t-k-v/10", "hw_profile": null,
+    "digest": "9f3c0a21", "check": {"ok": true, "message": null},
+    "setup": {"work_ms": 0.004, "insns": 120, "...": 0},
+    "run": {"work_ms": 0.002, "host_ms": 0.0011, "...": 0},
+    "host": {"ms": [0.0011, 0.0012], "cycles": [5200, 5310], "reps": 2500},
+    "heap": {"before": 1052672, "after_setup": 1060864, "after_run": 1061888},
+    "tables": {"count": 3, "bytes": 1312, "sites": [{"...": "a site, below"}]},
+    "hot": [{"key": "...", "name": "build", "module": "tkv", "line": 14, "work_ms": 0.0018, "insns": 98}]
+  }],
+  "scaling": [{"variant": "t[k][v]", "metric": "work_ms", "exponent": 1.01, "r2": 0.999, "last": 1.0,
+               "points": [[10, 0.002], [100, 0.019]]}],
+  "functions": [{"variant": "t[k][v]", "key": "...", "name": "build", "module": "tkv", "line": 14,
+                 "exponent": 1.98, "points": [[10, 0.0004], [100, 0.04]]}],
+  "winners": [{"metric": "work_ms", "size": 10000, "winner": "t[v][k]", "value": 1.2, "runner_up": "t[k][v]",
+               "ratio": 1.8, "vs_baseline": 1.8, "clear": true}],
+  "aa": [{"size": 10, "ratio": 1.02, "spread": 0.03}],
+  "hw": {"read": false, "why": "..."},
+  "check": {"ran": true, "ok": true, "failures": []},
+  "diffs": [{"variant": "t[v][k]", "size": 10000, "dir": "diff/t-v-k"}],
+  "notes": ["..."]
+}
+```
+
+- `variants[].slug` is the variant's folder name; `kind` is `function` or `module` (a version); `source` is where it is
+  defined (a version: its file). `metrics` lists every figure a phase can carry, in the order a table shows them:
+  `label`, `unit` (`ms`, `count`, `bytes`, `ratio`), `better` (`lower` or `higher`) and whether it is `exact` (above).
+- `runs[]`: one per variant and size. `status` is `ok`, `error` (the variant raised: `error` says where) or `failed` (the
+  run did not finish). `profile` and `hw_profile` are folders relative to this one. `digest` is a hash of the result's
+  contents (keys sorted), equal for equal results; `check` is null when the file has none. `setup` and `run` hold the
+  figures of their phase by metric key, null where not measured; run's are per call (the phase's totals divided by
+  `frames`):
+  - `work_ms` the work clock (ms of a client's time, docs/engine.md "Work clock"); `insns` instructions; `alloc_bytes`
+    and `allocs` what the VM allocated (objects, table storage, stacks); `heap_bytes` the reachable heap at the phase's
+    end beyond its start (what the phase still holds); `gc_steps`, `gc_freed` (bytes) and `gc_ms` (host time) the
+    collector's work; `cache_hits`, `cache_misses` (misses and slow paths) and `cache_hit_rate` Luau's inline caches;
+    `cold_tables` and `cold_ms` the frame's first touches of tables made before it and the work they were charged;
+    `rehashes` and `rehash_keys` tables that rehashed to grow and the keys they moved; `host_ms` (median), `host_ms_min`
+    and `host_cycles` (median, the thread's reference cycles) from the timed runs; `hw_instructions`, `hw_cycles`,
+    `hw_ipc`, `hw_l1d_misses`, `hw_l2_misses`, `hw_llc_misses` and `hw_branch_misses` from the hw run.
+  - `host`: the timed runs' samples (ms and cycles a call, one per round) and the calls a timed run made (`reps`).
+  - `heap`: the reachable heap (bytes) at the setup mark, the run mark and the after mark.
+  - `tables`: the tables the run allocated that are reachable after it (the result held), by allocation site, largest
+    first. A site: `{"site": "tkv:14 < tkv:30", "frames": [{"module": "tkv", "name": "build", "line": 14, "path":
+    "<file>"}], "phase": "run", "count": 10000, "bytes": 1200000, "header_bytes": 560000, "array_bytes": 0,
+    "hash_bytes": 640000, "array": {"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, 10000]]},
+    "hash": {"slots": 20000, "used": 20000, "min": 2, "median": 2, "max": 2, "hist": [[2, 10000]]}, "levels": {"min": 1,
+    "max": 1, "hist": [[1, 10000]]}, "rehashes": 10000, "rehash_keys": 30000}`. `bytes` is each table with its array
+    and hash parts as the VM counts them (gcinfo); a part's `slots` is its size and `used` the slots holding a value;
+    `hist` is `[[upper, tables]]` over power-of-two buckets (a size of 3 counts under 4); `levels` is how many levels of
+    tables a table is with those below it (1: it holds no table; tables in a cycle share a level); `rehashes` and
+    `rehash_keys` count the rehashes of the site's tables over the run and the keys they moved.
+  - `hot`: the functions with the most work in the run phase (its threads' part of the call tree).
+- `scaling`: per variant and metric, the exponent k of a least-squares fit of the figure against n (`c * n^k`, sizes
+  with a figure above zero) with its r², `last` the exponent between the two largest sizes, and the points.
+  `functions`: the same for the hot functions' work, matched across sizes by their key.
+- `winners`: per metric and size, the variant with the best figure, the runner-up, `ratio` (the runner-up's figure over
+  the winner's, the other way for `better: higher`), and `vs_baseline`. `clear` is false for a measured figure whose
+  ratio is within the A/A pair's noise, and for exact figures within 1 %. `aa`: per size, the A/A pair's median ratio
+  and its spread (the relative interquartile range of the baseline's rounds).
+- `notes`: what to keep in mind reading this comparison: the fidelity line's limits where they bear on it (cold first
+  touches of many small tables, natively compiled modules), failed runs, a check that failed.
 
 ## Environment
 
