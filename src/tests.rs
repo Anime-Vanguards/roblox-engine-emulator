@@ -3044,6 +3044,50 @@ fn the_work_clock_charges_a_scripts_luau() {
     assert!(output.contains(&"print: loop 32.0 tables 66.8 cframes 62.5".to_string()), "{output:?}");
 }
 
+/// The collector steps at the same points however fast the host runs. Luau paces it by how long a cycle took (lgc.cpp: the allocation
+/// rate and the mark phase's length set the next cycle's trigger), read from the wall clock, so on a busy machine it stepped at other
+/// points in every run, and what the work clock counts moved with it: an allocating fast call (`string.sub`) gives way to its C function
+/// while a step is due, a string is found alive or made again. A cutscene that slices its setup by an os.clock budget recorded
+/// differently in 1 run of 20 to 2 of 3. It paces by the work clock now (cost.rs `install_gc_clock`): here a host that stalls between
+/// the script's rounds (sleeping, as a loaded machine does) must not move a single heap reading.
+#[test]
+fn the_collector_steps_at_the_same_points_however_fast_the_host_runs() {
+    let readings = |stall: bool| -> Vec<String> {
+        let (lua, engine) = start();
+        engine_lua::modules::interpret_all(&lua, &engine);
+        let host_stall = lua
+            .create_function(move |_, ()| {
+                if stall {
+                    std::thread::sleep(std::time::Duration::from_millis(3));
+                }
+                Ok(())
+            })
+            .unwrap();
+        engine.lua.borrow().shared.as_ref().unwrap().raw_set("HostStall", host_stall).unwrap();
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        run(
+            &lua,
+            &engine,
+            r#"
+            local keep, counts, subs = {}, {}, 0
+            local text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            for round = 1, 40 do
+                for i = 1, 3000 do
+                    keep[i % 400 + 1] = { i, string.sub(text, i % 26 + 1, i % 26 + 1) .. i }
+                end
+                HostStall()
+                table.insert(counts, string.format("%.3f", collectgarbage("count")))
+            end
+            print(table.concat(counts, ","))
+            print(string.format("%.9f", os.clock()))
+            "#,
+        )
+    };
+    let quick = readings(false);
+    let stalled = readings(true);
+    assert_eq!(quick, stalled, "the collector stepped at other points when the host stalled");
+}
+
 /// Reading the clock costs what the call and its loop cost, however many reads a frame makes: every read
 /// past 256 in a phase used to advance it 10 us more (2,000 brackets of a spawn replay read
 /// 17 ms of clock for under 1 ms of work). A loop that only reads the clock still ends, on its own charges;

@@ -227,6 +227,8 @@ lua_State* lua_newstate(lua_Alloc f, void* ud)
 
     g->gcstats = GCStats();
     g->work = lua_WorkCounters();
+    g->gcclock = NULL;
+    g->gcclockud = NULL;
 
 #ifdef LUAI_GCMETRICS
     g->gcmetrics = GCMetrics();

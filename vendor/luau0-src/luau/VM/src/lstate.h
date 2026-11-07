@@ -229,6 +229,9 @@ typedef struct global_State
 #endif
 
     lua_WorkCounters work; // what the interpreter did, for a host that charges its cost (lua_workcounters)
+
+    double (*gcclock)(void* ud); // the clock the collector paces itself by (lua_setgcclock; NULL: lua_clock)
+    void* gcclockud;
 } global_State;
 // clang-format on
 

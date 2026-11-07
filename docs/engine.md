@@ -337,6 +337,14 @@ in speed write the same values. The clock never runs backwards and never falls b
 A recorded clock (`RUR_CLOCK`) takes no charges; the busy-loop allowance still ends a loop that only reads
 the clock.
 
+The same script is charged the same in every run. Luau's garbage collector paces its cycles by how long
+they took, and on the wall clock it stepped at other points in each run on a loaded machine: an allocating
+builtin's fast path gives way to its C function while a step is due, a string is found alive or made
+again, and what the VM counts moved with it, so a budgeted loop could take other frames. The collector
+paces itself by the scripts' own work on this clock instead (patches/luau.patch `lua_setgcclock`,
+cost.rs `install_gc_clock`), so a run collects at the same points however fast the host runs, one-shot
+or through `ree serve`.
+
 Some places cost more than others (`cost::PlacePrices`, `Options::place_prices`):
 
 - a Text write with AutoLocalize on and letters in the text pays a localization lookup in a place whose

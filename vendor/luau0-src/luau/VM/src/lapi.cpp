@@ -1185,6 +1185,12 @@ void lua_workmute(lua_State* L, int on)
         --muted;
 }
 
+void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud)
+{
+    L->global->gcclock = clock;
+    L->global->gcclockud = ud;
+}
+
 int lua_gc(lua_State* L, int what, int data)
 {
     int res = 0;

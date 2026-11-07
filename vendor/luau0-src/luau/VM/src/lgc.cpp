@@ -919,6 +919,12 @@ static int sweepgcopage(lua_State* L, lua_Page* page)
     return int(end - start) / blockSize;
 }
 
+// the collector's clock: the host's (lua_setgcclock) when it gave one, else the wall clock
+static double gcclock(global_State* g)
+{
+    return g->gcclock ? g->gcclock(g->gcclockud) : lua_clock();
+}
+
 static size_t gcstep(lua_State* L, size_t limit)
 {
     size_t cost = 0;
@@ -977,7 +983,7 @@ static size_t gcstep(lua_State* L, size_t limit)
         g->gcmetrics.currcycle.atomicstarttotalsizebytes = g->totalbytes;
 #endif
 
-        g->gcstats.atomicstarttimestamp = lua_clock();
+        g->gcstats.atomicstarttimestamp = gcclock(g);
         g->gcstats.atomicstarttotalsizebytes = g->totalbytes;
 
         cost = atomic(L); // finish mark phase
@@ -1082,7 +1088,7 @@ size_t luaC_step(lua_State* L, bool assist)
 
     // at the start of the new cycle
     if (g->gcstate == GCSpause)
-        g->gcstats.starttimestamp = lua_clock();
+        g->gcstats.starttimestamp = gcclock(g);
 
 #ifdef LUAI_GCMETRICS
     if (g->gcstate == GCSpause)
@@ -1111,7 +1117,7 @@ size_t luaC_step(lua_State* L, bool assist)
         g->GCthreshold = heaptrigger;
 
         g->gcstats.heapgoalsizebytes = heapgoal;
-        g->gcstats.endtimestamp = lua_clock();
+        g->gcstats.endtimestamp = gcclock(g);
         g->gcstats.endtotalsizebytes = g->totalbytes;
 
 #ifdef LUAI_GCMETRICS
@@ -1274,7 +1280,7 @@ int64_t luaC_allocationrate(lua_State* L)
 
     if (g->gcstate <= GCSatomic)
     {
-        double duration = lua_clock() - g->gcstats.endtimestamp;
+        double duration = gcclock(g) - g->gcstats.endtimestamp;
 
         if (duration < durationthreshold)
             return -1;

@@ -333,6 +333,10 @@ LUA_API void lua_workhostcalls(lua_State* L, int calls);
 LUA_API void lua_workhostnanos(lua_State* L, int nanos);
 // on: one more level of muting; off: one less (the engine's Luau prices a whole call itself, as Scheduler.muted does for the host's charges)
 LUA_API void lua_workmute(lua_State* L, int on);
+// the clock the garbage collector paces itself by, in seconds (it measures the allocation rate and the mark phase's length with it to
+// set the next cycle's trigger): the wall clock (lua_clock) by default, so where it steps depends on how fast the host ran; a host
+// that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
+LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
 
 /*
 ** memory statistics

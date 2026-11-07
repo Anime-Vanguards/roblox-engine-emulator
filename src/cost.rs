@@ -558,6 +558,35 @@ unsafe extern "C-unwind" {
     pub fn lua_workcounters(state: *mut mlua::ffi::lua_State) -> *const VmCounters;
     fn lua_setworkexempt(state: *mut mlua::ffi::lua_State, index: std::ffi::c_int);
     fn lua_workmute(state: *mut mlua::ffi::lua_State, on: std::ffi::c_int);
+    fn lua_setgcclock(state: *mut mlua::ffi::lua_State, clock: Option<unsafe extern "C" fn(*mut std::ffi::c_void) -> f64>, ud: *mut std::ffi::c_void);
+}
+
+/// The garbage collector's clock: the scripts' own Luau work so far, in seconds of Studio's time ([`luau`] of the VM's counters).
+/// Luau paces its collector by the time a cycle took (lgc.cpp getheaptrigger: the allocation rate and the mark phase's length set
+/// the next cycle's trigger), read from the wall clock, so on a busy machine the collector stepped at other points in every run:
+/// `string.sub` and the other allocating fast calls give way to their C function while a step is due, a string is made again or
+/// found alive, and the work clock's counts moved by a few instructions and calls; a script that slices its work by an os.clock
+/// budget then took other frames (a cutscene recorded differently in 1 run of 20 to 2 of 3 cold runs, and between a one-shot run and
+/// a warm service's). On this clock it steps at the same points in every run. The engine calls' charges stay out of it: the engine's
+/// own bookkeeping charges some (mounting the harness enters the DataModel), and a one-shot run and a service do that differently.
+struct GcClock {
+    counters: *const VmCounters,
+}
+
+unsafe extern "C" fn gc_clock(ud: *mut std::ffi::c_void) -> f64 {
+    // (called from inside an allocation: reads the VM's own counters, nothing that could be borrowed or raise)
+    let clock = unsafe { &*(ud as *const GcClock) };
+    luau(unsafe { &*clock.counters })
+}
+
+/// The VM's collector paces itself by the scripts' work (`GcClock`); the clock is owned by the Lua state (its app data), so it lives
+/// as long as the collector that reads it.
+pub fn install_gc_clock(lua: &mlua::Lua, counters: *const VmCounters) -> mlua::Result<()> {
+    struct Owned(#[allow(dead_code)] Box<GcClock>);
+    let clock = Box::new(GcClock { counters });
+    let ud = &*clock as *const GcClock as usize;
+    lua.set_app_data(Owned(clock));
+    unsafe { lua.exec_raw::<()>((), |state| lua_setgcclock(state, Some(gc_clock), ud as *mut std::ffi::c_void)) }
 }
 
 /// Mutes (or unmutes) the native datatype charges of the VM while the engine's Luau prices a call as a whole (`R.Mute`).

@@ -643,6 +643,11 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     };
     *api.create.borrow_mut() = Some(create);
     engine.lua.borrow_mut().raw = Some(api);
+    // (the collector steps by the scripts' work, not by the host's speed: at the same points in every run)
+    let counters = engine.state.borrow().sched.vm_counters;
+    if let Some(counters) = counters {
+        crate::cost::install_gc_clock(lua, counters)?;
+    }
 
     // Parent changes that move a subtree into or out of the DataModel re-anchor its userdata
     engine.hooks.borrow_mut().hierarchy_changed.push(Box::new(move |state, id, old, new| {
