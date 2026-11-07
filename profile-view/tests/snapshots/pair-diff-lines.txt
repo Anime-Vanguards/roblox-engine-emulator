@@ -1,7 +1,9 @@
  ◆ ree profile   after  ✓ run ok · Fixture.luau · 120 frames · 2.00 s                              Studio work 6.814 ms
   1 Overview  2 Flame  3 Calls  4 Source  5 Alloc  6 Heap  7 Timeline  8 Caches  9 Issues  d Diff  c Compare
 ╭ Before → after ──────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◇ the first figure and the functions' work cover phase steady; the rest cover the whole run                          │
 │                                                                                                                      │
+│ the game's code, phase steady        10.60 ms → 4.214 ms    ▼    -60.2%                                              │
 │ Studio work                          13.20 ms → 6.814 ms    ▼    -48.4%                                              │
 │ script instructions                     40.0K → 40.0K              same                                              │
 │ allocated                             2.63 MB → 63.6 KB     ▼    -97.6%                                              │
@@ -23,8 +25,6 @@
 │                                                 before       after        change                                     │
 │ ▌ Main:22                                     5.520 ms    1.115 ms ▼   -4.405 ms   -79.8% █████████████│             │
 │   Main:21                                     2.880 ms    1.098 ms ▼   -1.782 ms   -61.9%         █████│             │
-│                                                                                                                      │
-│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

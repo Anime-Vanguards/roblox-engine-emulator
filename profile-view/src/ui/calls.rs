@@ -118,7 +118,12 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     }
     // the function itself
     let share = if run_total > 0.0 { stat.own / run_total } else { 0.0 };
-    let title = Line::from(vec![Span::raw(" "), Span::styled("■ ", Style::new().fg(theme.node_of(share))), Span::styled(f.label(), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)), Span::raw(" ")]);
+    let mut title = vec![Span::raw(" "), Span::styled("■ ", Style::new().fg(theme.node_of(share))), Span::styled(f.label(), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD))];
+    if f.harness {
+        title.push(Span::styled("  the harness's code", Style::new().fg(theme.muted)));
+    }
+    title.push(Span::raw(" "));
+    let title = Line::from(title);
     let inner = kit::draw_panel(buf, parts[1], kit::bottom(kit::panel_line(theme, title, false), super::legend(app, theme, area.width)));
     let figure = |label: &str, value: f64| vec![Span::styled(format!("{label} "), Style::new().fg(theme.muted)), Span::styled(fmt::value(unit, value), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)), Span::styled(format!(" {}", fmt::share(value, run_total)), Style::new().fg(theme.ink2))];
     let mut spans = figure("own", stat.own);

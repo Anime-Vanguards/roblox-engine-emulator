@@ -75,7 +75,7 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
         draw_detail(buf, parts[1], app, issue, theme);
     }
     if unchecked_height > 0 {
-        let inner = kit::draw_panel(buf, parts[2], kit::panel(theme, "Not checked", "what this profile's kinds cannot show", false));
+        let inner = kit::draw_panel(buf, parts[2], kit::panel(theme, "Not checked", "what the issues do not cover", false));
         let lines: Vec<Line> = unchecked.iter().map(|note| Line::from(vec![Span::styled("○ ", Style::new().fg(theme.muted)), Span::styled(note.clone(), Style::new().fg(theme.ink2))])).collect();
         Paragraph::new(lines).render(inner, buf);
     }

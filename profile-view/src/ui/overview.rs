@@ -13,12 +13,14 @@ use super::{
     issues::severity_cell,
     kit::{self, Item, col, col_fill, col_r},
 };
+use rustc_hash::FxHashMap;
+
 use crate::{
     app::App,
     fmt,
     keys::Key,
-    metric::Unit,
-    model::{Kind, Profile},
+    metric::{Metric, Unit},
+    model::{Kind, Profile, Scope},
     theme::{Mark, Theme},
 };
 
@@ -43,10 +45,113 @@ pub fn ranked(app: &App) -> Vec<Ranked> {
     rows
 }
 
-/// The functions worth showing first: their own figure above zero, not the engine's own Luau
+/// One side's functions, the game's code or the harness's, in a scope: the largest first (not the engine's own Luau),
+/// and the side's whole figure
+#[derive(Clone, Debug, Default)]
+pub struct Side {
+    pub rows: Vec<Ranked>,
+    pub total: f64,
+}
+
+/// The code in the profile's scope, the game's and the harness's
+#[derive(Clone, Debug)]
+pub struct Sides {
+    /// The game's code when the harness's is set apart, else all of it
+    pub lead: Side,
+    /// The harness's code, when set apart
+    pub harness: Side,
+    pub scope: Scope,
+    /// Whether the harness's code is set apart ([`crate::model::harness_apart`], on the work clock)
+    pub apart: bool,
+}
+
+/// The game's code and the harness's in the profile's scope (the phases its summary reports), in the current metric:
+/// the work clock from the functions' figures per phase, exactly as the summary reports it; other figures from the
+/// call tree (a C function, the engine's Luau and mlua's helpers on their caller's side); cache misses, which have no
+/// stacks, by each function's own side over the run. The two stay together when the run's code is all the harness's
+pub fn sides(app: &App) -> Sides {
+    let p = &app.profiles[app.shown];
+    let metric = app.metric;
+    let mut scope = p.scope();
+    let mut maps: [FxHashMap<u32, f64>; 2] = [FxHashMap::default(), FxHashMap::default()];
+    if metric == Metric::Work && !app.scripts_only && p.has_phase_figures() {
+        for (index, f) in p.funcs.iter().enumerate() {
+            for (&phase, figures) in &f.phases {
+                if scope.covers(phase) {
+                    let harness = figures.harness_self_work_ms;
+                    let game = (figures.self_work_ms - harness).max(0.0);
+                    if game > 0.0 {
+                        *maps[0].entry(index as u32).or_default() += game;
+                    }
+                    if harness > 0.0 {
+                        *maps[1].entry(index as u32).or_default() += harness;
+                    }
+                }
+            }
+        }
+    } else if metric.has_stacks(p) {
+        maps = app.tree().sided(&scope, |func| p.funcs.get(func as usize).filter(|f| f.kind == Kind::Script && !f.module.is_empty()).map(|f| f.harness));
+    } else {
+        for (&func, &(missed, _)) in &p.miss_funcs {
+            let f = &p.funcs[func];
+            if !app.scripts_only || f.is_script() {
+                maps[usize::from(f.harness)].insert(func as u32, missed);
+            }
+        }
+        scope = Scope { phases: None, label: "every phase".into() };
+    }
+    let apart = apart_work(app).is_some();
+    if !apart {
+        let harness = std::mem::take(&mut maps[1]);
+        for (func, own) in harness {
+            *maps[0].entry(func).or_default() += own;
+        }
+    }
+    let side = |map: &FxHashMap<u32, f64>| {
+        let mut rows: Vec<Ranked> = map.iter().filter(|(func, own)| **own > 0.0 && p.funcs[**func as usize].kind != Kind::Engine).map(|(&func, &own)| Ranked { func, own, total: own, calls: 0 }).collect();
+        rows.sort_by(|a, b| b.own.total_cmp(&a.own).then(a.func.cmp(&b.func)));
+        Side { rows, total: map.values().sum() }
+    };
+    Sides { lead: side(&maps[0]), harness: side(&maps[1]), scope, apart }
+}
+
+/// The functions worth showing first: the game's code in the profile's scope (else the harness's, else every function
+/// over the run), not the engine's own Luau
 pub fn hot(app: &App) -> Vec<Ranked> {
+    let sides = sides(app);
+    if !sides.lead.rows.is_empty() {
+        return sides.lead.rows;
+    }
+    if !sides.harness.rows.is_empty() {
+        return sides.harness.rows;
+    }
     let p = &app.profiles[app.shown];
     ranked(app).into_iter().filter(|r| r.own > 0.0 && p.funcs[r.func as usize].kind != Kind::Engine).collect()
+}
+
+/// The work clock's self work of the game's code and of the harness's in the profile's scope: the profile's own
+/// figures (its summary's), else the functions' per phase, else the call tree's. None when none of the code is the
+/// harness's
+pub fn work_sides(app: &App) -> Option<(f64, f64, Scope)> {
+    let p = &app.profiles[app.shown];
+    if !p.has_harness() || p.raw.work.is_none() {
+        return None;
+    }
+    let scope = p.scope();
+    if let Some(raw) = &p.raw.scope {
+        return Some((raw.game_self_ms, raw.harness_self_ms, scope));
+    }
+    if let Some((game, harness)) = p.side_work(&scope) {
+        return Some((game, harness, scope));
+    }
+    let tree = app.tree_of(app.shown, Metric::Work, false);
+    let maps = tree.sided(&scope, |func| p.funcs.get(func as usize).filter(|f| f.kind == Kind::Script && !f.module.is_empty()).map(|f| f.harness));
+    Some((maps[0].values().sum(), maps[1].values().sum(), scope))
+}
+
+/// The work sides when the harness's code is set apart ([`crate::model::harness_apart`])
+pub fn apart_work(app: &App) -> Option<(f64, f64, Scope)> {
+    work_sides(app).filter(|(game, harness, _)| crate::model::harness_apart(*game, *harness))
 }
 
 /// `Work`, `Allocated`: a timeline column's name in titles
@@ -116,13 +221,14 @@ pub fn frame_columns(buf: &mut Buffer, area: Rect, axis: &kit::FrameAxis, values
 
 pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     let issues = app.issues();
-    let hot = hot(app);
+    let Sides { lead: game, harness, scope, apart } = sides(app);
+    let split = apart.then(|| apart_work(app)).flatten();
     let mut list = app.overview;
     let p = &app.profiles[app.shown];
     let fidelity = p.raw.work.as_ref().map(|w| w.fidelity.trim_start_matches("fidelity: ").to_string()).filter(|f| !f.is_empty());
     let has_timeline = p.raw.timeline.is_some();
     let parts = kit::rows(area, &[4, u16::from(fidelity.is_some()), if has_timeline { 9 } else { 0 }, 0]);
-    cards(buf, parts[0], p, theme);
+    cards(buf, parts[0], p, split.as_ref(), theme);
     if let Some(fidelity) = fidelity {
         let line = Line::from(vec![
             Span::styled(" ◇ work clock  ", Style::new().fg(theme.accent).add_modifier(Modifier::BOLD)),
@@ -149,26 +255,53 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
         list.offset = grid.offset;
     }
     app.overview = list;
-    // the hottest functions
-    let metric = app.metric;
+    // the hottest functions: the game's code, the harness's apart (its work moves with what it watches, not with the
+    // game), each in the profile's scope
     let p = &app.profiles[app.shown];
-    let total = metric.total(p);
-    let unit = metric.unit();
-    let block = kit::bottom(kit::panel(theme, "Hottest functions", &format!("own {}", metric.label(p)), false), super::legend(app, theme, right.width));
-    let inner = kit::draw_panel(buf, right, block);
+    let label = app.metric.label(p);
+    let unit = app.metric.unit();
+    if !apart {
+        let legend = kit::heat_legend(theme, &format!("{label}, {}", scope.label), right.width / 4);
+        let block = kit::bottom(kit::panel(theme, "Hottest functions", &format!("own {label} · {}", scope.label), false), legend);
+        hot_panel(buf, right, block, p, &game, unit, theme);
+        return;
+    }
+    // (the harness's panel: its rows, in a third of the height or what the game's rows leave)
+    let game_need = (game.rows.len() as u16 + 3).max(5);
+    let harness_height = if harness.rows.is_empty() { 0 } else { (harness.rows.len() as u16 + 3).max(5).min((right.height / 3).max(right.height.saturating_sub(game_need))) };
+    let (upper, lower) = (Rect { height: right.height - harness_height, ..right }, Rect { y: right.bottom() - harness_height, height: harness_height, ..right });
+    let legend = kit::heat_legend(theme, &format!("its side's {label}"), right.width / 4);
+    let game_note = format!("{} · {}", scope.label, fmt::short(unit, game.total));
+    let block = kit::panel(theme, "The game's code", &game_note, false);
+    let block = if harness_height == 0 { kit::bottom(block, legend.clone()) } else { block };
+    hot_panel(buf, upper, block, p, &game, unit, theme);
+    if harness_height > 0 {
+        let block = kit::bottom(kit::panel(theme, "The harness's code", &format!("{} · {}", scope.label, fmt::short(unit, harness.total)), false), legend);
+        hot_panel(buf, lower, block, p, &harness, unit, theme);
+    }
+}
+
+/// A panel of one side's hottest functions: each one's own figure, its share of the side's, a bar
+fn hot_panel(buf: &mut Buffer, area: Rect, block: ratatui::widgets::Block, p: &Profile, side: &Side, unit: Unit, theme: &Theme) {
+    let inner = kit::draw_panel(buf, area, block);
+    if side.rows.is_empty() {
+        kit::empty(buf, inner, theme, "none here");
+        return;
+    }
     let cols = [col_fill("function", 3), col_r("own", 10), col_r("share", 6), col_fill("", 2)];
     let bar_width = kit::widths(&cols, inner.width)[3];
-    let max = hot.first().map_or(0.0, |r| r.own);
-    let rows = hot
+    let max = side.rows.first().map_or(0.0, |r| r.own);
+    let rows = side
+        .rows
         .iter()
         .take(kit::rows_shown(inner))
         .map(|r| {
-            let share = if total > 0.0 { r.own / total } else { 0.0 };
+            let share = if side.total > 0.0 { r.own / side.total } else { 0.0 };
             let style = theme.row(share);
             vec![
                 Item::label(p.funcs[r.func as usize].label(), style),
                 Item::text(fmt::short(unit, r.own), style),
-                Item::text(fmt::share(r.own, total), style),
+                Item::text(fmt::share(r.own, side.total), style),
                 Item::Spans(kit::bar(if max > 0.0 { r.own / max } else { 0.0 }, bar_width, theme.heat_of(share))),
             ]
         })
@@ -182,7 +315,7 @@ type Card = (String, String, Line<'static>, Option<(f64, String, Color)>);
 
 /// The totals as cards: the work (the mount's share of it), a frame, instructions, host time, the allocation, the heap
 /// left and the collector
-fn cards(buf: &mut Buffer, area: Rect, p: &Profile, theme: &Theme) {
+fn cards(buf: &mut Buffer, area: Rect, p: &Profile, split: Option<&(f64, f64, Scope)>, theme: &Theme) {
     let mut cards: Vec<Card> = Vec::new();
     let dim = |text: String| Line::from(Span::styled(text, Style::new().fg(theme.muted)));
     if let Some(work) = &p.raw.work {
@@ -190,9 +323,15 @@ fn cards(buf: &mut Buffer, area: Rect, p: &Profile, theme: &Theme) {
         let startup = phases.iter().find(|(phase, _)| *phase == 0).filter(|_| phases.len() > 1).map(|(_, ms)| *ms);
         let gauge = startup.filter(|_| work.total_ms > 0.0).map(|ms| (ms / work.total_ms, format!("{} {}", p.phase_name(0), fmt::share(ms, work.total_ms)), theme.slot(0)));
         cards.push(("Studio work".into(), fmt::ms(work.total_ms), dim("the work clock".into()), gauge));
+        // (the game's code in the scope, beside the harness's: what the harness itself cost)
+        if let Some((game, harness, scope)) = split {
+            let both = game + harness;
+            let gauge = (both > 0.0).then(|| (harness / both, format!("harness {}", fmt::share(*harness, both)), theme.slot(1)));
+            cards.push(("the game's code".into(), fmt::ms(*game), dim(scope.label.clone()), gauge));
+        }
         if let Some(values) = p.raw.timeline.as_ref().and_then(|t| t.values("work_ms")) {
             let worst = p.frames_past_startup(&values).into_iter().fold(0.0, f64::max);
-            cards.push(("a frame".into(), fmt::ms(p.frames_mean(&values)), dim(format!("mean · max {}", fmt::ms(worst))), None));
+            cards.push(("a frame, mean".into(), fmt::ms(p.frames_mean(&values)), dim(format!("max {}", fmt::ms(worst))), None));
         }
         let insns = work.script_insns + work.engine_insns;
         let gauge = (insns > 0.0).then(|| (work.script_insns / insns, format!("scripts {}", fmt::share(work.script_insns, insns)), theme.slot(0)));

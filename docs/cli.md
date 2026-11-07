@@ -576,7 +576,12 @@ border in the accent.
   Compare, with the baseline's run at the largest size open in the other views.
 - **Views**, a key each:
   - `1` Overview: the run's totals (the mount's work apart from a frame's), the work clock's fidelity line, the run
-    frame by frame, the issues and the hottest functions.
+    frame by frame, the issues and the hottest functions in the phases the profile reports (its `scope`: as the
+    summary's tables, `--profile-phase`, by default steady when the run marked one, else every phase). The game's code
+    leads, and the harness's own code (under ReplicatedStorage.RURFixtures, and the engine's `rur.record` that calls it,
+    with the C functions, the engine's Luau and mlua's helpers they called) comes in a panel of its own, with a card for
+    the two sides' work; a run whose code is all the harness's (under 1% on the game's side: code measured by
+    `--harness` alone) is shown whole.
   - `2` Flame: the call tree as an icicle, the run at the top; each node as wide as its total and coloured by its own
     share. It opens on the run's heaviest phase; down follows the heaviest callee, enter zooms into a node, esc comes
     back out.
@@ -591,7 +596,9 @@ border in the accent.
     and each figure frame by frame.
   - `8` Caches: Luau's inline caches by kind and by call site, and ree's own.
   - `9` Issues: what the profile's numbers show to fix (below).
-  - `d` Diff, of a pair: the headline figures, then the functions, lines and allocation sites that moved.
+  - `d` Diff, of a pair: the headline figures, then the functions, lines and allocation sites that moved. When both
+    profiles report the same phases, or both marked steady, it leads with the game's code and the harness's in them,
+    and the functions' work covers those phases, the harness's functions last and greyed, as `ree profile diff`.
   - `c` Compare, of a what-if folder: each variant at each size in the comparison's metric, how it grows with n (a
     log-log plot, a line a variant) and each variant over the baseline by n, the best of each size, each variant's
     figure at the selected size as bars, every figure of a variant over the baseline's (worse to the right, on a log
@@ -616,7 +623,9 @@ border in the accent.
   tables regrown (table storage allocated past their first); collector and frame spikes; connections, instances or
   threads that keep growing; the reachable heap growing; an inline cache that misses; a property read again in the
   same frame, and writes that change nothing (the boundary profile's, `--profile boundary`); in a comparison, cost that
-  grows faster than n and a variant whose result differs. What the profile's kinds cannot show is listed as not checked.
+  grows faster than n and a variant whose result differs. The issues cover the game's code: what the harness's own code
+  sorts, allocates, misses or reads again is left out (unless the run's code is all the harness's), and a frame spike
+  says how much of the harness's work the frames hold. What the profile's kinds cannot show is listed as not checked.
 - `ree profile render <dir> [<dir2>] --out <file|dir|-> [--view <name>|all|<a,b>] [--metric <m>] [--select
   <function|file:line>] [--keys "<keys>"] [--size <cols>x<rows>] [--theme dark|light] [--scale <n>] [--format
   png|svg|txt]` draws exactly what the terminal shows at that size (default 160x48), the same on every machine:

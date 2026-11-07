@@ -253,3 +253,50 @@ fn mluas_own_chunks_are_the_engines() {
     assert_eq!(f.kind, Kind::Engine);
     assert!(p.funcs.iter().any(|f| f.kind == Kind::Script), "the fixture's own scripts stay scripts");
 }
+
+#[test]
+fn the_harnesss_own_code_is_left_out_of_the_issues() {
+    // the harness's watcher (Fixture:5) misses every lookup, regrows its tables, allocates 28 KB a frame and reads Name
+    // again: none of it is the game's, so none of it is an issue, and the game's own issues stay as they were
+    let temp = Temp::new("harness");
+    let dir = write_profile(&temp.path().join("run"), Shape::HARNESS);
+    let (issues, unchecked, _) = issues_of(&dir);
+    for issue in &issues {
+        assert!(!issue.title.contains("Fixture:") && !issue.title.contains("watch"), "{issue:#?}");
+    }
+    let misses = find(&issues, "cache misses");
+    assert_eq!(misses.len(), 1, "{misses:#?}");
+    assert!(misses[0].title.contains("Main:31"), "{}", misses[0].title);
+    let steady = find(&issues, "steady allocation");
+    assert!(steady[0].title.starts_with("21.9 KB a frame on average: rank  Main:21"), "{}", steady[0].title);
+    assert!(find(&issues, "repeat reads").iter().all(|issue| issue.title.contains("Main:31")));
+    assert!(unchecked.iter().any(|note| note == "the harness's code (1 function): the issues cover the game's code"), "{unchecked:?}");
+    // (a frame's figures are the whole frame's: a spike says the harness's code is in them)
+    let spikes = find(&issues, "frame spike");
+    assert!(spikes[0].evidence.iter().any(|line| line == "a frame's work counts the harness's code too: 4.000 ms of self work in phase steady"), "{:?}", spikes[0].evidence);
+    // without a harness, no such note
+    let (_, unchecked, _) = issues_of(&write_profile(&temp.path().join("plain"), Shape::BEFORE));
+    assert!(unchecked.iter().all(|note| !note.contains("harness")), "{unchecked:?}");
+}
+
+#[test]
+fn a_run_whose_code_is_all_the_harnesss_is_reported_whole() {
+    // code measured by --harness alone: every script function the harness's, the game's side (the recorder's few calls)
+    // under 1% of the work; its sort, its allocation and its misses are the run's issues
+    let temp = Temp::new("standalone");
+    let dir = write_profile(&temp.path().join("run"), Shape::HARNESS);
+    let path = dir.join("profile.json");
+    let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for f in json["functions"].as_array_mut().unwrap() {
+        if f["kind"] == "Luau" {
+            f["harness"] = serde_json::json!(true);
+        }
+    }
+    json["scope"]["game_self_ms"] = serde_json::json!(0.01);
+    json["scope"]["harness_self_ms"] = serde_json::json!(14.62);
+    std::fs::write(&path, json.to_string()).unwrap();
+    let (issues, unchecked, _) = issues_of(&dir);
+    assert!(find(&issues, "sort every frame").iter().any(|issue| issue.title.contains("rank")), "{issues:#?}");
+    assert!(find(&issues, "cache misses").iter().any(|issue| issue.title.contains("Fixture:6")), "{issues:#?}");
+    assert!(unchecked.iter().all(|note| !note.contains("harness's code (")), "{unchecked:?}");
+}

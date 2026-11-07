@@ -257,3 +257,45 @@ fn select_finds_a_function_or_a_line() {
     assert!(text.lines().any(|line| line.contains("▌") && line.contains("21")), "the line is selected:\n{text}");
     assert!(!open(&[&dir]).select("nothing_like_this"));
 }
+
+#[test]
+fn the_games_code_leads_and_the_harnesss_comes_apart() {
+    use ree_profile_view::ui::overview::{Side, sides};
+    let temp = Temp::new("sides");
+    let dir = write_profile(&temp.path().join("run"), Shape::HARNESS);
+    let mut app = open(&[&dir]);
+    let text = screen(&mut app, "", COLS, ROWS);
+    snapshot("harness-overview", &text, temp.path());
+    assert!(text.contains("The game's code") && text.contains("The harness's code"), "{text}");
+    // the steady phase's self work: the game's code 10.63 ms (rank's call from the harness is the game's: a script
+    // function is its module's side), the harness's 4.000 ms (its scan, a C function, goes with the harness)
+    let labels = |app: &ree_profile_view::app::App, side: &Side| side.rows.iter().map(|r| (app.profile().funcs[r.func as usize].label(), (r.own * 1e6).round() / 1e6)).collect::<Vec<_>>();
+    let got = sides(&app);
+    assert!(got.apart);
+    assert!((got.lead.total - 10.63).abs() < 1e-9 && (got.harness.total - 4.0).abs() < 1e-9, "{} {}", got.lead.total, got.harness.total);
+    assert_eq!(labels(&app, &got.harness), [("GetDescendants [C]".to_string(), 2.5), ("watch  Fixture:5".to_string(), 1.5)]);
+    assert_eq!(labels(&app, &got.lead)[..3], [("anonymous  Main:22".to_string(), 4.0), ("rank  Main:20".to_string(), 3.03), ("layout  Main:30".to_string(), 2.0)]);
+    // a profile from before ree c692e40 (no harness flags, no figures per phase, no scope) reads the same from its call
+    // tree, its steady phase and the harness's folder
+    let path = dir.join("profile.json");
+    let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    for f in json["functions"].as_array_mut().unwrap() {
+        let f = f.as_object_mut().unwrap();
+        f.remove("harness");
+        f.remove("phases");
+    }
+    json.as_object_mut().unwrap().remove("scope");
+    let old = temp.path().join("old");
+    std::fs::create_dir_all(&old).unwrap();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), old.join(entry.file_name())).unwrap();
+    }
+    std::fs::write(old.join("profile.json"), json.to_string()).unwrap();
+    let older = open(&[&old]);
+    let from_tree = sides(&older);
+    assert!(from_tree.apart);
+    assert_eq!((from_tree.lead.total * 1e6).round(), (got.lead.total * 1e6).round());
+    assert_eq!(labels(&older, &from_tree.harness), labels(&app, &got.harness));
+    assert_eq!(labels(&older, &from_tree.lead), labels(&app, &got.lead));
+}

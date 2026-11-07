@@ -36,6 +36,23 @@ pub struct Pair {
     /// The after profile's function (and line), where enter goes
     pub func: Option<u32>,
     pub line: Option<i64>,
+    /// The harness's own code (listed after the game's)
+    pub harness: bool,
+}
+
+/// The phases two profiles both report, as `ree profile diff` picks them: the same scope in both, else `steady` when
+/// both marked one; None for profiles without figures per phase (from before ree c692e40), which are compared whole
+pub fn shared_scope(b: &Profile, a: &Profile) -> Option<Vec<String>> {
+    if !b.has_phase_figures() || !a.has_phase_figures() {
+        return None;
+    }
+    if let (Some(sb), Some(sa)) = (&b.raw.scope, &a.raw.scope) {
+        if sb.phases == sa.phases && !sb.phases.is_empty() {
+            return Some(sb.phases.clone());
+        }
+    }
+    let marked = |p: &Profile| p.raw.phases.iter().any(|phase| phase == "steady");
+    (marked(b) && marked(a)).then(|| vec!["steady".to_string()])
 }
 
 impl Pair {
@@ -67,6 +84,18 @@ pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
     let mut out = Vec::new();
     let mut add = |name: &str, before: f64, after: f64, unit: Unit, exact: bool, cost: bool| out.push(Figure { name: name.into(), before, after, unit, exact, cost });
     let frames = (timeline_stats(b), timeline_stats(a));
+    // the game's code in the phases both report, apart from the harness's (whose work moves with what it watches, not
+    // with the game), first, as ree profile diff leads with them
+    let shared = shared_scope(b, a);
+    if let Some(names) = &shared {
+        let (scope_b, scope_a) = (b.scope_of(names), a.scope_of(names));
+        if let (Some(sb), Some(sa)) = (b.side_work(&scope_b), a.side_work(&scope_a)) {
+            add(&format!("the game's code, {}", scope_a.label), sb.0, sa.0, Unit::Ms, true, true);
+            if b.has_harness() || a.has_harness() {
+                add(&format!("the harness's code, {}", scope_a.label), sb.1, sa.1, Unit::Ms, true, true);
+            }
+        }
+    }
     if let (Some(wb), Some(wa)) = (&b.raw.work, &a.raw.work) {
         add("Studio work", wb.total_ms, wa.total_ms, Unit::Ms, true, true);
         // (a frame's from the timeline when both have one, below: the mount apart)
@@ -115,6 +144,14 @@ pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
             notes.push(format!("the runs ran other harnesses: {hb} and {ha}"));
         }
     }
+    if let Some(names) = &shared {
+        let label = a.scope_of(names).label;
+        notes.push(if b.has_harness() || a.has_harness() {
+            format!("the first two figures and the functions' work cover {label} (the harness's functions last); the rest cover the whole run")
+        } else {
+            format!("the first figure and the functions' work cover {label}; the rest cover the whole run")
+        });
+    }
     let changed = changed_modules(b, a);
     if !changed.is_empty() {
         notes.push(format!("source changed in {}: its lines are not compared", changed.iter().map(|m| crate::model::short_module(m).to_string()).collect::<Vec<_>>().join(", ")));
@@ -132,19 +169,37 @@ fn same_modules(b: &Profile, a: &Profile) -> BTreeSet<String> {
     b.raw.source_hashes.iter().filter(|(module, hash)| a.raw.source_hashes.get(*module) == Some(*hash)).map(|(module, _)| module.clone()).collect()
 }
 
-/// Per function key: (label, own figure, calls, the function's index)
-fn function_figures(app: &App, profile: usize, metric: Metric) -> BTreeMap<String, (String, f64, u64, u32)> {
+/// Per function key: (label, own figure, calls, the function's index, the harness's)
+fn function_figures(app: &App, profile: usize, metric: Metric) -> BTreeMap<String, (String, f64, u64, u32, bool)> {
     let p = &app.profiles[profile];
-    let mut out: BTreeMap<String, (String, f64, u64, u32)> = BTreeMap::new();
+    let mut out: BTreeMap<String, (String, f64, u64, u32, bool)> = BTreeMap::new();
     let mut put = |func: u32, own: f64, calls: u64| {
         let f = &p.funcs[func as usize];
         if f.kind == Kind::Engine || (app.scripts_only && f.kind != Kind::Script) {
             return;
         }
-        let entry = out.entry(f.key.clone()).or_insert_with(|| (f.label(), 0.0, 0, func));
+        let entry = out.entry(f.key.clone()).or_insert_with(|| (f.label(), 0.0, 0, func, f.harness));
         entry.1 += own;
         entry.2 += calls;
     };
+    let shared = (app.profiles.len() == 2).then(|| shared_scope(&app.profiles[0], &app.profiles[1])).flatten();
+    if let (Metric::Work, false, Some(names)) = (metric, app.scripts_only, &shared) {
+        // (a harness function's whole self work; the rest only the game's side of it, as ree profile diff counts them)
+        let scope = p.scope_of(names);
+        for (index, f) in p.funcs.iter().enumerate() {
+            let (mut own, mut calls) = (0.0, 0.0);
+            for (&phase, figures) in &f.phases {
+                if scope.covers(phase) {
+                    own += if f.harness { figures.self_work_ms } else { (figures.self_work_ms - figures.harness_self_work_ms).max(0.0) };
+                    calls += figures.calls;
+                }
+            }
+            if own > 0.0 || calls > 0.0 {
+                put(index as u32, own, calls as u64);
+            }
+        }
+        return out;
+    }
     if metric.has_stacks(p) {
         let tree = app.tree_of(profile, metric, app.scripts_only);
         for (&func, stat) in &tree.funcs {
@@ -161,6 +216,7 @@ fn function_figures(app: &App, profile: usize, metric: Metric) -> BTreeMap<Strin
 /// Functions paired by key, the ones that moved
 pub fn functions(app: &App, metric: Metric) -> Vec<Pair> {
     let (fb, fa) = (function_figures(app, 0, metric), function_figures(app, 1, metric));
+    let harness = |key: &String| fa.get(key).or_else(|| fb.get(key)).is_some_and(|entry| entry.4);
     let keys: BTreeSet<&String> = fb.keys().chain(fa.keys()).collect();
     keys.into_iter()
         .map(|key| {
@@ -173,6 +229,7 @@ pub fn functions(app: &App, metric: Metric) -> Vec<Pair> {
                 calls: Some((b.map_or(0, |e| e.2), a.map_or(0, |e| e.2))),
                 func: a.map(|e| e.3),
                 line: None,
+                harness: harness(key),
             }
         })
         .filter(|pair| pair.delta().abs() > 1e-12 || pair.calls.is_some_and(|(x, y)| x != y))
@@ -201,7 +258,7 @@ pub fn lines(app: &App, metric: Metric) -> Vec<Pair> {
         .map(|key| {
             let before = lb.get(key).map_or(0.0, |e| e.0);
             let after = la.get(key);
-            Pair { label: format!("{}:{}", crate::model::short_module(&key.0), key.1), before, after: after.map_or(0.0, |e| e.0), calls: None, func: after.map(|e| e.1), line: Some(key.1) }
+            Pair { label: format!("{}:{}", crate::model::short_module(&key.0), key.1), before, after: after.map_or(0.0, |e| e.0), calls: None, func: after.map(|e| e.1), line: Some(key.1), harness: false }
         })
         .filter(|pair| pair.delta().abs() > 1e-12)
         .collect()
@@ -241,7 +298,7 @@ pub fn sites(app: &App, metric: Metric) -> Vec<Pair> {
         .map(|key| {
             let before = sb.get(key);
             let after = sa.get(key);
-            Pair { label: after.or(before).map(|e| e.0.clone()).unwrap_or_default(), before: before.map_or(0.0, |e| e.1), after: after.map_or(0.0, |e| e.1), calls: None, func: after.and_then(|e| e.2), line: after.and_then(|e| e.3) }
+            Pair { label: after.or(before).map(|e| e.0.clone()).unwrap_or_default(), before: before.map_or(0.0, |e| e.1), after: after.map_or(0.0, |e| e.1), calls: None, func: after.and_then(|e| e.2), line: after.and_then(|e| e.3), harness: false }
         })
         .filter(|pair| pair.delta().abs() > 1e-9)
         .collect()

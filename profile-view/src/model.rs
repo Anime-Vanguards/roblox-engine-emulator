@@ -61,6 +61,34 @@ pub struct RawFunction {
     #[serde(rename = "self")]
     pub own: Figures,
     pub total: Figures,
+    /// The harness's own code (its module under ReplicatedStorage.RURFixtures); absent before ree c692e40
+    pub harness: Option<bool>,
+    /// Per phase, by name: self and total work, calls, self instructions, and the self work done for the harness
+    pub phases: Option<BTreeMap<String, PhaseFigures>>,
+}
+
+/// A function's figures in one phase (profile.json `functions[].phases`)
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct PhaseFigures {
+    pub self_work_ms: f64,
+    pub total_work_ms: f64,
+    pub calls: f64,
+    pub insns: f64,
+    /// The part of the self work done for the harness's code: all of a harness function's, and a C function's, the
+    /// engine's Luau's or mlua's helpers' when the harness called them
+    pub harness_self_work_ms: f64,
+}
+
+/// The phases the profile's summary reports (`--profile-phase`; by default steady when the run marked one, else every
+/// phase), and each side's self work in them (profile.json `scope`)
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct RawScope {
+    pub phases: Vec<String>,
+    pub game_self_ms: f64,
+    pub harness_self_ms: f64,
+    pub harness_folder: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -405,6 +433,7 @@ pub struct Raw {
     pub listings: BTreeMap<String, Listing>,
     pub source_hashes: BTreeMap<String, String>,
     pub summary: String,
+    pub scope: Option<RawScope>,
 }
 
 /// boundary.json: a crossing site (a Luau line reading, writing or calling an engine member)
@@ -485,6 +514,43 @@ pub struct Func {
     pub calls: u64,
     pub own: Figures,
     pub total: Figures,
+    /// The harness's own code: a Luau function whose module is under [`HARNESS_FOLDER`] (a C function, the engine's
+    /// Luau and mlua's helpers are never the harness's themselves: their work goes with their caller's side)
+    pub harness: bool,
+    /// Its figures per phase, by phase index (profile.json `phases`, from ree c692e40; empty before)
+    pub phases: BTreeMap<u32, PhaseFigures>,
+}
+
+/// Where a run's `--harness` module and what it brings along are mounted: code there is the harness's, not the code it
+/// measures (ree's report.rs `HARNESS_FOLDER`)
+pub const HARNESS_FOLDER: &str = "ReplicatedStorage.RURFixtures";
+
+/// Whether a module is the harness's own code: under [`HARNESS_FOLDER`], or the engine's chunks that drive it
+/// (`rur.record`, which calls the harness, is compiled as script code), as ree's report.rs `harness_module` (f8050ce)
+pub fn harness_module(module: &str) -> bool {
+    module.strip_prefix(HARNESS_FOLDER).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')) || module.starts_with("rur.") || module.starts_with("ree.")
+}
+
+/// Whether the views set the harness's code apart, given the self work of the game's code and the harness's in the
+/// reported phases: when the harness did some and the game's code at least 1% of the two. A run whose own code is all
+/// the harness's (code measured by `--harness` alone) is reported whole
+pub fn harness_apart(game: f64, harness: f64) -> bool {
+    harness > 0.0 && game >= 0.01 * (game + harness)
+}
+
+/// The phases a view reports: some of the run's, or every phase
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scope {
+    /// Phase indexes, None for every phase
+    pub phases: Option<Vec<u32>>,
+    /// `phase steady`, `phases setup, run`, `every phase` (the summary's words)
+    pub label: String,
+}
+
+impl Scope {
+    pub fn covers(&self, phase: u32) -> bool {
+        self.phases.as_ref().is_none_or(|phases| phases.contains(&phase))
+    }
 }
 
 impl Func {
@@ -632,6 +698,14 @@ impl Profile {
                 _ => Kind::C,
             };
             let name = if function.name.is_empty() && !module.is_empty() { "anonymous".to_string() } else { function.name.clone() };
+            // (the flag profile.json gives, else the rule ree applies: a script function under the harness's folder)
+            let harness = function.harness.unwrap_or(kind == Kind::Script && harness_module(&module));
+            let phases = function
+                .phases
+                .iter()
+                .flatten()
+                .map(|(name, figures)| (profile.raw.phases.iter().position(|phase| phase == name).unwrap_or(0) as u32, *figures))
+                .collect();
             profile.push_func(Func {
                 id: function.id,
                 key: function.key.clone(),
@@ -645,6 +719,8 @@ impl Profile {
                 calls: function.calls,
                 own: function.own,
                 total: function.total,
+                harness,
+                phases,
             });
         }
         profile.raw.functions = functions;
@@ -760,7 +836,8 @@ impl Profile {
             Kind::Script
         };
         let id = -3_000_000_000 - self.funcs.len() as i64;
-        self.push_func(Func { id, key: frame.to_string(), short: short_module(&module).to_string(), module, name, line, last_line: line, kind, native: false, calls: 0, own: Figures::default(), total: Figures::default() })
+        let harness = kind == Kind::Script && harness_module(&module);
+        self.push_func(Func { id, key: frame.to_string(), short: short_module(&module).to_string(), module, name, line, last_line: line, kind, native: false, calls: 0, own: Figures::default(), total: Figures::default(), harness, phases: BTreeMap::new() })
     }
 
     /// Parses a folded file: `phase;outermost;...;innermost @line weight`
@@ -857,6 +934,65 @@ impl Profile {
     pub fn frames_mean(&self, values: &[f64]) -> f64 {
         let kept = self.frames_past_startup(values);
         if kept.is_empty() { 0.0 } else { kept.iter().sum::<f64>() / kept.len() as f64 }
+    }
+
+    /// The phases the views report: the profile's scope (what its summary reports: `--profile-phase`, by default steady
+    /// when the run marked one, else every phase), else, for a profile from before ree c692e40, the same default
+    pub fn scope(&self) -> Scope {
+        let names: Vec<String> = match &self.raw.scope {
+            Some(scope) => scope.phases.clone(),
+            None => self.raw.phases.iter().filter(|phase| *phase == "steady").cloned().collect(),
+        };
+        self.scope_of(&names)
+    }
+
+    /// A scope of named phases (the ones this run marked; every phase when none is, or when they all are)
+    pub fn scope_of(&self, names: &[String]) -> Scope {
+        let mut phases: Vec<u32> = names.iter().filter_map(|name| self.raw.phases.iter().position(|phase| phase == name)).map(|index| index as u32).collect();
+        phases.sort_unstable();
+        phases.dedup();
+        if phases.is_empty() || phases.len() >= self.raw.phases.len().max(1) {
+            return Scope { phases: None, label: "every phase".into() };
+        }
+        let label = format!("{} {}", if phases.len() == 1 { "phase" } else { "phases" }, phases.iter().map(|&phase| self.phase_name(phase).to_string()).collect::<Vec<_>>().join(", "));
+        Scope { phases: Some(phases), label }
+    }
+
+    /// Whether any of the profile's code is the harness's
+    pub fn has_harness(&self) -> bool {
+        self.funcs.iter().any(|f| f.harness) || self.raw.scope.as_ref().is_some_and(|scope| scope.harness_self_ms > 0.0)
+    }
+
+    /// The work clock's self work of the game's code and of the harness's in the scope: the profile's own figures (its
+    /// summary's), else the functions' per phase; None for a profile from before ree c692e40 (the call tree has them)
+    pub fn scope_work(&self) -> Option<(f64, f64)> {
+        match &self.raw.scope {
+            Some(scope) => Some((scope.game_self_ms, scope.harness_self_ms)),
+            None => self.side_work(&self.scope()),
+        }
+    }
+
+    /// Whether the functions carry their figures per phase (ree c692e40 and later)
+    pub fn has_phase_figures(&self) -> bool {
+        self.funcs.iter().any(|f| !f.phases.is_empty())
+    }
+
+    /// The self work of the game's code and of the harness's in a scope's phases, from the functions' figures per phase:
+    /// None for a profile from before ree c692e40
+    pub fn side_work(&self, scope: &Scope) -> Option<(f64, f64)> {
+        if !self.has_phase_figures() {
+            return None;
+        }
+        let mut sides = (0.0, 0.0);
+        for f in &self.funcs {
+            for (&phase, figures) in &f.phases {
+                if scope.covers(phase) {
+                    sides.0 += (figures.self_work_ms - figures.harness_self_work_ms).max(0.0);
+                    sides.1 += figures.harness_self_work_ms;
+                }
+            }
+        }
+        Some(sides)
     }
 
     /// The work clock each marked phase took, from the marks (phase index, milliseconds)
