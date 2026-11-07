@@ -350,6 +350,25 @@ fn clear_all_children_destroys_the_last_child_first() {
 }
 
 #[test]
+fn an_engine_function_that_returns_nothing_returns_no_values() {
+    // Measured in a playing client (Studio 0.744, tools/parity/probes/signals.luau and task_order.luau):
+    // `pcall(Event.Fire, Event, {})` and `pcall(task.cancel, thread)` give only `true`, whether the method
+    // is called with `:` or read first
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Event = Instance.new("BindableEvent")
+        local Folder = Instance.new("Folder")
+        print(select("#", Event:Fire({})), select("#", Event.Fire(Event, {})), select("#", Folder.ClearAllChildren(Folder)))
+        print(select("#", pcall(task.cancel, task.defer(function() end))), select("#", Folder.FindFirstChild(Folder, "None")))
+        "##,
+    );
+    assert_eq!(lines(&engine), vec!["print: 0 0 0", "print: 1 1"]);
+}
+
+#[test]
 fn number_and_boolean_properties_take_any_value_as_in_roblox() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/coercion.luau)
     assert_script(

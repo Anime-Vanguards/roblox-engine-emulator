@@ -837,17 +837,9 @@
 		{
 			"line": "render-step errors error Unable to cast string to int",
 			"why": "not fixed yet"
-		},
-		{
-			"line": "unbind-missing ok ",
-			"why": "not fixed yet"
 		}
 	],
 	"hierarchy": [
-		{
-			"line": "destroy-twice ok ",
-			"why": "not fixed yet"
-		},
 		{
 			"line": "parent-to-self error Attempt to set Self as its own parent",
 			"why": "not fixed yet"
@@ -935,47 +927,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "attribute string ok  -> string(s)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute number ok  -> 1.5",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute integer ok  -> 3",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute boolean ok  -> boolean(true)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute UDim ok  -> UDim(1, 2)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute UDim2 ok  -> UDim2({1, 2}, {3, 4})",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute BrickColor ok  -> BrickColor(Bright red)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute Color3 ok  -> C3(1 0.5 0)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute Vector2 ok  -> V2(1 2)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute Vector3 ok  -> V3(1 2 3)",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute CFrame ok  -> CF(1 2 3 1 0 0 0 1 0 0 0 1)",
 			"why": "not fixed yet"
 		},
 		{
@@ -995,14 +947,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "attribute Font ok  -> Font(Font { Family = rbxasset://fonts/families/Arial.json, Weight = Regular, Style = Normal })",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute EnumItem ok  -> EnumItem(Enum.Material.Plastic)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute table error Array is not a supported attribute type -> nil(nil)",
 			"why": "not fixed yet"
 		},
@@ -1015,18 +959,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "attribute inf ok  -> inf",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute nan ok  -> nan",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute vector ok  -> V3(1 2 3)",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute-name \"\" error Attribute name cannot be empty (\"\")",
 			"why": "not fixed yet"
 		},
@@ -1035,27 +967,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "attribute-name \"dash-name\" ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"under_score\" ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"dot.name\" ok ",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute-name \"RBXName\" error Attempt to assign attribute RBXName. CoreScript permission required",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"rbxname\" ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name \"123\" ok ",
 			"why": "not fixed yet"
 		},
 		{
@@ -1063,23 +975,11 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "attribute-name \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" ok ",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute-name \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\" error Attribute name exceeds 100 character limit (\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\")",
 			"why": "not fixed yet"
 		},
 		{
-			"line": "attribute-name \"a/b\" ok ",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "attribute-name \"$x\" error Attribute name contains illegal character '$' (\"$x\")",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "attribute-name-number ok ",
 			"why": "not fixed yet"
 		},
 		{
@@ -1091,19 +991,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "long-string-attribute ok ",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "tags a,b has true false",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "addtag-number ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "addtag-empty ok ",
 			"why": "not fixed yet"
 		}
 	],
@@ -1263,15 +1151,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "fire-mixed ok ",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "mixed-received 1,2",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "fire-sparse ok ",
 			"why": "not fixed yet"
 		},
 		{
@@ -1279,19 +1159,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "fire-float-keys ok ",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "fire-cyclic error tables cannot be cyclic",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "connect-nonfunction ok Connection",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "connect-nil ok Connection",
 			"why": "not fixed yet"
 		},
 		{
@@ -1367,14 +1235,6 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "copy string-number-keys ok  | n=1 {string:1=x string:2=y}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy constructor-hole ok  | n=1 {number:1=a number:3=c}",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "copy nested-mixed ok  | n=1 {number:1={number:1=1 number:2=2}}",
 			"why": "not fixed yet"
 		},
@@ -1387,39 +1247,7 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "copy function-value ok  | n=1 {string:F=function}",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "copy thread-value ok  | n=1 {}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy instance-value ok  | n=1 {string:I=Instance}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy datatype-values ok  | n=1 {string:C=Color3 string:E=EnumItem string:V=Vector3}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy buffer-value ok  | n=1 {string:B=buffer}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy empty ok  | n=1 {}",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy trailing-nil ok  | n=2 x , nil",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy only-nils ok  | n=2 nil , nil",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy shared-subtable ok  | n=1 {string:A={number:1=1} string:B={number:1=1}}",
 			"why": "not fixed yet"
 		},
 		{
@@ -1427,23 +1255,11 @@
 			"why": "not fixed yet"
 		},
 		{
-			"line": "copy same-table-twice ok  | n=2 {number:1=1} , {number:1=1}",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "copy same-table-twice same false",
 			"why": "not fixed yet"
 		},
 		{
-			"line": "copy buffer-arg ok  | n=1 buffer",
-			"why": "not fixed yet"
-		},
-		{
 			"line": "copy buffer-arg same false",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "copy function-arg ok  | n=1 function",
 			"why": "not fixed yet"
 		},
 		{
@@ -1464,6 +1280,14 @@
 		},
 		{
 			"line": "invoke cyclic-result error tables cannot be cyclic",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "connect-nonfunction ok Connection",
+			"why": "not fixed yet"
+		},
+		{
+			"line": "connect-nil ok Connection",
 			"why": "not fixed yet"
 		},
 		{
@@ -1494,14 +1318,6 @@
 		},
 		{
 			"line": "cancel-normal error cannot cancel thread",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "cancel-dead ok ",
-			"why": "not fixed yet"
-		},
-		{
-			"line": "cancel-twice ok ",
 			"why": "not fixed yet"
 		},
 		{

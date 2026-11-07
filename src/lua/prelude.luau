@@ -19,9 +19,12 @@ local select = select
 local yield = coroutine.yield
 local NativeTypeof = typeof
 
-local function Pass(First, ...)
+-- (exactly the values the engine function returned: one that returns nothing returns no values, as Roblox's do,
+-- `select("#", Instance.ClearAllChildren(Part))` is 0)
+local function Pass(...)
+	local First = ...
 	if First == SIGNAL then
-		local Kind, Message, Level = ...
+		local _, Kind, Message, Level = ...
 		if Kind == 1 then
 			if Level == 0 then
 				error(Message, 0)
@@ -31,7 +34,7 @@ local function Pass(First, ...)
 		end
 		return yield()
 	end
-	return First, ...
+	return ...
 end
 
 local function Wrap(Function)
