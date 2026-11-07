@@ -155,6 +155,129 @@ Cyclic.Self = Cyclic
 print("fire-cyclic " .. P.try(Copy.Fire, Copy, Cyclic))
 task.wait()
 
+-- 5b. the copy in detail: which keys survive and as what, nested and shared tables, values inside tables, trailing
+-- nils, and BindableFunction:Invoke's arguments and results
+local function KeyText(Key)
+	local Kind = typeof(Key)
+	if Kind == "string" or Kind == "number" or Kind == "boolean" then
+		return Kind .. ":" .. (string.gsub(tostring(Key), "0x%x+", "ADDR"))
+	end
+	return Kind
+end
+local function Describe(Value, Depth)
+	if type(Value) ~= "table" then
+		if type(Value) == "string" or type(Value) == "number" or type(Value) == "boolean" then
+			return tostring(Value)
+		end
+		return typeof(Value)
+	end
+	if (Depth or 0) > 3 then
+		return "{...}"
+	end
+	local Entries = {}
+	for Key, Item in Value do
+		table.insert(Entries, KeyText(Key) .. "=" .. Describe(Item, (Depth or 0) + 1))
+	end
+	table.sort(Entries)
+	local Flags = (if getmetatable(Value) ~= nil then " meta" else "") .. (if table.isfrozen(Value) then " frozen" else "")
+	return "{" .. table.concat(Entries, " ") .. Flags .. "}"
+end
+local Copier = Instance.new("BindableEvent")
+local Arrived
+Copier.Event:Connect(function(...)
+	Arrived = table.pack(...)
+end)
+local function Through(Label, ...)
+	Arrived = nil
+	local Outcome = P.try(Copier.Fire, Copier, ...)
+	task.wait()
+	if Arrived == nil then
+		print("copy " .. Label .. " " .. Outcome .. " | nothing arrived")
+		return nil
+	end
+	local Parts = {}
+	for Index = 1, Arrived.n do
+		table.insert(Parts, Describe(Arrived[Index]))
+	end
+	print("copy " .. Label .. " " .. Outcome .. " | n=" .. Arrived.n .. " " .. table.concat(Parts, " , "))
+	return Arrived
+end
+Through("float-key", { [1.5] = "a" })
+Through("bool-key", { [true] = "t" })
+Through("instance-key", { [Part] = "p" })
+Through("function-key", { [math.floor] = 1 })
+Through("gap-start", { [2] = "b", [5] = "e" })
+Through("zero-key", { [0] = "z", "a", "b" })
+Through("negative-key", { [-1] = "n" })
+Through("fraction-keys", { [-1.5] = "a", [2.7] = "b" })
+Through("big-keys", { [2 ^ 31] = "a", [1e20] = "b", [math.huge] = "c" })
+Through("table-key", { [{}] = 1 })
+Through("vector-key", { [Vector3.new(1, 2, 3)] = 1 })
+Through("enum-key", { [Enum.Material.Plastic] = 1 })
+Through("thread-key", { [coroutine.create(function() end)] = 1 })
+Through("buffer-key", { [buffer.create(1)] = 1 })
+Through("string-and-number-key", { ["1"] = "s", [1.5] = "n" })
+Through("thread-arg", coroutine.create(function() end))
+Through("thread-in-array", { "a", coroutine.create(function() end), "c" })
+Through("long-sparse", { [1] = "a", [2] = "b", [100] = "z" })
+Through("string-number-keys", { ["1"] = "x", ["2"] = "y" })
+Through("constructor-hole", { "a", nil, "c" })
+Through("nested-mixed", { { 1, 2, K = 1 } })
+Through("nested-meta", { setmetatable({ 1 }, { __index = {} }) })
+Through("frozen", table.freeze({ 1 }))
+Through("function-value", { F = math.floor })
+Through("thread-value", { T = coroutine.create(function() end) })
+Through("instance-value", { I = Part })
+Through("datatype-values", { V = Vector3.new(1, 2, 3), C = Color3.new(1, 0, 0), E = Enum.Material.Plastic })
+Through("buffer-value", { B = buffer.create(2) })
+Through("empty", {})
+Through("trailing-nil", "x", nil)
+Through("only-nils", nil, nil)
+local Shared = { 1 }
+local Got = Through("shared-subtable", { A = Shared, B = Shared })
+print("copy shared-subtable same " .. tostring(Got ~= nil and Got[1].A == Got[1].B))
+local Twice = { 1 }
+Got = Through("same-table-twice", Twice, Twice)
+print("copy same-table-twice same " .. tostring(Got ~= nil and Got[1] == Got[2]))
+local Buffer = buffer.create(2)
+Got = Through("buffer-arg", Buffer)
+print("copy buffer-arg same " .. tostring(Got ~= nil and Got[1] == Buffer))
+local Callback = function() end
+Got = Through("function-arg", Callback)
+print("copy function-arg same " .. tostring(Got ~= nil and Got[1] == Callback))
+-- one copy per fire, or one per handler (and what a waiting thread gets)
+local Pair = Instance.new("BindableEvent")
+local Seen = {}
+Pair.Event:Connect(function(Value)
+	table.insert(Seen, Value)
+end)
+Pair.Event:Connect(function(Value)
+	table.insert(Seen, Value)
+end)
+local Waited
+task.spawn(function()
+	Waited = Pair.Event:Wait()
+end)
+local ToPair = { 1 }
+Pair:Fire(ToPair)
+task.wait()
+print("copy two-handlers same " .. tostring(Seen[1] == Seen[2]) .. " wait-is-sent " .. tostring(Waited == ToPair) .. " wait-is-handler " .. tostring(Waited == Seen[1] or Waited == Seen[2]))
+local Invoked = Instance.new("BindableFunction")
+local Inside
+Invoked.OnInvoke = function(Value)
+	Inside = Value
+	return Value, setmetatable({ 1, Key = "k" }, {})
+end
+local Argument = { 1, Key = "k" }
+local Back, Second = Invoked:Invoke(Argument)
+print("invoke arg-same " .. tostring(Inside == Argument) .. " back-same " .. tostring(Back == Argument) .. " back-is-inside " .. tostring(Back == Inside))
+print("invoke inside " .. Describe(Inside) .. " back " .. Describe(Back) .. " second " .. Describe(Second))
+print("invoke cyclic " .. P.try(Invoked.Invoke, Invoked, Cyclic))
+Invoked.OnInvoke = function()
+	return Cyclic
+end
+print("invoke cyclic-result " .. P.try(Invoked.Invoke, Invoked))
+
 -- 6. re-entrancy: a handler that fires its own event, and a Changed handler that writes its own property
 local Reentrant = Instance.new("BindableEvent")
 local Depth = 0
@@ -195,6 +318,25 @@ print("disconnected " .. tostring(Connection.Connected))
 print("signal tostring " .. tostring(Signal) .. " | " .. tostring(Part.Changed) .. " | " .. tostring(Part:GetPropertyChangedSignal("Size")))
 print("connect-nonfunction " .. P.try(Signal.Connect, Signal, 5))
 print("connect-nil " .. P.try(Signal.Connect, Signal, nil))
+-- what firing a connection to a value that is not a function does
+local NotFunctions = Instance.new("BindableEvent")
+local Messages = {}
+local MessageWatch = game:GetService("LogService").MessageOut:Connect(function(Message, Kind)
+	if Kind == Enum.MessageType.MessageError then
+		table.insert(Messages, P.err((string.split(Message, "\n"))[1]))
+	end
+end)
+local NilConnection = NotFunctions.Event:Connect(nil)
+NotFunctions.Event:Connect(5)
+NotFunctions.Event:Connect(function()
+	Note("function-handler")
+end)
+NotFunctions:Fire()
+task.wait()
+task.wait()
+MessageWatch:Disconnect()
+print("connect-nil-fire connected " .. tostring(NilConnection.Connected) .. " logged " .. #Messages .. " " .. table.concat(Messages, " | "))
+Flush("connect-nil-handlers")
 print("bad-property-signal " .. P.try(Part.GetPropertyChangedSignal, Part, "NotAProperty"))
 print("signal-equal " .. tostring(Part.Changed == Part.Changed) .. " " .. tostring(Part:GetPropertyChangedSignal("Size") == Part:GetPropertyChangedSignal("Size")))
 local Errors = Instance.new("BindableEvent")
