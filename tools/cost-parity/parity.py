@@ -72,6 +72,8 @@ local Language = {{ interp = require(Module("Language", Sources.Language)), nati
 	unsafe = require(Module("LanguageUnsafe", "local _ = getfenv()\\n" .. Sources.Language)) }}
 task.wait()
 local Result = Corpus.Run({{ Families = {family_list}, Rounds = {rounds}, Language = Language, Print = {printer} }})
+-- (a client runs each group of families as a job of one session: each job takes its scene out again)
+Corpus.Cleanup()
 Folder:Destroy()
 return Result
 """
@@ -132,7 +134,7 @@ def by_name(result):
 
 
 def value(row):
-    """A row's figure: the median round (a memory row: its largest, as the corpus sets `value`)."""
+    """A row's figure: the median round (as the corpus sets `value`)."""
     return row.get("value", row["median"])
 
 
@@ -195,6 +197,7 @@ def selftest():
     assert held_out("read.Part.CFrame") == held_out("read.Part.CFrame")
     text = job_text(["read"])
     assert "Corpus.Run" in text and '"--!native\\n" .. Sources.Language' in text
+    assert "Corpus.Cleanup()" in text
     assert long_string("a ]] b ]=] c").startswith("[==[")
     harness = ree_harness(["read"], 3)
     assert harness.startswith("return function(Context)") and "PARITY-RESULT" in harness and "@done" in harness

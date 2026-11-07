@@ -309,6 +309,14 @@ W("read", "Part.child", 20000, function(N, S)
 		local _ = P.Attachment
 	end
 end)
+-- a GUI object's rect as a visibility test reads it: the property and both of its components
+W("read", "Frame.AbsolutePosition.XY", 20000, function(N, S)
+	local F = S.Frame
+	for _ = 1, N do
+		local P = F.AbsolutePosition
+		local _ = P.X + P.Y
+	end
+end)
 
 -- write: one property of one instance, alternating between two values (N writes)
 local c1 = CFrame.new(1, 200, 3) * CFrame.Angles(0.3, 0.4, 0.5)
@@ -599,6 +607,13 @@ method("workspace.GetPartBoundsInBox.empty", 4000, function(N)
 		local _ = workspace:GetPartBoundsInBox(C, Size, Params)
 	end
 end)
+method("workspace.GetPartBoundsInBox.empty40", 2000, function(N)
+	local Params = OverlapParams.new()
+	local C, Size = CFrame.new(5000, 5000, 5000), Vector3.new(40, 40, 40)
+	for _ = 1, N do
+		local _ = workspace:GetPartBoundsInBox(C, Size, Params)
+	end
+end)
 method("workspace.GetPartBoundsInRadius", 2000, function(N, S)
 	spatial(S)
 	local Params = OverlapParams.new()
@@ -668,6 +683,57 @@ end)
 method("workspace.GetPartsInPart.stack", 1000, function(N, S)
 	local Params = OverlapParams.new()
 	local P = spatial(S).Stack[1]
+	for _ = 1, N do
+		local _ = workspace:GetPartsInPart(P, Params)
+	end
+end)
+-- GetPartsInPart of a part that touches nothing: the call's own work (a part far from everything, a big one in empty space, a
+-- ball, one beside the line, and one whose Include filter admits only a part it does not touch; Meta.queries says what each finds)
+local function loner(S, Key)
+	local Spatial = spatial(S)
+	if not Spatial[Key] then
+		local P = part(nil, "Lone" .. Key)
+		if Key == "Alone" then
+			P.CFrame = CFrame.new(SpatialAt + Vector3.new(0, 0, 200))
+		elseif Key == "Big" then
+			P.Size = Vector3.new(20, 20, 20)
+			P.CFrame = CFrame.new(SpatialAt + Vector3.new(0, 0, -100))
+		elseif Key == "Ball" then
+			P.Shape = Enum.PartType.Ball
+			P.Size = Vector3.new(4, 4, 4)
+			P.CFrame = CFrame.new(SpatialAt + Vector3.new(0, 0, 100))
+		elseif Key == "Six" or Key == "Twelve" or Key == "Forty" then
+			local Side = if Key == "Six" then 6 elseif Key == "Twelve" then 12 else 40
+			P.Size = Vector3.new(Side, Side, Side)
+			P.CFrame = CFrame.new(SpatialAt + Vector3.new(0, 0, if Key == "Six" then 300 elseif Key == "Twelve" then 400 else 500))
+		elseif Key == "Rod" then
+			P.Size = Vector3.new(2, 2, 40)
+			P.CFrame = CFrame.new(SpatialAt + Vector3.new(0, 0, 600))
+		elseif Key == "Slab" then
+			P.Size = Vector3.new(40, 2, 40)
+			P.CFrame = CFrame.new(SpatialAt + Vector3.new(0, 0, 700))
+		else
+			P.CFrame = CFrame.new(SpatialAt + Vector3.new(4.5, 0, 23))
+		end
+		P.Parent = Spatial.Line.Parent
+		Spatial[Key] = P
+	end
+	return Spatial[Key]
+end
+for _, Key in { "Alone", "Big", "Ball", "Beside", "Six", "Twelve", "Forty", "Rod", "Slab" } do
+	method("workspace.GetPartsInPart.none." .. string.lower(Key), 2000, function(N, S)
+		local Params = OverlapParams.new()
+		local P = loner(S, Key)
+		for _ = 1, N do
+			local _ = workspace:GetPartsInPart(P, Params)
+		end
+	end)
+end
+method("workspace.GetPartsInPart.none.include", 2000, function(N, S)
+	local Params = OverlapParams.new()
+	Params.FilterType = Enum.RaycastFilterType.Include
+	Params.FilterDescendantsInstances = { spatial(S).Stack[1] }
+	local P = loner(S, "Alone")
 	for _ = 1, N do
 		local _ = workspace:GetPartsInPart(P, Params)
 	end
@@ -1629,6 +1695,287 @@ datatype("Enum.item", function(N)
 	end
 end)
 
+-- datatype, second pass: Vector2 and UDim2 members and arithmetic (a UI script's per-frame work), more CFrame members and the
+-- sequence keypoints a gradient or an effect rebuilds
+local w1, w2 = Vector2.new(3, 4), Vector2.new(1, 2)
+local d1, d2 = UDim.new(0.5, 10), UDim.new(0.25, 4)
+local Keys5 = {
+	ColorSequenceKeypoint.new(0, k1), ColorSequenceKeypoint.new(0.25, k2), ColorSequenceKeypoint.new(0.5, k1),
+	ColorSequenceKeypoint.new(0.75, k2), ColorSequenceKeypoint.new(1, k1),
+}
+local Sequence5 = ColorSequence.new(Keys5)
+datatype("Vector2.X", function(N)
+	local a = w1
+	for _ = 1, N do
+		local _ = a.X
+	end
+end)
+datatype("Vector2.Y", function(N)
+	local a = w1
+	for _ = 1, N do
+		local _ = a.Y
+	end
+end)
+datatype("Vector2.x", function(N)
+	local a = w1
+	for _ = 1, N do
+		local _ = a.x
+	end
+end)
+datatype("Vector2.XY.sum", function(N)
+	local a = w1
+	for _ = 1, N do
+		local _ = a.X + a.Y
+	end
+end)
+datatype("Vector2.sub", function(N)
+	local a, b = w1, w2
+	for _ = 1, N do
+		local _ = a - b
+	end
+end)
+datatype("Vector2.mul", function(N)
+	local a, b = w1, w2
+	for _ = 1, N do
+		local _ = a * b
+	end
+end)
+datatype("Vector2.mul.number", function(N)
+	local a = w1
+	for _ = 1, N do
+		local _ = a * 2
+	end
+end)
+datatype("Vector2.div.number", function(N)
+	local a = w1
+	for _ = 1, N do
+		local _ = a / 2
+	end
+end)
+datatype("Vector2.unm", function(N)
+	local a = w1
+	for _ = 1, N do
+		local _ = -a
+	end
+end)
+datatype("Vector2.eq", function(N)
+	local a, b = w1, w2
+	for _ = 1, N do
+		local _ = a == b
+	end
+end)
+datatype("Vector2.Unit", function(N)
+	local a = w1
+	for _ = 1, N do
+		local _ = a.Unit
+	end
+end)
+datatype("Vector2.Dot", function(N)
+	local a, b = w1, w2
+	for _ = 1, N do
+		local _ = a:Dot(b)
+	end
+end)
+datatype("Vector2.Lerp", function(N)
+	local a, b = w1, w2
+	for _ = 1, N do
+		local _ = a:Lerp(b, 0.5)
+	end
+end)
+datatype("Vector2.Cross", function(N)
+	local a, b = w1, w2
+	for _ = 1, N do
+		local _ = a:Cross(b)
+	end
+end)
+datatype("UDim2.X", function(N)
+	local a = u1
+	for _ = 1, N do
+		local _ = a.X
+	end
+end)
+datatype("UDim2.Width", function(N)
+	local a = u1
+	for _ = 1, N do
+		local _ = a.Width
+	end
+end)
+datatype("UDim2.Y.Scale", function(N)
+	local a = u1
+	for _ = 1, N do
+		local _ = a.Y.Scale
+	end
+end)
+datatype("UDim2.sub", function(N)
+	local a, b = u1, u2
+	for _ = 1, N do
+		local _ = a - b
+	end
+end)
+datatype("UDim2.eq", function(N)
+	local a, b = u1, u2
+	for _ = 1, N do
+		local _ = a == b
+	end
+end)
+datatype("UDim.new", function(N)
+	for I = 1, N do
+		local _ = UDim.new(0.5, I)
+	end
+end)
+datatype("UDim.add", function(N)
+	local a, b = d1, d2
+	for _ = 1, N do
+		local _ = a + b
+	end
+end)
+datatype("UDim.Scale", function(N)
+	local a = d1
+	for _ = 1, N do
+		local _ = a.Scale
+	end
+end)
+datatype("Vector3.X", function(N)
+	local a = v1
+	for _ = 1, N do
+		local _ = a.X
+	end
+end)
+datatype("CFrame.X", function(N)
+	local a = c1
+	for _ = 1, N do
+		local _ = a.X
+	end
+end)
+datatype("CFrame.Rotation", function(N)
+	local a = c1
+	for _ = 1, N do
+		local _ = a.Rotation
+	end
+end)
+datatype("CFrame.RightVector", function(N)
+	local a = c1
+	for _ = 1, N do
+		local _ = a.RightVector
+	end
+end)
+datatype("CFrame.new12", function(N)
+	for I = 1, N do
+		local _ = CFrame.new(I, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+	end
+end)
+datatype("CFrame.add", function(N)
+	local a, b = c1, v1
+	for _ = 1, N do
+		local _ = a + b
+	end
+end)
+datatype("CFrame.GetComponents.all", function(N)
+	local a = c1
+	for _ = 1, N do
+		local _x, _y, _z, _r00, _r01, _r02, _r10, _r11, _r12, _r20, _r21, _r22 = a:GetComponents()
+	end
+end)
+datatype("CFrame.ToOrientation", function(N)
+	local a = c1
+	for _ = 1, N do
+		local _ = a:ToOrientation()
+	end
+end)
+datatype("ColorSequenceKeypoint.new", function(N)
+	local a = k1
+	for I = 1, N do
+		local _ = ColorSequenceKeypoint.new(I / (N + 1), a)
+	end
+end)
+datatype("NumberSequenceKeypoint.new", function(N)
+	for I = 1, N do
+		local _ = NumberSequenceKeypoint.new(I / (N + 1), 0.5)
+	end
+end)
+datatype("ColorSequence.keypoints5", function(N)
+	local Keys = Keys5
+	for _ = 1, N do
+		local _ = ColorSequence.new(Keys)
+	end
+end, 10000)
+datatype("ColorSequence.new1", function(N)
+	local a = k1
+	for _ = 1, N do
+		local _ = ColorSequence.new(a)
+	end
+end, 10000)
+datatype("NumberSequence.new1", function(N)
+	for I = 1, N do
+		local _ = NumberSequence.new(I / N)
+	end
+end, 10000)
+datatype("ColorSequence.Keypoints", function(N)
+	local a = Sequence5
+	for _ = 1, N do
+		local _ = a.Keypoints
+	end
+end, 10000)
+datatype("ColorSequence.Keypoints2", function(N)
+	local a = ColorSequence.new(k1, k2)
+	for _ = 1, N do
+		local _ = a.Keypoints
+	end
+end, 10000)
+datatype("NumberSequence.Keypoints", function(N)
+	local a = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.25, 1), NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(0.75, 1), NumberSequenceKeypoint.new(1, 0) })
+	for _ = 1, N do
+		local _ = a.Keypoints
+	end
+end, 10000)
+datatype("NumberSequence.Keypoints2", function(N)
+	local a = NumberSequence.new(0, 1)
+	for _ = 1, N do
+		local _ = a.Keypoints
+	end
+end, 10000)
+datatype("ColorSequenceKeypoint.Value", function(N)
+	local a = Keys5[2]
+	for _ = 1, N do
+		local _ = a.Value
+	end
+end)
+datatype("NumberRange.Min", function(N)
+	local a = NumberRange.new(1, 2)
+	for _ = 1, N do
+		local _ = a.Min
+	end
+end)
+datatype("Rect.new", function(N)
+	for I = 1, N do
+		local _ = Rect.new(0, 0, I, 10)
+	end
+end)
+datatype("TweenInfo.new", function(N)
+	for I = 1, N do
+		local _ = TweenInfo.new(I / N, Enum.EasingStyle.Quad)
+	end
+end, 10000)
+datatype("Ray.new", function(N)
+	local a, b = v1, v2
+	for _ = 1, N do
+		local _ = Ray.new(a, b)
+	end
+end)
+datatype("Random.NextInteger", function(N)
+	local R = Random.new(1)
+	for _ = 1, N do
+		local _ = R:NextInteger(1, 100)
+	end
+end)
+datatype("Color3.eq", function(N)
+	local a, b = k1, k2
+	for _ = 1, N do
+		local _ = a == b
+	end
+end)
+
 -- lib: string and table library calls from a game module
 local function lib(Name, N, Fn)
 	W("lib", Name, N, Fn)
@@ -1857,17 +2204,20 @@ end, {
 	end,
 })
 
--- mem: bytes an item kept (collectgarbage("count") before and after building 10,000; the median of the rounds)
+-- mem: bytes an item kept (collectgarbage("count") before and after building them). Every round's items stay alive until the row
+-- ends, so no round's garbage is there for the collector to free while a later round builds; the row reads its median round, which a
+-- round that grew a table the engine keeps for itself (its cache of instance references doubling) does not move.
 local function memory(Name, Count, Build)
 	W("mem", Name, Count, function(N)
 		local Before = collectgarbage("count")
 		local Kept = Build(N)
 		local After = collectgarbage("count")
-		Corpus.Keep = Kept
+		Corpus.Keep = Corpus.Keep or {}
+		table.insert(Corpus.Keep, Kept)
 		return (After - Before) * 1024
 	end, {
 		Memory = true,
-		Cleanup = function()
+		Finish = function()
 			Corpus.Keep = nil
 		end,
 	})
@@ -1958,6 +2308,57 @@ memory("Instance.Folder", 2000, function(N)
 	local T = table.create(N)
 	for I = 1, N do
 		T[I] = Instance.new("Folder")
+	end
+	return T
+end)
+-- what the heap holds for an instance: by class, parented, and for a clone whose ten children scripts have not touched (one
+-- reference made, eleven instances) against the same clones once GetChildren handed scripts all eleven
+for _, Class in { "NumberValue", "Frame", "Model", "Attachment", "UIGradient" } do
+	memory("Instance." .. Class, 2000, function(N)
+		local T = table.create(N)
+		for I = 1, N do
+			T[I] = Instance.new(Class)
+		end
+		return T
+	end)
+end
+memory("Instance.Folder.parented", 2000, function(N)
+	local Holder = Instance.new("Folder")
+	local T = table.create(N)
+	for I = 1, N do
+		local F = Instance.new("Folder")
+		F.Parent = Holder
+		T[I] = F
+	end
+	return { T, Holder }
+end)
+local CloneTemplate
+local function cloneTemplate()
+	if not CloneTemplate then
+		CloneTemplate = Instance.new("Folder")
+		for I = 1, 10 do
+			local C = Instance.new("Folder")
+			C.Name = "C" .. I
+			C.Parent = CloneTemplate
+		end
+	end
+	return CloneTemplate
+end
+cloneTemplate()
+memory("Instance.Folder.clone11", 500, function(N)
+	local Template = CloneTemplate
+	local T = table.create(N)
+	for I = 1, N do
+		T[I] = Template:Clone()
+	end
+	return T
+end)
+memory("Instance.Folder.clone11.touched", 500, function(N)
+	local Template = CloneTemplate
+	local T = table.create(N)
+	for I = 1, N do
+		local Copy = Template:Clone()
+		T[I] = { Copy, Copy:GetChildren() }
 	end
 	return T
 end)
@@ -2094,8 +2495,7 @@ function Corpus.Run(Options)
 			Row.min = math.min(table.unpack(Samples))
 			Row.max = math.max(table.unpack(Samples))
 			Row.unit = if Entry.Memory then "bytes" else "ns"
-			-- a memory row reads its largest round: the collector freeing older garbage while a round builds only lowers it
-			Row.value = if Entry.Memory then Row.max else Row.median
+			Row.value = Row.median
 			Row.work = Work
 		else
 			Row.error = tostring(Samples)
@@ -2164,6 +2564,17 @@ function Corpus.Run(Options)
 			return ray(SpatialAt + Vector3.new(30, 10, 20), Exclude)
 		end),
 	}
+	for _, Key in { "Alone", "Big", "Ball", "Beside", "Six", "Twelve", "Forty", "Rod", "Slab" } do
+		Meta.queries["inPart" .. Key] = found(function()
+			return #workspace:GetPartsInPart(loner(S, Key), OverlapParams.new())
+		end)
+	end
+	local IncludeOverlap = OverlapParams.new()
+	IncludeOverlap.FilterType = Enum.RaycastFilterType.Include
+	IncludeOverlap.FilterDescendantsInstances = { Spatial.Stack[1] }
+	Meta.queries.inPartIncludeMiss = found(function()
+		return #workspace:GetPartsInPart(loner(S, "Alone"), IncludeOverlap)
+	end)
 	if Options.Language and Options.Language.interp then
 		Meta.compiledName = Options.Language.interp.CompiledName()
 		Meta.optimization = if Meta.compiledName == "CompiledName" then 2 else 1
@@ -2172,6 +2583,24 @@ function Corpus.Run(Options)
 		Meta.nativeCompiledName = Options.Language.native.CompiledName()
 	end
 	return { meta = Meta, rows = Rows }
+end
+
+-- Takes this corpus's scene out of the DataModel: a client running the groups as jobs of one session would otherwise keep every
+-- job's scene, and a later group's queries would meet every earlier group's parts (three stacks of 24 instead of one).
+function Corpus.Cleanup()
+	local S = Scene
+	if not S then
+		return
+	end
+	if S.Spatial then
+		S.Spatial.Line.Parent:Destroy()
+	end
+	S.Root:Destroy()
+	S.Gui:Destroy()
+	if S.Loose then
+		S.Loose:Destroy()
+	end
+	Scene = nil
 end
 
 Corpus.List = List

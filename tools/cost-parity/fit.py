@@ -53,7 +53,7 @@ NATIVE = {"c_simple": 0.43, "c_mod": 0.65, "c_tablek": 0.42, "c_tabledyn": 0.75,
 LIBRARY = {"numtostr": 18.0, "newstring": 171.0, "sortcompare": 1.06, "sortcall": 9.7, "createitem": 4.3, "cloneitem": 4.3,
            "concatitem": 7.1, "splitpart": 25.4, "format": 102.0, "formatspec": 0.0}
 LUAU = {"object": 22.0, "stored": 0.4, "rehash": 12.0, "ccall": 5.0, "hostcall": 15.0, "magnitude": 12.5, "unit": 9.1,
-        "vectormethod": -9.0, "slowimport": 7.9, **LIBRARY}
+        "vectormethod": 0.0, "slowimport": 7.9, **LIBRARY}
 
 
 def counts(work, key="ops"):
