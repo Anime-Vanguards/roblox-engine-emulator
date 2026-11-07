@@ -277,7 +277,14 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   `alloc.counts.folded`, `heap.folded`, `counters.<counter>.folded`), `profile.speedscope.json`
   (speedscope.app) and `report.html`, one self-contained page (hot paths with callers, callees and
   annotated source, a call tree, memory, the timeline, caches, the CPU and its counters). `--profile-top
-  <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases the boundary profiler reports.
+  <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases the summary's function tables and
+  the boundary profiler report: by default `steady` when the run marked one (`Context.ProfilePhase`), else
+  every phase. The summary's tables are the game's code: the harness's own (`--harness` modules are
+  mounted under `ReplicatedStorage.RURFixtures`) and what it called are set apart, with their total on the
+  summary's `reported below:` line and their top functions in a table of their own. Lines are counted for
+  the whole run, not per phase. In profile.json each function has `harness` and its figures per phase
+  (`phases`, with `harness_self_work_ms`, the part done for the harness's code), and `scope` names the
+  reported phases with each side's self work.
   profile.json's `marks` (each `Context.ProfilePhase` mark) and `end` (the run's end) carry the counts so far, so a
   phase's figures are the difference of two marks': the work clock, host time and the run thread's cycles, instructions,
   the VM's work counters (`vm`: objects, their bytes, table storage, keys rehashed, cold first touches), the allocation
@@ -287,7 +294,10 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   figures (the reachable heap at the end, and apart from it the garbage not swept yet), the functions
   whose work, calls, instructions or allocations moved, the lines of modules whose source is the same in
   both, caches, memory by type and the timeline; it writes `diff.txt` (also printed), `diff.json` and
-  `diff.html`. `ree profile report <dir>` prints a profile's summary again and
+  `diff.html`. When both profiles report the same phases (or both marked `steady`), the headline leads
+  with the game's code and the harness's in those phases, and the function tables cover them, the
+  harness's functions in a table of their own: a harness's work moves with what it scans, not with the
+  game. Profiles from before the split are compared whole. `ree profile report <dir>` prints a profile's summary again and
   rewrites its page from its profile.json. `ree profile view` explores one in the terminal and `ree profile render`
   draws its screens to files ("The profile viewer").
 - With no profile the engine pays nothing measurable (a thread-local read where each profiler hooks in),

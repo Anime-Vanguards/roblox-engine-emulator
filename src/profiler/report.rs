@@ -87,6 +87,28 @@ pub fn short_module(module: &str) -> &str {
     module.rsplit(['.', '/', '\\']).next().unwrap_or(module)
 }
 
+/// Where a run's `--harness` module and what it brings along are mounted (record/run.rs): code there is the harness's,
+/// not the code it measures
+pub const HARNESS_FOLDER: &str = "ReplicatedStorage.RURFixtures";
+
+/// Whether a module is the harness's own code (under [`HARNESS_FOLDER`])
+pub fn harness_module(module: &str) -> bool {
+    module.strip_prefix(HARNESS_FOLDER).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+}
+
+/// The phases the summary reports, as indices into the run's phases: `--profile-phase a,b`, or `all`; by default
+/// `steady` when the run marked one, else every phase. Names the run never marked are skipped; when none is left, every
+/// phase.
+fn reported_phases(chosen: Option<&str>, phases: &[String]) -> Vec<u32> {
+    let every: Vec<u32> = (0..phases.len().max(1) as u32).collect();
+    let picked: Vec<u32> = match chosen.map(str::trim) {
+        Some("all") => return every,
+        Some(names) => names.split(',').filter_map(|name| phases.iter().position(|phase| phase == name.trim())).map(|index| index as u32).collect(),
+        None => phases.iter().position(|phase| phase == "steady").map(|index| vec![index as u32]).unwrap_or_default(),
+    };
+    if picked.is_empty() { every } else { picked }
+}
+
 /// Names of functions by id: Luau functions, C functions and the engine's steps
 struct Names<'a> {
     vm: Option<&'a vm::Results>,
@@ -127,6 +149,11 @@ impl Names<'_> {
 
     fn engine(&self, id: i32) -> bool {
         self.function(id).is_some_and(vm::Function::exempt)
+    }
+
+    /// A Luau function of the harness's own code ([`harness_module`])
+    fn harness(&self, id: i32) -> bool {
+        self.function(id).is_some_and(|f| !f.exempt() && harness_module(module_name(&f.source)))
     }
 }
 
@@ -189,6 +216,11 @@ struct Model {
     subtree: Vec<(f64, u64)>,
     /// The phase each node is under
     node_phase: Vec<u32>,
+    /// (function, phase, the harness's side) -> self work, calls and self instructions there. A node is on the side of
+    /// its nearest Luau function that is not the engine's own: a C function or the engine's Luau is its caller's.
+    phase_self: FxHashMap<(i32, u32, bool), (f64, u64, u64)>,
+    /// (function, phase, the harness's side) -> total work there (a function's outermost node on its path)
+    phase_total: FxHashMap<(i32, u32, bool), f64>,
 }
 
 /// The call tree's per-function and per-line figures, and its edges
@@ -203,6 +235,19 @@ fn tree_model(vm: &vm::Results) -> Model {
             model.node_phase[node.parent as usize]
         } else {
             0
+        };
+    }
+    // the harness's side: a node's own Luau function's module, else its parent's (a parent comes before its children).
+    // The engine's own Luau and mlua's (`__mlua_index`, which runs when a script indexes userdata) work for their caller.
+    let mut harness_side = vec![false; nodes.len()];
+    for (index, node) in nodes.iter().enumerate() {
+        let own = (node.function >= 0)
+            .then(|| vm.functions.get(node.function as usize))
+            .flatten()
+            .filter(|f| !f.exempt() && !module_name(&f.source).starts_with("__mlua"));
+        harness_side[index] = match own {
+            Some(function) => harness_module(module_name(&function.source)),
+            None => node.parent >= 0 && harness_side[node.parent as usize],
         };
     }
     for index in (0..nodes.len()).rev() {
@@ -220,6 +265,11 @@ fn tree_model(vm: &vm::Results) -> Model {
         if !real(node.function) {
             continue;
         }
+        let scoped = (node.function, model.node_phase[index], harness_side[index]);
+        let in_phase = model.phase_self.entry(scoped).or_default();
+        in_phase.0 += node.work;
+        in_phase.1 += node.calls;
+        in_phase.2 += node.insns;
         let figures = model.functions.entry(node.function).or_default();
         figures.calls += node.calls;
         figures.self_insns += node.insns;
@@ -237,6 +287,7 @@ fn tree_model(vm: &vm::Results) -> Model {
         if !nested {
             figures.total_work += model.subtree[index].0;
             figures.total_insns += model.subtree[index].1;
+            *model.phase_total.entry(scoped).or_default() += model.subtree[index].0;
         }
         if node.parent >= 0 {
             let parent = &nodes[node.parent as usize];
@@ -450,6 +501,28 @@ pub fn write(input: &Input) -> Result<String, String> {
     for callers in inlined_into.values_mut() {
         callers.sort_by(|a, b| b.1.work.total_cmp(&a.1.work).then(b.1.calls.cmp(&a.1.calls)).then(a.0.cmp(&b.0)));
     }
+    // each function's figures per phase: [self work, total work, calls, self instructions, self work on the harness's side]
+    let phase_name = |phase: u32| input.phases.get(phase as usize).cloned().unwrap_or_else(|| "startup".to_string());
+    let mut by_phase: FxHashMap<i32, BTreeMap<u32, [f64; 5]>> = FxHashMap::default();
+    for (&(id, phase, harness), &(work, calls, insns)) in &model.phase_self {
+        let figures = by_phase.entry(id).or_default().entry(phase).or_default();
+        figures[0] += work;
+        figures[2] += calls as f64;
+        figures[3] += insns as f64;
+        if harness {
+            figures[4] += work;
+        }
+    }
+    for (&(id, phase, _), &total) in &model.phase_total {
+        by_phase.entry(id).or_default().entry(phase).or_default()[1] += total;
+    }
+    // the phases the summary reports, and their self work on each side
+    let scope = reported_phases(input.config.phases.as_deref(), input.phases);
+    let (game_self, harness_self) = model
+        .phase_self
+        .iter()
+        .filter(|((_, phase, _), _)| scope.contains(phase))
+        .fold((0.0, 0.0), |(game, harness), ((_, _, side), figures)| if *side { (game, harness + figures.0) } else { (game + figures.0, harness) });
     let function_json = |id: i32, figures: &Figures| -> Json {
         let function = names.function(id);
         json!({
@@ -461,6 +534,13 @@ pub fn write(input: &Input) -> Result<String, String> {
             "last_line": function.and_then(|f| f.lines.iter().copied().max()),
             "kind": match function { Some(f) if f.exempt() => "engine Luau", Some(_) => "Luau", None if id <= ENGINE_STEP_BASE => "engine step", None => "C" },
             "native": function.is_some_and(vm::Function::native),
+            // (the harness's own code, under HARNESS_FOLDER)
+            "harness": names.harness(id),
+            // (per phase; harness_self_work_ms is the part done for the harness's code: all of a harness function's, a C
+            // function's or the engine's Luau when the harness called it)
+            "phases": by_phase.get(&id).map(|phases| phases.iter().map(|(phase, f)| (phase_name(*phase), json!({
+                "self_work_ms": ms(f[0]), "total_work_ms": ms(f[1]), "calls": f[2] as u64, "insns": f[3] as u64, "harness_self_work_ms": ms(f[4]),
+            }))).collect::<serde_json::Map<_, _>>()),
             "native_entries": function.map_or(0, |f| f.native_entries),
             "native_work_ms": function.map_or(0.0, |f| ms(f.native_work)),
             "calls": figures.calls,
@@ -475,6 +555,12 @@ pub fn write(input: &Input) -> Result<String, String> {
         })
     };
     json["functions"] = Json::Array(function_rows.iter().map(|(id, figures)| function_json(*id, figures)).collect());
+    json["scope"] = json!({
+        "phases": scope.iter().map(|phase| phase_name(*phase)).collect::<Vec<_>>(),
+        "game_self_ms": ms(game_self),
+        "harness_self_ms": ms(harness_self),
+        "harness_folder": HARNESS_FOLDER,
+    });
 
     // lines (with their opcodes)
     let mut line_rows: Vec<(&(i32, i32), &LineFigures)> = model.lines.iter().collect();
@@ -615,22 +701,64 @@ pub fn write(input: &Input) -> Result<String, String> {
             }
             let _ = writeln!(summary, "phases' work: {}", parts.join("; "));
         }
+        // the tables below cover the reported phases (--profile-phase) and the game's code; the harness's comes apart
+        let every_phase = scope.len() >= input.phases.len().max(1);
+        let scope_label = if every_phase {
+            "every phase".to_string()
+        } else {
+            format!("{} {}", if scope.len() == 1 { "phase" } else { "phases" }, scope.iter().map(|phase| phase_name(*phase)).collect::<Vec<_>>().join(", "))
+        };
+        let _ = writeln!(
+            summary,
+            "reported below: {scope_label}: the game's code {:.2} ms, the harness's code {:.2} ms of self work (the harness's is its code under {HARNESS_FOLDER} and what that called; --profile-phase picks phases, or all)",
+            ms(game_self),
+            ms(harness_self)
+        );
+        // one side's functions in the reported phases: (id, self work, total work, calls, self instructions)
+        let side_rows = |harness: bool| -> Vec<(i32, f64, f64, u64, u64)> {
+            let mut rows: FxHashMap<i32, (f64, f64, u64, u64)> = FxHashMap::default();
+            for (&(id, phase, side), &(work, calls, insns)) in &model.phase_self {
+                if side == harness && scope.contains(&phase) && !names.engine(id) {
+                    let row = rows.entry(id).or_default();
+                    row.0 += work;
+                    row.2 += calls;
+                    row.3 += insns;
+                }
+            }
+            for (&(id, phase, side), &total) in &model.phase_total {
+                if side == harness && scope.contains(&phase) && !names.engine(id) {
+                    rows.entry(id).or_default().1 += total;
+                }
+            }
+            let mut rows: Vec<(i32, f64, f64, u64, u64)> = rows.into_iter().map(|(id, (work, total, calls, insns))| (id, work, total, calls, insns)).collect();
+            rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+            rows
+        };
+        let (game_rows, harness_rows) = (side_rows(false), side_rows(true));
         let top = input.config.top;
-        let _ = writeln!(summary, "\ntop functions by self work (ms of Studio time; total includes callees)");
+        let _ = writeln!(summary, "\ntop functions by self work: the game's code, {scope_label} (ms of Studio time; total includes callees)");
         let _ = writeln!(summary, "{:>9} {:>9} {:>10} {:>12}  function", "self ms", "total ms", "calls", "insns");
         // (rows that print as zero are left out)
-        for (id, figures) in function_rows.iter().filter(|(id, figures)| figures.self_work >= 5e-7 && !names.engine(*id)).take(top) {
-            let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10} {:>12}  {}", ms(figures.self_work), ms(figures.total_work), group_digits(figures.calls), group_digits(figures.self_insns), names.label(*id));
+        for (id, work, total, calls, insns) in game_rows.iter().filter(|row| row.1 >= 5e-7).take(top) {
+            let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10} {:>12}  {}", ms(*work), ms(*total), group_digits(*calls), group_digits(*insns), names.label(*id));
         }
-        let mut by_total: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, _)| *id >= 0 && !names.engine(*id)).collect();
-        by_total.sort_by(|a, b| b.1.total_work.total_cmp(&a.1.total_work));
-        let _ = writeln!(summary, "\ntop functions by total work");
+        let mut by_total: Vec<&(i32, f64, f64, u64, u64)> = game_rows.iter().filter(|row| row.0 >= 0).collect();
+        by_total.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+        let _ = writeln!(summary, "\ntop functions by total work: the game's code, {scope_label}");
         let _ = writeln!(summary, "{:>9} {:>9} {:>10}  function", "total ms", "self ms", "calls");
-        for (id, figures) in by_total.iter().filter(|(_, figures)| figures.total_work >= 5e-7).take(top.min(12)) {
-            let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10}  {}", ms(figures.total_work), ms(figures.self_work), group_digits(figures.calls), names.label(*id));
+        for (id, work, total, calls, _) in by_total.iter().filter(|row| row.2 >= 5e-7).take(top.min(12)) {
+            let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10}  {}", ms(*total), ms(*work), group_digits(*calls), names.label(*id));
+        }
+        let harness_rows: Vec<&(i32, f64, f64, u64, u64)> = harness_rows.iter().filter(|row| row.1 >= 5e-7).collect();
+        if !harness_rows.is_empty() {
+            let _ = writeln!(summary, "\nthe harness's code, {scope_label}: {:.3} ms of self work, left out of the tables above", ms(harness_self));
+            let _ = writeln!(summary, "{:>9} {:>9} {:>10}  function", "self ms", "total ms", "calls");
+            for (id, work, total, calls, _) in harness_rows.iter().take(top.min(8)) {
+                let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10}  {}", ms(*work), ms(*total), group_digits(*calls), names.label(*id));
+            }
         }
         // functions -O2 inlined: no frame of theirs runs there, so the tables above count only their other calls
-        let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, _)| inlined_into.contains_key(id) && !names.engine(*id)).collect();
+        let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, _)| inlined_into.contains_key(id) && !names.engine(*id) && !names.harness(*id)).collect();
         if !inlined.is_empty() {
             inlined.sort_by(|a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(b.1.inlined_calls.cmp(&a.1.inlined_calls)).then(a.0.cmp(&b.0)));
             let _ = writeln!(
@@ -658,9 +786,10 @@ pub fn write(input: &Input) -> Result<String, String> {
                 );
             }
         }
-        let _ = writeln!(summary, "\ntop lines by self work");
+        // (a line's figures are counted per instruction for the whole run, not per phase)
+        let _ = writeln!(summary, "\ntop lines by self work: the game's code, {}", if every_phase { "every phase" } else { "every phase (lines are not counted per phase)" });
         let _ = writeln!(summary, "{:>9} {:>11} {:>12}  line  (opcodes)", "self ms", "total ms", "insns");
-        for ((function, line), figures) in line_rows.iter().filter(|(key, figures)| figures.work >= 5e-7 && !names.engine(key.0)).take(top) {
+        for ((function, line), figures) in line_rows.iter().filter(|(key, figures)| figures.work >= 5e-7 && !names.engine(key.0) && !names.harness(key.0)).take(top) {
             let ops: Vec<String> = {
                 let mut ops: Vec<_> = figures.ops.iter().collect();
                 ops.sort_by(|a, b| b.1.cmp(a.1));
