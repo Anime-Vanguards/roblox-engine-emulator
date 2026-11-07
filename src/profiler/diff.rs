@@ -122,6 +122,17 @@ fn last_snapshot(profile: &Json) -> Option<&Json> {
     profile["heap"]["snapshots"].as_array().and_then(|snapshots| snapshots.last())
 }
 
+/// A snapshot's reachable heap and its garbage not swept yet: (reachable bytes, reachable objects, garbage bytes, whether
+/// the profile counted them apart). A profile from before has only its walk's unreachable objects, which counted the
+/// names only function prototypes hold as garbage: its reachable heap is estimated as the rest.
+fn heap_split(snapshot: &Json) -> (f64, f64, f64, bool) {
+    if snapshot["reachable"].is_object() {
+        return (num(&snapshot["reachable"]["bytes"]), num(&snapshot["reachable"]["count"]), num(&snapshot["unswept"]["bytes"]), true);
+    }
+    let unreachable = &snapshot["unreachable"];
+    (num(&snapshot["object_bytes"]) - num(&unreachable["bytes"]), num(&snapshot["objects"]) - num(&unreachable["count"]), num(&unreachable["bytes"]), false)
+}
+
 fn timeline_stats(profile: &Json) -> Option<(f64, f64, f64, f64)> {
     let timeline = &profile["timeline"];
     let columns: Vec<&str> = timeline["columns"].as_array()?.iter().filter_map(Json::as_str).collect();
@@ -151,10 +162,20 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
         add("allocated", num(&before["alloc"]["bytes"]), num(&after["alloc"]["bytes"]), "bytes");
         add("allocations", num(&before["alloc"]["objects"]), num(&after["alloc"]["objects"]), "");
     }
+    let mut notes: Vec<String> = Vec::new();
     if let (Some(b), Some(a)) = (last_snapshot(before), last_snapshot(after)) {
-        add("live heap at the end", num(&b["object_bytes"]), num(&a["object_bytes"]), "bytes");
-        add("live objects at the end", num(&b["objects"]), num(&a["objects"]), "");
-        add("the run's own live objects", num(&b["allocated_since"]["bytes"]), num(&a["allocated_since"]["bytes"]), "bytes");
+        let (b_heap, a_heap) = (heap_split(b), heap_split(a));
+        for (side, split) in [("before", &b_heap), ("after", &a_heap)] {
+            if !split.3 {
+                notes.push(format!("the {side} profile is from a ree that did not count reachable memory apart: its reachable heap is estimated, and its own objects and heap by type hold garbage"));
+            }
+        }
+        // (the reachable heap is what a full collection keeps; the garbage not swept yet depends on where the collector's
+        // cycle stood when the run ended, so it is shown apart and never added in)
+        add("reachable heap at the end", b_heap.0, a_heap.0, "bytes");
+        add("reachable objects at the end", b_heap.1, a_heap.1, "");
+        add("garbage not swept yet at the end", b_heap.2, a_heap.2, "bytes");
+        add("the run's own reachable objects", num(&b["allocated_since"]["bytes"]), num(&a["allocated_since"]["bytes"]), "bytes");
         add("collector cycles", num(&before["heap"]["gc"]["cycles"]), num(&after["heap"]["gc"]["cycles"]), "");
         add("collector freed", num(&before["heap"]["gc"]["freed"]), num(&after["heap"]["gc"]["freed"]), "bytes");
     }
@@ -165,7 +186,7 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
         add("work a frame, mean", b.0, a.0, "ms");
         add("work a frame, worst", b.1, a.1, "ms");
         add("host a frame, mean (noisy)", b.2, a.2, "ms");
-        add("heap at the last frame", b.3, a.3, "bytes");
+        add("VM heap at the last frame, with garbage", b.3, a.3, "bytes");
     }
     add("frames", num(&before["run"]["frames"]), num(&after["run"]["frames"]), "");
 
@@ -174,9 +195,13 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
     if before["run"]["frames"] != after["run"]["frames"] || before["run"]["harness"] != after["run"]["harness"] {
         let _ = writeln!(text, "note: the runs differ in frames or harness; compare per-frame figures");
     }
-    let _ = writeln!(text, "{:<30} {:>14} {:>14} {:>10}", "", "before", "after", "change");
+    for note in &notes {
+        let _ = writeln!(text, "note: {note}");
+    }
+    let width = figures.iter().map(|figure| figure.name.len()).max().unwrap_or(0).max(30);
+    let _ = writeln!(text, "{:<width$} {:>14} {:>14} {:>10}", "", "before", "after", "change");
     for figure in &figures {
-        let _ = writeln!(text, "{:<30} {:>14} {:>14} {:>10}", figure.name, figure.show(figure.before), figure.show(figure.after), change(figure.before, figure.after));
+        let _ = writeln!(text, "{:<width$} {:>14} {:>14} {:>10}", figure.name, figure.show(figure.before), figure.show(figure.after), change(figure.before, figure.after));
     }
 
     // functions
@@ -282,7 +307,7 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
     let mut type_rows = Vec::new();
     for (title, b, a) in [
         ("allocated by type", by_type(before, &["alloc", "by_type"]), by_type(after, &["alloc", "by_type"])),
-        ("live at the end by type", last_snapshot(before).map(|s| by_type(s, &["by_type"])).unwrap_or_default(), last_snapshot(after).map(|s| by_type(s, &["by_type"])).unwrap_or_default()),
+        ("reachable at the end by type", last_snapshot(before).map(|s| by_type(s, &["by_type"])).unwrap_or_default(), last_snapshot(after).map(|s| by_type(s, &["by_type"])).unwrap_or_default()),
     ] {
         let names: BTreeSet<&String> = b.keys().chain(a.keys()).collect();
         let mut moved: Vec<(&String, f64, f64)> = names.into_iter().map(|name| (name, b.get(name).copied().unwrap_or(0.0), a.get(name).copied().unwrap_or(0.0))).filter(|(_, x, y)| (x - y).abs() >= 1.0).collect();
@@ -304,6 +329,7 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
             "after": {"self_work_ms": a.self_work, "total_work_ms": a.total_work, "calls": a.calls, "insns": a.insns, "alloc_bytes": a.alloc, "time_ms": a.time}})).collect::<Vec<_>>(),
         "lines": line_rows.iter().take(500).map(|((module, line), b, a)| json!({"module": module, "line": line, "before": {"work_ms": b.0, "insns": b.1, "alloc_bytes": b.2}, "after": {"work_ms": a.0, "insns": a.1, "alloc_bytes": a.2}})).collect::<Vec<_>>(),
         "changed_modules": changed,
+        "notes": notes,
         "caches": cache_rows,
         "types": type_rows,
         "summary": text,

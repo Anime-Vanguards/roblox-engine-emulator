@@ -437,12 +437,17 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   and frames, the string table, a loaded function's arrays). A sampled object is marked in its header
   (`lua_profilemark`), and the collector calls the profile when it frees one, so the run's live objects are
   known by the stack that allocated them.
-- **Heap snapshots**: `lua_enumheap` walks every object and reference as `luaC_enumheap` does, without the
-  objects a sweep has yet to free (a dead closure can hold a prototype already freed). From a root holding the
-  registry and the main thread it finds each object's dominator (Cooper, Harvey and Kennedy's algorithm), so
-  an object's retained size is what would be freed with it, and a breadth-first holder path (a path through
-  the registry's array part is a reference the engine itself holds: a handler, a thread it will resume).
-  Objects nothing reachable holds are garbage the collector has not swept yet.
+- **Heap snapshots**: `lua_enumheap` walks every object and every reference the collector follows (those
+  `luaC_enumheap` gives, and what it leaves out: a prototype's source, debug name, upvalue and local names, a
+  thread's namecall and open upvalues, a weak table's strings, which the collector never clears), from the
+  collector's roots: the main thread, the registry, the basic types' metatables and the fixed names. What the
+  walk reaches is what a full collection would keep: the reachable heap, which every heap figure reports. The
+  rest, with the objects a sweep has found dead and not freed yet (given by type and size alone: a dead closure
+  can hold a prototype already freed), is the garbage not swept yet, counted apart: how much there is depends
+  on where the collector's cycle stood, not on what the run holds. A snapshot collects nothing. From a root
+  over those roots it finds each object's dominator (Cooper, Harvey and Kennedy's algorithm), so an object's
+  retained size is what would be freed with it, and a breadth-first holder path (a path through the
+  registry's array part is a reference the engine itself holds: a handler, a thread it will resume).
 - **The collector**: the VM's interrupt runs at each collector step's start and end (steps, cycles, bytes
   freed, host time by the state a step began in). **The timeline**: `scheduler::step` takes a row a frame.
   **ree's caches**: counters at each cache (`profiler::caches`, process-wide). **The CPU**: the run thread's
@@ -462,7 +467,8 @@ times slower (allocation stacks about twice; the timeline and host time sampling
 What the memory figures are, beside Roblox's:
 
 - `gcinfo()` and `collectgarbage("count")` read the VM's whole heap in KB, as on Roblox (the profile's
-  `gcinfo` column). ree's `collectgarbage("count")` returns whole KB (gcinfo's), where Roblox's has a fraction.
+  `gcinfo` column and the timeline's heap), garbage not swept yet included; a snapshot's reachable heap leaves
+  that garbage out. ree's `collectgarbage("count")` returns whole KB (gcinfo's), where Roblox's has a fraction.
 - The VM holds the engine's own Luau too (its prelude, services and datatype tables), which Roblox keeps in
   C++: the `start` snapshot is that baseline. Compare a run's growth, or the run's own live objects, not
   totals. Instances live in the engine on both; each has a Luau userdata (48 bytes here).

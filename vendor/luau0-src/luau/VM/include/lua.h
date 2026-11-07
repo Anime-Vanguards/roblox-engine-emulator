@@ -424,10 +424,12 @@ LUA_API size_t lua_profileudataoffset(void);
 // marks an object: the profile's `freed` hook is called when the collector frees it
 LUA_API void lua_profilemark(void* block);
 LUA_API void lua_setprofilefreed(lua_State* L, void (*freed)(void* ud, void* block), void* ud);
-// every live collectable object and every reference between them, as luaC_enumheap gives them (lgcdebug.cpp), without the
-// objects a sweep has yet to free
+// every collectable object (as luaC_enumheap gives them, lgcdebug.cpp) and every reference the collector follows between
+// them, with the collector's roots as edges from NULL (the main thread, the registry, the basic types' metatables, the
+// fixed objects): what no edge reaches is garbage the next collection frees. Objects a sweep has yet to free go to `dead`
+// (type and size; NULL: left out)
 LUA_API void lua_enumheap(lua_State* L, void* context, void (*node)(void* context, void* ptr, uint8_t tt, uint8_t memcat, size_t size, const char* name),
-    void (*edge)(void* context, void* from, void* to, const char* name));
+    void (*edge)(void* context, void* from, void* to, const char* name), void (*dead)(void* context, uint8_t tt, size_t size));
 // the collector's state: GCSpause 0, GCSpropagate 1, GCSpropagateagain 2, GCSatomic 3, GCSsweep 4 (lgc.h)
 LUA_API int lua_gcstate(lua_State* L);
 

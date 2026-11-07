@@ -7,8 +7,10 @@
 //!   callers and callees ([`vm`]). Exact and the same every run.
 //! - `caches`: Luau's inline caches per call site (from the same stepping) and ree's own caches ([`caches`]).
 //! - `alloc`: bytes and counts allocated by Luau stack and by type ([`memory`]).
-//! - `heap`: live-heap snapshots at the end and at each `Context.ProfilePhase` mark (by type, Instance class, the
-//!   biggest by what they keep alive, the run's live objects by allocating stack) and the collector's work.
+//! - `heap`: snapshots of the reachable heap, what a full collection would keep, at the start, the end and each
+//!   `Context.ProfilePhase` mark (by type, Instance class, the biggest by what they keep alive, the run's reachable
+//!   objects by allocating stack), with the garbage the collector has not swept yet apart ([`memory::snapshot`]: nothing
+//!   is collected for one), and the collector's work.
 //! - `timeline`: one row a frame: work, host time, instructions, heap, allocations, collector, instances, connections,
 //!   threads.
 //! - `cpu`: the thread's CPU cycles; hardware counters (cache misses, branch misses, instructions retired) where the
@@ -67,7 +69,7 @@ impl Kinds {
         ("work", Kinds::WORK, "instructions and the work clock per function and line, by opcode, calls, callers and callees"),
         ("caches", Kinds::CACHES, "Luau's inline caches per call site and ree's own caches"),
         ("alloc", Kinds::ALLOC, "bytes and counts allocated by Luau stack and by type"),
-        ("heap", Kinds::HEAP, "live-heap snapshots and the collector's work"),
+        ("heap", Kinds::HEAP, "reachable-heap snapshots (garbage not swept yet apart) and the collector's work"),
         ("timeline", Kinds::TIMELINE, "one row a frame: work, host time, heap, allocations, instances, connections, threads"),
         ("cpu", Kinds::CPU, "CPU cycles, and hardware counters where the process may read them"),
         ("phases", Kinds::PHASES, "where the command's wall time went"),

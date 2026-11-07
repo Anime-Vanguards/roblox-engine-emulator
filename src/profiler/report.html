@@ -194,10 +194,14 @@ const PROFILE = /*PROFILE_DATA*/null;
 	if (P.work) tiles.push(["Work clock", fmt(P.work.total_ms, 2) + " ms", `${fmt(P.work.per_frame_ms, 3)} ms a frame`]);
 	if (P.work) tiles.push(["Script instructions", compact(P.work.script_insns), `${compact(P.work.engine_insns)} by the engine's Luau`]);
 	if (P.alloc) tiles.push(["Allocated", bytes(P.alloc.bytes), `${compact(P.alloc.objects)} objects`]);
+	// a snapshot's reachable heap and its garbage not swept yet (a profile from before they were counted apart has only
+	// the heap walk's unreachable objects: the reachable heap is estimated as the rest)
+	const reachableOf = (s) => s.reachable || { count: (s.objects || 0) - ((s.unreachable || {}).count || 0), bytes: (s.object_bytes || 0) - ((s.unreachable || {}).bytes || 0) };
+	const unsweptOf = (s) => s.unswept || { count: (s.unreachable || {}).count || 0, bytes: (s.unreachable || {}).bytes || 0, by_type: [] };
 	const snapshots = (P.heap && P.heap.snapshots) || [];
 	if (snapshots.length) {
 		const last = snapshots[snapshots.length - 1];
-		tiles.push(["Live heap at " + last.label, bytes(last.object_bytes), `${compact(last.objects)} objects`]);
+		tiles.push(["Reachable heap at " + last.label, bytes(reachableOf(last).bytes), `${compact(reachableOf(last).count)} objects; ${bytes(unsweptOf(last).bytes)} garbage not swept yet`]);
 	}
 	if (P.heap && P.heap.gc) tiles.push(["Collector", fmt(P.heap.gc.cycles) + " cycles", `${bytes(P.heap.gc.freed)} freed, ${fmt(P.heap.gc.ms, 1)} ms`]);
 	if (P.time) tiles.push(["Host time sampled", fmt(P.time.sampled_ms, 1) + " ms", "1 ms ticks at safepoints"]);
@@ -417,13 +421,15 @@ const PROFILE = /*PROFILE_DATA*/null;
 			const picker = el("select", {}, ...snapshots.map((s, i) => el("option", { value: String(i) }, `${s.label} (frame ${s.frame})`)));
 			picker.value = String(snapshots.length - 1);
 			const holder = el("div");
-			section.append(el("h2", {}, "Live heap"), el("div", { class: "controls" }, el("label", {}, "Snapshot: ", picker)), holder);
+			section.append(el("h2", {}, "Reachable heap"), el("div", { class: "controls" }, el("label", {}, "Snapshot: ", picker)), holder);
 			const show = () => {
 				const s = snapshots[Number(picker.value)];
+				const reachable = reachableOf(s), unswept = unsweptOf(s);
 				holder.replaceChildren(
-					el("p", { class: "lead" }, `${bytes(s.object_bytes)} in ${fmt(s.objects)} objects (gcinfo() ${fmt(s.gcinfo_kb)} KB). Allocated by the run and still alive: ${bytes(s.allocated_since.bytes)}. Not reachable, awaiting collection: ${bytes(s.unreachable.bytes)} in ${fmt(s.unreachable.count)} objects.`),
+					el("p", { class: "lead" }, `${bytes(reachable.bytes)} reachable in ${fmt(reachable.count)} objects: what scripts and the engine still hold, what a full collection keeps. ${s.reachable ? "Allocated by the run and still reachable" : "Allocated by the run and not freed yet, garbage included (an older profile)"}: ${bytes(s.allocated_since.bytes)}.`),
+					el("p", { class: "lead" }, `Garbage not swept yet: ${bytes(unswept.bytes)} in ${fmt(unswept.count)} objects, which the collector had not freed when the snapshot was taken. It is left out of the reachable figures and the tables below: how much there is depends on where the collector's cycle stood. gcinfo() counts both: ${fmt(s.gcinfo_kb)} KB.`),
 					el("div", { class: "cols" },
-						el("div", {}, el("h3", {}, "By type"), table(s.by_type, [
+						el("div", {}, el("h3", {}, "Reachable by type"), table(s.by_type, [
 							{ key: "type", label: "type", text: true, value: (t) => t.type },
 							{ key: "bytes", label: "bytes", value: (t) => t.bytes, fmt: (v) => bytes(v), bar: true },
 							{ key: "count", label: "objects", value: (t) => t.count, fmt: (v) => fmt(v) }], { sort: "bytes", limit: 60 })),
@@ -432,12 +438,18 @@ const PROFILE = /*PROFILE_DATA*/null;
 							{ key: "retained", label: "keeps alive", value: (b) => b.retained, fmt: (v) => bytes(v), bar: true },
 							{ key: "size", label: "own", value: (b) => b.size, fmt: (v) => bytes(v) },
 							{ key: "path", label: "held by", text: true, value: (b) => b.path }], { sort: "retained", limit: 40 }))),
-					el("h3", {}, "The run's live objects by allocating stack"),
+					el("h3", {}, "The run's reachable objects by allocating stack"),
 					table(s.by_stack, [
 						{ key: "stack", label: "stack", text: true, value: (x) => stackText(x.frames) },
 						{ key: "type", label: "type", text: true, value: (x) => x.type },
 						{ key: "bytes", label: "bytes now", value: (x) => x.bytes, fmt: (v) => bytes(v), bar: true },
-						{ key: "count", label: "objects", value: (x) => x.count, fmt: (v) => fmt(v) }], { sort: "bytes", limit: 100 }));
+						{ key: "count", label: "objects", value: (x) => x.count, fmt: (v) => fmt(v) }], { sort: "bytes", limit: 100 }),
+					el("h3", {}, "Garbage not swept yet, by type"),
+					(unswept.by_type || []).length ? table(unswept.by_type, [
+						{ key: "type", label: "type", text: true, value: (t) => t.type },
+						{ key: "bytes", label: "bytes", value: (t) => t.bytes, fmt: (v) => bytes(v), bar: true },
+						{ key: "count", label: "objects", value: (t) => t.count, fmt: (v) => fmt(v) }], { sort: "bytes", limit: 30 })
+						: el("p", { class: "muted" }, unswept.count ? "Not split by type in this profile." : "None: the collector had freed every object nothing holds."));
 			};
 			picker.addEventListener("change", show);
 			show();
@@ -461,11 +473,11 @@ const PROFILE = /*PROFILE_DATA*/null;
 		const col = (name) => t.columns.indexOf(name);
 		const rows = t.rows;
 		section.append(el("h2", {}, "Per frame"));
-		section.append(el("p", { class: "lead" }, "One value a frame. Work is the work clock's charge in the frame; host is the frame's wall time in this process; heap is the VM's heap at the frame's end."));
+		section.append(el("p", { class: "lead" }, "One value a frame. Work is the work clock's charge in the frame; host is the frame's wall time in this process; the VM heap is its count at the frame's end (gcinfo), garbage not swept yet included: the Memory tab's snapshots give what is reachable."));
 		const measures = [
 			["Work clock (ms a frame)", (r) => r[col("work_ms")], (v) => fmt(v, 3) + " ms"],
 			["Host time (ms a frame)", (r) => r[col("host_ms")], (v) => fmt(v, 2) + " ms"],
-			["Luau heap (MB)", (r) => r[col("heap_bytes")] / 1048576, (v) => fmt(v, 2) + " MB"],
+			["VM heap with garbage (MB)", (r) => r[col("heap_bytes")] / 1048576, (v) => fmt(v, 2) + " MB"],
 			["Allocated (KB a frame)", (r) => r[col("allocated_bytes")] / 1024, (v) => fmt(v, 1) + " KB"],
 			["Instructions a frame", (r) => r[col("instructions")], (v) => compact(v)],
 			["Collector (ms a frame)", (r) => r[col("gc_ms")], (v) => fmt(v, 3) + " ms"],

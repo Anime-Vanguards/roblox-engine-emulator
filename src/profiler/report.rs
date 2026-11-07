@@ -635,20 +635,29 @@ pub fn write(input: &Input) -> Result<String, String> {
         let last = input.snapshots.last().unwrap();
         let _ = writeln!(
             summary,
-            "\nheap at {}: {} live in {} objects (gcinfo() {} KB); the run's own allocations still alive: {}; garbage not collected yet: {}",
+            "\nheap at {}: {} reachable in {} objects, what a full collection keeps; the run's own allocations still reachable: {}",
             last.label,
-            bytes(last.object_bytes as f64),
-            group_digits(last.objects),
-            last.total_bytes / 1024,
+            bytes(last.reachable.1 as f64),
+            group_digits(last.reachable.0),
             bytes(last.allocated_since.1),
-            bytes(last.unreachable.1 as f64)
         );
-        let _ = writeln!(summary, "  by type: {}", last.by_type.iter().take(8).map(|(name, count, size)| format!("{name} {} ({})", bytes(*size as f64), group_digits(*count))).collect::<Vec<_>>().join(", "));
+        let _ = writeln!(
+            summary,
+            "  not swept yet: {} in {} objects, garbage the collector had not freed (not in the reachable figures; gcinfo() {} KB counts both)",
+            bytes(last.unswept.1 as f64),
+            group_digits(last.unswept.0),
+            last.total_bytes / 1024
+        );
+        let _ = writeln!(summary, "  reachable by type: {}", last.by_type.iter().take(8).map(|(name, count, size)| format!("{name} {} ({})", bytes(*size as f64), group_digits(*count))).collect::<Vec<_>>().join(", "));
         for held in last.biggest.iter().take(input.config.top.min(8)) {
             let _ = writeln!(summary, "  {:>10} kept alive by {} {}  ({})", bytes(held.retained as f64), held.ty, if held.name.is_empty() { String::new() } else { format!("\"{}\"", held.name) }, held.path);
         }
         if input.snapshots.len() > 1 {
-            let _ = writeln!(summary, "  snapshots: {}", input.snapshots.iter().map(|s| format!("{} {}", s.label, bytes(s.object_bytes as f64))).collect::<Vec<_>>().join(" -> "));
+            let _ = writeln!(
+                summary,
+                "  snapshots, reachable (+ not swept yet): {}",
+                input.snapshots.iter().map(|s| format!("{} {} (+{})", s.label, bytes(s.reachable.1 as f64), bytes(s.unswept.1 as f64))).collect::<Vec<_>>().join(" -> ")
+            );
         }
         let collector = input.collector;
         let _ = writeln!(
@@ -663,8 +672,10 @@ pub fn write(input: &Input) -> Result<String, String> {
             "snapshots": input.snapshots.iter().map(|snapshot| json!({
                 "label": snapshot.label, "frame": snapshot.frame, "seconds": snapshot.seconds, "gcinfo_kb": snapshot.total_bytes / 1024, "total_bytes": snapshot.total_bytes,
                 "objects": snapshot.objects, "object_bytes": snapshot.object_bytes,
+                "reachable": {"count": snapshot.reachable.0, "bytes": snapshot.reachable.1},
+                "unswept": {"count": snapshot.unswept.0, "bytes": snapshot.unswept.1,
+                    "by_type": snapshot.unswept_by_type.iter().map(|(name, count, size)| json!({"type": name, "count": count, "bytes": size})).collect::<Vec<_>>()},
                 "by_type": snapshot.by_type.iter().map(|(name, count, size)| json!({"type": name, "count": count, "bytes": size})).collect::<Vec<_>>(),
-                "unreachable": {"count": snapshot.unreachable.0, "bytes": snapshot.unreachable.1},
                 "allocated_since": {"count": snapshot.allocated_since.0.round(), "bytes": snapshot.allocated_since.1.round()},
                 "biggest": snapshot.biggest.iter().map(|held| json!({"type": held.ty, "name": held.name, "size": held.size, "retained": held.retained, "path": held.path,
                     "stack": held.stack.and_then(|stack| input.allocations.map(|allocations| allocations.stacks.stacks[stack as usize].iter().map(|&(f, l)| json!([f, l])).collect::<Vec<_>>()))})).collect::<Vec<_>>(),
@@ -700,7 +711,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         let (first, last) = (&rows[0], rows.last().unwrap());
         let _ = writeln!(
             summary,
-            "\ntimeline ({} frames): work a frame mean {:.3} ms, max {:.3} ms (frame {}); host a frame mean {:.2} ms; heap {} -> {}; instances {} -> {}; connections {} -> {}; threads {:+} over the run",
+            "\ntimeline ({} frames): work a frame mean {:.3} ms, max {:.3} ms (frame {}); host a frame mean {:.2} ms; VM heap with its garbage {} -> {}; instances {} -> {}; connections {} -> {}; threads {:+} over the run",
             rows.len(),
             mean,
             worst_work,

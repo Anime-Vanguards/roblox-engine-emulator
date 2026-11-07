@@ -844,9 +844,13 @@ void lua_setprofilefreed(lua_State* L, void (*freed)(void* ud, void* block), voi
     }
 }
 
-// The heap as luaC_enumheap (lgcdebug.cpp) describes it, without the objects the collector found dead and has not swept
-// yet: during a sweep a dead closure can hold a prototype already freed (luaC_enumheap asserts on it), and what is dead
-// is garbage, not something a script holds. Same node sizes and names, same edges.
+// The heap as the collector sees it: luaC_enumheap's nodes (lgcdebug.cpp: the same sizes and names) and every reference
+// the collector follows (lgc.cpp's traverse functions and cleartable), which differs from luaC_enumheap's edges in a
+// prototype's source, debug name, upvalue and local names, a thread's namecall and open upvalues, the strings of a weak
+// table (never cleared) and a weak-valued array part (not followed); and its roots (markroot, atomic) as edges from NULL:
+// the main thread, the registry, the basic types' metatables and the fixed objects. So an object no edge reaches is one
+// the next collection frees. Objects the collector found dead and has not swept yet go to `dead`, by type and size only:
+// during a sweep a dead closure can hold a prototype already freed (luaC_enumheap asserts on it).
 namespace
 {
 struct HeapWalk
@@ -855,11 +859,50 @@ struct HeapWalk
     void* context;
     void (*node)(void* context, void* ptr, uint8_t tt, uint8_t memcat, size_t size, const char* name);
     void (*edge)(void* context, void* from, void* to, const char* name);
+    void (*dead)(void* context, uint8_t tt, size_t size);
 };
 
 void* walkpointer(GCObject* gco)
 {
     return gco->gch.tt == LUA_TUSERDATA ? (void*)gco2u(gco)->data : (void*)gco;
+}
+
+// An object's size, read from its own fields only (a dead object's references may be freed already)
+size_t walksize(GCObject* o)
+{
+    switch (o->gch.tt)
+    {
+    case LUA_TSTRING:
+        return sizestring(gco2ts(o)->len);
+    case LUA_TTABLE:
+    {
+        LuaTable* h = gco2h(o);
+        return sizeof(LuaTable) + (h->node == &luaH_dummynode ? 0 : sizenode(h) * sizeof(LuaNode)) + h->sizearray * sizeof(TValue);
+    }
+    case LUA_TFUNCTION:
+    {
+        Closure* cl = gco2cl(o);
+        return cl->isC ? sizeCclosure(cl->nupvalues) : sizeLclosure(cl->nupvalues);
+    }
+    case LUA_TUSERDATA:
+        return sizeudata(gco2u(o)->len);
+    case LUA_TTHREAD:
+    {
+        lua_State* th = gco2th(o);
+        return sizeof(lua_State) + sizeof(TValue) * th->stacksize + sizeof(CallInfo) * th->size_ci;
+    }
+    case LUA_TBUFFER:
+        return sizebuffer(gco2buf(o)->len);
+    case LUA_TPROTO:
+    {
+        Proto* p = gco2p(o);
+        return sizeof(Proto) + sizeof(Instruction) * p->sizecode + sizeof(Proto*) * p->sizep + sizeof(TValue) * p->sizek + p->sizelineinfo +
+               sizeof(LocVar) * p->sizelocvars + sizeof(TString*) * p->sizeupvalues;
+    }
+    case LUA_TUPVAL:
+        return sizeof(UpVal);
+    }
+    return 0;
 }
 
 void walknode(HeapWalk* w, GCObject* gco, size_t size, const char* name)
@@ -881,28 +924,28 @@ void walkedges(HeapWalk* w, GCObject* from, TValue* data, size_t size, const cha
 
 void walktable(HeapWalk* w, LuaTable* h)
 {
-    size_t size = sizeof(LuaTable) + (h->node == &luaH_dummynode ? 0 : sizenode(h) * sizeof(LuaNode)) + h->sizearray * sizeof(TValue);
-    walknode(w, obj2gco(h), size, h == hvalue(registry(w->L)) ? "registry" : NULL);
+    walknode(w, obj2gco(h), walksize(obj2gco(h)), h == hvalue(registry(w->L)) ? "registry" : NULL);
+    bool weakkey = false;
+    bool weakvalue = false;
+    if (const TValue* mode = gfasttm(w->L->global, h->metatable, TM_MODE))
+    {
+        if (ttisstring(mode))
+        {
+            weakkey = strchr(svalue(mode), 'k') != NULL;
+            weakvalue = strchr(svalue(mode), 'v') != NULL;
+        }
+    }
+    // (a weak reference is no edge, but a weak table keeps its strings: cleartable never clears a string)
     if (h->node != &luaH_dummynode)
     {
-        bool weakkey = false;
-        bool weakvalue = false;
-        if (const TValue* mode = gfasttm(w->L->global, h->metatable, TM_MODE))
-        {
-            if (ttisstring(mode))
-            {
-                weakkey = strchr(svalue(mode), 'k') != NULL;
-                weakvalue = strchr(svalue(mode), 'v') != NULL;
-            }
-        }
         for (int i = 0; i < sizenode(h); ++i)
         {
             const LuaNode& n = h->node[i];
             if (!ttisnil(&n.val) && (iscollectable(&n.key) || iscollectable(&n.val)))
             {
-                if (!weakkey && iscollectable(&n.key))
+                if (iscollectable(&n.key) && (!weakkey || ttisstring(&n.key)))
                     walkedge(w, obj2gco(h), gcvalue(&n.key), "[key]");
-                if (!weakvalue && iscollectable(&n.val))
+                if (iscollectable(&n.val) && (!weakvalue || ttisstring(&n.val)))
                 {
                     char buf[32];
                     const char* name = buf;
@@ -912,13 +955,19 @@ void walktable(HeapWalk* w, LuaTable* h)
                         snprintf(buf, sizeof(buf), "%.14g", nvalue(&n.key));
                     else
                         snprintf(buf, sizeof(buf), "[%s]", getstr(w->L->global->ttname[n.key.tt]));
-                    walkedge(w, obj2gco(h), gcvalue(&n.val), name);
+                    // (in a table weak in both, a string value stays while its key does: cleartable clears the entry of
+                    // a freed key without marking the value)
+                    if (weakkey && weakvalue && iscollectable(&n.key) && !ttisstring(&n.key))
+                        walkedge(w, gcvalue(&n.key), gcvalue(&n.val), name);
+                    else
+                        walkedge(w, obj2gco(h), gcvalue(&n.val), name);
                 }
             }
         }
     }
-    if (h->sizearray)
-        walkedges(w, obj2gco(h), h->array, h->sizearray, "array");
+    for (int i = 0; i < h->sizearray; ++i)
+        if (iscollectable(&h->array[i]) && (!weakvalue || ttisstring(&h->array[i])))
+            walkedge(w, obj2gco(h), gcvalue(&h->array[i]), "array");
     if (h->metatable)
         walkedge(w, obj2gco(h), obj2gco(h->metatable), "metatable");
 }
@@ -927,7 +976,7 @@ void walkclosure(HeapWalk* w, Closure* cl)
 {
     if (cl->isC)
     {
-        walknode(w, obj2gco(cl), sizeCclosure(cl->nupvalues), cl->c.debugname);
+        walknode(w, obj2gco(cl), walksize(obj2gco(cl)), cl->c.debugname);
     }
     else
     {
@@ -937,7 +986,7 @@ void walkclosure(HeapWalk* w, Closure* cl)
             snprintf(buf, sizeof(buf), "%s:%d %s", p->debugname ? getstr(p->debugname) : "unnamed", p->linedefined, getstr(p->source));
         else
             snprintf(buf, sizeof(buf), "%s:%d", p->debugname ? getstr(p->debugname) : "unnamed", p->linedefined);
-        walknode(w, obj2gco(cl), sizeLclosure(cl->nupvalues), buf);
+        walknode(w, obj2gco(cl), walksize(obj2gco(cl)), buf);
     }
     walkedge(w, obj2gco(cl), obj2gco(cl->env), "env");
     if (cl->isC)
@@ -971,14 +1020,14 @@ void walkudata(HeapWalk* w, Udata* u)
             }
         }
     }
-    walknode(w, obj2gco(u), sizeudata(u->len), name);
+    walknode(w, obj2gco(u), walksize(obj2gco(u)), name);
     if (u->metatable)
         walkedge(w, obj2gco(u), obj2gco(u->metatable), "metatable");
 }
 
 void walkthread(HeapWalk* w, lua_State* th)
 {
-    size_t size = sizeof(lua_State) + sizeof(TValue) * th->stacksize + sizeof(CallInfo) * th->size_ci;
+    size_t size = walksize(obj2gco(th));
     Closure* tcl = NULL;
     for (CallInfo* ci = th->base_ci; ci <= th->ci; ++ci)
     {
@@ -1002,12 +1051,16 @@ void walkthread(HeapWalk* w, lua_State* th)
     walkedge(w, obj2gco(th), obj2gco(th->gt), "globals");
     if (th->top > th->stack)
         walkedges(w, obj2gco(th), th->stack, th->top - th->stack, "stack");
+    // (traversestack marks these too)
+    if (th->namecall)
+        walkedge(w, obj2gco(th), obj2gco(th->namecall), "namecall");
+    for (UpVal* uv = th->openupval; uv; uv = uv->u.open.threadnext)
+        walkedge(w, obj2gco(th), obj2gco(uv), "open upvalue");
 }
 
 void walkproto(HeapWalk* w, Proto* p)
 {
-    size_t size = sizeof(Proto) + sizeof(Instruction) * p->sizecode + sizeof(Proto*) * p->sizep + sizeof(TValue) * p->sizek + p->sizelineinfo +
-                  sizeof(LocVar) * p->sizelocvars + sizeof(TString*) * p->sizeupvalues;
+    size_t size = walksize(obj2gco(p));
     char buf[LUA_IDSIZE];
     if (p->source)
         snprintf(buf, sizeof(buf), "proto %s:%d %s", p->debugname ? getstr(p->debugname) : "unnamed", p->linedefined, getstr(p->source));
@@ -1018,6 +1071,17 @@ void walkproto(HeapWalk* w, Proto* p)
         walkedges(w, obj2gco(p), p->k, p->sizek, "constants");
     for (int i = 0; i < p->sizep; ++i)
         walkedge(w, obj2gco(p), obj2gco(p->p[i]), "protos");
+    // (traverseproto marks the names too)
+    if (p->source)
+        walkedge(w, obj2gco(p), obj2gco(p->source), "source");
+    if (p->debugname)
+        walkedge(w, obj2gco(p), obj2gco(p->debugname), "debugname");
+    for (int i = 0; i < p->sizeupvalues; ++i)
+        if (p->upvalues[i])
+            walkedge(w, obj2gco(p), obj2gco(p->upvalues[i]), "upvalue name");
+    for (int i = 0; i < p->sizelocvars; ++i)
+        if (p->locvars[i].varname)
+            walkedge(w, obj2gco(p), obj2gco(p->locvars[i].varname), "local name");
 }
 
 void walkobject(HeapWalk* w, GCObject* o)
@@ -1025,7 +1089,7 @@ void walkobject(HeapWalk* w, GCObject* o)
     switch (o->gch.tt)
     {
     case LUA_TSTRING:
-        return walknode(w, o, sizestring(gco2ts(o)->len), NULL);
+        return walknode(w, o, walksize(o), NULL);
     case LUA_TTABLE:
         return walktable(w, gco2h(o));
     case LUA_TFUNCTION:
@@ -1035,13 +1099,13 @@ void walkobject(HeapWalk* w, GCObject* o)
     case LUA_TTHREAD:
         return walkthread(w, gco2th(o));
     case LUA_TBUFFER:
-        return walknode(w, o, sizebuffer(gco2buf(o)->len), NULL);
+        return walknode(w, o, walksize(o), NULL);
     case LUA_TPROTO:
         return walkproto(w, gco2p(o));
     case LUA_TUPVAL:
     {
         UpVal* uv = gco2uv(o);
-        walknode(w, o, sizeof(UpVal), NULL);
+        walknode(w, o, walksize(o), NULL);
         if (iscollectable(uv->v))
             walkedge(w, o, gcvalue(uv->v), "value");
         return;
@@ -1053,8 +1117,16 @@ bool walkvisit(void* context, lua_Page* page, GCObject* gco)
 {
     HeapWalk* w = (HeapWalk*)context;
     // (dead, not swept yet: garbage whose references may already be freed)
-    if (!isdead(w->L->global, gco))
-        walkobject(w, gco);
+    if (isdead(w->L->global, gco))
+    {
+        if (w->dead)
+            w->dead(w->context, gco->gch.tt, walksize(gco));
+        return false;
+    }
+    walkobject(w, gco);
+    // (the collector never frees a fixed object: the type and metamethod names, the memory error messages)
+    if (isfixed(gco))
+        w->edge(w->context, NULL, walkpointer(gco), "fixed");
     return false;
 }
 } // namespace
@@ -1063,11 +1135,26 @@ void lua_enumheap(
     lua_State* L,
     void* context,
     void (*node)(void* context, void* ptr, uint8_t tt, uint8_t memcat, size_t size, const char* name),
-    void (*edge)(void* context, void* from, void* to, const char* name)
+    void (*edge)(void* context, void* from, void* to, const char* name),
+    void (*dead)(void* context, uint8_t tt, size_t size)
 )
 {
-    HeapWalk w = {L, context, node, edge};
-    walkobject(&w, obj2gco(L->global->mainthread));
+    HeapWalk w = {L, context, node, edge, dead};
+    global_State* g = L->global;
+    walkobject(&w, obj2gco(g->mainthread));
+    // the roots markroot and atomic mark
+    edge(context, NULL, walkpointer(obj2gco(g->mainthread)), "main thread");
+    if (iscollectable(registry(L)))
+        edge(context, NULL, walkpointer(gcvalue(registry(L))), "registry");
+    for (int i = 0; i < LUA_T_COUNT; ++i)
+    {
+        if (g->mt[i])
+        {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "metatable of %s", getstr(g->ttname[i]));
+            edge(context, NULL, walkpointer(obj2gco(g->mt[i])), buf);
+        }
+    }
     luaM_visitgco(L, &w, walkvisit);
 }
 

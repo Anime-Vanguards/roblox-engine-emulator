@@ -242,6 +242,177 @@ fn a_heap_snapshot_finds_what_holds_memory() {
     assert_eq!(live("garbage"), 0.0, "garbage's tables were freed");
 }
 
+/// One profile of a script that holds 2,000 tables, then runs a loop of `churn` throwaway tables, with the collector
+/// stopped so that whatever garbage the loop makes is still there when the run ends; its profile.json
+fn heap_profile_with_garbage(churn: u32) -> serde_json::Value {
+    let (lua, engine) = start();
+    let config = Config::new(Kinds::HEAP, temp_dir("garbage"));
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    unsafe { mlua::ffi::lua_gc(main_state(&lua), mlua::ffi::LUA_GCSTOP, 0) };
+    run(&lua, &engine, "held", "local held = {}\nfor i = 1, 2000 do\n\theld[i] = {i, tostring(i)}\nend\n_G.Held = held\n");
+    run(&lua, &engine, "churn", &format!("for i = 1, {churn} do\n\tlocal _ = {{i, tostring(i)}}\nend\n"));
+    profiler::collect(&lua);
+    session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    json
+}
+
+/// `ree profile diff` headlines the reachable heap: two runs that hold the same data, one leaving 20,000 tables of
+/// garbage the collector has not swept, have the same heap at the end, and the garbage is a figure of its own (before,
+/// the headline counted it: +42 % for a UI module whose reachable heap had not moved).
+#[test]
+fn the_heap_headline_is_the_reachable_heap_and_leaves_garbage_out() {
+    let _lock = lock();
+    let (before, after) = (heap_profile_with_garbage(0), heap_profile_with_garbage(20_000));
+    let (text, diff) = profiler::diff::compare(&before, &after, 10);
+    let figures = diff["figures"].as_array().unwrap();
+    let figure = |name: &str| figures.iter().find(|figure| figure["name"] == name).unwrap_or_else(|| panic!("no {name:?} in\n{text}"));
+    // the headline: the first heap figure of the run's end
+    let headline = figures.iter().find(|figure| figure["name"].as_str().unwrap().contains("heap at the end")).unwrap_or_else(|| panic!("{text}"));
+    let (b, a) = (headline["before"].as_f64().unwrap(), headline["after"].as_f64().unwrap());
+    assert!(b > 0.0 && ((a - b) / b).abs() < 0.01, "{} moved {:+.1} % with the garbage alone:\n{text}", headline["name"], (a - b) / b * 100.0);
+    assert_eq!(headline["name"], "reachable heap at the end");
+    // the garbage is shown apart, under its own name: at least the 20,000 tables (each at least a LuaTable header)
+    let garbage = figure("garbage not swept yet at the end");
+    assert!(garbage["after"].as_f64().unwrap() - garbage["before"].as_f64().unwrap() >= 20_000.0 * 48.0, "{text}");
+    // and the run's own objects are its reachable ones (the garbage it made is still followed until it is freed)
+    let own = figure("the run's own reachable objects");
+    let (own_before, own_after) = (own["before"].as_f64().unwrap(), own["after"].as_f64().unwrap());
+    assert!(own_before > 0.0 && ((own_after - own_before) / own_before).abs() < 0.01, "{text}");
+    // the summary and the page's data say the same
+    let end = |profile: &serde_json::Value| profile["heap"]["snapshots"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(end(&before)["reachable"]["bytes"].as_f64().unwrap(), b);
+    assert!(end(&after)["unswept"]["count"].as_u64().unwrap() >= 20_000, "{}", end(&after)["unswept"]);
+    let summary = after["summary"].as_str().unwrap();
+    assert!(summary.contains("reachable in") && summary.contains("not swept yet:"), "{summary}");
+}
+
+/// Walks of the heap a snapshot can be checked against: (type -> (count, bytes)) of every object, reachable and not
+fn objects_by_type(snapshot: &memory::Snapshot) -> std::collections::BTreeMap<String, (u64, u64)> {
+    let mut types = std::collections::BTreeMap::new();
+    for (name, count, bytes) in snapshot.by_type.iter().chain(&snapshot.unswept_by_type) {
+        let entry: &mut (u64, u64) = types.entry(name.clone()).or_default();
+        entry.0 += count;
+        entry.1 += bytes;
+    }
+    types
+}
+
+/// What a heap snapshot calls reachable is what a full collection keeps, type by type (a thread's size aside: the
+/// collector shrinks stacks), and what it calls garbage not swept yet is what that collection frees: the walk follows
+/// every reference and root the collector marks, among them the names only a function's prototype holds, the basic
+/// types' metatables, the fixed names and the strings of a weak table; a weak table's other values are garbage.
+#[test]
+fn a_heap_snapshots_reachable_heap_is_what_a_full_collection_keeps() {
+    let _lock = lock();
+    let (lua, engine) = start();
+    let state = main_state(&lua);
+    let config = Config::new(Kinds::HEAP.with(Kinds::ALLOC), temp_dir("collector"));
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    unsafe { mlua::ffi::lua_gc(state, mlua::ffi::LUA_GCSTOP, 0) };
+    run(
+        &lua,
+        &engine,
+        "collector",
+        concat!(
+            "local function OnlyItsPrototypeNamesMe()\n\treturn 1\nend\n_G.Kept = {OnlyItsPrototypeNamesMe}\n",
+            // weak values: the strings stay (in the array part and the hash part), the tables go
+            "local weak = setmetatable({}, {__mode = \"v\"})\nweak[1] = string.rep(\"a string a weak table keeps \", 3)\nweak[2] = {}\n",
+            "weak.name = string.rep(\"a string a weak table keeps by its key \", 2)\nweak.table = {}\n_G.Weak = weak\n",
+            // weak keys: a string key stays, a table key goes
+            "local keys = setmetatable({}, {__mode = \"k\"})\nkeys[string.rep(\"a key a weak-keyed table keeps \", 2)] = true\nkeys[{}] = true\n_G.Keys = keys\n",
+            // weak both: a string value stays while its key does
+            "local both = setmetatable({}, {__mode = \"kv\"})\nlocal key = {}\n_G.BothKey = key\nboth[key] = string.rep(\"kept while its key is \", 2)\n",
+            "both[{}] = string.rep(\"gone with its key \", 2)\n_G.Both = both\n",
+            "for i = 1, 3000 do\n\tlocal _ = {i, tostring(i)}\nend\n"
+        ),
+    );
+    profiler::collect(&lua);
+    session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let end = json["heap"]["snapshots"].as_array().unwrap().last().unwrap().clone();
+    let reachable: std::collections::BTreeMap<String, (u64, u64)> =
+        end["by_type"].as_array().unwrap().iter().map(|row| (row["type"].as_str().unwrap().to_string(), (row["count"].as_u64().unwrap(), row["bytes"].as_u64().unwrap()))).collect();
+    let total_before = vm::total_bytes(state);
+    // the collector itself
+    unsafe { mlua::ffi::lua_gc(state, mlua::ffi::LUA_GCCOLLECT, 0) };
+    let resolver = memory::resolver(Rc::downgrade(&engine));
+    let collected = memory::snapshot(state, "collected", 0, 0.0, Some(&*resolver), 5);
+    let kept = objects_by_type(&collected);
+    for (name, (count, bytes)) in &reachable {
+        let (kept_count, kept_bytes) = kept.get(name).copied().unwrap_or_default();
+        assert_eq!(kept_count, *count, "{name}: the snapshot's reachable objects are the ones the collection kept\nreachable {reachable:?}\nkept {kept:?}");
+        if name != "thread" {
+            assert_eq!(kept_bytes, *bytes, "{name}");
+        }
+    }
+    assert_eq!(kept.keys().collect::<Vec<_>>(), reachable.keys().collect::<Vec<_>>(), "the collection kept no type the snapshot had as garbage only");
+    assert_eq!(end["objects"].as_u64().unwrap() - end["unswept"]["count"].as_u64().unwrap(), collected.objects, "the collection freed what the snapshot had as garbage");
+    assert!(end["unswept"]["count"].as_u64().unwrap() >= 6000, "the loop's 3,000 tables and strings: {}", end["unswept"]);
+    // the VM's own count: the collection freed at least that garbage (and the string table it no longer needs)
+    let freed = total_before - vm::total_bytes(state);
+    assert!(freed as u64 >= end["unswept"]["bytes"].as_u64().unwrap(), "freed {freed}, garbage {}", end["unswept"]);
+    // once the collector has freed what it found, the walk reaches every object left: nothing the collector keeps (a
+    // name, a metatable, a fixed string) is taken for garbage. (A collection can leave garbage of its own: a userdata it
+    // frees can let go of a reference, so the walk is checked again after each one.)
+    let mut settled = memory::snapshot(state, "settled", 0, 0.0, Some(&*resolver), 5);
+    for _ in 0..4 {
+        if settled.unswept == (0, 0) {
+            break;
+        }
+        unsafe { mlua::ffi::lua_gc(state, mlua::ffi::LUA_GCCOLLECT, 0) };
+        settled = memory::snapshot(state, "settled", 0, 0.0, Some(&*resolver), 5);
+    }
+    assert_eq!(settled.unswept, (0, 0), "{:?}", settled.unswept_by_type);
+    // the weak tables kept their strings and lost their tables
+    let check = "local keys = 0\nfor key in _G.Keys do\n\tkeys += if type(key) == \"string\" then 1 else 100\nend\nlocal both = 0\nfor _ in _G.Both do\n\tboth += 1\nend\nprint(type(_G.Weak[1]), type(_G.Weak.name), _G.Weak[2] == nil, _G.Weak.table == nil, keys, both, _G.Both[_G.BothKey] ~= nil)\n";
+    assert_eq!(run(&lua, &engine, "check", check).last().unwrap(), "string string true true 1 1 true");
+}
+
+/// During a sweep, the objects the collector has found dead and not freed yet are garbage not swept yet too: a snapshot
+/// at a phase mark then counts every object the rest of the collection frees (the VM tells the allocation profile of
+/// each one it frees).
+#[test]
+fn a_heap_snapshot_during_a_sweep_counts_the_objects_it_has_yet_to_free() {
+    let _lock = lock();
+    let (lua, engine) = start();
+    let state = main_state(&lua);
+    let config = Config::new(Kinds::HEAP.with(Kinds::ALLOC), temp_dir("sweep"));
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    unsafe { mlua::ffi::lua_gc(state, mlua::ffi::LUA_GCCOLLECT, 0) };
+    run(&lua, &engine, "sweep", "local kept = {}\nfor i = 1, 500 do\n\tkept[i] = {i}\nend\n_G.Kept = kept\nfor i = 1, 20000 do\n\tlocal _ = {i}\nend\n");
+    // the collector steps into its sweep: the loop's tables are found dead, and many are not freed yet
+    let mut steps = 0;
+    while vm::gc_state(state) != 4 {
+        unsafe { mlua::ffi::lua_gc(state, mlua::ffi::LUA_GCSTEP, 0) };
+        steps += 1;
+        assert!(steps < 1_000_000, "the collector never reached its sweep");
+    }
+    profiler::phase("sweeping");
+    let followed = memory::with(|allocations| allocations.live.len()).unwrap();
+    unsafe { mlua::ffi::lua_gc(state, mlua::ffi::LUA_GCCOLLECT, 0) };
+    let freed = followed - memory::with(|allocations| allocations.live.len()).unwrap();
+    profiler::collect(&lua);
+    session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let snapshots = json["heap"]["snapshots"].as_array().unwrap();
+    let sweeping = snapshots.iter().find(|snapshot| snapshot["label"] == "sweeping").unwrap();
+    let end = snapshots.last().unwrap();
+    // (how many the sweep freed before the mark depends on its step size: thousands are left)
+    assert!(freed >= 1_000, "the rest of the collection freed the loop's tables: {freed}");
+    // every object the run made that the rest of the collection freed was counted as garbage (with what the engine's
+    // start left, which the profile does not follow)
+    let unswept = sweeping["unswept"]["count"].as_u64().unwrap();
+    assert!(unswept >= freed as u64, "garbage not swept yet {unswept}, freed {freed}: {}", sweeping["unswept"]);
+    assert_eq!(sweeping["reachable"]["count"].as_u64().unwrap(), end["objects"].as_u64().unwrap(), "what was reachable is what the collection kept");
+}
+
 /// The collector's steps, cycles and bytes freed come from the VM's interrupt at each step.
 #[test]
 fn the_collectors_work_is_counted() {

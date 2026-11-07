@@ -237,9 +237,13 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     that allocated them. Every allocation is counted by type; stacks are taken for every allocation unless
     `--profile-alloc-step <bytes>` samples them (weighted by the inverse of the chance).
   - `heap`: a snapshot of what the VM holds at the start, at every `Context.ProfilePhase` mark and at the
-    end: by type and Instance class, the biggest objects by what they keep alive (their dominated size)
-    with the path that holds them, the run's own live objects by the stack that allocated them, garbage
-    not swept yet; and the collector's work (steps, cycles, bytes freed, host time).
+    end. Its figures are the reachable heap, what scripts and the engine still hold (what a full
+    collection would keep): by type and Instance class, the biggest objects by what they keep alive (their
+    dominated size) with the path that holds them, the run's own reachable objects by the stack that
+    allocated them. The garbage the collector has not swept yet (what that collection would free) is
+    counted apart, by type, and is in none of those figures: how much there is depends on where the
+    collector's cycle stood when the snapshot was taken. A snapshot collects nothing. And the collector's
+    work (steps, cycles, bytes freed, host time).
   - `timeline`: a row a frame: work, host time, instructions, the heap, allocations, the collector,
     live instances, connections and threads.
   - `cpu`: the run thread's CPU cycles, the process's CPU time, page faults and peak memory. Hardware
@@ -259,9 +263,10 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   timeline, caches). `--profile-top <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases
   the boundary profiler reports.
 - `ree profile diff <before> <after> [--out <dir>]` compares two profile directories: the headline
-  figures, the functions whose work, calls, instructions or allocations moved, the lines of modules whose
-  source is the same in both, caches, memory by type and the timeline; it writes `diff.txt` (also
-  printed), `diff.json` and `diff.html`. `ree profile report <dir>` prints a profile's summary again and
+  figures (the reachable heap at the end, and apart from it the garbage not swept yet), the functions
+  whose work, calls, instructions or allocations moved, the lines of modules whose source is the same in
+  both, caches, memory by type and the timeline; it writes `diff.txt` (also printed), `diff.json` and
+  `diff.html`. `ree profile report <dir>` prints a profile's summary again and
   rewrites its page from its profile.json.
 - With no profile the engine pays nothing measurable (a thread-local read where each profiler hooks in),
   and a profile changes nothing a script sees: the work clock, os.clock and a recording are the same with

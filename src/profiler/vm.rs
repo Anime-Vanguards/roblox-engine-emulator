@@ -55,6 +55,7 @@ struct RawNode {
 
 type HeapNode = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void, u8, u8, usize, *const c_char);
 type HeapEdge = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void, *mut c_void, *const c_char);
+type HeapDead = unsafe extern "C-unwind" fn(*mut c_void, u8, usize);
 
 unsafe extern "C-unwind" {
     fn lua_profilestart(state: *mut lua_State, stepping: c_int, prices: *const f64, nprices: c_int, hostwork: *const f64, hostdrained: *const f64) -> c_int;
@@ -71,7 +72,7 @@ unsafe extern "C-unwind" {
     fn lua_profilemark(block: *mut c_void);
     fn lua_profileudataoffset() -> usize;
     fn lua_setprofilefreed(state: *mut lua_State, freed: Option<unsafe extern "C-unwind" fn(*mut c_void, *mut c_void)>, ud: *mut c_void);
-    fn lua_enumheap(state: *mut lua_State, context: *mut c_void, node: HeapNode, edge: HeapEdge);
+    fn lua_enumheap(state: *mut lua_State, context: *mut c_void, node: HeapNode, edge: HeapEdge, dead: Option<HeapDead>);
     fn lua_gcstate(state: *mut lua_State) -> c_int;
     fn lua_totalbytes(state: *mut lua_State, category: c_int) -> usize;
     fn lua_mainthread(state: *mut lua_State) -> *mut lua_State;
@@ -275,12 +276,15 @@ pub fn set_freed(state: *mut lua_State, freed: Option<unsafe extern "C-unwind" f
     unsafe { lua_setprofilefreed(state, freed, ud) }
 }
 
-/// Walks the heap: `node(ptr, tt, memcat, size, name)` for every collectable object (a userdata's ptr is its data), then
-/// `edge(from, to, name)` for every reference.
-pub fn enum_heap(state: *mut lua_State, mut node: impl FnMut(usize, u8, usize, Option<&str>), mut edge: impl FnMut(usize, usize, Option<&str>)) {
+/// Walks the heap as the collector sees it: `node(ptr, tt, size, name)` for every collectable object (a userdata's ptr
+/// is its data), `edge(from, to, name)` for every reference the collector follows, the collector's roots as edges from
+/// 0 (the main thread, the registry, the basic types' metatables, the fixed objects), and `dead(tt, size)` for each
+/// object a sweep found dead and has not freed yet (lua.h lua_enumheap).
+pub fn enum_heap(state: *mut lua_State, mut node: impl FnMut(usize, u8, usize, Option<&str>), mut edge: impl FnMut(usize, usize, Option<&str>), mut dead: impl FnMut(u8, usize)) {
     struct Context<'a> {
         node: &'a mut dyn FnMut(usize, u8, usize, Option<&str>),
         edge: &'a mut dyn FnMut(usize, usize, Option<&str>),
+        dead: &'a mut dyn FnMut(u8, usize),
     }
     unsafe extern "C-unwind" fn on_node(context: *mut c_void, ptr: *mut c_void, tt: u8, _memcat: u8, size: usize, name: *const c_char) {
         let context = unsafe { &mut *(context as *mut Context) };
@@ -292,8 +296,12 @@ pub fn enum_heap(state: *mut lua_State, mut node: impl FnMut(usize, u8, usize, O
         let name = (!name.is_null()).then(|| unsafe { CStr::from_ptr(name) }.to_string_lossy());
         (context.edge)(from as usize, to as usize, name.as_deref());
     }
-    let mut context = Context { node: &mut node, edge: &mut edge };
-    unsafe { lua_enumheap(state, &mut context as *mut Context as *mut c_void, on_node, on_edge) };
+    unsafe extern "C-unwind" fn on_dead(context: *mut c_void, tt: u8, size: usize) {
+        let context = unsafe { &mut *(context as *mut Context) };
+        (context.dead)(tt, size);
+    }
+    let mut context = Context { node: &mut node, edge: &mut edge, dead: &mut dead };
+    unsafe { lua_enumheap(state, &mut context as *mut Context as *mut c_void, on_node, on_edge, Some(on_dead)) };
 }
 
 /// The collector's state: 0 pause, 1 propagate, 2 propagate again, 3 atomic, 4 sweep (lgc.h)

@@ -1,7 +1,8 @@
 //! Memory: what the VM allocates, by Luau stack and by type (`--profile alloc`), and what it holds at a moment (`--profile
-//! heap`): a snapshot of every collectable object by type, Instance userdata by class, the biggest by what they keep
-//! alive (their dominated size) with the path that holds them, and the objects the run allocated that are still alive
-//! by the stack that allocated them; and the collector's work (steps, cycles, bytes freed, host time).
+//! heap`): a snapshot of the reachable heap, what a full collection would keep (by type, Instance userdata by class, the
+//! biggest by what they keep alive, their dominated size, with the path that holds them, and the objects the run
+//! allocated that are still reachable by the stack that allocated them), with the garbage the collector has not swept
+//! yet counted apart; and the collector's work (steps, cycles, bytes freed, host time).
 //!
 //! The allocation callback sees every allocation. Its type is exact: a collectable object's header is read at the next
 //! callback (once the VM set it), Instance userdata name their class, and the VM labels the other memory it allocates (a
@@ -429,25 +430,30 @@ impl Collector {
     }
 }
 
-/// A snapshot of the heap
+/// A snapshot of the heap: what the collector's roots reach (what a full collection would keep) and the garbage the
+/// collector has not swept yet (what that collection would free), apart
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub label: String,
     pub frame: u64,
     pub seconds: f64,
-    /// The VM's own count of its heap (gcinfo() * 1024)
+    /// The VM's own count of its heap (gcinfo() * 1024): the objects, reachable or not swept yet, and the string table
     pub total_bytes: usize,
+    /// Every collectable object in the heap now, reachable or not swept yet
     pub objects: u64,
     pub object_bytes: u64,
-    /// (type, count, bytes), largest first
+    /// What the collector's roots reach, what scripts and the engine still hold: (count, bytes)
+    pub reachable: (u64, u64),
+    /// Garbage the collector has not freed yet: objects no root reaches, and objects a sweep found dead: (count, bytes)
+    pub unswept: (u64, u64),
+    /// The reachable objects by type: (type, count, bytes), largest first
     pub by_type: Vec<(String, u64, u64)>,
-    /// Not reachable from the registry or the main thread: garbage the collector has not freed yet (and the basic
-    /// types' metatables)
-    pub unreachable: (u64, u64),
+    /// The garbage not swept yet by type, largest first
+    pub unswept_by_type: Vec<(String, u64, u64)>,
     pub biggest: Vec<Held>,
-    /// Live objects the run allocated, by (stack, type), weighted: (stack, type name, count, bytes now)
+    /// Reachable objects the run allocated, by (stack, type), weighted: (stack, type name, count, bytes now)
     pub by_stack: Vec<(u32, String, f64, f64)>,
-    /// Of the objects alive now, those the run allocated (followed since the profile began), weighted
+    /// Of the reachable objects, those the run allocated (followed since the profile began), weighted
     pub allocated_since: (f64, f64),
 }
 
@@ -464,6 +470,10 @@ pub struct Held {
 }
 
 /// Walks the heap and summarizes it. `allocations` maps the live sampled objects to their stacks (ptr: their block).
+///
+/// The walk follows every reference the collector follows from the collector's roots (lua.h lua_enumheap), so what it
+/// reaches is what a full collection would keep, and the rest, with the objects a sweep found dead and has not freed, is
+/// what it would free. Nothing is collected: a snapshot changes nothing the VM does.
 pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, resolver: Option<&dyn Fn(u32, u32) -> Option<String>>, top: usize) -> Snapshot {
     let main = vm::main_thread(state) as usize;
     let instance_tag = crate::lua::raw::INSTANCE_TAG;
@@ -476,6 +486,8 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
     let mut edges: Vec<(u32, u32, u32)> = Vec::new();
     let mut edge_names = Types::default();
     let mut pending_edges: Vec<(usize, usize, u32)> = Vec::new();
+    let mut root_edges: Vec<(usize, u32)> = Vec::new();
+    let mut dead: FxHashMap<u8, (u64, u64)> = FxHashMap::default();
     vm::enum_heap(
         state,
         |ptr, tt, size, name| {
@@ -487,7 +499,16 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         },
         |from, to, name| {
             let name = edge_names.id(name.unwrap_or(""));
-            pending_edges.push((from, to, name));
+            if from == 0 {
+                root_edges.push((to, name));
+            } else {
+                pending_edges.push((from, to, name));
+            }
+        },
+        |tt, size| {
+            let entry = dead.entry(tt).or_default();
+            entry.0 += 1;
+            entry.1 += size as u64;
         },
     );
     for (from, to, name) in pending_edges {
@@ -497,11 +518,16 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
     }
     let count = ptrs.len();
     let root = count as u32;
-    // successors in CSR form, the virtual root's first (the registry and the main thread)
-    let mut roots: Vec<u32> = Vec::new();
-    for (node, name) in names.iter().enumerate() {
-        if name.as_deref() == Some("registry") || ptrs[node] == main {
-            roots.push(node as u32);
+    // successors in CSR form, the virtual root's first: the collector's roots in the walk's order (the main thread, the
+    // registry, the basic types' metatables, the fixed objects), each by the name of its edge
+    let mut roots: Vec<(u32, u32)> = Vec::new();
+    let mut is_root = vec![false; count];
+    for (ptr, name) in root_edges {
+        if let Some(&node) = index.get(&ptr) {
+            if !is_root[node as usize] {
+                is_root[node as usize] = true;
+                roots.push((node, name));
+            }
         }
     }
     let mut offsets = vec![0u32; count + 2];
@@ -521,10 +547,10 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         target_names[at] = name;
         fill[from as usize] += 1;
     }
-    for &node in &roots {
+    for &(node, name) in &roots {
         let at = fill[count] as usize;
         targets[at] = node;
-        target_names[at] = u32::MAX;
+        target_names[at] = name;
         fill[count] += 1;
     }
     let successors = |node: u32| -> std::ops::Range<usize> { offsets[node as usize] as usize..offsets[node as usize + 1] as usize };
@@ -623,7 +649,8 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         }
     }
 
-    // by type (and Instance class), unreachable objects
+    // by type (and Instance class): what is reachable, and the garbage not swept yet (what no root reaches, and what a
+    // sweep found dead: its type alone, since its references may be freed)
     let offset = vm::udata_data_offset();
     let block_of = |node: usize| -> usize { if tts[node] == 8 { ptrs[node].wrapping_sub(offset) } else { ptrs[node] } };
     let resolve = |node: usize| -> String {
@@ -635,20 +662,30 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         type_name(tts[node] as i32).to_string()
     };
     let mut by_type: HashMap<String, (u64, u64)> = HashMap::new();
-    let mut unreachable = (0u64, 0u64);
-    let mut object_bytes = 0u64;
+    let mut garbage: HashMap<String, (u64, u64)> = HashMap::new();
+    let (mut reachable, mut unswept) = ((0u64, 0u64), (0u64, 0u64));
     for node in 0..count {
-        let entry = by_type.entry(resolve(node)).or_default();
+        let (types, total) = if visited[node] { (&mut by_type, &mut reachable) } else { (&mut garbage, &mut unswept) };
+        let entry = types.entry(resolve(node)).or_default();
         entry.0 += 1;
         entry.1 += sizes[node];
-        object_bytes += sizes[node];
-        if !visited[node] {
-            unreachable.0 += 1;
-            unreachable.1 += sizes[node];
-        }
+        total.0 += 1;
+        total.1 += sizes[node];
     }
-    let mut by_type: Vec<(String, u64, u64)> = by_type.into_iter().map(|(name, (count, bytes))| (name, count, bytes)).collect();
-    by_type.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    for (&tt, &(found, bytes)) in &dead {
+        let entry = garbage.entry(type_name(tt as i32).to_string()).or_default();
+        entry.0 += found;
+        entry.1 += bytes;
+        unswept.0 += found;
+        unswept.1 += bytes;
+    }
+    let sorted = |types: HashMap<String, (u64, u64)>| -> Vec<(String, u64, u64)> {
+        let mut types: Vec<(String, u64, u64)> = types.into_iter().map(|(name, (count, bytes))| (name, count, bytes)).collect();
+        types.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        types
+    };
+    let (by_type, unswept_by_type) = (sorted(by_type), sorted(garbage));
+    let object_bytes = reachable.1 + unswept.1;
 
     // holder paths: breadth-first parents from the root
     let mut parent = vec![(NONE, NONE); total];
@@ -677,9 +714,10 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         let mut current = node;
         while parent[current as usize].0 != NONE && parts.len() < 24 {
             let (up, edge) = parent[current as usize];
-            let edge = if edge == u32::MAX { String::new() } else { edge_names.names[edge as usize].clone() };
+            let edge = edge_names.names.get(edge as usize).cloned().unwrap_or_default();
+            // (a root by the name of its edge: "main thread", "registry", "metatable of string", "fixed")
             if up == root {
-                parts.push(label_of(current as usize));
+                parts.push(if edge.is_empty() { label_of(current as usize) } else { edge });
                 break;
             }
             parts.push(if edge.is_empty() { label_of(current as usize) } else { edge });
@@ -694,9 +732,10 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         parts.join(" > ")
     };
 
-    // the biggest by what they keep alive (the registry, the main thread and the globals keep nearly everything: left out)
+    // the biggest by what they keep alive (the roots, among them the registry and the main thread, and the globals keep
+    // nearly everything: left out)
     let main_index = index.get(&main).copied();
-    let mut candidates: Vec<u32> = (0..count as u32).filter(|&node| visited[node as usize] && !roots.contains(&node) && Some(node) != main_index).collect();
+    let mut candidates: Vec<u32> = (0..count as u32).filter(|&node| visited[node as usize] && !is_root[node as usize]).collect();
     candidates.sort_by(|&a, &b| retained[b as usize].cmp(&retained[a as usize]).then(a.cmp(&b)));
     // (the main thread's globals table keeps nearly everything too)
     let globals = main_index.and_then(|main| successors(main).find(|&at| edge_names.names.get(target_names[at] as usize).map(String::as_str) == Some("globals")).map(|at| targets[at]));
@@ -716,12 +755,13 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         })
         .collect();
 
-    // the run's live objects by the stack that allocated them, at their size now
+    // the run's reachable objects by the stack that allocated them, at their size now (its garbage is still followed
+    // until the collector frees it)
     let mut by_stack: FxHashMap<(u32, u32), (f64, f64)> = FxHashMap::default();
     let mut allocated_since = (0.0, 0.0);
     let mut type_names: Vec<String> = Vec::new();
     with(|allocations| type_names = allocations.types.names.clone());
-    for node in 0..count {
+    for node in (0..count).filter(|&node| visited[node]) {
         if let Some(followed) = live.get(&block_of(node)) {
             let entry = by_stack.entry((followed.stack, followed.ty)).or_default();
             entry.0 += followed.weight;
@@ -738,10 +778,12 @@ pub fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: f64, re
         frame,
         seconds,
         total_bytes: vm::total_bytes(state),
-        objects: count as u64,
+        objects: reachable.0 + unswept.0,
         object_bytes,
+        reachable,
+        unswept,
         by_type,
-        unreachable,
+        unswept_by_type,
         biggest,
         by_stack,
         allocated_since,
