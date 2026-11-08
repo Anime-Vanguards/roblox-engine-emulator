@@ -1832,8 +1832,19 @@ fn frame_keys(inner: &Inner, list: &[(u32, Json)], initial: Option<&Json>, field
     keys
 }
 
-/// Drops keys a straight line between their neighbours reproduces (within `tolerance`).
-fn reduce(keys: Vec<Json>, field: &str, tolerance: f64) -> Vec<Json> {
+/// How far a motion track's line may stray from a dropped key's position, in studs. A fixed distance: a bound that
+/// grew with the distance from the origin let a part 400 studs out stray 0.08 studs, which reads as a shake when the
+/// camera (keyed far more finely) follows that part.
+const MOTION_POSITION_STUDS: f64 = 2e-3;
+
+/// What a motion key's numbers may stray by: its position by a fixed distance, its rotation by a proportion.
+fn motion_allowance(component: usize, value: f64) -> f64 {
+    if component < 3 { MOTION_POSITION_STUDS } else { 2e-4 * (1.0 + value.abs()) }
+}
+
+/// Drops keys a straight line between their neighbours reproduces (each number within what `allowed` gives for its
+/// index and value).
+fn reduce(keys: Vec<Json>, field: &str, allowed: impl Fn(usize, f64) -> f64) -> Vec<Json> {
     if keys.len() <= 2 {
         return keys;
     }
@@ -1852,7 +1863,7 @@ fn reduce(keys: Vec<Json>, field: &str, tolerance: f64) -> Vec<Json> {
                     return false;
                 }
                 let alpha = (at[between] - ta) / (tb - ta).max(1e-9);
-                v.iter().zip(a.iter().zip(b.iter())).all(|(v, (a, b))| (a + (b - a) * alpha - v).abs() <= tolerance * (1.0 + v.abs()))
+                v.iter().zip(a.iter().zip(b.iter())).enumerate().all(|(component, (v, (a, b)))| (a + (b - a) * alpha - v).abs() <= allowed(component, *v))
             }),
             _ => false,
         };
@@ -1897,7 +1908,7 @@ fn playback(inner: &Inner) -> Playback {
             let continuous = list.windows(2).any(|pair| pair[1].0 == pair[0].0 + 1);
             if continuous && lerpable {
                 let initial = if staged { Some(&stage) } else { record.file.get(name).filter(|v| numbers(v).map(|n| n.len()) == shape) };
-                let keys = reduce(frame_keys(inner, list, initial, "value"), "value", 1e-4);
+                let keys = reduce(frame_keys(inner, list, initial, "value"), "value", |_, value| 1e-4 * (1.0 + value.abs()));
                 tweens.push(element(&json!({ "target": target, "property": property, "keys": keys })));
             } else {
                 for (frame, value) in list {
@@ -1938,7 +1949,7 @@ fn playback(inner: &Inner) -> Playback {
         }
         if !record.motion.is_empty() {
             let list: Vec<(u32, Json)> = record.motion.iter().map(|(frame, cframe)| (*frame, cframe_json(cframe))).collect();
-            let keys = reduce(frame_keys(inner, &list, None, "cframe"), "cframe", 2e-4);
+            let keys = reduce(frame_keys(inner, &list, None, "cframe"), "cframe", motion_allowance);
             match record.physics_from.filter(|_| !record.physics_steered) {
                 Some(frame) => motion.push(element(&json!({ "target": target, "keys": keys, "physicsFrom": time_of(inner, frame) }))),
                 None => motion.push(element(&json!({ "target": target, "keys": keys }))),

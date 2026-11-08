@@ -2320,3 +2320,36 @@ fn studio_only_placeholders_are_not_drawn_whenever_they_are_built() {
     instance(&scene, &["Entities", "Circles", "Circle"]);
     assert!(find(&during["actions"], |a| a["target"].as_str().is_some_and(|t| t.contains("Blur") || t.contains("Highlight"))).is_empty(), "no action for a placeholder");
 }
+
+#[test]
+fn a_motion_key_is_kept_by_distance_however_far_the_part_is_from_the_origin() {
+    let key = |at: f64, x: f64, y: f64, z: f64| {
+        let mut cframe = vec![x, y, z];
+        cframe.extend([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        serde_json::json!({ "at": at, "cframe": cframe })
+    };
+    let far = 400.0;
+    let curve: Vec<Json> = (0..120)
+        .map(|frame| {
+            let at = f64::from(frame) / 60.0;
+            key(at, far, far + 1.5 * at * at, -far)
+        })
+        .collect();
+    let kept = super::reduce(curve.clone(), "cframe", super::motion_allowance);
+    let times: Vec<f64> = kept.iter().map(|kept| kept["at"].as_f64().unwrap()).collect();
+    for original in &curve {
+        let at = original["at"].as_f64().unwrap();
+        let index = times.partition_point(|time| *time <= at).clamp(1, times.len() - 1);
+        let alpha = (at - times[index - 1]) / (times[index] - times[index - 1]);
+        let (from, to) = (kept[index - 1]["cframe"][1].as_f64().unwrap(), kept[index]["cframe"][1].as_f64().unwrap());
+        let strayed = (from + (to - from) * alpha - original["cframe"][1].as_f64().unwrap()).abs();
+        assert!(strayed <= super::MOTION_POSITION_STUDS + 1e-9, "at {at} the line strays {strayed} studs");
+    }
+    let straight: Vec<Json> = (0..120)
+        .map(|frame| {
+            let at = f64::from(frame) / 60.0;
+            key(at, far + at, far, -far)
+        })
+        .collect();
+    assert_eq!(super::reduce(straight, "cframe", super::motion_allowance).len(), 2, "a straight line needs only its ends");
+}

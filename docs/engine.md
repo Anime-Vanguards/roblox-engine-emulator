@@ -764,7 +764,7 @@ record/prepare.rs runs prepared ahead by `ree serve`
   the target `Workspace.Terrain.Clouds`, their path in a place: Color, Cover, Density and Enabled. `playback.json` holds `set` actions, keyed
   tweens for properties that change frame after frame, motion tracks, emits and clears, reparenting and
   references written later; `events.json` holds prints, warnings, errors and sounds with their times.
-  Values are rounded to 1e-5, motion keys within 2e-4, and keys a straight line reproduces are dropped.
+  Values are rounded to 1e-5, and keys a straight line reproduces are dropped: a motion key's position within 0.002 studs, its rotation within 2e-4.
   A Studio-only placeholder is the place's own: it has a class and a name and no values, and it is made
   when a script first lists its parent, so drawing it drew default effects and parts, and a run that
   looked at more of the place recorded more of it than one that did not. One that draws (an effect, a
