@@ -259,7 +259,8 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   Changed / GetPropertyChangedSignal (deferred); `raw_set_silent` stores without events. Both bump
   `Instance.version`.
 - **Invalidation**: `engine.hooks.borrow_mut().property_changed` and `hierarchy_changed` (instance, old
-  parent, new parent) run after a change's signals are queued. `Instance.version` changes with every own
+  parent, new parent) run after a change's signals are queued; `property_unchanged` runs for a `raw_set`
+  that stored the value the property already held (no signals). `Instance.version` changes with every own
   property, attribute or tag change, `child_version` with its child list, `Dom::structure_version` with
   any parenting. A hook receives `&mut State` and must not borrow `engine.state`.
 - **Frame phases**: `state.sched.add_hook(Phase::Render | PreRender | Tween | RenderStep | Heartbeat |
@@ -745,7 +746,10 @@ record/prepare.rs runs prepared ahead by `ree serve`
   draws what a client parents there), Lighting's own properties and the skies, atmospheres and post
   effects a run parents to Lighting or the camera, SurfaceGuis and BillboardGuis in the PlayerGui under
   their adornees, and the PlayerGui's ScreenGuis in the scene's `PlayerGui`. Each instance gets one copy
-  in `scene.rbxm` as it appeared, hidden before and after; `playback.json` holds `set` actions, keyed
+  in `scene.rbxm` as it appeared, hidden before and after. Lighting's values before the run stand in for the
+  place's, which the renderer's stage draws: every write the run makes to a tracked Lighting property plays
+  (one before frame 0 at frame 0, one of the value the engine held too), and a keyed tween holds
+  `{"initial": true}` (the stage's value) until the run first changes the property. `playback.json` holds `set` actions, keyed
   tweens for properties that change frame after frame, motion tracks, emits and clears, reparenting and
   references written later; `events.json` holds prints, warnings, errors and sounds with their times.
   Values are rounded to 1e-5, motion keys within 2e-4, and keys a straight line reproduces are dropped.
