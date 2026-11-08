@@ -126,11 +126,21 @@ pool while Engine.Start runs (`project::Prescan`). `begin_project` stops after t
 there).
 
 - **Rojo roots**: `<root>/<Service>/...` with `init.luau`, `*.server.luau`, `*.client.luau`,
-  `init.meta.json`, JSON modules and `*.model.json` models. A root's folder is the project folder that
-  the conventions below are read from. A link to a directory (a symlink or a Windows junction) mounts
-  what it leads to, unless it leads back to a directory on the way down to it: that directory would
-  hold itself without end, so the link is left out with a warning (place content's folders, below, are
-  walked the same way).
+  `init.meta.json`, JSON modules and `*.model.json` models. A directory holding `default.project.json`
+  mounts as that project's tree (its `$path`, `$className` and child nodes; Wally packages ship one
+  each), ahead of any init script, named by the project's `name` (else the directory's), as Rojo nests
+  it; a directory mounted itself (by `--mount`, `Context.Mount` or a `$path`) keeps that name rather
+  than the project's. A project file can come from a third-party package, so a `$path` stays inside the
+  folder holding the file: it is looked up only in that folder's listing, and one that is absolute (a
+  leading `/` or `\`, a UNC path or a drive such as `C:`) or has a `..` segment is refused with a
+  warning. On a tree's root, a `$path` that is refused or names nothing leaves the directory mounted as
+  it is, as does a project file ree can't read (not JSON, or no `tree` object); on a child node, the
+  node is left out. Each is reported, except an absent `{ "optional": ... }` target. A project inside
+  more than 32 others, or past the 10000th of one mount, is left an empty Folder, with a warning. A
+  root's folder is the project folder that the conventions below are read from. A link to a
+  directory (a symlink or a Windows junction) mounts what it leads to, unless it leads back to a
+  directory on the way down to it: that directory would hold itself without end, so the link is left
+  out with a warning (place content's folders, below, are walked the same way).
 - **Project settings**: `rur.json` at the project folder, keyed by the root folder's name (the first
   root with a value wins): `placeIds`, `modelAssets` (`mount`, `prefixes`), `clientGui`,
   `streamingTargetRadius`. The name is kept from rur, which wrote these files first.
