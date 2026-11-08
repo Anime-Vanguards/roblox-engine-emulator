@@ -260,6 +260,36 @@ impl Tree {
     }
 
     /// Functions by own figure, heaviest first
+    /// Each function's own figure on each side, the game's (0) and the harness's (1), in the phases a scope covers: a
+    /// node is on its nearest script function's side (`side` names a script function's, None for the rest), so a C
+    /// function, the engine's Luau and mlua's helpers go with their caller, as ree's report puts them
+    pub fn sided(&self, scope: &crate::model::Scope, side: impl Fn(u32) -> Option<bool>) -> [FxHashMap<u32, f64>; 2] {
+        let mut out: [FxHashMap<u32, f64>; 2] = [FxHashMap::default(), FxHashMap::default()];
+        // (node, the side it inherits)
+        let mut stack: Vec<(u32, bool)> = Vec::new();
+        for &child in &self.node(ROOT).children {
+            match self.node(child).frame {
+                Frame::Phase(phase) if !scope.covers(phase) => {}
+                _ => stack.push((child, false)),
+            }
+        }
+        while let Some((index, inherited)) = stack.pop() {
+            let node = self.node(index);
+            let on = match node.frame {
+                Frame::Func(func) => {
+                    let on = side(func).unwrap_or(inherited);
+                    *out[usize::from(on)].entry(func).or_default() += node.own;
+                    on
+                }
+                _ => inherited,
+            };
+            for &child in &node.children {
+                stack.push((child, on));
+            }
+        }
+        out
+    }
+
     pub fn ranked(&self) -> Vec<(u32, FuncStat)> {
         let mut rows: Vec<(u32, FuncStat)> = self.funcs.iter().map(|(&func, &stat)| (func, stat)).collect();
         rows.sort_by(|a, b| b.1.own.total_cmp(&a.1.own).then(b.1.total.total_cmp(&a.1.total)).then(a.0.cmp(&b.0)));

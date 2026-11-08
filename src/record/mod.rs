@@ -16,11 +16,15 @@
 //!   (world CFrames), as do attachments whose CFrame is written (or whose parent is not a part).
 //!   `ParticleEmitter:Emit(n)` and `Clear()` become actions at their frame; an instance reparented
 //!   inside the world a `parent` action.
-//! - Lighting's own properties play on ror's `Lighting`; the skies, atmospheres and post effects a
+//! - Lighting's own properties play on ror's `Lighting`: every write of the run, its setup's at frame 0
+//!   (the engine's values before the run stand in for the place's, ror's stage); the skies, atmospheres and post effects a
 //!   run parents to Lighting are kept in the scene's `~Lighting` folder and parented into
 //!   `Lighting` while they are there (so are the post effects it parents to the CurrentCamera: Studio
 //!   draws them as it draws Lighting's). The place's own (ror's stage: `--lighting-from`'s) leave with
 //!   the run's taking its own of their class out of Lighting and come back with them.
+//! - The Terrain's Clouds (a Clouds in the Workspace's Terrain, the only place Roblox draws one) play on
+//!   ror's `Workspace.Terrain.Clouds` as Lighting's own properties do: every write of the run, its setup's
+//!   at frame 0 (the engine's clouds stand in for the place's, ror's stage). No Clouds is recorded as an instance.
 //! - A Studio-only placeholder (the place's hierarchy snapshot gives it a class and a name and no values;
 //!   project::materialize builds it when a script first lists its parent) is the place's own: one that
 //!   draws (an effect, a part, a highlight, a sky) is never drawn, in the world or in Lighting, since the
@@ -138,7 +142,8 @@ const VISUAL: &[(&str, &[(&str, Track)])] = {
         ("Lighting", &[
             ("ExposureCompensation", Plain), ("Brightness", Plain), ("Ambient", Plain), ("OutdoorAmbient", Plain), ("ClockTime", Plain),
             ("FogColor", Plain), ("FogStart", Plain), ("FogEnd", Plain), ("ColorShift_Top", Plain), ("ColorShift_Bottom", Plain),
-            ("EnvironmentDiffuseScale", Plain), ("EnvironmentSpecularScale", Plain), ("GeographicLatitude", Plain),
+            ("EnvironmentDiffuseScale", Plain), ("EnvironmentSpecularScale", Plain), ("GeographicLatitude", Plain), ("GlobalShadows", Plain),
+            ("ShadowSoftness", Plain),
         ]),
         ("PostEffect", &[("Enabled", Plain)]),
         ("ColorCorrectionEffect", &[("Brightness", Plain), ("Contrast", Plain), ("Saturation", Plain), ("TintColor", Plain)]),
@@ -147,6 +152,7 @@ const VISUAL: &[(&str, &[(&str, Track)])] = {
         ("SunRaysEffect", &[("Intensity", Plain), ("Spread", Plain)]),
         ("DepthOfFieldEffect", &[("FarIntensity", Plain), ("FocusDistance", Plain), ("InFocusRadius", Plain), ("NearIntensity", Plain)]),
         ("Atmosphere", &[("Density", Plain), ("Offset", Plain), ("Color", Plain), ("Decay", Plain), ("Glare", Plain), ("Haze", Plain)]),
+        ("Clouds", &[("Color", Plain), ("Cover", Plain), ("Density", Plain), ("Enabled", Plain)]),
     ]
 };
 
@@ -156,14 +162,18 @@ const SWITCHABLE: &[&str] = &["ParticleEmitter", "Trail", "Beam", "PointLight", 
 const CLEARABLE: &[&str] = &["ParticleEmitter", "Trail"];
 /// What a child of Lighting adds to the look.
 const LIGHTING_CHILDREN: &[&str] = &["Sky", "Atmosphere", "ColorCorrectionEffect", "BloomEffect", "BlurEffect", "SunRaysEffect", "DepthOfFieldEffect", "ColorGradingEffect"];
-/// Never recorded, with everything under them: code, sounds, values and the like draw nothing.
+/// Never recorded, with everything under them: code, sounds, values and the like draw nothing (and
+/// the Terrain's Clouds play on [`CLOUDS`]).
 const SKIPPED: &[&str] = &[
     "LuaSourceContainer", "Sound", "ValueBase", "BindableEvent", "BindableFunction", "RemoteEvent", "UnreliableRemoteEvent",
     "RemoteFunction", "Animation", "AnimationController", "Animator", "Humanoid", "Configuration", "SoundEffect", "SoundGroup",
-    "Terrain", "Camera",
+    "Terrain", "Camera", "Clouds",
 ];
 /// The scene folder holding what the run parented to Lighting.
 const LIGHTING_FOLDER: &str = "~Lighting";
+/// The playback's target for the Terrain's Clouds: their path in a place, where ror keeps the clouds it
+/// draws (its stage's).
+const CLOUDS: &str = "Workspace.Terrain.Clouds";
 /// The scene's PlayerGui, holding the ScreenGuis the local player's PlayerGui shows (ror draws them on
 /// the screen; their paths read as Roblox names them).
 const PLAYER_GUI: &str = "PlayerGui";
@@ -276,6 +286,9 @@ struct Inner {
     camera: Vec<(u32, Affine3A, f64)>,
     /// Lighting's own properties (target "Lighting")
     lighting: Option<Record>,
+    /// The Terrain's Clouds' properties (target [`CLOUDS`]) and what finds those clouds
+    clouds: Option<Record>,
+    terrain_clouds: Option<TerrainClouds>,
     warnings: Vec<String>,
     unsupported: BTreeSet<String>,
     /// Sibling names already used in the scene, by parent record (None: the file's roots)
@@ -333,10 +346,20 @@ impl Recorder {
                 state.property_names.insert(name, property.to_string());
             }
         }
+        // (Lighting's record is there before the harness runs: what it writes then is a change at frame 0)
         if let Some(lighting) = super::services::find_service(engine, engine.world().game, "Lighting") {
-            state.ignored.extend(engine.state.borrow().dom.children_of(lighting).iter().copied());
+            let engine_state = engine.state.borrow();
+            state.ignored.extend(engine_state.dom.children_of(lighting).iter().copied());
             state.lighting_id = Some(lighting);
+            state.lighting = Some(stage_record(lighting, engine_state.dom.at(lighting).class, "Lighting", "Lighting"));
         }
+        // (so is the Terrain's Clouds', whenever the place's clouds are built or the run makes its own)
+        let terrain_clouds = TerrainClouds::of(engine);
+        if let Some(found) = terrain_clouds {
+            state.clouds = Some(stage_record(found.workspace, found.clouds, "Clouds", CLOUDS));
+            state.terrain_clouds = terrain_clouds;
+        }
+        let lighting_id = state.lighting_id;
         let inner = Rc::new(RefCell::new(state));
         let mut hooks = engine.hooks.borrow_mut();
         let moves = inner.clone();
@@ -360,6 +383,19 @@ impl Recorder {
                 inner.dirty.push((id, name));
             }
         }));
+        // a write to Lighting or the Terrain's Clouds is the run's even when it stores the value the engine
+        // held: that value only stands in for the place's, which the renderer's stage draws
+        if lighting_id.is_some() || terrain_clouds.is_some() {
+            let kept = inner.clone();
+            hooks.property_unchanged.push(Box::new(move |state: &mut State, id, name| {
+                if Some(id) == lighting_id || terrain_clouds.is_some_and(|clouds| clouds.holds(state, id)) {
+                    let mut inner = kept.borrow_mut();
+                    if inner.dirty_set.insert((id, name)) {
+                        inner.dirty.push((id, name));
+                    }
+                }
+            }));
+        }
         let events = inner.clone();
         hooks.world_events.push(Box::new(move |state: &mut State, event: &WorldEvent| {
             let mut inner = events.borrow_mut();
@@ -738,6 +774,27 @@ fn is_drawn_camera(state: &State, engine: &Engine, id: InstanceId) -> bool {
 fn is_drawn_terrain(state: &State, engine: &Engine, id: InstanceId) -> bool {
     let world = engine.world();
     state.dom.parent_of(id) == Some(world.workspace) && is_a(engine, state.dom.at(id).class, "Terrain")
+}
+
+/// What finds the Terrain's Clouds: the Clouds and Terrain classes and the Workspace.
+#[derive(Clone, Copy)]
+struct TerrainClouds {
+    clouds: ClassId,
+    terrain: ClassId,
+    workspace: InstanceId,
+}
+
+impl TerrainClouds {
+    fn of(engine: &Engine) -> Option<Self> {
+        Some(Self { clouds: engine.reflection.class_id("Clouds")?, terrain: engine.reflection.class_id("Terrain")?, workspace: engine.world().workspace })
+    }
+
+    /// Whether `id` is a Clouds in the Workspace's Terrain: the Terrain's clouds, whatever its name
+    /// (Roblox's documentation: a Clouds draws only as the Terrain's child).
+    fn holds(self, state: &State, id: InstanceId) -> bool {
+        let Some(instance) = state.dom.get(id).filter(|instance| instance.class == self.clouds) else { return false };
+        instance.parent.and_then(|parent| state.dom.get(parent)).is_some_and(|terrain| terrain.class == self.terrain && terrain.parent == Some(self.workspace))
+    }
 }
 
 /// Transparency as drawn: LocalTransparencyModifier over Transparency.
@@ -1417,9 +1474,6 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
             now.push(id);
             stack.extend(state.dom.children_of(id).iter().rev().copied());
         }
-        if inner.lighting.is_none() {
-            inner.lighting = Some(lighting_record(state, engine, lighting, inner));
-        }
     }
     inner.walks += 1;
     let walk = inner.walks;
@@ -1521,17 +1575,18 @@ fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lightin
             }
             continue;
         }
-        if Some(id) == lighting_id {
-            if let Some(mut record) = inner.lighting.take() {
+        let clouds = inner.terrain_clouds.is_some_and(|found| found.holds(state, id));
+        if Some(id) == lighting_id || clouds {
+            if let Some(mut record) = if clouds { inner.clouds.take() } else { inner.lighting.take() } {
                 if let Some(&(_, track)) = tracked(inner, engine, record.class).iter().find(|(n, _)| *n == name) {
                     match current(&state, engine, id, name, track) {
                         Some(value) => change(&mut record, name, track, value, frame),
                         None => {
-                            inner.unsupported.insert(format!("Lighting.{}", engine.reflection.name(name)));
+                            inner.unsupported.insert(format!("{}.{}", record.class_name, engine.reflection.name(name)));
                         }
                     }
                 }
-                inner.lighting = Some(record);
+                *if clouds { &mut inner.clouds } else { &mut inner.lighting } = Some(record);
             }
             continue;
         }
@@ -1653,15 +1708,17 @@ fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lightin
     }
 }
 
-/// Lighting's own record: its properties as the run started.
-fn lighting_record(state: &State, engine: &Engine, lighting: InstanceId, inner: &mut Inner) -> Record {
-    let class = state.dom.at(lighting).class;
-    let mut record = Record {
-        id: lighting,
+/// The record of a look the renderer's stage draws: Lighting's own properties (`id` Lighting), the
+/// Terrain's Clouds (`id` the Workspace holding them). It holds no values from before the run: the
+/// engine's instance stands in for the place's, so every write of the run is a change, and a property
+/// holds the stage's value until the run first writes it.
+fn stage_record(id: InstanceId, class: ClassId, class_name: &str, path: &str) -> Record {
+    Record {
+        id,
         class,
-        class_name: "Lighting".into(),
-        name: "Lighting".into(),
-        path: "Lighting".into(),
+        class_name: class_name.into(),
+        name: class_name.into(),
+        path: path.into(),
         parent: None,
         appear: 0,
         visibility: Visibility::None,
@@ -1684,13 +1741,7 @@ fn lighting_record(state: &State, engine: &Engine, lighting: InstanceId, inner: 
         lighting_child: false,
         screen: false,
         attachment: false,
-    };
-    for &(name, track) in tracked(inner, engine, class).iter() {
-        if let Some(value) = current(state, engine, lighting, name, track) {
-            record.file.insert(name, value);
-        }
     }
-    record
 }
 
 // Output
@@ -1819,8 +1870,10 @@ fn playback(inner: &Inner) -> Playback {
     let mut actions: Vec<(f64, Box<[u8]>)> = Vec::new();
     let mut tweens: Vec<Box<[u8]>> = Vec::new();
     let mut motion: Vec<Box<[u8]>> = Vec::new();
-    let records = inner.records.iter().chain(inner.lighting.iter());
-    for record in records {
+    // (Lighting's and the Terrain's Clouds' values before the run's first write are the stage's: ror's `{"initial": true}`)
+    let stage = json!({ "initial": true });
+    let records = inner.records.iter().map(|record| (record, false)).chain(inner.lighting.iter().chain(inner.clouds.iter()).map(|record| (record, true)));
+    for (record, staged) in records {
         let target = record.path.as_str();
         for (name, track, list) in &record.changes {
             let property = inner.property_names.get(name).cloned().unwrap_or_default();
@@ -1843,7 +1896,7 @@ fn playback(inner: &Inner) -> Playback {
             let lerpable = shape.is_some() && list.iter().all(|(_, v)| numbers(v).map(|n| n.len()) == shape);
             let continuous = list.windows(2).any(|pair| pair[1].0 == pair[0].0 + 1);
             if continuous && lerpable {
-                let initial = record.file.get(name).filter(|v| numbers(v).map(|n| n.len()) == shape);
+                let initial = if staged { Some(&stage) } else { record.file.get(name).filter(|v| numbers(v).map(|n| n.len()) == shape) };
                 let keys = reduce(frame_keys(inner, list, initial, "value"), "value", 1e-4);
                 tweens.push(element(&json!({ "target": target, "property": property, "keys": keys })));
             } else {

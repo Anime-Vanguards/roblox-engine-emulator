@@ -9,6 +9,7 @@ The [README](../README.md) has a first run; [engine.md](engine.md) is the contra
 ree record --harness path/to/Harness.luau --out out/scene --roots "game/shared;game/src" \
     --seconds 3 --fps 60 --context '{"Scenario":"demo"}' --assets-at ReplicatedStorage.Bundles --assets Models \
     [--animations <dir>]                             # pre-fetched KeyframeSequences, <id>.rbxm
+    [--timing-check]                                 # record again with the in-frame clock moved (What a recording holds)
 ror video out/scene/scene.rbxm --playback out/scene/playback.json --duration 3
 ree run --harness path/to/Probe.luau --seconds 1     # no recording: the status and every output line as JSON
 ree run --harness path/to/Server.luau --run-context server --seconds 60   # a Play-mode server; `@done` ends it early
@@ -144,6 +145,15 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   as `set` actions naming the referenced instance's path, Lighting),
   `events.json` (prints, warnings, errors, sound plays and stops with their times), `camera.json` and
   `summary.json`, which is also printed on stdout; a `ree: record ...` line goes to stderr.
+- `--timing-check` (or `REE_TIMING_CHECK=1`) records the harness a second time with the in-frame clock moved
+  (twice the modelled work, never frozen; a frozen run's wall clock stays pinned) and compares the two
+  recordings' playback and camera. A script that times itself on `os.clock` within a frame (a visual
+  clock's waits, an elapsed-time sum, a work budget) draws differently in a client whenever its real work
+  moves, which ree's modelled work and a frozen clock do not follow: if the second recording differs, an A/B
+  whose recordings read identical has not shown the look holds there. The verdict is `timing` in the summary
+  and `timing.json` (`hinges`, the first difference's time and what, how many entries differ per list), and
+  the status line ends `hinges on sub-frame timing from <t> s (<what>)` or `sub-frame timing: no change`.
+  The second recording's files are removed. A warm service's prepared run is not checked.
 
 ## Animation
 
@@ -238,7 +248,10 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   - `caches`: Luau's inline caches per call site (a table key's or a global's predicted slot, a method's
     slot, a resolved import, a builtin's fast path: hit, miss, slow path) and ree's own caches (member
     atoms and dispatch, datatype values, Instance userdata, require results, module bytecode, spatial
-    query solids, bundle plans), with hits, misses and evictions.
+    query solids, bundle plans), with hits, misses and evictions. These are software caches, counted
+    exactly by the patched VM: before each instruction with an inline cache runs, it makes the check the
+    interpreter is about to make (patches/luau/12-profiling.patch). They are not the CPU's caches, and no
+    CPU counter is involved: the CPU's cache misses are the `hw` kind's (Hardware counters, below).
   - `alloc`: bytes and counts allocated, by type (table, its storage, function, string, userdata by
     Instance class or datatype, thread and its stack, buffer, function prototypes) and by the Luau stack
     that allocated them. Every allocation is counted by type; stacks are taken for every allocation unless
@@ -277,17 +290,39 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   `alloc.counts.folded`, `heap.folded`, `counters.<counter>.folded`), `profile.speedscope.json`
   (speedscope.app) and `report.html`, one self-contained page (hot paths with callers, callees and
   annotated source, a call tree, memory, the timeline, caches, the CPU and its counters). `--profile-top
-  <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases the boundary profiler reports.
+  <n>` sets the summary's rows; `--profile-phase <a,b|all>` the phases the summary's function tables and
+  the boundary profiler report: by default `steady` when the run marked one (`Context.ProfilePhase`), else
+  every phase. The summary's tables are the game's code: the harness's own (`--harness` modules are
+  mounted under `ReplicatedStorage.RURFixtures`; the engine's `rur.record`, which calls the harness, is
+  counted with it) and what it called are set apart, with their total on the
+  summary's `reported below:` line and their top functions in a table of their own. Lines are counted for
+  the whole run, not per phase. In profile.json each function has `harness` and its figures per phase
+  (`phases`, with `harness_self_work_ms`, the part done for the harness's code), and `scope` names the
+  reported phases with each side's self work.
+  The summary's `engine operations` line counts what the reported phases' scripts asked the engine to do, whatever the
+  work clock prices it at (the engine's side of a cast, which the work clock reads lower than a client pays): instances
+  cloned (each of a copy), made with Instance.new, destroyed (each of the subtree) and taken into the Workspace; property
+  writes, those that changed a value, and among them the moves and resizes of a part in the Workspace and the switches of
+  an emitter, beam or trail; pivots of what is in the Workspace, parts bulk-moved, emits and descendant queries
+  (`scope.engine` in profile.json: `cloned`, `created`, `destroyed`, `entered`, `writes`, `changed`, `geometry`,
+  `toggles`, `pivots`, `bulk_moved`, `emits`, `queries`). They are counted at the engine, so they are every script's,
+  the harness's too, and what the engine's own Luau does inside a call it prices whole (a PivotTo's moves) is the call's.
   profile.json's `marks` (each `Context.ProfilePhase` mark) and `end` (the run's end) carry the counts so far, so a
   phase's figures are the difference of two marks': the work clock, host time and the run thread's cycles, instructions,
   the VM's work counters (`vm`: objects, their bytes, table storage, keys rehashed, cold first touches), the allocation
   profile's bytes and objects, rehashes (all, and a script's own: `script_rehashes`, `script_rehash_keys`), the
-  collector's steps, cycles, bytes freed and host time, and the inline caches' outcomes by kind.
+  collector's steps, cycles, bytes freed and host time, the inline caches' outcomes by kind, and the engine operations
+  (`engine`).
 - `ree profile diff <before> <after> [--out <dir>]` compares two profile directories: the headline
   figures (the reachable heap at the end, and apart from it the garbage not swept yet), the functions
   whose work, calls, instructions or allocations moved, the lines of modules whose source is the same in
   both, caches, memory by type and the timeline; it writes `diff.txt` (also printed), `diff.json` and
-  `diff.html`. `ree profile report <dir>` prints a profile's summary again and
+  `diff.html`. When both profiles report the same phases (or both marked `steady`), the headline leads
+  with the game's code and the harness's in those phases, and the function tables cover them, the
+  harness's functions in a table of their own: a harness's work moves with what it scans, not with the
+  game. The headline's `engine:` rows compare the engine operations in the same phases (the whole run when
+  the profiles share none): instances made, instances destroyed, property writes, parts moved (by a write
+  or BulkMoveTo), pivots and emits. Profiles from before the split are compared whole. `ree profile report <dir>` prints a profile's summary again and
   rewrites its page from its profile.json. `ree profile view` explores one in the terminal and `ree profile render`
   draws its screens to files ("The profile viewer").
 - With no profile the engine pays nothing measurable (a thread-local read where each profiler hooks in),
@@ -324,16 +359,24 @@ Windows service reads them on a profile's behalf (tools/hw-counters):
   folder traversal. It starts on demand and stops itself after a minute with no client. The account it was installed
   for may start it and read its status, nothing else. Its pipe opens only for that account (and SYSTEM), from this
   machine; the client process must run as that account and gets counts for its own threads only, never another
-  process's. While a profile counts (30 minutes at most) it runs one kernel trace session of context switches that
-  carry the counters' values. On AMD Family 1Ah processors it registers four events with Windows until the next
-  restart, through Windows Performance Recorder (`wpr.exe`, part of Windows). No driver is installed and no protection
-  is turned off.
+  process's. While any client counts (each 30 minutes at most) it runs one kernel trace session of context switches
+  that carry the counters' values. Only one session at a time may hold the CPU's counters, so up to eight clients
+  share it: a ree profile, roblox-sim's frame logs, two arms of an A/B side by side. The first client starts it with
+  its counters, later ones count those or some of them (one that asks for others is told the service is busy, with
+  what it counts), each gets only its own process's threads, and the last one out stops it. A client that leaves while
+  others count waits a little over a second for the trace's last buffers. On AMD Family 1Ah processors it registers
+  four events with Windows until the next restart, through Windows Performance Recorder (`wpr.exe`, part of Windows).
+  No driver is installed and no protection is turned off.
 - **The counters**: `instructions` (retired), `cycles` (core clock cycles while the thread ran), `branches`,
   `branch-misses` (mispredicted), `l1d-accesses` (loads and stores dispatched to the L1 data cache), `l1d-misses`
   (lines the L1 data cache filled for demand loads and stores), `l2-misses` (of those, lines filled from beyond the
   core's L2) and `llc-misses` (of those, lines filled from beyond the core complex's L3: another complex's cache or
   memory). The four cache counters are AMD Family 1Ah events (event 0x29, and the demand fills by source, event 0x43,
-  unit masks 0xFF, 0xFE and 0xDC); the rest are the CPU's built-in sources. Any other name is taken for a Windows
+  unit masks 0xFF, 0xFE and 0xDC); the rest are the CPU's built-in sources. In AMD's Processor Programming Reference
+  for Family 1Ah, and in Linux perf's Zen 5 event list, they are `ls_dispatch.all` and `ls_dmnd_fills_from_sys`:
+  `all`; every source but `local_l2`; and `near_cache`, `dram_io_near`, `far_cache`, `dram_io_far` and
+  `alternate_memories`, the sources beyond the core complex. They count demand data fills, one a line: prefetches and
+  instruction fetches are not in them, and a dispatched load or store may be one the CPU later discards. Any other name is taken for a Windows
   profile source as `ree-hw-counters sources` (or `wpr -pmcsources`) lists it. The CPU counts six at once:
   `--profile-counters a,b,...` chooses them (default `instructions,cycles,l1d-misses,l2-misses,llc-misses,branch-misses`;
   `l1d-accesses` in place of one of them gives the L1 miss rate). The profile adds IPC, the miss rates the counts allow
@@ -565,7 +608,15 @@ border in the accent.
   Compare, with the baseline's run at the largest size open in the other views.
 - **Views**, a key each:
   - `1` Overview: the run's totals (the mount's work apart from a frame's), the work clock's fidelity line, the run
-    frame by frame, the issues and the hottest functions.
+    frame by frame, the issues and the hottest functions in the phases the profile reports (its `scope`: as the
+    summary's tables, `--profile-phase`, by default steady when the run marked one, else every phase). The game's code
+    leads, and the harness's own code (under ReplicatedStorage.RURFixtures, and the engine's `rur.record` that calls it,
+    with the C functions, the engine's Luau and mlua's helpers they called) comes in a panel of its own, with a card for
+    the two sides' work; a run whose code is all the harness's (under 1% on the game's side: code measured by
+    `--harness` alone) is shown whole. A line under the fidelity line counts what those phases' scripts asked the
+    engine to do (instances cloned, made, destroyed and taken into the Workspace, property writes and the moves among
+    them, pivots, bulk moves, emits, queries: profile.json's marks, from ree 64fb6e6), every script's, the harness's
+    too: the engine's side of a cast, which the work clock reads lower than a client pays.
   - `2` Flame: the call tree as an icicle, the run at the top; each node as wide as its total and coloured by its own
     share. It opens on the run's heaviest phase; down follows the heaviest callee, enter zooms into a node, esc comes
     back out.
@@ -580,7 +631,11 @@ border in the accent.
     and each figure frame by frame.
   - `8` Caches: Luau's inline caches by kind and by call site, and ree's own.
   - `9` Issues: what the profile's numbers show to fix (below).
-  - `d` Diff, of a pair: the headline figures, then the functions, lines and allocation sites that moved.
+  - `d` Diff, of a pair: the headline figures, then the functions, lines and allocation sites that moved. When both
+    profiles report the same phases, or both marked steady, it leads with the game's code and the harness's in them,
+    and the functions' work covers those phases, the harness's functions last and greyed, as `ree profile diff`. The
+    engine's counts in the same phases follow (instances made and destroyed, property writes, parts moved, pivots,
+    emits), in ree profile diff's groups.
   - `c` Compare, of a what-if folder: each variant at each size in the comparison's metric, how it grows with n (a
     log-log plot, a line a variant) and each variant over the baseline by n, the best of each size, each variant's
     figure at the selected size as bars, every figure of a variant over the baseline's (worse to the right, on a log
@@ -605,7 +660,9 @@ border in the accent.
   tables regrown (table storage allocated past their first); collector and frame spikes; connections, instances or
   threads that keep growing; the reachable heap growing; an inline cache that misses; a property read again in the
   same frame, and writes that change nothing (the boundary profile's, `--profile boundary`); in a comparison, cost that
-  grows faster than n and a variant whose result differs. What the profile's kinds cannot show is listed as not checked.
+  grows faster than n and a variant whose result differs. The issues cover the game's code: what the harness's own code
+  sorts, allocates, misses or reads again is left out (unless the run's code is all the harness's), and a frame spike
+  says how much of the harness's work the frames hold. What the profile's kinds cannot show is listed as not checked.
 - `ree profile render <dir> [<dir2>] --out <file|dir|-> [--view <name>|all|<a,b>] [--metric <m>] [--select
   <function|file:line>] [--keys "<keys>"] [--size <cols>x<rows>] [--theme dark|light] [--scale <n>] [--format
   png|svg|txt]` draws exactly what the terminal shows at that size (default 160x48), the same on every machine:

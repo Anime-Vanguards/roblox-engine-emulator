@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 pub const MODULE: &str = "ReplicatedStorage.Fixture.Main";
+/// The harness's module, where ree mounts a run's --harness (its code is not the game's)
+pub const HARNESS_MODULE: &str = "ReplicatedStorage.RURFixtures.Fixture";
 
 /// A temporary folder of the test's own, removed when dropped
 pub struct Temp(pub PathBuf);
@@ -64,11 +66,15 @@ pub struct Shape {
     pub sorts: u64,
     /// Records `rank` allocates a frame
     pub records: u64,
+    /// A harness function in the steady state: `watch` (Fixture:5), scanning with a C function, calling rank once in ten
+    /// frames, allocating, missing its caches and reading members again
+    pub harness: bool,
 }
 
 impl Shape {
-    pub const BEFORE: Shape = Shape { sorts: 100, records: 200 };
-    pub const AFTER: Shape = Shape { sorts: 1, records: 0 };
+    pub const BEFORE: Shape = Shape { sorts: 100, records: 200, harness: false };
+    pub const AFTER: Shape = Shape { sorts: 1, records: 0, harness: false };
+    pub const HARNESS: Shape = Shape { sorts: 100, records: 200, harness: true };
 }
 
 fn us(value: f64) -> f64 {
@@ -85,7 +91,7 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
     let sort_share = shape.sorts as f64 / 100.0;
     // the calling-context tree: [parent, function, calls, self work in us, self instructions, label]
     let compare_calls = 500 * shape.sorts;
-    let tree = vec![
+    let mut tree = vec![
         json!([-1, -1, 0, 0.0, 0, "startup"]),
         json!([0, 0, 1, 500.0, 400, null]),
         json!([0, -1, 0, 0.0, 0, "frames"]),
@@ -103,6 +109,13 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
         json!([13, -3, 30000, 300.0, 0, "__index [C]"]),
         json!([9, 5, 100, 100.0, 800, null]),
     ];
+    if shape.harness {
+        // the harness's watcher under the steady phase, its C scan (the harness's side) and a call into the game's rank
+        // (the game's side: a script function is its own module's)
+        tree.push(json!([8, 6, 100, 1500.0, 6000, null]));
+        tree.push(json!([16, -4, 100, 2500.0, 0, "GetDescendants [C]"]));
+        tree.push(json!([16, 2, 10, 30.0, 200, null]));
+    }
     // per function: (self work us, total work us, self insns, total insns, calls)
     let node = |i: usize| -> (i64, i64, u64, f64, f64) {
         let n = tree[i].as_array().unwrap();
@@ -131,12 +144,49 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
         entry.3 += subtree[i].1;
         entry.4 += calls;
     }
+    // per (function, phase): [self work, total work, calls, self insns, self work on the harness's side]; a node's phase
+    // is its phase root's, its side its nearest script function's
+    let harness_function = |id: i64| id == 6;
+    let script_function = |id: i64| matches!(id, 0..=4 | 6);
+    let mut phase_of: Vec<String> = vec![String::new(); count];
+    let mut side_of: Vec<bool> = vec![false; count];
+    for i in 0..count {
+        let n = tree[i].as_array().unwrap();
+        let (parent, function) = (node(i).0, node(i).1);
+        phase_of[i] = if function == -1 { n[5].as_str().unwrap().to_string() } else { phase_of[parent as usize].clone() };
+        side_of[i] = if script_function(function) { harness_function(function) } else { parent >= 0 && side_of[parent as usize] };
+    }
+    let mut by_phase: std::collections::BTreeMap<i64, std::collections::BTreeMap<String, [f64; 5]>> = std::collections::BTreeMap::new();
+    for i in 0..count {
+        let (_, function, calls, work, insns) = node(i);
+        if function == -1 {
+            continue;
+        }
+        let f = by_phase.entry(function).or_default().entry(phase_of[i].clone()).or_default();
+        f[0] += work;
+        f[1] += subtree[i].0;
+        f[2] += calls as f64;
+        f[3] += insns;
+        if side_of[i] {
+            f[4] += work;
+        }
+    }
+    let (mut game_steady, mut harness_steady) = (0.0, 0.0);
+    for i in 0..count {
+        if node(i).1 != -1 && phase_of[i] == "steady" {
+            if side_of[i] {
+                harness_steady += node(i).3;
+            } else {
+                game_steady += node(i).3;
+            }
+        }
+    }
     // allocations, the stacks innermost first: rank's records (a table and its storage each, 64 + 48 bytes), layout's
     // buckets (a table a frame grown 6 more times, 64 bytes a step), the chunk's cache, and the engine's thread stacks
     let records_steady = shape.records * 100;
     let records_frames = shape.records * 20;
     let records = records_steady + records_frames;
-    let alloc_stacks = vec![
+    let mut alloc_stacks = vec![
         json!({"frames": [[2, 21], [1, 10]], "type": "table", "bytes": (records * 64) as f64, "count": records as f64}),
         json!({"frames": [[2, 21], [1, 10]], "type": "table storage", "bytes": (records * 48) as f64, "count": records as f64}),
         json!({"frames": [[4, 32], [1, 10]], "type": "table storage", "bytes": 840.0 * 64.0, "count": 840.0}),
@@ -144,6 +194,11 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
         json!({"frames": [[0, 5]], "type": "table", "bytes": 640.0, "count": 10.0}),
         json!({"frames": [], "type": "thread stack", "bytes": 3072.0, "count": 3.0}),
     ];
+    if shape.harness {
+        // the watcher's tables, regrown six times each: 28 KB a frame
+        alloc_stacks.push(json!({"frames": [[6, 7]], "type": "table", "bytes": 6400.0, "count": 100.0}));
+        alloc_stacks.push(json!({"frames": [[6, 7]], "type": "table storage", "bytes": 2_867_200.0, "count": 700.0}));
+    }
     let rank_bytes = (records * 112) as f64;
     let alloc_total = rank_bytes + 61440.0 + 640.0 + 3072.0;
     let alloc_objects = (records * 2) as f64 + 960.0 + 10.0 + 3.0;
@@ -173,8 +228,10 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
         (3, ("", Some(22), "Luau")),
         (4, ("layout", Some(30), "Luau")),
         (5, ("helper", Some(3), "engine Luau")),
+        (6, ("watch", Some(5), "harness")),
         (-2, ("sort [C]", None, "C")),
         (-3, ("__index [C]", None, "C")),
+        (-4, ("GetDescendants [C]", None, "C")),
     ]
     .into_iter()
     .collect();
@@ -184,9 +241,17 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
             let (name, line, kind) = names[&id];
             let module = match kind {
                 "Luau" => Some(MODULE),
+                "harness" => Some(HARNESS_MODULE),
                 "engine Luau" => Some("rur.prelude"),
                 _ => None,
             };
+            let kind = if kind == "harness" { "Luau" } else { kind };
+            let phases: serde_json::Map<String, Value> = by_phase
+                .get(&id)
+                .into_iter()
+                .flatten()
+                .map(|(phase, f)| (phase.clone(), json!({"self_work_ms": us(f[0]), "total_work_ms": us(f[1]), "calls": f[2] as u64, "insns": f[3] as u64, "harness_self_work_ms": us(f[4])})))
+                .collect();
             let key = match (module, name) {
                 (Some(m), "") => format!("{m}:anonymous@{}", line.unwrap()),
                 (Some(m), n) => format!("{m}:{n}"),
@@ -196,7 +261,7 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
             let (total_alloc, total_allocs) = total_alloc_of(id);
             json!({
                 "id": id, "key": key, "name": name, "module": module, "line": line, "last_line": line.map(|l| l + 4), "kind": kind,
-                "native": false, "native_entries": 0, "native_work_ms": 0.0, "calls": calls,
+                "native": false, "native_entries": 0, "native_work_ms": 0.0, "calls": calls, "harness": harness_function(id), "phases": phases,
                 "self": {"insns": insns, "work_ms": us(work), "time_ms": 0.0, "alloc_bytes": alloc, "allocs": allocs},
                 "total": {"insns": total_insns, "work_ms": us(total), "time_ms": 0.0, "alloc_bytes": total_alloc, "allocs": total_allocs},
             })
@@ -244,12 +309,35 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
         {"type": "table", "name": "", "size": 4096.0, "retained": 1_800_000.0, "path": "registry > Items", "stack": [[0, 5]]},
         {"type": "thread", "name": "", "size": 6768.0, "retained": 220_000.0, "path": "(engine reference)", "stack": null},
     ]);
+    // what the scripts asked the engine to do, so far at each mark and at the end (ree 64fb6e6): the mount makes the
+    // grid, the frames add a little, and the steady state clones, destroys and writes a frame's worth each frame (a
+    // tenth of it after the change, and half the writes)
+    let names = ["cloned", "created", "destroyed", "entered", "writes", "changed", "geometry", "toggles", "pivots", "bulk_moved", "emits", "queries"];
+    let mount = [40.0, 12.0, 0.0, 52.0, 300.0, 260.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0];
+    let frames_ops = [0.0, 0.0, 0.0, 0.0, 40.0, 40.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let busy = shape.records > 0;
+    let steady_ops = if busy { [100.0, 0.0, 100.0, 100.0, 3000.0, 2400.0, 600.0, 20.0, 10.0, 0.0, 50.0, 200.0] } else { [10.0, 0.0, 10.0, 10.0, 1200.0, 1150.0, 300.0, 20.0, 10.0, 0.0, 50.0, 200.0] };
+    let engine_at = |mark: usize| -> Value {
+        let mut map = serde_json::Map::new();
+        for (index, name) in names.iter().enumerate() {
+            let so_far = [0.0, mount[index], mount[index] + frames_ops[index], mount[index] + frames_ops[index] + steady_ops[index]][mark];
+            map.insert(name.to_string(), json!(so_far));
+        }
+        Value::Object(map)
+    };
+    let steady_engine: Value = Value::Object(names.iter().zip(steady_ops).map(|(name, n)| (name.to_string(), json!(n))).collect());
+    let mut cache_sites = vec![json!({"function": 4, "line": 31, "pc": 7, "op": "GETTABLEKS", "hits": 1000, "misses": 5000, "slow": 0, "other": 0}), json!({"function": 2, "line": 21, "pc": 3, "op": "GETTABLEKS", "hits": 89000, "misses": 0, "slow": 0, "other": 2000})];
+    if shape.harness {
+        // (the watcher's lookups miss every time: the harness's, not an issue of the game's)
+        cache_sites.push(json!({"function": 6, "line": 6, "pc": 2, "op": "GETTABLEKS", "hits": 0, "misses": 9000, "slow": 0, "other": 0}));
+    }
     let profile = json!({
         "version": 1, "tool": "ree",
         "kinds": ["work", "caches", "alloc", "heap", "timeline", "cpu", "phases"],
         "run": {"command": "run", "status": "ok", "harness": "C:/fixture/Fixture.luau", "frames": 120, "seconds": 2.0, "fps": 60.0, "elapsed": 0.5},
         "phases": ["startup", "frames", "steady"],
-        "marks": [{"phase": "startup", "frame": 0, "seconds": 0.0, "work_ms": 0.0}, {"phase": "frames", "frame": 0, "seconds": 0.0, "work_ms": 0.5}, {"phase": "steady", "frame": 20, "seconds": 0.333, "work_ms": 2.54}],
+        "marks": [{"phase": "startup", "frame": 0, "seconds": 0.0, "work_ms": 0.0, "engine": engine_at(0)}, {"phase": "frames", "frame": 0, "seconds": 0.0, "work_ms": 0.5, "engine": engine_at(1)}, {"phase": "steady", "frame": 20, "seconds": 0.333, "work_ms": 2.54, "engine": engine_at(2)}],
+        "end": {"phase": "end", "frame": 120, "seconds": 2.0, "work_ms": us(total_work) + 0.06, "engine": engine_at(3)},
         "warnings": [],
         "functions": functions,
         "lines": lines,
@@ -258,7 +346,7 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
         "work": {"total_ms": us(total_work) + 0.06, "outside_instructions_ms": 0.06, "per_second_ms": (us(total_work) + 0.06) / 2.0, "per_frame_ms": (us(total_work) + 0.06) / 120.0,
             "fidelity": "fidelity: a fixture's numbers, chosen for the tests", "script_insns": 40000, "engine_insns": 800, "native_functions": [], "opcodes": [{"op": "GETTABLEKS", "count": 36000, "work_ms": 1.0}]},
         "luau_caches": {"by_kind": [{"kind": "table key slot", "hits": 90000, "misses": 5000, "slow": 0, "other": 2000}, {"kind": "import", "hits": 400, "misses": 0, "slow": 4, "other": 0}],
-            "sites": [{"function": 4, "line": 31, "pc": 7, "op": "GETTABLEKS", "hits": 1000, "misses": 5000, "slow": 0, "other": 0}, {"function": 2, "line": 21, "pc": 3, "op": "GETTABLEKS", "hits": 89000, "misses": 0, "slow": 0, "other": 2000}]},
+            "sites": cache_sites},
         "alloc": {"bytes": alloc_total, "objects": alloc_objects, "step": 1, "by_type": by_type, "by_stack": alloc_stacks},
         "heap": {"snapshots": [snapshot("start", 0, 512_000.0, heap_types.clone(), holders.clone()), snapshot("steady", 20, 1_048_576.0, heap_types.clone(), holders.clone()), snapshot("end", 120, 3_670_016.0, heap_types, holders)],
             "gc": {"cycles": 3, "steps": 640, "freed": 2_400_000, "ms": 9.5, "by_state": [{"state": "propagate", "steps": 400, "ms": 6.0}, {"state": "sweep", "steps": 240, "ms": 3.5}]}},
@@ -270,6 +358,7 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
             "2": {"path": source_path.to_string_lossy(), "lines": [[20, "local function rank(items)"]]},
         },
         "source_hashes": {MODULE: hash},
+        "scope": {"phases": ["steady"], "game_self_ms": us(game_steady), "harness_self_ms": us(harness_steady), "harness_folder": "ReplicatedStorage.RURFixtures", "engine": steady_engine},
         "summary": "ree profile: run ok (a test fixture)\n",
         "files": ["summary.txt", "profile.json"],
     });
@@ -287,16 +376,22 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
         records_frames * 112
     );
     let counts = format!("steady;{update};{rank} @21 {}\nframes;{update};{rank} @21 {}\nsteady;{update};{layout} @32 800\nframes;{update};{layout} @32 160\nstartup;{chunk} @5 10\nsteady 3\n", records_steady * 2, records_frames * 2);
+    let watch = format!("watch {HARNESS_MODULE}:5");
+    let (bytes, counts) = if shape.harness { (format!("{bytes}steady;{watch} @7 2873600\n"), format!("{counts}steady;{watch} @7 800\n")) } else { (bytes, counts) };
     std::fs::write(dir.join("alloc.folded"), bytes).unwrap();
     std::fs::write(dir.join("alloc.counts.folded"), counts).unwrap();
     // the boundary profile: Part.Size read again 200 times a frame at Main:31, Position written unchanged at Main:33
-    let boundary = json!({
+    let mut boundary = json!({
         "version": 1, "phase": "steady", "emulated_seconds": 1.6667, "frames": 100, "crossings": 33000, "crossings_per_s": 19800.0, "cost_ms_per_s": 4.0,
         "by_site_count": [{"script": MODULE, "function": "layout", "line": 33, "kind": "write", "member": "Part.Position", "count": 3000, "per_s": 1800.0, "cost_ms_per_s": 1.0, "unchanged_writes": 3000, "repeat_reads": 0, "repeat_reads_per_s": 0.0}],
         "by_site_cost": [],
         "by_member": [{"member": "Part.Size", "kind": "read", "count": 30000, "per_s": 18000.0, "cost_ms_per_s": 3.0, "call_sites": 1, "reads_per_frame": 300.0, "distinct_per_frame": 100.0, "same_function_repeats_per_frame": 200.0, "cross_function_repeats_per_frame": 0.0}],
         "repeat_reads": [{"script": MODULE, "function": "layout", "line": 31, "kind": "read", "member": "Part.Size", "count": 30000, "per_s": 15000.0, "cost_ms_per_s": 3.0, "unchanged_writes": 0, "repeat_reads": 20000, "repeat_reads_per_s": 12000.0}],
     });
+    if shape.harness {
+        // (the watcher reads each part's Name again: the harness's)
+        boundary["repeat_reads"].as_array_mut().unwrap().push(json!({"script": HARNESS_MODULE, "function": "watch", "line": 6, "kind": "read", "member": "Instance.Name", "count": 60000, "per_s": 36000.0, "cost_ms_per_s": 6.0, "unchanged_writes": 0, "repeat_reads": 50000, "repeat_reads_per_s": 30000.0}));
+    }
     std::fs::write(dir.join("boundary.json"), serde_json::to_string(&boundary).unwrap()).unwrap();
     dir.to_path_buf()
 }

@@ -823,6 +823,92 @@ fn a_profile_writes_its_files_and_diffs() {
     let _ = std::fs::remove_dir_all(&after);
 }
 
+/// A profile of a clip-shaped run: the game mounts in startup, attacks in steady while a harness module watches, and
+/// idles after; `watch` spins `watched` times. `phases` is `--profile-phase`. Returns the summary and profile.json.
+fn harness_profile(name: &str, watched: u32, phases: Option<&str>) -> (String, serde_json::Value) {
+    let (lua, engine) = start();
+    let config = Config { print: false, phases: phases.map(str::to_string), ..Config::new(Kinds::WORK, temp_dir(name)) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    // (a table's function: -O2 inlines a small local function into its caller)
+    let spin = |function: &str, rounds: u32| format!("local M = {{}}\nfunction M.{function}(n)\n\tlocal x = 0\n\tfor i = 1, n do\n\t\tx += i % 7\n\tend\n\treturn x\nend\nresult = M.{function}({rounds})\n");
+    run(&lua, &engine, "ReplicatedStorage.Scene.Mount", &spin("mount", 40000));
+    profiler::phase("steady");
+    run(&lua, &engine, "ReplicatedStorage.Scene.Attack", &spin("attack", 20000));
+    run(&lua, &engine, "ReplicatedStorage.RURFixtures.Clip", &spin("watch", watched));
+    // (the engine's chunk that calls a harness, as `ree record` names it)
+    run(&lua, &engine, "rur.record", &spin("drive", 3000));
+    profiler::phase("after");
+    run(&lua, &engine, "ReplicatedStorage.Scene.Idle", &spin("idle", 5000));
+    profiler::collect(&lua);
+    let summary = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), frames: 1, seconds: 1.0 / 60.0, fps: 60.0, ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    (summary, json)
+}
+
+/// The text between a summary's `title` line and the next blank line
+fn section<'a>(summary: &'a str, title: &str) -> &'a str {
+    let start = summary.find(title).unwrap_or_else(|| panic!("no {title:?} in\n{summary}"));
+    let rest = &summary[start..];
+    &rest[..rest.find("\n\n").unwrap_or(rest.len())]
+}
+
+/// The summary reports the steady phase the run marked, and the harness's own code (under ReplicatedStorage.RURFixtures)
+/// apart from the game's: its work moves with what it watches, not with the game
+#[test]
+fn the_summary_reports_the_steady_phase_with_the_harnesss_code_apart() {
+    let _lock = lock();
+    let (summary, json) = harness_profile("harness", 30000, None);
+    assert!(summary.contains("reported below: phase steady: the game's code"), "{summary}");
+    let game = section(&summary, "top functions by self work: the game's code, phase steady");
+    assert!(game.contains("attack") && !game.contains("watch") && !game.contains("mount") && !game.contains("idle"), "{summary}");
+    let harness = section(&summary, "the harness's code, phase steady");
+    assert!(harness.contains("watch") && harness.contains("drive") && !harness.contains("attack"), "{summary}");
+    assert!(!game.contains("drive"), "{summary}");
+    // profile.json: the harness's functions are marked, every function has its phases, the scope has each side's work
+    let function = |name: &str| {
+        let suffix = format!(".{name}");
+        json["functions"].as_array().unwrap().iter().find(|f| f["name"].as_str().is_some_and(|n| n == name || n.ends_with(&suffix))).unwrap_or_else(|| panic!("no {name} in\n{summary}"))
+    };
+    assert_eq!(function("watch")["harness"], true);
+    assert_eq!(function("attack")["harness"], false);
+    assert!(function("attack")["phases"]["steady"]["self_work_ms"].as_f64().unwrap() > 0.0);
+    assert!(function("attack")["phases"].get("startup").is_none() && function("mount")["phases"]["startup"]["self_work_ms"].as_f64().unwrap() > 0.0);
+    assert_eq!(function("watch")["phases"]["steady"]["harness_self_work_ms"], function("watch")["phases"]["steady"]["self_work_ms"]);
+    assert_eq!(json["scope"]["phases"], serde_json::json!(["steady"]));
+    let (game_ms, harness_ms) = (json["scope"]["game_self_ms"].as_f64().unwrap(), json["scope"]["harness_self_ms"].as_f64().unwrap());
+    let steady = |name: &str| function(name)["phases"]["steady"]["self_work_ms"].as_f64().unwrap();
+    assert!(game_ms >= steady("attack") && harness_ms >= steady("watch") && harness_ms < steady("watch") + game_ms, "game {game_ms}, harness {harness_ms}");
+    // --profile-phase all: every phase's game code, and still not the harness's
+    let (all, _) = harness_profile("harness-all", 30000, Some("all"));
+    let game = section(&all, "top functions by self work: the game's code, every phase");
+    assert!(game.contains("mount") && game.contains("attack") && game.contains("idle") && !game.contains("watch"), "{all}");
+}
+
+/// A diff of two runs leads with the game's code in the phase both report; the harness's moved work stays apart
+#[test]
+fn a_diff_leads_with_the_games_code_and_keeps_the_harnesss_apart() {
+    let _lock = lock();
+    let ((_, before), (_, after)) = (harness_profile("diff-before", 20000, None), harness_profile("diff-after", 60000, None));
+    let (text, json) = profiler::diff::compare(&before, &after, 10);
+    let figure = |name: &str| json["figures"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap_or_else(|| panic!("no {name} in\n{text}")).clone();
+    let first = &json["figures"][0];
+    assert_eq!(first["name"], "the game's code, phase steady", "{text}");
+    let game = figure("the game's code, phase steady");
+    let (game_before, game_after) = (game["before"].as_f64().unwrap(), game["after"].as_f64().unwrap());
+    assert!((game_after - game_before).abs() <= 0.05 * game_before, "the game's code did the same work: {game_before} -> {game_after}\n{text}");
+    let harness = figure("the harness's code, phase steady");
+    assert!(harness["after"].as_f64().unwrap() > 2.0 * harness["before"].as_f64().unwrap(), "{text}");
+    assert_eq!(json["scope"], serde_json::json!(["steady"]));
+    let rows = json["functions"].as_array().unwrap();
+    assert!(rows.iter().any(|row| row["function"].as_str().unwrap().contains("watch") && row["harness"] == true), "{text}");
+    // (the game's code did the same work, so its table may be empty and left out)
+    let game_title = "functions that moved most: the game's code, phase steady";
+    assert!(!text.contains(game_title) || !section(&text, game_title).contains("watch"), "{text}");
+    assert!(section(&text, "the harness's functions that moved most, phase steady").contains("watch"), "{text}");
+}
+
 /// The memory module's own figures: a stack is interned once, a type name once.
 #[test]
 fn stacks_and_types_intern_once() {
@@ -1095,6 +1181,84 @@ fn a_phase_is_the_difference_of_its_marks_counts() {
     let figures = profiler::whatif::phase_figures(&json, "grow", "after", 1.0);
     assert!(figures["allocs"] >= 11.0);
     assert_eq!((figures["rehash_keys"], figures["rehashes"]), (20.0, 5.0));
+}
+
+/// A clip-shaped run whose steady phase casts `casts` times: each cast clones a template of three into the Workspace, moves a
+/// part by a write, pivots the copy, bulk-moves both parts, emits from a new emitter and switches it off, lists the copy's
+/// descendants and destroys it. Returns the summary and profile.json.
+fn engine_ops_profile(name: &str, casts: u32) -> (String, serde_json::Value) {
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::WORK, temp_dir(name)) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    // (the template, made before the phase: its three instances are startup's)
+    run(
+        &lua,
+        &engine,
+        "setup",
+        "local model = Instance.new(\"Model\")\nmodel.Name = \"Template\"\nfor i = 1, 2 do\n\tInstance.new(\"Part\", model)\nend\nmodel.Parent = game:GetService(\"ReplicatedStorage\")\n",
+    );
+    profiler::phase("steady");
+    let cast = "local Workspace = game:GetService(\"Workspace\")
+local copy = game:GetService(\"ReplicatedStorage\").Template:Clone()
+copy.Parent = Workspace
+local parts = copy:GetChildren()
+parts[1].CFrame = CFrame.new(0, 10, 0)
+parts[1].Name = \"Moved\"
+parts[1].Name = \"Moved\"
+copy:PivotTo(CFrame.new(5, 0, 0))
+Workspace:BulkMoveTo(parts, { CFrame.new(1, 0, 0), CFrame.new(2, 0, 0) })
+local emitter = Instance.new(\"ParticleEmitter\")
+emitter.Parent = parts[2]
+emitter:Emit(4)
+emitter.Enabled = false
+local _ = copy:GetDescendants()
+copy:Destroy()
+";
+    for _ in 0..casts {
+        run(&lua, &engine, "cast", cast);
+    }
+    profiler::phase("after");
+    run(&lua, &engine, "idle", "local idle = Instance.new(\"Folder\")\n");
+    profiler::collect(&lua);
+    let summary = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), frames: 1, seconds: 1.0 / 60.0, fps: 60.0, ..Default::default() }).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    (summary, json)
+}
+
+/// The engine's side of a phase: what its scripts asked the engine to do (cost::EngineOps), carried by each mark like the work
+/// clock, so the steady phase's counts are its own; the summary reports them under the reported phase, and a diff compares them
+#[test]
+fn a_phase_counts_what_its_scripts_asked_the_engine_to_do() {
+    let _lock = lock();
+    let (summary, json) = engine_ops_profile("engine-ops", 1);
+    let ops = &json["scope"]["engine"];
+    let count = |name: &str| ops[name].as_u64().unwrap_or_else(|| panic!("no {name} in {ops}"));
+    // the copy and its two parts; the emitter; the copy, its parts and the emitter destroyed; the copy and its parts entering the
+    // Workspace, then the emitter
+    assert_eq!((count("cloned"), count("created"), count("destroyed"), count("entered")), (3, 1, 4, 4), "{ops}");
+    // one part moved by a write, one emitter switched, one pivot, both parts bulk-moved, one emit, one descendant query
+    assert_eq!((count("geometry"), count("toggles"), count("pivots"), count("bulk_moved"), count("emits"), count("queries")), (1, 1, 1, 2, 1, 1), "{ops}");
+    // the CFrame, both names and Enabled at least (the second name changed nothing)
+    assert!(count("writes") >= 4 && count("changed") >= 3 && count("changed") < count("writes"), "{ops}");
+    // startup's template is not the phase's, and after's folder is not either; the marks carry the counts so far
+    let marks = json["marks"].as_array().unwrap();
+    let mark = |phase: &str| marks.iter().find(|mark| mark["phase"] == phase).unwrap_or_else(|| panic!("{marks:#?}"));
+    assert!(mark("steady")["engine"]["created"].as_u64().unwrap() >= 3, "{marks:#?}");
+    assert_eq!(json["end"]["engine"]["created"].as_u64().unwrap() - mark("after")["engine"]["created"].as_u64().unwrap(), 1);
+    let line = summary.lines().find(|line| line.starts_with("engine operations, phase steady:")).unwrap_or_else(|| panic!("{summary}"));
+    for part in ["3 instances cloned", "1 made with Instance.new", "4 destroyed", "4 entered the Workspace", "1 moved or resized a part in the Workspace", "1 switched an effect", "1 pivot, 2 parts bulk-moved", "1 emit", "1 descendant query"] {
+        assert!(line.contains(part), "{part:?} in {line}");
+    }
+    // a diff: twice the casts, twice the engine's counts in the phase both report
+    let (_, twice) = engine_ops_profile("engine-ops-twice", 2);
+    let (text, diff) = profiler::diff::compare(&json, &twice, 10);
+    let figure = |name: &str| diff["figures"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap_or_else(|| panic!("no {name} in\n{text}")).clone();
+    let made = figure("engine: instances made, phase steady");
+    assert_eq!((made["before"].as_f64().unwrap(), made["after"].as_f64().unwrap()), (4.0, 8.0), "{text}");
+    let moved = figure("engine: parts moved, phase steady");
+    assert_eq!((moved["before"].as_f64().unwrap(), moved["after"].as_f64().unwrap()), (3.0, 6.0), "{text}");
 }
 
 /// A level is one more than the deepest table a table holds; the tables of a cycle share theirs

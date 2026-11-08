@@ -225,6 +225,152 @@ fn lighting_additions_play_in_the_lighting() {
     assert_eq!(values, [2.0, 0.0]);
 }
 
+/// The engine's Lighting before the run stands in for the place's, which the renderer's stage draws, so
+/// every write of the run plays: what the harness writes before frame 0 (its setup) plays from frame 0,
+/// a write of the value the engine held plays too, and a tween holds
+/// the stage's value (`{"initial": true}`) until the run first changes the property. GlobalShadows and
+/// ShadowSoftness play as the other Lighting properties do.
+#[test]
+fn lighting_writes_before_the_first_frame_play_from_it() {
+    let (playback, _, _, summary) = record(
+        r#"
+        local Lighting = game:GetService("Lighting")
+        local Held = Lighting.GlobalShadows
+        Lighting.GlobalShadows = Held
+        Lighting.Brightness = 0.5
+        Lighting.ShadowSoftness = 0.6
+        task.delay(0.1, function()
+            Lighting.GlobalShadows = not Held
+            Lighting.ShadowSoftness = 1
+            Lighting.Brightness = 0.5
+            game:GetService("TweenService"):Create(Lighting, TweenInfo.new(0.05, Enum.EasingStyle.Linear), {ExposureCompensation = 1}):Play()
+        end)
+        "#,
+        16,
+    );
+    let sets = |property: &str| -> Vec<(f64, Json)> {
+        find(&playback["actions"], |a| a["target"] == "Lighting" && !a["set"][property].is_null()).iter().map(|a| (a["at"].as_f64().unwrap(), a["set"][property].clone())).collect()
+    };
+    let shadows = sets("GlobalShadows");
+    assert_eq!(shadows.len(), 2, "the held value written back, then its opposite: {shadows:?}");
+    assert!(shadows[0].1.is_boolean() && shadows[1].1.is_boolean() && shadows[0].1 != shadows[1].1, "{shadows:?}");
+    assert!(shadows[0].0 == 0.0 && shadows[1].0 > 0.0, "{shadows:?}");
+    let brightness = sets("Brightness");
+    assert_eq!(brightness.len(), 1, "a write of the value the run last wrote plays nothing: {brightness:?}");
+    assert_eq!((brightness[0].0, brightness[0].1.as_f64().unwrap()), (0.0, 0.5));
+    let softness: Vec<(f64, f64)> = sets("ShadowSoftness").iter().map(|(at, value)| (*at, value.as_f64().unwrap())).collect();
+    assert_eq!(softness.len(), 2, "{softness:?}");
+    assert_eq!(softness[0].0, 0.0);
+    assert!((softness[0].1 - 0.6).abs() < 1e-5 && (softness[1].1 - 1.0).abs() < 1e-5, "{softness:?}");
+    let tweens = find(&playback["tweens"], |t| t["target"] == "Lighting");
+    assert_eq!(tweens.len(), 1, "{tweens:?}");
+    let keys = tweens[0]["keys"].as_array().unwrap();
+    assert_eq!(tweens[0]["property"], "ExposureCompensation");
+    assert_eq!(keys[0]["value"], serde_json::json!({ "initial": true }), "{keys:?}");
+    assert!(keys[0]["at"].as_f64().unwrap() > 0.0, "{keys:?}");
+    assert_eq!(keys.last().unwrap()["value"].as_f64(), Some(1.0), "{keys:?}");
+    assert!(summary["unsupported"].as_array().unwrap().is_empty(), "{summary}");
+}
+
+/// The Terrain's Clouds play on `Workspace.Terrain.Clouds` as Lighting's own properties play on
+/// `Lighting`: the place's (a Studio-only placeholder, at the engine's defaults) stand in for the clouds
+/// the renderer's stage draws, so every write of the run plays, its setup's at frame 0, a write of the
+/// value the engine held too, and a tween holds the stage's value until it first changes the property.
+/// A Clouds is never recorded as an instance, and one outside the Terrain draws nothing.
+#[test]
+fn terrain_cloud_writes_play_on_the_stages_clouds() {
+    let run = |source: &str, place_clouds: bool| -> (Json, rbx_dom_weak::WeakDom, Json) {
+        let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+        let lua = Lua::new();
+        engine_lua::start(&lua, &engine).expect("start");
+        if place_clouds {
+            let terrain = crate::world::terrain(&engine, engine.world().workspace).expect("Terrain");
+            let mut state = engine.state.borrow_mut();
+            let class = engine.reflection.class_id("Clouds").unwrap();
+            let id = crate::instance::create_named(&mut state, &engine.reflection, class, "Clouds");
+            state.dom.at_mut(id).set_flag(crate::dom::flags::STUDIO_ONLY, true);
+            state.dom.attach(id, terrain);
+        }
+        let recorder = Recorder::install(&engine, 60.0);
+        let script = {
+            let mut state = engine.state.borrow_mut();
+            let class = engine.reflection.class_id("ModuleScript").unwrap();
+            crate::instance::create_named(&mut state, &engine.reflection, class, "Harness")
+        };
+        let env = engine_lua::modules::environment(&lua, &engine, script).expect("environment");
+        let function = lua.load(source).set_name("=Harness").set_environment(env).into_function().expect("compile");
+        let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
+        if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+            panic!("harness failed: {message}");
+        }
+        recorder.sample(&engine, 0);
+        for frame in 1..=16 {
+            scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("frame");
+            recorder.sample(&engine, frame);
+        }
+        let out = std::env::temp_dir().join(format!("rur-record-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let summary = recorder.write(&engine, &out, Map::new()).expect("write");
+        let playback: Json = serde_json::from_str(&std::fs::read_to_string(out.join("playback.json")).unwrap()).unwrap();
+        let scene = rbx_binary::from_reader(std::fs::read(out.join("scene.rbxm")).unwrap().as_slice()).expect("scene.rbxm");
+        let _ = std::fs::remove_dir_all(&out);
+        drop(lua);
+        engine.teardown();
+        (playback, scene, summary)
+    };
+    let sets = |playback: &Json, property: &str| -> Vec<(f64, Json)> {
+        find(&playback["actions"], |a| a["target"] == "Workspace.Terrain.Clouds" && !a["set"][property].is_null()).iter().map(|a| (a["at"].as_f64().unwrap(), a["set"][property].clone())).collect()
+    };
+    let (playback, scene, summary) = run(
+        r#"
+        local Clouds = workspace.Terrain:FindFirstChildOfClass("Clouds")
+        local Held = Clouds.Enabled
+        Clouds.Enabled = Held
+        Clouds.Color = Color3.fromRGB(70, 74, 88)
+        Clouds.Cover = 0.95
+        local Stray = Instance.new("Clouds")
+        Stray.Parent = workspace
+        Stray.Cover = 0.1
+        task.delay(0.1, function()
+            Clouds.Cover = 0.95
+            game:GetService("TweenService"):Create(Clouds, TweenInfo.new(0.05, Enum.EasingStyle.Linear), {Density = 0.2}):Play()
+        end)
+        "#,
+        true,
+    );
+    let enabled = sets(&playback, "Enabled");
+    assert_eq!(enabled, vec![(0.0, Json::Bool(true))], "the held value written back plays at frame 0");
+    let color = sets(&playback, "Color");
+    assert_eq!(color.len(), 1, "{color:?}");
+    let rgb: Vec<f64> = color[0].1.as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert!(color[0].0 == 0.0 && (rgb[0] - 70.0 / 255.0).abs() < 1e-4 && (rgb[2] - 88.0 / 255.0).abs() < 1e-4, "{color:?}");
+    let cover = sets(&playback, "Cover");
+    assert_eq!(cover.len(), 1, "a write of the value the run last wrote plays nothing: {cover:?}");
+    assert!(cover[0].0 == 0.0 && (cover[0].1.as_f64().unwrap() - 0.95).abs() < 1e-5, "{cover:?}");
+    let tweens = find(&playback["tweens"], |t| t["target"] == "Workspace.Terrain.Clouds");
+    assert_eq!(tweens.len(), 1, "{tweens:?}");
+    assert_eq!(tweens[0]["property"], "Density");
+    let keys = tweens[0]["keys"].as_array().unwrap();
+    assert_eq!(keys[0]["value"], serde_json::json!({ "initial": true }), "{keys:?}");
+    assert!(keys[0]["at"].as_f64().unwrap() > 0.0, "{keys:?}");
+    assert!((keys.last().unwrap()["value"].as_f64().unwrap() - 0.2).abs() < 1e-5, "{keys:?}");
+    assert!(find(&playback["actions"], |a| a["target"] != "Workspace.Terrain.Clouds").is_empty(), "the stray Clouds plays nothing: {}", playback["actions"]);
+    assert!(scene.descendants().all(|instance| instance.class != "Clouds"), "no Clouds is recorded as an instance");
+    assert!(summary["unsupported"].as_array().unwrap().is_empty(), "{summary}");
+
+    // clouds the run makes in the Terrain are the Terrain's too
+    let (playback, scene, _) = run(
+        r#"
+        local Clouds = Instance.new("Clouds")
+        Clouds.Cover = 0.3
+        Clouds.Parent = workspace.Terrain
+        "#,
+        false,
+    );
+    let cover = sets(&playback, "Cover");
+    assert!(cover.len() == 1 && cover[0].0 == 0.0 && (cover[0].1.as_f64().unwrap() - 0.3).abs() < 1e-5, "{cover:?}");
+    assert!(scene.descendants().all(|instance| instance.class != "Clouds"), "no Clouds is recorded as an instance");
+}
+
 /// A Glass part still draws at Transparency 1 when a Highlight is under it (ror's notes, glass-quirks),
 /// so one that appears later and is destroyed leaves the world before and after instead of turning
 /// Transparency 1: the house's distortion bubbles (a disabled Highlight under each) otherwise hung on
@@ -544,6 +690,64 @@ fn a_spooled_run_prints_what_a_kept_one_prints() {
     assert!(kept.ends_with("}\n") && kept.matches('\n').count() == 1);
 }
 
+/// `ree record --timing-check`: a recording whose script budgets its work on os.clock within a frame hinges on sub-frame
+/// timing (a second recording with the in-frame clock moved differs, from the first changed key), one that does not reads
+/// no change; the verdict is in the summary and timing.json, and the second recording's files are gone.
+#[test]
+fn a_timing_check_says_whether_a_recording_hinges_on_sub_frame_timing() {
+    let root = std::env::temp_dir().join(format!("ree-record-timing-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(root.join("none")).unwrap();
+    let write = |name: &str, body: &str| {
+        let path = root.join(name);
+        std::fs::write(&path, body).unwrap();
+        path
+    };
+    let steady = write(
+        "Steady.luau",
+        "return function(Context)\n\
+         local Part = Instance.new('Part') Part.Anchored = true Part.Parent = workspace\n\
+         game:GetService('TweenService'):Create(Part, TweenInfo.new(0.2), {Transparency = 0.5}):Play()\n\
+         task.wait(0.25)\n\
+         end",
+    );
+    let budgeted = write(
+        "Budgeted.luau",
+        "return function(Context)\n\
+         local Part = Instance.new('Part') Part.Anchored = true Part.Parent = workspace\n\
+         local Steps = 0\n\
+         for _ = 1, 10 do\n\
+         local Start = os.clock()\n\
+         repeat for _ = 1, 200 do local _ = Part.Position end Steps += 1 until os.clock() - Start > 0.0005 or Steps % 50 == 0\n\
+         Part.Position = Vector3.new(Steps, 0, 0)\n\
+         task.wait()\n\
+         end\n\
+         end",
+    );
+    let host = crate::launch::Host::default();
+    let check = |harness: &std::path::Path, name: &str| {
+        let out = root.join(name);
+        let args: Vec<String> = ["--harness", &harness.to_string_lossy(), "--out", &out.to_string_lossy(), "--roots", &root.join("none").to_string_lossy(), "--seconds", "0.3", "--fps", "60", "--timing-check"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let parsed = super::run::parse(&args, true).expect("arguments");
+        let (done, emulator) = super::run::execute_with(&parsed, &host, true, false).expect("record");
+        drop(emulator);
+        let written: Json = serde_json::from_str(&std::fs::read_to_string(out.join("timing.json")).unwrap()).unwrap();
+        assert_eq!(written, done.summary["timing"]);
+        assert!(!out.join("timing-check").exists(), "the second recording's files are removed");
+        done
+    };
+    let steady = check(&steady, "steady");
+    assert_eq!(steady.summary["timing"]["hinges"], Json::Bool(false), "{}", steady.summary["timing"]);
+    assert!(steady.line.ends_with("sub-frame timing: no change"), "{}", steady.line);
+    let budgeted = check(&budgeted, "budgeted");
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(budgeted.summary["timing"]["hinges"], Json::Bool(true), "{}", budgeted.summary["timing"]);
+    assert_eq!(budgeted.summary["timing"]["first"]["what"], "Part");
+    assert!(budgeted.line.contains("hinges on sub-frame timing from"), "{}", budgeted.line);
+}
+
 /// `ree record` writes the same files whether its output lines are kept or written to a temporary file
 /// as events.json holds them, as they come (the command line's recording).
 #[test]
@@ -640,6 +844,8 @@ fn a_harness_requires_its_own_modules() {
             frame_times: None,
             script_timeout: None,
             script_timeouts: None,
+            timing_check: false,
+            clock_moved: false,
         };
         let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
         assert_eq!(ran.status, "ok", "{harness}: {:?}", ran.failure);
@@ -1416,6 +1622,8 @@ fn frame_times_replay_a_take_then_go_on_at_the_frame_rate() {
         frame_times,
         script_timeout: None,
         script_timeouts: None,
+        timing_check: false,
+        clock_moved: false,
     };
     let round = |times: Vec<f64>| times.into_iter().map(|t| (t * 1e4).round() / 1e4).collect::<Vec<_>>();
     assert_eq!(round(args(Some(vec![0.03, 0.05])).frame_schedule()), vec![0.03, 0.05, 0.0667, 0.0833, 0.1]);
@@ -1675,6 +1883,8 @@ fn trace_writes_names_the_line_of_each_write() {
         frame_times: None,
         script_timeout: None,
         script_timeouts: None,
+        timing_check: false,
+        clock_moved: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     let _ = std::fs::remove_dir_all(&root);
@@ -1733,6 +1943,8 @@ fn trace_writes_star_names_every_property_and_attribute_write() {
         frame_times: None,
         script_timeout: None,
         script_timeouts: None,
+        timing_check: false,
+        clock_moved: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     let _ = std::fs::remove_dir_all(&root);
@@ -1790,6 +2002,8 @@ fn profile_phase_splits_the_allocation_profile() {
         frame_times: None,
         script_timeout: None,
         script_timeouts: None,
+        timing_check: false,
+        clock_moved: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     drop(guard);
@@ -1853,6 +2067,8 @@ fn census_names_the_line_behind_what_accumulates() {
         frame_times: None,
         script_timeout: None,
         script_timeouts: None,
+        timing_check: false,
+        clock_moved: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     let _ = std::fs::remove_dir_all(&root);
@@ -1930,6 +2146,8 @@ fn holders_name_what_keeps_an_orphan_tree_alive() {
         frame_times: None,
         script_timeout: None,
         script_timeouts: None,
+        timing_check: false,
+        clock_moved: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     let _ = std::fs::remove_dir_all(&root);

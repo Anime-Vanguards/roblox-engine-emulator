@@ -36,6 +36,8 @@ fn rows(app: &App) -> (Vec<Pair>, Unit, String) {
         DiffSort::Decrease => rows.sort_by(|a, b| a.delta().total_cmp(&b.delta()).then(a.label.cmp(&b.label))),
         DiffSort::Name => rows.sort_by(|a, b| a.label.cmp(&b.label)),
     }
+    // (the harness's own code after the game's, each in the chosen order)
+    rows.sort_by_key(|row| row.harness);
     (rows, unit, what)
 }
 
@@ -135,7 +137,7 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
             let delta = row.delta();
             let (m, color) = mark(delta, theme);
             let mut cells = vec![
-                Item::label(row.label.clone(), Style::new().fg(theme.ink)),
+                Item::label(row.label.clone(), Style::new().fg(if row.harness { theme.muted } else { theme.ink })),
                 Item::text(fmt::short(unit, row.before), Style::new().fg(theme.ink2)),
                 Item::text(fmt::short(unit, row.after), Style::new().fg(theme.ink).add_modifier(Modifier::BOLD)),
                 Item::Spans(Line::from(Span::styled(m, Style::new().fg(color)))),

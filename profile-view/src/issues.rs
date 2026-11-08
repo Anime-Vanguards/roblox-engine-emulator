@@ -87,13 +87,24 @@ pub fn detect(p: &Profile, work: Option<&Tree>, sites: &[AllocSite]) -> (Vec<Iss
         unchecked.push("the steady state's sorts, allocation and growth: the run marks no phase after startup (the mount)".into());
     }
 
+    // the harness's own code is not the game's: what it sorts, allocates, misses or reads again is left out, as ree's
+    // summary leaves it out of its tables, unless the run's code is all the harness's
+    let harness_out = p.has_harness()
+        && p.scope_work()
+            .or_else(|| {
+                work.map(|tree| {
+                    let maps = tree.sided(&p.scope(), |func| p.funcs.get(func as usize).filter(|f| f.kind == Kind::Script && !f.module.is_empty()).map(|f| f.harness));
+                    (maps[0].values().sum(), maps[1].values().sum())
+                })
+            })
+            .is_some_and(|(game, harness)| crate::model::harness_apart(game, harness));
     match work {
-        Some(tree) => sorts_every_frame(p, tree, steady, &steady_frames, &mut issues),
+        Some(tree) => sorts_every_frame(p, tree, steady, &steady_frames, harness_out, &mut issues),
         None => unchecked.push("sorts every frame: needs work".into()),
     }
     if p.raw.alloc.is_some() {
-        steady_allocation(p, sites, steady, &steady_frames, &mut issues);
-        table_growth(p, sites, &mut issues);
+        steady_allocation(p, sites, steady, &steady_frames, harness_out, &mut issues);
+        table_growth(p, sites, harness_out, &mut issues);
     } else {
         unchecked.push("allocation and table growth: need alloc".into());
     }
@@ -107,11 +118,15 @@ pub fn detect(p: &Profile, work: Option<&Tree>, sites: &[AllocSite]) -> (Vec<Iss
         heap_growth(p, &mut issues);
     }
     if p.raw.luau_caches.is_some() {
-        cache_misses(p, &mut issues);
+        cache_misses(p, harness_out, &mut issues);
     }
     match &p.boundary {
-        Some(boundary) => repeat_reads(p, boundary, &mut issues),
+        Some(boundary) => repeat_reads(p, boundary, harness_out, &mut issues),
         None => unchecked.push("repeat reads and unchanged writes: need boundary, in a run of its own".into()),
+    }
+    let harness = p.funcs.iter().filter(|f| f.harness).count();
+    if harness_out {
+        unchecked.push(format!("the harness's code ({harness} {}): the issues cover the game's code", if harness == 1 { "function" } else { "functions" }));
     }
     issues.sort_by(|a, b| a.severity.cmp(&b.severity).then(b.weight.total_cmp(&a.weight)).then(a.title.cmp(&b.title)));
     (issues, unchecked)
@@ -123,7 +138,7 @@ fn phase_work(tree: &Tree, phase: u32) -> f64 {
 }
 
 /// `table.sort` called about once a frame or more through the steady state, by the function that calls it
-fn sorts_every_frame(p: &Profile, tree: &Tree, steady: Option<(u32, u64)>, steady_frames: &str, issues: &mut Vec<Issue>) {
+fn sorts_every_frame(p: &Profile, tree: &Tree, steady: Option<(u32, u64)>, steady_frames: &str, harness_out: bool, issues: &mut Vec<Issue>) {
     let Some((phase, frames)) = steady else { return };
     if frames < 10 || !tree.has_calls {
         return;
@@ -144,6 +159,9 @@ fn sorts_every_frame(p: &Profile, tree: &Tree, steady: Option<(u32, u64)>, stead
             _ => None,
         });
         let Some(caller) = caller else { continue };
+        if harness_out && p.funcs[caller as usize].harness {
+            continue;
+        }
         let entry = by_caller.entry(caller).or_default();
         entry.0 += node.calls;
         entry.1 += node.total;
@@ -202,7 +220,7 @@ fn frame_allocation(p: &Profile, phase: u32) -> Option<(f64, f64, f64)> {
 
 /// Sites that allocate through the steady state. A site whose average a frame is more than the phase's smallest frame
 /// allocates in all cannot allocate that every frame: it comes in bursts
-fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)>, steady_frames: &str, issues: &mut Vec<Issue>) {
+fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)>, steady_frames: &str, harness_out: bool, issues: &mut Vec<Issue>) {
     let Some((phase, frames)) = steady else { return };
     if frames < 10 {
         return;
@@ -210,7 +228,7 @@ fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)
     let frame_bytes = frame_allocation(p, phase);
     let mut rows: Vec<(&AllocSite, f64, f64)> = sites
         .iter()
-        .filter(|site| site.func != ENGINE)
+        .filter(|site| site.func != ENGINE && !(harness_out && p.funcs[site.func as usize].harness))
         .map(|site| {
             let (bytes, count) = site.per_frame(phase, frames);
             (site, bytes, count)
@@ -262,11 +280,11 @@ fn steady_allocation(p: &Profile, sites: &[AllocSite], steady: Option<(u32, u64)
 }
 
 /// Table storage allocated past the new tables' own: tables grown a step at a time (each growth rehashes the keys)
-fn table_growth(p: &Profile, sites: &[AllocSite], issues: &mut Vec<Issue>) {
+fn table_growth(p: &Profile, sites: &[AllocSite], harness_out: bool, issues: &mut Vec<Issue>) {
     let frames = p.raw.run.frames.max(1) as f64;
     let mut rows: Vec<(&AllocSite, f64, f64, f64)> = sites
         .iter()
-        .filter(|site| site.func != ENGINE)
+        .filter(|site| site.func != ENGINE && !(harness_out && p.funcs[site.func as usize].harness))
         .map(|site| {
             let (_, tables) = site.of_type("table");
             let (storage_bytes, storage) = site.of_type("table storage");
@@ -346,7 +364,14 @@ fn spikes(p: &Profile, issues: &mut Vec<Issue>) {
                 },
                 kind: "frame spike",
                 title: format!("Frame spikes: {}, worst {} (frame {})", frames_text(spikes.len()), fmt::ms(work[worst]), frame(worst)),
-                evidence: vec![format!("frame {}: {} of work; median frame {}", frame(worst), fmt::ms(work[worst]), fmt::ms(typical)), format!("frames at {} or more: {}", fmt::ms(floor), list(&spikes))],
+                evidence: {
+                    let mut evidence = vec![format!("frame {}: {} of work; median frame {}", frame(worst), fmt::ms(work[worst]), fmt::ms(typical)), format!("frames at {} or more: {}", fmt::ms(floor), list(&spikes))];
+                    // (a frame's figures are the whole frame's: the harness's code is in them too)
+                    if let Some((_, harness)) = harness_work(p) {
+                        evidence.push(format!("a frame's work counts the harness's code too: {} of self work in {}", fmt::ms(harness), p.scope().label));
+                    }
+                    evidence
+                },
                 advice: "Spread the work over frames, or do it ahead".into(),
                 target: Target::Frame(worst),
                 weight: work[worst],
@@ -407,6 +432,14 @@ fn frames_text(count: usize) -> String {
     if count == 1 { "1 frame".into() } else { format!("{count} frames") }
 }
 
+/// The self work of the game's code and the harness's in the profile's scope, when some of its code is the harness's
+fn harness_work(p: &Profile) -> Option<(f64, f64)> {
+    if !p.has_harness() {
+        return None;
+    }
+    p.scope_work().filter(|(_, harness)| *harness > 0.0)
+}
+
 /// The threads the last heap snapshot found reachable
 fn reachable_threads(p: &Profile) -> Option<f64> {
     let snapshot = p.raw.heap.as_ref()?.snapshots.last()?;
@@ -446,7 +479,7 @@ fn heap_growth(p: &Profile, issues: &mut Vec<Issue>) {
 }
 
 /// Luau inline cache sites that miss often
-fn cache_misses(p: &Profile, issues: &mut Vec<Issue>) {
+fn cache_misses(p: &Profile, harness_out: bool, issues: &mut Vec<Issue>) {
     let Some(caches) = &p.raw.luau_caches else { return };
     let frames = p.raw.run.frames.max(1) as f64;
     let all: f64 = caches.sites.iter().map(|site| site.missed()).sum();
@@ -456,7 +489,7 @@ fn cache_misses(p: &Profile, issues: &mut Vec<Issue>) {
         let site = &caches.sites[index];
         let Some(func) = p.func_of_id(site.function) else { continue };
         let f = &p.funcs[func];
-        if f.kind == Kind::Engine {
+        if f.kind == Kind::Engine || (harness_out && f.harness) {
             continue;
         }
         let slow_mostly = site.slow > site.misses;
@@ -490,6 +523,11 @@ fn cache_misses(p: &Profile, issues: &mut Vec<Issue>) {
     }
 }
 
+/// Whether a boundary site is in the harness's code (its script under the harness's folder)
+fn harness_site(p: &Profile, site: &crate::model::BoundarySite) -> bool {
+    crate::model::harness_module(crate::model::module_name(&site.script)) || boundary_func(p, &site.script, site.line).is_some_and(|func| p.funcs[func as usize].harness)
+}
+
 /// The function a boundary site names (its script and line)
 fn boundary_func(p: &Profile, script: &str, line: i64) -> Option<u32> {
     let short = crate::model::short_module(crate::model::module_name(script));
@@ -502,9 +540,9 @@ fn boundary_func(p: &Profile, script: &str, line: i64) -> Option<u32> {
 }
 
 /// The boundary profile's repeat table and unchanged writes
-fn repeat_reads(p: &Profile, boundary: &crate::model::Boundary, issues: &mut Vec<Issue>) {
+fn repeat_reads(p: &Profile, boundary: &crate::model::Boundary, harness_out: bool, issues: &mut Vec<Issue>) {
     let frames = boundary.frames.max(1.0);
-    let mut rows: Vec<&crate::model::BoundarySite> = boundary.repeat_reads.iter().filter(|site| site.repeat_reads / frames >= 10.0).collect();
+    let mut rows: Vec<&crate::model::BoundarySite> = boundary.repeat_reads.iter().filter(|site| site.repeat_reads / frames >= 10.0 && !(harness_out && harness_site(p, site))).collect();
     rows.sort_by(|a, b| b.repeat_reads.total_cmp(&a.repeat_reads));
     for site in rows.into_iter().take(5) {
         let per_frame = site.repeat_reads / frames;
@@ -523,7 +561,7 @@ fn repeat_reads(p: &Profile, boundary: &crate::model::Boundary, issues: &mut Vec
             weight: site.repeat_reads,
         });
     }
-    let mut writes: Vec<&crate::model::BoundarySite> = boundary.by_site_count.iter().filter(|site| site.unchanged_writes / frames >= 10.0).collect();
+    let mut writes: Vec<&crate::model::BoundarySite> = boundary.by_site_count.iter().filter(|site| site.unchanged_writes / frames >= 10.0 && !(harness_out && harness_site(p, site))).collect();
     writes.sort_by(|a, b| b.unchanged_writes.total_cmp(&a.unchanged_writes));
     for site in writes.into_iter().take(3) {
         let func = boundary_func(p, &site.script, site.line);

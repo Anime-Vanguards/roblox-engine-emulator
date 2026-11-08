@@ -8,6 +8,11 @@ casts, emits and sound plays) and a recorder that writes what a script does to t
 scene and a playback [ror](https://github.com/Anime-Vanguards/roblox-object-renderer) draws. The Luau
 runs in an embedded, patched Luau VM (mlua), compiled into the crate.
 
+> [!NOTE]
+> Almost all of the code here was written by AI: Claude, Anthropic's model, at its maintainers' direction. A lot of
+> work went into making it correct, usable and fast for real projects (its behaviour is measured against Roblox Studio
+> and checked by tests and benchmarks), but in the end Claude wrote nearly all of it.
+
 <a href="docs/media/cutscene-1.mp4"><img src="docs/media/cutscene-1.webp" width="100%" alt="A cutscene: a giant winged figure rises over a dark field, a burst of light, and a shockwave rolls over the ground"></a>
 
 A cutscene from a live Roblox game, run offline. The game's own cutscene Luau, unchanged, builds its scene and drives

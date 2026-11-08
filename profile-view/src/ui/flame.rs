@@ -244,6 +244,7 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     if let Frame::Func(func) = node.frame {
         let f = &p.funcs[func as usize];
         let kind = match f.kind {
+            crate::model::Kind::Script if f.harness => "Luau · the harness's code",
             crate::model::Kind::Script => "Luau",
             crate::model::Kind::Engine => "engine Luau",
             crate::model::Kind::C => "C",
