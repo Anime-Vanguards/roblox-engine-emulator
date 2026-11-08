@@ -691,9 +691,12 @@ record/prepare.rs runs prepared ahead by `ree serve`
   or a model, past Folders, Configurations and Accessories; a model's frame is its pivot, a WorldModel's
   or the Workspace's the identity. An attachment under a bone follows the bone's
   TransformedWorldCFrame.
-- **Rigid assemblies** (Roblox's documentation, not measured): Weld, Snap, ManualWeld, Motor, Motor6D
-  (Part0 * C0 * Transform = Part1 * C1) and WeldConstraint carry the parts they join. Each assembly hangs
-  from its root (an anchored part, else by Massless, RootPriority, then the documented size formula). A
+- **Rigid assemblies** (Roblox's documentation; the root measured in a playing client): Weld, Snap, ManualWeld,
+  Motor, Motor6D (Part0 * C0 * Transform = Part1 * C1) and WeldConstraint carry the parts they join. Each assembly
+  hangs from its root, which `BasePart.AssemblyRootPart` reads (nil outside a WorldRoot): an anchored part, else a
+  part that is not Massless, then the higher RootPriority, then the larger largest face (its area, not rounded)
+  times 20 for a Seat or VehicleSeat, 10 for a part named HumanoidRootPart and 5 for one named Torso, then the
+  later made part. A
   part's CFrame write moves its whole assembly rigidly; Position / Orientation / Rotation move the part
   alone and rewrite its joints. Model:PivotTo and ScaleTo write their parts as one batch. After PivotTo a
   model whose pivot is its own (no PrimaryPart) has the target as its pivot exactly, every call, as in a client;

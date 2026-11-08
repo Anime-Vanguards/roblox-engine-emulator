@@ -964,6 +964,124 @@ fn an_anchored_root_stays_and_anchored_parts_do_not_link() {
 /// A pose landing while the rig moves leaves its anchored root where the moves put it: follower
 /// rigs (anchored HumanoidRootPart, Model:PivotTo each frame) whose idle pose was set
 /// a defer after they were built lay on their side.
+/// BasePart.AssemblyRootPart picks the root as a Studio 0.746 playing client does (each line its answer): an anchored part,
+/// else not Massless, the higher RootPriority, the larger largest face (not rounded) times a Seat's, a HumanoidRootPart's
+/// or a Torso's weight, then the later made part; nil outside a WorldRoot.
+#[test]
+fn assembly_root_part_is_the_root_a_playing_client_picks() {
+    check(
+        r#"
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local function Part(Name, Size, Props, Parent)
+            local P = Instance.new((Props and Props.Class) or "Part")
+            P.Name = Name
+            P.Size = Size
+            P.CanCollide = false
+            for Key, Value in Props or {} do
+                if Key ~= "Class" then
+                    P[Key] = Value
+                end
+            end
+            P.Parent = Parent or Folder
+            return P
+        end
+        local function Join(Kind, A, B)
+            local J = Instance.new(Kind)
+            J.Part0, J.Part1 = A, B
+            J.Parent = A
+            return J
+        end
+        local function Root(P)
+            local R = P.AssemblyRootPart
+            return R and R.Name or "nil"
+        end
+        local function Is(Case, A, B, Want)
+            local Got = Root(A) .. " " .. Root(B)
+            assert(Got == Want .. " " .. Want, `{Case}: {Got}, the client's {Want}`)
+        end
+        local Two = Vector3.new(2, 2, 2)
+        -- equal parts: the later made one, whatever the joint's kind and direction
+        for _, Kind in { "Weld", "WeldConstraint", "Motor6D" } do
+            local A, B = Part("A", Two), Part("B", Two)
+            Join(Kind, A, B)
+            Is(Kind, A, B, "B")
+            local C, D = Part("C", Two), Part("D", Two)
+            Join(Kind, D, C)
+            Is(Kind .. " the other way", C, D, "D")
+        end
+        -- the size: the largest face's area, not rounded
+        do
+            local A, B = Part("Cube4", Vector3.new(4, 4, 4)), Part("Rod10", Vector3.new(10, 1, 1))
+            Join("Weld", B, A)
+            Is("a cube and a longer rod", A, B, "Cube4")
+            local C, D = Part("Cube3", Vector3.new(3, 3, 3)), Part("Slab", Vector3.new(4, 4, 0.5))
+            Join("Weld", C, D)
+            Is("a cube and a wider slab", C, D, "Slab")
+            local E, F = Part("Older", Vector3.new(4, 4.0001, 1)), Part("Newer", Vector3.new(4, 4, 1))
+            Join("Weld", E, F)
+            Is("a face 0.0004 larger", E, F, "Older")
+        end
+        -- Massless, RootPriority, then the names' and seats' weights (each at the plate it beats and the one it ties)
+        do
+            local A, B = Part("Big", Vector3.new(6, 6, 6), { Massless = true }), Part("Small", Two)
+            Join("Weld", A, B)
+            Is("massless", A, B, "Small")
+            local C, D = Part("Big", Vector3.new(6, 6, 6)), Part("Small", Two, { RootPriority = 1 })
+            Join("Weld", C, D)
+            Is("root priority", C, D, "Small")
+        end
+        for _, Case in {
+            { "HumanoidRootPart", "Part", 9.9, "HumanoidRootPart" },
+            { "HumanoidRootPart", "Part", 10, "Plate" },
+            { "Torso", "Part", 4.9, "Torso" },
+            { "Torso", "Part", 5, "Plate" },
+            { "Seat", "Seat", 19.9, "Seat" },
+            { "VehicleSeat", "VehicleSeat", 20, "Plate" },
+            { "Head", "Part", 1.1, "Plate" },
+        } do
+            local A, B = Part(Case[1], Vector3.new(1, 1, 1), { Class = Case[2] }), Part("Plate", Vector3.new(Case[3], 1, 0.1))
+            Join("Weld", A, B)
+            Is(`{Case[1]} and a plate of {Case[3]}`, A, B, Case[4])
+        end
+        -- anchored parts are their own roots
+        do
+            local A, B = Part("Big", Vector3.new(6, 6, 6)), Part("Small", Two, { Anchored = true })
+            Join("Weld", A, B)
+            Is("an anchored part", A, B, "Small")
+            local C, D = Part("C", Two, { Anchored = true }), Part("D", Vector3.new(4, 4, 4), { Anchored = true })
+            Join("Weld", C, D)
+            assert(Root(C) == "C" and Root(D) == "D", "two anchored parts")
+        end
+        -- a thrown rock and the glow cloned onto it: the glow while free, the rock while held
+        do
+            local Rock = Part("Rock", Vector3.new(1, 1, 1))
+            local Glow = Rock:Clone()
+            Glow.Name = "Glow"
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1 = Glow, Rock
+            W.Parent = Glow
+            Glow.Parent = Rock
+            Is("the glow", Rock, Glow, "Glow")
+            Rock.Anchored = true
+            Is("the rock held", Rock, Glow, "Rock")
+            Rock.Anchored = false
+            Is("the rock let go", Rock, Glow, "Glow")
+        end
+        -- outside a WorldRoot: nil; a disabled weld joins nothing
+        do
+            local Storage = game:GetService("ReplicatedStorage")
+            local A, B = Part("A", Two, nil, Storage), Part("B", Vector3.new(4, 4, 4), nil, Storage)
+            Join("Weld", A, B)
+            assert(A.AssemblyRootPart == nil and B.AssemblyRootPart == nil and Instance.new("Part").AssemblyRootPart == nil, "outside the Workspace")
+            local C, D = Part("C", Two), Part("D", Vector3.new(4, 4, 4))
+            Join("Weld", C, D).Enabled = false
+            assert(Root(C) == "C" and Root(D) == "D", "a disabled weld")
+        end
+        "#,
+    );
+}
+
 #[test]
 fn an_anchored_root_stays_when_a_pose_lands_while_it_moves() {
     check_running(
