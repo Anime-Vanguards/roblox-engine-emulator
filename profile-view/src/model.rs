@@ -471,12 +471,70 @@ pub struct CounterLine {
 pub struct Counters {
     pub source: String,
     pub names: Vec<String>,
+    /// What each counter counts (a profile from before the field: none)
+    pub about: Vec<Option<String>>,
     pub error: Option<String>,
     pub notes: Vec<String>,
+    /// Seconds captured before the service reached its slice limit
+    pub cut_short: Option<f64>,
+    /// How counts reached functions: `{"method": "calls", "version": 2, ...}` from readings around sampled calls (a
+    /// line's figures are then what the calls made from it cost; no version: one call drawn of each run of calls, and
+    /// threads' switches not read); none for a profile from before, whose stacks are 1 ms samples'
+    pub attribution: Option<serde_json::Value>,
     pub run: CounterRun,
     pub frames: Columns,
     pub functions: Vec<CounterFunction>,
     pub lines: Vec<CounterLine>,
+}
+
+impl Counters {
+    /// Old counter names as the names they have now (hw_counters::OLD_NAMES): a profile from before the fill counters
+    /// were named for what they count opens with the names a new one has, so the views, the metric switch and a diff
+    /// between the two match them
+    pub fn normalize(&mut self) {
+        let renamed = |name: &str| crate::hw_counters::canonical(name).to_string();
+        let map = |map: &mut BTreeMap<String, f64>| *map = std::mem::take(map).into_iter().map(|(name, value)| (renamed(&name), value)).collect();
+        for name in &mut self.names {
+            *name = renamed(name);
+        }
+        map(&mut self.run.counts);
+        for column in &mut self.frames.columns {
+            *column = renamed(column);
+        }
+        for row in &mut self.functions {
+            map(&mut row.own);
+            map(&mut row.total);
+        }
+        for row in &mut self.lines {
+            map(&mut row.own);
+            map(&mut row.total);
+        }
+    }
+
+    /// Whether counts reached functions from readings around sampled calls (a line's figures then being its calls')
+    pub fn by_calls(&self) -> bool {
+        self.attribution.as_ref().is_some_and(|attribution| attribution["method"] == "calls")
+    }
+
+    /// How counts reached functions, in words (the Compare view says when two profiles differ)
+    pub fn attribution_text(&self) -> &'static str {
+        let attribution = self.attribution.as_ref();
+        match (attribution.and_then(|a| a["method"].as_str()), attribution.and_then(|a| a["version"].as_u64())) {
+            (Some("calls"), Some(2..)) => "readings around sampled calls, each drawn on its own, and where threads switch",
+            (Some("calls"), _) => "readings around sampled calls, one drawn of each run of calls, threads' switches not read",
+            _ => "1 ms samples, each booked to the stack the next reading found",
+        }
+    }
+
+    /// What a counter counts, one line
+    pub fn about_of(&self, index: usize) -> Option<String> {
+        self.about.get(index).cloned().flatten().or_else(|| self.names.get(index).and_then(|name| crate::hw_counters::known(name)).map(|known| known.about.to_string()))
+    }
+
+    /// The derived figures of a function's or a stretch's counts, in `names` order (hw_counters::figures)
+    pub fn figures(&self, counts: &[f64]) -> Vec<crate::hw_counters::Figure> {
+        crate::hw_counters::figures(&self.names, counts)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -749,7 +807,12 @@ impl Profile {
                 }
                 if let Ok(text) = std::fs::read_to_string(dir.join(&name)) {
                     let folded = profile.parse_folded(&text);
-                    profile.folded.insert(stem.to_string(), folded);
+                    // (a counter's file under its old name is its new name's: Counters::normalize)
+                    let stem = match stem.strip_prefix("counters.") {
+                        Some(counter) => format!("counters.{}", crate::hw_counters::canonical(counter)),
+                        None => stem.to_string(),
+                    };
+                    profile.folded.insert(stem, folded);
                 }
             }
         }
@@ -765,6 +828,9 @@ impl Profile {
     pub fn from_raw(dir: PathBuf, mut raw: Raw) -> Profile {
         if raw.ree_caches.is_none() {
             raw.ree_caches = raw.emulator.as_ref().map(|emulator| emulator.caches.clone());
+        }
+        if let Some(counters) = raw.counters.as_mut() {
+            counters.normalize();
         }
         let mut profile = Profile {
             dir,
@@ -875,10 +941,13 @@ impl Profile {
                     counter_funcs.insert(func, (read(&row.own), read(&row.total)));
                 }
             }
+            // (from readings around sampled calls a line's own code is its function's: its figure is what the calls made
+            // from it cost; from 1 ms samples, what the samples there booked)
+            let by_calls = c.by_calls();
             for row in &c.lines {
                 let Some(func) = self.func_of_id(row.function) else { continue };
                 let fig = lines.entry((func, row.line)).or_insert_with(blank);
-                for (slot, value) in fig.counters.iter_mut().zip(read(&row.own)) {
+                for (slot, value) in fig.counters.iter_mut().zip(read(if by_calls { &row.total } else { &row.own })) {
                     *slot += value;
                 }
             }

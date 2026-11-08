@@ -191,6 +191,11 @@ pub fn phase_color(order: &[u32], phase: u32, theme: &Theme) -> Color {
 
 /// A timeline column's unit
 pub fn unit_of(column: &str) -> Unit {
+    match column.strip_prefix("hw:") {
+        Some(crate::hw_counters::LOAD_STALL_SHARE) => return Unit::Share,
+        Some("IPC" | crate::hw_counters::STALL_PER_THOUSAND) => return Unit::Decimal,
+        _ => {}
+    }
     if column.ends_with("_ms") {
         Unit::Ms
     } else if column.contains("bytes") || column == "gc_freed" {
@@ -398,8 +403,21 @@ fn cards(buf: &mut Buffer, area: Rect, p: &Profile, split: Option<&(f64, f64, Sc
         }
         cards.push(("collector".into(), format!("{} cycles", fmt::grouped(heap.gc.cycles)), dim(format!("{} steps", fmt::grouped(heap.gc.steps))), None));
     }
+    // the CPU's counters: what memory cost the run thread (the share of its cycles stalled on loads, a miss's latency),
+    // then IPC; derived from the run's counts, so a profile from before the stall counters gets what its counts allow
     if let Some(c) = p.raw.counters.as_ref().filter(|c| c.error.is_none()) {
-        if let Some(ipc) = c.run.rates.get("IPC") {
+        let counts: Vec<f64> = c.names.iter().map(|name| c.run.counts.get(name).copied().unwrap_or(0.0)).collect();
+        let figures = c.figures(&counts);
+        let get = |key: &str| figures.iter().find(|figure| figure.key == key).map(|figure| figure.value);
+        if let Some(share) = get(crate::hw_counters::LOAD_STALL_SHARE) {
+            let per = get(crate::hw_counters::STALL_PER_THOUSAND).map_or_else(String::new, |per| format!("{} a 1000 instr", fmt::decimal(per)));
+            cards.push(("stalled on loads".into(), fmt::percent(share), dim(per.clone()), Some((share.clamp(0.0, 1.0), format!("of cycles · {per}"), theme.slot(1)))));
+        }
+        if let Some(latency) = get(crate::hw_counters::MISS_LATENCY) {
+            let overlap = get(crate::hw_counters::MISSES_OUTSTANDING).map_or_else(String::new, |outstanding| format!("{} outstanding a cycle", fmt::decimal(outstanding)));
+            cards.push(("a miss".into(), format!("{latency:.0} cycles"), dim(overlap), None));
+        }
+        if let Some(ipc) = get("IPC").or_else(|| c.run.rates.get("IPC").copied()) {
             cards.push(("IPC".into(), format!("{ipc:.2}"), dim("instructions a cycle".into()), None));
         }
     }

@@ -488,15 +488,21 @@ unsafe extern "C-unwind" fn allocating(state: *mut mlua::ffi::lua_State, _block:
 /// (the same time with no springs and no enemies), and a recorder's walk the first handler's loop line. Luau a step
 /// runs is booked as its own (the VM's enter and leave hook).
 pub fn engine_step<R>(name: &str, step: impl FnOnce() -> R) -> R {
+    // (the hardware counters' readings around the step, whether host time is sampled or not: its counts are its own)
+    let counted = crate::profiler::hw_step(Some(name));
+    let result = timed_engine_step(name, step);
+    if counted {
+        crate::profiler::hw_step(None);
+    }
+    result
+}
+
+/// [`engine_step`]'s host time: a frame of its own for the step in the samples
+fn timed_engine_step<R>(name: &str, step: impl FnOnce() -> R) -> R {
     if SUITE_TIME.load(Ordering::Relaxed) {
-        // (the hardware counters' readings around the step: its counts are its own)
-        let counted = crate::profiler::hw_step(Some(name));
         crate::profiler::time_step(Some(name));
         let result = step();
         crate::profiler::time_step(None);
-        if counted {
-            crate::profiler::hw_step(None);
-        }
         return result;
     }
     if !ENABLED.load(Ordering::Relaxed) || WORK_CLOCK.load(Ordering::Relaxed) {

@@ -432,6 +432,31 @@ const BuiltinShape kBuiltins[] = {
 const int kBuiltinCount = int(sizeof(kBuiltins) / sizeof(kBuiltins[0]));
 static_assert(sizeof(kBuiltins) / sizeof(kBuiltins[0]) == LBF_TABLE_CLEAR + 1, "a builtin shape for each LBF_* id, in order");
 
+// a function's calls as the call hook samples them: each with a chance of one in `every`; with `every` 0 none, and one
+// call after every `remeasure` read for its length alone (`left` of those calls still to come). `open` of its sampled
+// calls have not returned (on any thread: lua_ProfileState::callopen), and `nestedleft` more calls inside the sampled
+// one a recursion began with may be sampled with it
+struct CallSample
+{
+    int every = 1;
+    int remeasure = 0;
+    int left = 0;
+    int open = 0;
+    int nestedleft = 0;
+};
+
+// the calls inside a sampled call of their own function sampled with it, at most (then they are drawn again)
+const int kNestedReads = 64;
+
+// whether a sampled call of `p` is open below `ci` on L: `ci` is a recursion's inner call
+static bool insampledcall(lua_State* L, CallInfo* ci, Proto* p)
+{
+    for (CallInfo* c = ci - 1; c >= L->base_ci; --c)
+        if ((c->flags & LUA_CALLINFO_PROFILECALL) && c->p == p)
+            return true;
+    return false;
+}
+
 } // namespace
 
 struct lua_ProfileState
@@ -527,6 +552,14 @@ struct lua_ProfileState
     // the interpreter entered and left (lua_setprofilevm)
     void (*vm)(void* ud, lua_State* L, int entered) = NULL;
     void* vmud = NULL;
+    // the host's hook around the calls it samples (lua_setprofilecalls), and each function's sampling, by function id
+    void (*callhook)(void* ud, lua_State* L, int event, int function, int every, int depth) = NULL;
+    void* callud = NULL;
+    std::vector<CallSample> callsamples;
+    uint64_t callrandom = 0x9e3779b97f4a7c15ull;
+    // each thread's open sampled calls (their functions, innermost last): a thread that goes (an error ended it, it was
+    // reset or freed) gives them up, so a function's count of open sampled calls stays true
+    std::unordered_map<lua_State*, std::vector<int>> callopen;
 };
 
 static lua_ProfileState* stateof(lua_State* L)
@@ -2034,6 +2067,16 @@ void luaP_threadgone(lua_State* L, lua_State* L1)
         if (s->namecalls[i].L == L1)
             s->namecalls.erase(s->namecalls.begin() + i);
     s->threads.erase(L1);
+    // (a freed thread's sampled calls are gone without a word: their functions' counts give them up; a reset one's left
+    // first, lua_resetthread)
+    auto open = s->callopen.find(L1);
+    if (open != s->callopen.end())
+    {
+        for (int id : open->second)
+            if (size_t(id) < s->callsamples.size() && s->callsamples[id].open > 0)
+                s->callsamples[id].open--;
+        s->callopen.erase(open);
+    }
 }
 
 void luaP_freed(lua_State* L, GCObject* o)
@@ -2183,7 +2226,117 @@ void lua_profilefree(lua_State* L)
     if (!s)
         return;
     luaP_state = NULL;
+    s->g->profilecalls = 0;
     delete s;
+}
+
+void lua_setprofilecalls(lua_State* L, void (*hook)(void* ud, lua_State* L, int event, int function, int every, int depth), void* ud)
+{
+    lua_ProfileState* s = stateof(L);
+    if (!s)
+        return;
+    s->callhook = hook;
+    s->callud = ud;
+    s->g->profilecalls = hook != NULL;
+}
+
+void lua_setprofilecallevery(lua_State* L, int function, int every, int remeasure)
+{
+    lua_ProfileState* s = stateof(L);
+    if (!s || function < 0)
+        return;
+    if (size_t(function) >= s->callsamples.size())
+        s->callsamples.resize(size_t(function) + 1);
+    CallSample& sample = s->callsamples[function];
+    sample.every = every < 0 ? 0 : every;
+    sample.remeasure = remeasure < 0 ? 0 : remeasure;
+    sample.left = sample.remeasure;
+}
+
+void luaP_callenter(lua_State* L)
+{
+    CallInfo* ci = L->ci;
+    Proto* p = ci->p;
+    lua_ProfileState* s = stateof(L);
+    // (native code returns without the interpreter's RETURN: its calls are not sampled; a call's frame has the native flag
+    // only once its NATIVECALL runs, so the function is asked)
+    if (!s || !s->callhook || (ci->flags & LUA_CALLINFO_NATIVE) || (p->exectarget != 0 && p->execdata))
+        return;
+    int id = functionof(s, p);
+    if (size_t(id) >= s->callsamples.size())
+        s->callsamples.resize(size_t(id) + 1);
+    CallSample& sample = s->callsamples[id];
+    int every = sample.every;
+    if (every > 1 && sample.open > 0 && sample.nestedleft > 0 && insampledcall(L, ci, p))
+    {
+        // inside a sampled call of its own function on this thread: sampled with it (a chance of 1, which the hook is
+        // told), so a recursion's estimate is as steady as its outermost call's instead of noisier with every level
+        sample.nestedleft--;
+        every = 1;
+    }
+    else if (every <= 0)
+    {
+        // none sampled: one call after every `remeasure` read around for its length alone
+        if (sample.remeasure <= 0 || --sample.left > 0)
+            return;
+        sample.left = sample.remeasure;
+        every = 0;
+    }
+    else if (every > 1)
+    {
+        // each call drawn on its own (xorshift64): a call nested in another of its function is as likely as any
+        uint64_t x = s->callrandom;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s->callrandom = x;
+        if ((x >> 11) % uint64_t(every) != 0)
+            return;
+        // (the outermost sampled call of its function on this thread: the calls of it inside may be read with it; a
+        // call on another thread, or one a dead thread left open, does not hold the budget back)
+        if (sample.open == 0 || !insampledcall(L, ci, p))
+            sample.nestedleft = kNestedReads;
+    }
+    sample.open++;
+    s->callopen[L].push_back(id);
+    ci->flags |= LUA_CALLINFO_PROFILECALL;
+    // (the frame's first instruction: the hook may read the stack, this frame's line included)
+    ci->savedpc = p->code;
+    s->callhook(s->callud, L, LUA_PROFILECALL_ENTER, id, every, int(ci - L->base_ci));
+}
+
+void luaP_callleave(lua_State* L, CallInfo* ci)
+{
+    ci->flags &= ~LUA_CALLINFO_PROFILECALL;
+    lua_ProfileState* s = stateof(L);
+    if (!s)
+        return;
+    int id = functionof(s, ci->p);
+    // (leaves come innermost first: the thread's last open call, unless the hook was set while calls were open)
+    auto open = s->callopen.find(L);
+    if (open != s->callopen.end())
+    {
+        std::vector<int>& calls = open->second;
+        for (size_t i = calls.size(); i-- > 0;)
+            if (calls[i] == id)
+            {
+                calls.erase(calls.begin() + i);
+                if (size_t(id) < s->callsamples.size() && s->callsamples[id].open > 0)
+                    s->callsamples[id].open--;
+                break;
+            }
+        if (calls.empty())
+            s->callopen.erase(open);
+    }
+    if (s->callhook)
+        s->callhook(s->callud, L, LUA_PROFILECALL_LEAVE, id, 0, int(ci - L->base_ci));
+}
+
+void luaP_callsunwound(lua_State* L, CallInfo* to)
+{
+    for (CallInfo* ci = L->ci; ci > to; --ci)
+        if (ci->flags & LUA_CALLINFO_PROFILECALL)
+            luaP_callleave(L, ci);
 }
 
 int lua_profilestack(lua_State* L, int* functions, int* lines, int max)

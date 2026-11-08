@@ -970,9 +970,10 @@ fn stacks_and_types_intern_once() {
 }
 
 /// Hardware counters (`hw`) with the mock source (each reading takes the thread's cycle count, QueryThreadCycleTime,
-/// and the other counters are fixed shares of it): every window between readings is booked once, so the run's cycles
-/// are the thread's own cycles between its start and end readings, inside what the test reads around the profile; the
-/// phases and the stacks add up to the run exactly, every frame has its row, and the busy function holds most of it.
+/// and the other counters are fixed shares of it): every window between readings is booked once, a reading's own counts
+/// taken out, so the run's cycles are the thread's own cycles between its start and end readings, inside what the test
+/// reads around the profile; the VM's hook reads around the Luau calls it samples, and the phases and the functions add
+/// up to the run exactly, every frame has its row, and the busy function holds most of it.
 #[test]
 fn hardware_counters_are_booked_to_the_run_its_phases_frames_and_stacks() {
     let _lock = lock();
@@ -1011,7 +1012,12 @@ fn hardware_counters_are_booked_to_the_run_its_phases_frames_and_stacks() {
     assert_eq!(counters["run"]["counts"]["instructions"].as_u64().unwrap(), 2 * cycles, "the mock's instructions are twice its cycles, window by window");
     assert_eq!(counters["run"]["rates"]["IPC"].as_f64().unwrap(), 2.0);
     assert_eq!(counters["readings"]["matched"], counters["readings"]["count"], "every reading has its switch");
-    assert!(counters["readings"]["samples"].as_u64().unwrap() >= 20, "a sample a millisecond: {}", counters["readings"]);
+    assert_eq!(counters["attribution"]["method"], "calls");
+    assert!(counters["attribution"]["calls"].as_u64().unwrap() >= 20, "the VM's hook read around its calls: {}", counters["attribution"]);
+    assert!(counters["readings"]["taken_out"].as_bool().unwrap(), "a reading's own counts come out of the run's");
+    // the cost figures: the mock's stall cycles are a quarter of its cycles
+    let share = counters["run"]["rates"]["load stall share"].as_f64().unwrap();
+    assert!((share - 0.25).abs() < 0.01, "{share}");
     // the phases add up to the run
     let phases = counters["phases"].as_array().unwrap();
     assert_eq!(phases.iter().map(|phase| phase["counts"]["cycles"].as_u64().unwrap()).sum::<u64>(), cycles);
@@ -1023,15 +1029,492 @@ fn hardware_counters_are_booked_to_the_run_its_phases_frames_and_stacks() {
     assert_eq!(rows.len(), 10);
     assert!(rows.iter().all(|row| row[column].as_u64().unwrap() > 0), "{rows:?}");
     assert!(rows.iter().map(|row| row[column].as_u64().unwrap()).sum::<u64>() < cycles);
-    // every count is some frame's self: the stacks add up to the run, and the busy function holds most of it
+    // every count is some function's own: the functions add up to the run (an estimate may be below zero for one), and
+    // the busy function holds most of it
     let functions = counters["functions"].as_array().unwrap();
-    assert_eq!(functions.iter().map(|f| f["self"]["cycles"].as_u64().unwrap()).sum::<u64>(), cycles, "{summary}");
+    assert_eq!(functions.iter().map(|f| f["self"]["cycles"].as_i64().unwrap()).sum::<i64>(), cycles as i64, "{summary}");
     let spin = functions.iter().find(|f| f["name"].as_str().is_some_and(|name| name.ends_with("spin"))).unwrap_or_else(|| panic!("{summary}"));
-    assert!(spin["self"]["cycles"].as_u64().unwrap() as f64 >= 0.5 * cycles as f64, "{spin}\n{summary}");
+    assert!(spin["self"]["cycles"].as_i64().unwrap() as f64 >= 0.5 * cycles as f64, "{spin}\n{summary}");
+    assert!(spin["self_rates"]["load stall share"].as_f64().is_some(), "{spin}");
     assert!(functions.iter().any(|f| f["kind"] == "engine step"), "the engine's own steps have frames of their own");
+    // (the folded file leaves out a stack whose estimate fell below zero)
     let folded_total: u64 = folded.lines().map(|line| line.rsplit(' ').next().unwrap().parse::<u64>().unwrap()).sum();
-    assert_eq!(folded_total, cycles, "the folded stacks hold the run");
-    assert!(summary.contains("hardware counters") && summary.contains("IPC 2.00"), "{summary}");
+    assert!((folded_total as f64 - cycles as f64).abs() <= 0.01 * cycles as f64, "the folded stacks hold the run: {folded_total} of {cycles}");
+    // the call sites: what the calls made from a line cost, the line that calls spin among them
+    let lines = counters["lines"].as_array().unwrap();
+    assert!(lines.iter().all(|line| line["calls"] == true && line["self"].as_object().is_some_and(|own| own.is_empty())), "{lines:?}");
+    assert!(lines.iter().any(|line| line["total"]["cycles"].as_i64().unwrap_or(0) as f64 >= 0.5 * cycles as f64), "the line that calls spin: {lines:?}");
+    assert!(summary.contains("hardware counters") && summary.contains("IPC 2.00") && summary.contains("memory: 25.0 %"), "{summary}");
+}
+
+/// Calls shorter than the shortest sampled are read around only until their function's first calls measured them, and
+/// then one now and then (less often each time): a script calling a tiny function a hundred thousand times takes a few
+/// readings for it, not one a call, and the tiny function's counts are all its caller's, those first calls' too
+#[test]
+fn hardware_counters_leave_short_calls_to_their_callers() {
+    let _lock = lock();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::HW, temp_dir("hw-short")) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    run(&lua, &engine, "tiny", "local M = {}
+function M.tiny(x)
+	return x + 1
+end
+local total = 0
+for i = 1, 100000 do
+	total = M.tiny(total)
+end
+result = total
+");
+    profiler::collect(&lua);
+    let summary = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(None));
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let attribution = &json["counters"]["attribution"];
+    let calls = attribution["calls"].as_u64().unwrap();
+    // (its first 4 calls, then one after 64, 128, ... 65,536 more: 4 + 10 by the hundred thousandth, and the chunk's)
+    assert!((14..=20).contains(&calls), "a hundred thousand tiny calls read around {calls} times: {attribution}
+{summary}");
+    assert!(attribution["unsampled_functions"].as_u64().unwrap() >= 1, "{attribution}");
+    assert!(attribution["calls_booked_to_callers"].as_u64().unwrap() >= 14, "every read of the tiny function is its caller's: {attribution}");
+    let functions = json["counters"]["functions"].as_array().unwrap();
+    assert!(functions.iter().all(|f| !f["name"].as_str().is_some_and(|name| name.ends_with("tiny")) || f["self"]["cycles"].as_i64() == Some(0)), "{summary}");
+}
+
+/// Runs `source` (a chunk named `name`) under the mock counters (each reading takes the thread's cycle count, so the
+/// booking splits real cycles), then `frames` frames: each function's own cycles by name, the attribution, the summary
+fn booked_cycles(name: &str, source: &str, frames: usize) -> (std::collections::HashMap<String, f64>, serde_json::Value, String) {
+    let _lock = lock();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(Kinds::HW, temp_dir(name)) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    run(&lua, &engine, name, source);
+    for _ in 0..frames {
+        scheduler::step(&lua, &engine, Some(1.0 / 60.0)).unwrap();
+    }
+    profiler::collect(&lua);
+    let summary = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), frames: frames as u64, ..Default::default() }).unwrap();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(None));
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    let mut own: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for function in json["counters"]["functions"].as_array().unwrap() {
+        let name = function["name"].as_str().unwrap_or("").rsplit(['.', ':']).next().unwrap_or("").to_string();
+        *own.entry(name).or_default() += function["self"]["cycles"].as_f64().unwrap_or(0.0);
+    }
+    (own, json["counters"]["attribution"].clone(), summary)
+}
+
+/// A function calling itself four deep, its calls sampled one in several: each call is drawn on its own, so the
+/// function's own cycles are its calls' (the caller's loop keeps next to nothing), not the bias one draw for each run of
+/// calls gave (the nested call and its caller never sampled together)
+#[test]
+fn hardware_counters_book_a_recursive_function_its_own() {
+    let (own, attribution, summary) = booked_cycles(
+        "rec",
+        "local work = {}
+function work.f(n, k)
+	if n > 0 then
+		work.f(n - 1, k)
+	end
+	local x = 0
+	for i = 1, k do
+		x += i % 7
+	end
+	return x
+end
+local function main()
+	local total = 0
+	for round = 1, 3000 do
+		total += work.f(3, 3000)
+	end
+	return total
+end
+result = main()
+",
+        0,
+    );
+    let (f, main) = (own.get("f").copied().unwrap_or(0.0), own.get("main").copied().unwrap_or(0.0));
+    let calls = attribution["calls"].as_u64().unwrap();
+    assert!(calls < 9000, "f's 12,000 calls sampled one in several: {calls} read\n{summary}");
+    assert!(f > 0.0 && main > -0.05 * f && main < 0.05 * f, "f {f}, its caller's loop {main}\n{summary}");
+}
+
+/// A coroutine's body runs between the readings where it resumes and yields: its loop is its own, as the same loop in
+/// a function called beside it is that function's, and the code resuming it keeps next to nothing
+#[test]
+fn hardware_counters_book_a_coroutine_its_own() {
+    let (own, attribution, summary) = booked_cycles(
+        "co",
+        "local work = {}
+function work.compute(n)
+	local x = 0
+	for i = 1, n do
+		x += i % 7
+	end
+	return x
+end
+local function generator(n)
+	while true do
+		local x = 0
+		for i = 1, n do
+			x += i % 7
+		end
+		n = coroutine.yield(x)
+	end
+end
+local body = coroutine.wrap(generator)
+local function main()
+	local total = 0
+	for round = 1, 600 do
+		total += body(8000)
+		total += work.compute(8000)
+	end
+	return total
+end
+result = main()
+",
+        0,
+    );
+    let (generator, compute, main) = (own.get("generator").copied().unwrap_or(0.0), own.get("compute").copied().unwrap_or(0.0), own.get("main").copied().unwrap_or(0.0));
+    assert!(attribution["switch_readings"].as_u64().unwrap() >= 1000, "a reading where the coroutine resumes and yields: {attribution}");
+    assert!(compute > 0.0 && (generator / compute - 1.0).abs() < 0.25, "the coroutine's loop {generator}, the same loop called {compute}\n{summary}");
+    assert!(main.abs() < 0.15 * compute, "the code resuming it {main}\n{summary}");
+}
+
+/// Two threads the engine resumes each frame, one running its loop inline, one calling a function with the same loop:
+/// each thread's stretch is its own, whichever thread's reading closed it
+#[test]
+fn hardware_counters_book_each_thread_its_own() {
+    let (own, attribution, summary) = booked_cycles(
+        "task",
+        "local work = {}
+function work.compute(n)
+	local x = 0
+	for i = 1, n do
+		x += i % 7
+	end
+	return x
+end
+local function inlineLoop()
+	while true do
+		local x = 0
+		for i = 1, 30000 do
+			x += i % 7
+		end
+		task.wait()
+	end
+end
+local function callingLoop()
+	while true do
+		work.compute(30000)
+		task.wait()
+	end
+end
+task.spawn(inlineLoop)
+task.spawn(callingLoop)
+",
+        60,
+    );
+    let (inline, calling, compute) = (own.get("inlineLoop").copied().unwrap_or(0.0), own.get("callingLoop").copied().unwrap_or(0.0), own.get("compute").copied().unwrap_or(0.0));
+    assert!(attribution["switch_readings"].as_u64().unwrap() >= 200, "{attribution}");
+    assert!(compute > 0.0 && (inline / compute - 1.0).abs() < 0.25, "the inline loop {inline}, the called one {compute}\n{summary}");
+    assert!(calling.abs() < 0.15 * compute, "the calling thread's own {calling}\n{summary}");
+}
+
+/// A function whose first call is short and the rest long is sampled from its first calls on (one short call decides
+/// nothing); one whose first calls are all short is measured again and sampled once its calls grew
+#[test]
+fn hardware_counters_sample_a_function_whose_first_calls_were_short() {
+    let source = |short: usize| {
+        format!(
+            "local work = {{}}
+function work.process(n)
+	local x = 0
+	for i = 1, n do
+		x += i % 7
+	end
+	return x
+end
+local function main()
+	local total = 0
+	for i = 1, {short} do
+		total += work.process(10)
+	end
+	for round = 1, 300 do
+		total += work.process(30000)
+	end
+	return total
+end
+result = main()
+"
+        )
+    };
+    let (own, _, summary) = booked_cycles("sticky", &source(1), 0);
+    let (process, main) = (own.get("process").copied().unwrap_or(0.0), own.get("main").copied().unwrap_or(0.0));
+    assert!(process > 0.0 && main.abs() < 0.05 * process, "one short call first: process {process}, its caller {main}\n{summary}");
+    // (ten short calls: none sampled after the fourth; the 64th call after it is measured, long, and sampling resumes)
+    let (own, _, summary) = booked_cycles("sticky-10", &source(10), 0);
+    let (process, main) = (own.get("process").copied().unwrap_or(0.0), own.get("main").copied().unwrap_or(0.0));
+    assert!(process > 0.6 * (process + main), "ten short calls first: process {process}, its caller {main}\n{summary}");
+}
+
+/// A function long at first and short later keeps its long calls: whether its first calls are its callers' is decided
+/// when its fourth is measured, not by how it is sampled at the run's end (two long builds then 20,000 tiny calls lost
+/// both builds to the caller)
+#[test]
+fn hardware_counters_keep_a_functions_long_first_calls_when_it_shrinks() {
+    let source = |tiny: usize| {
+        format!(
+            "local work = {{}}
+function work.build(n)
+	local x = 0
+	for i = 1, n do
+		x += i % 7
+	end
+	return x
+end
+function work.main()
+	local total = work.build(600000) + work.build(600000)
+	for _ = 1, {tiny} do
+		total += work.build(1)
+	end
+	return total
+end
+result = work.main()
+"
+        )
+    };
+    let (alone, _, _) = booked_cycles("shrink-alone", &source(0), 0);
+    let (shrunk, attribution, summary) = booked_cycles("shrink", &source(20_000), 0);
+    // (the mock's cycles are the thread's own, which move a quarter from run to run on a busy machine; decided at the
+    // run's end, the function kept none of them)
+    let (builds, kept) = (alone.get("build").copied().unwrap_or(0.0), shrunk.get("build").copied().unwrap_or(0.0));
+    assert!(builds > 0.0 && kept > 0.5 * builds, "the two builds: {builds} alone, {kept} before 20,000 tiny calls\n{summary}");
+    assert!(attribution["unsampled_functions"].as_u64().unwrap() >= 1, "by the end it is too short to sample: {attribution}");
+}
+
+/// Threads that died by an error inside sampled calls of a recursive function, or were closed there, give those calls
+/// up: the recursion's inner calls are still read with their sampled outer one afterwards (the function's count of open
+/// sampled calls had stayed up, the nested reads stopped, and the caller's share swung by tens of percent)
+#[test]
+fn hardware_counters_read_recursion_whole_after_threads_died_in_it() {
+    let source = |before: &str| {
+        format!(
+            "local work = {{}}
+function work.f(depth, n, fail)
+	if depth > 0 then
+		work.f(depth - 1, n, fail)
+	end
+	local x = 0
+	for i = 1, n do
+		x += i % 7
+	end
+	if fail == \"error\" and depth == 0 then
+		error(\"down\")
+	elseif fail == \"yield\" and depth == 0 then
+		coroutine.yield()
+	end
+	return x
+end
+function work.main()
+	local total = 0
+	for _ = 1, 3000 do
+		total += work.f(3, 3000)
+	end
+	return total
+end
+{before}
+result = work.main()
+"
+        )
+    };
+    let (_, clean, _) = booked_cycles("rec-clean", &source(""), 0);
+    let died = "for _ = 1, 3 do\n\tcoroutine.resume(coroutine.create(function()\n\t\twork.f(3, 3000, \"error\")\n\tend))\nend";
+    let closed = "for _ = 1, 3 do\n\tlocal co = coroutine.create(function()\n\t\twork.f(3, 3000, \"yield\")\n\tend)\n\tcoroutine.resume(co)\n\tcoroutine.close(co)\nend";
+    for (name, before) in [("rec-died", died), ("rec-closed", closed)] {
+        let (own, after, summary) = booked_cycles(name, &source(before), 0);
+        let (calls_clean, calls_after) = (clean["calls"].as_u64().unwrap() as f64, after["calls"].as_u64().unwrap() as f64);
+        assert!(calls_after > 0.7 * calls_clean, "{name}: calls read {calls_after}, {calls_clean} without\n{summary}");
+        let (f, main) = (own.get("f").copied().unwrap_or(0.0), own.get("main").copied().unwrap_or(0.0));
+        assert!(f > 0.0 && main.abs() < 0.06 * f, "{name}: f {f}, its caller {main}\n{summary}");
+    }
+}
+
+/// Runs `script` under a profile of `kinds` whose hardware counters are the mock's, and returns the script's output with
+/// the `attribution` the profile's counters section reports
+fn run_with_mock_counters(kinds: Kinds, script: &str) -> (Vec<String>, serde_json::Value) {
+    let _lock = lock();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
+    let (lua, engine) = start();
+    let config = Config { print: false, ..Config::new(kinds, temp_dir("same")) };
+    let session = profiler::Session::begin(config.clone());
+    crate::luau_profile::install(&lua);
+    let output = run(&lua, &engine, "same", script);
+    profiler::collect(&lua);
+    let run_result = profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() };
+    let _ = session.finish(run_result).unwrap();
+    profiler::hw::TEST_MODE.with(|mode| mode.set(None));
+    let profile_json = std::fs::read_to_string(config.out.join("profile.json")).unwrap();
+    let profile: serde_json::Value = serde_json::from_str(&profile_json).unwrap();
+    let _ = std::fs::remove_dir_all(&config.out);
+    (output, profile["counters"]["attribution"].clone())
+}
+
+/// The interpreter's copy that samples calls (which runs while the counters' hook is set) computes what the plain copy
+/// does: the same script, the same output, with and without the hook
+#[test]
+fn the_interpreter_that_samples_calls_computes_what_the_plain_one_does() {
+    let script = "local out = {}
+local function emit(...)
+	local parts = table.pack(...)
+	for i = 1, parts.n do
+		parts[i] = tostring(parts[i])
+	end
+	table.insert(out, table.concat(parts, \" \"))
+end
+local work = {}
+function work.fib(n)
+	if n < 2 then
+		return n
+	end
+	return work.fib(n - 1) + work.fib(n - 2)
+end
+function work.sum(...)
+	local total = 0
+	for i = 1, select(\"#\", ...) do
+		total += select(i, ...)
+	end
+	return total, select(\"#\", ...)
+end
+function work.counter()
+	local count = 0
+	return function(step)
+		count += step or 1
+		return count
+	end
+end
+local Vector = {}
+Vector.__index = Vector
+Vector.__add = function(a, b)
+	return setmetatable({x = a.x + b.x, y = a.y + b.y}, Vector)
+end
+Vector.__eq = function(a, b)
+	return a.x == b.x and a.y == b.y
+end
+Vector.__lt = function(a, b)
+	return a.x < b.x
+end
+Vector.__len = function(a)
+	return math.floor(math.sqrt(a.x * a.x + a.y * a.y))
+end
+Vector.__concat = function(a, b)
+	return tostring(a) .. tostring(b)
+end
+Vector.__tostring = function(a)
+	return \"(\" .. a.x .. \",\" .. a.y .. \")\"
+end
+Vector.__call = function(a, k)
+	return a.x * k
+end
+function Vector.length2(self)
+	return self.x * self.x + self.y * self.y
+end
+local proxy = setmetatable({}, {__index = function(_, key)
+	return key * 2
+end, __newindex = function(t, key, value)
+	rawset(t, key, value + 1)
+end})
+emit(\"fib\", work.fib(18))
+emit(\"sum\", work.sum(1, 2, 3, 4.5, 6))
+local tick = work.counter()
+tick()
+tick(5)
+emit(\"counter\", tick(10))
+local a, b = setmetatable({x = 3, y = 4}, Vector), setmetatable({x = 1, y = -2}, Vector)
+local c = a + b
+emit(\"vector\", c.x, c.y, a == b, b < a, #a, a .. b, a(7), a:length2())
+proxy[5] = 10
+emit(\"proxy\", proxy[21], proxy[5])
+local words = {}
+for word in string.gmatch(\"the quick brown fox jumps over the lazy dog\", \"%a+\") do
+	table.insert(words, word)
+end
+table.sort(words, function(x, y)
+	if #x ~= #y then
+		return #x < #y
+	end
+	return x < y
+end)
+emit(\"sorted\", table.concat(words, \",\"))
+emit(\"gsub\", (string.gsub(\"a1b22c333\", \"%d+\", function(d)
+	return \"<\" .. #d .. \">\"
+end)))
+local gen = coroutine.wrap(function(limit)
+	for i = 1, limit do
+		local ok, err = pcall(function()
+			if i % 3 == 0 then
+				error(\"tick \" .. i, 0)
+			end
+			coroutine.yield(i * i)
+		end)
+		if not ok then
+			coroutine.yield(err)
+		end
+	end
+	return \"done\"
+end)
+local yielded = {}
+for _ = 1, 7 do
+	table.insert(yielded, tostring(gen(6)))
+end
+emit(\"coroutine\", table.concat(yielded, \",\"))
+local ok, message = xpcall(function()
+	local t = nil
+	return t.field
+end, function(err)
+	return \"handled: \" .. tostring(string.find(err, \"index\") ~= nil)
+end)
+emit(\"xpcall\", ok, message)
+local acc = 0
+for i = 10, 1, -3 do
+	acc += i
+end
+for i = 0.5, 2.5, 0.5 do
+	acc += i
+end
+emit(\"loops\", acc)
+local deep = 0
+local function recurse(n)
+	if n == 0 then
+		return 0
+	end
+	deep += 1
+	return 1 + recurse(n - 1)
+end
+emit(\"recurse\", recurse(150), deep)
+for _, line in out do
+	print(line)
+end
+";
+    let plain = {
+        let _lock = lock();
+        let (lua, engine) = start();
+        run(&lua, &engine, "same", script)
+    };
+    assert!(plain.len() == 11 && plain.iter().any(|line| line == "coroutine 1,4,tick 3,16,25,tick 6,done"), "{plain:#?}");
+    // (the counters alone, then beside host time, then beside the work clock's stepping: the interpreter's wrapper picks its copy differently in each)
+    let profile_kinds = [Kinds::HW, Kinds::HW.with(Kinds::TIME), Kinds::HW.with(Kinds::WORK)];
+    for kinds in profile_kinds {
+        let (profiled, attribution) = run_with_mock_counters(kinds, script);
+        assert_eq!(plain, profiled, "the same output with {kinds:?}");
+        assert!(attribution["calls"].as_u64().unwrap() > 10, "the hook read calls in the profiled run: {attribution}");
+    }
 }
 
 /// Without the counter service the profile says why and the run goes on: no counts, a warning naming what is missing
@@ -1305,6 +1788,22 @@ fn a_phase_counts_what_its_scripts_asked_the_engine_to_do() {
     assert_eq!((made["before"].as_f64().unwrap(), made["after"].as_f64().unwrap()), (4.0, 8.0), "{text}");
     let moved = figure("engine: parts moved, phase steady");
     assert_eq!((moved["before"].as_f64().unwrap(), moved["after"].as_f64().unwrap()), (3.0, 6.0), "{text}");
+}
+
+/// `profile diff` says when the two profiles' hardware counters reached functions in other ways (1 ms samples, readings
+/// around sampled calls drawn one of each run, or each drawn on its own with the threads' switches read): the functions'
+/// counter figures then compare only roughly
+#[test]
+fn a_diff_says_when_the_counters_reached_functions_in_other_ways() {
+    let profile = |attribution: serde_json::Value| serde_json::json!({"run": {"status": "ok", "frames": 1}, "counters": {"names": ["cycles"], "run": {"counts": {"cycles": 1000}}, "attribution": attribution}});
+    let (sampled, now) = (profile(serde_json::Value::Null), profile(serde_json::json!({"method": "calls", "version": 2})));
+    let (text, json) = profiler::diff::compare(&sampled, &now, 10);
+    assert!(text.contains("reached functions in other ways") && text.contains("1 ms samples") && text.contains("each drawn on its own"), "{text}");
+    assert!(json["notes"].as_array().unwrap().iter().any(|note| note.as_str().unwrap().contains("other ways")), "{json}");
+    let (same, _) = profiler::diff::compare(&now, &now, 10);
+    assert!(!same.contains("other ways"), "{same}");
+    let (older, _) = profiler::diff::compare(&profile(serde_json::json!({"method": "calls"})), &now, 10);
+    assert!(older.contains("one drawn of each run"), "{older}");
 }
 
 /// A level is one more than the deepest table a table holds; the tables of a cycle share theirs

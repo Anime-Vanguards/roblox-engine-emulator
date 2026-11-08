@@ -59,6 +59,7 @@ impl Figure {
             "ms" => format!("{value:.3} ms"),
             "%" => format!("{value:.1} %"),
             "ratio" => format!("{value:.2}"),
+            "share" => format!("{:.1} %", value * 100.0),
             _ => format!("{value:.0}"),
         }
     }
@@ -185,6 +186,43 @@ fn lines(profile: &Json, same: &BTreeSet<String>) -> BTreeMap<(String, i64), (f6
     out
 }
 
+/// A hardware counters' counts object by the counters' names now (counters.rs `canonical`)
+fn counter_counts(counts: &Json) -> Option<BTreeMap<String, f64>> {
+    Some(counts.as_object()?.iter().map(|(name, value)| (super::hw::counters::canonical(name).to_string(), num(value))).collect())
+}
+
+/// The hardware counters' functions: key -> (label, self counts by the counters' names now)
+fn counter_functions(profile: &Json) -> BTreeMap<String, (String, BTreeMap<String, f64>)> {
+    profile["counters"]["functions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let key = row["key"].as_str()?.to_string();
+            let name = row["name"].as_str().unwrap_or("?");
+            let label = match (row["module"].as_str(), row["line"].as_i64()) {
+                (Some(module), Some(line)) => format!("{} {}:{line}", if name.is_empty() { "anonymous" } else { name }, module.rsplit(['.', '/', '\\']).next().unwrap_or(module)),
+                _ => name.to_string(),
+            };
+            Some((key, (label, counter_counts(&row["self"]).unwrap_or_default())))
+        })
+        .collect()
+}
+
+/// `1.23G`, `45.6M`, `789K`: a count in a few characters
+fn compact(value: f64) -> String {
+    let (sign, value) = if value < 0.0 { ("-", -value) } else { ("", value) };
+    if value >= 1e9 {
+        format!("{sign}{:.2}G", value / 1e9)
+    } else if value >= 1e6 {
+        format!("{sign}{:.1}M", value / 1e6)
+    } else if value >= 1e4 {
+        format!("{sign}{:.0}K", value / 1e3)
+    } else {
+        format!("{sign}{value:.0}")
+    }
+}
+
 fn last_snapshot(profile: &Json) -> Option<&Json> {
     profile["heap"]["snapshots"].as_array().and_then(|snapshots| snapshots.last())
 }
@@ -288,15 +326,35 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
     if (before["time"].is_object() || after["time"].is_object()) && same_version {
         add("host time sampled (noisy)", num(&before["time"]["sampled_ms"]), num(&after["time"]["sampled_ms"]), "ms");
     }
-    // the hardware counters both profiles read (the run thread's; the CPU's own, so they move a little run to run)
-    if let (Some(b), Some(a)) = (before["counters"]["run"]["counts"].as_object(), after["counters"]["run"]["counts"].as_object()) {
+    // the hardware counters both profiles read (the run thread's; the CPU's own, so they move a little run to run), by
+    // their names now (a profile from before the fills were named for what they count matches a newer one), then what
+    // memory cost the run thread in each: the share of its cycles stalled on loads, those cycles a thousand
+    // instructions, a miss's latency, and IPC
+    let (counts_before, counts_after) = (counter_counts(&before["counters"]["run"]["counts"]), counter_counts(&after["counters"]["run"]["counts"]));
+    if let (Some(b), Some(a)) = (&counts_before, &counts_after) {
         for (name, value) in b {
             if let Some(after_value) = a.get(name) {
-                add(&format!("{name} (hardware counter)"), num(value), num(after_value), "");
+                add(&format!("{name} (hardware counter)"), *value, *after_value, "");
             }
         }
-        if let (Some(b), Some(a)) = (before["counters"]["run"]["rates"]["IPC"].as_f64(), after["counters"]["run"]["rates"]["IPC"].as_f64()) {
-            add("IPC (hardware counters)", b, a, "ratio");
+        let figures = |counts: &BTreeMap<String, f64>| {
+            let names: Vec<String> = counts.keys().cloned().collect();
+            let values: Vec<f64> = counts.values().copied().collect();
+            super::hw::counters::figures(&names, &values)
+        };
+        let (fb, fa) = (figures(b), figures(a));
+        for (key, unit) in [(super::hw::counters::LOAD_STALL_SHARE, "share"), (super::hw::counters::STALL_PER_THOUSAND, "ratio"), (super::hw::counters::MISS_LATENCY, "cycles"), ("IPC", "ratio")] {
+            let get = |figures: &[super::hw::counters::Figure]| figures.iter().find(|figure| figure.key == key).map(|figure| figure.value);
+            if let (Some(x), Some(y)) = (get(&fb), get(&fa)) {
+                add(&format!("{key} (hardware counters)"), x, y, unit);
+            }
+        }
+    }
+    // (the functions' counter figures compare only between profiles whose counters reached functions the same way)
+    if before["counters"]["run"].is_object() && after["counters"]["run"].is_object() {
+        let (b, a) = (super::report::attribution_of(&before["counters"]), super::report::attribution_of(&after["counters"]));
+        if b != a {
+            notes.push(format!("the hardware counters reached functions in other ways (before: {b}; after: {a}): the run's counts compare, the functions' counter figures only roughly"));
         }
     }
     if let (Some(b), Some(a)) = (timeline_stats(before), timeline_stats(after)) {
@@ -377,6 +435,40 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
                 bytes(a.alloc),
                 label
             );
+        }
+    }
+
+    // the functions whose cycles stalled on loads moved most (the hardware counters' self counts, by function key)
+    let mut counter_rows: Vec<Json> = Vec::new();
+    let (cfb, cfa) = (counter_functions(before), counter_functions(after));
+    let stall_key = ["load-stall-cycles", "cycles"].into_iter().find(|name| cfb.values().chain(cfa.values()).any(|(_, counts)| counts.contains_key(*name)));
+    if let Some(lead) = stall_key {
+        let keys: BTreeSet<&String> = cfb.keys().chain(cfa.keys()).collect();
+        let empty = (String::new(), BTreeMap::new());
+        let mut moved: Vec<(&String, f64, f64, f64, f64)> = keys
+            .into_iter()
+            .map(|key| {
+                let (b, a) = (cfb.get(key).unwrap_or(&empty), cfa.get(key).unwrap_or(&empty));
+                let get = |counts: &BTreeMap<String, f64>, name: &str| counts.get(name).copied().unwrap_or(0.0);
+                (key, get(&b.1, lead), get(&a.1, lead), get(&b.1, "cycles"), get(&a.1, "cycles"))
+            })
+            .filter(|(_, b, a, _, _)| (a - b).abs() > 0.0)
+            .collect();
+        moved.sort_by(|x, y| (y.2 - y.1).abs().total_cmp(&(x.2 - x.1).abs()).then_with(|| x.0.cmp(y.0)));
+        if !moved.is_empty() {
+            let stalls = lead == "load-stall-cycles";
+            let _ = writeln!(text, "
+functions whose {} moved most (hardware counters, self: before -> after{}; they vary run to run)", if stalls { "cycles stalled on loads" } else { "cycles" }, if stalls { ", and the share of their own cycles stalled" } else { "" });
+            let share = |stalled: f64, cycles: f64| if cycles > 0.0 { format!("{:.1} %", stalled / cycles * 100.0) } else { "-".into() };
+            for (key, b, a, cb, ca) in moved.iter().take(top) {
+                let label = cfa.get(*key).or_else(|| cfb.get(*key)).map_or(key.as_str(), |(label, _)| label.as_str());
+                if stalls {
+                    let _ = writeln!(text, "{:>12} -> {:<12} {:>9} -> {:<9} {:>10}  {}", compact(*b), compact(*a), share(*b, *cb), share(*a, *ca), change(*b, *a), label);
+                } else {
+                    let _ = writeln!(text, "{:>12} -> {:<12} {:>10}  {}", compact(*b), compact(*a), change(*b, *a), label);
+                }
+                counter_rows.push(json!({"function": label, "key": key, "counter": lead, "before": b, "after": a, "before_cycles": cb, "after_cycles": ca}));
+            }
         }
     }
 
@@ -484,6 +576,7 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
         "scope": scope,
         "functions": rows.iter().take(500).map(|(label, harness, b, a)| json!({"function": label, "harness": harness, "before": side_json(b), "after": side_json(a)})).collect::<Vec<_>>(),
         "lines": line_rows.iter().take(500).map(|((module, line), b, a)| json!({"module": module, "line": line, "before": {"work_ms": b.0, "insns": b.1, "alloc_bytes": b.2}, "after": {"work_ms": a.0, "insns": a.1, "alloc_bytes": a.2}})).collect::<Vec<_>>(),
+        "counter_functions": counter_rows,
         "changed_modules": changed,
         "notes": notes,
         "caches": cache_rows,

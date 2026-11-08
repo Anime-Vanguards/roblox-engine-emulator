@@ -28,7 +28,8 @@ fn each_pattern_is_named_with_its_numbers() {
     let temp = Temp::new("detect");
     let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
     let (issues, unchecked, app) = issues_of(&dir);
-    assert!(unchecked.is_empty(), "every kind is there: {unchecked:?}");
+    // (every kind but the CPU's counters, which a run of their own reads: tests/counters.rs)
+    assert_eq!(unchecked, vec!["code that waits on memory: needs hw (the CPU's counters), in a run of its own".to_string()], "every other kind is there");
     let all = |issue: &Issue| format!("{}\n{}", issue.title, issue.evidence.join("\n"));
 
     // a sort every frame of the steady state: 100 sorts in 100 frames, 4.2 ms of the phase's 10.6 ms (39.6 %)
@@ -138,8 +139,9 @@ fn what_the_kinds_cannot_show_is_said_and_not_guessed() {
     std::fs::remove_file(dir.join("alloc.counts.folded")).unwrap();
     let (issues, unchecked, _) = issues_of(&dir);
     assert!(issues.is_empty(), "{issues:#?}");
-    assert_eq!(unchecked.len(), 4, "{unchecked:?}");
+    assert_eq!(unchecked.len(), 5, "{unchecked:?}");
     assert!(unchecked.iter().any(|note| note.contains("boundary")));
+    assert!(unchecked.iter().any(|note| note.contains("waits on memory") && note.contains("hw")));
 }
 
 #[test]

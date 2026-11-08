@@ -209,8 +209,10 @@ const READS_VERSION = 2;
 	if (P.time) tiles.push(["Host time sampled", fmt(P.time.sampled_ms, 1) + " ms", "1 ms ticks at safepoints"]);
 	if (P.counters && P.counters.run && !P.counters.error) {
 		const names = P.counters.names || [];
+		const rates = P.counters.run.rates || {};
 		const lead = names.includes("cycles") ? "cycles" : names[0];
-		if (P.counters.run.rates && P.counters.run.rates.IPC != null) tiles.push(["IPC", fmt(P.counters.run.rates.IPC, 2), "instructions a cycle, run thread"]);
+		if (rates["load stall share"] != null) tiles.push(["Stalled on loads", (rates["load stall share"] * 100).toFixed(1) + " %", `of the run thread's cycles${rates["L1D miss latency"] != null ? `; a miss ${fmt(rates["L1D miss latency"], 0)} cycles` : ""}`]);
+		if (rates.IPC != null) tiles.push(["IPC", fmt(rates.IPC, 2), "instructions a cycle, run thread"]);
 		if (lead) tiles.push([lead[0].toUpperCase() + lead.slice(1), compact(P.counters.run.counts[lead] || 0), P.counters.source === "mock" ? "made-up counts (mock)" : "the run thread, counted by the CPU"]);
 	}
 	tiles.push(["Frames", fmt(run.frames), `${fmt(run.seconds, 2)} s emulated`]);
@@ -660,28 +662,39 @@ const READS_VERSION = 2;
 		return el("div", { class: "card chart" }, el("div", { class: "title" }, title), svg);
 	};
 
-	// the hardware counters (`--profile hw`): the run's totals and rates, by phase and thread, functions, lines, frames
+	// the hardware counters (`--profile hw`): the run's totals and what memory cost it, by phase and thread, functions,
+	// call sites, frames
 	const counterSection = (section, k) => {
 		section.append(el("h2", {}, "Hardware counters"));
 		if (k.error) { section.append(el("div", { class: "warn" }, "Hardware counters not read: " + k.error)); return; }
 		const names = k.names || [];
-		const lead = names.includes("cycles") ? "cycles" : names[0];
-		section.append(el("p", { class: "lead" }, "What the CPU counted while the run thread ran, read at the profile's start and end, at each frame's start and end, at phase marks, around the engine's own steps and at the VM's safepoints once a millisecond. A function's self counts are what was counted since the sample before one that found it innermost; its total, since the samples that found it anywhere on the stack." + (k.source === "mock" ? " These counts are made up (REE_HW_COUNTERS=mock): the thread's cycle count and fixed shares of it." : "")));
+		const lead = names.includes("load-stall-cycles") ? "load-stall-cycles" : names.includes("cycles") ? "cycles" : names[0];
+		const byCalls = k.attribution && k.attribution.method === "calls";
+		const how = byCalls
+			? `Readings around sampled Luau calls give each function its own counts: everything counted while one of its calls was the innermost read around, its callees' apart; a Luau thread holding a sampled call is read where it resumes and stops, so each thread's work is its own calls'. Each call is drawn on its own: every call of a function whose calls take ${fmt(k.attribution.threshold_us, 0)} us or more was read around, one in several of shorter ones (standing for the rest: an unbiased estimate, which can fall below zero for a function), a recursion's inner calls with its sampled outer one, none of functions whose calls take under ${fmt(k.attribution.min_sampled_us, 0)} us once their first calls measured them (their counts are their callers'). A reading costs the code after it some of its caches, so a short sampled function reads a little high and its callers low. A line's figures are what the calls made from it cost. A reading's own counts are taken out of every stretch between readings.`
+			: "A function's self counts are what was counted since the sample before one that found it innermost; its total, since the samples that found it anywhere on the stack.";
+		section.append(el("p", { class: "lead" }, "What the CPU counted while the run thread ran: these measure ree's own process running the Luau, a guide to where memory costs, not a client's frame time (the work clock estimates that). " + how + (k.source === "mock" ? " These counts are made up (REE_HW_COUNTERS=mock): the thread's cycle count and fixed shares of it." : "")));
 		for (const note of k.notes || []) section.append(el("p", { class: "muted" }, note));
 		const runCounts = (k.run && k.run.counts) || {};
-		const totals = names.map((name, i) => el("tr", {}, el("td", { class: "text" }, name), el("td", { class: "num" }, fmt(runCounts[name])), el("td", { class: "text muted" }, (k.about || [])[i] || (k.sources || [])[i] || "")));
-		for (const [label, value] of Object.entries((k.run && k.run.rates) || {})) totals.push(el("tr", {}, el("td", { class: "text" }, label), el("td", { class: "num" }, label.includes("rate") ? (value * 100).toFixed(1) + " %" : fmt(value, 2)), el("td", { class: "text muted" }, "")));
+		const totals = names.map((name, i) => el("tr", {}, el("td", { class: "text" }, name), el("td", { class: "num" }, fmt(runCounts[name])), el("td", { class: "text muted" }, [(k.about || [])[i] || (k.sources || [])[i] || "", (k.amd || [])[i] ? ` (AMD: ${(k.amd || [])[i]})` : ""].join(""))));
+		const shownRate = (label, value) => /share|rate|per load/.test(label) ? (value * 100).toFixed(1) + " %" : label.includes("latency") ? fmt(value, 0) + " cycles" : fmt(value, 2);
+		for (const [label, value] of Object.entries((k.run && k.run.rates) || {})) totals.push(el("tr", {}, el("td", { class: "text" }, label), el("td", { class: "num" }, shownRate(label, value)), el("td", { class: "text muted" }, "")));
 		section.append(el("div", { class: "card" }, el("table", {}, el("tbody", {}, ...totals))));
 		const readings = k.readings || {};
-		section.append(el("p", { class: "muted" }, `${fmt(readings.count)} readings (${fmt(readings.samples)} samples at safepoints) over ${fmt((k.run || {}).seconds, 2)} s; ${fmt(readings.matched)} found their own switch.` + (readings.own_counts ? ` A reading's own counts, counted with the run's: ${names.map((n) => `${n} ${compact(readings.own_counts[n] || 0)}`).join(", ")}.` : "")));
+		section.append(el("p", { class: "muted" }, `${fmt(readings.count)} readings${byCalls ? ` (${fmt(2 * (readings.calls || 0))} of them around ${fmt(readings.calls || 0)} sampled calls${k.attribution.switch_readings ? `, ${fmt(k.attribution.switch_readings)} where threads switched` : ""})` : ` (${fmt(readings.samples)} samples at safepoints)`} over ${fmt((k.run || {}).seconds, 2)} s; ${fmt(readings.matched)} found their own switch.` + (readings.own_counts ? ` A reading's own counts${readings.taken_out ? ", taken out of every stretch" : ", counted with the run's"}: ${names.map((n) => `${n} ${compact(readings.own_counts[n] || 0)}`).join(", ")}.` : "") + (byCalls && k.attribution.readings_share_of_cycles != null ? ` The readings took ${(k.attribution.readings_share_of_cycles * 100).toFixed(1)} % of the run thread's cycles.` : "")));
 		const trace = k.trace || {};
 		if (trace.lost_events || trace.lost_buffers) section.append(el("div", { class: "warn" }, `The trace session lost ${fmt(trace.lost_events)} events and ${fmt(trace.lost_buffers)} buffers: some of the threads' stretches are missing.`));
 		if (trace.without_counters) section.append(el("p", { class: "muted" }, `${fmt(trace.without_counters)} context switches came without counter values.`));
-		const ipcOf = (counts) => counts && counts.instructions != null && counts.cycles ? counts.instructions / counts.cycles : 0;
+		const ratio = (counts, part, whole) => counts && counts[part] != null && counts[whole] ? counts[part] / counts[whole] : null;
+		const stallShare = (counts) => ratio(counts, "load-stall-cycles", "cycles");
+		const ipcOf = (counts) => ratio(counts, "instructions", "cycles") || 0;
+		const hasStalls = names.includes("load-stall-cycles") && names.includes("cycles");
+		const percentCell = (v) => v == null ? "-" : (v * 100).toFixed(1) + " %";
 		const counterColumns = (get, prefix) => names.map((name) => ({ key: name, label: prefix + name, value: (row) => (get(row) || {})[name] || 0, fmt: (v) => compact(v), bar: name === lead }));
+		const costColumns = (get, prefix) => (hasStalls ? [{ key: "stalled", label: prefix + "stalled on loads", value: (row) => stallShare(get(row)) || 0, fmt: percentCell }] : []).concat([{ key: "ipc", label: prefix + "IPC", value: (row) => ipcOf(get(row)), fmt: (v) => fmt(v, 2) }]);
 		if ((k.phases || []).length) {
 			section.append(el("h3", {}, "By phase"));
-			section.append(table(k.phases, [{ key: "phase", label: "phase", text: true, value: (p) => p.phase }, ...counterColumns((p) => p.counts, ""), { key: "ipc", label: "IPC", value: (p) => ipcOf(p.counts), fmt: (v) => fmt(v, 2) }], { sort: lead }));
+			section.append(table(k.phases, [{ key: "phase", label: "phase", text: true, value: (p) => p.phase }, ...counterColumns((p) => p.counts, ""), ...costColumns((p) => p.counts, "")], { sort: lead }));
 		}
 		if ((k.threads || []).length) {
 			section.append(el("h3", {}, "By thread"));
@@ -689,10 +702,12 @@ const READS_VERSION = 2;
 		}
 		section.append(el("h3", {}, "Functions"));
 		const label = (f) => f.module ? `${f.name || "anonymous"}  ${shortModule(f.module)}:${f.line}` : f.name;
-		section.append(table(k.functions || [], [{ key: "name", label: "function", text: true, value: label }, ...counterColumns((f) => f.self, "self "), { key: "total", label: "total " + lead, value: (f) => (f.total || {})[lead] || 0, fmt: (v) => compact(v) }, { key: "ipc", label: "self IPC", value: (f) => ipcOf(f.self), fmt: (v) => fmt(v, 2) }], { sort: lead, limit: 300 }));
+		section.append(table(k.functions || [], [{ key: "name", label: "function", text: true, value: label }, ...counterColumns((f) => f.self, "self "), ...costColumns((f) => f.self, "self "), { key: "total", label: "total " + lead, value: (f) => (f.total || {})[lead] || 0, fmt: (v) => compact(v) }], { sort: lead, limit: 300 }));
 		if ((k.lines || []).length) {
-			section.append(el("h3", {}, "Lines"));
-			section.append(table(k.lines, [{ key: "line", label: "line", text: true, value: (l) => `${shortModule(l.module || "")}:${l.line}` }, { key: "fn", label: "function", text: true, value: (l) => l.name || "anonymous" }, ...counterColumns((l) => l.self, "self "), { key: "ipc", label: "self IPC", value: (l) => ipcOf(l.self), fmt: (v) => fmt(v, 2) }], { sort: lead, limit: 200 }));
+			const calls = (k.lines[0] || {}).calls;
+			section.append(el("h3", {}, calls ? "Call sites (what the calls made from a line cost)" : "Lines"));
+			const of = (l) => calls ? l.total : l.self;
+			section.append(table(k.lines, [{ key: "line", label: "line", text: true, value: (l) => `${shortModule(l.module || "")}:${l.line}` }, { key: "fn", label: "function", text: true, value: (l) => l.name || "anonymous" }, ...counterColumns(of, calls ? "calls' " : "self "), ...costColumns(of, calls ? "calls' " : "self ")], { sort: lead, limit: 200 }));
 		}
 		const frames = k.frames;
 		if (frames && frames.rows && frames.rows.length) {
@@ -700,12 +715,16 @@ const READS_VERSION = 2;
 			const col = (name) => frames.columns.indexOf(name);
 			const labels = frames.rows.map((r) => `frame ${r[col("frame")]} · ${(P.phases || [])[r[col("phase")]] || ""}`);
 			const series = [[lead + " a frame", frames.rows.map((r) => r[col(lead)]), (v) => compact(v)]];
+			if (col("load stall share") >= 0) series.push(["share of cycles stalled on loads", frames.rows.map((r) => r[col("load stall share")]), (v) => (v * 100).toFixed(1) + " %"]);
+			else if (col("load-stall-cycles") >= 0 && col("cycles") >= 0) series.push(["share of cycles stalled on loads", frames.rows.map((r) => r[col("cycles")] ? r[col("load-stall-cycles")] / r[col("cycles")] : 0), (v) => (v * 100).toFixed(1) + " %"]);
+			if (col("L1D miss latency") >= 0) series.push(["L1D miss latency (cycles)", frames.rows.map((r) => r[col("L1D miss latency")]), (v) => fmt(v, 0)]);
 			if (col("instructions") >= 0 && col("cycles") >= 0) series.push(["IPC", frames.rows.map((r) => r[col("cycles")] ? r[col("instructions")] / r[col("cycles")] : 0), (v) => fmt(v, 2)]);
-			for (const name of names.filter((n) => n.endsWith("-misses"))) series.push([name + " a frame", frames.rows.map((r) => r[col(name)]), (v) => compact(v)]);
+			for (const name of names.filter((n) => n.endsWith("-misses") || n.startsWith("demand-fills"))) series.push([name + " a frame", frames.rows.map((r) => r[col(name)]), (v) => compact(v)]);
 			const grid = el("div", { class: "charts" });
 			for (const [title, values, show] of series) grid.append(lineChart(title, values, show, labels));
 			section.append(grid);
-			section.append(table(frames.rows.map((r) => ({ r })), frames.columns.map((name, i) => ({ key: name, label: name.replace(/_/g, " "), value: (x) => x.r[i], fmt: name === "phase" ? (v) => (P.phases || [])[v] || String(v) : name === "host_ms" ? (v) => fmt(v, 3) : (v) => fmt(v) })), { sort: lead, limit: 400 }));
+			const shownCell = (name) => name === "phase" ? (v) => (P.phases || [])[v] || String(v) : name === "host_ms" ? (v) => fmt(v, 3) : /share/.test(name) ? (v) => (v * 100).toFixed(1) + " %" : /latency|per 1000|IPC/.test(name) ? (v) => fmt(v, 2) : (v) => fmt(v);
+			section.append(table(frames.rows.map((r) => ({ r })), frames.columns.map((name, i) => ({ key: name, label: name.replace(/_/g, " "), value: (x) => x.r[i], fmt: shownCell(name) })), { sort: lead, limit: 400 }));
 		}
 	};
 

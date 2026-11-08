@@ -152,10 +152,21 @@ pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
     if let (Some(tb), Some(ta), true) = (&b.raw.time, &a.raw.time, same) {
         add("host time (noisy)", tb.sampled_ms, ta.sampled_ms, Unit::Ms, false, true);
     }
+    // the CPU's counters both profiles read (by their names now: an older profile's fills match a newer one's), then
+    // what memory cost the run thread in each: the share of its cycles stalled on loads, those cycles a thousand
+    // instructions, a miss's latency, IPC
     if let (Some(cb), Some(ca)) = (&b.raw.counters, &a.raw.counters) {
         for (name, value) in &cb.run.counts {
             if let Some(after) = ca.run.counts.get(name) {
                 add(&format!("{name} (CPU counter)"), *value, *after, Unit::Count, false, true);
+            }
+        }
+        let figures = |c: &crate::model::Counters| c.figures(&c.names.iter().map(|name| c.run.counts.get(name).copied().unwrap_or(0.0)).collect::<Vec<_>>());
+        let (fb, fa) = (figures(cb), figures(ca));
+        for (key, unit, cost) in [(crate::hw_counters::LOAD_STALL_SHARE, Unit::Share, true), (crate::hw_counters::STALL_PER_THOUSAND, Unit::Decimal, true), (crate::hw_counters::MISS_LATENCY, Unit::Count, false), ("IPC", Unit::Decimal, false)] {
+            let get = |figures: &[crate::hw_counters::Figure]| figures.iter().find(|figure| figure.key == key).map(|figure| figure.value);
+            if let (Some(before), Some(after)) = (get(&fb), get(&fa)) {
+                add(&format!("{key} (CPU counters)"), before, after, unit, false, cost);
             }
         }
     }
@@ -191,6 +202,12 @@ pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
         let engine = if engine_rows { ", the engine's counts" } else { "" };
         let last = if harness { " (the harness's functions last)" } else { "" };
         notes.push(format!("{first}{engine} and the functions' work cover {label}{last}; the rest cover the whole run"));
+    }
+    // (the functions' counter figures compare only between profiles whose counters reached functions the same way)
+    if let (Some(cb), Some(ca)) = (&b.raw.counters, &a.raw.counters)
+        && cb.attribution_text() != ca.attribution_text()
+    {
+        notes.push(format!("the CPU counters reached functions in other ways (before: {}; after: {}): the run's counts compare, the functions' only roughly", cb.attribution_text(), ca.attribution_text()));
     }
     let changed = changed_modules(b, a);
     if !changed.is_empty() {

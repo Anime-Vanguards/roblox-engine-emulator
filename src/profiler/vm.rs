@@ -143,6 +143,12 @@ struct RawNode {
 /// lua.h `lua_setprofilerehash`'s hook: (ud, the thread, the table, array slots and hash nodes before, after, the keys it holds
 /// with the new one, whether a script's own instruction made it)
 pub type RehashHook = unsafe extern "C-unwind" fn(*mut c_void, *mut lua_State, *mut c_void, c_int, c_int, c_int, c_int, c_int, c_int);
+/// lua.h `lua_setprofilecalls`' hook: (ud, the thread, [`CALL_ENTER`] or [`CALL_LEAVE`], the function's id, the `every` its
+/// call was drawn with (entries), the frame's depth)
+pub type CallHook = unsafe extern "C-unwind" fn(*mut c_void, *mut lua_State, c_int, c_int, c_int, c_int);
+/// lua.h `LUA_PROFILECALL_*`
+pub const CALL_ENTER: c_int = 0;
+pub const CALL_LEAVE: c_int = 1;
 type HeapNode = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void, u8, u8, usize, *const c_char);
 type HeapEdge = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void, *mut c_void, *const c_char);
 type HeapDead = unsafe extern "C-unwind" fn(*mut c_void, u8, usize);
@@ -170,6 +176,8 @@ unsafe extern "C-unwind" {
     fn lua_profileudataoffset() -> usize;
     fn lua_setprofilefreed(state: *mut lua_State, freed: Option<unsafe extern "C-unwind" fn(*mut c_void, *mut c_void)>, ud: *mut c_void);
     fn lua_setprofilerehash(state: *mut lua_State, rehash: Option<RehashHook>, ud: *mut c_void);
+    fn lua_setprofilecalls(state: *mut lua_State, hook: Option<CallHook>, ud: *mut c_void);
+    fn lua_setprofilecallevery(state: *mut lua_State, function: c_int, every: c_int, remeasure: c_int);
     fn lua_profiletable(ptr: *mut c_void, arrayslots: *mut c_int, arrayused: *mut c_int, nodes: *mut c_int, nodesused: *mut c_int) -> c_int;
     fn lua_profiletablebytes(header: *mut usize, slot: *mut usize, node: *mut usize);
     fn lua_profilecachetotals(state: *mut lua_State, out: *mut u64) -> c_int;
@@ -533,6 +541,40 @@ pub fn set_freed(state: *mut lua_State, freed: Option<unsafe extern "C-unwind" f
 /// The hook told of each table that rehashed to fit a new key (the profile's own thread's VM), or none
 pub fn set_rehash(state: *mut lua_State, rehash: Option<RehashHook>, ud: *mut c_void) {
     unsafe { lua_setprofilerehash(state, rehash, ud) }
+}
+
+/// A thread's frames on its call stack (lua.h `lua_stackdepth`: 0 before its first run and once it returned)
+///
+/// # Safety
+/// `state` is a live thread of the VM the profile runs on.
+pub unsafe fn depth(state: *mut lua_State) -> i32 {
+    unsafe { mlua::ffi::lua_stackdepth(state) }
+}
+
+/// A thread's status (lua.h `lua_status`: 0 running or done, 1 yielded, 2 to 5 an error ended it, 6 a break)
+///
+/// # Safety
+/// `state` is a live thread of the VM the profile runs on.
+pub unsafe fn status(state: *mut lua_State) -> i32 {
+    unsafe { mlua::ffi::lua_status(state) }
+}
+
+/// The hook called around the Luau calls the VM samples (the running profile's VM), or none (lua.h `lua_setprofilecalls`)
+///
+/// # Safety
+/// `state` is a live thread of the VM the profile runs on.
+/// The hook and `ud` stay valid until the hook is cleared or the profile ends.
+pub unsafe fn set_calls(state: *mut lua_State, hook: Option<CallHook>, ud: *mut c_void) {
+    unsafe { lua_setprofilecalls(state, hook, ud) }
+}
+
+/// Each call of function `function` is sampled with a chance of one in `every`; with `every` 0 none, and one call after
+/// every `remeasure` calls is read around for its length alone (0: none)
+///
+/// # Safety
+/// `state` is a live thread of the VM the profile runs on.
+pub unsafe fn set_call_every(state: *mut lua_State, function: i32, every: u32, remeasure: u32) {
+    unsafe { lua_setprofilecallevery(state, function, every.min(i32::MAX as u32) as c_int, remeasure.min(i32::MAX as u32) as c_int) }
 }
 
 /// A table's shape: its array part's slots and those holding a value, its hash part's nodes (0: none) and those holding one

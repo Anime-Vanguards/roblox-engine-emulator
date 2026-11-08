@@ -2211,20 +2211,31 @@ fn compact(value: u64) -> String {
     }
 }
 
+/// A signed count in at most six characters (booked counts are estimates and may be below zero for a stack)
+fn compact_signed(value: f64) -> String {
+    if value < 0.0 { format!("-{}", compact((-value).round() as u64)) } else { compact(value.round() as u64) }
+}
+
 /// The hardware counters' part of the summary and of profile.json (`counters`), and their folded stacks: one file a
-/// counter (`counters.<name>.folded`), each stack weighted by what was counted since the sample before it
+/// counter (`counters.<name>.folded`), each stack weighted by what was counted while its call was the innermost sampled
+/// one (an estimate where calls were sampled; a stack whose estimate falls below zero cannot be in a folded file, so
+/// the summary lists those and profile.json says what the folded files left out)
 fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String, folded: &mut Vec<(String, Vec<(String, u64)>)>) -> Json {
-    use hw::readings::{Counts, add};
+    use hw::{Figures, counters as known};
     let n = hw.names.len();
-    let object = |counts: &Counts| -> Json { Json::Object(hw.names.iter().zip(counts).map(|(name, value)| (name.clone(), json!(value))).collect()) };
-    let rates = |counts: &Counts| -> Json { Json::Object(hw::rates(&hw.names, counts).into_iter().map(|(label, value, _)| (label, json!(round(value, 6)))).collect()) };
+    let whole = |value: f64| -> Json { json!(value.round() as i64) };
+    let object = |counts: &Figures| -> Json { Json::Object(hw.names.iter().zip(counts).map(|(name, value)| (name.clone(), whole(*value))).collect()) };
+    let rates = |counts: &Figures| -> Json { Json::Object(hw::figures(&hw.names, counts).into_iter().map(|figure| (figure.key.to_string(), json!(round(figure.value, 6)))).collect()) };
+    let figure = |counts: &Figures, key: &str| hw::figures(&hw.names, counts).into_iter().find(|figure| figure.key == key);
     let mut out = json!({
         "source": hw.source,
         "names": hw.names,
         "sources": hw.sources,
-        "about": hw.names.iter().map(|name| hw::protocol::known(name).map(|known| known.about)).collect::<Vec<_>>(),
+        "about": hw.names.iter().map(|name| known::known(name).map(|known| known.about)).collect::<Vec<_>>(),
+        "amd": hw.names.iter().map(|name| known::known(name).and_then(|known| (!known.amd.is_empty()).then_some(known.amd))).collect::<Vec<_>>(),
         "error": hw.error,
         "notes": hw.notes,
+        "cut_short": hw.cut_short,
     });
     let _ = writeln!(summary);
     if let Some(error) = &hw.error {
@@ -2234,27 +2245,73 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
         }
         return out;
     }
-    let listed = |counts: &Counts| hw.names.iter().zip(counts).map(|(name, value)| format!("{name} {}", group_digits(*value))).collect::<Vec<_>>().join(", ");
-    let derived = |counts: &Counts| hw::rates(&hw.names, counts).into_iter().map(|(label, _, shown)| format!("{label} {shown}")).collect::<Vec<_>>().join(", ");
-    // the counter tables sort by: cycles when counted, else the first
-    let lead = hw.names.iter().position(|name| name == "cycles").unwrap_or(0);
+    let listed = |counts: &Figures| hw.names.iter().zip(counts).map(|(name, value)| format!("{name} {}", group_digits(value.max(0.0).round() as u64))).collect::<Vec<_>>().join(", ");
+    let derived = |counts: &Figures| hw::figures(&hw.names, counts).into_iter().map(|figure| format!("{} {}", figure.key, figure.text())).collect::<Vec<_>>().join(", ");
+    // the tables sort by the cycles stalled on loads when counted, else the cycles, else the first counter
+    let lead = hw.names.iter().position(|name| name == "load-stall-cycles").or_else(|| hw.names.iter().position(|name| name == "cycles")).unwrap_or(0);
     let lead_name = &hw.names[lead];
+    let cycles = hw.names.iter().position(|name| name == "cycles");
     let _ = writeln!(
         summary,
-        "hardware counters ({}; the run thread over {:.2} s; {} readings, {} of them samples at the VM's safepoints): {}",
+        "hardware counters ({}; the run thread over {:.2} s; {} readings, {} of them around {} sampled Luau calls): {}",
         if hw.source == "mock" { "REE_HW_COUNTERS=mock: made-up counts from the thread's cycle count" } else { "read by the counter service" },
         hw.run_seconds,
         group_digits(hw.readings as u64),
-        group_digits(hw.samples as u64),
+        group_digits(2 * hw.calls as u64),
+        group_digits(hw.calls as u64),
         listed(&hw.run)
     );
+    if let Some(seconds) = hw.cut_short {
+        let _ = writeln!(
+            summary,
+            "  WARNING: hardware-counter profile CUT SHORT after {seconds:.3} s: the service's slice limit was reached; \
+             the rest of the run has no counter figures (count a shorter run)"
+        );
+    }
     let run_rates = derived(&hw.run);
     if !run_rates.is_empty() {
         let _ = writeln!(summary, "  {run_rates}");
     }
+    // what memory cost the run, said plainly
+    match (figure(&hw.run, known::LOAD_STALL_SHARE), figure(&hw.run, known::STALL_PER_THOUSAND)) {
+        (Some(share), Some(per)) => {
+            let latency = figure(&hw.run, known::MISS_LATENCY).map(|latency| format!("; an L1 data cache miss stayed outstanding {} cycles on average", latency.text())).unwrap_or_default();
+            let overlap = figure(&hw.run, known::MISSES_OUTSTANDING).map(|outstanding| format!(", {} outstanding on average over all cycles", outstanding.text())).unwrap_or_default();
+            let _ = writeln!(summary, "  memory: {} of the run thread's cycles nothing retired because the oldest op waited for load data ({} cycles per 1000 instructions){latency}{overlap}", share.text(), per.text());
+        }
+        _ if !hw.names.iter().any(|name| name == "load-stall-cycles") => {
+            let _ = writeln!(summary, "  memory: not measured (load-stall-cycles not counted): fills count a line once and prefetched lines not at all, so they are no measure of what memory cost");
+        }
+        _ => {}
+    }
+    let readings_share = match (&hw.per_reading, cycles) {
+        (Some(per_reading), Some(cycles)) => per_reading[cycles] as f64 * hw.readings as f64 / (hw.run[cycles] + per_reading[cycles] as f64 * hw.readings as f64).max(1.0),
+        _ => 0.0,
+    };
     if let Some(per_reading) = &hw.per_reading {
-        let share = per_reading[lead] as f64 * hw.readings as f64 / hw.run[lead].max(1) as f64;
-        let _ = writeln!(summary, "  a reading's own counts (counted with the run's): {}; the readings' share of the run's {lead_name}: {}", listed(per_reading), percent(share, 1.0));
+        let _ = writeln!(
+            summary,
+            "  a reading's own counts, taken out of every stretch between readings (the median of the back-to-back ones at the start; {:.1} us each): {}; the readings took {} of the run thread's cycles",
+            hw.reading_us,
+            hw.names.iter().zip(per_reading).map(|(name, value)| format!("{name} {}", group_digits(*value))).collect::<Vec<_>>().join(", "),
+            percent(readings_share, 1.0)
+        );
+    }
+    if hw.calls > 0 || hw.sampled_functions > 0 {
+        let _ = writeln!(
+            summary,
+            "  calls: {} read around, of {} functions measured: each call drawn on its own, every call of a function whose calls take {:.0} us or more, one in (that over its mean call) of shorter ones, a recursion's inner calls with its sampled outer one; a function's first {} calls all, to learn its length; none of the {} whose calls take under {:.0} us (their counts are their callers', those first calls' too: {} calls read for their length alone), one of their calls measured now and then in case they grow",
+            group_digits(hw.calls as u64),
+            group_digits(hw.sampled_functions as u64),
+            hw.threshold_us,
+            hw::MIN_MEASURED,
+            group_digits(hw.unsampled_functions as u64),
+            hw::MIN_SAMPLED_US,
+            group_digits(hw.transparent_calls as u64)
+        );
+        if hw.switch_readings > 0 {
+            let _ = writeln!(summary, "  thread switches: {} readings where a Luau thread holding a sampled call resumed or stopped, so each thread's work is booked to its own calls", group_digits(hw.switch_readings as u64));
+        }
     }
     if hw.matched + 2 < hw.readings {
         let _ = writeln!(summary, "  warning: {} of {} readings found no switch of their own: their windows were merged into the next ones", hw.readings - hw.matched, hw.readings);
@@ -2271,11 +2328,16 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
         let _ = writeln!(summary, "  note: {note}");
     }
     let phase_name = |phase: u32| input.phases.get(phase as usize).cloned().unwrap_or_else(|| format!("phase {phase}"));
+    let cost_text = |counts: &Figures| [known::LOAD_STALL_SHARE, "IPC"].iter().filter_map(|key| figure(counts, key)).map(|figure| format!("{} {}", figure.key, figure.text())).collect::<Vec<_>>().join(", ");
     if !hw.phases.is_empty() {
-        let parts: Vec<String> = hw.phases.iter().map(|(phase, counts)| {
-            let ipc = hw::rates(&hw.names, counts).into_iter().find(|rate| rate.0 == "IPC").map(|rate| format!(", IPC {}", rate.2)).unwrap_or_default();
-            format!("{} {lead_name} {}{ipc}", phase_name(*phase), compact(counts[lead]))
-        }).collect();
+        let parts: Vec<String> = hw
+            .phases
+            .iter()
+            .map(|(phase, counts)| {
+                let cost = cost_text(counts);
+                format!("{} {lead_name} {}{}", phase_name(*phase), compact_signed(counts[lead]), if cost.is_empty() { String::new() } else { format!(", {cost}") })
+            })
+            .collect();
         let _ = writeln!(summary, "  by phase: {}", parts.join("; "));
     }
     let thread_label = |thread: &hw::ThreadCounts| match (&thread.name, thread.run_thread) {
@@ -2284,41 +2346,48 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
         (Some(name), false) => name.clone(),
         (None, false) => format!("thread {}", thread.id),
     };
+    let by_thread = cycles.unwrap_or(lead);
     if !hw.threads.is_empty() {
-        let mut parts: Vec<String> = hw.threads.iter().take(6).map(|thread| format!("{} {}", thread_label(thread), compact(thread.counts[lead]))).collect();
+        let mut parts: Vec<String> = hw.threads.iter().take(6).map(|thread| format!("{} {}", thread_label(thread), compact_signed(thread.counts[by_thread]))).collect();
         if hw.threads.len() > 6 {
-            let mut rest = [0u64; hw::protocol::MAX_COUNTERS];
-            for thread in &hw.threads[6..] {
-                add(&mut rest, &thread.counts);
-            }
-            parts.push(format!("{} others {}", hw.threads.len() - 6, compact(rest[lead])));
+            let rest: f64 = hw.threads[6..].iter().map(|thread| thread.counts[by_thread]).sum();
+            parts.push(format!("{} others {}", hw.threads.len() - 6, compact_signed(rest)));
         }
-        let _ = writeln!(summary, "  {lead_name} by thread: {}", parts.join("; "));
+        let _ = writeln!(summary, "  {} by thread: {}", hw.names[by_thread], parts.join("; "));
     }
     if !hw.frames.is_empty() {
-        let values: Vec<u64> = hw.frames.iter().map(|frame| frame.counts[lead]).collect();
-        let worst = values.iter().enumerate().max_by_key(|(_, value)| **value).map_or(0, |(index, _)| index);
-        let _ = writeln!(
-            summary,
+        let values: Vec<f64> = hw.frames.iter().map(|frame| frame.counts[lead]).collect();
+        let worst = values.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map_or(0, |(index, _)| index);
+        let mut line = format!(
             "  frames: {}, {lead_name} a frame mean {}, max {} (frame {})",
             hw.frames.len(),
-            compact(values.iter().sum::<u64>() / values.len() as u64),
-            compact(values[worst]),
+            compact_signed(values.iter().sum::<f64>() / values.len() as f64),
+            compact_signed(values[worst]),
             hw.frames[worst].frame
         );
+        let shares: Vec<(usize, f64)> = hw.frames.iter().enumerate().filter_map(|(index, frame)| figure(&frame.counts, known::LOAD_STALL_SHARE).map(|figure| (index, figure.value))).collect();
+        if let Some(&(most, share)) = shares.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
+            let mut sorted: Vec<f64> = shares.iter().map(|(_, share)| *share).collect();
+            sorted.sort_by(f64::total_cmp);
+            let _ = write!(line, "; load stall share a frame median {:.1} %, most {:.1} % (frame {})", sorted[sorted.len() / 2] * 100.0, share * 100.0, hw.frames[most].frame);
+        }
+        let _ = writeln!(summary, "{line}");
     }
 
-    // per function and line: the innermost frame is self, every frame on the stack total (once a stack)
-    let mut functions: FxHashMap<i32, (Counts, Counts)> = FxHashMap::default();
-    let mut lines: FxHashMap<(i32, i32), (Counts, Counts)> = FxHashMap::default();
-    let mut by_counter: Vec<HashMap<String, u64>> = vec![HashMap::new(); n];
+    // per function and call site: a stack's innermost frame is a sampled call's function (self), every frame on it once
+    // its total; a caller's frame carries the line it called from, so a line's total is what the calls it made cost
+    let mut functions: FxHashMap<i32, (Figures, Figures)> = FxHashMap::default();
+    let mut lines: FxHashMap<(i32, i32), Figures> = FxHashMap::default();
+    let mut by_counter: Vec<HashMap<String, f64>> = vec![HashMap::new(); n];
+    let add = |total: &mut Figures, counts: &Figures| {
+        for (total, count) in total.iter_mut().zip(counts) {
+            *total += count;
+        }
+    };
     for (&(phase, stack), counts) in &hw.by_stack {
         let frames = &hw.stacks.stacks[stack as usize];
-        if let Some(&(function, line)) = frames.first() {
+        if let Some(&(function, _)) = frames.first() {
             add(&mut functions.entry(function).or_default().0, counts);
-            if function >= 0 && line >= 0 {
-                add(&mut lines.entry((function, line)).or_default().0, counts);
-            }
         }
         let mut seen_functions: FxHashSet<i32> = FxHashSet::default();
         let mut seen_lines: FxHashSet<(i32, i32)> = FxHashSet::default();
@@ -2327,7 +2396,7 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
                 add(&mut functions.entry(function).or_default().1, counts);
             }
             if function >= 0 && line >= 0 && seen_lines.insert((function, line)) {
-                add(&mut lines.entry((function, line)).or_default().1, counts);
+                add(lines.entry((function, line)).or_default(), counts);
             }
         }
         let key = fold(names, input.phases, phase, frames);
@@ -2335,9 +2404,15 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
             *rows.entry(key.clone()).or_default() += counts[index];
         }
     }
+    // (a folded file's weights cannot fall below zero: the stacks whose estimate did are left out, and said so)
+    let mut left_out: Vec<(usize, f64)> = vec![(0, 0.0); n];
     for (index, rows) in by_counter.into_iter().enumerate() {
         let file: String = hw.names[index].chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-        folded.push((format!("counters.{file}.folded"), rows.into_iter().collect()));
+        for value in rows.values().filter(|value| **value <= -0.5) {
+            left_out[index].0 += 1;
+            left_out[index].1 += value;
+        }
+        folded.push((format!("counters.{file}.folded"), rows.into_iter().filter(|(_, value)| *value >= 0.5).map(|(key, value)| (key, value.round() as u64)).collect()));
     }
     let kind = |id: i32| -> &'static str {
         match names.function(id) {
@@ -2348,34 +2423,60 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
             None => "C",
         }
     };
-    let mut function_rows: Vec<(i32, (Counts, Counts))> = functions.into_iter().collect();
-    function_rows.sort_by(|a, b| b.1.0[lead].cmp(&a.1.0[lead]).then(b.1.1[lead].cmp(&a.1.1[lead])).then(a.0.cmp(&b.0)));
-    let ipc_of = |counts: &Counts| hw::rates(&hw.names, counts).into_iter().find(|rate| rate.0 == "IPC").map(|rate| rate.2);
-    let _ = writeln!(summary, "\ntop functions by self {lead_name} (what was counted since the sample before, booked to the stack each sample found; total includes callees)");
-    let _ = writeln!(summary, "{}  {:>5}  function", hw.names.iter().map(|name| format!(" {name:>13}")).collect::<Vec<_>>().join(""), "IPC");
-    for (id, (own, _)) in function_rows.iter().filter(|(_, (own, _))| own[lead] > 0).take(input.config.top) {
-        let _ = writeln!(summary, "{}  {:>5}  {}", own[..n].iter().map(|value| format!(" {:>13}", compact(*value))).collect::<Vec<_>>().join(""), ipc_of(own).unwrap_or_else(|| "-".into()), names.label(*id));
+    let mut function_rows: Vec<(i32, (Figures, Figures))> = functions.into_iter().collect();
+    function_rows.sort_by(|a, b| b.1.0[lead].total_cmp(&a.1.0[lead]).then(b.1.1[lead].total_cmp(&a.1.1[lead])).then(a.0.cmp(&b.0)));
+    let share_of = |counts: &Figures| figure(counts, known::LOAD_STALL_SHARE).map(|figure| figure.text()).unwrap_or_else(|| "-".into());
+    let ipc_of = |counts: &Figures| figure(counts, "IPC").map(|figure| figure.text()).unwrap_or_else(|| "-".into());
+    let _ = writeln!(summary, "\ntop functions by self {lead_name} (readings around sampled calls: a function's own counts are its calls', its callees' apart, estimated where one call in several was sampled; total includes callees; a reading costs the code after it some of its caches, so a short sampled function reads a little high and its callers low)");
+    let _ = writeln!(summary, "{}  {:>7}  {:>5}  function", hw.names.iter().map(|name| format!(" {name:>13}")).collect::<Vec<_>>().join(""), "stalled", "IPC");
+    for (id, (own, _)) in function_rows.iter().filter(|(_, (own, _))| own[lead] > 0.0).take(input.config.top) {
+        let _ = writeln!(summary, "{}  {:>7}  {:>5}  {}", own[..n].iter().map(|value| format!(" {:>13}", compact_signed(*value))).collect::<Vec<_>>().join(""), share_of(own), ipc_of(own), names.label(*id));
     }
-    let mut line_rows: Vec<((i32, i32), (Counts, Counts))> = lines.into_iter().collect();
-    line_rows.sort_by(|a, b| b.1.0[lead].cmp(&a.1.0[lead]).then(a.0.cmp(&b.0)));
-    let _ = writeln!(summary, "\ntop lines by self {lead_name}");
-    for ((function, line), (own, _)) in line_rows.iter().filter(|(_, (own, _))| own[lead] > 0).take(input.config.top.min(15)) {
+    // estimates below zero: the sampling's noise (what came off a function for its callees' unsampled calls outweighed
+    // what its own sampled calls read), shown so the tables above add up
+    let below: Vec<String> = function_rows.iter().filter(|(_, (own, _))| own[lead] <= -0.5).map(|(id, (own, _))| format!("{} {}", names.label(*id), compact_signed(own[lead]))).collect();
+    if !below.is_empty() {
+        let shown = below.len().min(input.config.top.max(5));
+        let rest = if below.len() > shown { format!("; {} more", below.len() - shown) } else { String::new() };
+        let _ = writeln!(summary, "estimated below zero by self {lead_name} (sampling noise: what came off them for their callees' unsampled calls outweighed what their sampled calls read): {}{rest}", below[..shown].join("; "));
+    }
+    if left_out[lead].0 > 0 {
+        let _ = writeln!(summary, "the folded files leave out the stacks estimated below zero: {} stacks, {lead_name} {}", group_digits(left_out[lead].0 as u64), compact_signed(left_out[lead].1));
+    }
+    let mut line_rows: Vec<((i32, i32), Figures)> = lines.into_iter().collect();
+    line_rows.sort_by(|a, b| b.1[lead].total_cmp(&a.1[lead]).then(a.0.cmp(&b.0)));
+    let _ = writeln!(summary, "\ntop call sites by the {lead_name} of the calls they make (a line's own code is its function's)");
+    for ((function, line), total) in line_rows.iter().filter(|(_, total)| total[lead] > 0.0).take(input.config.top.min(15)) {
         let module = names.function(*function).map_or(String::new(), |f| names.short(&f.source).to_string());
-        let _ = writeln!(summary, "{}  {:>5}  {module}:{line}", own[..n].iter().map(|value| format!(" {:>13}", compact(*value))).collect::<Vec<_>>().join(""), ipc_of(own).unwrap_or_else(|| "-".into()));
+        let _ = writeln!(summary, "{}  {:>7}  {:>5}  {module}:{line}", total[..n].iter().map(|value| format!(" {:>13}", compact_signed(*value))).collect::<Vec<_>>().join(""), share_of(total), ipc_of(total));
     }
 
+    // (version 2: each call drawn on its own, a function's first calls all read and its short calls measured again, the
+    // readings where threads switch; a profile without a version drew one call of each run of calls and read no switch)
+    out["attribution"] = json!({
+        "method": "calls", "version": ATTRIBUTION_VERSION,
+        "calls": hw.calls, "calls_booked_to_callers": hw.transparent_calls, "switch_readings": hw.switch_readings,
+        "functions": hw.sampled_functions, "unsampled_functions": hw.unsampled_functions,
+        "threshold_us": round(hw.threshold_us, 3), "min_sampled_us": hw::MIN_SAMPLED_US, "min_measured": hw::MIN_MEASURED, "readings_a_second": hw::READINGS_A_SECOND,
+        "readings_share_of_cycles": round(readings_share, 6),
+        "folded_left_out": Json::Object(hw.names.iter().zip(&left_out).map(|(name, (stacks, sum))| (name.clone(), json!({"stacks": stacks, "sum": sum.round() as i64}))).collect()),
+    });
     out["run"] = json!({"counts": object(&hw.run), "rates": rates(&hw.run), "seconds": hw.run_seconds});
-    out["readings"] = json!({"count": hw.readings, "matched": hw.matched, "samples": hw.samples, "own_counts": hw.per_reading.as_ref().map(object)});
+    out["readings"] = json!({"count": hw.readings, "matched": hw.matched, "calls": hw.calls, "own_counts": hw.per_reading.as_ref().map(|own| object(&own.map(|value| value as f64))), "own_us": round(hw.reading_us, 3), "taken_out": true});
     out["trace"] = json!({"switches": hw.switches, "without_counters": hw.without_counters, "lost_events": hw.lost_events, "lost_buffers": hw.lost_buffers});
     out["threads"] = Json::Array(hw.threads.iter().map(|thread| json!({"id": thread.id, "name": thread.name, "run_thread": thread.run_thread, "slices": thread.slices, "counts": object(&thread.counts)})).collect());
     out["phases"] = Json::Array(hw.phases.iter().map(|(phase, counts)| json!({"phase": phase_name(*phase), "counts": object(counts), "rates": rates(counts)})).collect());
+    // a row a frame: its counts, then the cost figures they allow
+    let frame_figures: Vec<&str> = [known::LOAD_STALL_SHARE, known::STALL_PER_THOUSAND, known::MISS_LATENCY, "IPC"].into_iter().filter(|key| hw.frames.iter().any(|frame| figure(&frame.counts, key).is_some())).collect();
     let mut columns = vec!["frame".to_string(), "phase".to_string(), "host_ms".to_string()];
     columns.extend(hw.names.iter().cloned());
+    columns.extend(frame_figures.iter().map(|key| key.to_string()));
     out["frames"] = json!({
         "columns": columns,
         "rows": hw.frames.iter().map(|frame| {
             let mut row = vec![json!(frame.frame), json!(frame.phase), json!(round(frame.host_ms, 4))];
-            row.extend(frame.counts[..n].iter().map(|value| json!(value)));
+            row.extend(frame.counts[..n].iter().map(|value| whole(*value)));
+            row.extend(frame_figures.iter().map(|key| figure(&frame.counts, key).map_or(json!(0.0), |figure| json!(round(figure.value, 6)))));
             Json::Array(row)
         }).collect::<Vec<_>>(),
     });
@@ -2384,14 +2485,27 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
         json!({
             "id": id, "key": function_key(names, *id), "name": function.map_or_else(|| names.frame(*id), |f| f.name.clone()),
             "module": function.map(|f| module_name(&f.source).to_string()), "line": function.map(|f| f.line), "kind": kind(*id),
-            "self": object(own), "total": object(total), "self_rates": rates(own),
+            "self": object(own), "total": object(total), "self_rates": rates(own), "total_rates": rates(total),
         })
     }).collect());
-    out["lines"] = Json::Array(line_rows.iter().take(2000).map(|((function, line), (own, total))| {
+    // (a line's own code is its function's: "self" is empty, "total" is what the calls made from it cost)
+    out["lines"] = Json::Array(line_rows.iter().take(2000).map(|((function, line), total)| {
         let f = names.function(*function);
-        json!({"function": function, "name": f.map(|f| f.name.clone()), "module": f.map(|f| module_name(&f.source).to_string()), "line": line, "self": object(own), "total": object(total), "self_rates": rates(own)})
+        json!({"function": function, "name": f.map(|f| f.name.clone()), "module": f.map(|f| module_name(&f.source).to_string()), "line": line, "self": {}, "total": object(total), "total_rates": rates(total), "calls": true})
     }).collect());
     out
+}
+
+/// profile.json `counters.attribution.version`: how the counters reached functions (see [`counters`])
+pub const ATTRIBUTION_VERSION: u32 = 2;
+
+/// How a profile.json's counters reached functions, in words (`profile diff` and the viewer say when two differ)
+pub fn attribution_of(counters: &Json) -> &'static str {
+    match (counters["attribution"]["method"].as_str(), counters["attribution"]["version"].as_u64()) {
+        (Some("calls"), Some(2..)) => "readings around sampled calls, each drawn on its own, and where threads switch",
+        (Some("calls"), _) => "readings around sampled calls, one drawn of each run of calls, threads' switches not read",
+        _ => "1 ms samples, each booked to the stack the next reading found",
+    }
 }
 
 /// A stable key for a function across runs (its module and name, and its line for anonymous ones)
@@ -2502,4 +2616,51 @@ pub fn html(profile_json: &str) -> String {
     // (`</` cannot end the script element the data sits in)
     let data = profile_json.replace("</", "<\\/");
     TEMPLATE.replacen("/*PROFILE_DATA*/null", &data, 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hardware-counter profile cut short by the service's slice limit says so, with the seconds captured, in its
+    /// summary and in profile.json
+    #[test]
+    fn a_cut_short_counter_profile_warns_in_its_summary_and_json() {
+        let config = Config::new(super::super::Kinds::HW, std::path::PathBuf::new());
+        let run = Run::default();
+        let collector = memory::Collector::default();
+        let cpu = cpu::Report::default();
+        let sources = FxHashMap::default();
+        let hw = hw::Report { names: vec!["cycles".into()], cut_short: Some(12.345), ..Default::default() };
+        let input = Input {
+            config: &config,
+            run: &run,
+            elapsed: 0.0,
+            vm: None,
+            allocations: None,
+            time: None,
+            phases: &[],
+            marks: &[],
+            rows: &[],
+            snapshots: &[],
+            collector: &collector,
+            caches: &[],
+            facts: super::super::caches::Facts::default(),
+            cpu: &cpu,
+            cpu_frames: &[],
+            hw: Some(&hw),
+            sources: &sources,
+            end_work: 0.0,
+            end: None,
+            boundary: None,
+            phase_timing: None,
+            phase_tree: None,
+            warnings: &[],
+        };
+        let names = Names { vm: None, steps: Vec::new(), outside: Vec::new(), shorts: FxHashMap::default() };
+        let mut summary = String::new();
+        let json = counters(&input, &hw, &names, &mut summary, &mut Vec::new());
+        assert_eq!(json["cut_short"], json!(12.345));
+        assert!(summary.contains("WARNING: hardware-counter profile CUT SHORT after 12.345 s"), "{summary}");
+    }
 }

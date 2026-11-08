@@ -560,6 +560,21 @@ LUA_API int lua_profileentries(lua_State* L, int* incfunction);
 // registers a chunk's functions when it first runs one
 LUA_API void lua_profilechunks(lua_State* L, int on);
 
+// a host's hook around the Luau calls it samples (a running profile's; NULL turns it off): LUA_PROFILECALL_ENTER as a
+// sampled call's first instruction is about to run (its frame in place, so lua_profilestack sees it on top), and
+// LUA_PROFILECALL_LEAVE as it returns, as an error unwinds it in a protected call, or as its thread is ended by an error
+// or reset (its frame still in place). Each
+// call of a function is drawn on its own, with a chance of one in `every` (lua_setprofilecallevery; 1 until set: every
+// call), except that a call inside a sampled call of its own function on the same thread is sampled too (up to 64 such
+// calls a sampled call, then they are drawn again), so a recursion is read as a whole; with `every` 0 none is sampled,
+// and one call after every `remeasure` calls is read around for its length alone. The hook is told the `every` its call
+// was drawn with (1 for a call sampled inside its function's, 0 for a call read for its length only) and the frame's
+// depth (lua_stackdepth). Calls into native code are not sampled.
+#define LUA_PROFILECALL_ENTER 0
+#define LUA_PROFILECALL_LEAVE 1
+LUA_API void lua_setprofilecalls(lua_State* L, void (*hook)(void* ud, lua_State* L, int event, int function, int every, int depth), void* ud);
+LUA_API void lua_setprofilecallevery(lua_State* L, int function, int every, int remeasure);
+
 // what the memory an onallocate callback reports is for (lua_allocblock)
 #define LUA_ALLOC_OTHER 0
 #define LUA_ALLOC_OBJECT 1 // a collectable object: lua_allocblock returns its block

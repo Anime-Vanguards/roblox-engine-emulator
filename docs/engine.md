@@ -724,11 +724,35 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   (`hw::protocol`, shared with the service). The run thread's readings make it switch out (`hw::client::Reader`), so
   the slices split exactly at them (`hw::readings::split`: a slice is the window of the first reading whose switch is
   at or after its end, the last such reading's when a switch was not seen). Readings come at the profile's start and
-  end, when the VM is installed, at each frame's start and end, at phase marks, around the engine's own steps and at
-  safepoints once the 1 ms ticker moved; a safepoint's reading books what was counted since the one before to the
-  stack it finds. What ran before the VM and after a phase's last sample gets frames of their own, so the stacks, the
-  phases and the run add up to the same counts. `REE_HW_COUNTERS=mock` takes the thread's cycle time at each reading
-  instead (tests).
+  end, when the VM is installed, at each frame's start and end, at phase marks, around the engine's own steps, around
+  the Luau calls the VM samples, and where a Luau thread holding a sampled call resumes or stops (the VM's `preresume`
+  and `postresume` callbacks). The call hook (`lua_setprofilecalls`, patches/luau/17-profile-calls.patch) runs as a
+  sampled call's first instruction is about to run and as it returns or an error unwinds it to a protected call; each
+  call is drawn on its own with a chance of one in `every` (`lua_setprofilecallevery`), and a call inside a sampled
+  call of its own function on the same thread is sampled with it (up to 64 from each recursion's outermost sampled
+  call), so a recursion is read as a whole; a thread an error ends, or one reset, leaves its sampled calls, and a freed
+  one gives them up (each thread's open sampled calls are tracked). The
+  profile sets `every` from the function's mean call (each measured call weighed by the calls it stood for) against a
+  threshold between 20 us and 1 ms that keeps call readings near 10,000 a second (frame, engine-step and thread readings
+  cannot raise it), after reading a function's first 4 calls; under 10 us, none
+  (stopping only under 7.5 us), with one call read for its length after 64, 128, ... 65,536 calls. A stretch between
+  readings goes, as the reading that opened it left things, to the innermost open sampled call of the innermost
+  running thread that holds one (else the engine step, else the profile's own frames), booked to its stack (its
+  callers at their call sites, itself without a line) weighted by its `every`; at its end `every - 1` times its net
+  comes off what it ran in (still, when that call ended first), so each function's own counts are an unbiased estimate
+  and every booking adds up to the run's counts; a line's figures are the calls made from it. Calls read for their
+  length alone, and a function's first calls when its fourth found it too short (decided then), are their callers'. A reading's own
+  counts (the median of back-to-back readings) come out of every stretch between readings, and the run thread and the
+  reader's helper are pinned to one CPU while the service counts. The counters' names, the AMD events they read and
+  the figures derived from them (the share of cycles stalled on loads, a miss's latency) are `hw::counters`, shared
+  with the service and the profile viewer, which also maps the names profiles used before. What ran before the VM and
+  outside the sampled calls gets frames of their own. `REE_HW_COUNTERS=mock` takes the thread's cycle time at each
+  reading instead (tests). When the service reaches its limit of two million slices, ree books only the run up to the
+  last complete reading; `counters.cut_short` gives the host seconds captured, and the summary and the viewer's header
+  mark the profile CUT SHORT. Each reading makes two slices, so 10,000 readings a second allow about 100 s, and fewer
+  with extra frame and thread readings. A thin wrapper between a caller and a heavy callee (such as a `pcall`) can have
+  a noisy self estimate, with the opposite error in its caller; measured, it was up to 11 % of the callee's
+  instructions. Read the callee's own figure for its work.
 - **Host time** (`time`, luau_profile.rs, `profiler::time`): a 1 ms ticker; where it moved, what ran since the last
   booking is booked to the Luau stack at a safepoint (a call, a return, a loop edge), to the Luau that ran last when the
   interpreter is left, to the engine's step open when it is entered (`lua_setprofilevm`: the Animator, joints, physics,
@@ -746,8 +770,12 @@ nanosecond: at most 0.6 % of a loop of the library's allocating calls (string.sp
 that does nothing but touch tables first in a frame (docs/engine.md). A profile's
 hooks are written straight into the VM's callbacks, allocating nothing on its heap (a protected call to set them made a
 closure there, and the collector's later cycles then began elsewhere: what a script read of memory moved). The hardware
-counters add no hook of their own: their readings sit behind the frame hook's read, the interrupt a profile
-installs and the engine steps' check of the ticker. On, nothing a
+counters' call hook costs a Luau call nothing while off: `luau_execute` runs a copy of the interpreter that asks only
+while a hook is set, as it runs one for single-stepping, compiled in a translation unit of its own
+(lvmexecute_profiled.cpp, so the copies build side by side; a call from C or a metamethod's fast path loads
+a flag in the global state, a return tests a frame flag it loads anyway; measured, 50 million calls of a table's
+function took the same cycles as with the VM before the hook, +0.0 % the median of 15 interleaved pairs); their other
+readings sit behind the frame hook's read and the engine steps' check. On, nothing a
 script sees changes: the profile allocates nothing on the VM's heap and leaves the VM's counts as they are,
 so the work clock, os.clock and a recording are the same (a sim recorded with every kind on, a frozen clock
 and a pinned epoch is byte for byte the unprofiled recording). Stepping makes the interpreter about five

@@ -124,6 +124,11 @@ pub fn detect(p: &Profile, work: Option<&Tree>, sites: &[AllocSite]) -> (Vec<Iss
         Some(boundary) => repeat_reads(p, boundary, harness_out, &mut issues),
         None => unchecked.push("repeat reads and unchanged writes: need boundary, in a run of its own".into()),
     }
+    match p.raw.counters.as_ref().filter(|c| c.error.is_none()) {
+        Some(c) if c.names.iter().any(|name| name == "load-stall-cycles") && c.names.iter().any(|name| name == "cycles") => memory_waits(p, c, harness_out, &mut issues),
+        Some(_) => unchecked.push("code that waits on memory: needs the counters' load-stall-cycles and cycles (the default set)".into()),
+        None => unchecked.push("code that waits on memory: needs hw (the CPU's counters), in a run of its own".into()),
+    }
     let harness = p.funcs.iter().filter(|f| f.harness).count();
     if harness_out {
         unchecked.push(format!("the harness's code ({harness} {}): the issues cover the game's code", if harness == 1 { "function" } else { "functions" }));
@@ -663,6 +668,63 @@ fn repeat_reads(p: &Profile, boundary: &crate::model::Boundary, harness_out: boo
             advice: "Write only when the value changes".into(),
             target: func.map_or(Target::None, |f| Target::Line(f, site.line)),
             weight: site.unchanged_writes,
+        });
+    }
+}
+
+/// Functions whose own cycles went mostly to waiting for load data, from the hardware counters read around their sampled
+/// calls: a function holding at least 5 % of the run's stall cycles, with at least 30 % of its own cycles stalled
+fn memory_waits(p: &Profile, c: &crate::model::Counters, harness_out: bool, issues: &mut Vec<Issue>) {
+    let index = |name: &str| c.names.iter().position(|known| known == name);
+    let (Some(stalls), Some(cycles)) = (index("load-stall-cycles"), index("cycles")) else { return };
+    let (occupancy, allocs) = (index("miss-buffer-occupancy"), index("miss-buffer-allocs"));
+    let run_cycles = c.run.counts.get("cycles").copied().unwrap_or(0.0);
+    let run_stalls = c.run.counts.get("load-stall-cycles").copied().unwrap_or(0.0);
+    if run_cycles <= 0.0 || run_stalls <= 0.0 {
+        return;
+    }
+    let mut rows: Vec<(usize, f64, f64, Vec<f64>)> = p
+        .counter_funcs
+        .iter()
+        .filter(|(func, _)| p.funcs[**func].kind == Kind::Script && !(harness_out && p.funcs[**func].harness))
+        .filter_map(|(&func, (own, _))| {
+            let (stalled, spent) = (own.get(stalls).copied().unwrap_or(0.0), own.get(cycles).copied().unwrap_or(0.0));
+            (stalled >= 0.05 * run_stalls && spent > 0.0 && stalled / spent >= 0.3).then(|| (func, stalled, spent, own.clone()))
+        })
+        .collect();
+    rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    let how = if c.by_calls() { "read around its sampled calls (its own, its callees' apart)" } else { "booked from the 1 ms samples after it" };
+    for (func, stalled, spent, own) in rows.into_iter().take(4) {
+        let of_run = stalled / run_cycles;
+        let mut evidence = vec![format!(
+            "{} of its own {} cycles stalled waiting for load data ({}), {} of the run thread's cycles; {how}",
+            fmt::compact(stalled),
+            fmt::compact(spent),
+            fmt::share(stalled, spent),
+            fmt::share(stalled, run_cycles)
+        )];
+        if let (Some(occupancy), Some(allocs)) = (occupancy, allocs) {
+            let (inflight, allocated) = (own.get(occupancy).copied().unwrap_or(0.0), own.get(allocs).copied().unwrap_or(0.0));
+            if allocated > 0.0 && spent > 0.0 {
+                evidence.push(format!("its L1 data cache misses stayed outstanding {:.0} cycles on average, {:.2} outstanding on average over its cycles", inflight / allocated, inflight / spent));
+            }
+        }
+        evidence.push("the counters measure ree's own process running the Luau: where memory costs, not a client's frame time (the work clock's)".into());
+        let f = &p.funcs[func];
+        issues.push(Issue {
+            severity: if of_run >= 0.10 {
+                Severity::Serious
+            } else if of_run >= 0.03 {
+                Severity::Warning
+            } else {
+                Severity::Info
+            },
+            kind: "memory waits",
+            title: format!("Waits on memory: {} ({} of its cycles stalled on loads)", f.label(), fmt::share(stalled, spent)),
+            evidence,
+            advice: "Its loads wait for data from beyond the L1: fewer cache lines touched, or the same lines touched again while they are near, would shorten the wait".into(),
+            target: Target::Func(func as u32),
+            weight: stalled,
         });
     }
 }

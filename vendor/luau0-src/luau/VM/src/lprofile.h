@@ -52,6 +52,22 @@ LUAI_FUNC void luaP_freed(lua_State* L, GCObject* o);
 // moved with the new one (what the work counters' `rehashed` counts); the profile's rehash hook (lua_setprofilerehash)
 LUAI_FUNC void luaP_rehash(lua_State* L, LuaTable* t, int oldarray, int oldnodes, int keys);
 
+// while a profile's call hook is set (lua_setprofilecalls, global_State::profilecalls) the interpreter calls
+// luaP_callenter as each Luau call's frame is set up: luau_execute then runs an instantiation of its own that asks, so the
+// one that runs without a profile does not (a call from C or a metamethod's fast path loads the flag)
+struct CallInfo;
+// a Luau call's frame (L->ci, of L->ci->p) is set up and its first instruction is next: the hook when the call is
+// sampled (only L passed: the interpreter keeps nothing more live for a call it almost never makes)
+LUAI_FUNC void luaP_callenter(lua_State* L);
+// a sampled call (LUA_CALLINFO_PROFILECALL) returns, its frame still in place
+LUAI_FUNC void luaP_callleave(lua_State* L, CallInfo* ci);
+// an error unwinds L's frames above `to` (a protected call's recovery), or all of them (an error ended the thread, or it
+// is reset: L->base_ci): each sampled call among them leaves, innermost first
+LUAI_FUNC void luaP_callsunwound(lua_State* L, CallInfo* to);
+// the interpreter's copy that samples calls (lvmexecute_profiled.cpp, a translation unit of its own so it compiles beside
+// the plain one): luau_execute runs it while a call hook is set
+LUAI_FUNC void luaP_executeprofiled(lua_State* L);
+
 // luau_execute holds one while it runs under a profile (an error that unwinds it may skip its destructor: the catch tells the
 // profile, luaP_unwound)
 struct luaP_Execute

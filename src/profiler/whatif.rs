@@ -113,9 +113,13 @@ pub const METRICS: &[Metric] = &[
     metric("hw_instructions", "CPU instructions", "count", "lower", false, true, true, "instructions the CPU retired (hardware counter)"),
     metric("hw_cycles", "CPU cycles", "count", "lower", false, true, true, "core cycles (hardware counter)"),
     metric("hw_ipc", "CPU IPC", "ratio", "higher", false, false, false, "instructions a cycle"),
-    metric("hw_l1d_misses", "L1D misses", "count", "lower", false, true, true, "L1 data cache misses (hardware counter)"),
-    metric("hw_l2_misses", "L2 misses", "count", "lower", false, true, true, "L2 misses (hardware counter)"),
-    metric("hw_llc_misses", "LLC misses", "count", "lower", false, true, true, "last-level cache misses (hardware counter)"),
+    metric("hw_load_stall_cycles", "cycles stalled on loads", "count", "lower", false, true, true, "cycles nothing retired because the oldest op waited for load data (hardware counter): what memory cost"),
+    metric("hw_load_stall_share", "load stall share", "ratio", "lower", false, false, false, "the share of cycles stalled on loads"),
+    metric("hw_miss_latency", "L1D miss latency", "count", "lower", false, false, false, "cycles an L1 data cache miss stayed outstanding on average (misses outstanding a cycle, summed, over misses allocated): where misses were served from, not what they cost"),
+    metric("hw_miss_buffers", "L1D miss buffers", "count", "lower", false, true, true, "lines the L1 data cache fetched (hardware counter: one a line, however many loads missed it)"),
+    metric("hw_demand_fills", "demand fills", "count", "lower", false, true, true, "lines filled for demand loads and stores (hardware counter: one a line; prefetched lines not at all)"),
+    metric("hw_demand_fills_beyond_l2", "demand fills beyond L2", "count", "lower", false, true, true, "demand fills from beyond the core's L2 (hardware counter)"),
+    metric("hw_demand_fills_beyond_l3", "demand fills beyond L3", "count", "lower", false, true, true, "demand fills from beyond the core complex's L3 (hardware counter)"),
     metric("hw_branch_misses", "branch misses", "count", "lower", false, true, true, "mispredicted branches (hardware counter)"),
 ];
 
@@ -695,18 +699,34 @@ fn read_hw(dir: &Path, frames: f64) -> Option<Figures> {
     let profile = super::diff::load_profile(dir).ok()?;
     let phases = profile["counters"]["phases"].as_array()?;
     let run = phases.iter().find(|phase| phase["phase"] == "run")?;
-    let counts = &run["counts"];
+    // (by the counters' names now: a profile from before the fills were renamed reads the same)
+    let counts: std::collections::BTreeMap<String, f64> = run["counts"].as_object()?.iter().filter_map(|(name, value)| Some((super::hw::counters::canonical(name).to_string(), value.as_f64()?))).collect();
     let mut figures = Figures::new();
     let calls = frames.max(1.0);
-    for (counter, key) in [("instructions", "hw_instructions"), ("cycles", "hw_cycles"), ("l1d-misses", "hw_l1d_misses"), ("l2-misses", "hw_l2_misses"), ("llc-misses", "hw_llc_misses"), ("branch-misses", "hw_branch_misses")] {
-        if let Some(value) = counts[counter].as_f64() {
+    for (counter, key) in [
+        ("instructions", "hw_instructions"),
+        ("cycles", "hw_cycles"),
+        ("load-stall-cycles", "hw_load_stall_cycles"),
+        ("miss-buffer-allocs", "hw_miss_buffers"),
+        ("demand-fills", "hw_demand_fills"),
+        ("demand-fills-beyond-l2", "hw_demand_fills_beyond_l2"),
+        ("demand-fills-beyond-l3", "hw_demand_fills_beyond_l3"),
+        ("branch-misses", "hw_branch_misses"),
+    ] {
+        if let Some(value) = counts.get(counter) {
             figures.insert(key, value / calls);
         }
     }
-    if let (Some(instructions), Some(cycles)) = (counts["instructions"].as_f64(), counts["cycles"].as_f64()) {
-        if cycles > 0.0 {
-            figures.insert("hw_ipc", instructions / cycles);
-        }
+    let names: Vec<String> = counts.keys().cloned().collect();
+    let values: Vec<f64> = counts.values().copied().collect();
+    for figure in super::hw::counters::figures(&names, &values) {
+        let key = match figure.key {
+            "IPC" => "hw_ipc",
+            super::hw::counters::LOAD_STALL_SHARE => "hw_load_stall_share",
+            super::hw::counters::MISS_LATENCY => "hw_miss_latency",
+            _ => continue,
+        };
+        figures.insert(key, figure.value);
     }
     (!figures.is_empty()).then_some(figures)
 }
