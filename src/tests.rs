@@ -3537,6 +3537,59 @@ fn a_frozen_clock_ignores_the_work_between_reads() {
     }
 }
 
+/// A frozen clock is the frame's time for every thread that reads it, however many read it in a frame, as the bench's
+/// frame-locked clock is: 400 threads timed on os.clock, as a heavy attack's copies are, all read it the same within each
+/// frame. (The reads counted against the allowance for the whole phase, so from the 257th on each moved it 10 us, and an arm
+/// that read more ran its copies ahead.) A busy loop in one resumption still moves it, so it ends.
+#[test]
+fn a_frozen_clock_reads_the_same_for_every_thread_in_a_frame() {
+    let (lua, engine) = start();
+    engine.state.borrow_mut().sched.frozen_clock = true;
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local RunService = game:GetService("RunService")
+        local Reads = { {}, {} }
+        _G.FrozenReads = Reads
+        for _ = 1, 400 do
+            task.spawn(function()
+                for Frame = 1, 2 do
+                    RunService.Heartbeat:Wait()
+                    table.insert(Reads[Frame], os.clock())
+                end
+            end)
+        end
+        "#,
+    );
+    for _ in 0..3 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local function Spread(List)
+            local Low, High = math.huge, -math.huge
+            for _, Value in List do
+                Low, High = math.min(Low, Value), math.max(High, Value)
+            end
+            return High - Low
+        end
+        local Reads = _G.FrozenReads
+        print(string.format("reads %d %d spread %.9f %.9f", #Reads[1], #Reads[2], Spread(Reads[1]), Spread(Reads[2])))
+        local Start, Count = os.clock(), 0
+        while os.clock() - Start < 0.001 do
+            Count += 1
+        end
+        print(string.format("busy loop ended after %d reads", Count))
+        "#,
+    );
+    assert!(output.contains(&"print: reads 400 400 spread 0.000000000 0.000000000".to_string()), "{output:?}");
+    assert!(output.iter().any(|line| line.starts_with("print: busy loop ended after ")), "{output:?}");
+}
+
 /// A frozen clock stops the wall clock too: tick(), os.time() and DateTime.now() read the same in a run an hour later, so two
 /// differential runs that straddle an hour boundary still write the same values.
 #[test]

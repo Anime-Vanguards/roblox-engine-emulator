@@ -542,7 +542,8 @@ in speed write the same values; a client's os.clock is real time, so a script th
 frame can draw differently there when its real work moves (`ree record --timing-check` says when a recording
 hinges on that: docs/cli.md). The clock never runs backwards and never falls behind the frame's time.
 A recorded clock (`RUR_CLOCK`) takes no charges; the busy-loop allowance still ends a loop that only reads
-the clock.
+the clock. A frozen clock counts those reads within one resumption only, so every thread that reads it in a
+frame, however many there are, reads the frame's time, as a frame-locked benchmark clock gives them.
 
 The same script is charged the same in every run. Luau's garbage collector paces its cycles by how long
 they took, and on the wall clock it stepped at other points in each run on a loaded machine: an allocating
