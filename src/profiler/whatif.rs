@@ -102,8 +102,9 @@ pub const METRICS: &[Metric] = &[
     metric("gc_steps", "collector steps", "count", "lower", true, true, true, "the collector's steps (it paces itself by the scripts' work, so they are the same every run); the work clock does not charge them"),
     metric("gc_freed", "collector freed", "bytes", "lower", true, false, true, "bytes the collector freed"),
     metric("gc_ms", "collector host time", "ms", "none", false, false, true, "host time of the collector's steps in the profiled run (its profilers slow it: a guide, not a measure)"),
-    metric("cache_hit_rate", "inline cache hits", "ratio", "higher", true, false, false, "Luau's inline caches: hits of the lookups (misses and slow paths the rest)"),
-    metric("cache_misses", "inline cache misses", "count", "lower", true, true, true, "inline cache misses and slow paths"),
+    metric("cache_hit_rate", "inline cache hits", "ratio", "higher", true, false, false, "Luau's inline caches: hits of the lookups a table serves (a value another type's metamethod serves is no cache's)"),
+    metric("cache_uncharged_ms", "inline caches' uncharged work", "ms", "lower", true, true, true, "what the inline caches' outcomes the work clock does not charge cost over hits at the committed prices (profiler/prices.rs), in the work clock's ms, beyond work_ms: a reprediction, an absent key, an insert with room, a metatable walk by its depth; a rehash and a looked-up import are the clock's own charge, already in work_ms; prices within the noise are left out"),
+    metric("cache_lookups", "inline cache lookups", "count", "none", true, false, true, "the lookups a table serves"),
     metric("cache_hits", "inline cache hit count", "count", "none", true, false, true, "inline cache hits"),
     metric("cold_tables", "cold tables", "count", "lower", true, true, true, "tables the frame touched first that were made before it (a client finds them out of its CPU's caches)"),
     metric("cold_ms", "cold touches' work", "ms", "lower", true, false, true, "what the work clock charged for the frame's cold first touches of tables, closures and functions"),
@@ -320,6 +321,8 @@ fn ree_run(options: &Options, args: &[String], timed: bool) -> Ran {
     for variable in UNSET {
         command.env_remove(variable);
     }
+    // (the harness is ree's own: its code is never the game's, nor a user's harness: report.rs tool_module)
+    command.env(crate::profiler::report::TOOL_HARNESS_ENV, "1");
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -535,18 +538,27 @@ pub fn phase_figures(profile: &Json, from: &str, to: &str, calls: f64) -> Figure
         }
     }
     if let (Some(before), Some(after)) = (a["caches"].as_object(), b["caches"].as_object()) {
-        let (mut hits, mut misses) = (0.0, 0.0);
+        use crate::profiler::vm;
+        let (mut hits, mut lookups, mut uncharged_us) = (0.0, 0.0, 0.0);
+        let counts = |row: Option<&Json>| -> Vec<u64> { row.and_then(Json::as_array).map(|o| o.iter().filter_map(Json::as_u64).collect()).unwrap_or_default() };
         for (kind, outcomes) in after {
-            let now: Vec<f64> = outcomes.as_array().map(|o| o.iter().filter_map(Json::as_f64).collect()).unwrap_or_default();
-            let then: Vec<f64> = before.get(kind).and_then(Json::as_array).map(|o| o.iter().filter_map(Json::as_f64).collect()).unwrap_or_default();
-            let at = |values: &Vec<f64>, slot: usize| values.get(slot).copied().unwrap_or(0.0);
-            hits += at(&now, 0) - at(&then, 0);
-            misses += at(&now, 1) - at(&then, 1) + at(&now, 2) - at(&then, 2);
+            let (now, then) = (counts(Some(outcomes)), counts(before.get(kind)));
+            let (depths_now, depths_then) = (counts(b["cache_depths"].get(kind)), counts(a["cache_depths"].get(kind)));
+            let at = |values: &Vec<u64>, slot: usize| values.get(slot).copied().unwrap_or(0);
+            // (luau_caches.outcomes' order; a value another type serves is no cache's lookup)
+            let phase: [u64; vm::CACHE_OUTCOMES] = std::array::from_fn(|slot| at(&now, slot).saturating_sub(at(&then, slot)));
+            let walks: [u64; vm::CACHE_DEPTHS] = std::array::from_fn(|depth| at(&depths_now, depth).saturating_sub(at(&depths_then, depth)));
+            hits += phase[vm::HIT] as f64;
+            lookups += (phase.iter().sum::<u64>() - phase[vm::NOT_TABLE]) as f64;
+            if let Some(index) = vm::CACHE_KINDS.iter().position(|name| name == kind) {
+                uncharged_us += crate::profiler::prices::site_extra(index, &phase, &walks, 1.0).uncharged_us;
+            }
         }
         put("cache_hits", Some(hits));
-        put("cache_misses", Some(misses));
-        if hits + misses > 0.0 {
-            put("cache_hit_rate", Some(hits / (hits + misses)));
+        put("cache_lookups", Some(lookups));
+        put("cache_uncharged_ms", Some(uncharged_us / 1e3));
+        if lookups > 0.0 {
+            put("cache_hit_rate", Some(hits / lookups));
         }
     }
     figures
@@ -950,7 +962,9 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
         let name = format!("profile-{}-{}", variants[variant].slug, size_label(sizes[size]));
         let args = match run_args(&options.out, &name, &context, frames + 4.0) {
             Ok(mut args) => {
-                args.extend(["--profile".into(), "all".into(), "--profile-out".into(), profile_dir.to_string_lossy().into_owned()]);
+                // (the kinds `all` holds but cpu: the timed runs take host time and cycles, `--profile cpu` alone, so this run needs
+                // no cpu pass of its own)
+                args.extend(["--profile".into(), "work,caches,alloc,heap,timeline,phases".into(), "--profile-out".into(), profile_dir.to_string_lossy().into_owned()]);
                 args
             }
             Err(error) => {
@@ -1261,7 +1275,7 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, aa
             // whether a variant's figure is clear of the best's: (clear, the rounds it lost of those paired)
             let samples = |variant: usize| run_of(variant, size).map(|run| if metric.key == "host_ms" { run.host_ms.clone() } else { run.host_cycles.clone() }).unwrap_or_default();
             let largest = values.iter().map(|(_, value)| value.abs()).fold(0.0f64, f64::max);
-            let lookups = (0..variants.len()).filter_map(|variant| { let run = run_of(variant, size)?; Some(run.run.get("cache_hits")? + run.run.get("cache_misses")?) }).fold(0.0f64, f64::max);
+            let lookups = (0..variants.len()).filter_map(|variant| run_of(variant, size)?.run.get("cache_lookups").copied()).fold(0.0f64, f64::max);
             let material = match metric.unit {
                 "count" if metric.key != "insns" => largest >= (insns * 0.001).max(10.0),
                 "bytes" => largest >= 1024.0,
@@ -1784,10 +1798,10 @@ mod tests {
             "marks": [
                 {"phase": "run", "work_ms": 1.0, "insns": 100, "alloc_bytes": 1000, "allocs": 10, "script_rehashes": 1, "script_rehash_keys": 4,
                  "gc": {"steps": 2, "freed": 64, "ms": 0.5}, "vm": {"cold_tables": 0, "cold_closures": 0, "cold_protos": 0, "cold_code": 0},
-                 "caches": {"table key slot": [10, 1, 0, 0], "import": [5, 0, 0, 0]}},
+                 "caches": {"table key slot": [10, 1, 0, 0, 0, 0], "import": [5, 0, 0, 0]}, "cache_depths": {"table key slot": [0, 0, 0, 0]}},
                 {"phase": "after", "work_ms": 5.0, "insns": 500, "alloc_bytes": 3000, "allocs": 30, "script_rehashes": 5, "script_rehash_keys": 24,
                  "gc": {"steps": 6, "freed": 128, "ms": 0.9}, "vm": {"cold_tables": 10, "cold_closures": 2, "cold_protos": 0, "cold_code": 0},
-                 "caches": {"table key slot": [40, 3, 2, 0], "import": [9, 0, 0, 0]}}
+                 "caches": {"table key slot": [40, 3, 2, 0, 1, 2], "import": [9, 0, 0, 0]}, "cache_depths": {"table key slot": [1, 1, 0, 0]}}
             ]
         });
         let figures = phase_figures(&profile, "run", "after", 2.0);
@@ -1800,9 +1814,17 @@ mod tests {
         assert_eq!(figures["gc_steps"], 2.0);
         assert_eq!(figures["cold_tables"], 5.0);
         assert!((figures["cold_ms"] - (10.0 * crate::cost::LUAU_COLD_TABLE + 2.0 * crate::cost::LUAU_COLD_CLOSURE) * 1e-6 / 2.0).abs() < 1e-12);
-        // caches: 34 hits, 4 misses and slow paths in the phase; the rate is not per call
+        // caches: 34 hits of 41 lookups in the phase (2 repredictions, 2 absent reads, a rehash, a walk of one __index table and one
+        // of two); the rate is not per call, the uncharged work is: each uncharged outcome by its price (a price within the noise left
+        // out), the rehash none (the work clock charges it, in work_ms)
         assert_eq!(figures["cache_hits"], 17.0);
-        assert_eq!(figures["cache_misses"], 2.0);
-        assert!((figures["cache_hit_rate"] - 34.0 / 38.0).abs() < 1e-12);
+        assert_eq!(figures["cache_lookups"], 20.5);
+        assert!((figures["cache_hit_rate"] - 34.0 / 41.0).abs() < 1e-12);
+        let clear = |price: Option<crate::profiler::prices::Price>| price.filter(|price| !price.within_noise).map_or(0.0, |price| price.ns);
+        let price = |outcome: usize| clear(crate::profiler::prices::outcome(3, outcome, 1.0));
+        let walk = |depth: usize| clear(crate::profiler::prices::metatable(3, depth, 1.0));
+        assert!(crate::profiler::prices::outcome(3, crate::profiler::vm::REHASHED, 1.0).is_none(), "a rehash is charged, not priced");
+        let expected = (2.0 * price(crate::profiler::vm::REPREDICTED) + 2.0 * price(crate::profiler::vm::ABSENT) + walk(1) + walk(2)) / 1e3 / 1e3 / 2.0;
+        assert!((figures["cache_uncharged_ms"] - expected).abs() < 1e-12, "{} against {expected}", figures["cache_uncharged_ms"]);
     }
 }

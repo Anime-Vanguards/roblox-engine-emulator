@@ -241,17 +241,58 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     what the work clock charges (the instruction's own cost, the engine calls it makes, what it allocates)
     is booked to the instruction that caused it. Per function and per line, self and total: instructions,
     work in milliseconds of Studio time, calls, by opcode; callers and callees; the hottest functions'
-    source annotated. Exact, and the same every run of the same code. ree compiles modules at `-O2`, which
+    source annotated. Exact, and the same every run of the same code. A C function a call reaches is a
+    function of its own at that call site (`table.sort`, `string.byte`, `Instance:GetAttribute`: named by
+    where the globals hold it, or by the method a method call looked up), with its calls and what was charged
+    between the call and its return, whether or not it calls Luau; a Luau function a C function calls (a sort's
+    comparison function) counts a call each time it is entered. ree compiles modules at `-O2`, which
     inlines small local functions into their callers: such a function has no frame of its own there, so its
     calls are counted where its inlined copies run, listed under "inlined functions" (docs/engine.md
     "Profiling").
-  - `caches`: Luau's inline caches per call site (a table key's or a global's predicted slot, a method's
-    slot, a resolved import, a builtin's fast path: hit, miss, slow path) and ree's own caches (member
-    atoms and dispatch, datatype values, Instance userdata, require results, module bytecode, spatial
-    query solids, bundle plans), with hits, misses and evictions. These are software caches, counted
-    exactly by the patched VM: before each instruction with an inline cache runs, it makes the check the
-    interpreter is about to make (patches/luau/12-profiling.patch). They are not the CPU's caches, and no
-    CPU counter is involved: the CPU's cache misses are the `hw` kind's (Hardware counters, below).
+  - `caches`: what each of Luau's inline caches did per call site, as the interpreter did it: the cached slot
+    served it (hit), the key was at another slot (repredicted), the key is absent (a full lookup for nil), a
+    new key was inserted (and whether the table rehashed to fit it), metatables were walked (how many, a table
+    or a function at the end), the environment is unsafe, or the value is not a table (and which type's
+    metamethod served it). The VM keeps a site's counts for each phase it ran in, and the tables cover the reported
+    phases (`--profile-phase`). What the outcomes cost is apart by whether the work clock charges them
+    (`luau_caches.prices.kinds`, each outcome `charged` or not). Charged (a rehash's keys and storage, an import looked up
+    each time, an Instance member's engine price) is the clock's own charge at the site, as the VM booked it
+    (`charged_work_us`, which holds whatever else the clock charged the instruction past its dispatch, a table's cold first
+    touch in the frame among it): part of its function's work, never added to it. It splits exactly into `first_touch_us`,
+    the first touch in a frame of the table the site reaches (its operand's, the environment's for a global), which any change
+    to the site still pays, and `outcome_charged_us`, the rest. At a site whose inserts rehashed, `presized_us` is what
+    allocating those tables' storage at the size each rehash made, up front, would have charged beyond the storage they were
+    built with (a presized constructor's or `table.create`'s cost in their place, at the clock's price for storage), so
+    `outcome_charged_us - presized_us` is what building them presized saves (each with a `_per_frame` figure, and summed by
+    kind). A site that did more than hit (a charge, another outcome) lists its records apart by the call-tree node it ran in
+    too (`nodes`: each with `node`, its index in `tree`, its outcomes and the same figures, which add up exactly to the
+    site's; the per-frame ones are those over `luau_caches.frames`), so a function called from two places, a comparator under
+    `table.sort` and from a loop, has its charge in each; a site that only hit has none. Uncharged (a reprediction, an absent key, an insert
+    into a table with room, a metatable walk, an `__index` function's call) is priced at committed prices
+    (profiler/prices.rs, the same in every profile): a ratio measured on ree's interpreter (a module's safe environment,
+    values passed as arguments, interleaved rounds, in several processes in each of several sessions at different times:
+    the median of every process's median, the least and greatest of them the spread; the CPU, the sessions and their dates
+    are its provenance) times the work clock's price for the base opcode (a global read's, a keyed read's for a table key and
+    a method's lookup). A site's `extra_work_us` is those, work beyond the clock's; a price whose spread reaches zero (the
+    outcome might cost nothing over a hit) is within the noise, shown and left out of every sum (`within_noise` counts the
+    outcomes). The builtin calls the compiler made fast calls of (`builtins`): per builtin, the
+    calls its fast path served and the ones it declined, by reason (the argument count, a type, the results asked for, a
+    collector step owed, an unsafe environment, values out of its range), with what the work clock charged the declines
+    (`decline_charged_us`, and each site's: what the VM booked for a declined call, its fast call's dispatch, its fallback's
+    instructions and the function their CALL reached, a C function's work with its cold first call in the frame or the
+    engine's own Luau, as Vector3.new's constructor; part of the function's work), what the fast path would charge the same
+    calls (`fast_equivalent_us`: its dispatch and the builtin's own counted work there, a new string's interning, the
+    objects and table storage it allocates and the keys its tables' rehashes move, which a fix still pays, so
+    `decline_charged_us - fast_equivalent_us` is what it saves), a site that declined apart by call-tree node (`nodes`, adding up exactly to it), and advice where an equivalent
+    call takes the fast path. ree's own tool code (`rur.record`, a harness
+    one of ree's tools ran) is counted apart (`luau_caches.tool`, `builtins_tool`), out of the tables and the advice, and
+    out of the marks' cache totals. ree's own caches (member atoms and dispatch, datatype values, Instance userdata, require results,
+    module bytecode, spatial query solids, bundle plans: hits, misses and evictions) are listed under
+    `emulator`: they say how fast ree runs, not what the game costs; what three of them say of the game is
+    listed as its facts (`game`: the instances its scripts touched, the modules that ran, the datatype property
+    reads). These are software caches, counted exactly by the patched VM (patches/luau/12-profiling.patch).
+    They are not the CPU's caches, and no CPU counter is involved: the CPU's cache misses are the `hw` kind's
+    (Hardware counters, below).
   - `alloc`: bytes and counts allocated, by type (table, its storage, function, string, userdata by
     Instance class or datatype, thread and its stack, buffer, function prototypes) and by the Luau stack
     that allocated them. Every allocation is counted by type; stacks are taken for every allocation unless
@@ -270,20 +311,53 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     parts apart), their array and hash parts as distributions (slots, those holding a value, least, median, greatest, a
     power-of-two histogram), how many levels of tables each is with the tables it holds, and the rehashes that grew them;
     the summary lists the biggest sites. And the collector's work (steps, cycles, bytes freed, host time).
-  - `timeline`: a row a frame: work, host time, instructions, the heap, allocations, the collector,
-    live instances, connections and threads.
-  - `cpu`: the run thread's CPU cycles, the process's CPU time, page faults and peak memory. Nothing is
-    estimated. The CPU's hardware counters are `hw`'s.
+  - `timeline`: a row a frame: work, host time and the run thread's cycles, instructions, the heap,
+    allocations, the collector, the live instances in the DataModel, alive outside it and destroyed (kept until
+    the VM collects them), connections and the threads made. A kind that slows the run (stepping, the
+    allocation and heap hooks, host time, the boundary) leaves the frame's host time and cycles out: `cpu` takes
+    them in a pass of its own.
+  - `cpu`: from the run's start (its VM's) to the profile's end: the run thread's CPU time (its cycles at the
+    timestamp counter's rate) by phase and by frame, the process's CPU time and page faults, the working set
+    and private bytes at the run's start and their growth, the most working set a frame's end saw. Nothing is
+    estimated. Asked with a kind that slows the run (`all` is), the command runs again first, as a process of
+    its own with `cpu` alone, into `<profile>/cpu-pass`, which keeps only its `profile.json` (its recording, if any, and
+    its own report go): the CPU figures and the timeline's host time a frame come from there. Each run records its script
+    timeouts and those host time fired alone (the timeout's host-time backstop, which the profiling's slowdown makes
+    likelier); when the pass went another way (other timeouts, frames or status), the summary and `cpu.pass_differs` say
+    so. `ree profile try`'s profiled runs leave `cpu` out (its timed runs take host time and cycles). The CPU's hardware
+    counters are `hw`'s.
   - `hw`: the CPU's hardware counters on the run thread ("Hardware counters" below): instructions, cycles
     and IPC, the L1 data cache's misses, the L2's and the last-level cache's, branch mispredictions and
     their rates; for the run, each thread, each phase and frame, and each Luau function and line.
-  - `phases`: the wall-time phases of plain `--profile`.
-  - `time`: host time sampled every millisecond at the VM's calls, returns and loop edges (a line's time
-    lands on its next safepoint). `boundary`: the boundary profiler, its report in the summary and its data
-    in `boundary.json` in the profile's folder.
+  - `phases`: the wall-time phases of plain `--profile`, as a tree: a phase timed inside another is its child
+    (the recorder's first walk inside the harness's start), each with its own time beside its total, the
+    command's own the time no phase covers; the own times add up to the command's (`phase_tree` in
+    profile.json).
+  - `time`: host time, sampled each millisecond the ticker moved and booked to what ran since the sample
+    before: the Luau stack at a call, return or loop edge; the Luau that ran last when the interpreter is left;
+    the engine's step that was open when it is entered (the recorder, the animator, joints, physics), else
+    `(ree engine: outside scripts)`; an Instance API call on its own line. A sample is weighted by the run
+    thread's CPU time (wall time beside it), so time the thread was not running is not booked. A line's time lands on
+    its next safepoint: a line with no call, return or loop edge of its own has its time on the line of the one after it.
+    An inlined function's host time is an estimate (`inlined.estimated_time_ms`): a sample stands for the instructions
+    since the safepoint before it, and a copy `-O2` inlined gets its share of them by the work clock's prices of their
+    opcodes, a leaf's with no safepoint of its own too; a sample right after a call that reached a C function is not split,
+    as it holds the call's own time, while one after a call to a Luau function, which that function's own safepoints
+    sampled, is: each sample says whether a C function ran since its frame's safepoint before it (the VM's count of the C
+    calls scripts make, read at each safepoint while host time is sampled, kept for each entry into the interpreter: an
+    interrupt from inside a C function, as string.gsub's matcher sends at a match, and the safepoints of a Luau function it
+    calls back leave the count to the calling frame's next safepoint, after the call returned), so a call site that reaches
+    both is split after its Luau calls, and a builtin call its fast path served is no C call. About 1.2 times slower on a
+    loop-heavy run.
+    `boundary`: the boundary profiler, its report in the summary and its data in `boundary.json` in the
+    profile's folder: a repeat read is a value read again in the frame while it was unchanged, split by where
+    a cache would go (the same call: a local; a later call: read it once in the caller; another function), and
+    a write that stored what the property held is an unchanged write.
   - `all`: `work`, `caches`, `alloc`, `heap`, `timeline`, `cpu` and `phases`. `time`, `hw` and `boundary`
     are asked for apart: counting every instruction slows the interpreter several times over, so host time
-    and the CPU's counters are read in runs of their own.
+    and the CPU's counters are read in runs of their own (`cpu` takes its own pass). The cpu pass is the command run a
+    second time, so `all` takes longer in wall time than its kinds without `cpu` (about 1.3 times on a recording): the price
+    of CPU figures a slowed run cannot give.
 - A profile writes, in `--profile-out` (default `<out>/profile` for `record`, `ree-profile` for `run`):
   `summary.txt` (also printed on stderr), `profile.json` (everything), folded stacks for flame graph tools
   (`work.folded` in microseconds, `instructions.folded`, `time.folded`, `alloc.folded` and
@@ -298,7 +372,11 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   summary's `reported below:` line and their top functions in a table of their own. Lines are counted for
   the whole run, not per phase. In profile.json each function has `harness` and its figures per phase
   (`phases`, with `harness_self_work_ms`, the part done for the harness's code), and `scope` names the
-  reported phases with each side's self work.
+  reported phases with each side's self work. A function's `tool` marks ree's own code (the engine's chunks
+  that drive a harness, and the harness of a run `ree profile try` made), never the game's nor a user's
+  harness; `short` is its module's last segment, qualified where two modules would share one. A C function's
+  `call_sites` give its callers and the lines that called it; a tree node's last element is the line that
+  called it.
   The summary's `engine operations` line counts what the reported phases' scripts asked the engine to do, whatever the
   work clock prices it at (the engine's side of a cast, which the work clock reads lower than a client pays): instances
   cloned (each of a copy), made with Instance.new, destroyed (each of the subtree) and taken into the Workspace; property
@@ -322,7 +400,15 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   harness's functions in a table of their own: a harness's work moves with what it scans, not with the
   game. The headline's `engine:` rows compare the engine operations in the same phases (the whole run when
   the profiles share none): instances made, instances destroyed, property writes, parts moved (by a write
-  or BulkMoveTo), pivots and emits. Profiles from before the split are compared whole. `ree profile report <dir>` prints a profile's summary again and
+  or BulkMoveTo), pivots and emits. Profiles from before the split are compared whole. profile.json carries a
+  `version` (2), which keeps every row's shape, so an older reader still parses it: a `tree` node is `[parent, function,
+  calls, self work in us, self instructions, label]`, and its calling line is in `tree_lines`, one a node (-1 for none);
+  two profiles of different versions are compared without what changed meaning between them (a function's and
+  a line's self work, the game's and the harness's code: a C function's work is its own row since version 2, not its
+  caller's; a function's calls and instructions: version 1 counted a module's main chunk at none; host time, the wall
+  clock's before; Luau's inline caches, builtin calls and ree's own caches), and the diff says so (`diff.json` gives those
+  figures as null, the text as `-`). The viewer refuses a newer version and says on its Overview when it reads an older one, and its Diff leaves the same
+  figures out across versions; the page says when its profile's version is not the one it reads. `ree profile report <dir>` prints a profile's summary again and
   rewrites its page from its profile.json. `ree profile view` explores one in the terminal and `ree profile render`
   draws its screens to files ("The profile viewer").
 - With no profile the engine pays nothing measurable (a thread-local read where each profiler hooks in),
@@ -549,7 +635,10 @@ reused, ways to iterate, Vector3 or numbers) and what they show.
     together lies between the two); `insns` instructions; `alloc_bytes` and `allocs` what the VM allocated (bytes of
     objects, table parts and stacks; collectable objects); `heap_bytes` the reachable heap at the phase's end beyond its
     start (what the phase still holds); `gc_steps`, `gc_freed` (bytes) and `gc_ms` the collector's work; `cache_hits`,
-    `cache_misses` (misses and slow paths) and `cache_hit_rate` Luau's inline caches; `cold_tables` and `cold_ms` the
+    `cache_lookups` (those a table serves) and `cache_hit_rate` Luau's inline caches, and `cache_uncharged_ms` what their
+    outcomes the work clock does not charge cost over hits at the committed prices (a reprediction, an absent key, an insert
+    with room, a metatable walk by its depth), beyond `work_ms`, which holds what the clock charges (a rehash, a looked-up
+    import); prices within the noise are left out; `cold_tables` and `cold_ms` the
     frame's first touches of tables made before it and the work they were charged; `rehashes` and `rehash_keys` the
     rehashes a script's own instructions made tables do to grow, and the keys they moved; `host_ms` (the fastest round),
     `host_ms_median` and `host_cycles` (the fastest round, the run thread's reference cycles) from the timed runs; `hw_instructions`, `hw_cycles`,

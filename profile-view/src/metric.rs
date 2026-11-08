@@ -179,7 +179,7 @@ impl Metric {
             Metric::Insns => p.raw.work.as_ref().map(|w| w.script_insns + w.engine_insns).filter(|t| *t > 0.0).unwrap_or_else(|| p.funcs.iter().map(|f| f.own.insns).sum()),
             Metric::AllocBytes => p.raw.alloc.as_ref().map_or(0.0, |a| a.bytes),
             Metric::AllocCount => p.raw.alloc.as_ref().map_or(0.0, |a| a.objects),
-            Metric::CacheMisses => p.raw.luau_caches.as_ref().map_or(0.0, |c| c.by_kind.iter().map(|k| k.misses + k.slow).sum()),
+            Metric::CacheMisses => p.raw.luau_caches.as_ref().map_or(0.0, |c| c.by_kind.iter().map(|k| k.lookups() - k.hit_count()).sum()),
             Metric::Counter(index) => p.raw.counters.as_ref().and_then(|c| c.names.get(index as usize).and_then(|name| c.run.counts.get(name))).copied().unwrap_or(0.0),
         }
     }

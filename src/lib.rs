@@ -60,6 +60,10 @@ mod server_tests;
 mod luau_profile_tests;
 #[cfg(test)]
 mod profiler_tests;
+#[cfg(test)]
+mod profiler_prices_tests;
+#[cfg(test)]
+mod profiler_vm_tests;
 
 use std::{
     any::Any,

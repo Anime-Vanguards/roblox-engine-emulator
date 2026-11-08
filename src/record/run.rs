@@ -134,6 +134,17 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
             return 2;
         }
     };
+    // (the CPU figures, host time a frame and cycles of a run a kind slows are not the run's: a pass of their own, first)
+    let suite = suite.map(|mut config| {
+        if config.kinds.has(crate::profiler::Kinds::CPU) && config.kinds.slows_the_run() {
+            let folder = config.out.join("cpu-pass");
+            match crate::profiler::cpu_pass(&args, command, &folder) {
+                Ok(()) => config.cpu_pass = Some(folder),
+                Err(error) => eprintln!("{} {command}: the cpu pass: {error}", host.name),
+            }
+        }
+        config
+    });
     if suite.is_none() {
         if crate::profiler::phases_requested(&args) {
             crate::timing::begin(std::time::Instant::now());
@@ -158,6 +169,8 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
         if let Ok(done) = &result {
             profiled_run.status = done.summary["status"].as_str().unwrap_or("?").to_string();
             profiled_run.frames = done.summary["frames"].as_u64().unwrap_or(0);
+            profiled_run.script_timeouts = done.summary["script_timeouts"].as_u64().unwrap_or(0);
+            profiled_run.host_backstop_timeouts = done.summary["host_backstop_timeouts"].as_u64().unwrap_or(0);
             if let Some(frames) = done.summary["frames"].as_u64().filter(|_| profiled_run.fps > 0.0) {
                 profiled_run.seconds = profiled_run.seconds.min(frames.saturating_sub(1) as f64 / profiled_run.fps).max(0.0);
             }
@@ -350,7 +363,12 @@ pub(crate) fn execute_with(args: &RecordArgs, host: &Host, record: bool, spool: 
             state.output.spool();
         }
     }
-    let done = if record { record_in(&emulator, args, host)? } else { run_in(&emulator, args, host)? };
+    let mut done = if record { record_in(&emulator, args, host)? } else { run_in(&emulator, args, host)? };
+    // (the script timeouts the run had, and those host time fired alone: a profile's two passes are compared by them)
+    if let Some(timeout) = emulator.engine.state.borrow().sched.timeout.as_ref().filter(|timeout| timeout.timeouts() > 0) {
+        done.summary["script_timeouts"] = json!(timeout.timeouts());
+        done.summary["host_backstop_timeouts"] = json!(timeout.host_timeouts());
+    }
     finished(&emulator, &history);
     // (a profile reads the VM while it still runs)
     crate::profiler::collect(&emulator.lua);
@@ -819,7 +837,7 @@ pub(crate) fn finish_run(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, reco
         }
         scheduler::flush_deferred(lua, engine).map_err(lua_error)?;
         if let Some(recorder) = recorder {
-            recorder.sample(engine, 0);
+            crate::timing::time("recorder: first walk", || crate::luau_profile::engine_step("recorder", || recorder.sample(engine, 0)));
         }
     }
     starting.stop();
@@ -926,7 +944,7 @@ fn step_frames(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, recorder: Opti
             return Ok(false);
         }
         if let Some(recorder) = recorder {
-            crate::timing::time("frames: sample", || recorder.sample(engine, frame));
+            crate::timing::time("frames: sample", || crate::luau_profile::engine_step("recorder", || recorder.sample(engine, frame)));
         }
         steps.stepped = frame;
     }

@@ -18,7 +18,6 @@
 #include "lprofile.h"
 
 #include <string.h>
-#include <type_traits>
 
 LUAU_FASTFLAGVARIABLE(DebugLuauUserDefinedClassesRuntime)
 LUAU_FASTFLAGVARIABLE(LuauPromoteProto)
@@ -288,9 +287,6 @@ static void luau_execute(lua_State* L)
     LUAU_ASSERT(isLua(L->ci));
     LUAU_ASSERT(L->isactive);
     LUAU_ASSERT(!isblack(obj2gco(L))); // we don't use luaC_threadbarrier because active threads never turn black
-
-    // a host's profile follows the stepping interpreter's nesting (lprofile.cpp)
-    typename std::conditional<SingleStep, luaP_Execute, luaP_NoExecute>::type profiled(L);
 
     // (a frame that starts here: luau_execute also continues a frame once a call it made returns, as the yieldable pcall and
     // the fast pcall continue their caller, which is not a call)
@@ -4071,8 +4067,18 @@ exit:;
 
 void luau_execute(lua_State* L)
 {
-    // (a host's profile steps every thread of its VM: lprofile.cpp)
-    if (L->singlestep || (luaP_state && luaP_stepping(L)))
+    // a host's profile follows every entry into the interpreter, and steps every thread of its VM while it counts (lprofile.cpp)
+    if (LUAU_UNLIKELY(luaP_state != NULL))
+    {
+        luaP_Execute profiled(L);
+        if (L->singlestep || luaP_stepping(L))
+            luau_execute<true>(L);
+        else
+            luau_execute<false>(L);
+        return;
+    }
+
+    if (L->singlestep)
         luau_execute<true>(L);
     else
         luau_execute<false>(L);

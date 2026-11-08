@@ -151,7 +151,8 @@ fn sorts_every_frame(p: &Profile, tree: &Tree, steady: Option<(u32, u64)>, stead
         let node = tree.node(index);
         let Frame::Func(func) = node.frame else { continue };
         let f = &p.funcs[func as usize];
-        if f.kind != Kind::C || !(f.name == "sort [C]" || f.name == "sort") {
+        // (a newer ree names a C function by where the globals hold it: table.sort)
+        if f.kind != Kind::C || !(f.name == "table.sort" || f.name == "sort [C]" || f.name == "sort") {
             continue;
         }
         let caller = tree.path(index).iter().rev().skip(1).find_map(|&up| match tree.node(up).frame {
@@ -389,8 +390,19 @@ fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_frames: &str, issues: 
     let phases = timeline.values("phase").unwrap_or_default();
     let rows: Vec<usize> = (0..phases.len()).filter(|&i| phases[i] as u32 == phase).collect();
     let (Some(&first), Some(&last)) = (rows.first(), rows.last()) else { return };
+    // (the instances a frame keeps: those in the DataModel and those made outside it; a profile before they were apart has one
+    // column. Threads made a frame are a flow, not a count held: their growth is the heap snapshots' below)
+    let instances = timeline.values("instances").or_else(|| {
+        let (inside, outside) = (timeline.values("instances_in_datamodel")?, timeline.values("instances_outside").unwrap_or_default());
+        Some(inside.iter().enumerate().map(|(row, n)| n + outside.get(row).copied().unwrap_or(0.0)).collect())
+    });
+    thread_growth(p, steady_frames, issues);
     for what in ["connections", "instances", "threads"] {
-        let Some(values) = timeline.values(what) else { continue };
+        let values = match what {
+            "instances" => instances.clone(),
+            _ => timeline.values(what),
+        };
+        let Some(values) = values else { continue };
         let delta = values[last] - values[first];
         let per_frame = delta / (rows.len().max(2) - 1) as f64;
         if delta < 20.0 || per_frame < 0.5 {
@@ -425,6 +437,41 @@ fn growth(p: &Profile, steady: Option<(u32, u64)>, steady_frames: &str, issues: 
             weight: per_frame,
         });
     }
+}
+
+/// Threads that keep growing, when the timeline counts the threads made a frame (a flow): the threads the heap snapshots reach,
+/// at the first snapshot past startup and at the last, what a full collection keeps
+fn thread_growth(p: &Profile, steady_frames: &str, issues: &mut Vec<Issue>) {
+    if p.raw.timeline.as_ref().is_some_and(|timeline| timeline.index("threads").is_some()) {
+        return;
+    }
+    let Some(heap) = &p.raw.heap else { return };
+    let threads = |snapshot: &crate::model::Snapshot| -> Option<f64> {
+        snapshot.reachable.as_ref()?;
+        Some(snapshot.by_type.iter().filter(|row| row.ty == "thread").map(|row| row.count).sum())
+    };
+    let snapshots: Vec<(&crate::model::Snapshot, f64)> = heap.snapshots.iter().skip(1).filter_map(|snapshot| Some((snapshot, threads(snapshot)?))).collect();
+    let (Some(&(first, from)), Some(&(last, to))) = (snapshots.first(), snapshots.last()) else { return };
+    let frames = last.frame.saturating_sub(first.frame).max(1) as f64;
+    let (delta, per_frame) = (to - from, (to - from) / frames);
+    if snapshots.len() < 2 || delta < 20.0 || per_frame < 0.5 {
+        return;
+    }
+    issues.push(Issue {
+        severity: if per_frame >= 10.0 { Severity::Serious } else { Severity::Warning },
+        kind: "growth",
+        title: format!("Threads keep growing: +{} over {steady_frames}", fmt::grouped(delta)),
+        evidence: vec![format!(
+            "{} threads reachable at frame {} → {} at frame {}: {per_frame:+.1} a frame (what a full collection keeps, at the heap snapshots)",
+            fmt::grouped(from),
+            first.frame,
+            fmt::grouped(to),
+            last.frame
+        )],
+        advice: "Frames make threads that something keeps: a coroutine or task held in a table, a connection whose handler waits".into(),
+        target: Target::None,
+        weight: per_frame,
+    });
 }
 
 /// `1 frame`, `4 frames`
@@ -481,45 +528,88 @@ fn heap_growth(p: &Profile, issues: &mut Vec<Issue>) {
 /// Luau inline cache sites that miss often
 fn cache_misses(p: &Profile, harness_out: bool, issues: &mut Vec<Issue>) {
     let Some(caches) = &p.raw.luau_caches else { return };
-    let frames = p.raw.run.frames.max(1) as f64;
+    // (the counts cover the reported phases' frames in a version 2 profile, the run's before)
+    let frames = caches.frames.unwrap_or(p.raw.run.frames as f64).max(1.0);
     let all: f64 = caches.sites.iter().map(|site| site.missed()).sum();
-    let mut rows: Vec<(usize, f64, f64)> = caches.sites.iter().enumerate().map(|(index, site)| (index, site.missed(), site.runs())).filter(|(_, missed, runs)| *missed >= 1000.0 && *missed >= 0.2 * *runs).collect();
+    let mut rows: Vec<(usize, f64, f64)> = caches.sites.iter().enumerate().map(|(index, site)| (index, site.missed(), site.lookups())).filter(|(_, missed, lookups)| *missed >= 1000.0 && *missed >= 0.2 * *lookups).collect();
     rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-    for (index, missed, runs) in rows.into_iter().take(4) {
+    for (index, missed, lookups) in rows.into_iter().take(4) {
         let site = &caches.sites[index];
         let Some(func) = p.func_of_id(site.function) else { continue };
         let f = &p.funcs[func];
         if f.kind == Kind::Engine || (harness_out && f.harness) {
             continue;
         }
-        let slow_mostly = site.slow > site.misses;
-        // (what a miss is depends on the cache: the profiler reads each as the interpreter will, lprofile.cpp)
-        let advice = match site.op.as_str() {
-            op if slow_mostly && op.starts_with("FASTCALL") => "The script's environment is unsafe (it calls getfenv or setfenv), so no builtin takes its fast path: drop those calls",
-            _ if slow_mostly => "A metatable serves the lookup (__index, __newindex), or the environment is unsafe: a plain field avoids it",
-            op if op.starts_with("FASTCALL") =>"The builtin's fast path turned these arguments down (a type, or a count, it does not take there: string.sub without its end, say), so each call went the full way: pass what the fast path takes",
-            "NAMECALL" => "The method is not where the cache looked: objects of several shapes or classes meet here, or the method sits further up an __index chain",
-            "GETGLOBAL" | "SETGLOBAL" => "A global the cache could not keep its slot for: read it into a local once",
-            "GETIMPORT" => "The import was not resolved when the script loaded: a global the script sets, or one missing then",
-            _ => "The tables here differ in shape (keys added in other orders, or other keys): build them alike",
+        // what the cached slot did instead: each outcome as the interpreter ran it (version 2), with its advice, the commonest's
+        let commonest = site.commonest_miss();
+        let advice = match commonest {
+            Some((outcome, _)) => caches.outcome_info.get(outcome).map(|info| info.advice.clone()).filter(|advice| !advice.is_empty()).unwrap_or_else(|| outcome_advice(outcome).to_string()),
+            None => legacy_advice(site).to_string(),
         };
+        let told: Vec<String> = if site.outcomes.is_empty() {
+            vec![format!("{} predicted wrong", fmt::grouped(site.misses)), format!("{} slow", fmt::grouped(site.slow))]
+        } else {
+            site.outcomes.iter().filter(|(name, n)| name.as_str() != "hit" && name.as_str() != "not_table" && **n > 0.0).map(|(name, n)| format!("{} {}", name.replace('_', " "), fmt::grouped(*n))).collect()
+        };
+        let mut evidence = vec![format!(
+            "{} of {} lookups not served by the slot ({}), {} a frame; {} of all",
+            fmt::grouped(missed),
+            fmt::grouped(lookups),
+            told.join(", "),
+            fmt::grouped((missed / frames).round()),
+            fmt::share(missed, all)
+        )];
+        if site.charged_work_us_per_frame > 0.0 || site.extra_work_us_per_frame > 0.0 || site.within_noise > 0.0 {
+            // (the charge is whatever the clock charged the instruction past its dispatch, a table's cold first touch in the frame
+            // among it; the extra leaves out the outcomes whose prices are within the noise)
+            let noise = if site.within_noise > 0.0 {
+                let a_frame = site.within_noise / frames;
+                let a_frame = if a_frame >= 1.0 { format!(", {} a frame", fmt::grouped(a_frame.round())) } else { String::new() };
+                format!(", leaving out {} outcomes priced within the noise{a_frame}", fmt::grouped(site.within_noise))
+            } else {
+                String::new()
+            };
+            evidence.push(format!(
+                "the work clock charged {:.2} µs a frame there (in the function's work; whatever it charged the instruction past its dispatch, a table's cold first touch in the frame among it); the outcomes it does not charge cost {:.2} µs a frame more at the committed prices{noise}",
+                site.charged_work_us_per_frame, site.extra_work_us_per_frame
+            ));
+        }
         issues.push(Issue {
             severity: if missed / frames >= 1000.0 { Severity::Serious } else { Severity::Warning },
             kind: "cache misses",
-            title: format!("{} at {}:{} misses {} of its lookups", site.op, f.short, site.line, fmt::share(missed, runs)),
-            evidence: vec![format!(
-                "{} of {} missed ({} predicted wrong, {} slow), {:.0} a frame; {} of all misses",
-                fmt::grouped(missed),
-                fmt::grouped(runs),
-                fmt::grouped(site.misses),
-                fmt::grouped(site.slow),
-                missed / frames,
-                fmt::share(missed, all)
-            )],
-            advice: advice.into(),
+            title: format!("{} at {}:{} misses {} of its lookups", site.op, f.short, site.line, fmt::share(missed, lookups)),
+            evidence,
+            advice,
             target: Target::Cache(index),
             weight: missed,
         });
+    }
+}
+
+/// What helps a cache outcome, when the profile gives none (ree's report.rs OUTCOME_INFO says the same)
+fn outcome_advice(outcome: &str) -> &'static str {
+    match outcome {
+        "repredicted" => "The tables here differ in shape (keys added in other orders, or other keys): build them alike",
+        "absent" => "The key is missing: give the table the field (nil-able fields read faster once present), or test for it once",
+        "inserted" => "A new key each time: create the table with its fields, in one constructor",
+        "rehashed" => "The table grows a key at a time and rehashes: build it with its keys at once (a constructor, table.create)",
+        "metatable_table" | "metatable_function" => "A metatable serves the lookup (__index): a plain field, or a local copy of the method, avoids the walk",
+        "unsafe_env" => "The script's environment is unsafe (it calls getfenv or setfenv): drop those calls",
+        _ => "The cache could not serve the lookup from its slot",
+    }
+}
+
+/// What helps a site of a profile before the outcomes (its op and its counts)
+fn legacy_advice(site: &crate::model::CacheSite) -> &'static str {
+    let slow_mostly = site.slow > site.misses;
+    match site.op.as_str() {
+        op if slow_mostly && op.starts_with("FASTCALL") => "The script's environment is unsafe (it calls getfenv or setfenv), so no builtin takes its fast path: drop those calls",
+        _ if slow_mostly => "A metatable serves the lookup (__index, __newindex), or the environment is unsafe: a plain field avoids it",
+        op if op.starts_with("FASTCALL") => "The builtin's fast path turned these arguments down (a type, or a count, it does not take there: string.sub without its end, say), so each call went the full way: pass what the fast path takes",
+        "NAMECALL" => "The method is not where the cache looked: objects of several shapes or classes meet here, or the method sits further up an __index chain",
+        "GETGLOBAL" | "SETGLOBAL" => "A global the cache could not keep its slot for: read it into a local once",
+        "GETIMPORT" => "The import was not resolved when the script loaded: a global the script sets, or one missing then",
+        _ => "The tables here differ in shape (keys added in other orders, or other keys): build them alike",
     }
 }
 

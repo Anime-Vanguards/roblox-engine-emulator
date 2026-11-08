@@ -229,7 +229,8 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
     let has_timeline = p.raw.timeline.is_some();
     // (the profile's reported phases, whatever the metric: the counts are the engine's, not a function's)
     let engine = engine_line(p, &p.scope(), apart, theme);
-    let parts = kit::rows(area, &[4, u16::from(fidelity.is_some()), u16::from(engine.is_some()), if has_timeline { if engine.is_some() { 8 } else { 9 } } else { 0 }, 0]);
+    let warning = p.raw.warnings.first().cloned();
+    let parts = kit::rows(area, &[4, u16::from(fidelity.is_some()), u16::from(warning.is_some()), u16::from(engine.is_some()), if has_timeline { if engine.is_some() { 8 } else { 9 } } else { 0 }, 0]);
     cards(buf, parts[0], p, split.as_ref(), theme);
     if let Some(fidelity) = fidelity {
         let line = Line::from(vec![
@@ -239,14 +240,23 @@ pub fn draw(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme) {
         ]);
         Paragraph::new(line).render(parts[1], buf);
     }
-    if let Some(line) = engine {
+    if let Some(warning) = warning {
+        let more = p.raw.warnings.len() - 1;
+        let line = Line::from(vec![
+            Span::styled(" ⚠ ", Style::new().fg(theme.warning).add_modifier(Modifier::BOLD)),
+            Span::styled(fmt::fit(&warning, parts[2].width.saturating_sub(16) as usize), Style::new().fg(theme.ink2)),
+            Span::styled(if more > 0 { format!("  +{more} more") } else { String::new() }, Style::new().fg(theme.muted)),
+        ]);
         Paragraph::new(line).render(parts[2], buf);
     }
+    if let Some(line) = engine {
+        Paragraph::new(line).render(parts[3], buf);
+    }
     if has_timeline {
-        frames(buf, parts[3], app, theme);
+        frames(buf, parts[4], app, theme);
     }
     // the issues and the hottest functions, side by side
-    let (left, right) = kit::split(parts[4], parts[4].width / 2);
+    let (left, right) = kit::split(parts[5], parts[5].width / 2);
     let (found, unchecked) = (&issues.0, &issues.1);
     let inner = kit::draw_panel(buf, left, kit::panel(theme, "Issues", &fmt::grouped(found.len() as f64), true));
     if found.is_empty() {

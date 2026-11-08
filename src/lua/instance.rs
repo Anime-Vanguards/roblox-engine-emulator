@@ -476,7 +476,7 @@ fn cross_set(engine: &Engine, state: &State, id: InstanceId, name: NameId, cost:
     if crate::boundary::active() && !state.sched.is_muted() {
         let class = state.dom.at(id).class;
         let reflection = &engine.reflection;
-        crate::boundary::record(crate::boundary::Kind::Set, class, name, id.index, cost, changed, || {
+        crate::boundary::record(crate::boundary::Kind::Set, class, name, id.index, None, cost, changed, || {
             (reflection.class(reflection.declaring_class(class, name)).name.to_string(), reflection.name(name).to_string())
         });
     }

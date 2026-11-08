@@ -58,6 +58,8 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
 
     if (LUAU_SETJMP(jb.buf) == 0)
         f(L, ud);
+    else if (luaP_state)
+        luaP_unwound(L, &jb);
 
     L->global->errorjmp = jb.prev;
     return jb.status;
@@ -141,9 +143,15 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
         LUAU_ASSERT(e.getThread() == L);
 
         status = e.getStatus();
+        // (the interpreter's entries the error unwound: a profile's nesting of them)
+        if (luaP_state)
+            luaP_unwound(L, &status);
     }
     catch (std::exception& e)
     {
+        // (the interpreter's entries the exception unwound, as for a Luau error)
+        if (luaP_state)
+            luaP_unwound(L, &status);
         // Luau will never throw this, but this can catch exceptions that escape from C++ implementations of external functions
         try
         {

@@ -138,12 +138,12 @@ fn booked_work_adds_up_to_the_work_clock_and_leaves_it_unchanged() {
     assert!((booked - profiled).abs() <= 1e-9 * profiled.max(1e-9) + 1e-12, "booked {booked} of the work clock's {profiled}");
 }
 
-/// The inline caches are read as the interpreter reads them: a table key read from one table hits its slot after its
-/// first miss; a key the table lacks is looked up every time (a miss); a key its metatable's __index gives takes the
-/// slow path; a global hits its slot. (The table is a clone: a compiler since Luau 0.744 reads a local table that a
-/// constructor built and nothing changes as constants.)
+/// The inline caches are read as the interpreter does them: a table key read from one table hits its slot after its first
+/// lookup; a key the table lacks is absent every time (a full lookup, no metatable walked); a key its metatable's __index table
+/// gives walks one metatable; a global hits its slot. (The table is a clone: a compiler since Luau 0.744 reads a local table
+/// that a constructor built and nothing changes as constants.)
 #[test]
-fn inline_caches_tell_hits_from_misses() {
+fn inline_caches_tell_what_each_lookup_did() {
     let _lock = lock();
     let lua = Lua::new();
     lua.enable_jit(false);
@@ -156,26 +156,32 @@ fn inline_caches_tell_hits_from_misses() {
     let results = vm::results(state);
     vm::free(state);
     let main = results.functions.iter().find(|f| f.source == "caches" && f.line == 0).unwrap_or_else(|| &results.functions[0]);
-    let outcomes = |line: i32, op: &str| -> [u64; 4] {
-        let mut total = [0u64; 4];
-        for pc in 0..main.code.len() {
-            if main.lines[pc] == line && vm::opcode_name((main.code[pc] & 0xff) as u8) == op && !main.caches.is_empty() {
-                for slot in 0..4 {
-                    total[slot] += main.caches[pc * vm::CACHE_OUTCOMES + slot];
-                }
+    let outcomes = |line: i32, op: &str| -> ([u64; vm::CACHE_OUTCOMES], [u64; vm::CACHE_DEPTHS]) {
+        let (mut total, mut depths) = ([0u64; vm::CACHE_OUTCOMES], [0u64; vm::CACHE_DEPTHS]);
+        for site in main.caches.iter().filter(|site| main.lines[site.pc] == line && vm::opcode_name(site.op) == op) {
+            for (into, count) in total.iter_mut().zip(site.outcomes.iter()) {
+                *into += count;
+            }
+            for (into, count) in depths.iter_mut().zip(site.depths.iter()) {
+                *into += count;
             }
         }
-        total
+        (total, depths)
     };
-    let same = outcomes(4, "GETTABLEKS");
+    let (same, _) = outcomes(4, "GETTABLEKS");
     assert_eq!(same.iter().sum::<u64>(), 100);
-    assert!(same[0] >= 99, "one shape: hits after the first lookup {same:?}");
-    let absent = outcomes(8, "GETTABLEKS");
-    assert_eq!(absent, [0, 100, 0, 0], "a key the table lacks: looked up every time");
-    let inherited = outcomes(12, "GETTABLEKS");
-    assert_eq!(inherited, [0, 0, 100, 0], "a key its metatable gives: the metatable's path");
-    let globals = outcomes(16, "GETGLOBAL");
-    assert!(globals[0] >= 99 && globals.iter().sum::<u64>() == 100, "{globals:?}");
+    assert!(same[vm::HIT] >= 99 && same[vm::HIT] + same[vm::REPREDICTED] == 100, "one shape: hits after the first lookup {same:?}");
+    let (absent, _) = outcomes(8, "GETTABLEKS");
+    let mut expected = [0u64; vm::CACHE_OUTCOMES];
+    expected[vm::ABSENT] = 100;
+    assert_eq!(absent, expected, "a key the table lacks: absent, a full lookup every time");
+    let (inherited, depths) = outcomes(12, "GETTABLEKS");
+    let mut expected = [0u64; vm::CACHE_OUTCOMES];
+    expected[vm::METATABLE] = 100;
+    assert_eq!(inherited, expected, "a key its metatable's __index table gives: a metatable walk");
+    assert_eq!(depths, [100, 0, 0, 0], "one __index table consulted");
+    let (globals, _) = outcomes(16, "GETGLOBAL");
+    assert!(globals[vm::HIT] >= 99 && globals.iter().sum::<u64>() == 100, "{globals:?}");
 }
 
 /// The profiler names opcodes and type tags as the vendored VM numbers them: Bytecode.h's opcodes in order, and lua.h's
@@ -561,7 +567,8 @@ fn the_collectors_work_is_counted() {
     assert!(gc["freed"].as_u64().unwrap() > 1_000_000, "{gc}");
 }
 
-/// The timeline has a row a frame, with the frame's work, the heap, live instances, connections and threads.
+/// The timeline has a row a frame, with the frame's work, the heap, the live instances by where they are, connections and the
+/// threads made.
 #[test]
 fn the_timeline_has_a_row_a_frame() {
     let _lock = lock();
@@ -587,8 +594,10 @@ fn the_timeline_has_a_row_a_frame() {
     assert_eq!(rows.len(), 10);
     let column = |name: &str| columns.iter().position(|c| *c == name).unwrap();
     let (first, last) = (&rows[0], &rows[9]);
-    assert_eq!(last[column("instances")].as_u64().unwrap() - first[column("instances")].as_u64().unwrap(), 9, "a Folder a frame");
-    assert!(last[column("threads")].as_i64().unwrap() - first[column("threads")].as_i64().unwrap() >= 9, "a waiting thread a frame");
+    // (the Folders are held by a table, outside the DataModel)
+    assert_eq!(last[column("instances_outside")].as_u64().unwrap() - first[column("instances_outside")].as_u64().unwrap(), 9, "a Folder a frame");
+    assert_eq!(last[column("instances_in_datamodel")], first[column("instances_in_datamodel")]);
+    assert!(rows.iter().all(|row| row[column("threads_made")].as_u64().unwrap() >= 1), "a thread made a frame: {timeline}");
     assert!(rows.iter().all(|row| row[column("work_ms")].as_f64().unwrap() > 0.0), "each frame's handler did work");
 }
 
@@ -610,8 +619,13 @@ fn host_time_is_booked_in_milliseconds_where_it_was_spent() {
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
     let _ = std::fs::remove_dir_all(&config.out);
     let sampled = json["time"]["sampled_ms"].as_f64().unwrap();
+    // The samples' wall time is what adds up to the run's wall time. Their thread-CPU weight (`sampled_ms` when the weight
+    // is the thread's CPU) falls short of it whenever other work shares the machine, so it is checked against the samples'
+    // own wall time instead.
+    let sampled_wall = json["time"]["wall_ms"].as_f64().unwrap();
     assert!(wall > 20.0, "the script ran long enough to measure: {wall:.1} ms");
-    assert!(sampled >= 0.5 * wall - 5.0 && sampled <= wall + 2.0, "sampled {sampled} ms of a {wall:.1} ms run");
+    assert!(sampled_wall >= 0.5 * wall - 5.0 && sampled_wall <= wall + 2.0, "sampled {sampled_wall} ms of wall time in a {wall:.1} ms run");
+    assert!(sampled > 0.0 && sampled <= sampled_wall + 2.0, "the thread's CPU time {sampled} ms within the {sampled_wall} ms of wall time sampled");
     let functions = json["functions"].as_array().unwrap();
     let spin = functions.iter().find(|f| f["name"].as_str().is_some_and(|name| name.ends_with("spin"))).unwrap_or_else(|| panic!("{}", json["functions"]));
     assert!(spin["self"]["time_ms"].as_f64().unwrap() >= 0.8 * sampled, "the loop's function holds the time: {spin}");
@@ -664,25 +678,43 @@ fn inlined_functions_count_their_calls_where_their_copies_run() {
     assert_eq!(inlined_here.len(), 1, "only leaf was inlined: {inlined_here:?}");
 }
 
-/// ree's own caches are counted while a profile asks: a property read twice hits the member dispatch the second time,
-/// and an Instance pushed again hits its userdata.
+/// ree's own caches are counted while a profile asks, under the summary's "emulator": a property read twice hits the member
+/// dispatch the second time, and an Instance pushed again hits its userdata; a member name's atom is a miss when the VM looks a
+/// new string up by its bytes (1,000 keys made at run time: 1,000 misses), a hit when read off the string. What they say of the
+/// game itself is listed as its facts: the instances the scripts touched, the datatype property reads.
 #[test]
 fn ree_caches_count_hits_and_misses() {
     let _lock = lock();
     let (lua, engine) = start();
-    let config = Config::new(Kinds::CACHES, temp_dir("caches"));
+    let config = Config { print: false, ..Config::new(Kinds::CACHES, temp_dir("caches")) };
     let session = profiler::Session::begin(config.clone());
     crate::luau_profile::install(&lua);
-    run(&lua, &engine, "caches", "local part = Instance.new(\"Part\")\nlocal folder = Instance.new(\"Folder\")\npart.Parent = folder\nfor i = 1, 100 do\n\tlocal _ = part.Transparency\n\tlocal _ = part.Parent\nend\n");
+    run(
+        &lua,
+        &engine,
+        "caches",
+        "local part = Instance.new(\"Part\")\nlocal folder = Instance.new(\"Folder\")\npart.Parent = folder\nfor i = 1, 100 do\n\tlocal _ = part.Transparency\n\tlocal _ = part.Parent\n\tlocal _ = part.Color\nend\nfor i = 1, 1000 do\n\tpcall(function()\n\t\treturn folder[\"Run\" .. i]\n\tend)\nend\nfor i = 1, 9 do\n\tInstance.new(\"Part\", folder)\nend\nlocal _ = folder:GetChildren()\n",
+    );
     profiler::collect(&lua);
-    session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
+    let summary = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() }).unwrap();
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
     let _ = std::fs::remove_dir_all(&config.out);
-    let cache = |name: &str| json["ree_caches"].as_array().unwrap().iter().find(|row| row["name"] == name).cloned().unwrap();
+    assert!(json.get("ree_caches").is_none(), "ree's caches are the emulator's");
+    let cache = |name: &str| json["emulator"]["caches"].as_array().unwrap().iter().find(|row| row["name"] == name).cloned().unwrap();
     let members = cache("member dispatch");
     assert!(members["hits"].as_u64().unwrap() >= 198, "{members}");
     let wrappers = cache("instance userdata");
     assert!(wrappers["hits"].as_u64().unwrap() >= 99, "the folder's userdata found again: {wrappers}");
+    let atoms = cache("member atoms");
+    assert!(atoms["misses"].as_u64().unwrap() >= 1000, "each key made at run time is looked up by its bytes: {atoms}");
+    assert!(atoms["hits"].as_u64().unwrap() >= 300, "a member name's atom read off the string: {atoms}");
+    let game = &json["game"];
+    // (the part, the folder, the nine parts made in it and listed)
+    assert!(game["instances_touched"].as_u64().unwrap() >= 11, "{game}");
+    // (the caches' counts are the process's: another test's engine can add to them, never take from them)
+    assert!(game["datatype_reads"].as_u64().unwrap() >= 100, "{game}");
+    assert!(game["datatype_reads_reused"].as_u64().unwrap() >= 99, "{game}");
+    assert!(summary.contains("game facts") && summary.contains("emulator: ree's own caches"), "{summary}");
     assert!(json["luau_caches"]["by_kind"].as_array().is_some(), "Luau's caches come with the stepping");
 }
 
@@ -809,7 +841,7 @@ fn a_profile_writes_its_files_and_diffs() {
         assert!(before.join(file).is_file(), "{file}");
     }
     let page = std::fs::read_to_string(before.join("report.html")).unwrap();
-    assert!(page.contains("\"version\":1") && !page.contains("/*PROFILE_DATA*/"), "the page carries the profile");
+    assert!(page.contains("\"version\":2") && !page.contains("/*PROFILE_DATA*/"), "the page carries the profile");
     let speedscope: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(before.join("profile.speedscope.json")).unwrap()).unwrap();
     assert!(speedscope["profiles"].as_array().unwrap().len() >= 3);
     let load = |dir: &std::path::Path| -> serde_json::Value { serde_json::from_str(&std::fs::read_to_string(dir.join("profile.json")).unwrap()).unwrap() };
@@ -819,6 +851,20 @@ fn a_profile_writes_its_files_and_diffs() {
     assert!(moved.contains("hot"), "{moved}");
     let hot = json["functions"].as_array().unwrap().iter().find(|row| row["function"].as_str().unwrap().starts_with("M.hot") || row["function"].as_str().unwrap().starts_with("hot")).unwrap_or_else(|| panic!("{moved}"));
     assert!(hot["after"]["calls"].as_f64().unwrap() == 2.0 * hot["before"]["calls"].as_f64().unwrap(), "{hot}");
+    // across versions, what changed meaning is left out: self work (a C function's own row since version 2), a function's calls
+    // and instructions (version 1 counted a module's main chunk at none), lines, host time, the caches; allocations still compare
+    let mut older = load(&before);
+    older["version"] = serde_json::json!(1);
+    let (across, json) = profiler::diff::compare(&older, &load(&after), 10);
+    assert!(across.contains("the profiles are of two versions (1 and 2)") && !across.contains("lines that moved most") && !across.contains("Luau inline caches"), "{across}");
+    assert!(across.contains("a function's calls and instructions (version 1 counted a module's main chunk at none)"), "{across}");
+    let hot = json["functions"].as_array().unwrap().iter().find(|row| row["function"].as_str().unwrap().contains("hot")).unwrap_or_else(|| panic!("{across}"));
+    for (side, figure) in [("before", "self_work_ms"), ("after", "self_work_ms"), ("before", "calls"), ("after", "calls"), ("before", "insns"), ("after", "insns"), ("after", "time_ms")] {
+        assert!(hot[side][figure].is_null(), "{side} {figure} is not compared: {hot}");
+    }
+    assert!(hot["after"]["alloc_bytes"].as_f64().unwrap() > hot["before"]["alloc_bytes"].as_f64().unwrap(), "allocations compare: {hot}");
+    let row = across.lines().find(|line| line.contains("hot") && line.contains(" -> ")).unwrap_or_else(|| panic!("{across}"));
+    assert_eq!(row.split_whitespace().take(9).filter(|word| *word == "-").count(), 6, "self work, calls and instructions print as -: {row}");
     let _ = std::fs::remove_dir_all(&before);
     let _ = std::fs::remove_dir_all(&after);
 }

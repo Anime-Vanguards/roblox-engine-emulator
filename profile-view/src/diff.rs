@@ -67,27 +67,34 @@ fn last_heap(p: &Profile) -> Option<(f64, f64, f64, f64)> {
     Some((reachable, objects, unswept, snapshot.allocated_since.bytes))
 }
 
-fn timeline_stats(p: &Profile) -> Option<(f64, f64, f64)> {
+fn timeline_stats(p: &Profile) -> Option<(f64, f64, Option<f64>)> {
     let timeline = p.raw.timeline.as_ref()?;
     let work = timeline.values("work_ms")?;
-    let host = timeline.values("host_ms").unwrap_or_default();
     if work.is_empty() {
         return None;
     }
-    // (past startup, as the Overview reads a frame: the mount apart)
+    // (past startup, as the Overview reads a frame: the mount apart; host time a frame only where the run took it)
     let worst = p.frames_past_startup(&work).into_iter().fold(0.0, f64::max);
-    Some((p.frames_mean(&work), worst, p.frames_mean(&host)))
+    Some((p.frames_mean(&work), worst, timeline.values("host_ms").map(|host| p.frames_mean(&host))))
+}
+
+/// Whether two profiles count alike: of one profile.json version (none given is 1). Across versions, a function's and a line's
+/// self work (C functions are rows of their own since version 2), host time (the wall clock's before, thread CPU since) and the
+/// caches' counts changed meaning
+pub fn same_version(b: &Profile, a: &Profile) -> bool {
+    b.raw.version.max(1) == a.raw.version.max(1)
 }
 
 /// The headline figures both profiles have, and notes on how to read them
 pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
+    let same = same_version(b, a);
     let mut out = Vec::new();
     let mut add = |name: &str, before: f64, after: f64, unit: Unit, exact: bool, cost: bool| out.push(Figure { name: name.into(), before, after, unit, exact, cost });
     let frames = (timeline_stats(b), timeline_stats(a));
     // the game's code in the phases both report, apart from the harness's (whose work moves with what it watches, not
     // with the game), first, as ree profile diff leads with them
     let shared = shared_scope(b, a);
-    if let Some(names) = &shared {
+    if let (Some(names), true) = (&shared, same) {
         let (scope_b, scope_a) = (b.scope_of(names), a.scope_of(names));
         if let (Some(sb), Some(sa)) = (b.side_work(&scope_b), a.side_work(&scope_a)) {
             add(&format!("the game's code, {}", scope_a.label), sb.0, sa.0, Unit::Ms, true, true);
@@ -142,7 +149,7 @@ pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
         add("collector cycles", hb.gc.cycles, ha.gc.cycles, Unit::Count, true, true);
         add("collector freed", hb.gc.freed, ha.gc.freed, Unit::Bytes, true, true);
     }
-    if let (Some(tb), Some(ta)) = (&b.raw.time, &a.raw.time) {
+    if let (Some(tb), Some(ta), true) = (&b.raw.time, &a.raw.time, same) {
         add("host time (noisy)", tb.sampled_ms, ta.sampled_ms, Unit::Ms, false, true);
     }
     if let (Some(cb), Some(ca)) = (&b.raw.counters, &a.raw.counters) {
@@ -155,10 +162,19 @@ pub fn headline(b: &Profile, a: &Profile) -> (Vec<Figure>, Vec<String>) {
     if let (Some(sb), Some(sa)) = frames {
         add("Studio work a frame (mean)", sb.0, sa.0, Unit::Ms, true, true);
         add("Studio work a frame (worst)", sb.1, sa.1, Unit::Ms, true, true);
-        add("host time a frame (mean, noisy)", sb.2, sa.2, Unit::Ms, false, true);
+        if let (Some(before), Some(after), true) = (sb.2, sa.2, same) {
+            add("host time a frame (mean, noisy)", before, after, Unit::Ms, false, true);
+        }
     }
     add("frames", b.raw.run.frames as f64, a.raw.run.frames as f64, Unit::Count, true, false);
     let mut notes = Vec::new();
+    if !same {
+        notes.push(format!(
+            "the profiles are of two versions ({} and {}): functions' and lines' self work, calls and instructions, the game's and the harness's code, host time and the caches are not compared (their meaning changed)",
+            b.raw.version.max(1),
+            a.raw.version.max(1)
+        ));
+    }
     if b.raw.run.frames != a.raw.run.frames {
         notes.push(format!("the runs ran {} and {} frames: compare figures a frame", fmt::grouped(b.raw.run.frames as f64), fmt::grouped(a.raw.run.frames as f64)));
     }
@@ -239,6 +255,10 @@ fn function_figures(app: &App, profile: usize, metric: Metric) -> BTreeMap<Strin
 
 /// Functions paired by key, the ones that moved
 pub fn functions(app: &App, metric: Metric) -> Vec<Pair> {
+    let same = same_version(&app.profiles[0], &app.profiles[1]);
+    if !same && matches!(metric, Metric::Work | Metric::Time | Metric::CacheMisses | Metric::Insns) {
+        return Vec::new();
+    }
     let (fb, fa) = (function_figures(app, 0, metric), function_figures(app, 1, metric));
     let harness = |key: &String| fa.get(key).or_else(|| fb.get(key)).is_some_and(|entry| entry.4);
     let keys: BTreeSet<&String> = fb.keys().chain(fa.keys()).collect();
@@ -250,7 +270,8 @@ pub fn functions(app: &App, metric: Metric) -> Vec<Pair> {
                 label: a.or(b).map(|e| e.0.clone()).unwrap_or_else(|| key.clone()),
                 before: b.map_or(0.0, |e| e.1),
                 after: a.map_or(0.0, |e| e.1),
-                calls: Some((b.map_or(0, |e| e.2), a.map_or(0, |e| e.2))),
+                // (calls are not compared across versions: version 1 counted a module's main chunk at none)
+                calls: same.then(|| (b.map_or(0, |e| e.2), a.map_or(0, |e| e.2))),
                 func: a.map(|e| e.3),
                 line: None,
                 harness: harness(key),
@@ -263,6 +284,9 @@ pub fn functions(app: &App, metric: Metric) -> Vec<Pair> {
 /// Lines of unchanged modules, paired by (module, line)
 pub fn lines(app: &App, metric: Metric) -> Vec<Pair> {
     let (b, a) = (&app.profiles[0], &app.profiles[1]);
+    if !same_version(b, a) && matches!(metric, Metric::Work | Metric::Time | Metric::CacheMisses | Metric::Insns) {
+        return Vec::new();
+    }
     let same = same_modules(b, a);
     let figures = |p: &Profile| -> BTreeMap<(String, i64), (f64, u32)> {
         let mut out: BTreeMap<(String, i64), (f64, u32)> = BTreeMap::new();
