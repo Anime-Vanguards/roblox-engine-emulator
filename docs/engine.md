@@ -705,6 +705,11 @@ record/prepare.rs runs prepared ahead by `ree serve`
   model whose pivot is its own (no PrimaryPart) has the target as its pivot exactly, every call, as in a client;
   composing the move onto the old pivot compounded float error until a model pivoted every frame lost its rotation.
   Motor6D.Transform applies after PreSimulation (edit mode: at each Heartbeat's start).
+- **BulkMoveTo** (measured in a playing client): `WorldRoot:BulkMoveTo` checks its lists before any part moves, with a
+  client's messages: lists of different lengths ("Length of part list (2) and length of CFrame list (1) do not match."),
+  a part list entry that is no BasePart, a frame list entry that is no CFrame, and arguments that are no arrays. A nil in
+  the part list leaves its frame unused, so the lists still pair by index. Destroyed parts, parts with no parent and
+  parts outside the Workspace move.
 - **Free flight** (measured in playing clients): in play mode an assembly in the Workspace with no
   anchored part, nothing that can collide, no Humanoid and no constraint flies from its first simulation
   step under Workspace.Gravity, at the velocity and with the spin a script gave any of its parts

@@ -1082,6 +1082,77 @@ fn assembly_root_part_is_the_root_a_playing_client_picks() {
     );
 }
 
+/// WorldRoot:BulkMoveTo checks its lists as a Studio 0.746 playing client does, with its messages, before any part moves; a
+/// nil in the part list keeps the lists paired by index; destroyed, parentless and stored parts move.
+#[test]
+fn bulk_move_to_checks_its_lists_as_a_playing_client_does() {
+    check(
+        r#"
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local function Part(X, Parent)
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.CFrame = CFrame.new(X, 50, 0)
+            P.Parent = Parent or Folder
+            return P
+        end
+        local function Fails(Want, Function)
+            local Ok, Message = pcall(Function)
+            assert(not Ok and Message == Want, `{Want}: got {Ok} {Message}`)
+        end
+        local A, B, C = Part(0), Part(10), Part(20)
+        -- lists of different lengths throw before any part moves
+        Fails("Length of part list (2) and length of CFrame list (1) do not match.", function()
+            workspace:BulkMoveTo({ A, B }, { CFrame.new(1, 60, 0) })
+        end)
+        assert(A.Position == Vector3.new(0, 50, 0) and B.Position == Vector3.new(10, 50, 0), "a part moved before the error")
+        Fails("Length of part list (1) and length of CFrame list (2) do not match.", function()
+            workspace:BulkMoveTo({ A }, { CFrame.new(2, 60, 0), CFrame.new(3, 60, 0) })
+        end)
+        Fails("Length of part list (3) and length of CFrame list (2) do not match.", function()
+            workspace:BulkMoveTo({ A, B, C }, { CFrame.new(), CFrame.new() }, Enum.BulkMoveMode.FireCFrameChanged)
+        end)
+        Fails("Length of part list (0) and length of CFrame list (1) do not match.", function()
+            workspace:BulkMoveTo({}, { CFrame.new() })
+        end)
+        workspace:BulkMoveTo({}, {})
+        -- the entries and the arguments
+        Fails("Can only call BulkMoveTo on BaseParts, partList[1] is a Folder.", function()
+            workspace:BulkMoveTo({ Folder }, { CFrame.new() })
+        end)
+        Fails("Unable to cast value to Object", function()
+            workspace:BulkMoveTo({ 5 } :: any, { CFrame.new() })
+        end)
+        Fails("CFrame list must only contain CFrames, cframeList[1] is a Vector3.", function()
+            workspace:BulkMoveTo({ A }, { Vector3.new() } :: any)
+        end)
+        Fails("Unable to cast CoordinateFrame to Array", function()
+            workspace:BulkMoveTo(A :: any, CFrame.new() :: any)
+        end)
+        Fails("Argument 2 missing or nil", function()
+            (workspace :: any):BulkMoveTo({ A })
+        end)
+        Fails("Unable to cast Dictionary to Array", function()
+            workspace:BulkMoveTo({ x = A } :: any, { x = CFrame.new() } :: any)
+        end)
+        -- a nil in the part list leaves its frame unused: the lists pair by index
+        workspace:BulkMoveTo({ A, nil, B }, { CFrame.new(14, 60, 0), CFrame.new(15, 60, 0), CFrame.new(16, 60, 0) })
+        assert(A.Position == Vector3.new(14, 60, 0) and B.Position == Vector3.new(16, 60, 0), "the lists did not pair by index")
+        -- destroyed parts, parts with no parent and parts outside the Workspace move
+        local Gone = Part(30)
+        Gone:Destroy()
+        local Loose = Instance.new("Part")
+        local Stored = Part(50, game:GetService("ReplicatedStorage"))
+        workspace:BulkMoveTo({ Gone, Loose, Stored, A }, { CFrame.new(9, 60, 0), CFrame.new(10, 60, 0), CFrame.new(11, 60, 0), CFrame.new(13, 60, 0) })
+        assert(Gone.Position == Vector3.new(9, 60, 0), "the destroyed part did not move")
+        assert(Loose.Position == Vector3.new(10, 60, 0), "the part with no parent did not move")
+        assert(Stored.Position == Vector3.new(11, 60, 0), "the part outside the Workspace did not move")
+        assert(A.Position == Vector3.new(13, 60, 0), "the part beside them did not move")
+        "#,
+    );
+}
+
 #[test]
 fn an_anchored_root_stays_when_a_pose_lands_while_it_moves() {
     check_running(
