@@ -1593,6 +1593,80 @@ fn a_model_pivoted_every_frame_keeps_its_rotation() {
     );
 }
 
+/// A jointed rig moved by BulkMoveTo, every part given its CFrame times one rigid move (a scene moved from one spot to
+/// another), keeps its root's rotation and its shape. Each part's write moves the root as that part moved, `Target *
+/// Before:Inverse()`; the inverse is the transpose, so a root scaled by s came back scaled by s squared and the error
+/// doubled with each part written. A 15-part rig's root read |RightVector| 0.978 after one such move and a rotation of
+/// determinant 0 after the second, and the parts welded to it collapsed with it; a move and a move back left a rig NaN.
+/// The root is stored as a client stores a part's CFrame (`frame::stored_rotation`), so it stays orthonormal.
+#[test]
+fn a_jointed_rig_moved_part_by_part_keeps_its_roots_rotation() {
+    check(
+        r#"
+        local Rig = Instance.new("Model")
+        local Root = Instance.new("Part")
+        Root.Name = "Root"
+        Root.Anchored = true
+        Root.Size = Vector3.new(2, 2, 1)
+        Root.CFrame = CFrame.new(-24, 3, -132) * CFrame.fromOrientation(0.3, math.rad(40), -0.2)
+        Root.Parent = Rig
+        local Parts = { Root }
+        for Index = 1, 14 do
+            local Part = Instance.new("Part")
+            Part.Name = `Part{Index}`
+            Part.Size = Vector3.new(1, 1, 1)
+            Part.Massless = true
+            Part.Parent = Rig
+            local Joint = Instance.new(if Index % 2 == 0 then "Motor6D" else "Weld")
+            Joint.Part0, Joint.Part1 = Parts[(Index + 1) // 2], Part
+            Joint.C0 = CFrame.new(0.5, 1, -0.25 * Index) * CFrame.fromOrientation(0.1 * Index, 0.7, -0.2 * Index)
+            Joint.C1 = CFrame.fromOrientation(0, -0.3 * Index, 0.4)
+            Joint.Parent = Part
+            table.insert(Parts, Part)
+        end
+        Rig.Parent = workspace
+        local Start = Root.CFrame
+        local Offsets = {}
+        for Index, Part in Parts do
+            Offsets[Index] = Root.CFrame:ToObjectSpace(Part.CFrame)
+        end
+        local function Off(A, B)
+            local a, b = { A:GetComponents() }, { B:GetComponents() }
+            local Worst = 0
+            for Index = 1, 12 do
+                Worst = math.max(Worst, math.abs(a[Index] - b[Index]))
+            end
+            return Worst
+        end
+        local function Check(What, Want)
+            local At = Root.CFrame
+            local X, Y, Z = At.XVector, At.YVector, At.ZVector
+            local Worst = math.max(math.abs(X:Dot(X) - 1), math.abs(Y:Dot(Y) - 1), math.abs(Z:Dot(Z) - 1), math.abs(X:Dot(Y)), math.abs(X:Dot(Z)), math.abs(Y:Dot(Z)))
+            assert(Worst < 1e-5, `{What}: the root's rotation is {Worst} off orthonormal (|RightVector| {X.Magnitude})`)
+            assert(Off(At, Want) < 1e-3, `{What}: the root is at {At}, the move puts it at {Want}`)
+            for Index, Part in Parts do
+                assert(Off(At:ToObjectSpace(Part.CFrame), Offsets[Index]) < 1e-3, `{What}: {Part.Name} left its joints`)
+            end
+        end
+        local function Move(Delta)
+            local Targets = {}
+            for Index, Part in Parts do
+                Targets[Index] = Delta * Part.CFrame
+            end
+            workspace:BulkMoveTo(Parts, Targets, Enum.BulkMoveMode.FireCFrameChanged)
+        end
+        local There = CFrame.new(2, 0, -108) * CFrame.fromOrientation(0, math.rad(240), 0) * (CFrame.new(-24, 0, -132) * CFrame.fromOrientation(0, math.rad(40), 0)):Inverse()
+        Move(There)
+        Check("the first move", There * Start)
+        local Again = CFrame.new(30, 0, 5) * CFrame.fromOrientation(0, math.rad(-75), 0)
+        Move(Again)
+        Check("the second move", Again * There * Start)
+        Move((Again * There):Inverse())
+        Check("the move back", Start)
+        "#,
+    );
+}
+
 /// What a script writes is stored as a client stores it: Vector3s and CFrames exactly (lune's own conversion rounded each
 /// fraction to 1/65536), and a part's CFrame, a joint's C0 and a BulkMoveTo orthonormalized as `CFrame:Orthonormalize()` gives
 /// it once it is off by more than 1e-5 (a mirror kept), identity for a rotation with a zero column; a model's WorldPivot keeps

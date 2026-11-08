@@ -700,7 +700,8 @@ record/prepare.rs runs prepared ahead by `ree serve`
   part that is not Massless, then the higher RootPriority, then the larger largest face (its area, not rounded)
   times 20 for a Seat or VehicleSeat, 10 for a part named HumanoidRootPart and 5 for one named Torso, then the
   later made part. A
-  part's CFrame write moves its whole assembly rigidly; Position / Orientation / Rotation move the part
+  part's CFrame write moves its whole assembly rigidly, the root's rotation stored as a part's CFrame write stores
+  it, so a rig whose parts are written one by one (a BulkMoveTo of all of them) keeps its shape; Position / Orientation / Rotation move the part
   alone and rewrite its joints. Model:PivotTo and ScaleTo write their parts as one batch. After PivotTo a
   model whose pivot is its own (no PrimaryPart) has the target as its pivot exactly, every call, as in a client;
   composing the move onto the old pivot compounded float error until a model pivoted every frame lost its rotation.

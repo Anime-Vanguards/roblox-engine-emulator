@@ -16,7 +16,8 @@
 //!   16) times 20 for a Seat or VehicleSeat, 10 for a part named exactly HumanoidRootPart and 5 for
 //!   one named exactly Torso (the RootPriority announcement's weights), then the later made part.
 //! - Setting a part's CFrame moves its whole assembly with it, now (BasePart.CFrame): the root moves
-//!   as the part moved, rigidly, and the rest follows its joints from the root. The joints never
+//!   as the part moved, rigidly (its rotation stored as a script's write to it would be:
+//!   frame::stored_rotation), and the rest follows its joints from the root. The joints never
 //!   place the root, so a Motor6D.Transform set since the parts were last placed bends the limbs it
 //!   drives and leaves the root (an anchored one above all) where the move puts it. The other
 //!   parts' CFrames change without Changed events, as physics moves parts; engine hooks (the
@@ -565,12 +566,14 @@ fn settle(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
         });
     }
     // The root is never placed through the joints: a Motor6D.Transform set since the parts were
-    // last placed would swing it (an anchored root too) about the moved part
+    // last placed would swing it (an anchored root too) about the moved part. It is stored as a
+    // client stores a part's CFrame: `before`'s transposed inverse squares any stretch the root
+    // carries, so unstored it doubled its error with each part a BulkMoveTo wrote
     let (fixed, root) = match anchor {
         Anchor::Root => (0, cframe_of(state, setup, assembly.nodes[0].part)),
         Anchor::Moved(index, before) => {
             let moved = cframe_of(state, setup, assembly.nodes[index].part) * inverse(&before);
-            (index, moved * cframe_of(state, setup, assembly.nodes[0].part))
+            (index, frame::stored_transform(&(moved * cframe_of(state, setup, assembly.nodes[0].part))))
         }
     };
     for (index, node) in assembly.nodes.iter().enumerate() {
