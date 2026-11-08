@@ -1563,6 +1563,142 @@ fn nested_default_projects_mount_as_their_tree() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A `default.project.json` can come from a third-party package, so a `$path` stays inside the folder
+/// holding it. One that is absolute or has a `..` segment is reported and not followed, on a tree's root
+/// or a child node. A required `$path` that names nothing and a project file that can't be read are
+/// reported too, and each such directory mounts as it is.
+#[test]
+fn nested_project_paths_stay_inside_the_project_folder() {
+    use super::project::{Mount, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-project-path-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let write = |relative: &str, text: &str| {
+        let file = dir.join(relative);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    };
+    write("Outside.json", r#"{ "outside": true }"#);
+    write("Outside/Secret.luau", "return 1");
+    let root = dir.to_string_lossy().replace('\\', "/");
+    let absolute = format!("{root}/Outside.json");
+    let refused = ["..", "../x", "../../Outside.json", "../../Outside", "src/../..", r"src\..\..\Outside.json", "/x", r"\x", "//server/share/x", r"\\server\share\x", "C:/x", r"C:\x", "C:x", absolute.as_str()];
+    // Each under a mount of its own: a `..` that is followed would otherwise mount the other cases again at every level
+    for (index, path) in refused.iter().enumerate() {
+        write(&format!("Refused{index}/package/default.project.json"), &serde_json::json!({ "tree": { "$path": path } }).to_string());
+        write(&format!("Refused{index}/package/src/Inside.luau"), "return 1");
+        write(&format!("Refused{index}/package/x/init.luau"), "return 1");
+    }
+    write("Packages/child/default.project.json", r#"{ "tree": { "$className": "Folder", "Escape": { "$path": "../../Outside.json" }, "Kept": { "$path": "Kept.luau" } } }"#);
+    write("Packages/child/Kept.luau", r#"return "kept""#);
+    for (package, project) in [("garbled", "not json"), ("treeless", r#"{ "name": "treeless" }"#), ("missing", r#"{ "tree": { "$path": "gone" } }"#), ("optional", r#"{ "tree": { "$path": { "optional": "gone" } } }"#)] {
+        write(&format!("Packages/{package}/default.project.json"), project);
+        write(&format!("Packages/{package}/Inside.luau"), "return 1");
+    }
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Packages={root}/Packages"), false).unwrap()).unwrap();
+    for index in 0..refused.len() {
+        mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Refused{index}={root}/Refused{index}"), false).unwrap()).unwrap();
+    }
+    let output = run(&lua, &engine, r#"
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local Packages = ReplicatedStorage.Packages
+        for _, case in ReplicatedStorage:GetChildren() do
+            if case.Name:find("^Refused") then
+                assert(case.package.ClassName == "Folder" and case.package:FindFirstChild("src"), case.Name)
+            end
+        end
+        for _, descendant in ReplicatedStorage:GetDescendants() do
+            assert(descendant.Name ~= "Outside" and descendant.Name ~= "Secret", descendant:GetFullName())
+        end
+        assert(Packages.child:FindFirstChild("Escape") == nil and require(Packages.child.Kept) == "kept", "a refused child node")
+        for _, name in { "garbled", "treeless", "missing", "optional" } do
+            assert(Packages[name].ClassName == "Folder" and Packages[name]:FindFirstChild("Inside"), name)
+        end
+        print("ok")
+    "#);
+    assert!(output.contains(&"print: ok".to_string()), "{output:?}");
+    let says = |package: &str, message: &str| format!("warn: {root}/{package}/default.project.json: {message}");
+    let mut expected: Vec<String> = refused.iter().enumerate().map(|(index, path)| says(&format!("Refused{index}/package"), &format!("$path {path} leaves the project's folder; not mounted"))).collect();
+    expected.push(says("Packages/child", "$path ../../Outside.json leaves the project's folder; not mounted"));
+    expected.push(says("Packages/missing", "$path gone names nothing ree can mount; not mounted"));
+    for package in ["Packages/garbled", "Packages/treeless"] {
+        expected.push(says(package, "not a project ree can read (JSON with a \"tree\" object); the directory mounts as it is"));
+    }
+    let reported: Vec<&String> = output.iter().filter(|line| line.contains("default.project.json")).collect();
+    for line in &expected {
+        assert!(reported.contains(&line), "{line} in {reported:?}");
+    }
+    assert_eq!(reported.len(), expected.len(), "{reported:?}");
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A project inside more than 32 others is left as an empty Folder and reported, the depth where
+/// roblox-ui-renderer's cli/rojo.mjs stops, so a chain of projects ends there.
+#[test]
+fn nested_projects_stop_past_the_nesting_limit() {
+    use super::project::{Mount, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-project-nesting-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let chain = |name: &str, projects: usize| {
+        let mut folder = dir.join("Packages").join(name);
+        for _ in 0..projects {
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("default.project.json"), r#"{ "tree": { "$path": "n" } }"#).unwrap();
+            folder = folder.join("n");
+        }
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("init.luau"), r#"return "end""#).unwrap();
+    };
+    chain("Fits", 33);
+    chain("TooDeep", 34);
+    let root = dir.to_string_lossy().replace('\\', "/");
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Packages={root}/Packages"), false).unwrap()).unwrap();
+    let output = run(&lua, &engine, r#"
+        local Packages = game:GetService("ReplicatedStorage").Packages
+        assert(require(Packages.Fits) == "end", "a chain within the limit")
+        assert(Packages.TooDeep.ClassName == "Folder" and #Packages.TooDeep:GetChildren() == 0, "a chain past the limit")
+        print("ok")
+    "#);
+    assert!(output.contains(&"print: ok".to_string()), "{output:?}");
+    let expected = format!("warn: {root}/Packages/TooDeep/{}default.project.json: project nesting too deep (past 32 levels); not mounted", "n/".repeat(33));
+    let stopped: Vec<&String> = output.iter().filter(|line| line.contains("too deep")).collect();
+    assert_eq!(stopped, [&expected]);
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A tree's child nodes can each `$path` to the same project, so the mounts would double at every level
+/// while the depth stays within its limit: one mount follows 10000 projects at most and reports the rest.
+#[test]
+fn a_mount_stops_following_projects_past_its_limit() {
+    use super::project::{Mount, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-project-fan-out-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut folder = dir.join("Doubling");
+    for _ in 0..15 {
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("default.project.json"), r#"{ "tree": { "$className": "Folder", "A": { "$path": "n" }, "B": { "$path": "n" } } }"#).unwrap();
+        folder = folder.join("n");
+    }
+    std::fs::create_dir_all(&folder).unwrap();
+    let root = dir.to_string_lossy().replace('\\', "/");
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Doubling={root}/Doubling"), false).unwrap()).unwrap();
+    let output = run(&lua, &engine, r#"
+        -- two nodes under each of the 10000 projects followed
+        local count = #game:GetService("ReplicatedStorage").Doubling:GetDescendants()
+        assert(count == 20000, tostring(count))
+        print("ok")
+    "#);
+    assert!(output.contains(&"print: ok".to_string()), "{output:?}");
+    let stopped = output.iter().filter(|line| line.starts_with("warn:") && line.ends_with("more than 10000 projects in one mount; not mounted")).count();
+    assert!((1..=32).contains(&stopped), "{stopped} reported");
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Rojo's JSON models (`*.model.json`, Rojo 7's format: rojo.space/docs/v7/sync-details/#json-models
 /// and its json_model.rs): one instance named after the file (its own top-level name ignored) or by
 /// its project node, lowercase or legacy capitalized keys, a child without a name taking its class's,
