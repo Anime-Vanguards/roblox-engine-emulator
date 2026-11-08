@@ -127,7 +127,10 @@ there).
 
 - **Rojo roots**: `<root>/<Service>/...` with `init.luau`, `*.server.luau`, `*.client.luau`,
   `init.meta.json`, JSON modules and `*.model.json` models. A root's folder is the project folder that
-  the conventions below are read from.
+  the conventions below are read from. A link to a directory (a symlink or a Windows junction) mounts
+  what it leads to, unless it leads back to a directory on the way down to it: that directory would
+  hold itself without end, so the link is left out with a warning (place content's folders, below, are
+  walked the same way).
 - **Project settings**: `rur.json` at the project folder, keyed by the root folder's name (the first
   root with a value wins): `placeIds`, `modelAssets` (`mount`, `prefixes`), `clientGui`,
   `streamingTargetRadius`. The name is kept from rur, which wrote these files first.

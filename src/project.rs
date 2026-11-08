@@ -93,7 +93,7 @@ impl Listing {
 }
 
 fn same_listing(old: &ScanNode, new: &ScanNode, read: &FxHashSet<String>) -> bool {
-    if old.entries != new.entries || old.stamps.len() != new.stamps.len() || old.dirs.len() != new.dirs.len() {
+    if old.entries != new.entries || old.stamps.len() != new.stamps.len() || old.dirs.len() != new.dirs.len() || old.loops != new.loops {
         return false;
     }
     for (index, entry) in old.entries.iter().enumerate() {
@@ -104,6 +104,8 @@ fn same_listing(old: &ScanNode, new: &ScanNode, read: &FxHashSet<String>) -> boo
                     return false;
                 }
             }
+            // a link left out still leads where it did (a link has no stamp of its own)
+            (None, None) if old.loops.iter().any(|(name, _)| name == entry) => {}
             (None, None) => {
                 let (before, now) = (old.stamps[index], new.stamps[index]);
                 let lower = entry.to_ascii_lowercase();
@@ -474,8 +476,38 @@ struct ScanNode {
     /// a module file is unchanged without a query per file)
     stamps: Vec<Option<crate::files::Stamp>>,
     dirs: FxHashMap<String, ScanNode>,
+    /// Entries that are links back to a directory on the way down to them (the entry, that directory's
+    /// path): not listed, since the directory would hold itself without end
+    loops: Vec<(String, String)>,
     /// A directory below was listed through a link, whose target a watch on this tree does not see
     linked: bool,
+}
+
+/// A directory on the way a walk took to the one it lists, for finding a link back to one of them.
+struct Above<'a> {
+    path: &'a str,
+    /// Its real path, the links resolved: found once, when a link below asks
+    real: std::sync::OnceLock<Option<std::path::PathBuf>>,
+    up: Option<&'a Above<'a>>,
+}
+
+impl<'a> Above<'a> {
+    fn new(path: &'a str, up: Option<&'a Above<'a>>) -> Self {
+        Above { path, real: std::sync::OnceLock::new(), up }
+    }
+
+    /// The path of the directory on this way that link `child` leads back to, if it does.
+    fn looped_by(&self, child: &Path) -> Option<&'a str> {
+        let target = std::fs::canonicalize(child).ok()?;
+        let mut at = Some(self);
+        while let Some(above) = at {
+            if above.real.get_or_init(|| std::fs::canonicalize(above.path).ok()).as_deref() == Some(target.as_path()) {
+                return Some(above.path);
+            }
+            at = above.up;
+        }
+        None
+    }
 }
 
 fn may_be_directory(entry: &str) -> bool {
@@ -488,6 +520,11 @@ fn may_be_directory(entry: &str) -> bool {
 
 /// Lists a directory tree (directories checked and scanned in parallel; listing order kept).
 fn scan(path: String) -> ScanNode {
+    scan_below(path, None)
+}
+
+/// [`scan`] of a directory the walk reached through the directories `up`.
+fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
     use rayon::prelude::*;
     let mut entries = Vec::new();
     let mut kinds = Vec::new();
@@ -517,7 +554,8 @@ fn scan(path: String) -> ScanNode {
             kinds.clear();
         }
     }
-    let dirs: FxHashMap<String, ScanNode> = entries
+    let here = Above::new(&path, up);
+    let found: Vec<(String, Result<ScanNode, String>)> = entries
         .par_iter()
         .zip(kinds.par_iter())
         .filter(|(entry, _)| may_be_directory(entry))
@@ -531,16 +569,30 @@ fn scan(path: String) -> ScanNode {
                 Some(kind) if plain => kind.is_dir(),
                 _ => std::fs::metadata(&child).is_ok_and(|m| m.is_dir()),
             };
+            if !is_dir {
+                return None;
+            }
             let via_link = !kind.is_some_and(|kind| !kind.is_symlink());
-            is_dir.then(|| {
-                let mut node = scan(child);
-                node.linked |= via_link;
-                (entry.clone(), node)
-            })
+            if let Some(above) = via_link.then(|| here.looped_by(Path::new(&child))).flatten() {
+                return Some((entry.clone(), Err(above.to_string())));
+            }
+            let mut node = scan_below(child, Some(&here));
+            node.linked |= via_link;
+            Some((entry.clone(), Ok(node)))
         })
         .collect();
+    let mut dirs = FxHashMap::default();
+    let mut loops = Vec::new();
+    for (entry, found) in found {
+        match found {
+            Ok(node) => {
+                dirs.insert(entry, node);
+            }
+            Err(above) => loops.push((entry, above)),
+        }
+    }
     let linked = dirs.values().any(|dir| dir.linked);
-    ScanNode { path, entries, stamps, dirs, linked }
+    ScanNode { path, entries, stamps, dirs, loops, linked }
 }
 
 /// [`scan`] of a mounted tree, kept between VMs in a process that keeps compiled modules ([`kept_listing`]).
@@ -726,6 +778,10 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
     for (index, entry) in node.entries.iter().enumerate() {
         let full_path = format!("{}/{entry}", node.path);
         if entry.starts_with('.') {
+            continue;
+        }
+        if let Some((_, above)) = node.loops.iter().find(|(name, _)| name == entry) {
+            engine.warn(format!("{full_path}: a link back to {above}, which would hold itself; not mounted"));
             continue;
         }
         if let Some(child_node) = node.dirs.get(entry) {
@@ -1323,6 +1379,28 @@ pub fn use_studio_hierarchy(engine: &Engine, roots: &[String]) -> Option<String>
     Some(path)
 }
 
+/// The model files below place-content directory `dir`, reached through the directories `up`; a link
+/// back to one of those directories is not followed, but noted in `loops` (the link, that directory).
+fn place_content_files(dir: &Path, up: Option<&Above>, files: &mut Vec<PathBuf>, loops: &mut Vec<(String, String)>) {
+    crate::files::note_listing(dir);
+    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let path = dir.to_string_lossy();
+    let here = Above::new(&path, up);
+    for entry in read.flatten() {
+        let child = entry.path();
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if child.is_dir() {
+            let via_link = !entry.file_type().is_ok_and(|kind| !kind.is_symlink());
+            match via_link.then(|| here.looped_by(&child)).flatten() {
+                Some(above) => loops.push((child.to_string_lossy().into_owned(), above.to_string())),
+                None => place_content_files(&child, Some(&here), files, loops),
+            }
+        } else if name.ends_with(".rbxm") || name.ends_with(".rbxmx") {
+            files.push(child);
+        }
+    }
+}
+
 /// Place content: the instances a place stores that its hierarchy snapshot lists by name and class
 /// only (a Studio-only Model is a default one: scale 1, no pivot, no sizes). `<repo>/data/place-content/
 /// <Place>/<parent path>/*.rbxm` holds them as Studio serialized them: the directories below the place
@@ -1334,19 +1412,10 @@ pub fn mount_place_content(engine: &Engine, hierarchy: &str) -> usize {
     let Some(place) = Path::new(hierarchy).file_stem().map(|stem| stem.to_string_lossy().into_owned()) else { return 0 };
     let top = repo_path(engine, "data/place-content").join(&place);
     let mut files = Vec::new();
-    let mut stack = vec![top.clone()];
-    while let Some(dir) = stack.pop() {
-        crate::files::note_listing(&dir);
-        let Ok(read) = std::fs::read_dir(&dir) else { continue };
-        for entry in read.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            if path.is_dir() {
-                stack.push(path);
-            } else if name.ends_with(".rbxm") || name.ends_with(".rbxmx") {
-                files.push(path);
-            }
-        }
+    let mut loops = Vec::new();
+    place_content_files(&top, None, &mut files, &mut loops);
+    for (link, above) in loops {
+        engine.warn(format!("place content {}: a link back to {}, which would hold itself; not read", normalize(&link), normalize(&above)));
     }
     files.sort();
     let mut mounted = 0;
