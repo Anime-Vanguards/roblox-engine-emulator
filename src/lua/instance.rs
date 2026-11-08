@@ -163,6 +163,18 @@ pub fn reveal_bundle(engine: &Engine, id: InstanceId) {
     let _ = (engine, id);
 }
 
+/// A child a script looked up by name and did not find that a bundle mount makes when asked for: a manifest alias's copy
+/// (project::model_assets::requested).
+fn made_on_request(engine: &Engine, id: InstanceId, name: &[u8]) -> Option<InstanceId> {
+    #[cfg(feature = "bundles")]
+    return project::model_assets::requested(engine, id, name);
+    #[cfg(not(feature = "bundles"))]
+    {
+        let _ = (engine, id, name);
+        None
+    }
+}
+
 /// Reached: a script found `child` by name (a bundle's placeholder becomes the bundle's instance;
 /// script access to Studio-only placeholders is noted).
 pub(super) fn reached(engine: &Engine, child: InstanceId) -> InstanceId {
@@ -224,6 +236,9 @@ pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Re
     let child = engine.state.borrow().dom.find_child(id, &key_bytes);
     if let Some(child) = child {
         reached(engine, child);
+        return Ok(instance_value(lua, engine, child)?);
+    }
+    if let Some(child) = made_on_request(engine, id, &key_bytes) {
         return Ok(instance_value(lua, engine, child)?);
     }
     if let Some(child) = super::globals::missing_child(lua, engine, id, &key_bytes)? {
@@ -711,6 +726,9 @@ pub fn find_first_child_counting(engine: &Engine, id: InstanceId, name: Option<&
     };
     if let Some(child) = found {
         return Some(reached(engine, child));
+    }
+    if !recursive && let Some(name) = name && let Some(made) = made_on_request(engine, id, name) {
+        return Some(made);
     }
     if recursive {
         let children = engine.state.borrow().dom.at(id).children.clone();

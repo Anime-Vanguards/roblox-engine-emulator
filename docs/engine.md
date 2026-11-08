@@ -186,6 +186,7 @@ Luau module returning a table with one bundle a line,
 return {
 	["Models/Props"] = { AssetId = 1234567890, Version = 3 },
 	["Models/Props/_Loose"] = { AssetId = 2345678901, Version = 1 },
+	["Models/Props/Tall Lamp"] = { AliasOf = "Models/Props/Lamp" },
 }
 ```
 
@@ -196,6 +197,11 @@ placeholder or looks inside it: the placeholder becomes the bundle's one instanc
 properties, attributes, tags and children; its name stays the path's last segment), so a script that
 holds it holds the instance. A `_Loose` bundle's members go into its parent folder. A bundle file
 without exactly one instance at its top mounts its instances in a folder at its path, with a warning.
+An `AliasOf` line (an alias of an alias followed) is a copy of the Model at the path it names, made the first
+time a script asks for the alias's path by name (FindFirstChild, WaitForChild or an index, its folders too):
+the bundle holding the model imports, and the copy, named as the alias's last segment, goes into the alias's
+folders (a bundle's own folders when the path runs through one). A listing makes no alias, and an alias of
+anything but a Model, or of a path no bundle holds, is not made, with a warning.
 
 Bundles come from a `BundleSource` (`catalog`, `bundle`, `cached`, `shape`), which a host sets with
 `engine.set_bundle_source`. The default is `AssetWorker`: a child process (`REE_ASSET_WORKER` names the
