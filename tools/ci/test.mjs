@@ -284,6 +284,16 @@ test("every job sets up the compile cache before it restores the two caches, and
 	}
 });
 
+test("the source checks run once, in the standalone job, before any step that a failed download or restore could skip them with", () => {
+	const standaloneJob = WORKFLOW.split(/^  standalone:\r?\n/m)[1];
+	const firstCacheStep = standaloneJob.indexOf("compile-cache.mjs start");
+	for (const check of ["run: node tools/vendor.mjs --check", "run: node --test tools/ci/test.mjs"]) {
+		assert.equal(WORKFLOW.split(check).length, 2, check);
+		const at = standaloneJob.indexOf(check);
+		assert(at >= 0 && at < firstCacheStep, `${check} comes before the caches`);
+	}
+});
+
 test("only the test job on main stores the compile cache, and sccache never gets the workflow's token", () => {
 	const stores = WORKFLOW.split(/^      - /m).filter(step => step.includes("actions/cache/save@"));
 	assert.equal(stores.length, 1);
