@@ -905,7 +905,8 @@ KeyframeSequence pages); how a track behaves before its asset arrives is measure
 - The Animator step runs in the play-mode simulation phase right after PreAnimation and before Stepped.
   Per joint, priorities from the highest (Action4 ... Action, Movement, Idle, Core) each take their
   tracks' summed weight of what is left, blended by weight; what is left stays at rest. A Pose moves the
-  Motor6D whose Part0 / Part1 names are its parent Pose's and its own, else the Bone of its name.
+  Motor6D whose Part0 / Part1 names are its parent Pose's and its own, else the Bone of its name whose
+  parent has the parent Pose's name (a bone under a renamed part is not posed).
 - Fetching (measured in Studio playtests): an asset's first request in a session arrives 0.45 s later;
   tracks and preloads of it share the fetch, and one fetched before loads at once. Until it arrives a
   track has Length 0 and never poses. ContentProvider:PreloadAsync waits for the Animations it is given.
