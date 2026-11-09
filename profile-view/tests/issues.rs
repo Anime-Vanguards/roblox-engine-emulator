@@ -390,6 +390,35 @@ fn a_comparison_names_cost_that_grows_faster_than_n() {
     assert!(function.title.contains("grows as n^1.90"), "{}", function.title);
 }
 
+/// An O(n²) scan with a fixed cost a call: a log-log fit over n = 10 to 1,000 reads n^1.15, under the 1.3 the list starts
+/// at, while it grows as n^1.76 between the two largest sizes (0.816 ms against 14.2 us). The issue reads the large-n
+/// growth: a version 1 comparison's slope between the two largest sizes, a version 2 one's exponent at large n (its fit
+/// with the fixed cost apart)
+#[test]
+fn a_quadratic_scan_is_named_by_its_growth_at_large_n() {
+    let temp = Temp::new("scaling-scan");
+    let dir = write_comparison(&temp.path().join("what-if"));
+    let path = dir.join("compare.json");
+    let points = serde_json::json!([[10, 0.0041], [100, 0.0142], [1000, 0.816]]);
+    let mut compare: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    compare["scaling"][1] = serde_json::json!({"variant": "t[v][k]", "metric": "work_ms", "exponent": 1.15, "r2": 0.97, "last": 1.76, "points": points});
+    std::fs::write(&path, serde_json::to_string(&compare).unwrap()).unwrap();
+    let issues = ree_profile_view::compare::Compare::load(&dir).unwrap().issues();
+    let scan = issues.iter().find(|issue| issue.title.contains("t[v][k]: work grows")).expect("the version 1 scan is named");
+    assert!(scan.title.contains("n^1.76") && scan.severity == Severity::Warning, "{scan:#?}");
+    // version 2: the exponent at large n, the growing part's slope with the fixed cost apart (ree's stats::growth on
+    // these points: 1.90 with a fixed 3.97 us), and each segment's own slope in the evidence
+    compare["version"] = serde_json::json!(2);
+    compare["scaling"][1] = serde_json::json!({"variant": "t[v][k]", "metric": "work_ms", "exponent": 1.90, "last": 1.76,
+        "fit": {"k": 1.90, "fixed": 0.00397, "coefficient": 1.62e-6, "error": 0.0, "fitted": true},
+        "segments": [[10, 100, 0.54], [100, 1000, 1.76]], "points": points});
+    std::fs::write(&path, serde_json::to_string(&compare).unwrap()).unwrap();
+    let issues = ree_profile_view::compare::Compare::load(&dir).unwrap().issues();
+    let scan = issues.iter().find(|issue| issue.title.contains("t[v][k]: work grows")).expect("the version 2 scan is named");
+    assert!(scan.title.contains("n^1.90") && scan.severity == Severity::Serious, "{scan:#?}");
+    assert!(scan.evidence[0].contains("10-100 0.54") && scan.evidence[0].contains("100-1000 1.76"), "{:?}", scan.evidence);
+}
+
 #[test]
 fn line_allocations_are_the_lines_own() {
     // (ree's lines[].alloc_bytes adds what a line's calls allocated and counts the allocating line twice: the viewer

@@ -18,6 +18,8 @@ pub struct Run {
     pub command: String,
     pub status: String,
     pub harness: Option<String>,
+    /// The harness file's contents hashed (two copies of one harness in other folders are the same harness)
+    pub harness_hash: Option<String>,
     pub frames: u64,
     pub seconds: f64,
     pub fps: f64,
@@ -45,6 +47,8 @@ pub struct Figures {
     pub time_ms: f64,
     pub alloc_bytes: f64,
     pub allocs: f64,
+    /// Of `work_ms`, the cold and first-use charges (the work clock's split; absent where the profile does not split them)
+    pub cold_work_ms: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -56,6 +60,9 @@ pub struct RawFunction {
     pub module: Option<String>,
     pub line: Option<i64>,
     pub last_line: Option<i64>,
+    /// Its compiled code and its text hashed: what pairs it across an edit that moved it (ree's report.rs)
+    pub code_hash: Option<String>,
+    pub source_hash: Option<String>,
     pub kind: String,
     pub native: bool,
     pub native_entries: u64,
@@ -86,6 +93,10 @@ pub struct PhaseFigures {
     /// The part of the self work done for the harness's code: all of a harness function's, and a C function's, the
     /// engine's Luau's or mlua's helpers' when the harness called them
     pub harness_self_work_ms: f64,
+    /// Of the self work, the cold and first-use charges (the work clock's split; absent where the profile does not split them)
+    pub cold_work_ms: Option<f64>,
+    /// Cold charges paid for the harness, on the same side as `harness_self_work_ms`.
+    pub harness_cold_work_ms: Option<f64>,
 }
 
 /// The phases the profile's summary reports (`--profile-phase`; by default steady when the run marked one, else every
@@ -996,6 +1007,9 @@ pub struct Func {
     pub short: String,
     pub line: i64,
     pub last_line: i64,
+    /// Its compiled code's hash and its text's (None from a ree before them, and for C functions)
+    pub code_hash: Option<String>,
+    pub source_hash: Option<String>,
     pub kind: Kind,
     pub native: bool,
     pub calls: u64,
@@ -1227,6 +1241,8 @@ impl Profile {
                 name,
                 line: function.line.unwrap_or(0),
                 last_line: function.last_line.or(function.line).unwrap_or(0),
+                code_hash: function.code_hash.clone(),
+                source_hash: function.source_hash.clone(),
                 kind,
                 native: function.native,
                 calls: function.calls,
@@ -1360,7 +1376,7 @@ impl Profile {
         let id = -3_000_000_000 - self.funcs.len() as i64;
         let harness = kind == Kind::Script && harness_module(&module);
         let tool = kind == Kind::Script && (module.starts_with("rur.") || module.starts_with("ree."));
-        self.push_func(Func { id, key: frame.to_string(), short: short_module(&module).to_string(), module, name, line, last_line: line, kind, native: false, calls: 0, own: Figures::default(), total: Figures::default(), harness, tool, phases: BTreeMap::new() })
+        self.push_func(Func { id, key: frame.to_string(), short: short_module(&module).to_string(), module, name, line, last_line: line, code_hash: None, source_hash: None, kind, native: false, calls: 0, own: Figures::default(), total: Figures::default(), harness, tool, phases: BTreeMap::new() })
     }
 
     /// Parses a folded file: `phase;outermost;...;innermost @line weight`
@@ -1433,6 +1449,22 @@ impl Profile {
     /// The harness's file name, when the run had one
     pub fn harness(&self) -> Option<String> {
         self.raw.run.harness.as_deref().map(|path| path.rsplit(['/', '\\']).next().unwrap_or(path).to_string())
+    }
+
+    /// What tells the run's harness apart, and whether by content: its file's contents hashed (run.harness_hash), else its
+    /// module's source hash, else (a profile from before ree hashed it) its file's name
+    pub fn harness_identity(&self) -> Option<(bool, String)> {
+        // (both forms the plain hash: run.harness_hash hashes the text the harness's module loaded as source_hashes does,
+        // so a profile from before it and one after read the same harness as the same)
+        if let Some(hash) = &self.raw.run.harness_hash {
+            return Some((true, hash.clone()));
+        }
+        let name = self.harness()?;
+        let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
+        match self.raw.source_hashes.get(&format!("{HARNESS_FOLDER}.{stem}")) {
+            Some(hash) => Some((true, hash.clone())),
+            None => Some((false, name)),
+        }
     }
 
     pub fn phase_name(&self, phase: u32) -> &str {

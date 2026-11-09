@@ -44,6 +44,7 @@ pub mod hw;
 pub mod memory;
 pub mod prices;
 pub mod report;
+pub mod stats;
 pub mod time;
 pub mod vm;
 pub mod whatif;

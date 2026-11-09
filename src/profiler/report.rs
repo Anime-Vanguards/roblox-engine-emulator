@@ -929,6 +929,13 @@ pub fn write(input: &Input) -> Result<String, String> {
         "run": {
             "command": input.run.command, "status": input.run.status, "harness": input.run.harness, "frames": input.run.frames,
             "seconds": input.run.seconds, "fps": input.run.fps, "elapsed": input.elapsed,
+            // (the harness's contents hashed: two copies of one harness in other folders are the same harness. The text its
+            // module loaded, hashed as source_hashes hashes it, so that a profile from before this field, compared by that
+            // entry, reads the same harness as the same; the file's bytes where no module of its name loaded)
+            "harness_hash": input.run.harness.as_ref().and_then(|path| match Path::new(path).file_stem().and_then(|stem| input.sources.get(&format!("{HARNESS_FOLDER}.{}", stem.to_string_lossy()))) {
+                Some(source) => Some(format!("{:016x}", fxhash(&source.text))),
+                None => std::fs::read(path).ok().map(|bytes| format!("{:016x}", fxhash(&bytes))),
+            }),
             "script_timeouts": input.run.script_timeouts, "host_backstop_timeouts": input.run.host_backstop_timeouts,
         },
         "phases": input.phases,
@@ -1027,6 +1034,9 @@ pub fn write(input: &Input) -> Result<String, String> {
             "module": function.map(|f| module_name(&f.source).to_string()),
             "line": function.map(|f| f.line),
             "last_line": function.and_then(|f| f.lines.iter().copied().max()),
+            // (what pairs a function across an edit that moved it: its code as compiled, and its text)
+            "code_hash": function.and_then(code_hash),
+            "source_hash": function.and_then(|f| source_hash(input.sources, f)),
             "kind": match function { Some(f) if f.exempt() => "engine Luau", Some(_) => "Luau", None if id <= ENGINE_STEP_BASE => "engine step", None => "C" },
             "native": function.is_some_and(vm::Function::native),
             // (the harness's own code, under HARNESS_FOLDER; tool: ree's own, never the game's nor a user's: the engine's chunks
@@ -3383,6 +3393,63 @@ fn function_key(names: &Names, id: i32) -> String {
     }
 }
 
+/// A function's bytecode hashed as the compiler wrote it (profile.json `code_hash`): the same code hashes the same wherever
+/// it moves in its file, so `ree profile diff` pairs a function across an edit that moved it (an anonymous function's key
+/// carries its line). What a run changes in the code is taken out: the slot a table-key, global or method instruction
+/// predicts (the VM patches it into the instruction's C field), and the loader's GETUDATAKS / SETUDATAKS / NAMECALLUDATA
+/// forms, which read as the GETTABLEKS / SETTABLEKS / NAMECALL they stand for (the profile writes the plain form once a
+/// site runs). A second word (an aux) is hashed as it is. Line numbers live outside the code, so a move changes nothing
+fn code_hash(function: &vm::Function) -> Option<String> {
+    if function.code.is_empty() {
+        return None;
+    }
+    let op = |name: &str| vm::OPCODES.iter().position(|op| *op == name).map_or(u32::MAX, |index| index as u32);
+    let rewritten = [(op("GETUDATAKS"), op("GETTABLEKS")), (op("SETUDATAKS"), op("SETTABLEKS")), (op("NAMECALLUDATA"), op("NAMECALL"))];
+    let slotted = [op("GETGLOBAL"), op("SETGLOBAL"), op("GETTABLEKS"), op("SETTABLEKS"), op("NAMECALL")];
+    // (Luau's BytecodeUtils.h getOpLength: the instructions followed by an aux word)
+    let with_aux: Vec<u32> = [
+        "GETGLOBAL", "SETGLOBAL", "GETIMPORT", "GETTABLEKS", "SETTABLEKS", "NAMECALL", "JUMPIFEQ", "JUMPIFLE", "JUMPIFLT", "JUMPIFNOTEQ", "JUMPIFNOTLE", "JUMPIFNOTLT", "NEWTABLE", "SETLIST", "FORGLOOP", "LOADKX",
+        "FASTCALL2", "FASTCALL2K", "FASTCALL3", "JUMPXEQKNIL", "JUMPXEQKB", "JUMPXEQKN", "JUMPXEQKS", "GETUDATAKS", "SETUDATAKS", "NAMECALLUDATA", "NEWCLASSMEMBER", "CALLFB", "CMPPROTO", "NEWCLASS", "CONSTRUCT",
+        "GETPRIVATEFIELD", "SETPRIVATEFIELD",
+    ]
+    .iter()
+    .map(|name| op(name))
+    .collect();
+    let mut bytes: Vec<u8> = Vec::with_capacity(function.code.len() * 4);
+    let mut pc = 0;
+    while pc < function.code.len() {
+        let insn = function.code[pc];
+        let loaded = insn & 0xff;
+        let opcode = rewritten.iter().find(|(from, _)| *from == loaded).map_or(loaded, |(_, to)| *to);
+        let mut word = (insn & !0xff) | opcode;
+        if slotted.contains(&opcode) {
+            word &= 0x00ff_ffff;
+        }
+        bytes.extend_from_slice(&word.to_le_bytes());
+        if with_aux.contains(&loaded) {
+            if let Some(aux) = function.code.get(pc + 1) {
+                bytes.extend_from_slice(&aux.to_le_bytes());
+            }
+            pc += 2;
+        } else {
+            pc += 1;
+        }
+    }
+    Some(format!("{:016x}", fxhash(&bytes)))
+}
+
+/// A function's source text hashed (profile.json `source_hash`): its lines from where it starts to its last instruction's,
+/// each trimmed, so a function moved or re-indented hashes the same and one whose text changed does not. None when the
+/// profile did not keep its module's source
+fn source_hash(sources: &FxHashMap<String, Source>, function: &vm::Function) -> Option<String> {
+    let source = sources.get(module_name(&function.source))?;
+    let text = String::from_utf8_lossy(&source.text);
+    let first = function.line.max(1) as usize;
+    let last = function.lines.iter().copied().max().unwrap_or(function.line).max(function.line).max(1) as usize;
+    let span: Vec<&str> = text.lines().skip(first - 1).take(last + 1 - first).map(str::trim).collect();
+    (!span.is_empty()).then(|| format!("{:016x}", fxhash(span.join("\n").as_bytes())))
+}
+
 fn fxhash(bytes: &[u8]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = rustc_hash::FxHasher::default();
@@ -3916,6 +3983,27 @@ pub fn html(profile_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn op(name: &str) -> u32 {
+        vm::OPCODES.iter().position(|op| *op == name).unwrap() as u32
+    }
+
+    /// A function's code hash stays as compiled whatever a run made of it: the slot a GETTABLEKS predicts (its C byte,
+    /// which the VM patches) and the loader's GETUDATAKS form hash as the plain instruction; its lines, which a move
+    /// changes, are not in it; a changed operand is
+    #[test]
+    fn a_code_hash_ignores_what_a_run_patches_and_where_the_function_lies() {
+        let function = |words: Vec<u32>, line: i32| vm::Function { code: words, line, lines: vec![line; 4], ..vm::Function::default() };
+        // GETTABLEKS A=1 B=0 C=slot, aux 7; then RETURN
+        let get = |opcode: u32, slot: u32| (slot << 24) | (1 << 8) | opcode;
+        let ret = op("RETURN") | (1 << 16);
+        let loaded = code_hash(&function(vec![get(op("GETTABLEKS"), 0), 7, ret], 10)).unwrap();
+        assert_eq!(code_hash(&function(vec![get(op("GETTABLEKS"), 5), 7, ret], 10)).unwrap(), loaded, "a predicted slot");
+        assert_eq!(code_hash(&function(vec![get(op("GETUDATAKS"), 3), 7, ret], 10)).unwrap(), loaded, "the loader's form");
+        assert_eq!(code_hash(&function(vec![get(op("GETTABLEKS"), 0), 7, ret], 13)).unwrap(), loaded, "moved three lines");
+        assert_ne!(code_hash(&function(vec![get(op("GETTABLEKS"), 0), 8, ret], 10)).unwrap(), loaded, "another key");
+        assert!(code_hash(&vm::Function::default()).is_none());
+    }
 
     #[test]
     fn cold_object_total_keeps_listing_order_before_display_sort() {

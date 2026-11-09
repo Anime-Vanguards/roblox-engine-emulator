@@ -678,8 +678,10 @@ proxies and tables, vectors as Vector3), and the compiler leaves a constant vect
 So a loop that slices its work by an os.clock budget per Heartbeat takes as many frames as in Studio, and
 a frozen clock (`REE_FROZEN_CLOCK=1`: the clock follows the frames only) makes runs of code that differs
 in speed write the same values; a client's os.clock is real time, so a script that times itself on it within a
-frame can draw differently there when its real work moves (`ree record --timing-check` says when a recording
-hinges on that: docs/cli.md). The clock never runs backwards and never falls behind the frame's time.
+frame can draw differently there when its real work moves (`ree record --timing-check` records again under clients
+faster and slower than the model, across the work clock's fidelity band and a phone's, and says under which a recording
+hinges on that: docs/cli.md; `Options::clock_probe` runs the in-frame clock on such a multiple of the modelled work).
+The clock never runs backwards and never falls behind the frame's time.
 A recorded clock (`RUR_CLOCK`) takes no charges; the busy-loop allowance still ends a loop that only reads
 the clock. A frozen clock counts those reads within one resumption only, so every thread that reads it in a
 frame, however many there are, reads the frame's time, as a frame-locked benchmark clock gives them.
@@ -711,7 +713,10 @@ phones (each family's rows, as roblox-sim runs them on the desktop), which nothi
 
 `--profile <kinds>` (docs/cli.md "Profiles and caches") or a host's `profiler::Session` runs the profilers a
 profile asks for; `profiler::report` writes its files and `ree profile diff` compares two; the profile viewer
-(profile-view/, docs/cli.md "The profile viewer") reads them and nothing else. What each one measures:
+(profile-view/, docs/cli.md "The profile viewer") reads them and nothing else. A diff keeps function identity across a
+source move while leaving out figures whose meaning changed between profile versions. Its price-only tag needs the
+exact cold charges to explain the work change; scoped rows subtract harness work and harness cold charges together.
+What each one measures:
 
 - **The VM's instruction profile** (patches/luau/12-profiling.patch, `lprofile.cpp`, `lua_profilestart`). While a profile
   steps, `luau_execute` runs its single-step variant on every thread of the VM, and the dispatch calls the

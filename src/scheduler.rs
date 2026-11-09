@@ -464,8 +464,8 @@ impl Scheduler {
             randoms: Default::default(),
             display_interval_index: None,
             display_beat_clock: None,
-            // (a timing check's second run: twice the modelled work moves os.clock within each frame, record/run.rs)
-            price_scale: crate::cost::device_scale(&options.device) * if options.clock_moved { 2.0 } else { 1.0 },
+            // (a timing check's probe: os.clock within each frame runs on the probe's multiple of the modelled work, record/run.rs)
+            price_scale: crate::cost::device_scale(&options.device) * options.clock_probe.unwrap_or(1.0),
         };
         scheduler.edit_mode = options.edit_mode();
         // Scheduler.Configure: RUR_EPOCH=<Unix seconds or ms> pins the wall clock's start
@@ -476,7 +476,7 @@ impl Scheduler {
         if scheduler.frozen_clock {
             scheduler.freeze_wall_clock();
         }
-        if options.clock_moved {
+        if options.clock_probe.is_some() {
             scheduler.frozen_clock = false;
         }
         // RUR_CLOCK=<file.json> replays a recorded Studio frame clock instead of the ideal one
