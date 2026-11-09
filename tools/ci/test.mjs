@@ -1,12 +1,18 @@
-// Tests of the CI test runner and its entry: node --test tools/ci/test.mjs
+// Tests of the CI tools (the test runner, its entry and the compile cache) and of what the workflow must keep:
+// node --test tools/ci/test.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { command } from "../release/common.mjs";
+import { cacheKey, checked, download, parseEnvironment, stop } from "./compile-cache.mjs";
 import { OWN_JOBS, jobOf, parseTestList, partition, run } from "./test-runner.mjs";
+
+const WORKFLOW = fs.readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
 
 // Where cargo runs planted's binary (the profile-view package's folder), and the package name it sets there
 const cwd = path.resolve("profile-view");
@@ -62,8 +68,7 @@ test("core skips only the two test binaries with jobs of their own and passes ev
 });
 
 test("the workflow has jobs for both test binaries that core skips", () => {
-	const workflow = fs.readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-	const modes = [...workflow.matchAll(/runner=\['node','\$entry','(\w+)'/g)].map(match => match[1]);
+	const modes = [...WORKFLOW.matchAll(/runner=\['node','\$entry','(\w+)'/g)].map(match => match[1]);
 	assert.deepEqual(modes.sort(), ["core", ...Object.keys(OWN_JOBS)].sort());
 });
 
@@ -154,4 +159,140 @@ test("the entry runs the test binary and exits with its code, whether that is 0 
 		assert.equal(result.stderr, "");
 		assert.equal(result.status, code);
 	}
+});
+
+test("a download is used only when its SHA-256 is the pinned one", () => {
+	const archive = Buffer.from("the release archive");
+	const sha256 = createHash("sha256").update(archive).digest("hex");
+	assert.equal(checked(archive, sha256, "sccache.zip"), archive);
+	assert.throws(() => checked(Buffer.from("another archive"), sha256, "sccache.zip"), /sccache\.zip: checksum mismatch/);
+});
+
+// A fake fetch that gives `answers` in turn, and the last one from then on, and records the addresses it was asked
+// for. An answer that is an Error is thrown.
+function fakeFetch(...answers) {
+	const calls = [];
+	const get = async (url) => {
+		const answer = answers[Math.min(calls.length, answers.length - 1)];
+		calls.push(url);
+		if (answer instanceof Error) throw answer;
+		return answer;
+	};
+	return { calls, get };
+}
+
+test("a download that fails or stalls is tried again after a growing pause, and gives up with the address and the cause", async () => {
+	const archive = Buffer.from("the release archive");
+	const pin = { url: "https://releases.example/sccache.zip", sha256: createHash("sha256").update(archive).digest("hex") };
+	const refused = new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED 192.0.2.1:443") });
+	const pauses = [];
+	const options = { attempts: 4, wait: 100, pause: async (ms) => void pauses.push(ms), log() {} };
+
+	// a network error, then a server's error, then the archive
+	const third = fakeFetch(refused, new Response("busy", { status: 503 }), new Response(archive));
+	assert.deepEqual(await download(pin, { ...options, get: third.get }), archive);
+	assert.deepEqual(third.calls, [pin.url, pin.url, pin.url]);
+	assert.deepEqual(pauses, [100, 200]);
+
+	const never = fakeFetch(refused);
+	const failure = /https:\/\/releases\.example\/sccache\.zip: no download in 4 attempts, the last one failed: fetch failed: connect ECONNREFUSED 192\.0\.2\.1:443/;
+	await assert.rejects(download(pin, { ...options, get: never.get }), failure);
+	assert.equal(never.calls.length, 4);
+	const busy = fakeFetch(new Response("busy", { status: 503 }));
+	await assert.rejects(download(pin, { ...options, attempts: 1, get: busy.get }), /no download in 1 attempts, the last one failed: HTTP 503/);
+
+	// an answer that has not come when an attempt's time is up fails that attempt. The fake's timer keeps the process
+	// waiting until then, as fetch's open connection does.
+	const stalled = (url, { signal }) => new Promise((resolve, reject) => {
+		const connection = setInterval(() => {}, 1000);
+		signal.addEventListener("abort", () => {
+			clearInterval(connection);
+			reject(signal.reason);
+		});
+	});
+	await assert.rejects(download(pin, { ...options, attempts: 2, timeout: 20, get: stalled }), /no download in 2 attempts, the last one failed: .*timeout/);
+});
+
+test("a download whose SHA-256 is not the pinned one fails at once, with no second attempt", async () => {
+	const pin = { url: "https://releases.example/sccache.zip", sha256: createHash("sha256").update("the release archive").digest("hex") };
+	const other = fakeFetch(new Response("another archive"));
+	const options = { get: other.get, pause: () => assert.fail("it waited for another attempt"), log() {} };
+	await assert.rejects(download(pin, options), /sccache\.zip: checksum mismatch/);
+	assert.equal(other.calls.length, 1);
+});
+
+test("the environment script's variables are read as cmd prints them", () => {
+	const printed = "INCLUDE=C:\\VC\\include;C:\\Kits\\ucrt\r\nVCToolsVersion=14.44.35207\r\nPROMPT=$P$G=\r\n\r\n";
+	assert.deepEqual(parseEnvironment(printed), { INCLUDE: "C:\\VC\\include;C:\\Kits\\ucrt", VCToolsVersion: "14.44.35207", PROMPT: "$P$G=" });
+});
+
+test("the cache key follows a vendored file's bytes and name and the compilers' versions, and nothing else", (t) => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ree-compile-cache-"));
+	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+	const source = path.join(root, "vendor", "vm", "lvm.cpp");
+	fs.mkdirSync(path.dirname(source), { recursive: true });
+	fs.writeFileSync(source, "int a;");
+	fs.writeFileSync(path.join(root, "Cargo.lock"), "version = 4");
+	fs.writeFileSync(path.join(root, "README.md"), "not an input");
+	const key = (compiler = "19.44.35207") => cacheKey(root, ["vendor", "Cargo.lock"], ["rustc 1.90.0", compiler]);
+
+	const first = key();
+	assert.match(first, /^compile-cache-[0-9a-f]{32}$/);
+	// a file that is no input, and an input's modification time, leave the key as it is
+	fs.writeFileSync(path.join(root, "README.md"), "still not an input");
+	fs.utimesSync(source, new Date(0), new Date(0));
+	assert.equal(key(), first);
+
+	assert.notEqual(key("19.45.0"), first);
+	fs.writeFileSync(source, "int b;");
+	const edited = key();
+	assert.notEqual(edited, first);
+	fs.renameSync(source, path.join(root, "vendor", "vm", "lgc.cpp"));
+	assert.notEqual(key(), edited);
+});
+
+test("stopping prints sccache's statistics, and a job in which no server is running is told so and passes", () => {
+	// what `stop` prints when sccache answers its --stop-server with `result`
+	function stopped(result) {
+		const lines = [];
+		const fake = fakeSpawn(result);
+		stop({ env: { RUSTC_WRAPPER: "C:\\tools\\sccache.exe" }, spawn: fake.spawn, log: line => lines.push(line) });
+		assert.deepEqual(fake.calls, [["--stop-server"]]);
+		return lines.join("\n");
+	}
+	assert.match(stopped({ status: 0, stdout: "Stopping sccache server...\nCache hits   120\n", stderr: "" }), /Cache hits   120/);
+	// sccache 0.19.0's answer when no server is running
+	const refused = "sccache: error: couldn't connect to server\nsccache: caused by: No connection could be made because the target machine actively refused it. (os error 10061)\n";
+	assert.match(stopped({ status: 2, stdout: "Stopping sccache server...\n", stderr: refused }), /^compile cache: no sccache server is running/);
+
+	// any other failure of sccache, one that could not be started, and a job in which `start` did not run fail the step
+	const unread = { status: 2, stdout: "Stopping sccache server...\n", stderr: "sccache: error: failed to read response\n" };
+	assert.throws(() => stopped(unread), /--stop-server: exit 2: sccache: error: failed to read response/);
+	assert.throws(() => stopped({ status: null, signal: "SIGTERM", stdout: "", stderr: "" }), /--stop-server: exit null/);
+	assert.throws(() => stopped({ error: new Error("spawnSync sccache.exe ENOENT") }), /--stop-server: spawnSync sccache\.exe ENOENT/);
+	assert.throws(() => stop({ env: {}, spawn: () => assert.fail("sccache was started") }), /RUSTC_WRAPPER is not set/);
+});
+
+test("every job sets up the compile cache before it restores the two caches, and stops it after its tests", () => {
+	const jobs = WORKFLOW.split(/^jobs:/m)[1].split(/^  \w+:\r?\n/m).slice(1);
+	assert.equal(jobs.length, 3);
+	for (const job of jobs) {
+		const steps = ["compile-cache.mjs start", "actions/cache/restore@", "Swatinem/rust-cache@", "cargo test", "compile-cache.mjs stop"];
+		const order = steps.map(step => job.indexOf(step));
+		assert(order.every(at => at >= 0), "a job is missing one of the steps");
+		assert.deepEqual(order, [...order].sort((a, b) => a - b));
+	}
+});
+
+test("only the test job on main stores the compile cache, and sccache never gets the workflow's token", () => {
+	const stores = WORKFLOW.split(/^      - /m).filter(step => step.includes("actions/cache/save@"));
+	assert.equal(stores.length, 1);
+	assert.match(stores[0], /if: \$\{\{ github\.ref == 'refs\/heads\/main' && /);
+	assert(WORKFLOW.split(/^  planted:/m)[0].includes("actions/cache/save@"), "the store step belongs to the test job");
+	// the whole cache action would also store at the end of any job that missed, a pull request's included
+	assert(!WORKFLOW.includes("uses: actions/cache@"));
+	// sccache's own GitHub storage needs the runner's cache token in the environment of the build
+	assert.doesNotMatch(WORKFLOW, /SCCACHE_GHA|ACTIONS_RUNTIME_TOKEN|ACTIONS_CACHE_URL|ACTIONS_RESULTS_URL/);
+	// every action is pinned to a full commit SHA
+	for (const line of WORKFLOW.split("\n").filter(line => line.includes("uses:"))) assert.match(line, /@[0-9a-f]{40}\b/);
 });
