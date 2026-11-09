@@ -1,5 +1,9 @@
 # Runs on the public repository only: the private one has no free Actions minutes to spare.
 # Third-party actions are pinned to full commit SHAs; Dependabot (private repo) keeps them current.
+#
+# Two jobs: test runs everything but the planted profile tests, and planted runs those in three shards at once, which
+# shortens the run. Cargo starts each test binary through tools/ci/test-entry.mjs, and the runner it calls
+# (tools/ci/test-runner.mjs) decides what runs where.
 name: CI
 
 on:
@@ -18,13 +22,9 @@ concurrency:
 jobs:
   test:
     if: ${{ !github.event.repository.private }}
-    name: Build and test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Build and test (windows-latest)
+    runs-on: windows-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,12 +35,55 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          shared-key: test # All four jobs share the one cache the single test job used before.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Vendored VM matches its patches
         run: node tools/vendor.mjs --check
-      - name: Build
+      - name: CI test runner tests
+        run: node --test tools/ci/test.mjs
+      # Cargo builds all the test targets in one graph, which includes the release binaries the integration tests run,
+      # and runs the doctests. The runner skips planted's tests; the planted job runs them.
+      # The entry is given by its absolute path, as cargo starts it in each package's folder.
+      - name: Build and test (all but the planted profile tests)
+        run: |
+          $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
+          cargo test --release --locked --no-fail-fast --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','core']"
+      # The next two steps run after a failed test step too, so one failure does not hide the other checks.
+      # A plain release build checks the features the shipped binaries use. The test build has already built the same
+      # artifacts, so this finds them fresh.
+      - name: Build release binaries
+        if: ${{ !cancelled() }}
         run: cargo build --release --locked
-      - name: Test
-        run: cargo test --release --locked
       - name: Test the counter service (tools/hw-counters, a workspace of its own)
+        if: ${{ !cancelled() }}
         run: cargo test --release --locked --manifest-path tools/hw-counters/Cargo.toml
+
+  planted:
+    if: ${{ !github.event.repository.private }}
+    name: Planted profile tests, shard ${{ matrix.shard }} (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # One job per shard. The runner is told its position and the shard count by the matrix itself, so adding a shard
+        # here is all it takes to cut the slices thinner.
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: "1.90.0"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: test # The test job's cache, see above.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The runner lists planted's tests and runs this job's slice, one test at a time. The slices of the three jobs
+      # together hold every test once (tools/ci/test-runner.mjs).
+      # Only planted's target is built here: the other test targets are built by the test job.
+      - name: Test planted profiles (this shard's slice)
+        run: |
+          $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
+          cargo test --release --locked --no-fail-fast -p ree-profile-view --test planted --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','planted','${{ strategy.job-index }}','${{ strategy.job-total }}']"
