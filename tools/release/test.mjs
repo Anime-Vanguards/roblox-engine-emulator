@@ -369,6 +369,18 @@ test("release workflow retains its publication boundary and pins", () => {
 	assert(!publish.includes("actions/checkout"));
 	assert(!workflow.includes("rust-cache"));
 
+	// the mimalloc define is spelled -D, in the workflow and in the rebuild instructions: Git Bash turns a /D value
+	// in the environment into a path, and the define never reaches the compiler
+	assert.match(workflow, /CXXFLAGS_x86_64_pc_windows_msvc:.*'-DMI_WIN_INIT_USE_FLS=1'/);
+	assert(sourceText("0.1.0", "a".repeat(40)).includes('CXXFLAGS_x86_64_pc_windows_msvc="-DMI_WIN_INIT_USE_FLS=1"'));
+
+	// the built Windows executable is started between the build and the packaging
+	const buildStep = workflow.indexOf("run: cargo build --release --locked --bin ree");
+	const startupStep = workflow.indexOf('run: \'"target/$TARGET/release/$BINARY" --version\'');
+	const packageStep = workflow.indexOf("- name: Licenses and package");
+	assert(startupStep > buildStep);
+	assert(startupStep < packageStep, "startup must be checked before packaging");
+
 	// it publishes the existing tag, never creating one
 	assert(workflow.includes("--verify-tag"));
 	assert(!workflow.includes('--target "$TAG"'));

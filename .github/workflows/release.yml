@@ -80,7 +80,9 @@ jobs:
       # One executable also on a Windows machine without the Visual C++ redistributable.
       RUSTFLAGS: ${{ matrix.os == 'windows' && '-C target-feature=+crt-static' || '' }}
       # Mimalloc's TLS hook precedes static CRT initialization; its CRT/FLS path starts after it.
-      CXXFLAGS_x86_64_pc_windows_msvc: ${{ matrix.os == 'windows' && '/DMI_WIN_INIT_USE_FLS=1' || '' }}
+      # Spelled -D, not /D: the build step runs in Git Bash, which rewrites an environment value that starts with / into
+      # a Windows path, so cl.exe never saw the define. MSVC accepts both spellings.
+      CXXFLAGS_x86_64_pc_windows_msvc: ${{ matrix.os == 'windows' && '-DMI_WIN_INIT_USE_FLS=1' || '' }}
     steps:
       - name: Check out the tagged commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,6 +99,12 @@ jobs:
       - name: Build with public default features and no cache
         shell: bash
         run: cargo build --release --locked --bin ree --target "$TARGET"
+      # A bad static-CRT or mimalloc setup builds fine and then crashes at startup. Run it here so that fails the build
+      # job, not only the smoke job after the zip is uploaded.
+      - name: Check the built Windows executable starts
+        if: ${{ matrix.os == 'windows' }}
+        shell: bash
+        run: '"target/$TARGET/release/$BINARY" --version'
       - name: Licenses and package (checks binary order, checksums and Unix modes)
         shell: bash
         run: |

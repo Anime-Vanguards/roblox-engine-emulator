@@ -87,9 +87,12 @@ Windows sets two things:
 
 - `RUSTFLAGS="-C target-feature=+crt-static"` links the C/C++ runtime into the executable, so it needs no Visual C++
   redistributable.
-- `CXXFLAGS_x86_64_pc_windows_msvc="/DMI_WIN_INIT_USE_FLS=1"` makes mimalloc v2 start through the runtime's own
+- `CXXFLAGS_x86_64_pc_windows_msvc="-DMI_WIN_INIT_USE_FLS=1"` makes mimalloc v2 start through the runtime's own
   startup path. Without it, mimalloc's early thread-local-storage hook runs before the static runtime has started and
-  the program crashes at startup.
+  the program crashes at startup. The pinned mimalloc crate compiles a C++ wrapper on MSVC, so this is a CXXFLAGS
+  setting. Use `-D`: Git Bash converts a `/D` flag in the environment into a path before the compiler sees it.
+
+The Windows build runs `--version` before packaging, so a startup failure fails the build job itself.
 
 Each platform then gets a fresh runner, which extracts the archive outside any checkout, runs `--version`, an offline
 harness, a recording and the service with redirected user caches, and checks that nothing was written outside the

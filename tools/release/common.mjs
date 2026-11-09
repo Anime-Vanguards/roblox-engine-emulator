@@ -130,7 +130,7 @@ export function sourceText(releaseVersion, commit, repository = REPOSITORY) {
 		"Build with Rust 1.90.0 and a C++ toolchain: node tools/vendor.mjs --check, then",
 		"cargo build --release --locked --bin ree --target <target triple>, using the default features.",
 		'For Windows set RUSTFLAGS="-C target-feature=+crt-static" to link the C/C++ runtime into the executable,',
-		`and CXXFLAGS_x86_64_pc_windows_msvc="/DMI_WIN_INIT_USE_FLS=1" for mimalloc's initialization after the CRT.`,
+		`and CXXFLAGS_x86_64_pc_windows_msvc="-DMI_WIN_INIT_USE_FLS=1" for mimalloc's initialization after the CRT.`,
 		"",
 	].join("\n");
 }

@@ -1,7 +1,7 @@
 // Process tests for the installed asset worker, with a local JSON worker and no downloads.
 //
 // Each check copies the ree binary into a fresh folder and runs it there, so it is a standalone install. The worker is
-// a copy of node that a --require script turns into a mock worker, and it logs every request it gets to a file. The
+// a Node launcher that a --require script turns into a mock worker, and it logs every request it gets to a file. The
 // checks read that log to see which executable ran and which paths it was sent.
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -36,7 +36,7 @@ const MODEL_XML = '<roblox version="4"><Item class="KeyframeSequence" referent="
 const MOCK_WORKER = `
 const fs = require("node:fs");
 const path = require("node:path");
-// With REE_WORKER_HELPER=1 this copy of node is the helper tool: it only says it ran.
+// With REE_WORKER_HELPER=1 this process is the helper tool: it only says it ran.
 if (process.env.REE_WORKER_HELPER === "1") {
 	console.log("helper ok");
 	process.exit(0);
@@ -51,11 +51,13 @@ if (process.env.REE_WORKER_USES_HELPER === "1") {
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
 	const request = JSON.parse(line);
 	// The test roots are canonical, but the OS may report this executable through a link (macOS /var is /private/var),
-	// so log its real path to compare with the paths the test built.
+	// so log its real path to compare with the paths the test built. On Unix the worker is a launcher script that runs
+	// node with its own path as argv[1] (installWorker), because process.execPath is then the shared node.
+	const worker = process.platform === "win32" ? process.execPath : process.argv[1];
 	const logged = {
 		...request,
 		pid: process.pid,
-		worker: fs.realpathSync(process.execPath),
+		worker: fs.realpathSync(worker),
 		cwd: process.cwd(),
 		workerEnv: process.env.REE_ASSET_WORKER,
 		pathEnv: process.env.PATH,
@@ -77,6 +79,26 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 	console.log(JSON.stringify({ file }));
 });
 `;
+
+// Puts a mock worker (or helper, or decoy) at `file`, with the file mode `mode`.
+//
+// Windows copies node itself. On Unix a copy would not start: Homebrew's node on macOS finds its libnode library
+// relative to where it is installed (@loader_path/../lib), so a lone copy makes dyld exit before the mock runs. The
+// file is a small launcher instead, which runs the installed node by absolute path. It can't be `#!/usr/bin/env node`,
+// because several checks set PATH to only the worker and helper folders, where `node` is not found.
+//
+// The launcher passes its own path to node as argv[1], and the mock logs that as the worker: a log of the shared node
+// would not show which of the files on PATH the OS picked. The empty `-e` program stops node from treating "$0" as a
+// script to run, so stdin is left to the mock that --require loads.
+function installWorker(file, mode = 0o755) {
+	if (WINDOWS) {
+		fs.copyFileSync(process.execPath, file);
+	} else {
+		const node = `'${process.execPath.replaceAll("'", "'\\''")}'`; // single-quoted for sh
+		fs.writeFileSync(file, `#!/bin/sh\nexec ${node} -e '' "$0" "$@"\n`);
+	}
+	fs.chmodSync(file, mode);
+}
 
 // Runs `body` in a fresh folder with an installed ree. It gets:
 //   env       the environment ree runs in; a check may add to it
@@ -112,8 +134,7 @@ function check(name, body) {
 			const directory = path.join(root, folder);
 			fs.mkdirSync(path.join(directory, "helpers"), { recursive: true });
 			const worker = path.join(directory, "helpers", WORKER_FILE);
-			fs.copyFileSync(process.execPath, worker);
-			fs.chmodSync(worker, 0o755);
+			installWorker(worker);
 			return directory;
 		};
 		const requests = () => fs.readFileSync(env.REE_WORKER_LOG, "utf8").trim().split("\n").map(JSON.parse);
@@ -292,8 +313,7 @@ check("a bare worker name uses PATH despite decoys in the project and copied ser
 	fs.mkdirSync(serviceBin, { recursive: true });
 	for (const folder of [directory, serviceBin]) {
 		const decoy = path.join(folder, WORKER_FILE);
-		fs.copyFileSync(process.execPath, decoy);
-		fs.chmodSync(decoy, 0o755);
+		installWorker(decoy);
 	}
 	env.REE_ASSET_WORKER = WORKER_FILE;
 	removePath(env);
@@ -330,7 +350,7 @@ async function findsWorkerBesideBinary(name, { env, ree, project, requests, exec
 	// serve --warm reads in its project's roots
 	fs.mkdirSync(path.join(directory, "root"));
 	const worker = path.join(path.dirname(executable), WORKER_FILE);
-	fs.copyFileSync(process.execPath, worker);
+	installWorker(worker);
 	removePath(env);
 	env.REE_ASSET_WORKER = name;
 
@@ -368,8 +388,7 @@ if (WINDOWS) {
 check("direct, manual and warm workers resolve helper PATH and user folders", async ({ root, env, ree, project, requests, executable }) => {
 	const directory = project("project");
 	const helper = path.join(directory, "helpers", WINDOWS ? "helper.exe" : "helper");
-	fs.copyFileSync(process.execPath, helper);
-	fs.chmodSync(helper, 0o755);
+	installWorker(helper);
 	env.REE_WORKER_USES_HELPER = "1";
 	env.REE_ASSET_WORKER = `.${path.sep}helpers${path.sep}${WORKER_FILE}`;
 	// relative spellings: the worker runs in the state dir, so it only finds its helper if ree made them absolute
@@ -410,8 +429,7 @@ if (!WINDOWS) {
 			const first = project("first");
 			const second = project("second");
 			for (const directory of [first, second]) {
-				fs.copyFileSync(process.execPath, path.join(directory, WORKER_FILE));
-				fs.chmodSync(path.join(directory, WORKER_FILE), 0o755);
+				installWorker(path.join(directory, WORKER_FILE));
 				fs.mkdirSync(path.join(directory, "root"));
 			}
 			env.REE_ASSET_WORKER = WORKER_FILE;
@@ -440,15 +458,14 @@ function unrunnableModes() {
 	return process.getuid() === 0 ? [0o644] : [0o644, 0o001];
 }
 
-// The lookup is the platform's own, so it must go by the caller's permissions: a file the caller cannot execute is
-// skipped and the search goes on to the next PATH entry.
+// The lookup is the platform's own (execvp(3) on Linux and macOS), so it goes by the caller's permissions: a file the
+// caller cannot execute fails with EACCES, is skipped, and the search goes on to the next PATH entry.
 for (const mode of unrunnableModes()) {
 	check(`worker lookup skips a file the caller cannot execute, mode=${mode.toString(8)}`, async ({ env, ree, project, requests }) => {
 		const directory = project("project");
 		const notExecutable = path.join(directory, "decoys");
 		fs.mkdirSync(notExecutable);
-		fs.copyFileSync(process.execPath, path.join(notExecutable, WORKER_FILE));
-		fs.chmodSync(path.join(notExecutable, WORKER_FILE), mode);
+		installWorker(path.join(notExecutable, WORKER_FILE), mode);
 		env.REE_ASSET_WORKER = WORKER_FILE;
 		env.PATH = [notExecutable, path.join(directory, "helpers"), env.PATH].join(path.delimiter);
 		// one direct run, an explicit first-call fallback, then a job the service must answer
@@ -500,8 +517,7 @@ check("an unresolved worker stays unresolved when a decoy exists in the service 
 	env.REE_ASSET_WORKER = WINDOWS ? "only-in-state.exe" : "only-in-state";
 	const decoy = path.join(env.RUR_STATE_DIR, "bin", env.REE_ASSET_WORKER);
 	fs.mkdirSync(path.dirname(decoy), { recursive: true });
-	fs.copyFileSync(process.execPath, decoy);
-	fs.chmodSync(decoy, 0o755);
+	installWorker(decoy);
 	fs.writeFileSync(path.join(directory, "Harness.luau"), `return function()
 game:GetService("KeyframeSequenceProvider"):GetKeyframeSequenceAsync("rbxassetid://5001")
 end`);

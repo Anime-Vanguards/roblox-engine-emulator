@@ -7,8 +7,12 @@ with Rust 1.90.0, the lockfile and the default features.
 Windows sets two environment variables for the build:
 
 - `RUSTFLAGS="-C target-feature=+crt-static"` puts the C/C++ runtime into the one executable.
-- `CXXFLAGS_x86_64_pc_windows_msvc="/DMI_WIN_INIT_USE_FLS=1"` makes mimalloc v2 initialize through its existing
-  CRT/FLS path after the static runtime has started, instead of from an earlier TLS callback.
+- `CXXFLAGS_x86_64_pc_windows_msvc="-DMI_WIN_INIT_USE_FLS=1"` makes mimalloc v2 initialize through its existing
+  CRT/FLS path after the static runtime has started, instead of from an earlier TLS callback. The pinned crate compiles
+  a C++ wrapper on MSVC, so this is a CXXFLAGS setting. The `-D` spelling matters: Git Bash would turn a `/D` value
+  into a path.
+
+The Windows build checks `--version` before packaging, as well as in the installed smoke test.
 
 ```sh
 node --test tools/release/test.mjs
@@ -46,8 +50,10 @@ node tools/release/notes.mjs --tag v0.1.0 --out out/release-notes.md
   generated PNG relative to the current project, draws into it and records a snapshot in the redirected cache. It
   needs no GPU, Studio, credentials or network. File hashes show that only the expected cache, output and temp folders
   changed. On Linux and macOS it also checks that the worker lookup skips a file without execute permission on PATH,
-  in direct and in served runs. On GitHub Actions it checks that the input checkout stayed unchanged. Successful checks
-  remove the temp folder; failures keep it and print its path. `cargo test --release` runs the smoke too
+  in direct and in served runs. Its Unix mock workers launch the installed Node by absolute path: copying Homebrew's
+  executable alone loses its relative libraries, and the helper checks deliberately restrict PATH. On GitHub Actions
+  it checks that the input checkout stayed unchanged. Successful checks remove the temp folder; failures keep it and
+  print its path. `cargo test --release` runs the smoke too
   (`tests/standalone.rs`), with only the built binary copied into a fresh folder (`--binary <path>`), so the tests need
   Node.js.
 - `notes.mjs` writes the release notes. It needs a full-history checkout that has the tag. Commit subjects are read
