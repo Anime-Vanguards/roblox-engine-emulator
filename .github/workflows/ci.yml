@@ -1,9 +1,9 @@
 # Runs on the public repository only: the private one has no free Actions minutes to spare.
 # Third-party actions are pinned to full commit SHAs; Dependabot (private repo) keeps them current.
 #
-# Two jobs: test runs everything but the planted profile tests, and planted runs those in three shards at once, which
-# shortens the run. Cargo starts each test binary through tools/ci/test-entry.mjs, and the runner it calls
-# (tools/ci/test-runner.mjs) decides what runs where.
+# Three jobs, side by side, which shortens the run: test runs everything but two slow test binaries, planted runs the
+# planted profile tests in three shards at once, and standalone runs the standalone tests. Cargo starts each test binary
+# through tools/ci/test-entry.mjs, and the runner it calls (tools/ci/test-runner.mjs) decides what runs where.
 name: CI
 
 on:
@@ -35,16 +35,16 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: test # All four jobs share the one cache the single test job used before.
+          shared-key: test # Every job shares the one cache the single test job used before.
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Vendored VM matches its patches
         run: node tools/vendor.mjs --check
       - name: CI test runner tests
         run: node --test tools/ci/test.mjs
       # Cargo builds all the test targets in one graph, which includes the release binaries the integration tests run,
-      # and runs the doctests. The runner skips planted's tests; the planted job runs them.
+      # and runs the doctests. The runner skips planted's and standalone's tests; their jobs run them.
       # The entry is given by its absolute path, as cargo starts it in each package's folder.
-      - name: Build and test (all but the planted profile tests)
+      - name: Build and test (all but the planted and standalone tests)
         run: |
           $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
           cargo test --release --locked --no-fail-fast --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','core']"
@@ -87,3 +87,29 @@ jobs:
         run: |
           $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
           cargo test --release --locked --no-fail-fast -p ree-profile-view --test planted --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','planted','${{ strategy.job-index }}','${{ strategy.job-total }}']"
+
+  standalone:
+    if: ${{ !github.event.repository.private }}
+    name: Standalone tests (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
+        with:
+          toolchain: "1.90.0"
+      # This job builds the engine's dependencies but not the viewer's, so it only reads the cache: one stored from here
+      # would leave the other jobs without the viewer's.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: test # The test job's cache, see above.
+          save-if: false
+      # One of these tests alone takes three minutes: it runs the installed binary's checks six times in a row.
+      # No package is named, so cargo resolves the workspace's features as the test job does and builds the same ree.
+      # Only standalone's target and what it needs are built here: the engine and ree.
+      - name: Test the standalone binary
+        run: |
+          $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
+          cargo test --release --locked --no-fail-fast --test standalone --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','standalone']"
