@@ -1286,6 +1286,8 @@ fn booked_cycles(name: &str, source: &str, frames: usize) -> (std::collections::
 /// calls gave (the nested call and its caller never sampled together)
 #[test]
 fn hardware_counters_book_a_recursive_function_its_own() {
+    // (25 us calls against the 100 us threshold: one call in four is sampled once learned, however fast or loaded the host)
+    let _fixed_call_length = profiler::hw::fixed_call_us(25.0);
     let (own, attribution, summary) = booked_cycles(
         "rec",
         "local work = {}
