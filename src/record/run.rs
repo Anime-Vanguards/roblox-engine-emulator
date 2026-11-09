@@ -1194,6 +1194,32 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     // a frame did that is the same however fast the host is
     let e = engine.clone();
     context.set("WorkSeconds", lua.create_function(move |_, ()| Ok(e.state.borrow().sched.work_total()))?)?;
+    // Context.FireEvent(Instance, Event, ...): fires an engine event the emulator does not raise itself, to the
+    // connections made to it (Humanoid.Running while a harness walks a character, which nothing simulates here);
+    // nil, booleans, numbers, strings and instances, as a BindableEvent carries them
+    let e = engine.clone();
+    context.set(
+        "FireEvent",
+        lua.create_function(move |_, (target, event, rest): (LuaValue, String, LuaMultiValue)| {
+            let id = engine_lua::instance_id(&target).ok_or_else(|| LuaError::runtime("Context.FireEvent: an Instance first"))?;
+            let name = e.reflection.name_id(&event).ok_or_else(|| LuaError::runtime(format!("Context.FireEvent: no event named {event}")))?;
+            let mut arguments = Vec::with_capacity(rest.len());
+            for value in rest {
+                arguments.push(match value {
+                    LuaValue::Nil => Value::Nil,
+                    LuaValue::Boolean(flag) => Value::Bool(flag),
+                    LuaValue::Integer(number) => Value::Number(number as f64),
+                    LuaValue::Number(number) => Value::Number(number),
+                    LuaValue::String(text) => Value::String(Str::new(&*text.as_bytes())),
+                    other => Value::Instance(
+                        engine_lua::instance_id(&other).ok_or_else(|| LuaError::runtime("Context.FireEvent: arguments are nil, booleans, numbers, strings or instances"))?,
+                    ),
+                });
+            }
+            core::fire_event(&mut e.state.borrow_mut(), id, name, arguments);
+            Ok(())
+        })?,
+    )?;
     // Context.SetJoinData(Player, JoinData): a server run's (`--run-context server`) fake player arrives
     // with the join data a teleport would have given it, which Player:GetJoinData returns (lua/server.luau),
     // so a game that reads its TeleportData there joins the player as live servers do

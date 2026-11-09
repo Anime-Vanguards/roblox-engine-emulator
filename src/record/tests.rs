@@ -2238,6 +2238,46 @@ fn a_harness_reseeds_its_run_and_a_server_mount_takes_studio_names() {
     assert!(!printed.iter().any(|line| line.starts_with("server error:") || line.starts_with("client error:")), "{printed:?}");
 }
 
+/// Context.FireEvent(Instance, Event, ...) fires an engine event nothing here raises (a walking Humanoid's Running) to the
+/// connections made to it, with its arguments; an unknown event or a table argument raises.
+#[test]
+fn a_harness_fires_an_engine_event_to_its_connections() {
+    let root = std::env::temp_dir().join(format!("ree-fire-event-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(root.join("place")).unwrap();
+    std::fs::write(
+        root.join("Harness.luau"),
+        "return function(Context)\n\
+         local Model = Instance.new('Model')\n\
+         local Humanoid = Instance.new('Humanoid')\n\
+         Humanoid.Parent = Model\n\
+         Model.Parent = workspace\n\
+         local Speeds = {}\n\
+         Humanoid.Running:Connect(function(Speed) table.insert(Speeds, Speed) end)\n\
+         Context.FireEvent(Humanoid, 'Running', 22.5)\n\
+         Context.FireEvent(Humanoid, 'Running', 0)\n\
+         task.wait()\n\
+         local _, Unknown = pcall(Context.FireEvent, Humanoid, 'NoSuchEventAnywhere')\n\
+         local _, Table = pcall(Context.FireEvent, Humanoid, 'Running', {})\n\
+         print('speeds', table.concat(Speeds, ','), Unknown, Table)\n\
+         end",
+    )
+    .unwrap();
+    let place = root.join("place").to_string_lossy().into_owned();
+    let harness = root.join("Harness.luau").to_string_lossy().into_owned();
+    let args: Vec<String> = ["--harness", &harness, "--roots", &place, "--seconds", "0.1"].iter().map(|s| s.to_string()).collect();
+    let parsed = super::run::parse(&args, false).expect("arguments");
+    let (done, emulator) = super::run::execute_with(&parsed, &crate::launch::Host::default(), false, false).expect("run");
+    let mut bytes = Vec::new();
+    done.print(&mut bytes).expect("printed");
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&root);
+    let summary: Json = serde_json::from_str(&String::from_utf8(bytes).expect("UTF-8")).expect("one line of JSON");
+    let printed: Vec<String> = summary["output"].as_array().expect("output").iter().map(|line| line["message"].as_str().unwrap_or_default().to_string()).collect();
+    let line = printed.iter().find(|line| line.starts_with("speeds ")).unwrap_or_else(|| panic!("{printed:?}"));
+    assert!(line.starts_with("speeds 22.5,0 "), "{line}");
+    assert!(line.contains("no event named NoSuchEventAnywhere") && line.contains("arguments are nil, booleans"), "{line}");
+}
+
 /// A Studio-only placeholder (the place's hierarchy snapshot gives it a class and a name and no values) is built when a script
 /// first lists its parent, so a run that looks at more of the place built more of them, and recorded them appearing then: a cast
 /// that walked every service had its recording carry the place's seven Lighting effects (drawn at their default values) and two of
