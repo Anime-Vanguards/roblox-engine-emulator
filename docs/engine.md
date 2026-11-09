@@ -500,18 +500,48 @@ plus the script work charged since the frame began. Every Instance read (by what
 reached by its lower-case first letter 40 ns more, `LOWER_FIRST`), write and method call, Instance.new, Clone (per instance), a subtree entering or leaving the DataModel (per instance),
 Destroy, the lists methods return (per element), a find's walk (per child or node looked at), a ray's path
 and a spatial query's results (per part), signals and threads, and EditableMesh's own work are charged what
-they cost in a client, as measured with os.clock (cost.rs gives each price with its measurement). A script's
-own Luau is charged too, from the VM's work counters (patches/luau/02-work-counters.patch `lua_workcounters`: instructions
-by opcode, a `--!native` module's apart, objects and table storage allocated, keys moved as tables grow, C
-calls and calls into the engine's own Luau, imports looked up, and the library's own loops: numbers made
-strings, new strings, sorting, table.create / clone / concat, string.split and string.format). Each
-instruction is priced by its kind, interpreted or native (`INTERPRETED_OPS`, `NATIVE_OPS`). The engine's own
+they cost in a client, as measured with os.clock (cost.rs gives each price with its measurement and where it
+came from). A script's own Luau is charged too, from the VM's work counters (patches/luau/02-work-counters.patch
+`lua_workcounters`: instructions by opcode, a `--!native` module's apart, objects and table storage allocated,
+keys moved as tables grow, C calls and calls into the engine's own Luau, imports looked up, and the library's
+own loops: numbers made strings, new strings, sorting, table.create / clone / concat, string.split and
+string.format). What a library or engine call does by the size of its input is counted in slots of the
+counters' `hostops` that no opcode reaches (patches/luau/15-input-size-work.patch, cost.rs `SCANNED_SLOT` and
+below): the elements table.find compares and table.insert / remove at a position, table.move, unpack, pack and
+clear move; the bytes of every string a script's work makes or looks up; the bytes a plain search reads; the
+pattern matcher's steps; the bytes string.upper / lower convert and a utf8 function decodes; the buffers made
+and the bytes buffer functions write (a large new buffer's, and a copy's, fill's or string write's over 64 KB, apart:
+counted, not priced, as no price a byte fits a client's cache tiers, and a profile prints them as unpriced); and the bytes and objects a script's work allocates, its library
+and engine calls' with its instructions', an allocation too large for the VM's own pages apart. (A flat price a
+call read table.find over 100,000 elements as over 10, and `s ..= piece` grew linearly where a client's time
+grows with the square.) JSONEncode and JSONDecode are priced by the text's bytes and the values they write or
+build (`cost::json`). What the engine's own C functions allocate for a script (a datatype's value, an
+Instance's userdata) is part of the operation the engine prices, so these counts leave it out
+(`lua_sethostcfunction` or `lua_sethostcfunctions`). Registration retains every entry in stable, growable blocks;
+there is no fixed registry capacity. Classification is cached in each C closure, so a host registers its functions
+before scripts can classify them. Each instruction is priced by its kind, interpreted or native (`INTERPRETED_OPS`,
+`NATIVE_OPS`). The engine's own
 Luau (prelude, services, vector3.luau) stands in for Studio's C++ and is not charged. Roblox's datatypes are
 priced by operation where a client pays more than the instructions that reach them (lune-roblox
 `datatype_price`, cframe.rs `price`): a Vector2, UDim or UDim2's arithmetic and `==`, a member that makes a new
 value (a UDim2's X, a keypoint's Value, a Vector2's Unit), a sequence's Keypoints (a new table of new keypoints
 on every read), their constructors and CFrame's methods. A Vector2's X / Y and the deprecated lowercase names
 are plain member reads (an instruction).
+
+A thread the scheduler resumes is charged as a client resumes it: 0.35 us from task.wait or wait, 0.20 from
+task.delay, 0.445 from a signal's Wait (`RESUMED_WAIT`, `RESUMED_DELAY`, `RESUMED_SIGNAL_WAIT`: the parity
+bench's resume-spacing rows), booked to the line it waited on. An event's dispatch to each handler is booked to
+that handler, and a handler keeps the line that connected it (a profile's handlers by connect site); a frame
+event's first handler pays nothing for it, as measured (its dispatch is the frame's). An event kind no bench
+measured is priced as a heard BindableEvent's, a borrowed price a profile counts apart (`unmeasured_fires`).
+Queued handlers keep their signal's provenance even when no profile is active. If profiling begins before delivery,
+the handler's dispatch still carries that provenance; queueing before the profile is outside its totals.
+
+A deferred handler disconnected before it runs keeps its queue charge and pays no handler-thread charge. That is a
+modeling choice: running a callback is measured, but skipping a canceled job has no client timing. To measure it, queue
+heard events in a rendered client, disconnect them before the flush, and bracket the flush with a later live sentinel;
+queue-only and all-live controls, with the firing and disconnecting outside the interval, separate canceled-job scanning
+from callback startup.
 
 The first touch of an instance in a frame (a read, a write or a method call) costs more than the next ones:
 45 ns for a part, 270 ns for a GUI object or UI component, which a client lays out and draws every frame
@@ -558,6 +588,36 @@ loop, 50-70 when other allocations came between them, 140-210 when they were mad
 instances and other allocations: the VM does not see where an object lies, and the price is the made-over-time
 end, where a game's per-frame data is.
 
+The cold and first-use charges are booked apart from the rest (a profile's `cold_work_ms` per function, line
+and phase), to the code that paid them and to the object they were for: a table by the line that made it, a C
+function, a function of the engine's own Luau, an instance's class, a member, an engine path. A function's own
+cold code is charged to the function for the instructions it ran, each once a frame as it runs
+(patches/luau/16-cold-attribution.patch). An opcode marker arms each instruction.
+Its first dispatch charges its code and restores its normal opcode; the next frame rearms only instructions that
+executed. Coverage belongs to the prototype and is shared by its activations and coroutines. Skipped code remains
+uncharged, and the profile books a charge to the executing function, instruction and call-tree node. Auxiliary words
+and closure captures consumed as data are not dispatches. Code compiled during a frame follows the same first-dispatch
+rule; tracking starts before interpreted scripts run, including before the first render.
+
+Armed opcodes use the interpreter's dispatch fallback, keeping the normal switch's opcode range. A cold dispatch
+returns to an outer retry loop, so the compiler keeps cold-helper spills out of the warm dispatch path. The ordinary
+interpreter adds no instruction-epoch check or Luau call hook. First dispatches, interpreter completion checks,
+opcode inspections and frame rearming still do host work. The regression suite checks exact frame-specific code charges, self work and saving
+through waits, re-entry, shared and suspended coroutines, protected calls, errors and yielding iterators; code compiled
+before the first render, breakpoint changes and collected prototypes follow the same rule. Each object's
+charge keeps who paid it and in how many frames other code touched the same
+object, and a cut's saving (`saving_ms`) is its hot work and only the cold charges for objects nothing else
+touched in their frame: of two walkers over the same records, the first pays the frame's cold charges (its cold
+column says so) and cutting it would move them to the second, so both show the same saving whichever runs first.
+
+The collector's work is charged too: 8.6 ns an object the scripts' work allocated, each swept once it is garbage
+and marked while it lives (`LUAU_COLLECTOR_OBJECT`: the collector's share of the parity bench's churn rows on a
+heap of about 50 MB, its steps' time in ree's VM, which runs the client's collector, applied to a client's time),
+booked to the instruction whose allocation drove it (a profile's `collector_ms`, per function, line, phase and
+frame). It is priced an object, not a byte: a collector frees a large block at once, and a client builds a 1 MB
+string.format (3.7 MB of buffers) in 271 us in all, where 0.12 ns a byte read 440 us for its collector alone. The
+price moves nothing: where the collector steps stays the GC clock's (below), whatever it charges.
+
 The prices are measured with the parity bench (`tools/cost-parity`, README there): about 400 workloads that
 run unchanged in ree and in a real client, engine calls by family, the language loops interpreted and as a
 `--!native` module, and a module whose environment getfenv made unsafe; it prints each workload's ree /
@@ -566,7 +626,21 @@ measure what a client has done before (a heap of a game's size makes new strings
 clients that run the whole corpus. A client runs the corpus's groups of families as jobs of one session,
 and each job takes its scene out of the DataModel again (`Corpus.Cleanup`): the scenes left behind had made
 the later groups' spatial queries meet three copies of their geometry. A memory row keeps every round's
-objects alive until the row ends and reads its median round.
+objects alive until the row ends and reads its median round. The reference client is a rendered roblox-sim
+client (Studio 0.744's engine) of a game's match place on one desktop PC (`cost::REFERENCE_CLIENT`); its
+sessions' rows are kept in tools/cost-parity/reference (and two later sessions' for the buffer rows at 256 KB and
+4 MB), and the fits and bands compare each row with its fastest session (`--fastest`: a session's slower rows are
+its own noise, not the client's price).
+
+Every price says where it came from (`cost::kind`): fitted on those client sessions, kept from a Studio
+playtest or capture where the bench has no row (Studio-era: most signal kinds, some classes' clones and
+creations, EditableMesh), or borrowed from another price where nothing measured it (defaulted: a method the
+table does not name, Shapecast, a property of a class it does not name). A profile splits each function's work
+by that (`by_provenance_ms`), and its fidelity line weighs the bench's error by component on rows no fit saw (Luau,
+engine calls, the collector, dispatch: the held-out rows; cold: the macro bench's held-out rows of the whole clock,
+measured before the size fit, not a test of the cold charges alone; `cost::BENCH_BANDS`) and the Studio-era and
+borrowed shares by the work of the code the summary reports (the reported phases' game code), with a phone's
+factor's spread folded into the band (docs/cli.md "Profiles and caches").
 
 What the prices compose to on real per-frame code is a second question, measured on a game's own modules
 timed the same way on both sides: a GUI scroll and gradient step, an effect system's step lists and twelve
@@ -577,17 +651,21 @@ held out of every fit. Without any cold costs the work clock read 0.15-0.53x a c
 alone the casts 0.22-0.67x. With all of them a GUI scroll reads 0.82x, a gradient step 0.78x, the step lists
 0.85-1.17x, the server loop 1.03-1.08x, the card grid 0.63-0.66x, and the casts 0.73-1.10x fitted and
 0.51-0.81x held out (most 0.6-0.75x): a held-out cast's engine calls read 0.5-0.9x a client and its own Luau
-0.3-1.0x (most 0.5-0.7x). What is still missing is named in every profile's summary (`cost::FIDELITY`): the
-rest of a cast's cold cost (code and data a client finds cold after frames unused), where data lies, what a
-layout leaves warm, and the cold of each node a large walk visits. Size a cut in a client.
+0.3-1.0x (most 0.5-0.7x). Those 13 held-out rows are the cold component's band (0.53-1.06x, `cost::BENCH_BANDS`),
+which every profile weighs with the bench's other components by its own work in its fidelity line, naming what is
+still missing: the rest of a cast's cold cost (code and data a client finds cold after frames unused), where data
+lies, what a layout leaves warm, and the cold of each node a large walk visits. Size a cut in a client. With the
+prices fitted at several sizes, a fitted attack's warm cast reads 44.6 ms against a client's 42.3 (44.6 before),
+and of the game's 50 ms in it 27 are cold charges (docs/engine.md).
 
 Within one instruction kind the clock charges an average, so it cannot tell some ways of writing the same thing
 apart where the interpreter does (`ree profile try`, tools/what-if, host time against the clock, 9 interleaved rounds):
 a lookup by a number in a table's array part and by a string in its hash part cost the same on the clock and 1.5-1.8x
 apart in host time (10,000 keys, read 40,000 times); a numeric `for i = 1, #t` over an array reads 1.04x a generalized
 loop on the clock and 1.3-1.7x in host time. Growing a list costs more on the clock than in this machine's interpreter
-(appending 10,000 values to `{}` against `table.create(n)`: 5.5-5.8x on the clock, 1.4-1.9x in host time): the clock's
-prices for the keys a rehash moves and the bytes it stores are a client's.
+(appending 10,000 values to `{}` against `table.create(n)`: 1.7-2.2x on the clock, 1.3-1.6x in host time, where the
+clock read 5.5-5.8x before its allocation prices were fitted at several sizes): the parity bench's list growth rows
+read 1.1-1.3x a client.
 
 A script's environment is safe, as Roblox makes every script's: its imports (`game`, `Vector3.new`,
 `math.floor`) are resolved when it loads and read as constants, builtins (`math.*`, `type`, `typeof`, ...)
@@ -624,7 +702,10 @@ sets `Options::place_prices`.
 
 The prices are a desktop client's. `--device phone` (or `REE_DEVICE=phone`) emulates a touch device and
 scales the script work the clock charges by 2.77, a sim-to-phone calibration for scripts (range
-2.13-4.16): a conversion of the desktop prices, not a measurement on a phone.
+2.13-4.16): a conversion of the desktop prices, not a measurement on a phone. A profile reads in the clock's
+units (a phone run's milliseconds are the scaled ones os.clock advanced by), names the device and the price set,
+and gives the factor's band in its fidelity line. A phone price set of its own would need the parity bench run on
+phones (each family's rows, as roblox-sim runs them on the desktop), which nothing here does yet.
 
 ## Profiling (`src/profiler`, `src/luau_profile.rs`, `src/boundary.rs`)
 
@@ -685,6 +766,10 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   any code's. The counters past an opcode range's last opcode (the cold first calls and rare functions' `LUA_WORK_COLDCFUNCS`,
   `LUA_WORK_COLDHOSTFUNCS`, `LUA_WORK_RAREPROTOS`) are booked when they move, with the instruction or C function that moved
   them. `Context.ProfilePhase` starts a phase: the frames hang from a node of the phase's. Natively compiled code keeps running natively:
+  Each booking keeps its kinds apart (`lua_profilesplit`: cold and first-use, collector, dispatch, Studio-era and
+  borrowed prices). Cold charges keep their object and whether another function touched it in the frame.
+  Handler delivery and resumptions are booked to their next instruction. Function and line totals count only
+  the outermost activation on a path, and instruction counts and work are kept per phase.
   a function's entries into its native code and the work booked while it ran are its own, and its
   instructions are not counted (the summary names such functions); a call from native code into natively
   compiled code is not seen, so the callee's work stays with its caller. Luau's `-O2` (modules compile at
@@ -773,12 +858,14 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   written from every frame: the parts of a frame that a phase mark splits are added together, and the sites of one
   source edit are grouped, before the peak is found. What the viewer lists and how it grades therefore never depends on
   which frames the timeline kept.
-  `site_frames` holds those frames' net site work; `replacement_frames` holds shared prototype replacement work.
+  `site_frames` holds those frames' net site work; `replacement_frames` holds shared replacement work when known.
   Work and cache profiles keep compact frame work even without the detailed timeline kind. The active frame count
   unions all of a prototype's callers and newly created closures, including frames where its builtin site did not run.
-  For prototypes whose advised fix adds cold code, `function_contexts` stores compact inclusive activity ranges
+  When a replacement's cold work is known, `function_contexts` stores compact inclusive activity ranges
   `[function id, node id, first frame, last frame, ...]`. A combined fix pays cold work only on the callers' frames
   left running. No per-frame work history is stored for these ranges. The report page leaves frame evidence out.
+  An argument rewrite's replacement PCs are unknown, so its `fix_cold_us` is null. Prototype size and activity do not
+  price instructions that may never execute. Its operand-preserving site bound subtracts none of the unknown setup.
 
   Issues are explicit sets of call-tree nodes and charged sites. Every standalone price is the complete observed
   saving divided by the reported phases' frames, with the advised replacement's cost subtracted. Even one event has a
@@ -901,9 +988,10 @@ What the memory figures are, beside Roblox's:
 - `Stats:GetMemoryUsageMbForTag` is not emulated. The Developer Console's Luau heap view splits memory by
   memory category (one per script); the profile splits it by the stack that allocated it, by type and by
   Instance class, and gives the biggest objects with their holders, as its snapshot view does.
-- Imports: the engine loads a chunk before it gives it its environment, so imports are never resolved at
-  load and every GETIMPORT looks its global up (the cache profile reports them as misses); Roblox resolves
-  them at load. The work clock charges a GETIMPORT as one instruction either way.
+- Imports: a script's environment is safe, so its imports resolve when the chunk loads and read as constants,
+  as Roblox resolves them (the cache profile's hits); getfenv or setfenv makes that environment unsafe, and then
+  every GETIMPORT looks its global up again (the cache profile's slow ones), which the work clock charges 7.9 ns
+  more (`LUAU_SLOW_IMPORT`).
 
 ## World and recorder (`src/world`, `src/record`)
 

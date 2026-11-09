@@ -36,6 +36,7 @@
 //! os.clock and what scripts see are unchanged: the profile allocates nothing on the VM's heap and changes nothing the
 //! VM counts.
 
+pub mod attribution;
 pub mod caches;
 pub mod cpu;
 pub mod diff;
@@ -330,6 +331,12 @@ pub struct Mark {
 /// Running counts at a mark ([`Mark::totals`])
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Totals {
+    /// The work clock's cold and first-use charges so far and the collector's (seconds at desktop prices: the VM's and the engine's
+    /// cold kinds, cost::collector_seconds), the VM's own cold charges, and the VM's priced work (cost::luau)
+    pub cold: f64,
+    pub collector: f64,
+    pub vm_cold: f64,
+    pub luau: f64,
     /// Instructions dispatched (scripts', a native module's counted as interpreted)
     pub insns: u64,
     /// The VM's work counters (cost::VmCounters): collectable objects and their bytes a script's own instructions allocated,
@@ -345,6 +352,10 @@ pub struct Totals {
     /// table.sort's comparisons and its calls to a script's comparison function (the work counters' sortcompares, sortcalls)
     pub sort_compares: u64,
     pub sort_calls: u64,
+    /// Bytes the clock counts and does not price (cost::LUAU_BUFFER_FRESH_BYTE): new buffers' past Luau's own pages, and buffer
+    /// copies', fills' and string writes' in calls of over 64 KB
+    pub buffer_fresh: u64,
+    pub buffer_big: u64,
     /// The allocation profile's: every allocation's bytes and the objects, and the rehash hook's rehashes and their keys, all
     /// and those a script's own instruction made: (events, keys, script events, script keys)
     /// (`alloc` or `heap`)
@@ -368,6 +379,8 @@ pub struct Row {
     /// The frame's host time and the run thread's cycles (None in a run a kind slows: the `cpu` pass's)
     pub host_ms: Option<f64>,
     pub work_ms: f64,
+    /// The work clock's collector charge in the frame (cost::collector_seconds; inside work_ms)
+    pub collector_ms: f64,
     pub instructions: u64,
     pub heap_bytes: u64,
     pub allocated_bytes: u64,
@@ -556,6 +569,8 @@ struct Installed {
     /// (the VM's profile reads these cells by pointer while it steps: held here as long as it runs)
     _work: Rc<Cell<f64>>,
     _drained: Rc<Cell<f64>>,
+    /// The engine's charges by kind, which the VM's profile reads by pointer too (cost::WorkKinds)
+    kinds: Option<Rc<crate::cost::WorkKinds>>,
     counters: Option<*const crate::cost::VmCounters>,
     /// The timeline's row being built: when it began (host time, cycles), Some only inside a frame, and its part of the
     /// frame (0 until a phase mark splits the frame)
@@ -568,10 +583,20 @@ struct Installed {
     threads_made: u64,
 }
 
+impl Installed {
+    /// The work clock's collector charge so far (cost::collector_seconds); 0 without the VM's counters
+    fn collector_seconds(&self) -> f64 {
+        let Some(counters) = self.counters else { return 0.0 };
+        crate::cost::collector_seconds(unsafe { &*counters })
+    }
+}
+
 /// Running totals a frame's row is the difference of (taken when the frame begins)
 #[derive(Clone, Copy, Default)]
 struct FrameTotals {
     work: f64,
+    /// The work clock's collector charge so far (cost::collector_seconds)
+    collector: f64,
     instructions: u64,
     allocated_bytes: u64,
     allocations: u64,
@@ -600,6 +625,7 @@ struct State {
     time: Option<time::Time>,
     /// What the VM's profile and the allocation profile held when collected
     vm: Option<vm::Results>,
+    attribution: Option<attribution::Results>,
     allocations: Option<memory::Allocations>,
     cpu: cpu::Counters,
     /// The hardware counters (`hw`)
@@ -610,6 +636,9 @@ struct State {
     end_work: f64,
     /// The profile's end as a mark (phase `end`): its counts when the profile was collected
     end: Option<Mark>,
+    /// What the clock multiplied script work by and the device it priced (the report's units: Scheduler::price_scale)
+    price_scale: f64,
+    device: String,
 }
 
 impl State {
@@ -619,6 +648,11 @@ impl State {
         let kinds = self.config.kinds;
         let mut totals = Totals::default();
         if let Some(counters) = installed.counters.map(|counters| unsafe { &*counters }) {
+            totals.vm_cold = crate::cost::cold_seconds(counters);
+            let engine_cold = installed.kinds.as_ref().map_or(0.0, |kinds| kinds.totals()[vm::COLD]);
+            totals.cold = totals.vm_cold + engine_cold;
+            totals.collector = crate::cost::collector_seconds(counters);
+            totals.luau = crate::cost::luau(counters);
             totals.insns = instructions(counters);
             totals.objects = counters.objects;
             totals.allocated = counters.allocated;
@@ -630,6 +664,8 @@ impl State {
             totals.cold_code = counters.coldcode;
             totals.sort_compares = counters.sortcompares;
             totals.sort_calls = counters.sortcalls;
+            totals.buffer_fresh = counters.hostops[crate::cost::BUFFRESH_SLOT];
+            totals.buffer_big = counters.hostops[crate::cost::BUFBIGCOPY_SLOT];
         }
         if kinds.has(Kinds::ALLOC) || kinds.has(Kinds::HEAP) {
             if let Some((bytes, objects, rehashes)) = memory::with(|allocations| (allocations.bytes, allocations.objects, (allocations.rehashes.events, allocations.rehashes.keys, allocations.rehashes.script_events, allocations.rehashes.script_keys))) {
@@ -726,6 +762,7 @@ impl Session {
             cpu_frame_started: None,
             time: None,
             vm: None,
+            attribution: None,
             allocations: None,
             cpu,
             hw,
@@ -733,6 +770,8 @@ impl Session {
             collected: false,
             end_work: 0.0,
             end: None,
+            price_scale: 1.0,
+            device: "desktop".into(),
         };
         STATE.with(|cell| *cell.borrow_mut() = Some(Box::new(state)));
         ON.with(|on| on.set(true));
@@ -760,6 +799,7 @@ impl Session {
             run: &run,
             elapsed: state.started.elapsed().as_secs_f64(),
             vm: state.vm.as_ref(),
+            attribution: state.attribution.as_ref(),
             allocations: state.allocations.as_ref(),
             time: state.time.as_ref(),
             phases: &state.phases,
@@ -779,6 +819,8 @@ impl Session {
             phase_timing: phases_text.as_deref(),
             phase_tree: phase_tree.as_deref(),
             warnings: &state.warnings,
+            price_scale: state.price_scale,
+            device: &state.device,
         };
         report::write(&input)
     }
@@ -819,6 +861,20 @@ pub fn install(lua: &Lua) {
         }
         unsafe { vm::tool_chunks(state, &tools) };
     }
+    let work_kinds = if profiling_vm && kinds.steps() && prices.is_some() {
+        // (each booking keeps its cold, collector, dispatch, Studio-era and defaulted shares apart; the engine's cold charges keep who
+        // paid them, and dispatches and resumptions are booked to the code that pays them)
+        // (the cells live in Installed, as long as the profile runs)
+        let work_kinds = Rc::new(crate::cost::WorkKinds::default());
+        unsafe { vm::split(state, &crate::cost::slot_kinds(), work_kinds.as_ptr()) };
+        attribution::begin();
+        let mut engine_state = engine.state.borrow_mut();
+        engine_state.sched.kinds = Some(work_kinds.clone());
+        engine_state.sched.touched.borrow_mut().profile_work(Some(work_kinds.clone()));
+        Some(work_kinds)
+    } else {
+        None
+    };
     if kinds.has(Kinds::ALLOC) || kinds.has(Kinds::HEAP) {
         let step = with_state(|s| s.config.alloc_step).unwrap_or(1);
         memory::start(state, step, kinds.has(Kinds::HEAP), Some(memory::resolver(Rc::downgrade(&engine))));
@@ -863,7 +919,21 @@ pub fn install(lua: &Lua) {
         (engine_state.sched.frame, engine_state.sched.now, ops)
     };
     with_state(|s| {
-        s.installed = Some(Installed { state, engine: Rc::downgrade(&engine), _work: work, _drained: drained, counters, frame_started: None, part: 0, last: totals, nodes: NodeWork::default(), threads_made: 0 });
+        s.installed = Some(Installed {
+            state,
+            engine: Rc::downgrade(&engine),
+            _work: work,
+            _drained: drained,
+            kinds: work_kinds,
+            counters,
+            frame_started: None,
+            part: 0,
+            last: totals,
+            nodes: NodeWork::default(),
+            threads_made: 0,
+        });
+        s.price_scale = engine.state.borrow().sched.price_scale();
+        s.device = engine.options.device.clone();
         let (host, cycles) = (s.started.elapsed().as_secs_f64(), cpu::thread_cycles());
         let counts = s.totals();
         s.marks.push(Mark { phase: s.phases[0].clone(), frame, seconds, work: totals.work, host, cycles, totals: counts, engine: Some(ops) });
@@ -923,8 +993,16 @@ pub fn collect(lua: &Lua) {
         let host = ended.duration_since(s.started).as_secs_f64();
         s.end = Some(Mark { phase: "end".into(), frame, seconds, work, host, cycles: end_cycles, totals: s.totals(), engine: ops });
     });
-    let results = vm::results(state);
+    // (the VM the profile ran on, stopped above and freed below)
+    let results = unsafe { vm::results(state) };
     vm::free(state);
+    let engine = with_state(|s| s.installed.as_ref().and_then(|installed| installed.engine.upgrade())).flatten();
+    if let Some(engine) = &engine {
+        let mut state = engine.state.borrow_mut();
+        state.sched.kinds = None;
+        state.sched.touched.borrow_mut().profile_work(None);
+    }
+    let attributed = attribution::finish(engine.as_deref());
     let allocations = if kinds.has(Kinds::ALLOC) || kinds.has(Kinds::HEAP) { memory::stop(state) } else { None };
     if kinds.has(Kinds::TIMELINE) && !crate::census::installed() {
         // (the thread callback stays while a census uses it)
@@ -947,6 +1025,7 @@ pub fn collect(lua: &Lua) {
         }
         s.end_work = s.installed.as_ref().and_then(|installed| installed.engine.upgrade()).map_or(0.0, |engine| engine.state.borrow().sched.work_total());
         s.vm = Some(results);
+        s.attribution = attributed;
         s.allocations = allocations;
         s.collected = true;
     });
@@ -1063,6 +1142,7 @@ pub fn frame_begin(engine: &Engine) {
         let work = engine.state.borrow().sched.work_total();
         installed.last = FrameTotals {
             work,
+            collector: installed.collector_seconds(),
             instructions: installed.counters.map(|counters| instructions(unsafe { &*counters })).unwrap_or(0),
             allocated_bytes,
             allocations,
@@ -1094,7 +1174,8 @@ fn close_row(s: &mut State, engine: &Engine, phase: u32, split: bool) {
         (allocations.bytes, allocations.objects)
     })
     .unwrap_or((0, 0));
-    let totals = FrameTotals { work, instructions: insns, allocated_bytes, allocations, gc_steps: steps, gc_seconds: seconds_gc, gc_freed: freed };
+    let collector = installed.collector_seconds();
+    let totals = FrameTotals { work, collector, instructions: insns, allocated_bytes, allocations, gc_steps: steps, gc_seconds: seconds_gc, gc_freed: freed };
     let last = installed.last;
     let booked = stepping.then(|| installed.nodes.read(installed.state, work));
     let part = if split || installed.part > 0 { installed.part + 1 } else { 0 };
@@ -1104,6 +1185,7 @@ fn close_row(s: &mut State, engine: &Engine, phase: u32, split: bool) {
         phase,
         host_ms: own_host.then(|| started.elapsed().as_secs_f64() * 1e3),
         work_ms: (totals.work - last.work) * 1e3,
+        collector_ms: (totals.collector - last.collector) * 1e3,
         instructions: totals.instructions - last.instructions,
         heap_bytes: if detailed { vm::total_bytes(installed.state) as u64 } else { 0 },
         allocated_bytes: totals.allocated_bytes - last.allocated_bytes,

@@ -4225,8 +4225,124 @@ fn the_work_clock_charges_a_scripts_luau() {
     // (the cframes loop was 58.5 with every datatype operation a flat 15 ns; CFrame.new, `*` and Vector3.new were priced from the
     // lobby client's op_cost loop (101.5: `*` 60 ns), and `*` from a rig frame since (21 ns, 39 us less over the 1,000 products):
     // lune-roblox cframe.rs `price`. The instructions are priced by kind since (cost.rs INTERPRETED_OPS: an ADD or FORNLOOP 0.48 ns,
-    // where every instruction cost 1.6: the loop 32.0 then))
-    assert!(output.contains(&"print: loop 9.6 tables 65.5 cframes 47.9".to_string()), "{output:?}");
+    // where every instruction cost 1.6: the loop 32.0 then). The tables loop read 65.5 until the allocation prices were fitted on the
+    // parity bench's allocation, churn and growth rows at several sizes (an object 14.6 ns in all where it was 22, 8.6 of it the
+    // collector's; an allocated byte 0.061 and a byte of table storage 0.079 more, where storage was 0.4; an array slot growth moves
+    // nothing, where it was 12))
+    assert!(output.contains(&"print: loop 9.6 tables 32.1 cframes 47.9".to_string()), "{output:?}");
+}
+
+/// What a library or engine call does by the size of its input is work the clock charges (patches/luau/15-input-size-work.patch,
+/// cost.rs SCANNED_SLOT and below), so each of the audit's workloads grows on the clock as a client's time grows with it (the parity
+/// bench's `libsize` and `json` rows, a client's fastest session): table.find of a missing value 14 ns at 10 elements and 41 us at
+/// 100,000; `s ..= piece` growing with the square of its pieces where table.concat grows with them; a list drained from its front or
+/// filled at it, each call moving what is left; string.upper / gsub / rep on 1 MB 570-850 times their 1 KB figure; JSONEncode and
+/// JSONDecode of 1,000 records 83 and 91 times 10's. A flat price a call read each pair alike (table.find 6.19 us at every size).
+#[test]
+fn library_work_grows_with_its_input() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local HttpService = game:GetService("HttpService")
+        -- (each workload once before it is timed: a frame's first call of a C function costs its cold code, LUAU_COLD_CFUNC)
+        local function us(f, ...)
+            f(...)
+            local t0 = os.clock()
+            f(...)
+            return (os.clock() - t0) * 1e6
+        end
+        local function list(n)
+            local t = table.create(n)
+            for i = 1, n do
+                t[i] = i
+            end
+            return t
+        end
+        local results = {}
+        for _, n in { 10, 1000, 100000 } do
+            local t = list(n)
+            results["find" .. n] = us(function()
+                for _ = 1, 10 do
+                    table.find(t, -1)
+                end
+            end) / 10
+        end
+        for _, n in { 1000, 4000 } do
+            results["concat" .. n] = us(function()
+                local s = ""
+                for _ = 1, n do
+                    s ..= "abcdefgh"
+                end
+            end)
+            results["tconcat" .. n] = us(function()
+                local parts = table.create(n)
+                for i = 1, n do
+                    parts[i] = "abcdefgh"
+                end
+                local _ = table.concat(parts)
+            end)
+        end
+        for _, n in { 100, 1000 } do
+            results["remove" .. n] = us(function()
+                local t = list(n)
+                for _ = 1, n do
+                    table.remove(t, 1)
+                end
+            end) / n
+            results["insert" .. n] = us(function()
+                local t = {}
+                for i = 1, n do
+                    table.insert(t, 1, i)
+                end
+            end) / n
+        end
+        for _, size in { 1024, 1048576 } do
+            local s = string.rep("a", size)
+            results["upper" .. size] = us(string.upper, s)
+            results["gsub" .. size] = us(string.gsub, s, "a", "b")
+            results["rep" .. size] = us(string.rep, "b", size)
+        end
+        for _, n in { 10, 1000 } do
+            local records = {}
+            for i = 1, n do
+                records[i] = { id = i, name = "item" .. i, value = i * 0.5, tags = { "a", "b" } }
+            end
+            local text = HttpService:JSONEncode(records)
+            results["encode" .. n] = us(function()
+                HttpService:JSONEncode(records)
+            end)
+            results["decode" .. n] = us(function()
+                HttpService:JSONDecode(text)
+            end)
+        end
+        for name, value in results do
+            print(string.format("%s %.4f", name, value))
+        end
+        "#,
+    );
+    let figure = |name: &str| -> f64 {
+        let prefix = format!("print: {name} ");
+        output.iter().find_map(|line| line.strip_prefix(&prefix)).unwrap_or_else(|| panic!("no {name} in {output:?}")).parse().unwrap()
+    };
+    let ratio = |big: &str, small: &str| figure(big) / figure(small);
+    // table.find compares every element: a client 14.3 ns at 10, 41.4 us at 100,000
+    assert!(ratio("find100000", "find10") > 1000.0, "{output:?}");
+    assert!((0.5..2.0).contains(&(figure("find100000") / 41.41)), "table.find of 100,000 elements {} us against a client's 41.41", figure("find100000"));
+    // building a string piece by piece copies what it has built each time; table.concat copies each piece once
+    assert!(ratio("concat4000", "concat1000") > 8.0, "{output:?}");
+    assert!(ratio("tconcat4000", "tconcat1000") < 6.0, "{output:?}");
+    // each table.remove(t, 1) and table.insert(t, 1, v) moves the rest of the list
+    assert!(ratio("remove1000", "remove100") > 2.5 && ratio("insert1000", "insert100") > 2.5, "{output:?}");
+    // string work on 1 MB against 1 KB (a client: upper 1.48 ms and 1.74 us, gsub 1.54 ms and 2.44 us, rep 234 us and 0.41 us)
+    for name in ["upper", "gsub", "rep"] {
+        assert!(ratio(&format!("{name}1048576"), &format!("{name}1024")) > 300.0, "{name}: {output:?}");
+    }
+    // JSON by its text and values (a client: 10 records' encode 5.6 us, 1,000's 463 us)
+    assert!(ratio("encode1000", "encode10") > 40.0 && ratio("decode1000", "decode10") > 40.0, "{output:?}");
 }
 
 /// The collector steps at the same points however fast the host runs. Luau paces it by how long a cycle took (lgc.cpp: the allocation

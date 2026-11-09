@@ -172,6 +172,51 @@ fn a_comparison_writes_profiles_and_an_index_of_what_they_show() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A comparison of two ways to sum 1 to n, for the harness-figures test below
+const TINY: &str = r#"return {
+	title = "a tiny loop",
+	sizes = { 10 },
+	variants = {
+		{
+			name = "sum",
+			run = function(n)
+				local x = 0
+				for i = 1, n do
+					x += i
+				end
+				return x
+			end,
+		},
+		{
+			name = "sum down",
+			run = function(n)
+				local x = 0
+				for i = n, 1, -1 do
+					x += i
+				end
+				return x
+			end,
+		},
+	},
+}
+"#;
+
+/// A variant's figures are its own code's: the generated harness's frames are left out (the audit: a 0.24 us variant read 3.72 us,
+/// 2.73 of them the harness's `profile` function), "hot in a loop" has every cold and first-use charge taken out, and "first in frame"
+/// is that and the cold charges
+#[test]
+fn a_variants_figures_leave_the_harness_out() {
+    let root = scratch("tiny");
+    let (done, compare) = try_file(&root, "tiny.luau", TINY, "out", &["--rounds", "2", "--no-time", "--no-hw"], false);
+    assert_eq!(done.status.code(), Some(0), "{}", text(&done));
+    let run = &run_of(&compare, "sum", 10.0)["run"];
+    let (first, hot, cold) = (run["work_ms"].as_f64().unwrap(), run["warm_ms"].as_f64().unwrap(), run["cold_ms"].as_f64().unwrap());
+    // ten ADDs and FORNLOOPs and a call: well under a tenth of a microsecond hot; its cold charges on top, first in a frame
+    assert!(hot > 0.0 && hot < 0.1e-3, "hot in a loop {hot} ms");
+    assert!((first - hot - cold).abs() < 1e-12 && first < 2.0e-3, "first in frame {first} ms, cold {cold} ms");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_failed_check_and_a_variant_that_raises_are_reported() {
     let root = scratch("failures");

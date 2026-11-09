@@ -350,7 +350,7 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     `[function id, total work us, frames active, largest frame us, frame number]` over the reported phases.
     `timeline.node_frames` stores `[row index, node id, work us, ...]` only on whole frames reaching half the
     recorded budget. `site_frames` keeps those frames' net site savings and `replacement_frames` their shared
-    prototype replacement work. Small events keep their summaries. For prototypes whose advised fix adds cold code,
+    known shared replacement work. Small events keep their summaries. When a replacement's cold work is known,
     `function_contexts` stores compact inclusive activity ranges
     `[function id, node id, first frame, last frame, ...]`. A combined fix pays cold work only on the callers' frames
     left running. No per-frame work history is stored for these ranges. The report page omits frame evidence.
@@ -411,12 +411,47 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   counted with it) and what it called are set apart, with their total on the
   summary's `reported below:` line and their top functions in a table of their own. Lines are counted for
   the whole run, not per phase. In profile.json each function has `harness` and its figures per phase
-  (`phases`, with `harness_self_work_ms`, the part done for the harness's code), and `scope` names the
+  (`phases`, with `harness_self_work_ms` and `harness_cold_work_ms`, the parts done for the harness's code), and `scope` names the
   reported phases with each side's self work. A function's `tool` marks ree's own code (the engine's chunks
   that drive a harness, and the harness of a run `ree profile try` made), never the game's nor a user's
   harness; `short` is its module's last segment, qualified where two modules would share one. A C function's
   `call_sites` give its callers and the lines that called it; a tree node's last element is the line that
   called it.
+  The work clock's figures read in the units the run's clock ran on (`work.units`: a `--device phone` run's are the
+  desktop prices times 2.77), and the summary's headline names the device and the reference client. Each function's
+  self work splits into kinds (`self.cold_work_ms`: the frame's cold and first-use charges; `collector_ms`: the
+  collector's share of what it allocated; `dispatch_ms`: the engine's delivery of its handlers and resumption of its
+  threads; `by_provenance_ms`: priced from a client, from a Studio-era measurement or by a borrowed price), and
+  `saving_ms` is what cutting it saves: its hot work and only the cold charges for objects nothing else touched in
+  their frame (a shared object's charge moves to its next user). A function's and a line's totals count its
+  outermost call on a path only, so recursion adds nothing twice. profile.json's `cold` lists the cold and first-use
+  charges by object (a table by the line that made it, a C or engine function, an instance's class, a member, an
+  engine path) with who paid them and in how many frames other code shared them; `handlers` the event handlers by
+  the line that connected them (connections, runs, dispatch and whole work); `resumptions` parked threads' resumptions
+  by the line that waited; `clock_reads` the lines that read os.clock: `reads`, `frames`, `runs` of their function
+  that read it (a call, or what is left of one after its thread yielded), `iterations` (two reads by one run) and
+  `iteration_us` (the clock's advance between them, callees included, in the clock's units); a line that reads it
+  more than once a run is an os.clock budget loop (`budget_loop`), which the summary lists with its work an
+  iteration: its total is set by its budget, so compare that, and profile on the work clock, not a frozen one. A read
+  after a yield starts a run (across a yield the clock's advance is whatever else ran), so a loop that waits each
+  iteration is none; `unmeasured_fires` the events of kinds no bench measured.
+  `fidelity` is the profile's own band for what the summary reports (`weighted`: the reported phases' game code): each
+  component's error on rows no fit saw (cost.rs `BENCH_BANDS`; `components.<name>` `{share, band, rows, basis}`)
+  weighted by that code's work in each, the Studio-era and borrowed shares at their bands; `band` folds a phone's
+  factor's spread in (`clock_band` is the band before it, `device.ratio_band` what the spread multiplies it by).
+  `work.collector` gives the collector's price an object (`object_ns`, desktop ns) and the objects it charged; the
+  work's kinds are in `work.cold_work_ms`, `work.collector_ms`, `work.dispatch_ms` and `work.by_provenance_ms`;
+  `cold.total_ms` is the run's cold and first-use charges and `cold.objects_ms` the part its objects carry (the rest
+  is functions' own code, closures and first runs, in their cold column). `work.prices` gives the work
+  clock's price of one count, in ns at desktop prices (a phone run's are these times `work.units.scale`): `object_ns` (an
+  object a script's instruction made), `stored_byte_ns` (a byte of its table storage), `rehashed_key_ns` (a key its
+  table's growth moved), `c_call_ns`, `sort_compare_ns`, `sort_call_ns`, `allocated_byte_ns` (a byte any script work
+  allocated, its library calls' too), `hash_rehashed_key_ns` (a key a growth put back into a hash part),
+  `large_block_ns` (an allocation over 1 KB), `library_object_ns` (an object a library call made) and
+  `collector_object_ns` (the collector's charge an object, which `collector_ms` holds and the others leave out).
+  `work.unpriced` gives the bytes the clock counts and prices at nothing: `buffer_fresh_bytes` (new buffers past Luau's
+  own pages, over 1 KB) and `buffer_big_bytes` (buffer copies, fills and string writes of over 64 KB a call); the
+  summary prints them on an `unpriced:` line when a run has any, as the clock reads that work low.
   The summary's `engine operations` line counts what the reported phases' scripts asked the engine to do, whatever the
   work clock prices it at (the engine's side of a cast, which the work clock reads lower than a client pays): instances
   cloned (each of a copy), made with Instance.new, destroyed (each of the subtree) and taken into the Workspace; property
@@ -427,7 +462,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   the harness's too, and what the engine's own Luau does inside a call it prices whole (a PivotTo's moves) is the call's.
   profile.json's `marks` (each `Context.ProfilePhase` mark) and `end` (the run's end) carry the counts so far, so a
   phase's figures are the difference of two marks': the work clock, host time and the run thread's cycles, instructions,
-  the VM's work counters (`vm`: objects, their bytes, table storage, keys rehashed, cold first touches), the allocation
+  the VM's work counters (`vm`: objects, their bytes, table storage, keys rehashed, cold first touches, large buffers'
+  unpriced bytes), the allocation
   profile's bytes and objects, rehashes (all, and a script's own: `script_rehashes`, `script_rehash_keys`), the
   collector's steps, cycles, bytes freed and host time, the inline caches' outcomes by kind, and the engine operations
   (`engine`).
@@ -1082,8 +1118,9 @@ border in the accent.
   pass an existing numeric value directly: that price includes no added conversion.
 
   For `string.sub`, `string.byte`, `table.insert` and `table.unpack` the rewrite adds code, and its cost is counted
-  from the opcodes alone. `fix_instructions_us` and `fix_cold_us` are then nominal costs, not the cost of the rewritten
-  source. Only two rewrites keep a site-only bound, because they keep every original operand: `string.byte(s)` to
+  from the opcodes alone. `fix_instructions_us` is a nominal warm cost; `fix_cold_us` is unknown without the replacement's
+  executed instructions. Only two rewrites keep a site-only bound, because they keep every original operand:
+  `string.byte(s)` to
   `string.byte(s, 1)` and `string.sub(s, i)` to `string.sub(s, i, #s)`, each with no other advised reason to fix. Every
   other builtin rewrite and every cache edit states its site part separately and bounds the complete edit by the whole
   scoped code work.
@@ -1093,9 +1130,12 @@ border in the accent.
   access alone is not priced as reaching the fast path. The cache lookups in a declined call's fallback are the same
   work as the decline that contains them, so both issues name that work in the same way and the totals count it once.
 
-  The cold code a fix adds is the prototype's added code words times its active frames, taken as the union across
-  callers and newly created closures. When the site part of an edit with a whole-code bound is zero or negative, the
-  issue says the recorded site part saves nothing on this clock and keeps the bound, since the complete edit may still
+  A source edit's added cold work is unknown without the replacement's executed instructions in each frame, so
+  `fix_cold_us` is null for the argument rewrites above. Added code words and prototype activity do not establish that
+  cost: fallback words can stay dead, and a builtin can skip frames its function runs in. The operand-preserving
+  rewrites still give site-only upper bounds by subtracting none of the unknown setup, including cold setup. When the
+  site part of an edit with a whole-code bound is zero or negative, the issue says the recorded site part saves nothing
+  on this clock and keeps the bound, since the complete edit may still
   save work outside the site. Only the two operand-preserving rewrites can say the complete fix saves nothing on this
   clock.
   Sites keep their exact context amounts under `nodes`. Without the replacement's cost or the exact call context, an

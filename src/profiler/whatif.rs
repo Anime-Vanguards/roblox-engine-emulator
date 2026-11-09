@@ -90,8 +90,8 @@ const fn metric(key: &'static str, label: &'static str, unit: &'static str, bett
 
 /// The figures, in the order a table shows them
 pub const METRICS: &[Metric] = &[
-    metric("work_ms", "work clock", "ms", "lower", true, true, true, "the work clock: ms of a client's time for the scripts' work (docs/engine.md \"Work clock\")"),
-    metric("warm_ms", "work clock, warm", "ms", "lower", true, true, true, "the work clock without the frame's cold first touches: what the same work costs when its data is in the CPU's caches, as in a hot loop"),
+    metric("work_ms", "work clock, first in frame", "ms", "lower", true, true, true, "the work clock of the variant's own code (the generated harness's left out), as its first call in a frame pays it: ms of a client's time (docs/engine.md \"Work clock\")"),
+    metric("warm_ms", "work clock, hot in a loop", "ms", "lower", true, true, true, "the variant's work clock without any cold or first-use charge (tables, functions and their code, C and engine functions, instances, members and engine paths): what a call costs when a loop has run it already"),
     metric("host_ms", "host time", "ms", "lower", false, true, true, "this machine's time a call took in ree's interpreter: the fastest of the timed rounds (whatever else runs on the machine only ever slows a round)"),
     metric("host_ms_median", "host time, median round", "ms", "none", false, false, true, "the median of the timed rounds: above host time by what slowed the rounds"),
     metric("host_cycles", "host cycles", "count", "lower", false, false, true, "the run thread's CPU cycles a call took (reference cycles): the fastest of the timed rounds"),
@@ -107,7 +107,7 @@ pub const METRICS: &[Metric] = &[
     metric("cache_lookups", "inline cache lookups", "count", "none", true, false, true, "the lookups a table serves"),
     metric("cache_hits", "inline cache hit count", "count", "none", true, false, true, "inline cache hits"),
     metric("cold_tables", "cold tables", "count", "lower", true, true, true, "tables the frame touched first that were made before it (a client finds them out of its CPU's caches)"),
-    metric("cold_ms", "cold touches' work", "ms", "lower", true, false, true, "what the work clock charged for the frame's cold first touches of tables, closures and functions"),
+    metric("cold_ms", "cold and first-use charges", "ms", "lower", true, false, true, "what the work clock charged the variant's code for the frame's cold and first-use touches: first in frame less hot in a loop"),
     metric("rehashes", "table rehashes", "count", "lower", true, true, true, "tables that rehashed to grow"),
     metric("rehash_keys", "keys rehashed", "count", "lower", true, true, true, "keys those rehashes moved"),
     metric("hw_instructions", "CPU instructions", "count", "lower", false, true, true, "instructions the CPU retired (hardware counter)"),
@@ -536,8 +536,11 @@ pub fn phase_figures(profile: &Json, from: &str, to: &str, calls: f64) -> Figure
     }
     if let (Some(cold_tables), Some(cold_closures), Some(cold_protos), Some(cold_code)) = (delta(&["vm", "cold_tables"]), delta(&["vm", "cold_closures"]), delta(&["vm", "cold_protos"]), delta(&["vm", "cold_code"])) {
         put("cold_tables", Some(cold_tables));
-        use crate::cost::{LUAU_COLD_CLOSURE, LUAU_COLD_CODE, LUAU_COLD_PROTO, LUAU_COLD_TABLE};
-        let cold_ms = (cold_tables * LUAU_COLD_TABLE + cold_closures * LUAU_COLD_CLOSURE + cold_protos * LUAU_COLD_PROTO + cold_code * LUAU_COLD_CODE) * 1e-6;
+        // (every cold and first-use charge the marks carry, the engine's too; an older profile's VM counts at their prices)
+        let cold_ms = delta(&["cold_ms"]).unwrap_or_else(|| {
+            use crate::cost::{LUAU_COLD_CLOSURE, LUAU_COLD_CODE, LUAU_COLD_PROTO, LUAU_COLD_TABLE};
+            (cold_tables * LUAU_COLD_TABLE + cold_closures * LUAU_COLD_CLOSURE + cold_protos * LUAU_COLD_PROTO + cold_code * LUAU_COLD_CODE) * 1e-6
+        });
         put("cold_ms", Some(cold_ms));
         if let Some(work) = delta(&["work_ms"]) {
             put("warm_ms", Some((work - cold_ms).max(0.0)));
@@ -676,12 +679,39 @@ fn hot_functions(profile: &Json, functions: &BTreeMap<i64, &Json>, top: usize) -
     hot
 }
 
+/// The work of the variant's own code in `phase` and its cold and first-use charges (ms, the run's total): each function's self work
+/// there less what it did for the harness, with cold charges split by the same caller side. None for a profile
+/// without the per-function split (before the work clock's rework).
+fn own_work(profile: &Json, phase: &str) -> Option<(f64, f64)> {
+    let functions = profile["functions"].as_array()?;
+    let (mut work, mut cold, mut split) = (0.0, 0.0, false);
+    for function in functions {
+        let Some(figures) = function["phases"].get(phase) else { continue };
+        let own = figures["self_work_ms"].as_f64().unwrap_or(0.0) - figures["harness_self_work_ms"].as_f64().unwrap_or(0.0);
+        work += own.max(0.0);
+        if let Some(function_cold) = figures["cold_work_ms"].as_f64() {
+            split = true;
+            let harness_cold = figures["harness_cold_work_ms"].as_f64().unwrap_or(if function["harness"] == true { function_cold } else { 0.0 });
+            cold += (function_cold - harness_cold).max(0.0);
+        }
+    }
+    split.then_some((work, cold.min(work)))
+}
+
 /// A profiled run's figures, read from its profile folder
 fn read_profile(dir: &Path, frames: f64, paths: &ModulePaths) -> Result<(Figures, Figures, Option<(f64, f64, f64)>, Json, Vec<Hot>), String> {
     let profile = super::diff::load_profile(dir)?;
     let functions: BTreeMap<i64, &Json> = profile["functions"].as_array().into_iter().flatten().filter_map(|function| Some((function["id"].as_i64()?, function))).collect();
     let setup = phase_figures(&profile, "setup", "run", 1.0);
     let mut run = phase_figures(&profile, "run", "after", frames);
+    // (the variant's own subtree: the generated harness's wrapper and its check are not the variant's work; first in frame with every
+    // cold and first-use charge, hot in a loop without any)
+    if let Some((work, cold)) = own_work(&profile, "run") {
+        let calls = frames.max(1.0);
+        run.insert("work_ms", work / calls);
+        run.insert("warm_ms", (work - cold).max(0.0) / calls);
+        run.insert("cold_ms", cold / calls);
+    }
     let heap = match (reachable(&profile, "setup"), reachable(&profile, "run"), reachable(&profile, "after")) {
         (Some(before), Some(set), Some(after)) => Some((before, set, after)),
         _ => None,
@@ -1815,6 +1845,22 @@ mod tests {
         assert_eq!(grouped(2.5), "2.5");
         assert_eq!(show(0.0021, "ms"), "2.10 us");
         assert_eq!(show(2048.0, "bytes"), "2.0 KB");
+    }
+
+    #[test]
+    fn the_variants_own_work_leaves_the_harness_out() {
+        // the generated harness's wrapper (its own function), the variant, and a C function both called
+        let profile = json!({"functions": [
+            {"id": 0, "harness": true, "phases": {"run": {"self_work_ms": 3.0, "harness_self_work_ms": 3.0, "cold_work_ms": 0.5}}},
+            {"id": 1, "harness": false, "phases": {"run": {"self_work_ms": 1.0, "harness_self_work_ms": 0.0, "cold_work_ms": 0.2}}},
+            {"id": 2, "harness": false, "phases": {"run": {"self_work_ms": 0.5, "harness_self_work_ms": 0.3, "cold_work_ms": 0.15, "harness_cold_work_ms": 0.1}}},
+            {"id": 3, "harness": false, "phases": {"setup": {"self_work_ms": 9.0, "harness_self_work_ms": 0.0, "cold_work_ms": 1.0}}},
+        ]});
+        let (work, cold) = own_work(&profile, "run").expect("the split is there");
+        assert!((work - 1.2).abs() < 1e-12, "{work}");
+        assert!((cold - 0.25).abs() < 1e-12, "{cold}");
+        // (a profile from before the split has no cold per function: the marks' figures stand)
+        assert!(own_work(&json!({"functions": [{"id": 0, "phases": {"run": {"self_work_ms": 1.0}}}]}), "run").is_none());
     }
 
     /// A phase's figures are the differences of its marks' counts, flows per call

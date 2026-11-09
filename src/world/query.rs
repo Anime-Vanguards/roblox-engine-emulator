@@ -682,10 +682,12 @@ fn limited(max_parts: usize, parts: Vec<InstanceId>) -> Vec<InstanceId> {
 
 /// What a cast pays for the parts its path crosses, whatever its filter admits (cost.rs RAY_MET, RAY_CROSSED): the engine's
 /// broadphase meets them all before the filter is asked
-fn charge_cast(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32) {
+fn charge_cast(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32, each: f64, kinds: u8) {
     let crossed = cached_solids(engine, &Filter::default()).iter().filter(|solid| ray_solid(solid, origin, direction, grow).is_some()).count();
     if crossed > 0 {
-        charge_query(engine, crate::cost::RAY_MET + (crossed - 1) as f64 * crate::cost::RAY_CROSSED);
+        let seconds = crate::cost::RAY_MET + (crossed - 1) as f64 * each;
+        charge_query(engine, seconds);
+        engine.state.borrow().sched.touched.borrow().book_kinds(kinds, seconds);
     }
 }
 
@@ -715,7 +717,7 @@ pub fn install(engine: &Rc<Engine>) {
         let filter = take_filter(engine, args.get(3));
         let hit = cast_ray(&cached_solids(engine, &filter), origin, direction, 0.0, None);
         keep_filter(engine, filter);
-        charge_cast(engine, origin, direction, 0.0);
+        charge_cast(engine, origin, direction, 0.0, crate::cost::RAY_CROSSED, 0);
         hit_values(lua, engine, hit)
     })));
     members.push(("Spherecast", method(|lua, engine, _, args| {
@@ -725,7 +727,7 @@ pub fn install(engine: &Rc<Engine>) {
         let filter = take_filter(engine, args.get(4));
         let hit = cast_ray(&cached_solids(engine, &filter), center, direction, radius.max(0.0) as f32, None);
         keep_filter(engine, filter);
-        charge_cast(engine, center, direction, radius.max(0.0) as f32);
+        charge_cast(engine, center, direction, radius.max(0.0) as f32, crate::cost::SPHERE_CROSSED, 0);
         hit_values(lua, engine, hit)
     })));
     members.push(("Blockcast", method(|lua, engine, _, args| {
@@ -736,7 +738,7 @@ pub fn install(engine: &Rc<Engine>) {
         let hit = cast_box(&cached_solids(engine, &filter), &frame, size, direction, None);
         keep_filter(engine, filter);
         // (a box's path counted as its centre's, grown by its half diagonal)
-        charge_cast(engine, frame::translation(&frame), direction, size.length() * 0.5);
+        charge_cast(engine, frame::translation(&frame), direction, size.length() * 0.5, crate::cost::BLOCK_CROSSED, 0);
         hit_values(lua, engine, hit)
     })));
     members.push(("Shapecast", method(|lua, engine, _, args| {
@@ -764,6 +766,8 @@ pub fn install(engine: &Rc<Engine>) {
             Shape::Ball(radius) => cast_ray(&solids, frame::translation(&cast.frame), direction, radius, Some(part)),
             _ => cast_box(&solids, &cast.frame, cast.half_extents() * 2.0, direction, Some(part)),
         };
+        // (unmeasured: a Blockcast's price for what it crosses, borrowed)
+        charge_cast(engine, frame::translation(&cast.frame), direction, cast.half_extents().length(), crate::cost::BLOCK_CROSSED, crate::cost::kind::DEFAULTED);
         hit_values(lua, engine, hit)
     })));
     members.push(("GetPartBoundsInBox", method(|lua, engine, _, args| {

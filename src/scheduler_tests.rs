@@ -47,6 +47,65 @@ fn number(engine: &Engine, name: &str) -> f64 {
     }
 }
 
+/// A run with no profile books no charge by kind: the scheduler keeps no totals for it, and the work clock still advances.
+#[test]
+fn ordinary_dispatch_keeps_no_profile_kind_totals() {
+    let (lua, engine) = start();
+    let script = r#"
+        local event = Instance.new("BindableEvent")
+        event.Event:Connect(function()
+            os.clock()
+        end)
+        event:Fire()
+        task.delay(0, function()
+            os.clock()
+        end)
+    "#;
+    run(&lua, &engine, script);
+    scheduler::step(&lua, &engine, None).unwrap();
+    assert!(engine.state.borrow().sched.kinds.is_none());
+    assert!(engine.state.borrow().sched.work_total() > 0.0);
+}
+
+/// A job in the queue is the size it was on main. Where a handler's price came from (`kind`) sits in the handler variant of
+/// `JobTarget`, which has room for it; as a field of `Job` it made every queued job 8 bytes bigger.
+#[test]
+fn profiling_does_not_enlarge_queued_jobs() {
+    // The shapes main had, before the kinds existed
+    #[allow(dead_code)]
+    enum MainTarget {
+        Thread(LuaThread),
+        Handler(super::signal::ConnectionId),
+        DisconnectAll(super::InstanceId),
+    }
+    #[allow(dead_code)]
+    struct MainJob {
+        target: MainTarget,
+        args: Vec<super::Value>,
+        event_depth: u32,
+        signal: super::signal::SignalId,
+        resume_cost: f64,
+    }
+    // The shape this branch had before moving the byte into the handler variant: main's job and a byte
+    #[allow(dead_code)]
+    struct JobWithKindsByte {
+        target: MainTarget,
+        args: Vec<super::Value>,
+        event_depth: u32,
+        signal: super::signal::SignalId,
+        resume_cost: f64,
+        resume_kinds: u8,
+    }
+    let main_size = std::mem::size_of::<MainJob>();
+    let with_byte_size = std::mem::size_of::<JobWithKindsByte>();
+    let current_size = std::mem::size_of::<scheduler::Job>();
+    assert_eq!(std::mem::size_of::<scheduler::DispatchKind>(), 1);
+    println!("queued job layout: main {main_size}, previous {with_byte_size}, current {current_size}");
+    assert_eq!(std::mem::size_of::<scheduler::JobTarget>(), std::mem::size_of::<MainTarget>());
+    assert_eq!(current_size, main_size);
+    assert_eq!(std::mem::align_of::<scheduler::Job>(), std::mem::align_of::<MainJob>());
+}
+
 #[test]
 fn a_playing_clients_resumption_points_run_as_measured() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/deferred_points.luau, deferred_flush.luau): every

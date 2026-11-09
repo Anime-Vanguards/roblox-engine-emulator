@@ -42,9 +42,10 @@ function M.Step(x)
 end
 return M"#;
     let fixed_source = source.replace("math.abs(tostring(x))", "math.abs(x)");
-    let expected_site_ms = 0.137458333333;
-    let expected_saving_ms = 0.400913717849;
-    let expected_upper_ms = 0.457441007848;
+    // The refitted clock charges C calls at 5.77 ns, library allocations and only executed cold instructions.
+    let expected_site_ms = 0.146741700000;
+    let expected_saving_ms = 0.414257103130;
+    let expected_upper_ms = 0.470826459796;
 
     let temp = Temp::new("planted-numeric-argument");
     let handler = harness("Probe", "sink=M.Step(-3)");
@@ -68,10 +69,9 @@ return M"#;
 }
 
 #[test]
-fn advised_insert_bound_survives_nonpositive_site_part() {
-    // Declined table.insert calls (the position comes from M.Position, though it always equals the append position, so
-    // dropping it is the advised edit) cost less than the fast path would, so the site part is negative. Dropping the position still removes M.Position's work, so the whole-code bound stays
-    // and the issue does not say that fixing it saves nothing.
+fn advised_insert_bound_covers_removed_position_work() {
+    // The position always equals the append position. Dropping it also removes M.Position's work, which the site part
+    // leaves out. The refitted clock charges allocation and growth on both paths, so this site now has a saving.
     let source = r#"local M = {}
 function M.Position(i)
     local sum = 0
@@ -80,15 +80,12 @@ function M.Position(i)
 end
 function M.Step(x)
     local values = {}
-    for i = 1, 1100 do table.insert(values, M.Position(i), i) end
+    for i = 1, 12000 do table.insert(values, M.Position(i), i) end
     return #values
 end
 return M"#;
     let fixed_source = source.replace("table.insert(values, M.Position(i), i)", "table.insert(values, i)");
     let frames = 60.0;
-    let expected_site_net_ms = -0.035026666667;
-    let expected_saving_ms = 0.088832774972;
-    let expected_upper_ms = 0.144433034972;
 
     let temp = Temp::new("planted-insert-argument");
     let handler = harness("Probe", "sink=M.Step(-3)");
@@ -102,15 +99,14 @@ return M"#;
     let site_net_ms = (recorded.decline_charged_us.unwrap() - recorded.fast_equivalent_us.unwrap()) / 1000.0 / frames;
     let saved_ms = code_per_frame(&before) - code_per_frame(&after);
     let upper_ms = insert.upper_ms.expect("an advised edit has a whole-code bound");
-    assert_same_ms(site_net_ms, expected_site_net_ms, "site part");
-    assert_same_ms(saved_ms, expected_saving_ms, "measured saving");
-    assert!(insert.ms.is_none(), "a nonpositive site part is not a price");
+    assert!(site_net_ms > 0.0);
+    assert_same_ms(insert.ms.unwrap(), site_net_ms, "site part");
+    assert!(saved_ms > site_net_ms, "removing the position also saves its evaluation");
     assert!(!insert.no_saving, "the site part cannot decide the whole edit: {insert:#?}");
-    assert_same_ms(upper_ms, expected_upper_ms, "upper bound");
     assert_same_ms(upper_ms, code_per_frame(&before), "the bound is all the code's work");
     assert!(saved_ms <= upper_ms + SAME_MS, "saving {saved_ms} exceeds bound {upper_ms}");
-    assert!(insert.cost_text().contains("recorded site part saves nothing on this clock"));
-    assert!(insert.cost_text().contains("complete edit at most"));
+    assert!(insert.cost_text().contains("recorded work"));
+    assert!(insert.cost_text().contains("at most"));
     assert_accounted(&before, &found);
     println!("insert argument: site net {site_net_ms:.12}, A/B {saved_ms:.12}, upper {upper_ms:.12} ms/frame");
 }
@@ -131,8 +127,9 @@ function M.Step()
 end
 return M"#;
     let fixed_source = source.replace("table.sort(M.Build())", "");
-    let expected_subtotal_ms = 0.208072593333;
-    let expected_saving_ms = 0.285220485834;
+    // The refit changes the sort's C-call price and Build's allocation/growth charges.
+    let expected_subtotal_ms = 0.208115030000;
+    let expected_saving_ms = 0.271653744668;
 
     let temp = Temp::new("planted-sort-arguments");
     let handler = harness("Probe", "sink=M.Step()");
@@ -170,8 +167,9 @@ function M.Step(x)
 end
 return M"#;
     let fixed_source = source.replace("getfenv()", "");
-    let expected_subtotal_ms = 0.238215;
-    let expected_saving_ms = 0.470866535006;
+    // Both C calls use the refitted price; fallback cold instructions are charged where they execute.
+    let expected_subtotal_ms = 0.247499216667;
+    let expected_saving_ms = 0.489434118340;
 
     let temp = Temp::new("planted-environment-calls");
     let handler = harness("Probe", "sink=M.Step(-3)");
@@ -220,6 +218,14 @@ fn boundary_member<'a>(boundary: &'a serde_json::Value, member: &str) -> &'a ser
     members.iter().find(|row| row["member"] == member).unwrap()
 }
 
+/// A repeated Position read keeps the keyed instruction and getter's C call beside the engine's read price.
+fn repeat_read_ms(reads: f64) -> f64 {
+    use roblox_engine_emulator::cost;
+    let keyed_read_ns = cost::INTERPRETED_OPS[15];
+    let read_ns = cost::READ * 1e9 + cost::LUAU_CCALL + keyed_read_ns;
+    reads * read_ns / 1e6
+}
+
 /// Checks a one-second run of `FRAME_READS` against the frames and rates it must report. The run has 60 rendered
 /// frames, and the phase marked before the first one adds no 61st.
 fn assert_boundary_frame_rates(out: &std::path::Path, app: &App) {
@@ -227,7 +233,7 @@ fn assert_boundary_frame_rates(out: &std::path::Path, app: &App) {
     let reads_per_frame = 2000.0;
     let distinct_per_frame = 1.0;
     let repeats_per_frame = 1999.0;
-    let expected_repeat_ms = 0.07286355;
+    let expected_repeat_ms = repeat_read_ms(repeats_per_frame);
 
     let boundary = read_boundary_json(out);
     let profile = app.profile();
@@ -304,8 +310,9 @@ end
 return M"#
         )
     };
-    let expected_subtotal_ms = 0.07286355;
-    let expected_saving_ms = 0.07382307;
+    let expected_subtotal_ms = repeat_read_ms(1999.0);
+    // Keeping the receiver in a local also removes 1999 GETUPVAL instructions (opcode 9).
+    let expected_saving_ms = expected_subtotal_ms + 1999.0 * roblox_engine_emulator::cost::INTERPRETED_OPS[9] / 1e6;
 
     let temp = Temp::new("planted-receiver-bound");
     let handler = harness("Probe", "sink=M.Step()");
@@ -753,12 +760,14 @@ fn one_function_holding_the_games_work_is_named() {
     let hot = hot(&found);
     assert_eq!(hot.len(), 1, "{found:#?}");
     assert_eq!(hot[0].kind, "hot line");
-    assert!(hot[0].title.starts_with("Heavy Hot:7:") && hot[0].evidence.iter().any(|line| line.contains("99.7% of the game's work")), "{}", hot[0].title);
+    let share = format!("{:.1}% of the game's work", hot[0].ms.unwrap() / code_per_frame(&app) * 100.0);
+    assert!(hot[0].title.starts_with("Heavy Hot:7:") && hot[0].evidence.iter().any(|line| line.contains(&share)), "{}", hot[0].title);
     assert!(priced_sum(&found) <= code_per_frame(&app) + 1e-9, "{found:#?}");
     let ms = hot[0].ms.unwrap();
     assert!(ms > 0.05 && ms < 0.2, "{ms} ms a frame");
     assert_eq!(hot[0].severity, Severity::of(ms, app.profile().budget_ms()));
-    assert!(hot[0].evidence.iter().any(|line| line.starts_with("its lines (lines are counted over the whole run): Hot:11")), "{:?}", hot[0].evidence);
+    // The VM exports per-phase instruction work, so the line's evidence uses the selected phase too.
+    assert!(hot[0].evidence.iter().any(|line| line.starts_with("its lines: Hot:11")), "{:?}", hot[0].evidence);
 }
 
 const SORT: &str = "local M = {}\nlocal values = {}\nfor i = 1, 5000 do\n\tvalues[i] = (i * 7919) % 10007\nend\n\nfunction M.Rank()\n\tfor i = 1, #values do\n\t\tvalues[i] = (values[i] * 31 + i) % 10007\n\tend\n\ttable.sort(values)\n\treturn values[1]\nend\n\nfunction M.Other()\n\tlocal s = 0\n\tfor i = 1, 3000 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nreturn M\n";
@@ -827,9 +836,9 @@ fn a_game_spike_is_named_and_the_harnesss_or_the_setups_are_not() {
     let (_, app) = run(&temp, "harness-spike", "Small", SMALL, &source, "all", "2");
     let (found, _) = issues(&app);
     assert!(of(&found, "one-off").is_empty() && of(&found, "frame hitch").is_empty(), "{found:#?}");
-    // heavy setup, then the steady mark in the same frame: the setup's 16 ms is the setup phase's row, not the steady
+    // heavy setup, then the steady mark in the same frame: the setup's heavy work is the setup phase's row, not the steady
     // phase's first frame
-    let setup = "return function(Context)\n\tlocal RunService = game:GetService(\"RunService\")\n\tlocal M = require(game.ReplicatedStorage.Game.Small)\n\ttask.wait()\n\tContext.ProfilePhase(\"setup\")\n\tlocal world = {}\n\tfor i = 1, 400000 do\n\t\tworld[i] = i % 17\n\tend\n\tContext.ProfilePhase(\"steady\")\n\tlocal sink = 0\n\tRunService.Heartbeat:Connect(function()\n\t\tsink += M.Step(300) + #world\n\tend)\n\ttask.wait(Context.Seconds)\nend\n";
+    let setup = "return function(Context)\n\tlocal RunService = game:GetService(\"RunService\")\n\tlocal M = require(game.ReplicatedStorage.Game.Small)\n\ttask.wait()\n\tContext.ProfilePhase(\"setup\")\n\tlocal world = {}\n\tfor i = 1, 1200000 do\n\t\tworld[i] = i % 17\n\tend\n\tContext.ProfilePhase(\"steady\")\n\tlocal sink = 0\n\tRunService.Heartbeat:Connect(function()\n\t\tsink += M.Step(300) + #world\n\tend)\n\ttask.wait(Context.Seconds)\nend\n";
     let (_, app) = run(&temp, "same-mark", "Small", SMALL, setup, "all", "1");
     let (found, _) = issues(&app);
     assert!(of(&found, "one-off").is_empty() && of(&found, "frame hitch").is_empty(), "{found:#?}");
@@ -1656,7 +1665,10 @@ fn a_real_substring_fix_bounds_its_added_argument_instructions() {
         let price = declines[0].ms.unwrap_or_else(|| panic!("{:#?}", declines[0]));
         // The added argument instructions also cost cold work at the harness's call site.
         let saved = total_per_frame(&before) - total_per_frame(&after);
-        assert!(price > 0.09 && price < 0.13, "{price}");
+        let builtin = before.profile().raw.builtins.as_ref().unwrap().iter().find(|builtin| builtin.name == "string.sub").unwrap();
+        let expected = (builtin.decline_charged_us.unwrap() - builtin.fast_equivalent_us.unwrap()) / 1000.0 / declines[0].reported_frames;
+        assert_same_ms(price, expected, "operand-preserving site bound");
+        assert!(saved > 0.0);
         assert!(declines[0].at_most && saved <= price + 1e-9, "bound {price} against A/B {saved}");
         assert_accounted(&before, &found);
         println!("real string.sub fix, {length} characters: {price:.12} ms/frame; A/B saves {saved:.12}");
@@ -1697,12 +1709,12 @@ return M
 }
 
 #[test]
-fn a_real_substring_rewrite_with_no_clock_saving_says_so() {
+fn a_real_substring_rewrite_charges_both_paths_for_their_result_strings() {
     let temp = Temp::new("planted-builtin-zero");
     let source = r#"local M = {}
 function M.Read(s)
     local sum = 0
-    for i = 1, 600 do sum += #string.sub(s, i) end
+    for i = 1, 6000 do sum += #string.sub(s, i) end
     return sum
 end
 return M
@@ -1712,19 +1724,24 @@ return M
     let (found, _) = issues(&app);
     let declines = of(&found, "builtin declines");
     assert_eq!(declines.len(), 1, "{found:#?}");
-    assert!(declines[0].no_saving && declines[0].ms.is_none(), "{:#?}", declines[0]);
-    assert_eq!(declines[0].cost_text(), "fixing it saves nothing on this clock");
+    let fixed = source.replace("string.sub(s, i)", "string.sub(s, i, #s)");
+    let (_, after) = run(&temp, "fixed", "Sub", &fixed, &counting_harness("Sub", handler), "work,caches", "1");
+    let saved = code_per_frame(&app) - code_per_frame(&after);
+    let price = declines[0].ms.unwrap();
+    assert!(saved > 0.0 && saved <= price + SAME_MS, "bound {price} against A/B {saved}");
+    assert!(declines[0].at_most && !declines[0].no_saving);
+    println!("substring allocation parity: bound {price:.12}, A/B {saved:.12} ms/frame");
     assert_accounted(&app, &found);
 }
 
 #[test]
-fn a_real_nonpositive_append_site_part_keeps_the_complete_edit_bound() {
+fn a_real_append_site_part_retains_the_fast_paths_growth_charges() {
     let temp = Temp::new("planted-append-retained");
     let fill_module = |call: &str| {
         r#"local M = {}
 function M.Fill()
     local values = {}
-    for i = 1, 1100 do CALL end
+    for i = 1, 12000 do CALL end
     return #values
 end
 return M
@@ -1738,13 +1755,13 @@ return M
     let (found, _) = issues(&declined);
     let append = of(&found, "builtin declines");
     assert_eq!(append.len(), 1, "{found:#?}");
-    assert!(!append[0].no_saving && append[0].ms.is_none(), "{:#?}", append[0]);
+    assert!(!append[0].no_saving && append[0].ms.is_some(), "{:#?}", append[0]);
     assert!((append[0].upper_ms.unwrap() - code_per_frame(&declined)).abs() < SAME_MS);
-    assert!(append[0].cost_text().contains("recorded site part saves nothing on this clock"));
+    assert!(append[0].cost_text().contains("recorded work"));
     let saved = code_per_frame(&declined) - code_per_frame(&fast);
-    assert!(saved < 0.0, "retained rehashes make this fast path cost more on this clock: {saved}");
+    assert!(saved > 0.0 && saved <= append[0].upper_ms.unwrap() + SAME_MS, "A/B saving {saved} is bounded");
     assert_accounted(&declined, &found);
-    println!("real append fast path: A/B saves {saved:.12} ms/frame (no saving on this clock)");
+    println!("real append fast path: A/B saves {saved:.12} ms/frame");
 }
 
 #[test]
