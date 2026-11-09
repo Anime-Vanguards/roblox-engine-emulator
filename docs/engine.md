@@ -713,6 +713,64 @@ profile asks for; `profiler::report` writes its files and `ree profile diff` com
   ones are the heap snapshots'); its host time and cycles only in a run no kind slows. **ree's caches**: counters at each
   cache (`profiler::caches`, process-wide); a member name's atom misses where the VM looks a new string up by its bytes,
   and the instances a userdata was made for, the modules run and the datatype property reads are the game's facts.
+
+  `timeline.function_stats` holds `[function id, total us, active frames, largest frame us, frame number]` over the
+  reported phases. `timeline.node_frames` holds `[row index, node id, work us, ...]` for every part of a frame whose
+  combined code work reaches half the recorded frame budget (`1000 / fps` ms). Summaries retain small events without
+  keeping their frame history. The viewer also reads the old flat `functions` and run-length `function_runs` arrays.
+  `timeline.issue_stats` holds `[key, active frames, largest us, frame number, largest own us in over-budget frames]`
+  for each issue key (`function:<id>`, `sort:<id>:<line>`, `builtin:<name>:<id>:<line>`, `cache:<id>:<pc>`). It is
+  written from every frame: the parts of a frame that a phase mark splits are added together, and the sites of one
+  source edit are grouped, before the peak is found. What the viewer lists and how it grades therefore never depends on
+  which frames the timeline kept.
+  `site_frames` holds those frames' net site work; `replacement_frames` holds shared prototype replacement work.
+  Work and cache profiles keep compact frame work even without the detailed timeline kind. The active frame count
+  unions all of a prototype's callers and newly created closures, including frames where its builtin site did not run.
+  For prototypes whose advised fix adds cold code, `function_contexts` stores compact inclusive activity ranges
+  `[function id, node id, first frame, last frame, ...]`. A combined fix pays cold work only on the callers' frames
+  left running. No per-frame work history is stored for these ranges. The report page leaves frame evidence out.
+
+  Issues are explicit sets of call-tree nodes and charged sites. Every standalone price is the complete observed
+  saving divided by the reported phases' frames, with the advised replacement's cost subtracted. Even one event has a
+  mean rate. Active frames and peak work only describe how the work was spread. Totals count the exact set union, retaining partial
+  intersections and naming every function involved. The closing row covers everything outside the listed union.
+  An issue is shown when its mean reaches the absolute floor (41.7 us a frame) or its own largest frame reaches 2.5% of
+  the frame budget. Its severity is the worse of its mean price and its own work in over-budget frames. The list is
+  sorted by severity, then by price.
+  The largest standalone saving across all candidates alone earns the strongest-saving claim.
+
+  A cache fix retains `first_touch_us`; a rehash saves `outcome_charged_us - presized_us`. A declined builtin saves its
+  charged work less the fast replacement's cost for the same calls. Missing replacement or context evidence leaves
+  the issue explicitly unpriced. A whole sort is priced only when the advice is to remove it if ordering is unneeded.
+  Advice for `math.abs` with numeric strings assumes an existing numeric value, with no conversion added at the call site.
+  Every price states its precision. A charged subtotal with a known replacement is exact. Uncharged calibration work is
+  an estimate with a low and a high, and stays out of the clock totals and the strongest-saving claim. When the setup
+  of a source rewrite is unknown, the price is an upper bound and not an exact saving.
+
+  A removal's recorded part (a sort, a repeat read, an unchanged write) is only part of what its edit changes: removing
+  the statement also removes the evaluation of its arguments and the caller's instructions, which the profile books to
+  other functions. The issue gives the recorded part as its price and the whole scoped code work as the complete edit's
+  upper bound. Every advised source edit uses this whole-code bound by default, cache edits and environment edits
+  included. Only two builtin rewrites keep a site-only bound, because they keep every original operand: adding index 1
+  to `string.byte(s)` and adding the end to `string.sub(s, i)`, each without another advised reason. A zero or negative
+  site part cannot show that the complete edit saves nothing, so the bound stays. A bound never wins the
+  strongest-saving claim, and it counts against another issue's claim even when its own site part has no price.
+
+  A builtin site's `fallback_end_pc` is its fallback's last instruction, the CALL that follows the fast call. The cache
+  lookups between the two are the same work as the decline, and the cache and builtin issues use the same keys for it.
+  An unsafe environment hides the rejection reasons after it, so its builtin bound needs every fast-path condition
+  fixed together. Priced site tables have no cap.
+
+  A phase mark can fall in the middle of a physical frame. The boundary profile counts each physical frame a phase
+  touched, and the issues divide by the profile scope's physical frames. A repeat read is attributed to the function the
+  boundary recorded as executing, which stays correct when the compiler inlined a helper into it.
+  A scheduler step holds the phases marked during it and counts them in the frame it renders; the step's Heartbeat and
+  render parts share that frame. A step that renders no frame counts none, which is the case for the last timer
+  resumptions of a replay to a capture. A mark outside any step, such as one before the first step, adds no frame. So
+  frame zero never enters the boundary profile's frame counts or rate divisors. Recorded-clock replay holds phases the
+  same way, including a replay to a capture point through `run_until`.
+  Call-tree work retains fractional microseconds. Earlier profiles with whole-microsecond nodes keep that recording precision.
+
   **The CPU**: from the run's start (the VM's install), the run thread's cycles (QueryThreadCycleTime: timestamp-counter
   ticks while it ran) in milliseconds at the counter's rate, by phase from the marks and by frame, the process's CPU
   time, page faults, the working set and private bytes at the start and their growth; a run a kind slows takes these in a

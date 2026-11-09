@@ -601,6 +601,132 @@ fn the_timeline_has_a_row_a_frame() {
     assert!(rows.iter().all(|row| row[column("work_ms")].as_f64().unwrap() > 0.0), "each frame's handler did work");
 }
 
+/// Runs `ree run` in this process on a harness (`source`), with a game module mounted at ReplicatedStorage.Game.Spin
+/// (`game`), under `--profile <kinds>`: profile.json and the report page
+fn run_profiled_page(name: &str, source: &str, game: &str, kinds: &str, seconds: &str) -> (serde_json::Value, String) {
+    let dir = temp_dir(name);
+    std::fs::create_dir_all(dir.join("game")).unwrap();
+    let harness = dir.join(format!("{name}.luau"));
+    std::fs::write(&harness, source).unwrap();
+    std::fs::write(dir.join("game").join("Spin.luau"), game).unwrap();
+    let out = dir.join("profile");
+    let mount = format!("ReplicatedStorage/Game={}", dir.join("game").to_string_lossy().replace('\\', "/"));
+    let args: Vec<String> = ["--harness", harness.to_str().unwrap(), "--mount", &mount, "--seconds", seconds, "--profile", kinds, "--profile-out", out.to_str().unwrap()].iter().map(|arg| arg.to_string()).collect();
+    // (on a thread with a service worker's stack, as the ree binary runs its commands)
+    let code = std::thread::Builder::new().stack_size(64 << 20).spawn(move || crate::record::run::cli(&args, &crate::launch::Host::default(), false)).unwrap().join().unwrap();
+    assert_eq!(code, 0, "ree run {name}");
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("profile.json")).unwrap()).unwrap();
+    let page = std::fs::read_to_string(out.join("report.html")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    (json, page)
+}
+
+/// A phase mark inside a frame splits the frame's timeline row: the frame so far is the phase before's row (part 1), the
+/// rest the new phase's (part 2), both under the frame's number. With work, each row's work splits between the game's code
+/// and the harness's as the summary splits a phase (over the steady rows they add up to the summary's own figures), and a
+/// row names its heaviest functions
+#[test]
+fn a_mark_inside_a_frame_splits_its_row_and_each_row_splits_its_work_by_side() {
+    let _lock = lock();
+    let harness = "return function(Context)\n\tlocal RunService = game:GetService(\"RunService\")\n\tlocal Spin = require(game.ReplicatedStorage.Game.Spin)\n\tlocal frame = 0\n\tRunService.Heartbeat:Connect(function()\n\t\tframe += 1\n\t\tif frame == 3 then\n\t\t\tlocal x = 0\n\t\t\tfor i = 1, 20000 do\n\t\t\t\tx += i % 5\n\t\t\tend\n\t\t\tContext.ProfilePhase(\"steady\")\n\t\tend\n\t\tSpin.spin(if frame == 6 then 300000 else 300)\n\tend)\n\ttask.wait(Context.Seconds)\nend\n";
+    let game = "local M = {}\nfunction M.spin(n)\n\tlocal x = 0\n\tfor i = 1, n do\n\t\tx += i % 7\n\tend\n\treturn x\nend\nreturn M\n";
+    let (json, page) = run_profiled_page("split", harness, game, "work,timeline", "0.25");
+    let timeline = &json["timeline"];
+    let columns: Vec<&str> = timeline["columns"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+    let column = |name: &str| columns.iter().position(|c| *c == name).unwrap_or_else(|| panic!("no {name} in {columns:?}"));
+    let rows = timeline["rows"].as_array().unwrap();
+    let get = |row: &serde_json::Value, name: &str| row[column(name)].as_f64().unwrap();
+    let phases: Vec<&str> = json["phases"].as_array().unwrap().iter().map(|p| p.as_str().unwrap()).collect();
+    let steady = phases.iter().position(|p| *p == "steady").unwrap() as f64;
+    // the frame the harness marked steady in: two rows, one number, the part before the mark the phase before's
+    let first = rows.iter().position(|row| get(row, "phase") == steady).unwrap();
+    let (before, after) = (&rows[first - 1], &rows[first]);
+    assert_eq!(get(before, "frame"), get(after, "frame"), "{before} {after}");
+    assert_eq!((get(after, "part") - get(before, "part")), 1.0);
+    assert!(get(before, "part") >= 1.0 && get(before, "phase") != steady);
+    // the harness's 20,000 steps before the mark are the phase before's, in its part of the frame
+    let typical_harness = get(&rows[first + 2], "harness_ms");
+    assert!(get(before, "harness_ms") > 20.0 * typical_harness.max(1e-6), "{before} against {}", rows[first + 2]);
+    assert!(get(after, "harness_ms") < get(before, "harness_ms"), "{after}");
+    // a row's sides are the work booked to code: never more than the row's work (the rest charged outside instructions)
+    for row in rows {
+        assert!(get(row, "game_ms") + get(row, "harness_ms") <= get(row, "work_ms") + 1e-4, "{row}");
+    }
+    // over the steady rows, each side adds up to the summary's own split of the phase (each row rounded to 10 ns)
+    let sum = |name: &str| rows.iter().filter(|row| get(row, "phase") == steady).map(|row| get(row, name)).sum::<f64>();
+    let tolerance = 1e-5 * rows.len() as f64;
+    assert!((sum("game_ms") - json["scope"]["game_self_ms"].as_f64().unwrap()).abs() <= tolerance, "game {} against {}", sum("game_ms"), json["scope"]);
+    assert!((sum("harness_ms") - json["scope"]["harness_self_ms"].as_f64().unwrap()).abs() <= tolerance, "harness {} against {}", sum("harness_ms"), json["scope"]);
+    // the frame the game spun 300,000 steps in names spin first, on the game's side
+    let functions: std::collections::HashMap<i64, &serde_json::Value> = json["functions"].as_array().unwrap().iter().map(|f| (f["id"].as_i64().unwrap(), f)).collect();
+    let spike = (0..rows.len()).filter(|&i| get(&rows[i], "phase") == steady).max_by(|&a, &b| get(&rows[a], "game_ms").total_cmp(&get(&rows[b], "game_ms"))).unwrap();
+    // Small events keep their peak and active count even when their frames need no node history.
+    let stat = timeline["function_stats"].as_array().unwrap().iter().find(|stat| {
+        functions[&stat[0].as_i64().unwrap()]["name"].as_str().is_some_and(|name| name == "spin" || name.ends_with(".spin"))
+    }).unwrap();
+    let function = functions[&stat[0].as_i64().unwrap()];
+    assert_eq!(function["harness"], false);
+    assert_eq!(stat[4].as_f64().unwrap(), get(&rows[spike], "frame"));
+    assert!((stat[3].as_f64().unwrap() / 1e3 - get(&rows[spike], "game_ms")).abs() <= 0.01 * get(&rows[spike], "game_ms"));
+    assert!(page.contains("\"timeline\":{") && !page.contains("\"function_stats\":"), "the page leaves summaries out");
+    assert!(!page.contains("\"node_frames\":"));
+    // the summary counts frames, not the parts of one
+    let summary = json["summary"].as_str().unwrap();
+    assert!(summary.contains("split by phase marks") && summary.contains("the game's code"), "{summary}");
+}
+
+/// Added argument code is cold once per prototype and frame, even when this call skips the builtin.
+#[test]
+fn builtin_argument_setup_counts_frames_across_callers_and_new_closures() {
+    let _lock = lock();
+    let harness = r#"return function(Context)
+    local M = require(game.ReplicatedStorage.Game.Spin)
+    local frame = 0
+    task.wait()
+    Context.ProfilePhase("steady")
+    game:GetService("RunService").Heartbeat:Connect(function()
+        frame += 1
+        local read = M.make(frame)
+        M.left(read, if frame % 2 == 0 then "abcdefgh" else nil)
+        M.right(read, nil)
+    end)
+    task.wait(Context.Seconds)
+end"#;
+    let game = r#"local M = {}
+function M.make(seed)
+    local function Read(value)
+        if value then return string.sub(value, 2) end
+        return seed
+    end
+    return Read
+end
+function M.left(read, value) return read(value) end
+function M.right(read, value) return read(value) end
+return M"#;
+    let (json, _) = run_profiled_page("builtin-cold-union", harness, game, "work,caches", "0.2");
+    let functions = json["functions"].as_array().unwrap();
+    let reads: Vec<_> = functions.iter().filter(|function| function["name"] == "Read").collect();
+    assert_eq!(reads.len(), 1, "new closures share their prototype: {reads:?}");
+    let function = reads[0]["id"].as_i64().unwrap();
+    let stats = json["timeline"]["function_stats"].as_array().unwrap();
+    let stat = stats.iter().find(|stat| stat[0].as_i64() == Some(function)).unwrap();
+    let caller_frames = |name: &str| {
+        let caller = functions.iter().find(|function| function["name"].as_str().is_some_and(|label| label == name || label.ends_with(&format!(".{name}")))).unwrap();
+        stats.iter().find(|stat| stat[0] == caller["id"]).unwrap()[2].as_u64().unwrap()
+    };
+    let frames = caller_frames("left");
+    assert!(frames >= 10);
+    assert_eq!(json["luau_caches"]["frames"].as_f64(), Some(frames as f64), "cache rates use the same physical frames as the function summary");
+    assert_eq!(caller_frames("right"), frames);
+    assert_eq!(stat[2].as_u64(), Some(frames), "both callers and skipped builtin frames count once");
+    let builtin = json["builtins"].as_array().unwrap().iter().find(|builtin| builtin["name"] == "string.sub").unwrap();
+    let site = builtin["sites"].as_array().unwrap().iter().find(|site| site["function"].as_i64() == Some(function)).unwrap();
+    let declines: u64 = site["declines"].as_object().unwrap().values().map(|count| count.as_u64().unwrap()).sum();
+    assert!(declines > 0 && declines < frames, "the site skips half the frames");
+    assert!((site["fix_cold_us"].as_f64().unwrap() - frames as f64 * crate::cost::LUAU_COLD_CODE / 1000.0).abs() < 1e-12);
+    assert!(site["fix_instructions_us"].as_f64().unwrap() > 0.0);
+}
+
 /// Host time (`time`): the ticker's ticks are milliseconds, booked to the function that ran when they passed, and they
 /// add up to about the wall time the run took.
 #[test]
@@ -724,6 +850,8 @@ fn ree_caches_count_hits_and_misses() {
 fn profile_options_keep_the_old_forms() {
     let args = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
     assert_eq!(Kinds::parse("all").unwrap(), Kinds::ALL);
+    // (the boundary's crossings are in `all`: one profile holds one issue list; host time and the counters are not)
+    assert!(Kinds::ALL.has(Kinds::BOUNDARY) && !Kinds::ALL.has(Kinds::TIME) && !Kinds::ALL.has(Kinds::HW));
     assert!(Kinds::parse("instructions").unwrap().has(Kinds::WORK));
     assert!(Kinds::parse("memory").unwrap().has(Kinds::HEAP));
     assert!(Kinds::parse("nonsense").unwrap_err().contains("nonsense"));
@@ -1825,4 +1953,47 @@ fn nesting_levels_follow_what_a_table_holds() {
     let distribution = memory::Distribution::of(&mut sizes, true);
     assert_eq!((distribution.total, distribution.used, distribution.min, distribution.median, distribution.max), (23, 13, 0, 3, 16));
     assert_eq!(distribution.hist, vec![(0, 1), (4, 2), (16, 1)]);
+}
+
+/// An advised explicit argument adds code words to each compiled call site of the builtin: one for `string.sub`'s end, two
+/// for `string.byte`'s index
+#[test]
+fn substring_argument_fixes_add_the_expected_warm_instructions_and_code_words() {
+    let _lock = lock();
+    // The prototype of `Read`, which calls the builtin ten times, with the call as the source gives it
+    let measure_read = |call: &str| {
+        let lua = Lua::new();
+        lua.enable_jit(false);
+        let state = main_state(&lua);
+        assert!(vm::start(state, true, None, None));
+        let is_byte = call.starts_with("string.byte");
+        // (string.sub returns a string, whose length is summed; string.byte returns a number)
+        let summed = if is_byte { call.to_string() } else { format!("#{call}") };
+        let source = format!("local M = {{}}\nfunction M.Read(s, index)\n local sum = 0\n for i = 1, 10 do sum += {summed} end\n return sum\nend\nreturn M.Read(\"abcdef\", 2)\n");
+        let result = lua.load(&source).set_name("=substring-shape").set_compiler(engine_lua::modules::compiler()).eval::<f64>().unwrap();
+        let expected_sum = if is_byte { 970.0 } else { 50.0 };
+        assert_eq!(result, expected_sum);
+        vm::stop(state);
+        let results = vm::results(state);
+        vm::free(state);
+        results.functions.iter().find(|function| function.name == "Read").unwrap().clone()
+    };
+    let rewrites = [
+        ("string.sub(s, 2)", "string.sub(s, 2, #s)", 1),
+        ("string.sub(s, index)", "string.sub(s, index, #s)", 1),
+        ("string.byte(s)", "string.byte(s, 1)", 2),
+    ];
+    for (declined_call, fixed_call, code_words_per_site) in rewrites {
+        let declined = measure_read(declined_call);
+        let fixed = measure_read(fixed_call);
+        // (the compiled call sites that ran: each is a FASTCALL instruction)
+        let mut compiled_sites = 0;
+        for (code, count) in declined.code.iter().zip(&declined.counts) {
+            if *count > 0 && vm::opcode_name((*code & 255) as u8).starts_with("FASTCALL") {
+                compiled_sites += 1;
+            }
+        }
+        let added_words = fixed.code.len() - declined.code.len();
+        assert_eq!(added_words, code_words_per_site * compiled_sites, "{declined_call}: {} to {} words across {compiled_sites} compiled sites", declined.code.len(), fixed.code.len());
+    }
 }

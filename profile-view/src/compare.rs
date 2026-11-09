@@ -362,6 +362,7 @@ impl Compare {
                 advice: "Something is repeated per element".into(),
                 target: Target::Variant(scaling.variant.clone()),
                 weight: exponent,
+                ..Default::default()
             });
         }
         for function in &self.functions {
@@ -377,6 +378,7 @@ impl Compare {
                 advice: "It does per-element work for every element".into(),
                 target: Target::Variant(function.variant.clone()),
                 weight: exponent,
+                ..Default::default()
             });
         }
         for run in self.runs.iter().filter(|run| run.check.as_ref().is_some_and(|c| !c.ok)) {
@@ -388,6 +390,7 @@ impl Compare {
                 advice: "It does not compute the same thing, so it is no faster version of it".into(),
                 target: Target::Variant(run.variant.clone()),
                 weight: 1.0,
+                ..Default::default()
             });
         }
         for run in self.runs.iter().filter(|run| run.status != "ok" && !run.status.is_empty()) {
@@ -399,6 +402,7 @@ impl Compare {
                 advice: String::new(),
                 target: Target::Variant(run.variant.clone()),
                 weight: 0.5,
+                ..Default::default()
             });
         }
         out

@@ -1115,14 +1115,17 @@ unsafe fn push_value(state: *mut ffi::lua_State, api: &Api, dom_state: &State, i
 
 unsafe extern "C-unwind" fn meta_index(state: *mut ffi::lua_State) -> c_int {
     crate::boundary::enter(state);
+    crate::boundary::access_begin(state);
     // (host time: the call's time is its line's)
     let _time = crate::luau_profile::ApiCall::new(state);
     let out = guard(|| unsafe { index_fast(state) });
-    match out {
+    let count = match out {
         Out::Ret(count) => count,
         Out::Raise(message, level) => unsafe { raise(state, message, level) },
         _ => unsafe { index_slow(state) },
-    }
+    };
+    crate::boundary::access_end(state, false);
+    count
 }
 
 /// What a read's value adds to its price (cost.rs `read_value`), charged and booked to the read's boundary crossing
@@ -1284,6 +1287,7 @@ unsafe fn index_slow(state: *mut ffi::lua_State) -> c_int {
 unsafe extern "C-unwind" fn meta_newindex(state: *mut ffi::lua_State) -> c_int {
     crate::trace::enter(state);
     crate::boundary::enter(state);
+    crate::boundary::access_begin(state);
     // (host time: the call's time is its line's)
     let _time = crate::luau_profile::ApiCall::new(state);
     let out = guard(|| unsafe { newindex_fast(state) });
@@ -1297,6 +1301,7 @@ unsafe extern "C-unwind" fn meta_newindex(state: *mut ffi::lua_State) -> c_int {
             sync_if_moved(state, api);
         }
     }
+    crate::boundary::access_end(state, true);
     0
 }
 

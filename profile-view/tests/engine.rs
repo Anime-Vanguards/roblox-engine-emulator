@@ -13,8 +13,8 @@ use ree_profile_view::{app::View, cli, metric::Metric, sites::alloc_sites, theme
 const HARNESS: &str = r#"local RunService = game:GetService("RunService")
 
 local items = {}
-for index = 1, 50 do
-	items[index] = { score = (index * 37) % 50 }
+for index = 1, 500 do
+	items[index] = { score = (index * 37) % 500 }
 end
 
 -- (a table's function: the compiler inlines a small local function into its caller)
@@ -59,10 +59,9 @@ fn a_profile_the_engine_wrote_reads_whole() {
 
     // the call tree's work is the work clock's, less what it charged outside any instruction; its instructions are
     // every instruction the profile counted
-    // (profile.json writes each node's work in whole microseconds: half a microsecond a node either way)
     let tree = app.tree_of(0, Metric::Work, false);
     let booked = work.total_ms - work.outside_instructions_ms;
-    let rounding = p.raw.tree.len() as f64 * 0.0005;
+    let rounding = 1e-8;
     assert!((tree.total() - booked).abs() <= rounding, "tree {} ms, work clock less outside {booked} ms, {} nodes", tree.total(), p.raw.tree.len());
     let insns = app.tree_of(0, Metric::Insns, false);
     assert_eq!(insns.total(), work.script_insns + work.engine_insns);
@@ -79,9 +78,11 @@ fn a_profile_the_engine_wrote_reads_whole() {
 
     // the harness sorts every frame, in rank
     let issues = app.issues();
-    let sort = issues.0.iter().find(|issue| issue.kind == "sort every frame").unwrap_or_else(|| panic!("{:#?}", issues.0));
+    let sort = issues.0.iter().find(|issue| issue.kind == "sort calls").unwrap_or_else(|| panic!("{:#?}", issues.0));
     assert!(sort.title.contains("rank"), "{}", sort.title);
-    assert!(sort.evidence[0].contains("1.0 a frame"), "{}", sort.evidence[0]);
+    assert!(sort.evidence[0].starts_with("recorded removable subtotal "), "{}", sort.evidence[0]);
+    assert!(sort.upper_ms.unwrap() >= sort.ms.unwrap());
+    assert!(sort.evidence[1].contains("1.0 a frame"), "{}", sort.evidence[1]);
 
     // every view draws, and the Source view shows the harness's own lines
     for view in View::ALL {

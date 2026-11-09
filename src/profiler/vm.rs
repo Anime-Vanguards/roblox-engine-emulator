@@ -461,6 +461,115 @@ pub fn results(state: *mut lua_State) -> Results {
     Results { functions, cfunctions, nodes, engine_work: unsafe { lua_profileengine(state) } }
 }
 
+/// The call tree as it stands, while the profile runs: `each(node, parent, function, work in seconds)` for every node, a
+/// parent before its children (ids as [`Node`]'s; a node, once made, keeps its parent and function); the count. Reads
+/// pointers only: nothing is copied or booked.
+// (the state is the one the profile was started on, as every call here takes it)
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn walk_nodes(state: *mut lua_State, mut each: impl FnMut(usize, i32, i32, f64)) -> usize {
+    unsafe extern "C-unwind" fn visit(ud: *mut c_void, id: c_int, raw: *const RawNode) {
+        let each = unsafe { &mut *(ud as *mut &mut dyn FnMut(usize, i32, i32, f64)) };
+        let raw = unsafe { &*raw };
+        each(id.max(0) as usize, raw.parent, raw.function, raw.work);
+    }
+    let mut each: &mut dyn FnMut(usize, i32, i32, f64) = &mut each;
+    unsafe { lua_profilenodes(state, visit, &mut each as *mut &mut dyn FnMut(usize, i32, i32, f64) as *mut c_void).max(0) as usize }
+}
+
+/// The functions the profile registered from id `from` on, in id order, while it runs: `each(id, source, flags)` (a
+/// function's id never changes, so a reader keeps what it read of the ones before)
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn walk_functions(state: *mut lua_State, from: usize, mut each: impl FnMut(usize, &str, i32)) -> usize {
+    struct Visit<'a> {
+        from: usize,
+        each: &'a mut dyn FnMut(usize, &str, i32),
+    }
+    unsafe extern "C-unwind" fn visit(ud: *mut c_void, id: c_int, raw: *const RawFunction) {
+        let visit = unsafe { &mut *(ud as *mut Visit) };
+        if (id as usize) < visit.from {
+            return;
+        }
+        let raw = unsafe { &*raw };
+        let source = if raw.source.is_null() { std::borrow::Cow::Borrowed("") } else { unsafe { CStr::from_ptr(raw.source) }.to_string_lossy() };
+        (visit.each)(id as usize, &source, raw.flags);
+    }
+    let mut context = Visit { from, each: &mut each };
+    unsafe { lua_profilefunctions(state, visit, &mut context as *mut Visit as *mut c_void).max(0) as usize }
+}
+
+/// What the work clock charged one inline-cache or builtin-call site in one calling context, cumulative over the run.
+/// Reading them does not copy instruction histories.
+pub struct SiteCharges {
+    /// `cache` or `builtin`
+    pub kind: &'static str,
+    pub function: i32,
+    pub pc: usize,
+    /// The call-tree node of the context
+    pub node: usize,
+    /// All the work the clock charged at the site (seconds)
+    pub charged: f64,
+    /// The part of it a fix keeps paying (seconds): a cache's first touch and presized build, a builtin's fast-path work
+    pub retained: f64,
+    /// The builtin called, for a builtin site
+    pub builtin: Option<&'static str>,
+    /// The call instruction's opcode (for a builtin site; 0 where it cannot be read)
+    pub op: u8,
+    /// The calls the builtin's fast path declined in this context
+    pub declines: u64,
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn walk_site_charges(state: *mut lua_State, mut each: impl FnMut(SiteCharges)) {
+    unsafe extern "C-unwind" fn visit(ud: *mut c_void, function: c_int, raw: *const RawFunction) {
+        let each = unsafe { &mut *(ud as *mut &mut dyn FnMut(SiteCharges)) };
+        let raw = unsafe { &*raw };
+        if !raw.caches.is_null() {
+            let cache_sites = unsafe { std::slice::from_raw_parts(raw.caches, raw.ncaches.max(0) as usize) };
+            for site in cache_sites {
+                if site.node < 0 || site.charged == 0.0 {
+                    continue;
+                }
+                each(SiteCharges {
+                    kind: "cache",
+                    function,
+                    pc: site.pc.max(0) as usize,
+                    node: site.node as usize,
+                    charged: site.charged,
+                    retained: site.firsttouch + site.presized,
+                    builtin: None,
+                    op: site.op as u8,
+                    declines: 0,
+                });
+            }
+        }
+        if !raw.builtins.is_null() {
+            let builtin_sites = unsafe { std::slice::from_raw_parts(raw.builtins, raw.nbuiltins.max(0) as usize) };
+            for site in builtin_sites {
+                let declines = site.declines.iter().sum();
+                if site.node < 0 || declines == 0 {
+                    continue;
+                }
+                let pc = site.pc.max(0) as usize;
+                let has_code = pc < raw.sizecode.max(0) as usize && !raw.code.is_null();
+                let op = if has_code { unsafe { *raw.code.add(pc) as u8 } } else { 0 };
+                each(SiteCharges {
+                    kind: "builtin",
+                    function,
+                    pc,
+                    node: site.node as usize,
+                    charged: site.charged,
+                    retained: site.fastequivalent,
+                    builtin: builtin_name(site.builtin),
+                    op,
+                    declines,
+                });
+            }
+        }
+    }
+    let mut each: &mut dyn FnMut(SiteCharges) = &mut each;
+    unsafe { lua_profilefunctions(state, visit, &mut each as *mut &mut dyn FnMut(SiteCharges) as *mut c_void) };
+}
+
 /// The frames of `state`, innermost first, as (function id, line) pairs (ids as [`Node::function`]; line -1 for C and
 /// native frames), written into `out`; the count.
 pub fn stack(state: *mut lua_State, functions: &mut [c_int], lines: &mut [c_int]) -> usize {

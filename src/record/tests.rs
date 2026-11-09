@@ -12,6 +12,10 @@ use crate::{
     scheduler,
 };
 
+/// Recordings' temporary folders take a number from this as well as the process and the clock: two tests started in one
+/// tick of Windows' clock (100 ns) took the same folder and wrote each other's files into it
+static TEST_DIRS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Runs `source` in a play-mode engine for `frames` frames at 60 a second, recording; returns the
 /// output directory's files as read back.
 fn record(source: &str, frames: u32) -> (Json, Json, rbx_dom_weak::WeakDom, Json) {
@@ -60,7 +64,8 @@ fn record_in(source: &str, frames: u32, walk_always: bool, own: &[(&str, &str)])
         scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("frame");
         recorder.sample(&engine, frame);
     }
-    let out = std::env::temp_dir().join(format!("rur-record-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let unique = TEST_DIRS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!("rur-record-test-{}-{}-{unique}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let summary = recorder.write(&engine, &out, Map::new()).expect("write");
     let read = |name: &str| -> Json { serde_json::from_str(&std::fs::read_to_string(out.join(name)).unwrap()).unwrap() };
     let playback = read("playback.json");
@@ -2339,7 +2344,8 @@ fn studio_only_placeholders_are_not_drawn_whenever_they_are_built() {
             scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("frame");
             recorder.sample(&engine, frame);
         }
-        let out = std::env::temp_dir().join(format!("rur-record-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let unique = TEST_DIRS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let out = std::env::temp_dir().join(format!("rur-record-test-{}-{}-{unique}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         recorder.write(&engine, &out, Map::new()).expect("write");
         let playback: Json = serde_json::from_str(&std::fs::read_to_string(out.join("playback.json")).unwrap()).unwrap();
         let scene = std::fs::read(out.join("scene.rbxm")).unwrap();

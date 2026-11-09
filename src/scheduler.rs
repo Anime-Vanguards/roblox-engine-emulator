@@ -1618,6 +1618,9 @@ fn capture(lua: &Lua, engine: &Rc<Engine>, at: f64, event: RecordedEvent) -> Lua
 /// Replays recorded events up to and including the next render step; false when none ran (the
 /// clock ended or reached its capture).
 fn step_recorded(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<bool> {
+    // (the boundary profile counts the phases marked in this step in the frame it renders; `run_until` calls this
+    // directly when it replays up to a capture, and the capture's last step renders nothing)
+    let _boundary_frame = crate::boundary::Frame::begin();
     let events = {
         let mut state = engine.state.borrow_mut();
         if state.sched.track_build {
@@ -1701,6 +1704,8 @@ fn step_recorded(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<bool> {
 /// recorded clock replays its next frame instead while it has one; after its capture nothing
 /// runs.
 pub fn step(lua: &Lua, engine: &Rc<Engine>, duration: Option<f64>) -> LuaResult<()> {
+    // (the boundary profile's step guard; a recorded clock's `step_recorded` below opens a nested one, which does nothing)
+    let _boundary_frame = crate::boundary::Frame::begin();
     // (a profile's timeline: one row a frame; off, one thread-local read)
     if crate::profiler::active() {
         crate::profiler::frame_begin(engine);
@@ -1773,6 +1778,8 @@ fn step_frame(lua: &Lua, engine: &Rc<Engine>, duration: Option<f64>) -> LuaResul
 /// retained across calls, including calls shorter than one beat and switches back to fixed
 /// stepping. Returns the render steps run (0 or 1).
 pub fn step_display_duration(lua: &Lua, engine: &Rc<Engine>, duration: f64) -> LuaResult<u32> {
+    // (the boundary profile's step guard: a step of 0 or 1 render steps counts a frame only if it renders)
+    let _boundary_frame = crate::boundary::Frame::begin();
     {
         let state = engine.state.borrow();
         if state.sched.recorded.is_some() {

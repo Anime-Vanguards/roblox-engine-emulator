@@ -248,13 +248,36 @@ fn timeline_stats(profile: &Json) -> Option<(f64, f64, Option<f64>, f64)> {
         return None;
     }
     let column = |name: &str| columns.iter().position(|c| *c == name);
-    let values = |name: &str| -> Vec<f64> { column(name).map(|index| rows.iter().map(|row| num(&row[index])).collect()).unwrap_or_default() };
-    let work = values("work_ms");
+    let (frame_column, part_column) = (column("frame"), column("part"));
+    // A frame a phase mark split has one row for each part, numbered from 1. A part after the first continues the
+    // frame of the row before it.
+    let continues_previous_frame = |at: usize| -> bool {
+        let (Some(frame), Some(part)) = (frame_column, part_column) else { return false };
+        let is_later_part = num(&rows[at][part]) > 1.0;
+        at > 0 && is_later_part && num(&rows[at][frame]) == num(&rows[at - 1][frame])
+    };
+    // A column's value for each frame. Work and host time flow, so a frame's parts add up; a level (the heap) is the
+    // last part's value.
+    let per_frame = |name: &str, flows: bool| -> Option<Vec<f64>> {
+        let index = column(name)?;
+        let mut values: Vec<f64> = Vec::new();
+        for (at, row) in rows.iter().enumerate() {
+            let value = row.get(index)?.as_f64()?;
+            match values.last_mut().filter(|_| continues_previous_frame(at)) {
+                Some(last) if flows => *last += value,
+                Some(last) => *last = value,
+                None => values.push(value),
+            }
+        }
+        Some(values)
+    };
+    let work = per_frame("work_ms", true).unwrap_or_default();
     let mean = |values: &[f64]| if values.is_empty() { 0.0 } else { values.iter().sum::<f64>() / values.len() as f64 };
-    // (null in a run a kind slowed: not the run's own)
-    let host: Option<Vec<f64>> = column("host_ms").and_then(|index| rows.iter().map(|row| row[index].as_f64()).collect());
+    // (no host time in a run a kind slowed: not the run's own)
+    let host = per_frame("host_ms", true).map(|host| mean(&host));
     let max = work.iter().copied().fold(0.0, f64::max);
-    Some((mean(&work), max, host.map(|host| mean(&host)), values("heap_bytes").last().copied().unwrap_or(0.0)))
+    let heap_at_end = per_frame("heap_bytes", false).and_then(|heap| heap.last().copied()).unwrap_or(0.0);
+    Some((mean(&work), max, host, heap_at_end))
 }
 
 /// Compares two profiles; the text (printed by the command) and the JSON

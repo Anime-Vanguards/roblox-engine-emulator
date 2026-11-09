@@ -319,6 +319,15 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     the VM collects them), connections and the threads made. A kind that slows the run (stepping, the
     allocation and heap hooks, host time, the boundary) leaves the frame's host time and cycles out: `cpu` takes
     them in a pass of its own.
+    A phase mark inside a frame closes the row so far; its parts share the frame number and add up to one frame.
+    With work, `game_ms` and `harness_ms` split each row's code work. `timeline.function_stats` stores
+    `[function id, total work us, frames active, largest frame us, frame number]` over the reported phases.
+    `timeline.node_frames` stores `[row index, node id, work us, ...]` only on whole frames reaching half the
+    recorded budget. `site_frames` keeps those frames' net site savings and `replacement_frames` their shared
+    prototype replacement work. Small events keep their summaries. For prototypes whose advised fix adds cold code,
+    `function_contexts` stores compact inclusive activity ranges
+    `[function id, node id, first frame, last frame, ...]`. A combined fix pays cold work only on the callers' frames
+    left running. No per-frame work history is stored for these ranges. The report page omits frame evidence.
   - `cpu`: from the run's start (its VM's) to the profile's end: the run thread's CPU time (its cycles at the
     timestamp counter's rate) by phase and by frame, the process's CPU time and page faults, the working set
     and private bytes at the run's start and their growth, the most working set a frame's end saw. Nothing is
@@ -995,15 +1004,92 @@ border in the accent.
   a colour a variant or phase, in the data-viz palette's fixed order; an issue's severity as an icon and a word.
   24-bit colour where the terminal shows it, else each colour's nearest of the 256 every terminal has
   (`REE_VIEW_COLOR=truecolor|256` decides). Screenshots are always 24-bit.
-- **Issues** come from measured patterns only, each with its numbers and a link (enter) to the view and line that show
-  it: `table.sort` about once a frame or more in the steady state (the last phase holding most of the frames); a site
-  that allocates through the steady state, or in bursts (more a frame on average than some frames allocate in all);
-  tables regrown (table storage allocated past their first); collector and frame spikes; connections, instances or
-  threads that keep growing; the reachable heap growing; an inline cache that misses; a property read again in the
-  same frame, and writes that change nothing (the boundary profile's, `--profile boundary`); in a comparison, cost that
-  grows faster than n and a variant whose result differs. The issues cover the game's code: what the harness's own code
-  sorts, allocates, misses or reads again is left out (unless the run's code is all the harness's), and a frame spike
-  says how much of the harness's work the frames hold. What the profile's kinds cannot show is listed as not checked.
+- **Issues** come from measured patterns only. Each issue shows its numbers, its price, advice, and a link (enter) to the
+  view and line that show it.
+
+  *Price.* Every issue names a set of call-tree nodes or charged sites. Its standalone price is what removing the
+  advised work saves, minus the replacement's cost, divided by the reported phases' frames. It is always a mean rate,
+  including an event seen once: "19 ms once in this run: 31.7 us a frame over 600 frames". Spreading work between
+  frames saves no work. The words steady, recurring and once say how often a function worked. They describe an
+  issue and never change its price.
+
+  *Precision.* A price is exact, an estimate or a bound, and the issue says which.
+  - **Exact:** the work the clock charged at identified sites, less a known replacement's cost. Only exact prices are
+    clock savings.
+  - **Estimate:** work the clock did not charge (`extra_work_us`), shown with the calibration's low and high spread. An
+    estimate never enters the charged totals or the strongest-saving claim.
+  - **At most:** when the setup instructions of a source rewrite are unknown, the saving is somewhere between zero and
+    the price, which is then an upper bound.
+  - **Part:** a removal's recorded subtotal (a sort, a repeat read, an unchanged write) leaves out instructions the edit
+    also changes. Every advised source edit uses the whole scoped code work as the complete edit's upper bound by
+    default, including the caller's instructions and argument evaluation in other functions.
+
+  None of these claims to be the complete saving of a source edit.
+
+  *Floor and the closing row.* A fix is listed when its mean saving reaches the absolute floor, 41.7 us a frame
+  (0.25% of a 60 fps frame), or its own largest frame reaches 2.5% of the recorded frame budget. The cutoff only
+  decides what is shown. One closing row holds every millisecond outside the listed fixes' union.
+
+  *Overlap.* Each issue keeps its standalone saving. Totals intersect the actual node and site sets, so a declined
+  builtin inside a comparator overlaps removing the sort, while the comparator's work outside the sort stays separate.
+  `counted_ms` is the additional union work each row covers. Every function whose work the fix saves is named. A frame
+  hitch names its contributors and shares, and books no work itself.
+
+  *Severity.* An issue is as severe as the worse of its own mean price and its own work in frames over budget. The budget
+  is `1000 / fps` ms from the profile. A mean price of a tenth of the budget is critical, a fortieth serious, a
+  two-hundredth warning. A hitch contribution over budget is warning, over by a quarter of the budget serious, over
+  by a whole budget critical. Another function's hitch cannot promote a small contributor. Rank by severity, then mean
+  price. "Nothing elsewhere can save as much" belongs only to the largest exact saving across all candidates, including
+  those below the display floor. Another issue's upper bound counts against it, and an at-most price never gets it.
+
+  *Caches and builtins.* A cache fix keeps paying `first_touch_us`. Its charged saving is `outcome_charged_us`, less
+  `presized_us` for rehash outcomes. Presizing advice retains the writes; the price removes the rehash work.
+  Profiles without that breakdown say **not priced: needs a newer profile**.
+  `extra_work_us` is uncharged work beyond the measured clock; `luau_caches.prices.kinds` identifies charged outcomes.
+  Each calibration outcome also carries `low_ns` and `high_ns`. They are the spread of the estimate, not clock charges.
+  Outcomes within noise are shown and never summed.
+
+  A builtin fix saves its site's `decline_charged_us`, less the fast path's cost for those same calls
+  (`fast_equivalent_us`) and less the added instructions of the advised rewrite. For `math.abs` given a numeric string,
+  pass an existing numeric value directly: that price includes no added conversion.
+
+  For `string.sub`, `string.byte`, `table.insert` and `table.unpack` the rewrite adds code, and its cost is counted
+  from the opcodes alone. `fix_instructions_us` and `fix_cold_us` are then nominal costs, not the cost of the rewritten
+  source. Only two rewrites keep a site-only bound, because they keep every original operand: `string.byte(s)` to
+  `string.byte(s, 1)` and `string.sub(s, i)` to `string.sub(s, i, #s)`, each with no other advised reason to fix. Every
+  other builtin rewrite and every cache edit states its site part separately and bounds the complete edit by the whole
+  scoped code work.
+
+  An early `unsafe_env` rejection hides the checks after it. The advice is therefore the combination of a safe
+  environment and the types, values, argument count and result count the fast path accepts. Removing the environment
+  access alone is not priced as reaching the fast path. The cache lookups in a declined call's fallback are the same
+  work as the decline that contains them, so both issues name that work in the same way and the totals count it once.
+
+  The cold code a fix adds is the prototype's added code words times its active frames, taken as the union across
+  callers and newly created closures. When the site part of an edit with a whole-code bound is zero or negative, the
+  issue says the recorded site part saves nothing on this clock and keeps the bound, since the complete edit may still
+  save work outside the site. Only the two operand-preserving rewrites can say the complete fix saves nothing on this
+  clock.
+  Sites keep their exact context amounts under `nodes`. Without the replacement's cost or the exact call context, an
+  issue is not priced. A sort's whole subtree is priced only with the advice to remove those calls when ordering is
+  unnecessary. Older profiles still open and say what pricing evidence they lack.
+
+  `timeline.issue_stats` holds each issue's active frames, its peak and its largest own work in an over-budget frame,
+  written from every frame. Listing and severity therefore do not depend on which frames the timeline kept. Priced site
+  tables are not capped.
+
+  *What is checked.* Functions and their top lines, sorts every frame (a comparator's runs included; a sort with no
+  comparator needs the C call rows), cache misses (absent and inserted outcomes too), builtin declines, a property read
+  again in a frame and writes that change nothing (priced at what keeping the value saves: the first read of a frame
+  keeps its cold charge, and repeats in the same call and in later calls are both priced), allocation and table growth,
+  collector spikes, a heap that keeps growing, connections, instances or threads that keep growing, and, in a
+  comparison, cost that grows faster than n and a variant whose result differs. An issue the profile cannot price says
+  why (**not priced: ...**) and ranks after the priced ones; its severity is its own check's measure (bytes, counts,
+  steps). A check that cannot run on the profile (a kind missing, too few frames) is listed as not checked, with why.
+  The issues cover the game's code: what the harness's own code does is left out unless the run's code is all the
+  harness's. A price in ns (`work.prices`, boundary.json's costs) is a desktop one: the viewer multiplies it by the
+  run's `work.units.scale`, as the profile's own ms already are. A run of `ree profile try` is not read frame by frame:
+  its variant runs once, in one frame.
 - `ree profile render <dir> [<dir2>] --out <file|dir|-> [--view <name>|all|<a,b>] [--metric <m>] [--select
   <function|file:line>] [--keys "<keys>"] [--size <cols>x<rows>] [--theme dark|light] [--scale <n>] [--format
   png|svg|txt]` draws exactly what the terminal shows at that size (default 160x48), the same on every machine:

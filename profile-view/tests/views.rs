@@ -215,7 +215,7 @@ fn render_writes_a_file_a_view_and_prints_each() {
     }
     assert!(!out.join("diff.png").exists(), "one profile has no diff");
     // one view to text and to SVG, by the file's extension
-    for (file, check) in [("issues.txt", "Sorted every frame"), ("flame.svg", "<svg ")] {
+    for (file, check) in [("issues.txt", "Sort calls"), ("flame.svg", "<svg ")] {
         let path = temp.path().join(file);
         let view = file.split('.').next().unwrap();
         let args: Vec<String> = [dir.to_str().unwrap(), "--view", view, "--out", path.to_str().unwrap()].iter().map(|s| s.to_string()).collect();
@@ -332,4 +332,260 @@ fn what_the_scripts_asked_the_engine_to_do_reads_by_phase() {
     let mut older = open(&[&before]);
     assert!(older.profile().engine_ops(&older.profile().scope()).is_none());
     assert!(!screen(&mut older, "", COLS, ROWS).contains("◇ engine"));
+}
+
+/// A profile's JSON changed by `edit`, in a folder of its own
+fn edited(temp: &Temp, name: &str, shape: Shape, edit: impl FnOnce(&mut serde_json::Value)) -> std::path::PathBuf {
+    let dir = write_profile(&temp.path().join(name), shape);
+    let path = dir.join("profile.json");
+    let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    edit(&mut json);
+    std::fs::write(&path, json.to_string()).unwrap();
+    dir
+}
+
+#[test]
+fn the_header_marks_only_a_failure_and_says_what_was_not_measured() {
+    let temp = Temp::new("header");
+    // a harness still waiting when the run ends (`yielded`) is a run's usual end: no ✗
+    for (status, mark) in [("ok", "✓ run ok"), ("yielded", "○ run yielded"), ("error", "✗ run error")] {
+        let dir = edited(&temp, status, Shape::BEFORE, |json| json["run"]["status"] = serde_json::json!(status));
+        let text = screen(&mut open(&[&dir]), "", COLS, ROWS);
+        assert!(text.lines().next().unwrap().contains(mark), "{status}: {}", text.lines().next().unwrap());
+    }
+    // without the work kind: the frames' work clock where the timeline has it, else not measured, never 0 ms
+    let no_work = |json: &mut serde_json::Value| {
+        let object = json.as_object_mut().unwrap();
+        for key in ["work", "tree", "luau_caches", "alloc"] {
+            object.remove(key);
+        }
+        json["kinds"] = serde_json::json!(["timeline"]);
+    };
+    let dir = edited(&temp, "timeline", Shape::BEFORE, no_work);
+    let header = screen(&mut open(&[&dir]), "", COLS, ROWS).lines().next().unwrap().to_string();
+    assert!(header.contains("Studio work") && header.contains("in frames") && !header.contains(" 0 ms"), "{header}");
+    let dir = edited(&temp, "nothing", Shape::BEFORE, |json| {
+        no_work(json);
+        json.as_object_mut().unwrap().remove("timeline");
+    });
+    let header = screen(&mut open(&[&dir]), "", COLS, ROWS).lines().next().unwrap().to_string();
+    assert!(header.contains("Studio work not measured"), "{header}");
+}
+
+#[test]
+fn a_stepping_profile_shows_no_host_time_a_frame() {
+    // the VM stepped (work): its host time a frame is the slowed interpreter's, so the Timeline leaves it out and says so
+    let temp = Temp::new("host");
+    let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
+    let app = open(&[&dir]);
+    let series = ree_profile_view::ui::timeline::series(app.profile());
+    assert!(!series.iter().any(|s| s == "host_ms" || s == "cycles" || s == "part"), "{series:?}");
+    let mut app = open(&[&dir]);
+    let text = screen(&mut app, "7", COLS, ROWS);
+    assert!(text.contains("host time not shown: stepping slows the interpreter"), "{text}");
+    // a timeline of its own keeps it
+    let dir = edited(&temp, "plain", Shape::BEFORE, |json| json["kinds"] = serde_json::json!(["timeline"]));
+    let app = open(&[&dir]);
+    assert!(ree_profile_view::ui::timeline::series(app.profile()).iter().any(|s| s == "host_ms"));
+}
+
+/// The harness fixture with each timeline row's work split by side, as a stepping profile's timeline has it: the game's
+/// code 0.06 ms a frame in the steady phase (0.6 at frame 60) and the harness's 0.04 ms
+fn sided_timeline(json: &mut serde_json::Value) {
+    json["timeline"]["columns"].as_array_mut().unwrap().extend([serde_json::json!("part"), serde_json::json!("game_ms"), serde_json::json!("harness_ms")]);
+    for row in json["timeline"]["rows"].as_array_mut().unwrap() {
+        let frame = row[0].as_f64().unwrap();
+        let game = if frame == 60.0 { 0.6 } else { 0.06 };
+        row.as_array_mut().unwrap().extend([serde_json::json!(0), serde_json::json!(game), serde_json::json!(0.04)]);
+    }
+}
+
+#[test]
+fn a_frames_figures_are_the_games_code_when_the_harness_is_apart() {
+    let temp = Temp::new("frames");
+    let dir = edited(&temp, "run", Shape::HARNESS, sided_timeline);
+    let mut app = open(&[&dir]);
+    let text = screen(&mut app, "", 160, ROWS);
+    // the steady phase's 100 frames: 99 at 0.06 ms and one at 0.6 ms, a mean of 0.0654 ms
+    assert!(text.contains("game code/frame"), "{text}");
+    assert!(text.contains("65.4 µs") && text.contains("max 0.600 ms"), "{text}");
+    assert!(text.contains("The game's code a frame"), "the chart is the game's code a frame: {text}");
+    // the Timeline opens on the same series
+    assert_eq!(ree_profile_view::ui::timeline::current(&app).as_deref(), Some("game_ms"));
+}
+
+#[test]
+fn both_sides_hottest_functions_share_one_heat_scale() {
+    // the harness's scan (2.5 ms) against the game's comparator (4.0 ms): heat and bars are shares of both sides'
+    // 14.63 ms, so the harness's top row is not drawn as its side's whole
+    use ree_profile_view::ui::overview::sides;
+    let temp = Temp::new("heat");
+    let dir = write_profile(&temp.path().join("run"), Shape::HARNESS);
+    let mut app = open(&[&dir]);
+    let got = sides(&app);
+    let theme = app.theme.clone();
+    let text = screen(&mut app, "", COLS, ROWS);
+    assert!(text.contains("both sides"), "{text}");
+    // (the colours: the harness's top row at its share of both sides, not of its own side)
+    let whole = got.lead.total + got.harness.total;
+    assert_ne!(theme.heat_of(2.5 / whole), theme.heat_of(2.5 / got.harness.total), "the two scales differ for this fixture");
+}
+
+#[test]
+fn a_function_c_calls_says_its_calls_are_counted_once_a_c_call() {
+    // the comparator (Main:22) is called by sort [C]: 100 sorts read as 50,100 calls in the fixture's call tree, which a
+    // profile without invocation counts cannot tell from runs
+    let temp = Temp::new("from-c");
+    let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
+    let mut app = open(&[&dir]);
+    let text = screen(&mut app, "3 /anonymous", 200, ROWS);
+    assert!(text.contains("calls, counted once a C call (needs invocation counts)"), "{text}");
+    let dir = edited(&temp, "counted", Shape::BEFORE, |json| json["work"]["c_invocations"] = serde_json::json!(true));
+    let mut app = open(&[&dir]);
+    let text = screen(&mut app, "3 /anonymous", 200, ROWS);
+    assert!(!text.contains("counted once a C call") && text.contains(" each"), "{text}");
+}
+
+#[test]
+fn lines_counted_per_phase_and_the_collectors_work_show_where_a_profile_has_them() {
+    // a newer ree counts lines per phase (lines[].phases) and prices the collector inside the work clock
+    // (work.collector_ms): the Calls view's hottest lines are then the reported phase's, and the Overview has the
+    // collector's card; a profile without them says its lines are the whole run's and shows no such card
+    let temp = Temp::new("newer");
+    let plain = write_profile(&temp.path().join("plain"), Shape::BEFORE);
+    let mut app = open(&[&plain]);
+    let text = screen(&mut app, "3 /layout", 200, ROWS);
+    assert!(text.contains("the whole run (lines are not counted per phase)"), "{text}");
+    assert!(!screen(&mut open(&[&plain]), "", 200, ROWS).contains("the collector"));
+    let dir = edited(&temp, "newer", Shape::BEFORE, |json| {
+        json["work"]["collector_ms"] = serde_json::json!(1.5);
+        for line in json["lines"].as_array_mut().unwrap() {
+            let work = line["work_ms"].as_f64().unwrap();
+            line["phases"] = serde_json::json!({"steady": {"work_ms": work * 0.75, "total_work_ms": work * 0.75, "insns": 1}});
+        }
+    });
+    let mut app = open(&[&dir]);
+    let text = screen(&mut app, "3 /layout", 200, ROWS);
+    assert!(text.contains("own Studio work · phase steady") && !text.contains("not counted per phase"), "{text}");
+    // layout's line 31: 1.7 ms over the run, 1.275 ms in the steady phase
+    assert!(text.contains("1.275 ms"), "{text}");
+    let text = screen(&mut open(&[&dir]), "", 200, ROWS);
+    assert!(text.contains("the collector") && text.contains("1.500 ms"), "{text}");
+}
+
+#[test]
+fn host_time_a_frame_shows_when_a_run_of_its_own_measured_it() {
+    // a newer ree takes a stepping profile's CPU figures in a pass of its own (`cpu.pass`) and fills the timeline's host
+    // time from it: then it is the run's and shown; where it writes null, it is not
+    let temp = Temp::new("cpu-pass");
+    let dir = edited(&temp, "pass", Shape::BEFORE, |json| json["cpu"] = serde_json::json!({"pass": "a run of its own"}));
+    let app = open(&[&dir]);
+    assert!(ree_profile_view::ui::timeline::series(app.profile()).iter().any(|s| s == "host_ms"));
+    let dir = edited(&temp, "null", Shape::BEFORE, |json| {
+        json["kinds"] = serde_json::json!(["timeline"]);
+        for row in json["timeline"]["rows"].as_array_mut().unwrap() {
+            row[3] = serde_json::Value::Null;
+        }
+    });
+    let app = open(&[&dir]);
+    assert!(!ree_profile_view::ui::timeline::series(app.profile()).iter().any(|s| s == "host_ms"));
+}
+
+#[test]
+fn a_timeline_profiles_header_never_reads_zero_work_from_its_empty_call_tree() {
+    // a real timeline profile keeps a call tree of one empty node and no work section
+    let temp = Temp::new("one-node-header");
+    let dir = edited(&temp, "run", Shape::BEFORE, |json| {
+        let object = json.as_object_mut().unwrap();
+        for key in ["work", "luau_caches", "alloc"] {
+            object.remove(key);
+        }
+        json["tree"] = serde_json::json!([[-1, -1, 0, 0.0, 0, "startup"]]);
+        json["kinds"] = serde_json::json!(["timeline"]);
+    });
+    let header = screen(&mut open(&[&dir]), "", COLS, ROWS).lines().next().unwrap().to_string();
+    assert!(header.contains("in frames") && !header.contains(" 0 ms"), "{header}");
+}
+
+#[test]
+fn every_not_checked_note_shows_in_the_issues_view() {
+    // a profile missing most kinds: each note is shown, wrapped, none dropped
+    let temp = Temp::new("notes");
+    let dir = edited(&temp, "run", Shape::HARNESS, |json| {
+        let object = json.as_object_mut().unwrap();
+        for key in ["work", "alloc", "timeline", "luau_caches"] {
+            object.remove(key);
+        }
+        json["tree"] = serde_json::json!([[-1, -1, 0, 0.0, 0, "startup"]]);
+    });
+    std::fs::remove_file(dir.join("boundary.json")).unwrap();
+    let mut app = open(&[&dir]);
+    let notes = app.issues().1.clone();
+    assert!(notes.len() >= 4, "{notes:?}");
+    let text = screen(&mut app, "9", COLS, 60);
+    let flat = text.replace('│', " ").split_whitespace().collect::<Vec<_>>().join(" ");
+    for note in &notes {
+        let start: String = note.split_whitespace().take(5).collect::<Vec<_>>().join(" ");
+        assert!(flat.contains(&start), "{start:?} missing:\n{text}");
+    }
+    assert!(text.contains(&format!("Not checked  {} ·", notes.len())), "{text}");
+}
+
+#[test]
+fn a_short_screen_shows_whole_not_checked_notes_and_counts_the_rest() {
+    // at 60 by 16 the panel holds a few lines: each note it shows is whole and wrapped inside the panel, and the count says
+    // how many are left, a note that did not fit among them, never half of one on screen
+    let temp = Temp::new("notes-short");
+    let dir = edited(&temp, "run", Shape::HARNESS, |json| {
+        let object = json.as_object_mut().unwrap();
+        for key in ["work", "alloc", "timeline", "luau_caches"] {
+            object.remove(key);
+        }
+        json["tree"] = serde_json::json!([[-1, -1, 0, 0.0, 0, "startup"]]);
+    });
+    std::fs::remove_file(dir.join("boundary.json")).unwrap();
+    let mut app = open(&[&dir]);
+    let notes = app.issues().1.clone();
+    let text = screen(&mut app, "9", 60, 16);
+    let lines: Vec<&str> = text.lines().collect();
+    let top = lines.iter().position(|line| line.contains("Not checked")).unwrap_or_else(|| panic!("{text}"));
+    let (mut shown, mut more): (Vec<String>, Option<usize>) = (Vec::new(), None);
+    for line in &lines[top + 1..] {
+        if line.starts_with('╰') {
+            break;
+        }
+        let inner = line.trim_start_matches('│').trim_end_matches('│').trim_end();
+        let inner = inner.strip_prefix(' ').unwrap_or(inner);
+        if let Some(rest) = inner.strip_prefix("○ ") {
+            shown.push(rest.trim().to_string());
+        } else if inner.starts_with("… and ") {
+            more = inner.split_whitespace().nth(2).and_then(|count| count.parse().ok());
+        } else if let Some(rest) = inner.strip_prefix("  ") {
+            let last = shown.last_mut().unwrap_or_else(|| panic!("{text}"));
+            last.push(' ');
+            last.push_str(rest.trim());
+        }
+    }
+    assert!(!shown.is_empty() && more.is_some(), "{text}");
+    for note in &shown {
+        assert!(notes.contains(note), "{note:?} is not a whole note:\n{text}");
+    }
+    assert_eq!(more, Some(notes.len() - shown.len()), "{text}");
+}
+
+#[test]
+fn a_small_screen_still_lists_the_first_issues() {
+    // at 60 by 16 and 80 by 20 the issues list keeps room for its first issues: the detail and the notes take what is left
+    let temp = Temp::new("issues-small");
+    let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
+    let mut app = open(&[&dir]);
+    let found = app.issues().0.len();
+    assert!(found >= 3, "{found}");
+    for (cols, rows) in [(60, 16), (80, 20)] {
+        let text = screen(&mut app, "9", cols, rows);
+        let lines: Vec<&str> = text.lines().collect();
+        let top = lines.iter().position(|line| line.contains("Issues")).unwrap_or_else(|| panic!("{text}"));
+        let listed = lines[top + 1..].iter().take_while(|line| !line.starts_with('╰')).filter(|line| ["info", "warning", "serious", "critical"].iter().any(|word| line.contains(word))).count();
+        assert!(listed >= found.min(3), "{cols}x{rows}: {listed} issues listed of {found}:\n{text}");
+    }
 }
