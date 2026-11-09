@@ -1277,12 +1277,11 @@ fn flush_deferred_upto(lua: &Lua, engine: &Rc<Engine>, processed: &mut usize, up
                 break;
             }
             if *processed >= state.sched.max_deferred_per_flush {
-                let now = state.sched.now;
-                state.output.add(
+                drop(state);
+                engine.output(
                     "error",
-                    "Scheduler: deferred queue exceeded its per-flush budget (runaway re-entrancy?)".into(),
+                    "Scheduler: deferred queue exceeded its per-flush budget (runaway re-entrancy?)",
                     None,
-                    now,
                 );
                 break;
             }

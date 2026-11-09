@@ -6383,6 +6383,60 @@ fn a_playing_clients_message_out_arrives_after_the_frames_heartbeat() {
     assert!(output.contains(&want.to_string()), "{output:?}");
 }
 
+#[test]
+fn log_history_is_ordered_bounded_and_returns_independent_tables() {
+    for server in [false, true] {
+        let (lua, engine) = start_with(Options { mode: "play".into(), run_context: if server { super::RunContext::Server } else { super::RunContext::Client }, ..Options::default() });
+        let before = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+        run(&lua, &engine, r#"
+            local Log = game:GetService("LogService")
+            assert(#Log:GetLogHistory() == 0)
+            print("first", 2)
+            warn("second")
+            Log:Info("third")
+            pcall(Log.Error, Log, "fourth")
+            task.spawn(error, "fifth")
+            local History = Log:GetLogHistory()
+            assert(#History == 5)
+            local Kinds = { "MessageOutput", "MessageWarning", "MessageInfo", "MessageError", "MessageError" }
+            for Index, Entry in History do
+                assert(Entry.messageType == Enum.MessageType[Kinds[Index]])
+                assert(type(Entry.timestamp) == "number" and Entry.timestamp > 1700000000)
+            end
+            assert(History[1].message == "first 2" and History[2].message == "second")
+            assert(History[3].message == "third" and History[4].message == "fourth")
+            assert(string.find(History[5].message, "fifth", 1, true))
+            History[1].message = "changed"
+            History[2] = nil
+            local Again = Log:GetLogHistory()
+            assert(Again ~= History and Again[1] ~= History[1])
+            assert(#Again == 5 and Again[1].message == "first 2")
+            _G.LogListener = Log.MessageOut:Connect(function(Message)
+                if Message == "outer" then warn("inner") end
+            end)
+            print("outer")
+        "#);
+        for _ in 0..2 {
+            scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        }
+        run(&lua, &engine, r#"
+            _G.LogListener:Disconnect()
+            local Last = game:GetService("LogService"):GetLogHistory()
+            assert(Last[#Last].message == "inner")
+        "#);
+        let after = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+        assert!(engine.state.borrow().log_history.iter().all(|entry| entry.timestamp >= before && entry.timestamp <= after));
+        for index in 0..super::LOG_HISTORY_CAP + 3 {
+            engine.output("info", index.to_string(), None);
+        }
+        run(&lua, &engine, r#"
+            local History = game:GetService("LogService"):GetLogHistory()
+            assert(#History == 10000)
+            assert(History[1].message == "3" and History[10000].message == "10002")
+        "#);
+    }
+}
+
 /// LogService's logging methods in a playing client (measured, Studio 0.744: tools/parity/probes/logservice_methods.luau): a
 /// line of the method's MessageType with its {key} placeholders filled ({{ and }} escapes, a missing key kept), which
 /// MessageOut gets after the frame's Heartbeat with a converted copy of the context as its third argument (every line gets

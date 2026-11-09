@@ -938,6 +938,12 @@ A print of exactly `@done` ends `ree run` / `ree record` at the end of that fram
 
 ## Output and LogService
 
+`LogService:GetLogHistory()` returns a fresh array of fresh entry tables, oldest first, with `message`,
+`messageType` (an Enum.MessageType item), and `timestamp` (wall-clock Unix seconds at output). It records print,
+warn, script errors and LogService logging methods immediately, including output inside MessageOut handlers.
+The emulator retains the newest 10,000 entries per engine; this is a documented emulator cap, not a measured
+Roblox limit. The entry shape and warning order are checked by parity probe `logservice`, section 9.
+
 Every line a run outputs has a kind: `print`, `info` (LogService:Info, and Log with MessageInfo), `warn` or
 `error`. LogService.MessageOut gets each line after the frame's Heartbeat handlers and the deferred work they
 leave, on a playing client and on a server alike, with three arguments: the text, its MessageType and a context

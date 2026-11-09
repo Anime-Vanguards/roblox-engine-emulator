@@ -280,6 +280,15 @@ pub struct LogLine {
     pub context: Option<Value>,
 }
 
+/// A bounded session history, independent of deferred MessageOut delivery and output spooling.
+pub const LOG_HISTORY_CAP: usize = 10_000;
+
+pub struct LogEntry {
+    pub kind: &'static str,
+    pub text: String,
+    pub timestamp: f64,
+}
+
 /// The side a run's scripts are on ([`Options::run_context`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RunContext {
@@ -394,6 +403,7 @@ pub struct State {
     pub signals: signal::Signals,
     pub sched: scheduler::Scheduler,
     pub output: output::Output,
+    pub log_history: std::collections::VecDeque<LogEntry>,
     pub project: project::ProjectState,
     /// Engine-wide instance signals by (instance, event) are in the dom; these are services'
     pub collection: services::CollectionState,
@@ -486,6 +496,7 @@ impl Engine {
                 signals: Default::default(),
                 sched,
                 output,
+                log_history: Default::default(),
                 project: Default::default(),
                 collection: Default::default(),
                 joints: Default::default(),
@@ -582,6 +593,17 @@ impl Engine {
         let mut state = self.state.borrow_mut();
         let now = state.sched.now;
         let message = message.into();
+        let text = match &trace {
+            Some(trace) if kind == "error" || kind == "warn" => client_error_text(&message, trace),
+            _ => message.clone(),
+        };
+        if matches!(kind, "print" | "info" | "warn" | "error") {
+            let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+            if state.log_history.len() == LOG_HISTORY_CAP {
+                state.log_history.pop_front();
+            }
+            state.log_history.push_back(LogEntry { kind, text: text.clone(), timestamp });
+        }
         let server = self.options.server();
         if server && kind == "error" {
             self.fire_script_error(&mut state, &message, trace.as_deref());
@@ -593,10 +615,6 @@ impl Engine {
             // an engine warning that carries the script's stack, has its stack lines in the text, on a client and on a server
             // alike (measured in a server's game script too: tools/parity/probes/logservice.luau and logservice_text.luau run
             // with run.mjs --server).
-            let text = match &trace {
-                Some(trace) if kind == "error" || kind == "warn" => client_error_text(&message, trace),
-                _ => message.clone(),
-            };
             state.sched.log_queue.push(LogLine { kind, text, context });
         }
         state.output.add(kind, message, trace, now);
