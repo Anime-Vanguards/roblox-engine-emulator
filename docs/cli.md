@@ -3,6 +3,32 @@
 `ree record`, `ree run` and `ree serve`: harnesses, options, outputs, the warm service and the environment.
 The [README](../README.md) has a first run; [engine.md](engine.md) is the contract behind it.
 
+`ree --version` prints the engine version.
+
+A [release install](building.md#release-binaries) runs the same offline harnesses as a source build. Name the harness
+and any roots, mounts, snapshots or animation directories it needs: it reads no checkout data or `.env` from the
+current folder or the executable's folder. Its project is the current folder, and its caches go to the per-user `ree`
+cache folder (`RUR_STATE_DIR`, else `RUR_CACHE_DIR`, moves it). `--repo <dir>` names input data only: it never selects
+host mode or puts caches in `<dir>/.cache`. Every job keeps the installed binary's standalone defaults for project,
+state and asset workers, and `--service`, services started by hand and `serve --warm` share them and one service key.
+`serve --state-dir <dir>` overrides state for that service, its engines and its workers.
+Environment paths, including `RUR_CLOCK` and `RUR_ENGINE_DUMP`, are resolved from the client's current folder before a
+standalone service starts; its key and launch use those same paths.
+When no flag names the output, a run's profile goes in `<state dir>/ree-profile`, its boundary profile in
+`<state dir>/ree-boundary.json` and `profile try` in `<state dir>/what-if/<file name>`, and each command prints the path.
+`profile diff` and `profile report` also put their default files in `<state dir>/ree-profile`, even when their inputs
+are elsewhere. `profile diff --out <dir>` uses the named output directory.
+A path you name is used as given, and a recording's profile stays in the recording's output folder. A run that spools
+its script output to a file does so in `<state dir>/output` and deletes the file when it closes.
+
+`--version` and `--help` need no cache. A command that writes files resolves state first and fails
+with an error asking for `RUR_STATE_DIR` when neither an override nor a usable per-user cache exists, also with
+`--repo`. A binary in its own checkout and library hosts keep their existing defaults.
+
+A release archive holds ree as its only executable, so `profile view` and `profile render` report that they need the
+separate profile viewer from a source build. `profile report`, `profile diff`, `profile try` and profiling during a run
+work. Manifest bundles need `REE_ASSET_WORKER`; an installed ree does not look for a worker beside a checkout.
+
 ## Commands
 
 ```sh
@@ -105,7 +131,7 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   (src/launch.rs): `--roots "<dir>;<dir>"` (the project's Rojo roots; without them there is no project,
   only the harness and its mounts), `--project <dir>` (the project's folder) and `--place <name>`;
   `--mount Service/Name=<dir|file>` and `--instance Service/Name=<ClassName>` (repeatable),
-  `--snapshot-dir <dir>` / `--snapshot <Service.rbxm>` (Studio exports; the checkout's `data/place-content/<Place>/<parent path>/*.rbxm` replaces a hierarchy snapshot's name-and-class placeholders with the stored instances, no flag), `--run-context client|server`, `--player <name>`,
+  `--snapshot-dir <dir>` / `--snapshot <Service.rbxm>` (Studio exports; in a checkout, its `data/place-content/<Place>/<parent path>/*.rbxm` replaces a hierarchy snapshot's name-and-class placeholders with the stored instances, no flag), `--run-context client|server`, `--player <name>`,
   `--place-id <n>`, `--streaming <radius>` (the place streams: Workspace.StreamingEnabled and its
   StreamingTargetRadius, as rur.json's `streamingTargetRadius` sets them per root), `--viewport WxH`,
   `--offline`, `--verbose`. Content naming a local file (`file://<path>`, or a path such as
@@ -371,7 +397,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
     and the CPU's counters are read in runs of their own (`cpu` takes its own pass). The cpu pass is the command run a
     second time, so `all` takes longer in wall time than its kinds without `cpu` (about 1.3 times on a recording): the price
     of CPU figures a slowed run cannot give.
-- A profile writes, in `--profile-out` (default `<out>/profile` for `record`, `ree-profile` for `run`):
+- A profile writes, in `--profile-out` (default `<out>/profile` for `record`, `<state dir>/ree-profile` for a standalone
+  `run`, `ree-profile` in the current folder for a host or checkout build):
   `summary.txt` (also printed on stderr), `profile.json` (everything), folded stacks for flame graph tools
   (`work.folded` in microseconds, `instructions.folded`, `time.folded`, `alloc.folded` and
   `alloc.counts.folded`, `heap.folded`, `counters.<counter>.folded`), `profile.speedscope.json`
@@ -809,7 +836,8 @@ reused, ways to iterate, Vector3 or numbers) and what they show.
   of such runs read `--profile hw` alone (a new order each round; the first round's profiles in `runs/<variant>/<n>/hw/`),
   and each counter's figure is the median of its rounds. One more engine runs every variant at every size for the
   check. The profiled runs take `--jobs` (default 4) processes at a time; the timed ones run one at a time.
-- **Options**: `--out <dir>` (default `what-if/<file name>` here; a folder holding anything a comparison does not write
+- **Options**: `--out <dir>` (default `<state dir>/what-if/<file name>` for a standalone binary, `what-if/<file name>` here
+  for a host or checkout build; a folder holding anything a comparison does not write
   is refused), `--sizes a,b`, `--variants a,b` (some of them, the first the baseline), `--frames <n>`, `--rounds <n>`,
   `--time-ms <ms>`, `--jobs <n>`, `--no-time`, `--no-hw`, `--no-check`, `--keep-timed` (keep the timed runs' profile
   folders in `timed/`), `--script-timeout <s>`, and engine options. Exit 0 when every run finished and every check held,
@@ -1110,7 +1138,7 @@ Environment (the variables keep the names they had in rur, whose tools set them;
 `REE_PROFILE_COUNTERS` are the profile's, above, and `REE_HW_COUNTERS` its counters' source; the guards' `REE_SCRIPT_TIMEOUT`,
 `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS` and `REE_PARENT_WATCH` are above; docs/engine.md "Environment"
 lists them all): `RUR_STATE_DIR`
-(caches; default `.cache`), `RUR_VERBOSE=1` (script output on stderr), `RUR_ENGINE_TIMINGS=1` (mount
+(caches; default the checkout's `.cache`, or the standalone per-user `ree` cache), `RUR_VERBOSE=1` (script output on stderr), `RUR_ENGINE_TIMINGS=1` (mount
 phases), `RUR_ENGINE_DUMP=<file>` (every instance after the mount), `RUR_EPOCH` (the wall clock's start),
 `RUR_CLOCK` (a recorded Studio clock), `RUR_CAMERA`, `RUR_PLACE_ID`, `RUR_PLAYER`, `RUR_PLAYER_ID`,
 `RUR_PLAYER_DISPLAY`, `RUR_ROTATION_CLIPPING`, `RUR_PROFILE_CALLBACKS`, `RUR_LUAU_PROFILE=<file>` (the

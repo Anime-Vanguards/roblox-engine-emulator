@@ -156,6 +156,8 @@ fn numbers(key: &str, text: &str) -> Result<Vec<f64>, String> {
 /// `ree profile try`'s command line
 pub fn parse(args: &[String]) -> Result<Options, String> {
     let args = crate::launch::split_equals(args);
+    // A comparison writes its harness and contexts before starting an engine, even with an explicit --out.
+    crate::require_standalone_state(&crate::default_repo())?;
     let mut engine = crate::launch::Args::default();
     let mut file: Option<String> = None;
     let mut out: Option<String> = None;
@@ -224,7 +226,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         return Err(format!("{file}: no such file"));
     }
     let stem = options.file.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_else(|| "variants".into());
-    let out = out.map(PathBuf::from).unwrap_or_else(|| Path::new("what-if").join(&stem));
+    let out = out.map(PathBuf::from).unwrap_or_else(|| crate::default_output_path(Path::new("what-if").join(&stem)));
     options.out = std::path::absolute(&out).map_err(|error| format!("{}: {error}", out.display()))?;
     // without a project (no roots, project, place or mount), the runs have none: a folder of the harness's own stops the
     // implicit project a checkout may have
@@ -884,6 +886,11 @@ fn ratio_text(ratio: Option<f64>) -> String {
 /// `ree profile try ...`: the exit code (0: every run finished and every check held; 1: a run failed or a check did not
 /// hold, compare.json still written; 2: the command line)
 pub fn cli(args: &[String]) -> i32 {
+    // checked here as well as in `parse`: a missing cache is an exit 1 without the usage text, as for a run
+    if let Err(error) = crate::require_standalone_state(&crate::default_repo()) {
+        eprintln!("ree profile try: {error}");
+        return 1;
+    }
     let options = match parse(args) {
         Ok(options) => options,
         Err(error) => {

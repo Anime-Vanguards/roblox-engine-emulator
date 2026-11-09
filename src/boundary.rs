@@ -75,7 +75,7 @@ pub const NO_MEMBER: u32 = u32::MAX;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Where the JSON report goes (`--profile-out`; default `ree-boundary.json` in the working directory)
+    /// Where the JSON report goes (`--profile-out`; default `ree-boundary.json` in state for standalone runs, else here)
     pub out: PathBuf,
     /// How many rows the printed report shows per table
     pub top: usize,
@@ -92,7 +92,7 @@ pub fn parse(args: &[String]) -> Option<Config> {
     if !flag && env.is_none() {
         return None;
     }
-    let out = value("--profile-out").map(PathBuf::from).or_else(|| env.map(PathBuf::from)).unwrap_or_else(|| PathBuf::from("ree-boundary.json"));
+    let out = value("--profile-out").map(PathBuf::from).or_else(|| env.map(PathBuf::from)).unwrap_or_else(|| crate::default_output_path("ree-boundary.json"));
     Some(Config { out, top: value("--profile-top").and_then(|top| top.parse().ok()).unwrap_or(30), phase: value("--profile-phase") })
 }
 
@@ -1065,8 +1065,12 @@ pub fn finish() -> Option<String> {
             // (the profiling suite's boundary.json goes in the profile's folder, which the suite makes only after this, as
             // it writes the rest: a new folder lost the file)
             let folder = recorder.config.out.parent().filter(|folder| !folder.as_os_str().is_empty());
-            if let Err(error) = folder.map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&recorder.config.out, json)) {
-                eprintln!("Writing boundary profile {}: {error}", recorder.config.out.display());
+            let written = folder.map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&recorder.config.out, json));
+            match written {
+                Err(error) => eprintln!("Writing boundary profile {}: {error}", recorder.config.out.display()),
+                // a standalone run's default file is in state, a folder the user never named, so say where it went
+                Ok(()) if crate::is_standalone_binary() => eprintln!("boundary profile: {}", recorder.config.out.display()),
+                Ok(()) => {}
             }
         }
         Err(error) => eprintln!("Encoding boundary profile: {error}"),

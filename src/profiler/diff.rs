@@ -626,6 +626,11 @@ pub fn cli(args: &[String]) -> i32 {
         eprintln!("usage: ree profile diff <before dir> <after dir> [--out <dir>] [--top <n>]");
         return 2;
     };
+    // a standalone binary resolves its state before it reads or writes anything, so a missing cache stops the command
+    if let Err(error) = crate::require_standalone_state(&crate::default_repo()) {
+        eprintln!("ree profile diff: {error}");
+        return 2;
+    }
     let top = value("--top").and_then(|top| top.parse().ok()).unwrap_or(20);
     let (before, after) = match (load(Path::new(before_dir)), load(Path::new(after_dir))) {
         (Ok(before), Ok(after)) => (before, after),
@@ -634,10 +639,7 @@ pub fn cli(args: &[String]) -> i32 {
             return 1;
         }
     };
-    let out = value("--out").map(PathBuf::from).unwrap_or_else(|| {
-        let after = Path::new(after_dir);
-        if after.is_file() { after.parent().map(Path::to_path_buf).unwrap_or_default() } else { after.to_path_buf() }
-    });
+    let out = value("--out").map(PathBuf::from).unwrap_or_else(|| default_diff_out(after_dir));
     let (text, written) = write(&before, &after, top, &out);
     print!("{text}");
     match written {
@@ -650,6 +652,16 @@ pub fn cli(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// Where `profile diff` writes when `--out` names no folder: under state for a standalone binary, which must not write
+/// into whatever folder it was started in, else beside the after profile as hosts always had it
+fn default_diff_out(after_dir: &str) -> PathBuf {
+    if crate::is_standalone_binary() {
+        return crate::default_output_path("ree-profile");
+    }
+    let after = Path::new(after_dir);
+    if after.is_file() { after.parent().map(Path::to_path_buf).unwrap_or_default() } else { after.to_path_buf() }
 }
 
 /// Two profiles compared ([`compare`]) into `out`: diff.txt, diff.json and diff.html; the text, and whether the files were
@@ -678,6 +690,11 @@ pub fn report_cli(args: &[String]) -> i32 {
         eprintln!("usage: ree profile report <profile dir>");
         return 2;
     };
+    // as in `profile diff`: the page needs state, even though the profile it reads may be anywhere
+    if let Err(error) = crate::require_standalone_state(&crate::default_repo()) {
+        eprintln!("ree profile report: {error}");
+        return 2;
+    }
     let dir = Path::new(dir);
     let path = if dir.is_file() { dir.to_path_buf() } else { dir.join("profile.json") };
     let text = match std::fs::read_to_string(&path) {
@@ -694,13 +711,34 @@ pub fn report_cli(args: &[String]) -> i32 {
             return 1;
         }
     };
-    let page = path.with_file_name("report.html");
+    let page = match report_page(&path) {
+        Ok(page) => page,
+        Err(error) => {
+            eprintln!("ree profile report: {error}");
+            return 1;
+        }
+    };
     if let Err(error) = std::fs::write(&page, super::report::html(&text)) {
         eprintln!("ree profile report: {}: {error}", page.display());
         return 1;
     }
     print!("{}", json["summary"].as_str().unwrap_or_default());
+    // a standalone report is not beside its profile, so say where it went
+    if crate::is_standalone_binary() {
+        println!("\nreport in {}", page.display());
+    }
     0
+}
+
+/// Where `profile report` writes its page for the profile at `profile`: `report.html` in `<state>/ree-profile` for a
+/// standalone binary (the folder is created; an input never names an output folder), else beside the profile
+fn report_page(profile: &Path) -> Result<PathBuf, String> {
+    if !crate::is_standalone_binary() {
+        return Ok(profile.with_file_name("report.html"));
+    }
+    let out = crate::default_output_path("ree-profile");
+    std::fs::create_dir_all(&out).map_err(|error| format!("{}: {error}", out.display()))?;
+    Ok(out.join("report.html"))
 }
 
 /// The diff's page: its figures, functions, lines, caches and types as tables, a change bar on each row

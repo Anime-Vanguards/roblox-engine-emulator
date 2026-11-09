@@ -72,7 +72,9 @@ vendor/ patches/ tools/vendor.mjs   the patched Luau VM and Lune's datatypes
 
 - `cargo test --release`: the engine's unit tests (script-API tests in src/tests.rs, the scheduler,
   datatypes, the world, the recorder, model bundles, the Emulator) and the patched VM's
-  (tests/luau_vm.rs), plus the process guards (tests/process_guards.rs, which run the built `ree`).
+  (tests/luau_vm.rs), plus the process guards (tests/process_guards.rs, which run the built `ree`), the standalone
+  release and worker checks (tests/standalone.rs) and the host compatibility checks (tests/host_worker.rs, tests/host).
+  The standalone and host worker checks need Node.js ([Building](building.md#requirements)).
   Tests build their own scenes in temporary directories; none needs Roblox Studio, a game checkout, a
   GPU or the network.
 - `node tools/vendor.mjs --check`: vendor/ is exactly the pinned archives with patches/ applied (the VM's patches are a
@@ -223,6 +225,54 @@ executable) that answers one JSON request a line on its stdin with one JSON repl
   (the asset as uploaded, written to `out`)
 - a reply with `"error": "<text>"` is a failure; ree passes the worker nothing but the requests and
   `--offline`, and the worker handles any authentication the downloads need itself.
+
+A standalone binary resolves environment paths in the client before it starts a service or moves the worker's working
+folder. Every job stays standalone, including one with `--repo`: that flag names input data, never a host mode.
+
+- Each relative PATH entry is made absolute, because the worker runs in the state dir, where it would name another
+  folder. An empty entry names the client's current folder on Unix, as a Unix search reads it, so it becomes that
+  folder. Windows keeps empty entries as they are: its search skips them and never looks in the current folder.
+- On Windows, the client resolves a bare worker name once: its executable's folder, the system and Windows folders,
+  then PATH, with `.exe` added when the name has no dot. It forwards an absolute path or a lookup failure. A copied
+  service never searches beside its own executable, so a worker in its state folder cannot replace the client's choice.
+- On Unix, worker names without a directory stay bare. Rust's `Command` applies the platform's search and permission
+  rules (a file the caller cannot execute is skipped) with the absolute PATH; it never searches beside the executable.
+- A worker path with a directory is taken from the client's current folder.
+
+Services and direct workers receive the full client environment, including variables that only a custom worker reads.
+The standalone service key hashes that whole environment after normalization: known paths are resolved, Windows variable
+names are folded to uppercase, and RUR_STATE_DIR is the pinned state dir. Any change to the normalized environment
+selects a different service, including a change to RUR_CACHE_DIR when RUR_STATE_DIR decides the state dir. Values are
+never written to the service record.
+
+Ree resolves only the paths it knows, against the client's current folder: the PATH and NODE_PATH lists, per-user and
+temporary folders, state overrides, engine dump, recorded clock, profile outputs and the asset worker executable.
+NODE_PATH ignores empty entries on every platform. Every other value is passed unchanged, because ree cannot tell a path
+from other text; a relative path in one is read from the state dir, the same directly and through a service. No shell
+bookkeeping variables are removed. Hosts keep their existing environment and service keys.
+
+A standalone worker runs in the state dir, so it gets absolute project, manifest and output paths, also when
+`RUR_STATE_DIR` is relative. A relative `file` in an asset or bundle reply is read from that state dir. If an animation
+asset reply names the requested file through a link or another spelling of the same path, the animation loader sees
+that it is the same file (by file identity) and skips the copy. A bundle is imported from the output ree asked for,
+which is in the state dir. If the worker reports another file and did not write the requested one, ree copies the
+reported file there first, so the plan written when the bundle is converted stays in state.
+
+A standalone service started by hand resolves its environment paths before it moves into its state dir, and
+uses the same service key as an automatic one, so `--service` and `serve --warm` find it. Workers always receive the
+pinned state as RUR_STATE_DIR, so a flag-only service shares a key with a client setting that same RUR_STATE_DIR when
+the rest of their environment agrees. Every job and worker the service starts stays standalone and shares its state
+dir. The state dir is chosen once, at the first successful lookup, and kept: the service makes its environment paths
+absolute and moves into its state dir, and a later lookup must not pick another folder. A relative per-user folder variable (`LOCALAPPDATA`, `HOME`,
+`XDG_CACHE_HOME`, `APPDATA`, `USERPROFILE`) is ignored when the cache is chosen. Once the state dir is pinned, these
+folders and the temporary folders (`TMP`, `TEMP`, `TMPDIR`) are made absolute against the client's current folder
+before they reach a service or worker, because those run in the state dir, where a relative spelling would name another
+folder. A relative `XDG_CACHE_HOME`, for example, leaves the `HOME/.cache/ree` fallback on Linux, and a worker still
+sees `XDG_CACHE_HOME` resolved from the client's folder.
+
+A library host or a binary in a checkout keeps the worker lookup, arguments, working directory and spawn errors it had
+before standalone binaries. Its project and output paths, catalog cache keys and service environment key keep their
+original spelling, and the client neither resolves its worker nor passes it a lookup failure.
 
 Bundle files are kept in the state dir as `model-bundles/asset-<AssetId>-v<Version>.rbxm`, named by
 what they hold, so a file that exists is current and one file serves every project that pins that
@@ -1034,9 +1084,10 @@ measurements in a playing client.
 - A member a datatype does not have raises another message than Roblox's `<key> is not a valid member of
   <Type>` (some types quote the key), and reads nil on CFrame, Color3, UDim2, Vector2, Ray and the raycast
   and overlap params, where Roblox raises (tools/parity/known.json, probe camelcase).
-- The engine is developed and tested on Windows. Other systems build and run, but some fallbacks are
-  weak: off Windows a `ree serve` record of a dead process is not detected (`alive()` always answers
-  true), and memory is read from `/proc/meminfo` (Linux only).
+- The engine is developed and tested on Windows. The release workflow also builds and smoke-tests Linux and macOS
+  ([Building](building.md#platforms)). Some platform fallbacks are weak: off Windows a
+  `ree serve` record of a dead process is not detected (`alive()` always answers true), and memory is read from
+  `/proc/meminfo` (Linux only).
 
 ## Data files
 
@@ -1057,11 +1108,13 @@ measurements in a playing client.
 
 ## Environment
 
-None of these carry credentials; `ree serve` keys a service by an unkeyed 64-bit hash of the `RUR_*`,
-`REE_*` and `ROR_*` variables (and `LOCALAPPDATA`), never their values. The `RUR_*` names are kept from
-rur, whose tools set them.
+The settings below carry no credentials. `ree serve` records only an unkeyed 64-bit environment hash, never the
+values. A library host or checkout binary hashes the `RUR_*`, `REE_*` and `ROR_*` variables and `LOCALAPPDATA`; a
+standalone binary hashes the whole normalized worker environment, custom variables included ("Asset bundles"). The
+`RUR_*` names are kept from rur, whose tools set them.
 
-- `RUR_STATE_DIR` / `RUR_CACHE_DIR` (caches; default `<repo>/.cache`), `RUR_VERBOSE`,
+- `RUR_STATE_DIR` / `RUR_CACHE_DIR` (caches; default `<repo>/.cache` in a checkout, else the per-user `ree` cache
+  in [Building](building.md#release-binaries)), `RUR_VERBOSE`,
   `RUR_ENGINE_TIMINGS`, `RUR_ENGINE_DUMP`, `RUR_EPOCH`, `RUR_CLOCK`, `RUR_CAMERA`, `RUR_PLACE_ID`,
   `RUR_PLAYER`, `RUR_PLAYER_ID`, `RUR_PLAYER_DISPLAY`, `RUR_ROTATION_CLIPPING`, `RUR_PROFILE_CALLBACKS`,
   `RUR_LUAU_PROFILE`, `RUR_LUAU_PROFILE_CLOCK`, `RUR_LUAU_PROFILE_UNIT`, `RUR_LUAU_ALLOC_PROFILE`,
@@ -1072,3 +1125,36 @@ rur, whose tools set them.
   `REE_PROFILE_OUT`, `REE_PROFILE_COUNTERS`, `REE_HW_COUNTERS`, `REE_LUAU_FLAGS`, `REE_VIEW_COLOR` (the profile viewer's colours:
   `truecolor` or `256`), `REE_VIEW_BLESS` (its snapshot tests write their snapshots).
 - Others: `RAYON_NUM_THREADS`, `MIMALLOC_EAGER_COMMIT`, `MIMALLOC_PURGE_DELAY`.
+
+A library host and the `ree` binary get different defaults. A standalone executable is one with no ree checkout above
+it, such as a release install.
+
+- A library host keeps the defaults it was written against. `default_repo()` is the nearest folder above the executable
+  that holds a `Cargo.lock` (whatever the package), else `.`; `checkout_of(exe)` is that same lookup. `Options::default()`
+  and `Host::default()` use this repo, and `set_default_repo` replaces it (the first call counts).
+- The `ree` binary calls `init_binary(source, state)` at startup. `source` is the executable, or a service's starter.
+  A checkout needs a `Cargo.lock` beside a `Cargo.toml` whose `[package]` name is `roblox-engine-emulator`. Otherwise
+  the binary is standalone for its whole lifetime and the default repo is empty. `is_standalone(repo)` reports this
+  process-wide choice, regardless of the input repo. Library hosts never call `init_binary`.
+- In a standalone binary, `--repo <dir>` names input data only (project, places and data). It never switches mode,
+  chooses `<repo>/.cache`, changes worker handling or chooses another service key. The project is `--project`, else
+  the folder holding the first root, else the client's current folder, also for service jobs and warm-up. There are
+  no implicit project roots or snapshots; place content is read only from an explicitly named input repo.
+- Standalone state is `RUR_STATE_DIR`, else `RUR_CACHE_DIR`, else the per-user `ree` cache folder. An explicit
+  `serve --state-dir` takes priority for that service, its engines and its workers. A copied service inherits its
+  starter's standalone choice and state directory. `shared_state_path` never falls back to the input repo's `.cache`.
+- The per-user folder is resolved only when a command needs state. `--help` and `--version` work without it.
+  Runs, profile commands that write files, service clients and warm-up fail plainly when neither a state override
+  nor a usable per-user folder exists, also with `--repo`; the error asks for `RUR_STATE_DIR`.
+- Runs and profile commands resolve standalone state before they start a profiler or a child pass, so a missing cache stops
+  them with nothing written. Outputs that no flag named go in `<state>/ree-profile` (run profiles),
+  `<state>/ree-boundary.json` (boundary reports) and `<state>/what-if/<stem>` (comparisons), and the command prints each
+  path. `profile diff` and `profile report` also write default files in `<state>/ree-profile`; input paths never name
+  output folders. Named outputs are used as given, including `<recording out>/profile` and `profile diff --out`.
+  Output spools use `<state>/output`, with each file deleted on close.
+- A standalone service client makes `--frame-times` absolute against its own current folder, as it does the other input
+  paths, because the service runs elsewhere. Environment paths, including the recorded clock and engine dump, are
+  resolved there too, with the same values used for service keys and launches. Library hosts and checkout builds
+  forward their arguments and environment as before.
+- Hosts and binaries in their own checkout retain their original repo, project, state and worker defaults. In host
+  mode `state_dir(repo)` is `RUR_STATE_DIR`, else `RUR_CACHE_DIR`, else `<repo>/.cache`, even for an empty repo.

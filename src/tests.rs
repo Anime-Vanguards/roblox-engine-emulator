@@ -6816,6 +6816,7 @@ fn an_executable_belongs_to_the_nearest_checkout_above_it_wherever_it_runs() {
     let repo = root.join("ree");
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::write(repo.join("Cargo.lock"), "").unwrap();
+    std::fs::write(repo.join("Cargo.toml"), "[package]\nname = \"roblox-engine-emulator\"\n").unwrap();
     for exe in ["target/release/ree.exe", "target/release/deps/ree-0a1b.exe", ".cache/bin/ree-0.1.0-1-2.exe"] {
         assert_eq!(super::checkout_of(&repo.join(exe)), Some(repo.clone()), "{exe}");
     }
@@ -6826,6 +6827,112 @@ fn an_executable_belongs_to_the_nearest_checkout_above_it_wherever_it_runs() {
     // a service copy in a state dir outside any checkout has none: serve takes its starter's (--source)
     assert_eq!(super::checkout_of(&root.join("state/bin/ree-0.1.0-1-2.exe")), None);
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn checkout_of_still_finds_a_hosts_nearest_lockfile() {
+    let root = std::env::temp_dir().join(format!("ree-host-lockfile-test-{}", std::process::id()));
+    let host = root.join("host");
+    std::fs::create_dir_all(&host).unwrap();
+    std::fs::write(root.join("Cargo.lock"), "").unwrap();
+    std::fs::write(host.join("Cargo.lock"), "").unwrap();
+    let exe = host.join("target/release/host.exe");
+    assert_eq!(super::checkout_of(&exe), Some(host.clone()), "a host needs only its lockfile");
+    std::fs::write(host.join("Cargo.toml"), "[package]\nname = \"another-tool\"\n").unwrap();
+    assert_eq!(super::checkout_of(&exe), Some(host));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn an_unrelated_cargo_project_is_not_the_executables_checkout() {
+    let root = std::env::temp_dir().join(format!("ree-foreign-checkout-test-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let exe = root.join("bin/ree.exe");
+    let manifest = root.join("Cargo.toml");
+    std::fs::write(root.join("Cargo.lock"), "").unwrap();
+    assert_eq!(super::ree_checkout_of(&exe), None, "a lockfile without a manifest");
+    // a host that depends on ree names it under [dependencies], outside [package]
+    std::fs::write(&manifest, "[package]\nname = \"another-tool\"\n[dependencies]\nroblox-engine-emulator = \"0.1.0\"\n").unwrap();
+    assert_eq!(super::ree_checkout_of(&exe), None, "a host's manifest does not name this package");
+    // a literal string and a trailing comment still name the package
+    std::fs::write(&manifest, "[package]\nname = 'roblox-engine-emulator' # this package\n").unwrap();
+    assert_eq!(super::ree_checkout_of(&exe), Some(root.clone()));
+    // the search goes on past a lockfile that has no ree manifest beside it
+    let nested = root.join("target/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("Cargo.lock"), "").unwrap();
+    assert_eq!(super::ree_checkout_of(&nested.join("bin/ree.exe")), Some(root.clone()));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Standalone state uses the platform's per-user cache, unless the environment names one.
+#[test]
+fn standalone_caches_are_per_user() {
+    let root = std::env::temp_dir().join("ree-cache-defaults");
+    let path = |name: &str| root.join(name);
+    // a made-up environment: nothing here reads or creates the real per-user folders
+    let environment = [("LOCALAPPDATA", path("local")), ("HOME", path("home")), ("XDG_CACHE_HOME", path("xdg"))];
+    let var = |name: &str| environment.iter().find(|(key, _)| *key == name).map(|(_, value)| value.as_os_str().to_owned());
+    let with = |set: &'static str, value: &'static str| move |name: &str| if name == set { Some(path(value).into_os_string()) } else { var(name) };
+
+    // a standalone run: each platform's own cache folder
+    assert_eq!(super::standalone_state_dir("windows", var).unwrap(), path("local/ree"));
+    assert_eq!(super::standalone_state_dir("linux", var).unwrap(), path("xdg/ree"));
+    assert_eq!(super::standalone_state_dir("macos", var).unwrap(), path("home/Library/Caches/ree"));
+    // Linux falls back to ~/.cache when XDG_CACHE_HOME is unset or relative
+    let no_xdg = |name: &str| if name == "XDG_CACHE_HOME" { None } else { var(name) };
+    assert_eq!(super::standalone_state_dir("linux", no_xdg).unwrap(), path("home/.cache/ree"));
+    let relative_xdg = |name: &str| if name == "XDG_CACHE_HOME" { Some("relative".into()) } else { var(name) };
+    assert_eq!(super::standalone_state_dir("linux", relative_xdg).unwrap(), path("home/.cache/ree"));
+
+    // explicit overrides take priority over the per-user cache
+    for key in ["RUR_STATE_DIR", "RUR_CACHE_DIR"] {
+        assert_eq!(super::standalone_state_dir("linux", with(key, "override")).unwrap(), path("override"));
+    }
+    // RUR_STATE_DIR comes before RUR_CACHE_DIR
+    let both = |name: &str| match name {
+        "RUR_STATE_DIR" => Some(path("first").into_os_string()),
+        "RUR_CACHE_DIR" => Some(path("second").into_os_string()),
+        _ => var(name),
+    };
+    assert_eq!(super::standalone_state_dir("linux", both).unwrap(), path("first"));
+}
+
+#[test]
+fn standalone_state_stays_selected_after_environment_normalization() {
+    use crate::launch::resolve_path_variable;
+    use std::ffi::OsString;
+    use std::sync::OnceLock;
+    let root = std::path::absolute("cache-test").unwrap();
+    for os in ["windows", "linux", "macos"] {
+        // absolute HOME and LOCALAPPDATA, plus a relative XDG_CACHE_HOME that the cache lookup ignores
+        let client_environment = |name: &str| match name {
+            "LOCALAPPDATA" => Some(root.join("local").into_os_string()),
+            "HOME" => Some(root.join("home").into_os_string()),
+            "XDG_CACHE_HOME" => Some(OsString::from("relative")),
+            _ => None,
+        };
+        let expected = super::standalone_state_dir(os, client_environment).unwrap();
+
+        // the client's first lookup pins the state dir, before a service resolves its paths or changes folder
+        let state = OnceLock::new();
+        assert_eq!(super::resolve_standalone_state(&state, os, client_environment).unwrap(), expected);
+
+        // what a service or worker gets: the ignored relative folder is absolute now, so a fresh Linux lookup would pick it as the cache
+        let forwarded_environment = |name: &str| client_environment(name).and_then(resolve_path_variable);
+        assert_eq!(forwarded_environment("XDG_CACHE_HOME"), Some(std::path::absolute("relative").unwrap().into_os_string()));
+        assert_eq!(super::resolve_standalone_state(&state, os, forwarded_environment).unwrap(), expected, "{os}: forwarding paths must not change the pinned cache");
+
+        // a later job does not consult even a completely different environment
+        let changed_environment = |_: &str| Some(root.join("changed").into_os_string());
+        assert_eq!(super::resolve_standalone_state(&state, os, changed_environment).unwrap(), expected);
+
+        // with only relative folders there is no cache, so the lookup fails and pins nothing
+        let relative_environment = |name: &str| if matches!(name, "HOME" | "LOCALAPPDATA") { Some(OsString::from("relative")) } else { None };
+        let unpinned = OnceLock::new();
+        assert!(super::resolve_standalone_state(&unpinned, os, relative_environment).is_err(), "{os}: relative per-user folders stay unset");
+        assert!(unpinned.get().is_none());
+    }
 }
 
 /// The VM's work counts so far (a copy: the counters are plain numbers)

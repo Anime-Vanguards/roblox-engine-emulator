@@ -121,6 +121,11 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
     let started = std::time::Instant::now();
     let command = if record { "record" } else { "run" };
     let args = launch::split_equals(args);
+    // Profilers and their child passes write before launch::prepare resolves state, so a standalone run resolves it first.
+    if let Err(error) = crate::require_standalone_state(&host.repo) {
+        eprintln!("{} {command}: {error}", host.name);
+        return 1;
+    }
     if let Err(error) = guard_process(command, &args, started) {
         eprintln!("{} {command}: {error}", host.name);
         return 1;
@@ -209,12 +214,17 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
     }
 }
 
-/// A profile's directory when `--profile-out` names none: `<out>/profile` for a recording, `ree-profile` here for a run
+/// A profile's directory when `--profile-out` names none: `<out>/profile` for a recording, else `ree-profile` in state
+/// for a standalone run or in the current folder for a host.
 fn default_profile_dir(args: &[String], record: bool) -> PathBuf {
     let value = |key: &str| args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned();
-    match value("--out").or_else(|| value("--dir")).filter(|_| record) {
+    // A standalone recording takes its output folder the way `parse` does. A host keeps the order and aliases it always
+    // had here, which `parse` does not share.
+    let output_flags: &[&str] = if crate::is_standalone_binary() { &["--dir", "--out", "--dump-scene"] } else { &["--out", "--dir"] };
+    let recording_out = output_flags.iter().find_map(|flag| value(flag)).filter(|_| record);
+    match recording_out {
         Some(out) => PathBuf::from(out).join("profile"),
-        None => PathBuf::from("ree-profile"),
+        None => crate::default_output_path("ree-profile"),
     }
 }
 
