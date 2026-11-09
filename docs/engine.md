@@ -143,6 +143,9 @@ there).
   directory (a symlink or a Windows junction) mounts what it leads to, unless it leads back to a
   directory on the way down to it: that directory would hold itself without end, so the link is left
   out with a warning (place content's folders, below, are walked the same way).
+- **Module sources kept between runs** (a process that runs many engines, such as `ree serve`): a module's source and
+  bytecode are reused while the file's size and modification time are unchanged. Both are checked against the file
+  itself each time the module is read, never against the mount's listing, which can be older than an edit.
 - **Project settings**: `rur.json` at the project folder, keyed by the root folder's name (the first
   root with a value wins): `placeIds`, `modelAssets` (`mount`, `prefixes`), `clientGui`,
   `streamingTargetRadius`. The name is kept from rur, which wrote these files first.
