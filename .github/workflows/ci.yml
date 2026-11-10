@@ -150,6 +150,9 @@ jobs:
       - name: CI tool tests
         if: ${{ !cancelled() }}
         run: node --test tools/ci/test.mjs
+      - name: Luau release tracker tests
+        if: ${{ !cancelled() }}
+        run: node --test tools/luau-release.test.mjs
       # The two caches, as in the test job. This job reads the compile cache and never stores it.
       # From here on every step runs after a failed check too, so one failure does not hide the other, and the tests
       # then still build from the caches.
