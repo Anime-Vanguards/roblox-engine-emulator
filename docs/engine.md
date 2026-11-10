@@ -365,6 +365,19 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   since 0.701) are builtins (fast calls, a constant argument folded by the compiler) that take a number or a string Luau reads as one (`"1"`, `"inf"`,
   `"nan"`, `"1e400"`) and raise `invalid argument #1 to 'isnan' (number expected, got nil)` for anything
   else, as a playing client does (tools/parity/probes/math_classify.luau).
+  `buffer.readvectorf32x2` / `readvectorf32x3` and `buffer.writevectorf32x2` / `writevectorf32x3` (Roblox release 747;
+  no Luau release up to 0.746 has them, so they are a topic of the series, patches/luau/18-buffer-vector.patch) read
+  or write two or three contiguous little-endian float32s as a vector's first components, a read zeroing the rest.
+  They are builtins (one fast call, where three `readf32` and `vector.create` are four), and they follow the
+  functions' design, Luau RFC pull 198: each is the `readf32` / `writef32` calls it stands for, with the bounds of
+  the whole access checked before any byte moves, the offset taken as `readf32` takes it and
+  `buffer access out of bounds` past the end. Not measured in a client: release 747 lists them as pending and no
+  client had them when this was written. tools/parity/probes/buffer_vector_f32.luau runs the equivalent float32
+  calls in a client that lacks them, and every line they define matches but the subnormal ones (a client's vector
+  and a server's float32 reads and writes hold zero for a value below the smallest normal float32; the engine here
+  keeps it); the argument errors
+  (`invalid argument #3 to 'writevectorf32x3' (vector expected, got number)`, a bad value named before a bad
+  offset's bounds) follow `vector.magnitude` and `buffer.writef32` as measured in Studio 0.746.
 - **CFrame:FuzzyEq(other, eps = 1e-5)** (measured in a playing client, Studio 0.744: about 25,000 pairs at its
   thresholds; tools/parity/probes/cframe_fuzzyeq.luau): single precision, eps taken as a float and its size
   used. Position component by component: self's `a` and the other's `b` are equal, or `|a - b| <= |eps| *

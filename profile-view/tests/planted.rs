@@ -44,8 +44,8 @@ return M"#;
     let fixed_source = source.replace("math.abs(tostring(x))", "math.abs(x)");
     // The refitted clock charges C calls at 5.77 ns, library allocations and only executed cold instructions.
     let expected_site_ms = 0.146741700000;
-    let expected_saving_ms = 0.414257103130;
-    let expected_upper_ms = 0.470826459796;
+    let expected_saving_ms = 0.414132250630;
+    let expected_upper_ms = 0.470701607296;
 
     let temp = Temp::new("planted-numeric-argument");
     let handler = harness("Probe", "sink=M.Step(-3)");

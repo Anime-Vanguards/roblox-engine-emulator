@@ -5,6 +5,20 @@
 			"why": "Model:MoveTo itself: a client leaves a model outside the DataModel where it is (the exact name too); ree moves it"
 		}
 	],
+	"buffer_vector_f32": [
+		{
+			"line": "vector-f32-native false",
+			"why": "the capture's engine (Studio 0.744) has no buffer.readvectorf32x2/x3 or writevectorf32x2/x3 (release 747 lists them as pending): it ran the probe's float32 reference, ree runs the functions"
+		},
+		{
+			"line": "write-subnormal ok 0 000000000000008000000000 | ok 0100000000000000",
+			"why": "subnormal float32s: a client's vector holds zero for a component below the smallest normal float32 (its buffer.writef32 keeps one); ree's vectors keep them. A float mode of the engine, not of these functions"
+		},
+		{
+			"line": "arguments (the functions are not in this engine)",
+			"why": "the argument errors name the function and the vector type, which the float32 reference cannot say: printed only by an engine that has the functions (not checked against one)"
+		}
+	],
 	"buffer_vector_time": [
 		{
 			"line": "vector-format error invalid argument #2 to 'format' (string expected, got Vector3) ok 1, 2, 3 concat error @86: attempt to concatenate string with Vector3",
