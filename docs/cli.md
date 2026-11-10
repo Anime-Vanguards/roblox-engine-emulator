@@ -21,7 +21,8 @@ are elsewhere. `profile diff --out <dir>` uses the named output directory.
 A path you name is used as given, and a recording's profile stays in the recording's output folder. A run that spools
 its script output to a file does so in `<state dir>/output` and deletes the file when it closes.
 
-`--version` and `--help` need no cache. A command that writes files resolves state first and fails
+`--version` and `--help` need no cache, and `--help` or `-h` after `run` or `record` prints the same usage and exits 0.
+A command that writes files resolves state first and fails
 with an error asking for `RUR_STATE_DIR` when neither an override nor a usable per-user cache exists, also with
 `--repo`. A binary in its own checkout and library hosts keep their existing defaults.
 
