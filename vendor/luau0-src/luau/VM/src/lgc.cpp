@@ -1769,6 +1769,7 @@ static std::mutex coldlock;
 
 // coldon and coldslot sit in padding: the state's size (counted in totalbytes) is the stock one, whatever the release's layout
 #define LUAI_COLDALIGNUP(x, a) (((x) + (a) - 1) / (a) * (a))
+#if UINTPTR_MAX > 0xffffffffu
 static_assert(offsetof(global_State, coldon) == offsetof(global_State, gcdisabled) + 1 &&
                   offsetof(global_State, gray) == LUAI_COLDALIGNUP(offsetof(global_State, gcdisabled) + 1, alignof(GCObject*)),
     "coldon must sit in the padding before gray");
@@ -1779,6 +1780,7 @@ static_assert(offsetof(global_State, coldslot) == offsetof(global_State, gcsteps
 static_assert(offsetof(Proto, coldslot) == offsetof(Proto, execflags) + 2 &&
                   offsetof(Proto, lineinfo) == LUAI_COLDALIGNUP(offsetof(Proto, execflags) + 1, alignof(uint8_t*)),
     "Proto::coldslot must sit in the padding after execflags");
+#endif
 #undef LUAI_COLDALIGNUP
 
 static bool coldgrow(void** items, size_t* capacity, size_t itemsize)
