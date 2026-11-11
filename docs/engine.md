@@ -1136,7 +1136,7 @@ everything about CurveAnimations and their curves (below).
 ### Animation curves (`src/animation/curve.rs`, `curve_clip.rs`, `curves.rs`, `src/lua/curve_keys.rs`)
 
 Measured in Roblox Studio 0.747 with curves and clips built by script. `src/animation/curve_golden/` holds
-three scripts that run unchanged in Studio and here, with what Studio returned; `curve_tests.rs` holds the
+scripts that run unchanged in Studio and here, with what Studio returned; `curve_tests.rs` holds the
 poses, events and provider answers Studio gave for a small rig.
 
 - **Keys.** `FloatCurveKey.new(time, value, interpolation?)` and `RotationCurveKey.new(time, cframe,
@@ -1161,7 +1161,17 @@ poses, events and provider answers Studio gave for a small rig.
   does; keys go in with `InsertKey`.
 - **EulerRotationCurve** is `CFrame.fromEulerAngles(x, y, z, RotationOrder)` of its `X`, `Y`, `Z`
   FloatCurves; **Vector3Curve** the three values. `X()`, `Y()`, `Z()` return the channel and make it when
-  missing. **MarkerCurve** holds `{Time, Value}` markers. `Length` is the number of keys, read only.
+  missing. `Length` is the number of keys, read only.
+- **Channels** are remembered, as Studio remembers them (`curve_golden/channels.luau`): a FloatCurve named
+  X, Y or Z when it becomes a child is that channel if the curve has none, and stays it under any other
+  name; a FloatCurve named so when it stops being a child empties that channel, whichever curve was it. A
+  child renamed to X is therefore no channel, of two children named X the first is, and a channel renamed
+  and then removed is still what `X()` returns. Playing a clip finds the channels by name.
+- **MarkerCurve** holds `{Time, Value}` markers. A value is text of at most 64 bytes
+  (`curve_golden/markers.luau`): a number is written with up to 20 significant digits
+  (`0.10000000000000000555`), an EnumItem as its name, an instance as "Instance", a table as "{}", a
+  datatype as `tostring` writes it; a longer one raises "Invalid marker passed to InsertMarkerAtTime, max
+  string size is 64".
 - **Storage.** A curve keeps its keys in its `ValuesAndTimes` property in the form model files hold, so
   clones and files carry them; scripts cannot read the property.
 - **A CurveAnimation as a track.** A Folder below the clip (through Folders only) is a joint by its own
@@ -1184,8 +1194,9 @@ poses, events and provider answers Studio gave for a small rig.
   Keyframe every 1/30 s and at Length, a Pose per Folder, the markers as KeyframeMarkers).
 - **Differences from Studio.** Registered ids are `rbxtemp://N`, one per call (Studio's are a hash of the
   clip's content); a registered clip is read when a track loads it (Studio keeps the content it was
-  registered with). `X()` finds a channel by its current name (Studio remembers the name the child had
-  when it was parented). The messages of ids that do not load are this engine's own.
+  registered with). A curve that came whole (a clone, a model file) takes its channels by name when it is
+  first asked for one or a child comes or goes, not when it was made. A marker's value is cut at a zero
+  byte. The messages of ids that do not load are this engine's own.
 
 ## Server run context (`--run-context server`, `src/lua/server.luau`)
 

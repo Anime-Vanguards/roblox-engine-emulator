@@ -65,6 +65,18 @@ fn unset_tangents_match_studio() {
     assert_golden(&golden(include_str!("curve_golden/tangents.luau")), include_str!("curve_golden/tangents.txt"), 0.0);
 }
 
+/// Which FloatCurve is a Vector3Curve's or EulerRotationCurve's X, Y or Z as children come, go and are renamed.
+#[test]
+fn channels_match_studio() {
+    assert_golden(&golden(include_str!("curve_golden/channels.luau")), include_str!("curve_golden/channels.txt"), 0.0);
+}
+
+/// What a marker's value that is no string becomes, and the 64 bytes it may be.
+#[test]
+fn marker_values_match_studio() {
+    assert_golden(&golden(include_str!("curve_golden/markers.luau")), include_str!("curve_golden/markers.txt"), 0.0);
+}
+
 fn float_key(time: f32, value: f32) -> (f32, FloatKey) {
     (time, FloatKey { tick: curve::tick_of(time), value, mode: CUBIC, left: None, right: None })
 }

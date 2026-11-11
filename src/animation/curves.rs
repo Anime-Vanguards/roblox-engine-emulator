@@ -19,25 +19,36 @@
 //!   "count.".
 //! - A time may be a number, a string of one or a boolean; anything else raises "Unable to cast
 //!   Array to float" (an index: "to int"), a missing one "Argument 1 missing or nil".
-//! - Vector3Curve and EulerRotationCurve: `X()`, `Y()`, `Z()` return the FloatCurve child of that
-//!   name and make one when there is none. GetValueAtTime / GetAnglesAtTime return `{x, y, z}` with
-//!   nil for a channel that is missing or has no keys (and make no child);
+//! - Vector3Curve and EulerRotationCurve: `X()`, `Y()`, `Z()` return the curve's channel of that
+//!   name and make one, a FloatCurve child, when there is none. GetValueAtTime / GetAnglesAtTime
+//!   return `{x, y, z}` with nil for a channel that is missing or has no keys (and make no child);
 //!   GetRotationAtTime is `CFrame.fromEulerAngles` of the three, 0 for a missing one.
+//! - The curve remembers its three channels ([`Channels`]): a FloatCurve that is named X, Y or Z
+//!   when it becomes a child is that channel if the curve has none, and stays it under any other
+//!   name; a FloatCurve named so when it stops being a child empties that channel, whichever
+//!   curve was it. So a child renamed to X is no channel, of two children named X the first is,
+//!   removing the second empties the channel all the same, and a channel renamed and then removed
+//!   or destroyed is still what `X()` returns. Children of other classes change nothing.
+//! - A marker's value is text of at most 64 bytes ("Invalid marker passed to InsertMarkerAtTime,
+//!   max string size is 64"): a string as it is, a number with up to 20 significant digits
+//!   (`0.10000000000000000555`, `1e+20`, `INF`, `NAN`), a boolean's name, an EnumItem's name,
+//!   "Instance" for an instance, "{}" for a table, "function", "nil" for an Enum, a thread or a
+//!   plain userdata, "buffer { Size = 2 }", and a datatype as `tostring` writes it.
 //!
-//! Not emulated: Studio remembers a channel by the name the child had when it was parented (a
-//! FloatCurve renamed afterwards stays the channel, one named after it was parented is not found);
-//! here a channel is the first FloatCurve child that has the name now. What a marker's value that is
-//! no string or number becomes is not measured (empty here).
+//! Not emulated: a curve that came whole (a clone, a model file) takes its channels by name when one
+//! of these members first looks at it or a child comes or goes, where Studio took them when it was
+//! made: a channel renamed in between differs.
 
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use glam::Affine3A;
+use rustc_hash::FxHashMap;
 use mlua::prelude::*;
 
 use super::clip::EngineTree;
 use super::curve::{self, FloatKey, MarkerKey, RotationKey, Timed};
 use crate::{
-    Engine, InstanceId, NameId,
+    ClassId, Engine, InstanceId, NameId, State,
     instance as core,
     lua::{
         Args, Flow, convert,
@@ -145,23 +156,140 @@ fn key_table<'a>(engine: &Engine, args: &'a Args) -> Result<&'a LuaTable, Flow> 
     }
 }
 
-/// The X, Y or Z FloatCurve of a Vector3Curve or EulerRotationCurve: its first FloatCurve child of
-/// that name.
-fn channel(engine: &Engine, id: InstanceId, axis: &str) -> Option<InstanceId> {
-    let state = engine.state.borrow();
-    let float_curve = engine.reflection.class_id("FloatCurve")?;
-    state.dom.children_of(id).iter().copied().find(|&child| {
-        let instance = state.dom.at(child);
-        instance.class == float_curve && instance.name.as_bytes() == axis.as_bytes()
-    })
+const AXES: [&str; 3] = ["X", "Y", "Z"];
+
+fn axis_of(name: &[u8]) -> Option<usize> {
+    AXES.iter().position(|axis| axis.as_bytes() == name)
 }
 
-/// The three channels' values at `time`: None for one that is missing or has no keys.
-fn channel_values(engine: &Engine, id: InstanceId, property: NameId, time: f32) -> [Option<f32>; 3] {
-    ["X", "Y", "Z"].map(|axis| {
-        let keys = curve::decode_floats(&stored_bytes(engine, channel(engine, id, axis)?, property));
-        curve::float_at(&keys, time)
-    })
+/// The X, Y and Z channels the Vector3Curves and EulerRotationCurves of an engine remember (the
+/// module's notes): kept from the first time a curve's channels are asked for or one of its
+/// children comes or goes.
+struct Channels {
+    float_curve: ClassId,
+    holders: [Option<ClassId>; 2],
+    slots: RefCell<FxHashMap<InstanceId, [Option<InstanceId>; 3]>>,
+}
+
+impl Channels {
+    /// A curve's channels by its children's names now, `skip` left out: the first FloatCurve of each name.
+    fn named(&self, state: &State, curve: InstanceId, skip: Option<InstanceId>) -> [Option<InstanceId>; 3] {
+        let mut found = [None; 3];
+        for &child in state.dom.children_of(curve) {
+            let instance = state.dom.at(child);
+            if instance.class == self.float_curve
+                && Some(child) != skip
+                && let Some(axis) = axis_of(instance.name.as_bytes())
+                && found[axis].is_none()
+            {
+                found[axis] = Some(child);
+            }
+        }
+        found
+    }
+
+    /// `parent` when it is a curve that has channels.
+    fn holder(&self, state: &State, parent: Option<InstanceId>) -> Option<InstanceId> {
+        parent.filter(|&parent| state.dom.get(parent).is_some_and(|instance| self.holders.contains(&Some(instance.class))))
+    }
+
+    /// `child` went from `old` to `new`.
+    fn moved(&self, state: &State, child: InstanceId, old: Option<InstanceId>, new: Option<InstanceId>) {
+        let Some(instance) = state.dom.get(child).filter(|instance| instance.class == self.float_curve) else { return };
+        // (a curve's channels are kept from here on whatever the child's name: one named X later is no channel)
+        let axis = axis_of(instance.name.as_bytes());
+        let mut slots = self.slots.borrow_mut();
+        if let Some(curve) = self.holder(state, old) {
+            let kept = slots.entry(curve).or_insert_with(|| self.named(state, curve, None));
+            if let Some(axis) = axis {
+                kept[axis] = None;
+            }
+        }
+        if let Some(curve) = self.holder(state, new) {
+            let kept = slots.entry(curve).or_insert_with(|| self.named(state, curve, Some(child)));
+            if let Some(axis) = axis.filter(|&axis| kept[axis].is_none()) {
+                kept[axis] = Some(child);
+            }
+        }
+    }
+
+    /// An instance is freed: a curve's memory goes with it, and a channel that was it is empty.
+    fn freed(&self, state: &State, id: InstanceId) {
+        let mut slots = self.slots.borrow_mut();
+        if slots.is_empty() {
+            return;
+        }
+        slots.remove(&id);
+        if state.dom.get(id).is_some_and(|instance| instance.class == self.float_curve) {
+            for slot in slots.values_mut().flatten() {
+                if *slot == Some(id) {
+                    *slot = None;
+                }
+            }
+        }
+    }
+
+    /// The channel `axis` (0 for X) of `curve`.
+    fn of(&self, engine: &Engine, curve: InstanceId, axis: usize) -> Option<InstanceId> {
+        let state = engine.state.borrow();
+        let mut slots = self.slots.borrow_mut();
+        slots.entry(curve).or_insert_with(|| self.named(&state, curve, None))[axis].filter(|&channel| state.dom.get(channel).is_some())
+    }
+
+    /// The three channels' values at `time`: None for one that is missing or has no keys.
+    fn values(&self, engine: &Engine, curve: InstanceId, property: NameId, time: f32) -> [Option<f32>; 3] {
+        [0, 1, 2].map(|axis| {
+            let keys = curve::decode_floats(&stored_bytes(engine, self.of(engine, curve, axis)?, property));
+            curve::float_at(&keys, time)
+        })
+    }
+}
+
+/// A number as a marker's value: up to 20 significant digits, as C's `%.20g` writes them.
+fn marker_number(number: f64) -> String {
+    if number.is_nan() {
+        return "NAN".into();
+    }
+    if number.is_infinite() {
+        return if number > 0.0 { "INF" } else { "-INF" }.into();
+    }
+    let scientific = format!("{number:.19e}");
+    let (mantissa, exponent) = scientific.split_once('e').expect("an exponent");
+    let exponent: i32 = exponent.parse().expect("a whole exponent");
+    let trimmed = |digits: &str| if digits.contains('.') { digits.trim_end_matches('0').trim_end_matches('.').to_string() } else { digits.to_string() };
+    if (-4..20).contains(&exponent) {
+        trimmed(&format!("{number:.*}", (19 - exponent) as usize))
+    } else {
+        format!("{}e{}{:02}", trimmed(mantissa), if exponent < 0 { '-' } else { '+' }, exponent.abs())
+    }
+}
+
+/// InsertMarkerAtTime's value as the text a marker holds (the module's notes).
+fn marker_text(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Vec<u8>, Flow> {
+    let text = match value {
+        LuaValue::String(text) => text.as_bytes().to_vec(),
+        LuaValue::Number(number) => marker_number(*number).into_bytes(),
+        LuaValue::Integer(number) => marker_number(*number as f64).into_bytes(),
+        LuaValue::Boolean(flag) => flag.to_string().into_bytes(),
+        LuaValue::Table(_) => b"{}".to_vec(),
+        LuaValue::Function(_) => b"function".to_vec(),
+        LuaValue::Thread(_) => b"nil".to_vec(),
+        LuaValue::Buffer(buffer) => format!("buffer {{ Size = {} }}", buffer.len()).into_bytes(),
+        other => {
+            let written = || -> LuaResult<Vec<u8>> { Ok(lua.globals().get::<LuaFunction>("tostring")?.call::<LuaString>(other.clone())?.as_bytes().to_vec()) };
+            match typeof_value(engine, other).as_str() {
+                "Instance" => b"Instance".to_vec(),
+                "Enum" | "userdata" => b"nil".to_vec(),
+                // (`Enum.Material.Plastic` is "Plastic")
+                "EnumItem" => written()?.rsplit(|&byte| byte == b'.').next().unwrap_or_default().to_vec(),
+                _ => written()?,
+            }
+        }
+    };
+    if text.len() > 64 {
+        return raise("Invalid marker passed to InsertMarkerAtTime, max string size is 64");
+    }
+    Ok(text)
 }
 
 /// `{x, y, z}` with holes.
@@ -183,6 +311,19 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             behaviors.add_method(class, name, function);
         }
     };
+    let Some(float_curve) = reflection.class_id("FloatCurve") else { return };
+    let channels = Rc::new(Channels {
+        float_curve,
+        holders: [reflection.class_id("Vector3Curve"), reflection.class_id("EulerRotationCurve")],
+        slots: RefCell::default(),
+    });
+    {
+        let mut hooks = engine.hooks.borrow_mut();
+        let moved = channels.clone();
+        hooks.hierarchy_changed.push(Box::new(move |state, id, old, new| moved.moved(state, id, old, new)));
+        let freed = channels.clone();
+        hooks.instance_freed.push(Box::new(move |state, id| freed.freed(state, id)));
+    }
 
     for class in ["FloatCurve", "RotationCurve", "MarkerCurve"] {
         if let Some(class) = reflection.class_id(class) {
@@ -337,11 +478,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             return raise("Argument 2 missing or nil");
         }
         let time = time_arg(lua, engine, args, 1)?;
-        let value = match args.get(2) {
-            LuaValue::String(text) => text.as_bytes().to_vec(),
-            number @ (LuaValue::Number(_) | LuaValue::Integer(_)) => lua.coerce_string(number.clone())?.map_or_else(Vec::new, |text| text.as_bytes().to_vec()),
-            _ => Vec::new(),
-        };
+        let value = marker_text(lua, engine, args.get(2))?;
         let mut found = markers(engine, id);
         let outcome = curve::insert(&mut found, MarkerKey { tick: curve::tick_of(time), value });
         store(engine, id, stored, curve::encode_markers(&found));
@@ -357,11 +494,13 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
 
     // Vector3Curve and EulerRotationCurve
     for class in ["Vector3Curve", "EulerRotationCurve"] {
-        for axis in ["X", "Y", "Z"] {
+        for (index, axis) in AXES.into_iter().enumerate() {
+            let channels = channels.clone();
             add(behaviors, class, axis, method(move |lua, engine, id, _| {
-                let found = match channel(engine, id, axis) {
+                let found = match channels.of(engine, id, index) {
                     Some(found) => found,
                     None => {
+                        // (parenting it makes it the channel: Channels::moved)
                         let hooks = engine.hooks.borrow();
                         let mut state = engine.state.borrow_mut();
                         let made = core::new_instance(&mut state, &engine.reflection, &hooks, "FloatCurve", None).map_err(Flow::Error)?;
@@ -374,18 +513,20 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             }));
         }
     }
+    let of = channels.clone();
     add(behaviors, "Vector3Curve", "GetValueAtTime", method(move |lua, engine, id, args| {
         let time = time_arg(lua, engine, args, 1)?;
-        Ok(triple(lua, channel_values(engine, id, stored, time))?)
+        Ok(triple(lua, of.values(engine, id, stored, time))?)
     }));
+    let of = channels.clone();
     add(behaviors, "EulerRotationCurve", "GetAnglesAtTime", method(move |lua, engine, id, args| {
         let time = time_arg(lua, engine, args, 1)?;
-        Ok(triple(lua, channel_values(engine, id, stored, time))?)
+        Ok(triple(lua, of.values(engine, id, stored, time))?)
     }));
     let rotation_order = reflection.name_id("RotationOrder");
     add(behaviors, "EulerRotationCurve", "GetRotationAtTime", method(move |lua, engine, id, args| {
         let time = time_arg(lua, engine, args, 1)?;
-        let [x, y, z] = channel_values(engine, id, stored, time).map(|angle| angle.unwrap_or(0.0));
+        let [x, y, z] = channels.values(engine, id, stored, time).map(|angle| angle.unwrap_or(0.0));
         let order = {
             let state = engine.state.borrow();
             let item = rotation_order.and_then(|name| state.dom.raw_get(id, name)).and_then(Value::as_enum);
