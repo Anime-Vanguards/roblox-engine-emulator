@@ -568,7 +568,7 @@ impl Session {
             self.functions.resize(memory::MAX_DEPTH, 0);
             self.lines.resize(memory::MAX_DEPTH, 0);
         }
-        let depth = vm::stack(state, &mut self.functions, &mut self.lines);
+        let depth = unsafe { vm::stack(state, &mut self.functions, &mut self.lines) };
         let mut frames: Vec<memory::Frame> = (0..depth).map(|index| (self.functions[index], self.lines[index])).collect();
         match frames.first_mut() {
             Some(top) => *top = (function, -1),

@@ -976,7 +976,7 @@ unsafe fn push_instance_with(state: *mut ffi::lua_State, api: &Api, dom_state: O
 unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
     crate::boundary::enter(state);
     // (host time: the call's time is its line's)
-    let _time = crate::luau_profile::ApiCall::new(state);
+    let _time = unsafe { crate::luau_profile::ApiCall::new(state) };
     let out = guard(|| unsafe {
         let api = &*(ffi::lua_touserdata(state, ffi::lua_upvalueindex(1)) as *const Api);
         let engine = api.engine();
@@ -1121,7 +1121,7 @@ unsafe extern "C-unwind" fn meta_index(state: *mut ffi::lua_State) -> c_int {
     crate::boundary::enter(state);
     crate::boundary::access_begin(state);
     // (host time: the call's time is its line's)
-    let _time = crate::luau_profile::ApiCall::new(state);
+    let _time = unsafe { crate::luau_profile::ApiCall::new(state) };
     let out = guard(|| unsafe { index_fast(state) });
     let count = match out {
         Out::Ret(count) => count,
@@ -1293,7 +1293,7 @@ unsafe extern "C-unwind" fn meta_newindex(state: *mut ffi::lua_State) -> c_int {
     crate::boundary::enter(state);
     crate::boundary::access_begin(state);
     // (host time: the call's time is its line's)
-    let _time = crate::luau_profile::ApiCall::new(state);
+    let _time = unsafe { crate::luau_profile::ApiCall::new(state) };
     let out = guard(|| unsafe { newindex_fast(state) });
     match out {
         Out::Ret(_) => {}
@@ -1446,7 +1446,7 @@ unsafe extern "C-unwind" fn meta_namecall(state: *mut ffi::lua_State) -> c_int {
     crate::trace::enter(state);
     crate::boundary::enter(state);
     // (host time: the call's time is its line's)
-    let _time = crate::luau_profile::ApiCall::new(state);
+    let _time = unsafe { crate::luau_profile::ApiCall::new(state) };
     let out = guard(|| unsafe { namecall_fast(state) });
     match out {
         Out::Ret(count) => count,
