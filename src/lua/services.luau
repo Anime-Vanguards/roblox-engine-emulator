@@ -1,6 +1,6 @@
 --!nocheck
 -- Rust engine: the service stubs of runtime/engine/services.luau that return script data (Players
--- lookups, 3D model helpers, humanoid stand-ins, Path2D, EditableImage, HttpService
+-- lookups, 3D model helpers, humanoid stand-ins, EditableImage, HttpService
 -- JSON, ContentProvider, localization / marketplace / policy / social stubs, remotes). Kept in
 -- Luau: they build script tables, may yield, and raise their errors at script level exactly as
 -- the Luau runtime's do. Hot behaviours (DataModel, RunService, TweenService, ...) are Rust.
@@ -452,33 +452,33 @@ Method("Humanoid", "GetAppliedDescription", function()
 	return Create("HumanoidDescription")
 end)
 
--- Path2D keeps its control points (curves are not rendered offline)
-local function ControlPoints(Self)
-	local Store = Extra(Self)
-	Store.ControlPoints = Store.ControlPoints or {}
-	return Store.ControlPoints
-end
-Method("Path2D", "SetControlPoints", function(Self, Points)
-	Extra(Self).ControlPoints = table.clone(Points or {})
-end)
-Method("Path2D", "GetControlPoints", function(Self)
-	return table.clone(ControlPoints(Self))
-end)
-Method("Path2D", "GetControlPoint", function(Self, Index)
-	return ControlPoints(Self)[Index]
-end)
-Method("Path2D", "InsertControlPoint", function(Self, Index, Point)
-	table.insert(ControlPoints(Self), math.clamp(Index, 1, #ControlPoints(Self) + 1), Point)
-end)
-Method("Path2D", "RemoveControlPoint", function(Self, Index)
-	table.remove(ControlPoints(Self), Index)
-end)
-Method("Path2D", "UpdateControlPoint", function(Self, Index, Point)
-	ControlPoints(Self)[Index] = Point
-end)
-Method("Path2D", "GetMaxControlPoints", function()
-	return 1024
-end)
+-- Path2D: its control points, their errors and the curve queries are the engine's (path2d.rs), where a host's
+-- layout reads the points. (These lines keep the count of the stubs that stood here, so the lines below keep
+-- their numbers in recorded traces.)
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
 
 -- EditableImage: RGBA pixels (images/rs: an image loaded from an asset holds the asset's, decoded; a new
 -- one starts transparent black). One never written keeps its asset's id, so a SurfaceAppearance built

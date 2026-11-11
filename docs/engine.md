@@ -59,6 +59,7 @@ src/lua/             the Luau-facing API: Instance userdata (raw.rs), datatypes,
 src/world/ src/record/   the 3D world and the recorder
 src/animation/       AnimationTracks: the Animator step, clips, keyframe loading
 src/meshes.rs images.rs  EditableMesh and EditableImage
+src/path2d.rs        Path2D: control points, the curve and its queries, the parent rectangle a host's layout gives
 src/serve/           `ree serve` (a warm process running record / run jobs) and its client (`--service`)
 src/watchdog.rs      the script timeout, the wall-clock cap, the exit when the parent is gone
 src/trace.rs census.rs lua/holders.rs   Context.TraceWrites, Context.Census, Context.Holders
@@ -115,6 +116,9 @@ with or without a layer.
   Without it those members keep the core's static answers (GetMouseLocation (-1000, -1000), GuiState
   Idle), TextService:GetTextSize answers from Studio's measured advances (src/text_measure.rs), and the
   rest is reported as not emulated.
+- A Path2D's curve is the core's (`path2d`), and only its parent's rectangle is a layout's: a layer gives it with
+  `path2d::set_frame_source` (a `Frame`: the parent's corner, size and rotation on the screen) and says when a
+  path was laid out with `path2d::laid_out`. Without one a parent measures nothing ("Path2D" under "Engine API").
 
 ## Project mount (`src/mount.rs`, `src/project.rs`)
 
@@ -390,6 +394,39 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   (CFrame expected, got number)`, `invalid argument #2 (CFrame expected, got nil)` and `#3 (number expected,
   ...)` at the calling line (an eps of nil given is an error), `Invalid number of arguments: 1, CFrame.FuzzyEq
   expects 2 or 3.` without one.
+- **Path2D** (`src/path2d.rs`; measured in Studio 0.747 and a playing client, Studio 0.744;
+  tools/parity/probes/path2d.luau and path2d_layout.luau). A GuiBase with Closed, Color3 (black), Thickness (1,
+  clamped to 0..100 when written), Visible and ZIndex. Transparency, SelectedControlPoint, SelectedControlPointData
+  and GetSegmentCount raise the client's capability errors (`The current thread cannot read 'Transparency' (lacking
+  capability RobloxScript)`).
+  - Points: `Path2DControlPoint.new()` takes no, one or three UDim2s (Position, LeftTangent, RightTangent). A path
+    holds up to 100 (`GetMaxControlPoints`); `SetControlPoints` of more keeps the first 100 and raises
+    `Path2D:SetControlPoints() only supports 100 control points.`. `GetControlPoints`, `GetControlPoint`,
+    `InsertControlPoint`, `UpdateControlPoint` and `RemoveControlPoint` take an index rounded to an integer and raise
+    `Path2D:GetControlPoint() at index N access out of bounds` (by method name). Each successful change fires
+    ControlPointChanged once (deferred, no arguments), also when the list is what it was. The points are the hidden
+    property `PropertiesSerialize` (a count, then 49 bytes a point), so `Clone`, a model file and a recording carry them.
+  - Parent: a GuiObject or a LayerCollector, in the DataModel or not. Under any other parent Insert, Update and the
+    curve queries of a path with points raise `Attempting to use Path2D with invalid parent`.
+  - The spline behind the list trails it: `SetControlPoints` leaves it stale, a curve query or the next layout of
+    a path on screen rebuilds it, and Insert, Update or Remove of an index the spline does not have yet raises
+    `Spline inserting control point at index I access out of bounds` after the list has changed (no event).
+  - Curve: segment i runs from point i to point i + 1 (Closed adds the last to the first when there are three or
+    more points). Positions resolve against the parent's rectangle, tangents as sizes; a segment whose two
+    handles are zero is a line, with one a quadratic, else a cubic. `GetPositionOnCurve(t)` answers a UDim2 of
+    scales of the parent (offsets when the parent has no size), `GetTangentOnCurve(t)` the segment's derivative on
+    the screen, `GetLength()` the length by halving until a piece is straight to 1e-5 pixels, and
+    `GetBoundingRect()` the curve's bounds on the screen grown by (Thickness + 1) / 2. A query without a segment
+    raises `Path2D:GetPositionOnCurve() attempting to query with zero segments`.
+  - By length (`GetPositionOnCurveArcLength`, `GetTangentOnCurveArcLength`) a client does not answer the point at
+    that share of the length, and neither does the engine: `t` (held to 0..1) times the length is taken off
+    segment by segment, a line answers its share, and a curved segment is walked in 32 Runge-Kutta steps in
+    float32. On gentle curves that is the point to about 1e-5 of the length. Near a tight bend the walk ends
+    elsewhere on the curve or past the segment's end, at `t` = 1 it usually stops a hair short of the end, and
+    when float32 leaves the last segment a hair more than its length the answer is the path's start.
+  - Every number above comes out in Roblox's float32 digits (tools/parity, probe path2d: 385 lines, none known).
+  - The core has no layout: a GuiObject parent has no size and sits at the origin, a ScreenGui or SurfaceGui
+    measures 800 by 600. A host's layout answers instead ("Layers and extensions").
 - **Lifetime**: instances a script can reach keep their userdata identity; unreachable parentless
   subtrees are freed by `lua::raw::collect` (run from the render step). Rust code that holds an
   `InstanceId` outside the tree across frames keeps it reachable with `state.dom.pin(id)` / `unpin(id)`,
