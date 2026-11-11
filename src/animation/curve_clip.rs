@@ -16,9 +16,9 @@
 //! - Length is the last key's time among the curves inside the Folders (FloatCurves wherever they
 //!   are in one, RotationCurves and MarkerCurves too); a curve straight under the clip adds nothing.
 //! - Every MarkerCurve fires GetMarkerReachedSignal(its Name) with the marker's Value, under the
-//!   clip or inside a Folder. KeyframeReached fires once at the end with "End", looped or not
-//!   (a clip of Length 0 fires none here: not measured); GetTimeOfKeyframe raises "Invalid
-//!   operation for this animation format.".
+//!   clip or inside a Folder. KeyframeReached fires "End" when a pass ends, looped or not, and a
+//!   clip of Length 0 has no end (the step: animation::advance_curve); GetTimeOfKeyframe raises
+//!   "Invalid operation for this animation format.".
 //! - **Tracks play samples, not the curves.** The pose at time `t` is the line between the curves'
 //!   values at the two nearest multiples of 1/30 s: a Constant step from 0 to 30 at 0.5 s climbs
 //!   from 0 at 14/30 s (3.75 at 0.47083 s, 15 at 0.48333 s), and a Cubic 0 to 100 over 1 s reads
@@ -248,7 +248,8 @@ pub fn clip<T: Tree>(tree: &T, node: T::Node) -> Clip {
         looped: tree.boolean(node, "Loop").unwrap_or(true),
         priority: tree.enumeration(node, "Priority").unwrap_or(PRIORITY_ACTION),
         joints,
-        keyframes: if length > 0.0 { vec![(length, "End".to_string())] } else { Vec::new() },
+        // (KeyframeReached's "End" is no keyframe at a time: the step fires it when a pass ends, animation::advance_curve)
+        keyframes: Vec::new(),
         names: Vec::new(),
         markers: read.markers,
         curve: true,

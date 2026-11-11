@@ -366,12 +366,13 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
         })?,
     )?;
-    // AnimationClipProvider:GetAnimationClipAsync's clip, else nil and the error
+    // AnimationClipProvider:GetAnimationClipAsync's clip, else nil and the error, or false for an id that never answers
     let e = engine.clone();
     r.set(
         "AnimationClip",
         lua.create_function(move |lua, uri: String| match crate::animation::source::animation_clip(&e, &uri) {
             Ok(clip) => Ok((instance_value(lua, &e, clip)?, None)),
+            Err(error) if error == crate::animation::source::NEVER => Ok((LuaValue::Boolean(false), None)),
             Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
         })?,
     )?;

@@ -1129,9 +1129,13 @@ everything about CurveAnimations and their curves (below).
 - Fetching (measured in Studio playtests): an asset's first request in a session arrives 0.45 s later;
   tracks and preloads of it share the fetch, and one fetched before loads at once. Until it arrives a
   track has Length 0 and never poses. ContentProvider:PreloadAsync waits for the Animations it is given.
-- Not emulated: the default `Animate` script, animation graphs, RootMotion, Animator:StepAnimations,
-  FaceControls channels (a CurveAnimation's FloatCurves outside `Position` and `Rotation` count for its
-  Length and pose nothing).
+- `Animator:StepAnimations(delta)` steps that animator's tracks and poses its rig, as the frame's step
+  does for every animator. It has Plugin security: in play mode it raises "The current thread cannot call
+  'StepAnimations' (lacking capability Plugin)", in edit mode (`--mode edit`, where no Animator steps by
+  itself) it works. A delta below 0 or not a number steps by 0.
+- Not emulated: the default `Animate` script, animation graphs, RootMotion, FaceControls channels (a
+  CurveAnimation's FloatCurves outside `Position` and `Rotation` count for its Length and pose nothing;
+  no clip here drives a FaceControls instance, a KeyframeSequence's NumberPoses neither).
 
 ### Animation curves (`src/animation/curve.rs`, `curve_clip.rs`, `curves.rs`, `src/lua/curve_keys.rs`)
 
@@ -1178,9 +1182,20 @@ poses, events and provider answers Studio gave for a small rig.
   name alone: the Motor6D whose Part1 has that name, else the Bone of that name. Its `Position` child
   (Vector3Curve) and `Rotation` child (EulerRotationCurve or RotationCurve, the later of two) pose it; a
   joint without a `Rotation` leaves the rotation to the other playing tracks. Length is the last key's
-  time among the curves inside Folders. Loop and Priority are the clip's. Each MarkerCurve fires
-  `GetMarkerReachedSignal(its Name)` with the marker's Value; `KeyframeReached` fires "End" once at the
-  end; `GetTimeOfKeyframe` raises "Invalid operation for this animation format.".
+  time among the curves inside Folders, 0 or later: keys before 0 s do not play and markers there do not
+  fire. Loop and Priority are the clip's. Each MarkerCurve fires `GetMarkerReachedSignal(its Name)` with
+  the marker's Value; `GetTimeOfKeyframe` raises "Invalid operation for this animation format.".
+- **How a CurveAnimation's track steps** (`curve_golden/playback_steps.luau` and `playback_clips.luau`,
+  stepped with StepAnimations in Studio; 183 lines equal). TimePosition is a float32 that each step adds
+  `delta * Speed` to. A step fires the markers from where it starts up to, but not at, where it stops: a
+  marker at the time a step lands on fires with the next step that moves, one at the start with the first.
+  Reaching the last key forwards, or 0 s backwards, ends a pass: the end's own marker, then
+  `KeyframeReached("End")`, then `Stopped` for a track that does not loop, then `DidLoop` when the step
+  went past the end (looped or not). A looped track goes on from the other end; one that does not loop
+  fades out over 0.3 s, still moving if its TimePosition is set, and `Ended` fires a step after its weight
+  reached 0. `Play` with a negative speed starts at the last key. A TimePosition set on a looped track at
+  or past the last key is 0 s. A clip of Length 0 never ends: its time runs on, below 0 too, and passes
+  markers wherever they are.
 - **Tracks play samples, as Studio does.** The pose at a time is the line between the curves' values at
   the two nearest multiples of 1/30 s (rotations: the normalized mix of the two quaternions), so a
   Constant step is a ramp over the sample before it. The samples start at 0 s and the last lies at or
@@ -1188,13 +1203,22 @@ poses, events and provider answers Studio gave for a small rig.
 - **Providers.** `KeyframeSequenceProvider:RegisterKeyframeSequence` takes a CurveAnimation too;
   `AnimationClipProvider:RegisterAnimationClip` and `RegisterActiveAnimationClip` take either clip and
   refuse a CurveAnimation whose `Position` or `Rotation` child is of another class;
-  `RegisterActiveKeyframeSequence` takes a KeyframeSequence. `GetAnimationClipAsync(id)` yields and
+  `RegisterActiveKeyframeSequence` takes a KeyframeSequence. An id of the two that are not Active stands
+  for the clip's content: registering the same clip again, a clone or another built the same way returns
+  the same id, a clip changed in any way (a key, its name, an attribute) another, and a track of the id
+  plays the clip as it was when registered. `RegisterKeyframeSequence` also takes an instance that is no
+  clip: its id loads a track of Length 0 that stays at 0 s, `GetKeyframeSequenceAsync` of it returns an
+  empty KeyframeSequence and `GetAnimationClipAsync` never returns. `GetAnimationClipAsync(id)` yields and
   returns a copy of the clip as it is (the instance itself for an `active://` id);
   `GetKeyframeSequenceAsync` of a CurveAnimation returns the KeyframeSequence Studio makes of one (a
   Keyframe every 1/30 s and at Length, a Pose per Folder, the markers as KeyframeMarkers).
-- **Differences from Studio.** Registered ids are `rbxtemp://N`, one per call (Studio's are a hash of the
-  clip's content); a registered clip is read when a track loads it (Studio keeps the content it was
-  registered with). A curve that came whole (a clone, a model file) takes its channels by name when it is
+- **Differences from Studio.** Registered ids are `rbxtemp://N`, counted up, one per content (Studio's are
+  32 hexadecimal digits of the content, which a script cannot predict either).
+  `GetKeyframeSequenceAsync` and `GetAnimationClipAsync` of a registered id copy the instance as it is
+  now (Studio: as it was when registered), and a track of an `active://` id keeps the clip it loaded
+  (Studio: it follows the instance). A track's pose can differ from Studio's in the seventh digit (its
+  samples' times are not exactly ours). The steps above are a CurveAnimation's track's only: a
+  KeyframeSequence's track steps as before. A curve that came whole (a clone, a model file) takes its channels by name when it is
   first asked for one or a child comes or goes, not when it was made. A marker's value is cut at a zero
   byte. The messages of ids that do not load are this engine's own.
 

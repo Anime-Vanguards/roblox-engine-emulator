@@ -1001,6 +1001,10 @@ Method("AnimationClipProvider", "GetAnimationClipAsync", function(_, AssetId)
 	end
 	task.wait()
 	local Clip, Message = R.AnimationClip(AssetId)
+	if Clip == false then
+		-- (measured: the id of a registered instance that is no clip never answers)
+		coroutine.yield()
+	end
 	if not Clip then
 		error(Message, 0)
 	end

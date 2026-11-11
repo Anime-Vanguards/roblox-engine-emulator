@@ -13,8 +13,13 @@ use super::{Loading, enable};
 
 /// Runs a golden script (a chunk that returns its text) and returns the lines.
 fn golden(source: &str) -> Vec<String> {
-    let (lua, engine) = start("play");
-    let lines = run(&lua, &engine, &format!("print((function()\n{source}\nend)())"), 1.0);
+    golden_in("play", source, 1.0)
+}
+
+/// A golden script's lines in an engine of `mode`, run for `seconds`.
+fn golden_in(mode: &str, source: &str, seconds: f64) -> Vec<String> {
+    let (lua, engine) = start(mode);
+    let lines = run(&lua, &engine, &format!("print((function()\n{source}\nend)())"), seconds);
     let printed: Vec<&String> = lines.iter().filter(|line| line.starts_with("print: ")).collect();
     assert_eq!(printed.len(), 1, "{lines:?}");
     printed[0]["print: ".len()..].lines().map(str::to_string).collect()
@@ -75,6 +80,27 @@ fn channels_match_studio() {
 #[test]
 fn marker_values_match_studio() {
     assert_golden(&golden(include_str!("curve_golden/markers.luau")), include_str!("curve_golden/markers.txt"), 0.0);
+}
+
+/// A CurveAnimation's track stepped with Animator:StepAnimations in an edit session, as the script ran in Studio:
+/// times, events and ends, forwards and backwards, looped and not.
+#[test]
+fn stepped_tracks_match_studio() {
+    assert_golden(&golden_in("edit", include_str!("curve_golden/playback_steps.luau"), 60.0), include_str!("curve_golden/playback_steps.txt"), 0.0);
+}
+
+/// Keys before 0 s, clips of Length 0, ids of what is no clip and what a registered id stands for.
+#[test]
+fn clips_at_the_edges_match_studio() {
+    assert_golden(&golden_in("edit", include_str!("curve_golden/playback_clips.luau"), 60.0), include_str!("curve_golden/playback_clips.txt"), 0.0);
+}
+
+/// Animator:StepAnimations has Plugin security (Roblox's API reference): a game's script may not call it.
+#[test]
+fn a_games_script_may_not_step_animations() {
+    let (lua, engine) = start("play");
+    let lines = run(&lua, &engine, r#"print(pcall(function() Instance.new("Animator"):StepAnimations(0.1) end))"#, 0.1);
+    assert!(lines.iter().any(|line| line.ends_with("false The current thread cannot call 'StepAnimations' (lacking capability Plugin)")), "{lines:?}");
 }
 
 fn float_key(time: f32, value: f32) -> (f32, FloatKey) {
@@ -342,7 +368,8 @@ fn a_folder_names_its_joint_wherever_it_is() {
 }
 
 /// MarkerCurves fire GetMarkerReachedSignal(their name) with the marker's value, KeyframeReached says "End" once at
-/// the end, a looped clip loops and a clip played once stops there. Studio's order, stepped 0.1 s at a time.
+/// the end, a looped clip loops and a clip played once stops there. Studio's order (curve_golden/playback_steps.luau
+/// has it step by step).
 #[test]
 fn markers_the_end_and_loops_fire_as_in_studio() {
     scene(
@@ -382,8 +409,10 @@ fn markers_the_end_and_loops_fire_as_in_studio() {
         Single:Play(0)
         task.wait(0.3)
         assert(Single.IsPlaying and Shoulder.Transform.X > 1.5)
-        task.wait(0.5)
-        assert(table.concat(Fired, " ") == "KeyframeReached:End Stopped Ended", table.concat(Fired, " "))
+        task.wait(0.7)
+        -- (DidLoop fires at an end the step went past, of a track that does not loop too; the track fades out over
+        -- 0.3 s and Ended comes a step after that: measured)
+        assert(table.concat(Fired, " ") == "KeyframeReached:End Stopped DidLoop Ended", table.concat(Fired, " "))
         assert(Single.TimePosition == 0.5 and not Single.IsPlaying)
         "#,
     );
