@@ -2207,7 +2207,8 @@ pub fn collect(lua: &Lua, engine: &Engine) -> LuaResult<usize> {
         for &signal in &signals {
             state.signals.free(signal);
         }
-        (garbage, signals)
+        // (with the signals the hooks freed)
+        (garbage, state.signals.take_freed())
     };
     let (garbage, signals) = freed;
     forget(&api, engine, &garbage, &signals)?;

@@ -822,3 +822,28 @@ fn get_keyframe_sequence_async_makes_a_files_sequence() {
     );
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// A track's marker signal fires when tracks before it that had a marker signal were collected: the signals' slots are
+/// reused, and a script must get the new signal, not what it held for the slot before.
+#[test]
+fn a_marker_signal_fires_after_earlier_tracks_were_collected() {
+    check(
+        r#"
+        local Seen = {}
+        for Round = 1, 8 do
+            local Model, Animator = Rig()
+            local Track = Animator:LoadAnimation(Sequence({ {0, 0}, {0.1, 0.5, "Hit", { Impact = "big" }}, {0.2, 0} }))
+            local Count = 0
+            Track:GetMarkerReachedSignal("Impact"):Connect(function() Count += 1 end)
+            Track:Play(0)
+            task.wait(0.4)
+            table.insert(Seen, Count)
+            Model:Destroy()
+            for _ = 1, 200 do local _ = table.create(1000, 0) end
+            task.wait(0.2)
+        end
+        assert(table.concat(Seen, " ") == "1 1 1 1 1 1 1 1", table.concat(Seen, " "))
+        "#,
+        6.0,
+    );
+}
