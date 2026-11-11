@@ -65,6 +65,21 @@ pub struct JointTrack {
     pub rotation: bool,
 }
 
+/// A number a clip drives that is no joint's: a FaceControls property, by its name.
+#[derive(Clone, Debug)]
+pub struct ValueTrack {
+    pub name: String,
+    pub keys: Vec<ValueKey>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ValueKey {
+    pub time: f32,
+    pub value: f32,
+    pub style: u32,
+    pub direction: u32,
+}
+
 /// A KeyframeMarker: its Keyframe's time, its name and Value.
 #[derive(Clone, Debug)]
 pub struct Marker {
@@ -96,6 +111,10 @@ pub struct Clip {
     pub curve: bool,
     /// A KeyframeSequence that plays from its packed form ([`evenly_keyed`], [`pack`])
     pub even: bool,
+    /// The FaceControls properties it drives: a CurveAnimation's FloatCurves in a Folder named FaceControls, wherever
+    /// that is in the clip, each named after its property; a KeyframeSequence's NumberPoses in such a Folder in a
+    /// Pose (measured, Studio 0.747: the rig's FaceControls instance, the one of that name, takes them)
+    pub face: Vec<ValueTrack>,
 }
 
 /// What a clip is read from: a model file's instances or the engine's.
@@ -184,11 +203,36 @@ impl Clip {
                     _ => {}
                 }
             }
+            let number_poses = |clip: &mut Clip, folder: T::Node| {
+                for number in tree.children(folder) {
+                    if tree.class(number) != "NumberPose" {
+                        continue;
+                    }
+                    let key = ValueKey {
+                        time,
+                        value: tree.number(number, "Value").unwrap_or(0.0) as f32,
+                        style: tree.enumeration(number, "EasingStyle").unwrap_or(LINEAR),
+                        direction: tree.enumeration(number, "EasingDirection").unwrap_or(IN),
+                    };
+                    let name = tree.name(number);
+                    match clip.face.iter_mut().find(|track| track.name == name) {
+                        Some(track) => track.keys.push(key),
+                        None => clip.face.push(ValueTrack { name, keys: vec![key] }),
+                    }
+                }
+            };
+            for child in tree.children(keyframe) {
+                if tree.class(child) == "Folder" && tree.name(child) == "FaceControls" {
+                    number_poses(&mut clip, child);
+                }
+            }
             while let Some((pose, parent)) = stack.pop() {
                 let name = tree.name(pose);
                 for child in tree.children(pose) {
-                    if tree.class(child) == "Pose" {
-                        stack.push((child, name.clone()));
+                    match tree.class(child) {
+                        "Pose" => stack.push((child, name.clone())),
+                        "Folder" if tree.name(child) == "FaceControls" => number_poses(&mut clip, child),
+                        _ => {}
                     }
                 }
                 if tree.number(pose, "Weight").unwrap_or(1.0) <= 0.0 {
@@ -213,6 +257,9 @@ impl Clip {
         }
         clip.even = evenly_keyed(&clip.names, &joints);
         clip.joints = joints;
+        for track in &mut clip.face {
+            track.keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+        }
         clip.keyframes.sort_by(|a, b| a.0.total_cmp(&b.0));
         clip.markers.sort_by(|a, b| a.time.total_cmp(&b.time));
         if clip.even {
@@ -264,6 +311,9 @@ fn pack(clip: &mut Clip) {
         let moved = |time: f32| times.partition_point(|&earlier| earlier < time) as f32 * step;
         for joint in &mut clip.joints {
             joint.keys.iter_mut().for_each(|key| key.time = moved(key.time));
+        }
+        for track in &mut clip.face {
+            track.keys.iter_mut().for_each(|key| key.time = moved(key.time));
         }
         clip.keyframes.iter_mut().for_each(|(time, _)| *time = moved(*time));
         clip.names.iter_mut().for_each(|(time, _)| *time = moved(*time));
@@ -339,6 +389,38 @@ fn sampled(keys: &[Key], time: f32) -> (Quat, Vec3A) {
     let towards = if a.rotation.dot(b.rotation) < 0.0 { -b.rotation } else { b.rotation };
     let rotation = if mix == 0.0 { a.rotation } else { (a.rotation * (1.0 - mix) + towards * mix).normalize() };
     (through_angle(rotation), translation)
+}
+
+/// A [`ValueTrack`]'s value at `time` seconds, found as a joint's translation is ([`sample`], [`sampled`]).
+pub fn sample_value(keys: &[ValueKey], time: f32, even: bool) -> f32 {
+    let last = keys.len() - 1;
+    if keys[0].style == SAMPLED {
+        let place = time * super::curve_clip::SAMPLE_RATE;
+        let whole = place.floor();
+        if !(whole >= 0.0) {
+            return keys[0].value;
+        }
+        let mut mix = place - whole;
+        if mix < 1e-5 {
+            mix = 0.0;
+        }
+        let index = (whole as usize).min(last);
+        return keys[index].value * (1.0 - mix) + keys[(index + 1).min(last)].value * mix;
+    }
+    let next = keys.partition_point(|key| key.time <= time);
+    if next == 0 {
+        return keys[0].value;
+    }
+    if next == keys.len() || time.is_nan() {
+        return keys[last].value;
+    }
+    let (a, b) = (&keys[next - 1], &keys[next]);
+    let span = b.time - a.time;
+    if span <= 0.0 {
+        return b.value;
+    }
+    let fraction = if even || a.style == SAMPLED_COARSE { (time - a.time) / span } else { 1.0 - (b.time - time) / span };
+    a.value + (b.value - a.value) * ease(a.style, a.direction, fraction.clamp(0.0, 1.0))
 }
 
 /// A joint's offset (rotation, translation) at `time` seconds; `even` is the clip's ([`Clip::even`]). A time that

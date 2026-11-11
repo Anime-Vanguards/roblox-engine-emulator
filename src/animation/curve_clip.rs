@@ -29,6 +29,8 @@
 //!   0.2 rad; a slerp gives 0.025), and then through an angle and back, which leaves them up to
 //!   1e-4 off the curve. The samples' exact times and both forms are clip.rs `sampled` and
 //!   `through_angle`.
+//! - A Folder named `FaceControls`, anywhere in the clip, holds FloatCurves named after FaceControls
+//!   properties: they drive the rig's FaceControls instance and count for Length (`Clip::face`).
 //! - KeyframeSequenceProvider:GetKeyframeSequenceAsync of a CurveAnimation gives a KeyframeSequence
 //!   made of it ([`sequence`]): named "KeyframeSequence", Loop true and Priority Action whatever the
 //!   clip's are, a Keyframe "Keyframe" at each multiple of 1/30 s before Length and one at Length,
@@ -44,7 +46,7 @@ use rbx_dom_weak::{
     types::{Enum, Ref, Variant},
 };
 
-use super::clip::{Clip, JointTrack, Key, Marker, PRIORITY_ACTION, SAMPLED, SAMPLED_COARSE, Tree};
+use super::clip::{Clip, JointTrack, Key, Marker, PRIORITY_ACTION, SAMPLED, SAMPLED_COARSE, Tree, ValueKey, ValueTrack};
 use super::curve::{self, FloatKey, RotationKey};
 
 /// The samples a second a track plays a CurveAnimation from.
@@ -66,6 +68,8 @@ struct Folder {
     parent: Option<usize>,
     position: Option<[Vec<FloatKey>; 3]>,
     rotation: Option<Rotation>,
+    /// A Folder named FaceControls: its FloatCurves that have keys, by name (the first of a name)
+    face: Vec<(String, Vec<FloatKey>)>,
 }
 
 impl Folder {
@@ -130,7 +134,7 @@ fn visit<T: Tree>(tree: &T, node: T::Node, folder: Option<usize>, read: &mut Rea
     for child in tree.children(node) {
         let class = tree.class(child);
         if class == "Folder" {
-            read.folders.push(Folder { name: tree.name(child), parent: folder, position: None, rotation: None });
+            read.folders.push(Folder { name: tree.name(child), parent: folder, position: None, rotation: None, face: Vec::new() });
             visit(tree, child, Some(read.folders.len() - 1), read);
             continue;
         }
@@ -152,8 +156,13 @@ fn visit<T: Tree>(tree: &T, node: T::Node, folder: Option<usize>, read: &mut Rea
         let name = tree.name(child);
         match class {
             "FloatCurve" => {
-                if let Some(last) = float_keys(tree, child).last() {
+                let keys = float_keys(tree, child);
+                if let Some(last) = keys.last() {
                     read.length = read.length.max(curve::time_of(last.tick));
+                }
+                let holder = &mut read.folders[folder];
+                if holder.name == "FaceControls" && !keys.is_empty() && !holder.face.iter().any(|(kept, _)| *kept == name) {
+                    holder.face.push((name, keys));
                 }
             }
             "RotationCurve" => {
@@ -253,8 +262,18 @@ pub fn clip<T: Tree>(tree: &T, node: T::Node) -> Clip {
             rotation: folder.rotation.is_some(),
         })
         .collect();
+    // (of two FaceControls Folders with a curve of one name the first counts)
+    let mut face: Vec<ValueTrack> = Vec::new();
+    for (name, keys) in read.folders.iter().flat_map(|folder| &folder.face) {
+        if face.iter().any(|track| track.name == *name) {
+            continue;
+        }
+        let keys = times.iter().map(|&time| ValueKey { time, value: curve::float_at(keys, time).unwrap_or(0.0), style, direction: 0 }).collect();
+        face.push(ValueTrack { name: name.clone(), keys });
+    }
     Clip {
         length,
+        face,
         looped: tree.boolean(node, "Loop").unwrap_or(true),
         priority: tree.enumeration(node, "Priority").unwrap_or(PRIORITY_ACTION),
         joints,
@@ -276,6 +295,14 @@ pub fn sequence<T: Tree>(tree: &T, node: T::Node) -> (WeakDom, Ref) {
     times.push(length);
     fn pose(folders: &[Folder], index: usize, time: f32) -> InstanceBuilder {
         let folder = &folders[index];
+        // (measured: a Folder named FaceControls becomes a Folder of that name holding a NumberPose for each curve)
+        if folder.name == "FaceControls" {
+            return InstanceBuilder::new("Folder").with_name("FaceControls").with_children(folder.face.iter().map(|(name, keys)| {
+                InstanceBuilder::new("NumberPose")
+                    .with_name(name.as_str())
+                    .with_property("Value", Variant::Float64(curve::float_at(keys, time).unwrap_or(0.0) as f64))
+            }));
+        }
         let (rotation, translation) = folder.pose(time);
         let cframe = crate::world::frame::from_affine(&Affine3A::from_rotation_translation(rotation, translation.into()));
         InstanceBuilder::new("Pose")

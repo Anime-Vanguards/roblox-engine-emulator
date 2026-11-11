@@ -16,7 +16,7 @@
 //!   Stopped if it was playing, then Ended, and it is stepped no more (its WeightCurrent stays as it was).
 //! - Per joint, priorities from the highest down each take the smaller of their tracks' summed weight and
 //!   what is left; tracks of one priority blend by their weights; whatever no track takes stays at the rest
-//!   pose.
+//!   pose. A clip's FaceControls values blend the same way into the rig's FaceControls instance ([`pose`]).
 //!   A weight below 0.001 poses nothing. While an animator has a track that is stepped it writes every joint
 //!   of its rig each step (the rest pose into those no track poses); with none it writes nothing, so the
 //!   pose of a track stopped with a fade of 0 stays.
@@ -144,6 +144,7 @@ struct Names {
     model: ClassId,
     humanoid: ClassId,
     animation_controller: ClassId,
+    face_controls: Option<ClassId>,
     /// Enum.AnimationPriority items by value
     priorities: Vec<(u32, crate::reflection::EnumItemId)>,
 }
@@ -186,6 +187,7 @@ impl Names {
             model: c("Model")?,
             humanoid: c("Humanoid")?,
             animation_controller: c("AnimationController")?,
+            face_controls: c("FaceControls"),
             priorities,
         })
     }
@@ -1134,6 +1136,8 @@ struct Rig {
     named: FxHashMap<Str, InstanceId>,
     /// Every Motor6D and Bone of the rig, in the model's order
     all: Vec<InstanceId>,
+    /// The rig's FaceControls: the first instance of that class and name in the model
+    face: Option<InstanceId>,
     scale: f32,
 }
 
@@ -1174,7 +1178,7 @@ fn rig_of(state: &State, reflection: &Reflection, names: &Names, animator: Insta
     } else {
         1.0
     };
-    let mut rig = Rig { motors: FxHashMap::default(), bones: FxHashMap::default(), named: FxHashMap::default(), all: Vec::new(), scale };
+    let mut rig = Rig { motors: FxHashMap::default(), bones: FxHashMap::default(), named: FxHashMap::default(), all: Vec::new(), face: None, scale };
     let mut named_bones: Vec<(Str, InstanceId)> = Vec::new();
     let descendants = state.dom.descendants(model);
     // A model inside this one with its own Humanoid or AnimationController is a rig of its own: its joints are not this rig's,
@@ -1200,6 +1204,9 @@ fn rig_of(state: &State, reflection: &Reflection, names: &Names, animator: Insta
     };
     for id in descendants {
         let class = reflection.class(state.dom.at(id).class);
+        if rig.face.is_none() && Some(state.dom.at(id).class) == names.face_controls && state.dom.at(id).name.as_bytes() == b"FaceControls" && !in_carried_rig(id) {
+            rig.face = Some(id);
+        }
         if !(class.is_a(names.motor6d) || class.is_a(names.bone)) || in_carried_rig(id) {
             continue;
         }
@@ -1317,6 +1324,54 @@ fn pose(engine: &Rc<Engine>, shared: &Shared, names: &Names, animator: InstanceI
             write_transform(&mut state, reflection, &hooks, names, joint, Affine3A::IDENTITY);
         }
     }
+    // The rig's FaceControls: each property a posing track has a channel for takes the tracks' blend, held in 0 to 1.
+    // A property no posing track has is not written, so unlike a joint it keeps what it last had (measured: 0.9
+    // fading out over 0.3 s reads 0.6, 0.3 and then stays 0.3).
+    let Some(face) = rig.face.filter(|&face| state.dom.get(face).is_some()) else { return };
+    let class = state.dom.at(face).class;
+    let mut values: Vec<(NameId, Vec<(u32, f32, f32)>)> = Vec::new();
+    for &(ref clip, time, weight, rank) in &tracks {
+        for channel in &clip.face {
+            let Some(name) = reflection.name_id(&channel.name) else { continue };
+            // (the class's own properties, all numbers: a curve named Name or after nothing drives nothing)
+            if !reflection.class_property(class, name).is_some_and(|info| info.owner == class && !info.read_only) {
+                continue;
+            }
+            let value = clip::sample_value(&channel.keys, time, clip.even);
+            match values.iter_mut().find(|(kept, _)| *kept == name) {
+                Some((_, layers)) => layers.push((rank, weight, value)),
+                None => values.push((name, vec![(rank, weight, value)])),
+            }
+        }
+    }
+    for (name, mut layers) in values {
+        let value = blend_values(&mut layers).clamp(0.0, 1.0);
+        core::raw_set_unsignalled(&mut state, reflection, &hooks, face, name, Value::Number(value as f64));
+    }
+}
+
+/// [`blend`] for a number whose rest is 0 (a FaceControls property; measured with the same mixes: 0.8 and 0.2 at
+/// weight 0.25 each under a higher 0.4 at weight 0.5 give 0.45).
+pub fn blend_values(layers: &mut [(u32, f32, f32)]) -> f32 {
+    layers.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut remaining = 1.0f32;
+    let mut value = 0.0f32;
+    let mut start = 0;
+    while start < layers.len() && remaining > 0.0 {
+        let rank = layers[start].0;
+        let end = start + layers[start..].iter().take_while(|layer| layer.0 == rank).count();
+        let group = &layers[start..end];
+        start = end;
+        let total: f32 = group.iter().map(|layer| layer.1.max(0.0)).sum();
+        if total <= 0.0 {
+            continue;
+        }
+        let level: f32 = group.iter().map(|&(_, weight, value)| value * weight.max(0.0)).sum();
+        let share = total.min(remaining);
+        value += level / total * share;
+        remaining -= share;
+    }
+    value
 }
 
 /// Sets a joint's Transform as an Animator does: no Changed event (not measured), a Motor6D's

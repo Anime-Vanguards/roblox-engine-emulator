@@ -1174,9 +1174,8 @@ Studio playtests. What rests on Roblox's documentation alone is said where it st
   command bar there gets "Animator:StepAnimations() can only be used when the game is not running!",
   which no script of this engine reaches). In edit mode (`--mode edit`, where no Animator steps by
   itself) it works, with any delta: one below 0 or not a number steps as Studio's does (below).
-- Not emulated: the default `Animate` script, animation graphs, RootMotion, FaceControls channels (a
-  CurveAnimation's FloatCurves outside `Position` and `Rotation` count for its Length and pose nothing;
-  no clip here drives a FaceControls instance, a KeyframeSequence's NumberPoses neither).
+- Not emulated: the default `Animate` script, animation graphs, RootMotion, and what a FaceControls
+  instance does to a mesh (its properties are driven, below; nothing here deforms a head).
 
 ### Animation curves (`src/animation/curve.rs`, `curve_clip.rs`, `curves.rs`, `src/lua/curve_keys.rs`)
 
@@ -1281,6 +1280,16 @@ poses, events and provider answers Studio gave for a small rig.
   rounded down to steps of 1/32767 of its largest (with 1000 studs on one axis, 3 studs on another play as
   2.99081397); a rotation keeps its three smaller quaternion components cut to steps of `sqrt(2)/32766`
   (0.7 rad plays as 0.699953356 rad); and between keyframes the quaternions are mixed and normalized.
+- **FaceControls** (`curve_golden/face_controls.luau`, 30 lines equal). A Folder named `FaceControls`
+  anywhere in a CurveAnimation holds FloatCurves named after FaceControls properties (`JawDrop`,
+  `LeftEyeClosed`, ...: the 50 the class has); a KeyframeSequence holds NumberPoses in such a Folder under
+  a Pose. A track drives those properties of the rig's FaceControls instance: the first instance of that
+  class named "FaceControls" anywhere in the rig's model (one of another name is not driven). Values are
+  sampled like poses, blended over the tracks by priority and weight like a joint with 0 at rest, and
+  clamped to 0..1. A property is written only while a posing track has it: when the last one fades out the
+  property keeps what the last step wrote. The curves count for the clip's Length, and
+  `GetKeyframeSequenceAsync` of a CurveAnimation gives each Keyframe a `FaceControls` Folder of NumberPoses.
+  Not observable here: what the properties do to a head's mesh.
 - **Providers.** `KeyframeSequenceProvider:RegisterKeyframeSequence` takes a CurveAnimation too;
   `AnimationClipProvider:RegisterAnimationClip` and `RegisterActiveAnimationClip` take either clip and
   refuse a CurveAnimation whose `Position` or `Rotation` child is of another class;
@@ -1347,6 +1356,7 @@ poses, events and provider answers Studio gave for a small rig.
   - `RegisterActiveKeyframeSequence`'s id no longer loads a track (`LoadAnimation` raises "Unknown
     'active' animation"): tracks read AnimationClipProvider's active ids, which start at `active://0` too.
     A track of `RegisterActiveAnimationClip`'s id follows the sequence as scripts change it.
+  - NumberPoses in a `FaceControls` Folder drive the rig's FaceControls instance.
   - A negative or NaN frame delta is no longer taken as 0 (the frame loop never passes one).
 
 ## Server run context (`--run-context server`, `src/lua/server.luau`)

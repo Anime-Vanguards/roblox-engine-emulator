@@ -200,6 +200,12 @@ fn curves_that_arrive_whole_match_studio() {
     assert_golden(&golden_in("edit", include_str!("curve_golden/arrivals.luau"), 120.0), include_str!("curve_golden/arrivals.txt"), 0.0);
 }
 
+/// A clip's FaceControls curves and NumberPoses drive the rig's FaceControls instance.
+#[test]
+fn face_controls_match_studio() {
+    assert_golden(&golden_in("edit", include_str!("curve_golden/face_controls.luau"), 120.0), include_str!("curve_golden/face_controls.txt"), 0.0);
+}
+
 /// Animator:StepAnimations in a running game (measured in a Studio 0.747 playtest): a game's script may not call it
 /// ("lacking capability PluginOrOpenCloud"); the command bar's call there raises "Animator:StepAnimations() can only
 /// be used when the game is not running!", which no script of this engine reaches.
