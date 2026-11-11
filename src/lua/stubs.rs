@@ -363,6 +363,8 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "KeyframeSequence",
         lua.create_function(move |lua, uri: String| match crate::animation::source::sequence(&e, &uri) {
             Ok(sequence) => Ok((instance_value(lua, &e, sequence)?, None)),
+            // (an `active://` id's error is Studio's own text, measured, and the one for what is no clip)
+            Err(error) if uri.trim().starts_with("active://") || error == crate::animation::source::NOT_VALID => Ok((LuaValue::Nil, Some(error))),
             Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
         })?,
     )?;
@@ -373,6 +375,8 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         lua.create_function(move |lua, uri: String| match crate::animation::source::animation_clip(&e, &uri) {
             Ok(clip) => Ok((instance_value(lua, &e, clip)?, None)),
             Err(error) if error == crate::animation::source::NEVER => Ok((LuaValue::Boolean(false), None)),
+            // (an `active://` id's error is Studio's own text, measured)
+            Err(error) if uri.trim().starts_with("active://") => Ok((LuaValue::Nil, Some(error))),
             Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
         })?,
     )?;

@@ -208,8 +208,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   The asset may hold a KeyframeSequence or a CurveAnimation; both play.
   `KeyframeSequenceProvider:GetKeyframeSequenceAsync` returns a copy of the same KeyframeSequence (it
   raises for an id none of them has; of a CurveAnimation it returns the KeyframeSequence Studio makes
-  of one) and `AnimationClipProvider:GetAnimationClipAsync` the clip as it is. The default `Animate`
-  script is not emulated.
+  of one) and `AnimationClipProvider:GetAnimationClipAsync` a copy of the clip; of a clip a script
+  registered, both give it as it was registered. The default `Animate` script is not emulated.
 
 ## What is not simulated
 

@@ -1145,9 +1145,10 @@ record/prepare.rs runs prepared ahead by `ree serve`
 
 ## Animation (`src/animation`)
 
-AnimationTracks run as Roblox's documentation describes them (AnimationTrack, Animator, Motor6D,
-KeyframeSequence pages); how a track behaves before its asset arrives is measured in Studio, and so is
-everything about CurveAnimations and their curves (below).
+AnimationTracks play as Studio 0.747 plays them, measured by scripts that step an Animator in an edit
+session (`src/animation/curve_golden/`, below): how a track steps, fades, ends, fires and poses, for a
+KeyframeSequence and a CurveAnimation alike. How a track behaves before its asset arrives is measured in
+Studio playtests. What rests on Roblox's documentation alone is said where it stands.
 
 - Loading is the host's choice: `animation::enable(&engine, Loading { directories, download })`.
   `ree record` / `ree run` enable it with `--animations` directories (`<id>.rbxm` / `.rbxmx`), the
@@ -1155,21 +1156,24 @@ everything about CurveAnimations and their curves (below).
   command. An engine without it loads only the ids of clips registered in it (RegisterKeyframeSequence,
   RegisterAnimationClip and their Active forms). An id that loads nowhere warns once per engine and its
   tracks have Length 0. The clip an id names is a KeyframeSequence or a CurveAnimation.
-- LoadAnimation on an Animator, Humanoid or AnimationController makes an AnimationTrack; Play, Stop,
-  AdjustWeight and AdjustSpeed fade and play as documented; KeyframeReached, GetMarkerReachedSignal,
-  DidLoop, Stopped and Ended fire in time order.
-- The Animator step runs in the play-mode simulation phase right after PreAnimation and before Stepped.
-  Per joint, priorities from the highest (Action4 ... Action, Movement, Idle, Core) each take their
-  tracks' summed weight of what is left, blended by weight; what is left stays at rest. A Pose moves the
-  Motor6D whose Part0 / Part1 names are its parent Pose's and its own, else the Bone of its name whose
-  parent has the parent Pose's name (a bone under a renamed part is not posed).
+- LoadAnimation on an Animator, Humanoid or AnimationController makes an AnimationTrack. How it steps,
+  fades, ends and fires is under "How a track steps" below.
+- The Animator step runs in the play-mode simulation phase right after PreAnimation and before Stepped
+  (the documented order). Per joint, priorities from the highest (Action4 ... Action, Movement, Idle,
+  Core) each take `min(their tracks' summed weight, what is left)`, their tracks blended by weight; what
+  is left stays at rest. A Pose moves the Motor6D whose Part0 / Part1 names are its parent Pose's and its
+  own, else the Bone of its name whose parent has the parent Pose's name (a bone under a renamed part is
+  not posed). While an animator has a track that steps, every Motor6D and Bone of its rig is written each
+  step, those no track poses to rest; once none steps, nothing is written and the joints keep their pose.
 - Fetching (measured in Studio playtests): an asset's first request in a session arrives 0.45 s later;
   tracks and preloads of it share the fetch, and one fetched before loads at once. Until it arrives a
   track has Length 0 and never poses. ContentProvider:PreloadAsync waits for the Animations it is given.
 - `Animator:StepAnimations(delta)` steps that animator's tracks and poses its rig, as the frame's step
-  does for every animator. It has Plugin security: in play mode it raises "The current thread cannot call
-  'StepAnimations' (lacking capability Plugin)", in edit mode (`--mode edit`, where no Animator steps by
-  itself) it works. A delta below 0 or not a number steps by 0.
+  does for every animator. In play mode it raises "The current thread cannot call 'StepAnimations'
+  (lacking capability PluginOrOpenCloud)", as a game's script gets in a Studio playtest (measured; the
+  command bar there gets "Animator:StepAnimations() can only be used when the game is not running!",
+  which no script of this engine reaches). In edit mode (`--mode edit`, where no Animator steps by
+  itself) it works, with any delta: one below 0 or not a number steps as Studio's does (below).
 - Not emulated: the default `Animate` script, animation graphs, RootMotion, FaceControls channels (a
   CurveAnimation's FloatCurves outside `Position` and `Rotation` count for its Length and pose nothing;
   no clip here drives a FaceControls instance, a KeyframeSequence's NumberPoses neither).
@@ -1207,12 +1211,16 @@ poses, events and provider answers Studio gave for a small rig.
   X, Y or Z when it becomes a child is that channel if the curve has none, and stays it under any other
   name; a FloatCurve named so when it stops being a child empties that channel, whichever curve was it. A
   child renamed to X is therefore no channel, of two children named X the first is, and a channel renamed
-  and then removed is still what `X()` returns. Playing a clip finds the channels by name.
+  and then removed is still what `X()` returns. A curve that arrives whole (a clone, a model file) takes
+  its channels by the names its children have then, so a clone's child renamed before the first `X()` is
+  still the channel (`curve_golden/arrivals.luau`). Playing a clip finds the channels by name.
 - **MarkerCurve** holds `{Time, Value}` markers. A value is text of at most 64 bytes
   (`curve_golden/markers.luau`): a number is written with up to 20 significant digits
   (`0.10000000000000000555`), an EnumItem as its name, an instance as "Instance", a table as "{}", a
   datatype as `tostring` writes it; a longer one raises "Invalid marker passed to InsertMarkerAtTime, max
-  string size is 64".
+  string size is 64". A value may hold a zero byte and the curve gives it back whole; the stored form
+  ends a value there, so, as in Studio, a clone of such a curve, a track of its clip and the copies of the
+  registered clip have none of that curve's markers.
 - **Storage.** A curve keeps its keys in its `ValuesAndTimes` property in the form model files hold, so
   clones and files carry them; scripts cannot read the property.
 - **A CurveAnimation as a track.** A Folder below the clip (through Folders only) is a joint by its own
@@ -1222,21 +1230,57 @@ poses, events and provider answers Studio gave for a small rig.
   time among the curves inside Folders, 0 or later: keys before 0 s do not play and markers there do not
   fire. Loop and Priority are the clip's. Each MarkerCurve fires `GetMarkerReachedSignal(its Name)` with
   the marker's Value; `GetTimeOfKeyframe` raises "Invalid operation for this animation format.".
-- **How a CurveAnimation's track steps** (`curve_golden/playback_steps.luau` and `playback_clips.luau`,
-  stepped with StepAnimations in Studio; 183 lines equal). TimePosition is a float32 that each step adds
-  `delta * Speed` to. A step fires the markers from where it starts up to, but not at, where it stops: a
-  marker at the time a step lands on fires with the next step that moves, one at the start with the first.
-  Reaching the last key forwards, or 0 s backwards, ends a pass: the end's own marker, then
-  `KeyframeReached("End")`, then `Stopped` for a track that does not loop, then `DidLoop` when the step
-  went past the end (looped or not). A looped track goes on from the other end; one that does not loop
-  fades out over 0.3 s, still moving if its TimePosition is set, and `Ended` fires a step after its weight
-  reached 0. `Play` with a negative speed starts at the last key. A TimePosition set on a looped track at
-  or past the last key is 0 s. A clip of Length 0 never ends: its time runs on, below 0 too, and passes
-  markers wherever they are.
-- **Tracks play samples, as Studio does.** The pose at a time is the line between the curves' values at
-  the two nearest multiples of 1/30 s (rotations: the normalized mix of the two quaternions), so a
-  Constant step is a ramp over the sample before it. The samples start at 0 s and the last lies at or
-  past Length. Poses agree with Studio's within 2e-4 (Studio rounds the sampled rotations it stores).
+- **How a track steps**, a CurveAnimation's and a KeyframeSequence's alike (`curve_golden/
+  playback_steps.luau`, `playback_clips.luau`, `playback_deltas.luau`, `playback_weights.luau`,
+  `sequence_steps.luau`, stepped with StepAnimations in Studio; 580 lines, every one equal).
+  - TimePosition and WeightCurrent are float32. Each step adds `float32(delta * Speed)` to the time.
+  - A step fires the markers from where it starts up to, but not at, where it stops: a marker at the time
+    a step lands on fires with the next step that moves, one at the start with the first. A keyframe's
+    markers fire before its name, MarkerCurves in the clip's order.
+  - Reaching the last key forwards, or 0 s backwards, ends a pass. A CurveAnimation fires the end's own
+    marker, then `KeyframeReached("End")`; a KeyframeSequence fires its own keyframes' names and no "End".
+    Then `Stopped` for a track that does not loop, then `DidLoop` when the step went past the end, looped
+    or not. A looped track goes on from the other end; one that does not loop fades out over 0.3 s, still
+    moving if its TimePosition is set.
+  - `Play` with a negative speed starts at the last key. A TimePosition set on a looped track is taken
+    round the clip (at or past the last key it is 0 s); on one that does not loop it is held inside.
+  - A clip of Length 0 never ends: its time runs on, below 0 too. A CurveAnimation's markers fire as it
+    passes them; a KeyframeSequence's fire nothing.
+  - Fades: `Play`, `Stop` and `AdjustWeight` set a target and a time; the weight moves with the next step,
+    from where it is (a track played again fades from the weight it had), by
+    `target + (weight - target) * (left - delta) / left`. WeightTarget is 0 until a track is played.
+    `AdjustWeight` on a track that is not playing does nothing.
+  - Ending: a step that begins with the fade over and the track stopped, or with a target of at most
+    1e-5, fires `Stopped` (if it was playing) and `Ended` and drops the track without posing. So `Ended`
+    comes one step after the weight got to 0, `Stop(0)` leaves WeightCurrent where it was, and a joint
+    whose last track ends at once keeps its pose. A weight below 0.001 poses nothing.
+  - A delta below 0 moves the time back and the fade forward past its end: the weight reads NaN or -inf,
+    and a track whose weight is no finite number steps no more (it stays IsPlaying). A delta that is no
+    number makes the time NaN; a KeyframeSequence then fires the rest of its clip once and holds its last
+    keyframe's pose, a CurveAnimation fires and poses nothing.
+  - A destroyed AnimationTrack plays on; a destroyed Animator's tracks stop.
+- **A CurveAnimation's poses are samples, as in Studio.** Sample `k` is the curves' value at
+  `float32(k * float32(1/30))` s, held at Length; the pose at a time is `a * (1 - s) + b * s` of the two
+  samples around `float32(time * 30)`, `s` taken as 0 below 1e-5. So a Constant step is a ramp over the
+  sample before it, and a line from 0 to 10 over 1 s reads 7.00000048 at 0.7 s. Translations are Studio's
+  to the last digit (`curve_golden/playback_poses.luau`, 1,800 of them over a 10 s clip and others).
+  Rotations mix the two samples' quaternions, normalized, and then go through an angle and back the way
+  Studio's do (the arc cosine by a short polynomial: 0.6 rad plays as 0.60000138 rad): within 1e-6 a
+  matrix entry of Studio's (`playback_rotations.luau`), about half of them to the last digit; the rest
+  follow Studio's own float32 sine and cosine.
+- **A KeyframeSequence's poses** (`curve_golden/sequence_poses.luau`, 2,472 numbers within 2e-6, 2,180 to
+  the last digit). Between two keyframes the translation is `a + (b - a) * alpha` and the rotation turns
+  the short way at an even rate, then goes through the same angle as a curve's. `alpha` is the eased
+  fraction: Cubic's In and Out are the other way round (In starts fast), CubicV2's are not; Constant holds
+  the later keyframe's pose from the start with In, the earlier one's to the end with Out, and changes
+  half way with InOut; Elastic and Bounce InOut are their own curves.
+  Studio plays a sequence from a packed form when its keyframes are evenly spread (every gap within a
+  tenth of the first), every posed joint has a Pose in every keyframe and each of those is Linear. Then
+  keyframe `i` of `n` plays at `i * Length / (n - 1)` s, names and markers with it (keyframes at 0, 0.5
+  and 1.05 s play at 0, 0.525 and 1.05 s, and `GetTimeOfKeyframe` says so); a joint's translations are
+  rounded down to steps of 1/32767 of its largest (with 1000 studs on one axis, 3 studs on another play as
+  2.99081397); a rotation keeps its three smaller quaternion components cut to steps of `sqrt(2)/32766`
+  (0.7 rad plays as 0.699953356 rad); and between keyframes the quaternions are mixed and normalized.
 - **Providers.** `KeyframeSequenceProvider:RegisterKeyframeSequence` takes a CurveAnimation too;
   `AnimationClipProvider:RegisterAnimationClip` and `RegisterActiveAnimationClip` take either clip and
   refuse a CurveAnimation whose `Position` or `Rotation` child is of another class;
@@ -1244,20 +1288,66 @@ poses, events and provider answers Studio gave for a small rig.
   for the clip's content: registering the same clip again, a clone or another built the same way returns
   the same id, a clip changed in any way (a key, its name, an attribute) another, and a track of the id
   plays the clip as it was when registered. `RegisterKeyframeSequence` also takes an instance that is no
-  clip: its id loads a track of Length 0 that stays at 0 s, `GetKeyframeSequenceAsync` of it returns an
-  empty KeyframeSequence and `GetAnimationClipAsync` never returns. `GetAnimationClipAsync(id)` yields and
-  returns a copy of the clip as it is (the instance itself for an `active://` id);
-  `GetKeyframeSequenceAsync` of a CurveAnimation returns the KeyframeSequence Studio makes of one (a
-  Keyframe every 1/30 s and at Length, a Pose per Folder, the markers as KeyframeMarkers).
+  clip, and a clip that is not Archivable registers as one (all of those under one id): its id loads a
+  track of Length 0 that stays at 0 s, `GetKeyframeSequenceAsync` of it raises "KeyframeSequence loaded is
+  not valid." the first time and returns one empty KeyframeSequence from then on, and
+  `GetAnimationClipAsync` never returns.
+- **Copies of a registered clip** (`curve_golden/registered.luau`). `GetKeyframeSequenceAsync(id)` and
+  `GetAnimationClipAsync(id)` give the clip as it was when registered, whatever became of the instance
+  since, and each gives the same instance for an id every time, also after a script changed or destroyed
+  that copy (the two members' copies are two). KeyframeSequenceProvider's copy is named
+  "KeyframeSequence" and has none of the clip's own attributes and tags; AnimationClipProvider's keeps
+  them. Descendants that are not Archivable are left out. `GetKeyframeSequenceAsync` of a CurveAnimation
+  returns the KeyframeSequence Studio makes of one (a Keyframe every 1/30 s and at Length, a Pose per
+  Folder, the markers as KeyframeMarkers). Registering keeps the clip as data that shares what the
+  instance's properties hold: no instance is made, no serial used and nothing is charged, and keeping a
+  sequence of 1,200 instances takes 0.2 ms (`registering_a_clip_makes_nothing_a_script_sees`).
+- **`active://` ids** (`curve_golden/active.luau`). Each provider counts its own from `active://0`, and
+  registering a clip again gives the next. A track, and `GetAnimationClipAsync` (which returns the instance
+  itself), look an id up among AnimationClipProvider's; `GetKeyframeSequenceAsync` among
+  KeyframeSequenceProvider's (the instance itself too). An id that names none raises "Unknown 'active'
+  animation: 'active://N'", from `LoadAnimation` as well, and one that is no whole number "Invalid 'active'
+  animation format: it should be active://ID". A track of such an id follows its clip: Length at once
+  (without a Changed event), Looped and Priority unless a script wrote the track's own, and with the next
+  step the keys, joints added, renamed or removed, markers and new MarkerCurves; a clip emptied or
+  destroyed plays as one of Length 0. A CurveAnimation and a KeyframeSequence alike.
 - **Differences from Studio.** Registered ids are `rbxtemp://N`, counted up, one per content (Studio's are
-  32 hexadecimal digits of the content, which a script cannot predict either).
-  `GetKeyframeSequenceAsync` and `GetAnimationClipAsync` of a registered id copy the instance as it is
-  now (Studio: as it was when registered), and a track of an `active://` id keeps the clip it loaded
-  (Studio: it follows the instance). A track's pose can differ from Studio's in the seventh digit (its
-  samples' times are not exactly ours). The steps above are a CurveAnimation's track's only: a
-  KeyframeSequence's track steps as before. A curve that came whole (a clone, a model file) takes its channels by name when it is
-  first asked for one or a child comes or goes, not when it was made. A marker's value is cut at a zero
-  byte. The messages of ids that do not load are this engine's own.
+  32 hexadecimal digits of the content, which a script cannot predict either). Rotations a track gives a
+  joint can differ from Studio's in the last digit or two (6e-7 a matrix entry at most in those measured:
+  Studio's float32 sine, cosine and powers are not copied). The messages of ids that do not load are this
+  engine's own.
+- **What changed for a game that plays KeyframeSequences** (2026-11-12, when their tracks took the measured
+  rules above; before, they followed Roblox's documentation):
+  - TimePosition and WeightCurrent are float32 (0.3 reads 0.300000012); WeightTarget is 0 before `Play`.
+  - A fade starts with the next step and from the weight the track has, not from 0; `Play` on a playing
+    or fading track does not reset the weight.
+  - A track that reaches its end fades out over 0.3 s (was 0.1 s) and fires `DidLoop` when the step went
+    past the end, also when it does not loop. `Ended` fires one step after the weight reached 0.
+  - `Play` with a negative speed starts at the last keyframe.
+  - A keyframe at the time a step lands on fires with the next step that moves (was: with that step); the
+    first keyframe fires with the first step that moves. A keyframe's markers fire before its name.
+  - `Stop(0)` and a weight adjusted to 0 leave WeightCurrent and the joints' pose as they were (was: weight
+    0 and the joints back at rest). `AdjustWeight` on a track that is not playing does nothing. A weight
+    below 0.001 poses nothing, and a target of at most 1e-5 ends the track.
+  - A clip of Length 0 never ends, its time runs on, and it fires nothing.
+  - A TimePosition set on a looped track wraps round the clip.
+  - A destroyed AnimationTrack plays on.
+  - While any track of an animator steps, every joint of the rig is written each step.
+  - Blending: a priority takes `min(summed weight, what is left)` (was: what is left times
+    `min(summed weight, 1)`), so under a higher priority at weight 0.5 a track at 0.25 takes 0.25 (was
+    0.125), and negative weights count as none.
+  - Poses: rotations go through Studio's angle (up to 7e-5 rad from the keyframe's), Constant, Elastic and
+    Bounce ease as measured (Constant In shows the later keyframe at once; Elastic and Bounce In and Out
+    are no longer the other way round), and an evenly keyed Linear sequence plays from the packed form
+    (its keyframes' times, names and markers move to the even grid; translations up to 1/32767 of the
+    joint's largest lower, rotations about 1e-4 rad off).
+  - `GetKeyframeSequenceAsync` of a registered id returns one instance per id (was: a new clone each
+    call), the sequence as it was registered, named "KeyframeSequence" without the clip's attributes and
+    tags. A sequence that is not Archivable registers as no clip (Length 0).
+  - `RegisterActiveKeyframeSequence`'s id no longer loads a track (`LoadAnimation` raises "Unknown
+    'active' animation"): tracks read AnimationClipProvider's active ids, which start at `active://0` too.
+    A track of `RegisterActiveAnimationClip`'s id follows the sequence as scripts change it.
+  - A negative or NaN frame delta is no longer taken as 0 (the frame loop never passes one).
 
 ## Server run context (`--run-context server`, `src/lua/server.luau`)
 

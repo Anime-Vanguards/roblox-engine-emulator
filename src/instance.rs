@@ -698,6 +698,95 @@ fn copy_tree(
     Some(copy)
 }
 
+/// An instance tree kept as data: what [`clone_instance`] would copy of it now, without making an instance (a clip
+/// as it was when registered: animation/source.rs). Descendants that are not Archivable are left out, as a clone
+/// leaves them out; a property that refers to an instance keeps referring to it; scripts' sources and callbacks are
+/// not kept.
+pub struct KeptTree {
+    nodes: Vec<KeptNode>,
+}
+
+pub struct KeptNode {
+    pub class: ClassId,
+    pub name: crate::value::Str,
+    pub props: crate::dom::Props,
+    /// The node's children, as indexes into the tree
+    pub children: Vec<u32>,
+    parent: Option<u32>,
+    attributes: crate::dom::Attributes,
+    tags: crate::dom::ThinVec<crate::value::Str>,
+    flags: u16,
+    studio_node: crate::dom::StudioNode,
+    unmodeled: Option<crate::project::Unmodeled>,
+}
+
+impl KeptTree {
+    /// `root` and what is below it, as it is now; None when it is not Archivable.
+    pub fn of(state: &State, root: InstanceId) -> Option<KeptTree> {
+        if !archivable(state, root) {
+            return None;
+        }
+        let mut nodes: Vec<KeptNode> = Vec::new();
+        let mut stack: Vec<(InstanceId, Option<u32>)> = vec![(root, None)];
+        while let Some((id, parent)) = stack.pop() {
+            let source = state.dom.at(id);
+            let index = nodes.len() as u32;
+            if let Some(parent) = parent {
+                nodes[parent as usize].children.push(index);
+            }
+            nodes.push(KeptNode {
+                class: source.class,
+                name: source.name.clone(),
+                props: source.props.copied_without(K::Parent as NameId),
+                children: Vec::new(),
+                parent,
+                attributes: source.attributes.copied(),
+                tags: source.tags.clone(),
+                flags: source.flags & (flags::SCRIPT_CREATED | flags::STUDIO_ONLY | flags::MATERIALIZED | flags::JSON_MODULE | flags::HOLDS_REFS),
+                studio_node: source.studio_node,
+                unmodeled: source.unmodeled.clone(),
+            });
+            stack.extend(source.children.iter().rev().filter(|&&child| archivable(state, child)).map(|&child| (child, Some(index))));
+        }
+        Some(KeptTree { nodes })
+    }
+
+    pub fn nodes(&self) -> &[KeptNode] {
+        &self.nodes
+    }
+
+    /// The tree as new instances, unparented: its root. `bare`: the root without its Name, attributes and tags.
+    pub fn make(&self, state: &mut State, reflection: &Reflection, bare: bool) -> InstanceId {
+        let mut made: Vec<InstanceId> = Vec::with_capacity(self.nodes.len());
+        for node in &self.nodes {
+            let copy = create(state, reflection, node.class);
+            let bare = bare && made.is_empty();
+            {
+                let target = state.dom.at_mut(copy);
+                target.props = node.props.copied_without(if bare { K::Name as NameId } else { K::Parent as NameId });
+                if !bare {
+                    target.attributes = node.attributes.copied();
+                    target.tags = node.tags.clone();
+                }
+                target.flags |= node.flags;
+                target.studio_node = node.studio_node;
+                target.unmodeled = node.unmodeled.clone();
+            }
+            state.dom.refresh_name(reflection, copy);
+            if let Some(parent) = node.parent {
+                state.dom.attach(copy, made[parent as usize]);
+            }
+            made.push(copy);
+        }
+        for (node, &copy) in self.nodes.iter().zip(&made).skip(bare as usize) {
+            for tag in node.tags.clone() {
+                super::services::tag_added(state, copy, &tag);
+            }
+        }
+        made[0]
+    }
+}
+
 // Attributes and tags
 
 /// SetAttribute after type validation: stores (or removes) and fires AttributeChanged plus the
