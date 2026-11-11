@@ -531,14 +531,14 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         if clip.as_ref().is_some_and(|clip| clip.curve) {
             return Err(Flow::Error(ScriptError::plain("Invalid operation for this animation format.")));
         }
-        // Documented: it errors before the animation loaded and for a name no keyframe has
-        // (messages not measured)
+        // Documented: it errors before the animation loaded (message not measured) and for a name no keyframe has
+        // (measured, Studio 0.747: "Could not find a keyframe by that name!")
         let Some(clip) = clip.filter(|clip| clip.length > 0.0 || !clip.names.is_empty()) else {
             return Err(Flow::Error(ScriptError::plain("GetTimeOfKeyframe: the animation has not loaded")));
         };
         match clip.time_of(&name) {
             Some(time) => Ok(values([LuaValue::Number(time as f64)])),
-            None => Err(Flow::Error(ScriptError::plain(format!("Could not find a keyframe by the name of {name}")))),
+            None => Err(Flow::Error(ScriptError::plain("Could not find a keyframe by that name!"))),
         }
     }));
 

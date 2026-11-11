@@ -463,7 +463,8 @@ fn looping_markers_and_keyframes() {
         local Track = Animator:LoadAnimation(Sequence({ {0, 0, "Start"}, {0.25, 0.5, "Hit", { Impact = "big" }}, {0.5, 0} }, true))
         assert(Track.Looped, "Looped comes from the sequence")
         assert(Track:GetTimeOfKeyframe("Hit") == 0.25)
-        assert(not pcall(Track.GetTimeOfKeyframe, Track, "Nope"), "an unknown keyframe errors")
+        local Found, Message = pcall(Track.GetTimeOfKeyframe, Track, "Nope")
+        assert(not Found and Message == "Could not find a keyframe by that name!", Message)
         local Seen = {}
         Track.KeyframeReached:Connect(function(Name) table.insert(Seen, Name) end)
         Track:GetMarkerReachedSignal("Impact"):Connect(function(Value) table.insert(Seen, "Impact=" .. Value) end)
