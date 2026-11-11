@@ -989,6 +989,24 @@ Method("KeyframeSequenceProvider", "GetKeyframeSequenceAsync", function(_, Asset
 	return Sequence
 end)
 
+-- AnimationClipProvider:GetAnimationClipAsync: the same for the clip as it is, a KeyframeSequence or a
+-- CurveAnimation (measured in Studio 0.747: an id that is no string raises "Unable to cast double to
+-- ContentId"; the message of an id that does not load is this engine's own).
+Method("AnimationClipProvider", "GetAnimationClipAsync", function(_, AssetId)
+	if AssetId == nil then
+		error("Argument 1 missing or nil", 0)
+	end
+	if type(AssetId) ~= "string" then
+		error(`Unable to cast {if type(AssetId) == "number" then "double" else typeof(AssetId)} to ContentId`, 0)
+	end
+	task.wait()
+	local Clip, Message = R.AnimationClip(AssetId)
+	if not Clip then
+		error(Message, 0)
+	end
+	return Clip
+end)
+
 -- TextService: family metadata of a font family asset / json path
 Method("TextService", "GetFamilyInfoAsync", function(_, AssetId)
 	local Id = tostring(AssetId)

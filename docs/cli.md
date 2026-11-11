@@ -205,9 +205,11 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   none of them has is warned about once and its tracks have Length 0. As in Studio, an asset's first
   request in a run arrives 0.45 s later (its tracks keep Length 0 and no pose until then; a later one,
   or one ContentProvider:PreloadAsync waited for, loads at once).
+  The asset may hold a KeyframeSequence or a CurveAnimation; both play.
   `KeyframeSequenceProvider:GetKeyframeSequenceAsync` returns a copy of the same KeyframeSequence (it
-  raises for an id none of them has). CurveAnimations and the default `Animate` script are not
-  emulated.
+  raises for an id none of them has; of a CurveAnimation it returns the KeyframeSequence Studio makes
+  of one) and `AnimationClipProvider:GetAnimationClipAsync` the clip as it is. The default `Animate`
+  script is not emulated.
 
 ## What is not simulated
 

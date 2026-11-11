@@ -381,14 +381,6 @@
 			"why": "SharedTable is a userdata in a client; ree makes it a table"
 		},
 		{
-			"line": "value FloatCurveKey typeof=FloatCurveKey type=userdata tostring={Linear, 0, 1, nil, nil}",
-			"why": "FloatCurveKey has no constructor in ree"
-		},
-		{
-			"line": "value RotationCurveKey typeof=RotationCurveKey type=userdata tostring={Linear, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0}",
-			"why": "RotationCurveKey has no constructor in ree"
-		},
-		{
 			"line": "value SecurityCapabilities typeof=SecurityCapabilities type=userdata tostring=",
 			"why": "SecurityCapabilities has no constructor in ree"
 		}

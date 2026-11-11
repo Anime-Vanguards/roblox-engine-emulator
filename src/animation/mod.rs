@@ -1,7 +1,9 @@
 //! AnimationTracks: Animator:LoadAnimation (and the Humanoid's and AnimationController's), the
 //! track's playback members and events, and the Animator's step, which writes the blended pose into
-//! the rig's Motor6D.Transform and Bone.Transform each frame. Roblox's documentation, not measured
-//! in Studio (docs/engine.md "Animation" lists the assumptions):
+//! the rig's Motor6D.Transform and Bone.Transform each frame. A track plays a KeyframeSequence
+//! ([`clip`]) or a CurveAnimation ([`curve_clip`], measured in Studio; the curve instances' own
+//! members are in `curves`). The playback below is Roblox's documentation, not measured in Studio
+//! (docs/engine.md "Animation" lists the assumptions):
 //!
 //! - The step runs after RunService.PreAnimation and before Stepped (the task scheduler's order), in
 //!   play mode only (an Animator does not run in edit mode); the Motor6D batch after PreSimulation
@@ -18,7 +20,12 @@
 //! - Translations scale with the rig model's Scale (Model:ScaleTo scales the animations it plays).
 
 pub mod clip;
+pub mod curve;
+pub mod curve_clip;
+mod curves;
 pub mod source;
+#[cfg(test)]
+mod curve_tests;
 #[cfg(test)]
 mod tests;
 
@@ -520,6 +527,10 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let id = track_of(args)?;
         let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
         let clip = s.borrow().tracks.get(&id).and_then(|track| track.clip.clone());
+        // Measured (Studio 0.747): a CurveAnimation's track knows no keyframe names
+        if clip.as_ref().is_some_and(|clip| clip.curve) {
+            return Err(Flow::Error(ScriptError::plain("Invalid operation for this animation format.")));
+        }
         // Documented: it errors before the animation loaded and for a name no keyframe has
         // (messages not measured)
         let Some(clip) = clip.filter(|clip| clip.length > 0.0 || !clip.names.is_empty()) else {
@@ -531,25 +542,54 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         }
     }));
 
-    // KeyframeSequenceProvider:RegisterKeyframeSequence: a temporary id for a sequence of this run
-    // (GetKeyframeSequenceAsync yields: a Luau stub, lua/services.luau, over source::sequence)
-    add(behaviors, "KeyframeSequenceProvider", "RegisterKeyframeSequence", method(|lua, engine, _, args| {
-        let Some(sequence) = args.instance(1).filter(|&id| {
-            let state = engine.state.borrow();
-            engine.reflection.class(state.dom.at(id).class).name.as_ref() == "KeyframeSequence"
-        }) else {
-            return Err(Flow::Error(ScriptError::plain("RegisterKeyframeSequence requires a KeyframeSequence")));
-        };
-        let uri = {
-            let mut loader = source::loader(engine).borrow_mut();
-            loader.next_registered += 1;
-            let uri = format!("rbxtemp://{}", loader.next_registered);
-            loader.registered.insert(uri.clone(), sequence);
-            uri
-        };
-        engine.state.borrow_mut().dom.pin(sequence);
-        Ok(values([LuaValue::String(lua.create_string(&uri)?)]))
-    }));
+    // Registering a clip of this run: a temporary id for it (GetKeyframeSequenceAsync and GetAnimationClipAsync yield: Luau
+    // stubs, lua/services.luau, over source::sequence and source::animation_clip). Measured in Studio 0.747:
+    // KeyframeSequenceProvider:RegisterKeyframeSequence takes a CurveAnimation as it takes a KeyframeSequence, and does
+    // not look inside it; AnimationClipProvider's two refuse a CurveAnimation whose Position or Rotation child is of
+    // another class (curve_clip::validate) and anything that is not a clip; the Active ones give "active://N", counted
+    // from 0 across both services, and KeyframeSequenceProvider's takes a KeyframeSequence only. (Studio's other ids
+    // are a hash of the clip, the same for the same content; here they are rbxtemp://N, one per call. Studio's
+    // RegisterKeyframeSequence also gives an id for an instance that is no clip, a Folder say; what such an id plays is
+    // not measured, so it is refused here.)
+    let register = |active: bool, curves: bool, checked: bool, refusal: &'static str| {
+        method(move |lua, engine, _, args| {
+            // (RegisterKeyframeSequence without an argument is not measured: it keeps its refusal)
+            if args.get(1).is_nil() && (active || checked) {
+                return Err(Flow::Error(ScriptError::plain("Argument 1 missing or nil")));
+            }
+            let class = args.instance(1).map(|id| engine.reflection.class(engine.state.borrow().dom.at(id).class).name.clone());
+            let clip = match (args.instance(1), class.as_deref()) {
+                (Some(id), Some("KeyframeSequence")) => id,
+                (Some(id), Some("CurveAnimation")) if curves => id,
+                _ => return Err(Flow::Error(ScriptError::plain(refusal))),
+            };
+            if checked && class.as_deref() == Some("CurveAnimation") {
+                let state = engine.state.borrow();
+                let tree = clip::EngineTree { state: &state, reflection: &engine.reflection };
+                curve_clip::validate(&tree, clip).map_err(|problem| Flow::Error(ScriptError::plain(problem)))?;
+            }
+            let uri = {
+                let mut loader = source::loader(engine).borrow_mut();
+                let uri = if active {
+                    loader.next_active += 1;
+                    format!("active://{}", loader.next_active - 1)
+                } else {
+                    loader.next_registered += 1;
+                    format!("rbxtemp://{}", loader.next_registered)
+                };
+                loader.registered.insert(uri.clone(), clip);
+                uri
+            };
+            engine.state.borrow_mut().dom.pin(clip);
+            Ok(values([LuaValue::String(lua.create_string(&uri)?)]))
+        })
+    };
+    add(behaviors, "KeyframeSequenceProvider", "RegisterKeyframeSequence", register(false, true, false, "RegisterKeyframeSequence requires a KeyframeSequence"));
+    add(behaviors, "KeyframeSequenceProvider", "RegisterActiveKeyframeSequence", register(true, false, false, "Argument must be a 'KeyframeSequence' object"));
+    add(behaviors, "AnimationClipProvider", "RegisterAnimationClip", register(false, true, true, "Invalid AnimationClip instance passed to registerAnimationClip"));
+    add(behaviors, "AnimationClipProvider", "RegisterActiveAnimationClip", register(true, true, true, "Argument must be an 'AnimationClip' object"));
+
+    curves::install(engine, behaviors);
 
     *extension(engine).state.borrow_mut() = Some((shared, names));
 }
@@ -854,6 +894,8 @@ type PosingTrack = (Arc<Clip>, f32, f32, u32);
 struct Rig {
     motors: FxHashMap<(Str, Str), InstanceId>,
     bones: FxHashMap<(Str, Str), InstanceId>,
+    /// The joints by the one name a CurveAnimation gives them: a Motor6D by its Part1's name, else a Bone by its own
+    named: FxHashMap<Str, InstanceId>,
     scale: f32,
 }
 
@@ -894,7 +936,8 @@ fn rig_of(state: &State, reflection: &Reflection, names: &Names, animator: Insta
     } else {
         1.0
     };
-    let mut rig = Rig { motors: FxHashMap::default(), bones: FxHashMap::default(), scale };
+    let mut rig = Rig { motors: FxHashMap::default(), bones: FxHashMap::default(), named: FxHashMap::default(), scale };
+    let mut named_bones: Vec<(Str, InstanceId)> = Vec::new();
     let descendants = state.dom.descendants(model);
     // A model inside this one with its own Humanoid or AnimationController is a rig of its own: its joints are not this rig's,
     // however they are named
@@ -925,13 +968,18 @@ fn rig_of(state: &State, reflection: &Reflection, names: &Names, animator: Insta
         if class.is_a(names.motor6d) {
             let part = |name| state.dom.raw_get(id, name).and_then(Value::as_instance).and_then(|part| state.dom.get(part)).map(|part| part.name.clone());
             if let (Some(part0), Some(part1)) = (part(names.part0), part(names.part1)) {
+                rig.named.entry(part1.clone()).or_insert(id);
                 rig.motors.entry((part0, part1)).or_insert(id);
             }
         } else if class.is_a(names.bone) {
+            named_bones.push((state.dom.at(id).name.clone(), id));
             if let Some(parent) = state.dom.parent_of(id).and_then(|parent| state.dom.get(parent)) {
                 rig.bones.entry((parent.name.clone(), state.dom.at(id).name.clone())).or_insert(id);
             }
         }
+    }
+    for (name, id) in named_bones {
+        rig.named.entry(name).or_insert(id);
     }
     Some(rig)
 }
@@ -979,7 +1027,9 @@ pub fn blend(layers: &mut [Layer]) -> (Quat, Vec3A) {
 fn pose(engine: &Rc<Engine>, shared: &Shared, names: &Names, animator: InstanceId, tracks: Vec<PosingTrack>) {
     let reflection = &engine.reflection;
     // (joints in the order the tracks first pose them: hash order follows slots, which differ between two runs of one scene)
-    let mut joints: Vec<(InstanceId, Vec<Layer>)> = Vec::new();
+    // (with each joint, the layers of the tracks that turn it, once a track that does not has posed it: a CurveAnimation's
+    // joint without a Rotation curve)
+    let mut joints: Vec<(InstanceId, Vec<Layer>, Option<Vec<Layer>>)> = Vec::new();
     let mut joint_at: FxHashMap<InstanceId, usize> = FxHashMap::default();
     let hooks = engine.hooks.borrow();
     let mut state = engine.state.borrow_mut();
@@ -989,23 +1039,37 @@ fn pose(engine: &Rc<Engine>, shared: &Shared, names: &Names, animator: InstanceI
         scale = rig.scale;
         for &(ref clip, time, weight, rank) in &tracks {
             for joint in &clip.joints {
-                let key = (Str::from(joint.parent.as_str()), Str::from(joint.name.as_str()));
-                let target = rig.motors.get(&key).or_else(|| rig.bones.get(&key)).copied();
+                let target = if clip.curve {
+                    rig.named.get(&Str::from(joint.name.as_str())).copied()
+                } else {
+                    let key = (Str::from(joint.parent.as_str()), Str::from(joint.name.as_str()));
+                    rig.motors.get(&key).or_else(|| rig.bones.get(&key)).copied()
+                };
                 if let Some(target) = target {
                     let (q, t) = clip::sample(&joint.keys, time);
                     let at = *joint_at.entry(target).or_insert_with(|| {
-                        joints.push((target, Vec::new()));
+                        joints.push((target, Vec::new(), None));
                         joints.len() - 1
                     });
-                    joints[at].1.push((rank, weight, q, t));
+                    let (_, layers, turning) = &mut joints[at];
+                    if !joint.rotation && turning.is_none() {
+                        *turning = Some(layers.clone());
+                    }
+                    if let Some(turning) = turning.as_mut().filter(|_| joint.rotation) {
+                        turning.push((rank, weight, q, t));
+                    }
+                    layers.push((rank, weight, q, t));
                 }
             }
         }
     }
     let before = shared.borrow_mut().posed.remove(&animator).unwrap_or_default();
     let mut posed: Vec<InstanceId> = Vec::with_capacity(joints.len());
-    for (joint, mut layers) in joints {
-        let (rotation, translation) = blend(&mut layers);
+    for (joint, mut layers, turning) in joints {
+        let (mut rotation, translation) = blend(&mut layers);
+        if let Some(mut turning) = turning {
+            rotation = blend(&mut turning).0;
+        }
         write_transform(&mut state, reflection, &hooks, names, joint, Affine3A::from_rotation_translation(rotation, (translation * scale).into()));
         posed.push(joint);
     }

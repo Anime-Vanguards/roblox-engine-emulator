@@ -366,6 +366,15 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
         })?,
     )?;
+    // AnimationClipProvider:GetAnimationClipAsync's clip, else nil and the error
+    let e = engine.clone();
+    r.set(
+        "AnimationClip",
+        lua.create_function(move |lua, uri: String| match crate::animation::source::animation_clip(&e, &uri) {
+            Ok(clip) => Ok((instance_value(lua, &e, clip)?, None)),
+            Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
+        })?,
+    )?;
     // ContentProvider:PreloadAsync's animations: the seconds until the ones it asks for arrive
     let e = engine.clone();
     r.set(

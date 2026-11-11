@@ -69,7 +69,7 @@ fn blending_by_priority_then_weight() {
     assert!(clip::priority_rank(0) < clip::priority_rank(5));
 }
 
-fn start(mode: &str) -> (Lua, Rc<Engine>) {
+pub(super) fn start(mode: &str) -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options { mode: mode.into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
@@ -77,7 +77,7 @@ fn start(mode: &str) -> (Lua, Rc<Engine>) {
 }
 
 /// Runs `source` for `seconds` of play; panics with the script's error. Returns the output lines.
-fn run(lua: &Lua, engine: &Rc<Engine>, source: &str, seconds: f64) -> Vec<String> {
+pub(super) fn run(lua: &Lua, engine: &Rc<Engine>, source: &str, seconds: f64) -> Vec<String> {
     let script = {
         let mut state = engine.state.borrow_mut();
         let class = engine.reflection.class_id("ModuleScript").unwrap();
@@ -95,7 +95,7 @@ fn run(lua: &Lua, engine: &Rc<Engine>, source: &str, seconds: f64) -> Vec<String
     engine.state.borrow().output.entries.iter().map(|line| format!("{}: {}", line.kind, line.message)).collect()
 }
 
-fn check(source: &str, seconds: f64) {
+pub(super) fn check(source: &str, seconds: f64) {
     let (lua, engine) = start("play");
     run(&lua, &engine, source, seconds);
 }

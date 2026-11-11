@@ -1109,13 +1109,15 @@ record/prepare.rs runs prepared ahead by `ree serve`
 ## Animation (`src/animation`)
 
 AnimationTracks run as Roblox's documentation describes them (AnimationTrack, Animator, Motor6D,
-KeyframeSequence pages); how a track behaves before its asset arrives is measured in Studio.
+KeyframeSequence pages); how a track behaves before its asset arrives is measured in Studio, and so is
+everything about CurveAnimations and their curves (below).
 
 - Loading is the host's choice: `animation::enable(&engine, Loading { directories, download })`.
   `ree record` / `ree run` enable it with `--animations` directories (`<id>.rbxm` / `.rbxmx`), the
   download cache (`<state dir>/animations`) and, with feature `bundles`, the asset worker's `asset`
-  command. An engine without it loads only RegisterKeyframeSequence's ids. An id that loads nowhere warns
-  once per engine and its tracks have Length 0.
+  command. An engine without it loads only the ids of clips registered in it (RegisterKeyframeSequence,
+  RegisterAnimationClip and their Active forms). An id that loads nowhere warns once per engine and its
+  tracks have Length 0. The clip an id names is a KeyframeSequence or a CurveAnimation.
 - LoadAnimation on an Animator, Humanoid or AnimationController makes an AnimationTrack; Play, Stop,
   AdjustWeight and AdjustSpeed fade and play as documented; KeyframeReached, GetMarkerReachedSignal,
   DidLoop, Stopped and Ended fire in time order.
@@ -1127,7 +1129,62 @@ KeyframeSequence pages); how a track behaves before its asset arrives is measure
 - Fetching (measured in Studio playtests): an asset's first request in a session arrives 0.45 s later;
   tracks and preloads of it share the fetch, and one fetched before loads at once. Until it arrives a
   track has Length 0 and never poses. ContentProvider:PreloadAsync waits for the Animations it is given.
-- Not emulated: CurveAnimations, the default `Animate` script, animation graphs, RootMotion.
+- Not emulated: the default `Animate` script, animation graphs, RootMotion, Animator:StepAnimations,
+  FaceControls channels (a CurveAnimation's FloatCurves outside `Position` and `Rotation` count for its
+  Length and pose nothing).
+
+### Animation curves (`src/animation/curve.rs`, `curve_clip.rs`, `curves.rs`, `src/lua/curve_keys.rs`)
+
+Measured in Roblox Studio 0.747 with curves and clips built by script. `src/animation/curve_golden/` holds
+three scripts that run unchanged in Studio and here, with what Studio returned; `curve_tests.rs` holds the
+poses, events and provider answers Studio gave for a small rig.
+
+- **Keys.** `FloatCurveKey.new(time, value, interpolation?)` and `RotationCurveKey.new(time, cframe,
+  interpolation?)` (Cubic when the mode is not given), with `Time`, `Value`, `Interpolation`, `LeftTangent`
+  and `RightTangent` readable and writable, Studio's errors, equality by value and Studio's text
+  (`{Linear, 0, 1, nil, nil}`). A FloatCurveKey's tangents start unset; a RotationCurveKey's start at 0. A
+  right tangent can only be set on a Cubic key.
+- **Times** are whole ticks of 1/2400 s (the nearest), one key a tick. `SetKeys` sorts by time and drops a
+  key less than 1/2400 s (float32) after the one kept before it.
+- **FloatCurve:GetValueAtTime** holds the first and last key's value outside them. Between two keys the
+  earlier one's mode decides: Constant holds, Linear is `a * (1 - s) + b * s`, Cubic is the Hermite basis
+  with the earlier key's right tangent and the later key's left one as slopes. All in float32, in the
+  order written in `curve.rs`; every value of `curve_golden/float_curve.luau` equals Studio's to the last
+  bit. A tangent that is not set takes the slope on the key's other side: the neighbouring Linear
+  segment's, 0 beside a Constant one or at the curve's ends, the key's other tangent when that is set,
+  else the mean of the two segments' slopes scaled by `min(1, 4 * r)`, `r` the smaller value step over
+  the sum of both (0 at a peak or dip).
+- **RotationCurve** turns along the shortest arc: Linear by the fraction of the way, Cubic by the same
+  Hermite basis run from 0 to 1 (not clamped). Values agree with Studio's within 2e-6 rad (Studio's own
+  float32 arithmetic). `RotationCurve:SetKeys` raises "Variant cast failed" for any key, as Studio 0.747
+  does; keys go in with `InsertKey`.
+- **EulerRotationCurve** is `CFrame.fromEulerAngles(x, y, z, RotationOrder)` of its `X`, `Y`, `Z`
+  FloatCurves; **Vector3Curve** the three values. `X()`, `Y()`, `Z()` return the channel and make it when
+  missing. **MarkerCurve** holds `{Time, Value}` markers. `Length` is the number of keys, read only.
+- **Storage.** A curve keeps its keys in its `ValuesAndTimes` property in the form model files hold, so
+  clones and files carry them; scripts cannot read the property.
+- **A CurveAnimation as a track.** A Folder below the clip (through Folders only) is a joint by its own
+  name alone: the Motor6D whose Part1 has that name, else the Bone of that name. Its `Position` child
+  (Vector3Curve) and `Rotation` child (EulerRotationCurve or RotationCurve, the later of two) pose it; a
+  joint without a `Rotation` leaves the rotation to the other playing tracks. Length is the last key's
+  time among the curves inside Folders. Loop and Priority are the clip's. Each MarkerCurve fires
+  `GetMarkerReachedSignal(its Name)` with the marker's Value; `KeyframeReached` fires "End" once at the
+  end; `GetTimeOfKeyframe` raises "Invalid operation for this animation format.".
+- **Tracks play samples, as Studio does.** The pose at a time is the line between the curves' values at
+  the two nearest multiples of 1/30 s (rotations: the normalized mix of the two quaternions), so a
+  Constant step is a ramp over the sample before it. The samples start at 0 s and the last lies at or
+  past Length. Poses agree with Studio's within 2e-4 (Studio rounds the sampled rotations it stores).
+- **Providers.** `KeyframeSequenceProvider:RegisterKeyframeSequence` takes a CurveAnimation too;
+  `AnimationClipProvider:RegisterAnimationClip` and `RegisterActiveAnimationClip` take either clip and
+  refuse a CurveAnimation whose `Position` or `Rotation` child is of another class;
+  `RegisterActiveKeyframeSequence` takes a KeyframeSequence. `GetAnimationClipAsync(id)` yields and
+  returns a copy of the clip as it is (the instance itself for an `active://` id);
+  `GetKeyframeSequenceAsync` of a CurveAnimation returns the KeyframeSequence Studio makes of one (a
+  Keyframe every 1/30 s and at Length, a Pose per Folder, the markers as KeyframeMarkers).
+- **Differences from Studio.** Registered ids are `rbxtemp://N`, one per call (Studio's are a hash of the
+  clip's content); a registered clip is read when a track loads it (Studio keeps the content it was
+  registered with). `X()` finds a channel by its current name (Studio remembers the name the child had
+  when it was parented). The messages of ids that do not load are this engine's own.
 
 ## Server run context (`--run-context server`, `src/lua/server.luau`)
 
