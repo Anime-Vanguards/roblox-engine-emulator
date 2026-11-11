@@ -1149,11 +1149,12 @@ poses, events and provider answers Studio gave for a small rig.
 - **FloatCurve:GetValueAtTime** holds the first and last key's value outside them. Between two keys the
   earlier one's mode decides: Constant holds, Linear is `a * (1 - s) + b * s`, Cubic is the Hermite basis
   with the earlier key's right tangent and the later key's left one as slopes. All in float32, in the
-  order written in `curve.rs`; every value of `curve_golden/float_curve.luau` equals Studio's to the last
-  bit. A tangent that is not set takes the slope on the key's other side: the neighbouring Linear
-  segment's, 0 beside a Constant one or at the curve's ends, the key's other tangent when that is set,
-  else the mean of the two segments' slopes scaled by `min(1, 4 * r)`, `r` the smaller value step over
-  the sum of both (0 at a peak or dip).
+  order written in `curve.rs`; every value of `curve_golden/float_curve.luau` and
+  `curve_golden/tangents.luau` equals Studio's to the last bit. A tangent that is not set takes the slope
+  on the key's other side: the neighbouring Linear segment's, 0 beside a Constant one or at the curve's
+  ends, the key's other tangent when that is set, else the mean of the two segments' slopes scaled by
+  `min(1, 4 * min(r, 1 - r))`, `r` how far the key's value is from the key before's to the key after's
+  (0 at a peak or dip).
 - **RotationCurve** turns along the shortest arc: Linear by the fraction of the way, Cubic by the same
   Hermite basis run from 0 to 1 (not clamped). Values agree with Studio's within 2e-6 rad (Studio's own
   float32 arithmetic). `RotationCurve:SetKeys` raises "Variant cast failed" for any key, as Studio 0.747

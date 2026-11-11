@@ -10,9 +10,8 @@
 //!   float32, `s = (t - ta) / (tb - ta)`. Cubic is the Hermite basis in float32, with the earlier
 //!   key's right tangent and the later key's left one as slopes (value a second), each times the
 //!   span: `h00 * a + h10 * (dt * m0) + h01 * b + h11 * (dt * m1)`, summed left to right. Every
-//!   value of curve_golden/float_curve.luau agrees with `GetValueAtTime` to the last
-//!   bit; two others found are one float32 step off (curve_tests.rs: an unset tangent between
-//!   steps a hundred times apart).
+//!   value of curve_golden/float_curve.luau and curve_golden/tangents.luau agrees with
+//!   `GetValueAtTime` to the last bit.
 //! - The keys around a time are found by the time's tick, and the way between them by the time
 //!   itself: less than half a tick before a key the value is that key's already.
 //! - A tangent that is not set ([`right_tangent`], [`left_tangent`]): the slope the curve has on
@@ -206,16 +205,23 @@ fn slope(keys: &[FloatKey], from: usize) -> f32 {
     (keys[from + 1].value - keys[from].value) / (time_of(keys[from + 1].tick) - time_of(keys[from].tick))
 }
 
-/// The tangent of a key between two Cubic segments that has neither tangent set: the mean of the two
-/// slopes times `min(1, 4 * r)`, `r` the smaller of the two value steps over their sum; 0 where the
-/// steps differ in sign or one is 0. Measured: slopes 3 and 0.5 over 1 s and 2 s give 1.75, 10 and
-/// 0.1 give 0.396078, 0.1 and 10 give 0.100498, -2 and -4 give -2.4, 2 and 2 give 2.
-pub fn auto_tangent(slope_before: f32, step_before: f32, slope_after: f32, step_after: f32) -> f32 {
-    if step_before * step_after <= 0.0 {
+/// The tangent of key `index`, between two Cubic segments and with neither tangent set: the mean of
+/// the two slopes times `min(1, 4 * min(r, 1 - r))`, `r` how far the key's value is from the key
+/// before's to the key after's, `(v1 - v0) / (v2 - v0)`; 0 where the key is no nearer than a
+/// neighbour (a peak, a dip, a level step). All in float32, the slopes over the difference of the
+/// keys' times: of the orderings and precisions tried, the ones that give this give all 240 tangents
+/// Studio stored for random keys bit for bit (it writes the tangent it resolved into the unset
+/// fields), and no other gives more than 51 of the first 60. Slopes 3 and 0.5 over 1 s and 2 s give
+/// 1.75, 10 and 0.1 give 0.396078, 0.1 and 10 give 0.100498, -2 and -4 give -2.4, 2 and 2 give 2.
+pub fn auto_tangent(keys: &[FloatKey], index: usize) -> f32 {
+    let (before, value, after) = (keys[index - 1].value, keys[index].value, keys[index + 1].value);
+    let r = (value - before) / (after - before);
+    let factor = 4.0 * r.min(1.0 - r);
+    // (no value between the neighbours', or all three the same: not a number)
+    if factor.is_nan() || factor <= 0.0 {
         return 0.0;
     }
-    let (a, b) = (step_before.abs(), step_after.abs());
-    (slope_before + slope_after) * 0.5 * (4.0 * a.min(b) / (a + b)).min(1.0)
+    (slope(keys, index - 1) + slope(keys, index)) * 0.5 * factor.min(1.0)
 }
 
 /// The slope a Cubic segment leaves key `index` with (the key is Cubic and not the last).
@@ -229,9 +235,7 @@ pub fn right_tangent(keys: &[FloatKey], index: usize) -> f32 {
     }
     match keys[index - 1].mode {
         LINEAR => slope(keys, index - 1),
-        CUBIC => key.left.unwrap_or_else(|| {
-            auto_tangent(slope(keys, index - 1), key.value - keys[index - 1].value, slope(keys, index), keys[index + 1].value - key.value)
-        }),
+        CUBIC => key.left.unwrap_or_else(|| auto_tangent(keys, index)),
         _ => 0.0,
     }
 }
@@ -250,7 +254,7 @@ pub fn left_tangent(keys: &[FloatKey], index: usize) -> f32 {
     }
     match key.mode {
         LINEAR => slope(keys, index),
-        CUBIC => auto_tangent(slope(keys, index - 1), key.value - keys[index - 1].value, slope(keys, index), keys[index + 1].value - key.value),
+        CUBIC => auto_tangent(keys, index),
         _ => 0.0,
     }
 }

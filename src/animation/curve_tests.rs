@@ -58,18 +58,25 @@ fn the_other_curves_match_studio() {
     assert_golden(&golden(include_str!("curve_golden/curves.luau")), include_str!("curve_golden/curves.txt"), 2e-6);
 }
 
+/// 90 curves of three and five Cubic keys with no tangent set, their steps from equal to a thousand times apart,
+/// with peaks, dips and level steps among them: every value is Studio's to the last digit.
+#[test]
+fn unset_tangents_match_studio() {
+    assert_golden(&golden(include_str!("curve_golden/tangents.luau")), include_str!("curve_golden/tangents.txt"), 0.0);
+}
+
 fn float_key(time: f32, value: f32) -> (f32, FloatKey) {
     (time, FloatKey { tick: curve::tick_of(time), value, mode: CUBIC, left: None, right: None })
 }
 
-/// The two values found that differ from Studio's: a middle key's unset tangent where one segment's step is a
-/// hundredth of the other's. Studio returned 4.97512341 and 4.95049 at 0.5 s; one float32 step off is the bound.
+/// A middle key's unset tangent where one segment's step is a hundredth of the other's: Studio returned 4.97512341
+/// and 4.95049 at 0.5 s (the two values an earlier form of the rule had one float32 step off).
 #[test]
-fn an_unset_tangent_between_very_unequal_steps_is_within_a_float_step() {
+fn an_unset_tangent_between_very_unequal_steps_is_studios() {
     for (last, time, studio) in [(10.1f32, 3.0f32, 4.975_123_4_f32), (10.2, 3.0, 4.950_49)] {
         let keys = curve::set(vec![float_key(0.0, 0.0), float_key(1.0, 10.0), float_key(time, last)]);
         let value = curve::float_at(&keys, 0.5).unwrap();
-        assert!((value.to_bits() as i64 - studio.to_bits() as i64).abs() <= 1, "{value} against {studio}");
+        assert_eq!(value.to_bits(), studio.to_bits(), "{value} against {studio}");
     }
 }
 
