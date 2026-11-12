@@ -71,6 +71,11 @@ jobs:
       - name: Build release binaries
         if: ${{ !cancelled() }}
         run: cargo build --release --locked
+      # Clippy's errors only: its warnings are not cleaned up yet, so they do not fail the run. The test build has already
+      # built the dependencies, so this checks the workspace's own crates.
+      - name: Lint (clippy errors)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --release --locked --all-targets
       - name: Test the counter service (tools/hw-counters, a workspace of its own)
         if: ${{ !cancelled() }}
         run: cargo test --release --locked --manifest-path tools/hw-counters/Cargo.toml
