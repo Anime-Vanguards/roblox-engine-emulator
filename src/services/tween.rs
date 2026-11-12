@@ -8,7 +8,7 @@
 //! Exponential and Elastic take 10 * (t - 1) and Bounce 1 - t in float32.
 //!
 //! Interpolation by property type: floats and float-backed components lerp as
-//! a + f32(f32(b - a) * t); doubles in double; integers and UDim offsets round the double lerp half
+//! a + f32(f32(b - a) * t); Color3 channels as sqrt(a^2 + (b^2 - a^2) * t) in float32 (0 below 0); doubles in double; integers and UDim offsets round the double lerp half
 //! away from zero; booleans take the goal once the lerp of 0/1 is non-zero; CFrames slerp.
 
 use std::{cell::RefCell, rc::Rc};
@@ -85,6 +85,16 @@ pub fn ease(alpha: f64, style: &str, direction: &str) -> f64 {
 fn lerp_float(a: f64, b: f64, t: f64) -> f64 {
     let from = f32r(a);
     f32r(from + f32r(f32r(f32r(b) - from) * t))
+}
+
+/// A Color3 channel as TweenService blends it: the squares mixed, in float32, and the root taken; a mix below 0 (an
+/// overshooting style's alpha outside 0..1) gives 0, and a channel's sign is lost. Measured on every Color3 property
+/// (GUI objects, parts, lights, Color3Value, ...) and every style and direction, client and server, Studio 0.746 in
+/// roblox-sim (tools/parity/probes/tween_color.luau: 1,485 channels bit-exact); `Color3:Lerp` stays linear.
+fn lerp_squared(a: f32, b: f32, t: f64) -> f32 {
+    let (a2, b2, t) = (a * a, b * b, t as f32);
+    let mix = a2 + (b2 - a2) * t;
+    if mix > 0.0 { mix.sqrt() } else { 0.0 }
 }
 
 fn round_half_away(value: f64) -> f64 {
@@ -192,9 +202,9 @@ fn lerp(_lua: &Lua, kind: Kind, number: NumberKind, a: &LuaValue, b: &LuaValue, 
             Value::Bool(from + (to - from) * t != 0.0)
         }
         (Kind::Color3, Value::Color3(a), Value::Color3(b)) => Value::Color3(dom::Color3::new(
-            lerp_float(a.r as f64, b.r as f64, t) as f32,
-            lerp_float(a.g as f64, b.g as f64, t) as f32,
-            lerp_float(a.b as f64, b.b as f64, t) as f32,
+            lerp_squared(a.r, b.r, t),
+            lerp_squared(a.g, b.g, t),
+            lerp_squared(a.b, b.b, t),
         )),
         (Kind::Vector2, Value::Vector2(a), Value::Vector2(b)) => Value::Vector2(dom::Vector2::new(
             lerp_float(a.x as f64, b.x as f64, t) as f32,

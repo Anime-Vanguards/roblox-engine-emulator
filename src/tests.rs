@@ -7700,3 +7700,68 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
         ["CollectionService.GetCollections", "RunService.BindToSimulationParallel", "ParticleEmitter2D.Emit", "ParticleEmitter2D.Clear", "Sound.GetPlaybackState", "TextDocument.ReadAsync"]
     );
 }
+
+#[test]
+fn a_color3_tween_blends_the_squares_of_its_channels() {
+    // Measured in roblox-sim's Studio 0.746 client and server (tools/parity/probes/tween_color.luau, 1,485 channels
+    // bit-exact over every style and direction): each channel is sqrt(a^2 + (b^2 - a^2) * eased) in float32, 0 where the
+    // mix is below 0, on every class's Color3 properties; the end is that blend at 1 (not the goal itself), a reversed
+    // tween ends on the blend at 0 (a channel's sign is lost), and Color3:Lerp stays linear.
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    engine.state.borrow_mut().sched.set_main_thread(&lua.current_thread());
+    run(
+        &lua,
+        &engine,
+        r#"
+        local TweenService = game:GetService("TweenService")
+        local A, B = Color3.fromRGB(200, 40, 40), Color3.fromRGB(40, 40, 200)
+        local function Make(Class, Property, From, To, Info)
+            local Object = Instance.new(Class)
+            Object[Property] = From
+            local Tween = TweenService:Create(Object, Info, { [Property] = To })
+            Tween:Play()
+            return Object, Tween
+        end
+        _G.Frame = Make("Frame", "BackgroundColor3", A, B, TweenInfo.new(1, Enum.EasingStyle.Linear))
+        _G.Eased = Make("NumberValue", "Value", 0, 1, TweenInfo.new(1, Enum.EasingStyle.Linear))
+        _G.Light = Make("PointLight", "Color", A, B, TweenInfo.new(1, Enum.EasingStyle.Linear))
+        _G.Back = Make("Color3Value", "Value", Color3.new(0, 0, 0), Color3.new(1, 1, 1), TweenInfo.new(1, Enum.EasingStyle.Back, Enum.EasingDirection.In))
+        _G.Ending = Make("Color3Value", "Value", A, B, TweenInfo.new(0.05))
+        _G.Reversed = Make("Color3Value", "Value", Color3.new(-0.5, 0.3, 2), Color3.new(0.2, -0.7, 0.1), TweenInfo.new(0.05, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0, true))
+        _G.Lerp = A:Lerp(B, 0.5)
+        "#,
+    );
+    for _ in 0..12 {
+        scheduler::step(&lua, &engine, Some(1.0 / 60.0)).unwrap();
+    }
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local function F(X) return Vector3.new(X, 0, 0).X end
+        local function Squared(A, B, T)
+            local A2, B2 = F(A * A), F(B * B)
+            local X = F(A2 + F(F(B2 - A2) * F(T)))
+            return if X > 0 then F(math.sqrt(X)) else 0
+        end
+        local A, B = Color3.fromRGB(200, 40, 40), Color3.fromRGB(40, 40, 200)
+        local T = _G.Eased.Value
+        assert(T > 0.1 and T < 0.3, "eased " .. T)
+        for _, Color in { _G.Frame.BackgroundColor3, _G.Light.Color } do
+            for _, C in { "R", "G", "B" } do
+                assert(Color[C] == Squared(A[C], B[C], T), C .. " " .. Color[C] .. " " .. Squared(A[C], B[C], T))
+            end
+        end
+        assert(_G.Frame.BackgroundColor3.R > 0.7 and _G.Frame.BackgroundColor3.B > 0.3, "squared, not linear")
+        local Back = _G.Back.Value
+        assert(Back.R == 0 and Back.G == 0 and Back.B == 0, "overshoot below 0 reads 0")
+        local Ending = _G.Ending.Value
+        assert(Ending.R == Squared(A.R, B.R, 1) and Ending.R ~= B.R and Ending.B == Squared(A.B, B.B, 1), "the end is the blend at 1")
+        local Reversed = _G.Reversed.Value
+        assert(Reversed.R == 0.5 and Reversed.B == 2, "reversed end " .. tostring(Reversed))
+        assert(math.abs(_G.Lerp.R - 120 / 255) < 1e-6, "Color3:Lerp stays linear")
+        print("ok")
+        "#,
+    );
+    assert!(output.iter().any(|line| line.ends_with("ok")), "{output:?}");
+}

@@ -1,0 +1,121 @@
+# engine: Roblox Studio 0.746.0.7461264, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-13
+blend 0.15 Linear In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Linear Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Linear InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Sine In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Sine Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Sine InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Back In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Back Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Back InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quad In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quad Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quad InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quart In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quart Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quart InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quint In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quint Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Quint InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Bounce In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Bounce Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Bounce InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Elastic In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Elastic Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Elastic InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Exponential In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Exponential Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Exponential InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Circular In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Circular Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Circular InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Cubic In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Cubic Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.15 Cubic InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Linear In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Linear Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Linear InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Sine In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Sine Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Sine InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Back In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Back Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Back InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quad In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quad Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quad InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quart In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quart Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quart InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quint In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quint Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Quint InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Bounce In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Bounce Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Bounce InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Elastic In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Elastic Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Elastic InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Exponential In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Exponential Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Exponential InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Circular In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Circular Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Circular InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Cubic In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Cubic Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.5 Cubic InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Linear In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Linear Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Linear InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Sine In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Sine Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Sine InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Back In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Back Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Back InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quad In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quad Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quad InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quart In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quart Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quart InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quint In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quint Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Quint InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Bounce In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Bounce Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Bounce InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Elastic In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Elastic Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Elastic InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Exponential In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Exponential Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Exponential InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Circular In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Circular Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Circular InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Cubic In sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Cubic Out sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+blend 0.85 Cubic InOut sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq sq,sq,sq
+overshoot back-in 0 0 0
+overshoot back-out 0 0 0
+class Frame.BackgroundColor3 sq,sq,sq
+class Frame.BorderColor3 sq,sq,sq
+class TextLabel.TextColor3 sq,sq,sq
+class TextLabel.TextStrokeColor3 sq,sq,sq
+class ImageLabel.ImageColor3 sq,sq,sq
+class UIStroke.Color sq,sq,sq
+class PointLight.Color sq,sq,sq
+class Highlight.FillColor sq,sq,sq
+class Color3Value.Value sq,sq,sq
+class SelectionBox.Color3 sq,sq,sq
+class Texture.Color3 sq,sq,sq
+class Fire.Color sq,sq,sq
+class Atmosphere.Color sq,sq,sq
+class Part.Color floor,floor,floor
+untweened error TweenService:Create property named 'Color' on object 'UIGradient' is not a data type that can be tweened | error TweenService:Create property named 'BrickColor' on object 'Part' is not a data type that can be tweened | error TweenService:Create property named 'Value' on object 'Value' is not a data type that can be tweened | error TweenService:Create property named 'Color' on object 'Beam' is not a data type that can be tweened
+end 0.15686278 0.156862751 0.784313738 goal 0.156862751 0.156862751 0.784313738
+reversed-end 0.5 0.300000012 2
+lerp 0.470588237 0.156862751 0.470588267

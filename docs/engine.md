@@ -508,6 +508,14 @@ callbacks and handlers deferred, a full flush). A RenderStepped or PreRender han
 from before the frame's step, and a tween played there takes its first step that frame. Edit mode keeps
 Studio's edit order (a flush after each resumption; the tween step right after the callbacks).
 
+TweenService blends a Color3 per channel as `sqrt(a^2 + (b^2 - a^2) * eased)` in float32, 0 where the mix is below 0
+(Back / Elastic overshoot), on every class's Color3 properties (GUI objects, lights, Color3Value, ...). The end of a
+tween is that blend at 1 (a hair off the goal itself), a reversed tween ends on it at 0 (a channel's sign is lost), and
+`Color3:Lerp` stays linear. ColorSequence, BrickColor and attributes are not tweenable. Measured in a playing client and
+a server (Studio 0.746, every easing style and direction, 1,485 channels bit-exact; tools/parity tween_color; a Studio
+0.747 edit-mode reading agrees). What a script sees: every tweened Color3 between its ends (it blended linearly before)
+and at its end. Not emulated: a part keeps its Color in whole 1/255 steps (floor), ree the float32 written.
+
 `scheduler::step(lua, engine, Some(dt))`, `run_until(lua, engine, t)`, `step_display_duration(d)` /
 `step_display(n)` (a display's cadence: edit-mode Heartbeats keep their own 240 Hz deadlines),
 `use_recorded_clock(engine, Some(&json))` (`RUR_CLOCK`: a Studio session's recorded Heartbeats, render

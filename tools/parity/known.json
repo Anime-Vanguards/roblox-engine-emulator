@@ -673,6 +673,12 @@
 			"why": "TweenService:Create's type-mismatch text names the property's and the value's types as the client does not here"
 		}
 	],
+	"tween_color": [
+		{
+			"line": "class Part.Color floor,floor,floor",
+			"why": "a part keeps its Color in whole 1/255 steps (a client reads the tween's blend cut down, floor, to one); ree's BasePart.Color holds the float32 the write gave. The blend itself is the same (every other class's line)"
+		}
+	],
 	"ui_signals": [
 		{
 			"line": "mount-read 300,200 10,162 300,600",
