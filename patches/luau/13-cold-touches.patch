@@ -64,7 +64,7 @@ index 0379f8a..22aaced 100644
      c->env = e;
      c->nupvalues = cast_byte(nelems);
 diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
-index 1e0d5a0..53dfa35 100644
+index 1e0d5a0..f2c65ae 100644
 --- a/luau/VM/src/lgc.cpp
 +++ b/luau/VM/src/lgc.cpp
 @@ -2,6 +2,12 @@
@@ -80,7 +80,7 @@ index 1e0d5a0..53dfa35 100644
  #include "lobject.h"
  #include "lstate.h"
  #include "ltable.h"
-@@ -1721,3 +1727,237 @@ const char* luaC_statename(int state)
+@@ -1721,3 +1727,239 @@ const char* luaC_statename(int state)
          return NULL;
      }
  }
@@ -115,12 +115,14 @@ index 1e0d5a0..53dfa35 100644
 +
 +// coldon and coldslot sit in padding: the state's size (counted in totalbytes) is the stock one, whatever the release's layout
 +#define LUAI_COLDALIGNUP(x, a) (((x) + (a) - 1) / (a) * (a))
++#if UINTPTR_MAX > 0xffffffffu
 +static_assert(offsetof(global_State, coldon) == offsetof(global_State, gcdisabled) + 1 &&
 +                  offsetof(global_State, gray) == LUAI_COLDALIGNUP(offsetof(global_State, gcdisabled) + 1, alignof(GCObject*)),
 +    "coldon must sit in the padding before gray");
 +static_assert(offsetof(global_State, coldslot) == offsetof(global_State, gcstepsize) + sizeof(int) &&
 +                  offsetof(global_State, freepages) == LUAI_COLDALIGNUP(offsetof(global_State, gcstepsize) + sizeof(int), alignof(lua_Page*)),
 +    "coldslot must sit in the padding before freepages");
++#endif
 +#undef LUAI_COLDALIGNUP
 +
 +static bool coldgrow(void** items, size_t* capacity, size_t itemsize)

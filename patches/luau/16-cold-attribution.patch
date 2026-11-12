@@ -288,7 +288,7 @@ index 22aaced..9e209ed 100644
      luaM_freearray(L, f->p, f->sizep, Proto*, f->memcat);
      luaM_freearray(L, f->k, f->sizek, TValue, f->memcat);
 diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
-index 53dfa35..81cd3f2 100644
+index f2c65ae..a0ffbcd 100644
 --- a/luau/VM/src/lgc.cpp
 +++ b/luau/VM/src/lgc.cpp
 @@ -2,9 +2,12 @@
@@ -326,7 +326,7 @@ index 53dfa35..81cd3f2 100644
  };
  
  // the states that track cold touches, by global_State::coldslot (0: none); slots are taken and given back under the lock, and each
-@@ -1764,6 +1775,10 @@ static_assert(offsetof(global_State, coldon) == offsetof(global_State, gcdisable
+@@ -1765,6 +1776,10 @@ static_assert(offsetof(global_State, coldon) == offsetof(global_State, gcdisable
  static_assert(offsetof(global_State, coldslot) == offsetof(global_State, gcstepsize) + sizeof(int) &&
                    offsetof(global_State, freepages) == LUAI_COLDALIGNUP(offsetof(global_State, gcstepsize) + sizeof(int), alignof(lua_Page*)),
      "coldslot must sit in the padding before freepages");
@@ -334,10 +334,10 @@ index 53dfa35..81cd3f2 100644
 +static_assert(offsetof(Proto, coldslot) == offsetof(Proto, execflags) + 2 &&
 +                  offsetof(Proto, lineinfo) == LUAI_COLDALIGNUP(offsetof(Proto, execflags) + 1, alignof(uint8_t*)),
 +    "Proto::coldslot must sit in the padding after execflags");
+ #endif
  #undef LUAI_COLDALIGNUP
  
- static bool coldgrow(void** items, size_t* capacity, size_t itemsize)
-@@ -1791,7 +1806,7 @@ static void coldpush(global_State* g, GCObject* o)
+@@ -1793,7 +1808,7 @@ static void coldpush(global_State* g, GCObject* o)
  
  // a function whose code runs first in this frame and did not run in the frame before: a client finds its code out of every cache
  // (LUA_WORK_RAREPROTOS); the stamps live outside the VM's heap
@@ -346,7 +346,7 @@ index 53dfa35..81cd3f2 100644
  {
      ColdState* c = coldstates[g->coldslot];
      if (!c->protolast)
-@@ -1799,11 +1814,81 @@ static void coldrecent(global_State* g, GCObject* o)
+@@ -1801,11 +1816,81 @@ static void coldrecent(global_State* g, GCObject* o)
      if (!c->protolast)
          return;
      uint32_t& last = (*c->protolast)[o];
@@ -429,7 +429,7 @@ index 53dfa35..81cd3f2 100644
  void luaC_coldtouch(lua_State* L, GCObject* o)
  {
      global_State* g = L->global;
-@@ -1823,7 +1908,10 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
+@@ -1825,7 +1910,10 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
      case LUA_TTABLE:
          g->work.coldtables++;
          if (luaP_state)
@@ -440,7 +440,7 @@ index 53dfa35..81cd3f2 100644
          break;
      case LUA_TFUNCTION:
          g->work.coldclosures++;
-@@ -1831,11 +1919,26 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
+@@ -1833,11 +1921,26 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
      case LUA_TPROTO:
          g->work.coldprotos++;
          coldrecent(g, o);
@@ -468,7 +468,7 @@ index 53dfa35..81cd3f2 100644
  void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, const Proto* caller)
  {
      global_State* g = L->global;
-@@ -1855,6 +1958,9 @@ void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, cons
+@@ -1857,6 +1960,9 @@ void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, cons
              return;
      }
      g->work.hostops[host ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS]++;
@@ -478,7 +478,7 @@ index 53dfa35..81cd3f2 100644
  }
  
  void luaC_coldmade(lua_State* L, GCObject* o)
-@@ -1880,6 +1986,17 @@ bool luaC_colddefer(lua_State* L, lua_Page* page)
+@@ -1882,6 +1988,17 @@ bool luaC_colddefer(lua_State* L, lua_Page* page)
  // clears the marks of the objects marked since the last frame and returns the pages freed since then to the allocator
  static void coldclear(lua_State* L, ColdState* c)
  {
@@ -496,7 +496,7 @@ index 53dfa35..81cd3f2 100644
      // (a marked object may have been collected since: its block is still in a page of the VM's, kept by luaC_colddefer, and a mark
      // written into a free block or a new object of another kind means nothing)
      for (size_t i = 0; i < c->touchedcount; ++i)
-@@ -1890,6 +2007,17 @@ static void coldclear(lua_State* L, ColdState* c)
+@@ -1892,6 +2009,17 @@ static void coldclear(lua_State* L, ColdState* c)
      c->pagecount = 0;
  }
  
@@ -514,7 +514,7 @@ index 53dfa35..81cd3f2 100644
  void luaC_coldfree(lua_State* L)
  {
      global_State* g = L->global;
-@@ -1897,10 +2025,11 @@ void luaC_coldfree(lua_State* L)
+@@ -1899,10 +2027,11 @@ void luaC_coldfree(lua_State* L)
          return;
      ColdState* c = coldstates[g->coldslot];
      coldclear(L, c);
@@ -527,7 +527,7 @@ index 53dfa35..81cd3f2 100644
      {
          std::lock_guard<std::mutex> guard(coldlock);
          coldstates[g->coldslot] = NULL;
-@@ -1912,6 +2041,8 @@ void luaC_coldfree(lua_State* L)
+@@ -1914,6 +2043,8 @@ void luaC_coldfree(lua_State* L)
  static bool coldunmark(void* context, lua_Page* page, GCObject* gco)
  {
      gco->gch.marked &= cast_byte(~bitmask(COLDBIT));
@@ -536,7 +536,7 @@ index 53dfa35..81cd3f2 100644
      return false;
  }
  
-@@ -1922,7 +2053,7 @@ LUA_API void lua_coldtracking(lua_State* L, int on)
+@@ -1924,7 +2055,7 @@ LUA_API void lua_coldtracking(lua_State* L, int on)
      {
          if (!g->coldslot)
          {
@@ -545,7 +545,7 @@ index 53dfa35..81cd3f2 100644
              if (!c)
                  return;
              c->frame = 1;
-@@ -1936,17 +2067,18 @@ LUA_API void lua_coldtracking(lua_State* L, int on)
+@@ -1938,17 +2069,18 @@ LUA_API void lua_coldtracking(lua_State* L, int on)
                  }
              if (!g->coldslot)
              {
@@ -566,7 +566,7 @@ index 53dfa35..81cd3f2 100644
          g->coldon = 0;
      }
  }
-@@ -1954,6 +2086,8 @@ LUA_API void lua_coldtracking(lua_State* L, int on)
+@@ -1956,6 +2088,8 @@ LUA_API void lua_coldtracking(lua_State* L, int on)
  LUA_API void lua_coldframe(lua_State* L)
  {
      global_State* g = L->global;

@@ -78,7 +78,8 @@ nearly every file.
   without them.
 - **The VM is vendored.** The Luau VM, mlua-sys and Lune's datatypes come from pinned archives plus patches/ (the VM's are a topic
   series, patches/luau/NN-<topic>.patch): change a patch (`node tools/vendor.mjs edit` for a topic in the middle), run
-  `node tools/vendor.mjs`, commit both; never edit vendor/ by hand (`node tools/vendor.mjs --check`).
+  `node tools/vendor.mjs`, commit both; never edit vendor/ by hand. Run `node tools/vendor.mjs --check` (seconds, no
+  build) before every commit that touches vendor/ or patches/: CI fails a push where they disagree.
 - **Hot paths** read properties by interned id (`K::...`, `reflection.name_id` once), never by string, and allocate
   nothing per frame; the Instance API's fast paths stay in C metamethods (lua/raw.rs).
 - **Names other tools set stay as they are**: environment variables (`RUR_*`, `REE_*`), chunk names (`=rur.prelude`,
