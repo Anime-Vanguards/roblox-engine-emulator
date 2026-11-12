@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "ree-profile-view"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "fontdue",
  "mimalloc",
@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "roblox-engine-emulator"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "chrono",
