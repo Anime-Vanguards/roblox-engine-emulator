@@ -641,14 +641,46 @@ local function Draw(Self, X0, Y0, W0, H0, CombineType, Source)
 	Written(Self)
 end
 
-Method("EditableImage", "DrawRectangle", function(Self, Position, Size, Color, Transparency, CombineType)
+-- Studio 0.747 lists seven more ImageCombineType items (Darken, Lighten, Screen, Overlay, SoftLight, HardLight,
+-- Difference) and gives each Draw method an alphaBlendType (ImageAlphaType) after its other arguments, and plays
+-- neither yet (measured there): such a combine type, as an item, its name or its value, raises "EditableImage:DrawImage:
+-- the requested Enum.ImageCombineType is not yet supported", and after it an alpha type other than Default raises
+-- "EditableImage:DrawImage: Enum.ImageAlphaType other than Default is not yet supported". The image is left as it was.
+local UnsupportedCombine = { Darken = true, Lighten = true, Screen = true, Overlay = true, SoftLight = true, HardLight = true, Difference = true }
+
+local function ItemName(EnumType, Value)
+	if typeof(Value) == "EnumItem" then
+		return Value.Name
+	elseif type(Value) == "string" then
+		return Value
+	elseif type(Value) == "number" then
+		local Item = EnumType:FromValue(Value)
+		return Item and Item.Name
+	end
+	return nil
+end
+
+local function CheckBlend(Name, CombineType, AlphaType)
+	local Combine = ItemName(Enum.ImageCombineType, CombineType)
+	if Combine and UnsupportedCombine[Combine] then
+		error(`EditableImage:{Name}: the requested Enum.ImageCombineType is not yet supported`, 0)
+	end
+	local Alpha = ItemName(Enum.ImageAlphaType, AlphaType)
+	if Alpha == "LockCanvasAlpha" or Alpha == "LockCanvasColor" then
+		error(`EditableImage:{Name}: Enum.ImageAlphaType other than Default is not yet supported`, 0)
+	end
+end
+
+Method("EditableImage", "DrawRectangle", function(Self, Position, Size, Color, Transparency, CombineType, AlphaBlendType)
+	CheckBlend("DrawRectangle", CombineType, AlphaBlendType)
 	local R, G, B, A = Color.R, Color.G, Color.B, 1 - math.clamp(Transparency or 0, 0, 1)
 	Draw(Self, math.floor(Position.X), math.floor(Position.Y), math.floor(Size.X), math.floor(Size.Y), CombineType, function()
 		return R, G, B, A
 	end)
 end)
 
-Method("EditableImage", "DrawImage", function(Self, Position, Image, CombineType)
+Method("EditableImage", "DrawImage", function(Self, Position, Image, CombineType, AlphaBlendType)
+	CheckBlend("DrawImage", CombineType, AlphaBlendType)
 	local Width, Height = ImageSize(Image)
 	local Source = ImagePixels(Image)
 	Draw(Self, math.floor(Position.X), math.floor(Position.Y), Width, Height, CombineType, function(X, Y)
@@ -663,7 +695,8 @@ local function Smooth(AntiAliasing)
 	return not (typeof(AntiAliasing) == "EnumItem" and AntiAliasing.Name == "Disabled")
 end
 
-Method("EditableImage", "DrawCircle", function(Self, Center, Radius, Color, Transparency, CombineType, AntiAliasing)
+Method("EditableImage", "DrawCircle", function(Self, Center, Radius, Color, Transparency, CombineType, AntiAliasing, AlphaBlendType)
+	CheckBlend("DrawCircle", CombineType, AlphaBlendType)
 	local R, G, B, A = Color.R, Color.G, Color.B, 1 - math.clamp(Transparency or 0, 0, 1)
 	local Soft = Smooth(AntiAliasing)
 	local X0, Y0 = math.floor(Center.X - Radius - 1), math.floor(Center.Y - Radius - 1)
@@ -679,7 +712,8 @@ Method("EditableImage", "DrawCircle", function(Self, Center, Radius, Color, Tran
 	end)
 end)
 
-Method("EditableImage", "DrawLine", function(Self, P1, P2, Color, Transparency, CombineType, AntiAliasing)
+Method("EditableImage", "DrawLine", function(Self, P1, P2, Color, Transparency, CombineType, AntiAliasing, AlphaBlendType)
+	CheckBlend("DrawLine", CombineType, AlphaBlendType)
 	local R, G, B, A = Color.R, Color.G, Color.B, 1 - math.clamp(Transparency or 0, 0, 1)
 	local Soft = Smooth(AntiAliasing)
 	local X0, Y0 = math.floor(math.min(P1.X, P2.X)) - 1, math.floor(math.min(P1.Y, P2.Y)) - 1
@@ -706,6 +740,7 @@ end)
 -- AlphaBlend), as Roblox's EditableImage reference and its samples describe it.
 Method("EditableImage", "DrawImageTransformed", function(Self, Position, Scale, Rotation, Image, Options)
 	Options = Options or {}
+	CheckBlend("DrawImageTransformed", Options.CombineType, Options.AlphaBlendType)
 	local Width, Height = ImageSize(Image)
 	local Source = ImagePixels(Image)
 	local Pivot = Options.PivotPoint or Vector2.new(Width / 2, Height / 2)

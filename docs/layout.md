@@ -30,7 +30,7 @@ src/profiler/          the profiling suite (`--profile <kinds>`): the VM's instr
                        derived figures, the readings around sampled calls and how counts are booked)
 src/trace.rs                                     Context.TraceWrites: Luau call sites of Parent / property writes
 src/census.rs                                    Context.Census: live threads, connections, timers, instances by their Luau line
-data/                  reflection.json (Studio's dump; tools/dump-reflection.luau), font-enums.json, text metrics
+data/                  reflection.json (Studio's dump; tools/dump-reflection.luau, compared by tools/reflection-diff.mjs), font-enums.json, text metrics
 vendor/ patches/ tools/vendor.mjs   the patched Luau VM and Lune datatypes
 tools/cost-parity/     the work clock's calibration: the parity bench (ree against a client), its fits and the kept client sessions
 tools/luau-cost/       the work clock's older Luau calibration (a Studio playtest's, fitted by fit.py), kept for its history

@@ -6882,7 +6882,7 @@ fn reflection_service_lists_the_dumps_classes_as_a_game_script_gets_them() {
     assert_eq!(missing, vec![("ReflectedClass.Permits".to_string(), 2)], "{missing:?}");
     // the dump's classes and no others; IsA counts a class and its subclasses
     let reflected = engine.reflection.classes.iter().filter(|class| class.reflected).count();
-    assert_eq!(reflected, 640);
+    assert_eq!(reflected, 660);
 }
 
 /// A vide-like module that builds its element names from ReflectionService:GetClasses() when it is required (stock vide's
@@ -7357,4 +7357,346 @@ fn place_content_leaves_out_a_link_back_up_its_way_down() {
     let left_out: Vec<String> = lines(&engine).into_iter().filter(|line| line.contains("a link back to")).collect();
     assert_eq!(left_out.len(), 2, "{left_out:?}");
     let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Enum.EasingStyle as Studio 0.747 lists it (Bezier = 11 and Spring = 12 after Cubic), and what takes one: TweenInfo.new,
+/// TweenService:GetValue and GuiObject's Tween methods refuse the two in Studio's words, UIPageLayout.EasingStyle keeps its
+/// value, and a Pose's easing is another enum (measured in Studio 0.747.0.7471481; tools/parity/probes/api_747.luau).
+#[test]
+fn spring_and_bezier_are_easing_styles_nothing_plays() {
+    assert_script(
+        r#"
+        local Names = {}
+        for _, Item in Enum.EasingStyle:GetEnumItems() do table.insert(Names, Item.Name .. "=" .. Item.Value) end
+        assert(table.concat(Names, " ") == "Linear=0 Sine=1 Back=2 Quad=3 Quart=4 Quint=5 Bounce=6 Elastic=7 Exponential=8 Circular=9 Cubic=10 Bezier=11 Spring=12", table.concat(Names, " "))
+        assert(tostring(Enum.EasingStyle.Spring) == "Enum.EasingStyle.Spring" and Enum.EasingStyle:FromValue(11) == Enum.EasingStyle.Bezier and Enum.EasingStyle:FromValue(13) == nil)
+        local function fails(message, f, ...)
+            local Ok, Problem = pcall(f, ...)
+            assert(not Ok and Problem == message, tostring(Problem))
+        end
+        local TweenService = game:GetService("TweenService")
+        local Refused = " does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier"
+        for _, Name in { "Spring", "Bezier" } do
+            local Style = Enum.EasingStyle[Name]
+            fails("TweenInfo.new" .. Refused, TweenInfo.new, 1, Style)
+            fails("TweenInfo.new" .. Refused, TweenInfo.new, 1, Style.Value)
+            fails("TweenInfo.new" .. Refused, TweenInfo.new, 1, Style, "bad")
+            fails("TweenInfo.new second argument expects Enum.EasingStyle input", TweenInfo.new, 1, Name)
+            fails("TweenInfo.new first argument expects a number for time.", TweenInfo.new, "x", Style)
+            for _, Alpha in { 0, 0.5, 1, -1 } do
+                fails("TweenService:GetValue" .. Refused, TweenService.GetValue, TweenService, Alpha, Style, Enum.EasingDirection.In)
+            end
+            fails("TweenService:GetValue" .. Refused, TweenService.GetValue, TweenService, 0.5, Name, "Out")
+            fails("TweenService:GetValue" .. Refused, TweenService.GetValue, TweenService, 0.5, Style.Value, 2)
+            fails("Unable to cast string to EasingDirection", TweenService.GetValue, TweenService, 0.5, Style, "bad")
+            fails("Argument 1 missing or nil", TweenService.GetValue, TweenService, nil, Style, Enum.EasingDirection.In)
+            fails("Argument 3 missing or nil", TweenService.GetValue, TweenService, 0.5, Style)
+        end
+        fails("Unable to cast double to EasingStyle", TweenService.GetValue, TweenService, 0.5, 13, 0)
+        fails("Unable to cast EasingDirection to EasingStyle", TweenService.GetValue, TweenService, 0.5, Enum.EasingDirection.In, Enum.EasingDirection.In)
+        fails("Unable to cast string to float", TweenService.GetValue, TweenService, "x", Enum.EasingStyle.Linear, Enum.EasingDirection.In)
+        assert(TweenService:GetValue(0.5, "Quad", "In") == 0.25 and TweenService:GetValue(0.5, 3, 0) == 0.25)
+
+        local Layout = Instance.new("UIPageLayout")
+        local Changes = 0
+        Layout:GetPropertyChangedSignal("EasingStyle"):Connect(function() Changes += 1 end)
+        assert(Layout.EasingStyle == Enum.EasingStyle.Back)
+        Layout.EasingStyle = Enum.EasingStyle.Spring
+        Layout.EasingStyle = "Bezier"
+        Layout.EasingStyle = 12
+        assert(Layout.EasingStyle == Enum.EasingStyle.Back)
+        Layout.EasingStyle = Enum.EasingStyle.Quad
+        Layout.EasingStyle = Enum.EasingStyle.Bezier
+        assert(Layout.EasingStyle == Enum.EasingStyle.Quad)
+        fails("Unable to assign property EasingStyle. Invalid value 13 for enum EasingStyle", function() Layout.EasingStyle = 13 end)
+        task.wait()
+        assert(Changes == 1, Changes)
+
+        local Pose = Instance.new("Pose")
+        fails("Unable to assign property EasingStyle. EnumItem of type PoseEasingStyle expected, got an EnumItem of type EasingStyle", function() Pose.EasingStyle = Enum.EasingStyle.Spring end)
+        fails('Unable to assign property EasingStyle. Invalid value "Spring" for enum PoseEasingStyle', function() Pose.EasingStyle = "Spring" end)
+        "#,
+    );
+}
+
+/// TweenInfo.new checks every argument it is given, nil included, in order (Studio 0.747): only arguments left off take
+/// their defaults, a style or direction is an item or a number cut to an item's value, and RepeatCount is whole.
+#[test]
+fn tween_info_new_checks_each_argument_it_is_given() {
+    assert_script(
+        r#"
+        local Quad, In = Enum.EasingStyle.Quad, Enum.EasingDirection.In
+        local function fails(message, ...)
+            local Ok, Problem = pcall(TweenInfo.new, ...)
+            assert(not Ok and Problem == message, tostring(Problem))
+        end
+        assert(tostring(TweenInfo.new()) == "Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad")
+        assert(tostring(TweenInfo.new(2)) == "Time:2 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad")
+        assert(tostring(TweenInfo.new(1, Quad, In, 2, true, 1, "extra")) == "Time:1 DelayTime:1 RepeatCount:2 Reverses:True EasingDirection:In EasingStyle:Quad")
+        fails("TweenInfo.new first argument expects a number for time.", nil)
+        fails("TweenInfo.new first argument expects a number for time.", "1")
+        fails("TweenInfo.new first argument expects a number for time.", true)
+        fails("TweenInfo.new first argument expects a number for time.", nil, Quad)
+        fails("TweenInfo.new second argument expects Enum.EasingStyle input", 1, nil)
+        fails("TweenInfo.new second argument expects Enum.EasingStyle input", 1, nil, In)
+        fails("TweenInfo.new second argument expects Enum.EasingStyle input", 1, "Quad")
+        fails("TweenInfo.new second argument expects Enum.EasingStyle input", 1, false)
+        fails("TweenInfo.new second argument expects Enum.EasingStyle input", 1, 13)
+        fails("TweenInfo.new second argument expects Enum.EasingStyle input", 1, -1)
+        fails("TweenInfo.new second argument expects Enum.EasingStyle input", 1, In)
+        fails("TweenInfo.new third argument expects Enum.EasingDirection input", 1, Quad, nil)
+        fails("TweenInfo.new third argument expects Enum.EasingDirection input", 1, Quad, nil, 2)
+        fails("TweenInfo.new third argument expects Enum.EasingDirection input", 1, Quad, "In")
+        fails("TweenInfo.new third argument expects Enum.EasingDirection input", 1, Quad, 3)
+        fails("TweenInfo.new third argument expects Enum.EasingDirection input", 1, Quad, Quad)
+        fails("TweenInfo.new fourth arg should be a number for RepeatCount.", 1, Quad, In, nil)
+        fails("TweenInfo.new fourth arg should be a number for RepeatCount.", 1, Quad, In, "3")
+        fails("TweenInfo.new fifth arg should be a boolean for Reverses.", 1, Quad, In, 2, nil, 1)
+        fails("TweenInfo.new fifth arg should be a boolean for Reverses.", 1, Quad, In, 2, 1)
+        fails("TweenInfo.new sixth arg should be a number for DelayTime.", 1, Quad, In, 2, true, nil)
+        fails("TweenInfo.new sixth arg should be a number for DelayTime.", 1, Quad, In, 2, true, "0.5")
+        assert(TweenInfo.new(1, 3).EasingStyle == Quad and TweenInfo.new(1, 2.5).EasingStyle == Enum.EasingStyle.Back and TweenInfo.new(1, 10.9).EasingStyle == Enum.EasingStyle.Cubic)
+        assert(TweenInfo.new(1, Quad, 0).EasingDirection == In and TweenInfo.new(1, Quad, 1.9).EasingDirection == Enum.EasingDirection.Out)
+        assert(TweenInfo.new(1, Quad, In, 2.7).RepeatCount == 2 and TweenInfo.new(1, Quad, In, -1).RepeatCount == -1)
+        assert(TweenInfo.new(math.huge).Time == math.huge and TweenInfo.new(-1).Time == -1)
+        "#,
+    );
+}
+
+/// GuiObject's Tween methods cast their arguments, refuse Spring and Bezier, and refuse an object outside the DataModel
+/// (Studio 0.747): nothing moves and no callback runs when one raises.
+#[test]
+fn gui_tween_methods_cast_refuse_and_need_the_data_model() {
+    assert_script(
+        r#"
+        local function fails(message, f, ...)
+            local Ok, Problem = pcall(f, ...)
+            assert(not Ok and Problem == message, tostring(Problem))
+        end
+        local Out, Quad, Spring = Enum.EasingDirection.Out, Enum.EasingStyle.Quad, Enum.EasingStyle.Spring
+        local Holder = Instance.new("Folder")
+        Holder.Parent = workspace
+        local Frame = Instance.new("Frame")
+        Frame.Parent = Holder
+        local Called = false
+        local To = UDim2.fromOffset(5, 5)
+        for _, Style in { Spring, Enum.EasingStyle.Bezier, "Spring", 11 } do
+            fails("GuiObject:TweenPosition does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier", Frame.TweenPosition, Frame, To, Out, Style, 0.05, true, function() Called = true end)
+            fails("GuiObject:TweenSize does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier", Frame.TweenSize, Frame, To, Out, Style, 0.05, true)
+            fails("GuiObject:TweenSizeAndPosition does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier", Frame.TweenSizeAndPosition, Frame, To, To, Out, Style, 0.05, true)
+        end
+        fails("Unable to cast string to UDim2", Frame.TweenPosition, Frame, "x", Out, Spring, 0.05, true)
+        fails("Argument 1 missing or nil", Frame.TweenPosition, Frame, nil, Out, Spring, 0.05, true)
+        fails("Unable to cast string to UDim2", Frame.TweenSizeAndPosition, Frame, To, "x", Out, Quad, 0.05, true)
+        fails("Unable to cast string to EasingDirection", Frame.TweenPosition, Frame, To, "bad", Spring, 0.05, true)
+        fails("Unable to cast double to EasingStyle", Frame.TweenPosition, Frame, To, Out, 13, 0.05, true)
+        fails("Unable to cast string to float", Frame.TweenPosition, Frame, To, Out, Spring, "x", true)
+        local Loose = Instance.new("Frame")
+        local Unplaced = Instance.new("Frame")
+        Unplaced.Parent = Instance.new("ScreenGui")
+        fails("Can only tween objects in the workspace", Loose.TweenPosition, Loose, To, Out, Quad, 0.05, true)
+        fails("Can only tween objects in the workspace", Loose.TweenSize, Loose, To)
+        fails("Can only tween objects in the workspace", Unplaced.TweenSizeAndPosition, Unplaced, To, To)
+        fails("GuiObject:TweenPosition does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier", Loose.TweenPosition, Loose, To, Out, Spring)
+        task.wait()
+        assert(Frame.Position == UDim2.new() and Frame.Size == UDim2.new() and Loose.Position == UDim2.new() and not Called)
+        assert(Frame:TweenPosition(To, Out, Quad, 0.05, true, function() Called = true end) == true and Frame.Position == To)
+        assert(Frame:TweenSize(To) == true and Frame.Size == To)
+        task.wait()
+        assert(Called)
+        "#,
+    );
+}
+
+/// What Studio 0.747 does with the properties its dump adds beyond storing them: a Camera's projection properties drop
+/// every write, and some numbers hold a range (ParticleEmitter.TimeScale, ParticleEmitter2D's, UIBlur.Transparency,
+/// InputBinding.Deadzone). Every other new property of a creatable class read and wrote back as stored there (131 of them,
+/// each written once and read again).
+#[test]
+fn new_properties_of_0_747_ignore_and_clamp_as_studio_does() {
+    assert_script(
+        r#"
+        local Camera = Instance.new("Camera")
+        local Fired = 0
+        Camera.Changed:Connect(function() Fired += 1 end)
+        assert(Camera.ProjectionType == Enum.ProjectionType.Perspective and Camera.OrthographicMode == Enum.OrthographicMode.Vertical and Camera.OrthographicSize == 35 and Camera.ViewStretch == 1)
+        Camera.ProjectionType = Enum.ProjectionType.Orthographic
+        Camera.ProjectionType = "Orthographic"
+        Camera.OrthographicMode = Enum.OrthographicMode.Horizontal
+        Camera.OrthographicSize = 10
+        Camera.OrthographicSize = "x"
+        Camera.ViewStretch = 2
+        Camera.ViewStretch = nil
+        assert(Camera.ProjectionType == Enum.ProjectionType.Perspective and Camera.OrthographicMode == Enum.OrthographicMode.Vertical and Camera.OrthographicSize == 35 and Camera.ViewStretch == 1)
+        local Ok, Problem = pcall(function() Camera.ProjectionType = 5 end)
+        assert(not Ok and Problem == "Unable to assign property ProjectionType. Invalid value 5 for enum ProjectionType", Problem)
+        Ok, Problem = pcall(function() Camera.OrthographicMode = Enum.EasingStyle.Quad end)
+        assert(not Ok and Problem == "Unable to assign property OrthographicMode. EnumItem of type OrthographicMode expected, got an EnumItem of type EasingStyle", Problem)
+        task.wait()
+        assert(Fired == 0, Fired)
+
+        local function set(Object, Property, Value)
+            Object[Property] = Value
+            return Object[Property]
+        end
+        local Emitter = Instance.new("ParticleEmitter")
+        assert(set(Emitter, "TimeScale", -1) == 0 and set(Emitter, "TimeScale", 0.25) == 0.25 and set(Emitter, "TimeScale", 7) == 1)
+        local Flat = Instance.new("ParticleEmitter2D")
+        local Changes = 0
+        Flat:GetPropertyChangedSignal("TimeScale"):Connect(function() Changes += 1 end)
+        Flat.TimeScale = 0.5
+        Flat.TimeScale = 5
+        Flat.TimeScale = 9
+        Flat.TimeScale = 1
+        task.wait()
+        assert(Changes == 2 and Flat.TimeScale == 1, Changes)
+        assert(set(Flat, "TimeScale", -1) == 0 and set(Flat, "Brightness", -5) == 0 and set(Flat, "Brightness", 1e9) == 10000)
+        assert(set(Flat, "Blend", 5) == 1 and set(Flat, "Blend", -1) == 0 and set(Flat, "FlipbookSizeX", 0) == 1 and set(Flat, "FlipbookSizeY", 100000) == 64)
+        assert(set(Flat, "Rate", -5) == -5 and set(Flat, "Drag", -5) == -5 and set(Flat, "LightInfluence", 5) == 5 and set(Flat, "ZIndex", 2.7) == 2)
+        local Blur = Instance.new("UIBlur")
+        assert(Blur.Strength == Enum.UIBlurStrength.Heavy and Blur.Enabled and Blur.Color == Color3.new(1, 1, 1))
+        assert(set(Blur, "Transparency", 1.5) == 1 and set(Blur, "Transparency", -0.5) == 0 and set(Blur, "Transparency", 0.5) == 0.5)
+        local Binding = Instance.new("InputBinding")
+        assert(Binding.Deadzone == NumberRange.new(0.1, 1), tostring(Binding.Deadzone))
+        assert(set(Binding, "Deadzone", NumberRange.new(2, 3)) == NumberRange.new(1, 1) and set(Binding, "Deadzone", NumberRange.new(-3, 0.5)) == NumberRange.new(0, 0.5))
+
+        -- stored as written, and defaults as the dump has them
+        assert(set(Instance.new("Decal"), "ResampleMode", Enum.ResamplerMode.Pixelated) == Enum.ResamplerMode.Pixelated)
+        assert(Instance.new("AudioDeviceInput").Active == false and Instance.new("SurfaceAppearance").SurfaceSlot == -1 and Instance.new("UIDragDetector").Selectable == true)
+        assert(game.ServerRegion == "" and workspace.AuthorityMode == Enum.AuthorityMode.Automatic)
+        -- gone with 0.747
+        assert(not pcall(function() return Enum.PrimalPhysicsSolver end) and not pcall(function() return workspace.PrimalPhysicsSolver end))
+        assert(not pcall(Instance.new, "PlayerDataRecord"))
+        "#,
+    );
+}
+
+/// EditableImage's Draw methods refuse the combine types and alpha types Studio 0.747 lists and does not play yet.
+#[test]
+fn editable_image_refuses_the_blends_studio_does_not_play_yet() {
+    assert_script(
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local Image = AssetService:CreateEditableImage({ Size = Vector2.new(4, 4) })
+        local Other = AssetService:CreateEditableImage({ Size = Vector2.new(2, 2) })
+        local Red = Color3.new(1, 0, 0)
+        Image:DrawRectangle(Vector2.zero, Vector2.new(4, 4), Color3.new(0, 0, 1), 0, Enum.ImageCombineType.Overwrite)
+        local Before = buffer.tostring(Image:ReadPixelsBuffer(Vector2.zero, Vector2.new(4, 4)))
+        local function fails(message, f, ...)
+            local Ok, Problem = pcall(f, ...)
+            assert(not Ok and Problem == message, tostring(Problem))
+        end
+        local Add, Lock, Smooth = Enum.ImageCombineType.Add, Enum.ImageAlphaType.LockCanvasAlpha, Enum.AntiAliasing.Enabled
+        for _, Name in { "Darken", "Lighten", "Screen", "Overlay", "SoftLight", "HardLight", "Difference" } do
+            local Combine = Enum.ImageCombineType[Name]
+            local Refused = ": the requested Enum.ImageCombineType is not yet supported"
+            fails("EditableImage:DrawImage" .. Refused, Image.DrawImage, Image, Vector2.zero, Other, Combine)
+            fails("EditableImage:DrawImage" .. Refused, Image.DrawImage, Image, Vector2.zero, Other, Name)
+            fails("EditableImage:DrawImage" .. Refused, Image.DrawImage, Image, Vector2.zero, Other, Combine.Value)
+            fails("EditableImage:DrawImage" .. Refused, Image.DrawImage, Image, Vector2.zero, Other, Combine, Lock)
+            fails("EditableImage:DrawRectangle" .. Refused, Image.DrawRectangle, Image, Vector2.zero, Vector2.one, Red, 0, Combine)
+            fails("EditableImage:DrawCircle" .. Refused, Image.DrawCircle, Image, Vector2.one, 1, Red, 0, Combine)
+            fails("EditableImage:DrawLine" .. Refused, Image.DrawLine, Image, Vector2.zero, Vector2.one, Red, 0, Combine)
+            fails("EditableImage:DrawImageTransformed" .. Refused, Image.DrawImageTransformed, Image, Vector2.one, Vector2.one, 0, Other, { CombineType = Combine })
+        end
+        assert(Enum.ImageCombineType.Darken.Value == 8 and Enum.ImageCombineType.Difference.Value == 14)
+        for _, Alpha in { Lock, Enum.ImageAlphaType.LockCanvasColor } do
+            local Refused = ": Enum.ImageAlphaType other than Default is not yet supported"
+            fails("EditableImage:DrawImage" .. Refused, Image.DrawImage, Image, Vector2.zero, Other, Add, Alpha)
+            fails("EditableImage:DrawRectangle" .. Refused, Image.DrawRectangle, Image, Vector2.zero, Vector2.one, Red, 0, Add, Alpha)
+            fails("EditableImage:DrawCircle" .. Refused, Image.DrawCircle, Image, Vector2.one, 1, Red, 0, Add, Smooth, Alpha)
+            fails("EditableImage:DrawLine" .. Refused, Image.DrawLine, Image, Vector2.zero, Vector2.one, Red, 0, Add, Smooth, Alpha)
+            fails("EditableImage:DrawImageTransformed" .. Refused, Image.DrawImageTransformed, Image, Vector2.one, Vector2.one, 0, Other, { CombineType = Add, AlphaBlendType = Alpha })
+        end
+        assert(buffer.tostring(Image:ReadPixelsBuffer(Vector2.zero, Vector2.new(4, 4))) == Before, "a refused draw leaves the image")
+        Image:DrawRectangle(Vector2.zero, Vector2.one, Red, 0, Enum.ImageCombineType.Overwrite, Enum.ImageAlphaType.Default)
+        assert(buffer.readu8(Image:ReadPixelsBuffer(Vector2.zero, Vector2.one), 0) == 255)
+        "#,
+    );
+}
+
+/// The streaming and player settings Studio 0.747's ReflectionService lists no more are still stored (a place file's
+/// values, the engine's own reads), and a game script may neither read nor write them (a playing client, Studio 0.746:
+/// tools/parity/probes/api_747.luau).
+#[test]
+fn settings_the_0_747_dump_leaves_out_are_still_stored() {
+    let reflection = crate::Reflection::shared().unwrap();
+    assert_eq!(reflection.version, "0.747.0.7471481");
+    for (class, name) in [
+        ("Workspace", "StreamingMinRadius"),
+        ("Workspace", "StreamingTargetRadius"),
+        ("Workspace", "StreamOutBehavior"),
+        ("Workspace", "StreamingIntegrityMode"),
+        ("Workspace", "PredictiveStreamingMode"),
+        ("Players", "BanningEnabled"),
+        ("Players", "UseStrafingAnimations"),
+        ("StarterPlayer", "CreateDefaultPlayerModule"),
+    ] {
+        let class_id = reflection.class_id(class).unwrap();
+        let property = reflection.class_property(class_id, reflection.name_id(name).unwrap()).unwrap_or_else(|| panic!("{class}.{name}"));
+        assert!(property.serialized, "{class}.{name}");
+    }
+    let behavior = reflection.class_property(reflection.class_id("Workspace").unwrap(), reflection.name_id("StreamOutBehavior").unwrap()).unwrap();
+    assert_eq!(behavior.enum_type, reflection.enum_id("StreamOutBehavior"));
+    // every Content property with a string twin is still a view of it, whichever of the two the dump calls serialized
+    assert_script(
+        r#"
+        local Label = Instance.new("ImageLabel")
+        Label.Image = "rbxassetid://5"
+        assert(Label.ImageContent.Uri == "rbxassetid://5")
+        Label.ImageContent = Content.fromUri("rbxassetid://6")
+        assert(Label.Image == "rbxassetid://6")
+        local Sound = Instance.new("Sound")
+        Sound.AudioContent = Content.fromUri("rbxassetid://7")
+        assert(Sound.SoundId == "rbxassetid://7")
+        local Mesh = Instance.new("MeshPart")
+        Mesh.TextureID = "rbxassetid://8"
+        assert(Mesh.TextureContent.Uri == "rbxassetid://8")
+        local function fails(message, f)
+            local Ok, Problem = pcall(f)
+            assert(not Ok and Problem == message, tostring(Problem))
+        end
+        fails("The current thread cannot read 'StreamingMinRadius' (lacking capability PluginOrOpenCloud)", function() return workspace.StreamingMinRadius end)
+        fails("The current thread cannot write 'StreamingTargetRadius' (lacking capability PluginOrOpenCloud)", function() workspace.StreamingTargetRadius = 64 end)
+        fails("The current thread cannot read 'BanningEnabled' (lacking capability PluginOrOpenCloud)", function() return game:GetService("Players").BanningEnabled end)
+        fails("The current thread cannot write 'CreateDefaultPlayerModule' (lacking capability PluginOrOpenCloud)", function() game:GetService("StarterPlayer").CreateDefaultPlayerModule = false end)
+        fails("The current thread cannot read 'PlayerScriptsUseInputActionSystem' (lacking capability RobloxScript)", function() return workspace.PlayerScriptsUseInputActionSystem end)
+        "#,
+    );
+}
+
+/// What Studio 0.747's dump adds and ree does not emulate reports itself (Output `missing`) and answers nil; what the dump
+/// drops is no member any more.
+#[test]
+fn methods_new_in_0_747_report_themselves_as_not_emulated() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        print(game:GetService("CollectionService"):GetCollections(Instance.new("Part")))
+        print(game:GetService("RunService"):BindToSimulationParallel(function() end, Enum.StepFrequency.Hz60, 1))
+        local Emitter = Instance.new("ParticleEmitter2D")
+        print(Emitter:Emit(3), Emitter:Clear())
+        print(Instance.new("Sound"):GetPlaybackState(), Instance.new("TextDocument"):ReadAsync())
+        print(game:GetService("FeatureMatchingService").ClassName, Instance.new("UIBlur"):IsA("UIComponent"), Instance.new("AvatarRules").ClassName)
+        print(pcall(function() return Instance.new("AnimationRigData"):LoadFromHumanoid() end))
+        "#,
+    );
+    assert_eq!(
+        output,
+        [
+            "print: ",
+            "print: ",
+            "print: nil",
+            "print: nil",
+            "print: FeatureMatchingService true AvatarRules",
+            "print: false LoadFromHumanoid is not a valid member of AnimationRigData \"AnimationRigData\"",
+        ]
+    );
+    let missing: Vec<String> = engine.state.borrow().output.missing.iter().map(|(name, _)| name.clone()).collect();
+    assert_eq!(
+        missing,
+        ["CollectionService.GetCollections", "RunService.BindToSimulationParallel", "ParticleEmitter2D.Emit", "ParticleEmitter2D.Clear", "Sound.GetPlaybackState", "TextDocument.ReadAsync"]
+    );
 }

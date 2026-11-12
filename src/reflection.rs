@@ -336,14 +336,43 @@ const METHOD_SUPPLEMENT: &[(&str, &[&str])] = &[(
     ],
 )];
 
-// Properties the dump leaves out: (class, name, script type, engine type, scriptable, serialized). Path2D keeps its
+// Properties the dump leaves out: (class, name, script type, engine type or enum, scriptable, serialized). Path2D keeps its
 // control points in PropertiesSerialize, a BinaryString only files see, and a Transparency that only the engine's own
 // scripts reach, like its selection (path2d.rs; measured in Studio 0.747 and a playing client, Studio 0.744).
+// The streaming and player settings below are properties place files hold and the engine reads (world/gravity.rs):
+// Studio 0.740's ReflectionService listed them with no permits, 0.747's lists them no more, and they are still there
+// (0.747 reads Workspace.StreamingMinRadius 64 and Players.BanningEnabled true at plugin identity). They are stored, and
+// members a game script may not use ([`CAPABILITY_ONLY`]).
 const PROPERTY_SUPPLEMENT: &[(&str, &str, &str, &str, bool, bool)] = &[
     ("Path2D", "PropertiesSerialize", "any", "BinaryString", false, true),
     ("Path2D", "Transparency", "number", "float", true, true),
     ("Path2D", "SelectedControlPoint", "number", "int", true, false),
     ("Path2D", "SelectedControlPointData", "any", "", true, false),
+    ("Workspace", "StreamingMinRadius", "number", "int", true, true),
+    ("Workspace", "StreamingTargetRadius", "number", "int", true, true),
+    ("Workspace", "StreamOutBehavior", "EnumItem", "StreamOutBehavior", true, true),
+    ("Workspace", "StreamingIntegrityMode", "EnumItem", "StreamingIntegrityMode", true, true),
+    ("Workspace", "PredictiveStreamingMode", "EnumItem", "PredictiveStreamingMode", true, true),
+    ("Workspace", "PlayerScriptsUseInputActionSystem", "EnumItem", "RolloutState", true, true),
+    ("Players", "BanningEnabled", "boolean", "bool", true, true),
+    ("Players", "UseStrafingAnimations", "boolean", "bool", true, true),
+    ("StarterPlayer", "CreateDefaultPlayerModule", "boolean", "bool", true, true),
+];
+
+/// Properties a game script may neither read nor write: (class, name, the capability it lacks). A playing client and a
+/// server's game script (script identity 2, Studio 0.746) raise "The current thread cannot read 'StreamingMinRadius' (lacking
+/// capability PluginOrOpenCloud)", and "cannot write" for an assignment, where 0.740's dump (no permits) made ree answer
+/// "is not a valid member" (tools/parity/probes/api_747.luau). services::install gives each its getter and setter.
+pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
+    ("Workspace", "StreamingMinRadius", "PluginOrOpenCloud"),
+    ("Workspace", "StreamingTargetRadius", "PluginOrOpenCloud"),
+    ("Workspace", "StreamOutBehavior", "PluginOrOpenCloud"),
+    ("Workspace", "StreamingIntegrityMode", "PluginOrOpenCloud"),
+    ("Workspace", "PredictiveStreamingMode", "PluginOrOpenCloud"),
+    ("Workspace", "PlayerScriptsUseInputActionSystem", "RobloxScript"),
+    ("Players", "BanningEnabled", "PluginOrOpenCloud"),
+    ("Players", "UseStrafingAnimations", "PluginOrOpenCloud"),
+    ("StarterPlayer", "CreateDefaultPlayerModule", "PluginOrOpenCloud"),
 ];
 
 // Callbacks the dump leaves out (it lists none for any class): every callback Roblox's API dump lets
@@ -600,7 +629,9 @@ impl Reflection {
             if let Some(&id) = reflection.class_ids.get(*class) {
                 let known = reflection.classes[id as usize].own_properties.iter().any(|&index| reflection.names[reflection.properties[index as usize].name as usize].as_ref() == *name);
                 if !known {
-                    let index = reflection.add_property(name, script_type, engine_type, None, false, *scriptable, *serialized, id);
+                    // an enum property names its enum where the others name their engine type
+                    let (engine_type, enum_name) = if *script_type == "EnumItem" { ("Enum", Some(*engine_type)) } else { (*engine_type, None) };
+                    let index = reflection.add_property(name, script_type, engine_type, enum_name, false, *scriptable, *serialized, id);
                     reflection.classes[id as usize].own_properties.push(index);
                 }
             }

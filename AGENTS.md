@@ -28,6 +28,7 @@ node tools/vendor.mjs --check         # vendor/ is exactly the pinned archives p
 node tools/vendor.mjs bump client     # move the VM to the Luau release a live client runs (docs/building.md "Updating Luau")
 node tools/luau-flags.mjs             # the live client's Luau flag values (data/luau-flags.json), then vendor/ again
 node tools/parity/run.mjs [--diff]    # differential probes: ree against the real engine's captured output
+node tools/reflection-diff.mjs <old.json> <new.json>   # what a new Studio API dump (data/reflection.json) adds, removes, changes
 ```
 
 Don't run `cargo fmt` on the tree: the code isn't rustfmt-formatted (long lines), and a format pass would rewrite

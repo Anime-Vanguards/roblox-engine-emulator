@@ -1110,7 +1110,12 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
         if let Some(name) = n("GuiState") {
             behaviors.add_getter(gui_object, name, getter(|lua, engine, _| Ok(enum_item(lua, engine, "GuiState", "Idle")?)));
         }
-        // Tween* methods apply the end values at once and report Completed at the next resumption
+        // Tween* methods apply the end values at once and report Completed at the next resumption.
+        // Their arguments are cast first, in order (Studio 0.747: a string for the UDim2 raises "Unable to cast string to
+        // UDim2", nil "Argument 1 missing or nil", then the direction, the style and the time); Spring and Bezier are
+        // refused ("GuiObject:TweenPosition does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier", by item,
+        // name or value, nothing moved and no callback); and an object outside the DataModel is refused last ("Can only
+        // tween objects in the workspace": a Frame with no parent, or under a ScreenGui or Folder that has none).
         let tweens: [(&str, &[&str]); 3] = [
             ("TweenPosition", &["Position"]),
             ("TweenSize", &["Size"]),
@@ -1120,12 +1125,31 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
             let Some(name) = n(member) else { continue };
             let fields: Vec<NameId> = fields.iter().filter_map(|f| n(f)).collect();
             behaviors.add_method(gui_object, name, method(move |lua, engine, id, args| {
-                let class = engine.state.borrow().dom.at(id).class;
-                for (index, field) in fields.iter().enumerate() {
-                    if let Some(info) = engine.reflection.class_property(class, *field).cloned() {
-                        let value = convert::coerce(lua, engine, &info, args.get(1 + index))?;
-                        set_property(engine, id, *field, value);
+                let mut ends = Vec::with_capacity(fields.len());
+                for index in 0..fields.len() {
+                    let value = args.get(1 + index);
+                    match convert::from_lua(value) {
+                        end @ Value::UDim2(_) => ends.push(end),
+                        Value::Nil => return raise(format!("Argument {} missing or nil", 1 + index)),
+                        _ => return raise(format!("Unable to cast {} to UDim2", tween::cast_name(engine, value))),
                     }
+                }
+                let after = 1 + fields.len();
+                if !args.get(after).is_nil() {
+                    tween::enum_arg(lua, engine, args, after, "EasingDirection")?;
+                }
+                let style = if args.get(after + 1).is_nil() { None } else { Some(tween::enum_arg(lua, engine, args, after + 1, "EasingStyle")?) };
+                if !args.get(after + 2).is_nil() {
+                    tween::float_arg(lua, engine, args, after + 2)?;
+                }
+                if let Some(message) = style.and_then(|style| tween::unsupported_style(engine, style, &format!("GuiObject:{member}"))) {
+                    return raise(message);
+                }
+                if !in_data_model(&engine.state.borrow(), id) {
+                    return raise("Can only tween objects in the workspace");
+                }
+                for (field, end) in fields.iter().zip(ends) {
+                    set_property(engine, id, *field, end);
                 }
                 let callback_index = 1 + fields.len() + 4;
                 if let LuaValue::Function(callback) = args.get(callback_index).clone() {
@@ -1136,6 +1160,88 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
                 Ok(values([LuaValue::Boolean(true)]))
             }));
         }
+    }
+    // Settings only a plugin or the engine's own scripts use (reflection.rs CAPABILITY_ONLY): a game script's read and
+    // write raise as a client's do; the engine reads the stored values itself
+    for &(class_name, member, capability) in crate::reflection::CAPABILITY_ONLY {
+        let (Some(owner), Some(name)) = (class(&reflection, class_name), n(member)) else { continue };
+        let read = format!("The current thread cannot read '{member}' (lacking capability {capability})");
+        let write = format!("The current thread cannot write '{member}' (lacking capability {capability})");
+        behaviors.add_getter(owner, name, getter(move |_, _, _| raise(read.clone())));
+        behaviors.add_setter(owner, name, Rc::new(move |_, _, _, _| raise(write.clone())));
+    }
+    // UIPageLayout.EasingStyle keeps its value when Spring or Bezier is assigned (Studio 0.747: by item, name or value;
+    // no error and no Changed)
+    if let (Some(layout), Some(name)) = (class(&reflection, "UIPageLayout"), n("EasingStyle")) {
+        behaviors.add_setter(layout, name, Rc::new(move |lua, engine, id, value| {
+            let class = engine.state.borrow().dom.at(id).class;
+            let Some(info) = engine.reflection.class_property(class, name).cloned() else { return Ok(()) };
+            let style = convert::coerce(lua, engine, &info, &value)?;
+            if let Value::EnumItem(item) = style
+                && tween::unsupported_style(engine, item, "").is_some()
+            {
+                return Ok(());
+            }
+            set_property(engine, id, name, style);
+            Ok(())
+        }));
+    }
+    // A Camera's projection is not in use yet: Studio 0.747 lists ProjectionType, OrthographicMode, OrthographicSize and
+    // ViewStretch, reads their defaults (Perspective, Vertical, 35, 1) and drops every write without a Changed. The two
+    // enums still refuse what is no item of theirs; the two numbers take any value silently (a string, a table, nil).
+    if let Some(camera) = class(&reflection, "Camera") {
+        for member in ["ProjectionType", "OrthographicMode"] {
+            let Some(name) = n(member) else { continue };
+            behaviors.add_setter(camera, name, Rc::new(move |lua, engine, id, value| {
+                let class = engine.state.borrow().dom.at(id).class;
+                if let Some(info) = engine.reflection.class_property(class, name).cloned() {
+                    convert::coerce(lua, engine, &info, &value)?;
+                }
+                Ok(())
+            }));
+        }
+        for member in ["OrthographicSize", "ViewStretch"] {
+            if let Some(name) = n(member) {
+                behaviors.add_setter(camera, name, Rc::new(|_, _, _, _| Ok(())));
+            }
+        }
+    }
+    // Number ranges, measured in Studio 0.747: a write outside is stored as the nearest bound, and changes nothing when
+    // that is the value already (ParticleEmitter2D.TimeScale 0.5, 5, 9, 1 from 1: Changed twice). InputBinding.Deadzone
+    // holds each end within 0 and 1 (2..3 reads 1 1).
+    const RANGES: &[(&str, &str, f64, f64)] = &[
+        ("ParticleEmitter", "TimeScale", 0.0, 1.0),
+        ("ParticleEmitter2D", "TimeScale", 0.0, 1.0),
+        ("ParticleEmitter2D", "Brightness", 0.0, 10000.0),
+        ("ParticleEmitter2D", "Blend", 0.0, 1.0),
+        ("ParticleEmitter2D", "FlipbookSizeX", 1.0, 64.0),
+        ("ParticleEmitter2D", "FlipbookSizeY", 1.0, 64.0),
+        ("UIBlur", "Transparency", 0.0, 1.0),
+    ];
+    for &(class_name, member, low, high) in RANGES {
+        let (Some(owner), Some(name)) = (class(&reflection, class_name), n(member)) else { continue };
+        behaviors.add_setter(owner, name, Rc::new(move |lua, engine, id, value| {
+            let class = engine.state.borrow().dom.at(id).class;
+            let Some(info) = engine.reflection.class_property(class, name).cloned() else { return Ok(()) };
+            let value = match convert::coerce(lua, engine, &info, &value)? {
+                Value::Number(number) => Value::Number(number.clamp(low, high)),
+                other => other,
+            };
+            set_property(engine, id, name, value);
+            Ok(())
+        }));
+    }
+    if let (Some(binding), Some(name)) = (class(&reflection, "InputBinding"), n("Deadzone")) {
+        behaviors.add_setter(binding, name, Rc::new(move |lua, engine, id, value| {
+            let class = engine.state.borrow().dom.at(id).class;
+            let Some(info) = engine.reflection.class_property(class, name).cloned() else { return Ok(()) };
+            let value = match convert::coerce(lua, engine, &info, &value)? {
+                Value::NumberRange(range) => Value::NumberRange(dom::NumberRange::new(range.min.clamp(0.0, 1.0), range.max.clamp(0.0, 1.0))),
+                other => other,
+            };
+            set_property(engine, id, name, value);
+            Ok(())
+        }));
     }
     // (ApplyLayout, UIPageLayout navigation, the Absolute* / TextBounds getters and the
     // CanvasPosition setter are a layout layer's)

@@ -1440,6 +1440,22 @@ measurements in a playing client.
   `Display`, `Permits`); a class only rbx_reflection_database describes is nil there, though it is named in
   its superclass's `Subclasses`. The filter's `IsA` and `ExcludeDisplay` work as measured, with Roblox's
   errors for a filter that is not a dictionary or a field of the wrong type.
+  The file's `version` names the Studio that wrote it (0.747.0.7471481). Nothing refreshes it by itself: when
+  Studio moves, run the dump again, compare with `node tools/reflection-diff.mjs <old> <new>` (every class,
+  member, default and enum item that came, went or changed) and decide each: a new property is a stored value
+  with the dump's default, a new method answers nil and reports itself as not emulated, a new event never
+  fires, and what has a behaviour here is measured again. A setting the dump no longer lists and Studio
+  still has is kept in reflection.rs `PROPERTY_SUPPLEMENT`.
+  What 0.747's data brought as behaviour: `Enum.EasingStyle.Spring` and `Bezier` exist and nothing plays them
+  (`TweenInfo.new`, `TweenService:GetValue` and GuiObject's `TweenPosition` / `TweenSize` /
+  `TweenSizeAndPosition` raise Roblox's "does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier";
+  `UIPageLayout.EasingStyle` ignores them); `TweenInfo.new` and `GetValue` check each argument's type with
+  Roblox's messages; the GUI tween methods refuse an object outside the DataModel ("Can only tween objects in
+  the workspace"); Camera `ProjectionType`, `OrthographicMode`, `OrthographicSize` and `ViewStretch` ignore
+  writes, as Studio 0.747 does; a `Capsule` part is its box; EditableImage's draw methods refuse the combine
+  types after `Multiply` and an alpha type other than `Default` with Roblox's "not yet supported" errors;
+  `ParticleEmitter.TimeScale` holds 0 to 1; nine streaming and player settings (`StreamingMinRadius`, ...)
+  raise "The current thread cannot read 'X' (lacking capability PluginOrOpenCloud)" for a game script.
 - `data/text-advances.json`: per-glyph advance fits for each Enum.Font face, measured in Studio (no font
   files are included).
 - `data/fredoka-sizes.json`: FredokaOne advances and kerning at integer sizes 4-100, from Studio.

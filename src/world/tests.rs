@@ -1755,3 +1755,36 @@ fn a_parts_cframe_is_orthonormalized_as_a_client_stores_it() {
         "#,
     );
 }
+
+/// A Capsule part (Enum.PartType.Capsule = 5, new in Studio 0.747's dump) is a box there for now: it keeps its Size, weighs
+/// what a Block of that size weighs (6 x 2 x 4 of Plastic: 33.6, where a Cylinder weighs 13.19) and a ray meets its box
+/// (hits at the corners 2.9, 1.9 from the centre, misses past the faces). Measured in Studio 0.747.0.7471481.
+#[test]
+fn a_capsule_part_is_its_box() {
+    check(
+        r#"
+        local function near(a, b) return math.abs(a - b) < 1e-3 end
+        local Capsule = Instance.new("Part")
+        Capsule.Shape = Enum.PartType.Capsule
+        assert(Capsule.Shape == Enum.PartType.Capsule and Capsule.Shape.Value == 5 and Capsule.Size == Vector3.new(4, 1.2, 2))
+        Capsule.Size = Vector3.new(6, 2, 4)
+        Capsule.Anchored, Capsule.CFrame = true, CFrame.new(1000, 500, 1000)
+        Capsule.Parent = workspace
+        assert(near(Capsule.Mass, 33.6) and near(Capsule:GetMass(), 33.6), Capsule.Mass)
+        local Cylinder = Instance.new("Part")
+        Cylinder.Shape, Cylinder.Size = Enum.PartType.Cylinder, Vector3.new(6, 2, 4)
+        assert(near(Cylinder.Mass, 13.1947), Cylinder.Mass)
+        local Params = RaycastParams.new()
+        Params.FilterType = Enum.RaycastFilterType.Include
+        Params.FilterDescendantsInstances = { Capsule }
+        local function ray(x, z)
+            local Hit = workspace:Raycast(Vector3.new(1000 + x, 510, 1000 + z), Vector3.new(0, -20, 0), Params)
+            return Hit and Hit.Distance
+        end
+        assert(near(ray(0, 0), 9) and near(ray(2.9, 1.9), 9) and near(ray(-2.9, -1.9), 9), "the box's top")
+        assert(ray(3.1, 0) == nil and ray(0, 2.1) == nil, "past the box")
+        local Ok, Problem = pcall(function() Capsule.Shape = 6 end)
+        assert(not Ok and Problem == "Unable to assign property Shape. Invalid value 6 for enum PartType", Problem)
+        "#,
+    );
+}

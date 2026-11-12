@@ -1036,28 +1036,82 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
     let library = lua.create_table()?;
     let e = engine.clone();
+    // TweenInfo.new(time, easingStyle, easingDirection, repeatCount, reverses, delayTime), measured in Studio 0.747: an
+    // argument that is passed must be of its type, nil included (`TweenInfo.new(1, nil)` raises as `TweenInfo.new(1, "Quad")`
+    // does; only the arguments left off take their defaults), checked in order. A number is a number value (no string, no
+    // boolean); a style or a direction is an item of its enum or a number, cut to a whole one, that is an item's value (2.5
+    // is Back, 13 and -1 are refused); RepeatCount is cut to a whole number (2.7 reads 2). Spring and Bezier are refused
+    // once the style is known, before the direction is looked at. A seventh argument is ignored.
     library.set(
         "new",
-        lua.create_function(move |lua, args: LuaMultiValue| {
+        wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
-            let or = |value: &LuaValue, default: f64| match value {
-                LuaValue::Nil | LuaValue::Boolean(false) => LuaValue::Number(default),
-                other => other.clone(),
+            let count = args.len();
+            let number = |index: usize| match args.get(index) {
+                LuaValue::Number(n) => Some(*n),
+                LuaValue::Integer(n) => Some(*n as f64),
+                _ => None,
             };
-            let style = if args.get(1).is_nil() { None } else { coerce_named_enum(lua, &e, "EasingStyle", args.get(1)) };
-            let direction =
-                if args.get(2).is_nil() { None } else { coerce_named_enum(lua, &e, "EasingDirection", args.get(2)) };
+            let item = |enum_name: &str, value: &LuaValue| -> Option<EnumItemId> {
+                let id = e.reflection.enum_id(enum_name)?;
+                let by_value = |n: f64| n.is_finite().then(|| e.reflection.enums[id as usize].by_value.get(&(n.trunc() as i64)).copied()).flatten();
+                match value {
+                    LuaValue::UserData(_) => super::convert::coerce_enum(lua, &e, id, value),
+                    LuaValue::Number(n) => by_value(*n),
+                    LuaValue::Integer(n) => by_value(*n as f64),
+                    _ => None,
+                }
+            };
+            let time = match number(0) {
+                Some(time) => time,
+                None if count == 0 => 1.0,
+                None => return raise_plain("TweenInfo.new first argument expects a number for time."),
+            };
+            let easing_style = if count > 1 {
+                let Some(style) = item("EasingStyle", args.get(1)) else {
+                    return raise_plain("TweenInfo.new second argument expects Enum.EasingStyle input");
+                };
+                if matches!(&*e.reflection.enum_item_info(style).name, "Spring" | "Bezier") {
+                    return raise_plain("TweenInfo.new does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier");
+                }
+                style
+            } else {
+                e.reflection.enum_item("EasingStyle", "Quad").unwrap_or(0)
+            };
+            let easing_direction = if count > 2 {
+                let Some(direction) = item("EasingDirection", args.get(2)) else {
+                    return raise_plain("TweenInfo.new third argument expects Enum.EasingDirection input");
+                };
+                direction
+            } else {
+                e.reflection.enum_item("EasingDirection", "Out").unwrap_or(0)
+            };
+            let repeat_count = match number(3) {
+                Some(count) => count.trunc(),
+                None if count <= 3 => 0.0,
+                None => return raise_plain("TweenInfo.new fourth arg should be a number for RepeatCount."),
+            };
+            let reverses = match args.get(4) {
+                LuaValue::Boolean(reverses) => *reverses,
+                _ if count <= 4 => false,
+                _ => return raise_plain("TweenInfo.new fifth arg should be a boolean for Reverses."),
+            };
+            let delay_time = match number(5) {
+                Some(delay) => delay,
+                None if count <= 5 => 0.0,
+                None => return raise_plain("TweenInfo.new sixth arg should be a number for DelayTime."),
+            };
             let info = LTweenInfo {
-                time: or(args.get(0), 1.0),
-                easing_style: style.or_else(|| e.reflection.enum_item("EasingStyle", "Quad")).unwrap_or(0),
-                easing_direction: direction.or_else(|| e.reflection.enum_item("EasingDirection", "Out")).unwrap_or(0),
-                repeat_count: or(args.get(3), 0.0),
-                reverses: matches!(args.get(4), LuaValue::Boolean(true)),
-                delay_time: or(args.get(5), 0.0),
+                time: LuaValue::Number(time),
+                easing_style,
+                easing_direction,
+                repeat_count: LuaValue::Number(repeat_count),
+                reverses,
+                delay_time: LuaValue::Number(delay_time),
             };
             let userdata = lua.create_any_userdata(info)?;
             lock_metatable(lua, &userdata)?;
-            Ok(userdata)
+            Ok(values([LuaValue::UserData(userdata)]))
         })?,
     )?;
     engine.lua.borrow_mut().libraries.insert("TweenInfo", library);
