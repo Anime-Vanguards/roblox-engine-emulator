@@ -508,6 +508,18 @@ callbacks and handlers deferred, a full flush). A RenderStepped or PreRender han
 from before the frame's step, and a tween played there takes its first step that frame. Edit mode keeps
 Studio's edit order (a flush after each resumption; the tween step right after the callbacks).
 
+A `task.wait` / `task.delay` counts from the moment of its call, on the clock `os.clock` reads (the frame's time plus
+the script work run in the frame before the call), and resumes at the first task-queue phase whose time is at least
+that far on; that phase reads its time once, just before its first thread (the frame's time plus the work run in the
+frame before it). Measured in a playing client and a server (Studio 0.746: 5,000 delays and waits from Heartbeat and
+RenderStepped handlers and from resumed threads, timed by os.clock; tools/parity task_delay_time). What a script sees:
+a delay of whole frames started after script work in a frame (a Heartbeat or RenderStepped handler, a resumed thread)
+resumes one frame later than before (`task.wait(1/60)` in a Heartbeat handler: two frames, was one); `task.wait`
+returns a little less than whole frames (the work before the call is not counted); a thread the legacy phase resumed
+that calls `task.delay(0)` still resumes in the same frame. Delays off a frame boundary resume as before. The legacy
+`wait` / `delay` / `spawn` and the engine's own timers (Debris, WaitForChild's warning) keep the frame's time, and a
+recorded clock (RUR_CLOCK) or a frozen one takes no work, so its timers are unchanged.
+
 TweenService blends a Color3 per channel as `sqrt(a^2 + (b^2 - a^2) * eased)` in float32, 0 where the mix is below 0
 (Back / Elastic overshoot), on every class's Color3 properties (GUI objects, lights, Color3Value, ...). The end of a
 tween is that blend at 1 (a hair off the goal itself), a reversed tween ends on it at 0 (a channel's sign is lost), and

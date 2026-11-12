@@ -234,7 +234,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 crate::boundary::add_cost(crate::cost::DELAYED);
                 let rest: Vec<Value> = args.0.iter().skip(2).map(super::convert::from_lua).collect();
                 let mut state = engine.state.borrow_mut();
-                state.sched.schedule_task(TimerKind::Delay, delay, thread.clone(), rest);
+                state.sched.schedule_call(TimerKind::Delay, delay, thread.clone(), rest);
                 state.sched.set_task_state(&thread, "delayed");
                 Ok(values([LuaValue::Thread(thread)]))
             })())
@@ -248,7 +248,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let args = Args::new(args);
                 let delay = task_seconds(lua, engine, args.get(0), "wait")?.unwrap_or(0.0);
                 refs::admit(engine, Hold::Wait, "task.wait")?;
-                engine.state.borrow_mut().sched.schedule_task(TimerKind::Wait, delay, lua.current_thread(), Vec::new());
+                engine.state.borrow_mut().sched.schedule_call(TimerKind::Wait, delay, lua.current_thread(), Vec::new());
                 Ok(none())
             })())
         })?,
