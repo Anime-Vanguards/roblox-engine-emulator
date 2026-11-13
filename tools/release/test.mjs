@@ -10,6 +10,8 @@ import { ROOT, MANIFESTS, PLATFORMS, args, command, isMain, realPath, sourceText
 import { licenses, normalPackages } from "./licenses.mjs";
 import { DOCUMENTS, DOCUMENT_MODE, EXECUTABLE_MODE, checkArchive, crc32, readZip, zip } from "./package.mjs";
 import { notes } from "./notes.mjs";
+// The choice of the dry run a tag publishes from has tests of its own, run with these
+import "./dry-run.test.mjs";
 import { checkAssetWorker, removeTestFolder, servedRun } from "./smoke.mjs";
 
 // A fake `ree` whose single service has pid 41 and has completed one job. Once the job has run, the service has

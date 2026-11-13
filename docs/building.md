@@ -98,8 +98,10 @@ Each platform then gets a fresh runner, which extracts the archive outside any c
 harness, a recording and the service with redirected user caches, and checks that nothing was written outside the
 cache, the output and the temp folders.
 
-Pushes to main that touch release files, and manual runs, only upload workflow artifacts. Only a tag push publishes,
-after checking that the tag matches every release manifest and its commit is on main.
+Pushes to main that touch release files, and manual runs, only upload workflow artifacts (a dry run). Only a tag push
+publishes, after checking that the tag matches every release manifest and its commit is on main. It publishes the zips
+of the dry run that passed on main at the tagged commit, which built and smoke-tested them as above; when there is no
+such run, the tag run builds and smoke-tests every platform itself first.
 
 ### Verifying a release
 
