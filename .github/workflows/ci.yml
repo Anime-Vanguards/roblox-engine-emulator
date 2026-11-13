@@ -134,11 +134,14 @@ jobs:
           env-vars: INCLUDE
       # The runner lists planted's tests and runs this job's slice, one test at a time. The slices of the five jobs
       # together hold every test once (tools/ci/test-runner.mjs).
-      # Only planted's target is built here: the other test targets are built by the test job.
+      # Only planted's target is built here: the other test targets are built by the test job. No package is named, as in
+      # the standalone job: the features are the workspace's either way, but only so is the engine's library compiled
+      # as a workspace member, the same compile the test job stores in the compile cache, which can then answer for it
+      # when the engine's sources have not changed.
       - name: Test planted profiles (this shard's slice)
         run: |
           $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
-          cargo test --release --locked --no-fail-fast -p ree-profile-view --test planted --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','planted','${{ strategy.job-index }}','${{ strategy.job-total }}']"
+          cargo test --release --locked --no-fail-fast --test planted --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','planted','${{ strategy.job-index }}','${{ strategy.job-total }}']"
       - name: Compile cache statistics
         if: ${{ !cancelled() }}
         run: node tools/ci/compile-cache.mjs stop
