@@ -597,6 +597,35 @@ fn camera_projections() {
     );
 }
 
+/// The screen forms are measured from below the top inset, as Roblox documents them: WorldToScreenPoint is
+/// WorldToViewportPoint less the inset, and ScreenPointToRay(x, y) is ViewportPointToRay(x, y + inset).
+#[test]
+fn camera_screen_points_are_measured_from_below_the_top_inset() {
+    let engine = Engine::new(Options { topbar_inset: 58.0, ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Camera = workspace.CurrentCamera
+        Camera.CFrame = CFrame.lookAt(Vector3.new(0, 10, 20), Vector3.zero)
+        local Inset = game:GetService("GuiService"):GetGuiInset()
+        assert(Inset == Vector2.new(0, 58), tostring(Inset))
+        local Point = Vector3.new(3, 2, 0)
+        local Viewport = Camera:WorldToViewportPoint(Point)
+        local Screen, Visible = Camera:WorldToScreenPoint(Point)
+        assert(Visible and math.abs(Screen.X - Viewport.X) < 1e-3 and math.abs(Screen.Z - Viewport.Z) < 1e-4, tostring(Screen))
+        assert(math.abs(Screen.Y - (Viewport.Y - 58)) < 1e-3, `screen {Screen} for viewport {Viewport}`)
+        local Toward = (Point - Camera.CFrame.Position).Unit
+        local FromViewport = Camera:ViewportPointToRay(Viewport.X, Viewport.Y)
+        assert((FromViewport.Direction - Toward).Magnitude < 1e-4, tostring(FromViewport.Direction))
+        local FromScreen = Camera:ScreenPointToRay(Viewport.X, Viewport.Y - 58)
+        assert((FromScreen.Direction - Toward).Magnitude < 1e-4, tostring(FromScreen.Direction))
+        "#,
+    );
+}
+
 #[test]
 fn bulk_moves_and_reported_calls() {
     let (lua, engine) = start();

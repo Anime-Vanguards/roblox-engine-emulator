@@ -1131,6 +1131,12 @@ record/prepare.rs runs prepared ahead by `ree serve`
   hit it; CanQuery off is skipped, RespectCanCollide skips CanCollide off; collision groups are not
   modelled. FilterDescendantsInstances and the newer ExcludeInstances / IncludeInstances lists follow
   Roblox's documentation (devforum.roblox.com/t/4563575); a part must pass both.
+- **Camera projections** (Roblox's documentation, not measured): a perspective camera from its CFrame,
+  FieldOfView and the viewport size. WorldToViewportPoint and ViewportPointToRay count from the viewport's
+  top-left corner. WorldToScreenPoint and ScreenPointToRay count from below the top inset
+  (`Options::topbar_inset`, what GuiService:GetGuiInset reports), the space GUI positions are in:
+  WorldToScreenPoint's Y is WorldToViewportPoint's less the inset, and ScreenPointToRay(x, y) is
+  ViewportPointToRay(x, y + inset).
 - **World events** (`Hooks::world_events`): `ParticleEmitter:Emit` (with where its emitter was at the
   call), `Clear`, `Trail:Clear`, sound plays and stops. Particles, trails and beams are not simulated:
   a renderer draws them from these events and the recorded switches.
