@@ -1531,8 +1531,8 @@ dependencies = [
 
 [[package]]
 name = "ror-mesh"
-version = "0.1.0"
-source = "git+https://github.com/Anime-Vanguards/roblox-object-renderer?rev=60c69c9821e245f74181467bdc58ca0a8babf04c#60c69c9821e245f74181467bdc58ca0a8babf04c"
+version = "0.2.0"
+source = "git+https://github.com/Anime-Vanguards/roblox-object-renderer?rev=4e42bf0ee6b4302fbcc77208f90bd932d055cb0e#4e42bf0ee6b4302fbcc77208f90bd932d055cb0e"
 dependencies = [
  "draco-core",
  "lz4_flex 0.13.1",
