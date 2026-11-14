@@ -1,6 +1,7 @@
--- TweenService's Color3 blend: each channel is sqrt(a^2 + (b^2 - a^2) * eased) in float32, 0 where that is below 0,
--- on every Color3 property; Color3:Lerp stays linear. Sampled values are classed against that formula (computed here
--- from a NumberValue tween's eased alpha, paused in the same step), so the lines hold whatever the frame times were.
+-- TweenService's Color3 blend on every Color3 property, classed per channel against the two forms clients have used, in
+-- float32: `sq` sqrt(a^2 + (b^2 - a^2) * eased), 0 where that is below 0 (Studio 0.746), and `lin` a + (b - a) * eased
+-- (0.747); Color3:Lerp stays linear. The formulas are computed here from a NumberValue tween's eased alpha, paused in the
+-- same step, so the lines hold whatever the frame times were (a channel whose ends are equal reads `sq` under both).
 local TweenService = game:GetService("TweenService")
 local function F(X)
 	return Vector3.new(X, 0, 0).X
@@ -67,7 +68,8 @@ for _, Stop in { 0.15, 0.5, 0.85 } do
 	end
 end
 
--- overshoot where the blend goes below 0 reads exactly 0 (paused once the eased alpha is past the end it overshoots)
+-- overshoot past an end, classed against the eased alpha read in the same step (the value itself depends on the frame
+-- times): linear goes past the end, below 0 here; the squared blend reads exactly 0 where its mix goes below 0
 local function Overshoot(Style, Direction, From, To)
 	local Info = TweenInfo.new(1, Style, Direction)
 	local Value, Eased = Instance.new("Color3Value"), Instance.new("NumberValue")
@@ -82,7 +84,8 @@ local function Overshoot(Style, Direction, From, To)
 	for _, Tween in Tweens do
 		Tween:Pause()
 	end
-	return P.f32s(Value.Value.R, Value.Value.G, Value.Value.B)
+	local Read = Value.Value
+	return Class(Read, From, To, Eased.Value) .. " " .. (if Read.R < 0 then "below-0" elseif Read.R == 0 then "0" else "above-0")
 end
 print("overshoot back-in " .. Overshoot(Enum.EasingStyle.Back, Enum.EasingDirection.In, Color3.new(0, 0, 0), Color3.new(1, 1, 1)))
 print("overshoot back-out " .. Overshoot(Enum.EasingStyle.Back, Enum.EasingDirection.Out, Color3.new(1, 1, 1), Color3.new(0, 0, 0)))
@@ -131,9 +134,12 @@ PartTween:Pause()
 PartRawTween:Pause()
 local Steps = {}
 for _, Channel in { "R", "G", "B" } do
-	local Blend = Squared(A[Channel], B[Channel], PartRaw.Value)
-	local Read = Part.Color[Channel]
-	table.insert(Steps, if Read == F(math.floor(Blend * 255) / 255) then "floor" elseif Read == F(math.floor(Blend * 255 + 0.5) / 255) then "round" elseif Read == Blend then "sq" else "?" .. P.f32(Read))
+	local Read, Label = Part.Color[Channel], nil
+	for _, Form in { { "lin", Linear(A[Channel], B[Channel], PartRaw.Value) }, { "sq", Squared(A[Channel], B[Channel], PartRaw.Value) } } do
+		local Name, Blend = Form[1], Form[2]
+		Label = Label or (if Read == F(math.floor(Blend * 255) / 255) then "floor(" .. Name .. ")" elseif Read == F(math.floor(Blend * 255 + 0.5) / 255) then "round(" .. Name .. ")" elseif Read == Blend then Name else nil)
+	end
+	table.insert(Steps, Label or "?" .. P.f32(Read))
 end
 print("class Part.Color " .. table.concat(Steps, ","))
 

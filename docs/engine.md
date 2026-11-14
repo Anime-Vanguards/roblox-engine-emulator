@@ -515,13 +515,17 @@ that calls `task.delay(0)` still resumes in the same frame. Delays off a frame b
 `wait` / `delay` / `spawn` and the engine's own timers (Debris, WaitForChild's warning) keep the frame's time, and a
 recorded clock (RUR_CLOCK) or a frozen one takes no work, so its timers are unchanged.
 
-TweenService blends a Color3 per channel as `sqrt(a^2 + (b^2 - a^2) * eased)` in float32, 0 where the mix is below 0
-(Back / Elastic overshoot), on every class's Color3 properties (GUI objects, lights, Color3Value, ...). The end of a
-tween is that blend at 1 (a hair off the goal itself), a reversed tween ends on it at 0 (a channel's sign is lost), and
-`Color3:Lerp` stays linear. ColorSequence, BrickColor and attributes are not tweenable. Measured in a playing client and
-a server (Studio 0.746, every easing style and direction, 1,485 channels bit-exact; tools/parity tween_color; a Studio
-0.747 edit-mode reading agrees). What a script sees: every tweened Color3 between its ends (it blended linearly before)
-and at its end. Not emulated: a part keeps its Color in whole 1/255 steps (floor), ree the float32 written.
+TweenService blends a Color3 per channel as `a + (b - a) * eased` in float32, as it blends every float component, on
+every class's Color3 properties (GUI objects, lights, Color3Value, ...), so Back / Elastic overshoot takes a channel
+past its ends, below 0 too. The end of a tween is that blend at 1 (a hair off the goal itself), a reversed tween ends
+on it at 0 (its start), and `Color3:Lerp` is linear too. ColorSequence, BrickColor and attributes are not tweenable.
+Measured in a playing client and a server (Roblox 0.747.0.7471481 with its live flags, 2026-11-14: every easing style
+and direction, 1,485 channels bit-exact; tools/parity tween_color). Roblox switches the blend with the dynamic flag
+`DFFlagStyleTransitionColorSpace`: on, as clients ran until Roblox turned it off on 2026-11-13, each channel is
+`sqrt(a^2 + (b^2 - a^2) * eased)`, 0 where the mix is below 0 (the same probe with the flag forced on reads that,
+1,485 channels bit-exact, on a 0.746 or a 0.747 client alike); ree follows the flag's live value. What a script sees:
+every tweened Color3 between its ends and at its end (ree blended the squares before). Not emulated: a part keeps its
+Color in whole 1/255 steps (floor), ree the float32 written.
 
 `scheduler::step(lua, engine, Some(dt))`, `run_until(lua, engine, t)`, `step_display_duration(d)` /
 `step_display(n)` (a display's cadence: edit-mode Heartbeats keep their own 240 Hz deadlines),

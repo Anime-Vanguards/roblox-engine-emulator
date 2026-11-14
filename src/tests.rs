@@ -7735,11 +7735,12 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
 }
 
 #[test]
-fn a_color3_tween_blends_the_squares_of_its_channels() {
-    // Measured in roblox-sim's Studio 0.746 client and server (tools/parity/probes/tween_color.luau, 1,485 channels
-    // bit-exact over every style and direction): each channel is sqrt(a^2 + (b^2 - a^2) * eased) in float32, 0 where the
-    // mix is below 0, on every class's Color3 properties; the end is that blend at 1 (not the goal itself), a reversed
-    // tween ends on the blend at 0 (a channel's sign is lost), and Color3:Lerp stays linear.
+fn a_color3_tween_blends_its_channels_linearly() {
+    // Measured in roblox-sim's 0.747 client and server with live flags (tools/parity/probes/tween_color.luau, 1,485
+    // channels bit-exact over every style and direction): each channel is a + (b - a) * eased in float32 on every class's
+    // Color3 properties, so Back's overshoot goes below 0; the end is that blend at 1 (a hair off the goal itself) and a
+    // reversed tween ends on the blend at 0, the start itself. Roblox's DFFlagStyleTransitionColorSpace, off since
+    // 2026-11-13, blended the squares instead.
     let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
     engine.state.borrow_mut().sched.set_main_thread(&lua.current_thread());
     run(
@@ -7772,26 +7773,24 @@ fn a_color3_tween_blends_the_squares_of_its_channels() {
         &engine,
         r#"
         local function F(X) return Vector3.new(X, 0, 0).X end
-        local function Squared(A, B, T)
-            local A2, B2 = F(A * A), F(B * B)
-            local X = F(A2 + F(F(B2 - A2) * F(T)))
-            return if X > 0 then F(math.sqrt(X)) else 0
+        local function Linear(A, B, T)
+            return F(A + F(F(B - A) * F(T)))
         end
         local A, B = Color3.fromRGB(200, 40, 40), Color3.fromRGB(40, 40, 200)
         local T = _G.Eased.Value
         assert(T > 0.1 and T < 0.3, "eased " .. T)
         for _, Color in { _G.Frame.BackgroundColor3, _G.Light.Color } do
             for _, C in { "R", "G", "B" } do
-                assert(Color[C] == Squared(A[C], B[C], T), C .. " " .. Color[C] .. " " .. Squared(A[C], B[C], T))
+                assert(Color[C] == Linear(A[C], B[C], T), C .. " " .. Color[C] .. " " .. Linear(A[C], B[C], T))
             end
         end
-        assert(_G.Frame.BackgroundColor3.R > 0.7 and _G.Frame.BackgroundColor3.B > 0.3, "squared, not linear")
+        assert(_G.Frame.BackgroundColor3.R < 0.7 and _G.Frame.BackgroundColor3.B < 0.3, "linear, not squared")
         local Back = _G.Back.Value
-        assert(Back.R == 0 and Back.G == 0 and Back.B == 0, "overshoot below 0 reads 0")
+        assert(Back.R < -0.01 and Back.R == Back.G and Back.R == Back.B, "Back's overshoot goes below 0 " .. tostring(Back))
         local Ending = _G.Ending.Value
-        assert(Ending.R == Squared(A.R, B.R, 1) and Ending.R ~= B.R and Ending.B == Squared(A.B, B.B, 1), "the end is the blend at 1")
+        assert(Ending.R == Linear(A.R, B.R, 1) and Ending.R ~= B.R and Ending.B == Linear(A.B, B.B, 1), "the end is the blend at 1")
         local Reversed = _G.Reversed.Value
-        assert(Reversed.R == 0.5 and Reversed.B == 2, "reversed end " .. tostring(Reversed))
+        assert(Reversed.R == -0.5 and Reversed.G == F(0.3) and Reversed.B == 2, "reversed end " .. tostring(Reversed))
         assert(math.abs(_G.Lerp.R - 120 / 255) < 1e-6, "Color3:Lerp stays linear")
         print("ok")
         "#,
