@@ -1526,8 +1526,9 @@ pub fn moved(reflection: &Reflection, class: ClassId) -> f64 {
 pub const MOVE_BASE: f64 = 0.47e-6;
 
 /// The client the prices were measured in, as the profile's headline names it: the parity bench's sessions (tools/cost-parity,
-/// reference/), a roblox-sim client (Studio 0.744 engine) rendering a game's match place on one desktop PC, not Studio
-pub const REFERENCE_CLIENT: &str = "a rendered roblox-sim client (Studio 0.744 engine) of a game's match place, one desktop PC";
+/// reference/), a roblox-sim client (Studio 0.744's engine, and 0.747's since string.split's refit) rendering a game's match place on one
+/// desktop PC, not Studio
+pub const REFERENCE_CLIENT: &str = "a rendered roblox-sim client (Studio 0.744 and 0.747 engines) of a game's match place, one desktop PC";
 
 /// A component's band in [`BENCH_BANDS`]
 pub struct BenchBand {
@@ -1549,21 +1550,25 @@ pub struct BenchBand {
 /// where cold charges weigh most, against a client's script time, measured with the prices before the size fit. Studio-era is the
 /// Studio playtest client's prices against the bench's interpreted rows (their range: the only rows that test a Studio-era price), and
 /// defaulted what a borrowed price reads against what the bench measured for the calls it would stand in for (the 55 method rows at
-/// CALL's 58 ns). A profile weighs them by its own work (profiler/report.rs fidelity_json).
+/// CALL's 58 ns). A profile weighs them by its own work (profiler/report.rs fidelity_json). Luau, engine, dispatch and collector are
+/// read against the 0.744 and the 0.747 sessions since string.split's refit (bands.py --priced; against the 0.744 sessions alone they
+/// were 0.52-1.38 on 69 rows, 0.58-1.27, 0.83-1.66 and 0.61-1.04: the 0.747 sessions, faster on many rows, moved them, not the price).
 pub const BENCH_BANDS: &[BenchBand] = &[
-    BenchBand { component: "luau", rows: 69, low: 0.52, high: 1.38 },
-    BenchBand { component: "engine", rows: 94, low: 0.58, high: 1.27 },
-    BenchBand { component: "collector", rows: 4, low: 0.61, high: 1.04 },
+    BenchBand { component: "luau", rows: 71, low: 0.54, high: 1.41 },
+    BenchBand { component: "engine", rows: 94, low: 0.61, high: 1.32 },
+    BenchBand { component: "collector", rows: 4, low: 0.72, high: 1.04 },
     BenchBand { component: "cold", rows: 13, low: 0.53, high: 1.06 },
-    BenchBand { component: "dispatch", rows: 6, low: 0.83, high: 1.66 },
+    BenchBand { component: "dispatch", rows: 6, low: 0.83, high: 1.89 },
     BenchBand { component: "studio", rows: 35, low: 0.45, high: 2.1 },
     BenchBand { component: "defaulted", rows: 55, low: 0.01, high: 1.42 },
 ];
-/// ree / client over every held-out row of the parity bench the clock prices (173 rows, 10th to 90th percentile; the median 15.2 % off,
-/// where the clock before this fit reads 25.2 % off and its 10th percentile 0.06). The seven held-out large buffer rows it leaves out
-/// count bytes it prices at nothing and read down to 0.08x (a 4 MB fill: [`LUAU_BUFFER_FRESH_BYTE`]); with them, the 180 rows read
-/// 0.52-1.34x and 16.5 % off, against 27.8 % before the fit
-pub const FIDELITY_BAND: (f64, f64) = (0.55, 1.34);
+/// ree / client over every held-out row of the parity bench the clock prices (175 rows against the fastest of the 0.744 and 0.747
+/// sessions, 10th to 90th percentile; the median 16.5 % off, 17.6 % and 0.60-1.39x with string.split's price before its refit). The
+/// seven held-out large buffer rows it leaves out count bytes it prices at nothing and read down to 0.08x (a 4 MB fill:
+/// [`LUAU_BUFFER_FRESH_BYTE`]); with them, the 182 rows read 0.53-1.36x and 17.6 % off. Against the 0.744 sessions alone, as fitted:
+/// 173 rows 0.55-1.34x and 15.2 % off, where the clock before the size fit read 25.2 % off and its 10th percentile 0.06 (with the
+/// buffer rows 180 rows, 0.52-1.34x and 16.5 %, against 27.8 %)
+pub const FIDELITY_BAND: (f64, f64) = (0.60, 1.38);
 /// The phone factor's measured spread ([`PHONE_SCRIPTS`]): 2.13-4.16 over the phones and scenes compared
 pub const PHONE_SCRIPTS_BAND: (f64, f64) = (2.13, 4.16);
 
@@ -2041,6 +2046,10 @@ pub const LUAU_SLOW_IMPORT: f64 = 7.9;
 /// table.concat's item 7.1 (20: 154 ns); string.split's part 25.4 (five: 140 ns) and string.format's call 102 (an interpolated string is
 /// one: 280 ns with two values, a float's %.2f 335; the specifiers' kinds differ too much for a price by count, and the fit gives them none).
 /// table.create's element and table.concat's item are fitted again with the size prices below, at several sizes (1.95 and 5.0).
+/// string.split's part is fitted again on a 0.747 client, whose string.split is Luau 747's faster one (DFFlagLuauOptimizeStringSplit): 11.7,
+/// every other price as here, on the bench's split rows at 5, 100 and 10,000 parts (three rendered sessions of the whole corpus in the
+/// match place, reference/client-747-full-*; 75 ns, 1.85 us and 142 us a call), where 25.4 read them 1.5-2.2x a client's; the held-out
+/// rows at 10 and 1,000 parts read 1.04x and 1.13x (1.92x and 2.29x before).
 pub const LUAU_NUMBER_STRING: f64 = 18.0;
 pub const LUAU_NEW_STRING: f64 = 171.0;
 pub const LUAU_SORT_COMPARE: f64 = 1.06;
@@ -2048,7 +2057,7 @@ pub const LUAU_SORT_CALL: f64 = 9.7;
 pub const LUAU_CREATE_ITEM: f64 = 1.95;
 pub const LUAU_CLONE_ITEM: f64 = 4.3;
 pub const LUAU_CONCAT_ITEM: f64 = 5.0;
-pub const LUAU_SPLIT_PART: f64 = 25.4;
+pub const LUAU_SPLIT_PART: f64 = 11.7;
 pub const LUAU_FORMAT: f64 = 102.0;
 
 /// What library and engine calls do by the size of their input, in nanoseconds (the VM's counts: [`SCANNED_SLOT`] and below), fitted

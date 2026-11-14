@@ -68,6 +68,15 @@ with them, the 180 rows read 16.5 % off (0.52-1.34x) against 27.8 % (0.03-1.37x)
 the client its fastest kept session, over the held-out rows in ns, from the 10th to the 90th percentile (`bands.py <ree side
 json> --priced`).
 
+`client-747-full-*` (2026-11-14) are three sessions of the whole corpus in a rendered client of Studio 0.747's engine,
+the release a live client runs, on the same copy of the match place (its spatial queries answer as in the 0.744
+sessions). They read the corpus as the 0.744 sessions do (each row's fastest 0.99x the 0.744 full sessions' at the
+median, 0.77-1.08x from the 10th to the 90th percentile) but for what 0.747 changed, string.split above all (a call of
+five parts 245 -> 71 ns: Luau 747's faster string.split, which the client runs). string.split's price a part is fitted on
+them (`libsize.string.split.*`, 10 to 10,000 parts, came with them). Against every kept session the clock now reads
+the held-out rows it prices 16.5 % off at the median (175 rows; 0.60-1.38x), 17.6 % (0.60-1.39x) before that refit;
+`BENCH_BANDS` and `FIDELITY_BAND` are read against every kept session.
+
 ## Reading the table
 
 `compare`'s header names ree's commit and device and each engine run's version and place. Each row gives the

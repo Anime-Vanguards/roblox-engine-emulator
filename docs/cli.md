@@ -180,10 +180,10 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   clock's waits, an elapsed-time sum, a work budget) draws, sounds or works differently in a client whenever
   its real work moves, which ree's modelled work and a frozen clock do not follow. Each probe runs the in-frame
   clock on a multiple of the modelled work (never frozen; a frozen run's wall clock stays pinned) across the
-  range a client may lie in: the work clock's current calibration reads 0.55-1.34x a client's script time, so a
-  desktop client's is 0.75-1.82x the modelled work, and a phone's script time is 2.13-4.16x a desktop client's. A
-  desktop run probes 0.75x (the fastest desktop client), 1.82x (the slowest) and 7.56x (the slowest phone); a
-  `--device phone` run, whose clock carries the phone's 2.77x already, probes 0.57x and 2.73x of it (the fastest and
+  range a client may lie in: the work clock's current calibration reads 0.60-1.38x a client's script time, so a
+  desktop client's is 0.72-1.67x the modelled work, and a phone's script time is 2.13-4.16x a desktop client's. A
+  desktop run probes 0.72x (the fastest desktop client), 1.67x (the slowest) and 6.93x (the slowest phone); a
+  `--device phone` run, whose clock carries the phone's 2.77x already, probes 0.56x and 2.50x of it (the fastest and
   slowest phone);
   `REE_TIMING_PROBES=a,b` names others. Each probe is compared with the first recording in playback.json's lists,
   camera.json, events.json (output lines and sounds) and the work each frame did (the summary's `frame_work_ms`,

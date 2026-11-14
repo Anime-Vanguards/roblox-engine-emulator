@@ -701,8 +701,9 @@ the later groups' spatial queries meet three copies of their geometry. A memory 
 objects alive until the row ends and reads its median round. The reference client is a rendered roblox-sim
 client (Studio 0.744's engine) of a game's match place on one desktop PC (`cost::REFERENCE_CLIENT`); its
 sessions' rows are kept in tools/cost-parity/reference (and two later sessions' for the buffer rows at 256 KB and
-4 MB), and the fits and bands compare each row with its fastest session (`--fastest`: a session's slower rows are
-its own noise, not the client's price).
+4 MB), with three sessions of the whole corpus in a 0.747 client on the same place, which string.split's price a
+part is fitted on (Luau 747's string.split is faster), and the fits and bands compare each row with its fastest
+session (`--fastest`: a session's slower rows are its own noise, not the client's price).
 
 Every price says where it came from (`cost::kind`): fitted on those client sessions, kept from a Studio
 playtest or capture where the bench has no row (Studio-era: most signal kinds, some classes' clones and
