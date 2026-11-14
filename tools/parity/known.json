@@ -5,16 +5,6 @@
 			"why": "Model:MoveTo itself: a client leaves a model outside the DataModel where it is (the exact name too); ree moves it"
 		}
 	],
-	"api_747": [
-		{
-			"line": "editableimage error Overlay is not a valid member of \"Enum.ImageCombineType\"",
-			"why": "the capture's engine (Studio 0.746) has no Enum.ImageCombineType.Overlay: the probe's line stops there; ree follows 0.747, measured in its Studio (each new combine type and alpha type refused)"
-		},
-		{
-			"line": "reads error ServerRegion is not a valid member of DataModel \"RobloxSim\" | ok Enum.AuthorityMode.Automatic | ok false | ok 0.699999988 | ok Enum.ResamplerMode.Default | ok false | error ExplorerIconContent is not a valid member of Folder \"Folder\"",
-			"why": "the capture's engine (Studio 0.746) has no DataModel.ServerRegion or Folder.ExplorerIconContent; 0.747 reads \"\" and Content.none (measured in its Studio), as ree does"
-		}
-	],
 	"buffer_vector_f32": [
 		{
 			"line": "write-subnormal ok 0 000000000000008000000000 | ok 0100000000000000",
@@ -590,10 +580,6 @@
 		}
 	],
 	"reflection": [
-		{
-			"line": "count 656 633",
-			"why": "the class list follows the compiled-in API dump, Studio 0.747 (660 classes, 637 creatable or services); the capture's client is 0.744 (656)"
-		},
 		{
 			"line": "Permits held true true nil",
 			"why": "ree emulates no SecurityCapabilities: Permits holds none and reports itself as not emulated (Output missing)"

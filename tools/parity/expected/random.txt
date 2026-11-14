@@ -1,5 +1,5 @@
-# engine: Roblox Studio 0.744.0.7441077, a headless playing client (script identity 2 unless the probe asks for another; Workspace.SignalBehavior Deferred)
-# captured: 2026-11-07
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-14
 math.random seed 0 0.55145569047490739 0.017231024361130141 0.88337692090640296 0.92094836796652557 54 85 45 65 4 -3 2 -3 error invalid argument #1 to 'random' (interval is empty)
 math.random seed 1 0.94843442061922034 0.061285879733742145 0.8770159548057006 0.69849327860489163 28 37 97 8 -2 -2 5 4 error invalid argument #1 to 'random' (interval is empty)
 math.random seed 42 0.22072993115387124 0.92027372378942629 0.76355000807415585 0.5235603366883349 74 79 64 63 1 5 -1 5 error invalid argument #1 to 'random' (interval is empty)
