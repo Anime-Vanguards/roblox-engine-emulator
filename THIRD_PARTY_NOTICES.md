@@ -8,9 +8,9 @@ the third-party components below, each under its own license.
 
 | Component | Where | License | License text | Changes |
 |---|---|---|---|---|
-| [Luau](https://github.com/luau-lang/luau) 0.746 (Copyright Roblox Corporation), including code from Lua 5.1 (Copyright Lua.org, PUC-Rio) | `vendor/luau0-src/luau/` | MIT | [vendor/luau0-src/luau/LICENSE.txt](vendor/luau0-src/luau/LICENSE.txt), [lua_LICENSE.txt](vendor/luau0-src/luau/lua_LICENSE.txt) | modified by the topic series in [patches/luau/](patches/luau/) |
+| [Luau](https://github.com/luau-lang/luau) 0.747 (Copyright Roblox Corporation), including code from Lua 5.1 (Copyright Lua.org, PUC-Rio) | `vendor/luau0-src/luau/` | MIT | [vendor/luau0-src/luau/LICENSE.txt](vendor/luau0-src/luau/LICENSE.txt), [lua_LICENSE.txt](vendor/luau0-src/luau/lua_LICENSE.txt) | modified by the topic series in [patches/luau/](patches/luau/) |
 | [luau0-src](https://github.com/mlua-rs/luau-src-rs) 0.22.0 (Copyright Aleksandr Orlenko), the crate that builds Luau | `vendor/luau0-src/` | MIT | [vendor/luau0-src/LICENSE](vendor/luau0-src/LICENSE) | its build script and manifest, by the same series |
-| [mlua-sys](https://github.com/mlua-rs/mlua) 0.13.0 (Copyright A. Orlenko, rlua), mlua's FFI layer | `vendor/mlua-sys/` | MIT | [vendor/mlua-sys/LICENSE](vendor/mlua-sys/LICENSE) (mlua's: the crate ships none) | its bytecode version range, set to the vendored Luau's by `tools/vendor.mjs` |
+| [mlua-sys](https://github.com/mlua-rs/mlua) 0.13.0 (Copyright A. Orlenko, rlua), mlua's FFI layer | `vendor/mlua-sys/` | MIT | [vendor/mlua-sys/LICENSE](vendor/mlua-sys/LICENSE) (mlua's: the crate ships none) | the C API the vendored Luau moved, by [patches/mlua-sys.patch](patches/mlua-sys.patch), and its bytecode version range, set to the vendored Luau's by `tools/vendor.mjs` |
 | [Lune](https://github.com/lune-org/lune) 0.10.4: the `lune-roblox` crate | `vendor/lune-roblox/` | MPL-2.0 | [vendor/lune-roblox/LICENSE.txt](vendor/lune-roblox/LICENSE.txt) | modified by [patches/lune.patch](patches/lune.patch) |
 | [Lune](https://github.com/lune-org/lune) 0.10.4: the `lune-utils` crate | `vendor/lune-utils/` | MPL-2.0 | [vendor/lune-utils/LICENSE.txt](vendor/lune-utils/LICENSE.txt) | modified by [patches/lune.patch](patches/lune.patch) |
 

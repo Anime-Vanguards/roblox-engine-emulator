@@ -147,7 +147,7 @@ cargo test --release         # the engine's tests and the patched VM's
 Nothing else is fetched: the patched Luau VM (`vendor/luau0-src`), the mlua-sys that binds it
 (`vendor/mlua-sys`) and Lune's Roblox datatypes (`vendor/lune-roblox`, `vendor/lune-utils`) are vendored.
 They are the pinned upstream archives with the topic series in `patches/luau/` and `patches/lune.patch`
-applied, and mlua-sys with the VM's bytecode version range: `node tools/vendor.mjs` rebuilds
+applied, and mlua-sys with `patches/mlua-sys.patch` and the VM's bytecode version range: `node tools/vendor.mjs` rebuilds
 `vendor/` after a patch changes, `node tools/vendor.mjs --check` verifies it ([Updating
 Luau](#updating-luau) moves the VM to a newer release). `--release` is the everyday build:
 incremental, linked with rust-lld (`.cargo/config.toml`), and with cargo's ThinLTO across the crate's own
@@ -202,7 +202,8 @@ need it too. After a bump:
 2. If the C API that mlua binds moved (a type tag, a callback's signature), move `mlua` and `mlua-sys` to
    the versions made for it, pinned exactly in Cargo.toml (and mlua-sys's archive in `tools/vendor.mjs`,
    which vendors it with the release's bytecode version range), and update the engine's declarations of
-   the series' own functions.
+   the series' own functions. Until an mlua-sys binds the release, `patches/mlua-sys.patch` moves the
+   vendored copy to it (Luau 0.747 removed the integer type, which moved every type tag after `number`).
 3. `node tools/luau-flags.mjs`: the values a live client serves for the release's Luau flags
    (`data/luau-flags.json`, which the VM applies when it starts); it rebuilds `vendor/`. Run it again
    whenever Roblox changes them (it prints what changed since the last run).

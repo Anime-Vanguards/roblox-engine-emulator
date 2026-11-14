@@ -1969,7 +1969,9 @@ pub const LUAU_COLD_CODE: f64 = 0.85;
 /// user-defined classes (a debug flag). NAMECALL is priced apart: 0.746's interpreter dispatches the CALL after it as an instruction
 /// of its own, where 0.694 fell through to it and counted the two as one NAMECALL, the count the call class's interpreted price was
 /// fitted on; so that price is the CALL's, and the lookup's is the rest of what the fit gave a method call (nothing). Native code
-/// always ran the two apart.
+/// always ran the two apart. FASTPCALL, which 0.747's compiler emits for every pcall and xpcall, is a call too, and the VM counts the
+/// C call of pcall it stands for: a pcall costs its call and that C call (only the import the fallback carries is skipped), about what
+/// a 0.747 client's costs (the parity bench's lang.call.pcall 18.9 ns against the client's 18.3).
 const fn op_class(op: usize) -> usize {
     match op {
         // MOD, POW, MODK, POWK, IDIV, IDIVK

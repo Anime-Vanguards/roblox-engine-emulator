@@ -7158,6 +7158,39 @@ fn a_scripts_number_classifiers_are_fast_calls() {
     assert!(calls >= 3000 && ccalls >= 3000, "after getfenv: {calls} calls, {ccalls} C calls");
 }
 
+/// Luau 0.747's compiler makes every pcall / xpcall a fast protected call (FASTPCALL, which skips the import and the C call of the
+/// fallback it carries); a 0.747 client still pays what that call cost (the parity bench's lang.call.pcall: 18.3 ns, 17.9 in a 0.744
+/// client that made the call), so the call is counted as the C call it stands for: one a pcall, as before.
+#[test]
+fn a_fast_protected_call_counts_the_c_call_it_stands_for() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+            local Module = Instance.new("ModuleScript")
+            __setSource(Module, {source:?})
+            _G.Protected = require(Module)
+            "#,
+            source = "local function f(x) return x end
+return function(N) local s = 0 for i = 1, N do local ok, v = pcall(f, i) if ok then s += v end local ok2 = xpcall(f, print, i) if ok2 then s += 1 end end return s end
+"
+        ),
+    );
+    let before = vm_counts(&engine);
+    let output = run(&lua, &engine, "print(_G.Protected(1000))");
+    let after = vm_counts(&engine);
+    assert!(output.contains(&"print: 501500".to_string()), "{output:?}");
+    // (FASTPCALL is opcode 89, CALL 21 and CALLFB 87: the fast path skips the fallback's call; the snippet that calls the module and
+    // print make a few calls of their own)
+    let (fast, calls, ccalls) = (after.ops[89] - before.ops[89], after.ops[21] + after.ops[87] - before.ops[21] - before.ops[87], after.ccalls - before.ccalls);
+    assert!(fast >= 2000 && calls < 10, "{fast} fast protected calls, {calls} calls: the fast path ran");
+    assert!((2000..2010).contains(&ccalls), "{ccalls} C calls for 2,000 protected calls");
+}
+
 /// A `--!native` module's instructions are priced as a client's machine code takes them (cost.rs NATIVE_OPS: a keyed table read or
 /// write 0.42 ns, an addition or loop step 0.43; interpreted 2.45 and 0.48), whether or not this VM compiles the module: the parity
 /// bench's native rows run 0.8-7.8x faster than the same loops interpreted.
