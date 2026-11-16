@@ -296,6 +296,8 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+      id-token: write
+      attestations: write
       actions: read # to download the passing run's zips
     steps:
       # This job executes no repository code and does not check out the repository.
@@ -327,6 +329,10 @@ jobs:
           cd upload
           sha256sum -- *.zip > SHA256SUMS
           echo "Publishing as canary the zips that run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$DRY_RUN built and smoke-tested at $GITHUB_SHA" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Attest the build provenance of the canary zips
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: upload/*.zip
       # The tag already exists, moved by the export: this creates the release for it when there is none, else edits it,
       # and never creates or moves a tag. An existing release gets the new zips under the same names first, then loses
       # the assets that are no longer published, then its new title and notes.

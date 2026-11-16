@@ -471,8 +471,9 @@ test("the canary publishes a passing run's zips as a prerelease under fixed name
 
 	const canary = job("canary");
 	assert.match(canary, /^    if: .*github\.event_name == 'push' && github\.ref == 'refs\/tags\/canary' && .*needs\.version\.outputs\.dry-run != '' \}\}$/m);
-	// it alone writes, and runs nothing from the repository
-	assert.match(canary, /^    permissions:\n      contents: write\n      actions: read #.*\n    steps:/m);
+	// it alone writes, and runs nothing from the repository; it attests the zips as publish does
+	assert.match(canary, /^    permissions:\n      contents: write\n      id-token: write\n      attestations: write\n      actions: read #.*\n    steps:/m);
+	assert.match(canary, /uses: actions\/attest-build-provenance@[0-9a-f]{40} .*\n        with:\n          subject-path: upload\/\*\.zip$/m);
 	assert(!/actions\/checkout|\bnode\b|tools\//.test(canary));
 	// the zips are the passing run's, under the fixed names the notes link
 	assert.match(canary, /run-id: \$\{\{ needs\.version\.outputs\.dry-run \}\}/);
