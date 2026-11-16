@@ -7,6 +7,10 @@ How to build ree, the cargo features and the allocator. The [README](../README.m
 [Releases](https://github.com/Anime-Vanguards/roblox-engine-emulator/releases) provide a flat zip per platform, named
 `ree-<version>-<os>-<arch>.zip`. Extract `ree.exe` on Windows or `ree` elsewhere and put it on PATH.
 
+The [canary](https://github.com/Anime-Vanguards/roblox-engine-emulator/releases/tag/canary) prerelease is a build of
+main between releases, refreshed nightly: the same zips, named `ree-canary-<os>-<arch>.zip` so that a download link
+stays the same, with `SHA256SUMS`. It is not a release and may break, and it is never marked as the latest release.
+
 ### Platforms
 
 | Platform | Built on |
@@ -102,6 +106,10 @@ Pushes to main that touch release files, and manual runs, only upload workflow a
 publishes, after checking that the tag matches every release manifest and its commit is on main. It publishes the zips
 of the dry run that passed on main at the tagged commit, which built and smoke-tested them as above; when there is no
 such run, the tag run builds and smoke-tests every platform itself first.
+
+A nightly run builds and smoke-tests main's head as a dry run does, unless that commit already has a passing run. The
+`canary` tag, moved by the export to the newest commit of main with a passing run, publishes that run's zips as the
+canary prerelease. It never builds: when the run's zips have expired, it fails.
 
 ### Verifying a release
 

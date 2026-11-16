@@ -55,6 +55,10 @@ repository's. The zip also works with aftman and foreman, and `ree --version` pr
 What a release needs, where it keeps its caches and how to verify it are in
 [docs/building.md](docs/building.md#release-binaries).
 
+For a build of the current main between releases, download `ree-canary-<os>-<arch>.zip` from the
+[canary](https://github.com/Anime-Vanguards/roblox-engine-emulator/releases/tag/canary) prerelease. It is refreshed
+nightly and keeps its download links. It is not a release and may break.
+
 A release binary is standalone for every job. `--repo` names input data only; state goes to `RUR_STATE_DIR`, else
 `RUR_CACHE_DIR`, else the per-user `ree` cache, and the project is the current folder unless `--project` or `--roots`
 say otherwise. `--version`, `--help` and stateless commands work without a cache folder.

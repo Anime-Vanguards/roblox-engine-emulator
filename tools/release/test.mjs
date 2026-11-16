@@ -6,10 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { ROOT, MANIFESTS, PLATFORMS, args, command, isMain, realPath, sourceText, version } from "./common.mjs";
+import { ROOT, MANIFESTS, PLATFORMS, REPOSITORY, args, command, isMain, realPath, sourceText, version } from "./common.mjs";
 import { licenses, normalPackages } from "./licenses.mjs";
 import { DOCUMENTS, DOCUMENT_MODE, EXECUTABLE_MODE, checkArchive, crc32, readZip, zip } from "./package.mjs";
-import { notes } from "./notes.mjs";
+import { canaryAssets, canaryNotes, notes } from "./notes.mjs";
 // The choice of the dry run a tag publishes from has tests of its own, run with these
 import "./dry-run.test.mjs";
 import { checkAssetWorker, removeTestFolder, servedRun } from "./smoke.mjs";
@@ -345,7 +345,7 @@ test("each archive is deterministic, flat and has one executable first with Unix
 	assert.throws(() => zip([{ name: "folder/file", bytes: Buffer.alloc(0), mode: DOCUMENT_MODE }]), /flat/);
 });
 
-test("notes use the previous reachable release and keep shell-looking subjects as text", () => {
+test("notes use the previous reachable release, never canary, and keep shell-looking subjects as text", () => {
 	const sha = "a".repeat(40);
 	for (const previous of [null, "v0.0.9"]) {
 		const gitCalls = [];
@@ -354,7 +354,8 @@ test("notes use the previous reachable release and keep shell-looking subjects a
 			assert.equal(program, "git");
 			gitCalls.push(argv);
 			if (argv[0] === "rev-parse") return sha;
-			if (argv[0] === "tag") return ["v0.1.0", previous].filter(Boolean).join("\n");
+			// canary is a tag on main as well, and never a release
+			if (argv[0] === "tag") return ["canary", "v0.1.0", previous].filter(Boolean).join("\n");
 			return subject + "\n";
 		};
 		const output = notes("0.1.0", fakeGit);
@@ -370,12 +371,46 @@ test("notes use the previous reachable release and keep shell-looking subjects a
 	assert.throws(() => sourceText("0.1.0", "short"), /full SHA/);
 });
 
+test("canary notes link the commit and list the commits since the latest release, which is never canary", () => {
+	const sha = "b".repeat(40);
+	const site = `https://github.com/${REPOSITORY}`;
+	// the latest release and the number of commits since it
+	for (const [latest, count] of [["v0.4.0", 3], [null, 1], ["v0.4.0", 0], ["v0.4.0", 52]]) {
+		const gitCalls = [];
+		const subjects = Array.from({ length: count }, (_, i) => `Change ${count - i} $(echo data) \`literal\``);
+		const fakeGit = (program, argv) => {
+			assert.equal(program, "git");
+			gitCalls.push(argv);
+			if (argv[0] === "tag") return (latest ? ["canary", latest, "v0.3.0"] : ["canary"]).join("\n");
+			return subjects.map((subject) => `${subject}\n`).join("");
+		};
+		const output = canaryNotes(sha, "2026-11-16T01:42:09Z", fakeGit);
+		assert.deepEqual(gitCalls[0], ["tag", "--merged", sha, "--sort=-version:refname"]);
+		assert.deepEqual(gitCalls[1], ["log", "--format=%s", latest ? `${latest}..${sha}` : sha]);
+		assert(output.startsWith(`A build of main, not a release: it may break. Releases are at ${site}/releases.\n`));
+		assert(output.includes(`- Commit: [${sha.slice(0, 10)}](${site}/commit/${sha})\n`));
+		assert(output.includes("- Built: 2026-11-16 01:42 UTC\n"));
+		const plural = count === 1 ? "" : "s";
+		const since = latest ? `- ${count} commit${plural} since v0.4.0 ([compare](${site}/compare/v0.4.0...${sha}))` : "- 1 commit, no release yet:";
+		assert(output.includes(since), since);
+		// newest first as git lists them, at most 50, the rest counted
+		for (const subject of subjects.slice(0, 50)) assert(output.includes(`- ${subject}\n`), subject);
+		if (count > 50) assert(output.includes(`- and ${count - 50} earlier\n`) && !output.includes(`- ${subjects[50]}\n`));
+		for (const name of canaryAssets()) assert(output.includes(`${site}/releases/download/canary/${name}\n`), name);
+		for (const text of ["SHA256SUMS", "GPL-3.0-or-later", `${site}/tree/${sha}`, `${site}/archive/${sha}.tar.gz`]) assert(output.includes(text), text);
+	}
+	assert.deepEqual(canaryAssets(), ["ree-canary-windows-x86_64.zip", "ree-canary-linux-x86_64.zip", "ree-canary-macos-aarch64.zip"]);
+	assert.throws(() => canaryNotes("short", "2026-11-16T01:42:09Z", () => ""), /full SHA/);
+	assert.throws(() => canaryNotes(sha, "", () => ""), /build time/);
+	assert.throws(() => canaryNotes(sha, "yesterday", () => ""), /build time/);
+});
+
 test("release workflow retains its publication boundary and pins", () => {
 	const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/release.yml"), "utf8");
 	const lines = workflow.split("\n");
 
-	// the five jobs run on the public repository only
-	assert.equal(lines.filter((line) => /^    if: .*repository.private/.test(line)).length, 5);
+	// the six jobs run on the public repository only
+	assert.equal(lines.filter((line) => /^    if: .*repository.private/.test(line)).length, 6);
 
 	// the publish job runs no repository code, and nothing is cached
 	const publish = workflow.split(/^  publish:/m)[1];
@@ -412,4 +447,43 @@ test("release workflow retains its publication boundary and pins", () => {
 	// the command line reads values with spaces, and rejects a name without its value
 	assert.deepEqual(args(["--out", "folder with spaces"], ["out"]), { out: "folder with spaces" });
 	assert.throws(() => args(["--out"], ["out"]), /incomplete/);
+});
+
+test("the canary publishes a passing run's zips as a prerelease under fixed names, and never builds, tags or becomes latest", () => {
+	// Windows checkouts may have CRLF line ends
+	const workflow = fs.readFileSync(path.join(ROOT, ".github/workflows/release.yml"), "utf8").replace(/\r\n/g, "\n");
+	// a job's lines, up to the next job or the comment above it
+	const job = (name) => workflow.split(new RegExp(`^  ${name}:\\n`, "m"))[1].split(/^  \S/m)[0];
+
+	// the canary tag runs beside the version tags, and a nightly run builds main's head
+	assert.match(workflow, /^    tags: \['v\[0-9\]\+\.\[0-9\]\+\.\[0-9\]\+', 'canary'\]$/m);
+	assert.match(workflow, /^  schedule:\n    - cron: "31 1 \* \* \*"$/m);
+	// nightly runs and canary runs each share a group apart from the pushes' dry runs, and nothing is cancelled
+	const group = /^  group: (.*)$/m.exec(workflow)[1];
+	assert(group.startsWith("release-${{ github.event_name == 'schedule' && 'nightly' || github.event_name == 'push' && github.ref == 'refs/tags/canary' && 'canary' || "), group);
+	assert.match(workflow, /^  cancel-in-progress: false$/m);
+
+	// only a version tag reaches publish. The canary never builds: its version job finds the passing run's zips or fails
+	// (--required, checked with dry-run.mjs), and build and smoke run only when it found none.
+	assert.match(job("publish"), /^    if: .*github\.ref_type == 'tag' && github\.ref != 'refs\/tags\/canary' &&/m);
+	assert.match(job("version"), /dry-run-date: \$\{\{ steps\.dry-run\.outputs\.run-date \}\}/);
+	assert.match(job("notes"), /run: node tools\/release\/notes\.mjs --canary "\$GITHUB_SHA" --built "\$BUILT" --out/);
+
+	const canary = job("canary");
+	assert.match(canary, /^    if: .*github\.event_name == 'push' && github\.ref == 'refs\/tags\/canary' && .*needs\.version\.outputs\.dry-run != '' \}\}$/m);
+	// it alone writes, and runs nothing from the repository
+	assert.match(canary, /^    permissions:\n      contents: write\n      actions: read #.*\n    steps:/m);
+	assert(!/actions\/checkout|\bnode\b|tools\//.test(canary));
+	// the zips are the passing run's, under the fixed names the notes link
+	assert.match(canary, /run-id: \$\{\{ needs\.version\.outputs\.dry-run \}\}/);
+	const platforms = /for platform in (.*); do/.exec(canary)[1].split(" ");
+	assert.deepEqual(platforms.map((platform) => `ree-canary-${platform}.zip`), canaryAssets());
+	// the release of the existing tag, a prerelease and never latest; no tag is created or moved
+	assert(!/--target|target_commitish|git push|git tag/.test(canary));
+	assert.match(canary, /gh release create canary --verify-tag .*--prerelease --latest=false /);
+	assert.match(canary, /gh release edit canary .*--prerelease --latest=false /);
+	assert(canary.includes('title="Canary (main ${GITHUB_SHA:0:10})"'));
+	// an existing release gets the new zips under the same names before the stale assets go and the title changes
+	const order = ["gh release upload canary upload/* --clobber", "gh release delete-asset canary", "gh release edit canary"].map((text) => canary.indexOf(text));
+	assert(order[0] > 0 && order[0] < order[1] && order[1] < order[2], "upload, then delete, then edit");
 });
