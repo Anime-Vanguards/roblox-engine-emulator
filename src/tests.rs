@@ -1058,6 +1058,17 @@ fn enums_and_engine_datatypes() {
     assert_script(
         r#"
         assert(Enum.Font.GothamSemibold == Enum.Font.GothamMedium)
+        -- legacy names resolve to the item that carries the current name, and nothing lists them (measured, a 0.747 client:
+        -- tools/parity/probes/enum_legacy.luau). KeyCode's value 0 is None; Unknown is its legacy name
+        local Unknown = Enum.KeyCode.Unknown
+        assert(Unknown == Enum.KeyCode.None and Unknown.Name == "None" and Unknown.Value == 0 and tostring(Unknown) == "Enum.KeyCode.None")
+        assert(Enum.KeyCode:FromValue(0).Name == "None" and Enum.KeyCode:GetEnumItems()[1].Name == "None")
+        assert(Enum.KeyCode.Touch == Enum.KeyCode.TouchPosition and Enum.Material["Corroded Metal"] == Enum.Material.CorrodedMetal)
+        assert(Enum.Axis.Left == Enum.Axis.X and Enum.Axis.Top.Name == "Y" and Enum.SurfaceType.Bumps == Enum.SurfaceType.Glue)
+        assert(Enum.QualityLevel["Level  1"] == Enum.QualityLevel.Level01 and Enum.InputType.Throtle == Enum.InputType.NoInput)
+        for _, Item in Enum.Axis:GetEnumItems() do
+            assert(Item.Name ~= "Left" and Item.Name ~= "Top")
+        end
         assert(typeof(Enum) == "Enums" and typeof(Enum.Font) == "Enum" and typeof(Enum.Font.Arial) == "EnumItem")
         assert(tostring(Enum) == "Enums" and tostring(Enum.Font) == "Font" and tostring(Enum.Font.Arial) == "Enum.Font.Arial")
         assert(Enum.Font.Arial.EnumType == Enum.Font and Enum.Font.Arial:IsA("Font") and not Enum.Font.Arial:IsA("Nope"))

@@ -289,20 +289,35 @@ const RENAMED_CONTENT: &[(&str, &str, &str)] = &[
     ("Decal", "ColorMapContent", "Texture"),
 ];
 
-// Measured deprecated item names that resolve but are not enumerated (enums.luau ItemAliases).
+// Legacy item names: each resolves to the item beside it, which reports its current name, and no enumeration, FromName
+// or FromValue answers a legacy one. The names are the LegacyNames of Roblox's published API dump (0.747); all 73 measured
+// in a 0.747 client (tools/parity/probes/enum_legacy.luau). KeyCode's value 0 is None there, and Unknown its legacy name.
+#[rustfmt::skip]
 const ITEM_ALIASES: &[(&str, &[(&str, &str)])] = &[
-    (
-        "Font",
-        &[
-            ("GothamSemibold", "GothamMedium"),
-            ("Montserrat", "Gotham"),
-            ("MontserratMedium", "GothamMedium"),
-            ("MontserratBold", "GothamBold"),
-            ("MontserratBlack", "GothamBlack"),
-        ],
-    ),
+    ("AccessoryType", &[("TeeShirt", "TShirt")]),
+    ("AssetType", &[("TeeShirt", "TShirt"), ("TeeShirtAccessory", "TShirtAccessory")]),
+    ("AvatarAssetType", &[("TeeShirtAccessory", "TShirtAccessory")]),
+    ("Axis", &[("Left", "X"), ("Right", "X"), ("Bottom", "Y"), ("Top", "Y"), ("Back", "Z"), ("Front", "Z")]),
+    ("BinType", &[("Laser", "Script"), ("Rocket", "Script"), ("Slingshot", "Script")]),
+    ("CatalogSortType", &[("RecentlyUpdated", "RecentlyCreated")]),
+    ("ConnectionError", &[("DisconnectNoResponse", "DisconnectRaknetErrors")]),
+    ("ContextActionPriority", &[("Default", "Medium")]),
+    ("ControlMode", &[("Mouse Lock Switch", "MouseLockSwitch")]),
+    ("DeveloperMemoryTag", &[("PhysicsParts", "BaseParts")]),
+    ("ExplosionType", &[("CratersAndDebris", "Craters")]),
+    ("ExternalEditorMode", &[("CustomEditor", "UserSelectedEditor")]),
+    ("FluidForces", &[("Enabled", "Experimental")]),
+    ("Font", &[("Montserrat", "Gotham"), ("GothamSemibold", "GothamMedium"), ("MontserratMedium", "GothamMedium"), ("MontserratBold", "GothamBold"), ("MontserratBlack", "GothamBlack")]),
+    ("FormFactor", &[("Block", "Brick")]),
+    ("InputType", &[("Action1", "NoInput"), ("Action2", "NoInput"), ("Action3", "NoInput"), ("Action4", "NoInput"), ("Action5", "NoInput"), ("LeftTread", "NoInput"), ("RightTread", "NoInput"), ("Steer", "NoInput"), ("Throtle", "NoInput"), ("Throttle", "NoInput"), ("UpDown", "NoInput")]),
+    ("KeyCode", &[("Unknown", "None"), ("Touch", "TouchPosition")]),
+    ("Material", &[("Corroded Metal", "CorrodedMetal"), ("Aluminum", "Foil")]),
+    ("ModelLevelOfDetail", &[("Deactivated", "Disabled")]),
+    ("QualityLevel", &[("Level  1", "Level01"), ("Level  2", "Level02"), ("Level  3", "Level03"), ("Level  4", "Level04"), ("Level  5", "Level05"), ("Level  6", "Level06"), ("Level  7", "Level07"), ("Level  8", "Level08"), ("Level  9", "Level09"), ("Level 10", "Level10"), ("Level 11", "Level11"), ("Level 12", "Level12"), ("Level 13", "Level13"), ("Level 14", "Level14"), ("Level 15", "Level15"), ("Level 16", "Level16"), ("Level 17", "Level17"), ("Level 18", "Level18"), ("Level 19", "Level19"), ("Level 20", "Level20"), ("Level 21", "Level21")]),
     ("RaycastFilterType", &[("Blacklist", "Exclude"), ("Whitelist", "Include")]),
-    ("KeyCode", &[("Unknown", "None")]),
+    ("Style", &[("Alternating Supports", "AlternatingSupports"), ("Bridge Style Supports", "BridgeStyleSupports"), ("No Supports", "NoSupports")]),
+    ("SurfaceType", &[("Spawn", "Smooth"), ("Unjoinable", "Smooth"), ("Bumps", "Glue")]),
+    ("ThreadPoolConfig", &[("PartialThread", "Auto")]),
 ];
 
 // Events of classes only rbx-dom describes (reflection.luau EventSupplement).

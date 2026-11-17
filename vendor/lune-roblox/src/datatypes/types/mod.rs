@@ -247,14 +247,39 @@ pub mod float32 {
     }
 
     /// ToAxisAngle: `angle = acosf(0.5 * (((R00 + R11) + R22) - 1))`, `axis = (R21 - R12, R02 - R20, R10 - R01).Unit`.
-    /// At angle 0 the axis is X (not measured: G3D's and glam's choice, and ree's before).
+    /// The angle is only as fine as that cosine: within a float step of 1 it reads 0 (a 0.0003 rad turn does), then
+    /// 2^-11, and so on (measured). At angle 0 the axis is X (measured); skew terms that are all zero under another
+    /// angle give the axis 0, 0, 0 (measured). At a half turn (the cosine is -1) the skew terms say nothing, and the axis
+    /// comes from the largest diagonal term `d`: that component is `0.5 sqrtf(((d - e) - f) + 1)` and the other two
+    /// `0.5 / component` times a term of the upper triangle (G3D's Matrix3::toAxisAngle; it fits the measured lines).
     pub fn to_axis_angle(r: &Rot) -> (Vec3, f32) {
         let cos = (0.5 * (((r[0][0] + r[1][1]) + r[2][2]) - 1.0)).clamp(-1.0, 1.0);
         let angle = cos.acos();
         if angle == 0.0 {
             return ([1.0, 0.0, 0.0], 0.0);
         }
-        (unit3([r[2][1] - r[1][2], r[0][2] - r[2][0], r[1][0] - r[0][1]]), angle)
+        if angle < std::f32::consts::PI {
+            let skew = [r[2][1] - r[1][2], r[0][2] - r[2][0], r[1][0] - r[0][1]];
+            if skew == [0.0, 0.0, 0.0] {
+                return (skew, angle);
+            }
+            return (unit3(skew), angle);
+        }
+        let (d0, d1, d2) = (r[0][0], r[1][1], r[2][2]);
+        let axis = if d0 >= d1 && d0 >= d2 {
+            let x = 0.5 * (((d0 - d1) - d2) + 1.0).sqrt();
+            let half = 0.5 / x;
+            [x, half * r[0][1], half * r[0][2]]
+        } else if d1 > d0 && d1 >= d2 {
+            let y = 0.5 * (((d1 - d0) - d2) + 1.0).sqrt();
+            let half = 0.5 / y;
+            [half * r[0][1], y, half * r[1][2]]
+        } else {
+            let z = 0.5 * (((d2 - d0) - d1) + 1.0).sqrt();
+            let half = 0.5 / z;
+            [half * r[0][2], half * r[1][2], z]
+        };
+        (axis, angle)
     }
 
     /// lookAt / lookAlong: `look = dir.Unit`, `right = (look x up).Unit`, or `(look x X).Unit` when `|look x up|^2`

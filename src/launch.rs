@@ -307,7 +307,10 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
     }
     let local_player_name = match run_context {
         RunContext::Server => None,
-        RunContext::Client | RunContext::Edit => Some(args.player.clone().or_else(|| std::env::var("RUR_PLAYER").ok()).unwrap_or_else(|| "Player".into())),
+        // Studio's edit DataModel has no player (Players is empty and LocalPlayer nil for a plugin or the command bar
+        // outside Team Create; not measured: a headless session has no edit DataModel); `--player` gives the run one all the same
+        RunContext::Edit => args.player.clone(),
+        RunContext::Client => Some(args.player.clone().or_else(|| std::env::var("RUR_PLAYER").ok()).unwrap_or_else(|| "Player".into())),
     };
     let options = Options {
         offline: args.offline,
@@ -424,7 +427,9 @@ mod tests {
         assert!(refused(&["--run-context", "server", "--mode", "play", "--player", "Someone"]).contains("a server has none"));
         assert!(refused(&["--run-context", "both", "--mode", "play"]).contains("client, server or edit"));
         let edit = prepare(&args(&["--mount", "ReplicatedStorage/Lib=lib", "--run-context", "edit"]), Path::new("C:/somewhere")).unwrap();
-        assert!(edit.options.run_context == RunContext::Edit && !edit.options.server() && edit.options.local_player_name.is_some());
+        assert!(edit.options.run_context == RunContext::Edit && !edit.options.server() && edit.options.local_player_name.is_none());
+        let edit_player = prepare(&args(&["--run-context", "edit", "--player", "Someone"]), Path::new("C:/somewhere")).unwrap();
+        assert_eq!(edit_player.options.local_player_name.as_deref(), Some("Someone"));
         assert!(refused(&["--run-context", "edit", "--mode", "play"]).contains("needs --mode edit"));
     }
 

@@ -346,7 +346,8 @@ fn loadmodule_gives_a_json_module_a_function_that_decodes_it() {
 
 #[test]
 fn an_edit_run_context_is_both_sides() {
-    let source = r##"local RunService = game:GetService("RunService") print(RunService:IsClient(), RunService:IsServer(), RunService:IsRunning(), game:GetService("Players").LocalPlayer ~= nil)"##;
-    check(&run(Options { run_context: RunContext::Edit, ..Options::default() }, source), &["true true false true"]);
-    check(&run(Options::default(), source), &["true false false true"]);
+    let source = r##"local RunService = game:GetService("RunService") print(RunService:IsClient(), RunService:IsServer(), RunService:IsRunning(), game:GetService("Players").LocalPlayer, #game:GetService("Players"):GetPlayers())"##;
+    // (the command line's edit run context has no local player, as Studio's edit DataModel has none)
+    check(&run(Options { run_context: RunContext::Edit, local_player_name: None, ..Options::default() }, source), &["true true false nil 0"]);
+    check(&run(Options::default(), source), &["true false false Player 1"]);
 }

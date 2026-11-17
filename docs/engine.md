@@ -1441,8 +1441,9 @@ Measured in Studio 0.747, a headless play session's client and server, each capt
   as `GetService` does, and ScriptContext is named `Script Context`.
 - `--mode edit --run-context edit` (`RunContext::Edit`) is Studio's edit DataModel, both sides at once:
   `RunService:IsClient()` and `IsServer()` are both true (Roblox's RunService documentation's table; not measured: a
-  headless session has no edit DataModel) and EncodingService works as on a server. Everything else is the client's
-  edit mode, its local player included (Studio's edit DataModel has none). Test suites that Studio runs in edit mode
+  headless session has no edit DataModel) and EncodingService works as on a server. It has no player, as Studio's
+  edit DataModel has none (`Players.LocalPlayer` is nil and `Players:GetPlayers()` empty for a plugin or the command bar
+  outside Team Create; not measured), unless `--player` names one. Everything else is the client's edit mode. Test suites that Studio runs in edit mode
   with `debug.loadmodule` (Jest-Lua 3) run with `--mode edit --run-context edit --load-module`.
 
 ## Output and LogService

@@ -488,6 +488,38 @@ fn datatypes_answer_the_lowercase_names_a_client_lists() {
     );
 }
 
+/// CFrame:ToAxisAngle where the angle's cosine is a float step or two from 1 or -1: lines a Studio 0.747 playing client
+/// printed (tools/parity/probes/axis_angle_small.luau). The angle is as coarse as acosf of that cosine, a half turn takes
+/// its axis from the diagonal, and skew terms that are all zero give the axis 0, 0, 0.
+#[test]
+fn cframe_to_axis_angle_near_the_identity_and_a_half_turn_is_a_playing_clients() {
+    assert_script(
+        r#"
+local function Line(C)
+	local Axis, Angle = C:ToAxisAngle()
+	return string.format("%.9g %.9g %.9g %.17g", Axis.X, Axis.Y, Axis.Z, Angle)
+end
+local function Is(Got, Want)
+	assert(Got == Want, `got "{Got}", expected "{Want}"`)
+end
+Is(Line(CFrame.identity), "1 0 0 0")
+-- a 0.0003 rad turn reads 0, and the next angles are 2^-11 and 0.00069
+Is(Line(CFrame.Angles(0, 0.0003, 0)), "1 0 0 0")
+Is(Line(CFrame.Angles(0, 0.0005, 0)), "0 1 0 0.00048828125")
+Is(Line(CFrame.Angles(0, 0.0007, 0)), "0 1 0 0.00069053395418450236")
+Is(Line(CFrame.new(0, 0, 0, 0.99999994, 0, 0, 0, 1, 0, 0, 0, 1)), "1 0 0 0")
+Is(Line(CFrame.new(0, 0, 0, 0.99999994, 0, 0, 0, 0.99999994, 0, 0, 0, 0.99999994)), "0 0 0 0.00048828125")
+Is(Line(CFrame.Angles(math.pi - 0.0003, 0, 0)), "1 0 0 3.1412472724914551")
+-- a half turn: the axis from the largest diagonal term
+Is(Line(CFrame.Angles(math.pi - 1e-8, 0, 0)), "1 -0 0 3.1415927410125732")
+Is(Line(CFrame.Angles(0, math.pi, 0)), "0 1 0 3.1415927410125732")
+Is(Line(CFrame.new(0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, -1)), "0.707106769 0.707106769 0 3.1415927410125732")
+Is(Line(CFrame.fromAxisAngle(Vector3.new(1, 2, -3), math.pi - 0.0001)), "-0.267227888 -0.534539104 0.801783741 3.1415927410125732")
+Is(Line(CFrame.fromAxisAngle(Vector3.new(1, 2, -3), math.pi - 0.0006)), "0.267225772 0.534550846 -0.801776648 3.1411044597625732")
+"#,
+    );
+}
+
 /// CFrame, Vector2 and Color3 compute in a playing client's float order (types::float32): values a Studio 0.744
 /// playing client printed (tools/parity/probes/datatypes.luau, cframe_order.luau; tests/parity.rs guards every
 /// matching line of those probes).
