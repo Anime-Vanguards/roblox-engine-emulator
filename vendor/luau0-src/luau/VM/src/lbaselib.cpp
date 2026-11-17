@@ -122,13 +122,44 @@ static void getfunc(lua_State* L, int opt)
     }
 }
 
+// The environment of the nearest function up the stack that runs in a table of its own (a script's), else the thread's
+// globals: what "the thread's global env" is for a host that runs every script in its own environment on threads that
+// keep the VM's globals
+static void pushscriptenv(lua_State* L)
+{
+    lua_Debug ar;
+    for (int level = 1; lua_getinfo(L, level, "f", &ar); ++level)
+    {
+        if (!lua_iscfunction(L, -1))
+        {
+            lua_getfenv(L, -1);
+            if (!lua_rawequal(L, -1, LUA_GLOBALSINDEX))
+            {
+                lua_remove(L, -2);
+                return;
+            }
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pushvalue(L, LUA_GLOBALSINDEX);
+}
+
 static int luaB_getfenv(lua_State* L)
 {
     getfunc(L, 1);
-    if (lua_iscfunction(L, -1))             // is a C function?
-        lua_pushvalue(L, LUA_GLOBALSINDEX); // return the thread's global env.
+    if (lua_iscfunction(L, -1)) // is a C function?
+        pushscriptenv(L);       // return the thread's global env.
     else
+    {
         lua_getfenv(L, -1);
+        // (a function of the host's own Luau, which runs in the thread's globals, answers as a C function does)
+        if (lua_rawequal(L, -1, LUA_GLOBALSINDEX))
+        {
+            lua_pop(L, 1);
+            pushscriptenv(L);
+        }
+    }
     lua_setsafeenv(L, -1, false);
     return 1;
 }

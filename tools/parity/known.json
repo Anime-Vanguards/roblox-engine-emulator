@@ -113,6 +113,20 @@
 			"why": "require by a string path: the client's text names the prefixes a path must start with (./, ../, @); ree's differs"
 		}
 	],
+	"core_services": [
+		{
+			"line": "CoreGui get nil",
+			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
+		},
+		{
+			"line": "StudioService get nil",
+			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
+		},
+		{
+			"line": "ScriptEditorService get nil",
+			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
+		}
+	],
 	"datatypes": [
 		{
 			"line": "v3-precision 0.100000001 0.200000003 0.300000012 0.333333343 16777216 0 true",
@@ -175,10 +189,6 @@
 			"why": "the capture's job environment has no script global (a LocalScript's has one); ree's harness has one"
 		},
 		{
-			"line": "loadstring ok function error loadstring() is not available",
-			"why": "loadstring on a client: the client answers nil and its message; ree's answer differs"
-		},
-		{
 			"line": "globals shared=table _G=table _VERSION=string workspace=userdata Workspace=userdata game=userdata Game=userdata script=nil plugin=nil settings=function UserSettings=function tick=function time=function elapsedTime=function wait=function delay=function spawn=function ypcall=function printidentity=function stats=function version=function PluginManager=function LoadLibrary=nil collectgarbage=function gcinfo=function require=function unpack=function Stats=function warn=function DebuggerManager=nil utf8=table buffer=table vector=table task=table bit32=table",
 			"why": "the capture's job environment has no script global (a LocalScript's has one); ree's harness has one"
 		},
@@ -209,6 +219,16 @@
 		{
 			"line": "weak-values-left Closure,DelayedThread,EnumItem,HeldByHandler,HeldByOther,InWorld,String,Vector3",
 			"why": "garbage collection: ree keeps a table and a signal a script dropped one collection longer than a client"
+		}
+	],
+	"loadmodule": [
+		{
+			"line": "env keys [_G,script,shared] metatable string index nil frozen false",
+			"why": "a script's environment: Roblox's holds script, _G and shared under a locked metatable and its require is one global; ree's holds script and a require of the script's own over a plain metatable"
+		},
+		{
+			"line": "env is-getfenv(f) true is-caller's false script true raw-script true thread-env-is-caller's true _G true shared true require true game true",
+			"why": "require: Roblox's is one global function that finds the calling script; ree gives each script a require of its own, so a loaded module's is not the caller's"
 		}
 	],
 	"logservice": [

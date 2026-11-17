@@ -60,6 +60,8 @@ mod scheduler_tests;
 #[cfg(test)]
 mod server_tests;
 #[cfg(test)]
+mod loading_tests;
+#[cfg(test)]
 mod luau_profile_tests;
 #[cfg(test)]
 mod profiler_tests;
@@ -109,6 +111,11 @@ pub struct Options {
     /// RunService:IsStudio(): true for a Studio session (the default), false for a live game's
     /// server or client (`--studio false`), whose scripts then take their live branches
     pub studio: bool,
+    /// `debug.loadmodule` works (`--load-module`), as where Roblox's FFlagEnableLoadModule is on (a Studio whose
+    /// ClientAppSettings.json sets it); off, as in a live client and a plain Studio, it raises "debug.loadmodule is not enabled."
+    pub load_module: bool,
+    /// ServerScriptService.LoadStringEnabled is on, whatever the place holds (`--load-string`): a server's scripts have `loadstring`
+    pub load_string: bool,
     pub topbar_inset: f64,
     pub device: String,
     pub place_id: f64,
@@ -153,6 +160,8 @@ impl Default for Options {
             mode: "edit".into(),
             run_context: RunContext::Client,
             studio: true,
+            load_module: false,
+            load_string: false,
             topbar_inset: 0.0,
             device: "desktop".into(),
             place_id: 0.0,
@@ -300,6 +309,11 @@ pub enum RunContext {
     #[default]
     Client,
     Server,
+    /// Studio's edit DataModel, which is both sides at once (`--mode edit --run-context edit`): RunService:IsClient and
+    /// IsServer are both true, as Roblox's RunService documentation tabulates edit mode (not measured: a headless session
+    /// has no edit DataModel), so code that refuses to run off the server runs, as it does for a plugin or the command bar.
+    /// Everything else is the client's edit mode
+    Edit,
 }
 
 impl RunContext {
@@ -307,7 +321,8 @@ impl RunContext {
         match text {
             "client" => Ok(RunContext::Client),
             "server" => Ok(RunContext::Server),
-            other => Err(format!("--run-context must be client or server, not {other}")),
+            "edit" => Ok(RunContext::Edit),
+            other => Err(format!("--run-context must be client, server or edit, not {other}")),
         }
     }
 
@@ -315,6 +330,7 @@ impl RunContext {
         match self {
             RunContext::Client => "client",
             RunContext::Server => "server",
+            RunContext::Edit => "edit",
         }
     }
 }

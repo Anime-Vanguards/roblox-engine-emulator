@@ -1409,6 +1409,42 @@ and `IsRunMode` false; `IsEdit` is refused to game scripts, as on a client. It n
 
 A print of exactly `@done` ends `ree run` / `ree record` at the end of that frame.
 
+## Code loaded at run time (`src/lua/loading.rs`)
+
+Measured in Studio 0.747, a headless play session's client and server, each capture taken twice
+(`tools/parity/probes/loadstring.luau`, `loadmodule.luau`, `core_services.luau`).
+
+- `loadstring(source, chunkname?)` raises `loadstring() is not available` on a client and on a server whose
+  ServerScriptService.LoadStringEnabled is off (the place's property, or `--load-string` / `Options::load_string` to
+  turn it on whatever the place holds; a server with it off was not measured, Roblox's documentation gives the same
+  answer). Where it is on: the chunk is named by the second argument, else by the source, as Luau reads a chunk name
+  (`=Name` and `@Name` are `Name`, anything else `[string "<first line>"]`); it runs in the calling script's
+  environment, and `setfenv` replaces that for the function alone; a source that does not compile answers
+  `nil, message`; a number is taken as its text and other types raise Luau's argument errors; the text ends at its
+  first NUL byte.
+- `debug.loadmodule(module)` raises `debug.loadmodule is not enabled.` unless the run turns it on (`--load-module` /
+  `Options::load_module`: Roblox's FFlagEnableLoadModule, off in a live client and in a plain Studio). Turned on, it
+  answers `function, nil, cleanup` for one ModuleScript and raises `Attempted to call loadmodule with invalid
+  argument(s).` for anything else (a Script, a second argument). The function is the module's current Source compiled as
+  `require` compiles it (the chunk named by the module's full name, `script` the module) and not run; each load is a
+  function and an environment of its own, each call runs the source again, and `require` of the same module neither
+  sees nor changes them. A source that does not compile answers `nil, message`. A JSON module answers a function that
+  decodes its file at each call. Not measured: what the cleanup function releases (here nothing).
+- `getfenv(0)` and `getfenv` of an engine function answer the environment of the script that called, as in Roblox,
+  where a thread's globals are its script's environment (ree's threads keep the VM's globals; the VM's getfenv looks
+  the script's environment up the stack: `patches/luau/18-script-thread-globals.patch`).
+- `game:GetService` and `FindService` answer nil, with no error, for the services Roblox keeps for its own scripts
+  (`services::ROBLOX_ONLY_SERVICES`: CoreScriptSyncService, CorePackages, RobloxReplicatedStorage, PluginGuiService,
+  RobloxPluginGuiService, AppStorageService, CSGDictionaryService: nil at script identity 2 and at 4). CoreGui,
+  StudioService and ScriptEditorService, nil at identity 2 only, are answered as identity 4 gets them: edit-mode code
+  that Studio runs as a plugin parents its previews to CoreGui. `FindService` of a name that is no service's raises
+  as `GetService` does, and ScriptContext is named `Script Context`.
+- `--mode edit --run-context edit` (`RunContext::Edit`) is Studio's edit DataModel, both sides at once:
+  `RunService:IsClient()` and `IsServer()` are both true (Roblox's RunService documentation's table; not measured: a
+  headless session has no edit DataModel) and EncodingService works as on a server. Everything else is the client's
+  edit mode, its local player included (Studio's edit DataModel has none). Test suites that Studio runs in edit mode
+  with `debug.loadmodule` (Jest-Lua 3) run with `--mode edit --run-context edit --load-module`.
+
 ## Output and LogService
 
 `LogService:GetLogHistory()` returns a fresh array of fresh entry tables, oldest first, with `message`,

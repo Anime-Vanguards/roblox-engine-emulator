@@ -955,10 +955,11 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
             print.call::<()>(format!("{} 2", prefix.unwrap_or_else(|| "Current identity is".into())))
         })?,
     )?;
-    shared.raw_set(
-        "loadstring",
-        lua.create_function(|_, _: LuaMultiValue| Ok((LuaValue::Nil, "loadstring() is not available")))?,
-    )?;
+    let e = engine.clone();
+    shared.raw_set("loadstring", wrapped(lua, engine, move |lua, args| super::loading::loadstring(lua, &e, args))?)?;
+    let e = engine.clone();
+    let debug: LuaTable = exports.get("Debug")?;
+    debug.raw_set("loadmodule", wrapped(lua, engine, move |lua, args| super::loading::loadmodule(lua, &e, args))?)?;
     let inert: LuaFunction = exports.get("InertLibrary")?;
     for name in ["DockWidgetPluginGuiInfo", "PluginDrag", "CellId"] {
         shared.raw_set(name, inert.call::<LuaValue>(name)?)?;

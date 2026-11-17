@@ -15,6 +15,7 @@ pub mod globals;
 pub mod holders;
 pub mod instance;
 pub mod leaks;
+pub mod loading;
 pub mod modules;
 pub mod raw;
 pub mod refs;

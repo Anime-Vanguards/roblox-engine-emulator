@@ -413,7 +413,12 @@ pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[
     // A script's chunk is its full name as Roblox names it: error positions, tracebacks and debug.info(f, "s") read
     // `ReplicatedStorage.Module:3:`, not Luau's `[string "ReplicatedStorage.Module"]:3:` for an unmarked name
     // (measured in a playing client, Studio 0.744: tools/parity/probes/chunknames.luau).
-    let chunk = chunk.set_name(format!("={name}")).set_environment(env);
+    load(lua, engine, chunk.set_name(format!("={name}")).set_environment(env))
+}
+
+/// Loads a script's chunk as this engine's VM runs scripts: interpreted, or compiled to native code now or later
+/// ([`defer_codegen`], [`interpret_modules`]). A module's chunk ([`compile_in`]) and loadstring's (loading.rs).
+pub fn load(lua: &Lua, engine: &Rc<Engine>, chunk: LuaChunk) -> LuaResult<LuaFunction> {
     let (deferred, interpreted, interpret_all) = {
         let modules = engine.modules.borrow();
         (modules.deferred.is_some(), modules.interpreted, modules.interpret_all)
@@ -477,6 +482,30 @@ pub fn source_of(engine: &Engine, module: InstanceId) -> Option<Vec<u8>> {
         Some(Value::String(source)) => Some(source.as_bytes().to_vec()),
         _ => None,
     }
+}
+
+/// Lists `path` among the files this run's modules came from ([`required_files`]).
+pub fn note_required(engine: &Engine, path: &str) {
+    engine.modules.borrow_mut().files.insert(path.to_string());
+}
+
+/// A JSON module's value (Rojo `.json`): the file decoded, a new value each time.
+pub fn decode_json(lua: &Lua, engine: &Engine, path: &str) -> Result<LuaValue, String> {
+    note_read(engine, path);
+    read_file(engine, path)
+        .map(|(bytes, _)| bytes)
+        .map_err(|error| error.to_string())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| error.to_string()))
+        .and_then(|value| {
+            lua.to_value_with(
+                &value,
+                LuaSerializeOptions::new()
+                    .set_array_metatable(false)
+                    .serialize_none_to_null(false)
+                    .serialize_unit_to_null(false),
+            )
+            .map_err(|error| error.to_string())
+        })
 }
 
 fn error_result(lua: &Lua, message: String, level: i64) -> LuaResult<LuaMultiValue> {
@@ -614,21 +643,7 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         engine.modules.borrow_mut().files.insert(path.to_string());
     }
     if let (true, Some(path)) = (json, &path) {
-        note_read(engine, path);
-        let decoded = read_file(engine, path)
-            .map(|(bytes, _)| bytes)
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| error.to_string()))
-            .and_then(|value| {
-                lua.to_value_with(
-                    &value,
-                    LuaSerializeOptions::new()
-                        .set_array_metatable(false)
-                        .serialize_none_to_null(false)
-                        .serialize_unit_to_null(false),
-                )
-                .map_err(|error| error.to_string())
-            });
+        let decoded = decode_json(lua, engine, path);
         let mut refs = engine.modules.borrow_mut();
         return match decoded {
             Ok(value) => {

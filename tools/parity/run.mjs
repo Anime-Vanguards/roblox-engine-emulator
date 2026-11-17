@@ -47,7 +47,8 @@ export function readExpected(name, server = false) {
 	return { header: lines.filter(line => line.startsWith("# ")), lines: lines.filter(line => !line.startsWith("# ")) };
 }
 
-// A probe's options, from a line "-- parity: identity=4 device=desktop rendered" (capture_sim.py reads the same line).
+// A probe's options, from a line "-- parity: identity=4 device=desktop rendered flag=FFlagEnableLoadModule" (capture_sim.py
+// reads the same line; "flag" names one engine flag the capture turns on).
 export function probeOptions(name) {
 	const probe = fs.readFileSync(path.join(PROBES, `${name}.luau`), "utf8");
 	const match = probe.match(/--\s*parity:([^\r\n]*)/);
@@ -99,7 +100,9 @@ export function runInRee(name, ree, scratch, server = false) {
 	fs.writeFileSync(harness, `return function(Context)\n${HARNESS_PRINT}\n${body(name)}\n${HARNESS_FLUSH}\nend\n`);
 	const empty = path.join(scratch, "empty");
 	fs.mkdirSync(empty, { recursive: true });
-	const context = server ? ["--run-context", "server"] : [];
+	// (the server capture's place has ServerScriptService.LoadStringEnabled on; a probe's "flag=" names an engine flag it needs on)
+	const context = server ? ["--run-context", "server", "--load-string"] : [];
+	if (probeOptions(name).flag === "FFlagEnableLoadModule") context.push("--load-module");
 	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "120", ...context], {
 		encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true,
 	});

@@ -112,6 +112,13 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
 
 ## Run context
 
+- `--run-context edit` (with `--mode edit`) is Studio's edit DataModel, both sides at once: `RunService:IsClient()`
+  and `IsServer()` are both true and EncodingService works, so code that refuses to run off the server runs as it
+  does for a plugin or the command bar; everything else is the client's edit mode.
+- `--load-module` turns `debug.loadmodule` on (Roblox's FFlagEnableLoadModule; off, it raises `debug.loadmodule is
+  not enabled.`, as in a live client and a plain Studio), and `--load-string` gives a server's scripts `loadstring`
+  whatever the place's ServerScriptService.LoadStringEnabled holds (docs/engine.md "Code loaded at run time"). A
+  Jest-Lua 3 suite that Studio runs in edit mode runs with `--mode edit --run-context edit --load-module`.
 - `--run-context server` runs the scripts as a Studio Play-mode server (docs/engine.md "Server run
   context"): `RunService:IsServer()` true and `IsClient()` false, no local player (Players starts empty;
   a harness parents `Instance.new("Player")`s to it), nothing renders, in-memory DataStoreService,

@@ -279,6 +279,21 @@ fn vector2(lua: &Lua, x: f64, y: f64) -> LuaResult<LuaValue> {
     Ok(LuaValue::UserData(lua.create_userdata(vector)?))
 }
 
+/// Services Roblox keeps for its own scripts: a script's `game:GetService` answers nil for them, with no error (Studio 0.747,
+/// a play session's client and server at script identity 2 and a client at identity 4, the command bar's:
+/// tools/parity/probes/core_services.luau). At identity 2 CoreGui, StudioService and ScriptEditorService are nil as well, and a
+/// server refuses NetworkClient; ree answers those as identity 4 does, since edit-mode code that Studio runs as a plugin
+/// parents its previews to CoreGui.
+pub const ROBLOX_ONLY_SERVICES: &[&str] = &[
+    "AppStorageService",
+    "CSGDictionaryService",
+    "CorePackages",
+    "CoreScriptSyncService",
+    "PluginGuiService",
+    "RobloxPluginGuiService",
+    "RobloxReplicatedStorage",
+];
+
 /// GetService: the existing service child, or a new one (named, parented without events and
 /// parent-locked).
 pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Result<InstanceId, Flow> {
@@ -301,6 +316,7 @@ pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Res
     // `UserSettings().GameSettings`
     let instance_name = match service_name {
         "RunService" => "Run Service",
+        "ScriptContext" => "Script Context",
         "UserGameSettings" => "GameSettings",
         other => other,
     };
@@ -355,6 +371,9 @@ pub fn install(engine: &Rc<Engine>) {
     if let Some(data_model) = class(&reflection, "DataModel") {
         let get = method(|lua, engine, id, args| {
             let service_name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
+            if ROBLOX_ONLY_SERVICES.contains(&&*service_name) {
+                return Ok(values([LuaValue::Nil]));
+            }
             let service = get_service(engine, id, &service_name)?;
             Ok(values([instance_value(lua, engine, service)?]))
         });
@@ -362,7 +381,11 @@ pub fn install(engine: &Rc<Engine>) {
         behaviors.add_method(data_model, K::service as NameId, get);
         behaviors.add_method(data_model, K::FindService as NameId, method(|lua, engine, id, args| {
             let service_name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
-            Ok(values([match find_service(engine, id, &service_name) {
+            // (a name that is no service's raises as GetService does: tools/parity/probes/core_services.luau)
+            if !engine.reflection.class_by_name(&service_name).is_some_and(|class| class.service) {
+                return raise(format!("'{service_name}' is not a valid Service name"));
+            }
+            Ok(values([match find_service(engine, id, &service_name).filter(|_| !ROBLOX_ONLY_SERVICES.contains(&&*service_name)) {
                 Some(service) => instance_value(lua, engine, service)?,
                 None => LuaValue::Nil,
             }]))
@@ -549,10 +572,12 @@ pub fn install(engine: &Rc<Engine>) {
     if let Some(run_service) = class(&reflection, "RunService") {
         let mode_edit = options.edit_mode();
         let server = options.server();
+        // (Studio's edit DataModel, `--run-context edit`, is both sides: the same documentation's table, not measured)
+        let both = options.run_context == crate::RunContext::Edit;
         let studio = options.studio;
         behaviors.add_method(run_service, K::IsStudio as NameId, constant(move |_| Ok(LuaValue::Boolean(studio))));
         behaviors.add_method(run_service, K::IsClient as NameId, constant(move |_| Ok(LuaValue::Boolean(!server))));
-        behaviors.add_method(run_service, K::IsServer as NameId, constant(move |_| Ok(LuaValue::Boolean(server))));
+        behaviors.add_method(run_service, K::IsServer as NameId, constant(move |_| Ok(LuaValue::Boolean(server || both))));
         behaviors.add_method(run_service, K::IsRunning as NameId, constant(move |_| Ok(LuaValue::Boolean(!mode_edit))));
         behaviors.add_method(run_service, K::IsRunMode as NameId, constant(|_| Ok(LuaValue::Boolean(false))));
         // (a game script may not ask: "The current thread cannot call 'IsEdit' (lacking capability PluginOrOpenCloud)" on a
@@ -652,8 +677,9 @@ pub fn install(engine: &Rc<Engine>) {
     crate::meshes::install(engine, &mut behaviors);
     crate::path2d::install(engine, &mut behaviors);
     query::install(engine, &mut behaviors);
-    // (a client keeps EncodingService unemulated, as it was: its output does not change)
-    if options.server() {
+    // (a client keeps EncodingService unemulated, as it was: its output does not change; Studio's edit DataModel, both sides,
+    // has the server's)
+    if options.server() || options.run_context == crate::RunContext::Edit {
         encoding::install(engine, &mut behaviors);
     }
 

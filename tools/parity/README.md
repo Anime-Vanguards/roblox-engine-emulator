@@ -33,6 +33,10 @@ that asks for a device or a renderer is left out. `cargo test --release --test p
   PreRender-relative order out of lines that must be stable.
 - A probe that needs another script identity says so in a line `-- parity: identity=4` (writing `Source` and
   requiring the module needs 4 in a client).
+- A probe that needs an engine flag on says `flag=<name>` on that line (`flag=FFlagEnableLoadModule` for
+  `debug.loadmodule`): the capture turns the flag on for the probe's session, and the runner gives ree the option that
+  stands for it (`--load-module`). The server's runs pass `--load-string`: the server capture's place has
+  ServerScriptService.LoadStringEnabled on.
 - A probe that needs a screen says `-- parity: device=desktop rendered`, and the capture runs it in a rendered client
   on that device. Plain ree has no GUI layout, so `known.json` lists such a probe's lines. `--rur <checkout>` runs it
   through rur (roblox-ui-renderer), which adds one, on the capture client's screen (1920x1080 under a 58 px top-bar

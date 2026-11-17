@@ -146,6 +146,8 @@ pub struct Args {
     pub mode: Option<String>,
     pub run_context: Option<String>,
     pub studio: Option<bool>,
+    pub load_module: bool,
+    pub load_string: bool,
     pub player: Option<String>,
     pub device: Option<String>,
     pub place_id: Option<f64>,
@@ -176,6 +178,8 @@ impl Args {
             "--offline" => self.offline = true,
             "--verbose" => self.verbose = true,
             "--no-snapshots" => self.no_snapshots = true,
+            "--load-module" => self.load_module = true,
+            "--load-string" => self.load_string = true,
             "--roots" => self.roots = need()?.split(';').filter(|r| !r.is_empty()).map(str::to_string).collect(),
             "--project" => self.project = Some(need()?),
             "--place" => self.place = Some(need()?),
@@ -203,7 +207,7 @@ impl Args {
             "--instance" => self.mounts.push(project::Mount::parse(&need()?, true)?),
             _ => return Ok(None),
         }
-        Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots") { 1 } else { 2 }))
+        Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots" | "--load-module" | "--load-string") { 1 } else { 2 }))
     }
 }
 
@@ -290,6 +294,9 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
     let place_prices = crate::cost::PlacePrices::default().with(std::env::var("REE_LOCALIZED_PLACES").ok().as_deref(), std::env::var("REE_MATCH_PLACES").ok().as_deref())?;
     // A Studio Play-mode server: no local player, and no edit-mode server (Studio's edit DataModel is
     // both sides at once)
+    if run_context == RunContext::Edit && mode != "edit" {
+        return Err("--run-context edit needs --mode edit".into());
+    }
     if run_context == RunContext::Server {
         if mode == "edit" {
             return Err("--run-context server needs --mode play".into());
@@ -300,7 +307,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
     }
     let local_player_name = match run_context {
         RunContext::Server => None,
-        RunContext::Client => Some(args.player.clone().or_else(|| std::env::var("RUR_PLAYER").ok()).unwrap_or_else(|| "Player".into())),
+        RunContext::Client | RunContext::Edit => Some(args.player.clone().or_else(|| std::env::var("RUR_PLAYER").ok()).unwrap_or_else(|| "Player".into())),
     };
     let options = Options {
         offline: args.offline,
@@ -313,6 +320,8 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         mode,
         run_context,
         studio: args.studio.unwrap_or(true),
+        load_module: args.load_module,
+        load_string: args.load_string,
         verbose: args.verbose || std::env::var("RUR_VERBOSE").as_deref() == Ok("1"),
         local_player_name,
         local_player_user_id: std::env::var("RUR_PLAYER_ID").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
@@ -413,7 +422,10 @@ mod tests {
         let refused = |words: &[&str]| prepare(&args(words), Path::new("C:/somewhere")).err().unwrap_or_default();
         assert!(refused(&["--run-context", "server"]).contains("needs --mode play"));
         assert!(refused(&["--run-context", "server", "--mode", "play", "--player", "Someone"]).contains("a server has none"));
-        assert!(refused(&["--run-context", "both", "--mode", "play"]).contains("client or server"));
+        assert!(refused(&["--run-context", "both", "--mode", "play"]).contains("client, server or edit"));
+        let edit = prepare(&args(&["--mount", "ReplicatedStorage/Lib=lib", "--run-context", "edit"]), Path::new("C:/somewhere")).unwrap();
+        assert!(edit.options.run_context == RunContext::Edit && !edit.options.server() && edit.options.local_player_name.is_some());
+        assert!(refused(&["--run-context", "edit", "--mode", "play"]).contains("needs --mode edit"));
     }
 
     #[test]
