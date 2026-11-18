@@ -49,7 +49,7 @@ pub fn to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> 
             LuaValue::UserData(lua.create_userdata(lune::ColorSequence::from((**v).clone()))?)
         }
         Value::Font(font) => LuaValue::UserData(lua.create_any_userdata(LFont(std::cell::RefCell::new((**font).clone())))?),
-        Value::Content(content) => LuaValue::UserData(lua.create_any_userdata(LContent((**content).clone()))?),
+        Value::Content(content) => LuaValue::UserData(lua.create_any_userdata(LContent::new(lua, (**content).clone()))?),
         Value::Dom(variant) => dom_to_lua(lua, variant)?,
         Value::Lua(value) => {
             // (a table or buffer BindableEvent:Fire sent: every receiver gets a copy of its own, lua/bindable.rs)

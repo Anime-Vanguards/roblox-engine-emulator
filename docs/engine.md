@@ -431,7 +431,9 @@ scheduler.rs    Scheduler data and the Luau-running steps (flush_deferred, resum
   `InstanceId` outside the tree across frames keeps it reachable with `state.dom.pin(id)` / `unpin(id)`,
   queued work (scheduler job and timer arguments are scanned) or an instance property. Caches keyed by
   id drop entries in `hooks.instance_freed` (or check the generation: `dom.get(id)` of a freed id is
-  `None`).
+  `None`). A Content holding an Object keeps it alive while the Content lives, as a playing client's does
+  (tools/parity/probes/content_object.luau), and no script value can hold a freed instance (using one is a script
+  error, never an engine panic).
 
 ## Instance API (raw userdata, `src/lua/raw.rs`)
 

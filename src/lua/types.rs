@@ -5,7 +5,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 use mlua::prelude::*;
@@ -15,7 +15,7 @@ use super::{
     refs::{self, Hold}, signal_value, typeof_value, values, wrapped,
 };
 use crate::{
-    Engine, ScriptError,
+    Engine, InstanceId, ScriptError,
     reflection::{EnumId, EnumItemId},
     scheduler,
     signal::{ConnectionId, SignalId},
@@ -30,7 +30,86 @@ pub struct LEnums;
 pub struct LSignal(pub SignalId, pub u32);
 pub struct LConnection(pub ConnectionId);
 pub struct LFont(pub RefCell<FontValue>);
-pub struct LContent(pub ContentValue);
+/// A script's Content. One that holds an Object keeps it alive while the value lives, as Roblox's does (measured in a
+/// 0.747 client: an EditableImage only a Content holds stays usable after the collector ran; the Luau wrapper of the
+/// object is collected and `Object` answers a new one): the object is pinned until the value is collected.
+pub struct LContent(pub ContentValue, ObjectPin);
+
+impl LContent {
+    /// A Content value of `lua`'s engine (an Object's is pinned while the value lives).
+    pub fn new(lua: &Lua, content: ContentValue) -> Self {
+        let pin = match &content {
+            ContentValue::Object(id) => ObjectPin::new(lua, *id),
+            _ => ObjectPin(None),
+        };
+        LContent(content, pin)
+    }
+}
+
+/// Keeps a Content's object pinned while the Content value lives. A pin or unpin that finds the engine's state in use
+/// (the collector of the Luau heap drops a value wherever it runs) waits in [`PENDING_PINS`] until the next instance
+/// collection, which applies it before it looks for garbage.
+pub struct ObjectPin(Option<(Weak<Engine>, InstanceId)>);
+
+thread_local! {
+    static PENDING_PINS: RefCell<Vec<(Weak<Engine>, InstanceId, bool)>> = const { RefCell::new(Vec::new()) };
+}
+
+impl ObjectPin {
+    fn new(lua: &Lua, id: InstanceId) -> Self {
+        let Some(engine) = lua.app_data_ref::<Rc<Engine>>().map(|engine| Rc::downgrade(&engine)) else { return ObjectPin(None) };
+        pin(&engine, id, true);
+        ObjectPin(Some((engine, id)))
+    }
+}
+
+impl Drop for ObjectPin {
+    fn drop(&mut self) {
+        if let Some((engine, id)) = self.0.take() {
+            pin(&engine, id, false);
+        }
+    }
+}
+
+fn pin(engine: &Weak<Engine>, id: InstanceId, on: bool) {
+    let Some(strong) = engine.upgrade() else { return };
+    match strong.state.try_borrow_mut() {
+        Ok(mut state) if on => state.dom.pin(id),
+        Ok(mut state) => state.dom.unpin(id),
+        Err(_) => PENDING_PINS.with(|pending| pending.borrow_mut().push((engine.clone(), id, on))),
+    }
+}
+
+/// Applies the Content pins and unpins that waited for `engine`'s state (lua::raw::collect, before it looks for garbage).
+pub fn apply_pending_pins(engine: &Engine) {
+    let mine: Vec<(InstanceId, bool)> = PENDING_PINS.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if pending.is_empty() {
+            return Vec::new();
+        }
+        let mut mine = Vec::new();
+        pending.retain(|(owner, id, on)| {
+            if std::ptr::eq(owner.as_ptr(), engine) {
+                mine.push((*id, *on));
+                false
+            } else {
+                owner.strong_count() > 0
+            }
+        });
+        mine
+    });
+    if mine.is_empty() {
+        return;
+    }
+    let mut state = engine.state.borrow_mut();
+    for (id, on) in mine {
+        if on {
+            state.dom.pin(id);
+        } else {
+            state.dom.unpin(id);
+        }
+    }
+}
 
 pub struct LTweenInfo {
     pub time: LuaValue,
@@ -882,8 +961,10 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                     }]));
                 }
                 b"Object" => {
+                    // (a Content keeps its object; one that is gone anyway answers nil, never a dead instance)
+                    let live = matches!(content, ContentValue::Object(id) if e.state.borrow().dom.get(id).is_some());
                     return Ok(values([match content {
-                        ContentValue::Object(id) => super::instance_value(lua, &e, id)?,
+                        ContentValue::Object(id) if live => super::instance_value(lua, &e, id)?,
                         _ => LuaValue::Nil,
                     }]));
                 }
@@ -928,10 +1009,10 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "fromUri",
         lua.create_function(|lua, uri: LuaValue| {
             let text = string_of(lua, &uri)?;
-            lua.create_any_userdata(LContent(ContentValue::Uri(Str::from(text))))
+            lua.create_any_userdata(LContent::new(lua, ContentValue::Uri(Str::from(text))))
         })?,
     )?;
-    let none_value = lua.create_any_userdata(LContent(ContentValue::None))?;
+    let none_value = lua.create_any_userdata(LContent::new(lua, ContentValue::None))?;
     lock_metatable(lua, &none_value)?;
     // Roblox's documentation: fromAssetId(0) is Content.none, a non-finite id and fromObject(nil)
     // throw (the messages are not measured in Studio)
@@ -951,7 +1032,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             }
             let text = string_of(lua, id)?;
             Ok(values([LuaValue::UserData(
-                lua.create_any_userdata(LContent(ContentValue::Uri(Str::from(format!("rbxassetid://{text}")))))?,
+                lua.create_any_userdata(LContent::new(lua, ContentValue::Uri(Str::from(format!("rbxassetid://{text}")))))?,
             )]))
         })?,
     )?;
@@ -967,7 +1048,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 },
                 _ => ContentValue::None,
             };
-            Ok(values([LuaValue::UserData(lua.create_any_userdata(LContent(content))?)]))
+            Ok(values([LuaValue::UserData(lua.create_any_userdata(LContent::new(lua, content))?)]))
         })?,
     )?;
     library.set("none", none_value)?;

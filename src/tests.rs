@@ -1911,6 +1911,31 @@ fn held(lua: &Lua, engine: &Rc<Engine>) -> (Held, usize) {
     (held, lua.used_memory())
 }
 
+/// A Content made by Content.fromObject keeps its object alive, as Roblox's does (measured in a 0.747 client: an
+/// EditableImage only a Content holds is still the Content's object, and an image's content, after the collector ran):
+/// an EditableImage only the Content holds survives the instance collector, can be shown, and is freed once the Content
+/// is gone. Before, the collector freed it and the assignment raised an engine error (stale instance id).
+#[test]
+fn a_content_keeps_its_object_alive() {
+    let (lua, engine) = start();
+    run(&lua, &engine, r#"
+        shared.Kept = Content.fromObject(game:GetService("AssetService"):CreateEditableImage({ Size = Vector2.new(4, 4) }))
+    "#);
+    let (before, _) = held(&lua, &engine);
+    let output = run(&lua, &engine, r#"
+        local Kept = shared.Kept
+        local Label = Instance.new("ImageLabel")
+        Label.ImageContent = Kept
+        print("kept", typeof(Kept.Object), Kept.Object.ClassName, Kept.SourceType)
+        shared.Kept = nil
+        Label:Destroy()
+    "#);
+    assert!(output.iter().any(|line| line == "print: kept Instance EditableImage Enum.ContentSourceType.Object"), "{output:?}");
+    assert!(output.iter().all(|line| !line.starts_with("error")), "{output:?}");
+    let (after, _) = held(&lua, &engine);
+    assert!(after.instances < before.instances, "the image is freed once its Content is gone: {before:?} -> {after:?}");
+}
+
 /// A UI in the DataModel, every button's handlers capturing the whole tree (the cycle Roblox never
 /// collects), tagged and with attributes: built `count` times by `source`. (roblox-ui-renderer's
 /// copy of this test also lays it out: its layout records are freed too.)

@@ -742,6 +742,10 @@ pub fn instance_value(lua: &Lua, engine: &Engine, id: InstanceId) -> LuaResult<L
         }
     }
     crate::profiler::caches::miss(crate::profiler::caches::Cache::Wrappers);
+    // (a freed instance never gets a userdata: every use of one would be an engine error)
+    if engine.state.try_borrow().is_ok_and(|state| state.dom.get(id).is_none()) {
+        return Err(LuaError::runtime("engine error: the instance was freed"));
+    }
     crate::profiler::caches::instance_touched(id.index, id.generation);
     let create = api.create.borrow().clone().expect("instance factory");
     create.call::<LuaValue>((id.index, id.generation))
@@ -2173,6 +2177,7 @@ pub fn collect(lua: &Lua, engine: &Engine) -> LuaResult<usize> {
         unsafe { lua.exec_raw::<()>((), |state| sync(state, &api))? };
     }
     prune_children_lists(&api, engine)?;
+    super::types::apply_pending_pins(engine);
     let (dead, orphans) = {
         let mut gc = api.gc.borrow_mut();
         gc.frames = 0;
