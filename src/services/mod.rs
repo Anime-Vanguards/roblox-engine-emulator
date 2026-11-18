@@ -14,6 +14,7 @@
 //! runtime's own file (runtime/engine/packages/ui-labs.luau, mounted by project.rs).
 
 pub mod encoding;
+pub mod input_actions;
 pub mod json;
 pub mod query;
 pub mod reflection_service;
@@ -691,6 +692,7 @@ pub fn install(engine: &Rc<Engine>) {
     reflection_service::install(engine, &mut behaviors);
     crate::animation::install(engine, &mut behaviors);
     crate::meshes::install(engine, &mut behaviors);
+    input_actions::install(engine, &mut behaviors);
     crate::path2d::install(engine, &mut behaviors);
     query::install(engine, &mut behaviors);
     // (on every side: a playing client answers its members as a server does, measured)

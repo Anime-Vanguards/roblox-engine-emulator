@@ -117,6 +117,8 @@ with or without a layer.
   Idle), TextService:GetTextSize answers from Studio's measured advances (src/text_measure.rs), and the
   rest is reported as not emulated. UserInputService.MouseDeltaSensitivity and the user settings' mouse and gamepad
   sensitivities start at 1, as a playing client's do.
+- Input actions are the core's too ("Input actions" below): a layer that replays device input gives the core each key
+  or mouse button going down or up with `services::input_actions::deliver`, and the core drives the bound actions.
 - A Path2D's curve is the core's (`path2d`), and only its parent's rectangle is a layout's: a layer gives it with
   `path2d::set_frame_source` (a `Frame`: the parent's corner, size and rotation on the screen) and says when a
   path was laid out with `path2d::laid_out`. Without one a parent measures nothing ("Path2D" under "Engine API").
@@ -1397,6 +1399,25 @@ poses, events and provider answers Studio gave for a small rig.
     A track of `RegisterActiveAnimationClip`'s id follows the sequence as scripts change it.
   - NumberPoses in a `FaceControls` Folder drive the rig's FaceControls instance.
   - A negative or NaN frame delta is no longer taken as 0 (the frame loop never passes one).
+
+## Input actions (`src/services/input_actions.rs`)
+
+InputContext, InputAction and InputBinding as a playing client runs them (measured: tools/parity/probes/input_actions.luau
+and input_action_resets.luau for scripts, a client's own key and mouse input for devices).
+
+- `InputAction:GetState()` answers the action's state: Bool false, Direction1D 0, Direction2D (0, 0), Direction3D
+  (0, 0, 0), ViewportPosition (-1, -1) until set. A change queues Pressed or Released (a Bool) and then
+  StateChanged(state), deferred; GetState answers at once.
+- `InputAction:Fire(state)` sets it on an enabled action whose nearest InputContext is enabled (with no context, only in
+  the DataModel), with the client's errors for a state of another type or nil. `InputBinding:Fire(state)` needs Type
+  Scriptable and fires its action. Disabling the action or its context, or moving either, resets the action; a new Type
+  gives its default.
+- Device input is a host's: a layer calls `services::input_actions::deliver(engine, key, down)` for a key or mouse button
+  (a KeyCode item) going down or up, after it fired UserInputService.InputBegan / InputEnded, and not for input a
+  focused TextBox takes. The core delivers it as a client does: to the enabled actions in the DataModel (not under
+  StarterGui, StarterPack or StarterPlayer) through their Automatic bindings, a KeyCode binding with its modifiers held
+  first, composite Up / Down / Left / Right (/ Forward / Backward) bindings summed, clamped and scaled; contexts by
+  Priority, the newest first among equals, a sinking context keeping the input from lower priorities.
 
 ## Server run context (`--run-context server`, `src/lua/server.luau`)
 

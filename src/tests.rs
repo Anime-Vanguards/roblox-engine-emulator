@@ -8082,3 +8082,166 @@ fn a_color3_tween_blends_its_channels_linearly() {
     );
     assert!(output.iter().any(|line| line.ends_with("ok")), "{output:?}");
 }
+
+/// The Input Action System as a 0.747 client answers scripts (tools/parity/probes/input_actions.luau): GetState's defaults;
+/// Fire sets the state at once and queues Pressed / Released, then StateChanged; a value the state holds changes nothing;
+/// Fire acts in an enabled context anywhere (or with no context, in the DataModel) and nowhere else; a Scriptable binding's
+/// Fire is its action's; disabling, moving or retyping resets; the client's errors. Before, Fire did nothing and GetState
+/// answered nil.
+#[test]
+fn input_actions_keep_their_state_and_fire() {
+    let (lua, engine) = start();
+    run(&lua, &engine, r#"
+        local RS = game:GetService("ReplicatedStorage")
+        local Log = {}
+        shared.Log = Log
+        local function watch(label, action)
+            action.Pressed:Connect(function() table.insert(Log, `{label} Pressed`) end)
+            action.Released:Connect(function() table.insert(Log, `{label} Released`) end)
+            action.StateChanged:Connect(function(value) table.insert(Log, `{label} StateChanged {value}`) end)
+        end
+        local function make(kind, parent)
+            local context = Instance.new("InputContext")
+            local action = Instance.new("InputAction")
+            if kind then action.Type = kind end
+            action.Parent = context
+            context.Parent = parent
+            return context, action
+        end
+        local defaults = {}
+        for _, kind in Enum.InputActionType:GetEnumItems() do
+            local action = Instance.new("InputAction")
+            action.Type = kind
+            table.insert(defaults, tostring(action:GetState()))
+        end
+        assert(table.concat(defaults, ";") == "false;0;0, 0;0, 0, 0;-1, -1", table.concat(defaults, ";"))
+        local context, a = make(nil, RS)
+        watch("a", a)
+        a:Fire(true)
+        assert(a:GetState() == true and #Log == 0, "at once; the events deferred")
+        a:Fire(true)
+        a:Fire(false)
+        local _, one = make(Enum.InputActionType.Direction1D, nil)
+        watch("one", one)
+        one:Fire(0.7)
+        assert(one:GetState() == 0.699999988079071, "a float: " .. one:GetState())
+        local loose = Instance.new("InputAction")
+        loose:Fire(true)
+        assert(loose:GetState() == false, "no context, outside the DataModel")
+        local inGame = Instance.new("InputAction")
+        inGame.Parent = workspace
+        inGame:Fire(true)
+        assert(inGame:GetState() == true, "no context, in the DataModel")
+        local errors = {}
+        for _, case in { { a, 1 }, { a }, { one, true } } do
+            table.insert(errors, select(2, pcall(case[1].Fire, case[1], case[2])))
+        end
+        local binding = Instance.new("InputBinding")
+        binding.Parent = a
+        table.insert(errors, select(2, pcall(binding.Fire, binding, true)))
+        table.insert(errors, select(2, pcall(context.GetInputActions, context)))
+        shared.Errors = table.concat(errors, "|")
+        binding.Type = Enum.InputBindingType.Scriptable
+        binding:Fire(true)
+        assert(a:GetState() == true, "a Scriptable binding's Fire")
+        context.Enabled = false
+        assert(a:GetState() == false, "a disabled context resets")
+        a:Fire(true)
+        assert(a:GetState() == false, "nor fires")
+        context.Enabled = true
+        a:Fire(true)
+        context.Parent = workspace
+        assert(a:GetState() == false, "a moved context resets")
+        a:Fire(true)
+        a.Type = Enum.InputActionType.Direction2D
+        assert(a:GetState() == Vector2.zero, "a new type's default")
+    "#);
+    let output = run(&lua, &engine, r#"print("log", table.concat(shared.Log, ",")) print("errors", shared.Errors)"#);
+    let log = "a Pressed,a StateChanged true,a Released,a StateChanged false,one StateChanged 0.699999988079071,a Pressed,a StateChanged true,\
+        a Released,a StateChanged false,a Pressed,a StateChanged true,a Released,a StateChanged false,a Pressed,a StateChanged true,\
+        a StateChanged 0, 0";
+    assert!(output.iter().any(|line| line == &format!("print: log {log}")), "{output:?}");
+    let errors = "Action:Fire() on InputActionType.Bool should be called with a bool state|Argument 1 missing or nil|\
+        Action:Fire() on InputActionType.Direction1D should be called with a number state|\
+        InputBinding:Fire() can only be called when Type is Scriptable|\
+        The current thread cannot call 'GetInputActions' (lacking capability RobloxScript)";
+    assert!(output.iter().any(|line| line == &format!("print: errors {errors}")), "{output:?}");
+}
+
+/// A host's device input reaches bound actions through services::input_actions::deliver as a 0.747 client delivers keys
+/// and buttons (measured with a client's own key and mouse input): a key's binding presses a Bool and gives a
+/// Direction1D its Scale; modifiers must be down first and their release releases; composites sum and clamp; a sinking
+/// context of a higher priority keeps the input from lower ones, equal priorities all get it, the newest context first;
+/// nothing under StarterGui; a binding whose key changes while held releases; a key going up reaches what it holds.
+#[test]
+fn device_input_reaches_bound_actions() {
+    let (lua, engine) = start();
+    run(&lua, &engine, r#"
+        local Log = {}
+        shared.Log = Log
+        local function make(label, parent, props, kind, priority, sink)
+            local context = Instance.new("InputContext")
+            if priority then context.Priority = priority end
+            if sink then context.Sink = true end
+            local action = Instance.new("InputAction")
+            if kind then action.Type = kind end
+            action.Parent = context
+            local binding = Instance.new("InputBinding")
+            for key, value in props do binding[key] = value end
+            binding.Parent = action
+            context.Parent = parent
+            action.Pressed:Connect(function() table.insert(Log, `{label}+`) end)
+            action.Released:Connect(function() table.insert(Log, `{label}-`) end)
+            action.StateChanged:Connect(function(value) if typeof(value) ~= "boolean" then table.insert(Log, `{label}={value}`) end end)
+            shared[label] = { context = context, action = action, binding = binding }
+        end
+        local RS = game:GetService("ReplicatedStorage")
+        make("e", RS, { KeyCode = Enum.KeyCode.E })
+        make("e2", RS, { KeyCode = Enum.KeyCode.E })
+        make("shiftE", RS, { KeyCode = Enum.KeyCode.E, PrimaryModifier = Enum.KeyCode.LeftShift })
+        make("q-high", RS, { KeyCode = Enum.KeyCode.Q }, nil, 2000, true)
+        make("q-low", RS, { KeyCode = Enum.KeyCode.Q })
+        make("f", RS, { KeyCode = Enum.KeyCode.F, Scale = 2.5 }, Enum.InputActionType.Direction1D)
+        make("wasd", RS, { Up = Enum.KeyCode.W, Down = Enum.KeyCode.S, Left = Enum.KeyCode.A, Right = Enum.KeyCode.D }, Enum.InputActionType.Direction2D)
+        make("starter", game:GetService("StarterGui"), { KeyCode = Enum.KeyCode.R })
+        make("click", RS, { KeyCode = Enum.KeyCode.MouseLeftButton })
+    "#);
+    let key = |name: &str| engine.reflection.enum_item("KeyCode", name).unwrap();
+    let mut steps: Vec<String> = Vec::new();
+    let mut step = |label: &str, events: &[(&str, bool)], after: &str| {
+        for (name, down) in events {
+            crate::services::input_actions::deliver(&engine, key(name), *down);
+            scheduler::flush_deferred(&lua, &engine).unwrap();
+        }
+        if !after.is_empty() {
+            run(&lua, &engine, after);
+        }
+        engine.state.borrow_mut().output.entries.clear();
+        let output = run(&lua, &engine, r#"print("log", table.concat(shared.Log, ",")) table.clear(shared.Log)"#);
+        let line = output.iter().find_map(|line| line.strip_prefix("print: log ")).unwrap_or_default().to_string();
+        steps.push(format!("{label}: {line}"));
+    };
+    step("E", &[("E", true), ("E", false)], "");
+    step("shift E", &[("LeftShift", true), ("E", true), ("LeftShift", false), ("E", false)], "");
+    step("E shift", &[("E", true), ("LeftShift", true), ("E", false), ("LeftShift", false)], "");
+    step("Q", &[("Q", true), ("Q", false)], "");
+    step("F", &[("F", true), ("F", false)], "");
+    step("W D", &[("W", true), ("D", true), ("W", false), ("D", false)], "");
+    step("R under StarterGui", &[("R", true), ("R", false)], "");
+    step("click", &[("MouseLeftButton", true), ("MouseLeftButton", false)], "");
+    step("E held, rebound", &[("E", true)], "shared.e.binding.KeyCode = Enum.KeyCode.T");
+    step("E up", &[("E", false)], "");
+    let wanted = [
+        "E: e2+,e+,e2-,e-",
+        "shift E: shiftE+,e2+,e+,shiftE-,e2-,e-",
+        "E shift: e2+,e+,e2-,e-",
+        "Q: q-high+,q-high-",
+        "F: f=2.5,f=0",
+        "W D: wasd=0, 1,wasd=0.707106769, 0.707106769,wasd=1, 0,wasd=0, 0",
+        "R under StarterGui: ",
+        "click: click+,click-",
+        "E held, rebound: e2+,e+,e-",
+        "E up: e2-",
+    ];
+    assert_eq!(steps, wanted);
+}
