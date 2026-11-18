@@ -677,11 +677,8 @@ pub fn install(engine: &Rc<Engine>) {
     crate::meshes::install(engine, &mut behaviors);
     crate::path2d::install(engine, &mut behaviors);
     query::install(engine, &mut behaviors);
-    // (a client keeps EncodingService unemulated, as it was: its output does not change; Studio's edit DataModel, both sides,
-    // has the server's)
-    if options.server() || options.run_context == crate::RunContext::Edit {
-        encoding::install(engine, &mut behaviors);
-    }
+    // (on every side: a playing client answers its members as a server does, measured)
+    encoding::install(engine, &mut behaviors);
 
     // CollectionService
     if let Some(collection) = class(&reflection, "CollectionService") {

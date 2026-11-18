@@ -328,8 +328,8 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
     }
 }
 
-/// A client keeps what it had: its local player, no data stores and no EncodingService (their members are not emulated
-/// there, Output `missing`).
+/// A client keeps what it had: its local player and no data stores (their members are not emulated there, Output
+/// `missing`).
 #[test]
 fn a_client_keeps_its_stubs() {
     let lines = run(
@@ -337,18 +337,20 @@ fn a_client_keeps_its_stubs() {
         r#"
         local RunService = game:GetService("RunService")
         print("client", RunService:IsClient(), RunService:IsServer(), game.Players.LocalPlayer.Name, select('#', game:GetService("DataStoreService"):GetDataStore("X")))
-        print("encoding", select('#', game:GetService("EncodingService"):Base64Encode(buffer.fromstring("hi!"))))
         "#,
         0.1,
     );
-    assert!(has(&lines, "print: client true false Player 0") && has(&lines, "print: encoding 0"), "{lines:?}");
+    assert!(has(&lines, "print: client true false Player 0"), "{lines:?}");
 }
 
+/// EncodingService answers buffers on a playing client as on a server, with the client's errors (measured in a 0.747
+/// client and server: tools/parity/probes/encoding.luau).
 #[test]
-fn a_server_compresses_and_encodes_buffers() {
-    let lines = run(
-        RunContext::Server,
-        r#"
+fn clients_and_servers_compress_and_encode_buffers() {
+    for run_context in [RunContext::Client, RunContext::Server] {
+        let lines = run(
+            run_context,
+            r#"
         local EncodingService = game:GetService("EncodingService")
         local Text = string.rep("abc", 1000)
         local Packed = EncodingService:CompressBuffer(buffer.fromstring(Text), Enum.CompressionAlgorithm.Zstd, 4)
@@ -360,12 +362,17 @@ fn a_server_compresses_and_encodes_buffers() {
         print("bad", pcall(EncodingService.DecompressBuffer, EncodingService, buffer.fromstring("nope"), Enum.CompressionAlgorithm.Zstd))
         print("level", pcall(EncodingService.CompressBuffer, EncodingService, buffer.fromstring("x"), Enum.CompressionAlgorithm.Zstd, 23))
         print("size", EncodingService:GetDecompressedBufferSize(buffer.fromstring("nope"), Enum.CompressionAlgorithm.Zstd))
+        print("unpadded", pcall(EncodingService.Base64Decode, EncodingService, buffer.fromstring("aGVsbG8gd29ybGQ")))
+        print("string", pcall(EncodingService.Base64Encode, EncodingService, "hi!"))
         "#,
-        0.1,
-    );
-    assert!(has(&lines, "print: size nil"), "{lines:?}");
-    assert!(has_error(&lines, "bad false", "DecompressBuffer: the data does not hold a valid decompressed size"), "{lines:?}");
-    assert!(has_error(&lines, "level false", "CompressBuffer: compressionLevel must be an integer from -7 to 22"), "{lines:?}");
+            0.1,
+        );
+        assert!(has(&lines, "print: size nil"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "bad false", "DecompressBuffer: decompression failed - Unspecified error code"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "level false", "CompressBuffer: unsupported compression level for Zstd"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "unpadded false", "Base64Decode: input is not a base64 string"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "string false", "Argument 1 missing or nil"), "{run_context:?}: {lines:?}");
+    }
 }
 
 /// A server's output reaches its scripts: LogService.MessageOut (message, MessageType) for each line and ScriptContext.Error

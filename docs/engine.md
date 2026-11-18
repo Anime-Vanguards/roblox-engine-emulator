@@ -1404,7 +1404,8 @@ and `IsRunMode` false; `IsEdit` is refused to game scripts, as on a client. It n
   (this server's own subscribers), all empty at the start of every run. Limits and error codes follow
   Roblox's documentation where it gives them.
 - Remotes: FireClient / FireAllClients reach no client; InvokeClient waits until its player leaves.
-- EncodingService (Zstd compression and Base64) in a server; a client keeps it unemulated.
+- EncodingService (Zstd compression and Base64), as a playing client has it too (the same answers and errors on
+  both, measured: tools/parity/probes/encoding.luau).
 - LogService.MessageOut gets a server's lines as a playing client's ("Output and LogService" below), and
   ScriptContext.Error fires for a server's own errors.
 - `--studio false` makes `RunService:IsStudio()` false, as on a live server, so a game takes its live
