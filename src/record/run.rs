@@ -1210,11 +1210,12 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     context.set("WorkSeconds", lua.create_function(move |_, ()| Ok(e.state.borrow().sched.work_total()))?)?;
     // Context.FireEvent(Instance, Event, ...): fires an engine event the emulator does not raise itself, to the
     // connections made to it (Humanoid.Running while a harness walks a character, which nothing simulates here);
-    // nil, booleans, numbers, strings and instances, as a BindableEvent carries them
+    // nil, booleans, numbers, strings, instances and buffers, as a remote carries them (a buffer arrives as a copy, as a
+    // remote's does)
     let e = engine.clone();
     context.set(
         "FireEvent",
-        lua.create_function(move |_, (target, event, rest): (LuaValue, String, LuaMultiValue)| {
+        lua.create_function(move |lua, (target, event, rest): (LuaValue, String, LuaMultiValue)| {
             let id = engine_lua::instance_id(&target).ok_or_else(|| LuaError::runtime("Context.FireEvent: an Instance first"))?;
             let name = e.reflection.name_id(&event).ok_or_else(|| LuaError::runtime(format!("Context.FireEvent: no event named {event}")))?;
             let mut arguments = Vec::with_capacity(rest.len());
@@ -1225,8 +1226,10 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
                     LuaValue::Integer(number) => Value::Number(number as f64),
                     LuaValue::Number(number) => Value::Number(number),
                     LuaValue::String(text) => Value::String(Str::new(&*text.as_bytes())),
+                    LuaValue::Buffer(buffer) => Value::Lua(Box::new(LuaValue::Buffer(lua.create_buffer(buffer.to_vec())?))),
                     other => Value::Instance(
-                        engine_lua::instance_id(&other).ok_or_else(|| LuaError::runtime("Context.FireEvent: arguments are nil, booleans, numbers, strings or instances"))?,
+                        engine_lua::instance_id(&other)
+                            .ok_or_else(|| LuaError::runtime("Context.FireEvent: arguments are nil, booleans, numbers, strings, buffers or instances"))?,
                     ),
                 });
             }

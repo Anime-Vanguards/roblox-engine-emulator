@@ -92,8 +92,9 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   Random.new() from then on. `Context.WorkSeconds()` is the script work charged so far in seconds of
   Studio's time, the same however fast the host is. `Context.FireEvent(Instance, Event, ...)` fires an
   engine event the emulator does not raise itself to the connections made to it (a Humanoid's
-  `Running` while the harness walks a character, which nothing simulates here), with nil, boolean,
-  number, string and instance arguments. A server run's `Context.SetJoinData(Player,
+  `Running` while the harness walks a character, which nothing simulates here, or a remote's
+  `OnServerEvent` in a server run), with nil, boolean, number, string, buffer (a copy, as a remote
+  delivers one) and instance arguments. A server run's `Context.SetJoinData(Player,
   JoinData)` gives a fake player, before it joins, the join data a teleport would have carried
   (`TeleportData`, `Members`, ...), which `Player:GetJoinData()` then returns as a fresh copy.
 - A harness may split its setup instead: `return { Prepare = function(Context) ... end, Run =

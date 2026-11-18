@@ -2337,6 +2337,43 @@ fn a_harness_fires_an_engine_event_to_its_connections() {
     assert!(line.contains("no event named NoSuchEventAnywhere") && line.contains("arguments are nil, booleans"), "{line}");
 }
 
+/// A server run's harness delivers a client's remote message with Context.FireEvent: a buffer argument arrives as a remote
+/// carries one, a copy of what was fired (writing the harness's buffer afterwards does not reach the handler's).
+#[test]
+fn a_harness_fires_a_remote_with_a_buffer() {
+    let root = std::env::temp_dir().join(format!("ree-fire-buffer-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(root.join("place")).unwrap();
+    std::fs::write(
+        root.join("Harness.luau"),
+        "return function(Context)\n\
+         local Remote = Instance.new('RemoteEvent')\n\
+         Remote.Parent = game:GetService('ReplicatedStorage')\n\
+         local Player = Instance.new('Player')\n\
+         Player.Parent = game:GetService('Players')\n\
+         local Heard = {}\n\
+         Remote.OnServerEvent:Connect(function(From, Data, Tag) table.insert(Heard, `{From == Player} {typeof(Data)} {buffer.tostring(Data)} {Tag}`) end)\n\
+         local Data = buffer.fromstring('abc')\n\
+         Context.FireEvent(Remote, 'OnServerEvent', Player, Data, 7)\n\
+         buffer.writestring(Data, 0, 'xyz')\n\
+         task.wait()\n\
+         print('heard', table.concat(Heard, ';'))\n\
+         end",
+    )
+    .unwrap();
+    let place = root.join("place").to_string_lossy().into_owned();
+    let harness = root.join("Harness.luau").to_string_lossy().into_owned();
+    let args: Vec<String> = ["--harness", &harness, "--roots", &place, "--seconds", "0.1", "--mode", "play", "--run-context", "server"].iter().map(|s| s.to_string()).collect();
+    let parsed = super::run::parse(&args, false).expect("arguments");
+    let (done, emulator) = super::run::execute_with(&parsed, &crate::launch::Host::default(), false, false).expect("run");
+    let mut bytes = Vec::new();
+    done.print(&mut bytes).expect("printed");
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&root);
+    let summary: Json = serde_json::from_str(&String::from_utf8(bytes).expect("UTF-8")).expect("one line of JSON");
+    let printed: Vec<String> = summary["output"].as_array().expect("output").iter().map(|line| line["message"].as_str().unwrap_or_default().to_string()).collect();
+    assert!(printed.iter().any(|line| line == "heard true buffer abc 7"), "{printed:?}");
+}
+
 /// A Studio-only placeholder (the place's hierarchy snapshot gives it a class and a name and no values) is built when a script
 /// first lists its parent, so a run that looks at more of the place built more of them, and recorded them appearing then: a cast
 /// that walked every service had its recording carry the place's seven Lighting effects (drawn at their default values) and two of
