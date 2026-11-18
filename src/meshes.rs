@@ -6,9 +6,14 @@
 //! (InitialSize keeps MeshSize: ror scales by it), and skinned by its bones.
 //!
 //! Measured in Studio (2026-10-16): ids carry their kind in the high 32 bits (vertex 1, normal 2,
-//! colour 3, uv 4, face 5, bone 6) over a count from 1; a clone keeps them. AddTriangle gives each
-//! corner a new automatic normal (the face's), a white opaque colour and a (0, 0) uv. An automatic
-//! normal no face uses reads (0, 0, 0). Bone weights keep 1/255 steps. A mesh asset loads one vertex
+//! colour 3, uv 4, face 5, bone 6) over a count from 1; a clone keeps them. A new face's corner
+//! (AddTriangle, BatchAdd) takes the normal, uv and colour the newest face over its vertex gives it,
+//! else a new automatic normal, a white opaque colour and a (0, 0) uv (measured in a 0.747 client,
+//! tools/parity/probes/editable_mesh_batch.luau). An automatic normal is the sum, over the corners
+//! that use it in the faces' order, of the corner's unit normal weighed by 1 - cos^2 of its angle
+//! (the cosine of its unit edges), normalised, in single precision as that client computes it (bit
+//! for bit on 17 of 17 shared normals); one no face uses reads (0, 0, 0).
+//! Bone weights keep 1/255 steps. A mesh asset loads one vertex
 //! per file vertex (none merged), each with its own normal, uv and colour, the file's bones and bind
 //! CFrames, and four bone slots a skinned vertex (zero weights included). MeshSize is the mesh's box
 //! when the part is made (at least 0.001) and stays when the mesh changes; ApplyMesh copies MeshSize
@@ -89,6 +94,9 @@ struct Face {
     normals: [u32; 3],
     colors: [u32; 3],
     uvs: [u32; 3],
+    /// Where the face is in the mesh's list (GetFaces): the order faces were made in, which a BatchAdd's reversed ids
+    /// do not follow
+    order: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +119,12 @@ pub struct Mesh {
     bones: Slots<Bone>,
     /// Per vertex index: its bones (indices) and weights, when it has any
     skin: FxHashMap<u32, (Vec<u32>, Vec<f32>)>,
+    /// The next face's `order`
+    next_order: u32,
+    /// Per vertex index, what its newest face's corner there uses: (that face's order, [normal, uv, colour]); kept up to
+    /// date as faces are added or their corners set; None after a change that can take a vertex's newest face away (made
+    /// again from the faces when next needed)
+    corners: Option<FxHashMap<u32, (u32, [u32; 3])>>,
 }
 
 impl Mesh {
@@ -119,15 +133,30 @@ impl Mesh {
         (p(1) - p(0)).cross(p(2) - p(0))
     }
 
-    /// Every automatic normal's value: the normalised sum of the (area-weighted) normals of the faces
-    /// that use it; (0, 0, 0) when none does.
+    /// What corner `corner` of `face` adds to an automatic normal it uses: the corner's unit normal times 1 - cos^2 of its
+    /// angle, with the operations in the client's order (glam's normalise multiplies by the length's reciprocal, as it does).
+    fn corner_weight(&self, face: &Face, corner: usize) -> Vec3 {
+        let p = |i: usize| self.positions.get(face.vertices[i % 3]).copied().unwrap_or(Vec3::ZERO);
+        let at = p(corner);
+        let (e1, e2) = (p(corner + 1) - at, p(corner + 2) - at);
+        let cos = e1.normalize_or_zero().dot(e2.normalize_or_zero());
+        e1.cross(e2).normalize_or_zero() * (1.0 - cos * cos)
+    }
+
+    /// The live faces in the order they were made (the sums below add in it, as the client does).
+    fn faces_in_order(&self) -> Vec<&Face> {
+        let mut faces: Vec<&Face> = self.faces.live().map(|(_, face)| face).collect();
+        faces.sort_unstable_by_key(|face| face.order);
+        faces
+    }
+
+    /// Every automatic normal's value: the normalised sum of its corners' weights; (0, 0, 0) when no face uses it.
     fn automatic_normals(&self) -> FxHashMap<u32, Vec3> {
         let mut sums: FxHashMap<u32, Vec3> = FxHashMap::default();
-        for (_, face) in self.faces.live() {
-            let normal = self.face_normal(face);
-            for &n in &face.normals {
+        for face in self.faces_in_order() {
+            for (corner, &n) in face.normals.iter().enumerate() {
                 if matches!(self.normals.get(n), Some(None)) {
-                    *sums.entry(n).or_insert(Vec3::ZERO) += normal;
+                    *sums.entry(n).or_insert(Vec3::ZERO) += self.corner_weight(face, corner);
                 }
             }
         }
@@ -139,13 +168,80 @@ impl Mesh {
             Some(normal) => Some(*normal),
             None => {
                 let mut sum = Vec3::ZERO;
-                for (_, face) in self.faces.live() {
-                    if face.normals.contains(&index) {
-                        sum += self.face_normal(face);
+                for face in self.faces_in_order() {
+                    for (corner, &n) in face.normals.iter().enumerate() {
+                        if n == index {
+                            sum += self.corner_weight(face, corner);
+                        }
                     }
                 }
                 Some(sum.normalize_or_zero())
             }
+        }
+    }
+
+    /// The normal, uv and colour the newest face over vertex `v` uses at its corner there, if any face uses `v`.
+    fn corner_of(&mut self, v: u32) -> Option<[u32; 3]> {
+        if self.corners.is_none() {
+            let mut corners: FxHashMap<u32, (u32, [u32; 3])> = FxHashMap::default();
+            for (_, face) in self.faces.live() {
+                for corner in 0..3 {
+                    let here = (face.order, [face.normals[corner], face.uvs[corner], face.colors[corner]]);
+                    let entry = corners.entry(face.vertices[corner]).or_insert(here);
+                    if face.order >= entry.0 {
+                        *entry = here;
+                    }
+                }
+            }
+            self.corners = Some(corners);
+        }
+        self.corners.as_ref().and_then(|corners| corners.get(&v)).map(|(_, attributes)| *attributes)
+    }
+
+    /// Keeps [`Mesh::corner_of`] up to date after face `index` had its normals, uvs or colours set.
+    fn note_corners(&mut self, index: u32) {
+        let (Some(corners), Some(face)) = (self.corners.as_mut(), self.faces.get(index)) else { return };
+        for corner in 0..3 {
+            let here = (face.order, [face.normals[corner], face.uvs[corner], face.colors[corner]]);
+            let entry = corners.entry(face.vertices[corner]).or_insert(here);
+            if face.order >= entry.0 {
+                *entry = here;
+            }
+        }
+    }
+
+    /// After a change that can take a vertex's newest face away (a face removed, a face's vertices set).
+    fn faces_moved(&mut self) {
+        self.corners = None;
+    }
+
+    /// A new face over `vertices`: each corner takes what the newest face over its vertex uses there (a vertex twice in
+    /// the face shares it), else a new automatic normal, a (0, 0) uv and a white opaque colour, made corner by corner.
+    fn new_face(&mut self, vertices: [u32; 3]) -> Face {
+        let mut attributes = [[0u32; 3]; 3];
+        for corner in 0..3 {
+            let v = vertices[corner];
+            attributes[corner] = match vertices[..corner].iter().position(|&earlier| earlier == v) {
+                Some(earlier) => attributes[earlier],
+                None => match self.corner_of(v) {
+                    Some(found) => found,
+                    None => [self.normals.add(None), self.uvs.add([0.0; 2]), self.colors.add(([1.0; 3], 1.0))],
+                },
+            };
+        }
+        let order = self.next_order;
+        self.next_order += 1;
+        if let Some(corners) = self.corners.as_mut() {
+            for corner in 0..3 {
+                corners.insert(vertices[corner], (order, attributes[corner]));
+            }
+        }
+        Face {
+            vertices,
+            normals: attributes.map(|a| a[0]),
+            uvs: attributes.map(|a| a[1]),
+            colors: attributes.map(|a| a[2]),
+            order,
         }
     }
 
@@ -221,7 +317,9 @@ impl Mesh {
         for corners in file.indices[range.start as usize..range.end as usize].chunks_exact(3) {
             let c = [corners[0], corners[1], corners[2]];
             if c.iter().all(|&i| (i as usize) < count) {
-                mesh.faces.add(Face { vertices: c, normals: c, colors: c, uvs: c });
+                let order = mesh.next_order;
+                mesh.next_order += 1;
+                mesh.faces.add(Face { vertices: c, normals: c, colors: c, uvs: c, order });
             }
         }
         if let Some(skinning) = &file.skinning {
@@ -502,6 +600,30 @@ fn vector_value(lua: &Lua, engine: &Engine, v: Vec3) -> LuaResult<LuaValue> {
 
 fn ids_value(lua: &Lua, ids: impl Iterator<Item = f64>) -> LuaResult<LuaValue> {
     Ok(LuaValue::Table(lua.create_sequence_from(ids)?))
+}
+
+/// The array part of `table`, 1 to `#table` (a hole is nil).
+fn sequence(table: &LuaTable) -> Vec<LuaValue> {
+    (1..=table.raw_len()).map(|index| table.raw_get::<LuaValue>(index).unwrap_or(LuaValue::Nil)).collect()
+}
+
+/// The vertex a BatchAdd face names (measured: the client's errors for an id of another kind, a number that is no id,
+/// and a vertex that is gone).
+fn face_vertex(m: &Mesh, value: &LuaValue) -> Result<u32, Flow> {
+    let id = match value {
+        LuaValue::Number(n) => split_id(*n),
+        LuaValue::Integer(n) => split_id(*n as f64),
+        _ => None,
+    };
+    match id {
+        Some((VERTEX, index)) if m.positions.get(index).is_some() => Ok(index),
+        Some((VERTEX, _)) => Err(err("Invalid id")),
+        Some((kind @ NORMAL..=BONE, _)) => {
+            let name = ["Normal", "Color", "UV", "Face", "Bone"][(kind - NORMAL) as usize];
+            Err(err(format!("Unexpected EditableMesh id type. Expected Vertex id, received {name} id")))
+        }
+        _ => Err(err("Unexpected EditableMesh id type. Expected Vertex id, received value that doesn't appear to be an id")),
+    }
 }
 
 fn numbers_of(value: &LuaValue) -> Vec<f64> {
@@ -935,10 +1057,8 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             if v.iter().any(|&i| m.positions.get(i).is_none()) {
                 return Err(err("Invalid vertex id"));
             }
-            let normals = [m.normals.add(None), m.normals.add(None), m.normals.add(None)];
-            let colors = [m.colors.add(([1.0; 3], 1.0)), m.colors.add(([1.0; 3], 1.0)), m.colors.add(([1.0; 3], 1.0))];
-            let uvs = [m.uvs.add([0.0; 2]), m.uvs.add([0.0; 2]), m.uvs.add([0.0; 2])];
-            Ok(values([LuaValue::Number(make_id(FACE, m.faces.add(Face { vertices: v, normals, colors, uvs })))]))
+            let face = m.new_face(v);
+            Ok(values([LuaValue::Number(make_id(FACE, m.faces.add(face)))]))
         })
     }));
     add("AddBone", method(|_, engine, id, args| {
@@ -958,7 +1078,12 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                     NORMAL => m.normals.live().map(|(i, _)| make_id(kind, i)).collect(),
                     COLOR => m.colors.live().map(|(i, _)| make_id(kind, i)).collect(),
                     UV => m.uvs.live().map(|(i, _)| make_id(kind, i)).collect(),
-                    FACE => m.faces.live().map(|(i, _)| make_id(kind, i)).collect(),
+                    // (in the order they were made: a BatchAdd's ids run backwards, measured)
+                    FACE => {
+                        let mut faces: Vec<(u32, u32)> = m.faces.live().map(|(i, face)| (face.order, i)).collect();
+                        faces.sort_unstable();
+                        faces.into_iter().map(|(_, i)| make_id(kind, i)).collect()
+                    }
                     _ => m.bones.live().map(|(i, _)| make_id(kind, i)).collect(),
                 };
                 let each = if kind == VERTEX { crate::cost::LISTED_VERTEX } else { crate::cost::LISTED };
@@ -1068,6 +1193,11 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                     _ => &mut face.uvs,
                 };
                 *target = [ids[0], ids[1], ids[2]];
+                if which == 0 {
+                    m.faces_moved();
+                } else {
+                    m.note_corners(f);
+                }
                 Ok(none())
             })
         }));
@@ -1076,6 +1206,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let f = index_of(args, 1, FACE, "face")?;
         with_mesh(engine, id, true, |m| {
             m.faces.remove(f);
+            m.faces_moved();
             Ok(none())
         })
     }));
@@ -1088,6 +1219,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             for f in doomed {
                 m.faces.remove(f);
             }
+            m.faces_moved();
             Ok(none())
         })
     }));
@@ -1250,6 +1382,153 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         Ok(values([LuaValue::Table(out)]))
     }));
 
+    // BatchAdd(attribute, values[, alphas]): vertices, normals, uvs, colours (with their alphas) or faces at once, their
+    // new ids in the values' order (measured in a 0.747 client: tools/parity/probes/editable_mesh_batch.luau). Vertices,
+    // normals, uvs and colours are all made first, then given their values in order, so a value of the wrong type raises
+    // with the ones before it set and the rest left at their defaults; a nil normal is an automatic one. Faces are checked
+    // whole first, made in order (each corner as AddTriangle makes it) and numbered backwards: the first face gets the
+    // batch's last id. A face of four vertices (a quad, which this engine's faces cannot hold) is made as two triangles,
+    // the second on an id after the batch's, and reported (Output `missing`).
+    add("BatchAdd", method(|lua, engine, id, args| {
+        if args.len() < 3 {
+            return Err(err("BatchAdd: expects at least 2 arguments (attr, data)"));
+        }
+        let attribute = match convert::from_lua(args.get(1)) {
+            Value::EnumItem(item) if engine.reflection.enum_item_type_name(item) == "MeshAttribute" => engine.reflection.enum_item_info(item).value as u32,
+            _ => return Err(err("Invalid value for enum 'MeshAttribute'")),
+        };
+        let (label, expects, wanted) = match attribute {
+            0 => ("Vertex", "1 argument (positions)", 1),
+            1 => ("Normal", "1 argument (normals)", 1),
+            2 => ("Color", "2 arguments (colors, alphas)", 2),
+            3 => ("UV", "1 argument (uvs)", 1),
+            _ => ("Face", "1 argument (vertexIds)", 1),
+        };
+        let prefix = format!("BatchAdd(Enum.MeshAttribute.{label}, ...)");
+        if args.len() - 2 != wanted {
+            return Err(err(format!("{prefix}: expects {expects}")));
+        }
+        let array = |at: usize, name: &str| match args.get(at) {
+            LuaValue::Table(table) => Ok(sequence(table)),
+            _ => Err(err(format!("{prefix}: {name} must be an array"))),
+        };
+        // (the client's own argument numbers: -1 for a vector, 4 for a uv, 5 for a colour, wherever it is in the array)
+        let wrong = |expected: &str, number: i32, value: &LuaValue| {
+            Flow::Error(ScriptError::at_caller(format!("invalid argument #{number} ({expected} expected, got {})", crate::lua::typeof_value(engine, value))))
+        };
+        let fill = |slots: &[u32], items: &[LuaValue], set: &mut dyn FnMut(u32, &LuaValue) -> Result<(), Flow>| -> Result<(), Flow> {
+            for (&slot, item) in slots.iter().zip(items) {
+                set(slot, item)?;
+            }
+            Ok(())
+        };
+        let mut quads = 0;
+        let ids: Vec<f64> = match attribute {
+            0 => {
+                let items = array(2, "positions")?;
+                if fixed(engine, id) && !items.is_empty() {
+                    return Err(err("Cannot add vertices to a fixed-size EditableMesh"));
+                }
+                with_mesh(engine, id, true, |m| {
+                    let slots: Vec<u32> = items.iter().map(|_| m.positions.add(Vec3::ZERO)).collect();
+                    fill(&slots, &items, &mut |slot, item| {
+                        *m.positions.get_mut(slot).expect("made above") = vec3_of(item).ok_or_else(|| wrong("Vector3", -1, item))?;
+                        Ok(())
+                    })?;
+                    Ok(slots.iter().map(|&slot| make_id(VERTEX, slot)).collect())
+                })?
+            }
+            1 => {
+                let items = array(2, "normals")?;
+                with_mesh(engine, id, true, |m| {
+                    let slots: Vec<u32> = items.iter().map(|_| m.normals.add(None)).collect();
+                    fill(&slots, &items, &mut |slot, item| {
+                        if !item.is_nil() {
+                            *m.normals.get_mut(slot).expect("made above") = Some(vec3_of(item).ok_or_else(|| wrong("Vector3", -1, item))?);
+                        }
+                        Ok(())
+                    })?;
+                    Ok(slots.iter().map(|&slot| make_id(NORMAL, slot)).collect())
+                })?
+            }
+            2 => {
+                let colors = array(2, "colors")?;
+                let alphas = array(3, "alphas")?;
+                if colors.len() != alphas.len() {
+                    return Err(err(format!("{prefix}: colors and alphas arrays must be the same length")));
+                }
+                with_mesh(engine, id, true, |m| {
+                    let slots: Vec<u32> = colors.iter().map(|_| m.colors.add(([1.0; 3], 1.0))).collect();
+                    for ((&slot, color), opacity) in slots.iter().zip(&colors).zip(&alphas) {
+                        let rgb = color_of(color).ok_or_else(|| wrong("Color3", 5, color))?;
+                        // (as a number reads it: anything else is 0, unmeasured beyond a string being taken)
+                        let opacity = match opacity {
+                            LuaValue::Number(n) => *n,
+                            LuaValue::Integer(n) => *n as f64,
+                            LuaValue::String(text) => text.to_str().ok().and_then(|text| text.trim().parse::<f64>().ok()).unwrap_or(0.0),
+                            _ => 0.0,
+                        };
+                        *m.colors.get_mut(slot).expect("made above") = (rgb, alpha(opacity));
+                    }
+                    Ok(slots.iter().map(|&slot| make_id(COLOR, slot)).collect())
+                })?
+            }
+            3 => {
+                let items = array(2, "uvs")?;
+                with_mesh(engine, id, true, |m| {
+                    let slots: Vec<u32> = items.iter().map(|_| m.uvs.add([0.0; 2])).collect();
+                    fill(&slots, &items, &mut |slot, item| {
+                        *m.uvs.get_mut(slot).expect("made above") = vec2_of(item).ok_or_else(|| wrong("Vector2", 4, item))?;
+                        Ok(())
+                    })?;
+                    Ok(slots.iter().map(|&slot| make_id(UV, slot)).collect())
+                })?
+            }
+            _ => {
+                let LuaValue::Table(table) = args.get(2) else {
+                    return Err(err(format!("{prefix}: vertexIds must be a 2D array")));
+                };
+                let items = sequence(table);
+                if fixed(engine, id) && !items.is_empty() {
+                    return Err(err("Cannot add faces to a fixed-size EditableMesh"));
+                }
+                let made = with_mesh(engine, id, true, |m| {
+                    let mut faces: Vec<Vec<u32>> = Vec::with_capacity(items.len());
+                    for (index, item) in items.iter().enumerate() {
+                        let LuaValue::Table(ids) = item else {
+                            return Err(err(format!("{prefix}: element {} must be an array of 3 or 4 vertex ids", index + 1)));
+                        };
+                        let ids = sequence(ids);
+                        if !(3..=4).contains(&ids.len()) {
+                            return Err(err(format!("{prefix}: element {} must have 3 or 4 vertex ids, got {}", index + 1, ids.len())));
+                        }
+                        faces.push(ids.iter().map(|value| face_vertex(m, value)).collect::<Result<_, _>>()?);
+                    }
+                    let base = m.faces.0.len() as u32;
+                    let count = faces.len() as u32;
+                    m.faces.0.resize(m.faces.0.len() + faces.len(), None);
+                    let mut quads = 0;
+                    for (index, vertices) in faces.iter().enumerate() {
+                        let face = m.new_face([vertices[0], vertices[1], vertices[2]]);
+                        m.faces.0[(base + count - 1 - index as u32) as usize] = Some(face);
+                        if vertices.len() == 4 {
+                            let second = m.new_face([vertices[0], vertices[2], vertices[3]]);
+                            m.faces.add(second);
+                            quads += 1;
+                        }
+                    }
+                    Ok(((0..count).map(|index| make_id(FACE, base + count - 1 - index)).collect(), quads))
+                })?;
+                quads = made.1;
+                made.0
+            }
+        };
+        if quads > 0 {
+            engine.state.borrow_mut().output.missing("EditableMesh", "BatchAdd of a four-vertex face");
+        }
+        Ok(values([ids_value(lua, ids.into_iter())?]))
+    }));
+
     // Per-face and per-vertex attribute batches (Enum.MeshAttribute: Vertex 0, Normal 1, Color 2,
     // UV 3, Face 4)
     fn attribute(engine: &Engine, value: &LuaValue) -> Option<u32> {
@@ -1305,6 +1584,11 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                     _ => return Err(err("BatchSetFaceAttributes: not a face attribute")),
                 };
                 *target = [parsed[0].1, parsed[1].1, parsed[2].1];
+                if parsed[0].0 == VERTEX {
+                    m.faces_moved();
+                } else {
+                    m.note_corners(f);
+                }
             }
             Ok(none())
         })

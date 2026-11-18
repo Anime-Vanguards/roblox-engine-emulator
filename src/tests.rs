@@ -3496,6 +3496,112 @@ fn editable_meshes_follow_studio() {
     assert!(output.contains(&"print: ok".to_string()), "{output:?}");
 }
 
+/// A new face's corner takes the normal, uv and colour the newest face over its vertex uses there, and an automatic normal
+/// several corners share sums their faces' unit normals weighed by the square of the sine of each corner's angle (measured
+/// in a 0.747 client: tools/parity/probes/editable_mesh_batch.luau; the values are that client's to 3e-7). Before, every
+/// AddTriangle corner had attributes of its own, and a shared normal was area-weighted.
+#[test]
+fn editable_mesh_faces_share_their_vertices_corners() {
+    assert_script(
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local function near(a, b) return (a - b).Magnitude < 1e-6 end
+        local m = AssetService:CreateEditableMesh()
+        local v = {}
+        for _, p in { Vector3.new(0, 0, 0), Vector3.new(1, 0, 0), Vector3.new(1, 1, 0), Vector3.new(0, 0, 1), Vector3.new(0, 1, 0) } do
+            table.insert(v, m:AddVertex(p))
+        end
+        local a = m:AddTriangle(v[1], v[2], v[3])
+        local b = m:AddTriangle(v[1], v[3], v[4])
+        local na, nb = m:GetFaceNormals(a), m:GetFaceNormals(b)
+        assert(#m:GetNormals() == 4 and #m:GetUVs() == 4 and #m:GetColors() == 4, "4 corners' worth: " .. #m:GetNormals())
+        assert(nb[1] == na[1] and nb[2] == na[3] and m:GetFaceUVs(b)[2] == m:GetFaceUVs(a)[3] and m:GetFaceColors(b)[1] == m:GetFaceColors(a)[1], "shared")
+        assert(near(m:GetNormal(nb[1]), Vector3.new(0.632455528, -0.632455528, 0.44721359)), tostring(m:GetNormal(nb[1])))
+        assert(near(m:GetNormal(nb[2]), Vector3.new(0.392232329, -0.392232329, 0.832050323)), tostring(m:GetNormal(nb[2])))
+        assert(near(m:GetNormal(nb[3]), Vector3.new(0.707106769, -0.707106769, 0)), tostring(m:GetNormal(nb[3])))
+        -- the newest face's corner, a normal set on it included
+        local explicit = m:AddNormal(Vector3.new(1, 0, 0))
+        m:SetFaceNormals(b, { explicit, nb[2], nb[3] })
+        local c = m:AddTriangle(v[1], v[5], v[3])
+        assert(m:GetFaceNormals(c)[1] == explicit and m:GetFaceNormals(c)[3] == nb[2], "the newest face's")
+        -- a vertex no face uses any more gets new ones
+        local fresh = AssetService:CreateEditableMesh()
+        local p, q, r = fresh:AddVertex(Vector3.zero), fresh:AddVertex(Vector3.xAxis), fresh:AddVertex(Vector3.yAxis)
+        fresh:RemoveFace(fresh:AddTriangle(p, q, r))
+        local again = fresh:AddTriangle(p, q, r)
+        assert(#fresh:GetNormals() == 6 and fresh:GetFaceNormals(again)[1] == 8589934596, "new after the face went")
+        "#,
+    );
+}
+
+/// EditableMesh:BatchAdd as a 0.747 client answers it (tools/parity/probes/editable_mesh_batch.luau): the new ids in the
+/// values' order; colours with their alphas; faces numbered backwards (the first face the batch's last id), listed by
+/// GetFaces in the order given, their corners as AddTriangle makes them; a value of the wrong type raises at the caller
+/// with the values before it set and the rest made; a bad face makes none; the client's errors.
+#[test]
+fn editable_mesh_batch_add_follows_a_client() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local m = AssetService:CreateEditableMesh()
+        local v = m:BatchAdd(Enum.MeshAttribute.Vertex, { Vector3.new(0, 0, 0), Vector3.new(1, 0, 0), Vector3.new(0, 1, 0), Vector3.new(1, 1, 0) })
+        assert(#v == 4 and v[1] == 4294967297 and v[4] == 4294967300 and m:GetPosition(v[2]) == Vector3.new(1, 0, 0), "vertices")
+        local n = m:BatchAdd(Enum.MeshAttribute.Normal, { Vector3.new(0, 0, 1), nil, Vector3.new(0, 1, 0) })
+        assert(#n == 3 and n[1] == 8589934593 and m:GetNormal(n[1]) == Vector3.new(0, 0, 1), "normals, a hole automatic")
+        local u = m:BatchAdd(Enum.MeshAttribute.UV, { Vector2.new(0.5, 0.25) })
+        assert(u[1] == 17179869185 and m:GetUV(u[1]) == Vector2.new(0.5, 0.25), "uvs")
+        local c = m:BatchAdd(Enum.MeshAttribute.Color, { Color3.new(1, 0, 0), Color3.new(0, 0, 1) }, { 0.5, 2 })
+        assert(c[1] == 12884901889 and m:GetColor(c[1]) == Color3.new(1, 0, 0), "colours")
+        assert(math.abs(m:GetColorAlpha(c[1]) - 128 / 255) < 1e-6 and m:GetColorAlpha(c[2]) == 1, "alphas in 1/255 steps, clamped")
+        local f = m:BatchAdd(Enum.MeshAttribute.Face, { { v[1], v[2], v[3] }, { v[2], v[4], v[3] } })
+        assert(f[1] == 21474836482 and f[2] == 21474836481, "faces numbered backwards")
+        local listed = m:GetFaces()
+        assert(listed[1] == f[1] and listed[2] == f[2], "listed in the order given")
+        assert(m:GetFaceNormals(f[2])[1] == m:GetFaceNormals(f[1])[2], "corners shared over a vertex")
+        assert(#m:BatchAdd(Enum.MeshAttribute.Vertex, {}) == 0, "none")
+        local function fails(f, ...) local ok, e = pcall(f, ...) assert(not ok) print("error", e) end
+        local before = #m:GetVertices()
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Vertex, { Vector3.new(5, 5, 5), "x", Vector3.new(6, 6, 6) }) end)
+        local after = m:GetVertices()
+        assert(#after == before + 3 and m:GetPosition(after[before + 1]) == Vector3.new(5, 5, 5) and m:GetPosition(after[before + 3]) == Vector3.zero, "made, then set in order")
+        local faces = #m:GetFaces()
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Face, { { v[1], v[2], v[3] }, { v[1], v[2] } }) end)
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Face, { { v[1], v[2], n[1] } }) end)
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Face, { { v[1], v[2], 12345 } }) end)
+        assert(#m:GetFaces() == faces, "a bad face makes none")
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Color, { Color3.new() }, {}) end)
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Color, { Color3.new() }) end)
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Vertex, {}, {}) end)
+        fails(function() m:BatchAdd(Enum.MeshAttribute.UV, 5) end)
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Face, 5) end)
+        fails(function() m:BatchAdd("Vertex", {}) end)
+        fails(function() m:BatchAdd(Enum.MeshAttribute.Vertex) end)
+        fails(function() m:BatchAdd(Enum.MeshAttribute.UV, { Vector3.new() }) end)
+        print("ok")
+        "#,
+    );
+    assert!(output.contains(&"print: ok".to_string()), "{output:?}");
+    let errors: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: error ")).collect();
+    let wanted = [
+        "Test:21: invalid argument #-1 (Vector3 expected, got string)",
+        "BatchAdd(Enum.MeshAttribute.Face, ...): element 2 must have 3 or 4 vertex ids, got 2",
+        "Unexpected EditableMesh id type. Expected Vertex id, received Normal id",
+        "Unexpected EditableMesh id type. Expected Vertex id, received value that doesn't appear to be an id",
+        "BatchAdd(Enum.MeshAttribute.Color, ...): colors and alphas arrays must be the same length",
+        "BatchAdd(Enum.MeshAttribute.Color, ...): expects 2 arguments (colors, alphas)",
+        "BatchAdd(Enum.MeshAttribute.Vertex, ...): expects 1 argument (positions)",
+        "BatchAdd(Enum.MeshAttribute.UV, ...): uvs must be an array",
+        "BatchAdd(Enum.MeshAttribute.Face, ...): vertexIds must be a 2D array",
+        "Invalid value for enum 'MeshAttribute'",
+        "BatchAdd: expects at least 2 arguments (attr, data)",
+        "Test:36: invalid argument #4 (Vector2 expected, got Vector3)",
+    ];
+    assert_eq!(errors, wanted, "{output:?}");
+}
+
 /// CreateMeshPartAsync of a mesh file the project holds, as a game's asset id modules can name one until
 /// it is uploaded: its repo-relative path and a relative file:// URI are read from the project's folder
 /// (Options::project), whatever the current directory, and give the mesh's size as an absolute URI

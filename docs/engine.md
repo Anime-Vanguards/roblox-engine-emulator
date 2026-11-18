@@ -1165,9 +1165,12 @@ record/prepare.rs runs prepared ahead by `ree serve`
   looked at more of the place recorded more of it than one that did not. One that draws (an effect, a
   part, a highlight, a sky) is never drawn, in the Workspace or in Lighting; a placeholder folder or model
   is drawn once something the run made is under it, as that appears.
-- **EditableMesh and EditableImage** (src/meshes.rs, src/images.rs, measured in Studio): ids carry their
-  kind in the high bits; AddTriangle gives each corner a new automatic normal, a white opaque colour
-  and a (0, 0) uv; CreateEditableMeshAsync of a mesh asset (feature `meshes`, decoded by ror's ror-mesh)
+- **EditableMesh and EditableImage** (src/meshes.rs, src/images.rs, measured in Studio and a playing client): ids
+  carry their kind in the high bits; a new face's corner takes the normal, uv and colour the newest face over its
+  vertex uses, else a new automatic normal, a white opaque colour and a (0, 0) uv; an automatic normal several corners
+  share sums their unit normals weighed by 1 - cos^2 of each corner's angle, in single precision as a client computes
+  it; BatchAdd adds vertices, normals, uvs, colours with alphas, or triangles, answering their ids (faces numbered
+  backwards), with a client's errors (tools/parity/probes/editable_mesh_batch.luau); CreateEditableMeshAsync of a mesh asset (feature `meshes`, decoded by ror's ror-mesh)
   makes one vertex per file vertex with its bones and bind CFrames. A MeshPart bound to an EditableMesh
   points its MeshId at a FileMesh snapshot in the state dir, rewritten when the mesh changes. An image
   assigned through `Content.fromObject` shows as a PNG snapshot of its pixels.
