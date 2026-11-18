@@ -1253,6 +1253,72 @@ fn a_texture_content_swap_is_recorded() {
     assert!(values.len() == 1 && (values[0].0 - 0.1).abs() < 0.03 && values[0].1 == "rbxassetid://2", "{values:?}");
 }
 
+/// A script that switches a part's MaterialVariant among named variants (water whose ripples are a run
+/// of variants shown one at a time) is recorded as a set of MaterialVariant at the frame of each switch,
+/// on a MeshPart made from an EditableMesh and on a plain Part alike: switches in consecutive frames stay
+/// set actions (a name is not keyed), a write of the name already shown is none, and the empty name
+/// (back to the base material) is one. The scene holds the name a part appeared with. Material, the
+/// enum, plays beside it as its item's number.
+#[test]
+fn a_material_variant_switch_is_recorded() {
+    let (playback, _, scene, summary) = record(
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local RunService = game:GetService("RunService")
+        local Mesh = AssetService:CreateEditableMesh()
+        local A = Mesh:AddVertex(Vector3.new(0, 0, 0))
+        local B = Mesh:AddVertex(Vector3.new(1, 0, 0))
+        local C = Mesh:AddVertex(Vector3.new(0, 0, 1))
+        Mesh:AddTriangle(A, B, C)
+        local Sea = AssetService:CreateMeshPartAsync(Content.fromObject(Mesh))
+        Sea.Name = "Sea"
+        Sea.MaterialVariant = "Water01"
+        Sea.Parent = workspace
+        local Slab = Instance.new("Part")
+        Slab.Name = "Slab"
+        Slab.MaterialVariant = "Water01"
+        Slab.Parent = workspace
+        -- the name shown from each frame on
+        local Shown = { [2] = "Water02", [3] = "Water02", [4] = "Water03", [5] = "Water01" }
+        local Frame = 0
+        RunService.PreRender:Connect(function()
+            Frame += 1
+            local Name = Shown[Frame]
+            if Name then
+                Sea.MaterialVariant = Name
+                Slab.MaterialVariant = Name
+            end
+            if Frame == 7 then
+                Slab.MaterialVariant = ""
+                Slab.Material = Enum.Material.Slate
+            end
+        end)
+        "#,
+        10,
+    );
+    let named = |part: &str| match instance(&scene, &[part]).properties.get(&rbx_dom_weak::ustr("MaterialVariant")) {
+        Some(Variant::String(name)) => name.clone(),
+        other => panic!("{part}'s MaterialVariant {other:?}"),
+    };
+    assert_eq!((named("Sea"), named("Slab")), ("Water01".to_string(), "Water01".to_string()), "as each appeared");
+    let switches = |part: &str| -> Vec<(f64, String)> {
+        find(&playback["actions"], |a| a["target"] == part && a["set"]["MaterialVariant"].is_string())
+            .iter()
+            .map(|a| ((a["at"].as_f64().unwrap() * 60.0).round(), a["set"]["MaterialVariant"].as_str().unwrap().to_string()))
+            .collect()
+    };
+    let run = [(2.0, "Water02".to_string()), (4.0, "Water03".to_string()), (5.0, "Water01".to_string())];
+    assert_eq!(switches("Sea"), run, "{}", playback["actions"]);
+    assert_eq!(switches("Slab"), [&run[..], &[(7.0, String::new())]].concat(), "{}", playback["actions"]);
+    let materials: Vec<(f64, f64)> = find(&playback["actions"], |a| a["set"]["Material"].is_number())
+        .iter()
+        .map(|a| ((a["at"].as_f64().unwrap() * 60.0).round(), a["set"]["Material"].as_f64().unwrap()))
+        .collect();
+    assert_eq!(materials, [(7.0, 800.0)], "Slate, on the Slab: {}", playback["actions"]);
+    assert!(find(&playback["tweens"], |t| t["property"] == "MaterialVariant").is_empty(), "{}", playback["tweens"]);
+    assert!(summary["unsupported"].as_array().unwrap().is_empty(), "{summary}");
+}
+
 /// A MeshPart whose texture a script clears mid-run (TextureID = "" or TextureContent = Content.none)
 /// draws untextured from that frame: a part in the world gets a set of the empty texture then, and a
 /// textured part that enters the world after the clear is in the scene with none. The parts loaded

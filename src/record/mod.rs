@@ -81,7 +81,7 @@ enum Track {
 const VISUAL: &[(&str, &[(&str, Track)])] = {
     use Track::*;
     &[
-        ("BasePart", &[("CFrame", Motion), ("Size", Plain), ("Transparency", Effective), ("LocalTransparencyModifier", Effective), ("Color", Plain), ("Material", Plain), ("Reflectance", Plain)]),
+        ("BasePart", &[("CFrame", Motion), ("Size", Plain), ("Transparency", Effective), ("LocalTransparencyModifier", Effective), ("Color", Plain), ("Material", Plain), ("MaterialVariant", Plain), ("Reflectance", Plain)]),
         ("MeshPart", &[("TextureID", Plain), ("TextureContent", Plain), ("MeshContent", Plain), ("InitialSize", Plain)]),
         ("SurfaceAppearance", &[
             ("Color", Plain), ("EmissiveStrength", Plain), ("EmissiveTint", Plain), ("ColorMapContent", Plain), ("NormalMapContent", Plain),
