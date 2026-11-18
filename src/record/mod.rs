@@ -824,14 +824,22 @@ fn current(state: &State, engine: &Engine, id: InstanceId, name: NameId, track: 
         return Some(json!(round(effective_transparency(state, engine, id))));
     }
     // a Content property is a view of its string asset id (MeshPart.TextureContent: TextureID)
-    if let Some(sibling) = engine.reflection.content_sibling(state.dom.at(id).class, name) {
-        return Some(json!(state.dom.raw_get(id, sibling).and_then(|value| match value {
+    let class = state.dom.at(id).class;
+    if let Some(sibling) = engine.reflection.content_sibling(class, name) {
+        let uri = state.dom.raw_get(id, sibling).and_then(|value| match value {
             Value::String(uri) => Some(uri.to_string()),
             _ => None,
-        }).unwrap_or_default()));
+        }).unwrap_or_default();
+        // (a relative local file as the file the engine read: encode::local_uri)
+        return Some(json!(encode::local_uri(engine, &uri).unwrap_or(uri)));
     }
     let value = state.dom.raw_get(id, name)?;
-    to_json(engine, value)
+    let content = matches!(value, Value::Content(_))
+        || engine.reflection.class_property(class, name).is_some_and(|property| property.engine_type == crate::reflection::EngineType::ContentId);
+    match to_json(engine, value)? {
+        Json::String(uri) if content => Some(json!(encode::local_uri(engine, &uri).unwrap_or(uri))),
+        other => Some(other),
+    }
 }
 
 /// The tracked Content views of a string asset id a script wrote (TextureID: TextureContent), which
@@ -961,6 +969,10 @@ fn snapshot(state: &State, engine: &Engine, id: InstanceId, class: ClassId) -> (
                 properties.push((name.to_string(), value));
             }
         }
+    }
+    // a Content or content ID naming a relative local file names the file the engine read (encode::local_uri)
+    for (_, variant) in properties.iter_mut() {
+        encode::localize(engine, variant);
     }
     // rbx-binary writes attributes and tags only through its database's Instance entry
     let known = encode::dom_property(class_name, "Attributes").is_some();

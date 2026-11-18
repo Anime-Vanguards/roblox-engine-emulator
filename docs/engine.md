@@ -180,7 +180,8 @@ there).
 - **Local files**: content naming a relative local path (`output/x.mesh`, `file://<path>`) is read from
   the project's folder (`Options::project`: `--project`, else the folder holding the first root, else
   the current directory), by the same rules ror uses for what names a file (`Options::local_file`).
-  Studio reads no local files; this lets a project use meshes and images before they are uploaded.
+  Studio reads no local files; this lets a project use meshes and images before they are uploaded. A recording
+  names such content by the absolute `file://` URI of the file read, so the renderer finds it wherever it runs.
 
 Model files (snapshots, models, bundles) convert through `project::ModelPlan` (project/plan.rs): the
 structure and property values once, kept as a few flat arrays (nodes, properties, distinct values, the

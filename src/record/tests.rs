@@ -31,7 +31,12 @@ fn record_with(source: &str, frames: u32, walk_always: bool) -> (Json, Json, rbx
 
 /// [`record_with`] in a place whose Lighting holds `own` (class, name) before the run.
 fn record_in(source: &str, frames: u32, walk_always: bool, own: &[(&str, &str)]) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
-    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    record_options(Options { mode: "play".into(), ..Options::default() }, source, frames, walk_always, own)
+}
+
+/// [`record_in`] with the engine's options.
+fn record_options(options: Options, source: &str, frames: u32, walk_always: bool, own: &[(&str, &str)]) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
+    let engine = Engine::new(options).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
     if !own.is_empty() {
@@ -1227,6 +1232,57 @@ fn a_texture_content_swap_is_recorded() {
     let swaps = find(&playback["actions"], |a| a["target"] == "Skin" && a["set"]["TextureContent"].is_string());
     let values: Vec<(f64, &str)> = swaps.iter().map(|a| (a["at"].as_f64().unwrap(), a["set"]["TextureContent"].as_str().unwrap())).collect();
     assert!(values.len() == 1 && (values[0].0 - 0.1).abs() < 0.03 && values[0].1 == "rbxassetid://2", "{values:?}");
+}
+
+/// A texture naming a relative local file the engine read from the project's folder (`checker.png`, `./maps/other.png`)
+/// is recorded as that file's absolute `file://` URI, in the scene and in a later set, since ror reads a relative path from
+/// where it runs; an asset id stays as it is. Before, `checker.png` went into the scene unchanged and ror refused it.
+#[test]
+fn a_relative_local_texture_is_recorded_as_the_file_read() {
+    let project = std::env::temp_dir().join(format!("ree-local-texture-{}-{}", std::process::id(), TEST_DIRS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::create_dir_all(project.join("maps")).unwrap();
+    std::fs::write(project.join("checker.png"), b"png").unwrap();
+    std::fs::write(project.join("maps/other.png"), b"png").unwrap();
+    let options = Options { mode: "play".into(), project: Some(project.clone()), ..Options::default() };
+    let (playback, _, scene, _, _) = record_options(
+        options,
+        r#"
+        local Part = Instance.new("MeshPart")
+        Part.Name = "Skin"
+        Part.TextureID = "checker.png"
+        Part.Parent = workspace
+        local Asset = Instance.new("MeshPart")
+        Asset.Name = "Asset"
+        Asset.TextureID = "rbxassetid://5"
+        Asset.Parent = workspace
+        task.delay(0.1, function()
+            Part.TextureID = "./maps/other.png"
+        end)
+        "#,
+        12,
+        false,
+        &[],
+    );
+    let file = |relative: &str| format!("file://{}", std::path::absolute(project.join(relative)).unwrap().display());
+    let texts = |path: &[&str]| -> Vec<String> {
+        instance(&scene, path).properties.values().filter_map(|value| match value {
+            Variant::Content(content) => match content.value() {
+                rbx_dom_weak::types::ContentType::Uri(uri) => Some(uri.clone()),
+                _ => None,
+            },
+            Variant::ContentId(id) => Some(id.as_str().to_string()),
+            _ => None,
+        }).filter(|uri| !uri.is_empty()).collect()
+    };
+    let skin = texts(&["Skin"]);
+    assert!(!skin.is_empty() && skin.iter().all(|uri| *uri == file("checker.png")), "{skin:?}");
+    assert!(texts(&["Asset"]).iter().all(|uri| uri == "rbxassetid://5"), "{:?}", texts(&["Asset"]));
+    let sets: Vec<String> = find(&playback["actions"], |a| a["target"] == "Skin" && a["set"].is_object())
+        .iter()
+        .flat_map(|a| a["set"].as_object().unwrap().values().filter_map(|v| v.as_str().map(str::to_string)).collect::<Vec<_>>())
+        .collect();
+    assert!(!sets.is_empty() && sets.iter().all(|uri| *uri == file("maps/other.png")), "{sets:?}");
+    let _ = std::fs::remove_dir_all(&project);
 }
 
 /// A SurfaceAppearance AssetService builds from images loaded from assets draws those assets: its
