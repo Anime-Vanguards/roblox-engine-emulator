@@ -972,6 +972,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                     let name = match content {
                         ContentValue::Uri(_) => "Uri",
                         ContentValue::Object(_) => "Object",
+                        ContentValue::Opaque(..) => "Opaque",
                         ContentValue::None => "None",
                     };
                     return Ok(values([match e.reflection.enum_item("ContentSourceType", name) {
@@ -992,6 +993,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let name = engine.state.borrow().dom.get(*id).map(|i| i.name.to_string()).unwrap_or_default();
                 format!("Content{{SourceType=Object, Object={name}}}")
             }
+            ContentValue::Opaque(..) => "Content{SourceType=Opaque}".into(),
             ContentValue::None => "Content{SourceType=None}".into(),
         })
     })?;

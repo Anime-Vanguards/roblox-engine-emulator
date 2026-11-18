@@ -875,6 +875,32 @@ Method("AssetService", "CreateSurfaceAppearanceAsync", function(_, Maps)
 	return Surface
 end)
 
+-- CreateDataModelContentAsync: an EditableMesh's or EditableImage's Content made into one of its own, a copy of the object
+-- as it is (measured in a 0.747 client, tools/parity/probes/data_model_content.luau): it yields, then answers
+-- Enum.CreateContentResult.Success and an Opaque Content (no Uri and no Object; each call's is its own), which
+-- CreateMeshPartAsync, CreateEditableMeshAsync and image properties take, and which later edits of the object (or its
+-- Destroy) do not reach; any other Content is refused, and so is a mesh without faces. Offline nothing is uploaded, so the
+-- other results (PermissionDenied, UploadFailed, ...) never come.
+Method("AssetService", "CreateDataModelContentAsync", function(_, Source)
+	local Object = if typeof(Source) == "Content" and Source.SourceType == Enum.ContentSourceType.Object then Source.Object else nil
+	local Uri
+	if Object and Object.ClassName == "EditableMesh" then
+		local Problem
+		Uri, Problem = R.MeshCopy(Object)
+		if not Uri then
+			error(Problem, 0)
+		end
+	elseif Object and Object.ClassName == "EditableImage" then
+		local Data = Extra(Object)
+		local Drawn = if Data.Source then Content.fromUri(Data.Source) else Snapshot(Object)
+		Uri = if Drawn then Drawn.Uri else ""
+	else
+		error("The input content type is not supported by AssetService::CreateDataModelContentAsync yet!", 0)
+	end
+	task.wait()
+	return Enum.CreateContentResult.Success, R.OpaqueContent(Uri)
+end)
+
 -- Any other Content property that takes an image shows an EditableImage too (Roblox's EditableImage
 -- reference: "EditableImage can be used in any Content property which takes an image, such as
 -- ImageLabel.ImageContent or MeshPart.TextureContent", by Content.fromObject): the property holds the

@@ -576,7 +576,8 @@ fn content_object(engine: &Engine, value: &LuaValue) -> Option<InstanceId> {
 
 fn content_uri(value: &LuaValue) -> Option<String> {
     match convert::from_lua(value) {
-        Value::Content(content) => content.uri().map(|uri| uri.to_string()),
+        // (an Opaque Content's copy: CreateDataModelContentAsync)
+        Value::Content(content) => content.location().map(|uri| uri.to_string()),
         Value::String(uri) => Some(uri.to_string()),
         Value::Number(id) if id > 0.0 => Some(format!("rbxassetid://{}", id as u64)),
         _ => None,
@@ -690,6 +691,20 @@ pub fn flush(engine: &Engine) {
             Err(problem) => engine.warn(format!("EditableMesh: its snapshot could not be written ({problem})")),
         }
     }
+}
+
+/// AssetService:CreateDataModelContentAsync of an EditableMesh's Content: a FileMesh copy of the mesh as it is now (the
+/// snapshot file, which later edits do not reach), its `file://` URI. A mesh without faces is refused as a 0.747 client
+/// refuses an empty one.
+pub fn data_model_copy(engine: &Engine, id: InstanceId) -> Result<String, String> {
+    let ext = extension(engine);
+    let meshes = ext.meshes.borrow();
+    let mesh = meshes.get(&id).ok_or_else(|| "This EditableMesh has been destroyed".to_string())?;
+    if mesh.faces.live().next().is_none() {
+        return Err("Error creating FileMeshData: Empty Result".into());
+    }
+    let path = snapshot(engine, mesh)?;
+    Ok(format!("file://{}", path.display()))
 }
 
 /// A new MeshPart showing `mesh` (CreateMeshPartAsync of an EditableMesh's Content).

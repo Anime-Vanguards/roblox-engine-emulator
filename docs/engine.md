@@ -1171,6 +1171,10 @@ record/prepare.rs runs prepared ahead by `ree serve`
   makes one vertex per file vertex with its bones and bind CFrames. A MeshPart bound to an EditableMesh
   points its MeshId at a FileMesh snapshot in the state dir, rewritten when the mesh changes. An image
   assigned through `Content.fromObject` shows as a PNG snapshot of its pixels.
+  AssetService:CreateDataModelContentAsync of a mesh's or image's Content yields, then answers
+  `Enum.CreateContentResult.Success` and an Opaque Content: a copy of the object as it was, which
+  CreateMeshPartAsync and CreateEditableMeshAsync take and later edits do not reach (measured in a playing
+  client: tools/parity/probes/data_model_content.luau).
 - **Context helpers**: `Context.TraceWrites` names the Luau line behind each Parent or property write
   (src/trace.rs), `Context.Census` the line behind every live thread, connection, timer and instance
   (src/census.rs), `Context.Holders` what keeps a tree outside the DataModel alive (src/lua/holders.rs).

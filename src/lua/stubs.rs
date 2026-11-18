@@ -412,6 +412,25 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Err(error) => Ok((None, Some(error))),
         })?,
     )?;
+    // AssetService:CreateDataModelContentAsync (lua/services.luau): a copy of an EditableMesh as it is now (its file URI,
+    // else nil and the error), and the Opaque Content that names a copy (each call's its own)
+    let e = engine.clone();
+    r.set(
+        "MeshCopy",
+        lua.create_function(move |_, mesh: LuaValue| match crate::meshes::data_model_copy(&e, instance_of(&mesh)?) {
+            Ok(uri) => Ok((Some(uri), None)),
+            Err(problem) => Ok((None, Some(problem))),
+        })?,
+    )?;
+    r.set(
+        "OpaqueContent",
+        lua.create_function(|lua, uri: LuaString| {
+            static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let content = crate::value::ContentValue::Opaque(serial, crate::value::Str::new(&uri.as_bytes()));
+            lua.create_any_userdata(types::LContent::new(lua, content))
+        })?,
+    )?;
     // HttpService JSON: Lune's serde (sorted keys, empty tables as `{}`, integral numbers as integers)
     r.set(
         "JsonEncode",

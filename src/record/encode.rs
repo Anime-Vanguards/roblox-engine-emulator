@@ -14,7 +14,7 @@ use serde_json::{Value as Json, json};
 
 use crate::{
     Engine, InstanceId,
-    value::{ContentValue, Value},
+    value::Value,
     world::frame,
 };
 
@@ -54,9 +54,9 @@ pub fn to_json(engine: &Engine, value: &Value) -> Option<Json> {
         Value::ColorSequence(s) => {
             Json::Array(s.keypoints.iter().map(|k| json!([round(k.time as f64), round(k.color.r as f64), round(k.color.g as f64), round(k.color.b as f64)])).collect())
         }
-        Value::Content(content) => match &**content {
-            ContentValue::Uri(uri) => json!(uri.to_str_lossy()),
-            _ => json!(""),
+        Value::Content(content) => match content.location() {
+            Some(uri) => json!(uri.to_str_lossy()),
+            None => json!(""),
         },
         Value::Dom(variant) => match &**variant {
             Variant::CFrame(cframe) => cframe_json(&frame::to_affine(cframe)),
@@ -130,7 +130,7 @@ pub fn to_variant(engine: &Engine, value: &Value, data_type: &DataType, refs: &d
         (VariantType::BinaryString, Value::String(s)) => Variant::BinaryString(s.as_bytes().to_vec().into()),
         (VariantType::ContentId, Value::String(s)) => Variant::ContentId(s.to_str_lossy().as_ref().into()),
         (VariantType::ContentId, Value::Content(c)) => Variant::ContentId(c.uri().map(|u| u.to_str_lossy().into_owned()).unwrap_or_default().into()),
-        (VariantType::Content, Value::Content(c)) => Variant::Content(match c.uri() {
+        (VariantType::Content, Value::Content(c)) => Variant::Content(match c.location() {
             Some(uri) if !uri.is_empty() => dom::Content::from_uri(uri.to_str_lossy().into_owned()),
             _ => dom::Content::none(),
         }),
@@ -195,7 +195,7 @@ pub fn untyped_variant(engine: &Engine, value: &Value, engine_type: crate::refle
         Value::NumberRange(r) => Variant::NumberRange(*r),
         Value::NumberSequence(s) => Variant::NumberSequence((**s).clone()),
         Value::ColorSequence(s) => Variant::ColorSequence((**s).clone()),
-        Value::Content(c) => Variant::Content(match c.uri() {
+        Value::Content(c) => Variant::Content(match c.location() {
             Some(uri) if !uri.is_empty() => dom::Content::from_uri(uri.to_str_lossy().into_owned()),
             _ => dom::Content::none(),
         }),

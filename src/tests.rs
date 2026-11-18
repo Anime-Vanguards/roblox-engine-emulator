@@ -3712,6 +3712,55 @@ fn editable_mesh_colours_take_numbers_as_alpha() {
     assert!(output.contains(&"print: ok".to_string()), "{output:?}");
 }
 
+/// AssetService:CreateDataModelContentAsync as a 0.747 client answers it (tools/parity/probes/data_model_content.luau): it
+/// yields, then gives Enum.CreateContentResult.Success and an Opaque Content (no Uri, no Object, each call's its own), which
+/// CreateMeshPartAsync and CreateEditableMeshAsync take, a copy that later edits and the mesh's Destroy do not reach; other
+/// Content and a mesh without faces are refused with the client's errors.
+#[cfg(feature = "meshes")]
+#[test]
+fn data_model_content_is_a_copy_of_a_mesh() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local m = AssetService:CreateEditableMesh()
+        local a, b, c = m:AddVertex(Vector3.new(0, 0, 0)), m:AddVertex(Vector3.new(2, 0, 0)), m:AddVertex(Vector3.new(0, 3, 0))
+        m:AddTriangle(a, b, c)
+        task.spawn(function()
+            local Deferred = false
+            task.defer(function() Deferred = true end)
+            local result, made = AssetService:CreateDataModelContentAsync(Content.fromObject(m))
+            local _, again = AssetService:CreateDataModelContentAsync(Content.fromObject(m), {})
+            print("made", Deferred, result, tostring(made), made.SourceType, made.Uri, made.Object, made == made, made == again)
+            m:SetPosition(a, Vector3.new(-1, 0, 0))
+            m:Destroy()
+            local part = AssetService:CreateMeshPartAsync(made)
+            print("part", part.MeshSize == Vector3.new(2, 3, 0.001))
+            local copy = AssetService:CreateEditableMeshAsync(made)
+            print("copy", #copy:GetVertices(), #copy:GetFaces(), copy:GetPosition(copy:GetVertices()[1]) == Vector3.zero)
+            for _, source in { Content.fromUri("rbxassetid://1"), Content.none, Content.fromObject(AssetService:CreateEditableMesh()) } do
+                print("refused", pcall(AssetService.CreateDataModelContentAsync, AssetService, source))
+            end
+            print("done")
+        end)
+        "#,
+    );
+    assert!(!output.iter().any(|line| line.starts_with("print: made")), "it yields: {output:?}");
+    scheduler::run_until(&lua, &engine, 0.5).unwrap();
+    let lines = lines(&engine);
+    for wanted in [
+        "print: made true Enum.CreateContentResult.Success Content{SourceType=Opaque} Enum.ContentSourceType.Opaque nil nil true false",
+        "print: part true",
+        "print: copy 3 1 true",
+        "print: refused false The input content type is not supported by AssetService::CreateDataModelContentAsync yet!",
+        "print: refused false Error creating FileMeshData: Empty Result",
+    ] {
+        assert!(lines.iter().any(|line| line == wanted), "{wanted}: {lines:?}");
+    }
+}
+
 /// The work clock: os.clock advances within a frame by what the engine calls a script makes cost
 /// Studio (crate::cost: Instance.new, a write, entering the DataModel), and a new frame starts at
 /// its own virtual time; a mesh asset's CreateEditableMeshAsync yields (its first fetch 0.55 s).
