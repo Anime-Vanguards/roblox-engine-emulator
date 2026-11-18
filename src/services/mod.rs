@@ -321,10 +321,26 @@ pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Res
         other => other,
     };
     let service = core::create_named(&mut state, reflection, class, instance_name);
+    for &(class_name, property, value) in SERVICE_VALUES {
+        if class_name == service_name {
+            if let Some(name) = reflection.name_id(property) {
+                core::raw_set_silent(&mut state, reflection, service, name, Value::Number(value));
+            }
+        }
+    }
     state.dom.attach(service, game);
     state.dom.at_mut(service).set_flag(flags::PARENT_LOCKED, true);
     Ok(service)
 }
+
+/// What a playing client's services hold from the start where neither the dump nor rbx-dom gives a default (a service
+/// has none, and rbx-dom leaves UserGameSettings' numbers out, so they read 0): the mouse and gamepad sensitivities read 1
+/// (measured in a 0.747 client: tools/parity/probes/settings.luau; the settings file it read holds 1 for both sensitivities).
+const SERVICE_VALUES: &[(&str, &str, f64)] = &[
+    ("UserGameSettings", "MouseSensitivity", 1.0),
+    ("UserGameSettings", "GamepadCameraSensitivity", 1.0),
+    ("UserInputService", "MouseDeltaSensitivity", 1.0),
+];
 
 /// A UserSettings object (outside the DataModel, as in Roblox): `UserSettings()` makes it on its first
 /// call and returns it from then on. None when the reflection has no UserSettings class.

@@ -115,7 +115,8 @@ with or without a layer.
   Render-phase pass) and input (UserInputService state, GuiState, scrolling, TextBox editing, drag).
   Without it those members keep the core's static answers (GetMouseLocation (-1000, -1000), GuiState
   Idle), TextService:GetTextSize answers from Studio's measured advances (src/text_measure.rs), and the
-  rest is reported as not emulated.
+  rest is reported as not emulated. UserInputService.MouseDeltaSensitivity and the user settings' mouse and gamepad
+  sensitivities start at 1, as a playing client's do.
 - A Path2D's curve is the core's (`path2d`), and only its parent's rectangle is a layout's: a layer gives it with
   `path2d::set_frame_source` (a `Frame`: the parent's corner, size and rotation on the screen) and says when a
   path was laid out with `path2d::laid_out`. Without one a parent measures nothing ("Path2D" under "Engine API").

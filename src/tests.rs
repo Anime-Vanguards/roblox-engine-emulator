@@ -62,6 +62,19 @@ fn assert_script(source: &str) {
     assert!(errors.is_empty(), "{errors:?}");
 }
 
+/// A playing client's mouse and gamepad sensitivities start at 1 (measured: tools/parity/probes/settings.luau); they
+/// read 0 before (a service has no reflection defaults, and rbx-dom leaves UserGameSettings' numbers out).
+#[test]
+fn services_start_at_a_clients_sensitivities() {
+    assert_script(
+        r#"
+        local Settings = UserSettings():GetService("UserGameSettings")
+        assert(Settings.MouseSensitivity == 1 and Settings.GamepadCameraSensitivity == 1, tostring(Settings.MouseSensitivity))
+        assert(game:GetService("UserInputService").MouseDeltaSensitivity == 1)
+        "#,
+    );
+}
+
 #[test]
 fn instances_properties_and_errors() {
     assert_script(
