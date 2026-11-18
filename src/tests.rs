@@ -1789,6 +1789,87 @@ fn rojo_json_models_mount_as_their_instances() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Model files hold properties and enum items the engine's reflection (data/reflection.json, a newer Studio) has and
+/// rbx-dom's database does not: an InputBinding's Type and PrimaryModifier, KeyCode.MouseWheel, a SurfaceAppearance's
+/// ResampleMode. A Rojo JSON model gives them implicitly or explicitly (`rojo build` 7.7 takes both), and binary and XML
+/// models keep them; each reads back as the engine has it (rbx-dom's older database dropped the values).
+#[test]
+fn models_keep_what_the_engines_reflection_has_and_rbx_dom_lacks() {
+    use super::project::{Mount, mount_at};
+    use rbx_dom_weak::{InstanceBuilder, WeakDom, types::Enum};
+    let dir = std::env::temp_dir().join(format!("ree-newer-model-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::write(
+        dir.join("lib/Input.model.json"),
+        r#"{
+            "className": "InputContext",
+            "children": [
+                {
+                    "name": "Zoom", "className": "InputAction", "properties": { "Type": "Direction1D" },
+                    "children": [
+                        { "name": "Wheel", "className": "InputBinding", "properties": { "KeyCode": "MouseWheel", "Type": "Scriptable", "PrimaryModifier": "LeftShift" } }
+                    ]
+                }
+            ]
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("lib/Explicit.model.json"),
+        r#"{ "className": "InputBinding", "properties": { "KeyCode": { "Enum": 1035 }, "PrimaryModifier": { "Enum": 304 }, "Type": { "Enum": 1 } } }"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("lib/Look.model.json"), r#"{ "className": "SurfaceAppearance", "properties": { "ResampleMode": "Pixelated" } }"#).unwrap();
+    std::fs::write(
+        dir.join("lib/Xml.rbxmx"),
+        r#"<roblox version="4">
+	<Item class="InputBinding" referent="RBX0">
+		<Properties>
+			<string name="Name">Xml</string>
+			<token name="KeyCode">1035</token>
+			<token name="PrimaryModifier">304</token>
+			<token name="Type">1</token>
+		</Properties>
+	</Item>
+</roblox>"#,
+    )
+    .unwrap();
+    let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+    let binding = InstanceBuilder::new("InputBinding")
+        .with_name("Binary")
+        .with_property("KeyCode", Enum::from_u32(1035))
+        .with_property("PrimaryModifier", Enum::from_u32(304))
+        .with_property("Type", Enum::from_u32(1));
+    let look = InstanceBuilder::new("SurfaceAppearance").with_name("BinaryLook").with_property("ResampleMode", Enum::from_u32(1));
+    let top = dom.insert(dom.root_ref(), InstanceBuilder::new("Folder").with_name("Binary").with_children([binding, look]));
+    let mut file = Vec::new();
+    rbx_binary::to_writer(&mut file, &dom, &[top]).unwrap();
+    std::fs::write(dir.join("lib/Binary.rbxm"), file).unwrap();
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Lib={}", dir.join("lib").to_string_lossy()), false).unwrap()).unwrap();
+    let output = run(&lua, &engine, r#"
+        local Lib = game:GetService("ReplicatedStorage").Lib
+        local function check(Binding)
+            assert(Binding.KeyCode == Enum.KeyCode.MouseWheel, Binding.Name .. " KeyCode " .. tostring(Binding.KeyCode))
+            assert(Binding.PrimaryModifier == Enum.KeyCode.LeftShift, Binding.Name .. " PrimaryModifier " .. tostring(Binding.PrimaryModifier))
+            assert(Binding.Type == Enum.InputBindingType.Scriptable, Binding.Name .. " Type " .. tostring(Binding.Type))
+        end
+        assert(Lib.Input.ClassName == "InputContext" and Lib.Input.Zoom.Type == Enum.InputActionType.Direction1D, "the action's Type")
+        check(Lib.Input.Zoom.Wheel)
+        check(Lib.Explicit)
+        check(Lib.Xml)
+        check(Lib.Binary.Binary)
+        assert(Lib.Look.ResampleMode == Enum.ResamplerMode.Pixelated, "ResampleMode " .. tostring(Lib.Look.ResampleMode))
+        assert(Lib.Binary.BinaryLook.ResampleMode == Enum.ResamplerMode.Pixelated, "binary ResampleMode")
+        print("ok")
+    "#);
+    assert!(output.contains(&"print: ok".to_string()), "{output:?}");
+    assert!(output.iter().all(|line| !line.starts_with("warn") && !line.starts_with("error")), "{output:?}");
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Everything the engine holds per instance, signal and connection, and the Luau heap.
 #[derive(Debug, PartialEq, Clone, Copy)]
 struct Held {

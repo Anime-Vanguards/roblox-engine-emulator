@@ -1665,7 +1665,10 @@ pub fn decode_model(bytes: &[u8]) -> Result<WeakDom, String> {
         }
         Err(first_error.unwrap_or_default())
     } else {
-        rbx_xml::from_reader_default(bytes).map_err(|e| e.to_string())
+        // (properties rbx-dom's database does not know are read too, as rbx_binary reads them: a newer Studio's, which the
+        // engine's reflection has)
+        let options = rbx_xml::DecodeOptions::new().property_behavior(rbx_xml::DecodePropertyBehavior::ReadUnknown);
+        rbx_xml::from_reader(bytes, options).map_err(|e| e.to_string())
     }
 }
 
@@ -1690,6 +1693,12 @@ fn forget_property(db: &mut rbx_reflection::ReflectionDatabase<'static>, class: 
     false
 }
 
+/// The enum the engine's reflection gives `class_name.property`, when it is an enum property.
+pub(crate) fn engine_enum(reflection: &Reflection, class_name: &str, property: &str) -> Option<crate::reflection::EnumId> {
+    let class = reflection.class_id(class_name)?;
+    reflection.class_property(class, reflection.name_id(property)?)?.enum_type
+}
+
 /// The enum an rbx-dom Enum property holds (from rbx-dom's property descriptor, as Lune reads it).
 fn dom_enum_name(class_name: &str, property: &str) -> Option<String> {
     let database = rbx_reflection_database::get().ok()?;
@@ -1706,9 +1715,14 @@ fn dom_enum_name(class_name: &str, property: &str) -> Option<String> {
     None
 }
 
-/// An rbx-dom Enum property value as the engine's enum item (by rbx-dom's descriptor, as Lune
-/// reads it).
+/// An rbx-dom Enum property value as the engine's enum item: by the engine's own reflection when it
+/// gives the property an enum (data/reflection.json, a newer Studio than rbx-dom's database: an
+/// InputBinding's Type and PrimaryModifier, KeyCode.MouseWheel), else by rbx-dom's descriptor, as
+/// Lune reads it.
 fn dom_enum_value(reflection: &Reflection, class_name: &str, property: &str, item: u32) -> Option<Value> {
+    if let Some(enum_id) = engine_enum(reflection, class_name, property) {
+        return reflection.enums[enum_id as usize].by_value.get(&(item as i64)).copied().map(Value::EnumItem);
+    }
     let enum_name = dom_enum_name(class_name, property)?;
     let database = rbx_reflection_database::get().ok()?;
     let descriptor = database.enums.get(enum_name.as_str())?;

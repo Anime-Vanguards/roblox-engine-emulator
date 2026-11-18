@@ -193,8 +193,11 @@ if the import were made at once: serials (`GetDebugId`), child order, references
 Rojo's JSON models (`*.model.json`, project/json_model.rs) mount as Rojo 7 builds them: one instance
 named after the file, `className`, `name`, `properties`, `attributes`, `children` (lowercase or Rojo's
 older capitalized keys), property values explicit (`{"Vector3": [1, 2, 3]}`) or implicit (resolved by
-the property's type in rbx-dom's database), round-tripped through rbx_binary as `rojo build` writes
-them. A file Rojo would reject is reported as a warning and not mounted.
+the property's type in rbx-dom's database, or by the engine's own reflection for a property or enum item that
+database is too old to have, as a newer `rojo build` resolves them), round-tripped through rbx_binary as `rojo build`
+writes them. A file Rojo would reject is reported as a warning and not mounted. Every model format reads an enum
+value by the engine's reflection where it gives the property an enum, and XML models keep properties rbx-dom does not
+know, as binary ones do.
 
 ## Asset bundles (`src/project/model_assets.rs`, feature `bundles`)
 
