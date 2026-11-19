@@ -131,6 +131,47 @@ fn a_rojo_project_mounts_its_tree_where_rojo_puts_it() {
     assert_eq!(warnings, ["warn: default.project.json maps ServerStorage.Gone to gone, which doesn't exist; not mounted"], "{lines:?}");
 }
 
+/// A root project whose tree is a `$path` to the code's DataModel project with the world's project beside it (a code project
+/// and a world synced on its own) mounts both, as `rojo build` of it does: the code project's services from its own folder,
+/// the world's Workspace from its folder
+#[test]
+fn a_root_project_combines_a_datamodel_project_and_a_workspace_project() {
+    let root = scratch("root-path");
+    write(
+        &root,
+        &[
+            ("game.project.json", r#"{"name": "Game", "tree": {"$path": "default.project.json", "Workspace": {"$path": "world/workspace.project.json"}}}"#),
+            (
+                "default.project.json",
+                r#"{"name": "Code", "tree": {"$className": "DataModel",
+                    "ReplicatedStorage": {"Shared": {"$path": "src/shared"}},
+                    "ServerScriptService": {"Server": {"$path": "src/server"}}}}"#,
+            ),
+            ("src/shared/Answer.luau", "return 7"),
+            ("src/server/Main.server.luau", "print('server main')"),
+            ("world/workspace.project.json", r#"{"name": "World", "tree": {"$className": "Workspace", "Map": {"$path": "map"}}}"#),
+            ("world/map/Floor.model.json", r#"{"className": "Part", "properties": {"Anchored": true}}"#),
+            (
+                "Harness.luau",
+                "return function(Context)\n\
+                 print('shared', require(game:GetService('ReplicatedStorage').Shared.Answer))\n\
+                 print('server', game:GetService('ServerScriptService').Server.Main.ClassName)\n\
+                 print('map', workspace.Map.ClassName, workspace.Map.Floor.ClassName, workspace.Map.Floor.Anchored)\n\
+                 end",
+            ),
+        ],
+    );
+    let harness = root.join("Harness.luau").to_string_lossy().into_owned();
+    let project = root.join("game.project.json").to_string_lossy().into_owned();
+    let (summary, lines) = run_words(&["--harness", &harness, "--rojo", &project, "--seconds", "0.05"]);
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    for wanted in ["print: shared 7", "print: server Script", "print: map Folder Part true"] {
+        assert!(lines.iter().any(|line| line == wanted), "{wanted}: {lines:?}");
+    }
+    assert!(!lines.iter().any(|line| line.starts_with("warn:") || line.starts_with("error:")), "{lines:?}");
+}
+
 /// A loopback run with no harness boots the place a Rojo project describes as a play session does: the server runs the
 /// Script mapped into ServerScriptService, the client the LocalScript mapped into StarterPlayerScripts (copied into its
 /// PlayerScripts), each requiring a module mapped into ReplicatedStorage
