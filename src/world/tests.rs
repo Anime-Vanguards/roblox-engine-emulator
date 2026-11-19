@@ -149,6 +149,15 @@ fn workspace_terrain_and_service_names() {
         assert(Settings.SavedQualityLevel == Enum.SavedQualitySetting.Automatic and Settings.SavedQualityLevel.Value == 0)
         assert(UserSettings():GetService("UserGameSettings") == Settings and Settings.Parent == UserSettings())
         assert(UserSettings().GameSettings == Settings and Settings.Name == "GameSettings")
+        -- names as in Studio 0.748: the root is GlobalBasicSettings, and full names start below it, as below the DataModel
+        local Root = UserSettings()
+        assert(Root.Name == "GlobalBasicSettings" and tostring(Root) == "GlobalBasicSettings" and Root:GetFullName() == "GlobalBasicSettings")
+        assert(Settings:GetFullName() == "GameSettings", Settings:GetFullName())
+        assert(workspace.Terrain:GetFullName() == "Workspace.Terrain")
+        local Loose = Instance.new("Folder")
+        local Inner = Instance.new("Part")
+        Inner.Parent = Loose
+        assert(Inner:GetFullName() == "Folder.Part", Inner:GetFullName())
         -- what Roblox's PlayerModule calls on it
         Settings:SetCameraYInvertVisible()
         assert(Settings:GetCameraYInvertValue() == 1 and Settings:InFullScreen() == false)
@@ -157,7 +166,7 @@ fn workspace_terrain_and_service_names() {
         local OldOk, OldError = pcall(function()
             return (Settings :: any).GetCameraYInvert
         end)
-        assert(not OldOk and string.find(tostring(OldError), "GetCameraYInvert is not a valid member of UserGameSettings", 1, true), tostring(OldError))
+        assert(not OldOk and string.find(tostring(OldError), 'GetCameraYInvert is not a valid member of UserGameSettings "GameSettings"', 1, true), tostring(OldError))
         Settings.FullscreenChanged:Connect(function() end)
         -- deprecated CFrame members still answer
         local Frame = CFrame.new(1, 2, 3)
