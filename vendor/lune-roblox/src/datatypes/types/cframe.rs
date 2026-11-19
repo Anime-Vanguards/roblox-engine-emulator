@@ -3,7 +3,7 @@
 use core::fmt;
 use std::{ops, sync::Arc};
 
-use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
+use glam::{Mat3, Mat4, Vec3, Vec4};
 use mlua::{Variadic, prelude::*};
 use rbx_dom_weak::types::{CFrame as DomCFrame, Matrix3 as DomMatrix3, Vector3 as DomVector3};
 
@@ -560,11 +560,11 @@ impl LuaExportsTable for CFrame {
                 }
             }
 
+            // The quaternion made unit first, then the matrix (types::float32 `rot_from_quat`, as Lerp makes one; a playing
+            // client, 0.747, 134 quaternions to the bit: tools/parity/probes/cframe_new_quat.luau). A zero quaternion gives
+            // not-a-number.
             7 => match ArgsPosXYZQuat::from_lua_multi(args, lua) {
-                Ok((x, y, z, qx, qy, qz, qw)) => Ok(CFrame(Mat4::from_rotation_translation(
-                    Quat::from_array([qx, qy, qz, qw]),
-                    Vec3::new(x, y, z),
-                ))),
+                Ok((x, y, z, qx, qy, qz, qw)) => Ok(CFrame::from_parts([x, y, z], f32m::rot_from_quat([qx, qy, qz, qw]))),
                 Err(err) => Err(err),
             },
 

@@ -69,6 +69,16 @@
 			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		}
 	],
+	"cframe_new_quat": [
+		{
+			"line": "scale 9.9999999999999995e-21 1 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (the squares of components near 1e-20), where a client and ree keep them. A float mode of the engine, not of this constructor"
+		},
+		{
+			"line": "scale 9.9999999999999995e-21 2 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (the squares of components near 1e-20), where a client and ree keep them. A float mode of the engine, not of this constructor"
+		}
+	],
 	"cframe_rotation_between": [
 		{
 			"line": "args none error @123: missing argument #1 to 'fromRotationBetweenVectors' (Vector3 expected)",

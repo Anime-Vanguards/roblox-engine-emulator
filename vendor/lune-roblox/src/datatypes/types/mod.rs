@@ -362,7 +362,7 @@ pub mod float32 {
 
     /// A quaternion's rotation: made a unit quaternion first (`q * (1 / sqrtf(dot(q, q)))`, so a zero one gives
     /// not-a-number), then the matrix in single precision
-    fn rot_from_quat(q: Quat) -> Rot {
+    pub fn rot_from_quat(q: Quat) -> Rot {
         let k = 1.0 / quat_dot(q, q).sqrt();
         let [x, y, z, w] = q.map(|c| c * k);
         let (x2, y2, z2) = (x + x, y + y, z + z);

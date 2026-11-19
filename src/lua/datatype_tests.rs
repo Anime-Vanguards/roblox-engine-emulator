@@ -769,6 +769,42 @@ assert(string.match(Message, ":%d+: invalid argument #1 to 'AngleBetween' %(CFra
     );
 }
 
+/// CFrame.new(x, y, z, qx, qy, qz, qw) makes the quaternion unit before the matrix, as a 0.747 playing client does to the
+/// bit (tools/parity/probes/cframe_new_quat.luau; types::float32 rot_from_quat, Lerp's). It took the quaternion as unit:
+/// a non-unit one gave a scaled matrix ((1, 2, 3, 4) read R00 -25), a zero one the identity, and a unit one could read
+/// a float step off.
+#[test]
+fn cframe_new_from_a_quaternion_makes_it_unit_as_a_playing_client_does() {
+    assert_script(
+        r#"
+local function F(...)
+	local Out = {}
+	for _, Value in { ... } do
+		table.insert(Out, string.format("%.17g", Value))
+	end
+	return table.concat(Out, " ")
+end
+local function Is(Got, Want)
+	assert(Got == Want, `got "{Got}", expected "{Want}"`)
+end
+Is(F(CFrame.new(1, 2, 3, 1, 2, 3, 4):GetComponents()), "1 2 3 0.13333332538604736 -0.66666668653488159 0.7333332896232605 0.93333333730697632 0.33333331346511841 0.13333335518836975 -0.33333331346511841 0.66666662693023682 0.66666668653488159")
+Is(F(CFrame.new(1, 2, 3, 0, 0, 1, 1):GetComponents()), "1 2 3 5.9604644775390625e-08 -0.99999994039535522 0 0.99999994039535522 5.9604644775390625e-08 0 0 0 1")
+-- a unit quaternion is made unit again: 90 degrees about Z reads a float step past 1
+Is(F(CFrame.new(1, 2, 3, 0, 0, 0.70710676908493042, 0.70710676908493042):GetComponents()), "1 2 3 -1.1920928955078125e-07 -1.0000001192092896 0 1.0000001192092896 -1.1920928955078125e-07 0 0 0 1")
+Is(F(CFrame.new(1, 2, 3, -0, -0, -0.70710676908493042, -0.70710676908493042):GetComponents()), "1 2 3 -1.1920928955078125e-07 -1.0000001192092896 0 1.0000001192092896 -1.1920928955078125e-07 0 0 0 1")
+Is(F(CFrame.new(90.521240234375, -85.29052734375, 24.566650390625, -0.2734495997428894, 0.62109988927841187, -0.66557836532592773, -0.3105892539024353):GetComponents()), "90.521240234375 -85.29052734375 24.566650390625 -0.65751934051513672 -0.75312197208404541 -0.021809607744216919 0.073763936758041382 -0.035538434982299805 -0.99664229154586792 0.74981820583343506 -0.65692025423049927 0.078920483589172363")
+-- a squared length past the float range scales the quaternion to zero: the identity
+Is(F(CFrame.new(0, 0, 0, -6.2588892878193584e+29, 2.3618013992074302e+28, 2.2817638041885361e+29, -7.4541315783132245e+29):GetComponents()), "0 0 0 1 0 -0 -0 1 0 0 0 1")
+-- a zero quaternion: not-a-number
+local Zero = { CFrame.new(1, 2, 3, 0, 0, 0, 0):GetComponents() }
+Is(F(Zero[1], Zero[2], Zero[3]), "1 2 3")
+for Index = 4, 12 do
+	assert(Zero[Index] ~= Zero[Index], `component {Index} is {Zero[Index]}`)
+end
+"#,
+    );
+}
+
 /// Every CFrame constructor, member, method, deprecated alias and operator gives the same bits run after run
 /// (cframe_golden/ops.txt, printed with %.17g), and a misuse gives the same error text. Three misuse texts differ
 /// from the build before CFrame took and returned native vectors itself: a table where a Vector3 is expected names
