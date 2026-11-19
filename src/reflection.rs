@@ -341,7 +341,7 @@ const EVENT_SUPPLEMENT: &[(&str, &[&str])] = &[
 const METHOD_SUPPLEMENT: &[(&str, &[&str])] = &[(
     "UserGameSettings",
     &[
-        "GetCameraYInvert",
+        "GetCameraYInvertValue",
         "GetOnboardingCompleted",
         "InFullScreen",
         "InStudioMode",
