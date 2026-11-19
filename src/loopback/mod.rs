@@ -220,7 +220,7 @@ pub fn join(client_lua: &Lua, client: &Rc<Engine>) -> Result<(), String> {
     // (instance streaming is not emulated: the client gets the whole Workspace, said once)
     let streaming = server.reflection.name_id("StreamingEnabled").is_some_and(|name| server.state.borrow().dom.boolean(server.world().workspace, name) == Some(true));
     if streaming {
-        client.state.borrow_mut().output.missing("Workspace", "StreamingEnabled (a loopback client gets the whole Workspace)");
+        client.missing(None, "Workspace", "StreamingEnabled (a loopback client gets the whole Workspace)");
     }
     crate::lua::globals::join_local_player(client);
     bridge.joined.set(true);

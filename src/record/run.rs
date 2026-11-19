@@ -560,9 +560,14 @@ pub(crate) fn record_done(emulator: &Emulator, args: &RecordArgs, host: &Host, r
         let line = format!("{}: record {}; {} frames; not written: {}", host.name, ran.status, ran.frames + 1, crate::watchdog::CALLER_GONE);
         return Ok(Done { summary: Json::Object(extra), line, checkpoint: ran.checkpoint, split: ran.split, framed: ran.framed, code: ran.code, unpreparable: ran.unchecked.clone(), output: None });
     }
+    let unemulated = unemulated(engine);
+    let used = unemulated_count(&unemulated);
+    if let Some(list) = unemulated {
+        extra.insert("unemulated".into(), list);
+    }
     let summary = crate::timing::time("write", || recorder.write(engine, &out, extra))?;
     let line = format!(
-        "{}: record {}; {} frames; {} instances; {} errors; {:.2}s -> {}",
+        "{}: record {}; {} frames; {} instances; {} errors{used}; {:.2}s -> {}",
         host.name,
         ran.status,
         ran.frames + 1,
@@ -600,7 +605,9 @@ pub(crate) fn run_done(emulator: &Emulator, args: &RecordArgs, host: &Host, ran:
         errors += spool.errors();
         lines += spool.lines();
     }
-    let line = format!("{}: run {}; {} frames; {lines} output lines; {errors} errors; {:.2}s", host.name, ran.status, ran.frames + 1, started.elapsed().as_secs_f64());
+    let unemulated = unemulated(engine);
+    let used = unemulated_count(&unemulated);
+    let line = format!("{}: run {}; {} frames; {lines} output lines; {errors} errors{used}; {:.2}s", host.name, ran.status, ran.frames + 1, started.elapsed().as_secs_f64());
     let mut summary = json!({
         "status": ran.status,
         "harness": ran.harness.to_string_lossy(),
@@ -614,6 +621,9 @@ pub(crate) fn run_done(emulator: &Emulator, args: &RecordArgs, host: &Host, ran:
     if let Some(failure) = ran.failure {
         summary["failure"] = json!(failure);
     }
+    if let Some(list) = unemulated {
+        summary["unemulated"] = list;
+    }
     if ran.done {
         summary["done"] = json!(true);
     }
@@ -626,6 +636,24 @@ pub(crate) fn run_done(emulator: &Emulator, args: &RecordArgs, host: &Host, ran:
     }
     let output = spooled.map(|spool| spool.finish()).transpose()?;
     Ok(Done { summary, line, checkpoint: ran.checkpoint, split: ran.split, framed: ran.framed, code: ran.code, unpreparable: ran.unchecked.clone(), output })
+}
+
+/// A summary's `unemulated` list (crate::output::unemulated): the members the run's scripts used that the engine does not
+/// emulate, a loopback client's beside its server's. None (the key left out) when they used none.
+fn unemulated(engine: &Rc<crate::Engine>) -> Option<Json> {
+    let mut sides = vec![engine.state.borrow().output.unemulated()];
+    if let Some((_, server)) = engine.peer_server() {
+        sides.push(server.state.borrow().output.unemulated());
+    }
+    crate::output::unemulated(&sides)
+}
+
+/// The status line's count of [`unemulated`] members (`; 2 unemulated`), empty when there are none.
+fn unemulated_count(list: &Option<Json>) -> String {
+    match list.as_ref().and_then(Json::as_array) {
+        Some(list) => format!("; {} unemulated", list.len()),
+        None => String::new(),
+    }
 }
 
 /// `ree serve --warm [engine options, --assets-at, --assets]`: what a first recording of the project

@@ -942,6 +942,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A served job's summary lists the unemulated members its harness used, as the command's does, and its status line
+    /// counts them; a run and a recording alike (`ree run --service`, `ree record --service`).
+    #[test]
+    fn a_served_job_lists_the_unemulated_members() {
+        let root = std::env::temp_dir().join(format!("ree-serve-unemulated-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let harness = root.join("Hurt.luau");
+        std::fs::write(&harness, "return function(Context)\n\tlocal Humanoid = Instance.new(\"Humanoid\")\n\tHumanoid:TakeDamage(5)\n\tHumanoid:TakeDamage(5)\nend\n").unwrap();
+        let expected = serde_json::json!([{ "member": "Humanoid.TakeDamage", "count": 2, "first": "ReplicatedStorage.RURFixtures.Hurt:3" }]);
+        for command in ["run", "record"] {
+            let mut args: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.join("none").to_string_lossy(), "--seconds", "0.2"].iter().map(|s| s.to_string()).collect();
+            if command == "record" {
+                args.extend(["--out".to_string(), root.join("out").to_string_lossy().into_owned()]);
+            }
+            let (reply, emulator) = job(command, &args);
+            drop(emulator);
+            assert_eq!(reply["code"], 0, "{reply}");
+            let summary: serde_json::Value = serde_json::from_str(reply["stdout"].as_str().unwrap().trim()).unwrap();
+            assert_eq!(summary["unemulated"], expected, "{command}: {summary}");
+            assert!(reply["stderr"].as_str().unwrap().contains(" errors; 1 unemulated; "), "{reply}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A job whose harness fails replies exit 1 with the summary the command prints (the client exits with the reply's
     /// code), a run and a recording alike; a clean job of the same worker still replies 0.
     #[test]

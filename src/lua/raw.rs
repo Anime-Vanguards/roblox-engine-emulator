@@ -116,6 +116,9 @@ enum Read {
 enum Write {
     /// A writable reflected property without a setter (property index)
     Plain(u32),
+    /// A [`Write::Plain`] property a client does more for than store, which is not emulated: a write that changes it reports
+    /// that (lua/instance.rs unemulated_write)
+    Watched(u32),
     Parent,
     Name,
     Slow,
@@ -242,6 +245,7 @@ fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
                 }
             } else {
                 match property {
+                    Some(index) if !reflection.property(index).read_only && linstance::unemulated_write(engine, class, name) => Write::Watched(index),
                     Some(index) if !reflection.property(index).read_only => Write::Plain(index),
                     _ => Write::Slow,
                 }
@@ -1335,7 +1339,7 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
         let member = api.member(class, name);
         let kind = ffi::lua_type(state, 3);
         match member.write {
-            Write::Plain(property) => {
+            Write::Plain(property) | Write::Watched(property) => {
                 let info = engine.reflection.property(property);
                 let value = match (info.script_type, kind) {
                     (ScriptType::Number, ffi::LUA_TNUMBER) => {
@@ -1368,7 +1372,10 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
                         None => return Out::Slow,
                     },
                 };
-                linstance::script_set_property(engine, id, member.name, value);
+                let changed = linstance::script_set_property(engine, id, member.name, value);
+                if changed && matches!(member.write, Write::Watched(_)) {
+                    linstance::report_unemulated_write(engine, id, member.name, || super::script_position_on(state));
+                }
                 Out::Ret(0)
             }
             Write::Parent => {

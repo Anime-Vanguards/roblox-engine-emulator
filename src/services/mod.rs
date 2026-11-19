@@ -264,6 +264,15 @@ fn constant(value: impl Fn(&Lua) -> LuaResult<LuaValue> + 'static) -> MethodFn {
     Rc::new(move |lua, _, _, _| Ok(values([value(lua)?])))
 }
 
+/// A method that does nothing here where a client does something a script can see: each call reports `class`.`member` as not
+/// emulated (Output `missing`, Engine::missing) and returns nothing, so the script runs on.
+fn unemulated(class: &'static str, member: &'static str) -> MethodFn {
+    Rc::new(move |lua, engine, _, _| {
+        engine.missing(Some(lua), class, member);
+        Ok(none())
+    })
+}
+
 fn string_value(lua: &Lua, text: &str) -> LuaResult<LuaValue> {
     Ok(LuaValue::String(lua.create_string(text)?))
 }
@@ -434,6 +443,7 @@ pub fn install(engine: &Rc<Engine>) {
                 Ok(instance_value(lua, engine, service)?)
             }));
         }
+        // (its function runs when the server shuts down, which no run reaches: Roblox's DataModel documentation)
         behaviors.add_method(data_model, K::BindToClose as NameId, method(|_, _, _, _| Ok(none())));
         behaviors.add_method(data_model, K::GetJobsInfo as NameId, constant(|lua| Ok(LuaValue::Table(lua.create_table()?))));
         let place_id = options.place_id;
@@ -792,9 +802,17 @@ pub fn install(engine: &Rc<Engine>) {
                 behaviors.add_method(gui, n, constant(|_| Ok(LuaValue::Boolean(false))));
             }
         }
-        for member in ["CloseInspectMenu", "SetEmotesMenuOpen", "Select", "AddSelectionParent", "RemoveSelectionGroup"] {
+        // (no inspect menu opens without a GUI layer, so there is none to close, and no selection group to remove but one
+        // AddSelectionParent made, which reports itself)
+        for member in ["CloseInspectMenu", "RemoveSelectionGroup"] {
             if let Some(n) = name(&reflection, member) {
                 behaviors.add_method(gui, n, method(|_, _, _, _| Ok(none())));
+            }
+        }
+        // (not kept: GetEmotesMenuOpen stays false, SelectedObject unset)
+        for member in ["SetEmotesMenuOpen", "Select", "AddSelectionParent"] {
+            if let Some(n) = name(&reflection, member) {
+                behaviors.add_method(gui, n, unemulated("GuiService", member));
             }
         }
     }
@@ -865,9 +883,10 @@ pub fn install(engine: &Rc<Engine>) {
 
     // StarterGui / ContextActionService / Debris / Sound
     if let Some(starter) = class(&reflection, "StarterGui") {
+        // (Roblox's own UI is not emulated: GetCore and GetCoreGuiEnabled keep their first answers)
         for member in ["SetCore", "SetCoreGuiEnabled"] {
             if let Some(n) = name(&reflection, member) {
-                behaviors.add_method(starter, n, method(|_, _, _, _| Ok(none())));
+                behaviors.add_method(starter, n, unemulated("StarterGui", member));
             }
         }
         if let Some(n) = name(&reflection, "GetCore") {
@@ -882,7 +901,14 @@ pub fn install(engine: &Rc<Engine>) {
         }
     }
     if let Some(actions) = class(&reflection, "ContextActionService") {
-        for member in ["BindAction", "BindActionAtPriority", "UnbindAction", "UnbindAllActions", "SetTitle", "SetImage", "SetDescription", "SetPosition", "BindActivate", "UnbindActivate"] {
+        // Without an input layer no binding is kept (GetBoundActionInfo answers none), so a bind and a binding's touch button
+        // settings report themselves, and an unbind has nothing to remove
+        for member in ["BindAction", "BindActionAtPriority", "SetTitle", "SetImage", "SetDescription", "SetPosition", "BindActivate"] {
+            if let Some(n) = name(&reflection, member) {
+                behaviors.add_method(actions, n, unemulated("ContextActionService", member));
+            }
+        }
+        for member in ["UnbindAction", "UnbindAllActions", "UnbindActivate"] {
             if let Some(n) = name(&reflection, member) {
                 behaviors.add_method(actions, n, method(|_, _, _, _| Ok(none())));
             }
@@ -957,10 +983,11 @@ pub fn install(engine: &Rc<Engine>) {
         }));
     }
 
-    // Remotes never reach a server offline; Bindables fire locally
+    // Remotes never reach a server offline (a client run's: a server run's and a loopback run's are their own), so FireServer
+    // reports itself; Bindables fire locally
     for remote in ["RemoteEvent", "UnreliableRemoteEvent"] {
         if let (Some(c), Some(n)) = (class(&reflection, remote), name(&reflection, "FireServer")) {
-            behaviors.add_method(c, n, method(|_, _, _, _| Ok(none())));
+            behaviors.add_method(c, n, unemulated(remote, "FireServer"));
         }
     }
     if let Some(bindable) = class(&reflection, "BindableEvent") {
@@ -1147,9 +1174,10 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
         }
     }
     if let Some(text_box) = class(&reflection, "TextBox") {
+        // (focus is the input layer's: without one, nothing takes it)
         for member in ["CaptureFocus", "ReleaseFocus"] {
             if let Some(name) = n(member) {
-                behaviors.add_method(text_box, name, method(|_, _, _, _| Ok(none())));
+                behaviors.add_method(text_box, name, unemulated("TextBox", member));
             }
         }
         if let Some(name) = n("IsFocused") {

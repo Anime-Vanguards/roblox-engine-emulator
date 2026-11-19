@@ -128,6 +128,20 @@ Options accept `--key value` or `--key=value` (required for negative numbers).
 - **Asset bundles:** `--assets-at <Service.Path>` and `--assets <prefix>,...` (or `*` for all) configure manifest bundle mounting, overriding `rur.json`'s `modelAssets` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
   Bundles are fetched by the external worker named by `REE_ASSET_WORKER` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
 
+## The summary
+
+`ree run` prints its summary as JSON on stdout (`ree record` too, and writes it as `summary.json`), and a one-line `ree: run ...` / `ree: record ...` status on stderr. Through `--service` the summary is the same.
+
+- `status` (`ok`, `yielded`, `error`), `failure` (how it failed), `harness`, `mode`, `frames`, `fps`, `duration`, and `errors`: the output lines of kind `error`.
+- `output` (`ree run`; a recording's lines are in `events.json`): every line in the order written, `{kind, message, time[, trace][, side]}`. Kinds: `print`, `info`, `warn`, `error`, and `missing`.
+- **Unemulated members:** a member a script uses that `ree` does not emulate (a method nothing implements, such as `Humanoid:TakeDamage`; a stub that would otherwise do nothing; what a client does beside a write, such as the `Humanoid.Died` a `Health` write of 0 fires) still returns what it did, usually nothing, and reports itself ([engine.md](engine.md#design-principles)). Its first use writes an output line of kind `missing` (`Humanoid.TakeDamage is not emulated`, its `trace` the script position), which LogService never sees and `errors` doesn't count. The summary's `unemulated` lists every member used, most used first, then by name:
+
+  ```json
+  "unemulated": [{ "member": "Humanoid.TakeDamage", "count": 3, "first": "ReplicatedStorage.RURFixtures.Probe:8" }]
+  ```
+
+  `member` and `count` are the fields roblox-ui-renderer's scene diagnostics list too; `first` is where a script first used it (`<script path>:<line>`, the script's path in the DataModel, as error positions name it), or `null` when the engine itself did (a tween's step). A loopback run lists both sides' uses together. The key is left out when nothing unemulated was used, and the status line then reads as before; otherwise it adds `; N unemulated` after the errors. A test runner can fail or warn on the key's presence.
+
 ## Exit codes
 
 `ree run` and `ree record` exit with:

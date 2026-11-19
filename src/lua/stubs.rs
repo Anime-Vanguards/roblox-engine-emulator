@@ -247,8 +247,8 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Missing",
-        lua.create_function(move |_, (class_name, member): (String, String)| {
-            e.state.borrow_mut().output.missing(&class_name, &member);
+        lua.create_function(move |lua, (class_name, member): (String, String)| {
+            e.missing(Some(lua), &class_name, &member);
             Ok(())
         })?,
     )?;

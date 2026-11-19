@@ -71,8 +71,11 @@ impl Entry {
 pub struct Output {
     pub entries: Vec<Entry>,
     pub verbose: bool,
-    /// `Class.Member` of unemulated methods scripts called, with call counts (first-call order)
+    /// `Class.Member` of unemulated members scripts used, with use counts (first-use order)
     pub missing: Vec<(String, u64)>,
+    /// Beside each of `missing`: where a script first used it (`<chunk>:<line>`, the chunk the script's path in the
+    /// DataModel; none when no script's Luau was running) and the virtual time it did
+    pub missing_first: Vec<(Option<String>, f64)>,
     missing_index: FxHashMap<String, usize>,
     /// Where lines go instead of `entries` while one is set ([`Output::spool`])
     spool: Option<Box<Spool>>,
@@ -108,7 +111,11 @@ impl Output {
                 diagnostic(trace);
             }
         }
-        let entry = Entry { kind, message, time, trace, side: self.side };
+        self.deliver(Entry { kind, message, time, trace, side: self.side });
+    }
+
+    /// Keeps a line: in a loopback server's, in the client's list
+    fn deliver(&mut self, entry: Entry) {
         if let Some(client) = self.forward.as_ref().and_then(|forward| forward.0.upgrade()) {
             // (the client's own list is never borrowed while the server runs: the pair steps one side at a time)
             if let Ok(mut state) = client.state.try_borrow_mut() {
@@ -156,8 +163,11 @@ impl Output {
         self.spool.take()
     }
 
-    /// Output.Missing: an unemulated member was used.
-    pub fn missing(&mut self, class: &str, member: &str) {
+    /// Output.Missing: an unemulated member was used, at virtual time `time`. Its first use writes a line of kind `missing`
+    /// (`<Class.Member> is not emulated`, its trace where the script used it: `at`, asked then only); every use counts.
+    /// Hosts call [`crate::Engine::missing`], which finds the script's position. The line is not one a script logged:
+    /// LogService (MessageOut, GetLogHistory) never gets it.
+    pub fn missing(&mut self, class: &str, member: &str, time: f64, at: impl FnOnce() -> Option<String>) {
         let key = format!("{class}.{member}");
         if let Some(&index) = self.missing_index.get(&key) {
             self.missing[index].1 += 1;
@@ -166,9 +176,56 @@ impl Output {
         if self.verbose {
             diagnostic(&format!("[stub] {key} is not emulated; returned nil"));
         }
+        let at = at();
         self.missing_index.insert(key.clone(), self.missing.len());
+        self.missing_first.push((at.clone(), time));
+        let message = format!("{key} is not emulated");
         self.missing.push((key, 1));
+        // (the verbose line above stands for it: hosts' recorded verbose output keeps that one)
+        self.deliver(Entry { kind: MISSING, message, time, trace: at, side: self.side });
     }
+
+    /// The unemulated members used, as `ree run` and `ree record` summaries list them ([`unemulated`]).
+    pub fn unemulated(&self) -> Vec<Unemulated> {
+        self.missing.iter().zip(&self.missing_first).map(|((member, count), (at, time))| Unemulated { member: member.clone(), count: *count, first: at.clone(), time: *time }).collect()
+    }
+}
+
+/// The kind of an [`Output::missing`] line
+pub const MISSING: &str = "missing";
+
+/// An unemulated member a run used: how many times, and where and when a script first did ([`Output::missing`])
+#[derive(Clone, Debug, PartialEq)]
+pub struct Unemulated {
+    pub member: String,
+    pub count: u64,
+    pub first: Option<String>,
+    pub time: f64,
+}
+
+/// A summary's `unemulated` list from the members each side used (one list; a loopback run's two sides' merged: counts summed,
+/// the earlier first use kept): `{member, count, first}` objects (`first`: `<script path>:<line>`, or null when no script's Luau
+/// was running), most used first, then by member. None when nothing was used: the key is left out.
+pub fn unemulated(sides: &[Vec<Unemulated>]) -> Option<serde_json::Value> {
+    let mut merged: Vec<Unemulated> = Vec::new();
+    for side in sides {
+        for entry in side {
+            match merged.iter_mut().find(|known| known.member == entry.member) {
+                Some(known) => {
+                    known.count += entry.count;
+                    if entry.time < known.time {
+                        (known.first, known.time) = (entry.first.clone(), entry.time);
+                    }
+                }
+                None => merged.push(entry.clone()),
+            }
+        }
+    }
+    if merged.is_empty() {
+        return None;
+    }
+    merged.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.member.cmp(&b.member)));
+    Some(serde_json::Value::Array(merged.into_iter().map(|entry| serde_json::json!({ "member": entry.member, "count": entry.count, "first": entry.first })).collect()))
 }
 
 /// Output lines written to a temporary file as they come, each as [`Entry::json`] with commas between:

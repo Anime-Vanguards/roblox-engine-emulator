@@ -68,6 +68,8 @@ mod loading_tests;
 #[cfg(test)]
 mod rojo_tests;
 #[cfg(test)]
+mod unemulated_tests;
+#[cfg(test)]
 mod luau_profile_tests;
 #[cfg(test)]
 mod profiler_tests;
@@ -890,6 +892,20 @@ impl Engine {
 
     pub fn warn(&self, message: impl Into<String>) {
         self.output("warn", message, None);
+    }
+
+    /// A script used `class`.`member`, which the engine does not emulate: counted, and its first use written as an Output line
+    /// of kind `missing` with where the script used it, read from `lua`'s running stack ([`output::Output::missing`]). `lua`:
+    /// the VM of the callback the script called into (none for a use the engine itself makes, which names no position).
+    pub fn missing(&self, lua: Option<&mlua::Lua>, class: &str, member: &str) {
+        self.missing_where(class, member, || lua.and_then(crate::lua::script_position));
+    }
+
+    /// [`Engine::missing`] with the script's position found by `at` (asked for the member's first use only).
+    pub fn missing_where(&self, class: &str, member: &str, at: impl FnOnce() -> Option<String>) {
+        let mut state = self.state.borrow_mut();
+        let now = state.sched.now;
+        state.output.missing(class, member, now, at);
     }
 
     pub fn class_id(&self, name: &str) -> Option<ClassId> {

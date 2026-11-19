@@ -105,27 +105,27 @@ Method("Players", "GetNameFromUserIdAsync", function(_, UserId)
 	if UnknownUserIds[UserId] then
 		error("Players:GetUserIdFromNameAsync() failed: Unknown user", 0)
 	end
-	return `User{UserId}`
+	Missing("Players", "GetNameFromUserIdAsync") return `User{UserId}` -- (an account's name is the web's: a stand-in)
 end)
-local function HumanoidDescription()
-	return Create("HumanoidDescription")
+local function HumanoidDescription(Name) -- (an avatar is the web's: a default description stands in, and says so)
+	return function() Missing("Players", Name) return Create("HumanoidDescription") end
 end
-Method("Players", "GetHumanoidDescriptionFromUserId", HumanoidDescription)
-Method("Players", "GetHumanoidDescriptionFromUserIdAsync", HumanoidDescription)
-Method("Players", "GetHumanoidDescriptionFromOutfitId", HumanoidDescription)
-Method("Players", "GetHumanoidDescriptionFromOutfitIdAsync", HumanoidDescription)
+Method("Players", "GetHumanoidDescriptionFromUserId", HumanoidDescription("GetHumanoidDescriptionFromUserId"))
+Method("Players", "GetHumanoidDescriptionFromUserIdAsync", HumanoidDescription("GetHumanoidDescriptionFromUserIdAsync"))
+Method("Players", "GetHumanoidDescriptionFromOutfitId", HumanoidDescription("GetHumanoidDescriptionFromOutfitId"))
+Method("Players", "GetHumanoidDescriptionFromOutfitIdAsync", HumanoidDescription("GetHumanoidDescriptionFromOutfitIdAsync"))
 Method("Players", "GetFriendsAsync", function()
 	return EmptyPages()
 end)
--- A bare R15-less rig: a Model holding a Humanoid (no meshes offline).
-local function HumanoidModel()
-	local Model = Create("Model")
+-- A bare R15-less rig: a Model holding a Humanoid (no meshes offline), a stand-in that reports itself.
+local function HumanoidModel(Name)
+	Missing("Players", Name) local Model = Create("Model")
 	local Humanoid = Create("Humanoid")
 	R.SetParent(Humanoid, Model)
 	return Model
 end
 for _, Name in { "CreateHumanoidModelFromDescription", "CreateHumanoidModelFromDescriptionAsync", "CreateHumanoidModelFromUserId", "CreateHumanoidModelFromUserIdAsync" } do
-	Method("Players", Name, HumanoidModel)
+	Method("Players", Name, function() return HumanoidModel(Name) end)
 end
 
 -- UserService / TextChatService (offline: other users exist and may chat)
@@ -433,11 +433,11 @@ end)
 Method("Humanoid", "GetStateEnabled", function(Self, State)
 	return Extra(Self)[`_state:{tostring(State)}`] ~= false
 end)
-Method("Humanoid", "GetState", function()
-	return EnumItem("HumanoidStateType", "None")
+Method("Humanoid", "GetState", function() -- (ree has no Humanoid state machine and simulates no character: these report themselves)
+	Missing("Humanoid", "GetState") return EnumItem("HumanoidStateType", "None")
 end)
 for _, Name in { "ChangeState", "MoveTo", "Move", "ApplyDescription", "ApplyDescriptionAsync", "ApplyDescriptionReset", "BuildRigFromAttachments" } do
-	Method("Humanoid", Name, function() end)
+	Method("Humanoid", Name, function() Missing("Humanoid", Name) end)
 end
 Method("Humanoid", "GetAccessories", function(Self)
 	local Result = {}
@@ -449,7 +449,7 @@ Method("Humanoid", "GetAccessories", function(Self)
 	return Result
 end)
 Method("Humanoid", "GetAppliedDescription", function()
-	return Create("HumanoidDescription")
+	Missing("Humanoid", "GetAppliedDescription") return Create("HumanoidDescription")
 end)
 
 -- Path2D: its control points, their errors and the curve queries are the engine's (path2d.rs), where a host's
@@ -989,9 +989,9 @@ end)
 Method("Player", "HasAppearanceLoaded", function()
 	return true
 end)
--- Character control without a character (Roblox's ControlModule binds Move at load)
+-- Character control without a character (Roblox's ControlModule binds Move at load). Move walks the player's character (Roblox's Player documentation), so without one it does nothing, as in a client; RequestStreamAroundAsync asks for what a run holds whole already (no instance streaming); the rest are not emulated
 for _, Name in { "Kick", "Move", "LoadCharacter", "LoadCharacterAsync", "RequestStreamAroundAsync" } do
-	Method("Player", Name, function() end)
+	Method("Player", Name, function(Self) if Name == "RequestStreamAroundAsync" or (Name == "Move" and RawGet(Self, "Character") == nil) then return end Missing("Player", Name) end)
 end
 Method("Player", "DistanceFromCharacter", function()
 	return 0
@@ -1171,10 +1171,10 @@ for _, Name in { "UserOwnsGamePassAsync", "PlayerOwnsAsset", "PlayerOwnsBundle" 
 	end)
 end
 Method("MarketplaceService", "GetDeveloperProductsAsync", function()
-	return EmptyPages()
+	Missing("MarketplaceService", "GetDeveloperProductsAsync") return EmptyPages()
 end)
 for _, Name in { "PromptPurchase", "PromptProductPurchase", "PromptGamePassPurchase", "PromptPremiumPurchase", "PromptSubscriptionPurchase", "PromptBundlePurchase" } do
-	Method("MarketplaceService", Name, function() end)
+	Method("MarketplaceService", Name, function() Missing("MarketplaceService", Name) end)
 end
 
 Method("PolicyService", "GetPolicyInfoForPlayerAsync", function()
@@ -1192,10 +1192,10 @@ Method("BadgeService", "UserHasBadgeAsync", function()
 	return false
 end)
 Method("BadgeService", "GetBadgeInfoAsync", function()
-	return { Name = "Badge", Description = "", IconImageId = 0, IsEnabled = true }
+	Missing("BadgeService", "GetBadgeInfoAsync") return { Name = "Badge", Description = "", IconImageId = 0, IsEnabled = true }
 end)
 Method("GroupService", "GetGroupInfoAsync", function(_, GroupId)
-	return { Name = `Group {GroupId}`, Id = GroupId, Owner = { Name = "Owner", Id = 1 }, EmblemUrl = "", Roles = {} }
+	Missing("GroupService", "GetGroupInfoAsync") return { Name = `Group {GroupId}`, Id = GroupId, Owner = { Name = "Owner", Id = 1 }, EmblemUrl = "", Roles = {} }
 end)
 Method("GroupService", "GetGroupsAsync", function()
 	return {}
@@ -1222,7 +1222,7 @@ end)
 Method("TeleportService", "GetTeleportSetting", function()
 	return nil
 end)
-Method("TeleportService", "SetTeleportSetting", function() end)
+Method("TeleportService", "SetTeleportSetting", function() Missing("TeleportService", "SetTeleportSetting") end) -- (not kept: GetTeleportSetting stays nil)
 -- UserGameSettings (UserSettings().GameSettings): a client whose settings are as they start
 for _, Name in { "GetOnboardingCompleted", "InFullScreen", "InStudioMode" } do
 	Method("UserGameSettings", Name, function()
@@ -1234,10 +1234,10 @@ Method("UserGameSettings", "GetCameraYInvertValue", function()
 	return 1
 end)
 for _, Name in { "SetCameraYInvertVisible", "SetGamepadCameraSensitivityVisible", "SetOnboardingCompleted" } do
-	Method("UserGameSettings", Name, function() end)
+	Method("UserGameSettings", Name, function() if Name == "SetOnboardingCompleted" then Missing("UserGameSettings", Name) end end) -- (the other two only show options in Roblox's own settings menu, which no script reads)
 end
 for _, Name in { "LogCustomEvent", "LogEconomyEvent", "LogProgressionEvent", "LogFunnelStepEvent", "LogOnboardingFunnelStepEvent" } do
-	Method("AnalyticsService", Name, function() end)
+	Method("AnalyticsService", Name, function() end) -- (the events go to the creator's analytics dashboard; nothing a script can read changes: Roblox's AnalyticsService documentation)
 end
 -- (SoundService:PlayLocalSound is Rust: engine::world reports the play)
 

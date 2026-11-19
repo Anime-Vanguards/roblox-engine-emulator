@@ -7160,6 +7160,8 @@ fn reflection_service_lists_the_dumps_classes_as_a_game_script_gets_them() {
         "print: errors Unable to cast bool to Dictionary",
         "print: errors attempt to modify a readonly table",
         "print: errors Expected ':' not '.' calling member function GetClasses",
+        // (the first use of an unemulated member writes its line, before the print it is an argument of)
+        "missing: ReflectedClass.Permits is not emulated",
         "print: Permits table nil nil",
     ];
     assert_eq!(output, expected);
@@ -8046,8 +8048,8 @@ fn engine_only_methods_raise_a_game_scripts_capability_error_in_every_run_contex
     }
 }
 
-/// What Studio 0.747's dump adds and ree does not emulate reports itself (Output `missing`) and answers nil; what the dump
-/// drops is no member any more.
+/// What Studio 0.747's dump adds and ree does not emulate reports itself (an Output line of kind `missing` at its first use)
+/// and answers nil; what the dump drops is no member any more.
 #[test]
 fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     let (lua, engine) = start();
@@ -8067,9 +8069,15 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     assert_eq!(
         output,
         [
+            "missing: CollectionService.GetCollections is not emulated",
             "print: ",
+            "missing: RunService.BindToSimulationParallel is not emulated",
             "print: ",
+            "missing: ParticleEmitter2D.Emit is not emulated",
+            "missing: ParticleEmitter2D.Clear is not emulated",
             "print: nil",
+            "missing: Sound.GetPlaybackState is not emulated",
+            "missing: TextDocument.ReadAsync is not emulated",
             "print: nil",
             "print: FeatureMatchingService true AvatarRules",
             "print: false LoadFromHumanoid is not a valid member of AnimationRigData \"AnimationRigData\"",

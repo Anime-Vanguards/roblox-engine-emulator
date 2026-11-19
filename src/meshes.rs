@@ -1524,7 +1524,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             }
         };
         if quads > 0 {
-            engine.state.borrow_mut().output.missing("EditableMesh", "BatchAdd of a four-vertex face");
+            engine.missing(Some(lua), "EditableMesh", "BatchAdd of a four-vertex face");
         }
         Ok(values([ids_value(lua, ids.into_iter())?]))
     }));
