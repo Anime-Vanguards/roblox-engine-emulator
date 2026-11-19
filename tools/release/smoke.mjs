@@ -101,8 +101,11 @@ function isRunning(pid) {
 	}
 }
 
-// Waits until none of the processes a check started is running. A worker can outlive the ree that started it by a
-// moment, and a running process holds its folder, which the check's cleanup needs. One deadline covers all of them.
+// Waits until none of these processes is running: a running process holds its folder, which a check's cleanup needs. One
+// deadline covers all of them. An id names its process only while that process runs: Windows soon gives an exited
+// process's id to another process, and this would wait as long as that one runs. So on Windows wait only for processes
+// known to be running when the wait starts (a service `serve --status` just listed); asset_worker.mjs knows its Windows
+// workers are gone by a file each holds open.
 export async function waitForProcesses(pids) {
 	const deadline = Date.now() + 10_000;
 	for (const pid of new Set(pids)) {

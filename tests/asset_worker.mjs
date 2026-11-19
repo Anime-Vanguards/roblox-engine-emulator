@@ -10,6 +10,7 @@ import path from "node:path";
 import http from "node:http";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { realPath } from "../tools/release/common.mjs";
 import { removeTestFolder, servedRun, startManualService, stopServices, waitForProcesses } from "../tools/release/smoke.mjs";
 
@@ -49,6 +50,11 @@ if (process.env.REE_WORKER_USES_HELPER === "1") {
 	const result = require("node:child_process").spawnSync("helper", [], { encoding: "utf8", env: helperEnv });
 	if (result.error || result.status !== 0 || !result.stdout.includes("helper ok")) throw new Error("helper failed");
 }
+// On Windows the worker holds a file open unshared for as long as it runs (libuv's UV_FS_O_EXLOCK, 0x10000000) and logs
+// its path: Windows refuses to delete the file until the process has exited, which its process id cannot tell
+// (waitForWorkers).
+const running = process.platform === "win32" && process.env.REE_WORKER_LOG ? process.env.REE_WORKER_LOG + "." + process.pid + ".running" : undefined;
+if (running) fs.openSync(running, fs.constants.O_CREAT | fs.constants.O_RDWR | 0x10000000);
 require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
 	const request = JSON.parse(line);
 	// The test roots are canonical, but the OS may report this executable through a link (macOS /var is /private/var),
@@ -58,6 +64,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 	const logged = {
 		...request,
 		pid: process.pid,
+		running,
 		worker: fs.realpathSync.native(worker),
 		cwd: process.cwd(),
 		workerEnv: process.env.REE_ASSET_WORKER,
@@ -152,7 +159,7 @@ function check(name, body) {
 			try {
 				await stopServices((args) => ree(root, args));
 				// the log exists only when a worker ran
-				if (fs.existsSync(env.REE_WORKER_LOG)) await waitForProcesses(requests().map((row) => row.pid));
+				if (fs.existsSync(env.REE_WORKER_LOG)) await waitForWorkers(requests());
 			} catch (error) {
 				console.error(`worker cleanup failed; files kept at ${root}: ${error.message}`);
 				if (passed) throw error;
@@ -161,6 +168,28 @@ function check(name, body) {
 			else console.error(`asset worker check failed; files kept at ${root}`);
 		}
 	});
+}
+
+// Waits until every worker that logged a request in `rows` has exited; one deadline covers all of them. ree stops each
+// worker before its job counts as done, but Windows soon gives an exited process's id to another process, and a wait on
+// that id lasted as long as the other process (CI runs failed with "process <id> did not stop" after a full 10 s). So on
+// Windows a worker is gone once the file it held open unshared (MOCK_WORKER) can be deleted; elsewhere ids are handed out
+// in turn and are not reused this soon, so a worker is gone once no process has its id.
+async function waitForWorkers(rows) {
+	if (!WINDOWS) return waitForProcesses(rows.map((row) => row.pid));
+	const deadline = Date.now() + 10_000;
+	for (const { pid, running } of rows) {
+		for (;;) {
+			try {
+				fs.rmSync(running, { force: true });
+				break;
+			} catch (error) {
+				if (error.code !== "EBUSY" && error.code !== "EPERM") throw error;
+				assert(Date.now() < deadline, `worker ${pid} did not stop (${running} is still held)`);
+				await sleep(50);
+			}
+		}
+	}
 }
 
 // Removes PATH from `env`. Windows spells it "Path" and a plain copy of the environment keeps that spelling.
