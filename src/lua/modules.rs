@@ -335,6 +335,45 @@ pub fn engine_compiler() -> Compiler {
     Compiler::new().set_optimization_level(2).set_disabled_builtins(["typeof"])
 }
 
+/// How many times this process compiled a chunk of the engine's own Luau ([`load_engine_luau`]): once per chunk
+static ENGINE_COMPILES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The engine's own Luau chunks compiled so far, by the address of their (compiled-in) source
+static ENGINE_BYTECODE: std::sync::Mutex<Vec<(usize, std::sync::Arc<[u8]>)>> = std::sync::Mutex::new(Vec::new());
+
+/// How many chunks of the engine's own Luau this process has compiled (each once: [`load_engine_luau`])
+pub fn engine_compiles() -> usize {
+    ENGINE_COMPILES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A chunk of the engine's own Luau (the prelude, services.luau, server.luau, vector3.luau: a compiled-in `source`) as a
+/// function named `name`, in `env` when given. Its bytecode is compiled once per process ([`engine_compiler`]) and every VM
+/// loads those bytes, which are what its own compile would have made (mlua compiles a text chunk with its compiler and loads
+/// the bytecode the same way), so a second engine in a process (a loopback run's peer, a service's next job) compiles none of
+/// it: the 137 KB of engine Luau took 8.7-9.0 ms to compile and 0.34-0.37 ms to load (docs/engine.md, Log 2026-11-19). The
+/// bytes stay in the long-lived heap (crate::alloc) for the process.
+pub fn load_engine_luau(lua: &Lua, source: &'static str, name: &str, env: Option<LuaTable>) -> LuaResult<LuaFunction> {
+    let key = source.as_ptr() as usize;
+    let kept = ENGINE_BYTECODE.lock().ok().and_then(|kept| kept.iter().find(|(at, _)| *at == key).map(|(_, bytecode)| bytecode.clone()));
+    let bytecode = match kept {
+        Some(bytecode) => bytecode,
+        None => {
+            let compiled = engine_compiler().compile(source)?;
+            ENGINE_COMPILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let bytecode: std::sync::Arc<[u8]> = crate::alloc::long_lived(|| std::sync::Arc::from(compiled.as_slice()));
+            if let Ok(mut kept) = ENGINE_BYTECODE.lock() {
+                crate::alloc::long_lived(|| kept.push((key, bytecode.clone())));
+            }
+            bytecode
+        }
+    };
+    let chunk = lua.load(&*bytecode).set_mode(mlua::chunk::ChunkMode::Binary).set_name(name);
+    match env {
+        Some(env) => chunk.set_environment(env).into_function(),
+        None => chunk.into_function(),
+    }
+}
+
 /// Determinism patch for vide's `values()` (modules.luau DeterministicSource): its output order
 /// followed table iteration over address-keyed scopes; scopes are put in creation order.
 pub fn deterministic_source<'a>(chunk_name: &str, source: &'a [u8]) -> std::borrow::Cow<'a, [u8]> {

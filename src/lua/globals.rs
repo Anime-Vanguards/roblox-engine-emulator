@@ -19,6 +19,7 @@ use crate::{
 };
 
 const PRELUDE: &str = include_str!("prelude.luau");
+const VECTOR3: &str = include_str!("vector3.luau");
 
 /// Services Engine.Start creates, in its order.
 const START_SERVICES: &[&str] = &[
@@ -323,7 +324,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "Vector3",
         crate::cost::engine_luau(
             lua,
-            lua.load(include_str!("vector3.luau")).set_name("=rur.vector3").set_compiler(modules::engine_compiler()).into_function()?,
+            modules::load_engine_luau(lua, VECTOR3, "=rur.vector3", None)?,
         )?,
     )?;
     r.set(
@@ -346,7 +347,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
 
     let roblox = lune_roblox::module(lua.clone())?;
-    let prelude = lua.load(PRELUDE).set_name("=rur.prelude").set_compiler(modules::engine_compiler()).into_function()?;
+    let prelude = modules::load_engine_luau(lua, PRELUDE, "=rur.prelude", None)?;
     let exports: LuaTable = crate::cost::engine_luau(lua, prelude)?.call((r, roblox))?;
     let prelude = Prelude {
         wrap: exports.get("Wrap")?,

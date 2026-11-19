@@ -298,7 +298,9 @@ next mount of the same scene. Tests use their own `BundleSource`, so none needs 
 ## Engine API (`src`)
 
 One `Rc<Engine>` per mounted project, owned next to its `mlua::Lua` (drop the Lua first, then
-`engine.teardown()`; `Emulator` does both). Everything is single-threaded; `Engine` is `!Send`.
+`engine.teardown()`; `Emulator` does both). Everything is single-threaded; `Engine` is `!Send`. The engine's own Luau
+(its prelude, services and Vector3 chunks) is compiled to bytecode once per process and every VM loads those bytes
+(`lua::modules::load_engine_luau`), so an engine started after the first one compiles none of it.
 
 ```
 lib.rs          Engine { reflection: Arc<Reflection>, options: Options, state: RefCell<State>,
