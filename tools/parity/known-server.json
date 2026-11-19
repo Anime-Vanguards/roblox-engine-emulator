@@ -293,134 +293,6 @@
 	],
 	"random": [
 		{
-			"line": "Random-draws seed 7 4132333490/0.01291674651990379 4132333490/0.01291674651990379 4132333491/0.01291674651990379 4132333491/0.01291674651990379 3752549829/0.4321572161309693 3752549829/0.4321572161309693 3752549830/0.4321572161309693 3752549830/0.4321572161309693 3752549830/0.4321572161309693 3752549830/0.4321572161309693",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-draws seed 42 2380307333/0.043722934373824372 2380307333/0.043722934373824372 2380307333/0.043722934373824372 2380307333/0.043722934373824372 948027834/0.92027372378942629 948027834/0.92027372378942629 948027835/0.92027372378942629 948027835/0.92027372378942629 948027835/0.92027372378942629 948027835/0.92027372378942629",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-draws seed -3 2824053520/0.3075650253415918 2824053520/0.3075650253415918 2824053520/0.3075650253415918 2824053520/0.3075650253415918 1011670906/0.32381286642224644 1011670906/0.32381286642224644 1011670907/0.32381286642224644 1011670907/0.32381286642224644 1011670907/0.32381286642224644 1011670907/0.32381286642224644",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-draws seed 123456789 3558971760/0.54501621941221901 3558971760/0.54501621941221901 3558971761/0.54501621941221901 3558971761/0.54501621941221901 708845995/0.13056711073615965 708845995/0.13056711073615965 708845996/0.13056711073615965 708845996/0.13056711073615965 708845996/0.13056711073615965 708845996/0.13056711073615965",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 4294967294 2368484154 3752549829 948027834 1011670906 4073494817 15958245 4282696696 787871944 118902011 978767368 2234138946 3493790256 2998651075 229947275 403081268 679518992 1779763446 134213758 650025628 2855438548",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 4294967295 2368484155 3752549830 948027835 1011670907 4073494818 15958246 4282696697 787871945 118902012 978767369 2234138947 3493790257 2998651076 229947276 403081269 679518993 1779763447 134213759 650025629 2855438549",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 4294967297 2368484156 3752549831 948027835 1011670907 4073494819 15958246 4282696698 787871945 118902012 978767369 2234138948 3493790258 2998651077 229947276 403081269 679518993 1779763447 134213759 650025629 2855438550",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 8589934589 4736968308 7505099658 1896055669 2023341813 8146989634 31916491 8565393392 1575743889 237804023 1957534737 4468277892 6987580512 5997302150 459894551 806162537 1359037985 3559526893 268427517 1300051257 5710877096",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 8589934590 4736968309 7505099659 1896055669 2023341813 8146989635 31916491 8565393393 1575743889 237804023 1957534737 4468277893 6987580513 5997302151 459894551 806162537 1359037985 3559526893 268427517 1300051257 5710877097",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 8589934591 4736968311 7505099661 1896055671 2023341815 8146989637 31916493 8565393394 1575743890 237804024 1957534738 4468277895 6987580515 5997302153 459894552 806162538 1359037987 3559526894 268427518 1300051259 5710877098",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 8589934593 4736968312 7505099662 1896055671 2023341815 8146989638 31916493 8565393395 1575743890 237804024 1957534738 4468277896 6987580516 5997302154 459894552 806162538 1359037987 3559526894 268427518 1300051259 5710877099",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 2199023255549 1212663887758 1921305513449 485390251802 517975504718 2085629347304 8170622250 2192740708974 403390435942 60877830335 501128893026 1143879141137 1788820611994 1535309351287 117733005552 206377609727 347913724771 911238885080 68717444859 332813122492 1461984537333",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 2199023255550 1212663887759 1921305513450 485390251802 517975504718 2085629347305 8170622250 2192740708975 403390435942 60877830335 501128893026 1143879141138 1788820611995 1535309351288 117733005552 206377609727 347913724771 911238885080 68717444859 332813122492 1461984537334",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 2199023255551 1212663887760 1921305513452 485390251803 517975504720 2085629347307 8170622252 2192740708976 403390435944 60877830336 501128893027 1143879141140 1788820611997 1535309351290 117733005554 206377609728 347913724772 911238885081 68717444860 332813122493 1461984537336",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 2199023255553 1212663887761 1921305513453 485390251803 517975504720 2085629347308 8170622252 2192740708977 403390435944 60877830336 501128893027 1143879141141 1788820611998 1535309351291 117733005554 206377609728 347913724772 911238885081 68717444860 332813122493 1461984537337",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 2199023256552 1212663888312 1921305514326 485390252023 517975504955 2085629348256 8170622255 2192740709974 403390436127 60877830363 501128893255 1143879141660 1788820612811 1535309351988 117733005607 206377609821 347913724930 911238885495 68717444891 332813122644 1461984538001",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 1000000012345 551455697281 873708603271 220729933877 235547991502 948434432327 3715568869 997143040897 183440734382 27684032414 227887039370 520176015589 813461444558 698177868909 53538773047 93849672464 158212846629 414383474130 31249076394 151345887662 664833603597",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 1000000000000077 551455690474949 873708592486200 220729931153887 235547988595813 948434420619293 3715568824263 997143028588017 183440732118514 27684032073452 227887036557004 520176009167952 813461434516936 698177860290729 53538772387799 93849671306308 158212844677488 414383469015546 31249076010003 151345885794374 664833595390754",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 4503599627370496 2483535642134132 3934833691550950 994079235694089 1060813833667898 4271368903286072 16733434372422 4490732971983735 826143612813451 124677796530107 1026311972920615 2342664481055683 3663504613370460 3144313551443417 241117195375553 422661344723904 712527308334711 1866217236646762 140733327074319 681601274867551 2994144332464956",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 9007199254740990 4967071284268263 7869667383101899 1988158471388177 2121627667335794 8542737806572143 33466868744843 8981465943967468 1652287225626902 249355593060213 2052623945841229 4685328962111364 7327009226740918 6288627102886832 482234390751104 845322689447807 1425054616669422 3732434473293523 281466654148637 1363202549735101 5988288664929912",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 9007199254740991 4967071284268265 7869667383101900 1988158471388179 2121627667335796 8542737806572145 33466868744845 8981465943967470 1652287225626903 249355593060215 2052623945841230 4685328962111366 7327009226740920 6288627102886834 482234390751106 845322689447808 1425054616669423 3732434473293525 281466654148638 1363202549735103 5988288664929913",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide -2147483648 2147483647 221000507 1605066182 -1199455813 -1135812741 1926011170 -2131525402 2135213049 -1359611703 -2028581636 -1168716279 86655299 1346306609 851167428 -1917536372 -1744402379 -1467964655 -367720201 -2013269889 -1497458019 707954901",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide -1099511627779 1099511628777 113152260535 821793886551 -614121375755 -581536122823 986117720481 -1091341005524 1093229082199 -696121191651 -1038633797416 -598382734523 44367513883 689308985035 435797724212 -981778622172 -893134017957 -751597902848 -188272742282 -1030794182888 -766698505134 362472910225",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide -9007199254740992 9007199254740992 926943313795538 6732135511462809 -5030882311964634 -4763943920069400 8078276358403299 -8940265517251302 8955732633193948 -5702624803487185 -8508488068620562 -4901951363058531 363458669481740 5646819198740848 3570054951032676 -8042730473238780 -7316553875845375 -6157090021402145 -1542330308153942 -8444265946443715 -6280794155270785 2969378075118835",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide -4.6116860184273879e+18 4.6116860184273879e+18 4.7459497666331571e+17 3.4468533818689587e+18 -2.5758117437258921e+18 -2.4391392870755323e+18 4.1360774955024896e+18 -4.5774159448326661e+18 4.5853351081953014e+18 -2.9197438993854382e+18 -4.3563458911337272e+18 -2.5097990978859679e+18 1.8609083877465136e+17 2.8911714297553147e+18 1.8278681349287304e+18 -4.1178780022982548e+18 -3.7460755844328315e+18 -3.1524300909578982e+18 -7.8967311777481792e+17 -4.3234641645791816e+18 -3.2157666074986419e+18 1.520321574460844e+18",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide 0 9.2233720368547748e+18 5.0862809950907034e+18 8.0585394002963456e+18 2.0358742747014956e+18 2.1725467313518554e+18 8.7477635139298765e+18 34270073594721740 9.1970211266226883e+18 1.6919421190419494e+18 2.5534012729366051e+17 2.1018869205414198e+18 4.7977768572020388e+18 7.5028574481827021e+18 6.439554153356118e+18 4.9380801612913293e+17 8.6561043399455616e+17 1.4592559274694897e+18 3.8220129006525696e+18 2.8822185384820608e+17 1.395919410928746e+18 6.1320075928882309e+18",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide -9.2233720368547758e+18 9.2233720368547748e+18 9.4918995332663091e+17 6.8937067637379164e+18 -5.1516234874517842e+18 -4.8782785741510646e+18 8.2721549910049782e+18 -9.1548318896653322e+18 9.1706702163906017e+18 -5.8394877987708764e+18 -8.7126917822674545e+18 -5.0195981957719357e+18 3.7218167754930221e+17 5.7823428595106284e+18 3.6557362698574602e+18 -8.2357560045965097e+18 -7.492151168865663e+18 -6.3048601819157965e+18 -1.5793462355496364e+18 -8.6469283291583631e+18 -6.4315332149972838e+18 3.040643148921687e+18",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide -9.2233720368547758e+18 0 -4.1370910417640719e+18 -1.1648326365584292e+18 -7.1874977621532805e+18 -7.0508253055029207e+18 -4.7560852292489837e+17 -9.1891019632600545e+18 -26350910232086364 -7.5314299178128261e+18 -8.9680319095611156e+18 -7.1214851163133553e+18 -4.4255951796527365e+18 -1.7205145886720732e+18 -2.7838178834986573e+18 -8.7295640207256433e+18 -8.3577616028602194e+18 -7.7641161093852856e+18 -5.4013591362022062e+18 -8.9351501830065695e+18 -7.8274526259260293e+18 -3.0913644439665439e+18",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide -1e+18 1e+18 1.0291138094981485e+17 7.4741718497226662e+17 -5.5854013769225754e+17 -5.2890402280840736e+17 8.968688412384407e+17 -9.925688623514729e+17 9.9428605717588032e+17 -6.3311853576299802e+17 -9.446319358530976e+17 -5.4422592688602509e+17 40352018335825352 6.2692286903374682e+17 3.9635572058135136e+17 -8.9292245522440742e+17 -8.1230065738739635e+17 -6.8357431064504589e+17 -1.7123306196897184e+17 -9.3750184797999514e+17 -6.973082284112736e+17 3.2966719078140595e+17",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-wide -5e+17 7e+18 3.6359176785618058e+18 6.0528144436460001e+18 1.1554744836540342e+18 1.2666099144684726e+18 6.6132581546441523e+18 -4.7213323381802342e+17 6.9785727144095508e+18 8.7580549088875725e+17 -2.9236975944911603e+17 1.209152774177406e+18 3.4013200687593452e+18 5.6009607588765501e+18 4.7363339521800673e+18 -98459207091527760 2.0387253479726371e+17 6.8659633508107802e+17 2.6078760176163558e+18 -2.6563192992498154e+17 6.3509414345772416e+17 4.486251965430272e+18",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-sequence seed 7 3752549830 2 691350785 -990132692322 3090773579 33 862351165 63690896108 1352764576 96 716439541 712817708130 0.55908190107786493",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-sequence seed 910576195 787871945 28 2610787680 375451673339 1958203256 31 169373765 779776815326 94983944 15 2363972212 -35207822875 0.5684507614118226",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
 			"line": "Random-fraction -1.5 -1.5 -1/0.01291674651990379 -1/0.043722934373824372",
 			"why": "Random:NextInteger's fractional bounds: a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
 		},
@@ -469,19 +341,7 @@
 			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
 		},
 		{
-			"line": "Random-cases 95983175856496112/0.85903080109283381 23/0.7329491361304532 1/0.19262040317676415 -2147483639/0.059108882058320676 353496738/0.37285837530218313 737/0.011280462089970677 -75757/0.74101200535957179 -7.055451227370498e+18/0.20385902613735243 -325/0.15452334682157098 -734/0.89707780717271179",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
 			"line": "Random-cases -528/0.32160141392569191 118223913497/0.13708874896353157 438/0.31733312851629963 1574550686/0.047557692503847705 330/0.4652416177931169 667323640770949/0.82109647023808419 1371447402/0.81786637902719594 13/0.6930405822012935 -4294967290/0.016059015583728339 535428104/0.3025590180608404",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
-			"line": "Random-cases 1227/0.39662296338650471 70/0.95985637612802233 687919700022395/0.39074887154642768 602/0.63078084428121484 0/0.16671494471331874 19781/0.13516240698643778 -3.1445091345771648e+17/0.35464296390599531 3083456094/0.82473766586405717 -998123964/0.81938971602281307 -729741176/0.70261408448267881",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
-			"line": "Random-cases 359615906450784/0.80781642741160153 1696147939/0.27549096638137505 544737831733023/0.063037358633827298 -62084210/0.76378854622738679 800456320/0.50517381309298981 272916701962347/0.19633450060741811 -26/0.18298545148715409 240721665197/0.24128762319317426 279117233794072/0.12752399555030564 131/0.64537614477477101",
 			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
 		},
 		{
@@ -509,10 +369,6 @@
 			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
 		},
 		{
-			"line": "Random-cases -5661736113874320/0.17606963705242215 -2/0.29341417561987732 665555898911/0.25469085136446362 9322329844/0.76743555943457853 916403657/0.032472631898264201 3883683/0.48866625988344226 20916024153433196/0.37559882184062876 1592669291/0.18872915077425292 2241498312069/0.23032603839710977 -46986662491717560/0.47087247575667701",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
 			"line": "Random-cases -6871599497/0.74303696885515191 -36123141604455/0.2756226462596747 142/0.63678970709164984 3462516191/0.98610028173140851 384822092/0.95180754314550275 478/0.23687679473366186 -11967/0.49939852411791807 1262413336/0.56959185544738755 -11502236419986/0.39718139901079269 -9285013985/0.60957862024848031",
 			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
 		},
@@ -521,31 +377,7 @@
 			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
 		},
 		{
-			"line": "Random-cases -5.1450871258637466e+18/0.91937168484112375 2998888363/0.75204276063714526 -3.0678008457909069e+17/0.25393981262982995 4848492402/0.53126469600437076 -186901115011620/0.86355326844137958 -4857340769/0.45085847530313083 -138834942/0.62918713053818154 53827163496906760/0.92577437609190216 -7506906710/0.15637583509414296 -47647435/0.85689197158690888",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
-			"line": "Random-cases 26851/0.92281723129932991 -8/0.50699280410842673 3585230422891/0.26162163173629038 -26793/0.098823964588061947 -2964424039/0.067914115627687274 -25100748253560780/0.94180124273944932 4090025706/0.33225588924886706 -1745552810180273/0.78198283318506989 491946325/0.12057002404731613 82308678087/0.13793586868791252",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
-			"line": "Random-cases 1908236166/0.42564820592740832 1253/0.68448804170037236 -1014419787/0.25267863987981931 3850989721/0.91188170703191096 1272983514832/0.44813852003137322 -19176221393522416/0.045074224747230766 5.3547927340685734e+17/0.081650762985428185 23/0.13224171282335448 -158/0.91980006431348849 3905019734/0.38185200907878863",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
-			"line": "Random-cases 9/0.71564772169791124 440/0.77869098787819013 55046642835/0.71926887655069238 -328/0.71680510765586136 801305123734672/0.41365124337535764 1192/0.44287564251190054 8589934612/0.23384285066375043 4211697484/0.36959889221628761 1615246187911902/0.29577180888402466 -3273336704/0.38144139899476825",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
 			"line": "Random-cases 3951752603/0.69111366145445918 48825962110933/0.10264250548110121 -4261400924/0.60592878891875335 880117402/0.67588792946690157 1530603868/0.92498351848728844 1561802547/0.63131003249384954 1788602205/0.020322611233883285 1058995163/0.4514074232972079 104/0.10304642018393899 55/0.52258873260156413",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
-			"line": "Random-cases 3466361158/0.41130576293449861 123785519052484/0.37683592945422506 -131/0.89323514869705256 2485035193/0.083211374765111243 2942074253/0.83409029344226038 45916/0.089501248598742617 -1590876296/0.10034830953798038 404/0.37863467180747645 2701274522/0.080712695757569841 118/0.19841517904012995",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
-		},
-		{
-			"line": "Random-cases -3382396835/0.31263040843500728 45601/0.61986291949887762 3699811630/0.41140701907810212 -1832073000/0.011937106192639643 -8589934523/0.44464514714354286 3485243009/0.67074896389114702 685/0.78378962250004458 2147483649/0.44049851991503919 1.354401661875693e+17/0.25052816078305196 396/0.037268046173387408",
 			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
 		},
 		{
@@ -597,28 +429,16 @@
 			"why": "Random.new's argument errors: a client raises them at the calling line and names a vector Vector3; ree raised them without a position and named it vector"
 		},
 		{
-			"line": "Random-test-vectors 0.55145569047490739 0.017231024361130141 0.88337692090640296 73 72384586732 | 0.87370859248613331 0.4321572161309693 0.30899221989348707 5 482964445447 | 0.23554798859579634 0.32381286642224644 0.14705557445875167 28 -493285887951 | 0.94843442061922034 0.061285879733742145 0.8770159548057006 9 -497511649161 | 0.0037155688242635435 0.54698622302362776 0.31011551315193603 67 1062967531246 | 0.99714302858794013 0.55841065719489713 0.051360576460306472 58 -943718980274 | 0.027684032073451197 0.091037984328224547 0.98698859961975727 53 502533245394 | 0.22788703655698744 0.94258596880690426 0.067756402064319959 38 -518359285893",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-test-streams 1-12 23c03fd5 676e3a3a aafe0ccb 2673851b 73f93d13 0a109933 447b33a0 b3d9556d aebb2b36 a6e408ac d9a8e22a 65c39b14",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-test-streams 13-24 92355b16 f4d878bb cb6f0655 34d53ccd 6b2df047 09e46562 540b9179 81ba6f11 6a14bed7 73914a93 31d8b0f6 fd4ece73",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-test-streams 25-36 2f566c68 9bfd1d2b 1717b94d 73ddb9d5 aefc9801 c2e0624b 549db012 299fc9e4 0610a8c8 0dd12fbc d27e08a7 06fedd02",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
-			"line": "Random-test-streams 37-48 c0221d7d deb3b3ff f46c911a 6e05d8af 1b38e070 78b760b5 19dba424 a7f2cd8c ac733dca ee509b77 7599e1a4 3dee9f48",
-			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats"
-		},
-		{
 			"line": "Random-test-ranges 00000000 e9473863 81b3e3b4 df0cbdb8 d866f5e9 619d6445 c3fcced7 a06b9405 020a3e97 27f60369",
 			"why": "Random:NextInteger's fractional bounds: a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
+		},
+		{
+			"line": "Random-fraction -0.5 4294967293 4132333491/0.01291674651990379 2380307333/0.043722934373824372",
+			"why": "Random:NextInteger's fractional bounds: a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
+		},
+		{
+			"line": "Random-cases 995/0.78609549521694977 13/0.31395656141564016 -97/0.66363234071091992 -30835247968972404/0.28581986564904088 126/0.90465307853014498 -484103640/0.58630053718026509 362883340444/0.7660148957698425 2508185079/0.14643533715135665 -9.2233720368547758e+18/0.20387251437833517 700497431/0.42872882300075638",
+			"why": "Random:NextInteger from 2^32 - 1 values: a client takes two draws from 2^32 - 1 values (ree from 2^32) and adds to the low bound the high half of count * x from 32-bit halves, without the low halves' product; ree interpolated in floats; and a client truncates them toward zero (which can also move the range across 2^32 - 1 values); ree floors them"
 		}
 	],
 	"reflection": [

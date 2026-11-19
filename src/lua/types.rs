@@ -1248,22 +1248,30 @@ impl RandomState {
         low * (1.0 - unit) + high * unit
     }
 
-    /// NextInteger: the floored bounds as 64-bit integers (a C cast on x86-64: out of range, the least one), in order;
-    /// a range under 2^32 draws once, as math.random does, a wider one is `floor(min * (1 - u) + max * u)` (measured
-    /// likewise: NextInteger(-2^40, 2^40) for 10 seeds, where a 64-bit multiply gave one more for 7; NextInteger(-2^63,
-    /// 2^63) is -2^63. Not measured: where between 2^32 and 2^41 the wider draw starts).
+    /// NextInteger: the floored bounds as 64-bit integers (a C cast on x86-64: out of range, the least one), in order,
+    /// and `count` = high - low + 1 values. Up to 2^32 - 2 values take one draw, `low + (count * draw >> 32)`, as
+    /// math.random does; from 2^32 - 1 values on, two draws make one 64-bit number `x` (the first draw its low half, as
+    /// for NextNumber), and the value is `low` plus the high half of `count * x` from 32-bit halves, leaving out the
+    /// product of the two low halves: `ch*xh + (ch*xl >> 32) + (cl*xh >> 32)`, rounded to a double (measured in a playing
+    /// client, Studio 0.747, tools/parity/probes/random.luau: the draw counts from 2^32 - 3 to 2^32 + 1 values, 31 wide
+    /// ranges for 20 seeds, 300 random calls; before that 2,048 two-draw values of 32 seeds and 64 ranges, where the
+    /// float interpolation ree used matched 1,235 and the exact 128-bit product 1,211, and 1,000 random calls).
     fn next_integer(&mut self, min: f64, max: f64) -> f64 {
         let (mut low, mut high) = (int64_cast(min.floor()), int64_cast(max.floor()));
         if low > high {
             std::mem::swap(&mut low, &mut high);
         }
-        let range = high as i128 - low as i128 + 1;
-        if range < 1i128 << 32 {
-            let product = (range as u64) * (self.next_u32() as u64);
-            return (low as i128 + (product >> 32) as i128) as f64;
+        // (at most 2^64 - 1023 values: the widest bounds are -2^63 and 2^63 - 1024)
+        let count = (high as i128 - low as i128 + 1) as u64;
+        if count < u32::MAX as u64 {
+            let offset = (count * self.next_u32() as u64) >> 32;
+            return low.wrapping_add(offset as i64) as f64;
         }
-        let unit = self.next_unit();
-        (low as f64 * (1.0 - unit) + high as f64 * unit).floor()
+        let (x_low, x_high) = (self.next_u32() as u64, self.next_u32() as u64);
+        let (count_low, count_high) = (count & 0xFFFF_FFFF, count >> 32);
+        // (below 2^64: each product is under 2^64 - 2^33 + 2, each shifted one under 2^32)
+        let offset = count_high * x_high + ((count_high * x_low) >> 32) + ((count_low * x_high) >> 32);
+        low.wrapping_add(offset as i64) as f64
     }
 }
 
@@ -1985,15 +1993,16 @@ mod tests {
 
     #[test]
     fn random_matches_the_luau_oracle() {
-        // runtime/tests/random.luau vectors; the wide NextInteger as measured in a playing client (Studio 0.744:
-        // floor(min * (1 - u) + max * u), one less than that oracle's 64-bit multiply for seeds 7, -1.9 and -2^53 + 1)
+        // runtime/tests/random.luau vectors; the wide NextInteger as a playing client gives it (Studio 0.747,
+        // tools/parity/expected/random.txt Random-test-vectors: the floats ree interpolated gave one less for seeds 7, -3
+        // and 4294967303)
         let vectors: &[(f64, [f64; 3], f64, f64)] = &[
             (0.0, [0.5514556904749074, 0.01723102436113014, 0.883376920906403], 73.0, 72384586732.0),
-            (7.0, [0.8737085924861333, 0.4321572161309693, 0.3089922198934871], 5.0, 482964445446.0),
-            (-3.0, [0.23554798859579634, 0.32381286642224644, 0.14705557445875167], 28.0, -493285887950.0),
+            (7.0, [0.8737085924861333, 0.4321572161309693, 0.3089922198934871], 5.0, 482964445447.0),
+            (-3.0, [0.23554798859579634, 0.32381286642224644, 0.14705557445875167], 28.0, -493285887951.0),
             (1.9, [0.9484344206192203, 0.061285879733742145, 0.8770159548057006], 9.0, -497511649161.0),
             (-1.9, [0.0037155688242635435, 0.5469862230236278, 0.31011551315193603], 67.0, 1062967531246.0),
-            (4294967303.0, [0.9971430285879401, 0.5584106571948971, 0.05136057646030647], 58.0, -943718980273.0),
+            (4294967303.0, [0.9971430285879401, 0.5584106571948971, 0.05136057646030647], 58.0, -943718980274.0),
             (9007199254740991.0, [0.027684032073451197, 0.09103798432822455, 0.9869885996197573], 53.0, 502533245394.0),
             (-9007199254740991.0, [0.22788703655698744, 0.9425859688069043, 0.06775640206431996], 38.0, -518359285893.0),
         ];
@@ -2015,6 +2024,23 @@ mod tests {
             counter = luau_u32(counter * 1103515245.0 + 12345.0) as f64;
             assert_eq!(seed_random(counter).next_unit(), expected);
         }
+    }
+
+    #[test]
+    fn next_integer_takes_two_draws_from_2_32_minus_1_values() {
+        // tools/parity/expected/random.txt (Studio 0.747): Random-draws seed 7, the value and the NextNumber after it
+        let draws = |count: f64| {
+            let mut random = seed_random(7.0);
+            let value = random.next_integer(0.0, count - 1.0);
+            (value, random.next_number(0.0, 1.0))
+        };
+        assert_eq!(draws(4294967294.0), (4132333491.0, 0.01291674651990379));
+        assert_eq!(draws(4294967295.0), (3752549829.0, 0.4321572161309693));
+        assert_eq!(draws(4294967296.0), (3752549830.0, 0.4321572161309693));
+        // Random-wide 0 8589934591, seed 42: the high half of count * x without the low halves' product (floats gave
+        // 1896055670); and the widest range there is, rounded to a double (Random-wide -2^63 2^63 - 1024, seed 0)
+        assert_eq!(seed_random(42.0).next_integer(0.0, 8589934591.0), 1896055671.0);
+        assert_eq!(seed_random(0.0).next_integer(-9223372036854775808.0, 9223372036854774784.0), 9.491899533266309e17);
     }
 
     #[test]

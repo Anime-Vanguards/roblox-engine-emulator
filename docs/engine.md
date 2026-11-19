@@ -153,6 +153,8 @@ Each mounted project owns one single-threaded (`!Send`) `Rc<Engine>` paired with
   - Up to 100 `Path2DControlPoint`s (serialized in hidden `PropertiesSerialize`, 49 bytes/point). Out-of-bounds indices raise client errors; mutations fire deferred `ControlPointChanged` even if unchanged. Invalid non-`GuiObject`/non-`LayerCollector` parents raise `Attempting to use Path2D with invalid parent`.
   - Spline rebuilds lazily on curve query or layout (so `SetControlPoints` followed immediately by `Insert`/`Update`/`Remove` past the old spline raises `Spline inserting control point at index I access out of bounds` after mutating the list).
   - Segments use linear, quadratic, or cubic Bezier curves based on non-zero tangents; `GetLength` subdivides to `1e-5 px` flatness; `GetBoundingRect` pads by `(Thickness + 1)/2`; arc-length queries (`GetPositionOnCurveArcLength` / `GetTangentOnCurveArcLength`) reproduce Studio's 32-step `f32` Runge-Kutta walk (including tight-bend drift and `t = 1` wrap quirks).
+- **`Random` (`src/lua/types.rs`, `random.luau`, Studio 0.747):** Luau's PCG32, one state per object. `NextNumber(min, max)` orders its bounds and is `min * (1 - u) + max * u`, `u` from two draws (the first the low half).
+  - **`NextInteger(min, max)`:** each bound floored, then a C cast to a 64-bit integer (out of range, NaN or infinite: `-2^63`), in order; `count = high - low + 1`. Up to `2^32 - 2` values take one draw: `low + (count * draw >> 32)`. From `2^32 - 1` values on, two draws make one 64-bit `x` (the first draw its low half) and the value is `low + ch*xh + (ch*xl >> 32) + (cl*xh >> 32)`, the high half of `count * x` from 32-bit halves without the low halves' product, rounded to a double.
 
 ## Instance userdata API (`src/lua/raw.rs`)
 
