@@ -162,6 +162,9 @@ const SWITCHABLE: &[&str] = &["ParticleEmitter", "Trail", "Beam", "PointLight", 
 const CLEARABLE: &[&str] = &["ParticleEmitter", "Trail"];
 /// What a child of Lighting adds to the look.
 const LIGHTING_CHILDREN: &[&str] = &["Sky", "Atmosphere", "ColorCorrectionEffect", "BloomEffect", "BlurEffect", "SunRaysEffect", "DepthOfFieldEffect", "ColorGradingEffect"];
+/// What draws nothing itself but changes how its parent draws (a part's shape, a GUI's corners or layout, a
+/// character's clothing), with no property that hides it: out of the world while it is gone.
+const MODIFIERS: &[&str] = &["DataModelMesh", "UIComponent", "CharacterAppearance"];
 /// Never recorded, with everything under them: code, sounds, values and the like draw nothing (and
 /// the Terrain's Clouds play on [`CLOUDS`]).
 const SKIPPED: &[&str] = &[
@@ -191,10 +194,12 @@ enum Visibility {
     Visible,
     /// Parented out of Lighting (skies, atmospheres, post effects)
     Lighting,
-    /// Parented out of the world (SurfaceAppearances: a part shows the one it holds; Glass parts,
-    /// which still draw at Transparency 1: [`is_glass`])
+    /// Parented out of the world (SurfaceAppearances: a part shows the one it holds; meshes, UI
+    /// components and character appearances: [`MODIFIERS`]; Glass parts, which still draw at
+    /// Transparency 1: [`is_glass`])
     Detach,
-    /// Cannot be hidden (folders, models, attachments, layouts...)
+    /// Never hidden: draws nothing and changes nothing its descendants do not hide themselves
+    /// (folders, models, attachments, joints...)
     None,
 }
 
@@ -739,6 +744,8 @@ fn visibility_of(engine: &Engine, class: ClassId) -> Visibility {
         Visibility::Enabled
     } else if is_a(engine, class, "GuiObject") {
         Visibility::Visible
+    } else if MODIFIERS.iter().any(|c| is_a(engine, class, c)) {
+        Visibility::Detach
     } else {
         Visibility::None
     }
