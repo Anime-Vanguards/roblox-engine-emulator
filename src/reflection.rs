@@ -269,7 +269,8 @@ pub struct Reflection {
 /// methods are not in it), interned at load so behaviours can register them.
 const BEHAVIOR_ONLY_NAMES: &[&str] = &[
     "DistanceFromCharacter", "GetFriendsOnline", "GetJoinData", "GetMouse", "GetNetworkPing", "GetRankInGroup",
-    "GetRoleInGroup", "HasAppearanceLoaded", "IsFriendsWith", "IsInGroup", "IsVerified", "LoadCharacter", "LoadCharacterAsync",
+    "GetRankInGroupAsync", "GetRoleInGroup", "GetRoleInGroupAsync", "HasAppearanceLoaded", "IsFriendsWith", "IsInGroup",
+    "IsInGroupAsync", "IsVerified", "LoadCharacter", "LoadCharacterAsync",
     "RequestStreamAroundAsync", "Kick", "Move", "AddReplicationFocus", "RemoveReplicationFocus",
 ];
 

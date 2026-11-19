@@ -6419,6 +6419,58 @@ fn social_and_group_services_answer_as_studio_does_for_an_offline_player() {
     assert!(output.contains(&"print: studio's answers".to_string()), "{output:?}");
 }
 
+/// Player's group methods, the Async ones (public issue 19: "IsInGroupAsync is not a valid member of Player") and the older
+/// ones, as a 0.747 client and server answer for the offline player (tools/parity/probes/loopback/player_groups.luau): in no
+/// group, the six sharing the ids it was asked about (the first call naming one yields, later ones by any of the six do not),
+/// the id cast as an int64 argument, and the errors of a cast and of a call without the player
+#[test]
+fn players_group_methods_answer_as_a_client_does_for_the_offline_player() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Player = game:GetService("Players").LocalPlayer
+        local function Call(Name, ...)
+            local Ran = false
+            task.defer(function() Ran = true end)
+            local Ok, Answer = pcall(Player[Name], Player, ...)
+            return tostring(Answer) .. (if not Ok then "!" elseif Ran then " yielded" else "")
+        end
+        print(Call("IsInGroupAsync", 7), Call("IsInGroupAsync", 7), Call("GetRankInGroup", 7), Call("GetRoleInGroupAsync", 7))
+        print(Call("GetRankInGroupAsync", 8), Call("GetRoleInGroupAsync", 8), Call("IsInGroup", 8), Call("GetRoleInGroup", 9))
+        print(Call("IsInGroupAsync", 10.5), Call("IsInGroupAsync", 11), Call("IsInGroupAsync", true), Call("IsInGroupAsync", 1))
+        print(Call("IsInGroupAsync", 0 / 0), Call("IsInGroupAsync", 0), Call("IsInGroupAsync", 1e20), Call("IsInGroupAsync", -2 ^ 63))
+        print(Call("IsInGroupAsync", " 012 "), Call("IsInGroupAsync", 12), Call("IsInGroupAsync", "9007199254740993"), Call("IsInGroupAsync", 2 ^ 53))
+        print(Call("IsInGroupAsync", "+13"), Call("IsInGroupAsync", "13.0"), Call("IsInGroupAsync", "9223372036854775808"), Call("IsInGroupAsync", "-9223372036854775808"))
+        print(Call("GetRankInGroupAsync"), Call("GetRankInGroupAsync", {}), Call("GetRankInGroupAsync", { a = 1 }), Call("GetRankInGroupAsync", Enum.KeyCode.A), Call("GetRankInGroupAsync", print))
+        print(pcall(Player.IsInGroupAsync, workspace, 7))
+        print(pcall(Player.GetRoleInGroupAsync))
+        print(Player.IsInGroupAsync == Player.IsInGroupAsync, Player.IsInGroupAsync == Player.IsInGroup)
+        "#,
+    );
+    for _ in 0..4 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let output = lines(&engine);
+    assert_eq!(
+        output,
+        [
+            "print: false yielded false 0 Guest",
+            "print: 0 yielded Guest false Guest yielded",
+            "print: false yielded false false yielded false",
+            "print: false yielded false false yielded false",
+            "print: false yielded false false yielded false yielded",
+            "print: Unable to cast string to int64! Unable to cast string to int64! Unable to cast string to int64! false",
+            "print: Argument 1 missing or nil! Unable to cast Array to int64! Unable to cast Dictionary to int64! Unable to cast KeyCode to int64! Unable to cast Function to int64!",
+            "print: false Expected ':' not '.' calling member function IsInGroupAsync",
+            "print: false Expected ':' not '.' calling member function GetRoleInGroupAsync",
+            "print: true false",
+        ],
+        "{output:?}"
+    );
+}
+
 /// A one-letter Text write's and a workspace part's CFrame write's price in a client of `place_id` with `prices` and `parts` parts
 /// in the workspace, in us a write
 fn place_write_prices(place_id: f64, parts: usize, prices: crate::cost::PlacePrices) -> Vec<f64> {

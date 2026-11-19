@@ -241,6 +241,37 @@ fn a_recording_lists_the_unemulated_members_too() {
     assert_eq!(written["unemulated"], expected);
 }
 
+/// The offline player's own answers stay quiet, Player's Async group methods as the older ones (public issue 19: a live game's
+/// server asks IsInGroupAsync and GetRankInGroupAsync as the player joins, and ree raised "IsInGroupAsync is not a valid member
+/// of Player" on both sides): the answers of a player in no group, no error, no `missing` line and no `unemulated` list
+#[test]
+fn the_offline_players_group_answers_stay_quiet_on_both_sides() {
+    let summary = crate::loopback_tests::run_pair(
+        "groups",
+        r#"return {
+	Server = function(Context)
+		game:GetService("Players").PlayerAdded:Connect(function(Player)
+			print("server", Player:IsInGroupAsync(7), Player:GetRankInGroupAsync(7), Player:GetRoleInGroupAsync(7), Player:IsInGroup(7))
+		end)
+	end,
+	Client = function(Context)
+		local Player = game:GetService("Players").LocalPlayer
+		print("client", Player:IsInGroupAsync(7), Player:GetRankInGroupAsync(7), Player:GetRoleInGroupAsync(7), Player:GetRankInGroup(7))
+	end,
+}
+"#,
+        None,
+        &[],
+    );
+    assert_eq!(summary["status"], "ok", "{summary}");
+    assert_eq!(summary["errors"], 0, "{summary}");
+    let mut printed = other_lines(&summary);
+    printed.sort();
+    assert_eq!(printed, ["print: client false 0 Guest 0", "print: server false 0 Guest false"], "{summary}");
+    assert!(missing_lines(&summary).is_empty(), "{summary}");
+    assert!(summary.get("unemulated").is_none(), "{summary}");
+}
+
 /// A loopback run's summary holds both sides' members: the server's use (its line forwarded into the one output list, with
 /// its side) and the client's
 #[test]

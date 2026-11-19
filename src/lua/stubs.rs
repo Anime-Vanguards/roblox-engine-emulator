@@ -431,6 +431,18 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             lua.create_any_userdata(types::LContent::new(lua, content))
         })?,
     )?;
+    // A method's int64 argument (convert::int64_argument) as its decimal text, which keeps every int64 apart (a number holds
+    // integers exactly to 2^53 only); else nil and the cast error, which the stub raises without a position
+    let e = engine.clone();
+    r.set(
+        "Int64Argument",
+        lua.create_function(move |_, (value, index): (LuaValue, usize)| {
+            Ok(match convert::int64_argument(&e, &value, index) {
+                Ok(number) => (Some(number.to_string()), None),
+                Err(message) => (None, Some(message)),
+            })
+        })?,
+    )?;
     // HttpService JSON: Lune's serde (sorted keys, empty tables as `{}`, integral numbers as integers)
     r.set(
         "JsonEncode",

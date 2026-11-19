@@ -974,15 +974,15 @@ end)
 Method("Player", "GetMouse", function()
 	return R.Mouse
 end)
-Method("Player", "IsInGroup", function()
-	return false
-end)
-Method("Player", "GetRankInGroup", function()
-	return 0
-end)
-Method("Player", "GetRoleInGroup", function()
-	return "Guest"
-end)
+-- Groups: the offline player is in none (false, rank 0, role Guest), the Async methods as the older ones; the six share the ids a player was asked about, and the first call naming a group yields (a client asks the web), later ones answer at once (measured in a 0.747 client and server: parity loopback/player_groups)
+for Member, Answer in { IsInGroup = false, IsInGroupAsync = false, GetRankInGroup = 0, GetRankInGroupAsync = 0, GetRoleInGroup = "Guest", GetRoleInGroupAsync = "Guest" } do
+	Method("Player", Member, function(Self, GroupId)
+		local Id, Message = R.Int64Argument(GroupId, 1)
+		if typeof(Self) ~= "Instance" or not Self:IsA("Player") then error(`Expected ':' not '.' calling member function {Member}`, 0) elseif not Id then error(Message, 0) end
+		local Data = Extra(Self) Data.Groups = Data.Groups or {}
+		if not Data.Groups[Id] then task.wait() Data.Groups[Id] = true end return Answer
+	end)
+end
 Method("Player", "IsFriendsWith", function()
 	return false
 end)
