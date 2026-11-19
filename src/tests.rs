@@ -3651,6 +3651,149 @@ fn editable_mesh_batch_add_follows_a_client() {
     assert_eq!(errors, wanted, "{output:?}");
 }
 
+/// EditableMesh's per-vertex batches as a 0.747 client answers them (tools/parity/probes/editable_mesh_vertex_batch.luau,
+/// public issue 18: all three answered nil, a fixed-size copy's included): BatchGetVertexAttributes lists per vertex one
+/// entry per corner over it, the newest corner first; BatchGetVertexFaceAttributes reads one corner each; and
+/// BatchSetVertexFaceAttributes sets corners in turn (an error leaves the ones before it set) and brings a changed corner
+/// to the front, as the single-item methods do.
+#[test]
+fn editable_mesh_vertex_batches_follow_a_client() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local function show(t) local out = {} for _, x in t do table.insert(out, if type(x) == "table" then "{" .. show(x) .. "}" else string.format("%d:%d", x // 4294967296, x % 4294967296)) end return table.concat(out, ",") end
+        local m = AssetService:CreateEditableMesh()
+        local v = {}
+        for _, p in { Vector3.new(0, 0, 0), Vector3.new(1, 0, 0), Vector3.new(1, 1, 0), Vector3.new(0, 1, 0), Vector3.new(0, 0, 1), Vector3.new(2, 2, 2) } do
+            table.insert(v, m:AddVertex(p))
+        end
+        local a, b, c = m:AddTriangle(v[1], v[2], v[3]), m:AddTriangle(v[1], v[3], v[4]), m:AddTriangle(v[2], v[3], v[5])
+        local n = m:AddNormal(Vector3.xAxis)
+        local old = m:GetFaceNormals(b)
+        m:SetFaceNormals(b, { n, old[2], old[3] })
+        print("normals", show(m:BatchGetVertexAttributes(Enum.MeshAttribute.Normal, v)))
+        print("faces", show(m:BatchGetVertexAttributes(Enum.MeshAttribute.Face, v)))
+        print("single", show(m:GetVertexNormals(v[2])), show(m:GetVertexFaces(v[3])))
+        local copy = AssetService:CreateEditableMeshAsync(Content.fromObject(m))
+        print("fixed copy", copy.FixedSize, show(copy:BatchGetVertexAttributes(Enum.MeshAttribute.UV, { v[1], v[6] })))
+        print("corners", show(m:BatchGetVertexFaceAttributes(Enum.MeshAttribute.Normal, { v[1], v[1], v[3] }, { a, b, c })), show({ m:GetVertexFaceNormal(v[1], b) }))
+        -- set in turn: the first pair is set when the second fails
+        local z = m:AddNormal(Vector3.zAxis)
+        print("set", pcall(m.BatchSetVertexFaceAttributes, m, { v[2], v[5] }, { a, a }, { z, z }))
+        print("after", show(m:GetFaceNormals(a)), show(m:BatchGetVertexAttributes(Enum.MeshAttribute.Face, { v[1] })))
+        m:SetVertexFaceUV(v[3], b, m:AddUV(Vector2.one))
+        print("moved", show(m:GetVertexFaces(v[3])))
+        print("adjacent", show(m:GetAdjacentVertices(v[1])), show(m:GetAdjacentVertices(v[3])))
+        for _, call in {
+            function() return m:BatchGetVertexAttributes(Enum.MeshAttribute.Vertex, v) end,
+            function() return m:BatchGetVertexAttributes(Enum.MeshAttribute.Normal, { v[1], 12345 }) end,
+            function() return m:BatchGetVertexAttributes(Enum.MeshAttribute.Normal, { "x" }) end,
+            function() return m:BatchGetVertexAttributes(Enum.KeyCode.A, v) end,
+            function() return m:BatchGetVertexFaceAttributes(Enum.MeshAttribute.Normal, { v[5] }, { a }) end,
+            function() return m:BatchGetVertexFaceAttributes(Enum.MeshAttribute.Normal, { v[1] }, {}) end,
+            function() return m:BatchSetVertexFaceAttributes({ v[1] }, { a }, { v[2] }) end,
+            function() return m:GetVertexFaceNormal(v[5], a) end,
+        } do
+            print("error", select(2, pcall(call)))
+        end
+        "#,
+    );
+    let lines: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: ")).collect();
+    let wanted = [
+        "normals {2:6,2:1},{2:2,2:2},{2:3,2:3,2:3},{2:4},{2:5},{}",
+        "faces {5:2,5:1},{5:3,5:1},{5:3,5:2,5:1},{5:2},{5:3},{}",
+        "single 2:2,2:2 5:3,5:2,5:1",
+        "fixed copy true {4:1,4:1},{}",
+        "corners 2:1,2:6,2:3 2:6",
+        "set false BatchSetVertexFaceAttributes: vertexId not found on requested face at index 2",
+        "after 2:1,2:7,2:3 {5:2,5:1}",
+        "moved 5:2,5:3,5:1",
+        "adjacent 1:4,1:3,1:2 1:1,1:4,1:2,1:5,1:2",
+        "error BatchGetVertexAttributes: Enum.MeshAttribute.Vertex is not supported",
+        "error Unexpected EditableMesh id type. Expected Vertex id, received value that doesn't appear to be an id",
+        "error BatchGetVertexAttributes: id at index 1 is not a number",
+        "error Invalid type 'KeyCode' for enum 'MeshAttribute'",
+        "error BatchGetVertexFaceAttributes: vertexId not found on requested face at index 1",
+        "error BatchGetVertexFaceAttributes: vertexIds and faceIds arrays must be the same length",
+        "error BatchSetVertexFaceAttributes: unsupported attribute ID type 1",
+        "error vertexId not found on requested face",
+    ];
+    assert_eq!(lines, wanted, "{output:?}");
+}
+
+/// BatchRemove and the slots removed elements leave, as a 0.747 client has them (editable_mesh_vertex_batch.luau): it
+/// removes faces only, every id checked first; what they used stays until RemoveUnused; a freed slot comes back, the last
+/// freed first, under its next generation (`13:3`), so the old id is gone; the lists are dense arrays a removed item's
+/// place in is taken by the last one. Before, BatchRemove did nothing and ids were never reused.
+#[test]
+fn editable_mesh_batch_remove_frees_slots_as_a_client() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local function show(t) local out = {} for _, x in t do table.insert(out, string.format("%d:%d", x // 4294967296, x % 4294967296)) end return table.concat(out, ",") end
+        local function counts(m) return #m:GetVertices() .. "v " .. #m:GetNormals() .. "n " .. #m:GetFaces() .. "f" end
+        local m = AssetService:CreateEditableMesh()
+        local v = {}
+        for _, p in { Vector3.new(0, 0, 0), Vector3.new(1, 0, 0), Vector3.new(1, 1, 0), Vector3.new(0, 1, 0), Vector3.new(0, 0, 1), Vector3.new(2, 2, 2) } do
+            table.insert(v, m:AddVertex(p))
+        end
+        local f = { m:AddTriangle(v[1], v[2], v[3]), m:AddTriangle(v[1], v[3], v[4]), m:AddTriangle(v[2], v[3], v[5]) }
+        print("bad", pcall(m.BatchRemove, m, { f[1], v[6] }))
+        print("kept", counts(m))
+        print("removed", m:BatchRemove({ f[3], f[1], f[1] }), counts(m), show(m:GetFaces()))
+        print("again", pcall(m.BatchRemove, m, { f[1] }))
+        local g = { m:AddTriangle(v[1], v[2], v[3]), m:AddTriangle(v[2], v[3], v[5]), m:AddTriangle(v[4], v[5], v[6]) }
+        print("reused", show(g), show(m:GetFaces()))
+        print("stale", pcall(m.GetFaceVertices, m, f[3]))
+        local batch = m:BatchAdd(Enum.MeshAttribute.Face, { { v[1], v[2], v[4] } })
+        m:RemoveFace(g[1])
+        print("batch", show(batch), show(m:BatchAdd(Enum.MeshAttribute.Face, { { v[1], v[2], v[3] }, { v[1], v[4], v[5] } })))
+        m:BatchRemove(m:GetFaces())
+        local removed = m:RemoveUnused()
+        local w = { m:AddVertex(Vector3.one), m:AddVertex(Vector3.zero) }
+        print("unused", #removed, show({ removed[1], removed[6], removed[7] }), counts(m), show(w))
+        local plain = AssetService:CreateEditableMesh({ FixedSize = true })
+        print("options", plain.FixedSize, AssetService:CreateEditableMeshAsync(Content.fromObject(plain), { FixedSize = false }).FixedSize)
+        local fixed = AssetService:CreateEditableMeshAsync(Content.fromObject(plain))
+        for _, call in {
+            function() return fixed:BatchRemove({}) end,
+            function() return fixed:AddNormal(Vector3.one) end,
+            function() return fixed:RemoveUnused() end,
+            function() return m:RemoveFace(0) end,
+            function() return m:AddTriangle(w[1], w[2], v[6]) end,
+            function() return m:AddBone({ Name = "b", CFrame = CFrame.new() }) end,
+        } do
+            print("error", select(2, pcall(call)))
+        end
+        "#,
+    );
+    let lines: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: ")).collect();
+    let wanted = [
+        "bad false Unexpected EditableMesh id type. Expected Face id, received Vertex id",
+        "kept 6v 5n 3f",
+        "removed nil 6v 5n 1f 5:2",
+        "again false Invalid faceId",
+        "reused 13:1,13:3,5:4 5:2,13:1,13:3,5:4",
+        "stale false Invalid id",
+        "batch 5:5 5:6,21:1",
+        "unused 30 1:1,1:6,2:1 2v 0n 0f 9:6,9:5",
+        "options false false",
+        "error EditableMesh is fixed-size, adding or removing elements is not allowed in-experience",
+        "error EditableMesh is fixed-size, adding or removing elements is not allowed in-experience",
+        "error EditableMesh is fixed-size, adding or removing elements is not allowed in-experience",
+        "error Unexpected EditableMesh id type. Expected Face id, received value that doesn't appear to be an id",
+        "error Unable to add new triangle, vertex id 4294967302 is invalid",
+        "error Missing bone Virtual value",
+    ];
+    assert_eq!(lines, wanted, "{output:?}");
+}
+
 /// CreateMeshPartAsync of a mesh file the project holds, as a game's asset id modules can name one until
 /// it is uploaded: its repo-relative path and a relative file:// URI are read from the project's folder
 /// (Options::project), whatever the current directory, and give the mesh's size as an absolute URI
