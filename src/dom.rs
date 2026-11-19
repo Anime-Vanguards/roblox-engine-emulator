@@ -1085,19 +1085,23 @@ impl Dom {
         result
     }
 
-    /// GetFullName: names from below the DataModel down to `id`, dot separated.
+    /// GetFullName: names from below the service provider at the root (the DataModel, UserSettings) down to `id`, dot
+    /// separated; a parentless tree of other objects keeps its root's name.
     pub fn full_name(&self, reflection: &Reflection, id: InstanceId) -> String {
-        let data_model = reflection.class_id("DataModel");
-        // the DataModel's own full name is its Name (`game:GetFullName() == game.Name` in a playing client, Studio 0.744:
-        // tools/parity/probes/instances.luau); below it, paths start at the service
-        if Some(self.at(id).class) == data_model {
+        let provider = reflection.class_id("ServiceProvider");
+        let is_provider = |node: InstanceId| provider.is_some_and(|class| reflection.class(self.at(node).class).is_a(class));
+        // a service provider's own full name is its Name (`game:GetFullName() == game.Name` in a playing client, Studio
+        // 0.744: tools/parity/probes/instances.luau); below one, paths start at its child (Studio 0.748: Workspace.Terrain,
+        // UserSettings():GetService("UserGameSettings") is "GameSettings", settings().Rendering is "Rendering", while a
+        // parentless Folder's Part is "Folder.Part")
+        if is_provider(id) {
             return self.at(id).name.to_str_lossy().into_owned();
         }
         let mut parts: Vec<&Str> = Vec::new();
         let mut current = Some(id);
         while let Some(node) = current {
             let instance = self.at(node);
-            if Some(instance.class) == data_model {
+            if is_provider(node) {
                 break;
             }
             parts.push(&instance.name);

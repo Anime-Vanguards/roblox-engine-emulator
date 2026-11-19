@@ -358,7 +358,8 @@ pub fn user_settings(engine: &Engine) -> Option<InstanceId> {
     let class = engine.reflection.class_id("UserSettings")?;
     let id = {
         let mut state = engine.state.borrow_mut();
-        let id = core::create_named(&mut state, &engine.reflection, class, "UserSettings");
+        // named as in Roblox (Studio 0.748: UserSettings().Name, tostring and GetFullName are "GlobalBasicSettings")
+        let id = core::create_named(&mut state, &engine.reflection, class, "GlobalBasicSettings");
         state.dom.at_mut(id).set_flag(flags::PARENT_LOCKED, true);
         state.dom.pin(id);
         id
