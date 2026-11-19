@@ -6,7 +6,7 @@
 //! BindToRenderStep), CollectionService, GuiService, UserInputService (the static answers; runtime/
 //! input's live state is phase 5), StarterGui, ContextActionService, Debris, Sound, Bindable* /
 //! Remote*, HttpService (GUIDs, URL / JSON encoding, disabled requests); TweenService (tween.rs),
-//! QueryDescendants (query.rs); derived property views are engine::derived. GUI behaviours that
+//! QueryDescendants (query.rs), PhysicsService's collision groups (physics.rs); derived property views are engine::derived. GUI behaviours that
 //! need layout or text measurement (Absolute*, TextBounds, TextService:GetTextSize, ContentText)
 //! and live input are a host layer's (crate::Layer; roblox-ui-renderer installs them). The script-data stubs (Player methods, 3D model helpers,
 //! humanoid stand-ins (AnimationTracks: crate::animation), EditableImage, ContentProvider, marketplace / policy /
@@ -16,6 +16,7 @@
 pub mod encoding;
 pub mod input_actions;
 pub mod json;
+pub mod physics;
 pub mod query;
 pub mod reflection_service;
 pub mod tween;
@@ -715,6 +716,7 @@ pub fn install(engine: &Rc<Engine>) {
     // TweenService, Instance:QueryDescendants, AnimationTracks
     tween::install(engine, &mut behaviors);
     reflection_service::install(engine, &mut behaviors);
+    physics::install(engine, &mut behaviors);
     crate::animation::install(engine, &mut behaviors);
     crate::meshes::install(engine, &mut behaviors);
     input_actions::install(engine, &mut behaviors);

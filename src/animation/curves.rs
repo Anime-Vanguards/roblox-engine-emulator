@@ -266,47 +266,10 @@ impl Channels {
     }
 }
 
-/// A number as a marker's value: up to 20 significant digits, as C's `%.20g` writes them.
-fn marker_number(number: f64) -> String {
-    if number.is_nan() {
-        return "NAN".into();
-    }
-    if number.is_infinite() {
-        return if number > 0.0 { "INF" } else { "-INF" }.into();
-    }
-    let scientific = format!("{number:.19e}");
-    let (mantissa, exponent) = scientific.split_once('e').expect("an exponent");
-    let exponent: i32 = exponent.parse().expect("a whole exponent");
-    let trimmed = |digits: &str| if digits.contains('.') { digits.trim_end_matches('0').trim_end_matches('.').to_string() } else { digits.to_string() };
-    if (-4..20).contains(&exponent) {
-        trimmed(&format!("{number:.*}", (19 - exponent) as usize))
-    } else {
-        format!("{}e{}{:02}", trimmed(mantissa), if exponent < 0 { '-' } else { '+' }, exponent.abs())
-    }
-}
-
-/// InsertMarkerAtTime's value as the text a marker holds (the module's notes).
+/// InsertMarkerAtTime's value as the text a marker holds (the module's notes): the engine's cast of a value to a
+/// string parameter (convert::cast_text), at most 64 bytes.
 fn marker_text(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Vec<u8>, Flow> {
-    let text = match value {
-        LuaValue::String(text) => text.as_bytes().to_vec(),
-        LuaValue::Number(number) => marker_number(*number).into_bytes(),
-        LuaValue::Integer(number) => marker_number(*number as f64).into_bytes(),
-        LuaValue::Boolean(flag) => flag.to_string().into_bytes(),
-        LuaValue::Table(_) => b"{}".to_vec(),
-        LuaValue::Function(_) => b"function".to_vec(),
-        LuaValue::Thread(_) => b"nil".to_vec(),
-        LuaValue::Buffer(buffer) => format!("buffer {{ Size = {} }}", buffer.len()).into_bytes(),
-        other => {
-            let written = || -> LuaResult<Vec<u8>> { Ok(lua.globals().get::<LuaFunction>("tostring")?.call::<LuaString>(other.clone())?.as_bytes().to_vec()) };
-            match typeof_value(engine, other).as_str() {
-                "Instance" => b"Instance".to_vec(),
-                "Enum" | "userdata" => b"nil".to_vec(),
-                // (`Enum.Material.Plastic` is "Plastic")
-                "EnumItem" => written()?.rsplit(|&byte| byte == b'.').next().unwrap_or_default().to_vec(),
-                _ => written()?,
-            }
-        }
-    };
+    let text = convert::cast_text(lua, engine, value)?;
     if text.len() > 64 {
         return raise("Invalid marker passed to InsertMarkerAtTime, max string size is 64");
     }

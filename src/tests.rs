@@ -8503,3 +8503,219 @@ fn device_input_reaches_bound_actions() {
     ];
     assert_eq!(steps, wanted);
 }
+
+/// PhysicsService's collision group registry on a server (measured in roblox-sim's 0.747 server: tools/parity/probes/
+/// collision_groups.luau and collision_group_args.luau): Default alone at the start, groups at the lowest free id, the
+/// masks a collidable pair gives, a rename, an unregister and the id a later group takes, the casts, the errors, the
+/// 32-group limit and the deprecated CreateCollisionGroup / GetCollisionGroups. A game that walks the groups each frame
+/// iterated nil before.
+#[test]
+fn collision_groups_register_collide_rename_and_unregister_on_a_server() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        local function Groups()
+            local Parts = {}
+            for _, Group in PhysicsService:GetRegisteredCollisionGroups() do
+                table.insert(Parts, Group.name .. "=" .. Group.mask)
+            end
+            return table.concat(Parts, " ")
+        end
+        local function Try(...)
+            local Ok, Problem = pcall(...)
+            return if Ok then "ok" else Problem
+        end
+        print(PhysicsService:GetMaxCollisionGroups(), Groups())
+        PhysicsService:RegisterCollisionGroup("GroupA")
+        PhysicsService:RegisterCollisionGroup("GroupB")
+        PhysicsService:RegisterCollisionGroup("GroupA")
+        PhysicsService:CollisionGroupSetCollidable("GroupA", "GroupB", false)
+        PhysicsService:CollisionGroupSetCollidable("GroupB", "GroupB", false)
+        print(Groups(), PhysicsService:IsCollisionGroupRegistered("GroupA"), PhysicsService:IsCollisionGroupRegistered("groupa"))
+        print(PhysicsService:CollisionGroupsAreCollidable("GroupB", "GroupA"), PhysicsService:CollisionGroupsAreCollidable("GroupA", "Default"), PhysicsService:CollisionGroupsAreCollidable("GroupA", "Nope"))
+        PhysicsService:RenameCollisionGroup("GroupA", "Renamed")
+        PhysicsService:UnregisterCollisionGroup("GroupB")
+        PhysicsService:RegisterCollisionGroup("GroupC")
+        print(Groups())
+        print(Try(PhysicsService.RegisterCollisionGroup, PhysicsService, ""))
+        print(Try(PhysicsService.RegisterCollisionGroup, PhysicsService, "Default"))
+        print(Try(PhysicsService.RegisterCollisionGroup, PhysicsService, string.rep("x", 101)))
+        print(Try(PhysicsService.RegisterCollisionGroup, PhysicsService, string.rep("x", 100)))
+        print(Try(PhysicsService.CollisionGroupSetCollidable, PhysicsService, "GroupC", "Nope", false))
+        print(Try(PhysicsService.CollisionGroupSetCollidable, PhysicsService, "Nope", "Default", "no"))
+        print(Try(PhysicsService.RenameCollisionGroup, PhysicsService, nil, nil))
+        print(Try(PhysicsService.GetCollisionGroupId, PhysicsService, "Nope"))
+        print(Try(PhysicsService.GetCollisionGroupName, PhysicsService, 31.5))
+        print(PhysicsService:GetCollisionGroupName(1.5), PhysicsService:GetCollisionGroupName("1"), PhysicsService:GetCollisionGroupName(9), PhysicsService:GetCollisionGroupId("GroupC"))
+        PhysicsService:RegisterCollisionGroup(5)
+        PhysicsService:RegisterCollisionGroup(true)
+        PhysicsService:CollisionGroupSetCollidable("5", "true", 0)
+        local Off = PhysicsService:CollisionGroupsAreCollidable("5", "true")
+        PhysicsService:CollisionGroupSetCollidable("5", "true", "TRUE")
+        print(PhysicsService:IsCollisionGroupRegistered(5), PhysicsService:IsCollisionGroupRegistered("true"), Off, PhysicsService:CollisionGroupsAreCollidable("5", "true"))
+        for Index = 1, 26 do
+            PhysicsService:RegisterCollisionGroup("Fill" .. Index)
+        end
+        print(#PhysicsService:GetRegisteredCollisionGroups(), Try(PhysicsService.RegisterCollisionGroup, PhysicsService, "Over"), Try(PhysicsService.RegisterCollisionGroup, PhysicsService, "GroupC"))
+        PhysicsService:UnregisterCollisionGroup("Fill1")
+        local Id = PhysicsService:CreateCollisionGroup("Made")
+        local Entry = PhysicsService:GetCollisionGroups()[Id + 1]
+        print(Id, Entry.id, Entry.name, Entry.mask, Try(PhysicsService.CreateCollisionGroup, PhysicsService, "Made"))
+        "#,
+    );
+    assert_eq!(
+        output,
+        [
+            "print: 32 Default=-1",
+            "print: Default=-1 GroupA=-5 GroupB=-7 true false",
+            "print: false true true",
+            "print: Default=-1 Renamed=-1 GroupC=-1",
+            "print: Collision group requires a valid name.",
+            "print: Can not use/change the Default collision group.",
+            "print: Collision group name length cannot exceed 100 chars",
+            "print: ok",
+            "print: Both collision groups must be registered.",
+            "print: Unable to cast string to bool",
+            "print: Argument 2 missing or nil",
+            "print: Collision group not found.",
+            "print: The Collision group Id must be between 0 and 32",
+            "print: GroupC Renamed  2",
+            "print: true true false true",
+            "print: 32 Cannot register more than 32 collision groups in this world. Cannot register more than 32 collision groups in this world.",
+            "print: 6 6 Made -1 Cannot register more than 32 collision groups.",
+        ]
+    );
+    let missing: Vec<String> = engine.state.borrow().output.missing.iter().map(|(name, _)| name.clone()).filter(|name| name.contains("PhysicsService")).collect();
+    assert!(missing.is_empty(), "{missing:?}");
+}
+
+/// A playing client reads the registry and may not change it: the name checks of Create and Remove come first, the
+/// argument casts before everything (measured in roblox-sim's 0.747 client); SetPartCollisionGroup works there. An edit
+/// DataModel (ree's default mode, an edit-mode client too) may register.
+#[test]
+fn a_playing_client_reads_collision_groups_and_may_not_change_them() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        local function Try(...)
+            local Ok, Problem = pcall(...)
+            return if Ok then "ok" else Problem
+        end
+        print(PhysicsService:GetMaxCollisionGroups(), #PhysicsService:GetRegisteredCollisionGroups(), PhysicsService:IsCollisionGroupRegistered("Default"), PhysicsService:CollisionGroupsAreCollidable("Default", "Nope"))
+        for _, Name in { "RegisterCollisionGroup", "UnregisterCollisionGroup", "CreateCollisionGroup", "RemoveCollisionGroup" } do
+            print(Name, Try(PhysicsService[Name], PhysicsService, "GroupA"), Try(PhysicsService[Name], PhysicsService, ""), Try(PhysicsService[Name], PhysicsService, nil))
+        end
+        print(Try(PhysicsService.RenameCollisionGroup, PhysicsService, "GroupA", "GroupB"), Try(PhysicsService.CollisionGroupSetCollidable, PhysicsService, "Default", "Default", false), Try(PhysicsService.CollisionGroupSetCollidable, PhysicsService, "Default", "Default", "no"))
+        local Part = Instance.new("Part")
+        PhysicsService:SetPartCollisionGroup(Part, "GroupA")
+        print(Part.CollisionGroup, PhysicsService:CollisionGroupContainsPart("GroupA", Part), Try(PhysicsService.CollisionGroupContainsPart, PhysicsService, "GroupA", Instance.new("Folder")), #PhysicsService:GetRegisteredCollisionGroups())
+        "#,
+    );
+    let refused = "This API can only be used on the server!";
+    assert_eq!(
+        output,
+        [
+            "print: 32 1 true true".to_string(),
+            format!("print: RegisterCollisionGroup {refused} {refused} Argument 1 missing or nil"),
+            format!("print: UnregisterCollisionGroup {refused} {refused} Argument 1 missing or nil"),
+            format!("print: CreateCollisionGroup {refused} Collision group requires a valid name. Argument 1 missing or nil"),
+            format!("print: RemoveCollisionGroup {refused} Collision group requires a valid name. Argument 1 missing or nil"),
+            format!("print: {refused} {refused} Unable to cast string to bool"),
+            "print: GroupA true Parameter 2 must be BasePart in CollisionGroupContainsPart. 1".to_string(),
+        ]
+    );
+    for (mode, run_context) in [("edit", RunContext::Client), ("edit", RunContext::Edit)] {
+        let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, r#"game:GetService("PhysicsService"):RegisterCollisionGroup("GroupA") print(#game:GetService("PhysicsService"):GetRegisteredCollisionGroups())"#);
+        assert_eq!(output, ["print: 2"], "{mode} {run_context:?}");
+    }
+}
+
+/// A part's CollisionGroupId is its group's id while it is in the Workspace (-1 for a name that is not registered): worked
+/// out on the way in (inside a model), when its name changes there and when the groups change, over a script's id, and
+/// left as it is outside; each change fires Changed. CollisionGroup ignores "" and keeps 100 bytes. (Measured in
+/// roblox-sim's 0.747 server: tools/parity/probes/collision_group_args.luau.)
+#[test]
+fn a_parts_collision_group_id_follows_the_registry_in_the_workspace() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        PhysicsService:RegisterCollisionGroup("GroupA")
+        local Model = Instance.new("Model")
+        local Inner = Instance.new("Part")
+        local Changes = {}
+        Inner.Changed:Connect(function(Name)
+            if string.find(Name, "^CollisionGroup") then
+                table.insert(Changes, Name)
+            end
+        end)
+        Inner.CollisionGroup = "GroupA"
+        Inner.Parent = Model
+        print("outside", Inner.CollisionGroupId)
+        Model.Parent = workspace
+        print("entered", Inner.CollisionGroupId)
+        Inner.CollisionGroup = "GroupB"
+        print("unknown", Inner.CollisionGroupId)
+        PhysicsService:RegisterCollisionGroup("GroupB")
+        print("registered", Inner.CollisionGroupId)
+        Inner.CollisionGroupId = 9
+        PhysicsService:CollisionGroupSetCollidable("GroupA", "GroupB", false)
+        print("collidable", Inner.CollisionGroupId)
+        PhysicsService:UnregisterCollisionGroup("GroupA")
+        print("unregistered", Inner.CollisionGroupId)
+        PhysicsService:RenameCollisionGroup("GroupB", "GroupC")
+        print("renamed", Inner.CollisionGroup, Inner.CollisionGroupId)
+        Inner.CollisionGroup = ""
+        print("empty", Inner.CollisionGroup)
+        Inner.CollisionGroup = string.rep("L", 99) .. "\u{00FC}"
+        print("cut", #Inner.CollisionGroup)
+        Model.Parent = nil
+        Inner.CollisionGroup = "GroupC"
+        print("left", Inner.CollisionGroup, Inner.CollisionGroupId)
+        task.defer(function()
+            print("changes", table.concat(Changes, " "))
+        end)
+        "#,
+    );
+    let changes = ["CollisionGroup", "CollisionGroupId", "CollisionGroup", "CollisionGroupId", "CollisionGroupId", "CollisionGroupId", "CollisionGroupId", "CollisionGroupId", "CollisionGroup", "CollisionGroup"];
+    assert_eq!(
+        output,
+        [
+            "print: outside 0".to_string(),
+            "print: entered 1".into(),
+            "print: unknown -1".into(),
+            "print: registered 2".into(),
+            "print: collidable 9".into(),
+            "print: unregistered 2".into(),
+            "print: renamed GroupB -1".into(),
+            "print: empty GroupB".into(),
+            "print: cut 100".into(),
+            "print: left GroupC -1".into(),
+            format!("print: changes {}", changes.join(" ")),
+        ]
+    );
+}
+
+/// Each engine (DataModel) has its own collision groups.
+#[test]
+fn each_engine_has_its_own_collision_groups() {
+    use super::RunContext;
+    let server = || start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    let (first_lua, first) = server();
+    let (second_lua, second) = server();
+    let count = r#"print(#game:GetService("PhysicsService"):GetRegisteredCollisionGroups())"#;
+    assert_eq!(run(&first_lua, &first, &format!(r#"game:GetService("PhysicsService"):RegisterCollisionGroup("GroupA") {count}"#)), ["print: 2"]);
+    assert_eq!(run(&second_lua, &second, count), ["print: 1"]);
+}

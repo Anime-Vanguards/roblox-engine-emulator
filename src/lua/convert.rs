@@ -411,6 +411,53 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
     }
 }
 
+/// A number as a method's string parameter reads it: up to 20 significant digits, as C's `%.20g` writes them (`0.1` is
+/// `0.10000000000000000555`, `1e20` is `1e+20`), and `NAN`, `INF`, `-INF`.
+pub fn cast_number_text(number: f64) -> String {
+    if number.is_nan() {
+        return "NAN".into();
+    }
+    if number.is_infinite() {
+        return if number > 0.0 { "INF" } else { "-INF" }.into();
+    }
+    let scientific = format!("{number:.19e}");
+    let (mantissa, exponent) = scientific.split_once('e').expect("an exponent");
+    let exponent: i32 = exponent.parse().expect("a whole exponent");
+    let trimmed = |digits: &str| if digits.contains('.') { digits.trim_end_matches('0').trim_end_matches('.').to_string() } else { digits.to_string() };
+    if (-4..20).contains(&exponent) {
+        trimmed(&format!("{number:.*}", (19 - exponent) as usize))
+    } else {
+        format!("{}e{}{:02}", trimmed(mantissa), if exponent < 0 { '-' } else { '+' }, exponent.abs())
+    }
+}
+
+/// A value as a method's string parameter casts it (measured, Studio 0.747: MarkerCurve:InsertMarkerAtTime's value and
+/// PhysicsService's group names): a string as it is, a number by [`cast_number_text`], a boolean's name, an EnumItem's
+/// name, "Instance" for an instance, "{}" for a table, "function", "nil" for an Enum, a thread or a plain userdata,
+/// "buffer { Size = 2 }", and a datatype as `tostring` writes it. (nil is the caller's: "Argument n missing or nil".)
+pub fn cast_text(lua: &Lua, engine: &Engine, value: &LuaValue) -> LuaResult<Vec<u8>> {
+    Ok(match value {
+        LuaValue::String(text) => text.as_bytes().to_vec(),
+        LuaValue::Number(number) => cast_number_text(*number).into_bytes(),
+        LuaValue::Integer(number) => cast_number_text(*number as f64).into_bytes(),
+        LuaValue::Boolean(flag) => flag.to_string().into_bytes(),
+        LuaValue::Table(_) => b"{}".to_vec(),
+        LuaValue::Function(_) => b"function".to_vec(),
+        LuaValue::Thread(_) => b"nil".to_vec(),
+        LuaValue::Buffer(buffer) => format!("buffer {{ Size = {} }}", buffer.len()).into_bytes(),
+        other => {
+            let written = || -> LuaResult<Vec<u8>> { Ok(lua.globals().get::<LuaFunction>("tostring")?.call::<LuaString>(other.clone())?.as_bytes().to_vec()) };
+            match typeof_value(engine, other).as_str() {
+                "Instance" => b"Instance".to_vec(),
+                "Enum" | "userdata" => b"nil".to_vec(),
+                // (`Enum.Material.Plastic` is "Plastic")
+                "EnumItem" => written()?.rsplit(|&byte| byte == b'.').next().unwrap_or_default().to_vec(),
+                _ => written()?,
+            }
+        }
+    })
+}
+
 /// Enums.Coerce: an EnumItem of the type, an item name or an item value.
 pub fn coerce_enum(lua: &Lua, engine: &Engine, enum_id: u32, value: &LuaValue) -> Option<u32> {
     let _ = lua;

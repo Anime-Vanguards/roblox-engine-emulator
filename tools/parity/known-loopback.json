@@ -1,28 +1,20 @@
 {
 	"collision_groups": [
 		{
-			"line": "server: boot 2 Default=-3 LoopEarly=-2",
-			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
-		},
-		{
-			"line": "server: end 2 Default=-3 LoopRenamed=-2",
-			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
-		},
-		{
 			"line": "client: join 2 Default=-3 LoopEarly=-2",
-			"why": "ree has no collision group registry yet, and its loopback client would not get the server's groups either: ree replicates none"
+			"why": "a client gets its server's collision groups and collidable pairs, at its join and as they change; ree replicates none (services/physics.rs), so a loopback client keeps its own registry, Default alone"
 		},
 		{
 			"line": "client: late 3 Default=-3 LoopEarly=-6 LoopLate=-3",
-			"why": "ree has no collision group registry yet, and its loopback client would not get the server's groups either: ree replicates none"
+			"why": "a client gets its server's collision groups and collidable pairs, at its join and as they change; ree replicates none (services/physics.rs), so a loopback client keeps its own registry, Default alone"
 		},
 		{
 			"line": "client: late-collidable ok false",
-			"why": "ree has no collision group registry yet, and its loopback client would not get the server's groups either: ree replicates none"
+			"why": "a client gets its server's collision groups and collidable pairs, at its join and as they change; ree replicates none (services/physics.rs), so a loopback client keeps its own registry, Default alone"
 		},
 		{
 			"line": "client: changed 2 Default=-3 LoopRenamed=-2",
-			"why": "ree has no collision group registry yet, and its loopback client would not get the server's groups either: ree replicates none"
+			"why": "a client gets its server's collision groups and collidable pairs, at its join and as they change; ree replicates none (services/physics.rs), so a loopback client keeps its own registry, Default alone"
 		}
 	],
 	"remote_latency": [

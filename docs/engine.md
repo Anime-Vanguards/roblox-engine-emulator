@@ -30,7 +30,7 @@ src/instance.rs          Core instance semantics (create, set_parent, raw_set, c
 src/derived.rs           Derived property views and paired Changed notifications
 src/output.rs            Structured Output log and LogService history
 src/services/            Service & class behaviors (TweenService, QueryDescendants, EncodingService,
-                         ReflectionService, InputActions, etc.)
+                         ReflectionService, InputActions, PhysicsService collision groups, etc.)
 src/project.rs, project/ Rojo mounting, models, snapshots, placeholders, asset bundles (model_assets.rs),
                          ModelPlan & lazy instantiation (plan.rs, plan/codec.rs, plan/store.rs), JSON models
 src/lua/                 Luau API: raw Instance userdata (raw.rs), datatypes, globals, require, Actors,
@@ -266,6 +266,16 @@ Matches playing-client behavior (`input_actions.luau`, `input_action_resets.luau
 - `InputAction:Fire(state)` requires enabled action and nearest enabled `InputContext` (or DataModel ancestry if no context); `InputBinding:Fire(state)` requires `Type = Scriptable`. Disabling or reparenting resets the action; changing `Type` resets to default.
 - Host device input (`services::input_actions::deliver`, called after `UserInputService` events when no `TextBox` is focused) routes to enabled DataModel actions (excluding `StarterGui`/`StarterPack`/`StarterPlayer`) via `Automatic` bindings, prioritized by modified `KeyCode` bindings, summed/clamped/scaled directional composites, and `InputContext.Priority` (newest first on ties, respecting sink contexts).
 
+## PhysicsService collision groups (`src/services/physics.rs`)
+
+A registry per DataModel that remembers collision groups and which pairs collide. ree simulates no collisions (it has no rigid-body contacts): nothing reads the registry but scripts. Measured on a 0.747 client and server (`collision_groups.luau`, `collision_group_args.luau`, `loopback/collision_groups.luau`):
+
+- **Groups & masks:** ids `0`–`31`, `Default` at `0` and always there; a new group takes the lowest free id (`GetMaxCollisionGroups` is `32`). `GetRegisteredCollisionGroups()` returns a new array of `{ name, mask }` in id order each call (the deprecated `GetCollisionGroups()` adds `id`); `mask` is a signed 32-bit int whose bit *i* means "collides with group *i*" (`-1` for all). `CollisionGroupSetCollidable` sets both groups' bits (`Default` and a group with itself included); `CollisionGroupsAreCollidable` is `true` when either name is unregistered. Unregistering frees the id and resets its bit in every mask; renaming keeps id and mask. `CollisionGroupCollidableChanged` never fires for scripts.
+- **Names & errors:** byte-compared and case-sensitive. Register / Unregister / Rename / Create / Remove refuse `""` (`Collision group requires a valid name.`), `Default` (`Can not use/change the Default collision group.`) and more than 100 bytes (`Collision group name length cannot exceed 100 chars`). A 33rd group raises `Cannot register more than 32 collision groups in this world.` (checked before duplicates); re-registering, unregistering or renaming an unknown name, and renaming onto a registered one, do nothing. `CreateCollisionGroup` returns the id and refuses duplicates; `CollisionGroupSetCollidable` needs both names registered (`Both collision groups must be registered.`); `GetCollisionGroupId` / `GetCollisionGroupName` raise `Collision group not found.` / `The Collision group Id must be between 0 and 32`.
+- **Argument casts (last argument first):** a name casts any value to text (`5` → `"5"`, `true` → `"true"`, a table → `"{}"`, `0.1` → `0.10000000000000000555`); the collidable flag takes booleans, numbers (`0` is false) and `"true"` / `"false"` in any case; ids round half away from zero; part arguments must be `BasePart`s.
+- **Sides:** a playing client may read but not change the registry (`This API can only be used on the server!`); a server and edit mode (ree's default `--mode edit`, Studio's edit DataModel by Roblox's documentation, not measured) may. A real client also sees its server's groups; ree replicates none, so a loopback client keeps `Default` alone (`known-loopback.json`).
+- **Parts:** `BasePart.CollisionGroup` takes any name, registered or not (`""` is ignored, longer names are cut to 100 bytes); `SetPartCollisionGroup` writes it the same way and `CollisionGroupContainsPart` compares it. For a part in the Workspace, `CollisionGroupId` is its group's id (`-1` when unregistered), set when the part enters the Workspace, when its name changes there, and for every placed part when groups are registered, renamed or removed (firing `Changed`); outside the Workspace it keeps its last value. ree starts this tracking once a run touches collision groups; before that a part keeps the id it was loaded with. Groups a place file saved are not loaded: a run starts with `Default` alone.
+
 ## Server and edit run contexts (`src/lua/server.luau`, `src/lua/loading.rs`)
 
 - **Server (`--run-context server`, requires `--mode play`, forbids `--player`):** `IsServer`/`IsStudio`/`IsRunning = true`, `IsClient`/`IsRunMode = false`, `IsEdit` forbidden to game scripts (`--studio false` flips `IsStudio`). Empty `Players`, no rendering (`RenderStepped` errors; `PreRender`/`BindToRenderStep` bind silently), tweens step before `Heartbeat`. Includes clean in-memory `DataStoreService` (versions, keys, `OrderedDataStore`), `MemoryStoreService` (sorted/hash maps, queues), `MessagingService`, and `EncodingService` (Zstd + Base64, also available on clients). `FireClient`/`FireAllClients` are no-ops; `InvokeClient` yields until the player leaves (loopback servers reach their paired client; see below).
@@ -298,7 +308,7 @@ Runs a paired server and client (`RunContext::Server` + `RunContext::Client`) on
 ## Known limitations
 
 - `ImageLabel`/`ImageButton.IsLoaded`, `Sound.IsLoaded` (`TimeLength = 1`), and `DataModel:IsLoaded()` immediately return `true` without fetching assets.
-- No rigid-body collisions, physics constraints, body movers, particle simulation, or default character `Animate` scripts.
+- No rigid-body collisions, physics constraints, body movers, particle simulation, or default character `Animate` scripts (`PhysicsService`'s collision groups are a registry scripts read and write; nothing collides).
 - No Humanoid simulation: no state machine, health or death (`TakeDamage`, `ChangeState`, `MoveTo`, `GetState`, and the `HealthChanged`/`Died` a `Health` write would fire report `missing`; `Health` is stored as written).
 - All Luau HTTP requests are disabled.
 - `SecurityCapabilities` are not emulated (`ReflectionService` `Permits` returns a frozen table reporting `missing` on access); `GetPropertiesOfClass`, `GetMethodsOfClass`, and `GetEventsOfClass` are unimplemented.
