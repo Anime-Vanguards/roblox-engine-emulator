@@ -128,6 +128,20 @@ Options accept `--key value` or `--key=value` (required for negative numbers).
 - **Asset bundles:** `--assets-at <Service.Path>` and `--assets <prefix>,...` (or `*` for all) configure manifest bundle mounting, overriding `rur.json`'s `modelAssets` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
   Bundles are fetched by the external worker named by `REE_ASSET_WORKER` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
 
+## Exit codes
+
+`ree run` and `ree record` exit with:
+
+| Code | Meaning |
+|---|---|
+| `0` | The run ended with status `ok` or `yielded`, including an early end through `@done`. Errors raised by other scripts (handlers, spawned threads) are counted in the summary's `errors` and don't change the code. |
+| `1` | The run's status is `error`: the harness function or a frame failed (`failure` says how). The summary is printed on stdout and a recording's files are written, as for any other run. Also used when no run started (a missing `--harness` or harness file, an option value it cannot read); then stdout is empty and the reason is on stderr. |
+| `2` | Usage error: an unknown command, or a `--profile` kind `ree` does not know. |
+| `101` | `ree` panicked (a bug): no summary. |
+| `124`, `125`, `126` | A process guard stopped the run ([below](#limits-and-process-guards)). After `126` the summary is printed, with status `error`. |
+
+Through `--service`, the client exits with the job's code, and `ree serve --status` counts a job that exited non-zero (other than `125`) under `jobs.failed`. A caller should read the summary whenever stdout has one: exit `1` with a summary is a run that failed, not a crash.
+
 ## Limits and process guards
 
 `ree` enforces strict timeouts and resource limits (`src/watchdog.rs`) so runaway scripts never hang a machine:

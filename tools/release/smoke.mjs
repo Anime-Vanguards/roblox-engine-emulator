@@ -184,7 +184,9 @@ function runningServices(ree, pid) {
 // yet released the job's engine.
 // With no `expectedPid`, the one running service (or the one the job starts) is the expected one. `newService` says
 // the job must start a new process, as a changed environment or client folder does; services already running don't count.
-export async function servedRun(ree, argv, expectedPid, { newService = false } = {}) {
+// A job whose run fails exits 1 and the service counts it under `failed`: `run` runs the job instead of `ree` (one that
+// accepts that exit) and `counted` names the count that must rise.
+export async function servedRun(ree, argv, expectedPid, { newService = false, run = ree, counted = "done" } = {}) {
 	const ignoredPids = newService ? new Set(runningServices(ree).map((service) => service.pid)) : new Set();
 	const expectedServices = () => runningServices(ree, expectedPid).filter((service) => !ignoredPids.has(service.pid));
 	let before = expectedServices();
@@ -201,9 +203,9 @@ export async function servedRun(ree, argv, expectedPid, { newService = false } =
 		before = expectedServices();
 		assert.equal(before.length, 1, "the expected service must stay running");
 	}
-	const doneBefore = before[0]?.health.jobs.done ?? 0;
+	const doneBefore = before[0]?.health.jobs[counted] ?? 0;
 
-	const printed = ree(argv);
+	const printed = run(argv);
 
 	const deadline = Date.now() + 10_000;
 	for (;;) {
@@ -211,7 +213,7 @@ export async function servedRun(ree, argv, expectedPid, { newService = false } =
 		assert.equal(after.length, 1, "the expected service must stay running after the job");
 		expectedPid ??= after[0].pid;
 		assert.equal(after[0].pid, expectedPid, "the expected service must answer the job");
-		const doneAfter = after[0].health.jobs.done;
+		const doneAfter = after[0].health.jobs[counted];
 		if (doneAfter !== doneBefore || Date.now() >= deadline) {
 			assert.equal(doneAfter, doneBefore + 1, "the expected service must complete the job without client fallback");
 			return printed;

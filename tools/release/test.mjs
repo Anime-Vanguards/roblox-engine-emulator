@@ -41,6 +41,26 @@ test("served-run checks reject client fallback and a different service PID", asy
 	}
 });
 
+test("a served-run check of a failing job runs it with its own runner and counts the service's failed jobs", async (t) => {
+	// every clock read jumps past the 10 second limits, so the polling gives up at once instead of waiting
+	let now = 0;
+	t.mock.method(Date, "now", () => now += 10_001);
+	for (const [counted, served] of [["failed", true], ["done", false]]) {
+		let jobRan = false;
+		const ree = (argv) => {
+			assert.equal(argv[0], "serve", "the job goes to the runner that accepts its exit");
+			return JSON.stringify({ pid: 41, health: { jobs: { done: 1, failed: jobRan ? 1 : 0 } } });
+		};
+		const run = () => {
+			jobRan = true;
+			return "failed job output";
+		};
+		const job = servedRun(ree, ["run", "--service"], 41, { run, counted });
+		if (served) assert.equal(await job, "failed job output");
+		else await assert.rejects(job, /expected service must/);
+	}
+});
+
 test("served-run checks wait for previous work and delayed completion after the reply", async () => {
 	// The job counts that successive `serve --status` calls report: first an earlier job queued, then running, then
 	// done, which makes 5; after the reply the new job is still running, then released, and only then counted as the 6th.

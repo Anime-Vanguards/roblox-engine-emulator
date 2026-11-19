@@ -112,6 +112,7 @@ function installWorker(file, mode = 0o755) {
 // Runs `body` in a fresh folder with an installed ree. It gets:
 //   env       the environment ree runs in; a check may add to it
 //   ree       (cwd, args) runs ree and returns its output
+//   failed    (cwd, args) the same for a run that fails (status "error", exit 1)
 //   project   (name) makes a project folder holding a worker at helpers/worker
 //   requests  () the requests the worker has logged so far
 function check(name, body) {
@@ -139,6 +140,13 @@ function check(name, body) {
 			assert.equal(result.status, 0, result.stderr || result.stdout);
 			return result.stdout;
 		};
+		// a run whose status is "error" exits 1, with its summary printed as for any run
+		const failed = (cwd, args) => {
+			const result = spawnSync(executable, args, { cwd, env, encoding: "utf8", timeout: 120_000, windowsHide: true });
+			assert.ifError(result.error);
+			assert.equal(result.status, 1, result.stderr || result.stdout);
+			return result.stdout;
+		};
 		const project = (folder) => {
 			const directory = path.join(root, folder);
 			fs.mkdirSync(path.join(directory, "helpers"), { recursive: true });
@@ -151,7 +159,7 @@ function check(name, body) {
 		// A passing check removes its folder; a failing one keeps it and says where it is
 		let passed = false;
 		try {
-			await body({ root, env, ree, project, requests, executable });
+			await body({ root, env, ree, failed, project, requests, executable });
 			passed = true;
 		} finally {
 			// Stop the services, then wait for the workers they started, so nothing holds the folder when it is removed.
@@ -562,7 +570,7 @@ function makeCheckout(root) {
 
 // A binary in its own checkout is a host, so it starts its own worker as it did before standalone binaries: the
 // worker variable is passed on as it is and a missing worker fails at spawn.
-check("a missing host worker keeps its spawn error in a checkout", async ({ root, env, ree, project }) => {
+check("a missing host worker keeps its spawn error in a checkout", async ({ root, env, ree, failed, project }) => {
 	const directory = project("project");
 	makeCheckout(root);
 	env[HOST_WORKER_VARIABLE] = "ree_missing_host_worker";
@@ -572,14 +580,14 @@ check("a missing host worker keeps its spawn error in a checkout", async ({ root
 game:GetService("KeyframeSequenceProvider"):GetKeyframeSequenceAsync("rbxassetid://5101")
 end`);
 	const args = ["run", "--project", directory, "--harness", "Harness.luau", "--seconds", "0.05"];
-	const direct = JSON.parse(ree(directory, args));
+	const direct = JSON.parse(failed(directory, args));
 	assert.equal(direct.errors, 1, JSON.stringify(direct));
 	assert.match(direct.failure, /starting .*worker:/);
 	// No service runs yet, so the first --service call may run in the client; the next must forward the same failure
 	// through the service.
 	const serviceArgs = [...args, "--service"];
-	const firstServiceFallback = ree(directory, serviceArgs);
-	const servedReply = await servedRun(inDirectory(ree, directory), serviceArgs);
+	const firstServiceFallback = failed(directory, serviceArgs);
+	const servedReply = await servedRun(inDirectory(ree, directory), serviceArgs, undefined, { run: inDirectory(failed, directory), counted: "failed" });
 	for (const output of [firstServiceFallback, servedReply]) {
 		const served = JSON.parse(output);
 		assert.equal(served.failure, direct.failure, JSON.stringify(served));
@@ -588,7 +596,7 @@ end`);
 	assert(ree(root, ["serve", "--status"]).trim(), "the service stays running after the failed job");
 });
 
-check("an unresolved worker stays unresolved when a decoy exists in the service directory", async ({ root, env, ree, project }) => {
+check("an unresolved worker stays unresolved when a decoy exists in the service directory", async ({ root, env, ree, failed, project }) => {
 	const directory = project("project");
 	// The name is on no PATH, but a worker of that name sits in the state dir's bin, beside the copied service's executable
 	env.REE_ASSET_WORKER = WINDOWS ? "only-in-state.exe" : "only-in-state";
@@ -599,13 +607,13 @@ check("an unresolved worker stays unresolved when a decoy exists in the service 
 game:GetService("KeyframeSequenceProvider"):GetKeyframeSequenceAsync("rbxassetid://5001")
 end`);
 	const args = ["run", "--harness", "Harness.luau", "--seconds", "0.05"];
-	const direct = JSON.parse(ree(directory, args));
+	const direct = JSON.parse(failed(directory, args));
 	assert.match(direct.failure, WINDOWS ? /asset worker .*program not found/ : /starting .*worker:/);
 	// No service runs yet, so the first --service call may run in the client; the next must forward the client's lookup
 	// failure through the service.
 	const serviceArgs = [...args, "--service"];
-	const firstServiceFallback = ree(directory, serviceArgs);
-	const servedReply = await servedRun(inDirectory(ree, directory), serviceArgs);
+	const firstServiceFallback = failed(directory, serviceArgs);
+	const servedReply = await servedRun(inDirectory(ree, directory), serviceArgs, undefined, { run: inDirectory(failed, directory), counted: "failed" });
 	for (const output of [firstServiceFallback, servedReply]) {
 		const served = JSON.parse(output);
 		assert.equal(served.failure, direct.failure, JSON.stringify(served));

@@ -330,6 +330,10 @@ pub fn parse(args: &[String], record: bool) -> Result<RecordArgs, String> {
     Ok(RecordArgs { engine, harness, out, seconds, fps, context, model_assets, animations, frame_times, script_timeout, script_timeouts, timing_check, clock_probe: None, latency, record_server })
 }
 
+/// The exit code of a run whose status is `error` (its harness or a frame failed), with its summary printed and
+/// written as any run's: a caller that checks the exit code first sees the failure (docs/cli.md "Exit codes")
+pub const EXIT_RUN_ERROR: i32 = 1;
+
 /// What a command produced: the summary (printed on stdout) and its status line (stderr).
 pub struct Done {
     pub summary: Json,
@@ -340,7 +344,8 @@ pub struct Done {
     pub split: bool,
     /// Its checkpoint came between frames (Context.FrameCheckpoint): a prepared run is for its `--fps`
     pub framed: bool,
-    /// The command's exit code: 0, or [`crate::watchdog::EXIT_SCRIPT_TIMEOUTS`] / [`crate::watchdog::EXIT_ORPHANED`] when stopped
+    /// The command's exit code: 0, [`EXIT_RUN_ERROR`] when the run's status is `error`, or
+    /// [`crate::watchdog::EXIT_SCRIPT_TIMEOUTS`] / [`crate::watchdog::EXIT_ORPHANED`] when stopped
     pub code: i32,
     /// Why a run prepared up to its checkpoint would fail the same way (it read a mesh, an image... first)
     pub unpreparable: Option<String>,
@@ -1068,6 +1073,8 @@ pub(crate) fn finish_run(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, reco
     }
     let done = engine.state.borrow().output.done;
     let Steps { status, failure, stepped, code, .. } = steps;
+    // (a failed run exits as a failed command does; a guard that stopped it keeps its own code)
+    let code = if code == 0 && status == "error" { EXIT_RUN_ERROR } else { code };
     Ok(Ran { status, failure, frames: stepped, harness, checkpoint: checkpoint.reached.get(), split: checkpoint.split.get(), framed: checkpoint.framed.get(), code, done, unchecked: checkpoint.unchecked.borrow().clone() })
 }
 

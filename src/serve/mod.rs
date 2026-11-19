@@ -942,6 +942,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A job whose harness fails replies exit 1 with the summary the command prints (the client exits with the reply's
+    /// code), a run and a recording alike; a clean job of the same worker still replies 0.
+    #[test]
+    fn a_failed_job_replies_exit_1_and_its_whole_summary() {
+        let root = std::env::temp_dir().join(format!("ree-serve-failed-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let fails = root.join("Fails.luau");
+        std::fs::write(&fails, "return function() print('before') task.wait(0.1) error('boom') end").unwrap();
+        let clean = root.join("Clean.luau");
+        std::fs::write(&clean, "return function() print('fine') end").unwrap();
+        let args = |harness: &Path, out: Option<&str>| -> Vec<String> {
+            let mut args: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.join("none").to_string_lossy(), "--seconds", "0.5"].iter().map(|s| s.to_string()).collect();
+            if let Some(out) = out {
+                args.extend(["--out".to_string(), root.join(out).to_string_lossy().into_owned()]);
+            }
+            args
+        };
+        for (command, out) in [("run", None), ("record", Some("out"))] {
+            let (reply, emulator) = job(command, &args(&fails, out));
+            drop(emulator);
+            assert_eq!(reply["code"], 1, "{reply}");
+            assert!(reply["stderr"].as_str().unwrap().contains(&format!("ree: {command} error; 31 frames;")), "{reply}");
+            let summary: serde_json::Value = serde_json::from_str(reply["stdout"].as_str().unwrap().trim()).unwrap();
+            assert_eq!(summary["status"], "error", "{summary}");
+            assert!(summary["failure"].as_str().unwrap().contains("boom"), "{summary}");
+            assert_eq!(summary["frames"], 31, "{summary}");
+            let (reply, emulator) = job(command, &args(&clean, out.map(|_| "clean")));
+            drop(emulator);
+            assert_eq!(reply["code"], 0, "{reply}");
+        }
+        assert!(root.join("out").join("playback.json").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A warm-up job reads in what a recording of the project reads and records nothing: its reply is a
     /// summary, and the recording after it is what it is without it.
     #[test]
