@@ -84,6 +84,54 @@ return {
     assert_eq!(summary["runContext"], "loopback");
 }
 
+/// Both sides of a pair refuse the fast-flag methods to a game script (reflection.rs CAPABILITY_CALLS), so a scheduler that
+/// reads its frame budget through a define-under-pcall helper takes its default on each side, where the define answered
+/// nil and the budget then divided by the nil the getter read
+#[test]
+fn each_side_refuses_the_fast_flag_methods_and_a_scheduler_takes_its_default() {
+    let summary = run_pair(
+        "fast-flags",
+        r##"
+local function IntGetter(Name, Default)
+	local Ok, Problem = pcall(function()
+		return game:DefineFastInt(Name, Default)
+	end)
+	if Ok then
+		return function()
+			return game:GetFastInt(Name)
+		end
+	end
+	print("define", Problem)
+	return function()
+		return Default
+	end
+end
+local function Budget(Side)
+	local TargetFps = IntGetter("TestTargetFps", 50)
+	print(Side, "budget", 1000 / TargetFps(), select(2, pcall(game.GetFastInt, game, "TestTargetFps")))
+end
+return {
+	Server = function(Context)
+		Budget("server")
+	end,
+	Client = function(Context)
+		Budget("client")
+		task.wait()
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    for side in ["server", "client"] {
+        assert!(has(&lines, &format!("{side} print: define The current thread cannot call 'DefineFastInt' (lacking capability RobloxScript)")), "{lines:?}");
+        assert!(has(&lines, &format!("{side} print: {side} budget 20 The current thread cannot call 'GetFastInt' (lacking capability LocalUser)")), "{lines:?}");
+    }
+}
+
 /// A loopback run refuses edit mode and a harness of another shape; `--latency` is a loopback run's
 #[test]
 fn launch_refuses_what_a_loopback_run_cannot_be() {

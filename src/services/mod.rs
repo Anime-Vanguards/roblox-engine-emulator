@@ -378,6 +378,20 @@ struct RenderStep {
     sequence: u64,
 }
 
+/// The methods only Roblox's own scripts may call (reflection.rs CAPABILITY_CALLS): each is a function that raises the
+/// client's error whatever it is called with, in every run context. Plain functions, not instance methods, because the
+/// error comes before the instance is checked (`game.DefineFastInt("x", 1)` raises it too, not "Expected ':' not '.'").
+/// Installed with the core's behaviours, before a host's layers, which may replace them.
+pub fn install_capability_calls(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    for &(class_name, member, capability) in crate::reflection::CAPABILITY_CALLS {
+        let (Some(owner), Some(name)) = (class(&engine.reflection, class_name), engine.reflection.name_id(member)) else { continue };
+        let message = format!("The current thread cannot call '{member}' (lacking capability {capability})");
+        let function = super::lua::wrapped(lua, engine, move |_, _| raise(message.clone()))?;
+        engine.behaviors.borrow_mut().add_lua_method(owner, name, function);
+    }
+    Ok(())
+}
+
 /// Installs the service behaviours (Services.Install) and the RunService frame hooks.
 pub fn install(engine: &Rc<Engine>) {
     let reflection = engine.reflection.clone();

@@ -7983,6 +7983,69 @@ fn settings_the_0_747_dump_leaves_out_are_still_stored() {
     );
 }
 
+/// The fast-flag methods and GuiService:GetResolutionScale are there for a game script to read and raise when it calls
+/// them, in every run context, with the client's text and capability (reflection.rs CAPABILITY_CALLS, measured in a
+/// playing client and a server, Studio 0.747: tools/parity/probes/engine_capabilities.luau), where they answered nil and
+/// reported themselves missing: a settings helper that takes its default when the define raises went on with nil, and a
+/// scheduler that then read the setting divided by nil.
+#[test]
+fn engine_only_methods_raise_a_game_scripts_capability_error_in_every_run_context() {
+    use super::RunContext;
+    let script = r#"
+        local GuiService = game:GetService("GuiService")
+        local Calls = {
+            DefineFastFlag = function() return game:DefineFastFlag("TestFlag", true) end,
+            DefineFastInt = function() return game:DefineFastInt("TestInt", 7) end,
+            DefineFastString = function() return game:DefineFastString("TestString", "seven") end,
+            GetFastFlag = function() return game:GetFastFlag("TestFlag") end,
+            GetFastInt = function() return game:GetFastInt("TestInt") end,
+            GetFastString = function() return game:GetFastString("TestString") end,
+            GetEngineFeature = function() return game:GetEngineFeature("TestFeature") end,
+            GetResolutionScale = function() return GuiService:GetResolutionScale() end,
+        }
+        for _, Name in { "DefineFastFlag", "DefineFastInt", "DefineFastString", "GetFastFlag", "GetFastInt", "GetFastString", "GetEngineFeature", "GetResolutionScale" } do
+            local Owner = if Name == "GetResolutionScale" then GuiService else game
+            local Ok, Message = pcall(Calls[Name])
+            local NoSelf = select(2, pcall(Owner[Name]))
+            print(Name, typeof(Owner[Name]), Ok, type(Message), Message, NoSelf == Message)
+        end
+
+        -- a settings helper: define the setting under pcall and keep the default when the call raises
+        local function Setting(Kind, Name, Default)
+            local Ok, Value = pcall(function()
+                return game["Define" .. Kind](game, Name, Default)
+            end)
+            if Ok then
+                return Value
+            end
+            return Default
+        end
+        print("settings", Setting("FastInt", "TestFrameRate", 60), Setting("FastFlag", "TestEnabled", true), Setting("FastString", "TestMode", "on"))
+
+        -- a scheduler that reads its frame budget through such a helper: the getter it keeps reads the engine's value only
+        -- when the define went through, and the budget divides by it
+        local function IntGetter(Name, Default)
+            if pcall(function() return game:DefineFastInt(Name, Default) end) then
+                return function() return game:GetFastInt(Name) end
+            end
+            return function() return Default end
+        end
+        local TargetFps = IntGetter("TestTargetFps", 50)
+        print("frame budget", 1000 / TargetFps())
+    "#;
+    let mut want: Vec<String> = [("DefineFastFlag", "RobloxScript"), ("DefineFastInt", "RobloxScript"), ("DefineFastString", "RobloxScript"), ("GetFastFlag", "LocalUser"), ("GetFastInt", "LocalUser"), ("GetFastString", "LocalUser"), ("GetEngineFeature", "LocalUser"), ("GetResolutionScale", "RobloxScript")]
+        .iter()
+        .map(|(name, capability)| format!("print: {name} function false string The current thread cannot call '{name}' (lacking capability {capability}) true"))
+        .collect();
+    want.push("print: settings 60 true on".into());
+    want.push("print: frame budget 20".into());
+    for (mode, run_context) in [("play", RunContext::Client), ("play", RunContext::Server), ("edit", RunContext::Edit), ("edit", RunContext::Client)] {
+        let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, script);
+        assert_eq!(output, want, "{mode} {run_context:?}");
+    }
+}
+
 /// What Studio 0.747's dump adds and ree does not emulate reports itself (Output `missing`) and answers nil; what the dump
 /// drops is no member any more.
 #[test]

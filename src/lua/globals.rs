@@ -516,6 +516,7 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     types::register(lua, engine)?;
     instance::register(lua, engine)?;
     services::install(engine);
+    services::install_capability_calls(lua, engine)?;
     crate::derived::install(engine);
     // The 3D world's views, queries and reported calls (engine::world; after the derived views)
     crate::world::install(engine);

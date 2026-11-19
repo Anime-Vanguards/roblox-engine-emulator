@@ -390,6 +390,26 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
     ("StarterPlayer", "CreateDefaultPlayerModule", "PluginOrOpenCloud"),
 ];
 
+/// Methods a game script may not call: (class, name, the capability it lacks). A playing client's and a server's game
+/// script (script identity 2, Studio 0.747) read each as a function, and a call raises "The current thread cannot call
+/// 'DefineFastInt' (lacking capability RobloxScript)", a string error pcall catches, before the arguments or the
+/// instance are looked at: with none, with tables, on another instance or on no instance at all it is the same error
+/// (tools/parity/probes/engine_capabilities.luau). ree answered nil (not emulated), so a settings helper that falls back
+/// on its default when the define raises went on with nil. At identity 4 (the command bar's) the RobloxScript ones raise
+/// the same and the LocalUser ones answer; a plugin lacks LocalUser too (the developer forum's identity table, not
+/// measured), and the edit run context, where plugin code runs, raises them all. services::install_capability_calls
+/// gives each its function.
+pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
+    ("DataModel", "DefineFastFlag", "RobloxScript"),
+    ("DataModel", "DefineFastInt", "RobloxScript"),
+    ("DataModel", "DefineFastString", "RobloxScript"),
+    ("DataModel", "GetFastFlag", "LocalUser"),
+    ("DataModel", "GetFastInt", "LocalUser"),
+    ("DataModel", "GetFastString", "LocalUser"),
+    ("DataModel", "GetEngineFeature", "LocalUser"),
+    ("GuiService", "GetResolutionScale", "RobloxScript"),
+];
+
 // Callbacks the dump leaves out (it lists none for any class): every callback Roblox's API dump lets
 // a game script assign (Security None; MaximumADHD's Roblox-Client-Tracker API-Dump.json, read
 // 2026-10-24). A script assigns them, the engine keeps the function (`Instance::callbacks`) and

@@ -155,64 +155,6 @@
 			"why": "DateTime formats only in en-us: other locales (en-gb, fr, ja, de) are not emulated"
 		}
 	],
-	"engine_capabilities": [
-		{
-			"line": "DefineFastFlag read ok function | call error The current thread cannot call 'DefineFastFlag' (lacking capability RobloxScript) | no-args error The current thread cannot call 'DefineFastFlag' (lacking capability RobloxScript) | tables error The current thread cannot call 'DefineFastFlag' (lacking capability RobloxScript) | caught ok false string",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "DefineFastInt read ok function | call error The current thread cannot call 'DefineFastInt' (lacking capability RobloxScript) | no-args error The current thread cannot call 'DefineFastInt' (lacking capability RobloxScript) | tables error The current thread cannot call 'DefineFastInt' (lacking capability RobloxScript) | caught ok false string",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "DefineFastString read ok function | call error The current thread cannot call 'DefineFastString' (lacking capability RobloxScript) | no-args error The current thread cannot call 'DefineFastString' (lacking capability RobloxScript) | tables error The current thread cannot call 'DefineFastString' (lacking capability RobloxScript) | caught ok false string",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "GetFastFlag read ok function | call error The current thread cannot call 'GetFastFlag' (lacking capability LocalUser) | no-args error The current thread cannot call 'GetFastFlag' (lacking capability LocalUser) | tables error The current thread cannot call 'GetFastFlag' (lacking capability LocalUser) | caught ok false string",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "GetFastInt read ok function | call error The current thread cannot call 'GetFastInt' (lacking capability LocalUser) | no-args error The current thread cannot call 'GetFastInt' (lacking capability LocalUser) | tables error The current thread cannot call 'GetFastInt' (lacking capability LocalUser) | caught ok false string",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "GetFastString read ok function | call error The current thread cannot call 'GetFastString' (lacking capability LocalUser) | no-args error The current thread cannot call 'GetFastString' (lacking capability LocalUser) | tables error The current thread cannot call 'GetFastString' (lacking capability LocalUser) | caught ok false string",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "GetEngineFeature read ok function | call error The current thread cannot call 'GetEngineFeature' (lacking capability LocalUser) | no-args error The current thread cannot call 'GetEngineFeature' (lacking capability LocalUser) | tables error The current thread cannot call 'GetEngineFeature' (lacking capability LocalUser) | caught ok false string",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "GetResolutionScale read ok function | call error The current thread cannot call 'GetResolutionScale' (lacking capability RobloxScript) | no-args error The current thread cannot call 'GetResolutionScale' (lacking capability RobloxScript) | tables error The current thread cannot call 'GetResolutionScale' (lacking capability RobloxScript) | caught ok false string",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "other-self error The current thread cannot call 'GetFastInt' (lacking capability LocalUser) | error The current thread cannot call 'GetResolutionScale' (lacking capability RobloxScript)",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "no-self error The current thread cannot call 'DefineFastInt' (lacking capability RobloxScript) | error The current thread cannot call 'GetResolutionScale' (lacking capability RobloxScript)",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "define FastInt 5 default",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "define FastFlag true default",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "define FastString on default",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		},
-		{
-			"line": "frame ok 200",
-			"why": "DataModel's fast-flag methods and GuiService:GetResolutionScale answer nil (not emulated) where a game script's call raises 'lacking capability RobloxScript / LocalUser'"
-		}
-	],
 	"errors": [
 		{
 			"line": "error instance-new-number | Unable to create an Instance of type \"5\"",
