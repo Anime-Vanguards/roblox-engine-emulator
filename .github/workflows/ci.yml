@@ -64,6 +64,20 @@ jobs:
           path: ${{ runner.temp }}/compile-cache
           key: ${{ steps.compile-cache.outputs.key }}
           restore-keys: compile-cache-
+      # The runner image brings its own stable Rust, which these builds never use. rust-cache keys its
+      # cache by every installed toolchain, so each image with a newer stable found no cache and compiled
+      # everything. Removing the others leaves the pinned one in the key.
+      - name: Remove the runner image's other Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in $(rustup toolchain list --quiet | cut -d' ' -f1); do
+            case "$toolchain" in
+              1.90.0-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: test # Every job shares the one cache the single test job used before.
@@ -127,6 +141,18 @@ jobs:
           path: ${{ runner.temp }}/compile-cache
           key: ${{ steps.compile-cache.outputs.key }}
           restore-keys: compile-cache-
+      # As in the first job: only the pinned toolchain in rust-cache's key
+      - name: Remove the runner image's other Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in $(rustup toolchain list --quiet | cut -d' ' -f1); do
+            case "$toolchain" in
+              1.90.0-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: test # The test job's cache, see above.
@@ -195,6 +221,19 @@ jobs:
           restore-keys: compile-cache-
       # This job builds the engine's dependencies but not the viewer's, so it only reads the cache: one stored from here
       # would leave the other jobs without the viewer's.
+      # As in the first job: only the pinned toolchain in rust-cache's key
+      - name: Remove the runner image's other Rust toolchains
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for toolchain in $(rustup toolchain list --quiet | cut -d' ' -f1); do
+            case "$toolchain" in
+              1.90.0-*) ;;
+              *) rustup toolchain uninstall "$toolchain" ;;
+            esac
+          done
+          rustup toolchain list
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: ${{ !cancelled() }}
         with:
