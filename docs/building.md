@@ -127,7 +127,8 @@ The distributed binary is GPL-3.0-or-later; the source stays GPL-2.0-or-later.
 
 The Corresponding Source is:
 
-- the public tag and its exact commit, and GitHub's source archive of that tag;
+- the exact public commit the zip was built from (for a release, the one its tag names), and GitHub's source archive
+  of that commit;
 - the crates.io archives pinned in `Cargo.lock` with their SHA-256, and the git dependencies at the commits pinned there;
 - the native sources, which are vendored in the repository (the vendor check compares them with the pinned upstream
   archives).

@@ -12,6 +12,7 @@ import { DOCUMENTS, DOCUMENT_MODE, EXECUTABLE_MODE, checkArchive, crc32, readZip
 import { canaryAssets, canaryNotes, notes } from "./notes.mjs";
 // The choice of the dry run a tag publishes from has tests of its own, run with these
 import "./dry-run.test.mjs";
+import "./nightly.test.mjs";
 import { checkAssetWorker, removeTestFolder, servedRun } from "./smoke.mjs";
 
 // A fake `ree` whose single service has pid 41 and has completed one job. Once the job has run, the service has
@@ -369,6 +370,15 @@ test("notes use the previous reachable release, never canary, and keep shell-loo
 		}
 	}
 	assert.throws(() => sourceText("0.1.0", "short"), /full SHA/);
+});
+
+test("SOURCE.md links the exact commit and names its version, since a canary is not of its version tag's commit", () => {
+	const commit = "a".repeat(40);
+	const text = sourceText("0.1.0", commit);
+	assert(text.includes(`The source is https://github.com/${REPOSITORY}/tree/${commit}, commit ${commit} (version v0.1.0).\n`));
+	assert(text.includes(`GitHub's source archive: https://github.com/${REPOSITORY}/archive/${commit}.tar.gz\n`));
+	assert.doesNotMatch(text, /refs\/tags|tree\/v0\.1\.0/);
+	assert(text.includes("Git dependencies are available in their repositories at the pinned commits:"));
 });
 
 test("canary notes link the commit and list the commits since the latest release, which is never canary", () => {

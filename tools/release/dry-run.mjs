@@ -6,16 +6,16 @@
 // Prints `run-id=<id>` and `run-date=<when it started>` for $GITHUB_OUTPUT, or both empty when there is no such run
 // (the release then builds and tests every platform itself, as a dry run does). Says on stderr which run it found or
 // why it took none. With --required, no such run fails instead, as does a failing API call: the canary tag publishes
-// only what a dry run built and never builds. The nightly build uses it without --required, to find out whether main's
-// head already has a passing run. Reads the GitHub API with GH_TOKEN (or GITHUB_TOKEN), which needs `actions: read`.
-// Node.js only, no npm packages; the same file in each tool repository.
+// only what a dry run built and never builds. The nightly build (nightly.mjs) takes the same choice and lookups to find
+// the newest commit of main that has such a run. Reads the GitHub API with GH_TOKEN (or GITHUB_TOKEN), which needs
+// `actions: read`. Node.js only, no npm packages; the same file in each tool repository.
 //
 // A dry run qualifies when it:
 //   - ran the release workflow file itself (not another workflow at the same commit), on the default branch, started by
 //     a push, by hand or by the nightly schedule (the only events that run it there), at exactly the tagged commit;
 //   - completed with success, and every job of its latest attempt succeeded, except the tag-only jobs (notes, publish,
-//     and the canary's), which a dry run skips; a nightly run that skipped its builds because the commit already had
-//     a passing run is therefore passed over too;
+//     and the canary's), which a dry run skips; a nightly run that skipped its builds because nothing it would ship
+//     had changed is therefore passed over too;
 //   - still has an unexpired artifact of every name given.
 // The newest such run is taken. Its zips are a build of the same source by the same workflow file on clean runners.
 import fs from "node:fs";
@@ -55,6 +55,20 @@ async function api(token, url) {
 	return response.json();
 }
 
+// The API of `repository`, read with the token in `env`: `get(path)` for any GET below the repository, and the two
+// lookups pickDryRun takes.
+export function repositoryApi(repository, env = process.env) {
+	const token = env.GH_TOKEN || env.GITHUB_TOKEN;
+	if (!token) throw new Error("GH_TOKEN or GITHUB_TOKEN is needed to read the workflow runs");
+	const base = `${env.GITHUB_API_URL || "https://api.github.com"}/repos/${repository}`;
+	const get = (route) => api(token, `${base}${route}`);
+	return {
+		get,
+		jobsOf: async (r) => (await get(`/actions/runs/${r.id}/attempts/${r.run_attempt ?? 1}/jobs?per_page=100`)).jobs ?? [],
+		artifactsOf: async (r) => (await get(`/actions/runs/${r.id}/artifacts?per_page=100`)).artifacts ?? [],
+	};
+}
+
 function options(argv) {
 	const result = {};
 	for (let i = 0; i < argv.length; i++) {
@@ -69,14 +83,12 @@ function options(argv) {
 
 export async function run(argv, env = process.env, log = console.error) {
 	const { repository, sha, artifacts, branch = "main", required = false } = options(argv);
-	const token = env.GH_TOKEN || env.GITHUB_TOKEN;
-	if (!token) throw new Error("GH_TOKEN or GITHUB_TOKEN is needed to read the workflow runs");
-	const base = `${env.GITHUB_API_URL || "https://api.github.com"}/repos/${repository}`;
-	const listed = await api(token, `${base}/actions/workflows/release.yml/runs?head_sha=${sha}&branch=${encodeURIComponent(branch)}&per_page=50`);
+	const { get, jobsOf, artifactsOf } = repositoryApi(repository, env);
+	const listed = await get(`/actions/workflows/release.yml/runs?head_sha=${sha}&branch=${encodeURIComponent(branch)}&per_page=50`);
 	const { run: found, reasons } = await pickDryRun({
 		runs: listed.workflow_runs ?? [],
-		jobsOf: async (r) => (await api(token, `${base}/actions/runs/${r.id}/attempts/${r.run_attempt ?? 1}/jobs?per_page=100`)).jobs ?? [],
-		artifactsOf: async (r) => (await api(token, `${base}/actions/runs/${r.id}/artifacts?per_page=100`)).artifacts ?? [],
+		jobsOf,
+		artifactsOf,
 		sha,
 		branch,
 		artifacts: artifacts.split(",").map((name) => name.trim()).filter(Boolean),

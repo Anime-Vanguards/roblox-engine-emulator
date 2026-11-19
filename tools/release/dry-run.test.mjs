@@ -138,13 +138,13 @@ const workflow = () => fs.readFileSync(path.join(ROOT, WORKFLOW), "utf8").replac
 test("the workflow asks for every platform's zip and publishes from the dry run only on a tag", () => {
 	const text = workflow();
 	assert.deepEqual(/--artifacts (\S+)/.exec(text)[1].split(","), ARTIFACTS);
-	// a tag and the nightly run look for a passing run of the commit; only the canary tag requires one
-	assert.match(text, /name: Find a passing dry run of this commit\n\s+id: dry-run\n\s+if: \$\{\{ \(github.event_name == 'push' && github.ref_type == 'tag'\) \|\| github.event_name == 'schedule' \}\}\n/);
+	// a tag looks for a passing run of the commit (a nightly run asks nightly.mjs); only the canary tag requires one
+	assert.match(text, /name: Find a passing dry run of this commit\n\s+id: dry-run\n\s+if: \$\{\{ github.event_name == 'push' && github.ref_type == 'tag' \}\}\n/);
 	assert.match(text, /REQUIRED: \$\{\{ github.event_name == 'push' && github.ref == 'refs\/tags\/canary' && '--required' \|\| '' \}\}\n/);
 	assert.match(text, /--artifacts \S+ \$REQUIRED >> "\$GITHUB_OUTPUT"/);
-	// building and smoke-testing are skipped only when a passing run was found
+	// building and smoke-testing are skipped only when a passing run was found, or a nightly run has nothing to build
 	for (const job of ["build", "smoke"]) {
-		assert.match(text, new RegExp(`\\n  ${job}:\\n    if: \\$\\{\\{ !github.event.repository.private && needs.version.outputs.dry-run == '' \\}\\}`));
+		assert.match(text, new RegExp(`\\n  ${job}:\\n    if: \\$\\{\\{ !github.event.repository.private && needs.version.outputs.dry-run == '' && needs.version.outputs.nightly-build != 'false' \\}\\}`));
 	}
 	// and the downloads from another run are the publishing jobs' alone (publish, then canary)
 	assert.equal(text.match(/run-id: \$\{\{ needs.version.outputs.dry-run \}\}/g).length, text.split(/^  publish:/m)[1].match(/run-id: /g).length);

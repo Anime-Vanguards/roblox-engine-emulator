@@ -23,12 +23,14 @@ node tools/release/package.mjs --binary target/release/ree.exe --version 0.1.0 -
 node tools/release/smoke.mjs --archive out/release/ree-0.1.0-windows-x86_64.zip --version 0.1.0
 node tools/release/notes.mjs --tag v0.1.0 --out out/release-notes.md
 node tools/release/notes.mjs --canary <commit SHA> --built 2026-11-16T01:31:00Z --out out/canary-notes.md
+node tools/release/nightly.mjs --repository <owner/name> --sha <main's head> --artifacts <name,...>
 ```
 
 ## What each script does
 
 - `test.mjs` tests version agreement and tag rejection, which dependencies are walked, the ZIP bytes, CRCs, order and
-  modes, the notes of a first and a later release and of the canary, and the workflow's publication boundaries.
+  modes, the notes of a first and a later release and of the canary, the choice of a passing run, the nightly
+  decision and which paths ship, and the workflow's publication boundaries.
 - `version.mjs` prints the version. The engine and profile-view manifests and their workspace lockfile must agree on
   it. The hardware-counter service has its own version and is not shipped. With `--tag` it fails unless the tag is
   exactly `v<version>`.
@@ -42,8 +44,9 @@ node tools/release/notes.mjs --canary <commit SHA> --built 2026-11-16T01:31:00Z 
   dependencies downloaded but no build. `--metadata <file>` reads an already resolved metadata JSON instead, for when a
   build wrapper owns the cargo calls; it must have been made for that `--target`, with
   `cargo metadata --locked --format-version 1 --filter-platform <target>` and the default features.
-- `package.mjs` writes `SOURCE.md` and the zip. `SOURCE.md` names the exact commit (`GITHUB_SHA`, else HEAD;
-  `--commit <SHA>` overrides it for a self-check) and goes beside the zip and inside it. Before writing, the script
+- `package.mjs` writes `SOURCE.md` and the zip. `SOURCE.md` names and links the exact commit (`GITHUB_SHA`, else
+  HEAD; `--commit <SHA>` overrides it for a self-check) and its source archive, names the version as text (a canary is
+  a build of a later commit than its version's tag), and goes beside the zip and inside it. Before writing, the script
   checks that the layout is flat, that the binary is the first local and central entry, and every entry's CRC and Unix
   mode. The documents have mode 0644, only ree has mode 0755.
 - `smoke.mjs` extracts the archive into a fresh folder under the system temp folder, redirects the user cache and temp
@@ -66,8 +69,17 @@ node tools/release/notes.mjs --canary <commit SHA> --built 2026-11-16T01:31:00Z 
 - `dry-run.mjs` finds the passing run whose zips a tag publishes: a run of the release workflow on main at that commit,
   started by a push, by hand or by the nightly schedule, whose jobs all passed and whose zips are all still kept. It
   prints `run-id=` and `run-date=` for `$GITHUB_OUTPUT`, both empty when there is none, and the run then builds. With
-  `--required` it fails instead, as the canary does. A nightly run asks it about main's head and builds only when
-  there is none.
+  `--required` it fails instead, as the canary does.
+- `nightly.mjs` decides whether the nightly run builds main's head. It takes the newest commit of the head's
+  first-parent history with a run that `dry-run.mjs` would take, and builds nothing when that commit is the head or
+  when no path that ships changed since it (`git diff --name-only`, a renamed file counted under both names).
+  Otherwise, or with no such commit among the newest passing runs, it builds. A nightly run that builds nothing uploads
+  nothing, and its summary names the run that built that commit; one that builds names the changed paths that ship.
+  Any failure to decide builds, with a warning. A path ships unless it is under `.github/`, a dot-file or in a
+  dot-folder, Markdown, or under `docs/`, `notes/`, `tools/` or a `tests`, `benches`, `examples`, `fixtures` or
+  `goldens` folder. The paths a push to main starts a dry run for (`on.push.paths` in the workflow, such as
+  `tools/release/**`, `tools/vendor.mjs` and `patches/**`) always ship, except the workflow itself. This is the same
+  rule that decides when a release is due. It prints `build=` and `reason=` for `$GITHUB_OUTPUT`.
 
 The `publish` job runs none of these scripts and has no checkout. It only checksums, attests and publishes the
 archives the other jobs built.
