@@ -184,6 +184,9 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(none())
         })?,
     )?;
+    // utf8.nfcnormalize and utf8.nfdnormalize (lua/normalize.rs)
+    r.set("NfcNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, true)))?)?;
+    r.set("NfdNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, false)))?)?;
     // task library primitives (scheduler.luau Task)
     r.set(
         "TaskSpawn",

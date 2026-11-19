@@ -17,6 +17,7 @@ pub mod instance;
 pub mod leaks;
 pub mod loading;
 pub mod modules;
+pub mod normalize;
 pub mod raw;
 pub mod refs;
 pub mod stubs;

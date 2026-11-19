@@ -42,7 +42,8 @@ src/
 
 build.rs               Computes conversion digest keying cached `<bundle>.plan` files
 data/                  Compiled-in Studio reflection dump (reflection.json; tools/dump-reflection.luau,
-                       tools/reflection-diff.mjs), font enums, and text metrics
+                       tools/reflection-diff.mjs), font enums, text metrics, and the canonical normalization table
+                       utf8.nfcnormalize / nfdnormalize read (unicode-normalization.rs; tools/unicode-normalization.mjs)
 vendor/, patches/      Vendored patched Luau VM, mlua-sys, and Lune datatypes (rebuilt by tools/vendor.mjs)
 profile-view/          Separate workspace crate & binary (`ree-profile-view`) for terminal UI and
                        PNG/SVG/text profile rendering (bundles JetBrains Mono under fonts/)

@@ -850,6 +850,55 @@ fn random_draws_unit_vectors_shuffles_and_bounds_as_measured() {
     );
 }
 
+/// utf8.nfcnormalize and utf8.nfdnormalize as a playing client and a server answer them (Studio 0.747,
+/// tools/parity/probes/utf8_normalize.luau; lua/normalize.rs), where both returned their argument: nfc composes with the
+/// code point before it only (no reordering, singletons and exclusions stay, any syllable takes a trailing consonant),
+/// nfd decomposes in place with a U+0000 after a singleton; numbers are read as text, and the argument and invalid UTF-8
+/// errors are raised at the calling line.
+#[test]
+fn utf8_normalization_follows_a_clients_rules() {
+    let script = r##"
+        local U = utf8.char
+        local function Codes(Text)
+            local Out = {}
+            for _, Code in utf8.codes(Text) do
+                table.insert(Out, string.format("%X", Code))
+            end
+            return table.concat(Out, " ")
+        end
+        print("nfc", Codes(utf8.nfcnormalize(U(0x65, 0x301))), Codes(utf8.nfcnormalize(U(0x61, 0x302, 0x323))), Codes(utf8.nfcnormalize(U(0x61, 0x316, 0x301))))
+        print("nfc kept", Codes(utf8.nfcnormalize(U(0x212B, 0x958, 0xF900))), Codes(utf8.nfcnormalize(U(0x11935, 0x11930))))
+        print("nfc hangul", Codes(utf8.nfcnormalize(U(0x1100, 0x1161, 0x11A8))), Codes(utf8.nfcnormalize(U(0xAC01, 0x11A8))), Codes(utf8.nfcnormalize(U(0xAC00, 0x11A7))))
+        print("nfd", Codes(utf8.nfdnormalize(U(0x1EC7))), Codes(utf8.nfdnormalize(U(0x61, 0x301, 0x323))), Codes(utf8.nfdnormalize(U(0xD7A3))))
+        print("nfd singletons", Codes(utf8.nfdnormalize(U(0x212B))), Codes(utf8.nfdnormalize(U(0x2126, 0x62))), Codes(utf8.nfdnormalize(U(0x1F71))))
+        print("values", select("#", utf8.nfcnormalize("abc")), utf8.nfcnormalize(123), utf8.nfdnormalize(-0.5), utf8.nfcnormalize(""))
+        print(pcall(utf8.nfcnormalize))
+        print(pcall(utf8.nfdnormalize, nil))
+        print(pcall(utf8.nfcnormalize, workspace))
+        print(pcall(function() return utf8.nfcnormalize("\255") end))
+        print(pcall(function() return utf8.nfdnormalize("e\204") end))
+        print(pcall(function() return utf8.nfdnormalize(true) end))
+    "##;
+    let (lua, engine) = start();
+    assert_eq!(
+        run(&lua, &engine, script),
+        [
+            "print: nfc E9 E2 323 61 316 301",
+            "print: nfc kept 212B 958 F900 11935 11930",
+            "print: nfc hangul AC01 AC02 AC00",
+            "print: nfd 65 323 302 61 301 323 1112 1175 11C2",
+            "print: nfd singletons 41 30A 0 3A9 0 62 3B1 301 0",
+            "print: values 1 123 -0.5 ",
+            "print: false missing argument #1 to 'nfcnormalize' (string expected)",
+            "print: false invalid argument #1 to 'nfdnormalize' (string expected, got nil)",
+            "print: false invalid argument #1 to 'nfcnormalize' (string expected, got Instance)",
+            "print: false Test:19: String contains invalid UTF-8",
+            "print: false Test:20: End of string is invalid UTF-8",
+            "print: false Test:21: invalid argument #1 to 'nfdnormalize' (string expected, got boolean)",
+        ]
+    );
+}
+
 #[test]
 fn the_task_library_raises_robloxs_errors() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/task_order.luau): no position on any of them,
