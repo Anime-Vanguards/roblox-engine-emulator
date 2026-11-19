@@ -69,6 +69,25 @@ fn has_error(lines: &[String], label: &str, message: &str) -> bool {
     lines.iter().any(|line| line.starts_with(&start) && line.ends_with(message))
 }
 
+/// A server has no typesetting (measured on a Studio 0.747 server, tools/parity/probes/text_bounds.luau): GetTextSize answers (0, 0)
+/// whatever it is asked, and GetTextBoundsAsync raises once its argument is a GetTextBoundsParams. ree measured text there as a client.
+#[test]
+fn a_server_measures_no_text() {
+    let lines = run(
+        RunContext::Server,
+        r#"
+        local TextService = game:GetService("TextService")
+        print("size", TextService:GetTextSize("Hello world", 20, Enum.Font.SourceSans, Vector2.new(1e5, 1e5)))
+        print("bounds", pcall(TextService.GetTextBoundsAsync, TextService, Instance.new("GetTextBoundsParams")))
+        print("nil", pcall(TextService.GetTextBoundsAsync, TextService, nil))
+        "#,
+        0.1,
+    );
+    assert!(has(&lines, "print: size 0, 0"), "{lines:?}");
+    assert!(has(&lines, "print: bounds false Typesetting is not enabled in this DataModel"), "{lines:?}");
+    assert!(has(&lines, "print: nil false Argument 1 missing or nil"), "{lines:?}");
+}
+
 #[test]
 fn a_server_has_no_local_player_and_renders_nothing() {
     let lines = run(

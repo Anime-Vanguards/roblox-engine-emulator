@@ -4523,6 +4523,144 @@ fn text_service_returns_a_vector2_without_a_text_layer() {
     assert!(output.contains(&"print: measured".to_string()), "{output:?}");
 }
 
+/// TextService:GetTextBoundsAsync returned nothing without a host's text layer (it was an unemulated stub), so a UI view that read the
+/// bounds failed. It measures as GetTextSize does now, with the GetTextBoundsParams' Font face, Size and Width (measured in a playing
+/// client, Studio 0.747: tools/parity/probes/text_bounds.luau).
+#[test]
+fn text_service_measures_text_bounds_without_a_text_layer() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local TextService = game:GetService("TextService")
+        local Params = Instance.new("GetTextBoundsParams")
+        Params.Text = "Hello world"
+        Params.Font = Font.fromEnum(Enum.Font.FredokaOne)
+        Params.Size = 20
+        local Bounds = TextService:GetTextBoundsAsync(Params)
+        assert(typeof(Bounds) == "Vector2", typeof(Bounds))
+        assert(Bounds == Vector2.new(94, 20), tostring(Bounds))
+        assert(Bounds == TextService:GetTextSize("Hello world", 20, Enum.Font.FredokaOne, Vector2.new(1e6, 1e6)))
+        -- a face no Enum.Font names measures as the one its family has
+        Params.Font = Font.new("rbxasset://fonts/families/FredokaOne.json", Enum.FontWeight.Bold)
+        assert(TextService:GetTextBoundsAsync(Params) == Vector2.new(94, 20))
+        -- Width wraps, and Size stores 1 to 100, whole
+        Params.Text = "The quick brown fox jumps over the lazy dog and keeps running"
+        Params.Size = 14.99
+        Params.Width = 100
+        assert(Params.Size == 14, Params.Size)
+        assert(TextService:GetTextBoundsAsync(Params) == Vector2.new(98, 56), tostring(TextService:GetTextBoundsAsync(Params)))
+        Params.Size = 500
+        assert(Params.Size == 100)
+        Params.Size = 0.2
+        assert(Params.Size == 1)
+        local Empty = Instance.new("GetTextBoundsParams")
+        assert(TextService:GetTextBoundsAsync(Empty) == Vector2.new(0, 20), tostring(TextService:GetTextBoundsAsync(Empty)))
+        local function Raised(...)
+            local Ok, Message = pcall(TextService.GetTextBoundsAsync, TextService, ...)
+            assert(not Ok)
+            return Message
+        end
+        assert(Raised(nil) == "Argument 1 missing or nil")
+        assert(Raised(Instance.new("Part")) == "Argument 1 is invalid: expected 'GetTextBoundsParams' instance type")
+        assert(Raised({}) == "Unable to cast value to Object")
+        Empty.Font = Font.new("")
+        assert(Raised(Empty) == "Font with empty asset ID passed to TextService:GetTextBoundsAsync()")
+        print("measured")
+        "#,
+    );
+    assert!(output.contains(&"print: measured".to_string()), "{output:?}");
+    // a face of its own the tables lack is measured as the nearest and said; the faces above were all measurable
+    assert!(engine.state.borrow().output.missing.is_empty(), "{:?}", engine.state.borrow().output.missing);
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Params = Instance.new("GetTextBoundsParams")
+        Params.Text = "Hello"
+        Params.Font = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.SemiBold)
+        game:GetService("TextService"):GetTextBoundsAsync(Params)
+        Params.Font = Font.fromEnum(Enum.Font.SourceSans)
+        Params.RichText = true
+        Params.Text = "<b>Hello</b>"
+        game:GetService("TextService"):GetTextBoundsAsync(Params)
+        "#,
+    );
+    let missing: Vec<String> = engine.state.borrow().output.missing.iter().map(|(name, _)| name.clone()).collect();
+    assert_eq!(
+        missing,
+        [
+            "TextService.GetTextBoundsAsync of rbxasset://fonts/families/GothamSSm.json SemiBold Normal (a face the text tables lack; measured as GothamBold)",
+            "TextService.GetTextBoundsAsync of rich text markup (measured as plain text)",
+        ]
+    );
+}
+
+/// The first GetTextBoundsAsync of a face a client has not loaded yields while it loads, and a call that cannot yield (from a
+/// metamethod) raises; the faces a client starts with, and a face that resolves to a loaded one, do not yield (measured in a playing
+/// client, Studio 0.747: tools/parity/probes/text_bounds.luau).
+#[test]
+fn text_bounds_wait_for_a_face_to_load() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local TextService = game:GetService("TextService")
+        local function Params(Face)
+            local Made = Instance.new("GetTextBoundsParams")
+            Made.Text = "Hello"
+            Made.Font = Face
+            return Made
+        end
+        local function Status(Face)
+            local Thread = coroutine.create(function()
+                print("bounds", TextService:GetTextBoundsAsync(Params(Face)))
+            end)
+            coroutine.resume(Thread)
+            return coroutine.status(Thread)
+        end
+        local function FromMetamethod(Face)
+            local Meta = setmetatable({}, { __index = function()
+                return TextService:GetTextBoundsAsync(Params(Face))
+            end })
+            local Ok, Result = pcall(function()
+                return Meta.Bounds
+            end)
+            return if Ok then "ok" else Result
+        end
+        print("first", Status(Font.fromEnum(Enum.Font.FredokaOne)))
+        print("again", Status(Font.fromEnum(Enum.Font.FredokaOne)))
+        print("bold", FromMetamethod(Font.new("rbxasset://fonts/families/FredokaOne.json", Enum.FontWeight.Bold)))
+        print("SourceSans", Status(Font.fromEnum(Enum.Font.SourceSans)))
+        print("SourceSansPro Medium", FromMetamethod(Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Medium)))
+        print("Creepster", FromMetamethod(Font.fromEnum(Enum.Font.Creepster)))
+        task.defer(function()
+            print("Creepster later", FromMetamethod(Font.fromEnum(Enum.Font.Creepster)))
+        end)
+        "#,
+    );
+    let printed: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: ")).collect();
+    assert_eq!(
+        printed,
+        [
+            "first suspended",
+            "bounds 43, 20",
+            "again dead",
+            "bold ok",
+            "bounds 36, 20",
+            "SourceSans dead",
+            "SourceSansPro Medium ok",
+            "Creepster thread is not yieldable",
+            // (the first call, resumed at the next resumption point)
+            "bounds 43, 20",
+            "Creepster later ok",
+        ],
+        "{output:?}"
+    );
+}
+
 /// The work clock charges a script's own Luau as the interpreter runs it (crate::cost::luau): its
 /// instructions, calls, objects and table growth, and a datatype operation the engine's Luau serves
 /// (whose own instructions are not charged); Vector3.new is the VM's fast call, as Roblox compiles it.

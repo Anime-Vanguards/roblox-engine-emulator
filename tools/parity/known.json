@@ -695,6 +695,108 @@
 			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
 		}
 	],
+	"text_bounds": [
+		{
+			"line": "Size = 0.5 reads 1 measures 4 1",
+			"why": "Size 1 in FredokaOne: below the sizes data/fredoka-sizes.json holds, the per-glyph fit (data/text-advances.json) reads \"Hello\" 5 px wide where a client reads 4 (GetTextSize alike)"
+		},
+		{
+			"line": "Size = 0.20000000000000001 reads 1 measures 4 1",
+			"why": "Size 1 in FredokaOne: below the sizes data/fredoka-sizes.json holds, the per-glyph fit (data/text-advances.json) reads \"Hello\" 5 px wide where a client reads 4 (GetTextSize alike)"
+		},
+		{
+			"line": "Size = 0 reads 1 measures 4 1",
+			"why": "Size 1 in FredokaOne: below the sizes data/fredoka-sizes.json holds, the per-glyph fit (data/text-advances.json) reads \"Hello\" 5 px wide where a client reads 4 (GetTextSize alike)"
+		},
+		{
+			"line": "Size = -3 reads 1 measures 4 1",
+			"why": "Size 1 in FredokaOne: below the sizes data/fredoka-sizes.json holds, the per-glyph fit (data/text-advances.json) reads \"Hello\" 5 px wide where a client reads 4 (GetTextSize alike)"
+		},
+		{
+			"line": "Size = nan reads -2147483648 measures 4 1",
+			"why": "Size 1 in FredokaOne: below the sizes data/fredoka-sizes.json holds, the per-glyph fit (data/text-advances.json) reads \"Hello\" 5 px wide where a client reads 4 (GetTextSize alike)"
+		},
+		{
+			"line": "Size = -inf reads 1 measures 4 1",
+			"why": "Size 1 in FredokaOne: below the sizes data/fredoka-sizes.json holds, the per-glyph fit (data/text-advances.json) reads \"Hello\" 5 px wide where a client reads 4 (GetTextSize alike)"
+		},
+		{
+			"line": "Size = x reads 1 measures 4 1",
+			"why": "Size 1 in FredokaOne: below the sizes data/fredoka-sizes.json holds, the per-glyph fit (data/text-advances.json) reads \"Hello\" 5 px wide where a client reads 4 (GetTextSize alike)"
+		},
+		{
+			"line": "face SourceSansPro.json Heavy Normal measures as no Enum.Font face",
+			"why": "a face of its own the text tables lack (data/text-faces.json `near`): ree measures it as the nearest Enum.Font face and reports it missing"
+		},
+		{
+			"line": "face SourceSansPro.json Bold Italic measures as no Enum.Font face",
+			"why": "a face of its own the text tables lack (data/text-faces.json `near`): ree measures it as the nearest Enum.Font face and reports it missing"
+		},
+		{
+			"line": "face GothamSSm.json Light Normal measures as no Enum.Font face",
+			"why": "a face of its own the text tables lack (data/text-faces.json `near`): ree measures it as the nearest Enum.Font face and reports it missing"
+		},
+		{
+			"line": "face GothamSSm.json SemiBold Normal measures as no Enum.Font face",
+			"why": "a face of its own the text tables lack (data/text-faces.json `near`): ree measures it as the nearest Enum.Font face and reports it missing"
+		},
+		{
+			"line": "face BuilderSans.json SemiBold Normal measures as no Enum.Font face",
+			"why": "a face of its own the text tables lack (data/text-faces.json `near`): ree measures it as the nearest Enum.Font face and reports it missing"
+		},
+		{
+			"line": "face Roboto.json Bold Normal measures as no Enum.Font face",
+			"why": "a face of its own the text tables lack (data/text-faces.json `near`): ree measures it as the nearest Enum.Font face and reports it missing"
+		},
+		{
+			"line": "width 1 11 714 as GetTextSize",
+			"why": "a frame narrower than every glyph: a client lays out one line more than ree's character-by-character split (GetTextSize alike)"
+		},
+		{
+			"line": "text \"Hello\\x0A\" 30 22 60",
+			"why": "a word wider than the frame: a client splits \"Hello\" at 30 px as He|llo where ree's greedy split makes Hel|lo (GetTextSize alike)"
+		},
+		{
+			"line": "text \"\\x0AHello\" 30 22 60",
+			"why": "a word wider than the frame: a client splits \"Hello\" at 30 px as He|llo where ree's greedy split makes Hel|lo (GetTextSize alike)"
+		},
+		{
+			"line": "text \"  Hello  \" 30 30 40",
+			"why": "a word wider than the frame: a client splits \"Hello\" at 30 px as He|llo where ree's greedy split makes Hel|lo (GetTextSize alike)"
+		},
+		{
+			"line": "text \"Hello \" 30 25 40",
+			"why": "a word wider than the frame: a client splits \"Hello\" at 30 px as He|llo where ree's greedy split makes Hel|lo (GetTextSize alike)"
+		},
+		{
+			"line": "rich \"<b>Hello</b>\" 116 20 | 43 20",
+			"why": "rich text markup: a client reads its tags, entities and <br/>, and raises on markup that does not parse; without a host layer ree has no rich-text parser, measures the text as written and reports it missing"
+		},
+		{
+			"line": "rich \"a &amp; b\" 80 20 | 41 20",
+			"why": "rich text markup: a client reads its tags, entities and <br/>, and raises on markup that does not parse; without a host layer ree has no rich-text parser, measures the text as written and reports it missing"
+		},
+		{
+			"line": "rich \"<font size=\"30\">Big</font> small\" 276 20 | 87 30",
+			"why": "rich text markup: a client reads its tags, entities and <br/>, and raises on markup that does not parse; without a host layer ree has no rich-text parser, measures the text as written and reports it missing"
+		},
+		{
+			"line": "rich \"x<br/>y\" 69 20 | 10 40",
+			"why": "rich text markup: a client reads its tags, entities and <br/>, and raises on markup that does not parse; without a host layer ree has no rich-text parser, measures the text as written and reports it missing"
+		},
+		{
+			"line": "rich \"<b>Hello\" 75 20 | error Error parsing rich text",
+			"why": "rich text markup: a client reads its tags, entities and <br/>, and raises on markup that does not parse; without a host layer ree has no rich-text parser, measures the text as written and reports it missing"
+		},
+		{
+			"line": "rich \"a < b\" 39 20 | error Error parsing rich text",
+			"why": "rich text markup: a client reads its tags, entities and <br/>, and raises on markup that does not parse; without a host layer ree has no rich-text parser, measures the text as written and reports it missing"
+		},
+		{
+			"line": "a family that is no file: error Temp read failed.",
+			"why": "a family file a client does not have: it raises reading it; ree cannot know which family files a client has, measures it as SourceSans and reports it missing"
+		}
+	],
 	"tostring": [
 		{
 			"line": "color3-lerp 0.416666657 0.333333343 0.666666627 | 0 0.75 -1 | error Argument 3 missing or nil",

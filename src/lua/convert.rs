@@ -224,7 +224,7 @@ fn int64_for(number: f64) -> f64 {
 }
 
 /// The number a numeric property stores for an assigned number (`int` properties truncate, `int64` ones round,
-/// float properties round to float32, TextSize of text objects is whole and clamped, BorderSizePixel clamped,
+/// float properties round to float32, TextSize of text objects and GetTextBoundsParams.Size are whole and clamped, BorderSizePixel clamped,
 /// UIScale.Scale clamped).
 #[inline]
 pub fn number_for(engine: &Engine, info: &PropertyInfo, number: f64) -> f64 {
@@ -238,6 +238,10 @@ pub fn number_for(engine: &Engine, info: &PropertyInfo, number: f64) -> f64 {
         if info.name == crate::K::TextSize as crate::NameId && whole_text_size_owner(engine, info) {
             // a whole number as an int property takes it, then 1 to 100 (2^31 and NaN read 1)
             int32_for(number).clamp(1.0, 100.0)
+        } else if info.name == crate::K::Size as crate::NameId && &*engine.reflection.class(info.owner).name == "GetTextBoundsParams" {
+            // 1 to 100 first, then a whole number as an int property takes it (measured, tools/parity/probes/text_bounds.luau: 14.99
+            // reads 14, 0.2 and -inf 1, 2^31 and inf 100, and NaN -2^31)
+            int32_for(number.clamp(1.0, 100.0))
         } else if info.name == crate::K::Scale as crate::NameId
             && !number.is_nan()
             && &*engine.reflection.class(info.owner).name == "UIScale"
