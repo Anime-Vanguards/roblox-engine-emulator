@@ -203,6 +203,1062 @@
 			"why": "require by a string path: the client's text names the prefixes a path must start with (./, ../, @); ree's differs"
 		}
 	],
+	"collision_group_args": [
+		{
+			"line": "name-from-integer ok  | \"5\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-fraction ok  | \"2.5\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-negative-zero ok  | \"-0\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-large ok  | \"1e+20\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-2^53 ok  | \"9007199254740992\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-nan ok  | \"NAN\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-inf ok  | \"INF\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-true ok  | \"true\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-false ok  | \"false\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-empty-table ok  | \"{}\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-array ok  | \"{}\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-dictionary ok  | \"{}\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-Vector3 ok  | \"1, 2, 3\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-Instance ok  | \"Instance\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-EnumItem ok  | \"Plastic\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-function ok  | \"function\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-minus-inf ok  | \"-INF\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-tenth ok  | \"0.10000000000000000555\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-third ok  | \"0.33333333333333331483\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-buffer ok  | \"buffer { Size = 2 }\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-thread ok  | \"nil\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-Enum ok  | \"nil\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-userdata ok  | \"nil\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-Color3 ok  | \"1, 0, 0\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-UDim2 ok  | \"{1, 2}, {3, 4}\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-from-BrickColor ok  | \"Bright red\" | registered ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-0 ok  | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-1 ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-half ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-minus-one ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-nan ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-true-string ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-empty-string error Unable to cast string to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-table error Unable to cast Array to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-Instance error Unable to cast Instance to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-Vector3 error Unable to cast Vector3 to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-EnumItem error Unable to cast Material to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-false-string ok  | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-one-string error Unable to cast string to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-zero-string error Unable to cast string to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-TRUE-string ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-True-string ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-spaced-string error Unable to cast string to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-yes-string error Unable to cast string to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-function error Unable to cast Function to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-buffer error Unable to cast buffer to bool | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-from-false ok  | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-nil error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-string-1 ok ArgA",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-string-x error Unable to cast string to int",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-almost-32 error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-minus-half error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-nan error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-table error Unable to cast Array to int",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-true ok ArgA",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-0.4 ok Default",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-0.5 ok ArgA",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of--0.4 ok Default",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-31.5 error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-inf error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of--inf error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-2^31 error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-2^32 error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-2^32+1 error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of--2^32 error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-string-spaced ok ArgA",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-string-hex ok ArgA",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-false ok Default",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-Vector3 error Unable to cast Vector3 to int",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-of-Instance error Unable to cast Instance to int",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "edge-names Default,ArgA,default,DEFAULT",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-102-bytes error Collision group name length cannot exceed 100 chars",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-nul ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-nul-prefix ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "byte-names 3",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "id-empty error Collision group not found.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "id-long error Collision group not found.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-empty ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-long ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "default-mask ok -2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-Default-Default ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-known-unknown ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-unknown-known ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-unknown-unknown ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-empty-known error Both collision groups must be registered.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-known-empty error Both collision groups must be registered.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-long-known error Both collision groups must be registered.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-unknown-bad-bool error Unable to cast string to bool",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-nil-nil error Argument 3 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-known-nil-bool error Unable to cast string to bool",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-unknown-empty error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-unknown-long error Collision group name length cannot exceed 100 chars",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-empty-x error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-long-x error Collision group name length cannot exceed 100 chars",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-Default-empty error Can not use/change the Default collision group.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-empty-Default error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-nil-nil error Argument 2 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-nil-empty error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-empty-nil error Argument 2 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "unregister-long error Collision group name length cannot exceed 100 chars",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "create-existing error Could not register collision group, the name already exists.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "create-Default error Can not use/change the Default collision group.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "create-empty error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "create-long error Collision group name length cannot exceed 100 chars",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "create-nil error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "remove-Default error Can not use/change the Default collision group.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "remove-empty error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "remove-long error Collision group name length cannot exceed 100 chars",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "remove-nil error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-errors Default,ArgA",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-existing error Cannot register more than 32 collision groups in this world.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-Default error Can not use/change the Default collision group.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-empty error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-long error Collision group name length cannot exceed 100 chars",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-new error Cannot register more than 32 collision groups in this world.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-create-existing error Cannot register more than 32 collision groups.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-names ArgLimit29,ArgLimit30,ArgRenamed",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-name-31 ok ArgRenamed",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "full-id-renamed ok 31",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-nil error Parameter 2 must be BasePart in CollisionGroupContainsPart.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-folder error Parameter 2 must be BasePart in CollisionGroupContainsPart.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-string error Unable to cast value to Object",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-default ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-unknown-name ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-nil-name error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-nil-nil error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-number-name ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-part-nil-nil error Argument 2 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-part-string error Unable to cast value to Object",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "part-after-unknown ok Nope 0",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-part-nil-name error Argument 2 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-part-nil error Parameter 1 must be BasePart in SetPartCollisionGroup.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-part-folder error Parameter 1 must be BasePart in SetPartCollisionGroup.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "part-after-edges ok LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL 0",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "part-long-name ok 100",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "part-unicode-cut ok 100",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-set-B ok ArgB 2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-set-B-later ok ArgB 2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-set-unknown ok Nope -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-set-unknown-later ok Nope -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-contains-Nope ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-unregister ok ArgB -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-rename ok ArgA -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "entered ok 2 2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "entered-later ok 2 2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "left ok 2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "left-set ok ArgA 2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "entered-with-id ok ArgA 1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-unknown ok -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-registered-late ok 3",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-registered-late-later ok 3",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-id-after-register ok ArgLate 3",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-id-after-collidable ok ArgLate 3",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-id-after-unregister ok ArgLate 3",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-empty ok ArgLate 3",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "placed-set-part ok ArgA 1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-enter ok  | CollisionGroupId | ArgA 4 1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-name-placed ok  | CollisionGroup,CollisionGroupId | ArgNope 7 -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-empty ok  |  | ArgNope 7 -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-same ok  |  | ArgNope 7 -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-register ok  | CollisionGroupId | ArgNope 7 2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-unregister ok  | CollisionGroupId | ArgNope 7 2",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-long ok  | CollisionGroup,CollisionGroupId | LLLLLLLL 100 -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-long-again ok  |  | LLLLLLLL 100 -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "changed-leave ok  |  | LLLLLLLL 100 -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "end Default",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		}
+	],
+	"collision_groups": [
+		{
+			"line": "start 1 1{mask=-1:number,name=Default:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "max ok 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-Default ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-default ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-Nope ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-empty ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-nil error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-none error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-number ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-table ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-Default ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-unknown ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-unknown2 ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-nil error Argument 2 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-A 2 1{mask=-1:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-A ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-a ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-case 3 1{mask=-1:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name=probea:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-Default error Can not use/change the Default collision group.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-empty error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-spaces ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-nil error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-none error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-5 ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-unicode ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-32 ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-63 ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-64 ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-65 ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-99 ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-100 ok  | ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-101 error Collision group name length cannot exceed 100 chars | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-127 error Collision group name length cannot exceed 100 chars | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-128 error Collision group name length cannot exceed 100 chars | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-129 error Collision group name length cannot exceed 100 chars | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-255 error Collision group name length cannot exceed 100 chars | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-256 error Collision group name length cannot exceed 100 chars | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "register-length-1000 error Collision group name length cannot exceed 100 chars | ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-names 4 1{mask=-1:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-BC 6 1{mask=-1:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-1:number,name=ProbeB:string} 6{mask=-1:number,name=ProbeC:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-AB 6 1{mask=-1:number,name=Default:string} 2{mask=-17:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-3:number,name=ProbeB:string} 6{mask=-1:number,name=ProbeC:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-A-B ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-B-A ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-A-C ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-C-C ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-C 6 1{mask=-33:number,name=Default:string} 2{mask=-17:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-3:number,name=ProbeB:string} 6{mask=-34:number,name=ProbeC:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-A-B-2 ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-unknown error Both collision groups must be registered.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-unknown2 error Both collision groups must be registered.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-nil-bool error Argument 3 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-none-bool error Argument 3 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-string-bool error Unable to cast string to bool",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-A-B-3 ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-nil-name error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "set-number-name error Both collision groups must be registered.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-set 6 1{mask=-33:number,name=Default:string} 2{mask=-17:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-3:number,name=ProbeB:string} 6{mask=-34:number,name=ProbeC:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-rename 6 1{mask=-33:number,name=Default:string} 2{mask=-17:number,name=ProbeD:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-3:number,name=ProbeB:string} 6{mask=-34:number,name=ProbeC:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-A-renamed ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-D-B ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-to-empty error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-to-long error Collision group name length cannot exceed 100 chars",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-Default error Can not use/change the Default collision group.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-to-Default error Can not use/change the Default collision group.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "rename-nil error Argument 2 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-renames 6 1{mask=-33:number,name=Default:string} 2{mask=-17:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-3:number,name=ProbeB:string} 6{mask=-34:number,name=ProbeC:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-unregister-B 5 1{mask=-33:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-34:number,name=ProbeC:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "registered-B ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-B-gone ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "unregister-empty error Collision group requires a valid name.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "unregister-nil error Argument 1 missing or nil",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "unregister-Default error Can not use/change the Default collision group.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-F 6 1{mask=-33:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-1:number,name=ProbeF:string} 6{mask=-34:number,name=ProbeC:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "collidable-F-C ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-B-back 7 1{mask=-33:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-1:number,name=ProbeF:string} 6{mask=-34:number,name=ProbeC:string} 7{mask=-1:number,name=ProbeB:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "frozen false false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "same-table false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-mutate 7 1{mask=-33:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-1:number,name=ProbeF:string} 6{mask=-34:number,name=ProbeC:string} 7{mask=-1:number,name=ProbeB:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "part-set-empty ok NotRegistered 0",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-C ok true",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "contains-A ok false",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "part-after-set-part ok ProbeA -1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "create-H ok 5",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-create 7 1{mask=-1:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-1:number,name=ProbeF:string} 6{mask=-1:number,name=ProbeH:string} 7{mask=-1:number,name=ProbeB:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "get-groups 7 1{id=0:number,mask=-1:number,name=Default:string} 2{id=1:number,mask=-1:number,name=ProbeA:string} 3{id=2:number,mask=-1:number,name={}:string} 4{id=3:number,mask=-1:number,name=true:string} 5{id=4:number,mask=-1:number,name=ProbeF:string} 6{id=5:number,mask=-1:number,name=ProbeH:string} 7{id=6:number,mask=-1:number,name=ProbeB:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "id-Default ok 0",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "id-A ok 1",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "id-unknown error Collision group not found.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-0 ok Default",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-1 ok ProbeA",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-32 error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "name-neg error The Collision group Id must be between 0 and 32",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "after-remove 6 1{mask=-1:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-1:number,name=ProbeF:string} 6{mask=-1:number,name=ProbeB:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "limit made 26 then error Cannot register more than 32 collision groups in this world.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "limit-groups 32 1{mask=-1:number,name=Default:string} 2{mask=-1:number,name=ProbeA:string} 3{mask=-1:number,name={}:string} 4{mask=-1:number,name=true:string} 5{mask=-1:number,name=ProbeF:string} 6{mask=-1:number,name=ProbeLimit1:string} 7{mask=-1:number,name=ProbeB:string} 8{mask=-1:number,name=ProbeLimit2:string} 9{mask=-1:number,name=ProbeLimit3:string} 10{mask=-1:number,name=ProbeLimit4:string} 11{mask=-1:number,name=ProbeLimit5:string} 12{mask=-1:number,name=ProbeLimit6:string} 13{mask=-1:number,name=ProbeLimit7:string} 14{mask=-1:number,name=ProbeLimit8:string} 15{mask=-1:number,name=ProbeLimit9:string} 16{mask=-1:number,name=ProbeLimit10:string} 17{mask=-1:number,name=ProbeLimit11:string} 18{mask=-1:number,name=ProbeLimit12:string} 19{mask=-1:number,name=ProbeLimit13:string} 20{mask=-1:number,name=ProbeLimit14:string} 21{mask=-1:number,name=ProbeLimit15:string} 22{mask=-1:number,name=ProbeLimit16:string} 23{mask=-1:number,name=ProbeLimit17:string} 24{mask=-1:number,name=ProbeLimit18:string} 25{mask=-1:number,name=ProbeLimit19:string} 26{mask=-1:number,name=ProbeLimit20:string} 27{mask=-1:number,name=ProbeLimit21:string} 28{mask=-1:number,name=ProbeLimit22:string} 29{mask=-1:number,name=ProbeLimit23:string} 30{mask=-1:number,name=ProbeLimit24:string} 31{mask=-1:number,name=ProbeLimit25:string} 32{mask=-1:number,name=ProbeLimit26:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "limit-create error Cannot register more than 32 collision groups.",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		},
+		{
+			"line": "end 1 1{mask=-1:number,name=Default:string}",
+			"why": "PhysicsService has no collision groups in ree yet: each of its group methods answers nil (and reports itself missing), and BasePart.CollisionGroup and CollisionGroupId are plain properties"
+		}
+	],
 	"core_services": [
 		{
 			"line": "CoreGui get nil",
