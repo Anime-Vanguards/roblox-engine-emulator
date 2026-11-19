@@ -36,11 +36,11 @@ fn record_in(source: &str, frames: u32, walk_always: bool, own: &[(&str, &str)])
 
 /// [`record_in`] with the engine's options.
 fn record_options(options: Options, source: &str, frames: u32, walk_always: bool, own: &[(&str, &str)]) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
-    let engine = Engine::new(options).expect("engine");
-    let lua = Lua::new();
-    engine_lua::start(&lua, &engine).expect("start");
-    if !own.is_empty() {
-        let lighting = crate::services::find_service(&engine, engine.world().game, "Lighting").expect("Lighting");
+    record_prepared(options, source, frames, walk_always, |engine| {
+        if own.is_empty() {
+            return;
+        }
+        let lighting = crate::services::find_service(engine, engine.world().game, "Lighting").expect("Lighting");
         let hooks = engine.hooks.borrow();
         let mut state = engine.state.borrow_mut();
         for (class, name) in own {
@@ -48,7 +48,15 @@ fn record_options(options: Options, source: &str, frames: u32, walk_always: bool
             let id = crate::instance::create_named(&mut state, &engine.reflection, class, name);
             crate::instance::set_parent(&mut state, &engine.reflection, &hooks, id, Some(lighting)).expect("parent");
         }
-    }
+    })
+}
+
+/// [`record_options`] with `prepare` run on the started engine before the harness (a mount, say).
+fn record_prepared(options: Options, source: &str, frames: u32, walk_always: bool, prepare: impl FnOnce(&Engine)) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
+    let engine = Engine::new(options).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    prepare(&engine);
     let recorder = Recorder::install(&engine, 60.0);
     if walk_always {
         recorder.walk_every_frame();
@@ -1234,6 +1242,72 @@ fn a_texture_content_swap_is_recorded() {
     let swaps = find(&playback["actions"], |a| a["target"] == "Skin" && a["set"]["TextureContent"].is_string());
     let values: Vec<(f64, &str)> = swaps.iter().map(|a| (a["at"].as_f64().unwrap(), a["set"]["TextureContent"].as_str().unwrap())).collect();
     assert!(values.len() == 1 && (values[0].0 - 0.1).abs() < 0.03 && values[0].1 == "rbxassetid://2", "{values:?}");
+}
+
+/// A MeshPart whose texture a script clears mid-run (TextureID = "" or TextureContent = Content.none)
+/// draws untextured from that frame: a part in the world gets a set of the empty texture then, and a
+/// textured part that enters the world after the clear is in the scene with none. The parts loaded
+/// from a model file keep the file's TextureContent too, which the scene once wrote back over the
+/// cleared TextureID.
+#[test]
+fn a_cleared_mesh_part_texture_is_recorded_as_none() {
+    let dir = std::env::temp_dir().join(format!("ree-cleared-texture-{}-{}", std::process::id(), TEST_DIRS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut model = rbx_dom_weak::WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
+    let textured = |name: &str, uri: &str| {
+        rbx_dom_weak::InstanceBuilder::new("MeshPart")
+            .with_name(name)
+            .with_property("TextureContent", rbx_dom_weak::types::Content::from_uri(uri))
+    };
+    let top = model.insert(model.root_ref(), rbx_dom_weak::InstanceBuilder::new("Folder").with_name("Parts").with_children([textured("ById", "rbxassetid://2"), textured("ByContent", "rbxassetid://3")]));
+    let mut file = Vec::new();
+    rbx_binary::to_writer(&mut file, &model, &[top]).unwrap();
+    std::fs::write(dir.join("Parts.rbxm"), file).unwrap();
+    let mount = crate::project::Mount::parse(&format!("ReplicatedStorage/Fixture={}", dir.to_string_lossy()), false).unwrap();
+    let (playback, _, scene, _, _) = record_prepared(
+        Options { mode: "play".into(), ..Options::default() },
+        r#"
+        local Parts = game:GetService("ReplicatedStorage").Fixture.Parts
+        local Shown = Instance.new("MeshPart")
+        Shown.Name = "Shown"
+        Shown.TextureID = "rbxassetid://1"
+        Shown.Parent = workspace
+        task.delay(0.1, function()
+            Shown.TextureID = ""
+            local ById = Parts.ById:Clone()
+            ById.TextureID = ""
+            ById.Parent = workspace
+            local ByContent = Parts.ByContent:Clone()
+            ByContent.TextureContent = Content.none
+            ByContent.Parent = workspace
+        end)
+        "#,
+        12,
+        false,
+        |engine| {
+            crate::project::mount_at(engine, &mount).unwrap();
+        },
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    let textures = |name: &str| -> Vec<String> {
+        instance(&scene, &[name]).properties.iter().filter_map(|(property, value)| match value {
+            Variant::Content(content) => match content.value() {
+                rbx_dom_weak::types::ContentType::Uri(uri) => Some(format!("{property}={uri}")),
+                _ => None,
+            },
+            Variant::ContentId(id) => Some(format!("{property}={}", id.as_str())),
+            Variant::String(text) if property.as_str() == "TextureID" => Some(format!("{property}={text}")),
+            _ => None,
+        }).filter(|text| text.contains("rbxassetid://")).collect()
+    };
+    assert!(textures("Shown").iter().any(|text| text.ends_with("rbxassetid://1")), "{:?}", textures("Shown"));
+    assert!(textures("ById").is_empty(), "{:?}", textures("ById"));
+    assert!(textures("ByContent").is_empty(), "{:?}", textures("ByContent"));
+    let sets: Vec<(f64, &str)> = find(&playback["actions"], |a| a["target"] == "Shown" && a["set"]["TextureContent"].is_string())
+        .iter()
+        .map(|a| (a["at"].as_f64().unwrap(), a["set"]["TextureContent"].as_str().unwrap()))
+        .collect();
+    assert!(sets.len() == 1 && (sets[0].0 - 0.1).abs() < 0.03 && sets[0].1.is_empty(), "{sets:?}");
 }
 
 /// ParticleEmitter, Beam and Trail keep TextureContent in Studio's dump outside rbx-dom's older
