@@ -451,6 +451,488 @@
 			"why": "a part keeps its Color in whole 1/255 steps (a client reads the tween's blend cut down, floor, to one); ree's BasePart.Color holds the float32 the write gave. The blend itself is the same (every other class's line)"
 		}
 	],
+	"utf8_normalize": [
+		{
+			"line": "e-acute nfc 00E9 nfd 0065 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "e+acute nfc 00E9 nfd 0065 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "A-ring nfc 00C5 nfd 0041 030A",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "A+ring nfc 00C5 nfd 0041 030A",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "A-ring+acute nfc 01FA nfd 0041 030A 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "u-diaeresis-macron nfc 01D6 nfd 0075 0308 0304",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "u+diaeresis+macron nfc 01D6 nfd 0075 0308 0304",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "u-diaeresis+macron nfc 01D6 nfd 0075 0308 0304",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "e-dotbelow-circumflex nfc 1EC7 nfd 0065 0323 0302",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "two-letters nfc 00E9 00E9 nfd 0065 0301 0065 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "acute+acute nfc 00E1 0301 nfd 0061 0301 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "a+dotbelow+circumflex nfc 1EAD nfd 0061 0323 0302",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "a+circumflex+dotbelow nfc 00E2 0323 nfd 0061 0302 0323",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "a-dotbelow+circumflex nfc 1EAD nfd 0061 0323 0302",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "a-circumflex+dotbelow nfc 00E2 0323 nfd 0061 0302 0323",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "a-dotbelow-circumflex nfc 1EAD nfd 0061 0323 0302",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "a+acute+dotbelow nfc 00E1 0323 nfd 0061 0301 0323",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "o+horn+acute nfc 1EDB nfd 006F 031B 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "o+acute+horn nfc 00F3 031B nfd 006F 0301 031B",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "a+diaeresis+acute nfc 00E4 0301 nfd 0061 0308 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "a+diaeresis+macron nfc 01DF nfd 0061 0308 0304",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "e+cedilla+breve nfc 1E1D nfd 0065 0327 0306",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "e+breve+cedilla nfc 0115 0327 nfd 0065 0306 0327",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "alpha+psili+varia+ypogegrammeni nfc 1F82 nfd 03B1 0313 0300 0345",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "alpha+ypogegrammeni+psili+varia nfc 1FB3 0313 0300 nfd 03B1 0345 0313 0300",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "alpha-psili-varia-ypogegrammeni nfc 1F82 nfd 03B1 0313 0300 0345",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "iota-dialytika-tonos nfc 0390 nfd 03B9 0308 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "alpha-oxia nfc 1F71 nfd 03B1 0301 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "alpha-oxia+ypogegrammeni nfc 1F71 0345 nfd 03B1 0301 0000 0345",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "angstrom nfc 212B nfd 0041 030A 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "angstrom+acute nfc 212B 0301 nfd 0041 030A 0000 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "ohm nfc 2126 nfd 03A9 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "kelvin nfc 212A nfd 004B 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "en-quad nfc 2000 nfd 2002 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "em-quad nfc 2001 nfd 2003 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "grave-tone-mark nfc 0340 nfd 0300 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "acute-tone-mark nfc 0341 nfd 0301 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "koronis nfc 0343 nfd 0313 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "greek-question-mark nfc 037E nfd 003B 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "ano-teleia nfc 0387 nfd 00B7 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "singleton-then-letter nfc 212B 0062 nfd 0041 030A 0000 0062",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "letter-then-singleton nfc 0062 212B nfd 0062 0041 030A 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "two-singletons nfc 2126 2126 nfd 03A9 0000 03A9 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "singleton+mark nfc 2126 0301 nfd 03A9 0000 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "cjk-compat-F900 nfc F900 nfd 8C48 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "cjk-compat-FA10 nfc FA10 nfd 585A 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "cjk-compat-2F800 nfc 2F800 nfd 4E3D 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "cjk-compat-2FA1D nfc 2FA1D nfd 2A600 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "long-s-dot nfc 1E9B nfd 017F 0307",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "long-s+dot nfc 1E9B nfd 017F 0307",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "hangul-ga nfc AC00 nfd 1100 1161",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "hangul-gak nfc AC01 nfd 1100 1161 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "hangul-last nfc D7A3 nfd 1112 1175 11C2",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "jamo-L+V nfc AC00 nfd 1100 1161",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "jamo-L+V+T nfc AC01 nfd 1100 1161 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "jamo-last-L+V+T nfc D7A3 nfd 1112 1175 11C2",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-LV+T nfc AC01 nfd 1100 1161 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-LVT+T nfc AC02 nfd 1100 1161 11A8 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-LV+T-base nfc AC00 nfd 1100 1161 11A7",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-LV+T-last nfc AC1B nfd 1100 1161 11C2",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "jamo-L+L+V nfc 1100 AC00 nfd 1100 1100 1161",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "jamo-L+V+T+T nfc AC02 nfd 1100 1161 11A8 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "jamo-L+V+T-base+T nfc AC01 nfd 1100 1161 11A7 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-LVT+T-base nfc AC01 nfd 1100 1161 11A8 11A7",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-T27+T nfc AC1C nfd 1100 1161 11C2 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-last+T nfc D7A4 nfd 1112 1175 11C2 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-last+T+T nfc D7A4 11A8 nfd 1112 1175 11C2 11A8 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-LV+old-T nfc AC00 11C3 nfd 1100 1161 11C3",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "syllable-LV+V nfc AC00 1161 nfd 1100 1161 1161",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "devanagari-qa nfc 0958 nfd 0915 093C",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "hebrew-yod-hiriq nfc FB1D nfd 05D9 05B4",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "forking nfc 2ADC nfd 2ADD 0338",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "dialytika-tonos-mark nfc 0344 nfd 0308 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "tibetan-F73 nfc 0F73 nfd 0F71 0F72",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "musical-1D15E nfc 1D15E nfd 1D157 1D165",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "oriya-B47+B3E nfc 0B4B nfd 0B47 0B3E",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "kannada-CC6+CC2 nfc 0CCA nfd 0CC6 0CC2",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "kannada-CC6+CC2+CD5 nfc 0CCB nfd 0CC6 0CC2 0CD5",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "u5.2-kaithi-11099+110BA nfc 1109A nfd 11099 110BA",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "u6.1-chakma-11131+11127 nfc 1112E nfd 11131 11127",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "u7.0-grantha-11347+1133E nfc 1134B nfd 11347 1133E",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "u7.0-tirhuta-114B9+114BA nfc 114BB nfd 114B9 114BA",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "nfd-angstrom-written nfc 00C5 0000 nfd 0041 030A 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "A+ring+nul+acute nfc 00C5 0000 0301 nfd 0041 030A 0000 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-FF nfc error String contains invalid UTF-8 nfd error String contains invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-continuation nfc error String contains invalid UTF-8 nfd error String contains invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-truncated nfc error End of string is invalid UTF-8 nfd error End of string is invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-truncated-mark nfc error End of string is invalid UTF-8 nfd error End of string is invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-overlong nfc error String contains invalid UTF-8 nfd error String contains invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-surrogate nfc error String contains invalid UTF-8 nfd error String contains invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-above-max nfc error String contains invalid UTF-8 nfd error String contains invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-after-letter+mark nfc error String contains invalid UTF-8 nfd error String contains invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-between-letter-and-mark nfc error String contains invalid UTF-8 nfd error String contains invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-after-angstrom nfc error String contains invalid UTF-8 nfd error String contains invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "nfc-of-nfd 212B -> 00C5 0000 nfd-of-nfc -> 0041 030A 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "nfc-of-nfd 1F71 -> 03AC 0000 nfd-of-nfc -> 03B1 0301 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "nfc-of-nfd F900 -> 8C48 0000 nfd-of-nfc -> 8C48 0000",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "nfc-of-nfd 0061 0302 0323 -> 00E2 0323 nfd-of-nfc -> 0061 0302 0323",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "nfc-of-nfd AC01 -> AC01 nfd-of-nfc -> 1100 1161 11A8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "nfc-of-nfd 0958 -> 0915 093C nfd-of-nfc -> 0915 093C",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "nfc-of-nfd 0344 -> 0308 0301 nfd-of-nfc -> 0308 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-none nfc error missing argument #1 to 'nfcnormalize' (string expected) nfd error missing argument #1 to 'nfdnormalize' (string expected)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-nil nfc error invalid argument #1 to 'nfcnormalize' (string expected, got nil) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got nil)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-integer nfc 0031 0032 0033 nfd 0031 0032 0033",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-float nfc 002D 0030 002E 0035 nfd 002D 0030 002E 0035",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-boolean nfc error invalid argument #1 to 'nfcnormalize' (string expected, got boolean) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got boolean)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-table nfc error invalid argument #1 to 'nfcnormalize' (string expected, got table) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got table)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-function nfc error invalid argument #1 to 'nfcnormalize' (string expected, got function) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got function)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-buffer nfc error invalid argument #1 to 'nfcnormalize' (string expected, got buffer) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got buffer)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-thread nfc error invalid argument #1 to 'nfcnormalize' (string expected, got thread) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got thread)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-vector3 nfc error invalid argument #1 to 'nfcnormalize' (string expected, got Vector3) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got Vector3)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-color3 nfc error invalid argument #1 to 'nfcnormalize' (string expected, got Color3) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got Color3)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-instance nfc error invalid argument #1 to 'nfcnormalize' (string expected, got Instance) nfd error invalid argument #1 to 'nfdnormalize' (string expected, got Instance)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-extra nfc 00E9 nfd 0065 0301",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "arg-direct error @210: invalid argument #1 to 'nfcnormalize' (string expected, got nil) / error @212: invalid argument #1 to 'nfdnormalize' (string expected, got table)",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "bad-direct error @215: String contains invalid UTF-8 / error @217: End of string is invalid UTF-8",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "long-nfc bytes 40000 codes 20000 same true",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "long-nfd bytes 80000 codes 60000 same true",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "scan nfd changes 13232 (hangul 11172) hash BAB26028; nfc changes 0",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		},
+		{
+			"line": "scan nfc of nfd gives back 12112 hash DDA27138",
+			"why": "utf8.nfcnormalize and utf8.nfdnormalize return their argument unchanged (not emulated) where a client composes and decomposes it, and raises on invalid UTF-8"
+		}
+	],
 	"values": [
 		{
 			"line": "value SharedTable typeof=SharedTable type=userdata tostring=SharedTable: ADDR",
