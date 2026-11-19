@@ -910,6 +910,8 @@ fn a_harness_requires_its_own_modules() {
             script_timeouts: None,
             timing_check: false,
             clock_probe: None,
+            latency: None,
+            record_server: false,
         };
         let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
         assert_eq!(ran.status, "ok", "{harness}: {:?}", ran.failure);
@@ -1739,6 +1741,8 @@ fn frame_times_replay_a_take_then_go_on_at_the_frame_rate() {
         script_timeouts: None,
         timing_check: false,
         clock_probe: None,
+        latency: None,
+        record_server: false,
     };
     let round = |times: Vec<f64>| times.into_iter().map(|t| (t * 1e4).round() / 1e4).collect::<Vec<_>>();
     assert_eq!(round(args(Some(vec![0.03, 0.05])).frame_schedule()), vec![0.03, 0.05, 0.0667, 0.0833, 0.1]);
@@ -2000,6 +2004,8 @@ fn trace_writes_names_the_line_of_each_write() {
         script_timeouts: None,
         timing_check: false,
         clock_probe: None,
+        latency: None,
+        record_server: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     let _ = std::fs::remove_dir_all(&root);
@@ -2060,6 +2066,8 @@ fn trace_writes_star_names_every_property_and_attribute_write() {
         script_timeouts: None,
         timing_check: false,
         clock_probe: None,
+        latency: None,
+        record_server: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     let _ = std::fs::remove_dir_all(&root);
@@ -2119,6 +2127,8 @@ fn profile_phase_splits_the_allocation_profile() {
         script_timeouts: None,
         timing_check: false,
         clock_probe: None,
+        latency: None,
+        record_server: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     drop(guard);
@@ -2184,6 +2194,8 @@ fn census_names_the_line_behind_what_accumulates() {
         script_timeouts: None,
         timing_check: false,
         clock_probe: None,
+        latency: None,
+        record_server: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     let _ = std::fs::remove_dir_all(&root);
@@ -2263,6 +2275,8 @@ fn holders_name_what_keeps_an_orphan_tree_alive() {
         script_timeouts: None,
         timing_check: false,
         clock_probe: None,
+        latency: None,
+        record_server: false,
     };
     let ran = super::run::run(&emulator.lua, &emulator.engine, &args, None).expect("run");
     let _ = std::fs::remove_dir_all(&root);

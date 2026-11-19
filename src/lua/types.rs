@@ -144,7 +144,7 @@ fn number_of(value: &LuaValue) -> f64 {
 
 pub struct LDateTime(pub f64);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct RandomState {
     state: u64,
     /// A non-finite seed made the Luau runtime's state NaN: every draw is 0
@@ -191,6 +191,11 @@ fn mix_seed(base: u64, ordinal: u64) -> f64 {
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^= z >> 31;
     (z >> 12) as f64
+}
+
+/// A Random that continues from `state`, registered in `engine` (a loopback run's remote argument: loopback/wire.rs)
+pub(crate) fn random_with_state(engine: &Engine, state: RandomState) -> LRandom {
+    new_random(engine, state)
 }
 
 fn new_random(engine: &Engine, state: RandomState) -> LRandom {
@@ -518,6 +523,8 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
         if engine.options.server() && engine.state.borrow().signals.get(id).label.as_bytes() == b"RunService.RenderStepped" {
             return raise("RenderStepped event can only be used from local scripts");
         }
+        // (a loopback run refuses the other side's remote event)
+        crate::loopback::remotes::connecting(engine, id)?;
     }
     let LuaValue::Function(callback) = args.get(1).clone() else {
         // Roblox raises nothing: it logs the message and returns a connection that is not connected, which firing the
@@ -545,6 +552,12 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
     };
     if let Some(callback) = noted {
         crate::census::connected(lua, connection, &callback);
+    }
+    // (a loopback run's remote hands the events that waited for a first connection to this one)
+    if let Some(signal) = signal
+        && connection != ConnectionId::DISCONNECTED
+    {
+        crate::loopback::remotes::connected(engine, signal, connection);
     }
     // (a profile keeps where it was connected: its handlers' dispatch and runs are reported by that site)
     if crate::profiler::attribution::on()

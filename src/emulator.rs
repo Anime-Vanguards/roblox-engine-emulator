@@ -44,6 +44,8 @@ impl Drop for Emulator {
         if let Some(timeout) = self.engine.state.try_borrow().ok().and_then(|state| state.sched.timeout.clone()) {
             timeout.detach();
         }
+        // a loopback run's callers waiting on the other side, held for this VM, go before it
+        crate::loopback::release(&self.engine);
         // SAFETY: the field is never used again (this is the Emulator's drop)
         unsafe { ManuallyDrop::drop(&mut self.lua) };
         self.engine.teardown();
@@ -156,10 +158,11 @@ mod tests {
                      print(game:GetService('RunService'):IsServer(), #game:GetService('Players'):GetPlayers()) \
                      task.wait(0.05) print(pcall(function() return game:GetService('DataStoreService'):GetDataStore('A'):GetAsync('k') end))";
         let first = (start_and_run(false, probe), start_and_run(true, probe));
-        let compiled = crate::lua::modules::engine_compiles();
-        assert!(compiled >= 4, "the four chunks compiled once each ({compiled})");
+        // (counted on this thread: other tests start engines meanwhile)
+        let compiled = crate::lua::modules::engine_compiles_here();
         let second = (start_and_run(false, probe), start_and_run(true, probe));
-        assert_eq!(crate::lua::modules::engine_compiles(), compiled, "a second engine compiled engine Luau again");
+        assert_eq!(crate::lua::modules::engine_compiles_here(), compiled, "a second engine compiled engine Luau again");
+        assert!(crate::lua::modules::engine_compiles() >= 4, "the four chunks compiled");
         assert_eq!(first, second);
         assert!(first.0.iter().any(|line| line == "print: false 1") && first.1.iter().any(|line| line == "print: true 0"), "{first:?}");
     }

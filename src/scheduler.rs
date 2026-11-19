@@ -1570,6 +1570,10 @@ fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: 
         state.sched.edit_mode
     };
     flush_deferred(lua, engine)?;
+    // A loopback run's receive point (loopback.rs): what the other side sent last frame applies before the legacy
+    // resumptions, its events queued for their flush (measured: a remote's handlers run after the legacy wait() resumptions
+    // and before PreAnimation; a RemoteFunction's callback and an answered call before those resumptions)
+    crate::loopback::receive(lua, engine)?;
     if !edit_mode {
         // A playing client (measured, Studio 0.744: tools/parity/probes/deferred_points.luau and a wait / spawn
         // chain probe) resumes wait / delay / spawn threads after the render step's PreRender handlers and before
@@ -1869,6 +1873,15 @@ fn step_recorded(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<bool> {
 /// recorded clock replays its next frame instead while it has one; after its capture nothing
 /// runs.
 pub fn step(lua: &Lua, engine: &Rc<Engine>, duration: Option<f64>) -> LuaResult<()> {
+    // (a loopback run's client steps its server first: loopback.rs)
+    if engine.peer.borrow().is_some() {
+        return crate::loopback::step_pair(lua, engine, duration);
+    }
+    step_one(lua, engine, duration)
+}
+
+/// [`step`] of this engine alone (a loopback pair steps each of its engines this way)
+pub fn step_one(lua: &Lua, engine: &Rc<Engine>, duration: Option<f64>) -> LuaResult<()> {
     // (the boundary profile's step guard; a recorded clock's `step_recorded` below opens a nested one, which does nothing)
     let _boundary_frame = crate::boundary::Frame::begin();
     // (a profile's timeline: one row a frame; off, one thread-local read)

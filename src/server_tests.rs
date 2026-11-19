@@ -15,7 +15,7 @@ use super::{
 fn start(run_context: RunContext) -> (Lua, Rc<Engine>) {
     let options = match run_context {
         RunContext::Server => Options { mode: "play".into(), run_context, local_player_name: None, ..Options::default() },
-        RunContext::Client => Options { mode: "play".into(), ..Options::default() },
+        RunContext::Client | RunContext::Loopback => Options { mode: "play".into(), ..Options::default() },
         RunContext::Edit => Options { run_context, ..Options::default() },
     };
     let engine = Engine::new(options).expect("engine");

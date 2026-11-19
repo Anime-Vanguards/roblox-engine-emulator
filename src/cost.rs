@@ -1036,6 +1036,9 @@ pub enum SignalKind {
     AncestryChanged,
     /// BindableEvent:Fire with a connection
     Bindable,
+    /// A loopback run's remote event reaching its handlers (OnServerEvent, OnClientEvent): priced as an unmeasured event until
+    /// tools/cost-parity measures a remote's dispatch
+    Remote,
     /// other events: fired as before, unpriced
     Unmeasured,
 }
@@ -1083,7 +1086,7 @@ pub fn signal_costs(kind: SignalKind) -> (f64, f64) {
         SignalKind::AncestryChanged => (0.65e-6, 2.17e-6),
         SignalKind::Bindable => (0.58e-6, 1.73e-6),
         // (an event no bench measured: a heard BindableEvent's, a borrowed price: signal_kinds)
-        SignalKind::Unmeasured => (0.58e-6, 1.73e-6),
+        SignalKind::Unmeasured | SignalKind::Remote => (0.58e-6, 1.73e-6),
     };
     (queue * STUDIO_HOOKS, thread * STUDIO_HOOKS)
 }
@@ -1096,7 +1099,7 @@ pub fn signal_kinds(signal: SignalKind) -> SignalKinds {
     match signal {
         SignalKind::Changed | SignalKind::Property => SignalKinds { queue: 0, thread: kind::STUDIO },
         SignalKind::Bindable => SignalKinds { queue: 0, thread: 0 },
-        SignalKind::Unmeasured => SignalKinds { queue: kind::DEFAULTED, thread: kind::DEFAULTED },
+        SignalKind::Unmeasured | SignalKind::Remote => SignalKinds { queue: kind::DEFAULTED, thread: kind::DEFAULTED },
         _ => SignalKinds { queue: kind::STUDIO, thread: kind::STUDIO },
     }
 }

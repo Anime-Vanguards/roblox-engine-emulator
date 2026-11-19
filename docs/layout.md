@@ -15,6 +15,8 @@ src/services/          per-class behaviours (DataModel, RunService, TweenService
 src/project.rs project/   Rojo mounting, models and snapshots, Studio-only placeholders, bundles,
                        model plans and lazy imports (project/plan.rs), their files (plan/codec.rs),
                        Rojo's JSON models (project/json_model.rs)
+src/loopback/          `--run-context loopback`: a server and its client in one run (the pair, the join, replication,
+                       remotes, the values they carry); src/loopback_tests.rs its tests
 src/serve/             `ree serve` and its client (`--service`)
 src/timing.rs files.rs `--profile`'s phases; file stamps for the caches
 src/watchdog.rs        Roblox's script timeout, the wall-clock cap, the exit when the parent is gone

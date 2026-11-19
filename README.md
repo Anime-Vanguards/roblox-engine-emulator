@@ -37,6 +37,8 @@ It is a Rust crate (`roblox_engine_emulator`) and a command line (`ree`):
   (see "Layers and extensions" in [docs/engine.md](docs/engine.md)); the engine came out of rur on
   2026-10-10.
 - `ree record` runs a harness against a project and writes a recording that ror draws as a video.
+- `ree run --run-context loopback` runs a server and its client in one process, the client's world replicated from
+  the server's and remotes carrying calls both ways ("Loopback run context" in [docs/engine.md](docs/engine.md)).
 
 Everything script-visible is measured against Roblox Studio or follows Roblox's documentation where it
 is not measured yet (the 3D world); [docs/engine.md](docs/engine.md) is the contract and records which.

@@ -1233,6 +1233,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A loopback job (a server and its client, `--run-context loopback`) runs cold: nothing is prepared ahead of it, even
+    /// where its harness calls Context.Checkpoint, and it prints what a run of it from the command line prints
+    #[test]
+    fn a_loopback_job_runs_cold_as_a_direct_run_does() {
+        modules::reuse_compiled_modules();
+        let root = std::env::temp_dir().join(format!("ree-serve-loopback-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let harness = root.join("Pair.luau");
+        std::fs::write(
+            &harness,
+            r#"local Storage = game:GetService("ReplicatedStorage")
+            return {
+                Server = function(Context)
+                    Context.Checkpoint()
+                    local Remote = Instance.new("RemoteEvent")
+                    Remote.Name = "Ping"
+                    Remote.Parent = Storage
+                    Remote.OnServerEvent:Connect(function(Player, Text)
+                        print("server got", Text, Player.Name)
+                        Remote:FireClient(Player, Text .. "!")
+                    end)
+                end,
+                Client = function(Context)
+                    local Remote = Storage:WaitForChild("Ping")
+                    Remote.OnClientEvent:Connect(function(Text)
+                        print("client got", Text)
+                        print("@done")
+                    end)
+                    Remote:FireServer("hi")
+                end,
+            }"#,
+        )
+        .unwrap();
+        let roots = root.join("game").to_string_lossy().into_owned();
+        let args: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &roots, "--seconds", "1", "--run-context", "loopback"].iter().map(|s| s.to_string()).collect();
+        let counts = PreparedCounts::default();
+        let (reply, emulator, next) = run_job("run", &args, &mut None, &counts);
+        drop(emulator);
+        assert_eq!(reply["code"], 0, "{reply}");
+        assert!(next.is_none(), "a loopback job is not prepared ahead");
+        let served: serde_json::Value = serde_json::from_str(reply["stdout"].as_str().unwrap().trim()).unwrap();
+        let direct = crate::record::run::run_only(&crate::record::run::parse(&args, false).unwrap(), &launch::Host::default()).unwrap();
+        let lines = |summary: &serde_json::Value| -> Vec<String> {
+            summary["output"].as_array().unwrap().iter().map(|line| format!("{} {}", line["side"].as_str().unwrap_or("-"), line["message"].as_str().unwrap_or(""))).collect()
+        };
+        assert_eq!(lines(&served), ["server server got hi Player", "client client got hi!", "client @done"]);
+        assert_eq!(lines(&served), lines(&direct));
+        assert_eq!((served["frames"].clone(), served["runContext"].clone()), (direct["frames"].clone(), direct["runContext"].clone()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A Prepare that runs frames (a server's boot) and ends at Context.FrameCheckpoint parks between
     /// frames: its run prepared ahead serves a job with other `--context` and `--seconds` but the same
     /// `--fps`, printing what the job prints alone, frames and clocks included; Context.ReseedRandoms

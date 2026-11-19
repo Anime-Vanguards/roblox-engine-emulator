@@ -300,7 +300,9 @@ next mount of the same scene. Tests use their own `BundleSource`, so none needs 
 One `Rc<Engine>` per mounted project, owned next to its `mlua::Lua` (drop the Lua first, then
 `engine.teardown()`; `Emulator` does both). Everything is single-threaded; `Engine` is `!Send`. The engine's own Luau
 (its prelude, services and Vector3 chunks) is compiled to bytecode once per process and every VM loads those bytes
-(`lua::modules::load_engine_luau`), so an engine started after the first one compiles none of it.
+(`lua::modules::load_engine_luau`), so an engine started after the first one compiles none of it. A loopback run's
+client engine holds its server (`Engine::peer`, `loopback::link` and `loopback::join`): a host that steps the client
+steps the pair.
 
 ```
 lib.rs          Engine { reflection: Arc<Reflection>, options: Options, state: RefCell<State>,
@@ -1437,7 +1439,8 @@ and `IsRunMode` false; `IsEdit` is refused to game scripts, as on a client. It n
   keys, OrderedDataStore pages), MemoryStoreService (sorted maps, hash maps, queues) and MessagingService
   (this server's own subscribers), all empty at the start of every run. Limits and error codes follow
   Roblox's documentation where it gives them.
-- Remotes: FireClient / FireAllClients reach no client; InvokeClient waits until its player leaves.
+- Remotes: FireClient / FireAllClients reach no client; InvokeClient waits until its player leaves (a loopback run's
+  server reaches its client: "Loopback run context" below).
 - EncodingService (Zstd compression and Base64), as a playing client has it too (the same answers and errors on
   both, measured: tools/parity/probes/encoding.luau).
 - LogService.MessageOut gets a server's lines as a playing client's ("Output and LogService" below), and
@@ -1446,6 +1449,107 @@ and `IsRunMode` false; `IsEdit` is refused to game scripts, as on a client. It n
   branches.
 
 A print of exactly `@done` ends `ree run` / `ree record` at the end of that frame.
+
+## Loopback run context (`--run-context loopback`, `src/loopback`)
+
+A server and its client in one run, as one play session's two sides. Two engines, two DataModels and two Luau VMs on
+one thread: each frame the server steps, then the client, with the same `dt` (a recorded clock's too). Each side keeps
+its own rules: the server's are a server run's (`RunContext::Server`, server.luau, "Server run context"), the client's
+a client run's. Its rules were measured in a play session of one server and one client, two processes on a network
+loopback (Studio 0.747 in a headless session; `node tools/parity/run.mjs --loopback`, tools/parity/probes/loopback,
+each probe captured three times), unless said otherwise. The server's harness may also read `Context.Player`, the
+player that is to join (`Context.SetJoinData` works on it), and both sides read `Context.Side` (`"server"`, `"client"`).
+
+- **Starting.** The server mounts the project as a server run does and its harness's `Server` starts and runs to its
+  first yield; then the player joins and the harness's `Client` starts, before frame 1. The client's engine runs only
+  Engine.Start (its engine Luau interpreted: not charged, so nothing a script sees changes): its DataModel is a copy of
+  the server's replicated containers, made at the join. `Context.HoldJoin()` on the server holds the join until
+  `Context.Join()`, at that frame's end; the client's clocks start at its join, as a real client's DataModel starts
+  after the server's. `Context.Leave()` takes the player out at the next frame boundary (PlayerRemoving on the server;
+  the client steps no more; the server's InvokeClient calls waiting on it raise).
+- **The join.** The server makes the player (named by `--player`, as a client run's local player) with Backpack,
+  PlayerGui and StarterGear and parents it to Players, so PlayerAdded fires there; it pairs with the client's local
+  player and its containers by class (the client has PlayerScripts too). A client's PlayerAdded connected after its own
+  join fires nothing. The client gets a copy of the children of Workspace, ReplicatedStorage, ReplicatedFirst, Lighting,
+  Players, StarterGui, StarterPack, StarterPlayer, Teams, SoundService, Chat, TextChatService, LocalizationService,
+  MaterialService, TestService, InsertService, MarketplaceService, ProximityPromptService and PolicyService (measured:
+  a marker in every service the server can parent to); never ServerStorage's or ServerScriptService's (the client has
+  an empty ServerScriptService and no ServerStorage until a script asks), nor the server's Camera or the harness's
+  RURFixtures (each side mounts its own). Each side requires its own copy of a module.
+- **What replicates of an instance.** Its class, Name and every property but LocalTransparencyModifier (measured: 70
+  properties of 25 classes, before and after the join; rbx-dom's NotReplicated tag marks a property not sent as itself,
+  such as a script's Enabled or a part's Color, whose value arrives all the same) and a Workspace's CurrentCamera (each
+  side's own); its attributes and tags. A property holding an instance the client lacks arrives as nil. A server
+  Script arrives without its source (one whose RunContext is Client with it); a LocalScript or ModuleScript with it.
+  No event fires for the join's copy.
+- **After the join.** Every change the server makes in those containers (but ReplicatedFirst) goes out when its frame
+  ends, in the order first made, each as its value then: an instance made, written and parented arrives whole (its
+  ChildAdded, no Changed), three writes to one property give one Changed with the last value, a write and its revert
+  none, two properties' Changed come in the order first written, two SetAttribute calls one AttributeChanged. An
+  instance unparented or moved out of the containers keeps its copy on the client with Parent nil, and comes back as
+  the same instance; a destroyed one is destroyed there (Destroying, ChildRemoved, AncestryChanged, its descendants'
+  Destroying). A physics move arrives without Changed. The client applies the changes through the engine's setters, so
+  its events fire as for a script's change. Nothing the client does to instances reaches the server; its own write
+  stays until the server writes that property again.
+- **When.** What a side sends during its frame reaches the other at its next frame's start (measured: an event echoed
+  by the other side's handler comes back at the start of the sender's next frame, either way), at the receive point:
+  after the legacy wait() resumptions and before PreAnimation. Changes and remote events queue there as deferred work,
+  in the order sent, and run at the legacy step's flush; a RemoteFunction's callback and an answered call run at the
+  receive point itself, before the legacy resumptions (they are called, not deferred). `--latency <frames>` delivers
+  that many frames later (1, the default, is the next frame).
+- **Remote events.** FireServer, FireClient and FireAllClients send their arguments as they are at the call (a change
+  the sender makes after does not arrive): the count of arguments and trailing nils; numbers (a subnormal one as 0),
+  strings and buffers byte for byte; vectors as Vector3; datatypes, Random, TweenInfo, DateTime and EnumItems equal; an
+  instance as the receiver's own, or nil when it lacks it (server-only, parentless, client-made); a function, thread,
+  Enum or other userdata as nil. Tables as a BindableEvent copies them (the border decides array or dictionary, a
+  dictionary's keys become strings, `Invalid table key type used`, `tables cannot be cyclic`), but a function or an
+  instance the receiver lacks leaves a hole in an array, and each handler gets a table of its own. A table nested
+  deeper than 299 levels (298 for FireClient, after its player) is refused at the sender with `Max lua stack size
+  reached`. OnServerEvent gets the player first. Reliable events of a frame arrive in order; an UnreliableRemoteEvent's
+  arrive after them, and one whose arguments encode to more than 1000 bytes (a string 1 + its length's varint + its
+  bytes, a buffer one more, a number 9, a table 1 + its count's varint + its entries, an instance 6: the measured
+  cutoffs) is dropped with the sender's warning `Unreliable Event dropped as its payload is too large. Consider reducing
+  the total size of the arguments. Payload went over by: N bytes`. A client compresses buffers there, which ree does
+  not: a buffer of repeated bytes can pass a client where ree drops it. Every event is delivered (no loss is
+  simulated).
+- **Wrong side.** A client's FireClient (`FireClient can only be called from the server`, before the player argument
+  is looked at), FireAllClients and InvokeClient (`Argument 1 is invalid: expected 'Player' instance type` first, then
+  `InvokeClient can only be called from the server`) raise; so do connecting OnServerEvent (`OnServerEvent can only be
+  used on the server`; reading the member does not) and setting OnServerInvoke (`OnServerInvoke can only be implemented
+  on the server`), and on a server the client's counterparts. A parentless remote refuses nothing and sends nothing.
+- **Missing remotes and queues.** A remote the receiver lacks takes the event with nothing logged; an InvokeServer to
+  one waits for good. An event reaching a remote nothing listens to waits on it: the first connection made gets them
+  all, in order (one made after it, none); 256 wait, and past them each is dropped with the error `Remote event
+  invocation queue exhausted for <full name>; did you forget to implement OnClientEvent? (N events dropped)`, logged at
+  1, 2, 4, ... dropped. An invoke waits for its callback to be set.
+- **RemoteFunction.** InvokeServer and InvokeClient yield; the callback runs on a thread of its own with the arguments
+  copied as an event's; its results go back the same way (several, nils kept), its error as a string with the
+  callback's script and line (`error(x, 0)` without, a table as an empty string). Calls may finish out of order and
+  nest both ways; a call that started in a replaced callback finishes there. InvokeClient of a harness's fake player
+  waits for that player to leave, as in a server run.
+- **Each side.** RunService answers per side; `Players.LocalPlayer` is the client's. Each side's work clock and script
+  timeout are its own (the run stops at the third timeout of either side). The server uses the run's random seed and
+  so does the client (each its own sequence).
+- **Output.** One list in the order written, each line with `"side": "server"` or `"client"` (`ree run`'s output,
+  events.json); `@done` from either side ends the run at the end of that frame. The summary's `runContext` is
+  `loopback`, and `loopback` holds the latency, the frame the player joined at, the messages each way and what the
+  server's changes made and wrote on the client. `record` samples the client's world; `--record-side server` samples the
+  server's. Two runs of one harness give byte-identical recordings.
+- **No harness.** Without `--harness` each side starts from the place's own scripts: the server's enabled Scripts whose
+  RunContext is Legacy under Workspace or ServerScriptService, or Server anywhere but ServerStorage; the client copies
+  StarterPlayerScripts' children into its PlayerScripts, then runs its enabled LocalScripts under ReplicatedFirst and its
+  player's containers and its Scripts whose RunContext is Client outside ServerStorage and the Starter containers; each
+  once (Roblox's documentation of RunContext and the script containers; not measured).
+- **A service** runs a loopback job cold: nothing is prepared ahead of it.
+
+Known differences (tools/parity/known-loopback.json): a real session rounds a CFrame's rotation when it sends it (by
+about 1e-5), ree sends it exactly; an InvokeServer made right after a `Heartbeat:Wait()` returns a frame later in a real
+session than here; a real client's GetServerTimeNow and time() run later than the server's when a message arrives,
+ree's two clocks are the same at a frame's start. Not emulated (Output `missing` where a script asks): more than one
+client (a harness's fake players stay the server's, and FireClient to them reaches no one), characters, Humanoids,
+network ownership and replication from the client of anything but remotes, instance streaming (the client gets the
+whole Workspace), ReplicatedFirst arriving first and a client's loading, network loss, reordering and throttling,
+prepared loopback runs in a service, and MessagingService across servers.
 
 ## Code loaded at run time (`src/lua/loading.rs`)
 

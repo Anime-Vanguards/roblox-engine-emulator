@@ -273,6 +273,14 @@ pub fn interpret_all(lua: &Lua, engine: &Engine) {
     let _ = lua;
 }
 
+/// [`interpret_all`] for an engine whose VM has not started yet: Engine.Start loads the engine's own Luau interpreted too (a
+/// loopback run's server: the engine's Luau is not charged to scripts, so it changes no output)
+pub fn interpret_all_from_start(engine: &Engine) {
+    let mut modules = engine.modules.borrow_mut();
+    modules.interpreted = true;
+    modules.interpret_all = true;
+}
+
 /// Whether [`interpret_all`] is on for this engine's VM
 pub fn interprets_all(engine: &Engine) -> bool {
     engine.modules.borrow().interpret_all
@@ -341,9 +349,19 @@ static ENGINE_COMPILES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atom
 /// The engine's own Luau chunks compiled so far, by the address of their (compiled-in) source
 static ENGINE_BYTECODE: std::sync::Mutex<Vec<(usize, std::sync::Arc<[u8]>)>> = std::sync::Mutex::new(Vec::new());
 
+thread_local! {
+    /// The compiles of [`ENGINE_COMPILES`] this thread made
+    static ENGINE_COMPILES_HERE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How many chunks of the engine's own Luau this process has compiled (each once: [`load_engine_luau`])
 pub fn engine_compiles() -> usize {
     ENGINE_COMPILES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// How many of those this thread compiled (a test's own count, whatever other threads start meanwhile)
+pub fn engine_compiles_here() -> usize {
+    ENGINE_COMPILES_HERE.with(std::cell::Cell::get)
 }
 
 /// A chunk of the engine's own Luau (the prelude, services.luau, server.luau, vector3.luau: a compiled-in `source`) as a
@@ -360,6 +378,7 @@ pub fn load_engine_luau(lua: &Lua, source: &'static str, name: &str, env: Option
         None => {
             let compiled = engine_compiler().compile(source)?;
             ENGINE_COMPILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ENGINE_COMPILES_HERE.with(|count| count.set(count.get() + 1));
             let bytecode: std::sync::Arc<[u8]> = crate::alloc::long_lived(|| std::sync::Arc::from(compiled.as_slice()));
             if let Ok(mut kept) = ENGINE_BYTECODE.lock() {
                 crate::alloc::long_lived(|| kept.push((key, bytecode.clone())));

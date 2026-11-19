@@ -321,9 +321,11 @@ pub fn raw_set_unsignalled(
 ) -> bool {
     let (changed, _) = store(state, reflection, id, name, value);
     if changed {
+        state.quiet_write = true;
         for hook in &hooks.property_changed {
             hook(state, id, name);
         }
+        state.quiet_write = false;
     }
     changed
 }
@@ -824,6 +826,16 @@ pub fn add_tag(state: &mut State, id: InstanceId, tag: Str) {
     state.dom.at_mut(id).tags.push(tag.clone());
     state.dom.bump_version(id);
     super::services::tag_added(state, id, &tag);
+    log_tag(state, id, &tag);
+}
+
+/// A loopback run's server logs a replicated instance's tag change (loopback/replicate.rs)
+fn log_tag(state: &mut State, id: InstanceId, tag: &Str) {
+    if state.dom.at(id).flags & flags::REPLICATED != 0
+        && let Some(log) = state.loopback_log.as_mut()
+    {
+        log.push(crate::loopback::replicate::Change::Tag(id, tag.clone()));
+    }
 }
 
 pub fn remove_tag(state: &mut State, id: InstanceId, tag: &Str) {
@@ -834,6 +846,7 @@ pub fn remove_tag(state: &mut State, id: InstanceId, tag: &Str) {
     tags.remove(index);
     state.dom.bump_version(id);
     super::services::tag_removed(state, id, tag);
+    log_tag(state, id, tag);
 }
 
 /// A service: a parent-locked instance of a service class under the DataModel.

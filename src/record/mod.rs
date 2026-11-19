@@ -635,6 +635,10 @@ fn event_json(entry: &crate::output::Entry) -> Json {
     if let Some(trace) = &entry.trace {
         item["trace"] = json!(trace);
     }
+    // (a loopback run's line names its side; no other run's has one)
+    if let Some(side) = entry.side {
+        item["side"] = json!(side);
+    }
     item
 }
 

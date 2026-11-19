@@ -176,7 +176,7 @@ function readRun(result) {
 // client prints both sides' lines (loopback.luau), then `@done`.
 export function runInReeLoopback(name, ree, scratch) {
 	const harness = path.join(scratch, `${name}.luau`);
-	fs.writeFileSync(harness, `return {\n\tServer = function(Context)\n${loopbackText(name, "server")}\nend,\n\tClient = function(Context)\n${loopbackText(name, "client")}\nprint("@done")\nend,\n}\n`);
+	fs.writeFileSync(harness, `return {\n\tServer = function(Context)\n${loopbackText(name, "server")}\nend,\n\tClient = function(Context)\n${loopbackText(name, "client")}\n__LoopbackRealPrint("@done")\nend,\n}\n`);
 	const empty = path.join(scratch, "empty");
 	fs.mkdirSync(empty, { recursive: true });
 	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "120", "--run-context", "loopback"], {

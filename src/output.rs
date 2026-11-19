@@ -49,6 +49,8 @@ pub struct Entry {
     /// Virtual time (Scheduler.Now) when it was written
     pub time: f64,
     pub trace: Option<String>,
+    /// A loopback run's side that wrote it ("server", "client"); none in every other run
+    pub side: Option<&'static str>,
 }
 
 impl Entry {
@@ -57,6 +59,9 @@ impl Entry {
         let mut line = serde_json::json!({ "kind": self.kind, "message": self.message, "time": self.time });
         if let Some(trace) = &self.trace {
             line["trace"] = serde_json::json!(trace);
+        }
+        if let Some(side) = self.side {
+            line["side"] = serde_json::json!(side);
         }
         line
     }
@@ -73,6 +78,19 @@ pub struct Output {
     spool: Option<Box<Spool>>,
     /// A script printed a line that is exactly [`DONE`]: `ree run` / `ree record` stop at the end of the frame
     pub done: bool,
+    /// A loopback run's side: its lines carry it ([`Entry::side`])
+    pub side: Option<&'static str>,
+    /// A loopback run's server: its lines go to the client's list, which holds both sides' in the order written
+    pub forward: Option<Forward>,
+}
+
+/// The engine whose list a loopback server's lines go to ([`Output::forward`])
+pub struct Forward(pub std::rc::Weak<crate::Engine>);
+
+impl std::fmt::Debug for Forward {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Forward")
+    }
 }
 
 /// The line a harness prints to end its run early (record/run.rs).
@@ -90,7 +108,22 @@ impl Output {
                 diagnostic(trace);
             }
         }
-        let entry = Entry { kind, message, time, trace };
+        let entry = Entry { kind, message, time, trace, side: self.side };
+        if let Some(client) = self.forward.as_ref().and_then(|forward| forward.0.upgrade()) {
+            // (the client's own list is never borrowed while the server runs: the pair steps one side at a time)
+            if let Ok(mut state) = client.state.try_borrow_mut() {
+                state.output.push(entry);
+                return;
+            }
+        }
+        self.push(entry);
+    }
+
+    /// Keeps a line written (a loopback server's, forwarded: its `done` counts here too)
+    fn push(&mut self, entry: Entry) {
+        if entry.kind == "print" && entry.message == DONE {
+            self.done = true;
+        }
         match &mut self.spool {
             Some(spool) => spool.write(&entry),
             None => self.entries.push(entry),

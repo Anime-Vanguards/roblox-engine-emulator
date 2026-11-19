@@ -6,7 +6,7 @@
 //!   [--mount Service/Name=<dir|file>]... [--instance Service/Name=<ClassName>]...
 //!   [--snapshot <file.rbxm>]... [--snapshot-dir <dir>] [--no-snapshots] [--viewport WxH]
 //!   [--scale S] [--camera WxH] [--rotation-clipping enabled|disabled] [--mode edit|play]
-//!   [--run-context client|server] [--player Name] [--place-id N] [--streaming R] [--offline]
+//!   [--run-context client|server|loopback] [--player Name] [--place-id N] [--streaming R] [--offline]
 //!   [--verbose] [--repo <dir>]
 //!
 //! The project's Rojo roots are `--roots`; without them there is no project (a run of the
@@ -297,6 +297,10 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
     if run_context == RunContext::Edit && mode != "edit" {
         return Err("--run-context edit needs --mode edit".into());
     }
+    // A server and its client (src/loopback): a play session's two sides
+    if run_context == RunContext::Loopback && mode == "edit" {
+        return Err("--run-context loopback needs --mode play".into());
+    }
     if run_context == RunContext::Server {
         if mode == "edit" {
             return Err("--run-context server needs --mode play".into());
@@ -310,7 +314,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         // Studio's edit DataModel has no player (Players is empty and LocalPlayer nil for a plugin or the command bar
         // outside Team Create; not measured: a headless session has no edit DataModel); `--player` gives the run one all the same
         RunContext::Edit => args.player.clone(),
-        RunContext::Client => Some(args.player.clone().or_else(|| std::env::var("RUR_PLAYER").ok()).unwrap_or_else(|| "Player".into())),
+        RunContext::Client | RunContext::Loopback => Some(args.player.clone().or_else(|| std::env::var("RUR_PLAYER").ok()).unwrap_or_else(|| "Player".into())),
     };
     let options = Options {
         offline: args.offline,
@@ -425,7 +429,11 @@ mod tests {
         let refused = |words: &[&str]| prepare(&args(words), Path::new("C:/somewhere")).err().unwrap_or_default();
         assert!(refused(&["--run-context", "server"]).contains("needs --mode play"));
         assert!(refused(&["--run-context", "server", "--mode", "play", "--player", "Someone"]).contains("a server has none"));
-        assert!(refused(&["--run-context", "both", "--mode", "play"]).contains("client, server or edit"));
+        assert!(refused(&["--run-context", "both", "--mode", "play"]).contains("client, server, edit or loopback"));
+        assert!(refused(&["--run-context", "loopback"]).contains("needs --mode play"));
+        let pair = prepare(&args(&["--mode", "play", "--run-context", "loopback", "--player", "Someone"]), Path::new("C:/somewhere")).unwrap();
+        assert!(pair.options.run_context == RunContext::Loopback && !pair.options.server());
+        assert_eq!(pair.options.local_player_name.as_deref(), Some("Someone"));
         let edit = prepare(&args(&["--mount", "ReplicatedStorage/Lib=lib", "--run-context", "edit"]), Path::new("C:/somewhere")).unwrap();
         assert!(edit.options.run_context == RunContext::Edit && !edit.options.server() && edit.options.local_player_name.is_none());
         let edit_player = prepare(&args(&["--run-context", "edit", "--player", "Someone"]), Path::new("C:/somewhere")).unwrap();

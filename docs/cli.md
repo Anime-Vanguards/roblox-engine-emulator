@@ -131,6 +131,16 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   `RunService:IsStudio()` false, as on a live game's server or client, so the game takes its live
   branches (TeleportData from `Player:GetJoinData()`, live costs and cooldowns); the default is true.
   It is part of a prepared run's key.
+- `--run-context loopback` runs a server and its client in one run, as one play session's two sides
+  (docs/engine.md "Loopback run context"): the server mounts the project, the player (`--player`) joins before frame 1,
+  and the client's DataModel is a copy of the server's replicated containers, kept up to date as the server changes
+  them; remotes carry calls both ways. It needs `--mode play`. Its harness returns `{ Server = function(Context) or {
+  Prepare, Run }, Client = function(Context) or { Prepare, Run } }` (either may be left out; another shape is refused,
+  naming this one); without `--harness` each side starts from the place's own scripts. Both sides' Context have
+  `Side` (`"server"`, `"client"`); the server's has `Player` (the player that is to join), `HoldJoin()` and `Join()`
+  (the player joins when Join is called, at that frame's end), and `Leave()`. `--latency <frames>` delivers each way
+  that many frames later (1, the next frame, by default); `record --record-side server` records the server's world
+  instead of the client's. Output lines carry `side`. A service runs a loopback job cold.
 - `--device desktop|touch|gamepad|phone` (or `REE_DEVICE`) is the device the client emulates (UserInputService's inputs;
   desktop by default). `phone` is a touch device whose work clock charges a phone's prices: the desktop prices times a
   sim-to-phone calibration of script time, 2.77 (docs/engine.md "Work clock"): a conversion, not a measurement.
@@ -182,7 +192,8 @@ ree serve --warm --roots "game/shared;game/src" --assets-at ReplicatedStorage.Bu
   `set` actions and keyed tweens, motion tracks, `Emit(n)` / `Clear()` (each emit with where its
   emitter was at the call), moves as `parent`, instance references written after an instance appeared
   as `set` actions naming the referenced instance's path, Lighting),
-  `events.json` (prints, warnings, errors, sound plays and stops with their times), `camera.json` and
+  `events.json` (prints, warnings, errors, sound plays and stops with their times; a loopback run's lines name their
+  `side`), `camera.json` and
   `summary.json`, which is also printed on stdout; a `ree: record ...` line goes to stderr.
 - `--timing-check` (or `REE_TIMING_CHECK=1`) records the harness again under faster and slower clients and
   compares each recording with the first. A script that times itself on `os.clock` within a frame (a visual

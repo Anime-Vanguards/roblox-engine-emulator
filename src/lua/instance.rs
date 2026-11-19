@@ -335,11 +335,18 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
     };
     match member {
         Member::Callback => {
-            let mut state = engine.state.borrow_mut();
-            let callbacks = state.dom.at_mut(id).callbacks.vec_mut();
-            match callbacks.iter_mut().find(|(n, _)| *n == name) {
-                Some(entry) => entry.1 = value.clone(),
-                None => callbacks.push((name, value.clone())),
+            // (a loopback run refuses the other side's callback, and runs the invokes that waited for this one)
+            crate::loopback::remotes::setting_callback(engine, name)?;
+            {
+                let mut state = engine.state.borrow_mut();
+                let callbacks = state.dom.at_mut(id).callbacks.vec_mut();
+                match callbacks.iter_mut().find(|(n, _)| *n == name) {
+                    Some(entry) => entry.1 = value.clone(),
+                    None => callbacks.push((name, value.clone())),
+                }
+            }
+            if engine.loopback.borrow().is_some() && matches!(value, LuaValue::Function(_)) {
+                crate::loopback::remotes::callback_set(lua, engine, id)?;
             }
             return Ok(());
         }

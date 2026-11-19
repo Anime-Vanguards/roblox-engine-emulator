@@ -46,6 +46,13 @@ pub mod flags {
     /// properties, attributes, tags) before a script finds, tests, touches or looks inside it
     /// (project::model_assets::reveal)
     pub const BUNDLE_ROOT: u16 = 1 << 10;
+    /// A loopback run's server instance inside the replicated containers (src/loopback/replicate.rs): its changes go to the
+    /// client
+    pub const REPLICATED: u16 = 1 << 11;
+    /// The loopback client has (or is sent) a copy of it
+    pub const SENT: u16 = 1 << 12;
+    /// It left the replicated containers after it was sent: what it holds is sent again when it comes back
+    pub const STALE: u16 = 1 << 13;
 }
 
 /// Signals created for an instance (events by name, property / attribute change signals).

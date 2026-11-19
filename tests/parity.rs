@@ -116,7 +116,7 @@ fn loopback_text(prelude: &str, helpers: &str, probe: &str, side: &str) -> Strin
 /// A paired probe through `ree run --run-context loopback`: the lines the client printed (both sides'), none when the run failed
 fn run_loopback_probe(scratch: &Path, name: &str, server: &str, client: &str) -> Vec<String> {
     let harness = scratch.join(format!("{name}.luau"));
-    std::fs::write(&harness, format!("return {{\n\tServer = function(Context)\n{server}\nend,\n\tClient = function(Context)\n{client}\nprint(\"@done\")\nend,\n}}\n")).unwrap();
+    std::fs::write(&harness, format!("return {{\n\tServer = function(Context)\n{server}\nend,\n\tClient = function(Context)\n{client}\n__LoopbackRealPrint(\"@done\")\nend,\n}}\n")).unwrap();
     let empty = scratch.join("empty");
     std::fs::create_dir_all(&empty).unwrap();
     let done = Command::new(env!("CARGO_BIN_EXE_ree"))
