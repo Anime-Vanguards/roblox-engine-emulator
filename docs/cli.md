@@ -8,7 +8,7 @@ Run `ree --version` to print the build version, or pass `--help` / `-h` (also af
 
 An installed [release binary](building.md#release-binaries) runs standalone:
 - Never implicitly reads `.env`, checkout snapshots, or local place data from the current directory or binary directory.
-- Resolves the project from `--project`, else the parent of the first `--roots` entry, else the current directory. `--repo <dir>` supplies input data only (never relocating caches to `<dir>/.cache` or selecting host mode).
+- Resolves the project from `--project`, else the folder of the `--rojo` file, else the parent of the first `--roots` entry, else the current directory. `--repo <dir>` supplies input data only (never relocating caches to `<dir>/.cache` or selecting host mode).
 - Stores caches in the per-user `ree` cache directory (`RUR_STATE_DIR` or `RUR_CACHE_DIR` overrides; `serve --state-dir <dir>` overrides for a service and its workers). Environment paths (`RUR_CLOCK`, `RUR_ENGINE_DUMP`, etc.) resolve relative to the client's current directory before starting a standalone service.
 - Writes unnamed profiles to `<state dir>/ree-profile`, boundary profiles to `<state dir>/ree-boundary.json`, `profile try` output to `<state dir>/what-if/<file>`, `profile diff` / `profile report` defaults to `<state dir>/ree-profile`, and spooled script output to `<state dir>/output` (deleted on exit). Explicit `--out` paths are used verbatim, and recording profiles stay inside the recording's output directory.
 - `--version` and `--help` require no cache; commands that write files check state first and ask for `RUR_STATE_DIR` if no cache location exists.
@@ -83,11 +83,48 @@ A harness is a `ModuleScript` mounted at `ReplicatedStorage.RURFixtures.<name>` 
 Options accept `--key value` or `--key=value` (required for negative numbers).
 
 - **Project & roots (`src/launch.rs`):** `--roots "<dir>;<dir>"` (Rojo service roots; omit to run harness + mounts only), `--project <dir>`, and `--place <name>`.
+- **Rojo project file:** `--rojo <file.project.json>` mounts the place a Rojo project file describes, instead of `--roots` (the two are refused together; `--mount` / `--instance` still apply, after it). Works for `run`, `record`, `serve --warm` and through `--service`.
+  - A `"$className": "DataModel"` tree mounts each node's `$path` (a folder or file, relative to the project file) at the node's instance path, so `ReplicatedStorage.Shared`, `ServerScriptService.Server` and `StarterPlayer.StarterPlayerScripts.Client` hold what Rojo would put there. Files mount as they do below a `--roots` folder: `*.server.luau` / `*.client.luau` scripts, `init` files, `.model.json`, `.rbxm` / `.rbxmx`, JSON modules, and a folder's own `default.project.json`.
+  - `{ "optional": "<path>" }` is skipped quietly when it doesn't exist; a plain `$path` that doesn't exist is skipped with a warning in the output.
+  - `$className` nodes without a `$path` become instances of that class (folders between mapped nodes are made as Folders); a `$path` to another `*.project.json` mounts that project's tree there; `$properties`, `$attributes` and `$ignoreUnknownInstances` are ignored.
+  - A tree that is not a DataModel (a model or plugin project) mounts at `ReplicatedStorage/<project name>`, or at `--rojo-at Service/Name`.
+  - The project file's folder is the run's project (`--project` overrides it) and the place's root for what a `--roots` folder is looked up by: place id, Studio hierarchy snapshot, Studio name map, `rur.json` settings.
+
+  ```sh
+  ree run --harness tests/Probe.luau --rojo default.project.json --seconds 1
+  ree run --harness tests/Server.luau --rojo default.project.json --run-context server --seconds 5
+  ```
+
+  A roblox-ts-shaped `default.project.json` it mounts:
+
+  ```json
+  {
+  	"name": "my-game",
+  	"globIgnorePaths": ["**/package.json", "**/tsconfig.json"],
+  	"tree": {
+  		"$className": "DataModel",
+  		"ReplicatedStorage": {
+  			"$className": "ReplicatedStorage",
+  			"rbxts_include": {
+  				"$path": "include",
+  				"node_modules": { "$className": "Folder", "@rbxts": { "$path": "node_modules/@rbxts" } }
+  			},
+  			"TS": { "$path": "out/shared" }
+  		},
+  		"ServerScriptService": { "$className": "ServerScriptService", "TS": { "$path": "out/server" } },
+  		"StarterPlayer": {
+  			"$className": "StarterPlayer",
+  			"StarterPlayerScripts": { "$className": "StarterPlayerScripts", "TS": { "$path": "out/client" } }
+  		},
+  		"Workspace": { "$className": "Workspace", "$properties": { "FilteringEnabled": true }, "Map": { "$path": { "optional": "assets/map.rbxm" } } }
+  	}
+  }
+  ```
 - **Mounts & snapshots:**
   - `--mount Service/Name=<dir|file>` and `--instance Service/Name=<ClassName>` (repeatable).
   - `--snapshot-dir <dir>` / `--snapshot <Service.rbxm>` (in checkouts, `data/place-content/<Place>/<parent>/*.rbxm` auto-replaces matching placeholders).
 - **World & client settings:** `--player <name>`, `--place-id <n>`, `--streaming <radius>` (sets `Workspace.StreamingEnabled` and `StreamingTargetRadius`), `--viewport WxH`, `--offline`, `--verbose`.
-- **Relative content paths:** Local paths (`file://<path>` or relative paths like `output/x.mesh` passed to `CreateMeshPartAsync`, `CreateEditableMeshAsync`, `CreateEditableImageAsync`) resolve against `--project`, else the first root's parent, else the current directory.
+- **Relative content paths:** Local paths (`file://<path>` or relative paths like `output/x.mesh` passed to `CreateMeshPartAsync`, `CreateEditableMeshAsync`, `CreateEditableImageAsync`) resolve against `--project`, else the `--rojo` file's folder, else the first root's parent, else the current directory.
 - **Asset bundles:** `--assets-at <Service.Path>` and `--assets <prefix>,...` (or `*` for all) configure manifest bundle mounting, overriding `rur.json`'s `modelAssets` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
   Bundles are fetched by the external worker named by `REE_ASSET_WORKER` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
 

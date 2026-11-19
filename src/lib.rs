@@ -40,6 +40,7 @@ pub mod profiler;
 pub mod project;
 pub mod record;
 pub mod reflection;
+pub mod rojo;
 pub mod scheduler;
 #[cfg(feature = "cli")]
 pub mod serve;
@@ -64,6 +65,8 @@ mod server_tests;
 mod loopback_tests;
 #[cfg(test)]
 mod loading_tests;
+#[cfg(test)]
+mod rojo_tests;
 #[cfg(test)]
 mod luau_profile_tests;
 #[cfg(test)]

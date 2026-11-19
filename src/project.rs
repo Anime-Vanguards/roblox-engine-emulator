@@ -1232,7 +1232,13 @@ pub struct Prescan {
 
 impl Prescan {
     pub fn start(roots: &[String], reflection: &std::sync::Arc<Reflection>) -> Prescan {
-        let given = roots.to_vec();
+        Prescan::start_for(roots, roots, reflection)
+    }
+
+    /// [`Prescan::start`] of layout roots `roots`, with the data roots of the place `place_roots` names
+    /// ([`crate::mount::place_roots`]: a Rojo project file's folder when it is mounted without roots).
+    pub fn start_for(roots: &[String], place_roots: &[String], reflection: &std::sync::Arc<Reflection>) -> Prescan {
+        let given = place_roots.to_vec();
         let layout: Vec<_> = roots
             .iter()
             .map(|root| {

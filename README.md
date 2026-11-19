@@ -87,6 +87,12 @@ To run against a Rojo-structured project (`<root>/<Service>/...`), pass `--roots
 ree run --harness Probe.luau --roots "game/shared;game/src"
 ```
 
+Or mount the place a Rojo project file describes (a `DataModel` tree whose `$path`s map folders into services, as roblox-ts and Rojo games have) with `--rojo` ([docs/cli.md](docs/cli.md#engine-options)):
+
+```sh
+ree run --harness Probe.luau --rojo default.project.json
+```
+
 `ree run` emits structured JSON containing the run status and every output line stamped with its virtual time:
 
 <img src="docs/media/ree-run.webp" width="100%" alt="A Luau harness that creates a Part, tweens it, raycasts at it and changes an attribute, and the JSON ree run prints for it">

@@ -428,7 +428,7 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
     if prepared.options.run_context == crate::RunContext::Loopback {
         modules::share_compiled_modules();
     }
-    let history = History::new(host, args, &prepared.roots);
+    let history = History::new(host, args, &prepared.place_roots());
     // (a process that keeps compiled modules compiles the ones it lacks into them)
     let prefetch = match &history.modules {
         Some(files) if modules::reusing_compiled_modules() => {
@@ -446,6 +446,7 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
         snapshot_dir: prepared.snapshot_dir.clone(),
         mounts: prepared.mounts.clone(),
         model_assets: args.model_assets.clone(),
+        rojo: prepared.rojo.clone(),
     };
     if options.run_context == crate::RunContext::Loopback {
         return start_loopback(args, host, &options, &spec, prefetch, listings).map(|emulator| (emulator, history));
@@ -646,15 +647,15 @@ pub fn warm(args: &[String], host: &Host) -> Result<Json, String> {
         scene: None,
     };
     let prepared = launch::prepare(&engine_args, &host.repo)?;
-    let files = project_module_lists(&crate::state_dir(&host.repo).join("record"), &prepared.roots);
+    let files = project_module_lists(&crate::state_dir(&host.repo).join("record"), &prepared.place_roots());
     let files: Vec<String> = files.into_iter().filter(|file| crate::files::is_file(std::path::Path::new(file))).collect();
     let modules_read = modules::precompile_now(&files);
     let engine = (host.new_engine)(prepared.options.clone())?;
     #[cfg(feature = "bundles")]
-    let (bundles, bundles_read) = project::model_assets::warm(&host.repo, &prepared.roots, &model_assets, &engine.reflection);
+    let (bundles, bundles_read) = project::model_assets::warm(&host.repo, &prepared.place_roots(), &model_assets, &engine.reflection);
     #[cfg(not(feature = "bundles"))]
     let (bundles, bundles_read) = (0, 0);
-    let spec = mount::ProjectSpec { roots: prepared.roots.clone(), snapshots: engine_args.snapshots.clone(), snapshot_dir: prepared.snapshot_dir.clone(), mounts: prepared.mounts.clone(), model_assets };
+    let spec = mount::ProjectSpec { roots: prepared.roots.clone(), snapshots: engine_args.snapshots.clone(), snapshot_dir: prepared.snapshot_dir.clone(), mounts: prepared.mounts.clone(), model_assets, rojo: prepared.rojo.clone() };
     let emulator = Emulator::start(engine, &spec)?;
     #[cfg(feature = "bundles")]
     project::model_assets::stop(&emulator.engine);

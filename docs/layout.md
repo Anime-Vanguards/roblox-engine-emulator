@@ -9,6 +9,8 @@ src/
   emulator.rs          High-level Emulator wrapper owning Engine, Lua VM, and mounted project
   launch.rs            CLI engine option parsing -> Options, roots, mounts; Host trait
   mount.rs             Project mount orchestration
+  rojo.rs              Rojo project files (`--rojo`): a project's tree read into mounts, shared with roblox-ui-renderer
+                       (end-to-end tests in rojo_tests.rs)
   dom.rs               Instance arena/DOM
   reflection.rs        Studio reflection database lookup & property metadata
   value.rs             Roblox property Value representation
