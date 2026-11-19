@@ -1334,26 +1334,39 @@ fn with_random<T>(value: &LuaValue, f: impl FnOnce(&mut RandomState) -> T) -> Op
     Some(result)
 }
 
+/// A number argument of Random's as Luau's checks read it: a number, or a string Luau reads as one, hex and spaces
+/// included (measured in a playing client, Studio 0.747, tools/parity/probes/random.luau Random-strings and
+/// Random-string-seeds: NextInteger("0x10", "20") is 20, Random.new(" 7 ") is Random.new(7)).
+fn random_number(lua: &Lua, value: &LuaValue) -> LuaResult<Option<f64>> {
+    match value {
+        LuaValue::Number(n) => Ok(Some(*n)),
+        LuaValue::Integer(n) => Ok(Some(*n as f64)),
+        LuaValue::String(_) => lua.coerce_number(value.clone()),
+        _ => Ok(None),
+    }
+}
+
 fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let methods = lua.create_table()?;
-    let arg_number = |args: &Args, index: usize, default: f64, name: &str| -> Result<f64, Flow> {
+    let arg_number = |lua: &Lua, args: &Args, index: usize, default: f64, name: &str| -> Result<f64, Flow> {
         match args.get(index) {
             LuaValue::Nil => Ok(default),
-            LuaValue::Number(n) => Ok(*n),
-            LuaValue::Integer(n) => Ok(*n as f64),
-            other => raise_plain(format!(
-                "invalid argument #{} to '{name}' (number expected, got {})",
-                index,
-                other.type_name()
-            )),
+            other => match random_number(lua, other)? {
+                Some(n) => Ok(n),
+                None => raise_plain(format!(
+                    "invalid argument #{} to '{name}' (number expected, got {})",
+                    index,
+                    other.type_name()
+                )),
+            },
         }
     };
     methods.set(
         "NextNumber",
-        wrapped(lua, engine, move |_, args| {
+        wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
-            let min = arg_number(&args, 1, 0.0, "NextNumber")?;
-            let max = arg_number(&args, 2, 1.0, "NextNumber")?;
+            let min = arg_number(lua, &args, 1, 0.0, "NextNumber")?;
+            let max = arg_number(lua, &args, 2, 1.0, "NextNumber")?;
             let value = with_random(args.get(0), |r| r.next_number(min, max));
             match value {
                 Some(value) => Ok(values([LuaValue::Number(value)])),
@@ -1363,9 +1376,9 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     methods.set(
         "NextInteger",
-        wrapped(lua, engine, move |_, args| {
+        wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
-            let (Some(min), Some(max)) = (args.number(1), args.number(2)) else {
+            let (Some(min), Some(max)) = (random_number(lua, args.get(1))?, random_number(lua, args.get(2))?) else {
                 return raise_plain("invalid argument #2 to 'NextInteger' (number expected)");
             };
             match with_random(args.get(0), |r| r.next_integer(min, max)) {
@@ -1470,14 +1483,15 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                     state.sched.unseeded_random = Some(next);
                     next
                 }
-                LuaValue::Number(n) => *n,
-                LuaValue::Integer(n) => *n as f64,
-                other => {
-                    return raise_plain(format!(
-                        "invalid argument #1 to 'new' (number expected, got {})",
-                        other.type_name()
-                    ));
-                }
+                other => match random_number(lua, other)? {
+                    Some(n) => n,
+                    None => {
+                        return raise_plain(format!(
+                            "invalid argument #1 to 'new' (number expected, got {})",
+                            other.type_name()
+                        ));
+                    }
+                },
             };
             let userdata = lua.create_any_userdata(new_random(&seeded, seed_random(seed)))?;
             Ok(values([LuaValue::UserData(userdata)]))

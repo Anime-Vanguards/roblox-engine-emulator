@@ -293,14 +293,6 @@
 	],
 	"random": [
 		{
-			"line": "Random-strings ok 10 0.01291674651990379 | ok 20 0.01291674651990379 | ok 10 0.01291674651990379 | ok 10 0.01291674651990379 | ok -1 0.01291674651990379 | ok 3752549829 0.4321572161309693 | ok 2.8737085924861336 0.4321572161309693 | ok 2.8737085924861336 0.4321572161309693",
-			"why": "numeric strings: a client reads them as numbers, hex included (Luau's luaL_checknumber); ree raised"
-		},
-		{
-			"line": "Random-string-seeds ok 0.83407240584658338 0.53618507228538281 0.87370859248613331 0.7092995380612015",
-			"why": "numeric strings: a client reads them as numbers, hex included (Luau's luaL_checknumber); ree raised"
-		},
-		{
 			"line": "Random-arguments-dot error missing argument #2 to 'NextInteger' (number expected) | error missing argument #3 to 'NextInteger' (number expected) | error invalid argument #2 to 'NextInteger' (number expected, got nil) | error invalid argument #3 to 'NextInteger' (number expected, got nil) | error invalid argument #2 to 'NextInteger' (number expected, got string) | error invalid argument #3 to 'NextInteger' (number expected, got string) | error invalid argument #2 to 'NextInteger' (number expected, got boolean) | error invalid argument #2 to 'NextInteger' (number expected, got table) | error invalid argument #2 to 'NextInteger' (number expected, got Vector3) | error invalid argument #2 to 'NextInteger' (number expected, got Instance) | error Random:NextNumber requires 0 or 2 arguments | error Random:NextNumber requires 0 or 2 arguments | error Random:NextNumber requires 0 or 2 arguments | error invalid argument #2 to 'NextNumber' (number expected, got nil) | error invalid argument #3 to 'NextNumber' (number expected, got string) | ok 1.8737085924861332 | error missing argument #2 to 'Shuffle' (table expected) | error invalid argument #2 to 'Shuffle' (table expected, got nil) | error invalid argument #2 to 'Shuffle' (table expected, got number)",
 			"why": "argument errors: a client raises Luau's own (missing argument #n / invalid argument #n ... got <type>, #n counting self) at the calling line, naming the method in a `.` call only, and NextNumber with one argument raises 'requires 0 or 2 arguments'; ree raised its own"
 		},

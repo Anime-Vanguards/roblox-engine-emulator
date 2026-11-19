@@ -198,6 +198,35 @@ end
     );
 }
 
+/// Random's number arguments take numeric strings, hex and spaces included, as a playing client does (Studio 0.747,
+/// tools/parity/expected/random.txt Random-strings and Random-string-seeds).
+#[test]
+fn random_reads_numeric_strings() {
+    assert_script(
+        r#"
+local function Seven()
+	return Random.new(7)
+end
+assert(Seven():NextInteger("5", "10") == 10)
+assert(Seven():NextInteger("0x10", "20") == 20)
+assert(Seven():NextInteger(" 5 ", 10) == 10 and Seven():NextInteger(5, "1e1") == 10)
+assert(Seven():NextInteger("-1.5", "-1.5") == -1)
+assert(Seven():NextNumber("2", "3") == 2.8737085924861336)
+assert(Seven():NextNumber(" 2 ", "0x3") == 2.8737085924861336)
+assert(Random.new("5"):NextNumber() == 0.83407240584658338)
+assert(Random.new("0x10"):NextNumber() == 0.53618507228538281)
+assert(Random.new(" 7 "):NextNumber() == 0.87370859248613331)
+assert(Random.new("1e3"):NextNumber() == 0.7092995380612015)
+assert(not pcall(function()
+	return Seven():NextInteger("abc", 1)
+end))
+assert(not pcall(function()
+	return Random.new("abc")
+end))
+"#,
+    );
+}
+
 /// runtime/tests/smoke.luau's instance checks (its printed values as assertions): Frame
 /// defaults, assignment, the two-argument Instance.new, number-to-string Text, full names.
 #[test]
