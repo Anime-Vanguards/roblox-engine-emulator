@@ -147,8 +147,6 @@ pub struct LDateTime(pub f64);
 #[derive(Clone, Copy, Debug)]
 pub struct RandomState {
     state: u64,
-    /// A non-finite seed made the Luau runtime's state NaN: every draw is 0
-    dead: bool,
 }
 
 pub struct LRandom(pub Rc<Cell<RandomState>>);
@@ -1223,9 +1221,6 @@ const TWO32: f64 = 4294967296.0;
 
 impl RandomState {
     fn next_u32(&mut self) -> u32 {
-        if self.dead {
-            return 0;
-        }
         let old = self.state;
         self.state = old.wrapping_mul(MULTIPLIER).wrapping_add(INCREMENT);
         let xorshifted = (((old >> 18) ^ old) >> 27) as u32;
@@ -1286,7 +1281,7 @@ fn int64_cast(value: f64) -> i64 {
     }
 }
 
-/// Luau's `%` and `//` on doubles, for the seeding arithmetic.
+/// Luau's `%` on doubles.
 fn luau_mod(a: f64, b: f64) -> f64 {
     a - (a / b).floor() * b
 }
@@ -1300,25 +1295,27 @@ fn luau_u32(value: f64) -> u32 {
     }
 }
 
-/// Measured seeding (pcg32_seed): s = 0; step; s += seed as int64 two's complement (fractional
-/// seeds truncate toward zero); step.
-pub fn seed_random(seed: f64) -> RandomState {
-    let value = if seed < 0.0 { seed.ceil() } else { seed.floor() };
-    let (seed_hi, seed_lo) = if value >= 0.0 {
-        (luau_mod((value / TWO32).floor(), TWO32), luau_mod(value, TWO32))
+/// The 64-bit number Random.new(seed) seeds with: the seed toward zero as a two's complement integer; a seed of 2^53 or
+/// more either way, infinities too, is 0, and NaN (any payload) 0x8000000000000000, as a C cast makes it (measured in a
+/// playing client, Studio 0.747, tools/parity/probes/random.luau Random-seeds-*: 41 of 41 seeds in an exploratory
+/// capture, where ree's wrapped bits gave other streams from 2^53 up, and -1's for NaN and -inf, and zeros for inf).
+fn seed_bits(seed: f64) -> u64 {
+    if seed.is_nan() {
+        1 << 63
+    } else if seed.abs() >= 9_007_199_254_740_992.0 {
+        0
     } else {
-        let n = -value - 1.0;
-        (!luau_u32(luau_mod((n / TWO32).floor(), TWO32)) as f64, !luau_u32(luau_mod(n, TWO32)) as f64)
-    };
-    let lo = 105.0 + seed_lo;
-    let hi = seed_hi + (lo / TWO32).floor();
-    let (hi, lo) = (luau_mod(hi, TWO32), luau_mod(lo, TWO32));
-    if hi.is_nan() || lo.is_nan() {
-        return RandomState { state: 0, dead: true };
+        seed as i64 as u64
     }
-    let mut state = RandomState { state: ((hi as u64) << 32) | lo as u64, dead: false };
-    state.next_u32();
-    state
+}
+
+/// Measured seeding (pcg32_seed): s = 0; step; s += the seed's bits; step.
+pub fn seed_random(seed: f64) -> RandomState {
+    let mut random = RandomState { state: 0 };
+    random.next_u32();
+    random.state = random.state.wrapping_add(seed_bits(seed));
+    random.next_u32();
+    random
 }
 
 fn random_of(value: &LuaValue) -> Option<RandomState> {
@@ -2016,9 +2013,10 @@ mod tests {
             assert_eq!(random.next_integer(1.0, 100.0), *small);
             assert_eq!(random.next_integer(-1099511627776.0, 1099511628776.0), *large);
         }
-        assert_eq!(seed_random(f64::INFINITY).next_unit(), 0.0);
-        assert_eq!(seed_random(f64::NEG_INFINITY).next_unit(), 0.0037155688242635435);
-        assert_eq!(seed_random(f64::NAN).next_unit(), 0.0037155688242635435);
+        // (tools/parity/expected/random.txt, Studio 0.747: Random-seeds-large and Random-seeds-nan-fraction)
+        assert_eq!(seed_random(f64::INFINITY).next_unit(), 0.5514556904749074);
+        assert_eq!(seed_random(f64::NEG_INFINITY).next_unit(), 0.5514556904749074);
+        assert_eq!(seed_random(f64::NAN).next_unit(), 0.20012743358005303);
         assert_eq!(seed_random(-0.0).next_unit(), seed_random(0.0).next_unit());
         // Unseeded sequence
         let mut counter = 0x9E3779B9u32 as f64;
@@ -2043,6 +2041,22 @@ mod tests {
         // 1896055670); and the widest range there is, rounded to a double (Random-wide -2^63 2^63 - 1024, seed 0)
         assert_eq!(seed_random(42.0).next_integer(0.0, 8589934591.0), 1896055671.0);
         assert_eq!(seed_random(0.0).next_integer(-9223372036854775808.0, 9223372036854774784.0), 9.491899533266309e17);
+    }
+
+    #[test]
+    fn seeds_of_2_53_or_more_are_0_and_nan_the_integer_indefinite() {
+        // tools/parity/expected/random.txt (Studio 0.747): Random-seeds-large and Random-seeds-nan-fraction
+        let first = |seed: f64| seed_random(seed).next_number(0.0, 1.0);
+        assert_eq!(first(9007199254740991.0), 0.027684032073451197);
+        assert_eq!(first(-9007199254740991.0), 0.22788703655698744);
+        for seed in [9007199254740992.0, -9007199254740992.0, 2f64.powi(55), 2f64.powi(63), -2f64.powi(64), 1e19, -1e19, 1e300, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(first(seed), 0.5514556904749074, "seed {seed}");
+        }
+        for bits in [0x7FF8_0000_0000_0000u64, 0xFFF8_0000_0000_0000, 0x7FF0_0000_0000_0001] {
+            assert_eq!(first(f64::from_bits(bits)), 0.20012743358005303, "NaN {bits:#x}");
+        }
+        assert_eq!(first(4503599627370495.5), 0.911891985182802);
+        assert_eq!(first(-0.5), 0.5514556904749074);
     }
 
     #[test]

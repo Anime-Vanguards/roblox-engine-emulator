@@ -92,10 +92,11 @@ for _, Seed in { 4294967295, 4294967296, 4294967297, 1e20, -1e20 } do
 		assert(First:NextNumber() == Second:NextNumber())
 	end
 end
--- Preserve the pre-cache non-finite behavior and deterministic no-seed sequence.
-assert(Random.new(math.huge):NextNumber() == 0)
-assert(Random.new(-math.huge):NextNumber() == 0.0037155688242635435)
-assert(Random.new(0 / 0):NextNumber() == 0.0037155688242635435)
+-- Non-finite seeds as a playing client takes them (Studio 0.747, tools/parity/expected/random.txt Random-seeds-*: an
+-- infinity as 0, NaN as 0x8000000000000000), and the deterministic no-seed sequence.
+assert(Random.new(math.huge):NextNumber() == 0.55145569047490739)
+assert(Random.new(-math.huge):NextNumber() == 0.55145569047490739)
+assert(Random.new(0 / 0):NextNumber() == 0.20012743358005303)
 for _, Expected in { 0.15903319831126075, 0.6648808275887605, 0.7537480905786614 } do
 	assert(Random.new():NextNumber() == Expected, "no-seed sequence")
 end

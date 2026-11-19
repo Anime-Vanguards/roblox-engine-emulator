@@ -601,14 +601,6 @@
 	],
 	"random": [
 		{
-			"line": "Random-seeds-large 0.027684032073451197 0.22788703655698744 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739 0.55145569047490739",
-			"why": "Random.new's seed: a client takes one of 2^53 or more either way (infinities too) as 0 and NaN (any payload) as 0x8000000000000000; ree wrapped the seed's bits, made NaN and -inf -1 and inf a stream of zeros"
-		},
-		{
-			"line": "Random-seeds-nan-fraction 0.20012743358005303 0.20012743358005303 0.20012743358005303 0.20012743358005303 0.91189198518280201 0.90644580590387802 0.55145569047490739",
-			"why": "Random.new's seed: a client takes one of 2^53 or more either way (infinities too) as 0 and NaN (any payload) as 0x8000000000000000; ree wrapped the seed's bits, made NaN and -inf -1 and inf a stream of zeros"
-		},
-		{
 			"line": "Random-strings ok 10 0.01291674651990379 | ok 20 0.01291674651990379 | ok 10 0.01291674651990379 | ok 10 0.01291674651990379 | ok -1 0.01291674651990379 | ok 3752549829 0.4321572161309693 | ok 2.8737085924861336 0.4321572161309693 | ok 2.8737085924861336 0.4321572161309693",
 			"why": "numeric strings: a client reads them as numbers, hex included (Luau's luaL_checknumber); ree raised"
 		},

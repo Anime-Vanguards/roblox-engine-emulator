@@ -155,6 +155,7 @@ Each mounted project owns one single-threaded (`!Send`) `Rc<Engine>` paired with
   - Segments use linear, quadratic, or cubic Bezier curves based on non-zero tangents; `GetLength` subdivides to `1e-5 px` flatness; `GetBoundingRect` pads by `(Thickness + 1)/2`; arc-length queries (`GetPositionOnCurveArcLength` / `GetTangentOnCurveArcLength`) reproduce Studio's 32-step `f32` Runge-Kutta walk (including tight-bend drift and `t = 1` wrap quirks).
 - **`Random` (`src/lua/types.rs`, `random.luau`, Studio 0.747):** Luau's PCG32, one state per object. `NextNumber(min, max)` orders its bounds and is `min * (1 - u) + max * u`, `u` from two draws (the first the low half).
   - **`NextInteger(min, max)`:** each bound as a C cast makes it a 64-bit integer (toward zero, so `-1.5` is `-1`; out of range, NaN or infinite: `-2^63`), in order; `count = high - low + 1`. Up to `2^32 - 2` values take one draw: `low + (count * draw >> 32)`. From `2^32 - 1` values on, two draws make one 64-bit `x` (the first draw its low half) and the value is `low + ch*xh + (ch*xl >> 32) + (cl*xh >> 32)`, the high half of `count * x` from 32-bit halves without the low halves' product, rounded to a double.
+  - **`Random.new(seed)`:** seeds with the seed toward zero as a 64-bit two's complement integer (`s = 0`, a step, `s += seed`, a step); a seed of `2^53` or more either way, infinities too, seeds as `0`, and NaN (any payload) as `0x8000000000000000`.
 
 ## Instance userdata API (`src/lua/raw.rs`)
 
