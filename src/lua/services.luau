@@ -1224,11 +1224,15 @@ Method("TeleportService", "GetTeleportSetting", function()
 end)
 Method("TeleportService", "SetTeleportSetting", function() end)
 -- UserGameSettings (UserSettings().GameSettings): a client whose settings are as they start
-for _, Name in { "GetCameraYInvert", "GetOnboardingCompleted", "InFullScreen", "InStudioMode" } do
+for _, Name in { "GetOnboardingCompleted", "InFullScreen", "InStudioMode" } do
 	Method("UserGameSettings", Name, function()
 		return false
 	end)
 end
+-- the camera's vertical multiplier: 1, or -1 when the player inverts it (measured in Studio 0.748: 1 by default)
+Method("UserGameSettings", "GetCameraYInvertValue", function()
+	return 1
+end)
 for _, Name in { "SetCameraYInvertVisible", "SetGamepadCameraSensitivityVisible", "SetOnboardingCompleted" } do
 	Method("UserGameSettings", Name, function() end)
 end

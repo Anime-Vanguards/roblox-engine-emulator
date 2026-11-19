@@ -151,7 +151,13 @@ fn workspace_terrain_and_service_names() {
         assert(UserSettings().GameSettings == Settings and Settings.Name == "GameSettings")
         -- what Roblox's PlayerModule calls on it
         Settings:SetCameraYInvertVisible()
-        assert(Settings:GetCameraYInvert() == false and Settings:InFullScreen() == false)
+        assert(Settings:GetCameraYInvertValue() == 1 and Settings:InFullScreen() == false)
+        -- the camera's vertical multiplier is GetCameraYInvertValue, the number 1 by default; Studio 0.748 has no
+        -- GetCameraYInvert
+        local OldOk, OldError = pcall(function()
+            return (Settings :: any).GetCameraYInvert
+        end)
+        assert(not OldOk and string.find(tostring(OldError), "GetCameraYInvert is not a valid member of UserGameSettings", 1, true), tostring(OldError))
         Settings.FullscreenChanged:Connect(function() end)
         -- deprecated CFrame members still answer
         local Frame = CFrame.new(1, 2, 3)
