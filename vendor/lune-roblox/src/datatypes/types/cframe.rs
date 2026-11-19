@@ -18,7 +18,7 @@ use super::{super::*, Vector3, VectorArg, charge_host_nanos, float32 as f32m, na
     Roblox datatype, backed by [`glam::Mat4`].
 
     This implements most documented properties, methods & constructors of the `CFrame` class as of October 2025,
-    notably missing `CFrame.fromRotationBetweenVectors` and `CFrame:AngleBetween()`.
+    notably missing `CFrame:AngleBetween()`.
 */
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CFrame(pub Mat4);
@@ -91,6 +91,8 @@ pub mod price {
     /// (a Studio playtest client read Angles at 27-29 ns, below what the call counts here; a client of the match place 49.6)
     pub const ANGLES: i32 = 18;
     pub const FROM_AXIS_ANGLE: i32 = 48;
+    /// (not measured)
+    pub const ROTATION_BETWEEN: i32 = 0;
     pub const LOOK_AT: i32 = 55;
     /// `:FuzzyEq` comparing both parts, and answering from the position alone (a client stops at a position that differs). The
     /// parity bench's rows (a rendered client of a game's match place, six sessions of the whole corpus on a busy machine, each
@@ -410,6 +412,12 @@ impl LuaExportsTable for CFrame {
             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
         };
 
+        // (types::float32 `rotation_between`: the vectors as given, measured to the bit in a playing client)
+        let cframe_from_rotation_between_vectors = |lua: &Lua, (a, b): (VectorArg, VectorArg)| {
+            charge_host_nanos(lua, price::ROTATION_BETWEEN);
+            Ok(CFrame::from_parts([0.0; 3], f32m::rotation_between(array(a.0), array(b.0))))
+        };
+
         let cframe_look_at = |lua: &Lua, (from, to, up): (VectorArg, VectorArg, Option<VectorArg>)| {
             charge_host_nanos(lua, price::LOOK_AT);
             Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
@@ -524,6 +532,7 @@ impl LuaExportsTable for CFrame {
             .with_function("fromEulerAnglesYXZ", cframe_from_euler_angles_yxz)?
             .with_function("fromMatrix", cframe_from_matrix)?
             .with_function("fromOrientation", cframe_from_orientation)?
+            .with_function("fromRotationBetweenVectors", cframe_from_rotation_between_vectors)?
             .with_function("lookAlong", cframe_look_along)?
             .with_function("lookAt", cframe_look_at)?
             .with_function("new", cframe_new)?

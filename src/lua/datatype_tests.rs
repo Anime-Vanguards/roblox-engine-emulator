@@ -682,6 +682,44 @@ Is(F(Base:Lerp(Past, 3):GetComponents()), "0 0 0 0.669270039 -0.151950687 0.7273
     );
 }
 
+/// CFrame.fromRotationBetweenVectors builds its rotation from the vectors as given, as a 0.747 playing client does to the
+/// bit (the components it printed; tools/parity/probes/cframe_rotation_between.luau): the quaternion from the cross
+/// product and sqrtf(|a|^2 |b|^2) + a . b, a half turn once that is below 1e-5 of the lengths' product, made unit twice.
+/// It was nil.
+#[test]
+fn cframe_from_rotation_between_vectors_is_a_playing_clients() {
+    assert_script(
+        r#"
+local function F(...)
+	local Out = {}
+	for _, Value in { ... } do
+		table.insert(Out, string.format("%.17g", Value))
+	end
+	return table.concat(Out, " ")
+end
+local function Is(Got, Want)
+	assert(Got == Want, `got "{Got}", expected "{Want}"`)
+end
+local Between = CFrame.fromRotationBetweenVectors
+-- X to Y: the second normalization shows in the last bit
+Is(F(Between(Vector3.new(1, 0, 0), Vector3.new(0, 1, 0)):GetComponents()), "0 0 0 -1.1920928955078125e-07 -1.0000001192092896 0 1.0000001192092896 -1.1920928955078125e-07 0 0 0 1")
+-- the vectors are not made unit first
+Is(F(Between(Vector3.new(5, -1, 2), Vector3.new(5, -1, 2.001)):GetComponents()), "0 0 0 1 2.776740393173327e-09 -0.00016662759298924357 2.776740393173327e-09 1 3.3328698918921873e-05 0.00016662759298924357 -3.3328698918921873e-05 1")
+Is(F(Between(Vector3.new(-0.352783203125, -1.8609619140625, 8.59466552734375), Vector3.new(5.274658203125, -6.84051513671875, -4.91058349609375)):GetComponents()), "0 0 0 0.58208644390106201 0.4637712836265564 0.66790091991424561 0.74346202611923218 0.02909928560256958 -0.66814488172531128 -0.32930189371109009 0.88547700643539429 -0.32785797119140625")
+-- opposite: a half turn about (0, -a.z, a.y), since |a.x| <= |a.y|
+Is(F(Between(Vector3.new(1, 2, 3), Vector3.new(-1, -2, -3)):GetComponents()), "0 0 0 -1.0000002384185791 -0 0 0 0.38461536169052124 -0.92307692766189575 0 -0.92307692766189575 -0.38461554050445557")
+-- either side of the cutoff: 0.00445 rad from opposite is a half turn about Z, 0.004475 rad a rotation
+Is(F(Between(Vector3.new(1, 0, 0), Vector3.new(-0.99999010562896729, -0.0044499854557216167, 0)):GetComponents()), "0 0 0 -1 -0 0 0 -1 0 -0 0 1")
+Is(F(Between(Vector3.new(1, 0, 0), Vector3.new(-0.99998998641967773, -0.00447498494759202, 0)):GetComponents()), "0 0 0 -0.99998998641967773 0.0044753360562026501 -0 -0.0044753360562026501 -0.99998998641967773 0 0 0 1")
+-- a zero vector: not-a-number
+local Zero = { Between(Vector3.zero, Vector3.new(1, 0, 0)):GetComponents() }
+for Index = 4, 12 do
+	assert(Zero[Index] ~= Zero[Index], `component {Index} is {Zero[Index]}`)
+end
+"#,
+    );
+}
+
 /// Every CFrame constructor, member, method, deprecated alias and operator gives the same bits run after run
 /// (cframe_golden/ops.txt, printed with %.17g), and a misuse gives the same error text. Three misuse texts differ
 /// from the build before CFrame took and returned native vectors itself: a table where a Vector3 is expected names

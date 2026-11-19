@@ -55,6 +55,64 @@
 			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		}
 	],
+	"cframe_rotation_between": [
+		{
+			"line": "args none error @123: missing argument #1 to 'fromRotationBetweenVectors' (Vector3 expected)",
+			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
+		},
+		{
+			"line": "args one error @126: missing argument #2 to 'fromRotationBetweenVectors' (Vector3 expected)",
+			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
+		},
+		{
+			"line": "args string error @129: invalid argument #1 to 'fromRotationBetweenVectors' (Vector3 expected, got string)",
+			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
+		},
+		{
+			"line": "args nil error @132: invalid argument #2 to 'fromRotationBetweenVectors' (Vector3 expected, got nil)",
+			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
+		},
+		{
+			"line": "args vector2 error @135: invalid argument #2 to 'fromRotationBetweenVectors' (Vector3 expected, got Vector2)",
+			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
+		},
+		{
+			"line": "scaled -66 1 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		},
+		{
+			"line": "scaled-both -66 1 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		},
+		{
+			"line": "scaled -66 2 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		},
+		{
+			"line": "scaled-both -66 2 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		},
+		{
+			"line": "scaled -66 3 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		},
+		{
+			"line": "scaled-both -66 3 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		},
+		{
+			"line": "scaled-both -40 1 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		},
+		{
+			"line": "scaled-both -40 2 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		},
+		{
+			"line": "scaled-both -40 3 |",
+			"why": "subnormal float32s: a server flushes subnormal intermediate results to zero (squared lengths near 1e-38 and below), where a client and ree keep them. A float mode of the engine, not of this function"
+		}
+	],
 	"chunknames": [
 		{
 			"line": "odd-names info ReplicatedStorage.ParityProbes.Chunk",

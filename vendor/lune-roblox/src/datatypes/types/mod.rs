@@ -360,6 +360,8 @@ pub mod float32 {
         (a[0] * b[0] + a[1] * b[1]) + (a[2] * b[2] + a[3] * b[3])
     }
 
+    /// A quaternion's rotation: made a unit quaternion first (`q * (1 / sqrtf(dot(q, q)))`, so a zero one gives
+    /// not-a-number), then the matrix in single precision
     fn rot_from_quat(q: Quat) -> Rot {
         let k = 1.0 / quat_dot(q, q).sqrt();
         let [x, y, z, w] = q.map(|c| c * k);
@@ -372,6 +374,27 @@ pub mod float32 {
             [xy + wz, 1.0 - (xx + zz), yz - wx],
             [xz - wy, yz + wx, 1.0 - (xx + yy)],
         ]
+    }
+
+    /// CFrame.fromRotationBetweenVectors(a, b), for the vectors as given (not made unit; measured in a playing client,
+    /// 0.747, 478 pairs to the bit): the quaternion `(a x b, w)` with `w = sqrtf(|a|^2 |b|^2) + a . b`, or a half turn
+    /// `(axis, 0)` when `w < 1e-5 sqrtf(|a|^2 |b|^2)` (vectors within about a quarter of a degree of opposite) with the
+    /// axis `(0, -a.z, a.y)` if `|a.x| <= |a.y|`, else `(-a.z, 0, a.x)`; made a unit quaternion
+    /// (`q * (1 / sqrtf(dot(q, q)))`) and then a matrix by [`rot_from_quat`], which makes it unit a second time (so
+    /// X to Y reads R01 = -1.0000001). A zero vector, or squared lengths whose product leaves the float range, give
+    /// not-a-number.
+    pub fn rotation_between(a: Vec3, b: Vec3) -> Rot {
+        let length = (dot3(a, a) * dot3(b, b)).sqrt();
+        let w = length + dot3(a, b);
+        let q = if w < 1e-5 * length {
+            let axis = if a[0].abs() <= a[1].abs() { [0.0, -a[2], a[1]] } else { [-a[2], 0.0, a[0]] };
+            [axis[0], axis[1], axis[2], 0.0]
+        } else {
+            let c = cross3(a, b);
+            [c[0], c[1], c[2], w]
+        };
+        let k = 1.0 / quat_dot(q, q).sqrt();
+        rot_from_quat(q.map(|c| c * k))
     }
 
     /// CFrame:Lerp blends two rotations' quaternions when their dot is above this, rotations within about 2.2 degrees
