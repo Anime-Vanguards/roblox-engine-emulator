@@ -11,7 +11,7 @@ use std::{
 use mlua::prelude::*;
 
 use super::{
-    Args, Flow, Ret, enum_item_value, enum_value, lock_metatable, none, raise, raise_plain,
+    Args, Flow, Ret, enum_item_value, enum_value, lock_metatable, none, raise, raise_at_caller, raise_plain,
     refs::{self, Hold}, signal_value, typeof_value, values, wrapped,
 };
 use crate::{
@@ -1318,22 +1318,6 @@ pub fn seed_random(seed: f64) -> RandomState {
     random
 }
 
-fn random_of(value: &LuaValue) -> Option<RandomState> {
-    match value {
-        LuaValue::UserData(ud) => ud.borrow::<LRandom>().ok().map(|r| r.0.get()),
-        _ => None,
-    }
-}
-
-fn with_random<T>(value: &LuaValue, f: impl FnOnce(&mut RandomState) -> T) -> Option<T> {
-    let LuaValue::UserData(ud) = value else { return None };
-    let random = ud.borrow::<LRandom>().ok()?;
-    let mut state = random.0.get();
-    let result = f(&mut state);
-    random.0.set(state);
-    Some(result)
-}
-
 /// A number argument of Random's as Luau's checks read it: a number, or a string Luau reads as one, hex and spaces
 /// included (measured in a playing client, Studio 0.747, tools/parity/probes/random.luau Random-strings and
 /// Random-string-seeds: NextInteger("0x10", "20") is 20, Random.new(" 7 ") is Random.new(7)).
@@ -1346,102 +1330,133 @@ fn random_number(lua: &Lua, value: &LuaValue) -> LuaResult<Option<f64>> {
     }
 }
 
+/// A call of a Random method: its name, and whether it came by `.` (the type's __index) or by `:` (its __namecall).
+/// A client raises Luau's own argument errors at the calling line, counting self as #1, and names the method in a `.`
+/// call only (measured in a playing client, Studio 0.747, tools/parity/probes/random.luau Random-arguments-*:
+/// `invalid argument #2 to 'NextInteger' (number expected, got nil)` and `missing argument #3 to 'NextInteger' (number
+/// expected)` by `.`, `invalid argument #2 (number expected, got nil)` by `:`).
+#[derive(Clone, Copy)]
+struct RandomCall {
+    name: &'static str,
+    dotted: bool,
+}
+
+impl RandomCall {
+    /// Argument `index` (0 is self) is not a `expected`: `invalid argument #n ... got <type>`, or `missing argument #n`
+    /// past the last argument.
+    fn bad<T>(self, engine: &Engine, args: &Args, index: usize, expected: &str) -> Result<T, Flow> {
+        let to = if self.dotted { format!(" to '{}'", self.name) } else { String::new() };
+        if index >= args.len() {
+            raise_at_caller(format!("missing argument #{}{to} ({expected} expected)", index + 1))
+        } else {
+            raise_at_caller(format!("invalid argument #{}{to} ({expected} expected, got {})", index + 1, typeof_value(engine, args.get(index))))
+        }
+    }
+
+    /// Self (`invalid argument #1 to 'Clone' (Random expected, got number)`; a `:` call's self always is a Random).
+    fn this(self, engine: &Engine, args: &Args) -> Result<Rc<Cell<RandomState>>, Flow> {
+        if let LuaValue::UserData(ud) = args.get(0)
+            && let Ok(random) = ud.borrow::<LRandom>()
+        {
+            return Ok(random.0.clone());
+        }
+        self.bad(engine, args, 0, "Random")
+    }
+
+    fn number(self, lua: &Lua, engine: &Engine, args: &Args, index: usize) -> Result<f64, Flow> {
+        match random_number(lua, args.get(index))? {
+            Some(n) => Ok(n),
+            None => self.bad(engine, args, index, "number"),
+        }
+    }
+}
+
+/// Registers a Random method twice: wrapped in `dotted` for `.` (the type's __index), and raw in `called` for `:` (the
+/// type's __namecall, which runs it without the Luau wrapper).
+fn random_method(
+    lua: &Lua,
+    engine: &Rc<Engine>,
+    (dotted, called): (&LuaTable, &LuaTable),
+    name: &'static str,
+    method: impl Fn(&Lua, &Engine, &Args, RandomCall) -> Ret + Clone + 'static,
+) -> LuaResult<()> {
+    let (by_dot, owner) = (method.clone(), engine.clone());
+    dotted.raw_set(name, wrapped(lua, engine, move |lua, args| by_dot(lua, &owner, &Args::new(args), RandomCall { name, dotted: true }))?)?;
+    let owner = engine.clone();
+    let raw = lua.create_function(move |lua, args: LuaMultiValue| super::encode(lua, method(lua, &owner, &Args::new(args), RandomCall { name, dotted: false })))?;
+    called.raw_set(name, raw)
+}
+
 fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let methods = lua.create_table()?;
-    let arg_number = |lua: &Lua, args: &Args, index: usize, default: f64, name: &str| -> Result<f64, Flow> {
-        match args.get(index) {
-            LuaValue::Nil => Ok(default),
-            other => match random_number(lua, other)? {
-                Some(n) => Ok(n),
-                None => raise_plain(format!(
-                    "invalid argument #{} to '{name}' (number expected, got {})",
-                    index,
-                    other.type_name()
-                )),
-            },
+    let calls = lua.create_table()?;
+    let tables = (&methods, &calls);
+    random_method(lua, engine, tables, "NextNumber", |lua, engine, args, call| {
+        let random = call.this(engine, args)?;
+        // (no bounds is [0, 1); one argument, nil too, raises this, also at the calling line; a third is ignored)
+        let (min, max) = match args.len() {
+            1 => (0.0, 1.0),
+            2 => return raise_at_caller("Random:NextNumber requires 0 or 2 arguments"),
+            _ => (call.number(lua, engine, args, 1)?, call.number(lua, engine, args, 2)?),
+        };
+        let mut state = random.get();
+        let value = state.next_number(min, max);
+        random.set(state);
+        Ok(values([LuaValue::Number(value)]))
+    })?;
+    random_method(lua, engine, tables, "NextInteger", |lua, engine, args, call| {
+        let random = call.this(engine, args)?;
+        let (min, max) = (call.number(lua, engine, args, 1)?, call.number(lua, engine, args, 2)?);
+        let mut state = random.get();
+        let value = state.next_integer(min, max);
+        random.set(state);
+        Ok(values([LuaValue::Number(value)]))
+    })?;
+    random_method(lua, engine, tables, "NextUnitVector", |_, engine, args, call| {
+        let random = call.this(engine, args)?;
+        // Two 32-bit draws in float arithmetic: the angle from the first, z from the second (measured in a playing
+        // client, Studio 0.744, tools/parity/probes/random.luau: every component for 10 seeds; ree drew two
+        // 64-bit numbers, which also moved every draw after it)
+        let mut state = random.get();
+        let (first, second) = (state.next_u32(), state.next_u32());
+        random.set(state);
+        let (u, v) = ((first as f64 / TWO32) as f32, (second as f64 / TWO32) as f32);
+        let angle = std::f32::consts::TAU * u;
+        let z = 2.0f32 * v - 1.0;
+        let radius = (1.0f32 - z * z).max(0.0).sqrt();
+        let (x, y) = (radius * ((angle as f64).cos() as f32), radius * ((angle as f64).sin() as f32));
+        Ok(values([LuaValue::Vector(mlua::Vector::new(x, y, z))]))
+    })?;
+    random_method(lua, engine, tables, "Shuffle", |_, engine, args, call| {
+        let random = call.this(engine, args)?;
+        let LuaValue::Table(list) = args.get(1).clone() else {
+            return call.bad(engine, args, 1, "table");
+        };
+        let length = list.len()?;
+        // (measured likewise: Shuffle({1, nil, 3}) raises this, without a position, and draws nothing)
+        for index in 1..=length {
+            if list.get::<LuaValue>(index)?.is_nil() {
+                return raise_plain("Attempted to shuffle table containing nil values. This is not allowed because the table length may change.");
+            }
         }
-    };
-    methods.set(
-        "NextNumber",
-        wrapped(lua, engine, move |lua, args| {
-            let args = Args::new(args);
-            let min = arg_number(lua, &args, 1, 0.0, "NextNumber")?;
-            let max = arg_number(lua, &args, 2, 1.0, "NextNumber")?;
-            let value = with_random(args.get(0), |r| r.next_number(min, max));
-            match value {
-                Some(value) => Ok(values([LuaValue::Number(value)])),
-                None => raise("Expected ':' not '.' calling member function NextNumber"),
-            }
-        })?,
-    )?;
-    methods.set(
-        "NextInteger",
-        wrapped(lua, engine, move |lua, args| {
-            let args = Args::new(args);
-            let (Some(min), Some(max)) = (random_number(lua, args.get(1))?, random_number(lua, args.get(2))?) else {
-                return raise_plain("invalid argument #2 to 'NextInteger' (number expected)");
-            };
-            match with_random(args.get(0), |r| r.next_integer(min, max)) {
-                Some(value) => Ok(values([LuaValue::Number(value)])),
-                None => raise("Expected ':' not '.' calling member function NextInteger"),
-            }
-        })?,
-    )?;
-    methods.set(
-        "NextUnitVector",
-        wrapped(lua, engine, move |_, args| {
-            let args = Args::new(args);
-            // Two 32-bit draws in float arithmetic: the angle from the first, z from the second (measured in a playing
-            // client, Studio 0.744, tools/parity/probes/random.luau: every component for 10 seeds; ree drew two
-            // 64-bit numbers, which also moved every draw after it)
-            let Some((first, second)) = with_random(args.get(0), |r| (r.next_u32(), r.next_u32())) else {
-                return raise("Expected ':' not '.' calling member function NextUnitVector");
-            };
-            let (u, v) = ((first as f64 / TWO32) as f32, (second as f64 / TWO32) as f32);
-            let angle = std::f32::consts::TAU * u;
-            let z = 2.0f32 * v - 1.0;
-            let radius = (1.0f32 - z * z).max(0.0).sqrt();
-            let (x, y) = (radius * ((angle as f64).cos() as f32), radius * ((angle as f64).sin() as f32));
-            Ok(values([LuaValue::Vector(mlua::Vector::new(x, y, z))]))
-        })?,
-    )?;
-    methods.set(
-        "Shuffle",
-        wrapped(lua, engine, move |_, args| {
-            let args = Args::new(args);
-            let LuaValue::Table(list) = args.get(1).clone() else {
-                return raise_plain("invalid argument #1 to 'Shuffle' (table expected)");
-            };
-            let length = list.len()? as i64;
-            // (measured likewise: Shuffle({1, nil, 3}) raises this, without a position, and draws nothing)
-            for index in 1..=length {
-                if list.get::<LuaValue>(index)?.is_nil() {
-                    return raise_plain("Attempted to shuffle table containing nil values. This is not allowed because the table length may change.");
-                }
-            }
-            let mut index = length;
-            while index >= 2 {
-                let Some(other) = with_random(args.get(0), |r| r.next_integer(1.0, index as f64)) else {
-                    return raise("Expected ':' not '.' calling member function Shuffle");
-                };
-                let other = other as i64;
-                let a: LuaValue = list.get(index)?;
-                let b: LuaValue = list.get(other)?;
-                list.set(index, b)?;
-                list.set(other, a)?;
-                index -= 1;
-            }
-            Ok(none())
-        })?,
-    )?;
-    let cloning = engine.clone();
-    methods.set(
-        "Clone",
-        lua.create_function(move |lua, this: LuaValue| {
-            let state = random_of(&this).ok_or_else(|| LuaError::runtime("Expected ':' not '.' calling member function Clone"))?;
-            lua.create_any_userdata(new_random(&cloning, state))
-        })?,
-    )?;
+        let mut index = length;
+        while index >= 2 {
+            let mut state = random.get();
+            let other = state.next_integer(1.0, index as f64) as i64;
+            random.set(state);
+            let a: LuaValue = list.get(index)?;
+            let b: LuaValue = list.get(other)?;
+            list.set(index, b)?;
+            list.set(other, a)?;
+            index -= 1;
+        }
+        Ok(none())
+    })?;
+    random_method(lua, engine, tables, "Clone", |lua, engine, args, call| {
+        let random = call.this(engine, args)?;
+        let copy = lua.create_any_userdata(new_random(engine, random.get()))?;
+        Ok(values([LuaValue::UserData(copy)]))
+    })?;
     let index = wrapped(lua, engine, move |_, args| {
         let args = Args::new(args);
         let member: LuaValue = match args.get(1) {
@@ -1463,6 +1478,7 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
     let sample = lua.create_any_userdata(LRandom(Rc::new(Cell::new(seed_random(0.0)))))?;
     lock_metatable(lua, &sample)?;
+    super::raw::set_table_namecall(lua, &sample, calls, "Random", lua.create_table()?)?;
 
     // Random.new() without a seed: Studio seeds from entropy; offline runs stay deterministic, from
     // the run's seed (the default seed 1 keeps the sequence it always had); the sequence's state is the
@@ -1483,14 +1499,10 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                     state.sched.unseeded_random = Some(next);
                     next
                 }
+                // (measured likewise, Random-new-arguments: raised at the calling line, a vector named Vector3)
                 other => match random_number(lua, other)? {
                     Some(n) => n,
-                    None => {
-                        return raise_plain(format!(
-                            "invalid argument #1 to 'new' (number expected, got {})",
-                            other.type_name()
-                        ));
-                    }
+                    None => return raise_at_caller(format!("invalid argument #1 to 'new' (number expected, got {})", typeof_value(&seeded, other))),
                 },
             };
             let userdata = lua.create_any_userdata(new_random(&seeded, seed_random(seed)))?;

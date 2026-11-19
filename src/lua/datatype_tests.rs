@@ -227,6 +227,65 @@ end))
     );
 }
 
+/// Random's argument errors as a playing client raises them (Studio 0.747, tools/parity/expected/random.txt
+/// Random-arguments-*, Random-self and Random-new-arguments): Luau's own messages, self counted as #1, at the calling line,
+/// the method named in a `.` call only; NextNumber with one argument; a wrong self. A failed call draws nothing.
+#[test]
+fn random_raises_luaus_argument_errors() {
+    assert_script(
+        r#"
+local G = Random.new(7)
+local function Fails(Pattern, Function, ...)
+	local Ok, Message = pcall(Function, ...)
+	assert(not Ok and string.find(tostring(Message), Pattern) ~= nil, tostring(Message))
+end
+-- `.` through pcall: no position
+Fails("^missing argument #2 to 'NextInteger' %(number expected%)$", G.NextInteger, G)
+Fails("^missing argument #3 to 'NextInteger' %(number expected%)$", G.NextInteger, G, 1)
+Fails("^invalid argument #2 to 'NextInteger' %(number expected, got nil%)$", G.NextInteger, G, nil, 5)
+Fails("^invalid argument #3 to 'NextInteger' %(number expected, got string%)$", G.NextInteger, G, 1, "abc")
+Fails("^invalid argument #2 to 'NextInteger' %(number expected, got Vector3%)$", G.NextInteger, G, Vector3.zero, 1)
+Fails("^invalid argument #2 to 'NextInteger' %(number expected, got Instance%)$", G.NextInteger, G, game, 1)
+Fails("^Random:NextNumber requires 0 or 2 arguments$", G.NextNumber, G, nil)
+Fails("^invalid argument #2 to 'NextNumber' %(number expected, got nil%)$", G.NextNumber, G, nil, 5)
+Fails("^missing argument #2 to 'Shuffle' %(table expected%)$", G.Shuffle, G)
+Fails("^invalid argument #2 to 'Shuffle' %(table expected, got number%)$", G.Shuffle, G, 5)
+Fails("^invalid argument #1 to 'NextInteger' %(Random expected, got nil%)$", G.NextInteger, nil, 1, 2)
+Fails("^missing argument #1 to 'Clone' %(Random expected%)$", G.Clone)
+Fails("^invalid argument #1 to 'NextUnitVector' %(Random expected, got table%)$", G.NextUnitVector, {})
+Fails("^invalid argument #1 to 'new' %(number expected, got Vector3%)$", Random.new, Vector3.zero)
+-- from a function: at the calling line; a `:` call leaves the method's name out
+Fails("^Test:%d+: invalid argument #2 to 'NextInteger' %(number expected, got string%)$", function()
+	return G.NextInteger(G, "abc", 1)
+end)
+Fails("^Test:%d+: invalid argument #2 %(number expected, got string%)$", function()
+	return G:NextInteger("abc", 1)
+end)
+Fails("^Test:%d+: missing argument #3 %(number expected%)$", function()
+	return G:NextInteger(1)
+end)
+Fails("^Test:%d+: Random:NextNumber requires 0 or 2 arguments$", function()
+	return G:NextNumber(5)
+end)
+Fails("^Test:%d+: missing argument #2 %(table expected%)$", function()
+	return G:Shuffle()
+end)
+Fails("^Test:%d+: invalid argument #1 to 'new' %(number expected, got string%)$", function()
+	return Random.new("abc")
+end)
+Fails("^Attempted to shuffle table containing nil values", function()
+	G:Shuffle({ 1, nil, 3 })
+end)
+Fails("^Foo is not a valid member of Random$", function()
+	return (G :: any):Foo()
+end)
+-- nothing was drawn; a third bound is ignored
+assert(G:NextNumber(1, 2, 3) == Random.new(7):NextNumber(1, 2))
+assert(G:Clone():NextInteger(1, 100) == G:NextInteger(1, 100))
+"#,
+    );
+}
+
 /// runtime/tests/smoke.luau's instance checks (its printed values as assertions): Frame
 /// defaults, assignment, the two-argument Instance.new, number-to-string Text, full names.
 #[test]
