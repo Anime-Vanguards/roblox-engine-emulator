@@ -916,6 +916,18 @@ fn snapshot(state: &State, engine: &Engine, id: InstanceId, class: ClassId) -> (
     let class_name = class_name(engine, class);
     // the builder sets the name, the parent and the class, and the attributes and tags are written below
     let reserved = |property: &str| matches!(property, "Parent" | "Name" | "ClassName" | "Tags" | "Attributes" | "Source");
+    // a Content property the engine keeps as its string sibling (TextureContent: Texture,
+    // MeshContent: MeshId); reading the sibling covers both rbx-dom's database and Studio
+    // properties newer than it (ParticleEmitter, Beam and Trail TextureContent)
+    let read_property = |name: NameId, stored: NameId| -> Option<Value> {
+        if let Some(sibling) = engine.reflection.content_sibling(class, name) {
+            if let Some(Value::String(uri)) = state.dom.raw_get(id, sibling) {
+                let content = if uri.is_empty() { crate::value::ContentValue::None } else { crate::value::ContentValue::Uri(uri.clone()) };
+                return Some(Value::Content(std::rc::Rc::new(content)));
+            }
+        }
+        state.dom.raw_get(id, stored).cloned()
+    };
     for (property, data_type) in encode::serialized_properties(class_name) {
         if reserved(&property) {
             continue;
@@ -924,17 +936,7 @@ fn snapshot(state: &State, engine: &Engine, id: InstanceId, class: ClassId) -> (
         // a view whose value lives in another property: UICorner's CornerRadius reads TopLeftRadius
         // (services/mod.rs, measured)
         let stored = if class_name == "UICorner" && &*property == "CornerRadius" { K::TopLeftRadius as NameId } else { name };
-        // a Content property the engine keeps as its string sibling (TextureContent: Texture,
-        // MeshContent: MeshId)
-        let mut value = state.dom.raw_get(id, stored).cloned();
-        if let Some(sibling) = engine.reflection.content_sibling(class, name) {
-            if let Some(Value::String(uri)) = state.dom.raw_get(id, sibling) {
-                if !uri.is_empty() {
-                    value = Some(Value::String(uri.clone()));
-                }
-            }
-        }
-        let Some(value) = value else { continue };
+        let Some(value) = read_property(name, stored) else { continue };
         if matches!(data_type, rbx_reflection::DataType::Value(dom::VariantType::Ref)) {
             if let Value::Instance(target) = value {
                 references.push((property.to_string(), target));
@@ -961,7 +963,7 @@ fn snapshot(state: &State, engine: &Engine, id: InstanceId, class: ClassId) -> (
     extra.sort_by(|a, b| a.0.cmp(b.0));
     for (text, name, index) in extra {
         let property = engine.reflection.property(index);
-        if let Some(variant) = state.dom.raw_get(id, name).and_then(|value| encode::untyped_variant(engine, value, property.engine_type)) {
+        if let Some(variant) = read_property(name, name).and_then(|value| encode::untyped_variant(engine, &value, property.engine_type)) {
             properties.push((text.to_string(), variant));
         }
     }

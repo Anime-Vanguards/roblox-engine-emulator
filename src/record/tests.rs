@@ -1236,6 +1236,59 @@ fn a_texture_content_swap_is_recorded() {
     assert!(values.len() == 1 && (values[0].0 - 0.1).abs() < 0.03 && values[0].1 == "rbxassetid://2", "{values:?}");
 }
 
+/// ParticleEmitter, Beam and Trail keep TextureContent in Studio's dump outside rbx-dom's older
+/// database; snapshot() must write TextureContent from the Texture sibling so the default sparkles
+/// TextureContent does not shadow a script-assigned Texture (or a cleared empty Texture) in scene.rbxm.
+#[test]
+fn particle_beam_and_trail_texture_reaches_scene_texture_content() {
+    let (_, _, scene, _) = record(
+        r#"
+        local Host = Instance.new("Part")
+        Host.Name = "Host"
+        Host.Parent = workspace
+
+        local ByString = Instance.new("ParticleEmitter")
+        ByString.Name = "ByString"
+        ByString.Texture = "rbxassetid://111"
+        ByString.Parent = Host
+
+        local ByContent = Instance.new("ParticleEmitter")
+        ByContent.Name = "ByContent"
+        ByContent.TextureContent = Content.fromUri("rbxassetid://222")
+        ByContent.Parent = Host
+
+        local Cleared = Instance.new("ParticleEmitter")
+        Cleared.Name = "Cleared"
+        Cleared.Texture = ""
+        Cleared.Parent = Host
+
+        local Beam = Instance.new("Beam")
+        Beam.Name = "Arc"
+        Beam.Texture = "rbxassetid://333"
+        Beam.Parent = Host
+
+        local Trail = Instance.new("Trail")
+        Trail.Name = "Ribbon"
+        Trail.Texture = "rbxassetid://444"
+        Trail.Parent = Host
+        "#,
+        4,
+    );
+    let content_uri = |name: &str| match instance(&scene, &["Host", name]).properties.get(&rbx_dom_weak::ustr("TextureContent")) {
+        Some(Variant::Content(content)) => match content.value() {
+            rbx_dom_weak::types::ContentType::Uri(uri) => Some(uri.as_str()),
+            rbx_dom_weak::types::ContentType::None => None,
+            other => panic!("{name}: unexpected TextureContent {other:?}"),
+        },
+        other => panic!("{name}: missing TextureContent {other:?}"),
+    };
+    assert_eq!(content_uri("ByString"), Some("rbxassetid://111"));
+    assert_eq!(content_uri("ByContent"), Some("rbxassetid://222"));
+    assert_eq!(content_uri("Cleared"), None);
+    assert_eq!(content_uri("Arc"), Some("rbxassetid://333"));
+    assert_eq!(content_uri("Ribbon"), Some("rbxassetid://444"));
+}
+
 /// A texture naming a relative local file the engine read from the project's folder (`checker.png`, `./maps/other.png`)
 /// is recorded as that file's absolute `file://` URI, in the scene and in a later set, since ror reads a relative path from
 /// where it runs; an asset id stays as it is. Before, `checker.png` went into the scene unchanged and ror refused it.
