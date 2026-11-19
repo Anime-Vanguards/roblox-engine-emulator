@@ -1248,16 +1248,18 @@ impl RandomState {
         low * (1.0 - unit) + high * unit
     }
 
-    /// NextInteger: the floored bounds as 64-bit integers (a C cast on x86-64: out of range, the least one), in order,
-    /// and `count` = high - low + 1 values. Up to 2^32 - 2 values take one draw, `low + (count * draw >> 32)`, as
-    /// math.random does; from 2^32 - 1 values on, two draws make one 64-bit number `x` (the first draw its low half, as
-    /// for NextNumber), and the value is `low` plus the high half of `count * x` from 32-bit halves, leaving out the
-    /// product of the two low halves: `ch*xh + (ch*xl >> 32) + (cl*xh >> 32)`, rounded to a double (measured in a playing
-    /// client, Studio 0.747, tools/parity/probes/random.luau: the draw counts from 2^32 - 3 to 2^32 + 1 values, 31 wide
-    /// ranges for 20 seeds, 300 random calls; before that 2,048 two-draw values of 32 seeds and 64 ranges, where the
-    /// float interpolation ree used matched 1,235 and the exact 128-bit product 1,211, and 1,000 random calls).
+    /// NextInteger: each bound as a C cast makes it a 64-bit integer (toward zero, so -1.5 is -1; NaN, infinities and
+    /// values out of range the least one), in order, and `count` = high - low + 1 values. Up to 2^32 - 2 values take one
+    /// draw, `low + (count * draw >> 32)`, as math.random does; from 2^32 - 1 values on, two draws make one 64-bit number
+    /// `x` (the first draw its low half, as for NextNumber), and the value is `low` plus the high half of `count * x`
+    /// from 32-bit halves, leaving out the product of the two low halves: `ch*xh + (ch*xl >> 32) + (cl*xh >> 32)`,
+    /// rounded to a double (measured in a playing client, Studio 0.747, tools/parity/probes/random.luau: the draw counts
+    /// from 2^32 - 3 to 2^32 + 1 values, 31 wide ranges for 20 seeds, 300 random calls, and 15 fractional bounds,
+    /// negative and reversed, for 2 seeds, where flooring them gave another value or draw count for 9; before that
+    /// 2,048 two-draw values of 32 seeds and 64 ranges, where the float interpolation ree used matched 1,235 and the
+    /// exact 128-bit product 1,211, and 1,000 random calls).
     fn next_integer(&mut self, min: f64, max: f64) -> f64 {
-        let (mut low, mut high) = (int64_cast(min.floor()), int64_cast(max.floor()));
+        let (mut low, mut high) = (int64_cast(min), int64_cast(max));
         if low > high {
             std::mem::swap(&mut low, &mut high);
         }
@@ -2041,6 +2043,19 @@ mod tests {
         // 1896055670); and the widest range there is, rounded to a double (Random-wide -2^63 2^63 - 1024, seed 0)
         assert_eq!(seed_random(42.0).next_integer(0.0, 8589934591.0), 1896055671.0);
         assert_eq!(seed_random(0.0).next_integer(-9223372036854775808.0, 9223372036854774784.0), 9.491899533266309e17);
+    }
+
+    #[test]
+    fn next_integer_truncates_fractional_bounds() {
+        // tools/parity/expected/random.txt (Studio 0.747), Random-fraction, seed 7: toward zero, so -1.5 is -1 and
+        // (-0.5, 2^32 - 3) holds 2^32 - 2 values (one draw)
+        assert_eq!(seed_random(7.0).next_integer(-1.5, -1.5), -1.0);
+        assert_eq!(seed_random(7.0).next_integer(-0.5, -0.25), 0.0);
+        assert_eq!(seed_random(7.0).next_integer(-2.7, -2.2), -2.0);
+        assert_eq!(seed_random(7.0).next_integer(10.9, -4.2), 10.0);
+        let mut random = seed_random(7.0);
+        assert_eq!(random.next_integer(-0.5, 4294967293.0), 4132333491.0);
+        assert_eq!(random.next_number(0.0, 1.0), 0.01291674651990379);
     }
 
     #[test]

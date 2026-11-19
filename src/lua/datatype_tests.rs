@@ -171,12 +171,13 @@ for _, Case in StreamChecks do
 	end
 	assert(Checksum == Case[2], `PCG32 stream mismatch for seed {Case[1]}`)
 end
--- The exact-product boundary, signed/fractional bounds, and reversed bounds.
+-- The exact-product boundary, signed/fractional bounds (toward zero), and reversed bounds, as a playing client gives
+-- them (Studio 0.747, tools/parity/expected/random.txt Random-test-ranges).
 local RangeChecks = {
 	{ 0, 0, 0x00000000 },
 	{ 1, 12, 0xe9473863 },
-	{ -1.9, 1.9, 0x4aef8dba },
-	{ 10.9, -4.2, 0x0f06db22 },
+	{ -1.9, 1.9, 0x81b3e3b4 },
+	{ 10.9, -4.2, 0xdf0cbdb8 },
 	{ 0, 2097150, 0xd866f5e9 },
 	{ 0, 2097151, 0x619d6445 },
 	{ 0, 2097152, 0xc3fcced7 },
