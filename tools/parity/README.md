@@ -10,6 +10,7 @@ node tools/parity/run.mjs --write-known   # record the current differences in kn
 REE_PARITY_CAPTURE="<command>" node tools/parity/run.mjs --capture [probe ...]   # re-capture after a Roblox update
 node tools/parity/run.mjs ui_signals --rur <rur checkout>   # a probe that needs a GUI layout, through rur
 node tools/parity/run.mjs --server        # the probes as a server's script: expected/server, known-server.json
+node tools/parity/run.mjs --loopback      # the paired probes: a server and its client, expected/loopback, known-loopback.json
 ```
 
 `cargo test --release --test parity` runs the same comparison: every expected line ree does not print must be listed in
@@ -20,6 +21,28 @@ ones ree printed the same, the known differences and the new ones; it also names
 `--server` runs the same probes as a server's script would: ree with `--run-context server` against
 `expected/server` (what the probes printed as a Script in a play session's server) and `known-server.json`; a probe
 that asks for a device or a renderer is left out. `cargo test --release --test parity` checks both sets.
+
+`--loopback` runs the paired probes (`probes/loopback`): each is one play session's server and its client, ree with
+`--run-context loopback` against `expected/loopback` (what a real session's two sides printed) and `known-loopback.json`.
+`cargo test --release --test parity` checks them too, and fails for a paired probe that has no captured output.
+
+## Paired probes
+
+A paired probe (`probes/loopback/<name>.luau`) is one file with the lines both sides run first, then a line `--- server`
+and the server's lines, then a line `--- client` and the client's. Each side runs the whole file with the other side's
+lines blanked (so `@12:` in an error is the file's line 12 on either side), after prelude.luau and loopback.luau:
+
+- The server's half starts with the server, before the player joins (a game's server Script); the client's half once the
+  client runs scripts (in ree, the loopback harness's `Server` and `Client`).
+- `P.player()` is the player: the client's own, or the first to join the server (waited for).
+- `P.meet(Tag)` returns on each side once the other side reached `P.meet(Tag)` too, then waits for a resumption point.
+  Frames are counted on each side by its own RunService events; the two sides' frames are never compared.
+- Each side's `print` collects its lines; at the end the server sends its lines to the client, which prints them as
+  `server: <line>`, then its own as `client: <line>`. The expected file holds both, in that order.
+
+Capture each paired probe three times and keep only lines that read the same in all three: the two sides are two
+processes, so anything that depends on where one side's frame falls in the other's (a single send's frame count) varies.
+Count the fewest frames over many sends instead, or leave the line out.
 
 ## Writing a probe
 

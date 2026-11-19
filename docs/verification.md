@@ -13,6 +13,7 @@ What checks the engine, and what each check covers.
   `cargo test --release --test parity`: a line that matched the real engine must keep matching; the
   differences not fixed yet are listed, with their reasons, in `tools/parity/known.json`. Probes that need a
   GUI layout (when Absolute* properties and CanvasPosition change and fire during a scroll) run through
-  roblox-ui-renderer with `--rur <checkout>`.
+  roblox-ui-renderer with `--rur <checkout>`. Paired probes (`--loopback`) run a server and its client in one play
+  session, each side's lines compared with what the real session's two sides printed.
 - Recordings: `ree record` of the same harness and project gives byte-identical `scene.rbxm`,
   `playback.json`, `events.json`, `camera.json` and summary.
