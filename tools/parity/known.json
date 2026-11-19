@@ -47,6 +47,20 @@
 			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		}
 	],
+	"cframe_angle_between": [
+		{
+			"line": "args dot other error @92: invalid argument #2 to 'AngleBetween' (CFrame expected, got string)",
+			"why": "a '.' call names the method in argument #2's error ('to 'AngleBetween''), a ':' call does not; ree's AngleBetween is a C function found through __index (CFrame has no __namecall), which cannot tell the two apart, and gives the ':' call's text, as FuzzyEq does"
+		},
+		{
+			"line": "args stored error @96: invalid argument #2 to 'AngleBetween' (CFrame expected, got Vector3)",
+			"why": "a '.' call names the method in argument #2's error ('to 'AngleBetween''), a ':' call does not; ree's AngleBetween is a C function found through __index (CFrame has no __namecall), which cannot tell the two apart, and gives the ':' call's text, as FuzzyEq does"
+		},
+		{
+			"line": "args lowercase error angleBetween is not a valid member of CFrame",
+			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
+		}
+	],
 	"cframe_rotation_between": [
 		{
 			"line": "args none error @123: missing argument #1 to 'fromRotationBetweenVectors' (Vector3 expected)",

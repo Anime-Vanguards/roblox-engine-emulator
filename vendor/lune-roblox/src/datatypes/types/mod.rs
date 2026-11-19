@@ -397,6 +397,18 @@ pub mod float32 {
         rot_from_quat(q.map(|c| c * k))
     }
 
+    /// CFrame:AngleBetween, in doubles from the stored floats (measured in a playing client, 0.747, 213 pairs to the
+    /// bit): the cosine `x = (trace(A^T B) - 1) / 2`, the trace summed column by column
+    /// (`d_c = (A0c B0c + A1c B1c) + A2c B2c`, then `(d0 + d1) + d2`), clamped to [-1, 1] (a rotation against itself
+    /// can read a trace past 3), and the angle `atan2(sqrt(1 - x^2), x)` (acos differs in the last bits on a quarter
+    /// of the pairs, single precision by up to 3e-4 near the identity). Positions do not count; not-a-number stays so.
+    pub fn angle_between(a: &Rot, b: &Rot) -> f64 {
+        let product = |i: usize, j: usize| f64::from(a[i][j]) * f64::from(b[i][j]);
+        let column = |c: usize| (product(0, c) + product(1, c)) + product(2, c);
+        let x = ((((column(0) + column(1)) + column(2)) - 1.0) / 2.0).clamp(-1.0, 1.0);
+        (1.0 - x * x).sqrt().atan2(x)
+    }
+
     /// CFrame:Lerp blends two rotations' quaternions when their dot is above this, rotations within about 2.2 degrees
     /// (measured in Studio 0.746: a dot of 0.99981022 blended, 0.99980998 slerped)
     const BLEND_ABOVE: f32 = 0.99981;

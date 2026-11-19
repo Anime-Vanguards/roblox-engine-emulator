@@ -720,6 +720,55 @@ end
     );
 }
 
+/// CFrame:AngleBetween answers in doubles from the stored floats, as a 0.747 playing client does to the bit
+/// (tools/parity/probes/cframe_angle_between.luau): atan2(sqrt(1 - x^2), x) of the clamped cosine (trace(A^T B) - 1) / 2,
+/// summed column by column, with the client's argument errors. It was a missing method.
+#[test]
+fn cframe_angle_between_is_a_playing_clients() {
+    assert_script(
+        r#"
+local function Is(Got, Want)
+	assert(Got == Want, `got "{Got}", expected "{Want}"`)
+end
+local function Angle(A, B)
+	return string.format("%.17g", A:AngleBetween(B))
+end
+local function M(...)
+	return CFrame.new(0, 0, 0, ...)
+end
+Is(Angle(CFrame.identity, CFrame.Angles(0.5, 0, 0)), "0.50000002469944416")
+-- a rotation against itself: its trace reads 2.15e-8 past 3 here, so the clamp gives 0 (not-a-number without it)
+local Past = M(0.68016672134399414, 0.68180555105209351, 0.26928511261940002, 0.69895857572555542, -0.49245211482048035, -0.51860177516937256, -0.22097551822662354, 0.5409548282623291, -0.81150335073471069)
+Is(Angle(Past, Past), "0")
+-- and 8.1e-8 short of 3 here: atan2, where acos reads 0.0002853810724680844
+local Short = M(0.76375752687454224, -0.44085046648979187, 0.47151371836662292, 0.18491798639297485, -0.55041778087615967, -0.81415331363677979, 0.61844944953918457, 0.7090071439743042, -0.3388645350933075)
+Is(Angle(Short, Short), "0.00028538107245560946")
+-- positions do not count; a matrix that is not a rotation goes through the same steps
+Is(Angle(CFrame.new(1, 2, 3) * CFrame.Angles(0.3, 1.1, -0.4), CFrame.new(-5, 0, 9) * CFrame.Angles(0.2, 1.1, -0.4)), "0.099999571943821294")
+Is(Angle(M(0, 0, 0, 0, 0, 0, 0, 0, 0), CFrame.identity), "2.0943951023931957")
+Is(Angle(M(2, 0, 0, 0, 2, 0, 0, 0, 2), CFrame.identity), "0")
+-- the client's errors: the count without a position, a wrong argument at the calling line
+local Ok, Message = pcall(function()
+	return CFrame.identity:AngleBetween()
+end)
+Is(Ok, false)
+Is(Message, "Invalid number of arguments. CFrame:AngleBetween expected 2, got 1.")
+Ok, Message = pcall(function()
+	return CFrame.identity:AngleBetween(CFrame.identity, 1)
+end)
+Is(Message, "Invalid number of arguments. CFrame:AngleBetween expected 2, got 3.")
+Ok, Message = pcall(function()
+	return CFrame.identity:AngleBetween(Vector3.zero)
+end)
+assert(string.match(Message, ":%d+: invalid argument #2 %(CFrame expected, got Vector3%)$"), Message)
+Ok, Message = pcall(function()
+	return CFrame.identity.AngleBetween(5, CFrame.identity)
+end)
+assert(string.match(Message, ":%d+: invalid argument #1 to 'AngleBetween' %(CFrame expected, got number%)$"), Message)
+"#,
+    );
+}
+
 /// Every CFrame constructor, member, method, deprecated alias and operator gives the same bits run after run
 /// (cframe_golden/ops.txt, printed with %.17g), and a misuse gives the same error text. Three misuse texts differ
 /// from the build before CFrame took and returned native vectors itself: a table where a Vector3 is expected names
