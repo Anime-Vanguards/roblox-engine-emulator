@@ -209,6 +209,164 @@ return {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A host that makes its own client (rur's stories): the server started alone, the host's client readied, started with
+/// no project and linked; `begin_server` starts the server's part of the harness, which holds the join for a few frames,
+/// and the player joins once it lets it in. An error the server's harness raises at once is returned.
+#[test]
+fn a_host_links_its_own_client_and_the_servers_harness_holds_the_join() {
+    use crate::{Emulator, Engine, Options, RunContext, loopback, mount::ProjectSpec};
+    let dir = scratch("host");
+    let harness = dir.join("Host.luau");
+    std::fs::write(&harness, "return { Server = function(Context) Context.HoldJoin() print('server holds') task.wait(0.05) Context.Join() print('server lets in') end }").unwrap();
+    let failing = dir.join("Failing.luau");
+    std::fs::write(&failing, "return { Server = function(Context) error('the server harness failed') end }").unwrap();
+    let options = Options { mode: "play".into(), run_context: RunContext::Loopback, ..Options::default() };
+    let pair = |harness: &Path| {
+        let server = loopback::start_server(&Engine::new, &options, &ProjectSpec::default(), &|_| {}).unwrap();
+        let seed = server.engine.state.borrow().sched.random_seed;
+        let engine = Engine::new(loopback::side_options(&options, loopback::Side::Client)).unwrap();
+        loopback::ready_client(&engine);
+        assert_eq!(engine.state.borrow().sched.random_seed, seed + 1.0, "the client's own sequence");
+        let client = Emulator::start(engine, &ProjectSpec::default()).unwrap();
+        loopback::link(server, &client.lua, &client.engine, loopback::Spec::default()).unwrap();
+        let begun = run::begin_server(&client.lua, &client.engine, Some(harness), 1.0 / 60.0, 600);
+        (client, begun)
+    };
+    let (client, begun) = pair(&harness);
+    begun.unwrap();
+    let bridge = client.engine.loopback().unwrap().bridge.clone();
+    assert!(bridge.joined.get(), "the player joined");
+    assert!(bridge.joined_at.get() >= 3, "the server stepped alone until it let the player in (joined at {})", bridge.joined_at.get());
+    let printed: Vec<String> = client.engine.state.borrow().output.entries.iter().map(|entry| entry.message.clone()).collect();
+    assert!(printed.iter().any(|line| line == "server holds") && printed.iter().any(|line| line == "server lets in"), "{printed:?}");
+    let (_failed, begun) = pair(&failing);
+    assert!(begun.is_err_and(|message| message.contains("the server harness failed")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A module both sides require is compiled once in the run: the second side loads the bytecode the first one's compile
+/// made (each side still runs its own copy of it)
+#[test]
+fn a_shared_module_compiles_once() {
+    let root = project("compile");
+    let dir = scratch("compile-run");
+    let harness = dir.join("Compile.luau");
+    std::fs::write(&harness, "local Storage = game:GetService('ReplicatedStorage') return { Server = function() print('server', require(Storage.Shared.Counter).Bump()) end, Client = function() print('client', require(Storage.Shared.Counter).Bump()) print('@done') end }").unwrap();
+    let words: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--run-context", "loopback"].iter().map(|s| s.to_string()).collect();
+    let args = run::parse(&words, false).unwrap();
+    let (done, emulator) = run::execute(&args, &Host::default(), false).unwrap();
+    let lines = lines(&done.summary);
+    assert!(has(&lines, "server print: server 1") && has(&lines, "client print: client 1"), "{lines:?}");
+    let (_, server) = emulator.engine.peer_server().unwrap();
+    assert_eq!(emulator.engine.modules.borrow().text_compiles, 0, "the client compiled a module's text");
+    assert_eq!(server.modules.borrow().text_compiles, 0, "the server's require loaded the process's bytecode too");
+    drop(server);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A project whose place has a Studio hierarchy snapshot: Studio-only placeholders below ReplicatedStorage and the Workspace
+/// (a Folder of remotes, an asset, a map), and one module on disk. Returns the root to mount.
+fn studio_project(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    let root = dir.join("place");
+    std::fs::create_dir_all(root.join("ReplicatedStorage")).unwrap();
+    std::fs::write(root.join("ReplicatedStorage/Note.luau"), "return 'note'").unwrap();
+    std::fs::create_dir_all(dir.join(crate::project::SNAPSHOTS_DIR)).unwrap();
+    std::fs::write(dir.join(crate::project::PLACES_FILE), r#"{"environments":[{"name":"Lobby","projectFile":"place/default.project.json"}]}"#).unwrap();
+    let node = |name: &str, class: &str, parent: i64| format!(r#"{{"name":"{name}","className":"{class}","parent":{parent}}}"#);
+    let nodes = [
+        node("game", "DataModel", -1),
+        node("ReplicatedStorage", "ReplicatedStorage", 0),
+        node("Workspace", "Workspace", 0),
+        node("Remotes", "Folder", 1),
+        node("Ping", "RemoteEvent", 3),
+        node("Assets", "Folder", 1),
+        node("Sword", "Model", 5),
+        node("Handle", "Part", 6),
+        node("Map", "Model", 2),
+        node("Door", "Part", 8),
+        node("Lamp", "Part", 8),
+        node("Bulb", "Part", 10),
+        node("Props", "Folder", 1),
+        node("Crate", "Part", 12),
+        node("Lid", "Part", 13),
+    ];
+    std::fs::write(dir.join(crate::project::SNAPSHOTS_DIR).join("Lobby.json"), format!(r#"{{"nodes":[{}]}}"#, nodes.join(","))).unwrap();
+    root
+}
+
+/// The place's Studio-only instances stay lazy at the join: the client makes those its scripts look at itself, as a plain
+/// client run does, and the server's own (made after the join, when its scripts look) pair with the client's when a
+/// message names them: a remote both sides found, a part the server passes and writes, a part the client passes back
+/// that the server had not made. The server never makes what only the client looked at.
+#[test]
+fn studio_only_instances_stay_lazy_and_pair_as_they_are_named() {
+    let root = studio_project("studio");
+    let dir = scratch("studio-run");
+    let harness = dir.join("Studio.luau");
+    std::fs::write(
+        &harness,
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+return {
+	Server = function(Context)
+		task.wait(0.1)
+		local Ping = Storage.Remotes.Ping
+		Ping.OnServerEvent:Connect(function(Player, Part, Same)
+			print("server got", Part and Part:GetFullName(), Part == Storage.Props.Crate.Lid, Same == Ping)
+		end)
+		local Crate = Storage.Props.Crate
+		Crate.Transparency = 0.5
+		Crate:SetAttribute("Open", true)
+		Ping:FireAllClients(Crate, Ping)
+	end,
+	Client = function(Context)
+		local Map = workspace:WaitForChild("Map")
+		local Names = {}
+		for _, Part in Map:GetDescendants() do
+			table.insert(Names, Part.Name)
+		end
+		table.sort(Names)
+		print("client map", table.concat(Names, " "))
+		local Sword = Storage.Assets.Sword
+		print("client sword", Sword.Handle.ClassName)
+		local Ping = Storage.Remotes.Ping
+		Ping.OnClientEvent:Connect(function(Crate, Same)
+			task.wait()
+			print("client got", Crate == Storage.Props.Crate, Crate.Transparency, Crate:GetAttribute("Open"), Same == Ping)
+			Ping:FireServer(Crate.Lid, Ping)
+		end)
+	end,
+}
+"##,
+    )
+    .unwrap();
+    let words: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--run-context", "loopback"].iter().map(|s| s.to_string()).collect();
+    let args = run::parse(&words, false).unwrap();
+    let (done, emulator) = run::execute(&args, &Host::default(), false).unwrap();
+    let lines = lines(&done.summary);
+    assert!(has(&lines, "client print: client map Bulb Door Lamp"), "{lines:?}");
+    assert!(has(&lines, "client print: client sword Part"), "{lines:?}");
+    assert!(has(&lines, "client print: client got true 0.5 true true"), "{lines:?}");
+    assert!(has(&lines, "server print: server got ReplicatedStorage.Props.Crate.Lid true true"), "{lines:?}");
+    // the server never made the asset only the client looked at; both sides made Studio-only instances after the join
+    let (_, server) = emulator.engine.peer_server().unwrap();
+    assert!(server.loopback().unwrap().lazy.borrow().made() >= 3, "the server made its remote, the crate and its lid after the join");
+    assert!(emulator.engine.loopback().unwrap().lazy.borrow().made() >= 5, "the client made its own");
+    {
+        let state = server.state.borrow();
+        let storage = crate::services::find_service(&server, server.world().game, "ReplicatedStorage").unwrap();
+        let sword = state.dom.find_child(storage, b"Assets").and_then(|assets| state.dom.find_child(assets, b"Sword"));
+        assert!(sword.is_none_or(|sword| state.dom.find_child(sword, b"Handle").is_none()), "the server made the client's asset");
+    }
+    drop(server);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(root.parent().unwrap());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// After the join every change the server makes in the replicated containers arrives at the client's next frame, as its
 /// value when the server's frame ended: three writes give one Changed with the last, a made child arrives whole, a move
 /// out of the containers leaves the client's copy unparented (the same instance comes back), a destroy destroys it; a

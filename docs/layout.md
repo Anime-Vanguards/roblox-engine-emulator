@@ -21,7 +21,9 @@ src/
   services/            Per-class Roblox service and instance behaviors
   project.rs, project/ Rojo mounting, models, snapshots, Studio placeholders, bundles,
                        ModelPlan & lazy instantiation (plan.rs, plan/codec.rs), JSON models (json_model.rs)
-  loopback/            `--run-context loopback`: paired server + client replication and remotes (tests in loopback_tests.rs)
+  loopback/            `--run-context loopback`: paired server + client replication and remotes, their C-API copier, lazily
+                       paired Studio-only instances (tests in loopback_tests.rs; tests/loopback_alloc.rs, tests/loopback_bench.rs
+                       and tools/bench/loopback/ hold its allocation guard and bench)
   serve/               `ree serve` daemon and `--service` client
   timing.rs, files.rs  `--profile` phase timers and cache file stamps
   watchdog.rs          Script timeout, wall-clock cap, and parent-death watchdog

@@ -879,7 +879,7 @@ unsafe fn this<'a>(state: *mut ffi::lua_State) -> Option<(&'a Api, InstanceId)> 
 
 #[inline]
 /// The instance the stack value at `index` is, if any.
-pub(super) unsafe fn stack_instance(state: *mut ffi::lua_State, index: c_int) -> Option<InstanceId> {
+pub(crate) unsafe fn stack_instance(state: *mut ffi::lua_State, index: c_int) -> Option<InstanceId> {
     unsafe { arg_instance(state, index) }
 }
 

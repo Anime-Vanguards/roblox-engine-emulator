@@ -5,20 +5,20 @@
 -- (server.luau). Run as the engine's own Luau (not charged to scripts).
 local Call, Players = ...
 
-local function Answer(Results)
-	if Results[1] then
-		return table.unpack(Results, 2, Results.n)
+-- (results pass as arguments, never packed into a table: a call allocates nothing of its own here)
+local function Answer(Ok, ...)
+	if Ok then
+		return ...
 	end
-	error(Results[2], 0)
+	error((...), 0)
 end
 
 local function InvokeServer(Self, ...)
-	return Answer(table.pack(Call(Self, true, nil, ...)))
+	return Answer(Call(Self, true, nil, ...))
 end
 
-local function InvokeClient(Self, Player, ...)
-	local Results = table.pack(Call(Self, false, Player, ...))
-	if Results[1] == "fake" then
+local function Answered(Self, Player, Ok, ...)
+	if Ok == "fake" then
 		-- a harness's player: no client answers it (server.luau)
 		if Player.Parent == Players then
 			local Thread = coroutine.running()
@@ -33,12 +33,16 @@ local function InvokeClient(Self, Player, ...)
 		end
 		error(`InvokeClient: {Player.Name} left the game before {Self:GetFullName()} returned`, 0)
 	end
-	return Answer(Results)
+	return Answer(Ok, ...)
+end
+
+local function InvokeClient(Self, Player, ...)
+	return Answered(Self, Player, Call(Self, false, Player, ...))
 end
 
 -- The callback of an invoke that arrived: its outcome goes back to the caller (Done)
 local function Run(Callback, Done, CallId, ...)
-	Done(CallId, table.pack(pcall(Callback, ...)))
+	Done(CallId, pcall(Callback, ...))
 end
 
 return { InvokeServer = InvokeServer, InvokeClient = InvokeClient, Run = Run }

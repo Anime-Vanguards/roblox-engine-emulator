@@ -57,6 +57,13 @@ pub fn to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> 
                 if let Ok(copied) = userdata.borrow::<super::bindable::Copied>() {
                     return super::bindable::rebuild(lua, &copied.0);
                 }
+                // (a loopback run's received table or buffer: each handler rebuilds its own, loopback/copier.rs)
+                if let Ok(delivered) = userdata.borrow::<crate::loopback::wire::Delivered>() {
+                    return match &*delivered.0 {
+                        crate::loopback::wire::Wire::Buffer(bytes) => lua.create_buffer(&bytes[..]).map(LuaValue::Buffer),
+                        wire => crate::loopback::copier::rebuild_table(lua, engine, wire, &|id| Some(id)),
+                    };
+                }
             }
             (**value).clone()
         }

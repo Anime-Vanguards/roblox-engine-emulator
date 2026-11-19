@@ -298,6 +298,27 @@ pub fn materialize(state: &mut State, reflection: &Reflection, id: InstanceId) {
     }
 }
 
+/// A loopback client's place hierarchy: the server's snapshot (shared), its own DataModel at the top, and the same stand-in
+/// sources (loopback/lazy.rs: each side makes the Studio-only instances of what it copied)
+pub fn share_studio(server: &State, client: &mut State, client_game: InstanceId) {
+    client.project.studio = server.project.studio.as_ref().map(|studio| Studio { game: client_game, index: studio.index.clone() });
+    client.project.stand_in_sources = server.project.stand_in_sources.clone();
+    client.project.hierarchy_path = server.project.hierarchy_path.clone();
+}
+
+/// Whether `id` waits to make instances only the server can (a lazily imported plan's, a bundle's: not the Studio
+/// snapshot's, which a loopback client makes itself)
+pub fn lazy_beyond_studio(state: &State, id: InstanceId) -> bool {
+    if state.dom.at(id).flags & (flags::LAZY_PENDING | flags::BUNDLE_ROOT | flags::LAZY_ABOVE) != 0 {
+        return true;
+    }
+    #[cfg(feature = "bundles")]
+    if state.project.model_assets.waits_at(id) {
+        return true;
+    }
+    false
+}
+
 /// MaterializeDeep: materializes a whole subtree (Clone, GetDescendants).
 pub fn materialize_deep(engine: &Engine, id: InstanceId) {
     let mut stack = vec![id];
@@ -533,7 +554,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
     let mut entries = Vec::new();
     let mut kinds = Vec::new();
     let mut stamps = Vec::new();
-    let stamped = crate::lua::modules::reusing_compiled_modules();
+    let stamped = crate::lua::modules::keeping_between_runs();
     if let Ok(read) = std::fs::read_dir(&path) {
         let mut valid = true;
         for entry in read {
@@ -602,7 +623,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
 /// [`scan`] of a mounted tree, kept between VMs in a process that keeps compiled modules ([`kept_listing`]).
 fn listed(path: String) -> ScanNode {
     #[cfg(windows)]
-    if crate::lua::modules::reusing_compiled_modules() {
+    if crate::lua::modules::keeping_between_runs() {
         return kept_listing::listed(path);
     }
     scan(path)
@@ -1048,7 +1069,7 @@ fn decode_model_file(engine: &Engine, path: &str, bytes: &[u8]) -> Option<WeakDo
 fn mounted_plan(engine: &Engine, path: &str) -> Option<std::sync::Arc<ModelPlan>> {
     type Kept = std::sync::Mutex<FxHashMap<String, (crate::files::Stamp, std::sync::Arc<ModelPlan>)>>;
     static KEPT: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
-    let keep = crate::lua::modules::reusing_compiled_modules();
+    let keep = crate::lua::modules::keeping_between_runs();
     crate::files::note(Path::new(path));
     let stamp = crate::files::stamp(Path::new(path));
     if keep {

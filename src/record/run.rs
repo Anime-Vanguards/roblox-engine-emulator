@@ -424,6 +424,10 @@ pub(crate) fn finished(emulator: &Emulator, history: &History) {
 /// `listings`, the mount keeps the directory listings it made (record/prepare.rs checks them again).
 pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(Emulator, History), String> {
     let prepared = crate::timing::time("prepare", || launch::prepare(&args.engine, &host.repo))?;
+    // (a loopback run's two sides require the same modules: each file is compiled once, its bytecode loaded by both)
+    if prepared.options.run_context == crate::RunContext::Loopback {
+        modules::share_compiled_modules();
+    }
     let history = History::new(host, args, &prepared.roots);
     // (a process that keeps compiled modules compiles the ones it lacks into them)
     let prefetch = match &history.modules {
@@ -472,28 +476,25 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
 fn start_loopback(args: &RecordArgs, host: &Host, options: &crate::Options, spec: &mount::ProjectSpec, prefetch: Option<std::sync::Arc<modules::Prefetch>>, listings: bool) -> Result<Emulator, String> {
     use crate::loopback::{self, Side};
     let limit = crate::watchdog::script_timeout_seconds(args.script_timeout);
-    let server_engine = crate::timing::time("engine (reflection)", || (host.new_engine)(loopback::side_options(options, Side::Server)))?;
-    if let Some(prefetch) = prefetch {
-        modules::use_prefetch(&server_engine, prefetch);
-    }
-    modules::interpret_modules(&server_engine);
-    crate::animation::enable(&server_engine, crate::animation::Loading { directories: args.animations.clone(), download: true });
-    if listings {
-        server_engine.state.borrow_mut().project.listings = Some(Vec::new());
-    }
-    let server = Emulator::start(server_engine, spec)?;
-    let timeout = crate::watchdog::ScriptTimeout::install(&server.lua, &server.engine, limit, crate::watchdog::stop_after(args.script_timeouts));
-    server.engine.state.borrow_mut().sched.timeout = timeout;
-    let client_engine = crate::timing::time("loopback: client engine", || (host.new_engine)(loopback::side_options(options, Side::Client)))?;
-    modules::interpret_all_from_start(&client_engine);
-    // (the client draws its own sequence: the run's seed plus one)
-    client_engine.state.borrow_mut().sched.random_seed += 1.0;
-    crate::animation::enable(&client_engine, crate::animation::Loading { directories: args.animations.clone(), download: true });
-    let client = crate::timing::time("loopback: client start", || Emulator::start(client_engine, &mount::ProjectSpec::default()))?;
+    let prefetch = std::cell::RefCell::new(prefetch);
+    let loopback_spec = loopback::Spec { latency: args.latency.unwrap_or(1), record_server: args.record_server };
+    let client = loopback::start(&*host.new_engine, options, spec, loopback_spec, &|engine, side| {
+        if side == Side::Server {
+            if let Some(prefetch) = prefetch.borrow_mut().take() {
+                modules::use_prefetch(engine, prefetch);
+            }
+            if listings {
+                engine.state.borrow_mut().project.listings = Some(Vec::new());
+            }
+        }
+        crate::animation::enable(engine, crate::animation::Loading { directories: args.animations.clone(), download: true });
+    })?;
     crate::luau_profile::install(&client.lua);
-    let timeout = crate::watchdog::ScriptTimeout::install(&client.lua, &client.engine, limit, crate::watchdog::stop_after(args.script_timeouts));
-    client.engine.state.borrow_mut().sched.timeout = timeout;
-    loopback::link(server, &client, loopback::Spec { latency: args.latency.unwrap_or(1), record_server: args.record_server })?;
+    let (server_lua, server) = client.engine.peer_server().ok_or("not a loopback client")?;
+    for (lua, engine) in [(&server_lua, &server), (&*client.lua, &client.engine)] {
+        let timeout = crate::watchdog::ScriptTimeout::install(lua, engine, limit, crate::watchdog::stop_after(args.script_timeouts));
+        engine.state.borrow_mut().sched.timeout = timeout;
+    }
     Ok(client)
 }
 
@@ -714,7 +715,13 @@ impl History {
     fn save(&self, engine: &Engine) {
         #[cfg(feature = "bundles")]
         project::model_assets::remember(engine);
-        let files = modules::required_files(engine);
+        let mut files = modules::required_files(engine);
+        // (a loopback run's server requires most of what both sides do)
+        if let Some((_, server)) = engine.peer_server() {
+            files.extend(modules::required_files(&server));
+            files.sort();
+            files.dedup();
+        }
         if self.modules.as_ref() == Some(&files) || files.is_empty() {
             return;
         }
@@ -868,6 +875,41 @@ fn run_loopback(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, recorder: Opt
         ran.failure.get_or_insert(message);
     }
     Ok(ran)
+}
+
+/// A host's own loopback client (rur's stories, which mount on the client themselves) after [`loopback::link`]: the server's
+/// part of the loopback `harness` (`{ Server = ... }`; none: the place's own server scripts) starts on the pair's server
+/// as `ree run` starts it, then the player joins, at once or, when that harness held the join (Context.HoldJoin), once it
+/// calls Context.Join (the server steps alone meanwhile, `frame` seconds a step, `max_frames` at most). An error the
+/// harness raises before its first yield is returned; later ones are output lines, as in a run.
+///
+/// [`loopback::link`]: crate::loopback::link
+pub fn begin_server(client_lua: &Lua, client: &Rc<Engine>, harness: Option<&std::path::Path>, frame: f64, max_frames: u32) -> Result<(), String> {
+    use crate::loopback::{self, Side};
+    let (server_lua, server) = client.peer_server().ok_or("not a loopback client")?;
+    let bridge = client.loopback().ok_or("not a loopback client")?.bridge.clone();
+    let mut words: Vec<String> = vec!["--run-context".into(), "loopback".into(), "--roots".into(), String::new()];
+    if let Some(harness) = harness {
+        words.extend(["--harness".into(), harness.to_string_lossy().into_owned()]);
+    }
+    let args = parse(&words, false)?;
+    let begun = begin_side(&server_lua, &server, &args, Side::Server)?;
+    if let CallOutcome::Failed(message, _) = begun.harness_call.outcome().map_err(|error| error.to_string())? {
+        return Err(message);
+    }
+    if bridge.hold_join.get() && !bridge.join_asked.get() {
+        scheduler::flush_deferred(&server_lua, &server).map_err(|error| error.to_string())?;
+        let mut stepped = 0;
+        while stepped < max_frames && !bridge.join_asked.get() {
+            scheduler::step_one(&server_lua, &server, Some(frame)).map_err(|error| error.to_string())?;
+            loopback::replicate::flush(&server, &bridge);
+            stepped += 1;
+        }
+    }
+    if !bridge.hold_join.get() || bridge.join_asked.get() {
+        crate::timing::time("loopback: join", || loopback::join(client_lua, client))?;
+    }
+    Ok(())
 }
 
 /// A loopback run's side's harness started: its part of a `{ Server, Client }` harness, or the place's own scripts with no
@@ -1176,7 +1218,9 @@ pub fn harness_layout(path: &std::path::Path) -> (String, Option<PathBuf>) {
 /// ([`harness_layout`]), so it can require them through `script`.
 fn mount_harness(engine: &Rc<Engine>, path: &std::path::Path) -> Result<crate::InstanceId, String> {
     crate::files::note(path);
-    let source = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // (a loopback run's two sides load the one compile of it)
+    let source = if engine.loopback().is_some() { modules::read_kept(&path.to_string_lossy()) } else { std::fs::read(path) };
+    let source = source.map_err(|e| format!("{}: {e}", path.display()))?;
     let (name, children) = harness_layout(path);
     let game = engine.world().game;
     let storage = services::get_service(engine, game, "ReplicatedStorage").map_err(|_| "ReplicatedStorage")?;

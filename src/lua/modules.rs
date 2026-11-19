@@ -57,6 +57,9 @@ pub struct ModuleRecords {
     /// Every chunk of the VM runs in the interpreter, the engine's own included ([`interpret_all`]):
     /// loading a module leaves native code generation off
     interpret_all: bool,
+    /// Module chunks this engine compiled from their text (not loaded from bytecode compiled ahead: [`Prefetch`],
+    /// [`reuse_compiled_modules`]); a loopback run's second side compiles none of the modules both sides require
+    pub text_compiles: u32,
 }
 
 impl ModuleRecords {
@@ -191,7 +194,22 @@ impl CompiledSources {
 /// without compiling them to native code (`luau_codegen_compile` costs a one-shot story more than
 /// it gains; the interpreter gives the same results).
 pub fn reuse_compiled_modules() {
+    share_compiled_modules();
+    KEEPING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The process's compiled sources alone ([`CompiledSources`]), without what a service keeps between its runs (mount
+/// listings, file stamps, model plans: [`keeping_between_runs`]): a loopback run's two sides compile each module once
+pub fn share_compiled_modules() {
     let _ = COMPILED.set(CompiledSources { entries: std::sync::Mutex::new(Default::default()) });
+}
+
+/// The process runs many VMs one after another and keeps what their mounts read ([`reuse_compiled_modules`])
+static KEEPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether this process keeps mounts' listings, stamps and plans between runs (a service: [`reuse_compiled_modules`])
+pub fn keeping_between_runs() -> bool {
+    KEEPING.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Reads and compiles `paths` into the process's compiled sources on other threads (those not
@@ -233,6 +251,25 @@ pub fn forget_stale_modules() {
     let before = entries.len();
     entries.retain(|path, (stamp, _, _)| crate::files::stamp(std::path::Path::new(path)) == Some(*stamp));
     crate::profiler::caches::evicted(crate::profiler::caches::Cache::Bytecode, (before - entries.len()) as u64);
+}
+
+/// The process's bytecode of `script`'s file when it was compiled from exactly `source` ([`reuse_compiled_modules`]): a
+/// loopback run's client copy of a module the server had read already carries its text, not a read of its own
+fn kept_bytecode(engine: &Engine, script: InstanceId, source: &[u8]) -> Option<Vec<u8>> {
+    let compiled = COMPILED.get()?;
+    let path = engine.state.borrow().dom.at(script).source_path().cloned()?;
+    let entries = compiled.entries.lock().ok()?;
+    let (_, entry, _) = entries.get(&*path)?;
+    (entry.0 == source).then(|| entry.1.clone()).flatten()
+}
+
+/// A file's bytes, through the process's compiled sources when it keeps them ([`reuse_compiled_modules`]): a loopback
+/// run's harness, which both sides load, then compiles once ([`kept_bytecode`])
+pub fn read_kept(path: &str) -> std::io::Result<Vec<u8>> {
+    match COMPILED.get() {
+        Some(compiled) => compiled.read(path).map(|(bytes, _)| bytes),
+        None => std::fs::read(path),
+    }
 }
 
 /// Whether [`reuse_compiled_modules`] is on.
@@ -463,10 +500,14 @@ pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[
     }
     let source = deterministic_source(&name, source);
     let bytecode = engine.modules.borrow_mut().bytecode.remove(&script);
+    let bytecode = bytecode.or_else(|| kept_bytecode(engine, script, &source));
     let chunk = match (bytecode, &source) {
         // (the prefetcher's compile of this very source: loads as the text would)
         (Some(bytecode), std::borrow::Cow::Borrowed(_)) => lua.load(bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
-        _ => lua.load(&*source).set_compiler(compiler()),
+        _ => {
+            engine.modules.borrow_mut().text_compiles += 1;
+            lua.load(&*source).set_compiler(compiler())
+        }
     };
     // A script's chunk is its full name as Roblox names it: error positions, tracebacks and debug.info(f, "s") read
     // `ReplicatedStorage.Module:3:`, not Luau's `[string "ReplicatedStorage.Module"]:3:` for an unmarked name

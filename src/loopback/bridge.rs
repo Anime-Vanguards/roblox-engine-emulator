@@ -53,6 +53,9 @@ pub struct Node {
     pub tags: Vec<Str>,
     pub source: Option<crate::dom::ScriptSource>,
     pub json: bool,
+    /// Its place in the Studio snapshot and whether its Studio children were made (lazy.rs): the client makes them itself
+    pub studio: crate::dom::StudioNode,
+    pub studio_flags: u16,
 }
 
 /// Messages sealed at the end of a sender's frame, delivered at the receiver's frame `due`.

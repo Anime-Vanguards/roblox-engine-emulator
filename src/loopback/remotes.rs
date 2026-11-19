@@ -187,7 +187,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
     }
     let done = {
         let engine = engine.clone();
-        lua.create_function(move |lua, (call, results): (u32, LuaTable)| answered(lua, &engine, call, results))?
+        lua.create_function(move |lua, (call, ok, results): (u32, bool, LuaMultiValue)| answered(lua, &engine, call, ok, results))?
     };
     if let Some(endpoint) = engine.loopback() {
         *endpoint.remotes.run.borrow_mut() = Some((exports.get("Run")?, done));
@@ -217,7 +217,9 @@ fn send_event(lua: &Lua, engine: &Rc<Engine>, remote: InstanceId, arguments: &[L
             ));
             return Ok(none());
         }
-        endpoint.bridge.send_unreliable(endpoint.side, Msg::Event { remote, args });
+        let message = Msg::Event { remote, args };
+        super::lazy::pair_sent(engine, &endpoint, &message);
+        endpoint.bridge.send_unreliable(endpoint.side, message);
         return Ok(none());
     }
     send(engine, &endpoint, Msg::Event { remote, args });
@@ -226,14 +228,17 @@ fn send_event(lua: &Lua, engine: &Rc<Engine>, remote: InstanceId, arguments: &[L
 
 /// A reliable message from a side: a server's in its place among its frame's changes (replicate.rs flush), a client's
 /// straight into its stream
-fn send(engine: &Engine, endpoint: &Endpoint, message: Msg) {
+fn send(engine: &Engine, endpoint: &Rc<Endpoint>, message: Msg) {
     match endpoint.side {
         Side::Server => {
             if let Some(log) = engine.state.borrow_mut().loopback_log.as_mut() {
                 log.push(super::replicate::Change::Message(message));
             }
         }
-        Side::Client => endpoint.bridge.send(Side::Client, message),
+        Side::Client => {
+            super::lazy::pair_sent(engine, endpoint, &message);
+            endpoint.bridge.send(Side::Client, message)
+        }
     }
 }
 
@@ -270,14 +275,18 @@ fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
 }
 
 /// The instance ids of the other side's messages, as this side's
-fn mapper(endpoint: &Endpoint) -> impl Fn(InstanceId) -> Option<InstanceId> + '_ {
-    move |id| endpoint.bridge.ids.borrow().map(endpoint.side, id)
+fn mapper<'a>(engine: &'a Engine, endpoint: &'a Endpoint) -> impl Fn(InstanceId) -> Option<InstanceId> + 'a {
+    move |id| match endpoint.side {
+        // (a client pairs the server's Studio-only instances as it meets them: lazy.rs)
+        Side::Client => super::lazy::to_client(engine, endpoint, id),
+        Side::Server => endpoint.bridge.ids.borrow().map(Side::Server, id),
+    }
 }
 
 /// An event at the receive point: the receiver's handlers get it (deferred), or the remote keeps it until a first
 /// connection; a remote this side lacks takes nothing
-pub fn deliver_event(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote: InstanceId, args: &[Wire]) -> LuaResult<()> {
-    let map = mapper(endpoint);
+pub fn deliver_event(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote: InstanceId, args: Box<[Wire]>) -> LuaResult<()> {
+    let map = mapper(engine, endpoint);
     let Some(remote) = map(remote) else { return Ok(()) };
     if engine.state.borrow().dom.get(remote).is_none() {
         return Ok(());
@@ -287,7 +296,7 @@ pub fn deliver_event(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, re
         let player = endpoint.bridge.player.get().map(|(server, _)| server);
         values.push(player.map_or(Value::Nil, Value::Instance));
     }
-    for arg in args {
+    for arg in args.into_vec() {
         values.push(wire::delivered(lua, engine, arg, &map)?);
     }
     let Some(event) = engine.reflection.name_id(event_name(endpoint.side)) else { return Ok(()) };
@@ -368,7 +377,7 @@ pub fn callback_set(lua: &Lua, engine: &Rc<Engine>, remote: InstanceId) -> LuaRe
 
 /// An invoke at the receive point: its callback runs now on a thread of its own, or once it is set
 pub fn deliver_invoke(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote: InstanceId, call: u32, args: Box<[Wire]>) -> LuaResult<()> {
-    let Some(remote) = mapper(endpoint)(remote) else { return Ok(()) };
+    let Some(remote) = mapper(engine, endpoint)(remote) else { return Ok(()) };
     if engine.state.borrow().dom.get(remote).is_none() {
         return Ok(());
     }
@@ -392,7 +401,7 @@ fn run_callback(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote:
     let Some(name) = engine.reflection.name_id(callback_name(endpoint.side)) else { return Ok(()) };
     let Some(LuaValue::Function(callback)) = engine.state.borrow().dom.at(remote).callback(name).cloned() else { return Ok(()) };
     let Some((run, done)) = endpoint.remotes.run.borrow().clone() else { return Ok(()) };
-    let map = mapper(endpoint);
+    let map = mapper(engine, endpoint);
     let mut arguments = LuaMultiValue::with_capacity(args.len() + 4);
     arguments.push_back(LuaValue::Function(callback));
     arguments.push_back(LuaValue::Function(done));
@@ -413,18 +422,12 @@ fn run_callback(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote:
 }
 
 /// loopback.luau's Done: a callback's outcome goes back to its caller (results as arguments go, an error as its text)
-fn answered(lua: &Lua, engine: &Rc<Engine>, call: u32, results: LuaTable) -> LuaResult<()> {
+fn answered(lua: &Lua, engine: &Rc<Engine>, call: u32, ok: bool, mut results: LuaMultiValue) -> LuaResult<()> {
     let Some(endpoint) = engine.loopback() else { return Ok(()) };
-    let count: usize = results.raw_get::<Option<usize>>("n")?.unwrap_or(0);
-    let ok: bool = results.raw_get(1)?;
     let result = if ok {
-        let mut out = Vec::with_capacity(count.saturating_sub(1));
-        for index in 2..=count {
-            out.push(results.raw_get::<LuaValue>(index)?);
-        }
-        wire::capture_all(lua, engine, &out, wire::MAX_DEPTH)
+        wire::capture_all(lua, engine, results.make_contiguous(), wire::MAX_DEPTH)
     } else {
-        match results.raw_get::<LuaValue>(2)? {
+        match results.into_iter().next().unwrap_or(LuaValue::Nil) {
             LuaValue::String(text) => Err(text.to_string_lossy()),
             LuaValue::Integer(number) => Err(number.to_string()),
             LuaValue::Number(number) => Err(number.to_string()),
@@ -442,7 +445,7 @@ pub fn deliver_return(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, c
     if !crate::scheduler::can_resume(engine, &thread) {
         return Ok(());
     }
-    let map = mapper(endpoint);
+    let map = mapper(engine, endpoint);
     let mut answer = LuaMultiValue::new();
     match result {
         Ok(results) => {

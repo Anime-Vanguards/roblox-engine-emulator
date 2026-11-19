@@ -107,6 +107,39 @@ fn containers(engine: &Engine) -> Vec<(&'static str, InstanceId)> {
     CONTAINERS.iter().filter_map(|&name| crate::services::find_service(engine, game, name).map(|id| (name, id))).collect()
 }
 
+/// Makes what waits below `root` that only the server can make (project.rs `lazy_beyond_studio`), the made instances' own
+/// Studio-only children too
+fn make_lazy_regions(server: &Engine, root: InstanceId, excluded: &[InstanceId]) {
+    let mut waiting = Vec::new();
+    {
+        let state = server.state.borrow();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if excluded.contains(&node) {
+                continue;
+            }
+            if crate::project::lazy_beyond_studio(&state, node) {
+                waiting.push(node);
+                continue;
+            }
+            stack.extend_from_slice(&state.dom.at(node).children);
+        }
+    }
+    for node in waiting {
+        if server.state.borrow().dom.get(node).is_some() {
+            crate::project::materialize_deep(server, node);
+        }
+    }
+}
+
+/// What a copy keeps of its original's place in the Studio snapshot: the node (none for a script's instance) and whether
+/// its Studio children were made (lazy.rs)
+#[inline]
+fn studio_of(instance: &crate::dom::Instance) -> (crate::dom::StudioNode, u16) {
+    let node = if instance.flags & flags::SCRIPT_CREATED != 0 { crate::dom::StudioNode::None } else { instance.studio_node };
+    (node, instance.flags & (flags::STUDIO_ONLY | flags::MATERIALIZED))
+}
+
 /// The server instances that never replicate: its Camera, the harness's RURFixtures
 fn excluded(server: &Engine) -> Vec<InstanceId> {
     let world = server.world();
@@ -131,7 +164,9 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
     // the client's services, made where it has none (with no state borrowed: services run code as they are made)
     let mut pairs = Vec::new();
     for (name, service) in containers(server) {
-        crate::timing::time("loopback: join: make the server's lazy regions", || crate::project::materialize_deep(server, service));
+        // (what only the server can make, made now: a lazily imported plan's or a bundle's instances; the Studio snapshot's
+        // stay lazy, each side making its own: lazy.rs)
+        crate::timing::time("loopback: join: make the server's lazy regions", || make_lazy_regions(server, service, &excluded));
         let game = client.world().game;
         let copy = crate::services::get_service(client, game, name).map_err(|_| format!("the client cannot make {name}"))?;
         pairs.push((name, service, copy));
@@ -139,13 +174,14 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
     let copying = crate::timing::start("loopback: join: copy");
     let mut server_state = server.state.borrow_mut();
     let mut client_state = client.state.borrow_mut();
+    crate::project::share_studio(&server_state, &mut client_state, client.world().game);
     let reflection = &client.reflection;
     let mut ids = bridge.ids.borrow_mut();
     let mut refs: Vec<(InstanceId, NameId, InstanceId)> = Vec::new();
     let mut created = 0u64;
     for &(name, service, copy) in &pairs {
         ids.pair(service, copy);
-        copy_values(&server_state, &mut client_state, reflection, &filter, service, copy, &mut refs);
+        copy_values(&server_state, &mut client_state, reflection, &filter, service, copy, false, &mut refs);
         server_state.dom.at_mut(service).flags |= flags::SENT;
         let mut stack: Vec<(InstanceId, InstanceId)> = server_state.dom.at(service).children.iter().rev().map(|&child| (child, copy)).collect();
         while let Some((node, parent)) = stack.pop() {
@@ -172,7 +208,7 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
                 }
             };
             ids.pair(node, made);
-            copy_values(&server_state, &mut client_state, reflection, &filter, node, made, &mut refs);
+            copy_values(&server_state, &mut client_state, reflection, &filter, node, made, paired.is_none(), &mut refs);
             server_state.dom.at_mut(node).flags |= flags::SENT;
             stack.extend(server_state.dom.at(node).children.iter().rev().map(|&child| (child, made)));
         }
@@ -207,7 +243,10 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
 
 /// Copies an instance's name, replicated properties, attributes, tags and script source into its client copy
 /// (properties holding instances are noted in `refs`, set once every copy is made)
-fn copy_values(server: &State, client: &mut State, reflection: &Reflection, filter: &Filter, from: InstanceId, to: InstanceId, refs: &mut Vec<(InstanceId, NameId, InstanceId)>) {
+/// (a `fresh` copy, made for it, takes them as one vector in the server's name order, as Clone gives a copy its own; a
+/// paired one of the client's keeps what it has, a service's camera say)
+#[allow(clippy::too_many_arguments)]
+fn copy_values(server: &State, client: &mut State, reflection: &Reflection, filter: &Filter, from: InstanceId, to: InstanceId, fresh: bool, refs: &mut Vec<(InstanceId, NameId, InstanceId)>) {
     let source = server.dom.at(from);
     let class = source.class;
     let script = script_source(reflection, source);
@@ -227,9 +266,16 @@ fn copy_values(server: &State, client: &mut State, reflection: &Reflection, filt
     let attributes: crate::dom::Attributes = source.attributes.iter().filter_map(|(name, value)| super::wire::portable(value).map(|value| (name.clone(), value))).collect::<Vec<_>>().into();
     let tags = source.tags.clone();
     let json = source.flags & flags::JSON_MODULE;
+    let (studio, studio_flags) = studio_of(source);
     let target = client.dom.at_mut(to);
-    for (name, value) in props {
-        target.store(name, value);
+    target.studio_node = studio;
+    target.flags |= studio_flags;
+    if fresh {
+        target.props = crate::dom::Props::from(props);
+    } else {
+        for (name, value) in props {
+            target.store(name, value);
+        }
     }
     target.attributes = attributes;
     for tag in tags.iter() {
@@ -264,7 +310,7 @@ fn script_source(reflection: &Reflection, instance: &crate::dom::Instance) -> Op
 }
 
 /// Sets or clears [`flags::REPLICATED`] on `root` and what is below it (an excluded instance and its subtree stay out)
-fn mark(state: &mut State, root: InstanceId, on: bool, excluded: &[InstanceId]) {
+pub(super) fn mark(state: &mut State, root: InstanceId, on: bool, excluded: &[InstanceId]) {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if on && excluded.contains(&node) {
@@ -475,12 +521,16 @@ fn tree(state: &mut State, reflection: &Reflection, filter: &Filter, root: Insta
             continue;
         }
         let class = instance.class;
-        let props: Vec<(NameId, Value)> = instance
-            .props
-            .iter()
-            .filter(|(name, _)| filter.replicates(reflection, class, *name))
-            .filter_map(|(name, value)| super::wire::portable(value).map(|value| (name, value)))
-            .collect();
+        // (in name order, as the instance stores them: the client's copy takes the vector as it is)
+        let mut props: Vec<(NameId, Value)> = Vec::with_capacity(instance.props.len());
+        for (name, value) in instance.props.iter() {
+            if filter.replicates(reflection, class, name)
+                && let Some(value) = super::wire::portable(value)
+            {
+                props.push((name, value));
+            }
+        }
+        let (studio, studio_flags) = studio_of(instance);
         let node = Node {
             id,
             class,
@@ -490,6 +540,8 @@ fn tree(state: &mut State, reflection: &Reflection, filter: &Filter, root: Insta
             tags: instance.tags.iter().cloned().collect(),
             source: script_source(reflection, instance),
             json: instance.flags & flags::JSON_MODULE != 0,
+            studio,
+            studio_flags,
         };
         let index = nodes.len() as u32;
         nodes.push(node);
@@ -506,7 +558,8 @@ fn tree(state: &mut State, reflection: &Reflection, filter: &Filter, root: Insta
 /// script's change (deferred: they run at the legacy step's flush)
 pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: Msg) -> LuaResult<()> {
     let bridge = &endpoint.bridge;
-    let map = |id: InstanceId| bridge.ids.borrow().to_client.get(id);
+    // (the server's Studio-only instances are paired as they are met: lazy.rs)
+    let map = |id: InstanceId| super::lazy::to_client(client, endpoint, id);
     let live = |id: InstanceId| -> Option<InstanceId> {
         let copy = map(id)?;
         let state = client.state.borrow();
@@ -519,7 +572,7 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
         }
     };
     match message {
-        Msg::Tree { parent, nodes } => {
+        Msg::Tree { parent, mut nodes } => {
             let Some(parent) = live(parent) else { return Ok(()) };
             let reflection = &client.reflection;
             let mut made: Vec<InstanceId> = Vec::with_capacity(nodes.len());
@@ -527,19 +580,22 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             {
                 let mut state = client.state.borrow_mut();
                 let mut ids = bridge.ids.borrow_mut();
-                for node in &nodes {
+                for node in nodes.iter_mut() {
                     let copy = core::create(&mut state, reflection, node.class);
                     {
-                        let target = state.dom.at_mut(copy);
-                        for (name, value) in &node.props {
-                            match value.as_instance() {
-                                Some(instance) => refs.push((copy, *name, instance)),
-                                None => {
-                                    target.store(*name, value.clone());
-                                }
+                        // (the server's values in name order, as Clone gives a copy its vector; instance values once
+                        // every copy is made)
+                        let mut props = std::mem::take(&mut node.props);
+                        props.retain(|(name, value)| match value.as_instance() {
+                            Some(instance) => {
+                                refs.push((copy, *name, instance));
+                                false
                             }
-                        }
-                        target.attributes = node.attributes.clone().into();
+                            None => true,
+                        });
+                        let target = state.dom.at_mut(copy);
+                        target.props = crate::dom::Props::from(props);
+                        target.attributes = std::mem::take(&mut node.attributes).into();
                         target.tags = node.tags.clone().into();
                         if node.json {
                             target.flags |= flags::JSON_MODULE;
@@ -547,6 +603,8 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
                         if let Some(source) = &node.source {
                             target.script = Some(Box::new(source.clone()));
                         }
+                        target.studio_node = node.studio;
+                        target.flags |= node.studio_flags;
                     }
                     state.dom.refresh_name(reflection, copy);
                     if let Some(index) = node.parent {
@@ -555,15 +613,16 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
                     ids.pair(node.id, copy);
                     made.push(copy);
                 }
-                for (copy, name, target) in refs {
-                    let value = ids.to_client.get(target).map_or(Value::Nil, Value::Instance);
-                    state.dom.at_mut(copy).store(name, value);
-                }
                 for (node, &copy) in nodes.iter().zip(&made) {
                     for tag in &node.tags {
                         crate::services::tag_added(&mut state, copy, tag);
                     }
                 }
+            }
+            // instance values, every copy made (one the client makes of the snapshot is paired now: nothing borrowed)
+            for (copy, name, target) in refs {
+                let value = map(target).map_or(Value::Nil, Value::Instance);
+                client.state.borrow_mut().dom.at_mut(copy).store(name, value);
             }
             // the tree enters at once: its DescendantAdded, ChildAdded, the tagged instances' added signals
             if let Some(&root) = made.first() {

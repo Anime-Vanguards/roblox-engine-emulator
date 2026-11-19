@@ -58,12 +58,26 @@ pub const MAX_DEPTH_AFTER_PLAYER: usize = 298;
 
 /// The arguments of a call, captured, its tables nested at most `depth` deep: an error's text when one cannot be sent.
 pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], depth: usize) -> Result<Box<[Wire]>, String> {
-    let mut out = Vec::with_capacity(values.len());
-    let mut ancestors = Vec::new();
-    for value in values {
-        out.push(capture(lua, engine, value, &mut ancestors, depth)?);
+    // (tables through the C API's copier: copier.rs)
+    super::copier::capture_all(lua, engine, values, depth)
+}
+
+/// A received table each handler rebuilds (copier.rs), its instances already the receiver's
+pub struct Delivered(pub Rc<Wire>);
+
+impl LuaUserData for Delivered {}
+
+/// `wire`'s instances made the receiver's (`map`), an instance it lacks nil
+fn map_instances(wire: &mut Wire, map: &dyn Fn(InstanceId) -> Option<InstanceId>) {
+    if let Wire::Table(entries) = wire {
+        for (_, item) in entries.iter_mut() {
+            match item {
+                Wire::Instance(id) => *item = map(*id).map_or(Wire::Nil, Wire::Instance),
+                Wire::Table(_) => map_instances(item, map),
+                _ => {}
+            }
+        }
     }
-    Ok(out.into_boxed_slice())
 }
 
 /// A value as it is sent. `ancestors`: the tables it is inside of.
@@ -193,71 +207,57 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut
     Ok(entries)
 }
 
-/// A value for the receiver's handlers: a table or buffer as a copy each handler rebuilds (lua/bindable.rs `Copied`),
+/// A value for the receiver's handlers: a table or buffer as a copy each handler rebuilds ([`Delivered`], copier.rs),
 /// an instance as the receiver's own (`map`: the sender's id to the receiver's) or nil.
-pub fn delivered(lua: &Lua, engine: &Engine, wire: &Wire, map: &dyn Fn(InstanceId) -> Option<InstanceId>) -> LuaResult<Value> {
+pub fn delivered(lua: &Lua, engine: &Engine, wire: Wire, map: &dyn Fn(InstanceId) -> Option<InstanceId>) -> LuaResult<Value> {
     Ok(match wire {
         Wire::Nil => Value::Nil,
-        Wire::Bool(flag) => Value::Bool(*flag),
-        Wire::Number(number) => Value::Number(*number),
-        Wire::Vector([x, y, z]) => Value::Vector3(dom::Vector3::new(*x, *y, *z)),
-        Wire::String(text) => Value::String(crate::value::Str::new(text)),
-        Wire::Instance(id) => map(*id).map_or(Value::Nil, Value::Instance),
-        Wire::Value(value) => value.clone(),
-        Wire::Buffer(_) | Wire::Table(_) | Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) => {
-            let sent = sent(lua, engine, wire, map)?;
-            Value::Lua(Box::new(match sent {
-                bindable::Sent::Value(value) => value,
-                sent => LuaValue::UserData(lua.create_userdata(bindable::Copied(Rc::new(sent)))?),
-            }))
+        Wire::Bool(flag) => Value::Bool(flag),
+        Wire::Number(number) => Value::Number(number),
+        Wire::Vector([x, y, z]) => Value::Vector3(dom::Vector3::new(x, y, z)),
+        Wire::String(text) => Value::String(crate::value::Str::new(&text)),
+        Wire::Instance(id) => map(id).map_or(Value::Nil, Value::Instance),
+        Wire::Value(value) => value,
+        // (the message's own copy, kept: each handler rebuilds its table or buffer from it, copier.rs)
+        mut kept @ (Wire::Table(_) | Wire::Buffer(_)) => {
+            map_instances(&mut kept, map);
+            Value::Lua(Box::new(LuaValue::UserData(lua.create_userdata(Delivered(Rc::new(kept)))?)))
         }
+        wire @ (Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_)) => Value::Lua(Box::new(object(lua, engine, &wire)?)),
     })
 }
 
 /// A value rebuilt now in the receiver's VM (a RemoteFunction's results and arguments go straight to their thread)
 pub fn rebuilt(lua: &Lua, engine: &Engine, wire: &Wire, map: &dyn Fn(InstanceId) -> Option<InstanceId>) -> LuaResult<LuaValue> {
     match wire {
-        Wire::Buffer(_) | Wire::Table(_) => bindable::rebuild(lua, &sent(lua, engine, wire, map)?),
+        Wire::Table(_) => super::copier::rebuild_table(lua, engine, wire, map),
+        Wire::Buffer(bytes) => lua.create_buffer(&bytes[..]).map(LuaValue::Buffer),
+        Wire::Nil => Ok(LuaValue::Nil),
+        Wire::Bool(flag) => Ok(LuaValue::Boolean(*flag)),
+        Wire::Number(number) => Ok(LuaValue::Number(*number)),
+        Wire::String(text) => lua.create_string(&**text).map(LuaValue::String),
         other => {
-            let value = delivered(lua, engine, other, map)?;
+            let value = delivered(lua, engine, other.clone(), map)?;
             crate::lua::convert::to_lua(lua, engine, &value)
         }
     }
 }
 
-/// A wire value as bindable.rs's `Sent`, which every receiver rebuilds (scalars as the receiver VM's values)
-fn sent(lua: &Lua, engine: &Engine, wire: &Wire, map: &dyn Fn(InstanceId) -> Option<InstanceId>) -> LuaResult<bindable::Sent> {
+/// A Random, TweenInfo or DateTime made in the receiver's VM (a value of its own: no handler shares another's)
+fn object(lua: &Lua, engine: &Engine, wire: &Wire) -> LuaResult<LuaValue> {
     use crate::lua::types::{LDateTime, LTweenInfo};
     Ok(match wire {
-        Wire::Buffer(bytes) => bindable::Sent::Buffer(Rc::from(&bytes[..])),
-        Wire::Table(entries) => {
-            let mut out = Vec::with_capacity(entries.len());
-            for (key, item) in entries.iter() {
-                let item = sent(lua, engine, item, map)?;
-                if matches!(&item, bindable::Sent::Value(LuaValue::Nil)) {
-                    continue;
-                }
-                out.push((
-                    match key {
-                        Key::Index(index) => bindable::Key::Index(i64::from(*index)),
-                        Key::Name(name) => bindable::Key::Name(name.to_vec()),
-                    },
-                    item,
-                ));
-            }
-            bindable::Sent::Table(out)
-        }
-        Wire::Random(state) => bindable::Sent::Value(LuaValue::UserData(lua.create_any_userdata(crate::lua::types::random_with_state(engine, *state))?)),
-        Wire::TweenInfo { time, style, direction, repeats, reverses, delay } => bindable::Sent::Value(LuaValue::UserData(lua.create_any_userdata(LTweenInfo {
+        Wire::Random(state) => LuaValue::UserData(lua.create_any_userdata(crate::lua::types::random_with_state(engine, *state))?),
+        Wire::TweenInfo { time, style, direction, repeats, reverses, delay } => LuaValue::UserData(lua.create_any_userdata(LTweenInfo {
             time: LuaValue::Number(*time),
             easing_style: *style,
             easing_direction: *direction,
             repeat_count: LuaValue::Number(*repeats),
             reverses: *reverses,
             delay_time: LuaValue::Number(*delay),
-        })?)),
-        Wire::DateTime(millis) => bindable::Sent::Value(LuaValue::UserData(lua.create_any_userdata(LDateTime(*millis))?)),
-        other => bindable::Sent::Value(crate::lua::convert::to_lua(lua, engine, &delivered(lua, engine, other, map)?)?),
+        })?),
+        Wire::DateTime(millis) => LuaValue::UserData(lua.create_any_userdata(LDateTime(*millis))?),
+        _ => LuaValue::Nil,
     })
 }
 

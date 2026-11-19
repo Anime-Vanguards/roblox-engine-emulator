@@ -147,10 +147,17 @@ fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: 
 
 /// Hooks.Materialize (Studio-only children, once per instance) before children are looked up.
 pub fn materialize(engine: &Engine, id: InstanceId) {
+    // (a loopback pair's two sides make the same Studio-only instances and pair them: loopback/lazy.rs)
+    let before = if engine.loopback.borrow().is_some() { engine.state.borrow().dom.get(id).map(|instance| instance.children.len()) } else { None };
     #[cfg(feature = "bundles")]
     project::model_assets::materialize(engine, id);
-    let mut state = engine.state.borrow_mut();
-    project::materialize(&mut state, &engine.reflection, id);
+    {
+        let mut state = engine.state.borrow_mut();
+        project::materialize(&mut state, &engine.reflection, id);
+    }
+    if let Some(before) = before {
+        crate::loopback::lazy::materialized(engine, id, before);
+    }
 }
 
 /// A manifest bundle's placeholder ([`flags::BUNDLE_ROOT`]) a script is about to find, test or touch

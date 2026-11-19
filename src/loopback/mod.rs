@@ -14,6 +14,8 @@
 //! resumptions and before PreAnimation ([`receive`], called by the scheduler).
 
 pub mod bridge;
+pub mod copier;
+pub mod lazy;
 pub mod remotes;
 pub mod replicate;
 pub mod wire;
@@ -61,6 +63,8 @@ pub struct Endpoint {
     pub bridge: Rc<Bridge>,
     /// This side's remote state: its callers waiting for an answer, events waiting for a handler (remotes.rs)
     pub remotes: remotes::Remotes,
+    /// The Studio-only instances this side made of the place's snapshot after the join (lazy.rs)
+    pub lazy: std::cell::RefCell<lazy::Lazy>,
 }
 
 /// What the client engine holds ([`Engine::peer`]): the server it is linked to.
@@ -114,28 +118,67 @@ impl Engine {
     pub fn peer_server(&self) -> Option<(Lua, Rc<Engine>)> {
         self.peer.borrow().as_ref().map(|link| ((*link.server.lua).clone(), link.server.engine.clone()))
     }
+
+    /// [`Emulator::run`] on a loopback run's server, this engine its client
+    pub fn run_on_server(&self, name: &str, source: &str) -> Result<crate::lua::globals::Call, String> {
+        let peer = self.peer.borrow();
+        peer.as_ref().ok_or("not a loopback client")?.server.run(name, source)
+    }
+}
+
+/// A loopback pair: the server's engine made by `new_engine` with the project `spec` mounted, as a server run mounts it (its
+/// module chunks interpreted, as `ree run` loads them), then the client's engine started (Engine.Start only: its DataModel
+/// comes from the server at the join; its engine Luau interpreted too, which is not charged, so no output changes and
+/// nothing is compiled to native code; its random seed the run's plus one), linked ([`link`]). `setup` runs on each engine
+/// before it starts (a host's bundle source, animations, prefetched modules). Returns the client's Emulator, which holds
+/// the server; [`join`] lets the player in.
+pub fn start(new_engine: &dyn Fn(Options) -> Result<Rc<Engine>, String>, options: &Options, spec: &crate::mount::ProjectSpec, loopback: Spec, setup: &dyn Fn(&Rc<Engine>, Side)) -> Result<Emulator, String> {
+    let server = start_server(new_engine, options, spec, &|engine| setup(engine, Side::Server))?;
+    let client_engine = crate::timing::time("loopback: client engine", || new_engine(side_options(options, Side::Client)))?;
+    crate::lua::modules::interpret_all_from_start(&client_engine);
+    ready_client(&client_engine);
+    setup(&client_engine, Side::Client);
+    let client = crate::timing::time("loopback: client start", || Emulator::start(client_engine, &crate::mount::ProjectSpec::default()))?;
+    link(server, &client.lua, &client.engine, loopback)?;
+    Ok(client)
+}
+
+/// A loopback pair's server: its engine made by `new_engine` (the server's options of `options`), `setup` run on it, the
+/// project `spec` mounted as a server run mounts it (its module chunks interpreted). A host that makes its own client
+/// (rur's stories) starts this, makes its client from [`side_options`] with [`ready_client`], starts it with no project
+/// (its DataModel comes at the join) and [`link`]s the two.
+pub fn start_server(new_engine: &dyn Fn(Options) -> Result<Rc<Engine>, String>, options: &Options, spec: &crate::mount::ProjectSpec, setup: &dyn Fn(&Rc<Engine>)) -> Result<Emulator, String> {
+    let server_engine = crate::timing::time("engine (reflection)", || new_engine(side_options(options, Side::Server)))?;
+    crate::lua::modules::interpret_modules(&server_engine);
+    setup(&server_engine);
+    Emulator::start(server_engine, spec)
+}
+
+/// What a loopback client's engine takes before it starts: its own random sequence (the run's seed plus one)
+pub fn ready_client(client: &Engine) {
+    client.state.borrow_mut().sched.random_seed += 1.0;
 }
 
 /// Links a started server and a started client: each gets its endpoint and the remote methods of its side, the client
 /// holds the server ([`Engine::peer`]), the server's output goes to the client's list with `side` (one list in program
 /// order), and the server's player is made, waiting for the join ([`join`]).
-pub fn link(server: Emulator, client: &Emulator, spec: Spec) -> Result<(), String> {
+pub fn link(server: Emulator, client_lua: &Lua, client: &Rc<Engine>, spec: Spec) -> Result<(), String> {
     let bridge = Rc::new(Bridge::new(spec.latency));
     bridge.record_server.set(spec.record_server);
-    for (emulator, side) in [(&server, Side::Server), (client, Side::Client)] {
-        let endpoint = Rc::new(Endpoint { side, bridge: bridge.clone(), remotes: Default::default() });
-        *emulator.engine.loopback.borrow_mut() = Some(endpoint);
-        emulator.engine.state.borrow_mut().output.side = Some(side.name());
-        remotes::install(&emulator.lua, &emulator.engine, side).map_err(|error| error.to_string())?;
+    for (lua, engine, side) in [(&*server.lua, &server.engine, Side::Server), (client_lua, client, Side::Client)] {
+        let endpoint = Rc::new(Endpoint { side, bridge: bridge.clone(), remotes: Default::default(), lazy: Default::default() });
+        *engine.loopback.borrow_mut() = Some(endpoint);
+        engine.state.borrow_mut().output.side = Some(side.name());
+        remotes::install(lua, engine, side).map_err(|error| error.to_string())?;
     }
-    server.engine.state.borrow_mut().output.forward = Some(crate::output::Forward(Rc::downgrade(&client.engine)));
+    server.engine.state.borrow_mut().output.forward = Some(crate::output::Forward(Rc::downgrade(client)));
     // the server's player: made now (a harness's Context.SetJoinData may give it its join data), joined at the join
-    let client_player = client.engine.world().local_player.ok_or("the client has no local player")?;
+    let client_player = client.world().local_player.ok_or("the client has no local player")?;
     let server_player = {
         let engine = &server.engine;
         let reflection = &engine.reflection;
         let (name, display, user_id) = {
-            let state = client.engine.state.borrow();
+            let state = client.state.borrow();
             let player = state.dom.at(client_player);
             let display = state.dom.raw_get(client_player, K::DisplayName as NameId).cloned().unwrap_or(Value::Nil);
             let user_id = state.dom.raw_get(client_player, K::UserId as NameId).cloned().unwrap_or(Value::Number(1.0));
@@ -152,7 +195,7 @@ pub fn link(server: Emulator, client: &Emulator, spec: Spec) -> Result<(), Strin
     };
     bridge.player.set(Some((server_player, client_player)));
     bridge.ids.borrow_mut().pair(server_player, client_player);
-    *client.engine.peer.borrow_mut() = Some(Box::new(Link { server, bridge }));
+    *client.peer.borrow_mut() = Some(Box::new(Link { server, bridge }));
     Ok(())
 }
 
@@ -322,15 +365,19 @@ pub fn leave(client_engine: &Rc<Engine>) -> Result<(), String> {
 /// player joined and while it has not left), each followed by sealing what it sent. What the client sent between frames
 /// (its harness's start) goes out first.
 pub fn step_pair(lua: &Lua, client: &Rc<Engine>, duration: Option<f64>) -> LuaResult<()> {
-    let Some((server_lua, server)) = client.peer_server() else { return crate::scheduler::step_one(lua, client, duration) };
-    let Some(endpoint) = client.loopback() else { return crate::scheduler::step_one(lua, client, duration) };
-    let bridge = endpoint.bridge.clone();
-    if bridge.leave_asked.get() && !bridge.left.get() {
+    if client.peer.borrow().as_ref().is_some_and(|link| link.bridge.leave_asked.get() && !link.bridge.left.get()) {
         leave(client).map_err(LuaError::runtime)?;
     }
+    // (the link borrowed, not cloned: an idle frame of the pair costs its two engines' frames and a few compares)
+    let peer = client.peer.borrow();
+    let Some(link) = peer.as_ref() else {
+        drop(peer);
+        return crate::scheduler::step_one(lua, client, duration);
+    };
+    let bridge = &link.bridge;
     bridge.seal(Side::Client);
-    crate::scheduler::step_one(&server_lua, &server, duration)?;
-    replicate::flush(&server, &bridge);
+    crate::scheduler::step_one(&link.server.lua, &link.server.engine, duration)?;
+    replicate::flush(&link.server.engine, bridge);
     bridge.seal(Side::Server);
     if bridge.joined.get() && !bridge.left.get() {
         crate::scheduler::step_one(lua, client, duration)?;
@@ -344,11 +391,16 @@ pub fn step_pair(lua: &Lua, client: &Rc<Engine>, duration: Option<f64>) -> LuaRe
 /// order. Changes and events queue deferred work, which runs at the legacy step's flush (after the resumed threads, as
 /// measured); a RemoteFunction's callback and an answered call resume now. Nothing due: one compare.
 pub(crate) fn receive(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    let messages = {
+        let endpoint = engine.loopback.borrow();
+        let Some(endpoint) = endpoint.as_ref() else { return Ok(()) };
+        if endpoint.side == Side::Client && !endpoint.bridge.joined.get() {
+            return Ok(());
+        }
+        endpoint.bridge.begin_frame(endpoint.side)
+    };
+    let Some(messages) = messages else { return Ok(()) };
     let Some(endpoint) = engine.loopback() else { return Ok(()) };
-    if endpoint.side == Side::Client && !endpoint.bridge.joined.get() {
-        return Ok(());
-    }
-    let Some(messages) = endpoint.bridge.begin_frame(endpoint.side) else { return Ok(()) };
     apply(lua, engine, &endpoint, messages)
 }
 
@@ -356,7 +408,7 @@ fn apply(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, messages: Vec<
     use bridge::Msg;
     for message in messages {
         match message {
-            Msg::Event { remote, args } => remotes::deliver_event(lua, engine, endpoint, remote, &args)?,
+            Msg::Event { remote, args } => remotes::deliver_event(lua, engine, endpoint, remote, args)?,
             Msg::Invoke { remote, call, args } => remotes::deliver_invoke(lua, engine, endpoint, remote, call, args)?,
             Msg::Return { call, result } => remotes::deliver_return(lua, engine, endpoint, call, result)?,
             change => replicate::apply(lua, engine, endpoint, change)?,
