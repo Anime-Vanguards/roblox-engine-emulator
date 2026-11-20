@@ -1,5 +1,5 @@
 # engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
-# captured: 2026-11-19
+# captured: 2026-11-20
 identity | 1 2 3 0 0 0 1 | 1 2 3 1 0 0 0 1 0 0 0 1
 identity negated | 1 2 3 -0 -0 -0 -1 | 1 2 3 1 0 0 0 1 0 0 0 1
 x90 | 1 2 3 0.70710676908493042 0 0 0.70710676908493042 | 1 2 3 1 0 0 0 -1.1920928955078125e-07 -1.0000001192092896 0 1.0000001192092896 -1.1920928955078125e-07

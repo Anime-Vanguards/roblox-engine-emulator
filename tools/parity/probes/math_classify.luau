@@ -14,9 +14,9 @@ for _, Name in { "isnan", "isinf", "isfinite" } do
 	end))
 end
 
--- values made at run time (a table's fields are never folded by the compiler). Subnormal numbers come straight from a field and
--- are not printed: the client treats a subnormal operand of arithmetic or a comparison as zero, ree does not (the datatypes
--- probe's v3-precision line), which is not what this probe is about.
+-- values from a table's fields (the compiler folds a local table's constant fields as it folds literals). Subnormal numbers are
+-- classified, not printed: a script's arithmetic makes a subnormal result zero (the engine's float mode, float_flush.luau), so
+-- their printed form would only show that; a classifier or a comparison still reads a subnormal operand as itself.
 local K = { Zero = 0, One = 1, Big = 1e308, Huge = math.huge, Two = 2, Sub = 5e-324, NegSub = -5e-324, Normal = 2.2250738585072014e-308 }
 local Values = {
 	{ "0", K.Zero },

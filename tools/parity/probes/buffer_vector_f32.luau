@@ -103,7 +103,7 @@ print("write-short x3 " .. Write("writevectorf32x3", 11, 0, vector.one) .. " | "
 print("write-empty " .. Write("writevectorf32x3", 0, 0, vector.one) .. " | " .. Write("writevectorf32x2", 0, 0, vector.one))
 print("write-offset fraction " .. Write("writevectorf32x3", 16, 2.9, vector.one) .. " | nan " .. Write("writevectorf32x3", 16, 0 / 0, vector.one) .. " | inf " .. Write("writevectorf32x2", 16, math.huge, vector.one) .. " | 2^32 " .. Write("writevectorf32x3", 16, 2 ^ 32, vector.one) .. " | string " .. Write("writevectorf32x2", 16, "4", vector.one))
 print("write-special " .. Write("writevectorf32x3", 12, 0, vector.create(math.huge, -math.huge, 0 / 0)) .. " | " .. Write("writevectorf32x3", 12, 0, vector.create(-0, 1e-30, 3.4028234663852886e38)) .. " | " .. Write("writevectorf32x2", 8, 0, vector.create(1e40, -1e-50, 0)))
--- a component below the smallest normal float32, as vector.create and writef32 make it (a client makes it zero)
+-- a component below the smallest normal float32, as vector.create and writef32 make it (zero: the engine's float mode, float_flush.luau)
 print("write-subnormal " .. Write("writevectorf32x3", 12, 0, vector.create(1e-45, -1e-39, 1.1754942e-38)) .. " | " .. P.try(function()
 	local Target = buffer.create(8)
 	buffer.writef32(Target, 0, 1e-45)

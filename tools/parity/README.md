@@ -33,6 +33,7 @@ Each `probes/loopback/<name>.luau` file contains shared code at the top, followe
 ## Authoring a probe
 
 - **`prelude.luau` helpers:** `P.num` / `P.f32` (portable number formatting), `P.err` (strips chunk names and normalizes line numbers to `@12:`), `P.try` (prints call outcome), `P.rng` (isolated RNG so `Random` / `math.random` can be tested), `P.sync` (aligns to a scheduler resumption point). `print` escapes invalid UTF-8 and control bytes.
+- **Values made at run time:** the compiler folds the constant fields of a local table that never escapes as it folds literals, so `K.Sub * K.One` from `local K = { ... }` is a compile-time constant; build the table with `table.clone({ ... })` for run-time values (`float_flush.luau`).
 - **Avoid nondeterminism:** Never print table addresses, wall timings, or raw frame-time sums. Count frames instead of relying on exact boundary durations (use `0.04` or `0.06` s rather than `0.05` s, which falls on 3 x 60 Hz frames). Headless clients tick `PreRender` independently of simulation steps, so don't rely on `PreRender`-relative ordering.
 - **Directive comments:**
   - `-- parity: identity=4` — run at script identity 4 (needed to write `ModuleScript.Source`).
