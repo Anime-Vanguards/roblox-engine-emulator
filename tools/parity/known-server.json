@@ -283,6 +283,48 @@
 			"why": "settings() is refused to a client's game script (lacking capability Plugin); ree answers it"
 		}
 	],
+	"global_settings": [
+		{
+			"line": "call ",
+			"why": "settings() is a stub table in ree; a game script's call is refused (lacking capability Plugin)"
+		},
+		{
+			"line": "caught ",
+			"why": "settings() is a stub table in ree; a game script's call is refused (lacking capability Plugin)"
+		},
+		{
+			"line": "game ",
+			"why": "the DataModel's GetService makes a settings service its child, and refuses GlobalSettings, UserSettings and their superclasses as no service, where a game script gets nil or 'Invalid parent for Service'"
+		},
+		{
+			"line": "user ",
+			"why": "UserSettings()' GetService makes any service its child, where a game script gets nil, or a refusal of a settings service or of a service settings take no part in"
+		},
+		{
+			"line": "user-other ",
+			"why": "UserSettings()' GetService makes any service its child, where a game script gets nil, or a refusal of a settings service or of a service settings take no part in"
+		},
+		{
+			"line": "user-children ",
+			"why": "UserSettings()' GetService makes any service its child, where a game script gets nil, or a refusal of a settings service or of a service settings take no part in"
+		},
+		{
+			"line": "user-parent ",
+			"why": "UserSettings()' tree is not locked as a client's is: its parent, its clone and children added under it"
+		},
+		{
+			"line": "user-rename ",
+			"why": "UserSettings()' service takes a Name write, where a client's keeps its name"
+		},
+		{
+			"line": "user-clone ",
+			"why": "UserSettings()' tree is not locked as a client's is: its parent, its clone and children added under it"
+		},
+		{
+			"line": "user-add ",
+			"why": "UserSettings()' tree is not locked as a client's is: its parent, its clone and children added under it"
+		}
+	],
 	"instances": [
 		{
 			"line": "default Model PrimaryPart=nil(nil) LevelOfDetail=error:The current thread cannot read 'LevelOfDetail' (lacking capability PluginOrOpenCloud) ModelStreamingMode=EnumItem(Enum.ModelStreamingMode.Default) WorldPivot=CF(0 0 0 1 0 0 0 1 0 0 0 1) Name=string(Model)",

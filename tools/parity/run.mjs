@@ -110,10 +110,11 @@ export function readKnown(server = false, loopback = false) {
 	return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
-// Whether a probe runs on a server too: not one that needs a client's screen (a device or a renderer)
+// Whether a probe runs on a server too: not one that needs a client's screen (a device or a renderer), nor one ree runs as a
+// plugin's code ("context=edit")
 export function serverProbe(name) {
 	const options = probeOptions(name);
-	return !options.device && !options.rendered;
+	return !options.device && !options.rendered && !options.context;
 }
 
 function defaultRee() {
@@ -144,9 +145,12 @@ export function runInRee(name, ree, scratch, server = false) {
 	fs.writeFileSync(harness, `return function(Context)\n${HARNESS_PRINT}\n${body(name)}\n${HARNESS_FLUSH}\nend\n`);
 	const empty = path.join(scratch, "empty");
 	fs.mkdirSync(empty, { recursive: true });
-	// (the server capture's place has ServerScriptService.LoadStringEnabled on; a probe's "flag=" names an engine flag it needs on)
-	const context = server ? ["--run-context", "server", "--load-string"] : [];
-	if (probeOptions(name).flag === "FFlagEnableLoadModule") context.push("--load-module");
+	// (the server capture's place has ServerScriptService.LoadStringEnabled on; a probe's "flag=" names an engine flag it needs on;
+	// "context=edit" runs it as a plugin's code, in ree's edit run context: a probe captured at identity 4, which has the
+	// Plugin capability a game script lacks)
+	const options = probeOptions(name);
+	const context = server ? ["--run-context", "server", "--load-string"] : options.context === "edit" ? ["--mode", "edit", "--run-context", "edit"] : [];
+	if (options.flag === "FFlagEnableLoadModule") context.push("--load-module");
 	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "120", ...context], {
 		encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true,
 	});

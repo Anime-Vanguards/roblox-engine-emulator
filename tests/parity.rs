@@ -61,9 +61,17 @@ fn run_probe(scratch: &Path, name: &str, source: &str, server: bool) -> Vec<Stri
     std::fs::write(&harness, format!("return function(Context)\n{HARNESS_PRINT}\n{source}\n{HARNESS_FLUSH}\nend\n")).unwrap();
     let empty = scratch.join("empty");
     std::fs::create_dir_all(&empty).unwrap();
-    // (the server capture's place has ServerScriptService.LoadStringEnabled on; a probe's "flag=" names an engine flag it needs on)
-    let mut context: Vec<&str> = if server { vec!["--run-context", "server", "--load-string"] } else { Vec::new() };
-    if source.lines().any(|line| line.starts_with("-- parity:") && line.contains("flag=FFlagEnableLoadModule")) {
+    // (the server capture's place has ServerScriptService.LoadStringEnabled on; a probe's "flag=" names an engine flag it needs on;
+    // "context=edit" runs it as a plugin's code, in the edit run context: run.mjs runInRee)
+    let directive = |word: &str| source.lines().any(|line| line.starts_with("-- parity:") && line.split_whitespace().any(|part| part == word));
+    let mut context: Vec<&str> = if server {
+        vec!["--run-context", "server", "--load-string"]
+    } else if directive("context=edit") {
+        vec!["--mode", "edit", "--run-context", "edit"]
+    } else {
+        Vec::new()
+    };
+    if directive("flag=FFlagEnableLoadModule") {
         context.push("--load-module");
     }
     let done = Command::new(env!("CARGO_BIN_EXE_ree"))
