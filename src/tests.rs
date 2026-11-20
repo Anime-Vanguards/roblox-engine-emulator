@@ -8914,3 +8914,121 @@ fn each_engine_has_its_own_collision_groups() {
     assert_eq!(run(&first_lua, &first, &format!(r#"game:GetService("PhysicsService"):RegisterCollisionGroup("GroupA") {count}"#)), ["print: 2"]);
     assert_eq!(run(&second_lua, &second, count), ["print: 1"]);
 }
+
+/// settings() is refused to a game script, which a play run's scripts are, and the settings services are no children of the
+/// DataModel's or of UserSettings()' (measured in a 0.747 client and server: tools/parity/probes/global_settings.luau). It was a
+/// table of tables, and GetService made a settings service, or any other, under either.
+#[test]
+fn settings_is_refused_to_a_game_script_and_no_other_provider_holds_a_settings_service() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Ok, Problem = pcall(settings)
+        assert(not Ok and Problem == "The current thread cannot call 'settings' (lacking capability Plugin)", tostring(Problem))
+        assert(select(2, pcall(settings, 1, "x")) == Problem)
+        -- the DataModel: a settings service a game script may not have is nil, another refused
+        assert(game:GetService("RenderSettings") == nil and game:FindService("RenderSettings") == nil)
+        assert(select(2, pcall(game.GetService, game, "TaskScheduler")) == "Invalid parent for Service. TaskScheduler cannot be parented to " .. game.Name .. " .")
+        assert(select(2, pcall(game.GetService, game, "UserGameSettings")) == "Invalid parent for Service. UserGameSettings cannot be parented to " .. game.Name .. " .")
+        assert(game:GetService("GlobalSettings") == nil and game:FindService("UserSettings") == nil)
+        -- UserSettings() holds its own service and makes no other
+        local User = UserSettings()
+        assert(User:GetService("Players") == nil and User:GetService("RenderSettings") == nil and User:GetService("StudioService") == nil)
+        assert(select(2, pcall(User.GetService, User, "Lighting")) == "Not allowed to add that under settings")
+        assert(select(2, pcall(User.GetService, User, "LuaSettings")) == "Invalid parent for Service. LuaSettings cannot be parented to GlobalBasicSettings .")
+        assert(select(2, pcall(User.GetService, User, "NetworkClient")) == "The current thread cannot create 'NetworkClient' (lacking capability Plugin)")
+        assert(select(2, pcall(User.FindService, User, "NotAService")) == "'NotAService' is not a valid Service name")
+        assert(#User:GetChildren() == 1)
+        -- its tree is locked
+        assert(select(2, pcall(function() User.Parent = workspace end)) == "The current thread cannot set 'UserSettings parent' (lacking capability RobloxScript)")
+        assert(select(2, pcall(function() User.GameSettings.Parent = workspace end)) == "Cannot change Parent of type UserGameSettings")
+        assert(select(2, pcall(function() Instance.new("Folder").Parent = User end)) == "Not allowed to add that under settings")
+        assert(select(2, pcall(function() Instance.new("Folder").Parent = User.GameSettings end)) == "Not allowed to add that under settings")
+        assert(select(2, pcall(User.Clone, User)) == "GlobalBasicSettings cannot be cloned")
+        User.GameSettings.Name = "Renamed"
+        assert(User.GameSettings.Name == "GameSettings")
+        "#,
+    );
+    assert!(output.iter().all(|line| !line.starts_with("error")), "{output:?}");
+}
+
+/// In edit mode, where a plugin's code runs, settings() is the GlobalSettings object, the same every call, with its eight
+/// settings services under a client's names and their values (measured at identity 4: tools/parity/probes/global_settings_tree.luau
+/// and global_settings_services.luau). What ree does not emulate reports itself.
+#[test]
+fn settings_is_the_global_settings_object_a_plugin_gets() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Root = settings()
+        assert(typeof(Root) == "Instance" and Root.ClassName == "GlobalSettings" and Root.Name == "Global Settings" and tostring(Root) == "Global Settings")
+        assert(settings() == Root and Root:GetFullName() == "Global Settings" and Root.Parent == nil and Root:IsA("GenericSettings") and not Root:IsA("UserSettings"))
+        local Names = {}
+        for _, Child in Root:GetChildren() do
+            table.insert(Names, Child.ClassName .. ":" .. Child.Name)
+        end
+        assert(table.concat(Names, ",") == "GameSettings:Game Options,LuaSettings:Lua,DebugSettings:Diagnostics,PhysicsSettings:Physics,Studio:Studio,NetworkSettings:Network,RenderSettings:Rendering,TaskScheduler:Task Scheduler", table.concat(Names, ","))
+        local Rendering = Root.Rendering
+        assert(Root:GetService("RenderSettings") == Rendering and Root:FindService("RenderSettings") == Rendering and Rendering:GetFullName() == "Rendering")
+        assert(Rendering.QualityLevel == Enum.QualityLevel.Automatic and Rendering.MeshCacheSize == 33554432 and Rendering.EnableFRM and Rendering:GetMaxQualityLevel() == 22)
+        assert(Root.Physics.AllowSleep and Root.Diagnostics.TickCountPreciseOverride == Enum.TickCountSampleMethod.Precise and Root.Network.RandomizeJoinInstanceOrder)
+        assert(select(2, pcall(function() return Root.NotAMember end)) == 'NotAMember is not a valid member of GlobalSettings "Global Settings"')
+        assert(select(2, pcall(function() return Root.RenderSettings end)) == 'RenderSettings is not a valid member of GlobalSettings "Global Settings"')
+        -- writes: an enum setting takes an item's value; what a plugin may not touch refuses; a dropped write keeps the value
+        Rendering.QualityLevel = 3
+        assert(Rendering.QualityLevel == Enum.QualityLevel.Level03)
+        assert(select(2, pcall(function() Root.Network.HttpProxyURL = "x" end)) == "The current thread cannot write 'HttpProxyURL' (lacking capability RobloxScript)")
+        assert(select(2, pcall(function() return Root.Physics.AreTimestepsShown end)) == "The current thread cannot read 'AreTimestepsShown' (lacking capability RobloxScript)")
+        Root["Game Options"].VideoCaptureEnabled = false
+        Rendering.Name = "Renamed"
+        assert(Root["Game Options"].VideoCaptureEnabled and Rendering.Name == "Rendering")
+        -- the tree is locked
+        assert(select(2, pcall(function() Rendering.Parent = workspace end)) == "Cannot change Parent of type RenderSettings")
+        assert(select(2, pcall(function() Root.Parent = workspace end)) == "The current thread cannot set 'settings parent' (lacking capability RobloxScript)")
+        assert(select(2, pcall(function() Instance.new("Folder").Parent = Root end)) == "Not allowed to add that under settings")
+        assert(select(2, pcall(Root.Clone, Root)) == "Global Settings cannot be cloned" and select(2, pcall(Rendering.Clone, Rendering)) == "Rendering cannot be cloned")
+        assert(select(2, pcall(Root.Lua.Destroy, Root.Lua)) == "The Parent property of Lua is locked")
+        assert(select(2, pcall(Root.Destroy, Root)) == "The Parent property of Game Options is locked" and #Root:GetChildren() == 8)
+        -- the other providers' services
+        assert(select(2, pcall(Root.GetService, Root, "UserGameSettings")) == "Invalid parent for Service. UserGameSettings cannot be parented to Global Settings .")
+        assert(select(2, pcall(Root.GetService, Root, "Lighting")) == "Not allowed to add that under settings")
+        assert(Root:GetService("Workspace") == nil and #Root:GetChildren() == 8)
+        assert(select(2, pcall(game.GetService, game, "RenderSettings")) == "Invalid parent for Service. RenderSettings cannot be parented to " .. game.Name .. " .")
+        assert(select(2, pcall(UserSettings().GetService, UserSettings(), "Studio")) == "Invalid parent for Service. Studio cannot be parented to GlobalBasicSettings .")
+        -- RenderSettings' writes fire no Changed, PhysicsSettings' do (read after the deferred events ran)
+        _G.Seen = {}
+        Rendering.Changed:Connect(function(Name)
+            table.insert(_G.Seen, Name)
+        end)
+        Root.Physics.Changed:Connect(function(Name)
+            table.insert(_G.Seen, Name)
+        end)
+        Rendering.QualityLevel = Enum.QualityLevel.Level07
+        Root.Physics.AllowSleep = false
+        -- a live reading, Studio's settings and the flag methods report themselves
+        local _ = Root.Diagnostics.InstanceCount, Root.Studio["Tab Width"], Root:GetFFlag("Anything")
+        "#,
+    );
+    assert!(output.iter().all(|line| !line.starts_with("error")), "{output:?}");
+    assert_eq!(run(&lua, &engine, r#"print(table.concat(_G.Seen, ","))"#).last().map(String::as_str), Some("print: AllowSleep"));
+    let missing: Vec<String> = engine.state.borrow().output.missing.iter().map(|(name, _)| name.clone()).collect();
+    assert_eq!(missing, ["DebugSettings.InstanceCount", "Studio.Tab Width", "GlobalSettings.GetFFlag"]);
+}
+
+/// settings() makes its tree on its first call, so a run that never calls it numbers its instances as before
+#[test]
+fn settings_makes_its_tree_on_the_first_call() {
+    let (lua, engine) = start();
+    let class = engine.reflection.class_id("GlobalSettings").unwrap();
+    run(&lua, &engine, "local _ = UserSettings ~= nil and workspace");
+    assert_eq!(engine.state.borrow_mut().dom.count_of_class(class), 0);
+    let before = engine.state.borrow().dom.live_count();
+    run(&lua, &engine, "assert(settings() == settings())");
+    // (the run's own script, the root and its eight services)
+    assert_eq!(engine.state.borrow().dom.live_count(), before + 1 + 9);
+    assert_eq!(engine.state.borrow_mut().dom.count_of_class(class), 1);
+}

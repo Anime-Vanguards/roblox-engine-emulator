@@ -915,13 +915,34 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     shared.raw_set("task", exports.get::<LuaValue>("Task")?)?;
 
     let make_stub: LuaFunction = exports.get("MakeStubTree")?;
-    let settings: LuaValue = make_stub.call("settings")?;
+    // settings(): refused to a game script, which a play run's scripts are ("The current thread cannot call 'settings' (lacking
+    // capability Plugin)", with no position: a playing client and a server, Studio 0.747, tools/parity/probes/global_settings.luau);
+    // in edit mode, where a plugin's code runs, the GlobalSettings object with its settings services (services/settings.rs),
+    // made on the first call as UserSettings() is, else an inert stub without the class
+    let stub_global: LuaValue = make_stub.call("settings")?;
+    let global_settings: std::cell::RefCell<Option<LuaValue>> = std::cell::RefCell::new(None);
+    let e = engine.clone();
+    let edit = engine.options.edit_mode();
+    let settings = wrapped(lua, engine, move |lua, _| {
+        if !edit {
+            return raise_plain("The current thread cannot call 'settings' (lacking capability Plugin)");
+        }
+        if let Some(existing) = global_settings.borrow().as_ref() {
+            return Ok(values([existing.clone()]));
+        }
+        let made = match services::settings::global_settings(&e) {
+            Some(id) => instance_value(lua, &e, id)?,
+            None => stub_global.clone(),
+        };
+        *global_settings.borrow_mut() = Some(made.clone());
+        Ok(values([made]))
+    })?;
+    shared.raw_set("settings", settings)?;
     // UserSettings(): the UserSettings object (its GetService gives UserGameSettings & co. at their
     // defaults: SavedQualityLevel Automatic, ...), made on the first call (an engine that made it at
     // start would number every later instance differently), else an inert stub without the class
     let stub_settings: LuaValue = make_stub.call("UserSettings")?;
     let user_settings: std::cell::RefCell<Option<LuaValue>> = std::cell::RefCell::new(None);
-    shared.raw_set("settings", lua.create_function(move |_, ()| Ok(settings.clone()))?)?;
     let e = engine.clone();
     shared.raw_set(
         "UserSettings",

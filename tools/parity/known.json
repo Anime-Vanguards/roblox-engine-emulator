@@ -231,64 +231,50 @@
 		{
 			"line": "collectgarbage ok number | error missing argument #1 to 'collectgarbage' (string expected) | error collectgarbage must be called with 'count'; use gcinfo() instead | error collectgarbage must be called with 'count'; use gcinfo() instead",
 			"why": "collectgarbage's argument checks: the client's texts are not emulated"
-		},
-		{
-			"line": "settings error The current thread cannot call 'settings' (lacking capability Plugin) | ok Instance",
-			"why": "settings() is refused to a client's game script (lacking capability Plugin); ree answers it"
-		}
-	],
-	"global_settings": [
-		{
-			"line": "call ",
-			"why": "settings() is a stub table in ree; a game script's call is refused (lacking capability Plugin)"
-		},
-		{
-			"line": "caught ",
-			"why": "settings() is a stub table in ree; a game script's call is refused (lacking capability Plugin)"
-		},
-		{
-			"line": "game ",
-			"why": "the DataModel's GetService makes a settings service its child, and refuses GlobalSettings, UserSettings and their superclasses as no service, where a game script gets nil or 'Invalid parent for Service'"
-		},
-		{
-			"line": "user ",
-			"why": "UserSettings()' GetService makes any service its child, where a game script gets nil, or a refusal of a settings service or of a service settings take no part in"
-		},
-		{
-			"line": "user-other ",
-			"why": "UserSettings()' GetService makes any service its child, where a game script gets nil, or a refusal of a settings service or of a service settings take no part in"
-		},
-		{
-			"line": "user-children ",
-			"why": "UserSettings()' GetService makes any service its child, where a game script gets nil, or a refusal of a settings service or of a service settings take no part in"
-		},
-		{
-			"line": "user-parent ",
-			"why": "UserSettings()' tree is not locked as a client's is: its parent, its clone and children added under it"
-		},
-		{
-			"line": "user-rename ",
-			"why": "UserSettings()' service takes a Name write, where a client's keeps its name"
-		},
-		{
-			"line": "user-clone ",
-			"why": "UserSettings()' tree is not locked as a client's is: its parent, its clone and children added under it"
-		},
-		{
-			"line": "user-add ",
-			"why": "UserSettings()' tree is not locked as a client's is: its parent, its clone and children added under it"
 		}
 	],
 	"global_settings_services": [
 		{
-			"line": "",
-			"why": "settings() is a stub table in ree, not the GlobalSettings object a plugin gets"
+			"line": "BulkImportService ",
+			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
+		},
+		{
+			"line": "ChatbotUIService ",
+			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
+		},
+		{
+			"line": "ConversationalAIAcceptanceService ",
+			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
+		},
+		{
+			"line": "DataModelPatchService ",
+			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
+		},
+		{
+			"line": "LSPFileSyncService ",
+			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
+		},
+		{
+			"line": "SnippetService ",
+			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
+		},
+		{
+			"line": "StreamingService ",
+			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
 		}
 	],
 	"global_settings_tree": [
 		{
-			"line": "",
-			"why": "settings() is a stub table in ree, not the GlobalSettings object a plugin gets"
+			"line": "method GetFFlag ",
+			"why": "GlobalSettings:GetFFlag and GetFVariable are not emulated (ree knows no flag values): a call reports itself (Output missing) and answers nil, where a client raises for a flag no C++ code defines and for a missing argument"
+		},
+		{
+			"line": "method GetFVariable ",
+			"why": "GlobalSettings:GetFFlag and GetFVariable are not emulated (ree knows no flag values): a call reports itself (Output missing) and answers nil, where a client raises for a flag no C++ code defines and for a missing argument"
+		},
+		{
+			"line": "studio ",
+			"why": "Studio's settings are not emulated: its Theme (a StudioTheme) reads nil, and each read reports itself (Output missing)"
 		}
 	],
 	"instances": [

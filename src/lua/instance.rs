@@ -1271,13 +1271,14 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         Ok(values([LuaValue::String(lua.create_string(full_name(engine, id))?)]))
     }));
     let clone_method = method(|lua, engine, id, _| {
-        // A service cannot be cloned (measured likewise: `Lighting cannot be cloned`, `Players cannot be cloned`)
+        // A service cannot be cloned (measured likewise: `Lighting cannot be cloned`, `Players cannot be cloned`), nor a settings
+        // root (`Global Settings cannot be cloned`, `GlobalBasicSettings cannot be cloned`: services/settings.rs)
         let (class, name) = {
             let state = engine.state.borrow();
             let instance = state.dom.at(id);
             (instance.class, instance.name.to_str_lossy().into_owned())
         };
-        if engine.reflection.class(class).service {
+        if engine.reflection.class(class).service || crate::services::settings::is_root(&engine.reflection, class) {
             return raise(format!("{name} cannot be cloned"));
         }
         optional_instance(lua, engine, clone(engine, id))

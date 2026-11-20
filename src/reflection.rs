@@ -335,22 +335,29 @@ const EVENT_SUPPLEMENT: &[(&str, &[&str])] = &[
         ],
     ),
     ("UserGameSettings", &["FullscreenChanged", "StudioModeChanged"]),
+    // (settings().Studio's theme never changes offline: a signal that never fires; services/settings.rs)
+    ("Studio", &["ThemeChanged"]),
 ];
 
 // Methods of classes only rbx-dom describes (it lists properties alone): UserGameSettings's, which
-// Roblox's PlayerModule calls (behaviours in lua/services.luau)
-const METHOD_SUPPLEMENT: &[(&str, &[&str])] = &[(
-    "UserGameSettings",
-    &[
-        "GetCameraYInvertValue",
-        "GetOnboardingCompleted",
-        "InFullScreen",
-        "InStudioMode",
-        "SetCameraYInvertVisible",
-        "SetGamepadCameraSensitivityVisible",
-        "SetOnboardingCompleted",
-    ],
-)];
+// Roblox's PlayerModule calls (behaviours in lua/services.luau), and settings()' (services/settings.rs: GetMaxQualityLevel
+// answers; GetFFlag and GetFVariable are not emulated, since ree knows no flag values)
+const METHOD_SUPPLEMENT: &[(&str, &[&str])] = &[
+    (
+        "UserGameSettings",
+        &[
+            "GetCameraYInvertValue",
+            "GetOnboardingCompleted",
+            "InFullScreen",
+            "InStudioMode",
+            "SetCameraYInvertVisible",
+            "SetGamepadCameraSensitivityVisible",
+            "SetOnboardingCompleted",
+        ],
+    ),
+    ("GlobalSettings", &["GetFFlag", "GetFVariable"]),
+    ("RenderSettings", &["GetMaxQualityLevel"]),
+];
 
 // Properties the dump leaves out: (class, name, script type, engine type or enum, scriptable, serialized). Path2D keeps its
 // control points in PropertiesSerialize, a BinaryString only files see, and a Transparency that only the engine's own
@@ -389,6 +396,29 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
     ("Players", "BanningEnabled", "PluginOrOpenCloud"),
     ("Players", "UseStrafingAnimations", "PluginOrOpenCloud"),
     ("StarterPlayer", "CreateDefaultPlayerModule", "PluginOrOpenCloud"),
+    // settings().Physics' debug drawing settings rbx-dom lists as not scriptable: a plugin's read raises as well (identity 4,
+    // tools/parity/probes/global_settings_tree.luau; services/settings.rs)
+    ("PhysicsSettings", "AreAssemblyCentersOfMassShown", "RobloxScript"),
+    ("PhysicsSettings", "AreCollisionCostsShown", "RobloxScript"),
+    ("PhysicsSettings", "AreConstraintForcesShownForSelectedOrHoveredInstances", "RobloxScript"),
+    ("PhysicsSettings", "AreConstraintTorquesShownForSelectedOrHoveredInstances", "RobloxScript"),
+    ("PhysicsSettings", "AreContactForcesShownForSelectedOrHoveredAssemblies", "RobloxScript"),
+    ("PhysicsSettings", "AreGravityForcesShownForSelectedOrHoveredAssemblies", "RobloxScript"),
+    ("PhysicsSettings", "AreMagnitudesShownForDrawnForcesAndTorques", "RobloxScript"),
+    ("PhysicsSettings", "AreSolverIslandsShown", "RobloxScript"),
+    ("PhysicsSettings", "AreTimestepsShown", "RobloxScript"),
+    ("PhysicsSettings", "DrawConstraintsNetForce", "RobloxScript"),
+    ("PhysicsSettings", "DrawContactsNetForce", "RobloxScript"),
+    ("PhysicsSettings", "DrawTotalNetForce", "RobloxScript"),
+    ("PhysicsSettings", "EnableForceVisualizationSmoothing", "RobloxScript"),
+    ("PhysicsSettings", "FluidForceDrawScale", "RobloxScript"),
+    ("PhysicsSettings", "ForceDrawScale", "RobloxScript"),
+    ("PhysicsSettings", "ForceVisualizationSmoothingSteps", "RobloxScript"),
+    ("PhysicsSettings", "ShowFluidForcesForSelectedOrHoveredMechanisms", "RobloxScript"),
+    ("PhysicsSettings", "ShowInstanceNamesForDrawnForcesAndTorques", "RobloxScript"),
+    ("PhysicsSettings", "SolverConvergenceMetricType", "RobloxScript"),
+    ("PhysicsSettings", "SolverConvergenceVisualizationMode", "RobloxScript"),
+    ("PhysicsSettings", "TorqueDrawScale", "RobloxScript"),
 ];
 
 /// Methods a game script may not call: (class, name, the capability it lacks). A playing client's and a server's game

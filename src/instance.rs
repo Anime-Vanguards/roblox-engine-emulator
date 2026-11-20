@@ -478,6 +478,12 @@ pub fn set_parent(
         if is_service(state, reflection, id) {
             return Err(ScriptError::plain(format!("Cannot change Parent of type {}", reflection.class(state.dom.at(id).class).name)));
         }
+        // a settings root (settings(), UserSettings(): services/settings.rs) refuses its own way, measured
+        let class = state.dom.at(id).class;
+        if state.dom.at(id).parent.is_none() && super::services::settings::is_root(reflection, class) {
+            let label = super::services::settings::parent_label(reflection, class);
+            return Err(ScriptError::plain(format!("The current thread cannot set '{label} parent' (lacking capability RobloxScript)")));
+        }
         let new_name = match new_parent {
             Some(parent) => state.dom.at(parent).name.to_string(),
             None => "NULL".into(),
@@ -492,6 +498,16 @@ pub fn set_parent(
         return Ok(());
     }
     if let Some(parent) = new_parent {
+        // nothing goes under a settings root or one of its services (services/settings.rs; measured: "Not allowed to add that
+        // under settings", for settings() and UserSettings() alike)
+        let top = match state.dom.at(parent).parent {
+            None => Some(parent),
+            Some(up) if state.dom.at(up).parent.is_none() => Some(up),
+            Some(_) => None,
+        };
+        if top.is_some_and(|top| super::services::settings::is_root(reflection, state.dom.at(top).class)) {
+            return Err(ScriptError::plain("Not allowed to add that under settings"));
+        }
         if parent == id {
             return Err(ScriptError::plain(format!("Attempt to set {} as its own parent", state.dom.full_name(reflection, id))));
         }
@@ -849,12 +865,15 @@ pub fn remove_tag(state: &mut State, id: InstanceId, tag: &Str) {
     log_tag(state, id, tag);
 }
 
-/// A service: a parent-locked instance of a service class under the DataModel.
+/// A service: a parent-locked instance of a service class under a service provider (the DataModel, a settings root).
 fn is_service(state: &State, reflection: &Reflection, id: InstanceId) -> bool {
     let instance = state.dom.at(id);
     instance.has(flags::PARENT_LOCKED)
         && reflection.class(instance.class).service
-        && instance.parent.is_some_and(|parent| Some(state.dom.at(parent).class) == reflection.class_id("DataModel"))
+        && instance.parent.is_some_and(|parent| {
+            let class = state.dom.at(parent).class;
+            Some(class) == reflection.class_id("DataModel") || super::services::settings::is_root(reflection, class)
+        })
 }
 
 /// The first half of Destroy (after its Destroying handlers were queued): marks the instance destroyed,
@@ -865,9 +884,19 @@ pub fn begin_destroy(
     hooks: &Hooks,
     id: InstanceId,
 ) -> ScriptResult<Vec<InstanceId>> {
-    // a service stays as it was: "The Parent property of Lighting is locked" (measured, tools/parity/probes/hierarchy.luau)
-    if is_service(state, reflection, id) {
-        return Err(ScriptError::plain(format!("The Parent property of {} is locked", state.dom.at(id).name)));
+    // a service stays as it was: "The Parent property of Lighting is locked" (measured, tools/parity/probes/hierarchy.luau); a
+    // settings root too, naming its first service (settings(): "The Parent property of Game Options is locked", measured)
+    if state.dom.at(id).has(flags::PARENT_LOCKED) {
+        if is_service(state, reflection, id) {
+            return Err(ScriptError::plain(format!("The Parent property of {} is locked", state.dom.at(id).name)));
+        }
+        let instance = state.dom.at(id);
+        if instance.parent.is_none()
+            && let Some(&first) = instance.children.first()
+            && super::services::settings::is_root(reflection, instance.class)
+        {
+            return Err(ScriptError::plain(format!("The Parent property of {} is locked", state.dom.at(first).name)));
+        }
     }
     state.dom.at_mut(id).set_flag(flags::DESTROYED, true);
     if state.dom.at(id).parent.is_some() {

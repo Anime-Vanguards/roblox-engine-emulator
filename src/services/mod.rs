@@ -19,6 +19,7 @@ pub mod json;
 pub mod physics;
 pub mod query;
 pub mod reflection_service;
+pub mod settings;
 pub mod tween;
 
 use std::{cell::RefCell, rc::Rc};
@@ -418,6 +419,11 @@ pub fn install(engine: &Rc<Engine>) {
             if ROBLOX_ONLY_SERVICES.contains(&&*service_name) {
                 return Ok(values([LuaValue::Nil]));
             }
+            // (the settings services belong to settings() and UserSettings(): settings.rs)
+            if let Some(answer) = settings::data_model_service(engine, id, &service_name) {
+                answer?;
+                return Ok(values([LuaValue::Nil]));
+            }
             let service = get_service(engine, id, &service_name)?;
             Ok(values([instance_value(lua, engine, service)?]))
         });
@@ -426,7 +432,7 @@ pub fn install(engine: &Rc<Engine>) {
         behaviors.add_method(data_model, K::FindService as NameId, method(|lua, engine, id, args| {
             let service_name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
             // (a name that is no service's raises as GetService does: tools/parity/probes/core_services.luau)
-            if !engine.reflection.class_by_name(&service_name).is_some_and(|class| class.service) {
+            if !engine.reflection.class_by_name(&service_name).is_some_and(|class| class.service) && !settings::found_nowhere(&service_name) {
                 return raise(format!("'{service_name}' is not a valid Service name"));
             }
             Ok(values([match find_service(engine, id, &service_name).filter(|_| !ROBLOX_ONLY_SERVICES.contains(&&*service_name)) {
@@ -471,24 +477,6 @@ pub fn install(engine: &Rc<Engine>) {
         behaviors.add_getter(data_model, K::PlaceVersion as NameId, getter(|_, _, _| Ok(LuaValue::Number(0.0))));
         behaviors.add_getter(data_model, K::PrivateServerId as NameId, getter(|lua, _, _| Ok(string_value(lua, "")?)));
         behaviors.add_getter(data_model, K::PrivateServerOwnerId as NameId, getter(|_, _, _| Ok(LuaValue::Number(0.0))));
-    }
-
-    // UserSettings(): GetService / FindService give its settings services (children made on first
-    // use, like the DataModel's)
-    if let Some(settings) = class(&reflection, "UserSettings") {
-        let get = method(|lua, engine, id, args| {
-            let service_name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
-            let service = get_service(engine, id, &service_name)?;
-            Ok(values([instance_value(lua, engine, service)?]))
-        });
-        behaviors.add_method(settings, K::GetService as NameId, get);
-        behaviors.add_method(settings, K::FindService as NameId, method(|lua, engine, id, args| {
-            let service_name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
-            Ok(values([match find_service(engine, id, &service_name) {
-                Some(service) => instance_value(lua, engine, service)?,
-                None => LuaValue::Nil,
-            }]))
-        }));
     }
 
     // Workspace / Camera
@@ -727,6 +715,8 @@ pub fn install(engine: &Rc<Engine>) {
     tween::install(engine, &mut behaviors);
     reflection_service::install(engine, &mut behaviors);
     physics::install(engine, &mut behaviors);
+    // settings() and UserSettings(): GetService / FindService and the settings services' members
+    settings::install(engine, &mut behaviors);
     crate::animation::install(engine, &mut behaviors);
     crate::meshes::install(engine, &mut behaviors);
     input_actions::install(engine, &mut behaviors);
