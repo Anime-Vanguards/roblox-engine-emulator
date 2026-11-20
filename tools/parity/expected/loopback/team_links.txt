@@ -1,0 +1,90 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-20
+# repeated: 3 captures, the same lines
+server: joined now team=Red color=Bright red neutral=false
+server: joined then team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 | blue players ok 0
+server: joined events: Red.PlayerAdded team=Red color=Bright red neutral=false
+server: team blue now team=Blue color=Bright blue neutral=false
+server: team blue then team=Blue color=Bright blue neutral=false | Red=ok 0 Blue=ok 1 | blue players ok 1
+server: team blue events: changed TeamColor team=Blue color=Bright blue neutral=false / Red.PlayerRemoved team=Blue color=Bright blue neutral=false / Blue.PlayerAdded team=Blue color=Bright blue neutral=false / changed Team team=Blue color=Bright blue neutral=false
+server: team nil now team=nil color=Bright blue neutral=true
+server: team nil then team=nil color=Bright blue neutral=true | Red=ok 0 Blue=ok 0 | blue players ok 0
+server: team nil events: changed Neutral team=nil color=Bright blue neutral=true / Blue.PlayerRemoved team=nil color=Bright blue neutral=true / changed Team team=nil color=Bright blue neutral=true
+server: neutral false now team=Blue color=Bright blue neutral=false
+server: neutral false then team=Blue color=Bright blue neutral=false | Red=ok 0 Blue=ok 1 | blue players ok 1
+server: neutral false events: changed Neutral team=Blue color=Bright blue neutral=false / Blue.PlayerAdded team=Blue color=Bright blue neutral=false / changed Team team=Blue color=Bright blue neutral=false
+server: color red now team=Red color=Bright red neutral=false
+server: color red then team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 | blue players ok 0
+server: color red events: changed TeamColor team=Red color=Bright red neutral=false / Blue.PlayerRemoved team=Red color=Bright red neutral=false / Red.PlayerAdded team=Red color=Bright red neutral=false / changed Team team=Red color=Bright red neutral=false
+server: color black now team=nil color=Really black neutral=false
+server: color black then team=nil color=Really black neutral=false | Red=ok 0 Blue=ok 0 | blue players ok 0
+server: color black events: changed TeamColor team=nil color=Really black neutral=false / Red.PlayerRemoved team=nil color=Really black neutral=false / changed Team team=nil color=Really black neutral=false
+server: neutral true now team=nil color=Really black neutral=true
+server: neutral true then team=nil color=Really black neutral=true | Red=ok 0 Blue=ok 0 | blue players ok 0
+server: neutral true events: changed Neutral team=nil color=Really black neutral=true
+server:   set team team=Blue color=Bright blue neutral=false
+server: team blue neutral true now team=nil color=Bright blue neutral=true
+server: team blue neutral true then team=nil color=Bright blue neutral=true | Red=ok 0 Blue=ok 0 | blue players ok 0
+server: team blue neutral true events: changed TeamColor team=nil color=Bright blue neutral=true / changed Neutral team=nil color=Bright blue neutral=true / Blue.PlayerAdded team=nil color=Bright blue neutral=true / changed Team team=nil color=Bright blue neutral=true / changed Neutral team=nil color=Bright blue neutral=true / Blue.PlayerRemoved team=nil color=Bright blue neutral=true / changed Team team=nil color=Bright blue neutral=true
+server: blue recolored now team=nil color=Bright blue neutral=false
+server: blue recolored then team=nil color=Bright blue neutral=false | Red=ok 0 Blue=ok 0 | blue players ok 0
+server: blue recolored events: changed Neutral team=nil color=Bright blue neutral=false / Blue.PlayerAdded team=nil color=Bright blue neutral=false / changed Team team=nil color=Bright blue neutral=false / Blue.PlayerRemoved team=nil color=Bright blue neutral=false / changed Team team=nil color=Bright blue neutral=false
+server: twin made now team=Red color=Bright red neutral=false
+server: twin made then team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 Twin=ok 1 | blue players ok 0
+server: twin made events: changed TeamColor team=Red color=Bright red neutral=false / Red.PlayerAdded team=Red color=Bright red neutral=false / changed Team team=Red color=Bright red neutral=false
+server: color twin now team=Red color=Bright red neutral=false
+server: color twin then team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 Twin=ok 1 | blue players ok 0
+server: color twin events: changed TeamColor team=Red color=Bright red neutral=false / Red.PlayerRemoved team=Red color=Bright red neutral=false / Blue.PlayerAdded team=Red color=Bright red neutral=false / changed Team team=Red color=Bright red neutral=false / changed TeamColor team=Red color=Bright red neutral=false / Blue.PlayerRemoved team=Red color=Bright red neutral=false / Red.PlayerAdded team=Red color=Bright red neutral=false / changed Team team=Red color=Bright red neutral=false
+server: team twin now team=Red color=Bright red neutral=false
+server: team twin then team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 Twin=ok 1 | blue players ok 0
+server: team twin events: 
+server: blue moved out now team=nil color=Lime green neutral=false
+server: blue moved out then team=nil color=Lime green neutral=false | Red=ok 0 Twin=ok 0 | blue players error Team:GetPlayers() failed because team must be a child of the Teams service
+server: blue moved out events: changed TeamColor team=nil color=Lime green neutral=false / Red.PlayerRemoved team=nil color=Lime green neutral=false / Blue.PlayerAdded team=nil color=Lime green neutral=false / changed Team team=nil color=Lime green neutral=false / Blue.PlayerRemoved team=nil color=Lime green neutral=false / changed Team team=nil color=Lime green neutral=false
+server: team outside now team=nil color=Lime green neutral=false | error Setting Player.Team failed because team must be a child of the Teams service
+server: team outside then team=nil color=Lime green neutral=false | Red=ok 0 Twin=ok 0 | blue players error Team:GetPlayers() failed because team must be a child of the Teams service
+server: team outside events: 
+server: blue moved back now team=Blue color=Lime green neutral=false
+server: blue moved back then team=Blue color=Lime green neutral=false | Red=ok 0 Twin=ok 0 Blue=ok 1 | blue players ok 1
+server: blue moved back events: Blue.PlayerAdded team=Blue color=Lime green neutral=false / changed Team team=Blue color=Lime green neutral=false
+server: blue destroyed now team=nil color=Lime green neutral=false
+server: blue destroyed then team=nil color=Lime green neutral=false | Red=ok 0 Twin=ok 0 | blue players error Team:GetPlayers() failed because team must be a child of the Teams service
+server: blue destroyed events: Blue.PlayerRemoved team=nil color=Lime green neutral=false / changed Team team=nil color=Lime green neutral=false
+server: team destroyed now team=nil color=Lime green neutral=false | error Setting Player.Team failed because team must be a child of the Teams service
+server: team destroyed then team=nil color=Lime green neutral=false | Red=ok 0 Twin=ok 0 | blue players error Team:GetPlayers() failed because team must be a child of the Teams service
+server: team destroyed events: 
+server: get teams Red=ok 0 Twin=ok 0 | children 3
+client: joined team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 | blue players ok 0
+client: joined events: 
+client: team blue team=Blue color=Bright blue neutral=false | Red=ok 0 Blue=ok 1 | blue players ok 1
+client: team blue events: changed TeamColor team=Blue color=Bright blue neutral=false / Red.PlayerRemoved team=Blue color=Bright blue neutral=false / Blue.PlayerAdded team=Blue color=Bright blue neutral=false / changed Team team=Blue color=Bright blue neutral=false
+client: team nil team=nil color=Bright blue neutral=true | Red=ok 0 Blue=ok 0 | blue players ok 0
+client: team nil events: changed Neutral team=nil color=Bright blue neutral=true / Blue.PlayerRemoved team=nil color=Bright blue neutral=true / changed Team team=nil color=Bright blue neutral=true
+client: neutral false team=Blue color=Bright blue neutral=false | Red=ok 0 Blue=ok 1 | blue players ok 1
+client: neutral false events: changed Neutral team=Blue color=Bright blue neutral=false / Blue.PlayerAdded team=Blue color=Bright blue neutral=false / changed Team team=Blue color=Bright blue neutral=false
+client: color red team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 | blue players ok 0
+client: color red events: changed TeamColor team=Red color=Bright red neutral=false / Blue.PlayerRemoved team=Red color=Bright red neutral=false / Red.PlayerAdded team=Red color=Bright red neutral=false / changed Team team=Red color=Bright red neutral=false
+client: color black team=nil color=Really black neutral=false | Red=ok 0 Blue=ok 0 | blue players ok 0
+client: color black events: changed TeamColor team=nil color=Really black neutral=false / Red.PlayerRemoved team=nil color=Really black neutral=false / changed Team team=nil color=Really black neutral=false
+client: neutral true team=nil color=Really black neutral=true | Red=ok 0 Blue=ok 0 | blue players ok 0
+client: neutral true events: changed Neutral team=nil color=Really black neutral=true
+client: team blue neutral true team=nil color=Bright blue neutral=true | Red=ok 0 Blue=ok 0 | blue players ok 0
+client: team blue neutral true events: changed TeamColor team=nil color=Bright blue neutral=true
+client: blue recolored team=nil color=Bright blue neutral=false | Red=ok 0 Blue=ok 0 | blue players ok 0
+client: blue recolored events: changed Neutral team=nil color=Bright blue neutral=false / Blue.PlayerAdded team=nil color=Bright blue neutral=false / changed Team team=nil color=Bright blue neutral=false / Blue.PlayerRemoved team=nil color=Bright blue neutral=false / changed Team team=nil color=Bright blue neutral=false
+client: twin made team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 Twin=ok 1 | blue players ok 0
+client: twin made events: changed TeamColor team=Red color=Bright red neutral=false / Red.PlayerAdded team=Red color=Bright red neutral=false / changed Team team=Red color=Bright red neutral=false
+client: color twin team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 Twin=ok 1 | blue players ok 0
+client: color twin events: 
+client: team twin team=Red color=Bright red neutral=false | Red=ok 1 Blue=ok 0 Twin=ok 1 | blue players ok 0
+client: team twin events: 
+client: blue moved out team=nil color=Lime green neutral=false | Red=ok 0 Twin=ok 0 | blue players error Team:GetPlayers() failed because team must be a child of the Teams service
+client: blue moved out events: changed TeamColor team=nil color=Lime green neutral=false / Red.PlayerRemoved team=nil color=Lime green neutral=false / Blue.PlayerAdded team=nil color=Lime green neutral=false / changed Team team=nil color=Lime green neutral=false / Blue.PlayerRemoved team=nil color=Lime green neutral=false / changed Team team=nil color=Lime green neutral=false
+client: team outside team=nil color=Lime green neutral=false | Red=ok 0 Twin=ok 0 | blue players error Team:GetPlayers() failed because team must be a child of the Teams service
+client: team outside events: 
+client: blue moved back team=Blue color=Lime green neutral=false | Red=ok 0 Twin=ok 0 Blue=ok 1 | blue players ok 1
+client: blue moved back events: Blue.PlayerAdded team=Blue color=Lime green neutral=false / changed Team team=Blue color=Lime green neutral=false
+client: blue destroyed team=nil color=Lime green neutral=false | Red=ok 0 Twin=ok 0 | blue players none
+client: blue destroyed events: Blue.PlayerRemoved team=nil color=Lime green neutral=false / changed Team team=nil color=Lime green neutral=false
+client: team destroyed team=nil color=Lime green neutral=false | Red=ok 0 Twin=ok 0 | blue players none
+client: team destroyed events: 

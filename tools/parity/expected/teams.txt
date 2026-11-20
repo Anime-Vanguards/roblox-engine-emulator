@@ -1,0 +1,21 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-20
+start team=nil color=White neutral=true
+made now team=nil color=White neutral=true then team=nil color=White neutral=true | Red=0 Blue=0 | 
+team red now team=Red color=Bright red neutral=false then team=Red color=Bright red neutral=false | Red=1 Blue=0 | changed TeamColor team=Red color=Bright red neutral=false / changed Neutral team=Red color=Bright red neutral=false / Red.PlayerAdded true / changed Team team=Red color=Bright red neutral=false
+team blue now team=Blue color=Bright blue neutral=false then team=Blue color=Bright blue neutral=false | Red=0 Blue=1 | changed TeamColor team=Blue color=Bright blue neutral=false / Red.PlayerRemoved true / Blue.PlayerAdded true / changed Team team=Blue color=Bright blue neutral=false
+neutral true now team=nil color=Bright blue neutral=true then team=nil color=Bright blue neutral=true | Red=0 Blue=0 | changed Neutral team=nil color=Bright blue neutral=true / Blue.PlayerRemoved true / changed Team team=nil color=Bright blue neutral=true
+color blue now team=nil color=Bright blue neutral=true then team=nil color=Bright blue neutral=true | Red=0 Blue=0 | 
+team nil now team=nil color=Bright blue neutral=true then team=nil color=Bright blue neutral=true | Red=0 Blue=0 | 
+neutral false now team=Blue color=Bright blue neutral=false then team=Blue color=Bright blue neutral=false | Red=0 Blue=1 | changed Neutral team=Blue color=Bright blue neutral=false / Blue.PlayerAdded true / changed Team team=Blue color=Bright blue neutral=false
+color white now team=nil color=Institutional white neutral=false then team=nil color=Institutional white neutral=false | Red=0 Blue=0 | changed TeamColor team=nil color=Institutional white neutral=false / Blue.PlayerRemoved true / changed Team team=nil color=Institutional white neutral=false
+red recolored now team=nil color=Bright red neutral=false then team=nil color=Bright red neutral=false | Red=0 Blue=0 | changed TeamColor team=nil color=Bright red neutral=false / Red.PlayerAdded true / changed Team team=nil color=Bright red neutral=false / Red.PlayerRemoved true / changed Team team=nil color=Bright red neutral=false
+red destroyed now team=nil color=Bright red neutral=false then team=nil color=Bright red neutral=false | Blue=0 | 
+team part error Expected Team got Workspace for Player.Team.
+team string error Unable to assign property Team. Team expected, got string
+color string error Unable to assign property TeamColor. BrickColor expected, got string
+color number error Unable to assign property TeamColor. BrickColor expected, got number
+neutral string ok 
+after errors team=nil color=Bright red neutral=true
+get players arg ok 0
+teams methods ok 1

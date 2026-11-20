@@ -723,6 +723,12 @@
 			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
 		}
 	],
+	"teams": [
+		{
+			"line": "",
+			"why": "ree has no team logic yet: Player.TeamColor reads nil and Neutral false, a joining player gets no team, and Team:GetPlayers and Teams:GetTeams are not emulated, so the probe stops at its first line that reads a team"
+		}
+	],
 	"text_bounds": [
 		{
 			"line": "Size = 0.5 reads 1 measures 4 1",

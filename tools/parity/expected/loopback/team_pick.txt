@@ -1,0 +1,7 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-20
+# repeated: 3 captures, the same lines
+server: joined team=Zeta color=Bright blue neutral=false
+server: members Fixed=0 Zeta=1 Alpha=0 Mid=0 Kappa=0 | outside error Team:GetPlayers() failed because team must be a child of the Teams service
+client: first team=Zeta color=Bright blue neutral=false
+client: joined team=Zeta color=Bright blue neutral=false
