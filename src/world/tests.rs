@@ -1832,3 +1832,18 @@ fn a_capsule_part_is_its_box() {
         "#,
     );
 }
+
+#[test]
+fn teleport_service_is_named_with_a_space() {
+    // Studio 0.748 names it "Teleport Service", so game["Teleport Service"] finds it and game.TeleportService is no member
+    check(
+        r#"
+        local Teleport = game:GetService("TeleportService")
+        assert(Teleport.Name == "Teleport Service" and game["Teleport Service"] == Teleport, Teleport.Name)
+        local Ok, Problem = pcall(function()
+            return (game :: any).TeleportService
+        end)
+        assert(not Ok and string.find(tostring(Problem), "TeleportService is not a valid member of DataModel", 1, true), tostring(Problem))
+        "#,
+    );
+}
