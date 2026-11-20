@@ -339,6 +339,12 @@ const EVENT_SUPPLEMENT: &[(&str, &[&str])] = &[
     ("Studio", &["ThemeChanged"]),
 ];
 
+// Defaults of classes only rbx-dom describes, where it records none: a player starts neutral, on no team (Neutral true,
+// TeamColor White, measured in a 0.747 play session: services/teams.rs)
+fn default_supplement() -> [(&'static str, &'static str, Variant); 2] {
+    [("Player", "Neutral", Variant::Bool(true)), ("Player", "TeamColor", Variant::BrickColor(rbx_dom_weak::types::BrickColor::White))]
+}
+
 // Methods of classes only rbx-dom describes (it lists properties alone): UserGameSettings's, which
 // Roblox's PlayerModule calls (behaviours in lua/services.luau), and settings()' (services/settings.rs: GetMaxQualityLevel
 // answers; GetFFlag and GetFVariable are not emulated, since ree knows no flag values)
@@ -734,6 +740,12 @@ impl Reflection {
                         own.push(name);
                     }
                 }
+            }
+        }
+        for (class, name, value) in default_supplement() {
+            if let Some(&id) = reflection.class_ids.get(class) {
+                let name = reflection.intern(name);
+                reflection.classes[id as usize].raw_defaults.get_or_insert_with(FxHashMap::default).insert(name, RawDefault::Dom(value));
             }
         }
 

@@ -20,6 +20,7 @@ pub mod physics;
 pub mod query;
 pub mod reflection_service;
 pub mod settings;
+pub mod teams;
 pub mod tween;
 
 use std::{cell::RefCell, rc::Rc};
@@ -552,7 +553,7 @@ pub fn install(engine: &Rc<Engine>) {
         // PlayerRemoving when it leaves, and Player.CharacterAdded when its Character is set to a model
         // (the local player joined before the run, and CharacterRemoving is not fired: a changed property
         // carries no old value). On a server a joining player gets the containers Roblox's server gives
-        // it (Backpack, StarterGear, PlayerGui) before PlayerAdded, unless the harness made them.
+        // it (Backpack, StarterGear, PlayerGui) before PlayerAdded, unless the harness made them, and its team (teams.rs).
         if let (Some(player_class), Some(added), Some(removing), Some(character), Some(character_added)) = (
             class(&reflection, "Player"),
             name(&reflection, "PlayerAdded"),
@@ -586,6 +587,9 @@ pub fn install(engine: &Rc<Engine>) {
                                 state.dom.attach(child, id);
                             }
                         }
+                        // (its team before PlayerAdded: the team's PlayerAdded fires first, teams.rs)
+                        let hooks = engine.hooks.borrow();
+                        teams::assign_joining(state, &reflection_for_parent, &hooks, engine.world().game, id);
                     }
                     core::fire_event(state, new.unwrap(), added, vec![Value::Instance(id)]);
                 }
@@ -715,6 +719,8 @@ pub fn install(engine: &Rc<Engine>) {
     tween::install(engine, &mut behaviors);
     reflection_service::install(engine, &mut behaviors);
     physics::install(engine, &mut behaviors);
+    // Teams: a player's team follows its TeamColor and Neutral; Team:GetPlayers, Teams:GetTeams
+    teams::install(engine, &mut behaviors);
     // settings() and UserSettings(): GetService / FindService and the settings services' members
     settings::install(engine, &mut behaviors);
     crate::animation::install(engine, &mut behaviors);

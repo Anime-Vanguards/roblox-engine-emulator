@@ -95,34 +95,10 @@
 			"why": "ree's server and client start at the same virtual time and a message arrives in the client frame stepped after the server's, at the same frame time: the client's clocks are not later than the server's, as a real client's are"
 		}
 	],
-	"team_absent": [
-		{
-			"line": "",
-			"why": "ree has no team logic yet: Player.TeamColor reads nil and Neutral false, a joining player gets no team, and Team:GetPlayers and Teams:GetTeams are not emulated, so the probe stops at its first line that reads a team"
-		}
-	],
 	"team_join": [
 		{
-			"line": "",
-			"why": "ree has no team logic yet: Player.TeamColor reads nil and Neutral false, a joining player gets no team, and Team:GetPlayers and Teams:GetTeams are not emulated, so the probe stops at its first line that reads a team"
-		}
-	],
-	"team_links": [
-		{
-			"line": "",
-			"why": "ree has no team logic yet: Player.TeamColor reads nil and Neutral false, a joining player gets no team, and Team:GetPlayers and Teams:GetTeams are not emulated, so the probe stops at its first line that reads a team"
-		}
-	],
-	"team_none": [
-		{
-			"line": "",
-			"why": "ree has no team logic yet: Player.TeamColor reads nil and Neutral false, a joining player gets no team, and Team:GetPlayers and Teams:GetTeams are not emulated, so the probe stops at its first line that reads a team"
-		}
-	],
-	"team_pick": [
-		{
-			"line": "",
-			"why": "ree has no team logic yet: Player.TeamColor reads nil and Neutral false, a joining player gets no team, and Team:GetPlayers and Teams:GetTeams are not emulated, so the probe stops at its first line that reads a team"
+			"line": "server: ChildAdded team=Red color=Bright red neutral=false",
+			"why": "a joining player fires Players.PlayerAdded before Players.ChildAdded in a real session; ree fires ChildAdded first (set_parent queues it before the hierarchy hooks, where the Players hook fires PlayerAdded), so the ChildAdded line comes before the team and PlayerAdded lines"
 		}
 	]
 }

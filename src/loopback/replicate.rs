@@ -53,8 +53,10 @@ pub const CONTAINERS: [&str; 19] = [
 /// tools/parity/probes/loopback/replicated_properties.luau: 70 properties of 25 classes written on the server, before and
 /// after the join): every one arrives but LocalTransparencyModifier. rbx-dom's NotReplicated tag is not used: it marks a
 /// property not sent as itself (a script's Enabled, sent as Disabled; a part's Color, Size and Position), whose value arrives
-/// all the same. A Workspace's CurrentCamera is each side's own; Parent is the hierarchy's.
-const NOT_REPLICATED: [(Option<&str>, &str); 2] = [(None, "LocalTransparencyModifier"), (Some("Workspace"), "CurrentCamera")];
+/// all the same. A Workspace's CurrentCamera is each side's own; Parent is the hierarchy's. A player's Team each side works
+/// out from its TeamColor, Neutral and that side's teams (services/teams.rs; loopback/team_links.luau: the client's events
+/// are those of the TeamColor and Neutral it receives).
+const NOT_REPLICATED: [(Option<&str>, &str); 3] = [(None, "LocalTransparencyModifier"), (Some("Workspace"), "CurrentCamera"), (Some("Player"), "Team")];
 
 /// What the server did this frame that the client may have to hear of, in the order first done (sealed at the frame's
 /// end by [`flush`]: values are read then).

@@ -618,7 +618,7 @@ pub fn randomseed(engine: &Engine) -> LuaResult<()> {
 }
 
 /// Engine.JoinLocalPlayer: a joining player takes these from StarterPlayer (after the project,
-/// which may set them, is mounted).
+/// which may set them, is mounted), and its team.
 pub fn join_local_player(engine: &Rc<Engine>) {
     let Some(player) = engine.world().local_player else { return };
     let game = engine.world().game;
@@ -646,6 +646,14 @@ pub fn join_local_player(engine: &Rc<Engine>) {
         };
         let value = state.dom.raw_get(starter, starter_prop).cloned().unwrap_or(Value::Nil);
         core::raw_set(&mut state, reflection, &hooks, player, player_prop, value);
+    }
+    drop(state);
+    drop(hooks);
+    // and its team as a client finds it at its first line (services/teams.rs): in a client-only run the one its server gives
+    // the first player, in a loopback client the one the server's TeamColor and Neutral give (Studio's edit DataModel has
+    // no server to give one)
+    if !engine.options.edit_mode() {
+        services::teams::settle_local_player(engine, player, engine.loopback().is_some());
     }
 }
 

@@ -64,6 +64,8 @@ mod server_tests;
 #[cfg(test)]
 mod loopback_tests;
 #[cfg(test)]
+mod teams_tests;
+#[cfg(test)]
 mod loading_tests;
 #[cfg(test)]
 mod rojo_tests;
