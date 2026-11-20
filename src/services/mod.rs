@@ -447,6 +447,14 @@ pub fn install(engine: &Rc<Engine>) {
                 Ok(instance_value(lua, engine, service)?)
             }));
         }
+        // (the dump's `game.RunService` is the RunService, though the service is named "Run Service": measured in Studio
+        // 0.748, where game:FindFirstChild("RunService") is nil)
+        if let Some(run_service) = reflection.name_id("RunService") {
+            behaviors.add_getter(data_model, run_service, getter(|lua, engine, id| {
+                let service = get_service(engine, id, "RunService")?;
+                Ok(instance_value(lua, engine, service)?)
+            }));
+        }
         // (its function runs when the server shuts down, which no run reaches: Roblox's DataModel documentation)
         behaviors.add_method(data_model, K::BindToClose as NameId, method(|_, _, _, _| Ok(none())));
         behaviors.add_method(data_model, K::GetJobsInfo as NameId, constant(|lua| Ok(LuaValue::Table(lua.create_table()?))));
