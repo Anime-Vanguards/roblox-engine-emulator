@@ -294,3 +294,78 @@ fn math_number_classifiers_answer_as_luau_does() -> Result<()> {
     }
     Ok(())
 }
+
+unsafe extern "C-unwind" {
+    fn lua_setfloatmode(state: *mut mlua::ffi::lua_State, mode: std::ffi::c_int) -> std::ffi::c_int;
+}
+
+/// The smallest subnormal double times one, in the host's own arithmetic (never folded): 0 if the host ran in a flushing mode.
+fn host_product() -> f64 {
+    std::hint::black_box(5e-324_f64) * std::hint::black_box(1.0_f64)
+}
+
+/// lua_setfloatmode (patches/luau/19-float-mode.patch): in the flushing mode the interpreter makes a subnormal result zero and still
+/// reads a subnormal operand as itself (x86 flush-to-zero without denormals-are-zero), a Rust function the script calls computes in
+/// it too, and the host's own arithmetic finds its mode back once the interpreter returns, also when an error unwinds out of it (the
+/// VM is built without unwind semantics on MSVC: where the error lands puts it back). The keep mode keeps subnormals; a compile asked
+/// to (the mutable global "@floatmode:flush") folds constants in the flushing mode. Elsewhere than x86-64 nothing flushes.
+/// Interpreted, and in native code when the CPU supports it (products by 3: native code drops a multiplication by 1).
+#[test]
+fn the_float_mode_flushes_subnormal_results_inside_the_interpreter_only() -> Result<()> {
+    const PROBE: &str = r#"
+        local B = buffer.create(8)
+        buffer.writeu32(B, 0, 1)
+        buffer.writeu32(B, 4, 0)
+        local Sub = buffer.readf64(B, 0) -- the smallest subnormal, read at run time
+        local F = buffer.create(4)
+        buffer.writef32(F, 0, Sub + 1e-39) -- a float32 that is subnormal
+        local Caught = select(2, pcall(function() error({ Sub * 3 }) end))[1] -- (a number would gain the error's position)
+        return Sub * 3, buffer.readu32(F, 0), vector.create(Sub + 1e-39, 0, 0).X, Sub > 0, Sub * 2 ^ 60, HostProduct(Sub), Caught, Sub * 3
+    "#;
+    let flushes = cfg!(target_arch = "x86_64");
+    let subnormal_f32 = (1e-39_f32) as f64;
+    for jit in [false, true] {
+        let lua = Lua::new();
+        lua.enable_jit(jit && codegen_supported());
+        let state = lua.current_thread().state();
+        lua.globals().set("HostProduct", lua.create_function(|_, x: f64| Ok(std::hint::black_box(x) * std::hint::black_box(3.0)))?)?;
+        type Probe = (f64, u32, f64, bool, f64, f64, f64, f64);
+        // the default leaves the thread's mode as it is: kept
+        let kept: Probe = lua.load(PROBE).eval()?;
+        let three = 3.0 * 5e-324;
+        assert_eq!(kept, (three, 0x000AE398, subnormal_f32, true, 5e-324 * 2f64.powi(60), three, three, three), "jit {jit}");
+
+        assert_eq!(unsafe { lua_setfloatmode(state, 1) } != 0, flushes);
+        let flushed: Probe = lua.load(PROBE).eval()?;
+        if flushes {
+            // (a caught error inside the interpreter keeps the mode for what runs after it)
+            assert_eq!(flushed, (0.0, 0, 0.0, true, 5e-324 * 2f64.powi(60), 0.0, 0.0, 0.0), "jit {jit}");
+        } else {
+            assert_eq!(flushed, kept);
+        }
+        assert_eq!(host_product(), 5e-324, "the mode stays inside the interpreter (jit {jit})");
+        // an error that unwinds out of the interpreter, from a nested entry too (a Rust function's call back into Luau)
+        lua.globals().set("Reenter", lua.create_function(|lua, ()| lua.load("local B = buffer.create(8) buffer.writeu32(B, 0, 1) error(buffer.readf64(B, 0) * 3)").exec())?)?;
+        assert!(lua.load("Reenter()").exec().is_err());
+        assert_eq!(host_product(), 5e-324, "the mode stays inside the interpreter after an error (jit {jit})");
+        lua.globals().set("Fail", lua.create_function(|_, ()| -> Result<()> { Err(mlua::Error::runtime("a Rust function's error")) })?)?;
+        assert!(lua.load("Fail()").exec().is_err());
+        assert_eq!(host_product(), 5e-324, "after a Rust function's error (jit {jit})");
+        let resumed: Result<()> = lua.load("coroutine.wrap(function() error('in a coroutine') end)()").exec();
+        assert!(resumed.is_err());
+        assert_eq!(host_product(), 5e-324, "after an error in a coroutine (jit {jit})");
+
+        unsafe { lua_setfloatmode(state, 2) };
+        let kept_again: Probe = lua.load(PROBE).eval()?;
+        assert_eq!(kept_again, kept, "the keep mode (jit {jit})");
+
+        // constants fold in the flushing mode when the compile asks, whatever mode they then run in
+        let folded: (f64, f64, f64) = lua.load("return 2 ^ -1074, 5e-324 * 1, vector.create(1e-45, 0, 0).X").set_compiler(Compiler::new().set_optimization_level(2).add_mutable_global("@floatmode:flush")).eval()?;
+        assert_eq!(folded, if flushes { (0.0, 0.0, 0.0) } else { (5e-324, 5e-324, (1e-45_f32) as f64) }, "jit {jit}");
+        let unfolded: (f64, f64) = lua.load("return 2 ^ -1074, 5e-324 * 1").set_compiler(Compiler::new().set_optimization_level(2)).eval()?;
+        assert_eq!(unfolded, (5e-324, 5e-324), "jit {jit}");
+        assert_eq!(host_product(), 5e-324, "the mode stays inside the compile (jit {jit})");
+    }
+    Ok(())
+}
+

@@ -310,6 +310,11 @@ typedef struct global_State
 
     struct LuaTable* typeofnames; // a host's names for its values, for the builtin typeof (lua_settypeofnames; NULL: none)
     TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
+
+    uint8_t floatmode; // the float mode the interpreter runs in and native code compiles in (lua_setfloatmode)
+    bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
+    unsigned int floatsaved;
+    int floatdepth; // interpreter entries in progress (luau_execute)
 } global_State;
 // clang-format on
 

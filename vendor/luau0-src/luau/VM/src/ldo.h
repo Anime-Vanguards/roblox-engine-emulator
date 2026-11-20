@@ -7,6 +7,37 @@
 #include "luaconf.h"
 #include "ldebug.h"
 
+#include "Luau/FloatMode.h"
+
+// The host's float mode for the VM (lua_setfloatmode), applied by the outermost entry from C (a call: performcall; a resume:
+// lua_resume, lua_resumeerror; a Luau metamethod's call: callTMluau) and put back by its exit (every luau_execute runs inside one). An entry inside another only counts
+// itself: reading or writing the mode register waits for the float operations in flight, and a resume runs the interpreter several
+// times (a yieldable pcall leaves it and comes back). An error that unwinds entries skips their exits: luaD_rawrunprotected puts
+// the count and the mode back.
+struct FloatModeEntry
+{
+    global_State* g;
+
+    explicit FloatModeEntry(global_State* g)
+        : g(g)
+    {
+        if (g->floatdepth++ == 0)
+            g->floatchanged = Luau::floatModeApply(Luau::FloatMode(g->floatmode), g->floatsaved);
+    }
+
+    ~FloatModeEntry()
+    {
+        if (--g->floatdepth == 0 && g->floatchanged)
+        {
+            Luau::floatModeRestore(g->floatsaved);
+            g->floatchanged = false;
+        }
+    }
+
+    FloatModeEntry(const FloatModeEntry&) = delete;
+    FloatModeEntry& operator=(const FloatModeEntry&) = delete;
+};
+
 // returns target stack for 'n' extra elements to reallocate
 // if possible, stack size growth factor is 2x
 #define getgrownstacksize(L, n) ((n) <= L->stacksize ? 2 * L->stacksize : L->stacksize + (n))

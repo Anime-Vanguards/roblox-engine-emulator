@@ -1709,6 +1709,9 @@ fn render(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
         state.sched.begin_phase();
         profile::count("renderSteps", 1);
     }
+    // A client's and edit mode's render step keeps subnormals, where the rest of the frame flushes them (lua/float_mode.rs); a
+    // server has none
+    let _float_mode = (!engine.options.server()).then(|| crate::lua::float_mode::RenderStep::enter(lua));
     // The VM's tables, closures and functions go cold with the instances (cost.rs LUAU_COLD_TABLE): a VM that interprets its
     // scripts (their Luau is charged) counts their first touch in a frame from the first frame on
     let cold = engine.state.borrow().sched.cold_tracking;

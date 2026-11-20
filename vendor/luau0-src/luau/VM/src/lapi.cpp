@@ -2,6 +2,8 @@
 // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
 #include "lapi.h"
 
+#include "Luau/FloatMode.h"
+
 #include <atomic>
 #include <mutex>
 #include <type_traits>
@@ -1551,6 +1553,13 @@ void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud)
 {
     L->global->gcclock = clock;
     L->global->gcclockud = ud;
+}
+
+int lua_setfloatmode(lua_State* L, int mode)
+{
+    api_check(L, mode == LUA_FLOATMODE_THREAD || mode == LUA_FLOATMODE_FLUSH || mode == LUA_FLOATMODE_KEEP);
+    L->global->floatmode = uint8_t(mode);
+    return LUAU_FLOATMODE_SUPPORTED;
 }
 
 void lua_settypeofnames(lua_State* L, int idx, const char* vectorname)

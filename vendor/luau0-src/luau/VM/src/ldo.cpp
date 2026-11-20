@@ -10,6 +10,23 @@
 #include "lvm.h"
 #include "lprofile.h"
 
+#include "Luau/FloatMode.h"
+
+// After an error caught by a protected call entered with `depth` interpreter entries in progress: the entries it unwound did not
+// count their exits, and when it unwound the outermost one, the caller's float mode is put back (lua_setfloatmode)
+static void luaD_floatunwound(lua_State* L, int depth)
+{
+    global_State* g = L->global;
+    if (g->floatdepth == depth)
+        return;
+    g->floatdepth = depth;
+    if (depth == 0 && g->floatchanged)
+    {
+        Luau::floatModeRestore(g->floatsaved);
+        g->floatchanged = false;
+    }
+}
+
 #if LUA_USE_LONGJMP
 #include <setjmp.h>
 #include <stdlib.h>
@@ -54,11 +71,17 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
     jb.prev = L->global->errorjmp;
     jb.status = 0;
     L->global->errorjmp = &jb;
+    // (the interpreter's entries in progress: an error that unwinds some skips their exits, luaD_floatunwound)
+    const int floatdepth = L->global->floatdepth;
 
     if (LUAU_SETJMP(jb.buf) == 0)
         f(L, ud);
-    else if (luaP_state)
-        luaP_unwound(L, &jb);
+    else
+    {
+        luaD_floatunwound(L, floatdepth);
+        if (luaP_state)
+            luaP_unwound(L, &jb);
+    }
 
     L->global->errorjmp = jb.prev;
     return jb.status;
@@ -127,6 +150,9 @@ private:
 int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
 {
     int status = 0;
+    // The interpreter's entries in progress: an error that unwinds some skips their exits, built without unwind semantics (no /EHsc),
+    // so the count and the float mode are put back once it is caught (luaD_floatunwound)
+    const int floatdepth = L->global->floatdepth;
 
     try
     {
@@ -165,6 +191,9 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
         }
     }
 
+    // (here, not in the catch: on Windows a catch block runs before the unwind ends, which then restores the registers the error
+    // was raised with, the float mode's among them)
+    luaD_floatunwound(L, floatdepth);
     return status;
 }
 
@@ -302,6 +331,7 @@ static void performcall(lua_State* L, StkId func, int nresults, bool preparereen
         else
         {
             ptrdiff_t basecioffset = saveci(L, L->ci - 1);
+            FloatModeEntry floatmode(L->global);
 
             luau_execute(L);
 
@@ -843,6 +873,7 @@ int lua_resume(lua_State* L, lua_State* from, int nargs)
         L->global->cb.preresume(L);
 
     int oldnCcalls = L->nCcalls;
+    FloatModeEntry floatmode(L->global);
 
     int status = luaD_rawrunprotected(L, resume, L->top - nargs);
 
@@ -873,6 +904,7 @@ int lua_resumeerror(lua_State* L, lua_State* from)
         L->global->cb.preresume(L);
 
     int oldnCcalls = L->nCcalls;
+    FloatModeEntry floatmode(L->global);
 
     int status = LUA_ERRRUN;
 

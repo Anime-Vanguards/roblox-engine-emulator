@@ -99,6 +99,8 @@ static LUAU_FORCEINLINE void callTMluau(lua_State* L, StkId top, Closure* ccl, i
     if (LUAU_UNLIKELY(L->global->profilecalls))
         luaP_callenter(L);
 
+    // (an entry from C when a host's lua_gettable meets a Luau __index: ldo.h FloatModeEntry)
+    FloatModeEntry floatmode(L->global);
     luau_execute(L);
 
     // resume_continue is not handled here as metamethods are not yieldable

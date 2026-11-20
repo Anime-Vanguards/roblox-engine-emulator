@@ -3,9 +3,20 @@
 
 #include "Luau/Compiler.h"
 #include "Luau/ClientFlags.h"
+#include "Luau/FloatMode.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+// Whether a compile folds constants in the flushing float mode (Luau/FloatMode.h): the host lists this name among the mutable globals,
+// since the options' layout is the binding's to fill. No source can name it (it is no identifier), so it marks no global mutable.
+static bool foldsflushed(const char* const* mutableGlobals)
+{
+    for (const char* const* name = mutableGlobals; name && *name; ++name)
+        if (strcmp(*name, LUAU_COMPILE_FLOATMODE_FLUSH) == 0)
+            return true;
+    return false;
+}
 
 char* luau_compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize)
 {
@@ -22,6 +33,8 @@ char* luau_compile(const char* source, size_t size, lua_CompileOptions* options,
         memcpy(static_cast<void*>(&opts), options, sizeof(opts));
     }
 
+    // (constant folding runs in the float mode the host's scripts run in: a folded `2 ^ -1074` is zero where their arithmetic flushes)
+    Luau::FloatModeScope floatmode(options && foldsflushed(options->mutableGlobals) ? Luau::FloatMode::Flush : Luau::FloatMode::Thread);
     std::string result = compile(std::string(source, size), opts);
 
     char* copy = static_cast<char*>(malloc(result.size()));

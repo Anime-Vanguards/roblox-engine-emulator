@@ -11,6 +11,7 @@ pub mod actors;
 pub mod bindable;
 pub mod convert;
 pub mod curve_keys;
+pub mod float_mode;
 pub mod globals;
 pub mod holders;
 pub mod instance;

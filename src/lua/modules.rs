@@ -367,17 +367,20 @@ pub fn required_files(engine: &Engine) -> Vec<String> {
 /// Scripts see the engine's `typeof` (Vector3 for native vectors, registered table types), so
 /// the compiler must not fold or fast-call the builtin.
 /// Vector3.new compiles as the VM's vector constructor (a fast call), as Roblox compiles it.
+/// Constants fold in the float mode that flushes subnormal results, as Roblox's script loader folds them (lua/float_mode.rs): the
+/// same in every run context, so the bytecode this compiler makes (kept by [`CompiledSources`], [`Prefetch`] and a loopback run's
+/// sides) serves every engine.
 pub fn compiler() -> Compiler {
     // (typeof is a builtin, as in Roblox, whose client runs a script's `typeof(x)` as a fast call: the VM's builtin names ree's
     // values as ree's typeof does, raw.rs typeof_function; measured in tools/cost-parity's env rows. The compiler leaves the
     // typeof of a constant vector to the VM, which names it Vector3, rather than folding it to "vector": Luau has done so
     // since LuauCompileTypeofFold's behaviour became its only one)
-    Compiler::new().set_optimization_level(2).set_vector_ctor("Vector3.new").set_vector_type("Vector3")
+    Compiler::new().set_optimization_level(2).set_vector_ctor("Vector3.new").set_vector_type("Vector3").add_mutable_global(super::float_mode::COMPILE_FLUSH)
 }
 
 /// The engine's own Luau (the prelude, services, vector3.luau), whose `Vector3` is Lune's.
 pub fn engine_compiler() -> Compiler {
-    Compiler::new().set_optimization_level(2).set_disabled_builtins(["typeof"])
+    Compiler::new().set_optimization_level(2).set_disabled_builtins(["typeof"]).add_mutable_global(super::float_mode::COMPILE_FLUSH)
 }
 
 /// How many times this process compiled a chunk of the engine's own Luau ([`load_engine_luau`]): once per chunk

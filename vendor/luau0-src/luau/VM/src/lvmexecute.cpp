@@ -4134,6 +4134,7 @@ void luaP_executeprofiled(lua_State* L)
 #else
 void luau_execute(lua_State* L)
 {
+
     // A host's profile follows every entry into the interpreter, so it also sees an error that is caught outside it
     // (luaP_Execute). Under a profile the entry picks one of three copies: the stepping one for a thread the profile
     // steps, the call-sampling one (compiled apart: lvmexecute_profiled.cpp) while a call hook is set, else the plain one

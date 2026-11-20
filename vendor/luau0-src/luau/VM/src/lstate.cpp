@@ -246,6 +246,10 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
     g->gcclockud = NULL;
     g->typeofnames = NULL;
     g->vectortypename = NULL;
+    g->floatmode = LUA_FLOATMODE_THREAD;
+    g->floatchanged = false;
+    g->floatsaved = 0;
+    g->floatdepth = 0;
     g->coldon = 0;
     g->profilecalls = 0;
     g->coldslot = 0;

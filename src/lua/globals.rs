@@ -500,6 +500,8 @@ fn missing_child_in(lua: &Lua, engine: &Rc<Engine>, parent: InstanceId, name: &[
 /// player, camera and mouse, and the shared script environment.
 pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     lua.set_app_data(engine.clone());
+    // Scripts flush subnormal results to zero, as Roblox's engine runs them (lua/float_mode.rs)
+    super::float_mode::start(lua);
     lua.set_compiler(modules::compiler());
     // The string metatable is locked: getmetatable("") is a string in a playing client (measured, Studio 0.744:
     // tools/parity/probes/values.luau; the text is the lock text Roblox's other metatables give, not measured here)

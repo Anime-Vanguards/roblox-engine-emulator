@@ -5,20 +5,6 @@
 			"why": "Model:MoveTo itself: a client leaves a model outside the DataModel where it is (the exact name too); ree moves it"
 		}
 	],
-	"buffer_vector_f32": [
-		{
-			"line": "read-unaligned ok 1 0 -1.36468614e-12 -3123882.5 | ok 1 2.52437386e-29 -3.03172418e-13 0",
-			"why": "subnormal float32s: the reference builds its vector with vector.create, whose float32 conversion the engine flushes to zero (flush-to-zero; readf32 keeps a subnormal: float_flush.luau), as it does buffer.writef32; ree keeps them"
-		},
-		{
-			"line": "read-special ok 1 inf -inf nan | ok 1 0 -0 3.40282347e+38 | ok 1 0 -0 0",
-			"why": "subnormal float32s: the reference builds its vector with vector.create, whose float32 conversion the engine flushes to zero (flush-to-zero; readf32 keeps a subnormal: float_flush.luau), as it does buffer.writef32; ree keeps them"
-		},
-		{
-			"line": "write-subnormal ok 0 000000000000008000000000 | ok 0000000000000000",
-			"why": "subnormal float32s: the reference builds its vector with vector.create, whose float32 conversion the engine flushes to zero (flush-to-zero; readf32 keeps a subnormal: float_flush.luau), as it does buffer.writef32; ree keeps them"
-		}
-	],
 	"buffer_vector_time": [
 		{
 			"line": "vector-format error invalid argument #2 to 'format' (string expected, got Vector3) ok 1, 2, 3 concat error @86: attempt to concatenate string with Vector3",
@@ -69,16 +55,6 @@
 			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		}
 	],
-	"cframe_new_quat": [
-		{
-			"line": "scale 9.9999999999999995e-21 1 |",
-			"why": "subnormal float32s: the squares of components near 1e-20 are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this constructor"
-		},
-		{
-			"line": "scale 9.9999999999999995e-21 2 |",
-			"why": "subnormal float32s: the squares of components near 1e-20 are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this constructor"
-		}
-	],
 	"cframe_rotation_between": [
 		{
 			"line": "args none error @123: missing argument #1 to 'fromRotationBetweenVectors' (Vector3 expected)",
@@ -99,42 +75,6 @@
 		{
 			"line": "args vector2 error @135: invalid argument #2 to 'fromRotationBetweenVectors' (Vector3 expected, got Vector2)",
 			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
-		},
-		{
-			"line": "scaled -66 1 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
-		},
-		{
-			"line": "scaled-both -66 1 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
-		},
-		{
-			"line": "scaled -66 2 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
-		},
-		{
-			"line": "scaled-both -66 2 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
-		},
-		{
-			"line": "scaled -66 3 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
-		},
-		{
-			"line": "scaled-both -66 3 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
-		},
-		{
-			"line": "scaled-both -40 1 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
-		},
-		{
-			"line": "scaled-both -40 2 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
-		},
-		{
-			"line": "scaled-both -40 3 |",
-			"why": "subnormal float32s: squared lengths near 1e-38 and below are subnormal and the engine flushes them to zero (flush-to-zero, float_flush.luau); ree keeps them. A float mode of the engine, not of this function"
 		}
 	],
 	"chunknames": [
@@ -225,12 +165,6 @@
 			"why": "a server has no NetworkClient; ree's probe line is the service it made"
 		}
 	],
-	"datatypes": [
-		{
-			"line": "v3-precision 0.100000001 0.200000003 0.300000012 0.333333343 16777216 0 true",
-			"why": "the compiler folds Vector3.new(1 / 3, 2 ^ 24 + 1, 1e-45) in the engine's float mode, which flushes the subnormal Z to 0 (flush-to-zero, float_flush.luau); ree folds keeping it"
-		}
-	],
 	"datetime": [
 		{
 			"line": "locale-default error invalid argument #3 to 'FormatUniversalTime' (string expected, got nil) | ok 14 November 2023 | ok November 14, 2023 | ok November 14, 2023 | ok 5",
@@ -291,12 +225,6 @@
 		{
 			"line": "tags a,b has true false",
 			"why": "GetTags order: a client listed b then a as a,b (sorted or hashed: two tags do not tell); ree lists them in the order added"
-		}
-	],
-	"json_numbers": [
-		{
-			"line": "decode 0.30000000000000004=0.30000000000000004 0.30000000000000007=0.30000000000000004 195.66666666666666=195.66666666666666 1.7976931348623157e308=1.7976931348623157e+308 2.2250738585072014e-308=2.2250738585072014e-308 4.9e-324=0 2.4703282292062327e-324=0 9007199254740993=9007199254740992 9007199254740992.5=9007199254740992 123456789012345678901234567890=1.2345678901234568e+29 0.1000000000000000055511151231257827=0.10000000000000001 1e23=9.9999999999999992e+22 8.98846567431158e307=8.9884656743115795e+307 1.00000000000000011102230246251565404236316680908203125=1 1.000000000000000111022302462515654042363166809082031251=1.0000000000000002 0.000001=9.9999999999999995e-07 1e-7=9.9999999999999995e-08 -0.0=-0 -0=0 0e10=0 1E-2=0.01 12345678901234567890e-30=1.2345678901234568e-11",
-			"why": "P.num formats 4.9e-324 with %.17g, which prints 0 in the engine (flush-to-zero; JSONDecode keeps the subnormal: float_flush.luau); ree prints its digits"
 		}
 	],
 	"lifetime": [
@@ -455,132 +383,6 @@
 		{
 			"line": "value SecurityCapabilities typeof=SecurityCapabilities type=userdata tostring=",
 			"why": "SecurityCapabilities has no constructor in ree"
-		}
-	],
-	"float_flush": [
-		{
-			"line": "format ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "mul ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "add ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "sub ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "div ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "pow ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "mod ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "writef32 ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "pack-f ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "vector-create ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "vector3-new ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "vector-mul ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "vector-add ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "magnitude ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "vector-cross ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "read-vector ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "read-scale ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "datatypes ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "properties ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "cframe-mul ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path main ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path coroutine ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path pcall ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path spawned ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path resumed ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path handler ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path deferred ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path heartbeat ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path heartbeatWait ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "path tween ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
-		},
-		{
-			"line": "loadstring ",
-			"why": "the engine runs scripts with flush-to-zero on and denormals-are-zero off (float_flush.luau): a subnormal result is zero; ree keeps subnormals"
 		}
 	]
 }

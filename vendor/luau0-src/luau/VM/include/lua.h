@@ -403,6 +403,18 @@ LUA_API void lua_workmute(lua_State* L, int on);
 // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
 LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
 
+// the float mode the interpreter runs in, from its outermost entry until that returns (Luau/FloatMode.h): FLUSH makes a subnormal result zero
+// and still reads a subnormal operand as itself (x86 flush-to-zero without denormals-are-zero), KEEP keeps subnormals (IEEE 754),
+// THREAD (the default) leaves the calling thread's mode as it is. The caller's mode is back when the interpreter returns or once
+// an error is caught, so the host's own code outside the interpreter never runs in it; the C functions a script calls do,
+// as an engine's own code runs in its scripts' mode. Native code is compiled in it too (luau_codegen_compile folds constants). A
+// change takes effect at the next outermost entry (a host that runs one phase of its frame in another mode sets it between them).
+// Returns 0 where the target has no such mode (all but x86-64: the mode is then the thread's), else 1.
+#define LUA_FLOATMODE_THREAD 0
+#define LUA_FLOATMODE_FLUSH 1
+#define LUA_FLOATMODE_KEEP 2
+LUA_API int lua_setfloatmode(lua_State* L, int mode);
+
 // cold touches (the work counters' cold*): a client runs a frame's engine work between two frames' scripts, so a table, closure or
 // function a frame's script work touches first finds it out of the CPU's caches. On, the VM marks each table, Luau closure and
 // function its instructions touch, in the object's header (a bit no other use has; nothing a script reads changes), and counts the

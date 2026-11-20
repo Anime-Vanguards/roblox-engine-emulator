@@ -62,6 +62,59 @@ fn assert_script(source: &str) {
     assert!(errors.is_empty(), "{errors:?}");
 }
 
+/// Scripts compute in Roblox's float mode (lua/float_mode.rs; measured in Studio 0.747: tools/parity/probes/float_flush.luau): a
+/// subnormal result is zero while a subnormal operand still reads as itself, on a server everywhere and on a client and in edit
+/// mode everywhere but the render step (RenderStepped, PreRender, a binding, what they defer, a tween's Changed handlers on a
+/// client), which keeps subnormals; constants fold to zero in every context. The host's own arithmetic keeps them throughout.
+#[test]
+fn scripts_flush_subnormal_results_where_roblox_does_and_keep_them_in_a_clients_render_step() {
+    use super::RunContext;
+    let script = r##"
+        local Stored = buffer.create(8)
+        buffer.writeu32(Stored, 0, 1)
+        buffer.writeu32(Stored, 4, 0)
+        local function Mode()
+            local Sub = buffer.readf64(Stored, 0) -- the smallest subnormal, read at run time
+            -- (times 3: native code drops a multiplication by 1, as Luau's code generator does in Roblox's native code too)
+            return (if Sub * 3 ~= 0 then "keep" else "flush") .. (if Sub > 0 then "" else " operands")
+        end
+        local RunService = game:GetService("RunService")
+        local Seen = { start = Mode(), folded = if 2 ^ -1074 == 0 and 5e-324 * 1 == 0 then "flush" else "keep" }
+        _G.Seen = Seen
+        local function Note(Name)
+            Seen[Name] = Seen[Name] or Mode()
+        end
+        RunService.Heartbeat:Connect(function() Note("heartbeat") end)
+        local Value = Instance.new("NumberValue")
+        Value.Changed:Connect(function() Note("tween") end)
+        game:GetService("TweenService"):Create(Value, TweenInfo.new(0.1), { Value = 1 }):Play()
+        pcall(function()
+            RunService.RenderStepped:Connect(function()
+                Note("renderStepped")
+                task.defer(function() Note("renderDeferred") end)
+            end)
+            RunService:BindToRenderStep("Probe", 100, function() Note("binding") end)
+        end)
+        task.delay(0.05, function() Note("delay") end)
+        "##;
+    let flushes = super::lua::float_mode::supported();
+    for (mode, run_context, render, tween) in [("play", RunContext::Client, true, "keep"), ("play", RunContext::Server, false, "flush"), ("edit", RunContext::Edit, true, "keep")] {
+        let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });
+        run(&lua, &engine, script);
+        scheduler::run_until(&lua, &engine, 0.3).unwrap();
+        let output = run(&lua, &engine, "local Lines = {} for Name, Mode in _G.Seen do table.insert(Lines, Name .. '=' .. Mode) end table.sort(Lines) print(table.concat(Lines, ','))");
+        let got: Vec<String> = output.last().unwrap().trim_start_matches("print: ").split(',').map(String::from).collect();
+        let (flush, keep) = if flushes { ("flush", "keep") } else { ("keep", "keep") };
+        let mut want: Vec<String> = vec![format!("delay={flush}"), format!("folded={flush}"), format!("heartbeat={flush}"), format!("start={flush}"), format!("tween={}", if flushes { tween } else { keep })];
+        if render {
+            want.extend([format!("binding={keep}"), format!("renderDeferred={keep}"), format!("renderStepped={keep}")]);
+        }
+        want.sort();
+        assert_eq!(got, want, "{mode} {run_context:?}");
+        assert_eq!(std::hint::black_box(5e-324_f64) * std::hint::black_box(1.0), 5e-324, "the host's arithmetic keeps subnormals ({mode} {run_context:?})");
+    }
+}
+
 /// A playing client's mouse and gamepad sensitivities start at 1 (measured: tools/parity/probes/settings.luau); they
 /// read 0 before (a service has no reflection defaults, and rbx-dom leaves UserGameSettings' numbers out).
 #[test]

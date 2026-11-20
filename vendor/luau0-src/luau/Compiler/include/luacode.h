@@ -10,6 +10,10 @@
 #endif
 
 typedef struct lua_CompileOptions lua_CompileOptions;
+
+// a name a host lists among the mutable globals to have constants fold in the float mode that flushes subnormal results to zero (on
+// x86-64; elsewhere the thread's mode): the mode its scripts run in (lua_setfloatmode)
+#define LUAU_COMPILE_FLOATMODE_FLUSH "@floatmode:flush"
 typedef void* lua_CompileConstant;
 
 // return a type identifier for a global library member
@@ -55,6 +59,7 @@ struct lua_CompileOptions
     int vectorPrecision; // default=0
 
     // null-terminated array of globals that are mutable; disables the import optimization for fields accessed through these
+    // (LUAU_COMPILE_FLOATMODE_FLUSH among them: constants fold in the flushing float mode, Luau/FloatMode.h)
     const char* const* mutableGlobals;
 
     // null-terminated array of userdata types that will be included in the type information

@@ -1,0 +1,437 @@
+# Topic: scripts run, and constants fold, in the host's float mode
+#
+# What it does: lua_setfloatmode gives a VM the float mode its interpreter runs in: FLUSH (x86's SSE flush-to-zero with
+# denormals-are-zero off: a subnormal result is zero, a subnormal operand is still read as itself), KEEP (IEEE 754's gradual
+# underflow) or THREAD (the default: the calling thread's mode as it is). The VM's outermost entry from C (a call, a resume, a
+# Luau metamethod's call) applies it and puts the caller's back when it returns; a nested entry only counts itself (reading the
+# mode register waits for the float operations in flight, and a resume re-enters the interpreter for every yieldable pcall).
+# luaD_rawrunprotected resets the count and the mode once an error is caught (the VM is built without unwind semantics on MSVC,
+# so a destructor does not run while an error unwinds its frame, and on Windows a restore inside the catch block is undone by the
+# unwind that follows it); luau_codegen_compile
+# folds constants in the VM's mode; luau_compile folds them in the flushing mode when the options list
+# LUAU_COMPILE_FLOATMODE_FLUSH among the mutable globals (the options' C layout is the binding's to fill). x86-64 only: elsewhere
+# no mode flushes results alone, and every mode is the thread's (Luau/FloatMode.h).
+#
+# Why upstream lacks it: upstream leaves the float environment to its host. Roblox's engine runs scripts with flush-to-zero on
+# and denormals-are-zero off, except in a client's render step, and folds constants in that mode (measured in Studio 0.747 on a
+# client, a server and in edit mode: tools/parity/probes/float_flush.luau). The mode is set here, around the interpreter and the
+# compilers, because a host in Rust may not change it: its compiler assumes the default float environment, so no host code runs
+# in the mode but the C functions a script calls, as an engine's own code runs in its scripts' mode.
+
+diff --git a/luau/CodeGen/src/lcodegen.cpp b/luau/CodeGen/src/lcodegen.cpp
+index 1ad685a..3d5a3d5 100644
+--- a/luau/CodeGen/src/lcodegen.cpp
++++ b/luau/CodeGen/src/lcodegen.cpp
+@@ -4,6 +4,9 @@
+ #include "Luau/CodeGen.h"
+ 
+ #include "lapi.h"
++#include "lstate.h"
++
++#include "Luau/FloatMode.h"
+ 
+ int luau_codegen_supported()
+ {
+@@ -17,6 +20,8 @@ void luau_codegen_create(lua_State* L)
+ 
+ void luau_codegen_compile(lua_State* L, int idx)
+ {
++    // (the native compiler folds constants in the float mode the code will run in: lua_setfloatmode)
++    Luau::FloatModeScope floatmode(Luau::FloatMode(L->global->floatmode));
+     Luau::CodeGen::CompilationOptions options;
+     Luau::CodeGen::compile(L, idx, options);
+ }
+diff --git a/luau/Common/include/Luau/FloatMode.h b/luau/Common/include/Luau/FloatMode.h
+new file mode 100644
+index 0000000..0bc021d
+--- /dev/null
++++ b/luau/Common/include/Luau/FloatMode.h
+@@ -0,0 +1,90 @@
++// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
++#pragma once
++
++// A host's float mode for the code it runs (lua_setfloatmode), set on the calling thread for a scope and the caller's mode put back
++// when it ends. Only the mode's two bits change, and only here, in C++: the host's own code runs in them only when the scope calls it
++// (a C function a script calls).
++//
++// FloatMode::Flush is x86's SSE flush-to-zero (MXCSR bit 15) with denormals-are-zero (bit 6) off: an operation whose result is
++// subnormal gives zero, a subnormal operand is still read as itself (so reads, comparisons and scaling keep it). FloatMode::Keep clears
++// both: IEEE 754's gradual underflow. Other targets have no mode that flushes results alone (AArch64's FPCR.FZ also flushes operands,
++// unless FEAT_AFP's controls change it), so there nothing changes.
++//
++// Reading or writing the mode register waits for the float operations in flight, so the interpreter applies the mode at its outermost
++// entry only (lvmexecute.cpp). The VM is built without C++ unwind semantics on MSVC (no /EHsc: a destructor does not run while an
++// error unwinds its frame), so a scope puts the mode back on a normal exit only, and luaD_rawrunprotected does it once an error is
++// caught.
++#if (defined(_M_X64) && !defined(_M_ARM64EC)) || defined(__x86_64__)
++#include <xmmintrin.h>
++#define LUAU_FLOATMODE_SUPPORTED 1
++#else
++#define LUAU_FLOATMODE_SUPPORTED 0
++#endif
++
++namespace Luau
++{
++
++// (the values of lua.h's LUA_FLOATMODE_*)
++enum class FloatMode : unsigned char
++{
++    Thread = 0, // the calling thread's mode, unchanged
++    Flush = 1,
++    Keep = 2,
++};
++
++#if LUAU_FLOATMODE_SUPPORTED
++constexpr unsigned int kFloatModeBits = 0x8040; // flush-to-zero, denormals-are-zero
++constexpr unsigned int kFloatModeFlush = 0x8000;
++
++// Sets `mode` on the calling thread; true when that changed its bits, which `saved` then holds
++inline bool floatModeApply(FloatMode mode, unsigned int& saved)
++{
++    if (mode == FloatMode::Thread)
++        return false;
++    unsigned int csr = _mm_getcsr();
++    unsigned int want = (csr & ~kFloatModeBits) | (mode == FloatMode::Flush ? kFloatModeFlush : 0);
++    if (want == csr)
++        return false;
++    _mm_setcsr(want);
++    saved = csr & kFloatModeBits;
++    return true;
++}
++
++// Puts mode bits `saved` back on the calling thread (when they differ: a write costs more than a read)
++inline void floatModeRestore(unsigned int saved)
++{
++    unsigned int csr = _mm_getcsr();
++    if ((csr & kFloatModeBits) != saved)
++        _mm_setcsr((csr & ~kFloatModeBits) | saved);
++}
++#else
++inline bool floatModeApply(FloatMode, unsigned int&)
++{
++    return false;
++}
++
++inline void floatModeRestore(unsigned int) {}
++#endif
++
++// `mode` for a scope that raises no error past its end (a compile)
++struct FloatModeScope
++{
++    unsigned int saved = 0;
++    bool changed;
++
++    explicit FloatModeScope(FloatMode mode)
++        : changed(floatModeApply(mode, saved))
++    {
++    }
++
++    ~FloatModeScope()
++    {
++        if (changed)
++            floatModeRestore(saved);
++    }
++
++    FloatModeScope(const FloatModeScope&) = delete;
++    FloatModeScope& operator=(const FloatModeScope&) = delete;
++};
++
++} // namespace Luau
+diff --git a/luau/Compiler/include/luacode.h b/luau/Compiler/include/luacode.h
+index 1d932ae..4bd9d3a 100644
+--- a/luau/Compiler/include/luacode.h
++++ b/luau/Compiler/include/luacode.h
+@@ -10,6 +10,10 @@
+ #endif
+ 
+ typedef struct lua_CompileOptions lua_CompileOptions;
++
++// a name a host lists among the mutable globals to have constants fold in the float mode that flushes subnormal results to zero (on
++// x86-64; elsewhere the thread's mode): the mode its scripts run in (lua_setfloatmode)
++#define LUAU_COMPILE_FLOATMODE_FLUSH "@floatmode:flush"
+ typedef void* lua_CompileConstant;
+ 
+ // return a type identifier for a global library member
+@@ -55,6 +59,7 @@ struct lua_CompileOptions
+     int vectorPrecision; // default=0
+ 
+     // null-terminated array of globals that are mutable; disables the import optimization for fields accessed through these
++    // (LUAU_COMPILE_FLOATMODE_FLUSH among them: constants fold in the flushing float mode, Luau/FloatMode.h)
+     const char* const* mutableGlobals;
+ 
+     // null-terminated array of userdata types that will be included in the type information
+diff --git a/luau/Compiler/src/lcode.cpp b/luau/Compiler/src/lcode.cpp
+index ad5a92e..ebd7694 100644
+--- a/luau/Compiler/src/lcode.cpp
++++ b/luau/Compiler/src/lcode.cpp
+@@ -3,10 +3,21 @@
+ 
+ #include "Luau/Compiler.h"
+ #include "Luau/ClientFlags.h"
++#include "Luau/FloatMode.h"
+ 
+ #include <stdlib.h>
+ #include <string.h>
+ 
++// Whether a compile folds constants in the flushing float mode (Luau/FloatMode.h): the host lists this name among the mutable globals,
++// since the options' layout is the binding's to fill. No source can name it (it is no identifier), so it marks no global mutable.
++static bool foldsflushed(const char* const* mutableGlobals)
++{
++    for (const char* const* name = mutableGlobals; name && *name; ++name)
++        if (strcmp(*name, LUAU_COMPILE_FLOATMODE_FLUSH) == 0)
++            return true;
++    return false;
++}
++
+ char* luau_compile(const char* source, size_t size, lua_CompileOptions* options, size_t* outsize)
+ {
+     LUAU_ASSERT(outsize);
+@@ -22,6 +33,8 @@ char* luau_compile(const char* source, size_t size, lua_CompileOptions* options,
+         memcpy(static_cast<void*>(&opts), options, sizeof(opts));
+     }
+ 
++    // (constant folding runs in the float mode the host's scripts run in: a folded `2 ^ -1074` is zero where their arithmetic flushes)
++    Luau::FloatModeScope floatmode(options && foldsflushed(options->mutableGlobals) ? Luau::FloatMode::Flush : Luau::FloatMode::Thread);
+     std::string result = compile(std::string(source, size), opts);
+ 
+     char* copy = static_cast<char*>(malloc(result.size()));
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index 51ad5b8..c2827f8 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -403,6 +403,18 @@ LUA_API void lua_workmute(lua_State* L, int on);
+ // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
+ LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
+ 
++// the float mode the interpreter runs in, from its outermost entry until that returns (Luau/FloatMode.h): FLUSH makes a subnormal result zero
++// and still reads a subnormal operand as itself (x86 flush-to-zero without denormals-are-zero), KEEP keeps subnormals (IEEE 754),
++// THREAD (the default) leaves the calling thread's mode as it is. The caller's mode is back when the interpreter returns or once
++// an error is caught, so the host's own code outside the interpreter never runs in it; the C functions a script calls do,
++// as an engine's own code runs in its scripts' mode. Native code is compiled in it too (luau_codegen_compile folds constants). A
++// change takes effect at the next outermost entry (a host that runs one phase of its frame in another mode sets it between them).
++// Returns 0 where the target has no such mode (all but x86-64: the mode is then the thread's), else 1.
++#define LUA_FLOATMODE_THREAD 0
++#define LUA_FLOATMODE_FLUSH 1
++#define LUA_FLOATMODE_KEEP 2
++LUA_API int lua_setfloatmode(lua_State* L, int mode);
++
+ // cold touches (the work counters' cold*): a client runs a frame's engine work between two frames' scripts, so a table, closure or
+ // function a frame's script work touches first finds it out of the CPU's caches. On, the VM marks each table, Luau closure and
+ // function its instructions touch, in the object's header (a bit no other use has; nothing a script reads changes), and counts the
+diff --git a/luau/VM/src/lapi.cpp b/luau/VM/src/lapi.cpp
+index 00a5956..553d611 100644
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -2,6 +2,8 @@
+ // This code is based on Lua 5.x implementation licensed under MIT License; see lua_LICENSE.txt for details
+ #include "lapi.h"
+ 
++#include "Luau/FloatMode.h"
++
+ #include <atomic>
+ #include <mutex>
+ #include <type_traits>
+@@ -1553,6 +1555,13 @@ void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud)
+     L->global->gcclockud = ud;
+ }
+ 
++int lua_setfloatmode(lua_State* L, int mode)
++{
++    api_check(L, mode == LUA_FLOATMODE_THREAD || mode == LUA_FLOATMODE_FLUSH || mode == LUA_FLOATMODE_KEEP);
++    L->global->floatmode = uint8_t(mode);
++    return LUAU_FLOATMODE_SUPPORTED;
++}
++
+ void lua_settypeofnames(lua_State* L, int idx, const char* vectorname)
+ {
+     const TValue* names = index2addr(L, idx);
+diff --git a/luau/VM/src/ldo.cpp b/luau/VM/src/ldo.cpp
+index fe8e129..9a05084 100644
+--- a/luau/VM/src/ldo.cpp
++++ b/luau/VM/src/ldo.cpp
+@@ -10,6 +10,23 @@
+ #include "lvm.h"
+ #include "lprofile.h"
+ 
++#include "Luau/FloatMode.h"
++
++// After an error caught by a protected call entered with `depth` interpreter entries in progress: the entries it unwound did not
++// count their exits, and when it unwound the outermost one, the caller's float mode is put back (lua_setfloatmode)
++static void luaD_floatunwound(lua_State* L, int depth)
++{
++    global_State* g = L->global;
++    if (g->floatdepth == depth)
++        return;
++    g->floatdepth = depth;
++    if (depth == 0 && g->floatchanged)
++    {
++        Luau::floatModeRestore(g->floatsaved);
++        g->floatchanged = false;
++    }
++}
++
+ #if LUA_USE_LONGJMP
+ #include <setjmp.h>
+ #include <stdlib.h>
+@@ -54,11 +71,17 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+     jb.prev = L->global->errorjmp;
+     jb.status = 0;
+     L->global->errorjmp = &jb;
++    // (the interpreter's entries in progress: an error that unwinds some skips their exits, luaD_floatunwound)
++    const int floatdepth = L->global->floatdepth;
+ 
+     if (LUAU_SETJMP(jb.buf) == 0)
+         f(L, ud);
+-    else if (luaP_state)
+-        luaP_unwound(L, &jb);
++    else
++    {
++        luaD_floatunwound(L, floatdepth);
++        if (luaP_state)
++            luaP_unwound(L, &jb);
++    }
+ 
+     L->global->errorjmp = jb.prev;
+     return jb.status;
+@@ -127,6 +150,9 @@ private:
+ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+ {
+     int status = 0;
++    // The interpreter's entries in progress: an error that unwinds some skips their exits, built without unwind semantics (no /EHsc),
++    // so the count and the float mode are put back once it is caught (luaD_floatunwound)
++    const int floatdepth = L->global->floatdepth;
+ 
+     try
+     {
+@@ -165,6 +191,9 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+         }
+     }
+ 
++    // (here, not in the catch: on Windows a catch block runs before the unwind ends, which then restores the registers the error
++    // was raised with, the float mode's among them)
++    luaD_floatunwound(L, floatdepth);
+     return status;
+ }
+ 
+@@ -302,6 +331,7 @@ static void performcall(lua_State* L, StkId func, int nresults, bool preparereen
+         else
+         {
+             ptrdiff_t basecioffset = saveci(L, L->ci - 1);
++            FloatModeEntry floatmode(L->global);
+ 
+             luau_execute(L);
+ 
+@@ -843,6 +873,7 @@ int lua_resume(lua_State* L, lua_State* from, int nargs)
+         L->global->cb.preresume(L);
+ 
+     int oldnCcalls = L->nCcalls;
++    FloatModeEntry floatmode(L->global);
+ 
+     int status = luaD_rawrunprotected(L, resume, L->top - nargs);
+ 
+@@ -873,6 +904,7 @@ int lua_resumeerror(lua_State* L, lua_State* from)
+         L->global->cb.preresume(L);
+ 
+     int oldnCcalls = L->nCcalls;
++    FloatModeEntry floatmode(L->global);
+ 
+     int status = LUA_ERRRUN;
+ 
+diff --git a/luau/VM/src/ldo.h b/luau/VM/src/ldo.h
+index eedd416..6e8b8ac 100644
+--- a/luau/VM/src/ldo.h
++++ b/luau/VM/src/ldo.h
+@@ -7,6 +7,37 @@
+ #include "luaconf.h"
+ #include "ldebug.h"
+ 
++#include "Luau/FloatMode.h"
++
++// The host's float mode for the VM (lua_setfloatmode), applied by the outermost entry from C (a call: performcall; a resume:
++// lua_resume, lua_resumeerror; a Luau metamethod's call: callTMluau) and put back by its exit (every luau_execute runs inside one). An entry inside another only counts
++// itself: reading or writing the mode register waits for the float operations in flight, and a resume runs the interpreter several
++// times (a yieldable pcall leaves it and comes back). An error that unwinds entries skips their exits: luaD_rawrunprotected puts
++// the count and the mode back.
++struct FloatModeEntry
++{
++    global_State* g;
++
++    explicit FloatModeEntry(global_State* g)
++        : g(g)
++    {
++        if (g->floatdepth++ == 0)
++            g->floatchanged = Luau::floatModeApply(Luau::FloatMode(g->floatmode), g->floatsaved);
++    }
++
++    ~FloatModeEntry()
++    {
++        if (--g->floatdepth == 0 && g->floatchanged)
++        {
++            Luau::floatModeRestore(g->floatsaved);
++            g->floatchanged = false;
++        }
++    }
++
++    FloatModeEntry(const FloatModeEntry&) = delete;
++    FloatModeEntry& operator=(const FloatModeEntry&) = delete;
++};
++
+ // returns target stack for 'n' extra elements to reallocate
+ // if possible, stack size growth factor is 2x
+ #define getgrownstacksize(L, n) ((n) <= L->stacksize ? 2 * L->stacksize : L->stacksize + (n))
+diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
+index 68c7753..b0389b2 100644
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -246,6 +246,10 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
+     g->gcclockud = NULL;
+     g->typeofnames = NULL;
+     g->vectortypename = NULL;
++    g->floatmode = LUA_FLOATMODE_THREAD;
++    g->floatchanged = false;
++    g->floatsaved = 0;
++    g->floatdepth = 0;
+     g->coldon = 0;
+     g->profilecalls = 0;
+     g->coldslot = 0;
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index 10187c7..82dce7d 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -310,6 +310,11 @@ typedef struct global_State
+ 
+     struct LuaTable* typeofnames; // a host's names for its values, for the builtin typeof (lua_settypeofnames; NULL: none)
+     TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
++
++    uint8_t floatmode; // the float mode the interpreter runs in and native code compiles in (lua_setfloatmode)
++    bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
++    unsigned int floatsaved;
++    int floatdepth; // interpreter entries in progress (luau_execute)
+ } global_State;
+ // clang-format on
+ 
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index 00817cd..e21a73f 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -4134,6 +4134,7 @@ void luaP_executeprofiled(lua_State* L)
+ #else
+ void luau_execute(lua_State* L)
+ {
++
+     // A host's profile follows every entry into the interpreter, so it also sees an error that is caught outside it
+     // (luaP_Execute). Under a profile the entry picks one of three copies: the stepping one for a thread the profile
+     // steps, the call-sampling one (compiled apart: lvmexecute_profiled.cpp) while a call hook is set, else the plain one
+diff --git a/luau/VM/src/lvmutils.cpp b/luau/VM/src/lvmutils.cpp
+index 512ec2c..6b1948b 100644
+--- a/luau/VM/src/lvmutils.cpp
++++ b/luau/VM/src/lvmutils.cpp
+@@ -99,6 +99,8 @@ static LUAU_FORCEINLINE void callTMluau(lua_State* L, StkId top, Closure* ccl, i
+     if (LUAU_UNLIKELY(L->global->profilecalls))
+         luaP_callenter(L);
+ 
++    // (an entry from C when a host's lua_gettable meets a Luau __index: ldo.h FloatModeEntry)
++    FloatModeEntry floatmode(L->global);
+     luau_execute(L);
+ 
+     // resume_continue is not handled here as metamethods are not yieldable

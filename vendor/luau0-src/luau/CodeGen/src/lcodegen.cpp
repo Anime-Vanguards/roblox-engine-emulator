@@ -4,6 +4,9 @@
 #include "Luau/CodeGen.h"
 
 #include "lapi.h"
+#include "lstate.h"
+
+#include "Luau/FloatMode.h"
 
 int luau_codegen_supported()
 {
@@ -17,6 +20,8 @@ void luau_codegen_create(lua_State* L)
 
 void luau_codegen_compile(lua_State* L, int idx)
 {
+    // (the native compiler folds constants in the float mode the code will run in: lua_setfloatmode)
+    Luau::FloatModeScope floatmode(Luau::FloatMode(L->global->floatmode));
     Luau::CodeGen::CompilationOptions options;
     Luau::CodeGen::compile(L, idx, options);
 }
