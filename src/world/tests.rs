@@ -140,6 +140,18 @@ fn attachments_hang_past_folders() {
 }
 
 #[test]
+fn data_model_run_service_is_the_service() {
+    // the dump's DataModel.RunService property is the RunService (Studio 0.748), though the service is named "Run Service"
+    check(
+        r#"
+        local RunService = game:GetService("RunService")
+        assert(game.RunService == RunService and RunService.Name == "Run Service")
+        assert(game:FindFirstChild("RunService") == nil and game["Run Service"] == RunService)
+        "#,
+    );
+}
+
+#[test]
 fn workspace_terrain_and_service_names() {
     check(
         r#"
