@@ -323,10 +323,12 @@ pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Res
         return raise(format!("'{service_name}' is not a valid Service name"));
     };
     // Roblox's names that are not the class's: scripts index `game["Run Service"]` and
-    // `UserSettings().GameSettings`
+    // `UserSettings().GameSettings` (Studio 0.748: Run Service, Script Context and Teleport Service are the DataModel's
+    // only services named otherwise)
     let instance_name = match service_name {
         "RunService" => "Run Service",
         "ScriptContext" => "Script Context",
+        "TeleportService" => "Teleport Service",
         "UserGameSettings" => "GameSettings",
         other => other,
     };
