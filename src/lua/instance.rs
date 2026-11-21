@@ -1281,6 +1281,11 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         if engine.reflection.class(class).service || crate::services::settings::is_root(&engine.reflection, class) {
             return raise(format!("{name} cannot be cloned"));
         }
+        // nor the PlayerMouse while it is Archivable (measured, Studio 0.748: "Instance cannot be cloned"; nil once it is not)
+        let archivable = engine.reflection.name_id("Archivable").and_then(|n| engine.state.borrow().dom.boolean(id, n)).unwrap_or(true);
+        if archivable && engine.reflection.is_a(class, "Mouse") {
+            return raise(format!("{name} cannot be cloned"));
+        }
         optional_instance(lua, engine, clone(engine, id))
     });
     behaviors.add_method(base, K::Clone as NameId, clone_method.clone());

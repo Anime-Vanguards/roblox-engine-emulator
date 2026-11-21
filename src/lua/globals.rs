@@ -583,14 +583,15 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     }
     engine.set_world(World { game, workspace, camera, local_player });
 
-    let mouse = make_mouse(lua, engine)?;
+    // The host's record of the mouse, which Player:GetMouse()'s PlayerMouse reads (world/mouse.rs)
+    let mouse = crate::world::mouse::record(lua, engine)?;
     for name in START_SERVICES {
         services::get_service(engine, game, name).map_err(flow_error)?;
     }
     instance::lock(lua, engine, game)?;
 
     let shared = build_shared(lua, engine)?;
-    shared.raw_set("__rurMouse", mouse)?;
+    shared.raw_set(crate::world::mouse::RECORD, mouse)?;
     engine.lua.borrow_mut().shared = Some(shared);
     super::stubs::load(lua, engine)?;
 
@@ -655,31 +656,6 @@ pub fn join_local_player(engine: &Rc<Engine>) {
     if !engine.options.edit_mode() {
         services::teams::settle_local_player(engine, player, engine.loopback().is_some());
     }
-}
-
-fn make_mouse(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
-    let mouse = lua.create_table()?;
-    mouse.set("X", -1000)?;
-    mouse.set("Y", -1000)?;
-    let roblox_cframe: LuaTable = engine.prelude().exports.get::<LuaTable>("Datatypes")?.get("CFrame")?;
-    let new_cframe: LuaFunction = roblox_cframe.get("new")?;
-    mouse.set("Hit", new_cframe.call::<LuaValue>(())?)?;
-    mouse.set("Origin", new_cframe.call::<LuaValue>(())?)?;
-    mouse.set("Icon", "")?;
-    mouse.set("ViewSizeX", 0)?;
-    mouse.set("ViewSizeY", 0)?;
-    let datatypes: LuaTable = engine.prelude().exports.get("Datatypes")?;
-    let ray: LuaTable = datatypes.get("Ray")?;
-    let vector3: LuaTable = datatypes.get("Vector3")?;
-    let zero: LuaValue = vector3.get("zero")?;
-    let down: LuaValue = vector3.get::<LuaFunction>("new")?.call((0, 0, -1))?;
-    mouse.set("UnitRay", ray.get::<LuaFunction>("new")?.call::<LuaValue>((zero, down))?)?;
-    for name in ["Button1Down", "Button1Up", "Button2Down", "Button2Up", "Move", "Idle", "WheelForward", "WheelBackward", "KeyDown", "KeyUp"] {
-        let signal = types::new_signal(engine, name);
-        mouse.set(name, super::signal_value(lua, engine, signal)?)?;
-    }
-    engine.prelude().register.call::<()>((mouse.clone(), "Instance"))?;
-    Ok(mouse)
 }
 
 fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {

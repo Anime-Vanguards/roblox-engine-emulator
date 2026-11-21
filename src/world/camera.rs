@@ -56,6 +56,11 @@ impl View {
     }
 }
 
+/// ViewportPointToRay of `camera`: the ray through viewport point (x, y), `depth` studs along it (the PlayerMouse's UnitRay: world/mouse.rs).
+pub fn viewport_ray(engine: &Engine, camera: InstanceId, x: f32, y: f32, depth: f32) -> (Vec3, Vec3) {
+    view(engine, camera).ray(x, y, depth)
+}
+
 fn point(at: Vec3, visible: bool) -> LuaResult<LuaMultiValue> {
     Ok(LuaMultiValue::from_vec(vec![LuaValue::Vector(mlua::Vector::new(at.x, at.y, at.z)), LuaValue::Boolean(visible)]))
 }

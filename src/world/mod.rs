@@ -21,6 +21,7 @@ pub mod camera;
 pub mod frame;
 pub mod gravity;
 pub mod joints;
+pub mod mouse;
 pub mod query;
 
 #[cfg(test)]
@@ -556,6 +557,7 @@ pub fn install(engine: &Rc<Engine>) {
     drop(behaviors);
     query::install(engine);
     camera::install(engine);
+    mouse::install(engine);
     joints::install(engine);
     gravity::install(engine);
     engine.clear_member_cache();

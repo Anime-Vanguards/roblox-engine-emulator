@@ -5,7 +5,7 @@
 --    (1, message, level) to raise a string error (level 1: the position of the script line that
 --    called the engine function, 0: none) or (2) to yield the calling coroutine (the Rust side has
 --    already registered its resumption). `wrap` turns such a function into a script function.
--- 2. typeof with registered table types (SharedTable, Mouse).
+-- 2. typeof with registered table types (SharedTable).
 -- 3. Script libraries over Lune's datatypes (port of runtime/engine/datatypes.luau ScriptLibrary,
 --    constructor overrides and extras) and the small proxy types datatypes.luau implements in Luau
 --    (Faces, Axes, Path2DControlPoint, parameter objects).
