@@ -482,8 +482,9 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     options.set("ViewportWidth", engine.options.viewport_width)?;
     options.set("ViewportHeight", engine.options.viewport_height)?;
     r.set("Options", options)?;
-    let mouse: LuaValue = engine.lua.borrow().shared.as_ref().map(|s| s.raw_get("__rurMouse")).transpose()?.unwrap_or(LuaValue::Nil);
-    r.set("Mouse", mouse)?;
+    // Player:GetMouse()'s PlayerMouse, made on the first call (world/mouse.rs)
+    let e = engine.clone();
+    r.set("PlayerMouse", lua.create_function(move |lua, ()| crate::world::mouse::create(lua, &e))?)?;
 
     let shared = engine.lua.borrow().shared.clone().ok_or_else(|| LuaError::runtime("shared globals"))?;
     let services = modules::load_engine_luau(lua, SERVICES, "=rur.services", Some(shared.clone()))?;

@@ -1859,3 +1859,110 @@ fn teleport_service_is_named_with_a_space() {
         "#,
     );
 }
+
+#[test]
+fn player_mouse_is_an_instance_whose_rays_follow_the_camera() {
+    // Studio 0.748, a playing client: GetMouse() is a PlayerMouse Instance, no table; UnitRay is the CurrentCamera's
+    // ViewportPointToRay at the mouse, Origin CFrame.new(o, o + d), Hit and Target the first part along it
+    check(
+        r##"
+        local function fails(message, f, ...)
+            local ok, err = pcall(f, ...)
+            local text = string.gsub(tostring(err), "^[^:]*:%d+: ", "")
+            assert(not ok and text == message, tostring(err))
+        end
+        local Player = game:GetService("Players").LocalPlayer
+        local M = Player:GetMouse()
+        assert(type(M) == "userdata" and typeof(M) == "Instance" and M.ClassName == "PlayerMouse" and M.Name == "Instance")
+        assert(M:IsA("Mouse") and Player:GetMouse() == M and M.Parent == nil and M:GetFullName() == "Instance" and tostring(M) == "Instance")
+        fails("invalid argument #1 to 'next' (table expected, got Instance)", next, M)
+        fails("invalid argument #1 to 'rawget' (table expected, got Instance)", rawget, M, "X")
+        fails("attempt to get length of a Instance value", function() return #M end)
+        fails("NotAMember is not a valid member of PlayerMouse \"Instance\"", function() return (M :: any).NotAMember end)
+        fails("Unable to assign property X. Property is read only", function() (M :: any).X = 5 end)
+        fails("Unable to assign property Hit. Property is read only", function() (M :: any).Hit = CFrame.new() end)
+        fails("The Parent property of Instance is locked, current parent: NULL, new parent Workspace", function() M.Parent = workspace end)
+        fails("Instance cannot be cloned", M.Clone, M)
+        M.Archivable = false
+        assert(M:Clone() == nil)
+        assert(typeof(M.Button1Down) == "RBXScriptSignal" and typeof(M.Changed) == "RBXScriptSignal" and M.Icon == "")
+        -- the rays, from the mouse location (-1000, -1000 without a host)
+        assert(M.X == -1000 and M.Y == -1000)
+        local Camera = workspace.CurrentCamera
+        Camera.CFrame = CFrame.lookAt(Vector3.new(0, 500, 0), Vector3.new(0, 500, -100))
+        local Ray = Camera:ViewportPointToRay(M.X, M.Y)
+        assert(M.UnitRay.Origin == Ray.Origin and M.UnitRay.Direction == Ray.Direction)
+        assert(M.Origin == CFrame.new(Ray.Origin, Ray.Origin + Ray.Direction))
+        assert(M.Hit.Position == Ray.Origin + Ray.Direction * 10000 and M.Target == nil and M.TargetSurface == Enum.NormalId.Right)
+        -- a wall across the view, whatever its CanQuery, is the target, hit on its Back face
+        local Wall = Instance.new("Part")
+        Wall.Anchored = true
+        Wall.CanQuery = false
+        Wall.Transparency = 1
+        Wall.Size = Vector3.new(1e6, 1e6, 4)
+        Wall.CFrame = CFrame.new(0, 500, -60)
+        Wall.Parent = workspace
+        assert(M.Target == Wall and M.target == Wall and M.TargetSurface == Enum.NormalId.Back, tostring(M.Target))
+        assert(math.abs(M.Hit.Position.Z + 58) < 1e-3 and M.Hit.Rotation == M.Origin.Rotation, tostring(M.Hit))
+        M.TargetFilter = Wall
+        assert(M.Target == nil and M.TargetSurface == Enum.NormalId.Right)
+        -- computed when read: the camera's move shows at once
+        Camera.CFrame = CFrame.lookAt(Vector3.new(0, 600, 0), Vector3.new(0, 600, -100))
+        assert(M.UnitRay.Origin == Camera:ViewportPointToRay(M.X, M.Y).Origin)
+        "##,
+    );
+}
+
+#[test]
+fn the_hosts_mouse_record_moves_and_fires_the_player_mouse() {
+    // roblox-ui-renderer's input layer writes X / Y / ViewSizeX / ViewSizeY into shared.__rurMouse and fires the signals it
+    // holds: they reach the PlayerMouse
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local M = game:GetService("Players").LocalPlayer:GetMouse()
+        M.Button1Down:Connect(function() M:SetAttribute("Clicks", (M:GetAttribute("Clicks") or 0) + 1) end)
+        M.KeyDown:Connect(function(Key) M:SetAttribute("Key", Key) end)
+        "##,
+    );
+    let record: LuaTable = engine.lua.borrow().shared.as_ref().expect("shared").raw_get("__rurMouse").expect("the host's record");
+    let signal = |name: &str| match record.raw_get::<LuaValue>(name).expect(name) {
+        LuaValue::UserData(ud) => ud.borrow::<crate::lua::types::LSignal>().expect("a signal").0,
+        other => panic!("{name}: {other:?}"),
+    };
+    crate::instance::fire(&mut engine.state.borrow_mut(), signal("Button1Down"), Vec::new());
+    crate::instance::fire(&mut engine.state.borrow_mut(), signal("KeyDown"), vec![crate::Value::String(crate::Str::from("a"))]);
+    record.raw_set("X", 120.0).unwrap();
+    record.raw_set("Y", 80.0).unwrap();
+    record.raw_set("ViewSizeX", 1920.0).unwrap();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local M = game:GetService("Players").LocalPlayer:GetMouse()
+        assert(M:GetAttribute("Clicks") == 1 and M:GetAttribute("Key") == "a", tostring(M:GetAttribute("Clicks")))
+        assert(M.X == 120 and M.Y == 80 and M.ViewSizeX == 1920)
+        local Ray = workspace.CurrentCamera:ViewportPointToRay(120, 80)
+        assert(M.UnitRay.Direction == Ray.Direction)
+        "##,
+    );
+}
+
+#[test]
+fn the_player_mouse_is_made_on_the_first_get_mouse() {
+    // one made at start would take an instance serial before every other instance's (GetDebugId, a host's node ids)
+    check(
+        r##"
+        local Player = game:GetService("Players").LocalPlayer
+        local function Serial(Object) return tonumber((string.gsub(Object:GetDebugId(), "%D", ""))) end
+        local Before = Serial(Instance.new("Part"))
+        local Mouse = Player:GetMouse()
+        local After = Serial(Instance.new("Part"))
+        assert(Serial(Mouse) == Before + 1 and After == Before + 2, `{Before} {Serial(Mouse)} {After}`)
+        assert(Player:GetMouse() == Mouse and Serial(Instance.new("Part")) == After + 1)
+        "##,
+    );
+}

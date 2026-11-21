@@ -972,7 +972,13 @@ end)
 
 -- Player
 Method("Player", "GetMouse", function()
-	return R.Mouse
+	-- the PlayerMouse, made on the first call (world/mouse.rs)
+	local Mouse = R.Mouse
+	if Mouse == nil then
+		Mouse = R.PlayerMouse()
+		R.Mouse = Mouse
+	end
+	return Mouse
 end)
 -- Groups: the offline player is in none (false, rank 0, role Guest), the Async methods as the older ones; the six share the ids a player was asked about, and the first call naming a group yields (a client asks the web), later ones answer at once (measured in a 0.747 client and server: parity loopback/player_groups)
 for Member, Answer in { IsInGroup = false, IsInGroupAsync = false, GetRankInGroup = 0, GetRankInGroupAsync = 0, GetRoleInGroup = "Guest", GetRoleInGroupAsync = "Guest" } do
