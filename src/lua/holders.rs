@@ -89,6 +89,12 @@ fn collectable(kind: c_int) -> bool {
     matches!(kind, ffi::LUA_TTABLE | ffi::LUA_TFUNCTION | ffi::LUA_TTHREAD | ffi::LUA_TUSERDATA)
 }
 
+/// The array index (from 1) of entry `at` of the walk's tables. mlua's Integer is 32 bits on wasm32, so the conversion
+/// is checked rather than cast: an index past the VM's C int fails with mlua-sys's own message on every target.
+fn array_index(at: usize) -> ffi::lua_Integer {
+    at.checked_add(1).and_then(|index| ffi::lua_Integer::try_from(index).ok()).expect("cannot convert index from lua_Integer")
+}
+
 fn source_of(debug: &ffi::lua_Debug) -> String {
     if debug.short_src.is_null() {
         return "?".into();
@@ -170,7 +176,7 @@ impl Walk<'_> {
             self.seen.insert(pointer, id);
             self.nodes.push(Node { parent, label: label() });
             ffi::lua_pushvalue(state, index);
-            ffi::lua_rawseti(state, self.queue, id as ffi::lua_Integer + 1);
+            ffi::lua_rawseti(state, self.queue, array_index(id as usize));
         }
     }
 
@@ -518,7 +524,7 @@ pub fn report(lua: &Lua, engine: &Rc<Engine>, filters: Vec<String>, examples: us
             walk.seen.insert(ffi::lua_topointer(state, queue) as usize, u32::MAX);
             walk.seen.insert(ffi::lua_topointer(state, seeds_at) as usize, u32::MAX);
             for (index, label) in seed_labels.iter().enumerate() {
-                ffi::lua_rawgeti(state, seeds_at, index as ffi::lua_Integer + 1);
+                ffi::lua_rawgeti(state, seeds_at, array_index(index));
                 let at = ffi::lua_gettop(state);
                 walk.reach(at, u32::MAX, || label.clone());
                 ffi::lua_settop(state, queue);
@@ -562,7 +568,7 @@ pub fn report(lua: &Lua, engine: &Rc<Engine>, filters: Vec<String>, examples: us
             ffi::lua_settop(state, queue);
             let mut next = 0u32;
             while (next as usize) < walk.nodes.len() {
-                ffi::lua_rawgeti(state, queue, next as ffi::lua_Integer + 1);
+                ffi::lua_rawgeti(state, queue, array_index(next as usize));
                 walk.expand(next);
                 ffi::lua_settop(state, queue);
                 next += 1;

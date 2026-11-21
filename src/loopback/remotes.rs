@@ -405,7 +405,8 @@ fn run_callback(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote:
     let mut arguments = LuaMultiValue::with_capacity(args.len() + 4);
     arguments.push_back(LuaValue::Function(callback));
     arguments.push_back(LuaValue::Function(done));
-    arguments.push_back(LuaValue::Integer(i64::from(call)));
+    // (a Number: Luau's numbers are doubles, and mlua pushes its Integer as one, which is 32 bits on wasm32)
+    arguments.push_back(LuaValue::Number(f64::from(call)));
     if endpoint.side == Side::Server {
         let player = endpoint.bridge.player.get().map(|(server, _)| server);
         arguments.push_back(match player {

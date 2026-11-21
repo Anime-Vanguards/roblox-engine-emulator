@@ -798,7 +798,7 @@ fn sequence(table: &LuaTable) -> Vec<LuaValue> {
 fn face_vertex(m: &Mesh, value: &LuaValue) -> Result<u32, Flow> {
     let id = match value {
         LuaValue::Number(n) => id_of_number(*n),
-        LuaValue::Integer(n) => *n,
+        LuaValue::Integer(n) => i64::from(*n),
         _ => 0,
     };
     if parts(id).0 != VERTEX {
@@ -832,7 +832,7 @@ fn int64_arg(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<i64, 
     let value = args.get(at);
     let number = match value {
         LuaValue::Nil => return Err(err(format!("Argument {at} missing or nil"))),
-        LuaValue::Integer(n) => return Ok(*n),
+        LuaValue::Integer(n) => return Ok(i64::from(*n)),
         LuaValue::Number(n) => *n,
         LuaValue::Boolean(b) => return Ok(*b as i64),
         LuaValue::String(_) => lua.coerce_number(value.clone()).ok().flatten().ok_or_else(|| err("Unable to cast string to int64"))?,
@@ -864,7 +864,7 @@ fn check_kind(id: i64, kind: u64) -> Result<(), Flow> {
 /// at index <index> is not a number" (measured; an id plus 0.5 reads the id).
 fn element_id(lua: &Lua, value: &LuaValue, method: &str, name: &str, index: usize) -> Result<i64, Flow> {
     let number = match value {
-        LuaValue::Integer(n) => return Ok(*n),
+        LuaValue::Integer(n) => return Ok(i64::from(*n)),
         LuaValue::Number(n) => Some(*n),
         LuaValue::String(_) => lua.coerce_number(value.clone()).ok().flatten(),
         _ => None,
@@ -2179,4 +2179,38 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         Ok(none())
     }));
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// mlua hands a whole Luau number over as its Integer when it fits one, else as a Number. Its Integer is 64 bits on
+    /// most targets but 32 on wasm32 (a browser build), where every id past 2^31 (each EditableMesh id) arrives as a
+    /// Number: the id readers give the same id from either.
+    #[test]
+    fn mesh_ids_read_the_same_from_an_integer_or_a_number() {
+        let lua = Lua::new();
+        let engine = Engine::new(crate::Options::default()).expect("engine");
+        let mut mesh = Mesh::default();
+        let vertex = mesh.positions.add(Vec3::ZERO);
+        let vertex_id = mesh.positions.id(VERTEX, vertex) as i64;
+        assert!(vertex_id > i64::from(i32::MAX), "a vertex id is past 32 bits: {vertex_id}");
+        let ids = [0, 1, -1, i64::from(i32::MAX), i64::from(i32::MAX) + 1, i64::from(i32::MIN), vertex_id, (7 << 32) | 0xffff_ffff, 1 << 53, -(1 << 53), 1 << 62, i64::MIN];
+        let mut integers = 0;
+        for id in ids {
+            let number = LuaValue::Number(id as f64);
+            assert_eq!(int64_arg(&lua, &engine, &Args::new(LuaMultiValue::from_iter([number.clone()])), 0).ok(), Some(id), "int64 {id}");
+            assert_eq!(element_id(&lua, &number, "M", "ids", 1).ok(), Some(id), "element {id}");
+            let vertex_of_number = face_vertex(&mesh, &number).ok();
+            assert_eq!(vertex_of_number, (id == vertex_id).then_some(vertex), "face vertex {id}");
+            // (the Integer arm only where this target's Integer holds the id)
+            let Some(integer) = id.try_into().ok().map(LuaValue::Integer) else { continue };
+            integers += 1;
+            assert_eq!(int64_arg(&lua, &engine, &Args::new(LuaMultiValue::from_iter([integer.clone()])), 0).ok(), Some(id), "int64 {id}");
+            assert_eq!(element_id(&lua, &integer, "M", "ids", 1).ok(), Some(id), "element {id}");
+            assert_eq!(face_vertex(&mesh, &integer).ok(), vertex_of_number, "face vertex {id}");
+        }
+        assert!(integers >= 5, "{integers} ids as Integers");
+    }
 }
