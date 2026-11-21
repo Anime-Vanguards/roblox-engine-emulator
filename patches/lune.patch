@@ -7113,3 +7113,69 @@ diff --git a/crates/lune-roblox/src/datatypes/types/vector3int16.rs b/crates/lun
  /// Arithmetic results overflow the 16-bit integer as the constructor's components do: `Vector3int16.new(1, 2, 3) +
  /// Vector3int16.new(32767, 0, 0)` is (-32768, 2, 3) in a playing client (Studio 0.744; addition measured, the other
  /// operators taken to be the same 16-bit arithmetic).
+diff --git a/crates/lune-roblox/src/datatypes/script_error.rs b/crates/lune-roblox/src/datatypes/script_error.rs
+--- a/crates/lune-roblox/src/datatypes/script_error.rs
++++ b/crates/lune-roblox/src/datatypes/script_error.rs
+@@ -144,23 +144,43 @@ pub fn type_name(value: &LuaValue) -> String {
+     }
+ }
+ 
+-/// The `__type` of a userdata mlua did not make (none: it has none, as a newproxy has none).
++/// The name of a userdata mlua did not make, as typeof gives it: its `__type`, else the name the host registered for it
++/// (ree's prelude proxies, Axes or RaycastParams: [`host_type_name`]).
+ fn foreign_type_name(ud: &LuaAnyUserData) -> Option<String> {
+     let lua = ud.weak_lua().try_upgrade()?;
+     unsafe {
+         lua.exec_raw::<Option<String>>(ud, |state| {
+-            if ffi::luaL_getmetafield(state, -1, c"__type".as_ptr()) == ffi::LUA_TSTRING {
+-                ffi::lua_remove(state, -2);
+-            } else {
+-                ffi::lua_settop(state, 0);
+-                ffi::lua_pushnil(state);
+-            }
++            let name = type_name_at(state, -1);
++            ffi::lua_settop(state, 0);
++            ffi::lua_pushlstring(state, name.as_ptr().cast(), name.len());
+         })
+         .ok()
+         .flatten()
+     }
+ }
+ 
++/// The name the builtin typeof gives a table or a userdata without `__type`: the host's own name for it when it registered
++/// one (lua_settypeofnames: ree's prelude proxies, Axes, RaycastParams, a SharedTable), else the basic type's.
++///
++/// # Safety
++/// `state` must be a live thread and `index` a valid stack index.
++unsafe fn host_type_name(state: *mut ffi::lua_State, index: std::ffi::c_int) -> Option<String> {
++    unsafe {
++        let index = ffi::lua_absindex(state, index);
++        ffi::lua_getglobal(state, c"typeof".as_ptr());
++        ffi::lua_pushvalue(state, index);
++        let name = if ffi::lua_pcall(state, 1, 1, 0) == ffi::LUA_OK && ffi::lua_type(state, -1) == ffi::LUA_TSTRING {
++            let mut length = 0;
++            let text = ffi::lua_tolstring(state, -1, &mut length);
++            Some(String::from_utf8_lossy(std::slice::from_raw_parts(text.cast::<u8>(), length)).into_owned())
++        } else {
++            None
++        };
++        ffi::lua_pop(state, 1);
++        name
++    }
++}
++
+ /// A value's type as a client's reflection names it in `Unable to cast <type> to <type>`: double, string, bool,
+ /// Array or Dictionary, Function, CoordinateFrame for a CFrame, an EnumItem's enum (Material), else its `typeof`.
+ pub fn cast_name(value: &LuaValue) -> String {
+@@ -485,6 +505,11 @@ pub unsafe fn type_name_at(state: *mut ffi::lua_State, index: std::ffi::c_int) -
+                 return name;
+             }
+         }
++        if kind == ffi::LUA_TUSERDATA || kind == ffi::LUA_TTABLE {
++            if let Some(name) = host_type_name(state, index) {
++                return name;
++            }
++        }
+         CStr::from_ptr(ffi::lua_typename(state, kind)).to_string_lossy().into_owned()
+     }
+ }

@@ -11,12 +11,6 @@
 			"why": "DateTime formats only in en-us: other locales (en-gb, fr, ja, de) are not emulated"
 		}
 	],
-	"camelcase": [
-		{
-			"line": "datatype-unknown | error nextNumber is not a valid member of Random | error 'time' is not a valid member of TweenInfo | error 'min' is not a valid member of NumberRange | error 'width' is not a valid member of Rect | error 'top' is not a valid member of Faces",
-			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
-		}
-	],
 	"cframe_angle_between": [
 		{
 			"line": "args dot other error @92: invalid argument #2 to 'AngleBetween' (CFrame expected, got string)",
@@ -283,110 +277,6 @@
 		{
 			"line": "method Ray.Distance | ",
 			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "unary Axes | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes add | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes sub | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes mul | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes div | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes idiv | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes mod | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes pow | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes lt | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes le | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Axes concat | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "member Axes | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "assign Axes | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "unary Faces | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces add | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces sub | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces mul | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces div | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces idiv | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces mod | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces pow | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces lt | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces le | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "op Faces concat | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "member Faces | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "assign Faces | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
 		},
 		{
 			"line": "op Random eq | ",

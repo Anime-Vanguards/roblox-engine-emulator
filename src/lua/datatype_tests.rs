@@ -1519,3 +1519,20 @@ Fails("^Divide by zero exception$", function() return B / "x" end)
 "#,
     );
 }
+
+/// A datatype's argument error names a prelude proxy (Axes, RaycastParams) as typeof does, as a client names it (Studio
+/// 0.747, tools/parity/probes/datatype_errors.luau: `Vector2.one + Axes.new()` raises "invalid argument #2 (Vector2
+/// expected, got Axes)"), where it said "userdata".
+#[test]
+fn datatype_errors_name_proxy_values_as_typeof_does() {
+    assert_script(
+        r#"
+local Ok, Message = pcall(function() return Vector2.one + Axes.new() end)
+assert(not Ok and string.find(Message, "invalid argument #2 %(Vector2 expected, got Axes%)$"), tostring(Message))
+Ok, Message = pcall(function() return CFrame.identity * RaycastParams.new() end)
+assert(not Ok and string.find(Message, "invalid argument #2 %(Vector3 expected, got RaycastParams%)$"), tostring(Message))
+Ok, Message = pcall(function() return Vector2.one:Dot(Faces.new()) end)
+assert(not Ok and Message == "Unable to cast Faces to Vector2", tostring(Message))
+"#,
+    );
+}
