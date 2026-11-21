@@ -7,10 +7,6 @@
 	],
 	"buffer_vector_time": [
 		{
-			"line": "vector-format error invalid argument #2 to 'format' (string expected, got Vector3) ok 1, 2, 3 concat error @86: attempt to concatenate string with Vector3",
-			"why": "the VM names a native vector `vector` in its own errors (string.format, concatenation, arithmetic); a client names it Vector3"
-		},
-		{
 			"line": "DateTime-locales ok mardi 14 novembre 2023 22:13 | 2023年11月14日 火曜日 22:13 | 14. Nov. 2023 22:13",
 			"why": "DateTime formats only in en-us: other locales (en-gb, fr, ja, de) are not emulated"
 		}
@@ -349,12 +345,6 @@
 		{
 			"line": "coroutine-wrap out MessageError[@77: parity-text wrapped /     Stack Begin /     Stack End] trace []",
 			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
-		}
-	],
-	"math_classify": [
-		{
-			"line": "math-error Vector3 isnan error @109: invalid argument #1 to 'isnan' (number expected, got Vector3) | isinf error invalid argument #1 to 'isinf' (number expected, got Vector3) | isfinite error @111: invalid argument #1 to 'isfinite' (number expected, got Vector3)",
-			"why": "the VM names a vector `vector` in an argument error (luaT_objtypename), the client Vector3 (as vector-format)"
 		}
 	],
 	"path2d_layout": [
