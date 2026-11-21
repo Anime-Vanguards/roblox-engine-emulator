@@ -161,6 +161,80 @@
 			"why": "a server has no NetworkClient; ree's probe line is the service it made"
 		}
 	],
+	"datatype_errors": [
+		{
+			"line": "op ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "member ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "assign ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "method ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "unary ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "namecall ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "new ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "new-line ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "library ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "colon ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "self-string ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "self ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "lerp-alpha ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "int16 ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "assign-more ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "call-property ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "member-more ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		},
+		{
+			"line": "new-more ",
+			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+		}
+	],
 	"datetime": [
 		{
 			"line": "locale-default error invalid argument #3 to 'FormatUniversalTime' (string expected, got nil) | ok 14 November 2023 | ok November 14, 2023 | ok November 14, 2023 | ok 5",
