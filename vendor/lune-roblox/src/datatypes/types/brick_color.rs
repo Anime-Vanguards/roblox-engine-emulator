@@ -93,6 +93,8 @@ impl LuaExportsTable for BrickColor {
 
 impl LuaUserData for BrickColor {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("BrickColor"));
         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("BrickColor"));
         // Roblox answers Number / Name and the deprecated number / name, and only the lowercase r / g / b ('R' is not a valid

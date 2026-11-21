@@ -106,7 +106,8 @@ end))
 local Ok, Error = pcall(function()
 	(A :: any).Anything = 1
 end)
-assert(not Ok and string.find(tostring(Error), "Anything cannot be assigned to", 1, true), tostring(Error))
+-- (a Random has no properties: any key is no member, as a 0.747 playing client says, tools/parity/probes/datatype_errors.luau)
+assert(not Ok and Error == "Anything is not a valid member of Random", tostring(Error))
 assert(getmetatable(A) == "The metatable is locked")
 assert(getmetatable(B) == getmetatable(A) and A.NextNumber == B.NextNumber)
 local UnknownOk, UnknownError = pcall(function() return A.UnknownMember end)
@@ -1447,6 +1448,41 @@ Fails("^Test:%d+: invalid argument #2 %(string expected, got number%)$", functio
 Fails("^Test:%d+: invalid argument #2 %(string expected, got nil%)$", function() return Vector3.one[nil :: any] end)
 assert(Vector2.one.x == 1 and CFrame.identity.p == Vector3.zero and UDim.new(1, 2).Offset == 2 and Rect.new(1, 2, 3, 4).Width == 2)
 assert(CFrame.identity.FuzzyEq and Region3.new(Vector3.zero, Vector3.one).Size == Vector3.one and Color3.new(0.5, 0, 0).r == 0.5)
+"#,
+    );
+}
+
+/// An assignment to a datatype raises a playing client's error (Studio 0.747, tools/parity/probes/datatype_errors.luau):
+/// `X member of Vector2 is read-only and cannot be assigned to` for a property, `Nope is not a valid member of UDim`
+/// (unquoted on every type) for a method, a key the type lacks or a number key, `invalid argument #2 (string expected, got
+/// boolean)` from the calling line for another key; a Vector3 says `X cannot be assigned to` for any key, and a library is
+/// a frozen table. ree raised the VM's "attempt to index Vector2 with 'X'" or "X cannot be assigned to".
+#[test]
+fn datatype_assignments_raise_a_playing_clients_errors() {
+    assert_script(
+        r#"
+local function Fails(Pattern, Function)
+	local Ok, Message = pcall(Function)
+	assert(not Ok and type(Message) == "string" and string.find(Message, Pattern) ~= nil, tostring(Message))
+end
+local V2, U = Vector2.one, UDim.new(1, 2)
+Fails("^X member of Vector2 is read%-only and cannot be assigned to$", function() (V2 :: any).X = 1 end)
+Fails("^x member of Vector2 is read%-only and cannot be assigned to$", function() (V2 :: any).x = 1 end)
+Fails("^Abs is not a valid member of Vector2$", function() (V2 :: any).Abs = 1 end)
+Fails("^1 is not a valid member of Vector2$", function() (V2 :: any)[1] = 1 end)
+Fails("^Test:%d+: invalid argument #2 %(string expected, got boolean%)$", function() (V2 :: any)[true] = 1 end)
+Fails("^p member of CFrame is read%-only and cannot be assigned to$", function() (CFrame.identity :: any).p = 1 end)
+Fails("^FuzzyEq is not a valid member of CFrame$", function() (CFrame.identity :: any).FuzzyEq = 1 end)
+Fails("^Scale member of UDim is read%-only and cannot be assigned to$", function() (U :: any).Scale = 1 end)
+Fails("^Nope is not a valid member of UDim$", function() (U :: any).Nope = 1 end)
+Fails("^Time member of TweenInfo is read%-only and cannot be assigned to$", function() (TweenInfo.new() :: any).Time = 1 end)
+Fails("^ToIsoDate is not a valid member of DateTime$", function() (DateTime.now() :: any).ToIsoDate = 1 end)
+Fails("^X cannot be assigned to$", function() (Vector3.one :: any).X = 1 end)
+Fails("^1 cannot be assigned to$", function() (Vector3.one :: any)[1] = 1 end)
+Fails("^Test:%d+: attempt to modify a readonly table$", function() (Vector2 :: any).new = 1 end)
+local Face = Font.new("x")
+Face.Family = 1 :: any
+assert(Face.Family == "1")
 "#,
     );
 }

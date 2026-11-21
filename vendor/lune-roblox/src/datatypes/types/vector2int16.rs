@@ -45,6 +45,8 @@ impl LuaExportsTable for Vector2int16 {
 
 impl LuaUserData for Vector2int16 {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Vector2int16"));
         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("Vector2int16"));
         fields.add_field_method_get("X", |_, this| Ok(this.0.x));

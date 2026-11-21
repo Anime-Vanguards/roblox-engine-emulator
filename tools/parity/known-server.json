@@ -117,26 +117,6 @@
 	],
 	"datatype_errors": [
 		{
-			"line": "assign ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "assign-more ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "library ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "member Axes | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
-			"line": "member Faces | ",
-			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
-		},
-		{
 			"line": "method Vector2:Angle | ",
 			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
 		},
@@ -393,6 +373,14 @@
 			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
 		},
 		{
+			"line": "member Axes | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
+		},
+		{
+			"line": "assign Axes | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
+		},
+		{
 			"line": "unary Faces | ",
 			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
 		},
@@ -434,6 +422,14 @@
 		},
 		{
 			"line": "op Faces concat | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
+		},
+		{
+			"line": "member Faces | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
+		},
+		{
+			"line": "assign Faces | ",
 			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, and their members raise unquoted names, where a client names them Axes and Faces and quotes the key"
 		},
 		{
@@ -499,10 +495,6 @@
 		{
 			"line": "error instance-new-number | Unable to create an Instance of type \"5\"",
 			"why": "Instance.new(5): a client names the number in its text; ree's text differs"
-		},
-		{
-			"line": "error vector3-newindex | X cannot be assigned to",
-			"why": "assigning a component of a vector: the VM's own text, not the client's `X cannot be assigned to`"
 		},
 		{
 			"line": "error enumitem-newindex | Value is not a valid member of EnumItem",

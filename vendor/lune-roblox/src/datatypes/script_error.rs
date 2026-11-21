@@ -347,6 +347,61 @@ impl IntoLua for UnknownMembers {
     }
 }
 
+/// What an assignment to a datatype raises, as a playing client raises it (Studio 0.747, ree's
+/// tools/parity/probes/datatype_errors.luau): `X member of Vector2 is read-only and cannot be assigned to` for a property
+/// (a member whose value is no function), `Nope is not a valid member of UDim` for anything else (a method, a key the type
+/// lacks, a number key: `1 is not a valid member of Vector2`), unquoted on every type, without a position; a key of
+/// another type is `invalid argument #2 (string expected, got boolean)` from the calling line. It is the type's
+/// `__newindex` meta field (Lune's datatypes have no field setters, so mlua makes no `__newindex` of its own).
+pub struct AssignMembers(pub &'static str);
+
+impl IntoLua for AssignMembers {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let function = unsafe {
+            lua.exec_raw::<LuaFunction>(self.0, |state| {
+                ffi::lua_pushcclosurek(state, assign_member, c"__newindex".as_ptr(), 1, None);
+            })?
+        };
+        Ok(LuaValue::Function(function))
+    }
+}
+
+/// Reads `value[key]` (the value and the key on the stack), for a protected call.
+unsafe extern "C-unwind" fn read_member(state: *mut ffi::lua_State) -> std::ffi::c_int {
+    unsafe {
+        ffi::lua_gettable(state, 1);
+        1
+    }
+}
+
+/// `__newindex` of a datatype (the value, the key, the new value)
+unsafe extern "C-unwind" fn assign_member(state: *mut ffi::lua_State) -> std::ffi::c_int {
+    unsafe {
+        let Some(key) = member_key(state, true) else {
+            let message = format!("invalid argument #2 (string expected, got {})", type_name_at(state, 2));
+            raise_script(state, message, true)
+        };
+        // (a property reads as a value that is no function; reading a method gives its function, a key the type lacks raises)
+        let property = ffi::lua_type(state, 2) == ffi::LUA_TSTRING && {
+            ffi::lua_pushcfunction(state, read_member);
+            ffi::lua_pushvalue(state, 1);
+            ffi::lua_pushvalue(state, 2);
+            let read = ffi::lua_pcall(state, 2, 1, 0) == ffi::LUA_OK && ffi::lua_type(state, -1) != ffi::LUA_TFUNCTION;
+            ffi::lua_pop(state, 1);
+            read
+        };
+        let name = upvalue_name(state);
+        let message = if property {
+            format!("{key} member of {name} is read-only and cannot be assigned to")
+        } else {
+            format!("{key} is not a valid member of {name}")
+        };
+        drop(name);
+        drop(key);
+        raise_script(state, message, false)
+    }
+}
+
 /// The key at 2 as an unknown member's message names it (a string, or a number in its Luau form when `numbers`), or
 /// None for a key of another type.
 unsafe fn member_key(state: *mut ffi::lua_State, numbers: bool) -> Option<String> {

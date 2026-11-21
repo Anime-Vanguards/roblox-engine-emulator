@@ -635,6 +635,8 @@ impl LuaExportsTable for CFrame {
 
 impl LuaUserData for CFrame {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("CFrame"));
         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("CFrame"));
         // Vectors come back as Luau's native vector, which is what a script's Vector3 is; each read is

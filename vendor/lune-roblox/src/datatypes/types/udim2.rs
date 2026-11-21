@@ -76,6 +76,8 @@ impl LuaExportsTable for UDim2 {
 
 impl LuaUserData for UDim2 {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("UDim2"));
         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("UDim2"));
         // (each makes a new UDim: datatype_price::MEMBER_NEW)

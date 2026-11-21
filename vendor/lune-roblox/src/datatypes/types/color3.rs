@@ -145,6 +145,8 @@ impl FromLua for Color3 {
 
 impl LuaUserData for Color3 {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Color3"));
         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Color3"));
         fields.add_field_method_get("R", |_, this| Ok(this.r));

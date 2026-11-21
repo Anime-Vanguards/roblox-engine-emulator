@@ -342,8 +342,8 @@ local function ScriptLibrary(Name)
 	})
 	local Result = setmetatable({}, {
 		__index = Members,
-		__newindex = function(_, Key)
-			error(`{Key} cannot be assigned to`, 0)
+		__newindex = function() -- (a library is a frozen table in a client: Studio 0.747, datatype_errors.luau)
+			error("attempt to modify a readonly table", 2)
 		end,
 		__metatable = "The metatable is locked",
 	})

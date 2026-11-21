@@ -201,6 +201,14 @@ R.SetVectorMetatable({
 			error(`{Key} is not a valid member of Vector3`, 0)
 		end,
 	}),
+	-- an assignment raises Studio's "X cannot be assigned to" for any string or number key (a vector is a value), any other
+	-- key the client's Luau check from the calling line (Studio 0.747, tools/parity/probes/datatype_errors.luau)
+	__newindex = function(_, Key)
+		if type(Key) ~= "string" and type(Key) ~= "number" then
+			error(`invalid argument #2 (string expected, got {TypeName(Key)})`, 2)
+		end
+		error(`{Key} cannot be assigned to`, 0)
+	end,
 	__metatable = "The metatable is locked",
 	-- The VM names a vector by this table's __type in its own errors, as a playing client does (Studio 0.748): "attempt to
 	-- get length of a Vector3 value", "invalid argument #1 to 'floor' (number expected, got Vector3)"; type() still answers

@@ -228,6 +228,33 @@ fn unknown_member<T>(engine: &Engine, key: &LuaValue, type_name: &str, quoted: b
     }
 }
 
+/// An assignment to a datatype of the engine's own, as a playing client raises it (Studio 0.747,
+/// tools/parity/probes/datatype_errors.luau): `Time member of TweenInfo is read-only and cannot be assigned to` for one of
+/// its `properties`, `Nope is not a valid member of TweenInfo` for any other key (a method, a number key), without a
+/// position; a key of another type is `invalid argument #2 (string expected, got boolean)` from the calling line. (The
+/// same rules as Lune's datatypes: lune-roblox datatypes::script_error::AssignMembers.)
+fn assign_member<T>(engine: &Engine, key: &LuaValue, type_name: &str, properties: &[&str]) -> Result<T, Flow> {
+    match key {
+        LuaValue::String(text) => {
+            let name = text.to_string_lossy();
+            if properties.contains(&name.as_str()) {
+                raise(format!("{name} member of {type_name} is read-only and cannot be assigned to"))
+            } else {
+                raise(format!("{name} is not a valid member of {type_name}"))
+            }
+        }
+        LuaValue::Number(n) => raise(format!("{} is not a valid member of {type_name}", lune_roblox::datatypes::types::format_g(*n, 14))),
+        LuaValue::Integer(n) => raise(format!("{n} is not a valid member of {type_name}")),
+        other => raise_at_caller(format!("invalid argument #2 (string expected, got {})", super::typeof_value(engine, other))),
+    }
+}
+
+/// The `__newindex` of a read-only datatype of the engine's own ([`assign_member`]).
+fn read_only_members(lua: &Lua, engine: &Rc<Engine>, type_name: &'static str, properties: &'static [&'static str]) -> LuaResult<LuaFunction> {
+    let e = engine.clone();
+    wrapped(lua, engine, move |_, args| assign_member(&e, Args::new(args).get(1), type_name, properties))
+}
+
 fn read_only(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaFunction> {
     wrapped(lua, engine, |_, args| {
         let args = Args::new(args);
@@ -791,11 +818,15 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let value = args.get(2);
         let key = match args.get(1) {
             LuaValue::String(key) => key.to_string_lossy(),
-            other => key_text(other),
+            other @ (LuaValue::Number(_) | LuaValue::Integer(_)) => key_text(other),
+            // (Studio 0.747, tools/parity/probes/datatype_errors.luau: the key's Luau check from the calling line)
+            other => return raise_at_caller(format!("invalid argument #2 (string expected, got {})", typeof_value(&e, other))),
         };
         let mut data = font.0.borrow_mut();
         match (key.as_str(), value) {
             ("Family", LuaValue::String(family)) => data.family = Str::new(&family.as_bytes()),
+            // (a number is its text, as a client takes `font.Family = 1`: Studio 0.747, datatype_errors.luau)
+            ("Family", number @ (LuaValue::Number(_) | LuaValue::Integer(_))) => data.family = Str::new(string_of(lua, number)?.as_bytes()),
             ("Weight", _) => {
                 if let Some(item) = coerce_named_enum(lua, &e, "FontWeight", value) {
                     data.weight = item;
@@ -1031,7 +1062,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         })
     })?;
     let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| Ok(matches!((content_of(&a), content_of(&b)), (Some(a), Some(b)) if a == b)))?;
-    let newindex = read_only(lua, engine)?;
+    let newindex = read_only_members(lua, engine, "Content", &["SourceType", "Uri", "Object"])?;
     lua.register_userdata_type::<LContent>(|registry| {
         registry.add_meta_field("__type", "Content");
         registry.add_meta_field("__index", index);
@@ -1142,7 +1173,7 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             && a.reverses == b.reverses
             && a.delay_time == b.delay_time)
     })?;
-    let newindex = read_only(lua, engine)?;
+    let newindex = read_only_members(lua, engine, "TweenInfo", &["Time", "EasingStyle", "EasingDirection", "RepeatCount", "Reverses", "DelayTime"])?;
     lua.register_userdata_type::<LTweenInfo>(|registry| {
         registry.add_meta_field("__type", "TweenInfo");
         registry.add_meta_field("__index", index);
@@ -1491,7 +1522,7 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         Ok(values([member]))
     })?;
-    let newindex = read_only(lua, engine)?;
+    let newindex = read_only_members(lua, engine, "Random", &[])?;
     let tostring = lua.create_function(|_, _: LuaValue| Ok("Random"))?;
     lua.register_userdata_type::<LRandom>(|registry| {
         registry.add_meta_field("__type", "Random");
@@ -2023,7 +2054,7 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         unknown_member(&e, args.get(1), "DateTime", false)
     })?;
-    let newindex = read_only(lua, engine)?;
+    let newindex = read_only_members(lua, engine, "DateTime", &["UnixTimestamp", "UnixTimestampMillis"])?;
     let compare = |f: fn(f64, f64) -> bool| {
         move |_: &Lua, (a, b): (LuaValue, LuaValue)| -> LuaResult<bool> {
             Ok(match (date_time_of(&a), date_time_of(&b)) {

@@ -6682,3 +6682,284 @@ diff --git a/crates/lune-roblox/src/datatypes/types/vector3int16.rs b/crates/lun
          fields.add_field_method_get("X", |_, this| Ok(this.0.x));
          fields.add_field_method_get("Y", |_, this| Ok(this.0.y));
          fields.add_field_method_get("Z", |_, this| Ok(this.0.z));
+diff --git a/crates/lune-roblox/src/datatypes/script_error.rs b/crates/lune-roblox/src/datatypes/script_error.rs
+--- a/crates/lune-roblox/src/datatypes/script_error.rs
++++ b/crates/lune-roblox/src/datatypes/script_error.rs
+@@ -347,6 +347,61 @@ impl IntoLua for UnknownMembers {
+     }
+ }
+ 
++/// What an assignment to a datatype raises, as a playing client raises it (Studio 0.747, ree's
++/// tools/parity/probes/datatype_errors.luau): `X member of Vector2 is read-only and cannot be assigned to` for a property
++/// (a member whose value is no function), `Nope is not a valid member of UDim` for anything else (a method, a key the type
++/// lacks, a number key: `1 is not a valid member of Vector2`), unquoted on every type, without a position; a key of
++/// another type is `invalid argument #2 (string expected, got boolean)` from the calling line. It is the type's
++/// `__newindex` meta field (Lune's datatypes have no field setters, so mlua makes no `__newindex` of its own).
++pub struct AssignMembers(pub &'static str);
++
++impl IntoLua for AssignMembers {
++    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
++        let function = unsafe {
++            lua.exec_raw::<LuaFunction>(self.0, |state| {
++                ffi::lua_pushcclosurek(state, assign_member, c"__newindex".as_ptr(), 1, None);
++            })?
++        };
++        Ok(LuaValue::Function(function))
++    }
++}
++
++/// Reads `value[key]` (the value and the key on the stack), for a protected call.
++unsafe extern "C-unwind" fn read_member(state: *mut ffi::lua_State) -> std::ffi::c_int {
++    unsafe {
++        ffi::lua_gettable(state, 1);
++        1
++    }
++}
++
++/// `__newindex` of a datatype (the value, the key, the new value)
++unsafe extern "C-unwind" fn assign_member(state: *mut ffi::lua_State) -> std::ffi::c_int {
++    unsafe {
++        let Some(key) = member_key(state, true) else {
++            let message = format!("invalid argument #2 (string expected, got {})", type_name_at(state, 2));
++            raise_script(state, message, true)
++        };
++        // (a property reads as a value that is no function; reading a method gives its function, a key the type lacks raises)
++        let property = ffi::lua_type(state, 2) == ffi::LUA_TSTRING && {
++            ffi::lua_pushcfunction(state, read_member);
++            ffi::lua_pushvalue(state, 1);
++            ffi::lua_pushvalue(state, 2);
++            let read = ffi::lua_pcall(state, 2, 1, 0) == ffi::LUA_OK && ffi::lua_type(state, -1) != ffi::LUA_TFUNCTION;
++            ffi::lua_pop(state, 1);
++            read
++        };
++        let name = upvalue_name(state);
++        let message = if property {
++            format!("{key} member of {name} is read-only and cannot be assigned to")
++        } else {
++            format!("{key} is not a valid member of {name}")
++        };
++        drop(name);
++        drop(key);
++        raise_script(state, message, false)
++    }
++}
++
+ /// The key at 2 as an unknown member's message names it (a string, or a number in its Luau form when `numbers`), or
+ /// None for a key of another type.
+ unsafe fn member_key(state: *mut ffi::lua_State, numbers: bool) -> Option<String> {
+diff --git a/crates/lune-roblox/src/datatypes/types/brick_color.rs b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+--- a/crates/lune-roblox/src/datatypes/types/brick_color.rs
++++ b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+@@ -93,6 +93,8 @@ impl LuaExportsTable for BrickColor {
+ 
+ impl LuaUserData for BrickColor {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("BrickColor"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("BrickColor"));
+         // Roblox answers Number / Name and the deprecated number / name, and only the lowercase r / g / b ('R' is not a valid
+diff --git a/crates/lune-roblox/src/datatypes/types/cframe.rs b/crates/lune-roblox/src/datatypes/types/cframe.rs
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -635,6 +635,8 @@ impl LuaExportsTable for CFrame {
+ 
+ impl LuaUserData for CFrame {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("CFrame"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("CFrame"));
+         // Vectors come back as Luau's native vector, which is what a script's Vector3 is; each read is
+diff --git a/crates/lune-roblox/src/datatypes/types/color3.rs b/crates/lune-roblox/src/datatypes/types/color3.rs
+--- a/crates/lune-roblox/src/datatypes/types/color3.rs
++++ b/crates/lune-roblox/src/datatypes/types/color3.rs
+@@ -145,6 +145,8 @@ impl FromLua for Color3 {
+ 
+ impl LuaUserData for Color3 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Color3"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Color3"));
+         fields.add_field_method_get("R", |_, this| Ok(this.r));
+diff --git a/crates/lune-roblox/src/datatypes/types/color_sequence.rs b/crates/lune-roblox/src/datatypes/types/color_sequence.rs
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence.rs
+@@ -92,6 +92,8 @@ impl LuaExportsTable for ColorSequence {
+ 
+ impl LuaUserData for ColorSequence {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("ColorSequence"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("ColorSequence"));
+         // (a new table of new keypoints on every read)
+diff --git a/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs b/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
+@@ -47,6 +47,8 @@ impl LuaExportsTable for ColorSequenceKeypoint {
+ 
+ impl LuaUserData for ColorSequenceKeypoint {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("ColorSequenceKeypoint"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("ColorSequenceKeypoint"));
+         fields.add_field_method_get("Time", |_, this| Ok(this.time));
+diff --git a/crates/lune-roblox/src/datatypes/types/number_range.rs b/crates/lune-roblox/src/datatypes/types/number_range.rs
+--- a/crates/lune-roblox/src/datatypes/types/number_range.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_range.rs
+@@ -46,6 +46,8 @@ impl LuaExportsTable for NumberRange {
+ 
+ impl LuaUserData for NumberRange {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("NumberRange"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("NumberRange"));
+         fields.add_field_method_get("Min", |_, this| Ok(this.min));
+diff --git a/crates/lune-roblox/src/datatypes/types/number_sequence.rs b/crates/lune-roblox/src/datatypes/types/number_sequence.rs
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence.rs
+@@ -142,6 +142,8 @@ impl LuaExportsTable for NumberSequence {
+ 
+ impl LuaUserData for NumberSequence {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("NumberSequence"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("NumberSequence"));
+         // (a new table of new keypoints on every read)
+diff --git a/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs b/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
+@@ -57,6 +57,8 @@ impl LuaExportsTable for NumberSequenceKeypoint {
+ 
+ impl LuaUserData for NumberSequenceKeypoint {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("NumberSequenceKeypoint"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("NumberSequenceKeypoint"));
+         fields.add_field_method_get("Time", |_, this| Ok(this.time));
+diff --git a/crates/lune-roblox/src/datatypes/types/physical_properties.rs b/crates/lune-roblox/src/datatypes/types/physical_properties.rs
+--- a/crates/lune-roblox/src/datatypes/types/physical_properties.rs
++++ b/crates/lune-roblox/src/datatypes/types/physical_properties.rs
+@@ -97,6 +97,8 @@ impl LuaExportsTable for PhysicalProperties {
+ 
+ impl LuaUserData for PhysicalProperties {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("PhysicalProperties"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("PhysicalProperties"));
+         fields.add_field_method_get("Density", |_, this| Ok(this.density));
+diff --git a/crates/lune-roblox/src/datatypes/types/ray.rs b/crates/lune-roblox/src/datatypes/types/ray.rs
+--- a/crates/lune-roblox/src/datatypes/types/ray.rs
++++ b/crates/lune-roblox/src/datatypes/types/ray.rs
+@@ -56,6 +56,8 @@ impl LuaExportsTable for Ray {
+ 
+ impl LuaUserData for Ray {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Ray"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Ray"));
+         fields.add_field_method_get("Origin", |_, this| Ok(Vector3(this.origin)));
+diff --git a/crates/lune-roblox/src/datatypes/types/rect.rs b/crates/lune-roblox/src/datatypes/types/rect.rs
+--- a/crates/lune-roblox/src/datatypes/types/rect.rs
++++ b/crates/lune-roblox/src/datatypes/types/rect.rs
+@@ -64,6 +64,8 @@ impl LuaExportsTable for Rect {
+ 
+ impl LuaUserData for Rect {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Rect"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("Rect"));
+         fields.add_field_method_get("Min", |_, this| Ok(Vector2(this.min)));
+diff --git a/crates/lune-roblox/src/datatypes/types/region3.rs b/crates/lune-roblox/src/datatypes/types/region3.rs
+--- a/crates/lune-roblox/src/datatypes/types/region3.rs
++++ b/crates/lune-roblox/src/datatypes/types/region3.rs
+@@ -46,6 +46,8 @@ impl LuaExportsTable for Region3 {
+ 
+ impl LuaUserData for Region3 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Region3"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Region3"));
+         fields.add_field_method_get("CFrame", |_, this| {
+diff --git a/crates/lune-roblox/src/datatypes/types/region3int16.rs b/crates/lune-roblox/src/datatypes/types/region3int16.rs
+--- a/crates/lune-roblox/src/datatypes/types/region3int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/region3int16.rs
+@@ -43,6 +43,8 @@ impl LuaExportsTable for Region3int16 {
+ 
+ impl LuaUserData for Region3int16 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Region3int16"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("Region3int16"));
+         fields.add_field_method_get("Min", |_, this| Ok(Vector3int16(this.min)));
+diff --git a/crates/lune-roblox/src/datatypes/types/udim.rs b/crates/lune-roblox/src/datatypes/types/udim.rs
+--- a/crates/lune-roblox/src/datatypes/types/udim.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim.rs
+@@ -48,6 +48,8 @@ impl LuaExportsTable for UDim {
+ 
+ impl LuaUserData for UDim {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("UDim"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("UDim"));
+         fields.add_field_method_get("Scale", |_, this| Ok(this.scale));
+diff --git a/crates/lune-roblox/src/datatypes/types/udim2.rs b/crates/lune-roblox/src/datatypes/types/udim2.rs
+--- a/crates/lune-roblox/src/datatypes/types/udim2.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim2.rs
+@@ -76,6 +76,8 @@ impl LuaExportsTable for UDim2 {
+ 
+ impl LuaUserData for UDim2 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("UDim2"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("UDim2"));
+         // (each makes a new UDim: datatype_price::MEMBER_NEW)
+diff --git a/crates/lune-roblox/src/datatypes/types/vector2.rs b/crates/lune-roblox/src/datatypes/types/vector2.rs
+--- a/crates/lune-roblox/src/datatypes/types/vector2.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2.rs
+@@ -49,6 +49,8 @@ impl LuaExportsTable for Vector2 {
+ 
+ impl LuaUserData for Vector2 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Vector2"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Vector2"));
+         fields.add_field_method_get("Magnitude", magnitude);
+diff --git a/crates/lune-roblox/src/datatypes/types/vector2int16.rs b/crates/lune-roblox/src/datatypes/types/vector2int16.rs
+--- a/crates/lune-roblox/src/datatypes/types/vector2int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2int16.rs
+@@ -45,6 +45,8 @@ impl LuaExportsTable for Vector2int16 {
+ 
+ impl LuaUserData for Vector2int16 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Vector2int16"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("Vector2int16"));
+         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
+diff --git a/crates/lune-roblox/src/datatypes/types/vector3int16.rs b/crates/lune-roblox/src/datatypes/types/vector3int16.rs
+--- a/crates/lune-roblox/src/datatypes/types/vector3int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector3int16.rs
+@@ -57,6 +57,8 @@ impl LuaExportsTable for Vector3int16 {
+ 
+ impl LuaUserData for Vector3int16 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
++        // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
++        fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Vector3int16"));
+         // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+         fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("Vector3int16"));
+         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
