@@ -7,7 +7,8 @@
 //!   names them (lua/bindable.rs: a number truncated to a 64-bit integer, `<Instance> (Name)`, `<Vector3> (1, 2, 3)`;
 //!   a boolean or thread key raises `Invalid table key type used`). An empty table is `[]`. Metatables are not
 //!   consulted; a table inside itself raises `tables cannot be cyclic`, nesting past [`ENCODE_DEPTH`] `Max lua stack
-//!   size reached`.
+//!   size reached`, the depth checked first (a cycle closing one level past the limit raises the depth's error:
+//!   table_depth.luau, Studio 0.747).
 //! - A number has Grisu2's digits (Loitsch 2010, the rapidjson form) with its last digit rounded toward the value only
 //!   when at most eight digits came from the fraction loop (600 of 600 random doubles in json_numbers.luau), laid out
 //!   as ECMAScript's Number::toString lays digits out but without `+` in an exponent (`1e21`, `100000000000000000000`,
@@ -107,12 +108,13 @@ fn write_value(lua: &Lua, engine: &Engine, value: &LuaValue, out: &mut String, p
             out.push_str(r#""}"#);
         }
         LuaValue::Table(table) => {
+            // (the depth first: a cycle that closes one level past the limit raises the depth's error, table_depth.luau)
+            if path.len() >= ENCODE_DEPTH {
+                return Err("Max lua stack size reached".into());
+            }
             let pointer = table.to_pointer();
             if path.contains(&pointer) {
                 return Err("tables cannot be cyclic".into());
-            }
-            if path.len() >= ENCODE_DEPTH {
-                return Err("Max lua stack size reached".into());
             }
             path.push(pointer);
             let written = write_table(lua, engine, table, out, path, values);

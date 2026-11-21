@@ -1,7 +1,7 @@
 //! What a remote call's arguments (and a RemoteFunction's results) are while they cross from one VM to the other: plain
 //! Rust values, captured at the call (a change the sender makes afterwards does not arrive) and rebuilt in the receiver's
 //! VM, a table and a buffer anew for each handler. Measured in a playing session's two sides, each way alike (Studio
-//! 0.747, tools/parity/probes/loopback/remote_values.luau, remote_tables.luau, remote_depth.luau):
+//! 0.747, tools/parity/probes/loopback/remote_values.luau, remote_tables.luau, remote_depth.luau, remote_nesting.luau):
 //!
 //! - The count of arguments, trailing nils included, arrives. Numbers arrive as they are, NaN, infinities and -0 too, but a
 //!   subnormal double arrives as 0; strings and buffers byte for byte; a vector as a Vector3 (floats).
@@ -12,8 +12,12 @@
 //!   as nil: a server-only instance, a parentless one, a client-made one.
 //! - Tables as BindableEvent copies them (lua/bindable.rs: the border decides array or dictionary, a dictionary's keys
 //!   become strings, `Invalid table key type used`, `tables cannot be cyclic`), except that a function or an instance the
-//!   receiver lacks leaves a hole in an array, a function's dictionary entry is dropped, and a table nested deeper than
-//!   [`MAX_DEPTH`] is refused at the sender.
+//!   receiver lacks leaves a hole in an array, a function's dictionary entry is dropped, and a table nested too deep for
+//!   the Lua stack is refused at the sender with `Max lua stack size reached`, counted as BindableEvent:Fire counts it
+//!   (bindable.rs `nested_height`) from the call's frame: `self` and the arguments (the player among them for FireClient
+//!   and InvokeClient), a callback's results alone. So FireServer and FireAllClients take an array nested 299 deep and a
+//!   dictionary 150 deep, FireClient 298 and 149, one level less for each further argument, and a RemoteFunction's
+//!   callback may return an array 300 deep (three captures alike).
 
 use std::rc::Rc;
 
@@ -48,18 +52,11 @@ pub enum Key {
     Name(Box<[u8]>),
 }
 
-/// The deepest a table sent by FireServer or InvokeServer may nest: one nested this deep is sent, one more is refused at the
-/// sender with `Max lua stack size reached`. FireClient and InvokeClient, which take the player first, send one level less
-/// ([`MAX_DEPTH_AFTER_PLAYER`]). Bisected each way, three captures alike (Studio 0.747:
-/// tools/parity/probes/loopback/remote_depth.luau); FireAllClients and a callback's results are taken as FireServer's (not
-/// measured: a callback's 1000-deep result raised the text at the caller).
-pub const MAX_DEPTH: usize = 299;
-pub const MAX_DEPTH_AFTER_PLAYER: usize = 298;
-
-/// The arguments of a call, captured, its tables nested at most `depth` deep: an error's text when one cannot be sent.
-pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], depth: usize) -> Result<Box<[Wire]>, String> {
+/// The arguments of a call, captured, their tables starting above the call's frame of `height` values (the module's notes): an
+/// error's text when one cannot be sent.
+pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], height: usize) -> Result<Box<[Wire]>, String> {
     // (tables through the C API's copier: copier.rs)
-    super::copier::capture_all(lua, engine, values, depth)
+    super::copier::capture_all(lua, engine, values, height)
 }
 
 /// A received table each handler rebuilds (copier.rs), its instances already the receiver's
@@ -80,8 +77,9 @@ fn map_instances(wire: &mut Wire, map: &dyn Fn(InstanceId) -> Option<InstanceId>
     }
 }
 
-/// A value as it is sent. `ancestors`: the tables it is inside of.
-pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec<*const std::ffi::c_void>, depth: usize) -> Result<Wire, String> {
+/// A value as it is sent. `ancestors`: the tables it is inside of; `height`: the stack slot a table sits at (bindable.rs
+/// `nested_height`).
+pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize) -> Result<Wire, String> {
     Ok(match value {
         LuaValue::Nil => Wire::Nil,
         LuaValue::Boolean(flag) => Wire::Bool(*flag),
@@ -90,7 +88,7 @@ pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec
         LuaValue::String(text) => Wire::String(text.as_bytes().to_vec().into_boxed_slice()),
         LuaValue::Buffer(buffer) => Wire::Buffer(buffer.to_vec().into_boxed_slice()),
         LuaValue::Vector(vector) => Wire::Vector([vector.x(), vector.y(), vector.z()]),
-        LuaValue::Table(table) => capture_table(lua, engine, table, ancestors, depth)?,
+        LuaValue::Table(table) => capture_table(lua, engine, table, ancestors, height)?,
         LuaValue::UserData(userdata) => capture_userdata(userdata),
         // functions, threads, light userdata, errors: nil
         _ => Wire::Nil,
@@ -165,28 +163,31 @@ fn capture_userdata(userdata: &LuaAnyUserData) -> Wire {
     }
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, depth: usize) -> Result<Wire, String> {
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize) -> Result<Wire, String> {
     let pointer = table.to_pointer();
     if ancestors.contains(&pointer) {
         return Err("tables cannot be cyclic".into());
     }
-    if ancestors.len() >= depth {
-        return Err("Max lua stack size reached".into());
-    }
     ancestors.push(pointer);
-    let entries = capture_entries(lua, engine, table, ancestors, depth);
+    let entries = capture_entries(lua, engine, table, ancestors, height);
     ancestors.pop();
     Ok(Wire::Table(entries?.into_boxed_slice()))
 }
 
-fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, depth: usize) -> Result<Vec<(Key, Wire)>, String> {
+/// The stack slot a value held by a table at `height` sits at: a table's is checked (bindable.rs `nested_height`) before
+/// it is walked, so one too deep is refused before a cycle through it is found
+fn item_height(item: &LuaValue, height: usize, array: bool) -> Result<usize, String> {
+    if matches!(item, LuaValue::Table(_)) { bindable::nested_height(height, array) } else { Ok(height) }
+}
+
+fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize) -> Result<Vec<(Key, Wire)>, String> {
     let length = table.raw_len();
     if length > 0 {
         // an array: indices 1 to the border, a value that does not arrive leaving a hole
         let mut entries = Vec::with_capacity(length);
         for index in 1..=length {
             let item: LuaValue = table.raw_get(index).map_err(|error| error.to_string())?;
-            let wire = capture(lua, engine, &item, ancestors, depth)?;
+            let wire = capture(lua, engine, &item, ancestors, item_height(&item, height, true)?)?;
             if !matches!(wire, Wire::Nil) {
                 entries.push((Key::Index(index as u32), wire));
             }
@@ -197,7 +198,7 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
         let key = bindable::key_name(lua, engine, &key)?;
-        let wire = capture(lua, engine, &item, ancestors, depth)?;
+        let wire = capture(lua, engine, &item, ancestors, item_height(&item, height, false)?)?;
         if !matches!(wire, Wire::Nil) {
             // (keys that end up equal keep the later one, as a table's set does)
             entries.retain(|(existing, _): &(Key, Wire)| !matches!(existing, Key::Name(name) if **name == *key));

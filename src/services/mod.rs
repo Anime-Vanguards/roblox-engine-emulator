@@ -1007,8 +1007,10 @@ pub fn install(engine: &Rc<Engine>) {
             // buffers are copied as Roblox copies them, threads arrive as nil: lua/bindable.rs)
             super::lua::refs::admit(engine, super::lua::refs::Hold::Work, "Fire")?;
             let mut arguments: Vec<Value> = Vec::with_capacity(args.0.len().saturating_sub(1));
+            // (a table's copy starts above the call's frame, `self` and the arguments: lua/bindable.rs)
+            let height = args.0.len();
             for argument in args.0.iter().skip(1) {
-                match super::lua::bindable::sent_value(lua, engine, argument) {
+                match super::lua::bindable::sent_value(lua, engine, argument, height) {
                     Ok(value) => arguments.push(value),
                     Err(message) => return super::lua::raise(message),
                 }

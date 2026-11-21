@@ -567,6 +567,99 @@ return {
     assert!(has(&lines, "client print: late 1 2 3"), "{lines:?}");
 }
 
+/// A remote's tables are walked on the Lua stack as an event's are (bindable.rs `nested_height`), from the call's frame:
+/// `self` and the arguments (the player among them for FireClient), a callback's results alone. So a dictionary nests half
+/// as deep as an array, each further argument takes a level, and a callback may return an array 300 deep (measured each
+/// way in a 0.747 play session, tools/parity/probes/loopback/remote_nesting.luau); 100,000 levels raise the same error
+#[test]
+fn remotes_refuse_tables_nested_past_the_lua_stack() {
+    let summary = run_pair(
+        "remote-depth",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local function Nest(Depth, Key)
+	local Root = {}
+	local At = Root
+	for _ = 2, Depth do
+		local Inner = {}
+		At[Key or 1] = Inner
+		At = Inner
+	end
+	return Root
+end
+local function Height(Value)
+	local Count = 0
+	while type(Value) == "table" do
+		Count += 1
+		Value = Value[1]
+	end
+	return Count
+end
+return {
+	Server = function(Context)
+		local Event = Instance.new("RemoteEvent")
+		Event.Name = "Depth"
+		Event.Parent = Storage
+		local Call = Instance.new("RemoteFunction")
+		Call.Name = "DepthCall"
+		Call.OnServerInvoke = function(_, Depth)
+			return Nest(Depth)
+		end
+		Call.Parent = Storage
+		local Ready = Instance.new("RemoteEvent")
+		Ready.Name = "Ready"
+		Ready.Parent = Storage
+		local Player = Ready.OnServerEvent:Wait()
+		print("client dict 149", pcall(Event.FireClient, Event, Player, Nest(149, "a")))
+		print("client dict 150", pcall(Event.FireClient, Event, Player, Nest(150, "a")))
+		print("all 299", pcall(Event.FireAllClients, Event, Nest(299)))
+		print("all 300", pcall(Event.FireAllClients, Event, Nest(300)))
+		print("client 100000", pcall(Event.FireClient, Event, Player, Nest(100000)))
+	end,
+	Client = function(Context)
+		local Event = Storage:WaitForChild("Depth")
+		local Call = Storage:WaitForChild("DepthCall")
+		print("server dict 150", pcall(Event.FireServer, Event, Nest(150, "a")))
+		print("server dict 151", pcall(Event.FireServer, Event, Nest(151, "a")))
+		print("server 2nd 298", pcall(Event.FireServer, Event, 1, Nest(298)))
+		print("server 2nd 299", pcall(Event.FireServer, Event, 1, Nest(299)))
+		print("invoke arg 300", pcall(Call.InvokeServer, Call, Nest(300)))
+		print("invoke 300", pcall(function() return Height(Call:InvokeServer(300)) end))
+		print("invoke 301", pcall(function() return Height(Call:InvokeServer(301)) end))
+		print("server 100000", pcall(Event.FireServer, Event, Nest(100000)))
+		Storage:WaitForChild("Ready"):FireServer()
+		for _ = 1, 10 do
+			task.wait()
+		end
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    let deep = "Max lua stack size reached";
+    for wanted in [
+        "client print: server dict 150 true".to_string(),
+        format!("client print: server dict 151 false {deep}"),
+        "client print: server 2nd 298 true".into(),
+        format!("client print: server 2nd 299 false {deep}"),
+        format!("client print: invoke arg 300 false {deep}"),
+        "client print: invoke 300 true 300".into(),
+        format!("client print: invoke 301 false {deep}"),
+        format!("client print: server 100000 false {deep}"),
+        "server print: client dict 149 true".into(),
+        format!("server print: client dict 150 false {deep}"),
+        "server print: all 299 true".into(),
+        format!("server print: all 300 false {deep}"),
+        format!("server print: client 100000 false {deep}"),
+    ] {
+        assert!(has(&lines, &wanted), "{wanted}: {lines:?}");
+    }
+}
+
 /// RemoteFunction both ways: results and nils kept, the callback's error raised in the caller with its position, a call
 /// that waits for the callback to be set; when the player leaves the server's InvokeClient calls raise, and no call is
 /// left held by either side

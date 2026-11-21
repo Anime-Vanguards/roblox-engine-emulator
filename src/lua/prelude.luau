@@ -1265,12 +1265,13 @@ local function KeyFloat(Value)
 	local Number = tonumber(Value)
 	return if Number then vector.create(Number, 0, 0).x else nil
 end
-local function KeyCopy(Value)
+-- (Height: the frame the copy starts above, as Roblox's: new's arguments, a write's object, key and value, a read's result)
+local function KeyCopy(Value, Height)
 	local Kind = type(Value)
 	if Kind ~= "table" and Kind ~= "buffer" then
 		return Value
 	end
-	local Copy, _, Message = R.Copied(Value)
+	local Copy, _, Message = R.Copied(Height, Value)
 	if Copy == SIGNAL then
 		error(Message, 0)
 	end
@@ -1309,7 +1310,7 @@ local function KeyIndex(Self, Key)
 		Members.ReadMiss("ValueCurveKey", Key, true)
 	end
 	local Info = KeyInfo[Self]
-	return if Key == "Value" then KeyCopy(Info.Value) else Info[Key]
+	return if Key == "Value" then KeyCopy(Info.Value, 1) else Info[Key]
 end
 local function KeyNewIndex(Self, Key, Value)
 	local Info = KeyInfo[Self]
@@ -1319,7 +1320,7 @@ local function KeyNewIndex(Self, Key, Value)
 		if Value == nil then
 			error("Failed to get input value for setValue of ValueCurveKey", 0)
 		end
-		Info.Value = KeyCopy(Value)
+		Info.Value = KeyCopy(Value, 3)
 	elseif Key == "Interpolation" then
 		Info.Interpolation = KeyMode(Value)
 		if Info.Interpolation ~= KeyModes.Cubic then
@@ -1349,7 +1350,7 @@ local ValueCurveKeyLibrary = table.freeze({
 		if Value == nil then
 			error("Failed to get value for second argument in ValueCurveKey", 0)
 		end
-		local Info = { Time = KeyFloat(Time) or 0, Value = KeyCopy(Value), Interpolation = if Count == 3 then KeyMode(Mode) else KeyModes.Constant }
+		local Info = { Time = KeyFloat(Time) or 0, Value = KeyCopy(Value, Count), Interpolation = if Count == 3 then KeyMode(Mode) else KeyModes.Constant }
 		local Object = Proxy("ValueCurveKey", KeyIndex, KeyNewIndex, KeyMeta)
 		KeyInfo[Object] = Info
 		return Object

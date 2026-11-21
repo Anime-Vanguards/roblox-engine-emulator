@@ -12,6 +12,14 @@
 //!   EnumItem `<token> (Enum.Material.Plastic)`, a buffer `<Buffer> (buffer: 0x...)`. Keys that end up equal keep the
 //!   later one in iteration order. A boolean or thread key is an error, `Invalid table key type used`.
 //! - A table that contains itself is an error, `tables cannot be cyclic`.
+//! - The copy walks a table on the Lua stack above the call's own values: the outermost table sits at the height of the
+//!   call's frame (`self` and the arguments of Fire and Invoke, the results of an Invoke's callback), a table inside an
+//!   array one slot above its parent, one inside a dictionary two (its key below it). A table that would sit above
+//!   [`STACK_LIMIT`] is an error, `Max lua stack size reached`, raised before a cycle through it is found; the outermost
+//!   table is never refused, whatever the arguments around it. So Fire takes an array nested 299 deep alone and 298
+//!   after another argument, a dictionary 150 deep, and a callback may return an array 300 deep (measured in a 0.747
+//!   playing client and server, tools/parity/probes/table_depth.luau). Remotes, data stores and MessagingService walk
+//!   the same way from heights of their own (loopback/wire.rs, server.luau `Data`).
 //! - A thread arrives as nil (in an array it leaves a hole, in a dictionary its entry is dropped); a buffer as a
 //!   new buffer with the same bytes; everything else (functions, Instances, datatypes, strings) as it is.
 //!
@@ -45,33 +53,54 @@ pub struct Copied(pub Rc<Sent>);
 
 impl LuaUserData for Copied {}
 
-/// A value as it is sent: an error when a table cannot be (cyclic, or a key of a kind that cannot be sent).
-pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Sent, String> {
-    Ok(capture_value(lua, engine, value, &mut Vec::new())?.unwrap_or(Sent::Value(LuaValue::Nil)))
+/// The highest slot of the Lua stack a copied table may sit at ([`nested_height`]); one higher is [`STACK_FULL`].
+pub const STACK_LIMIT: usize = 300;
+
+/// The error of a table nested too deep for the stack.
+pub const STACK_FULL: &str = "Max lua stack size reached";
+
+/// The stack height of a table found inside one at `height`: an array's item sits one slot above it, a dictionary's value
+/// two (above its key); an error when that is above [`STACK_LIMIT`].
+pub fn nested_height(height: usize, array: bool) -> Result<usize, String> {
+    let nested = height + if array { 1 } else { 2 };
+    if nested > STACK_LIMIT { Err(STACK_FULL.into()) } else { Ok(nested) }
+}
+
+/// A value as it is sent: an error when a table cannot be (cyclic, nested too deep, or a key of a kind that cannot be
+/// sent). `height`: the call's frame, where the value's outermost table sits (the module's notes).
+pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize) -> Result<Sent, String> {
+    Ok(capture_value(lua, engine, value, height, &mut Vec::new())?.unwrap_or(Sent::Value(LuaValue::Nil)))
 }
 
 /// `None`: a value that does not arrive (a thread).
-fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec<*const c_void>) -> Result<Option<Sent>, String> {
+fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, ancestors: &mut Vec<*const c_void>) -> Result<Option<Sent>, String> {
     Ok(Some(match value {
         LuaValue::Thread(_) => return Ok(None),
-        LuaValue::Table(table) => capture_table(lua, engine, table, ancestors)?,
+        LuaValue::Table(table) => capture_table(lua, engine, table, height, ancestors)?,
         LuaValue::Buffer(buffer) => Sent::Buffer(buffer.to_vec().into()),
         other => Sent::Value(other.clone()),
     }))
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const c_void>) -> Result<Sent, String> {
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>) -> Result<Sent, String> {
     let pointer = table.to_pointer();
     if ancestors.contains(&pointer) {
         return Err("tables cannot be cyclic".into());
     }
     ancestors.push(pointer);
-    let entries = capture_entries(lua, engine, table, ancestors);
+    let entries = capture_entries(lua, engine, table, height, ancestors);
     ancestors.pop();
     Ok(Sent::Table(entries?))
 }
 
-fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const c_void>) -> Result<Vec<(Key, Sent)>, String> {
+/// The copy of a value held by a table at `height`: a table is checked against the stack ([`nested_height`]) before it is
+/// walked, so one too deep is refused before a cycle through it is found
+fn capture_item(lua: &Lua, engine: &Engine, item: &LuaValue, height: usize, array: bool, ancestors: &mut Vec<*const c_void>) -> Result<Option<Sent>, String> {
+    let height = if matches!(item, LuaValue::Table(_)) { nested_height(height, array)? } else { height };
+    capture_value(lua, engine, item, height, ancestors)
+}
+
+fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>) -> Result<Vec<(Key, Sent)>, String> {
     let mut entries = Vec::new();
     let length = table.raw_len();
     if length > 0 {
@@ -80,7 +109,7 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut
             if item.is_nil() {
                 continue;
             }
-            if let Some(copy) = capture_value(lua, engine, &item, ancestors)? {
+            if let Some(copy) = capture_item(lua, engine, &item, height, true, ancestors)? {
                 entries.push((Key::Index(index as i64), copy));
             }
         }
@@ -89,7 +118,7 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
         let key = key_name(lua, engine, &key)?;
-        if let Some(copy) = capture_value(lua, engine, &item, ancestors)? {
+        if let Some(copy) = capture_item(lua, engine, &item, height, false, ancestors)? {
             entries.push((Key::Name(key), copy));
         }
     }
@@ -148,11 +177,12 @@ pub fn rebuild(lua: &Lua, sent: &Sent) -> LuaResult<LuaValue> {
 }
 
 /// The engine value BindableEvent:Fire queues for an argument: a table or buffer as a [`Copied`] that every
-/// receiver rebuilds, a thread as nil, anything else converted as usual.
-pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Value, String> {
+/// receiver rebuilds, a thread as nil, anything else converted as usual. `height`: the call's frame (`self` and the
+/// arguments).
+pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize) -> Result<Value, String> {
     match value {
         LuaValue::Table(_) | LuaValue::Buffer(_) => {
-            let sent = capture(lua, engine, value)?;
+            let sent = capture(lua, engine, value, height)?;
             let userdata = lua.create_userdata(Copied(Rc::new(sent))).map_err(|error| error.to_string())?;
             Ok(Value::Lua(Box::new(LuaValue::UserData(userdata))))
         }
@@ -161,11 +191,12 @@ pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Value,
     }
 }
 
-/// BindableFunction:Invoke's copy of its arguments and of the callback's results (`R.Copied`).
-pub fn copied(lua: &Lua, engine: &Engine, values: LuaMultiValue) -> Ret {
+/// BindableFunction:Invoke's copy of its arguments and of the callback's results, and a ValueCurveKey's Value's: each
+/// value's tables sitting at `height` (the call's frame: [`capture`]).
+pub fn copied(lua: &Lua, engine: &Engine, values: LuaMultiValue, height: usize) -> Ret {
     let mut out = LuaMultiValue::with_capacity(values.len());
     for value in values.iter() {
-        let sent = match capture(lua, engine, value) {
+        let sent = match capture(lua, engine, value, height) {
             Ok(sent) => sent,
             Err(message) => return raise(message),
         };

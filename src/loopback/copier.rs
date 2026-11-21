@@ -15,13 +15,14 @@ use crate::{Engine, InstanceId};
 /// A value whose capture mlua finishes (an object's slot in the side table)
 const PENDING: u32 = u32::MAX;
 
-/// Captures the tables among `values` (the rest as wire.rs captures them) into wire values, tables nested at most `depth`
-pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], depth: usize) -> Result<Box<[Wire]>, String> {
+/// Captures the tables among `values` (the rest as wire.rs captures them) into wire values, tables starting above the call's
+/// frame of `height` values (wire.rs `capture_all`)
+pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], height: usize) -> Result<Box<[Wire]>, String> {
     let mut out = Vec::with_capacity(values.len());
     for value in values {
         out.push(match value {
-            LuaValue::Table(table) => capture_table(lua, engine, table, depth)?,
-            other => super::wire::capture(lua, engine, other, &mut Vec::new(), depth)?,
+            LuaValue::Table(table) => capture_table(lua, engine, table, height)?,
+            other => super::wire::capture(lua, engine, other, &mut Vec::new(), height)?,
         });
     }
     Ok(out.into_boxed_slice())
@@ -33,7 +34,7 @@ struct Walk {
     objects: u32,
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, depth: usize) -> Result<Wire, String> {
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize) -> Result<Wire, String> {
     let mut walk = Walk { error: None, objects: 0 };
     let mut tree: Option<Wire> = None;
     // (the side table: the objects' values in the order the walk met them, finished by mlua below)
@@ -42,7 +43,7 @@ fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, depth: usize) -> 
             ffi::lua_createtable(state, 0, 0);
             let side = ffi::lua_gettop(state);
             let mut ancestors: Vec<*const c_void> = Vec::new();
-            match walk_table(state, 1, side, &mut ancestors, depth, &mut walk) {
+            match walk_table(state, 1, side, &mut ancestors, height, &mut walk) {
                 Ok(wire) => tree = Some(wire),
                 Err(message) => walk.error = Some(message),
             }
@@ -55,7 +56,7 @@ fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, depth: usize) -> 
     .map_err(|error| error.to_string())?;
     if let Some(message) = walk.error {
         if message == FALLBACK {
-            return super::wire::capture(lua, engine, &LuaValue::Table(table.clone()), &mut Vec::new(), depth);
+            return super::wire::capture(lua, engine, &LuaValue::Table(table.clone()), &mut Vec::new(), height);
         }
         return Err(message);
     }
@@ -64,7 +65,7 @@ fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, depth: usize) -> 
         let mut finished = Vec::with_capacity(walk.objects as usize);
         for index in 1..=walk.objects {
             let value: LuaValue = objects.raw_get(index).map_err(|error| error.to_string())?;
-            finished.push(super::wire::capture(lua, engine, &value, &mut Vec::new(), depth)?);
+            finished.push(super::wire::capture(lua, engine, &value, &mut Vec::new(), height)?);
         }
         let mut next = finished.into_iter();
         fill_objects(&mut tree, &mut next);
@@ -87,15 +88,19 @@ fn fill_objects(wire: &mut Wire, objects: &mut std::vec::IntoIter<Wire>) {
 
 const PLACEHOLDER: Wire = Wire::Instance(InstanceId { index: PENDING, generation: PENDING });
 
-/// The table at stack slot `index` as a wire table (wire.rs `capture_entries`' rules)
-unsafe fn walk_table(state: *mut ffi::lua_State, index: c_int, side: c_int, ancestors: &mut Vec<*const c_void>, depth: usize, walk: &mut Walk) -> Result<Wire, String> {
+/// The stack slot a value of type `kind` held by a table at `height` sits at: a table's is checked (bindable.rs
+/// `nested_height`) before it is walked, so one too deep is refused before a cycle through it is found
+fn item_height(kind: c_int, height: usize, array: bool) -> Result<usize, String> {
+    if kind == ffi::LUA_TTABLE { crate::lua::bindable::nested_height(height, array) } else { Ok(height) }
+}
+
+/// The table at stack slot `index`, which sits at `height` (wire.rs `capture`), as a wire table (wire.rs
+/// `capture_entries`' rules)
+unsafe fn walk_table(state: *mut ffi::lua_State, index: c_int, side: c_int, ancestors: &mut Vec<*const c_void>, height: usize, walk: &mut Walk) -> Result<Wire, String> {
     unsafe {
         let pointer = ffi::lua_topointer(state, index);
         if ancestors.contains(&pointer) {
             return Err("tables cannot be cyclic".into());
-        }
-        if ancestors.len() >= depth {
-            return Err("Max lua stack size reached".into());
         }
         if ffi::lua_checkstack(state, 4) == 0 {
             return Err("Max lua stack size reached".into());
@@ -109,7 +114,10 @@ unsafe fn walk_table(state: *mut ffi::lua_State, index: c_int, side: c_int, ance
             let top = ffi::lua_gettop(state) + 1;
             for item in 1..=length {
                 let kind = ffi::lua_rawgeti_(state, index, item as c_int);
-                let wire = walk_typed(state, top, kind, side, ancestors, depth, walk);
+                let wire = match item_height(kind, height, true) {
+                    Ok(inner) => walk_typed(state, top, kind, side, ancestors, inner, walk),
+                    Err(message) => Err(message),
+                };
                 ffi::lua_settop(state, top - 1);
                 let wire = wire?;
                 if !matches!(wire, Wire::Nil) {
@@ -130,7 +138,11 @@ unsafe fn walk_table(state: *mut ffi::lua_State, index: c_int, side: c_int, ance
                         slow_key(state, top - 1)?
                     }
                 };
-                let wire = walk_value(state, top, side, ancestors, depth, walk);
+                let kind = ffi::lua_type(state, top);
+                let wire = match item_height(kind, height, false) {
+                    Ok(inner) => walk_typed(state, top, kind, side, ancestors, inner, walk),
+                    Err(message) => Err(message),
+                };
                 ffi::lua_settop(state, top - 1);
                 let wire = wire?;
                 if !matches!(wire, Wire::Nil) {
@@ -200,14 +212,10 @@ unsafe fn slow_key(state: *mut ffi::lua_State, index: c_int) -> Result<Box<[u8]>
 /// The walk met a key the typed copier names
 const FALLBACK: &str = "\u{0}fallback";
 
-/// The value at stack slot `index` (wire.rs `capture`'s rules): an object other than an instance goes to the side table
-unsafe fn walk_value(state: *mut ffi::lua_State, index: c_int, side: c_int, ancestors: &mut Vec<*const c_void>, depth: usize, walk: &mut Walk) -> Result<Wire, String> {
-    unsafe { walk_typed(state, index, ffi::lua_type(state, index), side, ancestors, depth, walk) }
-}
-
-/// [`walk_value`] of a value whose type is `kind`
+/// The value at stack slot `index`, whose type is `kind` (wire.rs `capture`'s rules): an object other than an instance goes
+/// to the side table; a table sits at `height`
 #[inline]
-unsafe fn walk_typed(state: *mut ffi::lua_State, index: c_int, kind: c_int, side: c_int, ancestors: &mut Vec<*const c_void>, depth: usize, walk: &mut Walk) -> Result<Wire, String> {
+unsafe fn walk_typed(state: *mut ffi::lua_State, index: c_int, kind: c_int, side: c_int, ancestors: &mut Vec<*const c_void>, height: usize, walk: &mut Walk) -> Result<Wire, String> {
     unsafe {
         Ok(match kind {
             ffi::LUA_TNIL => Wire::Nil,
@@ -230,7 +238,7 @@ unsafe fn walk_typed(state: *mut ffi::lua_State, index: c_int, kind: c_int, side
                 let data = ffi::lua_tobuffer(state, index, &mut length) as *const u8;
                 Wire::Buffer(std::slice::from_raw_parts(data, length).into())
             }
-            ffi::LUA_TTABLE => walk_table(state, index, side, ancestors, depth, walk)?,
+            ffi::LUA_TTABLE => walk_table(state, index, side, ancestors, height, walk)?,
             ffi::LUA_TUSERDATA => match super::super::lua::raw::stack_instance(state, index) {
                 Some(id) => Wire::Instance(id),
                 None => {

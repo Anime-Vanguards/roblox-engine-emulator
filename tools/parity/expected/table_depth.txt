@@ -1,0 +1,47 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-21
+fire deepest 299, got 299; one more: error Max lua stack size reached
+fire-dict deepest 150, got 150; one more: error Max lua stack size reached
+fire-2nd deepest 298, got 298; one more: error Max lua stack size reached
+fire-6th deepest 294, got 294; one more: error Max lua stack size reached
+fire-20th deepest 280, got 280; one more: error Max lua stack size reached
+fire-1st-of-2 deepest 298, got 298; one more: error Max lua stack size reached
+fire-two-deep deepest 298, got 298; one more: error Max lua stack size reached
+fire-under-dict deepest 297, got 1; one more: error Max lua stack size reached
+fire-from-deeper deepest 299, got 299; one more: error Max lua stack size reached
+fire-dict-2nd deepest 149, got 149; one more: error Max lua stack size reached
+fire-at-2 deepest 298, got 1; one more: error Max lua stack size reached
+fire-at-key-2 deepest 297, got 1; one more: error Max lua stack size reached
+fire-dict-with-more deepest 297, got 2; one more: error Max lua stack size reached
+fire-error-position error Max lua stack size reached
+fire-ring-at-limit error Max lua stack size reached
+fire-ring-one-more error Max lua stack size reached
+fire-ring-small error tables cannot be cyclic
+fire-298-numbers-then-1 ok 
+fire-299-numbers-then-1 ok 
+fire-300-numbers-then-1 ok 
+fire-297-numbers-then-2 ok 
+fire-298-numbers-then-2 error Max lua stack size reached
+fire-400-numbers-then-0 ok 
+fire-400-numbers-then-1 ok 
+fire-150-numbers-then-150 error Max lua stack size reached
+invoke-arg deepest 299, got ok 299; one more: error Max lua stack size reached
+invoke-2nd-arg deepest 298, got ok 298; one more: error Max lua stack size reached
+invoke-result deepest 300, got ok 300; one more: error Max lua stack size reached
+invoke-2nd-result deepest 299, got ok 299; one more: error Max lua stack size reached
+invoke-dict-arg deepest 150, got ok 150; one more: error Max lua stack size reached
+invoke-dict-result deepest 150, got ok 150; one more: error Max lua stack size reached
+invoke-ring-at-limit error Max lua stack size reached
+invoke-299-numbers-then-1 ok 1
+invoke-298-numbers-then-1 ok 1
+key-new deepest 299, got ok 299; one more: error Max lua stack size reached
+key-new-3 deepest 298, got ok 298; one more: error Max lua stack size reached
+key-new-dict deepest 150, got ok 150; one more: error Max lua stack size reached
+key-write deepest 298, got ok 298; one more: error Max lua stack size reached
+json-encode 300 ok 600, 301 error Max lua stack size reached
+json-ring-300 error Max lua stack size reached, 301 error Max lua stack size reached
+huge fire error Max lua stack size reached
+huge invoke-arg error Max lua stack size reached
+huge invoke-result error Max lua stack size reached
+huge key-new error Max lua stack size reached
+huge json-encode error Max lua stack size reached

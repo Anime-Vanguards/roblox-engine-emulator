@@ -57,14 +57,53 @@ local function IsEnum(Value, EnumName)
 	return typeof(Value) == "EnumItem" and Value.EnumType == Enum[EnumName]
 end
 
--- Data a store holds: a copy of Value and its length as JSON, or nil and the kind that cannot be stored
+-- Data a store holds: a copy of Value and its length as JSON, or nil and the kind that cannot be stored.
+--
+-- Roblox converts the value first, as BindableEvent:Fire copies a table (lua/bindable.rs): each table walked on the Lua
+-- stack, a table inside an array one slot above its parent, one inside a dictionary two, so a table that would sit above
+-- slot 300 raises "Max lua stack size reached" (before a cycle through it is found) and a table inside itself "tables cannot
+-- be cyclic", both without a position and before anything that cannot be stored is looked for, wherever it is in the value.
+-- Height is the slot the outermost table sits at, which each call has of its own: 1 for SetAsync and AddAsync (an array
+-- nested 300 deep is stored, a dictionary 150), 6 for an UpdateAsync transform's result (295 and 148), 4 for PublishAsync
+-- (297 and 149). Measured in a 0.747 playing server (tools/parity/probes/table_depth.luau); metadata's are not measured
+-- (taken as SetAsync's and UpdateAsync's values').
 
 local function JsonStringLength(Text)
 	local _, Escaped = string.gsub(Text, '[%c"\\]', "")
 	return #Text + 2 + Escaped
 end
 
-local function Data(Value, Seen)
+local STACK_LIMIT = 300
+
+-- The conversion's errors in a table at Height that Data stopped short of (it ends at the first thing it cannot store),
+-- walked as the conversion walks it: an array to its border, anything else by its pairs
+local Converted
+local function ConvertedItem(Item, Height, Ancestors)
+	if type(Item) ~= "table" then
+		return
+	elseif Height > STACK_LIMIT then
+		error("Max lua stack size reached", 0)
+	elseif Ancestors[Item] then
+		error("tables cannot be cyclic", 0)
+	end
+	Converted(Item, Height, Ancestors)
+end
+function Converted(Value, Height, Ancestors)
+	Ancestors[Value] = true
+	local Length = rawlen(Value)
+	if Length > 0 then
+		for Index = 1, Length do
+			ConvertedItem(rawget(Value, Index), Height + 1, Ancestors)
+		end
+	else
+		for _, Item in next, Value do
+			ConvertedItem(Item, Height + 2, Ancestors)
+		end
+	end
+	Ancestors[Value] = nil
+end
+
+local function Data(Value, Seen, Height)
 	local Kind = type(Value)
 	if Kind == "nil" then
 		return nil, 4
@@ -85,8 +124,10 @@ local function Data(Value, Seen)
 	elseif Kind ~= "table" then
 		return nil, nil, typeof(Value)
 	end
-	if Seen[Value] then
-		return nil, nil, "Dictionary"
+	if Height > STACK_LIMIT then
+		error("Max lua stack size reached", 0)
+	elseif Seen[Value] then
+		error("tables cannot be cyclic", 0)
 	end
 	Seen[Value] = true
 	local Count, Length = 0, rawlen(Value)
@@ -105,7 +146,7 @@ local function Data(Value, Seen)
 	local Copy, Size = {}, 2
 	if IsArray then
 		for Index = 1, Length do
-			local Item, ItemSize, Bad = Data(rawget(Value, Index), Seen)
+			local Item, ItemSize, Bad = Data(rawget(Value, Index), Seen, Height + 1)
 			if Bad then
 				return nil, nil, Bad
 			end
@@ -119,7 +160,7 @@ local function Data(Value, Seen)
 			elseif utf8.len(Key) == nil then
 				return nil, nil, "string"
 			end
-			local Copied, ItemSize, Bad = Data(Item, Seen)
+			local Copied, ItemSize, Bad = Data(Item, Seen, Height + 2)
 			if Bad then
 				return nil, nil, Bad
 			end
@@ -127,8 +168,21 @@ local function Data(Value, Seen)
 			Size += JsonStringLength(Key) + ItemSize + 2
 		end
 	end
+	-- (each entry above counted a separator after it: the last has none)
+	if Count > 0 then
+		Size -= 1
+	end
 	Seen[Value] = nil
 	return Copy, Size
+end
+
+-- Data of a value whose outermost table sits at Height, the conversion's errors anywhere in it raised first
+local function Stored(Value, Height)
+	local Copy, Size, Bad = Data(Value, {}, Height)
+	if Bad and type(Value) == "table" then
+		Converted(Value, Height, {})
+	end
+	return Copy, Size, Bad
 end
 
 local function Clone(Value)
@@ -157,8 +211,8 @@ local Infos = setmetatable({}, { __mode = "k" })
 local OptionMetadata = setmetatable({}, { __mode = "k" })
 local Serial = 0
 
-local function Storable(Value, At)
-	local Copy, Size, Bad = Data(Value, {})
+local function Storable(Value, At, Height)
+	local Copy, Size, Bad = Stored(Value, Height)
 	if Bad then
 		Fail(`104: Cannot store {Bad} in data store. Data stores can only accept valid UTF-8 characters.`, At)
 	elseif Size > MAX_VALUE then
@@ -200,14 +254,14 @@ local function CheckUserIds(UserIds, At)
 	return Copy
 end
 
-local function CheckMetadata(Metadata, At)
+local function CheckMetadata(Metadata, At, Height)
 	if Metadata == nil then
 		return {}
 	end
 	if type(Metadata) ~= "table" then
 		Fail("513: Attribute metadata format is invalid.", At)
 	end
-	local Copy, Size, Bad = Data(Metadata, {})
+	local Copy, Size, Bad = Stored(Metadata, Height)
 	if Bad or (next(Metadata) ~= nil and #Metadata > 0) then
 		Fail("513: Attribute metadata format is invalid.", At)
 	elseif Size > 300 then
@@ -308,7 +362,7 @@ Method("DataStoreOptions", "SetExperimentalFeatures", function(_, Features)
 end)
 for _, Class in { "DataStoreSetOptions", "DataStoreIncrementOptions" } do
 	Method(Class, "SetMetadata", function(Self, Attributes)
-		OptionMetadata[Self] = CheckMetadata(Attributes, true)
+		OptionMetadata[Self] = CheckMetadata(Attributes, true, 1)
 	end)
 	Method(Class, "GetMetadata", function(Self)
 		return Clone(OptionMetadata[Self] or {})
@@ -416,7 +470,7 @@ Method("GlobalDataStore", "SetAsync", function(Self, Key, Value, UserIds, Option
 	if Store.Kind == "Ordered" then
 		OrderedValue(Value, At)
 	end
-	local Copy = Storable(Value, At)
+	local Copy = Storable(Value, At, 1)
 	UserIds = CheckUserIds(UserIds, At)
 	local Metadata = MetadataOf(Options)
 	task.wait()
@@ -445,9 +499,9 @@ Method("GlobalDataStore", "UpdateAsync", function(Self, Key, Function)
 	if Ordered then
 		OrderedValue(Results[1], nil)
 	end
-	local Copy = Storable(Results[1], nil)
+	local Copy = Storable(Results[1], nil, 6)
 	local UserIds = CheckUserIds(Results[2], nil)
-	local Metadata = CheckMetadata(Results[3], nil)
+	local Metadata = CheckMetadata(Results[3], nil, 6)
 	local Written, New = Write(Store, Key, Copy, UserIds, Metadata)
 	if Ordered then
 		return Clone(Copy)
@@ -701,8 +755,8 @@ local function MemoryKey(Key, At)
 	return Key
 end
 
-local function MemoryValue(Value, At)
-	local Copy, Size, Bad = Data(Value, {})
+local function MemoryValue(Value, At, Height)
+	local Copy, Size, Bad = Stored(Value, Height)
 	if Bad or Value == nil then
 		MemoryFail("InvalidRequest", "Unable to convert value to json.", At)
 	elseif Size > MAX_ITEM then
@@ -819,7 +873,7 @@ end
 Method("MemoryStoreSortedMap", "SetAsync", function(Self, Key, Value, Seconds, Sort)
 	local Map = MemoryHandle(Self, "SetAsync", At)
 	Key = MemoryKey(Key, At)
-	local Copy = MemoryValue(Value, At)
+	local Copy = MemoryValue(Value, At, 1)
 	local Expires = Expiration(Seconds, At)
 	Sort = SortKey(Sort, At)
 	task.wait()
@@ -856,7 +910,7 @@ Method("MemoryStoreSortedMap", "UpdateAsync", function(Self, Key, Function, Seco
 	if Results[1] == nil then
 		return nil
 	end
-	local Copy = MemoryValue(Results[1], nil)
+	local Copy = MemoryValue(Results[1], nil, 6)
 	local Sort = SortKey(Results[2], nil)
 	Map.Items[Key] = { Value = Copy, Sort = Sort, Expires = Expires }
 	return Clone(Copy), Sort
@@ -904,7 +958,7 @@ end)
 Method("MemoryStoreHashMap", "SetAsync", function(Self, Key, Value, Seconds)
 	local Map = MemoryHandle(Self, "SetAsync", At)
 	Key = MemoryKey(Key, At)
-	local Copy = MemoryValue(Value, At)
+	local Copy = MemoryValue(Value, At, 1)
 	local Expires = Expiration(Seconds, At)
 	task.wait()
 	Map.Items[Key] = { Value = Copy, Expires = Expires }
@@ -936,7 +990,7 @@ Method("MemoryStoreHashMap", "UpdateAsync", function(Self, Key, Function, Second
 	if Results[1] == nil then
 		return nil
 	end
-	local Copy = MemoryValue(Results[1], nil)
+	local Copy = MemoryValue(Results[1], nil, 6)
 	Map.Items[Key] = { Value = Copy, Expires = Expires }
 	return Clone(Copy)
 end)
@@ -983,7 +1037,7 @@ end
 
 Method("MemoryStoreQueue", "AddAsync", function(Self, Value, Seconds, Priority)
 	local Queue = MemoryHandle(Self, "AddAsync", At)
-	local Copy = MemoryValue(Value, At)
+	local Copy = MemoryValue(Value, At, 1)
 	local Expires = Expiration(Seconds, At)
 	if Priority ~= nil and type(Priority) ~= "number" then
 		Fail("Unable to cast value to double", At)
@@ -1070,7 +1124,7 @@ Method("MessagingService", "SubscribeAsync", function(_, Name, Callback)
 end)
 Method("MessagingService", "PublishAsync", function(_, Name, Message)
 	Name = Topic(Name, At)
-	local Copy, Size, Bad = Data(Message, {})
+	local Copy, Size, Bad = Stored(Message, 4)
 	if Bad then
 		Fail(`PublishAsync: cannot send {Bad}`, At)
 	elseif Size > 1024 then
@@ -1116,7 +1170,7 @@ R.SetJoinData = function(Player, Given)
 		JoinData[Player] = nil
 		return
 	end
-	local Copy, _, Bad = Data(Given, {})
+	local Copy, _, Bad = Stored(Given, 1)
 	if type(Copy) ~= "table" or Bad then
 		error(`SetJoinData: join data is a table of JSON-like data{if Bad then ` (not {Bad})` else ""}`, 2)
 	end

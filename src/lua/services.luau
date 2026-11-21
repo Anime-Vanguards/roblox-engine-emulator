@@ -1261,7 +1261,7 @@ Method("BindableFunction", "Invoke", function(Self, ...)
 		Charge(Cost.ActorInvoke) -- (a call into an Actor's VM: 1.0 us in Studio)
 	end
 	-- (the arguments and results are copied as Roblox copies them: tables, buffers, threads; lua/bindable.rs)
-	return R.Copied(Callback(R.Copied(...)))
+	return R.Copied(Callback(R.CopiedArguments(...)))
 end)
 
 -- LogService:Output, Info, Warn, Error and Log: a line of their MessageType (Output: print's, Info: MessageInfo, Warn: warn's,

@@ -354,9 +354,18 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(e.state.borrow().dom.at(id).callback(name).cloned().unwrap_or(LuaValue::Nil))
         })?,
     )?;
-    // BindableFunction:Invoke's copies of its arguments and results (lua/bindable.rs)
+    // BindableFunction:Invoke's copies of its callback's results and of its arguments (lua/bindable.rs), whose tables
+    // start above the call's frame: the results alone, `self` below the arguments
     let e = engine.clone();
-    r.set("Copied", super::wrapped(lua, engine, move |lua, values| super::bindable::copied(lua, &e, values))?)?;
+    r.set("Copied", super::wrapped(lua, engine, move |lua, values| {
+        let height = values.len();
+        super::bindable::copied(lua, &e, values, height)
+    })?)?;
+    let e = engine.clone();
+    r.set("CopiedArguments", super::wrapped(lua, engine, move |lua, values| {
+        let height = values.len() + 1;
+        super::bindable::copied(lua, &e, values, height)
+    })?)?;
     // KeyframeSequenceProvider:GetKeyframeSequenceAsync's copy of an animation, else nil and the error
     let e = engine.clone();
     r.set(

@@ -184,9 +184,17 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(none())
         })?,
     )?;
-    // ValueCurveKey's table values, copied as an event's argument is (lua/bindable.rs), and SecurityCapabilities.fromCurrent's
-    // report in the edit run context, where a plugin's set was not measured (prelude.luau)
-    r.set("Copied", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::bindable::copied(lua, engine, args)))?)?;
+    // ValueCurveKey's table values, copied as an event's argument is (lua/bindable.rs): `R.Copied(height, value)`, the height
+    // of the frame the copy starts above; and SecurityCapabilities.fromCurrent's report in the edit run context, where a
+    // plugin's set was not measured (prelude.luau)
+    r.set("Copied", primitive(lua, engine, |lua, engine, mut args| {
+        let height = match args.pop_front() {
+            Some(LuaValue::Integer(height)) => usize::try_from(i64::from(height)).unwrap_or(0),
+            Some(LuaValue::Number(height)) if height >= 0.0 => height as usize,
+            _ => 0,
+        };
+        super::encode(lua, super::bindable::copied(lua, engine, args, height))
+    })?)?;
     let e = engine.clone();
     r.set(
         "Missing",

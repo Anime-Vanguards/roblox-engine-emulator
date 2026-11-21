@@ -132,7 +132,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
                 if side == Side::Server {
                     return raise("FireServer can only be called from the client");
                 }
-                send_event(lua, engine, id, &args.0.iter().skip(1).cloned().collect::<Vec<_>>(), unreliable, wire::MAX_DEPTH)
+                send_event(lua, engine, id, &args.0.iter().skip(1).cloned().collect::<Vec<_>>(), unreliable, args.0.len())
             }));
         }
         if let Some(fire_client) = name("FireClient") {
@@ -149,7 +149,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
                 if parentless(engine, id) || !is_loopback_player(engine, player) {
                     return Ok(none());
                 }
-                send_event(lua, engine, id, &args.0.iter().skip(2).cloned().collect::<Vec<_>>(), unreliable, wire::MAX_DEPTH_AFTER_PLAYER)
+                send_event(lua, engine, id, &args.0.iter().skip(2).cloned().collect::<Vec<_>>(), unreliable, args.0.len())
             }));
         }
         if let Some(fire_all) = name("FireAllClients") {
@@ -164,7 +164,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
                 if !joined {
                     return Ok(none());
                 }
-                send_event(lua, engine, id, &args.0.iter().skip(1).cloned().collect::<Vec<_>>(), unreliable, wire::MAX_DEPTH)
+                send_event(lua, engine, id, &args.0.iter().skip(1).cloned().collect::<Vec<_>>(), unreliable, args.0.len())
             }));
         }
     }
@@ -201,10 +201,11 @@ fn is_loopback_player(engine: &Engine, player: InstanceId) -> bool {
 }
 
 /// FireServer / FireClient / FireAllClients: the arguments as the call left them (wire.rs), into the side's stream; an
-/// unreliable call over its ceiling is dropped with the sender's warning
-fn send_event(lua: &Lua, engine: &Rc<Engine>, remote: InstanceId, arguments: &[LuaValue], unreliable: bool, depth: usize) -> Ret {
+/// unreliable call over its ceiling is dropped with the sender's warning. `height`: the call's frame (`self`, the player,
+/// the arguments), which its tables' copy starts above (wire.rs)
+fn send_event(lua: &Lua, engine: &Rc<Engine>, remote: InstanceId, arguments: &[LuaValue], unreliable: bool, height: usize) -> Ret {
     let Some(endpoint) = engine.loopback() else { return Ok(none()) };
-    let args = match wire::capture_all(lua, engine, arguments, depth) {
+    let args = match wire::capture_all(lua, engine, arguments, height) {
         Ok(args) => args,
         Err(message) => return raise(message),
     };
@@ -248,7 +249,9 @@ fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
     let Some(endpoint) = engine.loopback() else { return raise("not a loopback run") };
     let Some(remote) = crate::lua::instance_id(args.get(0)) else { return raise("Expected ':' not '.' calling member function InvokeServer") };
     let client_call = matches!(args.get(1), LuaValue::Boolean(true));
-    let (skip, depth) = if client_call { (3, wire::MAX_DEPTH) } else { (3, wire::MAX_DEPTH_AFTER_PLAYER) };
+    // (the call's frame as Roblox's: `self` and the arguments, the player among them for InvokeClient; wire.rs)
+    let skip = 3;
+    let height = args.0.len().saturating_sub(skip) + if client_call { 1 } else { 2 };
     if client_call {
         if side == Side::Server {
             return raise("InvokeServer can only be called from the client");
@@ -265,7 +268,7 @@ fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
         }
     }
     let arguments: Vec<LuaValue> = args.0.iter().skip(skip).cloned().collect();
-    let captured = match wire::capture_all(lua, engine, &arguments, depth) {
+    let captured = match wire::capture_all(lua, engine, &arguments, height) {
         Ok(captured) => captured,
         Err(message) => return raise(message),
     };
@@ -426,7 +429,9 @@ fn run_callback(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote:
 fn answered(lua: &Lua, engine: &Rc<Engine>, call: u32, ok: bool, mut results: LuaMultiValue) -> LuaResult<()> {
     let Some(endpoint) = engine.loopback() else { return Ok(()) };
     let result = if ok {
-        wire::capture_all(lua, engine, results.make_contiguous(), wire::MAX_DEPTH)
+        // (the results alone are the frame their tables' copy starts above: wire.rs)
+        let height = results.len();
+        wire::capture_all(lua, engine, results.make_contiguous(), height)
     } else {
         match results.into_iter().next().unwrap_or(LuaValue::Nil) {
             LuaValue::String(text) => Err(text.to_string_lossy()),

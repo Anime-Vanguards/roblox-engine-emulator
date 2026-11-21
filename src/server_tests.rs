@@ -214,6 +214,86 @@ fn data_stores_keep_copies_versions_and_metadata() {
     assert!(has(&other, "print: other nil"), "{other:?}");
 }
 
+/// Data stores, memory stores and MessagingService convert a value as an event copies a table (lua/bindable.rs): a table
+/// that would sit above the Lua stack's slot 300 raises "Max lua stack size reached" and a table inside itself "tables
+/// cannot be cyclic", without a position and before anything that cannot be stored, wherever it is. The outermost table
+/// sits at 1 for SetAsync and AddAsync, 6 for an UpdateAsync transform's result, 4 for PublishAsync (measured in a 0.747
+/// playing server, tools/parity/probes/table_depth.luau); 100,000 levels raise the same error. A message's size counts
+/// its JSON's separators, one fewer than its entries.
+#[test]
+fn stores_refuse_tables_nested_past_the_lua_stack() {
+    let lines = run(
+        RunContext::Server,
+        r#"
+        local function Nest(Depth, Key)
+            local Root = {}
+            local At = Root
+            for _ = 2, Depth do
+                local Inner = {}
+                At[Key or 1] = Inner
+                At = Inner
+            end
+            return Root
+        end
+        local function Ring(Depth)
+            local Root = Nest(Depth)
+            local At = Root
+            while At[1] do
+                At = At[1]
+            end
+            At[1] = Root
+            return Root
+        end
+        local function Try(Name, Call)
+            print(Name, pcall(Call))
+        end
+        local Store = game:GetService("DataStoreService"):GetDataStore("Depth")
+        local Memory = game:GetService("MemoryStoreService")
+        local Map, Hash, Queue = Memory:GetSortedMap("Depth"), Memory:GetHashMap("Depth"), Memory:GetQueue("Depth")
+        local Messaging = game:GetService("MessagingService")
+        Try("set 300", function() Store:SetAsync("k", Nest(300)) end)
+        Try("set 301", function() Store:SetAsync("k", Nest(301)) end)
+        Try("set dict 150", function() Store:SetAsync("k", Nest(150, "a")) end)
+        Try("set dict 151", function() Store:SetAsync("k", Nest(151, "a")) end)
+        Try("update 295", function() Store:UpdateAsync("k", function() return Nest(295) end) end)
+        Try("update 296", function() Store:UpdateAsync("k", function() return Nest(296) end) end)
+        Try("sorted 300", function() Map:SetAsync("k", Nest(300), 30) end)
+        Try("sorted 301", function() Map:SetAsync("k", Nest(301), 30) end)
+        Try("sorted update 296", function() Map:UpdateAsync("k", function() return Nest(296) end, 30) end)
+        Try("hash 301", function() Hash:SetAsync("k", Nest(301), 30) end)
+        Try("hash update 296", function() Hash:UpdateAsync("k", function() return Nest(296) end, 30) end)
+        Try("queue 300", function() Queue:AddAsync(Nest(300), 30) end)
+        Try("queue 301", function() Queue:AddAsync(Nest(301), 30) end)
+        Try("publish 297", function() Messaging:PublishAsync("t", Nest(297)) end)
+        Try("publish 298", function() Messaging:PublishAsync("t", Nest(298)) end)
+        Try("publish dict 149", function() Messaging:PublishAsync("t", Nest(149, "a")) end)
+        Try("publish dict 150", function() Messaging:PublishAsync("t", Nest(150, "a")) end)
+        Try("set ring", function() Store:SetAsync("k", Ring(3)) end)
+        Try("set function then ring", function() Store:SetAsync("k", { print, Ring(3) }) end)
+        Try("set function then deep", function() Store:SetAsync("k", { print, Nest(400) }) end)
+        Try("set ring 300", function() Store:SetAsync("k", Ring(300)) end)
+        Try("publish ring", function() Messaging:PublishAsync("t", Ring(3)) end)
+        Try("set 100000", function() Store:SetAsync("k", Nest(100000)) end)
+        Try("publish 100000", function() Messaging:PublishAsync("t", Nest(100000)) end)
+        Try("queue 100000", function() Queue:AddAsync(Nest(100000), 30) end)
+        "#,
+        3.0,
+    );
+    let deep = "Max lua stack size reached";
+    for label in ["set 300", "set dict 150", "update 295", "sorted 300", "queue 300", "publish 297", "publish dict 149"] {
+        assert!(has(&lines, &format!("print: {label} true")), "{label}: {lines:?}");
+    }
+    for label in [
+        "set 301", "set dict 151", "update 296", "sorted 301", "sorted update 296", "hash 301", "hash update 296", "queue 301", "publish 298",
+        "publish dict 150", "set function then deep", "set ring 300", "set 100000", "publish 100000", "queue 100000",
+    ] {
+        assert!(has(&lines, &format!("print: {label} false {deep}")), "{label}: {lines:?}");
+    }
+    for label in ["set ring", "set function then ring", "publish ring"] {
+        assert!(has(&lines, &format!("print: {label} false tables cannot be cyclic")), "{label}: {lines:?}");
+    }
+}
+
 #[test]
 fn ordered_data_stores_page_by_value() {
     let lines = run(

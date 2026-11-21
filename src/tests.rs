@@ -1262,6 +1262,125 @@ fn bindables_copy_tables_for_every_receiver_as_roblox_does() {
     );
 }
 
+/// A table an event or a curve key copies is walked on the Lua stack above the call's own values (the outermost at the
+/// frame's height, an array's table one slot up, a dictionary's two), and one above slot 300 raises "Max lua stack size
+/// reached" without a position, before a cycle through it does (measured in a 0.747 playing client and server,
+/// tools/parity/probes/table_depth.luau), however deep the table is: 100,000 levels raise the same error.
+#[test]
+fn copies_refuse_tables_nested_past_the_lua_stack() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Nest(Depth, Key)
+            local Root = {}
+            local At = Root
+            for _ = 2, Depth do
+                local Inner = {}
+                At[Key or 1] = Inner
+                At = Inner
+            end
+            return Root
+        end
+        local function Ring(Depth)
+            local Root = Nest(Depth)
+            local At = Root
+            while At[1] do
+                At = At[1]
+            end
+            At[1] = Root
+            return Root
+        end
+        local function Height(Value, Key)
+            local Count = 0
+            while type(Value) == "table" do
+                Count += 1
+                Value = Value[Key or 1]
+            end
+            return Count
+        end
+        local function Try(Name, Call)
+            local Ok, Result = pcall(Call)
+            print(Name, Ok, Result)
+        end
+        local Event = Instance.new("BindableEvent")
+        local Got = {}
+        Event.Event:Connect(function(...)
+            local Last = select(select("#", ...), ...)
+            table.insert(Got, math.max(Height(Last), Height(Last, "a")))
+        end)
+        Try("fire 299", function() Event:Fire(Nest(299)) end)
+        Try("fire 300", function() Event:Fire(Nest(300)) end)
+        Try("fire 2nd 298", function() Event:Fire(1, Nest(298)) end)
+        Try("fire 2nd 299", function() Event:Fire(1, Nest(299)) end)
+        Try("fire dict 150", function() Event:Fire(Nest(150, "a")) end)
+        Try("fire dict 151", function() Event:Fire(Nest(151, "a")) end)
+        Try("fire under dict 297", function() Event:Fire({ Key = Nest(297) }) end)
+        Try("fire under dict 298", function() Event:Fire({ Key = Nest(298) }) end)
+        local Many = table.create(400, 0)
+        table.insert(Many, {})
+        Try("fire after 400", function() Event:Fire(table.unpack(Many)) end)
+        Try("fire ring 299", function() Event:Fire(Ring(299)) end)
+        Try("fire ring 3", function() Event:Fire(Ring(3)) end)
+        Try("fire 100000", function() Event:Fire(Nest(100000)) end)
+        task.wait()
+        print("received", table.concat(Got, " "))
+        local Echo = Instance.new("BindableFunction")
+        Echo.OnInvoke = function(Value) return Height(Value) end
+        local Maker = Instance.new("BindableFunction")
+        Maker.OnInvoke = function(Depth) return Nest(Depth) end
+        Try("invoke 299", function() return Echo:Invoke(Nest(299)) end)
+        Try("invoke 300", function() return Echo:Invoke(Nest(300)) end)
+        Try("invoke 100000", function() return Echo:Invoke(Nest(100000)) end)
+        Try("result 300", function() return Height(Maker:Invoke(300)) end)
+        Try("result 301", function() return Height(Maker:Invoke(301)) end)
+        Try("result 100000", function() return Height(Maker:Invoke(100000)) end)
+        Try("key 299", function() return Height(ValueCurveKey.new(0, Nest(299)).Value) end)
+        Try("key 300", function() return ValueCurveKey.new(0, Nest(300)) end)
+        Try("key mode 298", function() return Height(ValueCurveKey.new(0, Nest(298), Enum.KeyInterpolationMode.Linear).Value) end)
+        Try("key mode 299", function() return ValueCurveKey.new(0, Nest(299), Enum.KeyInterpolationMode.Linear) end)
+        local Key = ValueCurveKey.new(0, 1)
+        Try("key write 298", function() Key.Value = Nest(298) return Height(Key.Value) end)
+        Try("key write 299", function() Key.Value = Nest(299) end)
+        Try("key 100000", function() return ValueCurveKey.new(0, Nest(100000)) end)
+        "##,
+    );
+    for _ in 0..4 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let deep = "Max lua stack size reached";
+    let wanted = [
+        "print: fire 299 true nil".to_string(),
+        format!("print: fire 300 false {deep}"),
+        "print: fire 2nd 298 true nil".into(),
+        format!("print: fire 2nd 299 false {deep}"),
+        "print: fire dict 150 true nil".into(),
+        format!("print: fire dict 151 false {deep}"),
+        "print: fire under dict 297 true nil".into(),
+        format!("print: fire under dict 298 false {deep}"),
+        "print: fire after 400 true nil".into(),
+        format!("print: fire ring 299 false {deep}"),
+        "print: fire ring 3 false tables cannot be cyclic".into(),
+        format!("print: fire 100000 false {deep}"),
+        "print: received 299 298 150 1 1".into(),
+        "print: invoke 299 true 299".into(),
+        format!("print: invoke 300 false {deep}"),
+        format!("print: invoke 100000 false {deep}"),
+        "print: result 300 true 300".into(),
+        format!("print: result 301 false {deep}"),
+        format!("print: result 100000 false {deep}"),
+        "print: key 299 true 299".into(),
+        format!("print: key 300 false {deep}"),
+        "print: key mode 298 true 298".into(),
+        format!("print: key mode 299 false {deep}"),
+        "print: key write 298 true 298".into(),
+        format!("print: key write 299 false {deep}"),
+        format!("print: key 100000 false {deep}"),
+    ];
+    assert_eq!(lines(&engine), wanted);
+}
+
 #[test]
 fn number_and_boolean_properties_take_any_value_as_in_roblox() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/coercion.luau)
@@ -7252,6 +7371,13 @@ fn json_encode_refuses_cycles_and_deep_nesting() {
         end
         print(#HttpService:JSONEncode(Nest(300)), pcall(function() return HttpService:JSONEncode(Nest(301)) end))
         print(pcall(function() return HttpService:JSONEncode(Nest(100000)) end))
+        local Ring = Nest(300)
+        local At = Ring
+        while At[1] do
+            At = At[1]
+        end
+        At[1] = Ring
+        print("ring", pcall(function() return HttpService:JSONEncode(Ring) end))
         "#,
     );
     assert!(output.contains(&"print: false tables cannot be cyclic".to_string()), "{output:?}");
@@ -7259,6 +7385,8 @@ fn json_encode_refuses_cycles_and_deep_nesting() {
     let deep = "Max lua stack size reached";
     assert!(output.contains(&format!("print: 600 false {deep}")), "{output:?}");
     assert!(output.contains(&format!("print: false {deep}")), "{output:?}");
+    // (a cycle closing one level past the limit raises the depth's error, as in a 0.747 client: table_depth.luau)
+    assert!(output.contains(&format!("print: ring false {deep}")), "{output:?}");
 }
 
 /// HttpService:JSONEncode and JSONDecode as a playing client runs them (Studio 0.744, tools/parity/probes/json.luau,
