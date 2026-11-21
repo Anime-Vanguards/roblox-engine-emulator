@@ -1524,11 +1524,23 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
     let newindex = read_only_members(lua, engine, "Random", &[])?;
     let tostring = lua.create_function(|_, _: LuaValue| Ok("Random"))?;
+    // (two Randoms are == when they would generate the same, as in a client: Random.new(1) == Random.new(1), not
+    // Random.new(2); Studio 0.747, tools/parity/probes/datatype_errors.luau)
+    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| {
+        Ok(match (a, b) {
+            (LuaValue::UserData(a), LuaValue::UserData(b)) => match (a.borrow::<LRandom>(), b.borrow::<LRandom>()) {
+                (Ok(a), Ok(b)) => a.0.get().state == b.0.get().state,
+                _ => false,
+            },
+            _ => false,
+        })
+    })?;
     lua.register_userdata_type::<LRandom>(|registry| {
         registry.add_meta_field("__type", "Random");
         registry.add_meta_field("__index", index);
         registry.add_meta_field("__newindex", newindex);
         registry.add_meta_field("__tostring", tostring);
+        registry.add_meta_field("__eq", eq);
     })?;
     let sample = lua.create_any_userdata(LRandom(Rc::new(Cell::new(seed_random(0.0)))))?;
     lock_metatable(lua, &sample)?;

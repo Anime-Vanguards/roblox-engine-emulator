@@ -279,10 +279,6 @@
 			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
 		},
 		{
-			"line": "op Random eq | ",
-			"why": "two Randoms made from one seed are == in a client (it compares what they would generate); ree's == compares the userdata"
-		},
-		{
 			"line": "namecall Ray:ClosestPoint | ",
 			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
 		},

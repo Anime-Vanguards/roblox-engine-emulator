@@ -554,19 +554,15 @@ impl LuaExportsTable for CFrame {
             Ok(CFrame::from_parts(array(at), f32m::look_along(array(direction), array(up.unwrap_or(Vec3::Y)))))
         };
 
-        // Dynamic args constructor
-        type ArgsLook = (VectorArg, VectorArg, Option<VectorArg>);
-
-        // new: 0 arguments (the identity), 1 (a position), 2 (a position looking at a point), 3 (three numbers, or three
-        // Vector3s: a position looking at a point with an up), 7 (a position and a quaternion) or 12 (a position and a
-        // matrix); any other count is the client's count error. Its numbers read as a client reads them: a number or a
-        // string Luau reads as one, anything else 0 (CFrame.new(1, 2, "x") is at 1, 2, 0)
+        // new: 0 arguments (the identity), 1 (a position), 2 (a position looking at a point), 3 (three numbers), 7 (a
+        // position and a quaternion) or 12 (a position and a matrix); any other count is the client's count error. Its
+        // numbers read as a client reads them: a number or a string Luau reads as one, anything else 0 (CFrame.new(1, 2,
+        // "x") is at 1, 2, 0, and three Vector3s are the identity: there is no look form with an up; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
         let cframe_new = |lua: &Lua, args: LuaMultiValue| {
             charge_host_nanos(lua, match (args.len(), args.front()) {
                 (1, _) => price::NEW_VECTOR,
                 (2, _) => price::NEW_LOOK,
-                (3, Some(LuaValue::Number(_) | LuaValue::Integer(_))) => price::NEW_XYZ,
-                (3, _) => price::NEW_LOOK,
+                (3, _) => price::NEW_XYZ,
                 (7, _) => price::NEW_QUAT,
                 (12, _) => price::NEW_MATRIX,
                 _ => 0,
@@ -584,14 +580,8 @@ impl LuaExportsTable for CFrame {
             }
 
             3 => {
-                if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua)
-                    && !args.iter().any(|value| matches!(value, LuaValue::Number(_) | LuaValue::Integer(_)))
-                {
-                    Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
-                } else {
-                    let n = numbers(&args);
-                    Ok(CFrame(Mat4::from_translation(Vec3::new(n[0], n[1], n[2]))))
-                }
+                let n = numbers(&args);
+                Ok(CFrame(Mat4::from_translation(Vec3::new(n[0], n[1], n[2]))))
             }
 
             // The quaternion made unit first, then the matrix (types::float32 `rot_from_quat`, as Lerp makes one; a playing

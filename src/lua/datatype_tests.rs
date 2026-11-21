@@ -69,12 +69,13 @@ end
 CheckVectors()
 CheckVectors() -- warm seeds must return the original initial states
 local A, B = Random.new(7), Random.new(7)
-assert(A ~= B and type(A) == "userdata" and typeof(A) == "Random")
+-- (== compares what they would generate, as a 0.747 playing client's does: tools/parity/probes/datatype_errors.luau)
+assert(A == B and not rawequal(A, B) and type(A) == "userdata" and typeof(A) == "Random")
 assert(A:NextNumber() == Vectors[2][2][1])
 assert(A:NextNumber() == Vectors[2][2][2])
 assert(B:NextNumber() == Vectors[2][2][1], "same-seed objects shared their mutable state")
 local Clone = A:Clone()
-assert(Clone ~= A and typeof(Clone) == "Random")
+assert(Clone == A and not rawequal(Clone, A) and typeof(Clone) == "Random")
 for _ = 1, 100 do
 	assert(A:NextInteger(-1000000, 1000000) == Clone:NextInteger(-1000000, 1000000))
 end
@@ -371,8 +372,9 @@ local Range = NumberRange.new(1, 2)
 assert(Range.Min == 1 and Range.Max == 2 and NumberRange.new(3).Min == 3 and NumberRange.new(1, 1).Max == 1)
 
 assert(BrickColor.palette(0).Name == "Earth green" and BrickColor.palette(127).Number == 1003, "palette indices are zero-based")
-Fails("Invalid index", BrickColor.palette, 128)
-Fails("Invalid index", BrickColor.palette, -1)
+-- (a 0.747 playing client's message, tools/parity/probes/datatype_errors.luau)
+Fails("palette index out of bounds (128)", BrickColor.palette, 128)
+Fails("palette index out of bounds (-1)", BrickColor.palette, -1)
 assert(BrickColor.new("Not a colour").Name == "Medium stone grey" and BrickColor.new(9999).Name == "Medium stone grey")
 assert(BrickColor.new("Bright red").Number == 21)
 -- three numbers are 0-1 components (the nearest by summed channel differences), as is a Color3
@@ -1533,6 +1535,26 @@ Ok, Message = pcall(function() return CFrame.identity * RaycastParams.new() end)
 assert(not Ok and string.find(Message, "invalid argument #2 %(Vector3 expected, got RaycastParams%)$"), tostring(Message))
 Ok, Message = pcall(function() return Vector2.one:Dot(Faces.new()) end)
 assert(not Ok and Message == "Unable to cast Faces to Vector2", tostring(Message))
+"#,
+    );
+}
+
+/// Rules measured once the datatype errors were fixed (Studio 0.747, tools/parity/probes/datatype_errors.luau "gaps"):
+/// CFrame.new reads three Vector3s as numbers (the identity: there is no look form with an up), an enum cast truncates a
+/// number and takes an item's name, BrickColor.palette names an index out of range, and two Randoms are == when they
+/// would generate the same.
+#[test]
+fn datatype_rules_the_gap_probe_measured() {
+    assert_script(
+        r#"
+assert(CFrame.new(Vector3.new(1, 2, 3), Vector3.new(4, 5, 7), Vector3.yAxis) == CFrame.identity)
+assert(Vector3.FromNormalId(1.5) == Vector3.yAxis and Vector3.FromNormalId("Top") == Vector3.yAxis and Vector3.FromAxis("Y") == Vector3.yAxis)
+local Ok, Message = pcall(BrickColor.palette, 200)
+assert(not Ok and Message == "palette index out of bounds (200)", tostring(Message))
+local A = Random.new(1)
+assert(A == Random.new(1) and A ~= Random.new(2))
+A:NextNumber()
+assert(A ~= Random.new(1))
 "#,
     );
 }

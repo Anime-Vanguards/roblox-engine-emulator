@@ -256,7 +256,8 @@ local Library = {
 }
 
 -- Vector3.FromNormalId and FromAxis (and their lowercase names) take the item as a playing client's reflection casts it
--- (Studio 0.747, tools/parity/probes/datatype_errors.luau): an item of the enum or its value as a number (1 is Top, Y);
+-- (Studio 0.747, tools/parity/probes/datatype_errors.luau): an item of the enum, its value as a number (1 is Top, Y,
+-- truncated: 1.5 too) or its name;
 -- none or nil is "Argument 1 missing or nil", anything else "Unable to cast string to NormalId", without a position
 local EnumItemName, EnumItemType, GetEnumItem = R.EnumItemName, R.EnumItemType, R.GetEnumItem
 
@@ -286,7 +287,7 @@ local function EnumArgument(Value, EnumName, Names)
 		error("Argument 1 missing or nil", 0)
 	end
 	local Name = if EnumItemType(Value) == EnumName then EnumItemName(Value)
-		elseif type(Value) == "number" then Names[Value]
+		elseif type(Value) == "number" then Names[if Value >= 0 then math.floor(Value) else math.ceil(Value)] -- (1.5 is 1)
 		elseif type(Value) == "string" and GetEnumItem(EnumName, Value) ~= nil then Value
 		else nil
 	if Name == nil then
