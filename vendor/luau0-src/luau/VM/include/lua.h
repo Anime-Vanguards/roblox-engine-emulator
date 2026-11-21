@@ -460,7 +460,9 @@ LUA_API void lua_sethostcfunctions(const lua_CFunction* functions, int count, lu
 
 // the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
 // `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names
-// every vector. The table is held for the collector (a weak-keyed one keeps its weak keys).
+// every vector. The VM's and the libraries' messages name a table or a userdata by the table too ("attempt to get length of a
+// RaycastParams value", "number expected, got RaycastParams"). The table is held for the collector (a weak-keyed one keeps its
+// weak keys).
 LUA_API void lua_settypeofnames(lua_State* L, int idx, const char* vectorname);
 
 /*

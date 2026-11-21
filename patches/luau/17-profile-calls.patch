@@ -19,10 +19,10 @@
 # call's entry and return; a hardware-counter profile needs both, and cheaply enough to skip most calls.
 
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index 0241628..51ad5b8 100644
+index bf40018..8d68469 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
-@@ -666,6 +666,21 @@ LUA_API int lua_profileentries(lua_State* L, int* incfunction);
+@@ -668,6 +668,21 @@ LUA_API int lua_profileentries(lua_State* L, int* incfunction);
  // registers a chunk's functions when it first runs one
  LUA_API void lua_profilechunks(lua_State* L, int on);
  

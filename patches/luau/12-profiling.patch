@@ -35,11 +35,11 @@
 # per-instruction cost.
 
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index c112348..44d61ec 100644
+index 6024f78..fc397d9 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
-@@ -408,6 +408,197 @@ LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
- // every vector. The table is held for the collector (a weak-keyed one keeps its weak keys).
+@@ -410,6 +410,197 @@ LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
+ // weak keys).
  LUA_API void lua_settypeofnames(lua_State* L, int idx, const char* vectorname);
  
 +/*

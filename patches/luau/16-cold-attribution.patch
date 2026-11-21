@@ -38,10 +38,10 @@ index 4d81cc8..e49b908 100644
  // ABC encoding: three 8-bit values, containing registers or small numbers
  #define LUAU_INSN_A(insn) (((insn) >> 8) & 0xff)
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index 6cfaec0..0241628 100644
+index 117bdec..bf40018 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
-@@ -530,6 +530,15 @@ typedef struct lua_ProfileInline
+@@ -532,6 +532,15 @@ typedef struct lua_ProfileInline
      uint64_t entries;
  } lua_ProfileInline;
  
@@ -57,7 +57,7 @@ index 6cfaec0..0241628 100644
  typedef struct lua_ProfileFunction
  {
      const char* source; // the chunk's name as lua_getinfo's short_src gives it
-@@ -549,6 +558,15 @@ typedef struct lua_ProfileFunction
+@@ -551,6 +560,15 @@ typedef struct lua_ProfileFunction
      double nativework; // booked while its native code ran
      int ninlines; // copies of other functions inlined into it (while stepping)
      const lua_ProfileInline* inlines;
@@ -73,7 +73,7 @@ index 6cfaec0..0241628 100644
  } lua_ProfileFunction;
  
  typedef struct lua_ProfileNode
-@@ -559,8 +577,60 @@ typedef struct lua_ProfileNode
+@@ -561,8 +579,60 @@ typedef struct lua_ProfileNode
      uint64_t calls;
      uint64_t insns; // instructions this node executed itself
      double work; // booked to this node itself

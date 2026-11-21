@@ -9,7 +9,7 @@
 # Why upstream lacks it: a real CPU pays those misses itself; an emulator on a warm host has to count them.
 
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index 44d61ec..607eddb 100644
+index fc397d9..266cc46 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
 @@ -403,6 +403,21 @@ LUA_API void lua_workmute(lua_State* L, int on);
@@ -33,7 +33,7 @@ index 44d61ec..607eddb 100644
 +
  // the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
  // `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names
- // every vector. The table is held for the collector (a weak-keyed one keeps its weak keys).
+ // every vector. The VM's and the libraries' messages name a table or a userdata by the table too ("attempt to get length of a
 diff --git a/luau/VM/src/lfunc.cpp b/luau/VM/src/lfunc.cpp
 index 0ea4c8d..3f7ddfe 100644
 --- a/luau/VM/src/lfunc.cpp

@@ -1295,3 +1295,51 @@ fn security_capabilities_and_value_curve_keys_follow_a_client() {
         "#,
     );
 }
+
+/// The VM's and the libraries' messages name a proxy value type as a client names it (a 0.747 playing client and server,
+/// tools/parity/probes/proxy_values.luau): "attempt to get length of a RaycastParams value", "got RaycastParams", where an
+/// unpatched VM says "userdata" (patches/luau/06-typeof-names.patch, luaT_objtypename). A registered table (SharedTable) is
+/// named too; an unregistered newproxy value stays a userdata.
+#[test]
+fn errors_name_proxy_values_by_their_type() {
+    assert_script(
+        r#"
+        local function Message(Function)
+            local Ok, Problem = pcall(Function)
+            assert(not Ok)
+            return (string.gsub(tostring(Problem), "^[^:]*:%d+: ", ""))
+        end
+        for _, Case in {
+            { "RaycastParams", RaycastParams.new() },
+            { "OverlapParams", OverlapParams.new() },
+            { "Axes", Axes.new(Enum.Axis.X) },
+            { "Faces", Faces.new(Enum.NormalId.Top) },
+            { "CatalogSearchParams", CatalogSearchParams.new() },
+            { "Path2DControlPoint", Path2DControlPoint.new() },
+            { "PathWaypoint", PathWaypoint.new() },
+            { "DockWidgetPluginGuiInfo", DockWidgetPluginGuiInfo.new() },
+            { "SecurityCapabilities", SecurityCapabilities.new() },
+            { "ValueCurveKey", ValueCurveKey.new(0, 1) },
+        } do
+            local Name, Value = Case[1], Case[2]
+            for _, Expected in {
+                { `attempt to get length of a {Name} value`, function() return #Value end },
+                { `attempt to perform arithmetic (add) on {Name} and number`, function() return Value + 1 end },
+                { `attempt to perform arithmetic (unm) on {Name}`, function() return -Value end },
+                { `attempt to compare {Name} < {Name}`, function() return Value < Value end },
+                { `attempt to concatenate {Name} with string`, function() return Value .. "s" end },
+                { `attempt to call a {Name} value`, function() return Value() end },
+                { `attempt to iterate over a {Name} value`, function() for _ in Value do end end },
+                { `invalid argument #1 to 'floor' (number expected, got {Name})`, function() return math.floor(Value) end },
+                { `invalid argument #1 to 'pairs' (table expected, got {Name})`, function() return pairs(Value) end },
+            } do
+                local Got = Message(Expected[2])
+                assert(Got == Expected[1], Got .. " (expected " .. Expected[1] .. ")")
+            end
+        end
+        assert(Message(function() return SharedTable.new() + 1 end) == "attempt to perform arithmetic (add) on SharedTable and number")
+        assert(Message(function() return #newproxy() end) == "attempt to get length of a userdata value")
+        assert(type(RaycastParams.new()) == "userdata" and typeof(RaycastParams.new()) == "RaycastParams")
+        "#,
+    );
+}

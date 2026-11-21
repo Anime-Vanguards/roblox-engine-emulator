@@ -181,5 +181,13 @@ const TString* luaT_objtypenamestr(lua_State* L, const TValue* o)
 
 const char* luaT_objtypename(lua_State* L, const TValue* o)
 {
+    // (the VM's and the libraries' messages name a host's own tables and userdata as its typeof does, a newproxy value too:
+    // lua_settypeofnames)
+    if (LuaTable* names = L->global->typeofnames; names && (ttistable(o) || ttisuserdata(o)))
+    {
+        const TValue* name = luaH_get(names, o);
+        if (ttisstring(name))
+            return svalue(name);
+    }
     return getstr(luaT_objtypenamestr(L, o));
 }
