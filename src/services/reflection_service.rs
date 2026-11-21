@@ -7,10 +7,10 @@
 //! order, those a script cannot get included; absent when there is none), `Display` (Category and, where the class has one,
 //! DeprecationMessage) and `Permits` (GetService / New, SecurityCapabilities). The filter is a dictionary: `IsA` (the class and
 //! its subclasses; a name no class has gives none), `ExcludeDisplay` (no Display), `Security`; other keys are ignored.
-//! ree emulates no SecurityCapabilities, so `Permits` is a frozen empty table that reports itself as not emulated when a script
-//! reads or iterates it (Output `missing`, ReflectedClass.Permits). A `Security` filter of another type is refused as Roblox
-//! refuses it; a SecurityCapabilities one (ree has no such value yet) would report itself (ReflectionClassFilter.Security) and
-//! filter nothing. GetPropertiesOfClass, GetMethodsOfClass and GetEventsOfClass need
+//! ree does not know which SecurityCapabilities a class permits, so `Permits` is a frozen empty table that reports itself as not
+//! emulated when a script reads or iterates it (Output `missing`, ReflectedClass.Permits). A `Security` filter of another type is
+//! refused as Roblox refuses it; a SecurityCapabilities one (prelude.luau) reports itself (ReflectionClassFilter.Security) and
+//! filters nothing. GetPropertiesOfClass, GetMethodsOfClass and GetEventsOfClass need
 //! fields the dump does not record (a reference type's InstanceType, a parameter's DefaultValue, member Display and event
 //! Permits) and stay unemulated.
 
@@ -63,7 +63,8 @@ fn filter(lua: &Lua, engine: &Engine, args: &Args, index: usize) -> Result<Filte
         LuaValue::Boolean(exclude) => !exclude,
         _ => return raise("ReflectionClassFilter's ExcludeDisplay field is expected to be type bool"),
     };
-    // (a value of another type is refused, as measured; ree has no SecurityCapabilities to filter by, so one reports itself)
+    // (a value of another type is refused, as measured; ree knows no class's permits to filter by, so a SecurityCapabilities
+    // value reports itself)
     match table.raw_get::<LuaValue>("Security")? {
         LuaValue::Nil => {}
         value if typeof_value(engine, &value) == "SecurityCapabilities" => {

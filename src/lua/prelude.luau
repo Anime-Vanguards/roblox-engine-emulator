@@ -85,7 +85,7 @@ local function Register(Value, TypeName)
 	return Value
 end
 
--- Userdata helper: a proxy with a locked metatable whose members come from `Index`.
+local Members = {} -- (a proxy's errors for keys its type has no member for: Members.ReadMiss / WriteMiss, below the traced functions)
 
 local function ReadOnlyMember(_, Key)
 	error(`{Key} cannot be assigned to`, 0)
@@ -393,10 +393,10 @@ local function FlagSet(TypeName, Names, Resolve, Shown)
 		local Object = Proxy(TypeName, function(Self, Key)
 			local Value = Info[Self][Key]
 			if Value == nil then
-				error(`{Key} is not a valid member of {TypeName}`, 0)
+				Members.ReadMiss(TypeName, Key, true)
 			end
 			return Value
-		end, nil, Meta)
+		end, function(Self, Key) Members.WriteMiss(TypeName, Key, Info[Self][Key] ~= nil) end, Meta) -- (every flag is read-only)
 		Info[Object] = Flags
 		return Object
 	end
@@ -446,7 +446,7 @@ local Path2DControlPoint = {}
 --
 --
 
-local function ParamsType(TypeName, Defaults, Methods, Meta)
+local function ParamsType(TypeName, Defaults, ReadOnly, Meta) -- (Defaults has every member; its key, quoted, for any other key)
 	return {
 		new = function(Initial)
 			local Data = table.clone(Defaults)
@@ -454,9 +454,9 @@ local function ParamsType(TypeName, Defaults, Methods, Meta)
 				Data[Key] = Value
 			end
 			return Proxy(TypeName, function(_, Key)
-				return if Methods and Methods[Key] then function(_Self, ...) return Methods[Key](Data, ...) end else Data[Key]
+				if Defaults[Key] == nil then Members.ReadMiss(TypeName, Key, true) end return Data[Key]
 			end, function(_, Key, Value)
-				Data[Key] = Value
+				if ReadOnly or Defaults[Key] == nil then Members.WriteMiss(TypeName, Key, Defaults[Key] ~= nil) end Data[Key] = Value
 			end, Meta and Meta(Data))
 		end,
 	}
@@ -754,9 +754,22 @@ local FilterLists = { FilterDescendantsInstances = true, ExcludeInstances = true
 local function ListCopy(Value)
 	return if type(Value) == "table" then table.move(Value, 1, #Value, 1, table.create(#Value)) else Value
 end
-local function FilterParamsType(TypeName, Defaults, Meta)
+-- `Fields`: every member a script reads and writes besides AddToFilter, with the default a new one reads (FilterType's,
+-- Exclude, is set at the first call, once the enums exist; the two filter lists of April 2026 are nil). Any other key raises
+-- unquoted ("Nope is not a valid member of RaycastParams"), a key that is not a string too ("invalid argument #2 (string
+-- expected, got number)"): measured in a 0.747 playing client and server (tools/parity/probes/proxy_values.luau).
+local function FilterParamsType(TypeName, Fields, Meta)
+	local Known = { FilterType = true, ExcludeInstances = true, IncludeInstances = true }
+	for Key in Fields do
+		Known[Key] = true
+	end
+	local Defaults
 	return {
 		new = function(Initial)
+			if not Defaults then
+				Defaults = table.clone(Fields)
+				Defaults.FilterType = GetEnumItem("RaycastFilterType", "Exclude")
+			end
 			local Data = table.clone(Defaults)
 			for Key, Value in Initial or {} do
 				Data[Key] = if FilterLists[Key] then ListCopy(Value) else Value
@@ -767,10 +780,15 @@ local function FilterParamsType(TypeName, Defaults, Meta)
 					return function(_Self, ...)
 						return Method(Data, ...)
 					end
+				elseif not Known[Key] then
+					Members.ReadMiss(TypeName, Key, false)
 				end
 				local Value = Data[Key]
 				return if FilterLists[Key] then ListCopy(Value) else Value
 			end, function(_, Key, Value)
+				if not Known[Key] then
+					Members.WriteMiss(TypeName, Key, false)
+				end
 				Data[Key] = if FilterLists[Key] then ListCopy(Value) else Value
 			end, Meta and Meta(Data))
 			ParamsData[Object] = Data
@@ -840,26 +858,32 @@ local CatalogSearchParamsLibrary = {
 			local Fields = { { "SearchKeyword", "" }, { "CategoryFilter", GetEnumItem("CatalogCategoryFilter", "None") }, { "SortType", GetEnumItem("CatalogSortType", "Relevance") },
 				{ "SortAggregation", GetEnumItem("CatalogSortAggregation", "AllTime") }, { "SalesTypeFilter", GetEnumItem("SalesTypeFilter", "All") }, { "CreatorName", "" },
 				{ "Limit", 30 }, { "CreatorType", GetEnumItem("CreatorTypeFilter", "All") }, { "BundleTypes", {} }, { "AssetTypes", {} }, { "IncludeOffSale", false } }
-			local Defaults = {}
+			-- (and three members its tostring leaves out at their defaults: a 0.747 client, tools/parity/probes/proxy_values.luau)
+			local Defaults = { MinPrice = 0, MaxPrice = 2147483647, CreatorId = 0 }
 			for _, Field in Fields do
 				Defaults[Field[1]] = Field[2]
 			end
-			CatalogSearchParamsType = ParamsType("CatalogSearchParams", Defaults, nil, ParamsText("CatalogSearchParams", Fields))
+			CatalogSearchParamsType = ParamsType("CatalogSearchParams", Defaults, false, ParamsText("CatalogSearchParams", Fields))
 		end
 		return CatalogSearchParamsType.new(Initial)
 	end,
 }
--- PathWaypoint.new(Position, Action, Label): tostring "{0.333333343, 2, 3}, Jump, label" (Studio 0.744)
-local PathWaypointType = ParamsType("PathWaypoint", {}, nil, function(Data)
-	return {
-		__tostring = function()
-			local Position = Data.Position
-			return `\{{string.format("%.9g", Position.X)}, {string.format("%.9g", Position.Y)}, {string.format("%.9g", Position.Z)}\}, {EnumItemName(Data.Action) or tostring(Data.Action)}, {Data.Label}`
-		end,
-	}
-end)
+-- PathWaypoint.new(Position, Action, Label): tostring "{0.333333343, 2, 3}, Jump, label" (Studio 0.744); its three members
+-- are read-only ("Label member of PathWaypoint is read-only and cannot be assigned to": a 0.747 client and server,
+-- tools/parity/probes/proxy_values.luau). Made at the first call, once the enums exist.
+local PathWaypointType
 local PathWaypointLibrary = {
 	new = function(Position, Action, Label)
+		if not PathWaypointType then
+			PathWaypointType = ParamsType("PathWaypoint", { Position = vector.zero, Action = GetEnumItem("PathWaypointAction", "Walk"), Label = "" }, true, function(Data)
+				return {
+					__tostring = function()
+						local Position = Data.Position
+						return `\{{string.format("%.9g", Position.X)}, {string.format("%.9g", Position.Y)}, {string.format("%.9g", Position.Z)}\}, {EnumItemName(Data.Action) or tostring(Data.Action)}, {Data.Label}`
+					end,
+				}
+			end)
+		end
 		return PathWaypointType.new({ Position = Position or vector.zero, Action = Action or GetEnumItem("PathWaypointAction", "Walk"), Label = Label or "" })
 	end,
 }
@@ -898,14 +922,14 @@ local Path2DPointMeta = {
 local function Path2DPointIndex(Self, Key)
 	local Value = Path2DPoints[Self][Key]
 	if Value == nil then
-		error(`'{Key}' is not a valid member of Path2DControlPoint`, 0)
+		Members.ReadMiss("Path2DControlPoint", Key, true)
 	end
 	return Value
 end
 local function Path2DPointNewIndex(Self, Key, Value)
 	local Fields = Path2DPoints[Self]
 	if Fields[Key] == nil then
-		error(`{Key} is not a valid member of Path2DControlPoint`, 0)
+		Members.WriteMiss("Path2DControlPoint", Key, false)
 	elseif Typeof(Value) ~= "UDim2" then
 		error(`invalid argument #3 (UDim2 expected, got {Typeof(Value)})`, 2)
 	end
@@ -936,6 +960,402 @@ function Path2DControlPoint.new(...)
 	return Point
 end
 
+-- Keys a proxy type has no member for, as a client words them (a 0.747 playing client and server,
+-- tools/parity/probes/proxy_values.luau). A read of a string names the key, quoted ("'Nope' is not a valid member of
+-- RaycastResult") or, for RaycastParams, OverlapParams and SecurityCapabilities, unquoted; the quoting types read a number key
+-- as its text ("'1.5' is not a valid member of Axes") where the others take only a string. A write names the key unquoted (a
+-- number as its text), and a member a script may only read as "X member of Axes is read-only and cannot be assigned to". Any
+-- other key raises "invalid argument #2 (string expected, got boolean)" at the script's line: each is called by the type's
+-- __index or __newindex itself, so level 3 is the script's.
+function Members.ReadMiss(TypeName, Key, Quoted)
+	local Kind = type(Key)
+	if Kind == "string" or (Quoted and Kind == "number") then
+		error(if Quoted then `'{Key}' is not a valid member of {TypeName}` else `{Key} is not a valid member of {TypeName}`, 0)
+	end
+	error(`invalid argument #2 (string expected, got {Typeof(Key)})`, 3)
+end
+function Members.WriteMiss(TypeName, Key, ReadOnly)
+	local Kind = type(Key)
+	if Kind == "string" or Kind == "number" then
+		error(if ReadOnly then `{Key} member of {TypeName} is read-only and cannot be assigned to` else `{Key} is not a valid member of {TypeName}`, 0)
+	end
+	error(`invalid argument #2 (string expected, got {Typeof(Key)})`, 3)
+end
+
+-- RaycastResult (world/query.rs builds one from a hit's fields): five read-only members, and tostring as a client prints it,
+-- "RaycastResult{Part @ 0, 900.5, 0; normal = 0, 1, 0; material = Plastic}": the part as it prints then (its Name), each
+-- vector's floats with 9 significant digits, the material's name. Two are equal when every member is (two casts that hit
+-- alike). Measured in a 0.747 playing client and server (tools/parity/probes/proxy_values.luau).
+local ResultMembers = { Instance = true, Position = true, Normal = true, Distance = true, Material = true }
+local ResultData = setmetatable({}, { __mode = "k" })
+local function Digits9(Vector)
+	local X, Y, Z = VectorParts(Vector)
+	return `{string.format("%.9g", X)}, {string.format("%.9g", Y)}, {string.format("%.9g", Z)}`
+end
+local ResultMeta = {
+	__tostring = function(Self)
+		local Data = ResultData[Self]
+		return `RaycastResult\{{tostring(Data.Instance)} @ {Digits9(Data.Position)}; normal = {Digits9(Data.Normal)}; material = {EnumItemName(Data.Material) or tostring(Data.Material)}\}`
+	end,
+	__eq = function(Left, Right)
+		local A, B = ResultData[Left], ResultData[Right]
+		if A == nil or B == nil then
+			return false
+		end
+		for Key in ResultMembers do
+			if A[Key] ~= B[Key] then
+				return false
+			end
+		end
+		return true
+	end,
+}
+local function RaycastResult(Data)
+	local Object = Proxy("RaycastResult", function(_, Key)
+		if not ResultMembers[Key] then
+			Members.ReadMiss("RaycastResult", Key, true)
+		end
+		return Data[Key]
+	end, function(_, Key)
+		Members.WriteMiss("RaycastResult", Key, ResultMembers[Key] ~= nil)
+	end, ResultMeta)
+	ResultData[Object] = Data
+	return Object
+end
+
+-- DockWidgetPluginGuiInfo.new(InitialDockState, InitialEnabled, InitialEnabledShouldOverrideRestore, FloatingXSize,
+-- FloatingYSize, MinWidth, MinHeight): a value with no member a script can read or write. tostring prints the fields
+-- ("InitialDockState:Right InitialEnabled:0 ... MinHeight:0", the flags as 1 or 0), and two with the same fields are equal.
+-- Every argument given is checked, nil too, and those past the seventh are ignored: the state an InitialDockState item or its
+-- value as a number (truncated; Right when left out), the flags booleans, the sizes numbers held as 32-bit integers (truncated;
+-- -2147483648 out of range or NaN). Measured in a 0.747 playing client and server (tools/parity/probes/proxy_values.luau).
+local DockStates = { "Top", "Bottom", "Left", "Right", "Float" } -- (by value + 1)
+local DockErrors = {
+	"DockWidgetPluginGuiInfo.new first argument expects InitialDockState input",
+	"DockWidgetPluginGuiInfo.new second arg should be a boolean for InitialEnabled.",
+	"DockWidgetPluginGuiInfo.new third arg should be a boolean for InitialEnabledShouldOverrideRestore.",
+	"DockWidgetPluginGuiInfo.new fourth argument expects an int for FloatingXSize.",
+	"DockWidgetPluginGuiInfo.new fifth argument expects an int for FloatingYSize.",
+	"DockWidgetPluginGuiInfo.new sixth argument expects an int for MinWidth.",
+	"DockWidgetPluginGuiInfo.new seventh argument expects an int for MinHeight.",
+}
+local DockInfo = setmetatable({}, { __mode = "k" })
+local DockMeta = {
+	__tostring = function(Self)
+		local Fields = DockInfo[Self]
+		return `InitialDockState:{Fields[1]} InitialEnabled:{if Fields[2] then 1 else 0} InitialEnabledShouldOverrideRestore:{if Fields[3] then 1 else 0} FloatingXSize:{Fields[4]} FloatingYSize:{Fields[5]} MinWidth:{Fields[6]} MinHeight:{Fields[7]}`
+	end,
+	__eq = function(Left, Right)
+		local A, B = DockInfo[Left], DockInfo[Right]
+		if A == nil or B == nil then
+			return false
+		end
+		for Index = 1, 7 do
+			if A[Index] ~= B[Index] then
+				return false
+			end
+		end
+		return true
+	end,
+}
+local function DockIndex(_, Key)
+	Members.ReadMiss("DockWidgetPluginGuiInfo", Key, true)
+end
+local function DockNewIndex(_, Key)
+	Members.WriteMiss("DockWidgetPluginGuiInfo", Key, false)
+end
+local DockWidgetPluginGuiInfoLibrary = table.freeze({
+	new = function(...)
+		local Fields = { "Right", false, false, 0, 0, 0, 0 }
+		for Index = 1, math.min(select("#", ...), 7) do
+			local Value = select(Index, ...)
+			local Kind = type(Value)
+			if Index == 1 then
+				local State
+				if Kind == "number" then
+					State = DockStates[(if Value >= 0 then math.floor(Value) else math.ceil(Value)) + 1]
+				elseif EnumItemType(Value) == "InitialDockState" then
+					State = EnumItemName(Value)
+				end
+				if State == nil then
+					error(DockErrors[1], 0)
+				end
+				Fields[1] = State
+			elseif Index <= 3 then
+				if Kind ~= "boolean" then
+					error(DockErrors[Index], 0)
+				end
+				Fields[Index] = Value
+			else
+				if Kind ~= "number" then
+					error(DockErrors[Index], 0)
+				end
+				Fields[Index] = Int32(Value) + 0 -- (-0 as 0)
+			end
+		end
+		local Object = Proxy("DockWidgetPluginGuiInfo", DockIndex, DockNewIndex, DockMeta)
+		DockInfo[Object] = Fields
+		return Object
+	end,
+})
+
+-- SecurityCapabilities: a set of Enum.SecurityCapability items. tostring names them joined by " | " in the client's own
+-- order (CapabilityOrder, not the items' values); AssetRequire is the set's LoadUnownedAsset and Avatar its AvatarAppearance
+-- (each prints as, and is contained as, the other). new(...) makes one; fromCurrent() a game script's, the same on a client
+-- and a server, whatever it is given; Contains(...) answers whether every item given is held (true for none); Add(...) and
+-- Remove(...) answer a new set. Two are equal when they hold the same items. An argument that is no item raises "Invalid
+-- value for enum 'SecurityCapability'", an item of another enum "Invalid type 'Material' for enum 'SecurityCapability'"; a
+-- method called on another value "invalid argument #1 to 'Contains' (SecurityCapabilities expected, got nil)" at the script's
+-- line; other members raise unquoted. Measured in a 0.747 playing client and server (tools/parity/probes/proxy_values.luau).
+-- A plugin's set was not measured: in the edit run context fromCurrent reports itself and answers a game script's.
+local CapabilityOrder = {
+	"Plugin", "LocalUser", "WritePlayer", "RobloxScript", "RobloxEngine", "RunClientScript", "RunServerScript", "AccessOutsideWrite",
+	"Unassigned", "LoadUnownedAsset", "LoadString", "ScriptGlobals", "CreateInstances", "Basic", "Audio", "DataStore", "Network",
+	"Physics", "UI", "CSG", "Chat", "Animation", "AvatarAppearance", "Input", "Environment", "RemoteEvent", "LegacySound",
+	"Players", "CapabilityControl", "AssetRead", "AssetManagement", "DynamicGeneration", "PlatformAvatarEditing",
+	"AssetCreateUpdate", "Capture", "SensitiveInput", "Monetization", "LoadOwnedAsset", "Social", "ServerCommunication",
+	"Logging", "PromptExternalPurchase", "Groups", "Teleport", "Consequences", "Material", "AvatarBehavior", "RemoteCommand",
+	"InternalTest", "PluginOrOpenCloud", "Assistant",
+}
+local CapabilityAliases = { AssetRequire = "LoadUnownedAsset", Avatar = "AvatarAppearance" }
+local CapabilityRank = {}
+for Rank, Name in CapabilityOrder do
+	CapabilityRank[Name] = Rank
+end
+-- (a game script's: RunClientScript to AvatarBehavior, every capability but the first five and the last four)
+local ScriptCapabilities = {}
+for Rank = CapabilityRank.RunClientScript, CapabilityRank.AvatarBehavior do
+	ScriptCapabilities[Rank] = true
+end
+local CapabilitySets = setmetatable({}, { __mode = "k" })
+local function CapabilityRankOf(Item)
+	local TypeName = EnumItemType(Item)
+	if TypeName == "SecurityCapability" then
+		local Name = EnumItemName(Item)
+		Name = CapabilityAliases[Name] or Name
+		local Rank = CapabilityRank[Name]
+		if Rank == nil then
+			-- (an item newer than the measured order goes after the others)
+			table.insert(CapabilityOrder, Name)
+			Rank = #CapabilityOrder
+			CapabilityRank[Name] = Rank
+		end
+		return Rank
+	elseif TypeName then
+		error(`Invalid type '{TypeName}' for enum 'SecurityCapability'`, 0)
+	end
+	error("Invalid value for enum 'SecurityCapability'", 0)
+end
+local function CapabilityRanks(...)
+	local Count = select("#", ...)
+	local Ranks = table.create(Count)
+	for Index = 1, Count do
+		Ranks[Index] = CapabilityRankOf((select(Index, ...)))
+	end
+	return Ranks
+end
+local CapabilityMethods = {}
+local CapabilityMeta = {
+	__tostring = function(Self)
+		local Set = CapabilitySets[Self]
+		local Names = {}
+		for Rank, Name in CapabilityOrder do
+			if Set[Rank] then
+				table.insert(Names, Name)
+			end
+		end
+		return table.concat(Names, " | ")
+	end,
+	__eq = function(Left, Right)
+		local A, B = CapabilitySets[Left], CapabilitySets[Right]
+		if A == nil or B == nil then
+			return false
+		end
+		for Rank in A do
+			if not B[Rank] then
+				return false
+			end
+		end
+		for Rank in B do
+			if not A[Rank] then
+				return false
+			end
+		end
+		return true
+	end,
+}
+local function CapabilityIndex(_, Key)
+	local Method = CapabilityMethods[Key]
+	if Method == nil then
+		Members.ReadMiss("SecurityCapabilities", Key, false)
+	end
+	return Method
+end
+local function CapabilityNewIndex(_, Key)
+	Members.WriteMiss("SecurityCapabilities", Key, false)
+end
+local function Capabilities(Set)
+	local Object = Proxy("SecurityCapabilities", CapabilityIndex, CapabilityNewIndex, CapabilityMeta)
+	CapabilitySets[Object] = Set
+	return Object
+end
+-- (a method's set; called by the method itself, so level 3 is the script's line: a table's function, which the compiler
+-- does not inline into the method as it would a local one)
+function Members.CapabilitySet(Self, Method)
+	local Set = if Self == nil then nil else CapabilitySets[Self]
+	if Set == nil then
+		error(`invalid argument #1 to '{Method}' (SecurityCapabilities expected, got {Typeof(Self)})`, 3)
+	end
+	return Set
+end
+function CapabilityMethods.Contains(Self, ...)
+	local Set = Members.CapabilitySet(Self, "Contains")
+	for _, Rank in CapabilityRanks(...) do
+		if not Set[Rank] then
+			return false
+		end
+	end
+	return true
+end
+function CapabilityMethods.Add(Self, ...)
+	local Set = table.clone(Members.CapabilitySet(Self, "Add"))
+	for _, Rank in CapabilityRanks(...) do
+		Set[Rank] = true
+	end
+	return Capabilities(Set)
+end
+function CapabilityMethods.Remove(Self, ...)
+	local Set = table.clone(Members.CapabilitySet(Self, "Remove"))
+	for _, Rank in CapabilityRanks(...) do
+		Set[Rank] = nil
+	end
+	return Capabilities(Set)
+end
+local SecurityCapabilitiesLibrary = table.freeze({
+	new = function(...)
+		local Set = {}
+		for _, Rank in CapabilityRanks(...) do
+			Set[Rank] = true
+		end
+		return Capabilities(Set)
+	end,
+	fromCurrent = function()
+		if R.EditMode then
+			R.Missing("SecurityCapabilities", "fromCurrent")
+		end
+		return Capabilities(table.clone(ScriptCapabilities))
+	end,
+})
+
+-- ValueCurveKey.new(Time, Value, Interpolation?): two or three arguments ("ValueCurveKey.new expects 2 or 3 input arguments").
+-- Time is what reads as a number (a number string too; anything else 0), kept as a float; Value anything but nil ("Failed to
+-- get value for second argument in ValueCurveKey"), a table or buffer copied as an event's argument is (lua/bindable.rs) and
+-- again at every read; Interpolation a KeyInterpolationMode item ("Invalid value for enum 'KeyInterpolationMode'" for nil,
+-- a name or a number, "Invalid type 'Material' for enum ..." for another enum's), Constant when left out. tostring is empty.
+-- Every member is written: Time as the constructor reads it, nil after a value that does not read as a number; Value anything
+-- but nil ("Failed to get input value for setValue of ValueCurveKey"); Interpolation an item, a mode other than Cubic dropping
+-- the right tangent; the tangents (nil until set) ignore nil and keep a float, NaN for what does not read as a number, the
+-- right one on a Cubic key only ("Attempting to set a right tangent value on a curve key for which the interpolation mode is
+-- not Cubic"). Two are equal when every member is (a key is itself; never with a nil Time, or a table or function Value). Other keys raise
+-- quoted. Measured in a 0.747 playing client and server (tools/parity/probes/proxy_values.luau).
+local KeyInfo = setmetatable({}, { __mode = "k" })
+local KeyMembers = { Time = true, Value = true, Interpolation = true, LeftTangent = true, RightTangent = true }
+local KeyModes -- (Constant and Cubic, at the first call, once the enums exist)
+local function KeyFloat(Value)
+	local Number = tonumber(Value)
+	return if Number then vector.create(Number, 0, 0).x else nil
+end
+local function KeyCopy(Value)
+	local Kind = type(Value)
+	if Kind ~= "table" and Kind ~= "buffer" then
+		return Value
+	end
+	local Copy, _, Message = R.Copied(Value)
+	if Copy == SIGNAL then
+		error(Message, 0)
+	end
+	return Copy
+end
+local function KeyMode(Value)
+	local TypeName = EnumItemType(Value)
+	if TypeName == "KeyInterpolationMode" then
+		return Value
+	elseif TypeName then
+		error(`Invalid type '{TypeName}' for enum 'KeyInterpolationMode'`, 0)
+	end
+	error("Invalid value for enum 'KeyInterpolationMode'", 0)
+end
+local KeyMeta = {
+	__tostring = function()
+		return ""
+	end,
+	__eq = function(Left, Right)
+		if rawequal(Left, Right) then
+			return true
+		end
+		local A, B = KeyInfo[Left], KeyInfo[Right]
+		if A == nil or B == nil or A.Time == nil or B.Time == nil then
+			return false
+		end
+		local Kind = type(A.Value)
+		if Kind == "table" or Kind == "function" or Kind == "buffer" then
+			return false
+		end
+		return A.Time == B.Time and A.Value == B.Value and A.Interpolation == B.Interpolation and A.LeftTangent == B.LeftTangent and A.RightTangent == B.RightTangent
+	end,
+}
+local function KeyIndex(Self, Key)
+	if not KeyMembers[Key] then
+		Members.ReadMiss("ValueCurveKey", Key, true)
+	end
+	local Info = KeyInfo[Self]
+	return if Key == "Value" then KeyCopy(Info.Value) else Info[Key]
+end
+local function KeyNewIndex(Self, Key, Value)
+	local Info = KeyInfo[Self]
+	if Key == "Time" then
+		Info.Time = KeyFloat(Value)
+	elseif Key == "Value" then
+		if Value == nil then
+			error("Failed to get input value for setValue of ValueCurveKey", 0)
+		end
+		Info.Value = KeyCopy(Value)
+	elseif Key == "Interpolation" then
+		Info.Interpolation = KeyMode(Value)
+		if Info.Interpolation ~= KeyModes.Cubic then
+			Info.RightTangent = nil
+		end
+	elseif Key == "LeftTangent" or Key == "RightTangent" then
+		if Value == nil then
+			return
+		elseif Key == "RightTangent" and Info.Interpolation ~= KeyModes.Cubic then
+			error("Attempting to set a right tangent value on a curve key for which the interpolation mode is not Cubic", 0)
+		end
+		Info[Key] = KeyFloat(Value) or 0 / 0
+	else
+		Members.WriteMiss("ValueCurveKey", Key, false)
+	end
+end
+local ValueCurveKeyLibrary = table.freeze({
+	new = function(...)
+		local Count = select("#", ...)
+		if Count ~= 2 and Count ~= 3 then
+			error("ValueCurveKey.new expects 2 or 3 input arguments", 0)
+		end
+		if not KeyModes then
+			KeyModes = { Constant = GetEnumItem("KeyInterpolationMode", "Constant"), Cubic = GetEnumItem("KeyInterpolationMode", "Cubic") }
+		end
+		local Time, Value, Mode = ...
+		if Value == nil then
+			error("Failed to get value for second argument in ValueCurveKey", 0)
+		end
+		local Info = { Time = KeyFloat(Time) or 0, Value = KeyCopy(Value), Interpolation = if Count == 3 then KeyMode(Mode) else KeyModes.Constant }
+		local Object = Proxy("ValueCurveKey", KeyIndex, KeyNewIndex, KeyMeta)
+		KeyInfo[Object] = Info
+		return Object
+	end,
+})
+
 return {
 	Wrap = Wrap,
 	WrapIndex = WrapIndex,
@@ -951,11 +1371,17 @@ return {
 	Axes = Axes,
 	Path2DControlPoint = Path2DControlPoint,
 	Path2DPoints = Path2DPoints,
-	RaycastParams = FilterParamsType("RaycastParams", { FilterDescendantsInstances = {}, IgnoreWater = false, RespectCanCollide = false, CollisionGroup = "Default" }, RaycastParamsText),
-	OverlapParams = FilterParamsType("OverlapParams", { FilterDescendantsInstances = {}, MaxParts = 0, RespectCanCollide = false, CollisionGroup = "Default" }, OverlapParamsText),
+	RaycastParams = FilterParamsType("RaycastParams", { FilterDescendantsInstances = {}, IgnoreWater = false, RespectCanCollide = false, CollisionGroup = "Default",
+		BruteForceAllSlow = false, Margin = 0, SizeGradient = 0 }, RaycastParamsText),
+	OverlapParams = FilterParamsType("OverlapParams", { FilterDescendantsInstances = {}, MaxParts = 0, RespectCanCollide = false, CollisionGroup = "Default",
+		BruteForceAllSlow = false, Tolerance = 0 }, OverlapParamsText),
 	ParamsData = ParamsData,
+	RaycastResult = RaycastResult,
 	CatalogSearchParams = CatalogSearchParamsLibrary,
 	PathWaypoint = PathWaypointLibrary,
+	DockWidgetPluginGuiInfo = DockWidgetPluginGuiInfoLibrary,
+	SecurityCapabilities = SecurityCapabilitiesLibrary,
+	ValueCurveKey = ValueCurveKeyLibrary,
 	InertLibrary = InertLibrary,
 	SharedTable = SharedTable,
 	MakeStubTree = MakeStubTree,

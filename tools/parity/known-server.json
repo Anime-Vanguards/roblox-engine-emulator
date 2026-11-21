@@ -287,6 +287,12 @@
 			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
 		}
 	],
+	"proxy_values": [
+		{
+			"line": "vm-names ",
+			"why": "the VM's own errors name a proxy type 'userdata' (luaT_objtypename skips a newproxy value's metatable) where a client names the type"
+		}
+	],
 	"reflection": [
 		{
 			"line": "Permits held true true nil",
@@ -369,10 +375,6 @@
 		{
 			"line": "value SharedTable typeof=SharedTable type=userdata tostring=SharedTable: ADDR",
 			"why": "SharedTable is a userdata in a client; ree makes it a table"
-		},
-		{
-			"line": "value SecurityCapabilities typeof=SecurityCapabilities type=userdata tostring=",
-			"why": "SecurityCapabilities has no constructor in ree"
 		}
 	]
 }

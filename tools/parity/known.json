@@ -653,6 +653,12 @@
 			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
 		}
 	],
+	"proxy_values": [
+		{
+			"line": "vm-names ",
+			"why": "the VM's own errors name a proxy type 'userdata' (luaT_objtypename skips a newproxy value's metatable) where a client names the type"
+		}
+	],
 	"reflection": [
 		{
 			"line": "Permits held true true nil",
@@ -891,10 +897,6 @@
 		{
 			"line": "value SharedTable typeof=SharedTable type=userdata tostring=SharedTable: ADDR",
 			"why": "SharedTable is a userdata in a client; ree makes it a table"
-		},
-		{
-			"line": "value SecurityCapabilities typeof=SecurityCapabilities type=userdata tostring=",
-			"why": "SecurityCapabilities has no constructor in ree"
 		}
 	]
 }

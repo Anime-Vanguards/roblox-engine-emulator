@@ -369,3 +369,34 @@ end
         ])
     );
 }
+
+/// SecurityCapabilities.fromCurrent answers a game script's set, measured in a playing client and a server, and stays quiet
+/// there; a plugin's set (the edit run context) was not measured, so there it answers the same set and reports itself. A
+/// ReflectionService filter by a SecurityCapabilities value reports itself and filters nothing (ree knows no class's permits)
+#[test]
+fn security_capabilities_from_current_reports_itself_in_the_edit_context() {
+    let harness = r#"return function(Context)
+	local Current = SecurityCapabilities.fromCurrent()
+	print(Current:Contains(Enum.SecurityCapability.RunClientScript), Current:Contains(Enum.SecurityCapability.Plugin))
+end
+"#;
+    let play = run_harness("FromCurrentPlay", harness, &[]);
+    assert_eq!(play["status"], "ok", "{play}");
+    assert!(missing_lines(&play).is_empty(), "{play}");
+    assert_eq!(other_lines(&play), ["print: true false"]);
+    let filtered = run_harness(
+        "SecurityFilter",
+        r#"return function(Context)
+	local Reflection = game:GetService("ReflectionService")
+	print(#Reflection:GetClasses({ Security = SecurityCapabilities.new() }) == #Reflection:GetClasses())
+end
+"#,
+        &[],
+    );
+    assert_eq!(missing_lines(&filtered), ["ReflectionClassFilter.Security is not emulated @ ReplicatedStorage.RURFixtures.SecurityFilter:3"]);
+    assert_eq!(other_lines(&filtered), ["print: true"]);
+    let edit = run_harness("FromCurrentEdit", harness, &["--mode", "edit", "--run-context", "edit"]);
+    assert_eq!(edit["status"], "ok", "{edit}");
+    assert_eq!(missing_lines(&edit), ["SecurityCapabilities.fromCurrent is not emulated @ ReplicatedStorage.RURFixtures.FromCurrentEdit:2"]);
+    assert_eq!(other_lines(&edit), ["print: true false"]);
+}

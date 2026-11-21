@@ -598,22 +598,10 @@ fn vector_lua(v: Vec3) -> LuaValue {
     LuaValue::Vector(mlua::Vector::new(v.x, v.y, v.z))
 }
 
-/// A RaycastResult (a read-only prelude proxy, typeof "RaycastResult").
+/// A RaycastResult (a read-only prelude proxy, typeof "RaycastResult": prelude.luau RaycastResult, its members, tostring and
+/// equality).
 fn result_value(lua: &Lua, engine: &Rc<Engine>, hit: &Hit) -> LuaResult<LuaValue> {
-    const KEY: &str = "rur.world.RaycastResult";
-    let make: LuaFunction = match lua.named_registry_value::<LuaValue>(KEY)? {
-        LuaValue::Function(f) => f,
-        _ => {
-            let proxy: LuaFunction = engine.prelude().exports.get("Proxy")?;
-            let chunk = lua
-                .load("local Proxy = ... return function(Data) return Proxy('RaycastResult', function(_, Key) return Data[Key] end) end")
-                .set_name("=rur.world")
-                .into_function()?;
-            let builder: LuaFunction = crate::cost::engine_luau(lua, chunk)?.call(proxy)?;
-            lua.set_named_registry_value(KEY, builder.clone())?;
-            builder
-        }
-    };
+    let make: LuaFunction = engine.prelude().exports.raw_get("RaycastResult")?;
     let data = lua.create_table()?;
     data.set("Instance", instance_value(lua, engine, hit.part)?)?;
     data.set("Position", vector_lua(hit.position))?;

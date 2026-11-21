@@ -184,6 +184,18 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(none())
         })?,
     )?;
+    // ValueCurveKey's table values, copied as an event's argument is (lua/bindable.rs), and SecurityCapabilities.fromCurrent's
+    // report in the edit run context, where a plugin's set was not measured (prelude.luau)
+    r.set("Copied", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::bindable::copied(lua, engine, args)))?)?;
+    let e = engine.clone();
+    r.set(
+        "Missing",
+        lua.create_function(move |lua, (class_name, member): (String, String)| {
+            e.missing(Some(lua), &class_name, &member);
+            Ok(())
+        })?,
+    )?;
+    r.set("EditMode", engine.options.edit_mode())?;
     // utf8.nfcnormalize and utf8.nfdnormalize (lua/normalize.rs)
     r.set("NfcNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, true)))?)?;
     r.set("NfdNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, false)))?)?;
@@ -973,7 +985,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let debug: LuaTable = exports.get("Debug")?;
     debug.raw_set("loadmodule", wrapped(lua, engine, move |lua, args| super::loading::loadmodule(lua, &e, args))?)?;
     let inert: LuaFunction = exports.get("InertLibrary")?;
-    for name in ["DockWidgetPluginGuiInfo", "PluginDrag", "CellId"] {
+    for name in ["PluginDrag", "CellId"] {
         shared.raw_set(name, inert.call::<LuaValue>(name)?)?;
     }
 
@@ -982,7 +994,9 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
         let library = engine.lua.borrow().libraries.get(name).cloned().expect("library");
         shared.raw_set(name, library)?;
     }
-    for name in ["OverlapParams", "RaycastParams", "CatalogSearchParams", "PathWaypoint", "Path2DControlPoint"] {
+    for name in [
+        "OverlapParams", "RaycastParams", "CatalogSearchParams", "PathWaypoint", "Path2DControlPoint", "DockWidgetPluginGuiInfo", "SecurityCapabilities", "ValueCurveKey",
+    ] {
         shared.raw_set(name, exports.get::<LuaValue>(name)?)?;
     }
     let script_library: LuaFunction = exports.get("ScriptLibrary")?;

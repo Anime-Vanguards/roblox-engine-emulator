@@ -1115,3 +1115,183 @@ fn cframe_fuzzy_eq_answers_as_a_client_does() {
         "##,
     );
 }
+
+/// The proxy value types (RaycastParams, OverlapParams, RaycastResult, Axes, Faces, CatalogSearchParams, Path2DControlPoint,
+/// PathWaypoint, DockWidgetPluginGuiInfo, SecurityCapabilities, ValueCurveKey) raise for a key they have no member for, as a
+/// 0.747 playing client and server do (tools/parity/probes/proxy_values.luau): a read names a string key quoted, or unquoted
+/// for RaycastParams, OverlapParams and SecurityCapabilities, which take no number key either; a write names the key unquoted
+/// and a member a script may only read as read-only; any other key raises Luau's argument error at the script's line. The
+/// members a script may use keep working, with their defaults.
+#[test]
+fn proxy_values_raise_for_keys_they_have_no_member_for() {
+    assert_script(
+        r#"
+        local Box = Instance.new("Part")
+        Box.Anchored = true
+        Box.Size = Vector3.new(4, 1, 4)
+        Box.Position = Vector3.new(0, 900, 0)
+        Box.Parent = workspace
+        local Params = RaycastParams.new()
+        Params.FilterType = Enum.RaycastFilterType.Include
+        Params.FilterDescendantsInstances = { Box }
+        local Hit = workspace:Raycast(Vector3.new(0, 950, 0), Vector3.new(0, -100, 0), Params)
+        assert(typeof(Hit) == "RaycastResult")
+        local function Fails(Expected, Function)
+            local Ok, Message = pcall(Function)
+            assert(not Ok and Message == Expected, tostring(Message) .. " (expected " .. Expected .. ")")
+        end
+        local function FailsHere(Pattern, Function)
+            local Ok, Message = pcall(Function)
+            assert(not Ok and string.find(tostring(Message), "^Test:%d+: " .. Pattern .. "$"), tostring(Message))
+        end
+        for _, Case in {
+            { "RaycastParams", RaycastParams.new(), false },
+            { "OverlapParams", OverlapParams.new(), false },
+            { "SecurityCapabilities", SecurityCapabilities.new(), false },
+            { "RaycastResult", Hit, true },
+            { "Axes", Axes.new(Enum.Axis.X), true },
+            { "Faces", Faces.new(Enum.NormalId.Top), true },
+            { "CatalogSearchParams", CatalogSearchParams.new(), true },
+            { "Path2DControlPoint", Path2DControlPoint.new(), true },
+            { "PathWaypoint", PathWaypoint.new(), true },
+            { "DockWidgetPluginGuiInfo", DockWidgetPluginGuiInfo.new(), true },
+            { "ValueCurveKey", ValueCurveKey.new(0, 1), true },
+        } do
+            local Name, Value, Quoted = Case[1], Case[2], Case[3]
+            if Quoted then
+                Fails(`'Nope' is not a valid member of {Name}`, function() return Value.Nope end)
+                Fails(`'Nope' is not a valid member of {Name}`, function() return Value:Nope() end)
+                Fails(`'1.5' is not a valid member of {Name}`, function() return Value[1.5] end)
+            else
+                Fails(`Nope is not a valid member of {Name}`, function() return Value.Nope end)
+                Fails(`Nope is not a valid member of {Name}`, function() return Value:Nope() end)
+                FailsHere("invalid argument #2 %(string expected, got number%)", function() return Value[1.5] end)
+            end
+            FailsHere("invalid argument #2 %(string expected, got boolean%)", function() return Value[true] end)
+            Fails(`Nope is not a valid member of {Name}`, function() Value.Nope = 1 end)
+            Fails(`1 is not a valid member of {Name}`, function() Value[1] = 1 end)
+            FailsHere("invalid argument #2 %(string expected, got boolean%)", function() Value[true] = 1 end)
+        end
+        Fails("Distance member of RaycastResult is read-only and cannot be assigned to", function() Hit.Distance = 1 end)
+        Fails("X member of Axes is read-only and cannot be assigned to", function() Axes.new().X = true end)
+        Fails("Front member of Faces is read-only and cannot be assigned to", function() Faces.new().Front = true end)
+        Fails("Label member of PathWaypoint is read-only and cannot be assigned to", function() PathWaypoint.new().Label = "x" end)
+        Fails("AddToFilter is not a valid member of RaycastParams", function() RaycastParams.new().AddToFilter = 1 end)
+        Fails("'InitialDockState' is not a valid member of DockWidgetPluginGuiInfo", function() return DockWidgetPluginGuiInfo.new().InitialDockState end)
+        -- the members a script uses, with their defaults
+        local Raycast = RaycastParams.new()
+        assert(Raycast.FilterType == Enum.RaycastFilterType.Exclude and Raycast.Margin == 0 and Raycast.SizeGradient == 0 and Raycast.BruteForceAllSlow == false)
+        assert(Raycast.ExcludeInstances == nil and Raycast.IncludeInstances == nil and #Raycast.FilterDescendantsInstances == 0 and type(Raycast.AddToFilter) == "function")
+        Raycast.Margin = 2
+        assert(Raycast.Margin == 2)
+        local Overlap = OverlapParams.new()
+        assert(Overlap.FilterType == Enum.RaycastFilterType.Exclude and Overlap.MaxParts == 0 and Overlap.Tolerance == 0 and Overlap.BruteForceAllSlow == false)
+        local Catalog = CatalogSearchParams.new()
+        assert(Catalog.MinPrice == 0 and Catalog.MaxPrice == 2147483647 and Catalog.CreatorId == 0 and Catalog.Limit == 30)
+        Catalog.SearchKeyword = "hat"
+        assert(Catalog.SearchKeyword == "hat")
+        assert(Hit.Instance == Box and Hit.Distance == 49.5 and Hit.Material == Enum.Material.Plastic)
+        "#,
+    );
+}
+
+/// RaycastResult and DockWidgetPluginGuiInfo print and compare as a 0.747 playing client's (tools/parity/probes/proxy_values.luau):
+/// a result names its part and its vectors with 9 significant digits; a dock info prints its seven fields and checks each
+/// argument it is given.
+#[test]
+fn raycast_results_and_dock_widget_infos_print_and_compare_as_a_client_does() {
+    assert_script(
+        r#"
+        local Box = Instance.new("Part")
+        Box.Name = "Probe Box"
+        Box.Anchored = true
+        Box.Size = Vector3.new(4, 1, 4)
+        Box.Position = Vector3.new(1 / 3, 900, -2.25)
+        Box.Parent = workspace
+        local Params = RaycastParams.new()
+        Params.FilterType = Enum.RaycastFilterType.Include
+        Params.FilterDescendantsInstances = { Box }
+        local function Cast(X)
+            return workspace:Raycast(Vector3.new(X, 950, -2.25), Vector3.new(0, -100, 0), Params)
+        end
+        local Hit = Cast(1 / 3)
+        assert(tostring(Hit) == "RaycastResult{Probe Box @ 0.333333343, 900.5, -2.25; normal = 0, 1, 0; material = Plastic}", tostring(Hit))
+        assert(tostring(Cast(0.1)) == "RaycastResult{Probe Box @ 0.100000001, 900.5, -2.25; normal = 0, 1, 0; material = Plastic}", tostring(Cast(0.1)))
+        assert(Hit == Cast(1 / 3) and Hit ~= Cast(1) and Hit ~= Params)
+        local S = Enum.InitialDockState
+        local function Dock(...)
+            return tostring(DockWidgetPluginGuiInfo.new(...))
+        end
+        assert(Dock() == "InitialDockState:Right InitialEnabled:0 InitialEnabledShouldOverrideRestore:0 FloatingXSize:0 FloatingYSize:0 MinWidth:0 MinHeight:0", Dock())
+        assert(Dock(S.Float, true, false, 200.5, 300, -0.5, 3e9) == "InitialDockState:Float InitialEnabled:1 InitialEnabledShouldOverrideRestore:0 FloatingXSize:200 FloatingYSize:300 MinWidth:0 MinHeight:-2147483648")
+        assert(Dock(2.5) == Dock(S.Left) and Dock(-0.5) == Dock(S.Top))
+        assert(DockWidgetPluginGuiInfo.new(1) == DockWidgetPluginGuiInfo.new(S.Bottom) and DockWidgetPluginGuiInfo.new(S.Left) ~= DockWidgetPluginGuiInfo.new())
+        local function Fails(Expected, ...)
+            local Ok, Message = pcall(DockWidgetPluginGuiInfo.new, ...)
+            assert(not Ok and Message == "DockWidgetPluginGuiInfo.new " .. Expected, tostring(Message))
+        end
+        Fails("first argument expects InitialDockState input", 5)
+        Fails("first argument expects InitialDockState input", "Top")
+        Fails("second arg should be a boolean for InitialEnabled.", S.Top, nil)
+        Fails("third arg should be a boolean for InitialEnabledShouldOverrideRestore.", S.Top, true, 1)
+        Fails("fourth argument expects an int for FloatingXSize.", S.Top, true, true, "12")
+        Fails("seventh argument expects an int for MinHeight.", S.Top, true, true, 1, 2, 3, nil)
+        assert(not pcall(function() DockWidgetPluginGuiInfo.Nope = 1 end))
+        "#,
+    );
+}
+
+/// SecurityCapabilities and ValueCurveKey are emulated as a 0.747 playing client and server have them
+/// (tools/parity/probes/proxy_values.luau): a capability set in the client's own order, its methods and errors; a curve key's
+/// members, writes, copies of a table value and equality.
+#[test]
+fn security_capabilities_and_value_curve_keys_follow_a_client() {
+    assert_script(
+        r#"
+        local SC = Enum.SecurityCapability
+        assert(typeof(SecurityCapabilities.new()) == "SecurityCapabilities" and tostring(SecurityCapabilities.new()) == "")
+        assert(tostring(SecurityCapabilities.new(SC.Network, SC.RunClientScript, SC.Basic, SC.Network)) == "RunClientScript | Basic | Network")
+        assert(tostring(SecurityCapabilities.new(SC.AssetRequire, SC.Avatar, SC.Plugin)) == "Plugin | LoadUnownedAsset | AvatarAppearance")
+        local Current = tostring(SecurityCapabilities.fromCurrent())
+        assert(string.sub(Current, 1, 54) == "RunClientScript | RunServerScript | AccessOutsideWrite" and string.sub(Current, -16) == "| AvatarBehavior", Current)
+        local Set = SecurityCapabilities.new(SC.Network, SC.UI)
+        assert(Set:Contains(SC.Network) and not Set:Contains(SC.Network, SC.Physics) and Set:Contains())
+        assert(tostring(Set:Add(SC.Physics)) == "Network | Physics | UI" and tostring(Set) == "Network | UI" and tostring(Set:Remove(SC.UI)) == "Network")
+        assert(Set == SecurityCapabilities.new(SC.UI, SC.Network) and Set ~= SecurityCapabilities.new(SC.UI))
+        local function Fails(Pattern, Function)
+            local Ok, Message = pcall(Function)
+            assert(not Ok and string.find(tostring(Message), Pattern), tostring(Message))
+        end
+        Fails("^Invalid value for enum 'SecurityCapability'$", function() return SecurityCapabilities.new("Network") end)
+        Fails("^Invalid type 'Material' for enum 'SecurityCapability'$", function() return Set:Contains(Enum.Material.Plastic) end)
+        Fails("^Test:%d+: invalid argument #1 to 'Add' %(SecurityCapabilities expected, got number%)$", function() return Set.Add(5, SC.UI) end)
+        Fails("^Test:%d+: attempt to modify a readonly table$", function() SecurityCapabilities.Nope = 1 end)
+
+        local KI = Enum.KeyInterpolationMode
+        local Key = ValueCurveKey.new(1 / 3, Vector3.new(1, 2, 3))
+        assert(typeof(Key) == "ValueCurveKey" and tostring(Key) == "" and Key.Time == 0.3333333432674408 and Key.Value == Vector3.new(1, 2, 3))
+        assert(Key.Interpolation == KI.Constant and Key.LeftTangent == nil and Key.RightTangent == nil and ValueCurveKey.new("0x10", 1).Time == 16)
+        Fails("^ValueCurveKey.new expects 2 or 3 input arguments$", function() return ValueCurveKey.new(0) end)
+        Fails("^Failed to get value for second argument in ValueCurveKey$", function() return ValueCurveKey.new(0, nil, KI.Linear) end)
+        Fails("^Invalid value for enum 'KeyInterpolationMode'$", function() return ValueCurveKey.new(0, 1, "Linear") end)
+        Fails("^tables cannot be cyclic$", function() local T = {} T.T = T return ValueCurveKey.new(0, T) end)
+        Key.LeftTangent = "2"
+        Key.LeftTangent = nil
+        assert(Key.LeftTangent == 2)
+        Key.LeftTangent = "x"
+        assert(Key.LeftTangent ~= Key.LeftTangent)
+        Fails("^Attempting to set a right tangent value on a curve key for which the interpolation mode is not Cubic$", function() Key.RightTangent = 1 end)
+        Key.Interpolation = KI.Cubic
+        Key.RightTangent = 1.5
+        Key.Interpolation = KI.Linear
+        assert(Key.RightTangent == nil)
+        Key.Time = "x"
+        assert(Key.Time == nil and Key == Key and Key ~= ValueCurveKey.new(0, Vector3.new(1, 2, 3), KI.Linear))
+        local Source = { 1, 2, Name = "dropped" }
+        local Copy = ValueCurveKey.new(0, Source)
+        Source[1] = 10
+        assert(Copy.Value[1] == 1 and Copy.Value.Name == nil and not rawequal(Copy.Value, Copy.Value) and Copy == Copy and Copy ~= ValueCurveKey.new(0, Source))
+        assert(ValueCurveKey.new(0, 1, KI.Linear) == ValueCurveKey.new(0, 1, KI.Linear) and ValueCurveKey.new(0, 1) ~= ValueCurveKey.new(0, "1"))
+        "#,
+    );
+}
