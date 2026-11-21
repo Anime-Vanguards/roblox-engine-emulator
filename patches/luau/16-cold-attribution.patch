@@ -1510,10 +1510,10 @@ index 98086ee..0805d3d 100644
  // luau_execute holds one while it runs under a profile (an error that unwinds it may skip its destructor: the catch tells the
  // profile, luaP_unwound)
 diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
-index bc368a1..e29cb1c 100644
+index 4580c65..9de58ff 100644
 --- a/luau/VM/src/ltable.cpp
 +++ b/luau/VM/src/ltable.cpp
-@@ -991,6 +991,8 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
+@@ -940,6 +940,8 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
      LuaTable* t = luaM_newgco(L, LuaTable, sizeof(LuaTable), L->activememcat, LUA_TTABLE);
      luaC_init(L, t, LUA_TTABLE);
      luaC_coldmade(L, obj2gco(t));
@@ -1522,7 +1522,7 @@ index bc368a1..e29cb1c 100644
      t->metatable = NULL;
      t->tmcache = cast_byte(~0);
      t->array = NULL;
-@@ -1438,6 +1440,8 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
+@@ -1356,6 +1358,8 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
      LuaTable* t = luaM_newgco(L, LuaTable, sizeof(LuaTable), L->activememcat, LUA_TTABLE);
      luaC_init(L, t, LUA_TTABLE);
      luaC_coldmade(L, obj2gco(t));
@@ -1777,10 +1777,10 @@ index 51474bb..97b7050 100644
  void luau_finishop(lua_State* L)
  {
 diff --git a/luau/VM/src/lvmload.cpp b/luau/VM/src/lvmload.cpp
-index 72bccae..188f9b2 100644
+index c999b60..cf619eb 100644
 --- a/luau/VM/src/lvmload.cpp
 +++ b/luau/VM/src/lvmload.cpp
-@@ -1052,6 +1052,7 @@ static int loadsafe(
+@@ -1015,6 +1015,7 @@ static int loadsafe(
              offset = protoStartOffset + protoSize;
          }
  

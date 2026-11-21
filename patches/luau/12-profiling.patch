@@ -3440,7 +3440,7 @@ index b93b721..43731ec 100644
      stringtable* tb = &g->strt;
      uint8_t hashshift = uint8_t(32 - luaO_log2(unsigned(newsize)));
 diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
-index b19857a..8200a9f 100644
+index bbb6674..7ea9793 100644
 --- a/luau/VM/src/ltable.cpp
 +++ b/luau/VM/src/ltable.cpp
 @@ -34,6 +34,7 @@
@@ -3451,7 +3451,7 @@ index b19857a..8200a9f 100644
  
  #include <string.h>
  
-@@ -675,6 +676,8 @@ static void countstored(lua_State* L, size_t bytes)
+@@ -624,6 +625,8 @@ static void countstored(lua_State* L, size_t bytes)
  {
      if (luaE_scriptinsn(L))
          L->global->work.stored += bytes;
@@ -3460,7 +3460,7 @@ index b19857a..8200a9f 100644
  }
  
  static void setarrayvector(lua_State* L, LuaTable* t, int size)
-@@ -683,6 +686,7 @@ static void setarrayvector(lua_State* L, LuaTable* t, int size)
+@@ -632,6 +635,7 @@ static void setarrayvector(lua_State* L, LuaTable* t, int size)
          luaG_runerror(L, "table overflow");
      if (size > t->sizearray)
          countstored(L, size * sizeof(TValue));
@@ -3468,7 +3468,7 @@ index b19857a..8200a9f 100644
      luaM_reallocarray(L, t->array, t->sizearray, size, TValue, t->memcat);
      TValue* array = t->array;
      for (int i = t->sizearray; i < size; i++)
-@@ -706,6 +710,7 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
+@@ -655,6 +659,7 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
              luaG_runerror(L, "table overflow");
          size = twoto(lsize);
          countstored(L, size * sizeof(LuaNode));
@@ -3476,7 +3476,7 @@ index b19857a..8200a9f 100644
          t->node = luaM_newarray(L, size, LuaNode, t->memcat);
          for (i = 0; i < size; i++)
          {
-@@ -751,6 +756,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
+@@ -700,6 +705,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
  
      if (nasize != oldsizearray)
      {
@@ -3484,7 +3484,7 @@ index b19857a..8200a9f 100644
          newarray = luaM_newarray(L, nasize, TValue, t->memcat);
  
          if (nasize < oldsizearray)
-@@ -778,6 +784,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
+@@ -727,6 +733,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
          // if we allocated a new array part, we have to be careful to with hash part allocation failure
          if (oldarray != newarray)
          {
@@ -3492,7 +3492,7 @@ index b19857a..8200a9f 100644
              newnode = luaM_trynewarray(L, nhsize, LuaNode, t->memcat);
  
              if (newnode == nullptr)
-@@ -788,6 +795,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
+@@ -737,6 +744,7 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
          }
          else
          {
@@ -3500,7 +3500,7 @@ index b19857a..8200a9f 100644
              newnode = luaM_newarray(L, nhsize, LuaNode, t->memcat);
          }
  
-@@ -888,7 +896,13 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
+@@ -837,7 +845,13 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
          // (the keys this rehash moves: the hash part's and the new one; the array part stays)
          if (luaE_scriptinsn(L))
              L->global->work.rehashed += nh;
@@ -3514,7 +3514,7 @@ index b19857a..8200a9f 100644
          return;
      }
  
-@@ -943,9 +957,18 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
+@@ -892,9 +906,18 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
  
      if (luaE_scriptinsn(L))
          L->global->work.rehashed += totaluse;
@@ -3533,7 +3533,7 @@ index b19857a..8200a9f 100644
  }
  
  /*
-@@ -1416,6 +1439,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
+@@ -1334,6 +1357,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
      if (tt->sizearray)
      {
          countstored(L, tt->sizearray * sizeof(TValue));
@@ -3541,7 +3541,7 @@ index b19857a..8200a9f 100644
          t->array = luaM_newarray(L, tt->sizearray, TValue, t->memcat);
          maybesetaboundary(t, getaboundary(tt));
          t->sizearray = tt->sizearray;
-@@ -1427,6 +1451,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
+@@ -1345,6 +1369,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
      {
          int size = 1 << tt->lsizenode;
          countstored(L, size * sizeof(LuaNode));
@@ -3645,7 +3645,7 @@ index 5a5b668..b606ee4 100644
          luau_execute<true>(L);
      else
 diff --git a/luau/VM/src/lvmload.cpp b/luau/VM/src/lvmload.cpp
-index 0937461..72bccae 100644
+index b4be516..c999b60 100644
 --- a/luau/VM/src/lvmload.cpp
 +++ b/luau/VM/src/lvmload.cpp
 @@ -14,6 +14,7 @@
@@ -3656,7 +3656,7 @@ index 0937461..72bccae 100644
  
  #include <string.h>
  
-@@ -51,6 +52,7 @@ struct TempBuffer
+@@ -49,6 +50,7 @@ struct TempBuffer
      {
          LUAU_ASSERT(this->L == nullptr);
          this->L = L;
@@ -3664,7 +3664,7 @@ index 0937461..72bccae 100644
          this->data = luaM_newarray(L, count, T, 0);
          this->count = count;
      }
-@@ -571,6 +573,7 @@ static void loadProto(
+@@ -534,6 +536,7 @@ static void loadProto(
                  // transform v1 into v2 format
                  int headersize = typesize > 127 ? 4 : 3;
  
@@ -3672,7 +3672,7 @@ index 0937461..72bccae 100644
                  p->typeinfo = luaM_newarray(L, headersize + typesize, uint8_t, p->memcat);
                  p->sizetypeinfo = headersize + typesize;
  
-@@ -601,6 +604,7 @@ static void loadProto(
+@@ -564,6 +567,7 @@ static void loadProto(
              {
                  uint8_t* types = (uint8_t*)data + offset;
  
@@ -3680,7 +3680,7 @@ index 0937461..72bccae 100644
                  p->typeinfo = luaM_newarray(L, typesize, uint8_t, p->memcat);
                  p->sizetypeinfo = typesize;
                  memcpy(p->typeinfo, types, typesize);
-@@ -615,6 +619,7 @@ static void loadProto(
+@@ -578,6 +582,7 @@ static void loadProto(
      }
  
      const int sizecode = readVarInt(data, size, offset);
@@ -3688,7 +3688,7 @@ index 0937461..72bccae 100644
      p->code = luaM_newarray(L, sizecode, Instruction, p->memcat);
      p->sizecode = sizecode;
  
-@@ -624,6 +629,7 @@ static void loadProto(
+@@ -587,6 +592,7 @@ static void loadProto(
      p->codeentry = p->code;
  
      const int sizek = readVarInt(data, size, offset);
@@ -3696,7 +3696,7 @@ index 0937461..72bccae 100644
      p->k = luaM_newarray(L, sizek, TValue, p->memcat);
      p->sizek = sizek;
  
-@@ -853,6 +859,7 @@ static void loadProto(
+@@ -816,6 +822,7 @@ static void loadProto(
      }
  
      const int sizep = readVarInt(data, size, offset);
@@ -3704,7 +3704,7 @@ index 0937461..72bccae 100644
      p->p = luaM_newarray(L, sizep, Proto*, p->memcat);
      p->sizep = sizep;
  
-@@ -879,6 +886,7 @@ static void loadProto(
+@@ -842,6 +849,7 @@ static void loadProto(
          int absoffset = (p->sizecode + 3) & ~3;
  
          const int sizelineinfo = absoffset + intervals * sizeof(int);
@@ -3712,7 +3712,7 @@ index 0937461..72bccae 100644
          p->lineinfo = luaM_newarray(L, sizelineinfo, uint8_t, p->memcat);
          p->sizelineinfo = sizelineinfo;
  
-@@ -904,6 +912,7 @@ static void loadProto(
+@@ -867,6 +875,7 @@ static void loadProto(
      if (debuginfo)
      {
          const int sizelocvars = readVarInt(data, size, offset);
@@ -3720,7 +3720,7 @@ index 0937461..72bccae 100644
          p->locvars = luaM_newarray(L, sizelocvars, LocVar, p->memcat);
          p->sizelocvars = sizelocvars;
  
-@@ -921,6 +930,7 @@ static void loadProto(
+@@ -884,6 +893,7 @@ static void loadProto(
          const int sizeupvalues = readVarInt(data, size, offset);
          LUAU_ASSERT(sizeupvalues == p->nups);
  
@@ -3728,7 +3728,7 @@ index 0937461..72bccae 100644
          p->upvalues = luaM_newarray(L, sizeupvalues, TString*, p->memcat);
          p->sizeupvalues = sizeupvalues;
  
-@@ -1060,6 +1070,10 @@ static int loadsafe(
+@@ -1023,6 +1033,10 @@ static int loadsafe(
              p->flags |= LUAU_PROTO_WORK_NATIVE;
      }
  
@@ -3739,7 +3739,7 @@ index 0937461..72bccae 100644
      luaC_threadbarrier(L);
  
      Closure* cl = luaF_newLclosure(L, 0, envt, main);
-@@ -1166,6 +1180,7 @@ static int loadlazysafe(lua_State* L, LuauLazyChunk* chunk, const char* chunknam
+@@ -1129,6 +1143,7 @@ static int loadlazysafe(lua_State* L, LuauLazyChunk* chunk, const char* chunknam
  
      // string table: just the offsets, a string is created when a function that uses it is built
      unsigned int stringCount = readVarInt(data, size, offset);
@@ -3747,7 +3747,7 @@ index 0937461..72bccae 100644
      chunk->stringOffsets = luaM_newarray(L, stringCount, uint32_t, chunk->memcat);
      chunk->stringCount = stringCount;
  
-@@ -1181,6 +1196,7 @@ static int loadlazysafe(lua_State* L, LuauLazyChunk* chunk, const char* chunknam
+@@ -1144,6 +1159,7 @@ static int loadlazysafe(lua_State* L, LuauLazyChunk* chunk, const char* chunknam
      readUserdataRemapping(L, chunk->typesversion, strings, chunk->userdataRemapping, data, size, offset);
  
      unsigned int protoCount = readVarInt(data, size, offset);
@@ -3755,7 +3755,7 @@ index 0937461..72bccae 100644
      chunk->protoOffsets = luaM_newarray(L, protoCount, uint32_t, chunk->memcat);
      chunk->protoCount = protoCount;
  
-@@ -1236,6 +1252,7 @@ static void runLazyLoad(lua_State* L, void* ud)
+@@ -1199,6 +1215,7 @@ static void runLazyLoad(lua_State* L, void* ud)
  {
      LazyLoadContext* ctx = static_cast<LazyLoadContext*>(ud);
  

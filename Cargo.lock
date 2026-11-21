@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "luau0-src"
-version = "0.22.0+luau747"
+version = "0.22.0+luau748"
 dependencies = [
  "cc",
 ]

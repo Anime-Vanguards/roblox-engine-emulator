@@ -8,10 +8,10 @@
 # load, so every import was a global lookup.
 
 diff --git a/luau/VM/src/lvmload.cpp b/luau/VM/src/lvmload.cpp
-index 7fe43fa..0937461 100644
+index 79a9374..b4be516 100644
 --- a/luau/VM/src/lvmload.cpp
 +++ b/luau/VM/src/lvmload.cpp
-@@ -1031,7 +1031,10 @@ static int loadsafe(
+@@ -994,7 +994,10 @@ static int loadsafe(
          p->bytecodeid = int(i);
          p->funid = L->global->lastprotoid == 0 ? 0 : L->global->lastprotoid++;
  
@@ -23,7 +23,7 @@ index 7fe43fa..0937461 100644
  
          if (version >= 12)
          {
-@@ -1203,7 +1206,7 @@ static int loadlazysafe(lua_State* L, LuauLazyChunk* chunk, const char* chunknam
+@@ -1166,7 +1169,7 @@ static int loadlazysafe(lua_State* L, LuauLazyChunk* chunk, const char* chunknam
      main->funid = L->global->lastprotoid == 0 ? 0 : L->global->lastprotoid++;
  
      chunk->envt = envt;

@@ -7953,6 +7953,31 @@ return function(N) local s = 0 for i = 1, N do local ok, v = pcall(f, i) if ok t
     assert!((2000..2010).contains(&ccalls), "{ccalls} C calls for 2,000 protected calls");
 }
 
+/// A numeric loop the compiler unrolls starts at its start as written, as the interpreter's own loop does: `for i = -0, 1` reads -0
+/// first in a 0.748 client and server (tools/parity/probes/loop_start.luau), and a live 0.748 client serves
+/// FFlagLuauCompileLoopUnrollNegativeZero on (data/luau-flags.json), which keeps an unrolled first index as written where it was once
+/// `-0 + 0 * 1`, which is 0 (the engine compiles at -O2, which unrolls such loops). A start the compiler cannot see (`tonumber`) is
+/// never unrolled and reads -0 either way.
+#[test]
+fn an_unrolled_loop_starts_at_its_start_as_written() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        for i = -0, 1 do print("unrolled", 1 / i) end
+        local start = -0
+        for i = start, 1 do print("constant local", 1 / i) end
+        for i = tonumber("-0"), 1 do print("run time", 1 / i) end
+        "#,
+    );
+    let expected: Vec<String> = ["unrolled", "constant local", "run time"]
+        .iter()
+        .flat_map(|case| [format!("print: {case} -inf"), format!("print: {case} 1")])
+        .collect();
+    assert_eq!(output, expected);
+}
+
 /// A `--!native` module's instructions are priced as a client's machine code takes them (cost.rs NATIVE_OPS: a keyed table read or
 /// write 0.42 ns, an addition or loop step 0.43; interpreted 2.45 and 0.48), whether or not this VM compiles the module: the parity
 /// bench's native rows run 0.8-7.8x faster than the same loops interpreted.

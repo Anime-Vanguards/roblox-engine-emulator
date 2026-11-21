@@ -337,10 +337,10 @@ index 0fe9695..2d33b9d 100644
  
      return 1;
 diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
-index 202ee43..142d769 100644
+index 10d8430..2ad7474 100644
 --- a/luau/VM/src/ltable.cpp
 +++ b/luau/VM/src/ltable.cpp
-@@ -598,10 +598,19 @@ static int hashslotsused(const LuaTable* t)
+@@ -547,10 +547,19 @@ static int hashslotsused(const LuaTable* t)
      return totaluse;
  }
  
@@ -360,7 +360,7 @@ index 202ee43..142d769 100644
      luaM_reallocarray(L, t->array, t->sizearray, size, TValue, t->memcat);
      TValue* array = t->array;
      for (int i = t->sizearray; i < size; i++)
-@@ -624,6 +633,7 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
+@@ -573,6 +582,7 @@ static void setnodevector(lua_State* L, LuaTable* t, int size)
          if (lsize > MAXBITS)
              luaG_runerror(L, "table overflow");
          size = twoto(lsize);
@@ -368,7 +368,7 @@ index 202ee43..142d769 100644
          t->node = luaM_newarray(L, size, LuaNode, t->memcat);
          for (i = 0; i < size; i++)
          {
-@@ -718,6 +728,12 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
+@@ -667,6 +677,12 @@ static void resize(lua_State* L, LuaTable* t, int nasize, int nhsize)
          }
      }
  
@@ -381,7 +381,7 @@ index 202ee43..142d769 100644
      // update table structure now that both allocations succeeded
      t->array = newarray;
      t->sizearray = nasize;
-@@ -797,6 +813,9 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
+@@ -746,6 +762,9 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
      if (!IsIntKey)
      {
          int nh = hashslotsused(t) + 1;
@@ -391,7 +391,7 @@ index 202ee43..142d769 100644
          resize(L, t, t->sizearray, nh);
          return;
      }
-@@ -850,6 +869,9 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
+@@ -799,6 +818,9 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
          nasize = adjustasize(t, nasize, newintkey);
      }
  
@@ -401,7 +401,7 @@ index 202ee43..142d769 100644
      // resize the table to new computed sizes
      resize(L, t, nasize, nh);
  }
-@@ -1321,6 +1343,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
+@@ -1239,6 +1261,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
  
      if (tt->sizearray)
      {
@@ -409,7 +409,7 @@ index 202ee43..142d769 100644
          t->array = luaM_newarray(L, tt->sizearray, TValue, t->memcat);
          maybesetaboundary(t, getaboundary(tt));
          t->sizearray = tt->sizearray;
-@@ -1331,6 +1354,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
+@@ -1249,6 +1272,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
      if (tt->node != dummynode)
      {
          int size = 1 << tt->lsizenode;
@@ -418,10 +418,10 @@ index 202ee43..142d769 100644
          t->lsizenode = tt->lsizenode;
          t->nodemask8 = tt->nodemask8;
 diff --git a/luau/VM/src/ltablib.cpp b/luau/VM/src/ltablib.cpp
-index 7eedb50..b5492c2 100644
+index 6d51442..6cd70c9 100644
 --- a/luau/VM/src/ltablib.cpp
 +++ b/luau/VM/src/ltablib.cpp
-@@ -327,6 +327,8 @@ static int tconcat(lua_State* L)
+@@ -325,6 +325,8 @@ static int tconcat(lua_State* L)
      int last = luaL_opt(L, luaL_checkinteger, 4, lua_objlen(L, 1));
  
      LuaTable* t = hvalue(L->base);
@@ -430,7 +430,7 @@ index 7eedb50..b5492c2 100644
  
      luaL_Strbuf b;
      luaL_buffinit(L, &b);
-@@ -402,6 +404,7 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
+@@ -400,6 +402,7 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
      setobj2s(L, L->top + 1, l);
      setobj2s(L, L->top + 2, r);
      L->top += 3; // safe because of LUA_MINSTACK guarantee
@@ -438,7 +438,7 @@ index 7eedb50..b5492c2 100644
      luaD_call(L, L->top - 3, 1);
      L->top -= 1; // maintain stack depth
  
-@@ -427,6 +430,7 @@ inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred
+@@ -425,6 +428,7 @@ inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred
      int n = t->sizearray;
      LUAU_ASSERT(unsigned(i) < unsigned(n) && unsigned(j) < unsigned(n)); // contract maintained in sort_less after predicate call
  
@@ -446,7 +446,7 @@ index 7eedb50..b5492c2 100644
      int res = pred(L, &arr[i], &arr[j]);
  
      // predicate call may resize the table, which is invalid
-@@ -564,7 +568,17 @@ static int tsort(lua_State* L)
+@@ -562,7 +566,17 @@ static int tsort(lua_State* L)
      lua_settop(L, 2); // make sure there are two arguments
  
      if (n > 0)
@@ -464,7 +464,7 @@ index 7eedb50..b5492c2 100644
      return 0;
  }
  
-@@ -573,6 +587,8 @@ static int tcreate(lua_State* L)
+@@ -571,6 +585,8 @@ static int tcreate(lua_State* L)
      int size = luaL_checkinteger(L, 1);
      if (size < 0)
          luaL_argerror(L, 1, "size out of range");
@@ -473,7 +473,7 @@ index 7eedb50..b5492c2 100644
  
      if (!lua_isnoneornil(L, 2))
      {
-@@ -698,7 +714,10 @@ static int tclone(lua_State* L)
+@@ -683,7 +699,10 @@ static int tclone(lua_State* L)
      luaL_checktype(L, 1, LUA_TTABLE);
      luaL_argcheck(L, !luaL_getmetafield(L, 1, "__metatable"), 1, "table has a protected metatable");
  
@@ -647,10 +647,10 @@ index 4a9a7b8..5a5b668 100644
  
          // yield
 diff --git a/luau/VM/src/lvmload.cpp b/luau/VM/src/lvmload.cpp
-index 7fc6d99..7fe43fa 100644
+index 6ef14cc..79a9374 100644
 --- a/luau/VM/src/lvmload.cpp
 +++ b/luau/VM/src/lvmload.cpp
-@@ -1046,6 +1046,17 @@ static int loadsafe(
+@@ -1009,6 +1009,17 @@ static int loadsafe(
      uint32_t mainid = readVarInt(data, size, offset);
      Proto* main = protos[mainid];
  

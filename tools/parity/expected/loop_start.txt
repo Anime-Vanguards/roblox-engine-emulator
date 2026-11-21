@@ -1,0 +1,8 @@
+# engine: Roblox Studio 0.748.0.7481526, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-21
+constant -inf 1
+constant-local -inf 1
+constant-once -inf
+constant-down -inf -1 -0.5
+run-time -inf 1
+run-time-down -inf -1 -0.5

@@ -422,10 +422,10 @@ index 47a8125..cbaaf5e 100644
      struct lua_Page* freepages[LUA_SIZECLASSES]; // free page linked list for each size class for non-collectable objects
      struct lua_Page* freegcopages[LUA_SIZECLASSES]; // free page linked list for each size class for collectable objects
 diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
-index 8200a9f..9a3860d 100644
+index 7ea9793..87d0cfe 100644
 --- a/luau/VM/src/ltable.cpp
 +++ b/luau/VM/src/ltable.cpp
-@@ -979,6 +979,7 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
+@@ -928,6 +928,7 @@ LuaTable* luaH_new(lua_State* L, int narray, int nhash)
  {
      LuaTable* t = luaM_newgco(L, LuaTable, sizeof(LuaTable), L->activememcat, LUA_TTABLE);
      luaC_init(L, t, LUA_TTABLE);
@@ -433,7 +433,7 @@ index 8200a9f..9a3860d 100644
      t->metatable = NULL;
      t->tmcache = cast_byte(~0);
      t->array = NULL;
-@@ -1425,6 +1426,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
+@@ -1343,6 +1344,7 @@ LuaTable* luaH_clone(lua_State* L, LuaTable* tt)
  {
      LuaTable* t = luaM_newgco(L, LuaTable, sizeof(LuaTable), L->activememcat, LUA_TTABLE);
      luaC_init(L, t, LUA_TTABLE);

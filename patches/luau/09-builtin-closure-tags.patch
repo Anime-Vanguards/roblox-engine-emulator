@@ -164,7 +164,7 @@ index 2d33b9d..7dc6d32 100644
  
      return 1;
 diff --git a/luau/VM/src/ltablib.cpp b/luau/VM/src/ltablib.cpp
-index b5492c2..f303e8f 100644
+index 6cd70c9..ec499df 100644
 --- a/luau/VM/src/ltablib.cpp
 +++ b/luau/VM/src/ltablib.cpp
 @@ -1,6 +1,7 @@
@@ -175,7 +175,7 @@ index b5492c2..f303e8f 100644
  
  #include "lapi.h"
  #include "lnumutils.h"
-@@ -751,6 +752,11 @@ int luaopen_table(lua_State* L)
+@@ -736,6 +737,11 @@ int luaopen_table(lua_State* L)
  {
      luaL_register(L, LUA_TABLIBNAME, tab_funcs);
  

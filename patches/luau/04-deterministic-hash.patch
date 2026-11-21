@@ -43,7 +43,7 @@ index 9b60859..4699f47 100644
  
  #define iswhite(x) test2bits((x)->gch.marked, WHITE0BIT, WHITE1BIT)
 diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
-index 142d769..b19857a 100644
+index 2ad7474..bbb6674 100644
 --- a/luau/VM/src/ltable.cpp
 +++ b/luau/VM/src/ltable.cpp
 @@ -25,7 +25,10 @@
@@ -57,7 +57,7 @@ index 142d769..b19857a 100644
  #include "ldebug.h"
  #include "lgc.h"
  #include "lmem.h"
-@@ -83,6 +86,72 @@ static LuaNode* hashpointer(const LuaTable* t, const void* p)
+@@ -81,6 +84,72 @@ static LuaNode* hashpointer(const LuaTable* t, const void* p)
      return hashpow2(t, h);
  }
  
@@ -130,7 +130,7 @@ index 142d769..b19857a 100644
  static LuaNode* hashnum(const LuaTable* t, double n)
  {
      static_assert(sizeof(double) == sizeof(unsigned int) * 2, "expected a 8-byte double");
-@@ -190,8 +259,10 @@ static LuaNode* mainposition(const LuaTable* t, const TValue* key)
+@@ -188,8 +257,10 @@ static LuaNode* mainposition(const LuaTable* t, const TValue* key)
          return hashboolean(t, bvalue(key));
      case LUA_TLIGHTUSERDATA:
          return hashpointer(t, pvalue(key));
@@ -142,7 +142,7 @@ index 142d769..b19857a 100644
      }
  }
  
-@@ -234,7 +305,8 @@ LUAU_FORCEINLINE LuaNode* mainpositiontagged<LUA_TSTRING>(const LuaTable* t, TSt
+@@ -232,7 +303,8 @@ LUAU_FORCEINLINE LuaNode* mainpositiontagged<LUA_TSTRING>(const LuaTable* t, TSt
  template<>
  LUAU_FORCEINLINE LuaNode* mainpositiontagged<LUA_TGCO>(const LuaTable* t, GCObject* key)
  {
@@ -151,7 +151,7 @@ index 142d769..b19857a 100644
 +    return key->gch.tt == LUA_TUSERDATA ? hashuserdata(t, gco2u(key)) : hashgcobject(t, key);
  }
  
- // TODO: remove with FFlagLuauTableFindImprovement
+ // For static raw equality dispatch on a known tag
 diff --git a/luau/VM/src/ltable.h b/luau/VM/src/ltable.h
 index 1b1dd36..c2e1497 100644
 --- a/luau/VM/src/ltable.h

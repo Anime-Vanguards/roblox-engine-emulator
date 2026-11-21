@@ -680,10 +680,10 @@ index 7dc6d32..d2f8932 100644
      lua_pushinteger(L, n); // number of substitutions
      return 2;
 diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
-index 9a3860d..bc368a1 100644
+index 87d0cfe..4580c65 100644
 --- a/luau/VM/src/ltable.cpp
 +++ b/luau/VM/src/ltable.cpp
-@@ -677,7 +677,15 @@ static void countstored(lua_State* L, size_t bytes)
+@@ -626,7 +626,15 @@ static void countstored(lua_State* L, size_t bytes)
      if (luaE_scriptinsn(L))
          L->global->work.stored += bytes;
      else if (luaP_state)
@@ -700,7 +700,7 @@ index 9a3860d..bc368a1 100644
  }
  
  static void setarrayvector(lua_State* L, LuaTable* t, int size)
-@@ -895,9 +903,10 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
+@@ -844,9 +852,10 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
          int nh = hashslotsused(t) + 1;
          // (the keys this rehash moves: the hash part's and the new one; the array part stays)
          if (luaE_scriptinsn(L))
@@ -713,7 +713,7 @@ index 9a3860d..bc368a1 100644
          // (the hash part's size before, for a profile's rehash hook)
          int oldnodes = t->node == dummynode ? 0 : sizenode(t);
          resize(L, t, t->sizearray, nh);
-@@ -956,9 +965,11 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
+@@ -905,9 +914,11 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
      }
  
      if (luaE_scriptinsn(L))
@@ -728,10 +728,10 @@ index 9a3860d..bc368a1 100644
      // (the sizes before, for a profile's rehash hook)
      int oldasize = t->sizearray;
 diff --git a/luau/VM/src/ltablib.cpp b/luau/VM/src/ltablib.cpp
-index f303e8f..afc6a6d 100644
+index ec499df..4de0736 100644
 --- a/luau/VM/src/ltablib.cpp
 +++ b/luau/VM/src/ltablib.cpp
-@@ -235,7 +235,10 @@ static int tinsert(lua_State* L)
+@@ -233,7 +233,10 @@ static int tinsert(lua_State* L)
  
          // move up elements if necessary
          if (1 <= pos && pos <= n)
@@ -742,7 +742,7 @@ index f303e8f..afc6a6d 100644
          break;
      }
      default:
-@@ -257,6 +260,7 @@ static int tremove(lua_State* L)
+@@ -255,6 +258,7 @@ static int tremove(lua_State* L)
          return 0;                // nothing to remove
      lua_rawgeti(L, 1, pos);      // result = t[pos]
  
@@ -750,7 +750,7 @@ index f303e8f..afc6a6d 100644
      moveelements(L, 1, 1, pos + 1, n, pos, /* sparsemove */ false);
  
      lua_pushnil(L);
-@@ -291,6 +295,7 @@ static int tmove(lua_State* L)
+@@ -289,6 +293,7 @@ static int tmove(lua_State* L)
              luaG_readonlyerror(L);
  
          bool sparsemove = shouldsparsemove(hvalue(L->base), dst, n);
@@ -758,7 +758,7 @@ index f303e8f..afc6a6d 100644
  
          if (t > 0 && (t - 1) <= dst->sizearray && (t - 1 + n) > dst->sizearray)
          { // grow the destination table array
-@@ -348,6 +353,7 @@ static int tconcat(lua_State* L)
+@@ -346,6 +351,7 @@ static int tconcat(lua_State* L)
  static int tpack(lua_State* L)
  {
      int n = lua_gettop(L);    // number of elements to pack
@@ -766,7 +766,7 @@ index f303e8f..afc6a6d 100644
      lua_createtable(L, n, 1); // create result table
  
      LuaTable* t = hvalue(L->top - 1);
-@@ -377,6 +383,7 @@ static int tunpack(lua_State* L)
+@@ -375,6 +381,7 @@ static int tunpack(lua_State* L)
      unsigned n = (unsigned)e - i; // number of elements minus 1 (avoid overflows)
      if (n >= (unsigned int)INT_MAX || !lua_checkstack(L, (int)(++n)))
          luaL_error(L, "too many results to unpack");
@@ -774,25 +774,25 @@ index f303e8f..afc6a6d 100644
  
      // fast-path: direct array-to-stack copy
      if (i == 1 && int(n) <= t->sizearray)
-@@ -651,9 +658,17 @@ static int tfind(lua_State* L)
-         if (!iscollectable(L->base + 1) || ttisnil(luaT_gettmbyobj(L, L->base + 1, TM_EQ)))
-         {
-             if (int index = luaH_rawfind(t, init, L->base + 1))
-+            {
-+                luaE_worklib(L, LUA_WORK_SCANNED, index - init + 1);
-                 lua_pushinteger(L, index);
-+            }
-             else
-+            {
-+                // (a miss read the array part from init on, and the integer keys of the hash part after it)
-+                int scanned = t->sizearray >= init ? t->sizearray - init + 1 : 0;
-+                luaE_worklib(L, LUA_WORK_SCANNED, scanned + (t->node == &luaH_dummynode ? 0 : sizenode(t)));
-                 lua_pushnil(L);
-+            }
+@@ -637,9 +644,17 @@ static int tfind(lua_State* L)
+     if (!iscollectable(L->base + 1) || ttisnil(luaT_gettmbyobj(L, L->base + 1, TM_EQ)))
+     {
+         if (int index = luaH_rawfind(t, init, L->base + 1))
++        {
++            luaE_worklib(L, LUA_WORK_SCANNED, index - init + 1);
+             lua_pushinteger(L, index);
++        }
+         else
++        {
++            // (a miss read the array part from init on, and the integer keys of the hash part after it)
++            int scanned = t->sizearray >= init ? t->sizearray - init + 1 : 0;
++            luaE_worklib(L, LUA_WORK_SCANNED, scanned + (t->node == &luaH_dummynode ? 0 : sizenode(t)));
+             lua_pushnil(L);
++        }
  
-             return 1;
-         }
-@@ -663,12 +678,16 @@ static int tfind(lua_State* L)
+         return 1;
+     }
+@@ -648,12 +663,16 @@ static int tfind(lua_State* L)
      {
          const TValue* e = luaH_getnum(t, i);
          if (ttisnil(e))
@@ -809,7 +809,7 @@ index f303e8f..afc6a6d 100644
              lua_pushinteger(L, i);
              return 1;
          }
-@@ -686,6 +705,7 @@ static int tclear(lua_State* L)
+@@ -671,6 +690,7 @@ static int tclear(lua_State* L)
      if (tt->readonly)
          luaG_readonlyerror(L);
  
