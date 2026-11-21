@@ -131,6 +131,63 @@ fn a_rojo_project_mounts_its_tree_where_rojo_puts_it() {
     assert_eq!(warnings, ["warn: default.project.json maps ServerStorage.Gone to gone, which doesn't exist; not mounted"], "{lines:?}");
 }
 
+/// StarterPlayer's script folders a project mounts are locked by class, as a place's are (measured in a 0.747 client and
+/// server on a place holding both): every Parent write refuses ("Cannot change Parent of type StarterPlayerScripts", the
+/// parent they have too) and Destroy refuses naming the full name; what they hold moves freely
+#[test]
+fn a_projects_starter_player_scripts_are_locked_by_class() {
+    let root = scratch("starter-locks");
+    let game = root.join("game");
+    write(
+        &game,
+        &[
+            (
+                "default.project.json",
+                r#"{
+	"name": "Sample",
+	"tree": {
+		"$className": "DataModel",
+		"StarterPlayer": {
+			"$className": "StarterPlayer",
+			"StarterPlayerScripts": { "$className": "StarterPlayerScripts", "Client": { "$path": "src/client" } },
+			"StarterCharacterScripts": { "$className": "StarterCharacterScripts" }
+		}
+	}
+}"#,
+            ),
+            ("src/client/Main.client.luau", "print('client main')"),
+        ],
+    );
+    write(
+        &root,
+        &[(
+            "Harness.luau",
+            "return function(Context)\n\
+             local function Try(F) local Ok, Err = pcall(F) return if Ok then 'ok' else (string.gsub(tostring(Err), '^[^:]*:%d+: ', '')) end\n\
+             local Starter = game:GetService('StarterPlayer')\n\
+             for _, Class in { 'StarterPlayerScripts', 'StarterCharacterScripts' } do\n\
+             local Folder = Starter:FindFirstChildOfClass(Class)\n\
+             print(Class, Try(function() Folder.Parent = Starter end), '|', Try(function() Folder.Parent = nil end), '|', Try(function() Folder:Destroy() end), '|', Folder.Parent == Starter)\n\
+             end\n\
+             local Client = Starter.StarterPlayerScripts.Client\n\
+             print('child', Try(function() Client.Parent = workspace end), Client.Parent == workspace)\n\
+             end",
+        )],
+    );
+    let harness = root.join("Harness.luau").to_string_lossy().into_owned();
+    let project = game.join("default.project.json").to_string_lossy().into_owned();
+    let (summary, lines) = run_words(&["--harness", &harness, "--rojo", &project, "--seconds", "0.1"]);
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    for wanted in [
+        "print: StarterPlayerScripts Cannot change Parent of type StarterPlayerScripts | Cannot change Parent of type StarterPlayerScripts | The Parent property of StarterPlayer.StarterPlayerScripts is locked | true",
+        "print: StarterCharacterScripts Cannot change Parent of type StarterCharacterScripts | Cannot change Parent of type StarterCharacterScripts | The Parent property of StarterPlayer.StarterCharacterScripts is locked | true",
+        "print: child ok true",
+    ] {
+        assert!(lines.iter().any(|line| line == wanted), "{wanted}: {lines:?}");
+    }
+}
+
 /// A root project whose tree is a `$path` to the code's DataModel project with the world's project beside it (a code project
 /// and a world synced on its own) mounts both, as `rojo build` of it does: the code project's services from its own folder,
 /// the world's Workspace from its folder

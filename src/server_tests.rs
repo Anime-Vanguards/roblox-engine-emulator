@@ -114,6 +114,8 @@ fn a_server_has_no_local_player_and_renders_nothing() {
             end
             table.sort(Names)
             print("containers", table.concat(Names, ","))
+            -- (measured, Studio 0.747 server: PlayerGui is locked by class, the Backpack not at all)
+            print("locks", select(2, pcall(function() Player.PlayerGui.Parent = Player end)), pcall(function() Player.Backpack.Parent = Player end))
         end)
         Players.PlayerRemoving:Connect(function(Player) print("removing", Player.Name) end)
         local Player = Instance.new("Player")
@@ -134,6 +136,7 @@ fn a_server_has_no_local_player_and_renders_nothing() {
         "print: render-stepped false RenderStepped event can only be used from local scripts",
         "print: added Fake 7",
         "print: containers Backpack,PlayerGui,StarterGear",
+        "print: locks Cannot change Parent of type PlayerGui true",
         "print: frames 0 0 true 1",
         "print: kicked true",
         "print: removing Fake",

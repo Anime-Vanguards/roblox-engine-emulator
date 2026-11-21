@@ -593,6 +593,93 @@ fn a_parent_write_of_the_parent_it_has_is_no_change() {
 }
 
 #[test]
+fn a_parent_write_meets_the_class_lock_then_no_change_then_the_instance_lock() {
+    // Measured in a playing client and a server (Studio 0.747, tools/parity/probes/parent_locks.luau; a 0.748 client reads the
+    // same): what is locked by class (most services, Terrain, a player's PlayerGui and PlayerScripts) refuses every write, the
+    // parent it has and itself too; then the parent it has is no change; then what is locked as an instance (29 services such
+    // as Workspace and Run Service, the PlayerMouse) refuses naming its parent and the new one by Name. A settings root made its
+    // own parent says so before its capability error; the Player, its Backpack and the Camera have no lock
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(F)
+            local Ok, Err = pcall(F)
+            if Ok then
+                return "ok"
+            end
+            local Text = string.gsub(tostring(Err), "^[^:]*:%d+: ", "")
+            return (string.gsub(Text, "current parent: " .. string.gsub(game.Name, "%p", "%%%0") .. ",", "current parent: <game>,"))
+        end
+        local Deep = Instance.new("Folder")
+        Deep.Name = "Deep"
+        Deep.Parent = Instance.new("Folder", game:GetService("ReplicatedStorage"))
+        print(Try(function() workspace.Parent = game end), Try(function() workspace.Parent = nil end))
+        print(Try(function() workspace.Parent = Deep end))
+        local Run = game:GetService("RunService")
+        print(Try(function() Run.Parent = Run end))
+        print(Try(function() game:GetService("ReplicatedStorage").Parent = game end), Try(function() game:GetService("Chat").Parent = nil end))
+        print(Try(function() workspace.Terrain.Parent = workspace end), Try(function() workspace.Terrain.Parent = workspace.Terrain end))
+        local Me = game:GetService("Players").LocalPlayer
+        local Gui, Scripts = Me:FindFirstChildOfClass("PlayerGui"), Me:FindFirstChildOfClass("PlayerScripts")
+        print(Try(function() Gui.Parent = Me end), Try(function() Scripts.Parent = nil end))
+        print(Try(function() Me.Parent = Me.Parent end), Try(function() Me.Backpack.Parent = Me end), Try(function() workspace.CurrentCamera.Parent = workspace end))
+        print(Try(function() workspace.CurrentCamera.Parent = workspace.CurrentCamera end))
+        local User = UserSettings()
+        print(Try(function() User.Parent = User end), Try(function() User.Parent = workspace end))
+        print(Try(function() Me:GetMouse().Parent = workspace end))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: ok The Parent property of Workspace is locked, current parent: <game>, new parent NULL",
+            "print: The Parent property of Workspace is locked, current parent: <game>, new parent Deep",
+            "print: The Parent property of Run Service is locked, current parent: <game>, new parent Run Service",
+            "print: Cannot change Parent of type ReplicatedStorage Cannot change Parent of type Chat",
+            "print: Cannot change Parent of type Terrain Cannot change Parent of type Terrain",
+            "print: Cannot change Parent of type PlayerGui Cannot change Parent of type PlayerScripts",
+            "print: ok ok ok",
+            "print: Attempt to set Workspace.Camera as its own parent",
+            "print: Attempt to set GlobalBasicSettings as its own parent The current thread cannot set 'UserSettings parent' (lacking capability RobloxScript)",
+            "print: The Parent property of Instance is locked, current parent: NULL, new parent Workspace",
+        ]
+    );
+}
+
+#[test]
+fn destroy_of_what_is_locked_by_class() {
+    // Measured in a playing client and a server (Studio 0.747, tools/parity/probes/parent_locks.luau): Terrain refuses Destroy
+    // and stays; a player's PlayerGui and PlayerScripts are destroyed and keep their class's lock
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(F)
+            local Ok, Err = pcall(F)
+            return if Ok then "ok" else (string.gsub(tostring(Err), "^[^:]*:%d+: ", ""))
+        end
+        print(Try(function() workspace.Terrain:Destroy() end), workspace.Terrain.Parent == workspace)
+        local Me = game:GetService("Players").LocalPlayer
+        for _, Class in { "PlayerGui", "PlayerScripts" } do
+            local Object = Me:FindFirstChildOfClass(Class)
+            print(Try(function() Object:Destroy() end), Object.Parent, Try(function() Object.Parent = nil end), Try(function() Object.Parent = Me end))
+        end
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: Cannot Destroy() Terrain true",
+            "print: ok nil Cannot change Parent of type PlayerGui Cannot change Parent of type PlayerGui",
+            "print: ok nil Cannot change Parent of type PlayerScripts Cannot change Parent of type PlayerScripts",
+        ]
+    );
+}
+
+#[test]
 fn destroy_and_clone() {
     let (lua, engine) = start();
     run(
@@ -9061,7 +9148,9 @@ fn settings_is_refused_to_a_game_script_and_no_other_provider_holds_a_settings_s
         assert(#User:GetChildren() == 1)
         -- its tree is locked
         assert(select(2, pcall(function() User.Parent = workspace end)) == "The current thread cannot set 'UserSettings parent' (lacking capability RobloxScript)")
+        assert(select(2, pcall(function() User.Parent = User end)) == "Attempt to set GlobalBasicSettings as its own parent")
         assert(select(2, pcall(function() User.GameSettings.Parent = workspace end)) == "Cannot change Parent of type UserGameSettings")
+        assert(select(2, pcall(function() User.GameSettings.Parent = User end)) == "Cannot change Parent of type UserGameSettings")
         assert(select(2, pcall(function() Instance.new("Folder").Parent = User end)) == "Not allowed to add that under settings")
         assert(select(2, pcall(function() Instance.new("Folder").Parent = User.GameSettings end)) == "Not allowed to add that under settings")
         assert(select(2, pcall(User.Clone, User)) == "GlobalBasicSettings cannot be cloned")
@@ -9107,6 +9196,8 @@ fn settings_is_the_global_settings_object_a_plugin_gets() {
         -- the tree is locked
         assert(select(2, pcall(function() Rendering.Parent = workspace end)) == "Cannot change Parent of type RenderSettings")
         assert(select(2, pcall(function() Root.Parent = workspace end)) == "The current thread cannot set 'settings parent' (lacking capability RobloxScript)")
+        assert(select(2, pcall(function() Root.Parent = Root end)) == "Attempt to set Global Settings as its own parent")
+        assert(select(2, pcall(function() Rendering.Parent = Root end)) == "Cannot change Parent of type RenderSettings")
         assert(select(2, pcall(function() Instance.new("Folder").Parent = Root end)) == "Not allowed to add that under settings")
         assert(select(2, pcall(Root.Clone, Root)) == "Global Settings cannot be cloned" and select(2, pcall(Rendering.Clone, Rendering)) == "Rendering cannot be cloned")
         assert(select(2, pcall(Root.Lua.Destroy, Root.Lua)) == "The Parent property of Lua is locked")

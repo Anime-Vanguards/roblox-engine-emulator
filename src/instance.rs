@@ -7,7 +7,7 @@ use crate::cost::SignalKind;
 use super::{
     Engine, Hooks, InstanceId, ScriptError, ScriptResult, State,
     dom::{InstanceSignals, flags},
-    reflection::{ClassId, K, NameId, Reflection},
+    reflection::{ClassId, K, NameId, ParentLock, Reflection},
     scheduler::{DispatchKind, JobTarget},
     signal::{Handler, SignalId},
     value::{Str, Value},
@@ -461,6 +461,40 @@ fn fire_ancestry_changed(state: &mut State, root: InstanceId, new_parent: Option
     }
 }
 
+/// How an instance's Parent is locked, where it is (set_parent; the class's part is [`ParentLock`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Lock {
+    /// "Cannot change Parent of type X", every write
+    Class,
+    /// "The Parent property of X is locked, current parent: P, new parent Y", once the parent it has passed as no change
+    Instance,
+    /// A settings root's capability error, once the parent it has passed and "its own parent" was looked at
+    SettingsRoot,
+}
+
+fn parent_lock(state: &State, reflection: &Reflection, id: InstanceId) -> Option<Lock> {
+    let instance = state.dom.at(id);
+    let class = reflection.class(instance.class);
+    let locked = instance.has(flags::PARENT_LOCKED);
+    // Terrain, a player's PlayerGui and PlayerScripts, StarterPlayer's script folders: locked once the engine has put one in
+    // place, or Destroy locked it (a destroyed PlayerGui keeps its class's lock, measured). A Studio-only placeholder is not
+    // in place: the place's own instance takes its place (project.rs)
+    if class.parent_lock == ParentLock::Class && (locked || (instance.parent.is_some() && !instance.has(flags::STUDIO_ONLY))) {
+        return Some(Lock::Class);
+    }
+    if !locked {
+        return (instance.parent.is_none() && Some(instance.class) == reflection.class_id("DataModel")).then_some(Lock::Instance);
+    }
+    if is_service(state, reflection, id) {
+        return Some(if class.parent_lock == ParentLock::Service { Lock::Class } else { Lock::Instance });
+    }
+    // a settings root (settings(), UserSettings(): services/settings.rs) refuses its own way, measured
+    if instance.parent.is_none() && super::services::settings::is_root(reflection, instance.class) {
+        return Some(Lock::SettingsRoot);
+    }
+    Some(Lock::Instance)
+}
+
 /// InstanceModule.SetParent.
 pub fn set_parent(
     state: &mut State,
@@ -469,40 +503,53 @@ pub fn set_parent(
     id: InstanceId,
     new_parent: Option<InstanceId>,
 ) -> ScriptResult<()> {
-    // Measured in a playing client (Studio 0.744, tools/parity/probes/hierarchy.luau): a service refuses with "Cannot change
-    // Parent of type Lighting"; the DataModel and a destroyed instance with "The Parent property of X is locked, current
-    // parent: NULL, new parent Y"; an instance made its own parent with "Attempt to set X as its own parent", and its
-    // descendant with the circular-reference text.
-    let is_data_model = Some(state.dom.at(id).class) == reflection.class_id("DataModel");
-    // Set to the parent it already has, an instance changes nothing and raises nothing, before its Parent lock is looked at
-    // (measured in a playing client, Studio 0.748: a destroyed instance's `Parent = nil`, `game.Parent = nil`,
-    // `UserSettings().Parent = nil`; in edit, `settings().Parent = nil` too). What refuses by its class refuses even the parent
-    // it has: a service ("Cannot change Parent of type Lighting") and Terrain ("Cannot change Parent of type Terrain")
-    if state.dom.at(id).parent == new_parent
-        && !is_service(state, reflection, id)
-        && reflection.class_id("Terrain") != Some(state.dom.at(id).class)
-    {
+    // A Parent write meets three checks in turn (measured in a playing client and a server, Studio 0.747, every service a game
+    // script gets and every locked instance the engine makes: tools/parity/probes/parent_locks.luau; a 0.748 client reads the
+    // same). What is locked by class refuses every write, the parent it has and itself too: "Cannot change Parent of type
+    // Lighting" (112 services, the settings services, UserGameSettings, Terrain, a player's PlayerGui and PlayerScripts,
+    // StarterPlayer's script folders: reflection.rs ParentLock). Then the parent it has is no change and raises nothing. Then
+    // what is locked as an instance refuses, naming its parent: "The Parent property of Workspace is locked, current parent:
+    // <the place's name>, new parent NULL" (the DataModel, 29 services, a destroyed instance, the PlayerMouse); a settings
+    // root raises its capability error there, but made its own parent "Attempt to set GlobalBasicSettings as its own parent".
+    // An unlocked instance (the Camera, the Player, its Backpack and character) made its own parent raises "Attempt to set X
+    // as its own parent", and set below its descendant the circular-reference text.
+    let lock = parent_lock(state, reflection, id);
+    if lock == Some(Lock::Class) {
+        return Err(ScriptError::plain(format!("Cannot change Parent of type {}", reflection.class(state.dom.at(id).class).name)));
+    }
+    if state.dom.at(id).parent == new_parent {
         return Ok(());
     }
-    if state.dom.at(id).has(flags::PARENT_LOCKED) || is_data_model {
-        if is_service(state, reflection, id) {
-            return Err(ScriptError::plain(format!("Cannot change Parent of type {}", reflection.class(state.dom.at(id).class).name)));
+    let name_of = |parent: Option<InstanceId>| parent.map_or_else(|| "NULL".to_string(), |parent| state.dom.at(parent).name.to_string());
+    match lock {
+        Some(Lock::SettingsRoot) if new_parent == Some(id) => {
+            return Err(ScriptError::plain(format!("Attempt to set {} as its own parent", state.dom.full_name(reflection, id))));
         }
-        // a settings root (settings(), UserSettings(): services/settings.rs) refuses its own way, measured
-        let class = state.dom.at(id).class;
-        if state.dom.at(id).parent.is_none() && super::services::settings::is_root(reflection, class) {
-            let label = super::services::settings::parent_label(reflection, class);
+        Some(Lock::SettingsRoot) => {
+            let label = super::services::settings::parent_label(reflection, state.dom.at(id).class);
             return Err(ScriptError::plain(format!("The current thread cannot set '{label} parent' (lacking capability RobloxScript)")));
         }
-        let new_name = match new_parent {
-            Some(parent) => state.dom.at(parent).name.to_string(),
-            None => "NULL".into(),
-        };
-        return Err(ScriptError::plain(format!(
-            "The Parent property of {} is locked, current parent: NULL, new parent {new_name}",
-            state.dom.at(id).name
-        )));
+        Some(Lock::Instance) => {
+            return Err(ScriptError::plain(format!(
+                "The Parent property of {} is locked, current parent: {}, new parent {}",
+                state.dom.at(id).name,
+                name_of(state.dom.at(id).parent),
+                name_of(new_parent)
+            )));
+        }
+        _ => {}
     }
+    reparent(state, reflection, hooks, id, new_parent)
+}
+
+/// set_parent past its Parent locks: the new parent's own checks, then the move and its events.
+fn reparent(
+    state: &mut State,
+    reflection: &Reflection,
+    hooks: &Hooks,
+    id: InstanceId,
+    new_parent: Option<InstanceId>,
+) -> ScriptResult<()> {
     let old_parent = state.dom.at(id).parent;
     if old_parent == new_parent {
         return Ok(());
@@ -908,9 +955,22 @@ pub fn begin_destroy(
             return Err(ScriptError::plain(format!("The Parent property of {} is locked", state.dom.at(first).name)));
         }
     }
+    // what is locked by class but no service (measured in a 0.747 client and server, tools/parity/probes/parent_locks.luau):
+    // Terrain refuses ("Cannot Destroy() Terrain"), StarterPlayer's script folders refuse naming their full name ("The Parent
+    // property of StarterPlayer.StarterPlayerScripts is locked"), and a player's PlayerGui and PlayerScripts are destroyed,
+    // their class's lock kept
+    if parent_lock(state, reflection, id) == Some(Lock::Class) {
+        match &*reflection.class(state.dom.at(id).class).name {
+            "Terrain" => return Err(ScriptError::plain("Cannot Destroy() Terrain")),
+            "StarterPlayerScripts" | "StarterCharacterScripts" => {
+                return Err(ScriptError::plain(format!("The Parent property of {} is locked", state.dom.full_name(reflection, id))));
+            }
+            _ => {}
+        }
+    }
     state.dom.at_mut(id).set_flag(flags::DESTROYED, true);
     if state.dom.at(id).parent.is_some() {
-        set_parent(state, reflection, hooks, id, None)?;
+        reparent(state, reflection, hooks, id, None)?;
     }
     // A destroyed Model lets go of its PrimaryPart (measured in Studio, 5 of 5; unparenting keeps it): the
     // part it named stays collectable once the Model is the last thing that referenced it

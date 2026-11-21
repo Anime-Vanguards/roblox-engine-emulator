@@ -186,6 +186,37 @@ pub enum RawDefault {
     EnumItem(EnumItemId),
 }
 
+/// How a class's instances refuse a Parent write (instance::set_parent; measured in a 0.747 playing client and server, every
+/// service a game script gets and every locked instance the engine makes: tools/parity/probes/parent_locks.luau).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ParentLock {
+    /// What the engine locks (the DataModel, a destroyed instance, the PlayerMouse, a service of
+    /// [`INSTANCE_LOCKED_SERVICES`]) refuses as an instance, after a write of the parent it has passed as no change: "The
+    /// Parent property of Workspace is locked, current parent: <its parent>, new parent NULL"
+    Instance,
+    /// A service the engine locked refuses by its class, every write, the parent it has too: "Cannot change Parent of type
+    /// Lighting" (the settings services and UserGameSettings too)
+    Service,
+    /// Every instance of the class in place refuses by its class, as a [`ParentLock::Service`] does ([`CLASS_LOCKED`]); no
+    /// script makes one (none is creatable)
+    Class,
+}
+
+/// The services a 0.747 client and server lock as an instance (they accept the parent they have and name it in the lock's
+/// message); the other 112 services they answer GetService with refuse by class. Nothing in the API dump tells the two apart
+/// (security, superclass, serialization, being there at the start), so the list is measured: tools/parity/probes/parent_locks.luau.
+pub const INSTANCE_LOCKED_SERVICES: &[&str] = &[
+    "AnimationClipProvider", "AssetService", "CollectionService", "ContentProvider", "ContextActionService", "CookiesService",
+    "Debris", "GuidRegistryService", "HeightmapImporterService", "KeyboardService", "KeyframeSequenceProvider",
+    "MemoryStoreService", "PermissionsService", "PhysicsService", "Players", "ProximityPromptService", "RunService",
+    "ScriptService", "Selection", "StarterGui", "StarterPack", "Stats", "TeleportService", "TestService", "TextService",
+    "TouchInputService", "TweenService", "VirtualInputManager", "Workspace",
+];
+
+/// The classes other than services that refuse every Parent write by class (measured in a 0.747 client and server:
+/// "Cannot change Parent of type Terrain"); a player's Backpack and StarterGear, the Camera and the Player have no lock.
+pub const CLASS_LOCKED: &[&str] = &["PlayerGui", "PlayerScripts", "StarterCharacterScripts", "StarterPlayerScripts", "Terrain"];
+
 #[derive(Debug)]
 pub struct ClassInfo {
     pub id: ClassId,
@@ -193,6 +224,8 @@ pub struct ClassInfo {
     pub superclass: Option<ClassId>,
     pub creatable: bool,
     pub service: bool,
+    /// How its instances refuse a Parent write ([`ParentLock`])
+    pub parent_lock: ParentLock,
     ancestors: Box<[u64]>,
     /// Resolved (inherited) members
     pub properties: FxHashMap<NameId, u32>,
@@ -770,6 +803,15 @@ impl Reflection {
             list.sort_unstable_by(|&a, &b| reflection.classes[a as usize].name.cmp(&reflection.classes[b as usize].name));
             reflection.classes[id].subclasses = list.into_boxed_slice();
         }
+        for class in &mut reflection.classes {
+            class.parent_lock = if CLASS_LOCKED.contains(&&*class.name) {
+                ParentLock::Class
+            } else if class.service && !INSTANCE_LOCKED_SERVICES.contains(&&*class.name) {
+                ParentLock::Service
+            } else {
+                ParentLock::Instance
+            };
+        }
         reflection.link_aliases();
 
         if let Some(bytes) = font_enums {
@@ -829,6 +871,7 @@ impl Reflection {
             superclass: None,
             creatable: false,
             service: false,
+            parent_lock: ParentLock::Instance,
             ancestors: Box::new([]),
             properties: FxHashMap::default(),
             events: FxHashSet::default(),
