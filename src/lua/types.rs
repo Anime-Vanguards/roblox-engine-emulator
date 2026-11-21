@@ -288,6 +288,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     register_date_time(lua, engine)?;
     register_instance_handle(lua, engine)?;
     super::curve_keys::register(lua, engine)?;
+    super::shared_table::register(lua, engine)?;
     Ok(())
 }
 

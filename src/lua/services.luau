@@ -1090,8 +1090,9 @@ Method("TextService", "GetFamilyInfoAsync", function(_, AssetId)
 end)
 
 -- SharedTableRegistry: a name holds one SharedTable, made on the first Get (measured in Studio 2026-10-23: a
--- fresh name returns a SharedTable, the same one on every call; SetSharedTable registers a given one). Without
--- Actors there is nothing to share it with, so a SharedTable is a plain table here.
+-- fresh name returns a SharedTable, the same one on every call; SetSharedTable registers a given one, and nil
+-- removes the name). SetSharedTable takes nothing else (Studio 0.748: "Unable to cast double to SharedTable", a
+-- table named an Array or a Dictionary). SharedTables are userdata (lua/shared_table.rs).
 local SharedTables = {}
 Method("SharedTableRegistry", "GetSharedTable", function(_, Name)
 	local Found = SharedTables[Name]
@@ -1102,6 +1103,11 @@ Method("SharedTableRegistry", "GetSharedTable", function(_, Name)
 	return Found
 end)
 Method("SharedTableRegistry", "SetSharedTable", function(_, Name, Value)
+	if Value ~= nil and typeof(Value) ~= "SharedTable" then
+		local Kind = if type(Value) == "table" then (if #Value > 0 or next(Value) == nil then "Array" else "Dictionary") else typeof(Value)
+		Kind = if Kind == "number" then "double" elseif Kind == "boolean" then "bool" else Kind
+		error(`Unable to cast {Kind} to SharedTable`, 0)
+	end
 	SharedTables[Name] = Value
 end)
 

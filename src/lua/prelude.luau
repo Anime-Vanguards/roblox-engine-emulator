@@ -5,7 +5,7 @@
 --    (1, message, level) to raise a string error (level 1: the position of the script line that
 --    called the engine function, 0: none) or (2) to yield the calling coroutine (the Rust side has
 --    already registered its resumption). `wrap` turns such a function into a script function.
--- 2. typeof with registered table types (SharedTable).
+-- 2. typeof with registered proxy types.
 -- 3. Script libraries over Lune's datatypes (port of runtime/engine/datatypes.luau ScriptLibrary,
 --    constructor overrides and extras) and the small proxy types datatypes.luau implements in Luau
 --    (Faces, Axes, Path2DControlPoint, parameter objects).
@@ -474,38 +474,6 @@ local function InertLibrary(TypeName)
 end
 
 -- Shared environment pieces (globals.luau)
-
-local SharedTable = {}
-function SharedTable.new(Initial)
-	local Self = if Initial then table.clone(R.SharedTableCopy(Initial)) else {}
-	Register(Self, "SharedTable")
-	return Self
-end
-function SharedTable.clone(Value, _Deep)
-	return SharedTable.new(Value)
-end
-SharedTable.cloneAndFreeze = SharedTable.clone
-function SharedTable.size(Value)
-	local Count = 0
-	for _ in Value do
-		Count += 1
-	end
-	R.Charge(Count * R.SharedSizeEntryCost); return Count
-end
-function SharedTable.clear(Value)
-	table.clear(R.SharedTableClear(Value))
-end
-function SharedTable.isFrozen(_Value)
-	return false
-end
-function SharedTable.update(Value, Key, Callback)
-	Value[Key] = Callback(Value[Key])
-end
-function SharedTable.increment(Value, Key, Delta)
-	local Old = Value[Key] or error(`Unable to increment the value for key "{Key}" because it does not exist in the SharedTable.`, 0)
-	Value[Key] = Old + Delta; R.Charge(R.SharedIncrementCost)
-	return Old
-end
 
 local function MakeStubTree(Name)
 	local Cache = {}
@@ -1416,7 +1384,6 @@ return {
 	SecurityCapabilities = SecurityCapabilitiesLibrary,
 	ValueCurveKey = ValueCurveKeyLibrary,
 	InertLibrary = InertLibrary,
-	SharedTable = SharedTable,
 	MakeStubTree = MakeStubTree,
 	Utf8 = Utf8Table,
 	Debug = DebugTable,
