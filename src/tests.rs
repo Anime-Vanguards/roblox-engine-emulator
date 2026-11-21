@@ -553,6 +553,46 @@ fn a_chain_of_events_and_defers_shares_one_depth() {
 }
 
 #[test]
+fn a_parent_write_of_the_parent_it_has_is_no_change() {
+    // Measured in a playing client (Studio 0.748): setting Parent to the parent an instance already has passes the Parent lock
+    // without a word or an event (a destroyed instance and its destroyed child, the DataModel, the UserSettings root); any
+    // other parent still meets the lock, and a service or Terrain still refuses even its own parent
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(F)
+            local Ok, Err = pcall(F)
+            return if Ok then "ok" else (string.gsub(tostring(Err), "^[^:]*:%d+: ", ""))
+        end
+        local A = Instance.new("Part")
+        local A1 = Instance.new("Folder")
+        A1.Parent = A
+        A.Parent = workspace
+        A:Destroy()
+        A.Changed:Connect(function(Name) print("changed " .. Name) end)
+        A1.Changed:Connect(function(Name) print("child changed " .. Name) end)
+        print(Try(function() A.Parent = nil end), Try(function() A1.Parent = nil end))
+        print(Try(function() A.Parent = workspace end))
+        print(Try(function() A.Parent = nil end))
+        print(Try(function() game.Parent = nil end), Try(function() UserSettings().Parent = nil end))
+        print(Try(function() game:GetService("Lighting").Parent = game end), (pcall(function() workspace.Terrain.Parent = workspace end)))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: ok ok",
+            "print: The Parent property of Part is locked, current parent: NULL, new parent Workspace",
+            "print: ok",
+            "print: ok ok",
+            "print: Cannot change Parent of type Lighting false",
+        ]
+    );
+}
+
+#[test]
 fn destroy_and_clone() {
     let (lua, engine) = start();
     run(

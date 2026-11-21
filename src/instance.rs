@@ -474,6 +474,16 @@ pub fn set_parent(
     // parent: NULL, new parent Y"; an instance made its own parent with "Attempt to set X as its own parent", and its
     // descendant with the circular-reference text.
     let is_data_model = Some(state.dom.at(id).class) == reflection.class_id("DataModel");
+    // Set to the parent it already has, an instance changes nothing and raises nothing, before its Parent lock is looked at
+    // (measured in a playing client, Studio 0.748: a destroyed instance's `Parent = nil`, `game.Parent = nil`,
+    // `UserSettings().Parent = nil`; in edit, `settings().Parent = nil` too). What refuses by its class refuses even the parent
+    // it has: a service ("Cannot change Parent of type Lighting") and Terrain ("Cannot change Parent of type Terrain")
+    if state.dom.at(id).parent == new_parent
+        && !is_service(state, reflection, id)
+        && reflection.class_id("Terrain") != Some(state.dom.at(id).class)
+    {
+        return Ok(());
+    }
     if state.dom.at(id).has(flags::PARENT_LOCKED) || is_data_model {
         if is_service(state, reflection, id) {
             return Err(ScriptError::plain(format!("Cannot change Parent of type {}", reflection.class(state.dom.at(id).class).name)));
