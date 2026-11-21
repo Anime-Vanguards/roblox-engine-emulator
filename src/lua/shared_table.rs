@@ -14,16 +14,26 @@
 //!   and the library's argument errors carry the script's position.
 //! - `for k, v in S` walks the entries as they were when the loop started: the integer keys ascending, then the string keys in
 //!   the order of Roblox's hash trie ([`string_order`]).
-//! - `#`, `next`, `pairs`, `rawget`, `setmetatable` and the `table` library raise as on any userdata, the metatable is
-//!   locked, `S:size()` raises "attempt to call missing method 'size' of SharedTable", and tostring is "SharedTable: 0x" and
-//!   16 hex digits.
+//! - `#`, `next`, `pairs`, `rawget`, `setmetatable` and the `table` library raise as on any userdata; every SharedTable shares
+//!   one metatable, which is locked; `S:size()` raises "attempt to call missing method 'size' of SharedTable", and tostring is
+//!   "SharedTable: 0x" and 16 hex digits.
 //! - The library (a read-only table): `new([table])`, `clone(S [, deep])` and `cloneAndFreeze(S [, deep])` (a shallow copy
 //!   shares the SharedTables it holds, a deep one copies them, frozen too for cloneAndFreeze; a clone of a frozen table is not
 //!   frozen), `isFrozen`, `size`, `clear`, `increment(S, key, delta)` (returns the old value) and `update(S, key, callback)`
 //!   (the callback gets the old value and returns the new one; it runs where it cannot yield, and an error it raises reaches
 //!   the caller as raised). Their messages are below, as measured.
+//!
+//! Where the contents live: in the engine, as Roblox keeps them in its own (numbers, booleans, vectors, strings and buffers as
+//! data, the value types the engine has values for as those, a SharedTable it holds as a shared reference), and the userdata
+//! is a handle, one per SharedTable while a script holds it (so `S.t == S.t`). A SharedTable holds none of mlua's reference
+//! slots (lua/refs.rs). The value types the engine has no value for (Ray, Axes, TweenInfo, the keypoints, ...) wait in one
+//! engine table, a slot each, freed once no SharedTable holds them. A SharedTable that holds itself is never freed, while its
+//! handle is: measured, a client collected the handles of 300 SharedTables that held themselves and their 300 MB of buffers
+//! stayed (plain ones gave theirs back).
+//!
+//! What their calls cost the work clock: cost.rs [`crate::cost::SHARED_NEW_STRING_ENTRY`] and the prices after it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::rc::Rc;
@@ -31,12 +41,14 @@ use std::rc::Rc;
 use mlua::prelude::*;
 use rustc_hash::FxHashMap;
 
-use super::{Args, Flow, lock_metatable, none, raise, raise_at_caller, raw, typeof_value, values, wrapped};
-use crate::Engine;
+use super::{Args, Flow, convert, lock_metatable, none, raise, raise_at_caller, raw, typeof_value, values, wrapped};
+use crate::{Engine, cost, value::Value};
 
-/// A SharedTable: its entries, and whether it is frozen. The userdata is its identity (a SharedTable stored in another is the
-/// same object).
-pub struct LSharedTable(RefCell<Contents>);
+/// A SharedTable as a script holds it: a handle to its contents.
+pub struct LSharedTable(Rc<Shared>);
+
+/// A SharedTable's contents; its identity is this allocation.
+struct Shared(RefCell<Contents>);
 
 #[derive(Clone, Default)]
 struct Contents {
@@ -48,9 +60,17 @@ struct Contents {
 /// A value as a SharedTable holds it.
 #[derive(Clone)]
 enum Stored {
-    Value(LuaValue),
+    Boolean(bool),
+    Number(f64),
+    Vector(f32, f32, f32),
+    String(Rc<[u8]>),
     /// A buffer's bytes: a copy goes in, and every read makes a new buffer of them
     Buffer(Rc<[u8]>),
+    /// A value type the engine has a value for (CFrame, UDim2, Color3, EnumItem, Font, ...)
+    Value(Value),
+    /// Another value type, kept in the [`Store`]'s pool
+    Pooled(Rc<PoolSlot>),
+    Shared(Rc<Shared>),
 }
 
 #[derive(Clone)]
@@ -98,6 +118,88 @@ impl Contents {
     }
 }
 
+/// A pool slot of the [`Store`]: its value is dropped from the pool once the last SharedTable holding it lets go (at the
+/// next value pooled; a drop may come from the collector, where no Lua may run).
+struct PoolSlot {
+    id: u32,
+    released: Rc<RefCell<Vec<u32>>>,
+}
+
+impl Drop for PoolSlot {
+    fn drop(&mut self) {
+        if let Ok(mut released) = self.released.try_borrow_mut() {
+            released.push(self.id);
+        }
+    }
+}
+
+/// The engine's part of every SharedTable: the handles (a weak-valued table, one per SharedTable while a script holds it) and
+/// the pool of the values the engine has no value of its own for.
+struct Store {
+    handles: LuaTable,
+    pool: LuaTable,
+    released: Rc<RefCell<Vec<u32>>>,
+    free: RefCell<Vec<u32>>,
+    next: Cell<u32>,
+}
+
+impl Store {
+    fn put(&self, value: LuaValue) -> LuaResult<Rc<PoolSlot>> {
+        // (what was let go: taken out before any Lua runs, which may collect and let go of more)
+        let released = std::mem::take(&mut *self.released.borrow_mut());
+        for id in released {
+            self.pool.raw_set(id, LuaValue::Nil)?;
+            self.free.borrow_mut().push(id);
+        }
+        let reused = self.free.borrow_mut().pop();
+        let id = reused.unwrap_or_else(|| {
+            self.next.set(self.next.get() + 1);
+            self.next.get()
+        });
+        self.pool.raw_set(id, value)?;
+        Ok(Rc::new(PoolSlot { id, released: self.released.clone() }))
+    }
+
+    /// The handle of `shared`: the one a script holds, else a new one.
+    fn handle(&self, lua: &Lua, shared: &Rc<Shared>) -> LuaResult<LuaAnyUserData> {
+        let key = Rc::as_ptr(shared) as usize as f64;
+        if let LuaValue::UserData(handle) = self.handles.raw_get::<LuaValue>(key)?
+            && handle.borrow::<LSharedTable>().is_ok_and(|held| Rc::ptr_eq(&held.0, shared))
+        {
+            return Ok(handle);
+        }
+        let handle = lua.create_any_userdata(LSharedTable(shared.clone()))?;
+        self.handles.raw_set(key, handle.clone())?;
+        Ok(handle)
+    }
+}
+
+/// Entries a call handled, for its price: by their key's kind, and the SharedTables a deep clone copied.
+#[derive(Default)]
+struct Tally {
+    strings: u64,
+    integers: u64,
+    tables: u64,
+}
+
+impl Tally {
+    fn count(&mut self, key: &Key) {
+        match key {
+            Key::Number(_) => self.integers += 1,
+            Key::String(_) => self.strings += 1,
+        }
+    }
+
+    fn count_contents(&mut self, contents: &Contents) {
+        self.integers += contents.numbers.len() as u64;
+        self.strings += contents.strings.len() as u64;
+    }
+}
+
+fn charge(engine: &Engine, seconds: f64) {
+    engine.state.borrow().sched.charge(seconds);
+}
+
 const KEY_TYPE: &str = "SharedTable keys can only be strings or numbers.";
 const KEY_NUMBER: &str = "Numeric SharedTable keys must be nonnegative integers less than 2^32";
 const FROZEN: &str = "SharedTable is frozen";
@@ -108,7 +210,7 @@ const CYCLIC: &str = "Cannot convert a cyclic table to a SharedTable";
 const KEPT: &[&str] = &[
     "Axes", "BrickColor", "CFrame", "Color3", "ColorSequence", "ColorSequenceKeypoint", "EnumItem", "Faces", "Font", "NumberRange",
     "NumberSequence", "NumberSequenceKeypoint", "Path2DControlPoint", "PhysicalProperties", "Ray", "Rect", "Region3", "Region3int16",
-    "TweenInfo", "UDim", "UDim2", "Vector2", "Vector2int16", "Vector3int16",
+    "SecurityCapabilities", "TweenInfo", "UDim", "UDim2", "Vector2", "Vector2int16", "Vector3int16",
 ];
 
 /// The value types a SharedTable drops without a word (measured: the key reads nil after the write).
@@ -143,35 +245,43 @@ fn refused<T>(name: &str) -> Result<T, Flow> {
     raise(format!("{name}s can not be stored in a SharedTable"))
 }
 
-/// What a SharedTable holds for `value` (None: no entry). `open` holds the tables being converted, to find a cycle.
-fn stored(lua: &Lua, engine: &Engine, value: &LuaValue, open: &mut Vec<*const c_void>) -> Result<Option<Stored>, Flow> {
-    Ok(match value {
-        LuaValue::Nil | LuaValue::Thread(_) | LuaValue::LightUserData(_) | LuaValue::Error(_) | LuaValue::Other(_) => None,
-        LuaValue::Boolean(_) | LuaValue::Integer(_) | LuaValue::Number(_) | LuaValue::String(_) | LuaValue::Vector(_) => Some(Stored::Value(value.clone())),
-        LuaValue::Buffer(buffer) => Some(Stored::Buffer(buffer.to_vec().into())),
+/// What a SharedTable holds for `value` (None: no entry). `open` holds the tables being converted, to find a cycle; `tally`
+/// counts the entries converted.
+fn stored(lua: &Lua, engine: &Engine, store: &Store, value: &LuaValue, open: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Stored>, Flow> {
+    Ok(Some(match value {
+        LuaValue::Nil | LuaValue::Thread(_) | LuaValue::LightUserData(_) | LuaValue::Error(_) | LuaValue::Other(_) => return Ok(None),
+        LuaValue::Boolean(b) => Stored::Boolean(*b),
+        LuaValue::Integer(n) => Stored::Number(*n as f64),
+        LuaValue::Number(n) => Stored::Number(*n),
+        LuaValue::Vector(v) => Stored::Vector(v.x(), v.y(), v.z()),
+        LuaValue::String(s) => Stored::String(s.as_bytes().to_vec().into()),
+        LuaValue::Buffer(buffer) => Stored::Buffer(buffer.to_vec().into()),
         LuaValue::Function(_) => return refused("Function"),
-        LuaValue::Table(table) => Some(Stored::Value(LuaValue::UserData(converted(lua, engine, table, open)?))),
+        LuaValue::Table(table) => Stored::Shared(converted(lua, engine, store, table, open, tally)?),
         LuaValue::UserData(ud) => {
-            if ud.is::<LSharedTable>() {
-                return Ok(Some(Stored::Value(value.clone())));
+            if let Ok(handle) = ud.borrow::<LSharedTable>() {
+                return Ok(Some(Stored::Shared(handle.0.clone())));
             }
             if raw::instance_of_ud(ud).is_some() {
                 return refused("Instance");
             }
             let name = typeof_value(engine, value);
             match name.as_str() {
-                name if KEPT.contains(&name) => Some(Stored::Value(value.clone())),
-                name if DROPPED.contains(&name) => None,
+                name if KEPT.contains(&name) => match convert::from_lua(value) {
+                    Value::Lua(_) => Stored::Pooled(store.put(value.clone())?),
+                    known => Stored::Value(known),
+                },
+                name if DROPPED.contains(&name) => return Ok(None),
                 "RBXScriptSignal" => return refused("EventInstance"),
                 "RBXScriptConnection" => return refused("Connection"),
                 other => return refused(other),
             }
         }
-    })
+    }))
 }
 
 /// A table as a new SharedTable (its own tables converted too).
-fn converted(lua: &Lua, engine: &Engine, table: &LuaTable, open: &mut Vec<*const c_void>) -> Result<LuaAnyUserData, Flow> {
+fn converted(lua: &Lua, engine: &Engine, store: &Store, table: &LuaTable, open: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Rc<Shared>, Flow> {
     let pointer = table.to_pointer();
     if open.contains(&pointer) {
         return raise(CYCLIC);
@@ -181,47 +291,48 @@ fn converted(lua: &Lua, engine: &Engine, table: &LuaTable, open: &mut Vec<*const
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, value) = pair?;
         let key = key_of(&key)?;
-        let value = stored(lua, engine, &value, open)?;
+        tally.count(&key);
+        let value = stored(lua, engine, store, &value, open, tally)?;
         contents.set(key, value);
     }
     open.pop();
-    Ok(make(lua, contents)?)
+    Ok(Rc::new(Shared(RefCell::new(contents))))
 }
 
-fn make(lua: &Lua, contents: Contents) -> LuaResult<LuaAnyUserData> {
-    lua.create_any_userdata(LSharedTable(RefCell::new(contents)))
-}
-
-fn load(lua: &Lua, stored: &Stored) -> LuaResult<LuaValue> {
+fn load(lua: &Lua, engine: &Engine, store: &Store, stored: &Stored) -> LuaResult<LuaValue> {
     Ok(match stored {
-        Stored::Value(value) => value.clone(),
+        Stored::Boolean(b) => LuaValue::Boolean(*b),
+        Stored::Number(n) => LuaValue::Number(*n),
+        Stored::Vector(x, y, z) => LuaValue::Vector(mlua::Vector::new(*x, *y, *z)),
+        Stored::String(bytes) => LuaValue::String(lua.create_string(&**bytes)?),
         Stored::Buffer(bytes) => LuaValue::Buffer(lua.create_buffer(&**bytes)?),
+        Stored::Value(value) => convert::to_lua(lua, engine, value)?,
+        Stored::Pooled(slot) => store.pool.raw_get(slot.id)?,
+        Stored::Shared(shared) => LuaValue::UserData(store.handle(lua, shared)?),
     })
 }
 
-/// A copy of `table`, frozen or not; a deep one copies the SharedTables it holds as well (`copies`: those copied so far, so a
-/// table held twice, or holding itself, is copied once).
-fn copy(lua: &Lua, table: &LuaAnyUserData, deep: bool, frozen: bool, copies: &mut FxHashMap<*const c_void, LuaAnyUserData>) -> LuaResult<LuaAnyUserData> {
-    if let Some(done) = copies.get(&table.to_pointer()) {
-        return Ok(done.clone());
+/// A copy of `shared`, frozen or not; a deep one copies the SharedTables it holds as well (`copies`: those copied so far, so a
+/// table held twice, or holding itself, is copied once), counting their entries and themselves in `tally`.
+fn copy(shared: &Rc<Shared>, deep: bool, frozen: bool, copies: &mut FxHashMap<*const Shared, Rc<Shared>>, tally: &mut Tally) -> Rc<Shared> {
+    if let Some(done) = copies.get(&Rc::as_ptr(shared)) {
+        return done.clone();
     }
-    let mut contents = table.borrow::<LSharedTable>()?.0.borrow().clone();
+    let result = Rc::new(Shared(RefCell::new(Contents::default())));
+    copies.insert(Rc::as_ptr(shared), result.clone());
+    let mut contents = shared.0.borrow().clone();
     contents.frozen = frozen;
-    let result = make(lua, Contents::default())?;
-    copies.insert(table.to_pointer(), result.clone());
     if deep {
-        let held = |stored: &Stored| match stored {
-            Stored::Value(LuaValue::UserData(ud)) if ud.is::<LSharedTable>() => Some(ud.clone()),
-            _ => None,
-        };
+        tally.count_contents(&contents);
         for value in contents.numbers.values_mut().chain(contents.strings.values_mut()) {
-            if let Some(inner) = held(value) {
-                *value = Stored::Value(LuaValue::UserData(copy(lua, &inner, true, frozen, copies)?));
+            if let Stored::Shared(inner) = value {
+                tally.tables += 1;
+                *value = Stored::Shared(copy(inner, true, frozen, copies, tally));
             }
         }
     }
-    *result.borrow::<LSharedTable>()?.0.borrow_mut() = contents;
-    Ok(result)
+    *result.0.borrow_mut() = contents;
+    result
 }
 
 /// The order Roblox's SharedTable walks its string keys: a CHAMP trie keyed by the 64-bit FNV-1a hash of the key's bytes, five
@@ -269,11 +380,19 @@ fn arg_type(engine: &Engine, args: &Args, index: usize) -> String {
     if index >= args.len() { "no value".into() } else { typeof_value(engine, args.get(index)) }
 }
 
-/// Argument `index` (0-based) of library function `function`, which must be a SharedTable.
-fn shared_arg(engine: &Engine, args: &Args, index: usize, function: &str) -> Result<LuaAnyUserData, Flow> {
+/// Argument `index` (0-based) of library function `function`, which must be a SharedTable: its contents.
+fn shared_arg(engine: &Engine, args: &Args, index: usize, function: &str) -> Result<Rc<Shared>, Flow> {
     match args.get(index) {
-        LuaValue::UserData(ud) if ud.is::<LSharedTable>() => Ok(ud.clone()),
+        LuaValue::UserData(ud) if ud.is::<LSharedTable>() => Ok(ud.borrow::<LSharedTable>()?.0.clone()),
         _ => raise_at_caller(format!("invalid argument #{} to '{function}' (SharedTable expected, got {})", index + 1, arg_type(engine, args, index))),
+    }
+}
+
+/// The SharedTable a metamethod was called on.
+fn this(args: &Args) -> Result<Rc<Shared>, Flow> {
+    match args.get(0) {
+        LuaValue::UserData(ud) => Ok(ud.borrow::<LSharedTable>()?.0.clone()),
+        _ => raise("invalid SharedTable"),
     }
 }
 
@@ -286,35 +405,31 @@ fn deep_arg(engine: &Engine, args: &Args, function: &str) -> Result<bool, Flow> 
     }
 }
 
-fn is_frozen(table: &LuaAnyUserData) -> LuaResult<bool> {
-    Ok(table.borrow::<LSharedTable>()?.0.borrow().frozen)
-}
-
 /// The value at `key`, for a script.
-fn read(lua: &Lua, table: &LuaAnyUserData, key: &Key) -> LuaResult<LuaValue> {
-    match table.borrow::<LSharedTable>()?.0.borrow().get(key) {
-        Some(stored) => load(lua, stored),
+fn read(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: &Key) -> LuaResult<LuaValue> {
+    match shared.0.borrow().get(key) {
+        Some(stored) => load(lua, engine, store, stored),
         None => Ok(LuaValue::Nil),
     }
 }
 
 /// Writes `value` at `key` (the key already checked, the table not frozen).
-fn write(lua: &Lua, engine: &Engine, table: &LuaAnyUserData, key: Key, value: &LuaValue) -> Result<(), Flow> {
-    let value = stored(lua, engine, value, &mut Vec::new())?;
-    table.borrow::<LSharedTable>()?.0.borrow_mut().set(key, value);
+fn write(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: Key, value: &LuaValue) -> Result<(), Flow> {
+    let value = stored(lua, engine, store, value, &mut Vec::new(), &mut Tally::default())?;
+    shared.0.borrow_mut().set(key, value);
     Ok(())
 }
 
 /// SharedTable.update's checks and its callback's call, as (failed, problem, level): the wrapper in [`register`] raises
 /// `problem` at the script's line (level 1) or as it is (level 0: the callback's own error, its value kept).
-fn update(lua: &Lua, engine: &Engine, pcall: &LuaFunction, args: &Args) -> Result<LuaMultiValue, Flow> {
-    let table = shared_arg(engine, args, 0, "update")?;
+fn update(lua: &Lua, engine: &Engine, store: &Store, pcall: &LuaFunction, args: &Args) -> Result<LuaMultiValue, Flow> {
+    let shared = shared_arg(engine, args, 0, "update")?;
     let key = key_of(args.get(1))?;
     let LuaValue::Function(callback) = args.get(2) else { return raise("Third argument to SharedTable::Update should be a function.") };
-    if is_frozen(&table)? {
+    if shared.0.borrow().frozen {
         return raise(FROZEN);
     }
-    let old = read(lua, &table, &key)?;
+    let old = read(lua, engine, store, &shared, &key)?;
     // (through pcall: an error the callback raises comes back as its value, not mlua's text of it)
     let mut results = pcall.call::<LuaMultiValue>((callback.clone(), old))?.into_iter();
     let succeeded = matches!(results.next(), Some(LuaValue::Boolean(true)));
@@ -322,15 +437,15 @@ fn update(lua: &Lua, engine: &Engine, pcall: &LuaFunction, args: &Args) -> Resul
     if !succeeded {
         return Ok(values([LuaValue::Boolean(true), first, LuaValue::Integer(0)]));
     }
-    write(lua, engine, &table, key, &first)?;
+    write(lua, engine, store, &shared, key, &first)?;
     Ok(values([LuaValue::Boolean(false)]))
 }
 
 /// SharedTable.increment: adds `delta` to the number at `key` and returns the old one.
 fn increment(engine: &Engine, args: &Args) -> Result<LuaMultiValue, Flow> {
-    let table = shared_arg(engine, args, 0, "increment")?;
+    let shared = shared_arg(engine, args, 0, "increment")?;
     let key = key_of(args.get(1))?;
-    if is_frozen(&table)? {
+    if shared.0.borrow().frozen {
         return raise(FROZEN);
     }
     let delta = match args.get(2) {
@@ -338,20 +453,19 @@ fn increment(engine: &Engine, args: &Args) -> Result<LuaMultiValue, Flow> {
         LuaValue::Number(n) => *n,
         _ => return raise("Variant cast failed"),
     };
-    let userdata = table.borrow::<LSharedTable>()?;
-    let mut contents = userdata.0.borrow_mut();
+    let mut contents = shared.0.borrow_mut();
     let old = match contents.get(&key) {
         None => return raise(format!("Unable to increment the value for key \"{}\" because it does not exist in the SharedTable.", key_text(&key))),
-        Some(Stored::Value(LuaValue::Number(n))) => *n,
-        Some(Stored::Value(LuaValue::Integer(n))) => *n as f64,
+        Some(Stored::Number(n)) => *n,
         Some(_) => return raise(format!("Unable to increment the value for key \"{}\" because it is not a number value.", key_text(&key))),
     };
-    contents.set(key, Some(Stored::Value(LuaValue::Number(old + delta))));
+    contents.set(key, Some(Stored::Number(old + delta)));
+    drop(contents);
     // (what Studio spent on it: cost.rs)
     let state = engine.state.borrow();
-    state.sched.charge(crate::cost::SHARED_INCREMENT);
+    state.sched.charge(cost::SHARED_INCREMENT);
     if !state.sched.is_muted() {
-        crate::boundary::add_cost(crate::cost::SHARED_INCREMENT);
+        crate::boundary::add_cost(cost::SHARED_INCREMENT);
     }
     Ok(values([LuaValue::Number(old)]))
 }
@@ -368,31 +482,46 @@ end
 
 /// Registers the SharedTable type and its library (types.rs).
 pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
-    let index = wrapped(lua, engine, |lua, args| {
+    let handles = lua.create_table()?;
+    let weak = lua.create_table()?;
+    weak.raw_set("__mode", "v")?;
+    handles.set_metatable(Some(weak))?;
+    let store = Rc::new(Store { handles, pool: lua.create_table()?, released: Rc::default(), free: RefCell::default(), next: Cell::new(0) });
+
+    let (e, s) = (engine.clone(), store.clone());
+    let index = wrapped(lua, engine, move |lua, args| {
         let args = Args::new(args);
-        let LuaValue::UserData(table) = args.get(0) else { return raise("invalid SharedTable") };
+        let shared = this(&args)?;
         let key = key_of(args.get(1))?;
-        Ok(values([read(lua, table, &key)?]))
+        Ok(values([read(lua, &e, &s, &shared, &key)?]))
     })?;
-    let e = engine.clone();
+    let (e, s) = (engine.clone(), store.clone());
     let newindex = wrapped(lua, engine, move |lua, args| {
         let args = Args::new(args);
-        let LuaValue::UserData(table) = args.get(0) else { return raise("invalid SharedTable") };
+        let shared = this(&args)?;
         let key = key_of(args.get(1))?;
-        if is_frozen(table)? {
+        if shared.0.borrow().frozen {
             return raise(FROZEN);
         }
-        write(lua, &e, table, key, args.get(2))?;
+        write(lua, &e, &s, &shared, key, args.get(2))?;
         Ok(none())
     })?;
-    let iter = lua.create_function(|lua, table: LuaAnyUserData| {
-        let mut entries = table.borrow::<LSharedTable>()?.0.borrow().ordered().into_iter();
+    let (e, s) = (engine.clone(), store.clone());
+    let iter = lua.create_function(move |lua, handle: LuaAnyUserData| {
+        let entries = handle.borrow::<LSharedTable>()?.0.0.borrow().ordered();
+        let mut tally = Tally::default();
+        for (key, _) in &entries {
+            tally.count(key);
+        }
+        charge(&e, cost::SHARED_LOOP + tally.strings as f64 * cost::SHARED_LOOP_STRING_ENTRY + tally.integers as f64 * cost::SHARED_LOOP_INTEGER_ENTRY);
+        let mut entries = entries.into_iter();
+        let (e, s) = (e.clone(), s.clone());
         lua.create_function_mut(move |lua, _: LuaMultiValue| match entries.next() {
-            Some((key, value)) => Ok((key_value(lua, &key)?, load(lua, &value)?)),
+            Some((key, value)) => Ok((key_value(lua, &key)?, load(lua, &e, &s, &value)?)),
             None => Ok((LuaValue::Nil, LuaValue::Nil)),
         })
     })?;
-    let tostring = lua.create_function(|_, table: LuaAnyUserData| Ok(format!("SharedTable: 0x{:016x}", table.to_pointer() as usize)))?;
+    let tostring = lua.create_function(|_, handle: LuaAnyUserData| Ok(format!("SharedTable: 0x{:016x}", handle.to_pointer() as usize)))?;
     lua.register_userdata_type::<LSharedTable>(|registry| {
         registry.add_meta_field("__type", "SharedTable");
         registry.add_meta_field("__index", index);
@@ -400,67 +529,72 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         registry.add_meta_field("__iter", iter);
         registry.add_meta_field("__tostring", tostring);
     })?;
-    lock_metatable(lua, &make(lua, Contents::default())?)?;
+    lock_metatable(lua, &lua.create_any_userdata(LSharedTable(Rc::new(Shared(RefCell::default()))))?)?;
 
     let library = lua.create_table()?;
-    let e = engine.clone();
+    let (e, s) = (engine.clone(), store.clone());
     library.set(
         "new",
         wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
-            match args.get(0) {
-                _ if args.is_empty() => Ok(values([LuaValue::UserData(make(lua, Contents::default())?)])),
-                LuaValue::Table(table) => Ok(values([LuaValue::UserData(converted(lua, &e, table, &mut Vec::new())?)])),
-                _ => raise_at_caller(format!("invalid argument #1 to 'new' (table expected, got {})", arg_type(&e, &args, 0))),
-            }
+            let shared = match args.get(0) {
+                _ if args.is_empty() => Rc::new(Shared(RefCell::default())),
+                LuaValue::Table(table) => {
+                    let mut tally = Tally::default();
+                    let shared = converted(lua, &e, &s, table, &mut Vec::new(), &mut tally)?;
+                    charge(&e, tally.strings as f64 * cost::SHARED_NEW_STRING_ENTRY + tally.integers as f64 * cost::SHARED_NEW_INTEGER_ENTRY);
+                    shared
+                }
+                _ => return raise_at_caller(format!("invalid argument #1 to 'new' (table expected, got {})", arg_type(&e, &args, 0))),
+            };
+            Ok(values([LuaValue::UserData(s.handle(lua, &shared)?)]))
         })?,
     )?;
     for (name, frozen) in [("clone", false), ("cloneAndFreeze", true)] {
-        let e = engine.clone();
+        let (e, s) = (engine.clone(), store.clone());
         library.set(
             name,
             wrapped(lua, engine, move |lua, args| {
                 let args = Args::new(args);
-                let table = shared_arg(&e, &args, 0, name)?;
+                let shared = shared_arg(&e, &args, 0, name)?;
                 let deep = deep_arg(&e, &args, name)?;
-                Ok(values([LuaValue::UserData(copy(lua, &table, deep, frozen, &mut FxHashMap::default())?)]))
+                let mut tally = Tally::default();
+                let copied = copy(&shared, deep, frozen, &mut FxHashMap::default(), &mut tally);
+                // (a shallow copy costs Studio the same at any size: only the call)
+                charge(
+                    &e,
+                    tally.strings as f64 * cost::SHARED_DEEP_STRING_ENTRY + tally.integers as f64 * cost::SHARED_DEEP_INTEGER_ENTRY + tally.tables as f64 * cost::SHARED_DEEP_TABLE,
+                );
+                Ok(values([LuaValue::UserData(s.handle(lua, &copied)?)]))
             })?,
         )?;
     }
     let e = engine.clone();
-    library.set(
-        "isFrozen",
-        wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Boolean(is_frozen(&shared_arg(&e, &Args::new(args), 0, "isFrozen")?)?)])))?,
-    )?;
+    library.set("isFrozen", wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Boolean(shared_arg(&e, &Args::new(args), 0, "isFrozen")?.0.borrow().frozen)])))?)?;
     let e = engine.clone();
     library.set(
         "size",
-        wrapped(lua, engine, move |_, args| {
-            let table = shared_arg(&e, &Args::new(args), 0, "size")?;
-            let size = table.borrow::<LSharedTable>()?.0.borrow().len();
-            Ok(values([LuaValue::Number(size as f64)]))
-        })?,
+        wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Number(shared_arg(&e, &Args::new(args), 0, "size")?.0.borrow().len() as f64)])))?,
     )?;
     let e = engine.clone();
     library.set(
         "clear",
         wrapped(lua, engine, move |_, args| {
-            let table = shared_arg(&e, &Args::new(args), 0, "clear")?;
-            if is_frozen(&table)? {
+            let shared = shared_arg(&e, &Args::new(args), 0, "clear")?;
+            if shared.0.borrow().frozen {
                 return raise(FROZEN);
             }
-            let userdata = table.borrow::<LSharedTable>()?;
-            let mut contents = userdata.0.borrow_mut();
-            contents.numbers.clear();
-            contents.strings.clear();
+            // (taken out first: what it held may let go of a pool slot)
+            let cleared = std::mem::take(&mut *shared.0.borrow_mut());
+            drop(cleared);
             Ok(none())
         })?,
     )?;
     let e = engine.clone();
     library.set("increment", wrapped(lua, engine, move |_, args| increment(&e, &Args::new(args)))?)?;
-    let e = engine.clone();
+    let (e, s) = (engine.clone(), store.clone());
     let pcall: LuaFunction = lua.globals().get("pcall")?;
-    let checked = lua.create_function(move |lua, args: LuaMultiValue| match update(lua, &e, &pcall, &Args::new(args)) {
+    let checked = lua.create_function(move |lua, args: LuaMultiValue| match update(lua, &e, &s, &pcall, &Args::new(args)) {
         Ok(results) => Ok(results),
         Err(Flow::Error(error)) => {
             Ok(values([LuaValue::Boolean(true), LuaValue::String(lua.create_string(&error.message)?), LuaValue::Integer(error.level.into())]))

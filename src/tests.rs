@@ -7091,6 +7091,9 @@ fn a_shared_table_is_a_userdata_with_roblox_keys_and_values() {
         Fails("DateTimes can not be stored in a SharedTable", function() S.d = DateTime.now() end)
         Fails("RaycastParamss can not be stored in a SharedTable", function() S.r = RaycastParams.new() end)
         Fails("EventInstances can not be stored in a SharedTable", function() S.e = workspace.Changed end)
+        Fails("ValueCurveKeys can not be stored in a SharedTable", function() S.k = ValueCurveKey.new(0, 1, Enum.KeyInterpolationMode.Linear) end)
+        S.capabilities = SecurityCapabilities.new()
+        assert(typeof(S.capabilities) == "SecurityCapabilities")
         Fails("Functions can not be stored in a SharedTable", function() S.t = { f = print } end)
         local Cyclic = {}
         Cyclic.Self = Cyclic
@@ -7266,6 +7269,109 @@ fn shared_tables_meet_the_registry_and_bindables_as_in_roblox() {
     assert!(output.contains(&"print: true true".to_string()), "{output:?}");
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     assert_eq!(lines(&engine).iter().filter(|line| *line == "print: true true").count(), 2, "{:?}", lines(&engine));
+}
+
+/// A SharedTable keeps its values in the engine's own data, so filling one takes none of mlua's reference slots (lua/refs.rs):
+/// strings, numbers, nested tables, the value types the engine has values for, and those it pools.
+#[test]
+fn a_shared_table_holds_no_reference_slots() {
+    let (lua, engine) = start();
+    let gauge = crate::lua::refs::Gauge::find(&lua).expect("the reference gauge");
+    run(&lua, &engine, r#"game:GetService("SharedTableRegistry"):SetSharedTable("Many", SharedTable.new())"#);
+    let before = gauge.count();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local S = game:GetService("SharedTableRegistry"):GetSharedTable("Many")
+        for I = 1, 10000 do
+            S["k" .. I] = "value " .. I
+            S[I] = { I, "nested" }
+            S["c" .. I] = CFrame.new(I, 0, 0)
+            S["t" .. I] = TweenInfo.new(I)
+        end
+        assert(SharedTable.size(S) == 40000 and S.k7 == "value 7" and S[7][2] == "nested" and S.t7.Time == 7)
+        "#,
+    );
+    let after = gauge.count();
+    assert!(after - before < 50, "{before} slots held before, {after} after");
+}
+
+/// A SharedTable that holds itself lets its handle go once no script holds it, as a playing client does (Studio 0.748: the
+/// handles of 300 such SharedTables were collected; their buffers' memory, as Roblox keeps it, stayed).
+#[test]
+fn a_shared_table_that_holds_itself_lets_its_handle_go() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        shared.Watched = setmetatable({}, { __mode = "k" })
+        do
+            local S = SharedTable.new()
+            S.self = S
+            S.other = SharedTable.new({ back = S })
+            shared.Watched[S] = true
+            shared.Watched[S.other] = true
+        end
+        "#,
+    );
+    lua.gc_collect().expect("collect");
+    lua.gc_collect().expect("collect");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Count = 0
+        for _ in shared.Watched do
+            Count += 1
+        end
+        assert(Count == 0, Count .. " handles still held")
+        "#,
+    );
+}
+
+/// SharedTable's bulk calls cost the work clock what they cost a playing client, by the entries they handle (Studio 0.748, cost.rs
+/// SHARED_NEW_STRING_ENTRY): new from 1,000 string-keyed entries 0.32 ms, a loop over them 36 us, a deep clone 10 us; a shallow
+/// clone the same at 1,000 entries as at 10.
+#[test]
+fn shared_table_bulk_calls_cost_what_studio_spent() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Per(Body)
+            local N = 20
+            local start = os.clock()
+            Body(N)
+            local middle = os.clock()
+            for _ = 1, N do end
+            return ((middle - start) - (os.clock() - middle)) / N * 1e6
+        end
+        local Big, Small = {}, {}
+        for I = 1, 1000 do
+            Big["k" .. I] = I
+        end
+        for I = 1, 10 do
+            Small["k" .. I] = I
+        end
+        local S, T = SharedTable.new(Big), SharedTable.new(Small)
+        local New = Per(function(N) for _ = 1, N do SharedTable.new(Big) end end)
+        local Loop = Per(function(N) for _ = 1, N do for _ in S do end end end)
+        local Deep = Per(function(N) for _ = 1, N do SharedTable.clone(S, true) end end)
+        local CloneBig = Per(function(N) for _ = 1, N do SharedTable.clone(S) end end)
+        local CloneSmall = Per(function(N) for _ = 1, N do SharedTable.clone(T) end end)
+        assert(New > 280 and New < 380, "new from 1,000 entries (us): " .. New)
+        assert(Loop > 30 and Loop < 45, "a loop over 1,000 entries (us): " .. Loop)
+        assert(Deep > 8 and Deep < 14, "a deep clone of 1,000 entries (us): " .. Deep)
+        assert(math.abs(CloneBig - CloneSmall) < 1, "a shallow clone at 1,000 and 10 entries (us): " .. CloneBig .. " " .. CloneSmall)
+        print("ok")
+        "#,
+    );
+    assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
 }
 
 /// The parallel bridge's machinery costs what Studio spent (an empty test place's client, an actor_cost probe, 2026-10-23): a BindableFunction:Invoke
