@@ -7341,6 +7341,111 @@ fn a_shared_table_that_holds_itself_lets_its_handle_go() {
     );
 }
 
+/// A table converted to a SharedTable sits on the Lua stack above the call's own values, each table inside another two slots
+/// higher, and one above slot 300 raises "Max lua stack size reached" without a position, after the cycle check (measured in a
+/// playing client, Studio 0.748): `new` takes arrays and dictionaries nested 150 deep, one level less for every two more
+/// arguments; a write and update's result 149.
+#[test]
+fn shared_table_conversions_stop_where_robloxs_stack_does() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Nest(Depth, Dict)
+            local T = {}
+            for _ = 2, Depth do
+                T = if Dict then { x = T } else { T }
+            end
+            return T
+        end
+        local function Ring(Depth)
+            local Outer = {}
+            local Inner = Outer
+            for _ = 2, Depth do
+                local Next = {}
+                Inner[1] = Next
+                Inner = Next
+            end
+            Inner[1] = Outer
+            return Outer
+        end
+        local function Fails(Message, F, ...)
+            local Ok, E = pcall(F, ...)
+            if Ok or E ~= Message then
+                error(tostring(E), 2)
+            end
+        end
+        local Full, Cyclic = "Max lua stack size reached", "Cannot convert a cyclic table to a SharedTable"
+        SharedTable.new(Nest(150))
+        SharedTable.new(Nest(150, true))
+        SharedTable.new(Nest(150), 1)
+        Fails(Full, SharedTable.new, Nest(151))
+        Fails(Full, SharedTable.new, Nest(151, true))
+        Fails(Full, SharedTable.new, Nest(150), 1, 2)
+        SharedTable.new(Nest(149), 1, 2, 3)
+        Fails(Full, SharedTable.new, Nest(149), 1, 2, 3, 4)
+        SharedTable.new(Nest(148), 1, 2, 3, 4)
+        local S = SharedTable.new()
+        S.k = Nest(149)
+        S[1] = Nest(149, true)
+        Fails(Full, function() S.k = Nest(150) end)
+        SharedTable.update(S, "k", function() return Nest(149) end)
+        Fails(Full, SharedTable.update, S, "k", function() return Nest(150) end)
+        Fails(Full, SharedTable.update, S, "k", function() return Nest(149) end, 1)
+        -- a cycle closing at the limit raises the cyclic message, one closing past it the stack's
+        Fails(Cyclic, SharedTable.new, Ring(150))
+        Fails(Full, SharedTable.new, Ring(151))
+        Fails(Cyclic, function() S.k = Ring(149) end)
+        Fails(Full, function() S.k = Ring(150) end)
+        -- SharedTables already made add no depth, and a table met twice is no cycle
+        local Holder = Nest(149)
+        local Inner = Holder
+        while next(Inner) do
+            Inner = Inner[1]
+        end
+        Inner[1] = SharedTable.new(Nest(150))
+        SharedTable.new(Holder)
+        local Leaf = Nest(140)
+        SharedTable.new({ a = Leaf, b = Leaf })
+        -- a table nested 300,000 deep fails as soon as it is too deep
+        local Deep = {}
+        for _ = 2, 300000 do
+            Deep = { Deep }
+        end
+        Fails(Full, SharedTable.new, Deep)
+        "#,
+    );
+}
+
+/// A chain of SharedTables a script builds one write at a time, each holding the next, is deep-copied and let go of whatever its
+/// length (Studio deep-copies a chain 1,000 long): neither nests a call once a link, which would overflow the engine's stack.
+#[test]
+fn a_long_chain_of_shared_tables_is_copied_and_let_go_of() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Head = SharedTable.new()
+        for _ = 1, 100000 do
+            local Next = SharedTable.new()
+            Next.next = Head
+            Head = Next
+        end
+        local Copy = SharedTable.clone(Head, true)
+        local Length, At = 0, Copy
+        while At.next do
+            Length += 1
+            At = At.next
+        end
+        assert(Length == 100000, Length)
+        "#,
+    );
+    lua.gc_collect().expect("collect");
+    lua.gc_collect().expect("collect");
+}
+
 /// SharedTable's bulk calls cost the work clock what they cost a playing client, by the entries they handle (Studio 0.748, cost.rs
 /// SHARED_NEW_STRING_ENTRY): new from 1,000 string-keyed entries 0.32 ms, and the same table written to a key as much, a loop over
 /// them 36 us, a deep clone 10 us; a shallow clone the same at 1,000 entries as at 10; a conversion that fails at its last entry

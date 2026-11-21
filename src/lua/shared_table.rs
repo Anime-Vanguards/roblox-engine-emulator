@@ -10,6 +10,12 @@
 //!   tables too, its metatable ignored; a cycle raises "Cannot convert a cyclic table to a SharedTable"). Instances,
 //!   functions and the engine's other objects raise "<Name>s can not be stored in a SharedTable"; threads, proxies, Enum,
 //!   Enums and RotationCurveKeys are dropped (the key reads nil). nil removes the key.
+//! - A table is converted on the Lua stack above the call's own values (new's arguments, a write's object, key and value,
+//!   update's arguments and its callback's result): a table inside another sits two slots above it (its key below it), in an
+//!   array as in a dictionary, and one that would sit above slot 300 raises "Max lua stack size reached", without a position,
+//!   once it is known not to close a cycle (a cycle that closes there raises the cyclic message). So `new(t)` takes tables
+//!   nested 150 deep and a write 149 ([`STACK_LIMIT`], measured with arrays and dictionaries; the outermost table is never
+//!   refused). SharedTables already made are kept as themselves and add no depth.
 //! - A write checks the key, then whether the table is frozen ("SharedTable is frozen"), then the value. Only the key's errors
 //!   and the library's argument errors carry the script's position.
 //! - `for k, v in S` walks the entries as they were when the loop started: the integer keys ascending, then the string keys in
@@ -26,54 +32,75 @@
 //! Where the contents live: in the engine, as Roblox keeps them in its own (numbers, booleans, vectors, strings and buffers as
 //! data, the value types the engine has values for as those, a SharedTable it holds as a shared reference), and the userdata
 //! is a handle, one per SharedTable while a script holds it (so `S.t == S.t`). A SharedTable holds none of mlua's reference
-//! slots (lua/refs.rs). A shallow copy shares its entries with the table it was made from until either is written (copy on
-//! write), so it takes the same time at any size, as Roblox's does. The value types the engine has no value for (Ray, Axes, TweenInfo, the keypoints, ...) wait in one
-//! engine table, a slot each, freed once no SharedTable holds them. A SharedTable that holds itself is never freed, while its
-//! handle is: measured, a client collected the handles of 300 SharedTables that held themselves and their 300 MB of buffers
-//! stayed (plain ones gave theirs back).
+//! slots (lua/refs.rs). The entries are a persistent hash trie, as in Roblox ([`Trie`]): a shallow copy shares it, and a write
+//! copies only the nodes on its path that a copy shares, so a shallow copy, and a write right after one, take the same time at
+//! any size (measured: 0.2 to 1.3 us for the first write after cloning 10, 1,000 or 10,000 entries). The value types the
+//! engine has no value for (Ray, Axes, TweenInfo, the keypoints, ...) wait in one engine table, a slot each, freed once no
+//! SharedTable holds them. A SharedTable that holds itself is kept, while its handle is not: measured, a client collected the
+//! handles of 300 SharedTables that held themselves and their 300 MB of buffers stayed (plain ones gave theirs back). Here it is
+//! kept until the engine's end, which empties every SharedTable still alive ([`Store`]'s drop). However long a chain of
+//! SharedTables a script builds (each holding the next), letting go of it and deep-copying it walk the chain in a loop, never
+//! a call nested once a link (Studio deep-copies a chain 1,000 long).
 //!
 //! What their calls cost the work clock: cost.rs [`crate::cost::SHARED_NEW_STRING_ENTRY`] and the prices after it.
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::cmp::Ordering;
 use std::ffi::c_void;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use mlua::prelude::*;
 use rustc_hash::FxHashMap;
 
+use super::bindable::{STACK_FULL, STACK_LIMIT};
 use super::{Args, Flow, convert, lock_metatable, none, raise, raise_at_caller, raw, typeof_value, values, wrapped};
 use crate::{Engine, cost, value::Value};
 
 /// A SharedTable as a script holds it: a handle to its contents.
 pub struct LSharedTable(Rc<Shared>);
 
-/// A SharedTable: whether it is frozen, and its entries, which the shallow copies made of it share until either is written.
-/// Its identity is this allocation.
+/// A SharedTable: whether it is frozen, and its entries, whose nodes the copies made of it share. Its identity is this
+/// allocation.
 struct Shared {
     frozen: Cell<bool>,
-    entries: RefCell<Rc<Entries>>,
+    entries: RefCell<Entries>,
 }
 
 impl Shared {
     fn new(entries: Entries, frozen: bool) -> Rc<Shared> {
-        Rc::new(Shared { frozen: Cell::new(frozen), entries: RefCell::new(Rc::new(entries)) })
+        Rc::new(Shared { frozen: Cell::new(frozen), entries: RefCell::new(entries) })
     }
 
     fn is_frozen(&self) -> bool {
         self.frozen.get()
     }
+}
 
-    /// The entries, to change: copied first while a shallow copy shares them.
-    fn entries_mut(&self) -> std::cell::RefMut<'_, Entries> {
-        std::cell::RefMut::map(self.entries.borrow_mut(), Rc::make_mut)
+impl Drop for Shared {
+    fn drop(&mut self) {
+        release(std::mem::take(self.entries.get_mut()));
+    }
+}
+
+/// Lets go of `entries` one SharedTable at a time: a SharedTable they were the last to hold is emptied in turn here, not
+/// dropped inside this drop, so a chain of any length (each holding the next) never nests a drop once a link.
+fn release(entries: Entries) {
+    let mut pending = vec![entries];
+    while let Some(entries) = pending.pop() {
+        entries.drain(&mut |value| {
+            if let Stored::Shared(shared) = value
+                && let Some(mut shared) = Rc::into_inner(shared)
+            {
+                pending.push(std::mem::take(shared.entries.get_mut()));
+            }
+        });
     }
 }
 
 #[derive(Clone, Default)]
 struct Entries {
-    numbers: BTreeMap<u32, Stored>,
-    strings: FxHashMap<Rc<[u8]>, Stored>,
+    numbers: Trie<u32>,
+    strings: Trie<Rc<[u8]>>,
 }
 
 /// A value as a SharedTable holds it.
@@ -102,40 +129,310 @@ impl Entries {
     fn get(&self, key: &Key) -> Option<&Stored> {
         match key {
             Key::Number(n) => self.numbers.get(n),
-            Key::String(s) => self.strings.get(&**s),
+            Key::String(s) => self.strings.get(s),
         }
     }
 
-    fn set(&mut self, key: Key, value: Option<Stored>) {
+    /// Sets the entry at `key` (None removes it): the value it replaces, for the caller to drop once it has let go of the
+    /// entries.
+    fn set(&mut self, key: Key, value: Option<Stored>) -> Option<Stored> {
         match (key, value) {
-            (Key::Number(n), Some(value)) => {
-                self.numbers.insert(n, value);
-            }
-            (Key::String(s), Some(value)) => {
-                self.strings.insert(s, value);
-            }
-            (Key::Number(n), None) => {
-                self.numbers.remove(&n);
-            }
-            (Key::String(s), None) => {
-                self.strings.remove(&*s);
-            }
+            (Key::Number(n), Some(value)) => self.numbers.insert(n, value),
+            (Key::String(s), Some(value)) => self.strings.insert(s, value),
+            (Key::Number(n), None) => self.numbers.remove(&n),
+            (Key::String(s), None) => self.strings.remove(&s),
         }
     }
 
     fn len(&self) -> usize {
-        self.numbers.len() + self.strings.len()
+        self.numbers.len + self.strings.len
     }
 
-    /// The entries in the order a loop walks them.
+    /// The entries in the order a loop walks them: the integer keys ascending, then the string keys in Roblox's order.
     fn ordered(&self) -> Vec<(Key, Stored)> {
-        let mut entries: Vec<(Key, Stored)> = self.numbers.iter().map(|(n, value)| (Key::Number(*n), value.clone())).collect();
-        for key in string_order(self.strings.keys().map(|key| &**key).collect()) {
-            if let Some((key, value)) = self.strings.get_key_value(key) {
-                entries.push((Key::String(key.clone()), value.clone()));
+        let mut numbers = Vec::with_capacity(self.numbers.len);
+        self.numbers.walk(&mut numbers);
+        let mut strings = Vec::with_capacity(self.strings.len);
+        self.strings.walk(&mut strings);
+        numbers.into_iter().map(|(n, value)| (Key::Number(n), value)).chain(strings.into_iter().map(|(s, value)| (Key::String(s), value))).collect()
+    }
+
+    /// The SharedTables held, by key.
+    fn tables(&self) -> Vec<(Key, Rc<Shared>)> {
+        let mut tables = Vec::new();
+        self.numbers.visit(&mut |n, value| {
+            if let Stored::Shared(shared) = value {
+                tables.push((Key::Number(*n), shared.clone()));
+            }
+        });
+        self.strings.visit(&mut |s, value| {
+            if let Stored::Shared(shared) = value {
+                tables.push((Key::String(s.clone()), shared.clone()));
+            }
+        });
+        tables
+    }
+
+    /// Every value of the nodes no other copy shares ([`Trie::drain`]).
+    fn drain(self, out: &mut impl FnMut(Stored)) {
+        self.numbers.drain(out);
+        self.strings.drain(out);
+    }
+}
+
+/// The keys of a [`Trie`]: the bits it branches on, five a level.
+trait TrieKey: Clone + PartialEq {
+    /// Whether a node walks its slots in order, entries and subnodes mixed (integers, which so come ascending), or its
+    /// entries first and then its subnodes (strings, as Roblox walks them)
+    const IN_ORDER: bool;
+    fn bits(&self) -> u64;
+    /// The slot of `bits` at `level`; None past the last level, where the keys left have equal bits
+    fn slot(bits: u64, level: u32) -> Option<u32>;
+    /// The order of keys with equal bits
+    fn order(&self, other: &Self) -> Ordering;
+}
+
+/// Integer keys branch on their own bits from the highest (two, then six levels of five), so walking the slots in order walks
+/// the integers ascending.
+impl TrieKey for u32 {
+    const IN_ORDER: bool = true;
+
+    fn bits(&self) -> u64 {
+        u64::from(*self)
+    }
+
+    fn slot(bits: u64, level: u32) -> Option<u32> {
+        match level {
+            0 => Some((bits >> 30) as u32 & 3),
+            1..=6 => Some((bits >> (30 - 5 * level)) as u32 & 31),
+            _ => None,
+        }
+    }
+
+    fn order(&self, other: &Self) -> Ordering {
+        self.cmp(other)
+    }
+}
+
+/// String keys branch on the 64-bit FNV-1a hash of their bytes, five bits a level from the lowest; a node's entries come
+/// before its subnodes. Measured: 299 random keys, 40 keys sharing a prefix, and keys after deletes and re-adds all came out in
+/// this order, whatever order they were added in. Keys whose hashes are equal (not measured) go by their bytes.
+impl TrieKey for Rc<[u8]> {
+    const IN_ORDER: bool = false;
+
+    fn bits(&self) -> u64 {
+        fnv1a(self)
+    }
+
+    fn slot(bits: u64, level: u32) -> Option<u32> {
+        (level * 5 < 64).then(|| (bits >> (5 * level)) as u32 & 31)
+    }
+
+    fn order(&self, other: &Self) -> Ordering {
+        (**self).cmp(&**other)
+    }
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3))
+}
+
+/// A persistent hash trie, as Roblox keeps a SharedTable's entries: a copy shares every node, and a write copies only the nodes
+/// on its path that another copy shares. It is canonical (a CHAMP): a key sits at the shallowest level where its slot is its
+/// own, whatever order keys came and went in, so the order it walks in is a function of its keys.
+#[derive(Clone)]
+struct Trie<K> {
+    root: Option<Rc<Node<K>>>,
+    len: usize,
+}
+
+impl<K> Default for Trie<K> {
+    fn default() -> Self {
+        Trie { root: None, len: 0 }
+    }
+}
+
+/// A node of a [`Trie`]: 32 slots, each empty, an entry or a subnode. Past the last level its entries have no slots and go by
+/// the keys' order.
+#[derive(Clone)]
+struct Node<K> {
+    entry_slots: u32,
+    node_slots: u32,
+    entries: Vec<(K, Stored)>,
+    nodes: Vec<Rc<Node<K>>>,
+}
+
+impl<K> Default for Node<K> {
+    fn default() -> Self {
+        Node { entry_slots: 0, node_slots: 0, entries: Vec::new(), nodes: Vec::new() }
+    }
+}
+
+/// Where the slot `bit` goes among the slots `slots` holds.
+fn below(slots: u32, bit: u32) -> usize {
+    (slots & (bit - 1)).count_ones() as usize
+}
+
+impl<K: TrieKey> Trie<K> {
+    fn get(&self, key: &K) -> Option<&Stored> {
+        let bits = key.bits();
+        let mut node = self.root.as_deref()?;
+        let mut level = 0;
+        loop {
+            let Some(slot) = K::slot(bits, level) else {
+                return node.entries.iter().find(|(other, _)| other == key).map(|(_, value)| value);
+            };
+            let bit = 1 << slot;
+            if node.entry_slots & bit != 0 {
+                let (other, value) = &node.entries[below(node.entry_slots, bit)];
+                return (other == key).then_some(value);
+            }
+            if node.node_slots & bit == 0 {
+                return None;
+            }
+            node = &node.nodes[below(node.node_slots, bit)];
+            level += 1;
+        }
+    }
+
+    /// Puts `value` at `key`: the value it replaces.
+    fn insert(&mut self, key: K, value: Stored) -> Option<Stored> {
+        let bits = key.bits();
+        let old = insert(self.root.get_or_insert_with(Rc::default), key, bits, value, 0);
+        if old.is_none() {
+            self.len += 1;
+        }
+        old
+    }
+
+    /// Takes `key` out: its value. Nothing is copied for a key the trie does not hold.
+    fn remove(&mut self, key: &K) -> Option<Stored> {
+        self.get(key)?;
+        let old = remove(self.root.as_mut()?, key, key.bits(), 0);
+        self.len -= 1;
+        if self.len == 0 {
+            self.root = None;
+        }
+        Some(old)
+    }
+
+    /// The entries in walk order.
+    fn walk(&self, out: &mut Vec<(K, Stored)>) {
+        if let Some(root) = &self.root {
+            walk(root, 0, out);
+        }
+    }
+
+    /// Every entry, in no particular order.
+    fn visit(&self, f: &mut impl FnMut(&K, &Stored)) {
+        let mut nodes: Vec<&Node<K>> = self.root.as_deref().into_iter().collect();
+        while let Some(node) = nodes.pop() {
+            for (key, value) in &node.entries {
+                f(key, value);
+            }
+            nodes.extend(node.nodes.iter().map(|node| &**node));
+        }
+    }
+
+    /// Every value of the nodes no other trie shares, handed to `out`; the nodes others share are only let go of. In a loop:
+    /// a drop never nests in a trie's levels.
+    fn drain(self, out: &mut impl FnMut(Stored)) {
+        let mut nodes: Vec<Rc<Node<K>>> = self.root.into_iter().collect();
+        while let Some(node) = nodes.pop() {
+            if let Some(node) = Rc::into_inner(node) {
+                for (_, value) in node.entries {
+                    out(value);
+                }
+                nodes.extend(node.nodes);
             }
         }
-        entries
+    }
+}
+
+/// [`Trie::insert`] at a node `level` deep (the node copied first when another trie shares it).
+fn insert<K: TrieKey>(node: &mut Rc<Node<K>>, key: K, bits: u64, value: Stored, level: u32) -> Option<Stored> {
+    let node = Rc::make_mut(node);
+    let Some(slot) = K::slot(bits, level) else {
+        return match node.entries.binary_search_by(|(other, _)| other.order(&key)) {
+            Ok(at) => Some(std::mem::replace(&mut node.entries[at].1, value)),
+            Err(at) => {
+                node.entries.insert(at, (key, value));
+                None
+            }
+        };
+    };
+    let bit = 1 << slot;
+    if node.entry_slots & bit != 0 {
+        let at = below(node.entry_slots, bit);
+        if node.entries[at].0 == key {
+            return Some(std::mem::replace(&mut node.entries[at].1, value));
+        }
+        // (two keys in one slot: a subnode for both, as many levels down as their slots stay the same)
+        let (other, other_value) = node.entries.remove(at);
+        node.entry_slots &= !bit;
+        let mut child = Rc::default();
+        let other_bits = other.bits();
+        insert(&mut child, other, other_bits, other_value, level + 1);
+        insert(&mut child, key, bits, value, level + 1);
+        node.nodes.insert(below(node.node_slots, bit), child);
+        node.node_slots |= bit;
+        return None;
+    }
+    if node.node_slots & bit != 0 {
+        let at = below(node.node_slots, bit);
+        return insert(&mut node.nodes[at], key, bits, value, level + 1);
+    }
+    node.entries.insert(below(node.entry_slots, bit), (key, value));
+    node.entry_slots |= bit;
+    None
+}
+
+/// [`Trie::remove`] at a node `level` deep, of a key the trie holds. A subnode left with one entry and no subnode gives the
+/// entry back to its parent, which keeps the trie canonical.
+fn remove<K: TrieKey>(node: &mut Rc<Node<K>>, key: &K, bits: u64, level: u32) -> Stored {
+    let node = Rc::make_mut(node);
+    let Some(slot) = K::slot(bits, level) else {
+        let at = node.entries.iter().position(|(other, _)| other == key).unwrap_or(0);
+        return node.entries.remove(at).1;
+    };
+    let bit = 1 << slot;
+    if node.entry_slots & bit != 0 {
+        node.entry_slots &= !bit;
+        return node.entries.remove(below(node.entry_slots, bit)).1;
+    }
+    let at = below(node.node_slots, bit);
+    let old = remove(&mut node.nodes[at], key, bits, level + 1);
+    if node.nodes[at].node_slots == 0 && node.nodes[at].entries.len() == 1 {
+        let child = node.nodes.remove(at);
+        node.node_slots &= !bit;
+        let entry = match Rc::try_unwrap(child) {
+            Ok(mut child) => child.entries.remove(0),
+            Err(child) => child.entries[0].clone(),
+        };
+        node.entries.insert(below(node.entry_slots, bit), entry);
+        node.entry_slots |= bit;
+    }
+    old
+}
+
+fn walk<K: TrieKey>(node: &Node<K>, level: u32, out: &mut Vec<(K, Stored)>) {
+    if K::IN_ORDER && K::slot(0, level).is_some() {
+        let (mut entries, mut nodes) = (node.entries.iter(), node.nodes.iter());
+        for slot in 0..32 {
+            let bit = 1u32 << slot;
+            if node.entry_slots & bit != 0 {
+                out.extend(entries.next().cloned());
+            } else if node.node_slots & bit != 0
+                && let Some(child) = nodes.next()
+            {
+                walk(child, level + 1, out);
+            }
+        }
+    } else {
+        out.extend(node.entries.iter().cloned());
+        for child in &node.nodes {
+            walk(child, level + 1, out);
+        }
     }
 }
 
@@ -154,17 +451,48 @@ impl Drop for PoolSlot {
     }
 }
 
-/// The engine's part of every SharedTable: the handles (a weak-valued table, one per SharedTable while a script holds it) and
-/// the pool of the values the engine has no value of its own for.
+/// The engine's part of every SharedTable: the handles (a weak-valued table, one per SharedTable while a script holds it), the
+/// pool of the values the engine has no value of its own for, and every SharedTable made, to empty those still alive at the
+/// engine's end.
 struct Store {
     handles: LuaTable,
     pool: LuaTable,
     released: Rc<RefCell<Vec<u32>>>,
     free: RefCell<Vec<u32>>,
     next: Cell<u32>,
+    tables: RefCell<Vec<Weak<Shared>>>,
+    /// How long `tables` may grow before those let go of are taken out
+    tables_kept: Cell<usize>,
+}
+
+/// The engine's end (its VM closing): every SharedTable still alive is emptied, so one that holds itself, which a session keeps
+/// as Roblox's does, does not outlive the engine with what it holds (a host running engine after engine gets it back).
+impl Drop for Store {
+    fn drop(&mut self) {
+        for table in std::mem::take(self.tables.get_mut()) {
+            if let Some(table) = table.upgrade()
+                && let Ok(mut entries) = table.entries.try_borrow_mut()
+            {
+                let entries = std::mem::take(&mut *entries);
+                release(entries);
+            }
+        }
+    }
 }
 
 impl Store {
+    /// A new SharedTable, listed for the engine's end.
+    fn table(&self, entries: Entries, frozen: bool) -> Rc<Shared> {
+        let shared = Shared::new(entries, frozen);
+        let mut tables = self.tables.borrow_mut();
+        if tables.len() >= self.tables_kept.get() {
+            tables.retain(|table| table.strong_count() > 0);
+            self.tables_kept.set((tables.len() * 2).max(1024));
+        }
+        tables.push(Rc::downgrade(&shared));
+        shared
+    }
+
     fn put(&self, value: LuaValue) -> LuaResult<Rc<PoolSlot>> {
         // (what was let go: taken out before any Lua runs, which may collect and let go of more)
         let released = std::mem::take(&mut *self.released.borrow_mut());
@@ -212,8 +540,8 @@ impl Tally {
     }
 
     fn count_entries(&mut self, entries: &Entries) {
-        self.integers += entries.numbers.len() as u64;
-        self.strings += entries.strings.len() as u64;
+        self.integers += entries.numbers.len as u64;
+        self.strings += entries.strings.len as u64;
     }
 
     /// What converting the counted entries costs (SharedTable.new from a table, or a table written to a key).
@@ -273,9 +601,28 @@ fn refused<T>(name: &str) -> Result<T, Flow> {
     raise(format!("{name}s can not be stored in a SharedTable"))
 }
 
-/// What a SharedTable holds for `value` (None: no entry). `open` holds the tables being converted, to find a cycle; `tally`
-/// counts the entries converted.
-fn stored(lua: &Lua, engine: &Engine, store: &Store, value: &LuaValue, open: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Stored>, Flow> {
+/// How far above a table one inside it sits on the Lua stack while it is converted: its key and itself, in an array as in a
+/// dictionary (measured: `new` takes arrays and dictionaries alike nested 150 deep).
+const NESTED: usize = 2;
+
+/// How a value is being converted: the stack slot a table found sits at ([`converted`]), the tables open around it (to find a
+/// cycle), and the entries converted so far (for the price).
+struct Conversion {
+    height: usize,
+    open: Vec<*const c_void>,
+    tally: Tally,
+}
+
+impl Conversion {
+    /// A conversion from the call's frame: `height` values on the stack (`new`'s arguments; a write's object, key and value;
+    /// `update`'s arguments and its callback's result), the outermost table at the top of them.
+    fn new(height: usize) -> Conversion {
+        Conversion { height, open: Vec::new(), tally: Tally::default() }
+    }
+}
+
+/// What a SharedTable holds for `value` (None: no entry), a table converted as [`converted`] says.
+fn stored(lua: &Lua, engine: &Engine, store: &Store, value: &LuaValue, conversion: &mut Conversion) -> Result<Option<Stored>, Flow> {
     Ok(Some(match value {
         LuaValue::Nil | LuaValue::Thread(_) | LuaValue::LightUserData(_) | LuaValue::Error(_) | LuaValue::Other(_) => return Ok(None),
         LuaValue::Boolean(b) => Stored::Boolean(*b),
@@ -285,7 +632,7 @@ fn stored(lua: &Lua, engine: &Engine, store: &Store, value: &LuaValue, open: &mu
         LuaValue::String(s) => Stored::String(s.as_bytes().to_vec().into()),
         LuaValue::Buffer(buffer) => Stored::Buffer(buffer.to_vec().into()),
         LuaValue::Function(_) => return refused("Function"),
-        LuaValue::Table(table) => Stored::Shared(converted(lua, engine, store, table, open, tally)?),
+        LuaValue::Table(table) => Stored::Shared(converted(lua, engine, store, table, conversion)?),
         LuaValue::UserData(ud) => {
             if let Ok(handle) = ud.borrow::<LSharedTable>() {
                 return Ok(Some(Stored::Shared(handle.0.clone())));
@@ -308,24 +655,31 @@ fn stored(lua: &Lua, engine: &Engine, store: &Store, value: &LuaValue, open: &mu
     }))
 }
 
-/// A table as a new SharedTable (its own tables converted too), its entries counted in `tally` as they go (also those walked
-/// before a failure).
-fn converted(lua: &Lua, engine: &Engine, store: &Store, table: &LuaTable, open: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Rc<Shared>, Flow> {
+/// A table as a new SharedTable (its own tables converted too), its entries counted as they go (also those walked before a
+/// failure). A table inside another sits [`NESTED`] slots above it; one that is already open closes a cycle, and otherwise one
+/// above [`STACK_LIMIT`] is too deep (in that order, measured: a cycle closing at the limit raises the cyclic message). The
+/// outermost table is never refused.
+fn converted(lua: &Lua, engine: &Engine, store: &Store, table: &LuaTable, conversion: &mut Conversion) -> Result<Rc<Shared>, Flow> {
     let pointer = table.to_pointer();
-    if open.contains(&pointer) {
+    if conversion.open.contains(&pointer) {
         return raise(CYCLIC);
     }
-    open.push(pointer);
+    if !conversion.open.is_empty() && conversion.height > STACK_LIMIT {
+        return raise(STACK_FULL);
+    }
+    conversion.open.push(pointer);
+    conversion.height += NESTED;
     let mut entries = Entries::default();
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, value) = pair?;
         let key = key_of(&key)?;
-        tally.count(&key);
-        let value = stored(lua, engine, store, &value, open, tally)?;
+        conversion.tally.count(&key);
+        let value = stored(lua, engine, store, &value, conversion)?;
         entries.set(key, value);
     }
-    open.pop();
-    Ok(Shared::new(entries, false))
+    conversion.height -= NESTED;
+    conversion.open.pop();
+    Ok(store.table(entries, false))
 }
 
 fn load(lua: &Lua, engine: &Engine, store: &Store, stored: &Stored) -> LuaResult<LuaValue> {
@@ -341,68 +695,38 @@ fn load(lua: &Lua, engine: &Engine, store: &Store, stored: &Stored) -> LuaResult
     })
 }
 
-/// A copy of `shared`, frozen or not. A shallow one shares its entries until either table is written (copy on write); a deep
-/// one copies them and the SharedTables they hold as well (`copies`: those copied so far, so a table held twice, or holding
-/// itself, is copied once), counting their entries and themselves in `tally`.
-fn copy(shared: &Rc<Shared>, deep: bool, frozen: bool, copies: &mut FxHashMap<*const Shared, Rc<Shared>>, tally: &mut Tally) -> Rc<Shared> {
+/// A copy of `shared`, frozen or not. A shallow one shares its entries' trie (a write to either copies only its path); a deep
+/// one copies the SharedTables they hold as well, each once (a table held twice, or holding itself, is copied once), counting
+/// their entries and the tables in `tally`. A deep copy walks the tables with a stack of its own, so a chain of any length
+/// never nests a call once a link.
+fn copy(store: &Store, shared: &Rc<Shared>, deep: bool, frozen: bool, tally: &mut Tally) -> Rc<Shared> {
+    let result = store.table(shared.entries.borrow().clone(), frozen);
     if !deep {
-        return Rc::new(Shared { frozen: Cell::new(frozen), entries: RefCell::new(shared.entries.borrow().clone()) });
+        return result;
     }
-    if let Some(done) = copies.get(&Rc::as_ptr(shared)) {
-        return done.clone();
-    }
-    let result = Shared::new(Entries::default(), frozen);
+    let mut copies: FxHashMap<*const Shared, Rc<Shared>> = FxHashMap::default();
     copies.insert(Rc::as_ptr(shared), result.clone());
-    let mut entries = (**shared.entries.borrow()).clone();
-    tally.count_entries(&entries);
-    for value in entries.numbers.values_mut().chain(entries.strings.values_mut()) {
-        if let Stored::Shared(inner) = value {
+    let mut pending = vec![result.clone()];
+    while let Some(copied) = pending.pop() {
+        // (its entries are still the original's, shared: each SharedTable among them is swapped for its copy)
+        let mut entries = copied.entries.borrow().clone();
+        tally.count_entries(&entries);
+        for (key, inner) in entries.tables() {
             tally.tables += 1;
-            *value = Stored::Shared(copy(inner, true, frozen, copies, tally));
+            let inner_copy = copies
+                .entry(Rc::as_ptr(&inner))
+                .or_insert_with(|| {
+                    let inner_copy = store.table(inner.entries.borrow().clone(), frozen);
+                    pending.push(inner_copy.clone());
+                    inner_copy
+                })
+                .clone();
+            entries.set(key, Some(Stored::Shared(inner_copy)));
         }
+        let original = copied.entries.replace(entries);
+        drop(original);
     }
-    *result.entries.borrow_mut() = Rc::new(entries);
     result
-}
-
-/// The order Roblox's SharedTable walks its string keys: a CHAMP trie keyed by the 64-bit FNV-1a hash of the key's bytes, five
-/// bits a level from the lowest, a node's own entries before its subnodes (both by those five bits). Measured: 299 random keys,
-/// 40 keys sharing a prefix, and keys after deletes and re-adds all came out in this order, whatever order they were added in.
-fn string_order(keys: Vec<&[u8]>) -> Vec<&[u8]> {
-    let mut hashed: Vec<(u64, &[u8])> = keys.into_iter().map(|key| (fnv1a(key), key)).collect();
-    let mut order = Vec::with_capacity(hashed.len());
-    walk(&mut hashed, 0, &mut order);
-    order
-}
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3))
-}
-
-fn walk<'a>(group: &mut [(u64, &'a [u8])], level: u32, order: &mut Vec<&'a [u8]>) {
-    if group.len() <= 1 || level * 5 >= 64 {
-        // (one key, or keys whose 64-bit hashes are equal: not measured, by their bytes)
-        group.sort_by(|a, b| a.1.cmp(b.1));
-        order.extend(group.iter().map(|(_, key)| *key));
-        return;
-    }
-    let slot = |hash: u64| (hash >> (5 * level)) & 31;
-    group.sort_by_key(|(hash, _)| slot(*hash));
-    let mut branches = Vec::new();
-    let mut start = 0;
-    while start < group.len() {
-        let at = slot(group[start].0);
-        let end = start + group[start..].iter().take_while(|(hash, _)| slot(*hash) == at).count();
-        if end - start == 1 {
-            order.push(group[start].1);
-        } else {
-            branches.push(start..end);
-        }
-        start = end;
-    }
-    for range in branches {
-        walk(&mut group[range], level + 1, order);
-    }
 }
 
 /// The script-facing name of argument `index` (0-based) for an argument error: "no value" when it was not passed.
@@ -445,11 +769,13 @@ fn read(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: &Key) -
 
 /// Writes `value` at `key` (the key already checked, the table not frozen). A table written is converted at `new`'s price,
 /// also for the entries walked before a conversion fails.
-fn write(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: Key, value: &LuaValue) -> Result<(), Flow> {
-    let mut tally = Tally::default();
-    let value = stored(lua, engine, store, value, &mut Vec::new(), &mut tally);
-    charge(engine, tally.converted_price());
-    shared.entries_mut().set(key, value?);
+/// `height`: the values on the stack below it ([`Conversion::new`]).
+fn write(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: Key, value: &LuaValue, height: usize) -> Result<(), Flow> {
+    let mut conversion = Conversion::new(height);
+    let value = stored(lua, engine, store, value, &mut conversion);
+    charge(engine, conversion.tally.converted_price());
+    let replaced = shared.entries.borrow_mut().set(key, value?);
+    drop(replaced);
     Ok(())
 }
 
@@ -470,7 +796,8 @@ fn update(lua: &Lua, engine: &Engine, store: &Store, pcall: &LuaFunction, args: 
     if !succeeded {
         return Ok(values([LuaValue::Boolean(true), first, LuaValue::Integer(0)]));
     }
-    write(lua, engine, store, &shared, key, &first)?;
+    // (the result is converted above update's arguments)
+    write(lua, engine, store, &shared, key, &first, args.len() + 1)?;
     Ok(values([LuaValue::Boolean(false)]))
 }
 
@@ -491,7 +818,7 @@ fn increment(engine: &Engine, args: &Args) -> Result<LuaMultiValue, Flow> {
         Some(Stored::Number(n)) => *n,
         Some(_) => return raise(format!("Unable to increment the value for key \"{}\" because it is not a number value.", key_text(&key))),
     };
-    shared.entries_mut().set(key, Some(Stored::Number(old + delta)));
+    shared.entries.borrow_mut().set(key, Some(Stored::Number(old + delta)));
     // (what Studio spent on it: cost.rs)
     let state = engine.state.borrow();
     state.sched.charge(cost::SHARED_INCREMENT);
@@ -503,8 +830,8 @@ fn increment(engine: &Engine, args: &Args) -> Result<LuaMultiValue, Flow> {
 
 const UPDATE_WRAPPER: &str = r#"
 local Update = ...
-return function(Value, Key, Callback)
-	local Failed, Problem, Level = Update(Value, Key, Callback)
+return function(...)
+	local Failed, Problem, Level = Update(...)
 	if Failed then
 		error(Problem, if Level == 1 then 2 else 0)
 	end
@@ -517,7 +844,15 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let weak = lua.create_table()?;
     weak.raw_set("__mode", "v")?;
     handles.set_metatable(Some(weak))?;
-    let store = Rc::new(Store { handles, pool: lua.create_table()?, released: Rc::default(), free: RefCell::default(), next: Cell::new(0) });
+    let store = Rc::new(Store {
+        handles,
+        pool: lua.create_table()?,
+        released: Rc::default(),
+        free: RefCell::default(),
+        next: Cell::new(0),
+        tables: RefCell::default(),
+        tables_kept: Cell::new(1024),
+    });
 
     let (e, s) = (engine.clone(), store.clone());
     let index = wrapped(lua, engine, move |lua, args| {
@@ -534,7 +869,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         if shared.is_frozen() {
             return raise(FROZEN);
         }
-        write(lua, &e, &s, &shared, key, args.get(2))?;
+        write(lua, &e, &s, &shared, key, args.get(2), 3)?;
         Ok(none())
     })?;
     let (e, s) = (engine.clone(), store.clone());
@@ -569,12 +904,12 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
             let shared = match args.get(0) {
-                _ if args.is_empty() => Shared::new(Entries::default(), false),
+                _ if args.is_empty() => s.table(Entries::default(), false),
                 LuaValue::Table(table) => {
                     // (charged for what it walked, also when the table fails partway)
-                    let mut tally = Tally::default();
-                    let shared = converted(lua, &e, &s, table, &mut Vec::new(), &mut tally);
-                    charge(&e, tally.converted_price());
+                    let mut conversion = Conversion::new(args.len());
+                    let shared = converted(lua, &e, &s, table, &mut conversion);
+                    charge(&e, conversion.tally.converted_price());
                     shared?
                 }
                 _ => return raise_at_caller(format!("invalid argument #1 to 'new' (table expected, got {})", arg_type(&e, &args, 0))),
@@ -591,7 +926,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let shared = shared_arg(&e, &args, 0, name)?;
                 let deep = deep_arg(&e, &args, name)?;
                 let mut tally = Tally::default();
-                let copied = copy(&shared, deep, frozen, &mut FxHashMap::default(), &mut tally);
+                let copied = copy(&s, &shared, deep, frozen, &mut tally);
                 // (a shallow copy shares the entries, and costs Studio the same at any size: only the call)
                 charge(
                     &e,
@@ -617,8 +952,8 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 return raise(FROZEN);
             }
             // (taken out first: what it held may let go of a pool slot)
-            let cleared = shared.entries.replace(Rc::default());
-            drop(cleared);
+            let cleared = shared.entries.take();
+            release(cleared);
             Ok(none())
         })?,
     )?;
@@ -643,23 +978,285 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use rustc_hash::FxHashSet;
+
     use super::*;
 
-    /// A shallow copy shares its table's entries (no per-entry work) until either side is written, and then only that side
-    /// changes; the frozen flags are each their own.
-    #[test]
-    fn a_shallow_copy_shares_the_entries_until_a_write() {
-        let mut entries = Entries::default();
-        for n in 0..1000 {
-            entries.set(Key::Number(n), Some(Stored::Number(f64::from(n))));
+    /// The order Roblox walks string keys, worked out from the keys alone (measured: [`TrieKey`] for strings): sorted by their
+    /// slot level by level, a level's lone keys before its groups. The trie must walk in this order after any writes.
+    fn string_order(keys: Vec<&[u8]>) -> Vec<&[u8]> {
+        fn group_order<'a>(group: &mut [(u64, &'a [u8])], level: u32, order: &mut Vec<&'a [u8]>) {
+            if group.len() <= 1 || level * 5 >= 64 {
+                group.sort_by(|a, b| a.1.cmp(b.1));
+                order.extend(group.iter().map(|(_, key)| *key));
+                return;
+            }
+            let slot = |hash: u64| (hash >> (5 * level)) & 31;
+            group.sort_by_key(|(hash, _)| slot(*hash));
+            let mut groups = Vec::new();
+            let mut start = 0;
+            while start < group.len() {
+                let at = slot(group[start].0);
+                let end = start + group[start..].iter().take_while(|(hash, _)| slot(*hash) == at).count();
+                if end - start == 1 {
+                    order.push(group[start].1);
+                } else {
+                    groups.push(start..end);
+                }
+                start = end;
+            }
+            for range in groups {
+                group_order(&mut group[range], level + 1, order);
+            }
         }
-        let shared = Shared::new(entries, false);
-        let copied = copy(&shared, false, true, &mut FxHashMap::default(), &mut Tally::default());
-        assert!(Rc::ptr_eq(&*shared.entries.borrow(), &*copied.entries.borrow()));
-        assert!(copied.is_frozen() && !shared.is_frozen());
-        shared.entries_mut().set(Key::Number(0), Some(Stored::Boolean(true)));
-        assert!(!Rc::ptr_eq(&*shared.entries.borrow(), &*copied.entries.borrow()));
-        assert!(matches!(copied.entries.borrow().get(&Key::Number(0)), Some(Stored::Number(n)) if *n == 0.0));
-        assert!(matches!(shared.entries.borrow().get(&Key::Number(0)), Some(Stored::Boolean(true))));
+        let mut hashed: Vec<(u64, &[u8])> = keys.into_iter().map(|key| (fnv1a(key), key)).collect();
+        let mut order = Vec::new();
+        group_order(&mut hashed, 0, &mut order);
+        order
+    }
+
+    fn number(stored: Option<&Stored>) -> Option<f64> {
+        match stored {
+            Some(Stored::Number(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
+    fn checked(entries: &Entries, numbers: &BTreeMap<u32, f64>, strings: &BTreeMap<Vec<u8>, f64>) {
+        assert_eq!((entries.numbers.len, entries.strings.len), (numbers.len(), strings.len()));
+        for (n, value) in numbers {
+            assert_eq!(number(entries.get(&Key::Number(*n))), Some(*value));
+        }
+        for (s, value) in strings {
+            assert_eq!(number(entries.get(&Key::String(s.as_slice().into()))), Some(*value));
+        }
+        let ordered = entries.ordered();
+        let walked_numbers: Vec<u32> = ordered.iter().filter_map(|(key, _)| if let Key::Number(n) = key { Some(*n) } else { None }).collect();
+        let walked_strings: Vec<&[u8]> = ordered.iter().filter_map(|(key, _)| if let Key::String(s) = key { Some(&**s) } else { None }).collect();
+        assert_eq!(walked_numbers, numbers.keys().copied().collect::<Vec<_>>());
+        assert_eq!(walked_strings, string_order(strings.keys().map(Vec::as_slice).collect()));
+    }
+
+    /// The trie holds what was written and walks in Roblox's order (the integers ascending, the strings as the keys alone give
+    /// it), after any order of writes, overwrites and removals.
+    #[test]
+    fn the_trie_walks_in_robloxs_order_after_any_writes() {
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut entries = Entries::default();
+        let (mut numbers, mut strings) = (BTreeMap::new(), BTreeMap::new());
+        for step in 0..20_000u32 {
+            let roll = next();
+            let value = f64::from(step);
+            let remove = roll % 3 == 0;
+            if roll & 16 == 0 {
+                let key = format!("k{}", (roll >> 8) % 3000).into_bytes();
+                if remove {
+                    entries.set(Key::String(key.as_slice().into()), None);
+                    strings.remove(&key);
+                } else {
+                    entries.set(Key::String(key.as_slice().into()), Some(Stored::Number(value)));
+                    strings.insert(key, value);
+                }
+            } else {
+                // (small integers, and ones spread over the whole range)
+                let key = if roll & 32 == 0 { ((roll >> 8) % 3000) as u32 } else { (roll >> 32) as u32 };
+                if remove {
+                    entries.set(Key::Number(key), None);
+                    numbers.remove(&key);
+                } else {
+                    entries.set(Key::Number(key), Some(Stored::Number(value)));
+                    numbers.insert(key, value);
+                }
+            }
+            if step % 2500 == 0 {
+                checked(&entries, &numbers, &strings);
+            }
+        }
+        checked(&entries, &numbers, &strings);
+        // emptied one key at a time, it ends as it began
+        for key in numbers.keys().copied().collect::<Vec<_>>() {
+            entries.set(Key::Number(key), None);
+        }
+        for key in strings.keys().cloned().collect::<Vec<_>>() {
+            entries.set(Key::String(key.as_slice().into()), None);
+        }
+        assert!(entries.numbers.root.is_none() && entries.strings.root.is_none() && entries.len() == 0);
+    }
+
+    /// Keys whose bits are all equal share a list past the last level, by their order; when one is left, it moves back up.
+    #[test]
+    fn keys_with_equal_bits_share_a_list_and_leave_it_canonically() {
+        #[derive(Clone, PartialEq, Debug)]
+        struct Tiny(u8, u8);
+        impl TrieKey for Tiny {
+            const IN_ORDER: bool = false;
+            fn bits(&self) -> u64 {
+                u64::from(self.0)
+            }
+            fn slot(bits: u64, level: u32) -> Option<u32> {
+                match level {
+                    0 => Some(bits as u32 & 31),
+                    1 => Some((bits >> 5) as u32 & 7),
+                    _ => None,
+                }
+            }
+            fn order(&self, other: &Self) -> Ordering {
+                self.1.cmp(&other.1)
+            }
+        }
+        let mut trie = Trie::default();
+        for key in [Tiny(1, 5), Tiny(33, 0), Tiny(1, 9), Tiny(1, 3)] {
+            trie.insert(key, Stored::Boolean(true));
+        }
+        let walked = |trie: &Trie<Tiny>| {
+            let mut out = Vec::new();
+            trie.walk(&mut out);
+            out.into_iter().map(|(key, _)| key).collect::<Vec<_>>()
+        };
+        // (1 and 33 share slot 1 at the first level; 33 has the second level's slot 1 alone, the ones share slot 0 and then a list)
+        assert_eq!(walked(&trie), [Tiny(33, 0), Tiny(1, 3), Tiny(1, 5), Tiny(1, 9)]);
+        assert!(trie.get(&Tiny(1, 9)).is_some() && trie.get(&Tiny(1, 4)).is_none());
+        trie.remove(&Tiny(1, 3));
+        trie.remove(&Tiny(1, 9));
+        assert_eq!(walked(&trie), [Tiny(1, 5), Tiny(33, 0)]);
+        trie.remove(&Tiny(33, 0));
+        let root = trie.root.as_ref().unwrap();
+        assert!(root.nodes.is_empty() && root.entries.len() == 1 && root.entry_slots == 1 << 1);
+    }
+
+    fn nodes<K>(trie: &Trie<K>, out: &mut Vec<*const ()>) {
+        let mut pending: Vec<&Rc<Node<K>>> = trie.root.iter().collect();
+        while let Some(node) = pending.pop() {
+            out.push(Rc::as_ptr(node).cast());
+            pending.extend(&node.nodes);
+        }
+    }
+
+    fn all_nodes(entries: &Entries) -> Vec<*const ()> {
+        let mut out = Vec::new();
+        nodes(&entries.numbers, &mut out);
+        nodes(&entries.strings, &mut out);
+        out
+    }
+
+    /// A shallow copy shares every node of its table's trie; a write to it then copies only the nodes on the key's path, and
+    /// the table it was made from keeps its own entries.
+    #[test]
+    fn a_copy_shares_the_trie_and_a_write_copies_only_its_path() {
+        let mut entries = Entries::default();
+        for n in 0..10_000u32 {
+            entries.set(Key::Number(n), Some(Stored::Number(f64::from(n))));
+            entries.set(Key::String(format!("k{n}").into_bytes().into()), Some(Stored::Number(f64::from(n))));
+        }
+        let original = Shared::new(entries, false);
+        let copied = Shared::new(original.entries.borrow().clone(), true);
+        assert_eq!(all_nodes(&original.entries.borrow()), all_nodes(&copied.entries.borrow()));
+        copied.entries.borrow_mut().set(Key::Number(0), Some(Stored::Boolean(true)));
+        copied.entries.borrow_mut().set(Key::String(b"k0"[..].into()), None);
+        let shared: FxHashSet<*const ()> = all_nodes(&original.entries.borrow()).into_iter().collect();
+        let fresh = all_nodes(&copied.entries.borrow()).into_iter().filter(|node| !shared.contains(node)).count();
+        // (at most one node a level on each of the two paths: seven levels for integers, thirteen for strings)
+        assert!((2..=20).contains(&fresh), "{fresh} nodes copied");
+        assert_eq!(number(original.entries.borrow().get(&Key::Number(0))), Some(0.0));
+        assert_eq!(number(original.entries.borrow().get(&Key::String(b"k0"[..].into()))), Some(0.0));
+        assert!(matches!(copied.entries.borrow().get(&Key::Number(0)), Some(Stored::Boolean(true))));
+        assert!(copied.entries.borrow().get(&Key::String(b"k0"[..].into())).is_none());
+        assert_eq!((original.entries.borrow().len(), copied.entries.borrow().len()), (20_000, 19_999));
+        assert!(copied.is_frozen() && !original.is_frozen());
+    }
+
+    fn store(lua: &Lua) -> Store {
+        Store {
+            handles: lua.create_table().unwrap(),
+            pool: lua.create_table().unwrap(),
+            released: Rc::default(),
+            free: RefCell::default(),
+            next: Cell::new(0),
+            tables: RefCell::default(),
+            tables_kept: Cell::new(1024),
+        }
+    }
+
+    /// A chain of 300,000 SharedTables, each holding the next, is deep-copied and let go of in a loop: a call nested once a link
+    /// would overflow the thread's stack.
+    #[test]
+    fn a_long_chain_is_copied_and_let_go_of_in_a_loop() {
+        let lua = Lua::new();
+        let store = store(&lua);
+        let link: Rc<[u8]> = b"next"[..].into();
+        let mut head = store.table(Entries::default(), false);
+        for _ in 0..300_000 {
+            let mut entries = Entries::default();
+            entries.set(Key::String(link.clone()), Some(Stored::Shared(head)));
+            head = store.table(entries, false);
+        }
+        let mut tally = Tally::default();
+        let copied = copy(&store, &head, true, true, &mut tally);
+        assert_eq!((tally.tables, tally.strings), (300_000, 300_000));
+        let mut length = 0;
+        let mut at = copied.clone();
+        loop {
+            assert!(at.is_frozen());
+            let next = match at.entries.borrow().get(&Key::String(link.clone())) {
+                Some(Stored::Shared(next)) => next.clone(),
+                _ => break,
+            };
+            assert!(!Rc::ptr_eq(&next, &head));
+            at = next;
+            length += 1;
+        }
+        assert_eq!(length, 300_000);
+        drop(at);
+        drop(copied);
+        drop(head);
+    }
+
+    /// A SharedTable that holds itself stays when nothing else does, as in Roblox, until the engine's end (its store's drop)
+    /// empties it, and it goes.
+    #[test]
+    fn the_engines_end_empties_a_table_that_holds_itself() {
+        let lua = Lua::new();
+        let store = store(&lua);
+        let table = store.table(Entries::default(), false);
+        table.entries.borrow_mut().set(Key::String(b"self"[..].into()), Some(Stored::Shared(table.clone())));
+        table.entries.borrow_mut().set(Key::String(b"bytes"[..].into()), Some(Stored::Buffer(vec![0; 1 << 20].into())));
+        let weak = Rc::downgrade(&table);
+        drop(table);
+        assert!(weak.upgrade().is_some());
+        drop(store);
+        assert!(weak.upgrade().is_none());
+    }
+
+    /// The same at a run's end: once the engine's VM closes and the engine is torn down (as an Emulator's drop does), a
+    /// SharedTable a script left holding itself is gone.
+    #[test]
+    fn a_runs_end_lets_go_of_a_table_that_holds_itself() {
+        let engine = crate::Engine::new(crate::Options::default()).expect("engine");
+        let lua = Lua::new();
+        crate::lua::start(&lua, &engine).expect("start");
+        let script = {
+            let mut state = engine.state.borrow_mut();
+            let class = engine.reflection.class_id("ModuleScript").expect("ModuleScript");
+            crate::instance::create_named(&mut state, &engine.reflection, class, "Test")
+        };
+        let env = crate::lua::modules::environment(&lua, &engine, script).expect("environment");
+        let source = "local S = SharedTable.new() S.self = S S.bytes = buffer.create(1048576) return S";
+        let handle: LuaAnyUserData = lua.load(source).set_environment(env).eval().expect("script");
+        let weak = Rc::downgrade(&handle.borrow::<LSharedTable>().expect("a SharedTable").0);
+        drop(handle);
+        lua.gc_collect().expect("collect");
+        lua.gc_collect().expect("collect");
+        assert!(weak.upgrade().is_some(), "a SharedTable that holds itself stays for the session");
+        drop(lua);
+        engine.teardown();
+        assert!(weak.upgrade().is_none(), "the run's end let go of it");
     }
 }
