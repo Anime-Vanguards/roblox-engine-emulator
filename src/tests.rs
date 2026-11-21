@@ -7202,6 +7202,16 @@ fn the_shared_table_library_follows_roblox() {
         Fails("invalid argument #1 to 'size' (SharedTable expected, got string)", Any.size, "x")
         Fails("invalid argument #1 to 'isFrozen' (SharedTable expected, got table)", Any.isFrozen, {})
         Fails("SharedTable is frozen", SharedTable.clear, Frozen)
+        -- a shallow copy and its table each see only their own writes, clear and increment
+        local Base = SharedTable.new({ n = 1, t = { 1 } })
+        local Copy, FrozenCopy = SharedTable.clone(Base), SharedTable.cloneAndFreeze(Base)
+        Base.n = 2
+        Copy.x = 1
+        assert(Copy.n == 1 and FrozenCopy.n == 1 and Base.x == nil and Base.n == 2 and Copy.t == Base.t)
+        assert(not SharedTable.isFrozen(Base) and SharedTable.isFrozen(FrozenCopy) and not SharedTable.isFrozen(Copy))
+        SharedTable.clear(Copy)
+        SharedTable.increment(Base, "n", 1)
+        assert(SharedTable.size(Copy) == 0 and SharedTable.size(Base) == 2 and Base.n == 3 and FrozenCopy.n == 1)
         local C = SharedTable.new({ a = 1, b = 2 })
         SharedTable.clear(C)
         assert(SharedTable.size(C) == 0)
@@ -7332,8 +7342,9 @@ fn a_shared_table_that_holds_itself_lets_its_handle_go() {
 }
 
 /// SharedTable's bulk calls cost the work clock what they cost a playing client, by the entries they handle (Studio 0.748, cost.rs
-/// SHARED_NEW_STRING_ENTRY): new from 1,000 string-keyed entries 0.32 ms, a loop over them 36 us, a deep clone 10 us; a shallow
-/// clone the same at 1,000 entries as at 10.
+/// SHARED_NEW_STRING_ENTRY): new from 1,000 string-keyed entries 0.32 ms, and the same table written to a key as much, a loop over
+/// them 36 us, a deep clone 10 us; a shallow clone the same at 1,000 entries as at 10; a conversion that fails at its last entry
+/// what it walked.
 #[test]
 fn shared_table_bulk_calls_cost_what_studio_spent() {
     let (lua, engine) = start();
@@ -7364,10 +7375,20 @@ fn shared_table_bulk_calls_cost_what_studio_spent() {
         local Deep = Per(function(N) for _ = 1, N do SharedTable.clone(S, true) end end)
         local CloneBig = Per(function(N) for _ = 1, N do SharedTable.clone(S) end end)
         local CloneSmall = Per(function(N) for _ = 1, N do SharedTable.clone(T) end end)
+        local Target = SharedTable.new()
+        local Written = Per(function(N) for _ = 1, N do Target.k = Big end end)
+        local Failing = {}
+        for I = 1, 999 do
+            Failing[I] = I
+        end
+        Failing[1000] = print
+        local Failed = Per(function(N) for _ = 1, N do pcall(SharedTable.new, Failing) end end)
         assert(New > 280 and New < 380, "new from 1,000 entries (us): " .. New)
         assert(Loop > 30 and Loop < 45, "a loop over 1,000 entries (us): " .. Loop)
         assert(Deep > 8 and Deep < 14, "a deep clone of 1,000 entries (us): " .. Deep)
         assert(math.abs(CloneBig - CloneSmall) < 1, "a shallow clone at 1,000 and 10 entries (us): " .. CloneBig .. " " .. CloneSmall)
+        assert(Written > 280 and Written < 380, "1,000 entries written to a key (us): " .. Written)
+        assert(Failed > 150 and Failed < 250, "new failing at its 1,000th entry (us): " .. Failed)
         print("ok")
         "#,
     );

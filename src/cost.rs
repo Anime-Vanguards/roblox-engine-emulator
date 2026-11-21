@@ -1203,7 +1203,7 @@ pub const SHARED_INCREMENT: f64 = 0.37e-6;
 /// SharedTable's calls by the entries they handle, beyond the call (lua/shared_table.rs), in seconds. A playing client (Studio 0.748,
 /// os.clock over 10 to 10,000 entries, string and integer keys, two runs, fitted for the least relative error): SharedTable.new from a
 /// table 0.32 us an entry with a string key and 0.19 with an integer key (a nested table's entries counted alike: 1,000 one-entry tables
-/// took 0.71 ms); a deep clone or cloneAndFreeze 10 and 6 ns an entry and 0.52 us a SharedTable it copies; a loop 0.4 us to start and
+/// took 0.71 ms; a table written to a key converts at the same price, and a conversion that fails pays for what it walked); a deep clone or cloneAndFreeze 10 and 6 ns an entry and 0.52 us a SharedTable it copies; a loop 0.4 us to start and
 /// 37 and 29 ns an entry, of which the VM already charges each step's call (8 ns here), so 29 and 21 ns on top. A shallow clone, cloneAndFreeze, clear and size took 0.1 to 0.3 us at 10 entries as at 10,000 (Roblox shares
 /// the structure), so they cost only the call.
 pub const SHARED_NEW_STRING_ENTRY: f64 = 0.32e-6;

@@ -26,7 +26,8 @@
 //! Where the contents live: in the engine, as Roblox keeps them in its own (numbers, booleans, vectors, strings and buffers as
 //! data, the value types the engine has values for as those, a SharedTable it holds as a shared reference), and the userdata
 //! is a handle, one per SharedTable while a script holds it (so `S.t == S.t`). A SharedTable holds none of mlua's reference
-//! slots (lua/refs.rs). The value types the engine has no value for (Ray, Axes, TweenInfo, the keypoints, ...) wait in one
+//! slots (lua/refs.rs). A shallow copy shares its entries with the table it was made from until either is written (copy on
+//! write), so it takes the same time at any size, as Roblox's does. The value types the engine has no value for (Ray, Axes, TweenInfo, the keypoints, ...) wait in one
 //! engine table, a slot each, freed once no SharedTable holds them. A SharedTable that holds itself is never freed, while its
 //! handle is: measured, a client collected the handles of 300 SharedTables that held themselves and their 300 MB of buffers
 //! stayed (plain ones gave theirs back).
@@ -47,14 +48,32 @@ use crate::{Engine, cost, value::Value};
 /// A SharedTable as a script holds it: a handle to its contents.
 pub struct LSharedTable(Rc<Shared>);
 
-/// A SharedTable's contents; its identity is this allocation.
-struct Shared(RefCell<Contents>);
+/// A SharedTable: whether it is frozen, and its entries, which the shallow copies made of it share until either is written.
+/// Its identity is this allocation.
+struct Shared {
+    frozen: Cell<bool>,
+    entries: RefCell<Rc<Entries>>,
+}
+
+impl Shared {
+    fn new(entries: Entries, frozen: bool) -> Rc<Shared> {
+        Rc::new(Shared { frozen: Cell::new(frozen), entries: RefCell::new(Rc::new(entries)) })
+    }
+
+    fn is_frozen(&self) -> bool {
+        self.frozen.get()
+    }
+
+    /// The entries, to change: copied first while a shallow copy shares them.
+    fn entries_mut(&self) -> std::cell::RefMut<'_, Entries> {
+        std::cell::RefMut::map(self.entries.borrow_mut(), Rc::make_mut)
+    }
+}
 
 #[derive(Clone, Default)]
-struct Contents {
-    frozen: bool,
+struct Entries {
     numbers: BTreeMap<u32, Stored>,
-    strings: FxHashMap<Box<[u8]>, Stored>,
+    strings: FxHashMap<Rc<[u8]>, Stored>,
 }
 
 /// A value as a SharedTable holds it.
@@ -76,14 +95,14 @@ enum Stored {
 #[derive(Clone)]
 enum Key {
     Number(u32),
-    String(Box<[u8]>),
+    String(Rc<[u8]>),
 }
 
-impl Contents {
+impl Entries {
     fn get(&self, key: &Key) -> Option<&Stored> {
         match key {
             Key::Number(n) => self.numbers.get(n),
-            Key::String(s) => self.strings.get(s),
+            Key::String(s) => self.strings.get(&**s),
         }
     }
 
@@ -99,7 +118,7 @@ impl Contents {
                 self.numbers.remove(&n);
             }
             (Key::String(s), None) => {
-                self.strings.remove(&s);
+                self.strings.remove(&*s);
             }
         }
     }
@@ -112,7 +131,9 @@ impl Contents {
     fn ordered(&self) -> Vec<(Key, Stored)> {
         let mut entries: Vec<(Key, Stored)> = self.numbers.iter().map(|(n, value)| (Key::Number(*n), value.clone())).collect();
         for key in string_order(self.strings.keys().map(|key| &**key).collect()) {
-            entries.push((Key::String(key.into()), self.strings[key].clone()));
+            if let Some((key, value)) = self.strings.get_key_value(key) {
+                entries.push((Key::String(key.clone()), value.clone()));
+            }
         }
         entries
     }
@@ -190,14 +211,21 @@ impl Tally {
         }
     }
 
-    fn count_contents(&mut self, contents: &Contents) {
-        self.integers += contents.numbers.len() as u64;
-        self.strings += contents.strings.len() as u64;
+    fn count_entries(&mut self, entries: &Entries) {
+        self.integers += entries.numbers.len() as u64;
+        self.strings += entries.strings.len() as u64;
+    }
+
+    /// What converting the counted entries costs (SharedTable.new from a table, or a table written to a key).
+    fn converted_price(&self) -> f64 {
+        self.strings as f64 * cost::SHARED_NEW_STRING_ENTRY + self.integers as f64 * cost::SHARED_NEW_INTEGER_ENTRY
     }
 }
 
 fn charge(engine: &Engine, seconds: f64) {
-    engine.state.borrow().sched.charge(seconds);
+    if seconds > 0.0 {
+        engine.state.borrow().sched.charge(seconds);
+    }
 }
 
 const KEY_TYPE: &str = "SharedTable keys can only be strings or numbers.";
@@ -218,7 +246,7 @@ const DROPPED: &[&str] = &["Enum", "Enums", "RotationCurveKey", "userdata"];
 
 fn key_of(value: &LuaValue) -> Result<Key, Flow> {
     let number = match value {
-        LuaValue::String(s) => return Ok(Key::String(s.as_bytes().to_vec().into_boxed_slice())),
+        LuaValue::String(s) => return Ok(Key::String(s.as_bytes().to_vec().into())),
         LuaValue::Integer(n) => *n as f64,
         LuaValue::Number(n) => *n,
         _ => return raise_at_caller(KEY_TYPE),
@@ -280,23 +308,24 @@ fn stored(lua: &Lua, engine: &Engine, store: &Store, value: &LuaValue, open: &mu
     }))
 }
 
-/// A table as a new SharedTable (its own tables converted too).
+/// A table as a new SharedTable (its own tables converted too), its entries counted in `tally` as they go (also those walked
+/// before a failure).
 fn converted(lua: &Lua, engine: &Engine, store: &Store, table: &LuaTable, open: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Rc<Shared>, Flow> {
     let pointer = table.to_pointer();
     if open.contains(&pointer) {
         return raise(CYCLIC);
     }
     open.push(pointer);
-    let mut contents = Contents::default();
+    let mut entries = Entries::default();
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, value) = pair?;
         let key = key_of(&key)?;
         tally.count(&key);
         let value = stored(lua, engine, store, &value, open, tally)?;
-        contents.set(key, value);
+        entries.set(key, value);
     }
     open.pop();
-    Ok(Rc::new(Shared(RefCell::new(contents))))
+    Ok(Shared::new(entries, false))
 }
 
 fn load(lua: &Lua, engine: &Engine, store: &Store, stored: &Stored) -> LuaResult<LuaValue> {
@@ -312,26 +341,27 @@ fn load(lua: &Lua, engine: &Engine, store: &Store, stored: &Stored) -> LuaResult
     })
 }
 
-/// A copy of `shared`, frozen or not; a deep one copies the SharedTables it holds as well (`copies`: those copied so far, so a
-/// table held twice, or holding itself, is copied once), counting their entries and themselves in `tally`.
+/// A copy of `shared`, frozen or not. A shallow one shares its entries until either table is written (copy on write); a deep
+/// one copies them and the SharedTables they hold as well (`copies`: those copied so far, so a table held twice, or holding
+/// itself, is copied once), counting their entries and themselves in `tally`.
 fn copy(shared: &Rc<Shared>, deep: bool, frozen: bool, copies: &mut FxHashMap<*const Shared, Rc<Shared>>, tally: &mut Tally) -> Rc<Shared> {
+    if !deep {
+        return Rc::new(Shared { frozen: Cell::new(frozen), entries: RefCell::new(shared.entries.borrow().clone()) });
+    }
     if let Some(done) = copies.get(&Rc::as_ptr(shared)) {
         return done.clone();
     }
-    let result = Rc::new(Shared(RefCell::new(Contents::default())));
+    let result = Shared::new(Entries::default(), frozen);
     copies.insert(Rc::as_ptr(shared), result.clone());
-    let mut contents = shared.0.borrow().clone();
-    contents.frozen = frozen;
-    if deep {
-        tally.count_contents(&contents);
-        for value in contents.numbers.values_mut().chain(contents.strings.values_mut()) {
-            if let Stored::Shared(inner) = value {
-                tally.tables += 1;
-                *value = Stored::Shared(copy(inner, true, frozen, copies, tally));
-            }
+    let mut entries = (**shared.entries.borrow()).clone();
+    tally.count_entries(&entries);
+    for value in entries.numbers.values_mut().chain(entries.strings.values_mut()) {
+        if let Stored::Shared(inner) = value {
+            tally.tables += 1;
+            *value = Stored::Shared(copy(inner, true, frozen, copies, tally));
         }
     }
-    *result.0.borrow_mut() = contents;
+    *result.entries.borrow_mut() = Rc::new(entries);
     result
 }
 
@@ -407,16 +437,19 @@ fn deep_arg(engine: &Engine, args: &Args, function: &str) -> Result<bool, Flow> 
 
 /// The value at `key`, for a script.
 fn read(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: &Key) -> LuaResult<LuaValue> {
-    match shared.0.borrow().get(key) {
+    match shared.entries.borrow().get(key) {
         Some(stored) => load(lua, engine, store, stored),
         None => Ok(LuaValue::Nil),
     }
 }
 
-/// Writes `value` at `key` (the key already checked, the table not frozen).
+/// Writes `value` at `key` (the key already checked, the table not frozen). A table written is converted at `new`'s price,
+/// also for the entries walked before a conversion fails.
 fn write(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: Key, value: &LuaValue) -> Result<(), Flow> {
-    let value = stored(lua, engine, store, value, &mut Vec::new(), &mut Tally::default())?;
-    shared.0.borrow_mut().set(key, value);
+    let mut tally = Tally::default();
+    let value = stored(lua, engine, store, value, &mut Vec::new(), &mut tally);
+    charge(engine, tally.converted_price());
+    shared.entries_mut().set(key, value?);
     Ok(())
 }
 
@@ -426,7 +459,7 @@ fn update(lua: &Lua, engine: &Engine, store: &Store, pcall: &LuaFunction, args: 
     let shared = shared_arg(engine, args, 0, "update")?;
     let key = key_of(args.get(1))?;
     let LuaValue::Function(callback) = args.get(2) else { return raise("Third argument to SharedTable::Update should be a function.") };
-    if shared.0.borrow().frozen {
+    if shared.is_frozen() {
         return raise(FROZEN);
     }
     let old = read(lua, engine, store, &shared, &key)?;
@@ -445,7 +478,7 @@ fn update(lua: &Lua, engine: &Engine, store: &Store, pcall: &LuaFunction, args: 
 fn increment(engine: &Engine, args: &Args) -> Result<LuaMultiValue, Flow> {
     let shared = shared_arg(engine, args, 0, "increment")?;
     let key = key_of(args.get(1))?;
-    if shared.0.borrow().frozen {
+    if shared.is_frozen() {
         return raise(FROZEN);
     }
     let delta = match args.get(2) {
@@ -453,14 +486,12 @@ fn increment(engine: &Engine, args: &Args) -> Result<LuaMultiValue, Flow> {
         LuaValue::Number(n) => *n,
         _ => return raise("Variant cast failed"),
     };
-    let mut contents = shared.0.borrow_mut();
-    let old = match contents.get(&key) {
+    let old = match shared.entries.borrow().get(&key) {
         None => return raise(format!("Unable to increment the value for key \"{}\" because it does not exist in the SharedTable.", key_text(&key))),
         Some(Stored::Number(n)) => *n,
         Some(_) => return raise(format!("Unable to increment the value for key \"{}\" because it is not a number value.", key_text(&key))),
     };
-    contents.set(key, Some(Stored::Number(old + delta)));
-    drop(contents);
+    shared.entries_mut().set(key, Some(Stored::Number(old + delta)));
     // (what Studio spent on it: cost.rs)
     let state = engine.state.borrow();
     state.sched.charge(cost::SHARED_INCREMENT);
@@ -500,7 +531,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let args = Args::new(args);
         let shared = this(&args)?;
         let key = key_of(args.get(1))?;
-        if shared.0.borrow().frozen {
+        if shared.is_frozen() {
             return raise(FROZEN);
         }
         write(lua, &e, &s, &shared, key, args.get(2))?;
@@ -508,7 +539,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
     let (e, s) = (engine.clone(), store.clone());
     let iter = lua.create_function(move |lua, handle: LuaAnyUserData| {
-        let entries = handle.borrow::<LSharedTable>()?.0.0.borrow().ordered();
+        let entries = handle.borrow::<LSharedTable>()?.0.entries.borrow().ordered();
         let mut tally = Tally::default();
         for (key, _) in &entries {
             tally.count(key);
@@ -529,7 +560,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         registry.add_meta_field("__iter", iter);
         registry.add_meta_field("__tostring", tostring);
     })?;
-    lock_metatable(lua, &lua.create_any_userdata(LSharedTable(Rc::new(Shared(RefCell::default()))))?)?;
+    lock_metatable(lua, &lua.create_any_userdata(LSharedTable(Shared::new(Entries::default(), false)))?)?;
 
     let library = lua.create_table()?;
     let (e, s) = (engine.clone(), store.clone());
@@ -538,12 +569,13 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
             let shared = match args.get(0) {
-                _ if args.is_empty() => Rc::new(Shared(RefCell::default())),
+                _ if args.is_empty() => Shared::new(Entries::default(), false),
                 LuaValue::Table(table) => {
+                    // (charged for what it walked, also when the table fails partway)
                     let mut tally = Tally::default();
-                    let shared = converted(lua, &e, &s, table, &mut Vec::new(), &mut tally)?;
-                    charge(&e, tally.strings as f64 * cost::SHARED_NEW_STRING_ENTRY + tally.integers as f64 * cost::SHARED_NEW_INTEGER_ENTRY);
-                    shared
+                    let shared = converted(lua, &e, &s, table, &mut Vec::new(), &mut tally);
+                    charge(&e, tally.converted_price());
+                    shared?
                 }
                 _ => return raise_at_caller(format!("invalid argument #1 to 'new' (table expected, got {})", arg_type(&e, &args, 0))),
             };
@@ -560,7 +592,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let deep = deep_arg(&e, &args, name)?;
                 let mut tally = Tally::default();
                 let copied = copy(&shared, deep, frozen, &mut FxHashMap::default(), &mut tally);
-                // (a shallow copy costs Studio the same at any size: only the call)
+                // (a shallow copy shares the entries, and costs Studio the same at any size: only the call)
                 charge(
                     &e,
                     tally.strings as f64 * cost::SHARED_DEEP_STRING_ENTRY + tally.integers as f64 * cost::SHARED_DEEP_INTEGER_ENTRY + tally.tables as f64 * cost::SHARED_DEEP_TABLE,
@@ -570,22 +602,22 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         )?;
     }
     let e = engine.clone();
-    library.set("isFrozen", wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Boolean(shared_arg(&e, &Args::new(args), 0, "isFrozen")?.0.borrow().frozen)])))?)?;
+    library.set("isFrozen", wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Boolean(shared_arg(&e, &Args::new(args), 0, "isFrozen")?.is_frozen())])))?)?;
     let e = engine.clone();
     library.set(
         "size",
-        wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Number(shared_arg(&e, &Args::new(args), 0, "size")?.0.borrow().len() as f64)])))?,
+        wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Number(shared_arg(&e, &Args::new(args), 0, "size")?.entries.borrow().len() as f64)])))?,
     )?;
     let e = engine.clone();
     library.set(
         "clear",
         wrapped(lua, engine, move |_, args| {
             let shared = shared_arg(&e, &Args::new(args), 0, "clear")?;
-            if shared.0.borrow().frozen {
+            if shared.is_frozen() {
                 return raise(FROZEN);
             }
             // (taken out first: what it held may let go of a pool slot)
-            let cleared = std::mem::take(&mut *shared.0.borrow_mut());
+            let cleared = shared.entries.replace(Rc::default());
             drop(cleared);
             Ok(none())
         })?,
@@ -607,4 +639,27 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     library.set_readonly(true);
     engine.lua.borrow_mut().libraries.insert("SharedTable", library);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A shallow copy shares its table's entries (no per-entry work) until either side is written, and then only that side
+    /// changes; the frozen flags are each their own.
+    #[test]
+    fn a_shallow_copy_shares_the_entries_until_a_write() {
+        let mut entries = Entries::default();
+        for n in 0..1000 {
+            entries.set(Key::Number(n), Some(Stored::Number(f64::from(n))));
+        }
+        let shared = Shared::new(entries, false);
+        let copied = copy(&shared, false, true, &mut FxHashMap::default(), &mut Tally::default());
+        assert!(Rc::ptr_eq(&*shared.entries.borrow(), &*copied.entries.borrow()));
+        assert!(copied.is_frozen() && !shared.is_frozen());
+        shared.entries_mut().set(Key::Number(0), Some(Stored::Boolean(true)));
+        assert!(!Rc::ptr_eq(&*shared.entries.borrow(), &*copied.entries.borrow()));
+        assert!(matches!(copied.entries.borrow().get(&Key::Number(0)), Some(Stored::Number(n)) if *n == 0.0));
+        assert!(matches!(shared.entries.borrow().get(&Key::Number(0)), Some(Stored::Boolean(true))));
+    }
 }
