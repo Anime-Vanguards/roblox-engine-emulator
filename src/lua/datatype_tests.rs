@@ -535,6 +535,34 @@ fn vector3_members_methods_and_errors_follow_studio() {
     );
 }
 
+/// A vector is a Vector3 in the VM's and the libraries' errors (measured in a playing client, Studio 0.748: operators, loops and
+/// argument errors all say Vector3), while `type` still answers "vector".
+#[test]
+fn errors_name_a_vector_vector3() {
+    assert_script(
+        r#"
+        local V = Vector3.new(1, 2, 3) :: any
+        assert(type(V) == "vector" and typeof(V) == "Vector3")
+        for _, Case in {
+            { "attempt to get length of a Vector3 value", function() return #V end },
+            { "attempt to perform arithmetic (add) on Vector3 and number", function() return V + 1 end },
+            { "attempt to perform arithmetic (add) on number and Vector3", function() return 1 + V end },
+            { "attempt to concatenate Vector3 with string", function() return V .. "x" end },
+            { "attempt to compare Vector3 < number", function() return V < 1 end },
+            { "attempt to call a Vector3 value", function() return V() end },
+            { "attempt to iterate over a Vector3 value", function() for _ in V do end end },
+            { "invalid 'for' initial value (number expected, got Vector3)", function() for _ = V, 1 do end end },
+            { "invalid argument #1 to 'floor' (number expected, got Vector3)", function() return math.floor(V) end },
+            { "invalid argument #1 to 'rawget' (table expected, got Vector3)", function() return rawget(V, "X") end },
+            { "invalid argument #2 to 'format' (string expected, got Vector3)", function() return string.format("%s", V) end },
+        } do
+            local Ok, Message = pcall(Case[2])
+            assert(not Ok and string.gsub(tostring(Message), "^[^:]*:%d+: ", "") == Case[1], tostring(Message))
+        end
+        "#,
+    );
+}
+
 /// The lowercase names a client's datatypes answer and those it does not (a headless roblox-sim client, Studio 0.744: every member
 /// of every datatype by its other first-letter case; tools/parity/probes/camelcase.luau): no rule as instances have, a list per type.
 #[test]
