@@ -2064,8 +2064,6 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
     };
     let eq = lua.create_function(compare(|a, b| a == b))?;
-    let lt = lua.create_function(compare(|a, b| a < b))?;
-    let le = lua.create_function(compare(|a, b| a <= b))?;
     // tostring is the instant's UnixTimestampMillis ("1700000000123", "-1500"; Studio 0.744)
     let tostring = lua.create_function(|_, this: LuaValue| Ok(format!("{}", date_time_of(&this).unwrap_or(0.0) as i64)))?;
     lua.register_userdata_type::<LDateTime>(|registry| {
@@ -2073,9 +2071,9 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         registry.add_meta_field("__index", index);
         registry.add_meta_field("__newindex", newindex);
         registry.add_meta_field("__tostring", tostring);
+        // (== only: a client's DateTime has no < or <=, the VM's 'attempt to compare DateTime < DateTime'; Studio 0.747,
+        // tools/parity/probes/datatype_errors.luau)
         registry.add_meta_field("__eq", eq);
-        registry.add_meta_field("__lt", lt);
-        registry.add_meta_field("__le", le);
     })?;
     if let LuaValue::UserData(sample) = make_date_time(lua, 0.0)? {
         lock_metatable(lua, &sample)?;

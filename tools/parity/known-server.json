@@ -277,34 +277,6 @@
 			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
 		},
 		{
-			"line": "op Vector3int16 mul | ",
-			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
-		},
-		{
-			"line": "op Vector3int16 div | ",
-			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
-		},
-		{
-			"line": "op Vector2int16 mul | ",
-			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
-		},
-		{
-			"line": "op Vector2int16 div | ",
-			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
-		},
-		{
-			"line": "unary Rect | ",
-			"why": "Rect has no arithmetic in a client (unary minus, + and - are the VM's 'attempt to perform arithmetic' errors); Lune's Rect has unary minus, + and -"
-		},
-		{
-			"line": "op Rect add | ",
-			"why": "Rect has no arithmetic in a client (unary minus, + and - are the VM's 'attempt to perform arithmetic' errors); Lune's Rect has unary minus, + and -"
-		},
-		{
-			"line": "op Rect sub | ",
-			"why": "Rect has no arithmetic in a client (unary minus, + and - are the VM's 'attempt to perform arithmetic' errors); Lune's Rect has unary minus, + and -"
-		},
-		{
 			"line": "method Ray:ClosestPoint | ",
 			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
 		},
@@ -319,14 +291,6 @@
 		{
 			"line": "method Ray.Distance | ",
 			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "op DateTime lt | ",
-			"why": "DateTime has no < or <= in a client (the VM's 'attempt to compare DateTime < DateTime'); ree's DateTime compares instants"
-		},
-		{
-			"line": "op DateTime le | ",
-			"why": "DateTime has no < or <= in a client (the VM's 'attempt to compare DateTime < DateTime'); ree's DateTime compares instants"
 		},
 		{
 			"line": "unary Axes | ",
@@ -459,22 +423,6 @@
 		{
 			"line": "colon DateTime | ",
 			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "int16 Vector3int16 mul | ",
-			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
-		},
-		{
-			"line": "int16 Vector3int16 div | ",
-			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
-		},
-		{
-			"line": "int16 Vector2int16 mul | ",
-			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
-		},
-		{
-			"line": "int16 Vector2int16 div | ",
-			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
 		},
 		{
 			"line": "call-property | ",

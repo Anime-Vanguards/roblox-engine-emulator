@@ -10,7 +10,8 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, vector3int16::int16_component};
-use crate::datatypes::script_error::{luau_number, same_operands};
+use super::vector3int16::{divide_by_zero, operand_number, x86_i32};
+use crate::datatypes::script_error::{luau_number, same_operands, userdata_of};
 
 /**
     An implementation of the [Vector2int16](https://create.roblox.com/docs/reference/engine/datatypes/Vector2int16)
@@ -70,8 +71,39 @@ impl LuaUserData for Vector2int16 {
             let (a, b) = same_operands::<Vector2int16>(&lhs, &rhs, "Vector2int16")?;
             Ok(a - b)
         });
-        methods.add_meta_method(LuaMetaMethod::Mul, userdata_impl_mul_i32);
-        methods.add_meta_method(LuaMetaMethod::Div, userdata_impl_div_i32);
+        // * and / take a number on either side or another Vector2int16, as Vector3int16's do, but a number multiplies and
+        // divides each component in doubles (Vector2int16(10, -10) * 1.5 is 15, -15, where a Vector3int16 truncates the
+        // 1.5), and a division by a number 0 (or an operand that reads as 0) raises 'Divide by zero exception'
+        // (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        methods.add_meta_function(LuaMetaMethod::Mul, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let scale = |v: Vector2int16, n: f64| Vector2int16(v.0.map(|c| x86_i32(f64::from(c) * n) as i16 as i32));
+            Ok(match (userdata_of::<Vector2int16>(Some(&lhs)), userdata_of::<Vector2int16>(Some(&rhs))) {
+                (Some(a), Some(b)) => *a * *b,
+                (Some(a), None) => scale(*a, operand_number(lua, &rhs)),
+                (None, Some(b)) => scale(*b, operand_number(lua, &lhs)),
+                (None, None) => unreachable!("a Vector2int16's * has one"),
+            })
+        });
+        methods.add_meta_function(LuaMetaMethod::Div, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let divided = |a: IVec2, b: IVec2| -> LuaResult<Vector2int16> {
+                if b.x == 0 || b.y == 0 {
+                    return Err(divide_by_zero());
+                }
+                Ok(Vector2int16(IVec2::new(a.x.wrapping_div(b.x), a.y.wrapping_div(b.y)).map(|c| c as i16 as i32)))
+            };
+            match (userdata_of::<Vector2int16>(Some(&lhs)), userdata_of::<Vector2int16>(Some(&rhs))) {
+                (Some(a), Some(b)) => divided(a.0, b.0),
+                (Some(a), None) => {
+                    let n = operand_number(lua, &rhs);
+                    if n == 0.0 {
+                        return Err(divide_by_zero());
+                    }
+                    Ok(Vector2int16(a.0.map(|c| x86_i32(f64::from(c) / n) as i16 as i32)))
+                }
+                (None, Some(b)) => divided(IVec2::splat(x86_i32(operand_number(lua, &lhs))), b.0),
+                (None, None) => unreachable!("a Vector2int16's / has one"),
+            }
+        });
     }
 }
 

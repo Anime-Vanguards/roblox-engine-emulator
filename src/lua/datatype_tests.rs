@@ -1486,3 +1486,36 @@ assert(Face.Family == "1")
 "#,
     );
 }
+
+/// The operators a client's datatypes have and lack (Studio 0.747, tools/parity/probes/datatype_errors.luau): Rect has no
+/// arithmetic and DateTime no < or <= (the VM's errors), and Vector3int16 and Vector2int16 read an operand of another kind
+/// as 0 and raise "Divide by zero exception" for an integer division by 0. ree's Rect negated and added, its DateTime
+/// compared, and its int16 vectors raised mlua's conversion error.
+#[test]
+fn datatype_operators_are_a_playing_clients() {
+    assert_script(
+        r#"
+local function Fails(Pattern, Function)
+	local Ok, Message = pcall(Function)
+	assert(not Ok and type(Message) == "string" and string.find(Message, Pattern) ~= nil, tostring(Message))
+end
+local R = Rect.new(1, 2, 3, 4)
+Fails("^Test:%d+: attempt to perform arithmetic %(unm%) on Rect$", function() return -R end)
+Fails("^Test:%d+: attempt to perform arithmetic %(add%) on Rect and number$", function() return R + 1 end)
+Fails("^Test:%d+: invalid argument #2 %(Vector2 expected, got Rect%)$", function() return Vector2.one + R end)
+Fails("^Test:%d+: attempt to compare DateTime < DateTime$", function() return DateTime.now() < DateTime.now() end)
+Fails("^Test:%d+: attempt to compare DateTime <= DateTime$", function() return DateTime.now() <= DateTime.now() end)
+assert(DateTime.fromUnixTimestamp(5) == DateTime.fromUnixTimestamp(5))
+local function Text(V)
+	return if typeof(V) == "Vector3int16" then `{V.X} {V.Y} {V.Z}` else `{V.X} {V.Y}`
+end
+local A, B = Vector3int16.new(10, -10, 7), Vector2int16.new(10, -10)
+assert(Text(A * "x") == "0 0 0" and Text(A * 1.5) == "10 -10 7" and Text(2.5 * A) == "20 -20 14" and Text(A * 1e10) == "0 0 0")
+assert(Text(A / 2) == "5 -5 3" and Text(A / 0.5) == "20 -20 14" and Text(A / 0) == "0 0 0" and Text(100 / A) == "10 -10 14")
+Fails("^Divide by zero exception$", function() return A / Vector3int16.new(0, 1, 1) end)
+assert(Text(B * 1.5) == "15 -15" and Text(B * 4000) == "-25536 25536" and Text(nil * B) == "0 0")
+Fails("^Divide by zero exception$", function() return B / 0 end)
+Fails("^Divide by zero exception$", function() return B / "x" end)
+"#,
+    );
+}

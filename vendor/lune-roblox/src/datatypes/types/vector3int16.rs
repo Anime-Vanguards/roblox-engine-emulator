@@ -10,7 +10,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::super::*;
-use crate::datatypes::script_error::{luau_number, same_operands};
+use crate::datatypes::script_error::{luau_number, same_operands, script_error, userdata_of};
 
 /**
     An implementation of the [Vector3int16](https://create.roblox.com/docs/reference/engine/datatypes/Vector3int16)
@@ -84,8 +84,40 @@ impl LuaUserData for Vector3int16 {
             let (a, b) = same_operands::<Vector3int16>(&lhs, &rhs, "Vector3int16")?;
             Ok(a - b)
         });
-        methods.add_meta_method(LuaMetaMethod::Mul, userdata_impl_mul_i32);
-        methods.add_meta_method(LuaMetaMethod::Div, userdata_impl_div_i32);
+        // * and / take a number on either side (truncated to an integer first, then each component multiplied in 32 bits
+        // and wrapped to 16) or another Vector3int16 (component by component); an operand of any other kind reads as 0,
+        // without an error. A Vector3int16 divided by a number divides each component in doubles (x86's conversion: by 0
+        // it is 0); a division by a Vector3int16 is an integer one, which raises the client's 'Divide by zero exception'
+        // for a zero component (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        methods.add_meta_function(LuaMetaMethod::Mul, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let scale = |v: Vector3int16, n: f64| {
+                let k = x86_i32(n);
+                Vector3int16(v.0.map(|c| c.wrapping_mul(k) as i16 as i32))
+            };
+            Ok(match (userdata_of::<Vector3int16>(Some(&lhs)), userdata_of::<Vector3int16>(Some(&rhs))) {
+                (Some(a), Some(b)) => *a * *b,
+                (Some(a), None) => scale(*a, operand_number(lua, &rhs)),
+                (None, Some(b)) => scale(*b, operand_number(lua, &lhs)),
+                (None, None) => unreachable!("a Vector3int16's * has one"),
+            })
+        });
+        methods.add_meta_function(LuaMetaMethod::Div, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let divided = |a: IVec3, b: IVec3| -> LuaResult<Vector3int16> {
+                if b.x == 0 || b.y == 0 || b.z == 0 {
+                    return Err(divide_by_zero());
+                }
+                Ok(Vector3int16(IVec3::new(a.x.wrapping_div(b.x), a.y.wrapping_div(b.y), a.z.wrapping_div(b.z)).map(|c| c as i16 as i32)))
+            };
+            match (userdata_of::<Vector3int16>(Some(&lhs)), userdata_of::<Vector3int16>(Some(&rhs))) {
+                (Some(a), Some(b)) => divided(a.0, b.0),
+                (Some(a), None) => {
+                    let n = operand_number(lua, &rhs);
+                    Ok(Vector3int16(a.0.map(|c| x86_i32(f64::from(c) / n) as i16 as i32)))
+                }
+                (None, Some(b)) => divided(IVec3::splat(x86_i32(operand_number(lua, &lhs))), b.0),
+                (None, None) => unreachable!("a Vector3int16's / has one"),
+            }
+        });
     }
 }
 
@@ -93,6 +125,24 @@ impl fmt::Display for Vector3int16 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}, {}, {}", self.0.x, self.0.y, self.0.z)
     }
+}
+
+/// x86's conversion of a double to a 32-bit integer (cvttsd2si), which a client's int16 vector arithmetic goes through:
+/// toward zero, and 0x80000000 for a value out of range or not a number (whose 16 low bits are 0: Vector3int16(10, -10, 7)
+/// * 1e10 is 0, 0, 0; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau).
+pub(crate) fn x86_i32(value: f64) -> i32 {
+    if value.is_nan() || value >= 2_147_483_648.0 || value <= -2_147_483_649.0 { i32::MIN } else { value as i32 }
+}
+
+/// The number an operand of an int16 vector's * or / reads as: a number or a string Luau reads as one, anything else 0
+/// (Vector3int16 * "x" is 0, 0, 0 in a client: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau).
+pub(crate) fn operand_number(lua: &Lua, value: &LuaValue) -> f64 {
+    luau_number(lua, value).unwrap_or(0.0)
+}
+
+/// The client's message for an integer division by zero (without a position)
+pub(crate) fn divide_by_zero() -> LuaError {
+    script_error("Divide by zero exception", false)
 }
 
 /// Arithmetic results overflow the 16-bit integer as the constructor's components do: `Vector3int16.new(1, 2, 3) +

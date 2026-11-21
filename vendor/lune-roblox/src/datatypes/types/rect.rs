@@ -77,9 +77,8 @@ impl LuaUserData for Rect {
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
-        methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
+        // (no arithmetic: a client's -rect, rect + x and rect - x are the VM's 'attempt to perform arithmetic (unm) on Rect',
+        // and an operand that is a Vector2 or a CFrame runs its own operator; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
     }
 }
 
