@@ -145,6 +145,10 @@ R.SetVectorMetatable({
 		end,
 	}),
 	__metatable = "The metatable is locked",
+	-- The VM names a vector by this table's __type in its own errors, as a playing client does (Studio 0.748): "attempt to
+	-- get length of a Vector3 value", "invalid argument #1 to 'floor' (number expected, got Vector3)"; type() still answers
+	-- "vector", as there
+	__type = "Vector3",
 })
 
 -- Lune's Ray / Region3 values: members and operators through ToLune / ToNative; Aliases
