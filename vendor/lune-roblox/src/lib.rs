@@ -67,6 +67,8 @@ fn create_all_exports(lua: Lua) -> LuaResult<Vec<(&'static str, LuaValue)>> {
 */
 #[cfg(feature = "mlua")]
 pub fn module(lua: Lua) -> LuaResult<LuaTable> {
+    // a datatype raises a script's plain string errors through mlua-sys's error hook (datatypes::script_error)
+    datatypes::script_error::install();
     // FUTURE: We can probably create these lazily as users
     // index the main exports (this return value) table and
     // save some memory and startup time. The full exports

@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, CFrame, Vector3};
+use crate::datatypes::script_error::{optional_ctor_arg, reflected_arg, reflected_float_arg};
 
 /**
     An implementation of the [Region3](https://create.roblox.com/docs/reference/engine/datatypes/Region3)
@@ -26,13 +27,16 @@ impl LuaExportsTable for Region3 {
     const EXPORT_NAME: &'static str = "Region3";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        let region3_new =
-            |_: &Lua, (min, max): (LuaUserDataRef<Vector3>, LuaUserDataRef<Vector3>)| {
-                Ok(Region3 {
-                    min: min.0,
-                    max: max.0,
-                })
-            };
+        // (two Vector3s checked as a client's Luau checks them, naming the constructor; one not passed is the zero vector:
+        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let region3_new = |_: &Lua, args: LuaMultiValue| {
+            let min = optional_ctor_arg::<Vector3>(&args, 1, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
+            let max = optional_ctor_arg::<Vector3>(&args, 2, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
+            Ok(Region3 {
+                min: min.0,
+                max: max.0,
+            })
+        };
 
         TableBuilder::new(lua)?
             .with_function("new", region3_new)?
@@ -50,7 +54,11 @@ impl LuaUserData for Region3 {
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         // Methods
-        methods.add_method("ExpandToGrid", |_, this, resolution: f32| {
+        // (a playing client's reflection checks the resolution, then self: "Argument 2 missing or nil", "Unable to cast
+        // string to float", "Unable to cast double to Region3"; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        methods.add_function("ExpandToGrid", |lua, args: LuaMultiValue| {
+            let resolution = reflected_float_arg(lua, &args, 2)? as f32;
+            let this = reflected_arg::<Region3>(&args, 1, "Region3")?;
             Ok(Region3 {
                 min: (this.min / resolution).floor() * resolution,
                 max: (this.max / resolution).ceil() * resolution,

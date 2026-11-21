@@ -4567,3 +4567,1794 @@
          let k = 1.0 / quat_dot(q, q).sqrt();
          let [x, y, z, w] = q.map(|c| c * k);
          let (x2, y2, z2) = (x + x, y + y, z + z);
+diff --git a/crates/lune-roblox/src/datatypes/mod.rs b/crates/lune-roblox/src/datatypes/mod.rs
+--- a/crates/lune-roblox/src/datatypes/mod.rs
++++ b/crates/lune-roblox/src/datatypes/mod.rs
+@@ -9,6 +9,8 @@ pub mod conversion;
+ #[cfg(feature = "mlua")]
+ pub mod result;
+ #[cfg(feature = "mlua")]
++pub mod script_error;
++#[cfg(feature = "mlua")]
+ pub mod types;
+ 
+ #[cfg(feature = "mlua")]
+diff --git a/crates/lune-roblox/src/datatypes/script_error.rs b/crates/lune-roblox/src/datatypes/script_error.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/lune-roblox/src/datatypes/script_error.rs
+@@ -0,0 +1,354 @@
++//! Datatype errors as a script sees them in a Roblox client (measured in a playing client, Studio 0.747: ree's
++//! tools/parity/probes/datatype_errors.luau): a plain string, after the calling line's position where the client's Luau
++//! checks raise it (`invalid argument #2 (Vector2 expected, got number)`), alone where its reflection raises it
++//! (`Unable to cast double to Vector2`, `Argument 3 missing or nil`) or a type's own code does, and never with a
++//! traceback. mlua raises a Rust callback's error as a userdata holding the Rust error, whose text carries one, so a
++//! callback returns [`script_error`]'s error instead, and the hook mlua-sys runs before `lua_error` ([`install`]) raises
++//! the string in its place.
++
++use std::{cell::RefCell, ffi::CStr};
++
++use mlua::{ffi, prelude::*};
++
++thread_local! {
++    static PENDING: RefCell<Option<Pending>> = const { RefCell::new(None) };
++}
++
++struct Pending {
++    message: String,
++    positioned: bool,
++}
++
++#[derive(Debug)]
++struct ScriptError(String);
++
++impl std::fmt::Display for ScriptError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str(&self.0)
++    }
++}
++
++impl std::error::Error for ScriptError {}
++
++/// The error a datatype's callback returns to raise `message` as the script's own error: a plain string, after the
++/// calling line's position when `positioned` (where a client's Luau checks raise it), else alone.
++pub fn script_error(message: impl Into<String>, positioned: bool) -> LuaError {
++    let message = message.into();
++    PENDING.with(|pending| *pending.borrow_mut() = Some(Pending { message: message.clone(), positioned }));
++    LuaError::external(ScriptError(message))
++}
++
++/// Installs the hook that raises [`script_error`]'s strings (once a process).
++pub fn install() {
++    static ONCE: std::sync::Once = std::sync::Once::new();
++    ONCE.call_once(|| ffi::lua_seterrorhook(Some(error_hook)));
++}
++
++/// Run before every `lua_error` a Rust caller raises: when the value mlua raises holds the error [`script_error`] made
++/// last (its text starts with the message), the message takes its place. A message an error left behind that never
++/// reached Lua (Rust code handled it) matches no later error and is dropped.
++unsafe extern "C-unwind" fn error_hook(state: *mut ffi::lua_State) {
++    let Some(pending) = PENDING.with(|pending| pending.borrow_mut().take()) else { return };
++    unsafe {
++        if ffi::lua_type(state, -1) != ffi::LUA_TUSERDATA {
++            return;
++        }
++        let mut length = 0;
++        let text = ffi::luaL_tolstring(state, -1, &mut length);
++        let text = std::slice::from_raw_parts(text.cast::<u8>(), length);
++        let message = pending.message.as_bytes();
++        let matches = text.starts_with(message) && (text.len() == message.len() || text[message.len()] == b'\n');
++        ffi::lua_pop(state, 1);
++        if !matches {
++            return;
++        }
++        let position = if pending.positioned { caller_position(state) } else { None };
++        let full = match position {
++            Some(position) => format!("{position}{}", pending.message),
++            None => pending.message,
++        };
++        ffi::lua_pushlstring(state, full.as_ptr().cast(), full.len());
++    }
++}
++
++/// Whether a chunk is code a client has none of: mlua's own Luau (`__mlua_index`) and the host's (ree names its chunks
++/// `rur.*` and `ree.*`), which stand in for what a client does in C++.
++fn internal_chunk(source: &[u8]) -> bool {
++    let name = source.strip_prefix(b"=").or_else(|| source.strip_prefix(b"@")).unwrap_or(source);
++    name.starts_with(b"__mlua") || name.starts_with(b"rur.") || name.starts_with(b"ree.")
++}
++
++/// Where a client's Luau check says an error is (`luaL_where(L, 1)`): the calling function's `<chunk>:<line>: `, or
++/// nothing when the caller is a C function (`pcall(Vector2.Abs, 5)`). Frames of [`internal_chunk`]s are looked past,
++/// and so is a C function one of them called (the pcall of the host's library wrapper), as a client has neither.
++///
++/// # Safety
++/// `state` must be the running thread, inside a C function (level 0).
++pub unsafe fn caller_position(state: *mut ffi::lua_State) -> Option<String> {
++    unsafe {
++        let mut level = 1;
++        while level < 64 {
++            let mut frame: ffi::lua_Debug = std::mem::zeroed();
++            if ffi::lua_getinfo(state, level, c"sl".as_ptr(), &mut frame) == 0 {
++                return None;
++            }
++            let source = if frame.source.is_null() { &b""[..] } else { CStr::from_ptr(frame.source).to_bytes() };
++            if internal_chunk(source) {
++                level += 1;
++                continue;
++            }
++            if frame.currentline < 0 {
++                // a C function: one the host's own Luau called is part of that code
++                let mut next: ffi::lua_Debug = std::mem::zeroed();
++                if ffi::lua_getinfo(state, level + 1, c"s".as_ptr(), &mut next) != 0
++                    && !next.source.is_null()
++                    && internal_chunk(CStr::from_ptr(next.source).to_bytes())
++                {
++                    level += 2;
++                    continue;
++                }
++                return None;
++            }
++            if frame.currentline == 0 {
++                return None;
++            }
++            if frame.short_src.is_null() {
++                return None;
++            }
++            let chunk = CStr::from_ptr(frame.short_src).to_string_lossy();
++            return Some(format!("{chunk}:{}: ", frame.currentline));
++        }
++        None
++    }
++}
++
++/// A value's type as a client's errors name it (its `typeof`): a userdata's `__type` (Vector2, CFrame, Instance),
++/// Vector3 for a vector, else the basic type's name.
++pub fn type_name(value: &LuaValue) -> String {
++    match value {
++        LuaValue::Nil => "nil".into(),
++        LuaValue::Boolean(_) => "boolean".into(),
++        LuaValue::Integer(_) | LuaValue::Number(_) => "number".into(),
++        LuaValue::Vector(_) => "Vector3".into(),
++        LuaValue::String(_) => "string".into(),
++        LuaValue::Table(_) => "table".into(),
++        LuaValue::Function(_) => "function".into(),
++        LuaValue::Thread(_) => "thread".into(),
++        LuaValue::UserData(ud) => match ud.type_name() {
++            Ok(name) => name.to_string_lossy(),
++            // (a userdata mlua did not make, as the host's Instances: its __type read directly)
++            Err(_) => foreign_type_name(ud).unwrap_or_else(|| "userdata".into()),
++        },
++        LuaValue::Buffer(_) => "buffer".into(),
++        _ => "userdata".into(),
++    }
++}
++
++/// The `__type` of a userdata mlua did not make (none: it has none, as a newproxy has none).
++fn foreign_type_name(ud: &LuaAnyUserData) -> Option<String> {
++    let lua = ud.weak_lua().try_upgrade()?;
++    unsafe {
++        lua.exec_raw::<Option<String>>(ud, |state| {
++            if ffi::luaL_getmetafield(state, -1, c"__type".as_ptr()) == ffi::LUA_TSTRING {
++                ffi::lua_remove(state, -2);
++            } else {
++                ffi::lua_settop(state, 0);
++                ffi::lua_pushnil(state);
++            }
++        })
++        .ok()
++        .flatten()
++    }
++}
++
++/// A value's type as a client's reflection names it in `Unable to cast <type> to <type>`: double, string, bool,
++/// Array or Dictionary, Function, CoordinateFrame for a CFrame, an EnumItem's enum (Material), else its `typeof`.
++pub fn cast_name(value: &LuaValue) -> String {
++    match value {
++        LuaValue::Integer(_) | LuaValue::Number(_) => "double".into(),
++        LuaValue::Boolean(_) => "bool".into(),
++        LuaValue::Table(table) => if table.raw_len() > 0 || table.is_empty() { "Array" } else { "Dictionary" }.into(),
++        LuaValue::Function(_) => "Function".into(),
++        LuaValue::UserData(ud) => match type_name(value).as_str() {
++            "CFrame" => "CoordinateFrame".into(),
++            "EnumItem" => ud
++                .get::<LuaValue>("EnumType")
++                .ok()
++                .and_then(|kind| match kind {
++                    LuaValue::UserData(kind) => kind.to_string().ok(),
++                    _ => None,
++                })
++                .unwrap_or_else(|| "EnumItem".into()),
++            name => name.into(),
++        },
++        other => type_name(other),
++    }
++}
++
++/// `invalid argument #<index>[ to '<function>'] (<expected> expected, got <type>)`, from the calling line: a client
++/// names the function in a `.` call and not in a `:` call (a method takes the `:` form for arguments after self, the
++/// call a script makes; self itself is wrong only in a `.` call).
++pub fn invalid_argument(index: usize, function: Option<&str>, expected: &str, value: &LuaValue) -> LuaError {
++    let to = function.map(|name| format!(" to '{name}'")).unwrap_or_default();
++    script_error(format!("invalid argument #{index}{to} ({expected} expected, got {})", type_name(value)), true)
++}
++
++/// `missing argument #<index>[ to '<function>'] (<expected> expected)`, from the calling line: no value at all was
++/// passed there (an explicit nil is an invalid argument).
++pub fn missing_argument(index: usize, function: Option<&str>, expected: &str) -> LuaError {
++    let to = function.map(|name| format!(" to '{name}'")).unwrap_or_default();
++    script_error(format!("missing argument #{index}{to} ({expected} expected)"), true)
++}
++
++/// The reflection's `Argument <index> missing or nil`, without a position.
++pub fn argument_missing(index: usize) -> LuaError {
++    script_error(format!("Argument {index} missing or nil"), false)
++}
++
++/// The reflection's `Unable to cast <value's type> to <to>`, without a position.
++pub fn unable_to_cast(value: &LuaValue, to: &str) -> LuaError {
++    script_error(format!("Unable to cast {} to {to}", cast_name(value)), false)
++}
++
++/// A number as a client's Luau checks read one (`luaL_checknumber`): a number, or a string Luau reads as one.
++pub fn luau_number(lua: &Lua, value: &LuaValue) -> Option<f64> {
++    match value {
++        LuaValue::Number(n) => Some(*n),
++        LuaValue::Integer(n) => Some(*n as f64),
++        LuaValue::String(_) => lua.coerce_number(value.clone()).ok().flatten(),
++        _ => None,
++    }
++}
++
++/// A number as a client's reflection casts one to a float: a number, a string Luau reads as one (hex and spaces
++/// included: `"0x1"`, `" 0.5 "`), or a boolean (1 or 0), measured with Lerp's alpha.
++pub fn reflected_float(lua: &Lua, value: &LuaValue) -> Option<f64> {
++    match value {
++        LuaValue::Boolean(on) => Some(if *on { 1.0 } else { 0.0 }),
++        other => luau_number(lua, other),
++    }
++}
++
++/// The value at `index` (0-based) of a call's arguments, None past the last one passed.
++pub fn arg(args: &LuaMultiValue, index: usize) -> Option<&LuaValue> {
++    args.get(index)
++}
++
++/// The userdata of type `T` a value is, if it is one.
++pub fn userdata_of<T: LuaUserData + 'static>(value: Option<&LuaValue>) -> Option<LuaUserDataRef<T>> {
++    match value {
++        Some(LuaValue::UserData(ud)) => ud.borrow::<T>().ok(),
++        _ => None,
++    }
++}
++
++/// Self of a method a client checks in Luau, named as a `.` call names it (only a `.` call can pass a wrong self):
++/// `missing argument #1 to '<method>' (<T> expected)` with no value, `invalid argument #1 to '<method>' (<T> expected,
++/// got <type>)` with another.
++pub fn luau_self<T: LuaUserData + 'static>(args: &LuaMultiValue, method: &str, type_name: &str) -> LuaResult<LuaUserDataRef<T>> {
++    match args.front() {
++        None => Err(missing_argument(1, Some(method), type_name)),
++        Some(value) => userdata_of::<T>(Some(value)).ok_or_else(|| invalid_argument(1, Some(method), type_name, value)),
++    }
++}
++
++/// Argument `index` (1-based, self being 1) of a method a client checks in Luau, as a `:` call reports it (no name).
++pub fn luau_arg<T: LuaUserData + 'static>(args: &LuaMultiValue, index: usize, type_name: &str) -> LuaResult<LuaUserDataRef<T>> {
++    match args.get(index - 1) {
++        None => Err(missing_argument(index, None, type_name)),
++        Some(value) => userdata_of::<T>(Some(value)).ok_or_else(|| invalid_argument(index, None, type_name, value)),
++    }
++}
++
++/// Argument `index` (1-based) a client's reflection casts to `to`: `Argument <index> missing or nil`, `Unable to cast
++/// <type> to <to>`.
++pub fn reflected_arg<T: LuaUserData + 'static>(args: &LuaMultiValue, index: usize, to: &str) -> LuaResult<LuaUserDataRef<T>> {
++    match args.get(index - 1) {
++        None | Some(LuaValue::Nil) => Err(argument_missing(index)),
++        Some(value) => userdata_of::<T>(Some(value)).ok_or_else(|| unable_to_cast(value, to)),
++    }
++}
++
++/// Argument `index` (1-based) a client's reflection casts to a float ([`reflected_float`]).
++pub fn reflected_float_arg(lua: &Lua, args: &LuaMultiValue, index: usize) -> LuaResult<f64> {
++    match args.get(index - 1) {
++        None | Some(LuaValue::Nil) => Err(argument_missing(index)),
++        Some(value) => reflected_float(lua, value).ok_or_else(|| unable_to_cast(value, "float")),
++    }
++}
++
++/// The two operands of a type's + or -, whichever side the value that runs it is on: a client's Luau checks raise the
++/// first that is not of the type, from the calling line (`invalid argument #1 (UDim expected, got number)`).
++pub fn same_operands<T: LuaUserData + Copy + 'static>(lhs: &LuaValue, rhs: &LuaValue, type_name: &str) -> LuaResult<(T, T)> {
++    let a = *userdata_of::<T>(Some(lhs)).ok_or_else(|| invalid_argument(1, None, type_name, lhs))?;
++    let b = *userdata_of::<T>(Some(rhs)).ok_or_else(|| invalid_argument(2, None, type_name, rhs))?;
++    Ok((a, b))
++}
++
++/// Argument `index` (1-based) of a constructor a client checks in Luau, naming it: none when not passed (the caller's
++/// default), else a value of type `T` (nil passed is none of it).
++pub fn optional_ctor_arg<T: LuaUserData + Copy + 'static>(args: &LuaMultiValue, index: usize, name: &str, type_name: &str) -> LuaResult<Option<T>> {
++    match args.get(index - 1) {
++        None => Ok(None),
++        Some(value) => userdata_of::<T>(Some(value)).map(|v| Some(*v)).ok_or_else(|| invalid_argument(index, Some(name), type_name, value)),
++    }
++}
++
++/// A number argument of a constructor a client checks in Luau, naming it: `missing argument #<index> to '<name>' (number
++/// expected)`, `invalid argument #<index> to '<name>' (number expected, got <type>)`.
++pub fn ctor_number(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<f64> {
++    match args.get(index - 1) {
++        None => Err(missing_argument(index, Some(name), "number")),
++        Some(value) => luau_number(lua, value).ok_or_else(|| invalid_argument(index, Some(name), "number", value)),
++    }
++}
++
++/// `attempt to <verb> a <T> with an incompatible value type or nil`, without a position: what a client's `*`, `/` and
++/// `//` of a Vector2 raise for an operand they take no number from.
++pub fn incompatible(verb: &str, type_name: &str) -> LuaError {
++    script_error(format!("attempt to {verb} a {type_name} with an incompatible value type or nil"), false)
++}
++
++/// [`type_name`] of the value at `index` of a C function's stack.
++///
++/// # Safety
++/// `state` must be a live thread and `index` a valid stack index.
++pub unsafe fn type_name_at(state: *mut ffi::lua_State, index: std::ffi::c_int) -> String {
++    unsafe {
++        let kind = ffi::lua_type(state, index);
++        if kind == ffi::LUA_TVECTOR {
++            return "Vector3".into();
++        }
++        if kind == ffi::LUA_TUSERDATA && ffi::luaL_getmetafield(state, index, c"__type".as_ptr()) != 0 {
++            let name = if ffi::lua_type(state, -1) == ffi::LUA_TSTRING {
++                let mut length = 0;
++                let text = ffi::lua_tolstring(state, -1, &mut length);
++                Some(String::from_utf8_lossy(std::slice::from_raw_parts(text.cast::<u8>(), length)).into_owned())
++            } else {
++                None
++            };
++            ffi::lua_pop(state, 1);
++            if let Some(name) = name {
++                return name;
++            }
++        }
++        CStr::from_ptr(ffi::lua_typename(state, kind)).to_string_lossy().into_owned()
++    }
++}
++
++/// Raises `message` from a C function as the script's plain string error, after [`caller_position`] when `positioned`.
++///
++/// # Safety
++/// `state` must be the running thread, inside a C function. Nothing the caller owns is dropped: pass owned values only.
++pub unsafe fn raise_script(state: *mut ffi::lua_State, message: String, positioned: bool) -> ! {
++    unsafe {
++        let full = match if positioned { caller_position(state) } else { None } {
++            Some(position) => format!("{position}{message}"),
++            None => message,
++        };
++        ffi::lua_pushlstring(state, full.as_ptr().cast(), full.len());
++        // (the strings are dropped before the error unwinds past this frame)
++        drop(full);
++        ffi::lua_error(state)
++    }
++}
+diff --git a/crates/lune-roblox/src/datatypes/types/brick_color.rs b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+--- a/crates/lune-roblox/src/datatypes/types/brick_color.rs
++++ b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, Color3};
++use crate::datatypes::script_error::{argument_missing, reflected_float, unable_to_cast};
+ 
+ /**
+     An implementation of the [BrickColor](https://create.roblox.com/docs/reference/engine/datatypes/BrickColor) Roblox datatype.
+@@ -54,7 +55,13 @@ impl LuaExportsTable for BrickColor {
+ 
+         // Roblox's documentation: a zero-based index (0 through 127); "An error is thrown if the
+         // index is out of bounds" (the message is not measured in Studio)
+-        let brick_color_palette = |_: &Lua, index: f64| {
++        // (the index as a playing client's reflection casts it to an int: "Argument 1 missing or nil", "Unable to cast
++        // string to int", a boolean 1 or 0; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let brick_color_palette = |lua: &Lua, args: LuaMultiValue| {
++            let index = match args.front() {
++                None | Some(LuaValue::Nil) => return Err(argument_missing(1)),
++                Some(value) => reflected_float(lua, value).ok_or_else(|| unable_to_cast(value, "int"))?,
++            };
+             let index = index.trunc();
+             if index >= 0.0 && index < BRICK_COLOR_PALETTE.len() as f64 {
+                 Ok(color_from_number(BRICK_COLOR_PALETTE[index as usize]))
+diff --git a/crates/lune-roblox/src/datatypes/types/cframe.rs b/crates/lune-roblox/src/datatypes/types/cframe.rs
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -1,7 +1,7 @@
+ #![allow(clippy::items_after_statements)]
+ 
+ use core::fmt;
+-use std::{ops, sync::Arc};
++use std::ops;
+ 
+ use glam::{Mat3, Mat4, Vec3, Vec4};
+ use mlua::{Variadic, prelude::*};
+@@ -12,6 +12,10 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, Vector3, VectorArg, charge_host_nanos, float32 as f32m, native_vector};
++use crate::datatypes::script_error::{
++    argument_missing, cast_name, invalid_argument, luau_arg, luau_number, luau_self, missing_argument, reflected_arg,
++    reflected_float_arg, script_error, type_name, unable_to_cast, userdata_of,
++};
+ 
+ /**
+     An implementation of the [CFrame](https://create.roblox.com/docs/reference/engine/datatypes/CFrame)
+@@ -322,13 +326,23 @@ unsafe extern "C-unwind" fn angle_between_c(state: *mut mlua::ffi::lua_State) ->
+     }
+ }
+ 
++/// A method under each of its names, made for each name by `$factory(name)` (it checks its own arguments, as a client
++/// does, and charges its price once they pass)
++macro_rules! aliased_named {
++    ($methods:ident, [$($name:literal),+], $factory:expr) => {
++        $($methods.add_function($name, ($factory)($name));)+
++    };
++}
++
+ /// A method under each of its names, charged `price` nanoseconds
++#[allow(unused_macros)]
+ macro_rules! aliased {
+     ($methods:ident, $price:expr, [$($name:literal),+], $function:expr) => {
+         $($methods.add_method($name, charged_method($price, $function));)+
+     };
+ }
+ 
++#[allow(dead_code)]
+ fn charged_method<A, R>(
+     price: i32,
+     function: impl Fn(&Lua, &CFrame, A) -> LuaResult<R> + 'static,
+@@ -339,12 +353,22 @@ fn charged_method<A, R>(
+     }
+ }
+ 
+-/// An Enum.RotationOrder argument (the host's Enum items print as "Enum.RotationOrder.XYZ"; nil is XYZ):
+-/// the order's name. Angles go by the letters of the name, x y z.
++/// An Enum.RotationOrder argument (the host's Enum items print as "Enum.RotationOrder.XYZ"; none is XYZ): the
++/// order's name. Angles go by the letters of the name, x y z. Anything else is a playing client's error, without a
++/// position (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau): `Invalid type 'KeyCode' for enum
++/// 'RotationOrder'` for an item of another enum, `Invalid value for enum 'RotationOrder'` for any other value, nil
++/// passed as one too.
+ fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<&'static str> {
+     let text = match order {
+-        None | Some(LuaValue::Nil) => String::from("Enum.RotationOrder.XYZ"),
+-        Some(item) => item.to_string()?,
++        None => String::from("Enum.RotationOrder.XYZ"),
++        Some(item @ LuaValue::UserData(_)) if type_name(item) == "EnumItem" => {
++            let text = item.to_string()?;
++            if !text.starts_with("Enum.RotationOrder.") {
++                return Err(script_error(format!("Invalid type '{}' for enum 'RotationOrder'", cast_name(item)), false));
++            }
++            text
++        }
++        Some(_) => String::new(),
+     };
+     Ok(match text.strip_prefix("Enum.RotationOrder.") {
+         Some("XYZ") => "XYZ",
+@@ -356,7 +380,7 @@ fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<&'stati
+         // (Studio's message for a string: "Invalid value for enum 'RotationOrder'")
+         _ => {
+             let _ = function;
+-            return Err(LuaError::RuntimeError("Invalid value for enum 'RotationOrder'".to_string()));
++            return Err(script_error("Invalid value for enum 'RotationOrder'", false));
+         }
+     })
+ }
+@@ -432,79 +456,111 @@ impl LuaExportsTable for CFrame {
+ 
+     #[allow(clippy::too_many_lines)]
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let cframe_angles = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++        // The constructors check their arguments as a playing client does (Studio 0.747, ree's
++        // tools/parity/probes/datatype_errors.luau): Angles, fromEulerAnglesXYZ / YXZ, fromOrientation and fromAxisAngle
++        // go through its reflection, which casts the last argument first ("Argument 3 missing or nil", "Unable to cast
++        // string to float"; a boolean is 1 or 0); the others as its Luau checks do, naming the constructor, from the
++        // calling line ("missing argument #2 to 'lookAt' (Vector3 expected)"), an optional argument passed as nil
++        // included; new counts its arguments first
++        let angles = |lua: &Lua, args: &LuaMultiValue| -> LuaResult<(f32, f32, f32)> {
++            let rz = reflected_float_arg(lua, args, 3)? as f32;
++            let ry = reflected_float_arg(lua, args, 2)? as f32;
++            let rx = reflected_float_arg(lua, args, 1)? as f32;
++            Ok((rx, ry, rz))
++        };
++
++        let cframe_angles = move |lua: &Lua, args: LuaMultiValue| {
++            let (rx, ry, rz) = angles(lua, &args)?;
+             charge_host_nanos(lua, price::ANGLES);
+             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("XYZ", rx, ry, rz)))
+         };
+ 
+-        let cframe_from_axis_angle = |lua: &Lua, (v, r): (VectorArg, f32)| {
++        let cframe_from_axis_angle = |lua: &Lua, args: LuaMultiValue| {
++            let r = reflected_float_arg(lua, &args, 2)? as f32;
++            let v = match args.front() {
++                None | Some(LuaValue::Nil) => return Err(argument_missing(1)),
++                Some(value) => VectorArg::from_lua(value.clone(), lua).map_err(|_| unable_to_cast(value, "Vector3"))?,
++            };
+             charge_host_nanos(lua, price::FROM_AXIS_ANGLE);
+             Ok(CFrame::from_parts([0.0; 3], f32m::from_axis_angle(array(v.0), r)))
+         };
+ 
+-        let cframe_from_euler_angles_xyz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++        let cframe_from_euler_angles_xyz = move |lua: &Lua, args: LuaMultiValue| {
++            let (rx, ry, rz) = angles(lua, &args)?;
+             charge_host_nanos(lua, price::ANGLES);
+             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("XYZ", rx, ry, rz)))
+         };
+ 
+-        let cframe_from_euler_angles = |lua: &Lua, (rx, ry, rz, order): (f32, f32, f32, Option<LuaValue>)| {
++        // (the angles checked from the last, then the order: nil passed as one is no order)
++        let cframe_from_euler_angles = |lua: &Lua, args: LuaMultiValue| {
++            let mut angles = [0f32; 3];
++            for index in (1..=3).rev() {
++                angles[index - 1] = match args.get(index - 1) {
++                    None => return Err(missing_argument(index, Some("fromEulerAngles"), "number")),
++                    Some(value) => luau_number(lua, value).ok_or_else(|| invalid_argument(index, Some("fromEulerAngles"), "number", value))? as f32,
++                };
++            }
++            let name = rotation_order(args.get(3), "fromEulerAngles")?;
+             charge_host_nanos(lua, price::ANGLES);
+-            let name = rotation_order(order.as_ref(), "fromEulerAngles")?;
+-            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler(name, rx, ry, rz)))
++            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler(name, angles[0], angles[1], angles[2])))
+         };
+ 
+-        let cframe_from_euler_angles_yxz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++        let cframe_from_euler_angles_yxz = move |lua: &Lua, args: LuaMultiValue| {
++            let (rx, ry, rz) = angles(lua, &args)?;
+             charge_host_nanos(lua, price::ANGLES);
+             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
+         };
+ 
+-        let cframe_from_matrix = |lua: &Lua,
+-                                  (pos, rx, ry, rz): (
+-            VectorArg,
+-            VectorArg,
+-            VectorArg,
+-            Option<VectorArg>,
+-        )| {
++        let cframe_from_matrix = |lua: &Lua, args: LuaMultiValue| {
++            let pos = vector_arg(lua, &args, 1, "fromMatrix")?;
++            let rx = vector_arg(lua, &args, 2, "fromMatrix")?;
++            let ry = vector_arg(lua, &args, 3, "fromMatrix")?;
++            let rz = optional_vector_arg(lua, &args, 4, "fromMatrix")?;
+             charge_host_nanos(lua, price::NEW_MATRIX);
+             // (a missing Z column is X cross Y made a unit vector; not measured)
+-            let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx.0), array(ry.0))), |r| array(r.0));
+-            Ok(CFrame::from_parts(array(pos.0), f32m::from_columns(array(rx.0), array(ry.0), z)))
++            let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx), array(ry))), array);
++            Ok(CFrame::from_parts(array(pos), f32m::from_columns(array(rx), array(ry), z)))
+         };
+ 
+-        let cframe_from_orientation = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
++        let cframe_from_orientation = move |lua: &Lua, args: LuaMultiValue| {
++            let (rx, ry, rz) = angles(lua, &args)?;
+             charge_host_nanos(lua, price::ANGLES);
+             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
+         };
+ 
+         // (types::float32 `rotation_between`: the vectors as given, measured to the bit in a playing client)
+-        let cframe_from_rotation_between_vectors = |lua: &Lua, (a, b): (VectorArg, VectorArg)| {
++        let cframe_from_rotation_between_vectors = |lua: &Lua, args: LuaMultiValue| {
++            let a = vector_arg(lua, &args, 1, "fromRotationBetweenVectors")?;
++            let b = vector_arg(lua, &args, 2, "fromRotationBetweenVectors")?;
+             charge_host_nanos(lua, price::ROTATION_BETWEEN);
+-            Ok(CFrame::from_parts([0.0; 3], f32m::rotation_between(array(a.0), array(b.0))))
++            Ok(CFrame::from_parts([0.0; 3], f32m::rotation_between(array(a), array(b))))
+         };
+ 
+-        let cframe_look_at = |lua: &Lua, (from, to, up): (VectorArg, VectorArg, Option<VectorArg>)| {
++        let cframe_look_at = |lua: &Lua, args: LuaMultiValue| {
++            let from = vector_arg(lua, &args, 1, "lookAt")?;
++            let to = vector_arg(lua, &args, 2, "lookAt")?;
++            let up = optional_vector_arg(lua, &args, 3, "lookAt")?;
+             charge_host_nanos(lua, price::LOOK_AT);
+-            Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
++            Ok(look_at(from, to, up.unwrap_or(Vec3::Y)))
+         };
+ 
+         // lookAlong takes the direction itself: far from the origin it is not lookAt(at, at + direction), whose sum
+         // rounds (Studio 0.744, tools/parity/probes/cframe_order.luau)
+-        let cframe_look_along = |lua: &Lua, (at, direction, up): (VectorArg, VectorArg, Option<VectorArg>)| {
++        let cframe_look_along = |lua: &Lua, args: LuaMultiValue| {
++            let at = vector_arg(lua, &args, 1, "lookAlong")?;
++            let direction = vector_arg(lua, &args, 2, "lookAlong")?;
++            let up = optional_vector_arg(lua, &args, 3, "lookAlong")?;
+             charge_host_nanos(lua, price::LOOK_AT);
+-            Ok(CFrame::from_parts(
+-                array(at.0),
+-                f32m::look_along(array(direction.0), array(up.map_or(Vec3::Y, |up| up.0))),
+-            ))
++            Ok(CFrame::from_parts(array(at), f32m::look_along(array(direction), array(up.unwrap_or(Vec3::Y)))))
+         };
+ 
+         // Dynamic args constructor
+-        type ArgsPos = VectorArg;
+         type ArgsLook = (VectorArg, VectorArg, Option<VectorArg>);
+ 
+-        type ArgsPosXYZ = (f32, f32, f32);
+-        type ArgsPosXYZQuat = (f32, f32, f32, f32, f32, f32, f32);
+-        type ArgsMatrix = (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32);
+-
++        // new: 0 arguments (the identity), 1 (a position), 2 (a position looking at a point), 3 (three numbers, or three
++        // Vector3s: a position looking at a point with an up), 7 (a position and a quaternion) or 12 (a position and a
++        // matrix); any other count is the client's count error. Its numbers read as a client reads them: a number or a
++        // string Luau reads as one, anything else 0 (CFrame.new(1, 2, "x") is at 1, 2, 0)
+         let cframe_new = |lua: &Lua, args: LuaMultiValue| {
+             charge_host_nanos(lua, match (args.len(), args.front()) {
+                 (1, _) => price::NEW_VECTOR,
+@@ -515,75 +571,48 @@ impl LuaExportsTable for CFrame {
+                 (12, _) => price::NEW_MATRIX,
+                 _ => 0,
+             });
++            let numbers = |args: &LuaMultiValue| args.iter().map(|value| luau_number(lua, value).unwrap_or(0.0) as f32).collect::<Vec<_>>();
+             match args.len() {
+             0 => Ok(CFrame(Mat4::IDENTITY)),
+ 
+-            1 => match ArgsPos::from_lua_multi(args, lua) {
+-                Ok(pos) => Ok(CFrame(Mat4::from_translation(pos.0))),
+-                Err(err) => Err(err),
+-            },
++            1 => Ok(CFrame(Mat4::from_translation(vector_arg(lua, &args, 1, "new")?))),
+ 
+             // Roblox's CFrame.new(from, to): looking at `to`, as G3D's CoordinateFrame looks (types::float32)
+             2 => {
+-                let vector = |index: usize| {
+-                    ArgsPos::from_lua(args[index].clone(), lua).map_err(|cause| {
+-                        LuaError::BadArgument {
+-                            to: Some("new".to_string()),
+-                            pos: index + 1,
+-                            name: None,
+-                            cause: Arc::new(cause),
+-                        }
+-                    })
+-                };
+-                let (from, to) = (vector(0)?.0, vector(1)?.0);
++                let (from, to) = (vector_arg(lua, &args, 1, "new")?, vector_arg(lua, &args, 2, "new")?);
+                 Ok(CFrame::from_parts(array(from), f32m::look_g3d(array(to - from))))
+             }
+ 
+             3 => {
+-                // the position as plain numbers, without the argument conversions below
+-                let number = |index: usize| match args[index] {
+-                    LuaValue::Number(n) => Some(n as f32),
+-                    LuaValue::Integer(n) => Some(n as f32),
+-                    _ => None,
+-                };
+-                if let (Some(x), Some(y), Some(z)) = (number(0), number(1), number(2)) {
+-                    Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
+-                } else if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua) {
++                if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua)
++                    && !args.iter().any(|value| matches!(value, LuaValue::Number(_) | LuaValue::Integer(_)))
++                {
+                     Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
+-                } else if let Ok((x, y, z)) = ArgsPosXYZ::from_lua_multi(args, lua) {
+-                    Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
+                 } else {
+-                    // TODO: Make this error message better
+-                    Err(LuaError::RuntimeError(
+-                        "Invalid arguments to constructor".to_string(),
+-                    ))
++                    let n = numbers(&args);
++                    Ok(CFrame(Mat4::from_translation(Vec3::new(n[0], n[1], n[2]))))
+                 }
+             }
+ 
+             // The quaternion made unit first, then the matrix (types::float32 `rot_from_quat`, as Lerp makes one; a playing
+             // client, 0.747, 134 quaternions to the bit: tools/parity/probes/cframe_new_quat.luau). A zero quaternion gives
+             // not-a-number.
+-            7 => match ArgsPosXYZQuat::from_lua_multi(args, lua) {
+-                Ok((x, y, z, qx, qy, qz, qw)) => Ok(CFrame::from_parts([x, y, z], f32m::rot_from_quat([qx, qy, qz, qw]))),
+-                Err(err) => Err(err),
+-            },
+-
+-            12 => match ArgsMatrix::from_lua_multi(args, lua) {
+-                Ok((x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)) => {
+-                    Ok(CFrame(Mat4::from_cols_array_2d(&[
+-                        [r00, r10, r20, 0.0],
+-                        [r01, r11, r21, 0.0],
+-                        [r02, r12, r22, 0.0],
+-                        [x, y, z, 1.0],
+-                    ])))
+-                }
+-                Err(err) => Err(err),
+-            },
++            7 => {
++                let n = numbers(&args);
++                Ok(CFrame::from_parts([n[0], n[1], n[2]], f32m::rot_from_quat([n[3], n[4], n[5], n[6]])))
++            }
++
++            12 => {
++                let n = numbers(&args);
++                Ok(CFrame(Mat4::from_cols_array_2d(&[
++                    [n[3], n[6], n[9], 0.0],
++                    [n[4], n[7], n[10], 0.0],
++                    [n[5], n[8], n[11], 0.0],
++                    [n[0], n[1], n[2], 1.0],
++                ])))
++            }
+ 
+-            _ => Err(LuaError::RuntimeError(format!(
+-                "Invalid number of arguments: expected 0, 1, 3, 7, or 12, got {}",
+-                args.len()
+-            ))),
++            count => Err(script_error(format!("Invalid number of arguments: {count}"), false)),
+             }
+         };
+ 
+@@ -674,90 +703,67 @@ impl LuaUserData for CFrame {
+ 
+     #[allow(clippy::too_many_lines)]
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+-        // Methods, and the deprecated lowercase names Roblox still answers
+-        aliased!(methods, price::INVERSE, ["Inverse", "inverse"], |_, this, ()| Ok(this.inverse()));
+-        aliased!(
+-            methods,
+-            price::LERP,
+-            ["Lerp", "lerp"],
+-            |_, this, (goal, alpha): (LuaUserDataRef<CFrame>, f32)| {
+-                let (a, b) = (this.pos(), goal.pos());
+-                let position = [0, 1, 2].map(|i| f32m::lerp(a[i], b[i], alpha));
+-                Ok(CFrame::from_parts(position, f32m::lerp_rotation(&this.rot(), &goal.rot(), alpha)))
+-            }
+-        );
+-        methods.add_method("Orthonormalize", charged_method(price::ORTHONORMALIZE, |_, this, ()| {
++        // Methods, and the deprecated lowercase names Roblox still answers, with a playing client's argument errors (Studio
++        // 0.747, ree's tools/parity/probes/datatype_errors.luau): Inverse and Lerp go through its reflection ("Argument 1
++        // missing or nil", "Unable to cast double to CoordinateFrame"), Lerp checking self, then the alpha, then the goal;
++        // the others are checked as its Luau checks them, from the calling line (self named as a `.` call names it, a later
++        // argument as a `:` call does), and the spaces take any number of frames or points after self
++        aliased_named!(methods, ["Inverse", "inverse"], |_| |lua: &Lua, args: LuaMultiValue| {
++            let this = reflected_arg::<CFrame>(&args, 1, "CoordinateFrame")?;
++            charge_host_nanos(lua, price::INVERSE);
++            Ok(this.inverse())
++        });
++        aliased_named!(methods, ["Lerp", "lerp"], |_| |lua: &Lua, args: LuaMultiValue| {
++            let this = reflected_arg::<CFrame>(&args, 1, "CoordinateFrame")?;
++            let alpha = reflected_float_arg(lua, &args, 3)? as f32;
++            let goal = reflected_arg::<CFrame>(&args, 2, "CoordinateFrame")?;
++            charge_host_nanos(lua, price::LERP);
++            let (a, b) = (this.pos(), goal.pos());
++            let position = [0, 1, 2].map(|i| f32m::lerp(a[i], b[i], alpha));
++            Ok(CFrame::from_parts(position, f32m::lerp_rotation(&this.rot(), &goal.rot(), alpha)))
++        });
++        methods.add_function("Orthonormalize", |lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, "Orthonormalize", "CFrame")?;
++            charge_host_nanos(lua, price::ORTHONORMALIZE);
+             Ok(CFrame::from_parts(this.pos(), f32m::orthonormalize(&this.rot())))
+-        }));
+-        aliased!(
+-            methods,
+-            price::TO_WORLD,
+-            ["ToWorldSpace", "toWorldSpace"],
+-            |_, this, rhs: Variadic<LuaUserDataRef<CFrame>>| {
+-                Ok(rhs
+-                    .into_iter()
+-                    .map(|cf| *this * *cf)
+-                    .collect::<Variadic<_>>())
+-            }
+-        );
+-        aliased!(
+-            methods,
+-            price::TO_OBJECT,
+-            ["ToObjectSpace", "toObjectSpace"],
+-            |_, this, rhs: Variadic<LuaUserDataRef<CFrame>>| {
+-                let inverse = this.inverse();
+-                Ok(rhs
+-                    .into_iter()
+-                    .map(|cf| inverse * *cf)
+-                    .collect::<Variadic<_>>())
+-            }
+-        );
+-        aliased!(
+-            methods,
+-            price::POINT_TO_WORLD,
+-            ["PointToWorldSpace", "pointToWorldSpace"],
+-            |_, this, rhs: Variadic<VectorArg>| {
+-                Ok(rhs
+-                    .into_iter()
+-                    .map(|v3| native_vector(this.point_to_world(v3.0)))
+-                    .collect::<Variadic<_>>())
+-            }
+-        );
+-        aliased!(
+-            methods,
+-            price::POINT_TO_OBJECT,
+-            ["PointToObjectSpace", "pointToObjectSpace"],
+-            |_, this, rhs: Variadic<VectorArg>| {
+-                Ok(rhs
+-                    .into_iter()
+-                    .map(|v3| native_vector(this.point_to_object(v3.0)))
+-                    .collect::<Variadic<_>>())
+-            }
+-        );
+-        aliased!(
+-            methods,
+-            price::VECTOR_TO_WORLD,
+-            ["VectorToWorldSpace", "vectorToWorldSpace"],
+-            |_, this, rhs: Variadic<VectorArg>| {
+-                Ok(rhs
+-                    .into_iter()
+-                    .map(|v3| native_vector(this.vector_to_world(v3.0)))
+-                    .collect::<Variadic<_>>())
+-            }
+-        );
+-        aliased!(
+-            methods,
+-            price::VECTOR_TO_OBJECT,
+-            ["VectorToObjectSpace", "vectorToObjectSpace"],
+-            |_, this, rhs: Variadic<VectorArg>| {
+-                Ok(rhs
+-                    .into_iter()
+-                    .map(|v3| native_vector(this.vector_to_object(v3.0)))
+-                    .collect::<Variadic<_>>())
+-            }
+-        );
++        });
++        aliased_named!(methods, ["ToWorldSpace", "toWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
++            let frames = frames_of(&args)?;
++            charge_host_nanos(lua, price::TO_WORLD);
++            Ok(frames.into_iter().map(|cf| *this * cf).collect::<Variadic<_>>())
++        });
++        aliased_named!(methods, ["ToObjectSpace", "toObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
++            let frames = frames_of(&args)?;
++            charge_host_nanos(lua, price::TO_OBJECT);
++            let inverse = this.inverse();
++            Ok(frames.into_iter().map(|cf| inverse * cf).collect::<Variadic<_>>())
++        });
++        aliased_named!(methods, ["PointToWorldSpace", "pointToWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let (this, points) = points_of(lua, &args, name)?;
++            charge_host_nanos(lua, price::POINT_TO_WORLD);
++            Ok(points.into_iter().map(|v3| native_vector(this.point_to_world(v3))).collect::<Variadic<_>>())
++        });
++        aliased_named!(methods, ["PointToObjectSpace", "pointToObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let (this, points) = points_of(lua, &args, name)?;
++            charge_host_nanos(lua, price::POINT_TO_OBJECT);
++            Ok(points.into_iter().map(|v3| native_vector(this.point_to_object(v3))).collect::<Variadic<_>>())
++        });
++        aliased_named!(methods, ["VectorToWorldSpace", "vectorToWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let (this, points) = points_of(lua, &args, name)?;
++            charge_host_nanos(lua, price::VECTOR_TO_WORLD);
++            Ok(points.into_iter().map(|v3| native_vector(this.vector_to_world(v3))).collect::<Variadic<_>>())
++        });
++        aliased_named!(methods, ["VectorToObjectSpace", "vectorToObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let (this, points) = points_of(lua, &args, name)?;
++            charge_host_nanos(lua, price::VECTOR_TO_OBJECT);
++            Ok(points.into_iter().map(|v3| native_vector(this.vector_to_object(v3))).collect::<Variadic<_>>())
++        });
+         #[rustfmt::skip]
+-        aliased!(methods, price::COMPONENTS, ["GetComponents", "components"], |_, this, ()| {
++        aliased_named!(methods, ["GetComponents", "components"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
++            charge_host_nanos(lua, price::COMPONENTS);
+             let pos = this.position();
+             let transposed = this.orientation().transpose();
+             Ok((
+@@ -767,22 +773,32 @@ impl LuaUserData for CFrame {
+                 transposed.z_axis.x, transposed.z_axis.y,   transposed.z_axis.z,
+             ))
+         });
+-        aliased!(methods, price::EULER, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |_, this, ()| {
++        aliased_named!(methods, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
++            charge_host_nanos(lua, price::EULER);
+             Ok(f32m::to_euler("XYZ", &this.rot()))
+         });
+         // (and their lowercase names, measured in a client: ree's tools/parity/probes/camelcase.luau)
+-        aliased!(methods, price::EULER, ["ToEulerAnglesYXZ", "toEulerAnglesYXZ"], |_, this, ()| {
++        aliased_named!(methods, ["ToEulerAnglesYXZ", "toEulerAnglesYXZ"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
++            charge_host_nanos(lua, price::EULER);
+             Ok(f32m::to_euler("YXZ", &this.rot()))
+         });
+-        aliased!(methods, price::EULER, ["ToOrientation", "toOrientation"], |_, this, ()| {
++        aliased_named!(methods, ["ToOrientation", "toOrientation"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
++            charge_host_nanos(lua, price::EULER);
+             Ok(f32m::to_euler("YXZ", &this.rot()))
+         });
+         // ToEulerAngles(order = Enum.RotationOrder.XYZ): the three angles in x, y, z order for the rotation order named
+-        aliased!(methods, price::EULER, ["ToEulerAngles", "toEulerAngles"], |_, this, order: Option<LuaValue>| {
+-            let name = rotation_order(order.as_ref(), "ToEulerAngles")?;
+-            Ok(f32m::to_euler(name, &this.rot()))
++        aliased_named!(methods, ["ToEulerAngles", "toEulerAngles"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
++            let order = rotation_order(args.get(1), name)?;
++            charge_host_nanos(lua, price::EULER);
++            Ok(f32m::to_euler(order, &this.rot()))
+         });
+-        aliased!(methods, price::AXIS_ANGLE, ["ToAxisAngle", "toAxisAngle"], |_, this, ()| {
++        aliased_named!(methods, ["ToAxisAngle", "toAxisAngle"], |name| move |lua: &Lua, args: LuaMultiValue| {
++            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
++            charge_host_nanos(lua, price::AXIS_ANGLE);
+             let (axis, angle) = f32m::to_axis_angle(&this.rot());
+             Ok((native_vector(Vec3::from_array(axis)), angle))
+         });
+@@ -792,7 +808,12 @@ impl LuaUserData for CFrame {
+             userdata_impl_eq(lua, this, other)
+         });
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+-        methods.add_meta_method(LuaMetaMethod::Mul, |lua, this, rhs: LuaValue| {
++        // *, + and - check their operands as a client's Luau checks do, from the calling line: the first a CFrame
++        // ("invalid argument #1 (CFrame expected, got number)", the CFrame on the right of a type with no * of its own),
++        // the second a Vector3 (or a CFrame, for *)
++        methods.add_meta_function(LuaMetaMethod::Mul, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let this = *userdata_of::<CFrame>(Some(&lhs)).ok_or_else(|| invalid_argument(1, None, "CFrame", &lhs))?;
++            let this = &this;
+             match &rhs {
+                 LuaValue::Vector(v) => {
+                     charge_host_nanos(lua, price::MUL_VECTOR);
+@@ -811,30 +832,60 @@ impl LuaUserData for CFrame {
+                 }
+                 _ => {}
+             }
+-            Err(LuaError::FromLuaConversionError {
+-                from: rhs.type_name(),
+-                to: "userdata".to_string(),
+-                message: Some(format!(
+-                    "Expected CFrame or Vector3, got {}",
+-                    rhs.type_name()
+-                )),
+-            })
++            Err(invalid_argument(2, None, "Vector3", &rhs))
+         });
+-        methods.add_meta_method(
+-            LuaMetaMethod::Add,
+-            |lua, this, vec: VectorArg| {
+-                charge_host_nanos(lua, price::ADD_VECTOR);
+-                Ok(*this + Vector3(vec.0))
+-            },
+-        );
+-        methods.add_meta_method(
+-            LuaMetaMethod::Sub,
+-            |lua, this, vec: VectorArg| {
+-                charge_host_nanos(lua, price::ADD_VECTOR);
+-                Ok(*this - Vector3(vec.0))
+-            },
+-        );
++        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (this, vec) = translation(lua, &lhs, &rhs)?;
++            charge_host_nanos(lua, price::ADD_VECTOR);
++            Ok(this + Vector3(vec))
++        });
++        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (this, vec) = translation(lua, &lhs, &rhs)?;
++            charge_host_nanos(lua, price::ADD_VECTOR);
++            Ok(this - Vector3(vec))
++        });
++    }
++}
++
++/// Argument `index` (1-based) of constructor `name` as a Vector3, checked as a client's Luau checks it.
++fn vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Vec3> {
++    match args.get(index - 1) {
++        None => Err(missing_argument(index, Some(name), "Vector3")),
++        Some(value) => VectorArg::from_lua(value.clone(), lua).map(|v| v.0).map_err(|_| invalid_argument(index, Some(name), "Vector3", value)),
++    }
++}
++
++/// An optional Vector3 argument: none when not passed, else checked as [`vector_arg`] (nil passed is no Vector3).
++fn optional_vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Option<Vec3>> {
++    if index > args.len() { Ok(None) } else { vector_arg(lua, args, index, name).map(Some) }
++}
++
++/// The CFrame and the Vector3 of a + or a -.
++fn translation(lua: &Lua, lhs: &LuaValue, rhs: &LuaValue) -> LuaResult<(CFrame, Vec3)> {
++    let this = *userdata_of::<CFrame>(Some(lhs)).ok_or_else(|| invalid_argument(1, None, "CFrame", lhs))?;
++    let vec = VectorArg::from_lua(rhs.clone(), lua).map_err(|_| invalid_argument(2, None, "Vector3", rhs))?;
++    Ok((this, vec.0))
++}
++
++/// Self and the points after it of a space method (PointToWorldSpace and the others).
++fn points_of(lua: &Lua, args: &LuaMultiValue, name: &str) -> LuaResult<(CFrame, Vec<Vec3>)> {
++    let this = *luau_self::<CFrame>(args, name, "CFrame")?;
++    let points = args
++        .iter()
++        .enumerate()
++        .skip(1)
++        .map(|(index, value)| VectorArg::from_lua(value.clone(), lua).map(|v| v.0).map_err(|_| invalid_argument(index + 1, None, "Vector3", value)))
++        .collect::<LuaResult<Vec<_>>>()?;
++    // (nothing after self is one zero vector, as a playing client answers: Studio 0.747, ree's datatype_errors.luau)
++    Ok((this, if points.is_empty() { vec![Vec3::ZERO] } else { points }))
++}
++
++/// The frames after self of ToWorldSpace or ToObjectSpace (none: one identity, as a playing client answers).
++fn frames_of(args: &LuaMultiValue) -> LuaResult<Vec<CFrame>> {
++    if args.len() < 2 {
++        return Ok(vec![CFrame::IDENTITY]);
+     }
++    (2..=args.len()).map(|index| luau_arg::<CFrame>(args, index, "CFrame").map(|cf| *cf)).collect()
+ }
+ 
+ impl fmt::Display for CFrame {
+diff --git a/crates/lune-roblox/src/datatypes/types/color3.rs b/crates/lune-roblox/src/datatypes/types/color3.rs
+--- a/crates/lune-roblox/src/datatypes/types/color3.rs
++++ b/crates/lune-roblox/src/datatypes/types/color3.rs
+@@ -11,6 +11,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::super::*;
++use crate::datatypes::script_error::{luau_number, luau_self, reflected_arg, reflected_float_arg, script_error};
+ 
+ /**
+     An implementation of the [Color3](https://create.roblox.com/docs/reference/engine/datatypes/Color3) Roblox datatype.
+@@ -40,7 +41,14 @@ impl LuaExportsTable for Color3 {
+             })
+         };
+ 
+-        let color3_from_hsv = |lua: &Lua, (h, s, v): (f32, f32, f32)| {
++        // (fewer than three arguments is the client's own message, without a position; the three read as a client reads
++        // them, a string Luau reads as a number included and anything else 0: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let color3_from_hsv = |lua: &Lua, args: LuaMultiValue| {
++            if args.len() < 3 {
++                return Err(script_error("Color3.fromHSV requires three arguments", false));
++            }
++            let component = |index: usize| luau_number(lua, &args[index]).unwrap_or(0.0) as f32;
++            let (h, s, v) = (component(0), component(1), component(2));
+             super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
+             // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c, in floats, the hue clamped to 0..1 first
+             // (fromHSV(1.5, 1, 1) is fromHSV(1, 1, 1) and -0.25 is 0: Studio 0.744, tools/parity/probes/datatypes.luau)
+@@ -64,7 +72,16 @@ impl LuaExportsTable for Color3 {
+             Ok(Color3 { r, g, b })
+         };
+ 
+-        let color3_from_hex = |_: &Lua, hex: String| {
++        // (no argument is the client's own message; a number is its text, as Luau turns one into a string; any other value is
++        // malformed text: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let color3_from_hex = |lua: &Lua, args: LuaMultiValue| {
++            let hex = match args.front() {
++                None => return Err(script_error("Color3.fromHex requires one argument", false)),
++                Some(value @ (LuaValue::String(_) | LuaValue::Number(_) | LuaValue::Integer(_))) => {
++                    lua.coerce_string(value.clone())?.map(|text| text.to_string_lossy()).unwrap_or_default()
++                }
++                Some(_) => return Err(script_error("Unable to convert characters to hex value", false)),
++            };
+             let trimmed = hex.trim_start_matches('#').to_ascii_uppercase();
+             let chars = if !trimmed.is_ascii() {
+                 return Err(LuaError::RuntimeError("Unable to convert characters to hex value".to_string()));
+@@ -140,7 +157,13 @@ impl LuaUserData for Color3 {
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+         // Methods
+         // a + (b - a) * t per channel in floats (Studio 0.744, tools/parity/probes/datatypes.luau)
+-        let lerp = |lua: &Lua, this: &Color3, (rhs, alpha): (LuaUserDataRef<Color3>, f32)| {
++        // (a playing client's reflection checks self, then the alpha, then the goal: "Argument 3 missing or nil", "Unable
++        // to cast double to Color3"; ToHSV and ToHex check self in Luau, from the calling line; Studio 0.747, ree's
++        // tools/parity/probes/datatype_errors.luau)
++        let lerp = |lua: &Lua, args: LuaMultiValue| {
++            let this = reflected_arg::<Color3>(&args, 1, "Color3")?;
++            let alpha = reflected_float_arg(lua, &args, 3)? as f32;
++            let rhs = reflected_arg::<Color3>(&args, 2, "Color3")?;
+             super::charge_host_nanos(lua, super::datatype_price::COLOR3_LERP);
+             let lerp = super::float32::lerp;
+             Ok(Color3 {
+@@ -149,14 +172,18 @@ impl LuaUserData for Color3 {
+                 b: lerp(this.b, rhs.b, alpha),
+             })
+         };
+-        methods.add_method("Lerp", lerp);
+-        methods.add_method("lerp", lerp);
++        methods.add_function("Lerp", lerp);
++        methods.add_function("lerp", lerp);
+         // G3D's (Foley and van Dam) in floats: pure red's hue is 1 (Studio 0.744, tools/parity/probes/datatypes.luau,
+         // cframe_order.luau)
+-        methods.add_method("ToHSV", |_, this, ()| Ok(super::float32::to_hsv(this.r, this.g, this.b)));
++        methods.add_function("ToHSV", |_, args: LuaMultiValue| {
++            let this = luau_self::<Color3>(&args, "ToHSV", "Color3")?;
++            Ok(super::float32::to_hsv(this.r, this.g, this.b))
++        });
+         // Lower-case hex of each channel times 255, rounded half away from zero and clamped to 0..255: 0.5 is 80,
+         // 0.5 / 255 is 01, 2.5 / 255 is 03, -0.1 is 00 (Studio 0.744)
+-        methods.add_method("ToHex", |_, this, ()| {
++        methods.add_function("ToHex", |_, args: LuaMultiValue| {
++            let this = luau_self::<Color3>(&args, "ToHex", "Color3")?;
+             let byte = |value: f32| (value * 255.0).round().clamp(u8::MIN as f32, u8::MAX as f32) as u8;
+             Ok(format!("{:02x}{:02x}{:02x}", byte(this.r), byte(this.g), byte(this.b)))
+         });
+diff --git a/crates/lune-roblox/src/datatypes/types/color_sequence.rs b/crates/lune-roblox/src/datatypes/types/color_sequence.rs
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence.rs
+@@ -78,7 +78,8 @@ impl LuaExportsTable for ColorSequence {
+             } else {
+                 // Studio's message for a missing or non-table argument
+                 Err(LuaError::RuntimeError(
+-                    "ColorSequence.new(): table expected".to_string(),
++                    // (with its full stop, as a playing client's: Studio 0.747, ree's datatype_errors.luau)
++                    "ColorSequence.new(): table expected.".to_string(),
+                 ))
+             }
+         };
+diff --git a/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs b/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
+--- a/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/color_sequence_keypoint.rs
+@@ -8,6 +8,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, Color3};
++use crate::datatypes::script_error::{ctor_number, script_error, userdata_of};
+ 
+ /**
+     An implementation of the [ColorSequenceKeypoint](https://create.roblox.com/docs/reference/engine/datatypes/ColorSequenceKeypoint) Roblox datatype.
+@@ -24,8 +25,13 @@ impl LuaExportsTable for ColorSequenceKeypoint {
+     const EXPORT_NAME: &'static str = "ColorSequenceKeypoint";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
++        // (the time checked as a client's Luau checks it, naming the constructor; a color that is no Color3 is the client's
++        // own message, without a position: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+         let color_sequence_keypoint_new =
+-            |lua: &Lua, (time, color): (f32, LuaUserDataRef<Color3>)| {
++            |lua: &Lua, args: LuaMultiValue| {
++                let time = ctor_number(lua, &args, 1, "new")? as f32;
++                let color = userdata_of::<Color3>(args.get(1))
++                    .ok_or_else(|| script_error("could not parse arg #2 to ColorSequenceKeypoint.new(), Color3 expected.", false))?;
+                 super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
+                 Ok(ColorSequenceKeypoint {
+                     time,
+diff --git a/crates/lune-roblox/src/datatypes/types/number_range.rs b/crates/lune-roblox/src/datatypes/types/number_range.rs
+--- a/crates/lune-roblox/src/datatypes/types/number_range.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_range.rs
+@@ -8,6 +8,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::super::*;
++use crate::datatypes::script_error::{ctor_number, luau_number};
+ 
+ /**
+     An implementation of the [NumberRange](https://create.roblox.com/docs/reference/engine/datatypes/NumberRange) Roblox datatype.
+@@ -26,12 +27,15 @@ impl LuaExportsTable for NumberRange {
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         // Roblox's documentation: "The minimum must be less than or equal to maximum" (not measured
+         // in Studio; the message is rbxmk's wording). Lune swapped the two instead.
+-        let number_range_new = |_: &Lua, (min, max): (f32, Option<f32>)| match max {
+-            Some(max) if min > max => Err(LuaError::RuntimeError(
+-                "NumberRange: invalid range".to_string(),
+-            )),
+-            Some(max) => Ok(NumberRange { min, max }),
+-            None => Ok(NumberRange { min, max: min }),
++        // (the minimum checked as a client's Luau checks it, naming the constructor; a maximum that is no number is none:
++        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let number_range_new = |lua: &Lua, args: LuaMultiValue| {
++            let min = ctor_number(lua, &args, 1, "new")? as f32;
++            match args.get(1).and_then(|value| luau_number(lua, value)).map(|max| max as f32) {
++                Some(max) if min > max => Err(LuaError::RuntimeError("NumberRange: invalid range".to_string())),
++                Some(max) => Ok(NumberRange { min, max }),
++                None => Ok(NumberRange { min, max: min }),
++            }
+         };
+ 
+         TableBuilder::new(lua)?
+diff --git a/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs b/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
+--- a/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
++++ b/crates/lune-roblox/src/datatypes/types/number_sequence_keypoint.rs
+@@ -8,6 +8,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::super::*;
++use crate::datatypes::script_error::{ctor_number, luau_number};
+ 
+ /**
+     An implementation of the [NumberSequenceKeypoint](https://create.roblox.com/docs/reference/engine/datatypes/NumberSequenceKeypoint) Roblox datatype.
+@@ -25,8 +26,13 @@ impl LuaExportsTable for NumberSequenceKeypoint {
+     const EXPORT_NAME: &'static str = "NumberSequenceKeypoint";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
++        // (time and value checked as a client's Luau checks them, naming the constructor; an envelope that is no number is
++        // 0: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+         let number_sequence_keypoint_new =
+-            |lua: &Lua, (time, value, envelope): (f32, f32, Option<f32>)| {
++            |lua: &Lua, args: LuaMultiValue| {
++                let time = ctor_number(lua, &args, 1, "new")? as f32;
++                let value = ctor_number(lua, &args, 2, "new")? as f32;
++                let envelope = args.get(2).and_then(|value| luau_number(lua, value)).map(|envelope| envelope as f32);
+                 super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
+                 // Roblox's documentation: "The envelope parameter must be a non-negative number"
+                 // (the message is not measured in Studio)
+diff --git a/crates/lune-roblox/src/datatypes/types/ray.rs b/crates/lune-roblox/src/datatypes/types/ray.rs
+--- a/crates/lune-roblox/src/datatypes/types/ray.rs
++++ b/crates/lune-roblox/src/datatypes/types/ray.rs
+@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, Vector3};
++use crate::datatypes::script_error::{luau_arg, luau_self, optional_ctor_arg};
+ 
+ /**
+     An implementation of the [Ray](https://create.roblox.com/docs/reference/engine/datatypes/Ray)
+@@ -36,13 +37,16 @@ impl LuaExportsTable for Ray {
+     const EXPORT_NAME: &'static str = "Ray";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let ray_new =
+-            |_: &Lua, (origin, direction): (LuaUserDataRef<Vector3>, LuaUserDataRef<Vector3>)| {
+-                Ok(Ray {
+-                    origin: origin.0,
+-                    direction: direction.0,
+-                })
+-            };
++        // (two Vector3s checked as a client's Luau checks them, naming the constructor; one not passed is the zero vector:
++        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let ray_new = |_: &Lua, args: LuaMultiValue| {
++            let origin = optional_ctor_arg::<Vector3>(&args, 1, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
++            let direction = optional_ctor_arg::<Vector3>(&args, 2, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
++            Ok(Ray {
++                origin: origin.0,
++                direction: direction.0,
++            })
++        };
+ 
+         TableBuilder::new(lua)?
+             .with_function("new", ray_new)?
+@@ -67,10 +71,16 @@ impl LuaUserData for Ray {
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+         // Methods
+-        methods.add_method("ClosestPoint", |_, this, to: LuaUserDataRef<Vector3>| {
++        // (self named as a `.` call names it, the point as a `:` call reports it: "missing argument #2 (Vector3 expected)";
++        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        methods.add_function("ClosestPoint", |_, args: LuaMultiValue| {
++            let this = luau_self::<Ray>(&args, "ClosestPoint", "Ray")?;
++            let to = luau_arg::<Vector3>(&args, 2, "Vector3")?;
+             Ok(Vector3(this.closest_point(to.0)))
+         });
+-        methods.add_method("Distance", |_, this, to: LuaUserDataRef<Vector3>| {
++        methods.add_function("Distance", |_, args: LuaMultiValue| {
++            let this = luau_self::<Ray>(&args, "Distance", "Ray")?;
++            let to = luau_arg::<Vector3>(&args, 2, "Vector3")?;
+             let closest = this.closest_point(to.0);
+             Ok((closest - to.0).length())
+         });
+diff --git a/crates/lune-roblox/src/datatypes/types/rect.rs b/crates/lune-roblox/src/datatypes/types/rect.rs
+--- a/crates/lune-roblox/src/datatypes/types/rect.rs
++++ b/crates/lune-roblox/src/datatypes/types/rect.rs
+@@ -10,6 +10,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, Vector2};
++use crate::datatypes::script_error::{invalid_argument, luau_number, script_error, userdata_of};
+ 
+ /**
+     An implementation of the [Rect](https://create.roblox.com/docs/reference/engine/datatypes/Rect)
+@@ -36,28 +37,23 @@ impl LuaExportsTable for Rect {
+     const EXPORT_NAME: &'static str = "Rect";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        type ArgsVector2s = (
+-            Option<LuaUserDataRef<Vector2>>,
+-            Option<LuaUserDataRef<Vector2>>,
+-        );
+-        type ArgsNums = (Option<f32>, Option<f32>, Option<f32>, Option<f32>);
+-
+-        let rect_new = |lua: &Lua, args: LuaMultiValue| {
+-            if let Ok((min, max)) = ArgsVector2s::from_lua_multi(args.clone(), lua) {
+-                Ok(Rect::new(
+-                    min.map(|m| *m).unwrap_or_default().0,
+-                    max.map(|m| *m).unwrap_or_default().0,
+-                ))
+-            } else if let Ok((x0, y0, x1, y1)) = ArgsNums::from_lua_multi(args, lua) {
+-                let min = Vec2::new(x0.unwrap_or_default(), y0.unwrap_or_default());
+-                let max = Vec2::new(x1.unwrap_or_default(), y1.unwrap_or_default());
+-                Ok(Rect::new(min, max))
+-            } else {
+-                // FUTURE: Better error message here using given arg types
+-                Err(LuaError::RuntimeError(
+-                    "Invalid arguments to constructor".to_string(),
+-                ))
++        // Rect.new() (empty), Rect.new(min, max) with two Vector2s checked as a client's Luau checks them, or Rect.new(x0,
++        // y0, x1, y1) with four numbers read as a client reads them (a string Luau reads as one, anything else 0), the corners
++        // put in order; any other count is the client's count error, without a position (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let rect_new = |lua: &Lua, args: LuaMultiValue| match args.len() {
++            0 => Ok(Rect::new(Vec2::ZERO, Vec2::ZERO)),
++            2 => {
++                let corner = |index: usize| {
++                    let value = &args[index - 1];
++                    userdata_of::<Vector2>(Some(value)).map(|v| v.0).ok_or_else(|| invalid_argument(index, Some("new"), "Vector2", value))
++                };
++                Ok(Rect::new(corner(1)?, corner(2)?))
+             }
++            4 => {
++                let n = args.iter().map(|value| luau_number(lua, value).unwrap_or(0.0) as f32).collect::<Vec<_>>();
++                Ok(Rect::new(Vec2::new(n[0], n[1]), Vec2::new(n[2], n[3])))
++            }
++            count => Err(script_error(format!("Invalid number of arguments: {count}"), false)),
+         };
+ 
+         TableBuilder::new(lua)?
+diff --git a/crates/lune-roblox/src/datatypes/types/region3.rs b/crates/lune-roblox/src/datatypes/types/region3.rs
+--- a/crates/lune-roblox/src/datatypes/types/region3.rs
++++ b/crates/lune-roblox/src/datatypes/types/region3.rs
+@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, CFrame, Vector3};
++use crate::datatypes::script_error::{optional_ctor_arg, reflected_arg, reflected_float_arg};
+ 
+ /**
+     An implementation of the [Region3](https://create.roblox.com/docs/reference/engine/datatypes/Region3)
+@@ -26,13 +27,16 @@ impl LuaExportsTable for Region3 {
+     const EXPORT_NAME: &'static str = "Region3";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let region3_new =
+-            |_: &Lua, (min, max): (LuaUserDataRef<Vector3>, LuaUserDataRef<Vector3>)| {
+-                Ok(Region3 {
+-                    min: min.0,
+-                    max: max.0,
+-                })
+-            };
++        // (two Vector3s checked as a client's Luau checks them, naming the constructor; one not passed is the zero vector:
++        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let region3_new = |_: &Lua, args: LuaMultiValue| {
++            let min = optional_ctor_arg::<Vector3>(&args, 1, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
++            let max = optional_ctor_arg::<Vector3>(&args, 2, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
++            Ok(Region3 {
++                min: min.0,
++                max: max.0,
++            })
++        };
+ 
+         TableBuilder::new(lua)?
+             .with_function("new", region3_new)?
+@@ -50,7 +54,11 @@ impl LuaUserData for Region3 {
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+         // Methods
+-        methods.add_method("ExpandToGrid", |_, this, resolution: f32| {
++        // (a playing client's reflection checks the resolution, then self: "Argument 2 missing or nil", "Unable to cast
++        // string to float", "Unable to cast double to Region3"; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        methods.add_function("ExpandToGrid", |lua, args: LuaMultiValue| {
++            let resolution = reflected_float_arg(lua, &args, 2)? as f32;
++            let this = reflected_arg::<Region3>(&args, 1, "Region3")?;
+             Ok(Region3 {
+                 min: (this.min / resolution).floor() * resolution,
+                 max: (this.max / resolution).ceil() * resolution,
+diff --git a/crates/lune-roblox/src/datatypes/types/region3int16.rs b/crates/lune-roblox/src/datatypes/types/region3int16.rs
+--- a/crates/lune-roblox/src/datatypes/types/region3int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/region3int16.rs
+@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, Vector3int16};
++use crate::datatypes::script_error::optional_ctor_arg;
+ 
+ /**
+     An implementation of the [Region3int16](https://create.roblox.com/docs/reference/engine/datatypes/Region3int16)
+@@ -26,13 +27,13 @@ impl LuaExportsTable for Region3int16 {
+     const EXPORT_NAME: &'static str = "Region3int16";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let region3int16_new =
+-            |_: &Lua, (min, max): (LuaUserDataRef<Vector3int16>, LuaUserDataRef<Vector3int16>)| {
+-                Ok(Region3int16 {
+-                    min: min.0,
+-                    max: max.0,
+-                })
+-            };
++        // (two Vector3int16s checked as a client's Luau checks them, naming the constructor; one not passed is zero:
++        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let region3int16_new = |_: &Lua, args: LuaMultiValue| {
++            let min = optional_ctor_arg::<Vector3int16>(&args, 1, "new", "Vector3int16")?.map_or(Default::default(), |v| v.0);
++            let max = optional_ctor_arg::<Vector3int16>(&args, 2, "new", "Vector3int16")?.map_or(Default::default(), |v| v.0);
++            Ok(Region3int16 { min, max })
++        };
+ 
+         TableBuilder::new(lua)?
+             .with_function("new", region3int16_new)?
+diff --git a/crates/lune-roblox/src/datatypes/types/udim.rs b/crates/lune-roblox/src/datatypes/types/udim.rs
+--- a/crates/lune-roblox/src/datatypes/types/udim.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim.rs
+@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::super::*;
++use crate::datatypes::script_error::same_operands;
+ 
+ /**
+     An implementation of the [UDim](https://create.roblox.com/docs/reference/engine/datatypes/UDim) Roblox datatype.
+@@ -61,13 +62,17 @@ impl LuaUserData for UDim {
+             super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
+             userdata_impl_unm(lua, this, ())
+         });
+-        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<UDim>| {
++        // (two UDims, whichever side: a client raises "invalid argument #2 (UDim expected, got number)" from the calling
++        // line, Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<UDim>(&lhs, &rhs, "UDim")?;
+             super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
+-            userdata_impl_add(lua, this, rhs)
++            Ok(a + b)
+         });
+-        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<UDim>| {
++        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<UDim>(&lhs, &rhs, "UDim")?;
+             super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
+-            userdata_impl_sub(lua, this, rhs)
++            Ok(a - b)
+         });
+     }
+ }
+diff --git a/crates/lune-roblox/src/datatypes/types/udim2.rs b/crates/lune-roblox/src/datatypes/types/udim2.rs
+--- a/crates/lune-roblox/src/datatypes/types/udim2.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim2.rs
+@@ -11,6 +11,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, UDim};
++use crate::datatypes::script_error::{reflected_arg, reflected_float_arg, same_operands};
+ 
+ /**
+     An implementation of the [UDim2](https://create.roblox.com/docs/reference/engine/datatypes/UDim2) Roblox datatype.
+@@ -99,7 +100,12 @@ impl LuaUserData for UDim2 {
+         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
+         // Each scale is a + (b - a) * t in floats, each offset the same rounded half away from zero (Studio 0.744,
+         // tools/parity/probes/datatypes.luau)
+-        let lerp = |lua: &Lua, this: &UDim2, (goal, alpha): (LuaUserDataRef<UDim2>, f32)| {
++        // (a playing client's reflection checks self, then the alpha, then the goal: "Argument 3 missing or nil", "Unable
++        // to cast double to UDim2"; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let lerp = |lua: &Lua, args: LuaMultiValue| {
++            let this = reflected_arg::<UDim2>(&args, 1, "UDim2")?;
++            let alpha = reflected_float_arg(lua, &args, 3)? as f32;
++            let goal = reflected_arg::<UDim2>(&args, 2, "UDim2")?;
+             super::charge_host_nanos(lua, super::datatype_price::UDIM2_LERP);
+             let lerp = super::float32::lerp;
+             let offset = |a: i32, b: i32| lerp(a as f32, b as f32, alpha).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+@@ -108,8 +114,8 @@ impl LuaUserData for UDim2 {
+                 y: UDim { scale: lerp(this.y.scale, goal.y.scale, alpha), offset: offset(this.y.offset, goal.y.offset) },
+             })
+         };
+-        methods.add_method("Lerp", lerp);
+-        methods.add_method("lerp", lerp);
++        methods.add_function("Lerp", lerp);
++        methods.add_function("lerp", lerp);
+         // Metamethods
+         methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
+             super::charge_host_nanos(lua, super::datatype_price::EQ);
+@@ -120,13 +126,16 @@ impl LuaUserData for UDim2 {
+             super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
+             userdata_impl_unm(lua, this, ())
+         });
+-        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<UDim2>| {
++        // (two UDim2s, whichever side, as UDim's)
++        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<UDim2>(&lhs, &rhs, "UDim2")?;
+             super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
+-            userdata_impl_add(lua, this, rhs)
++            Ok(a + b)
+         });
+-        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<UDim2>| {
++        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<UDim2>(&lhs, &rhs, "UDim2")?;
+             super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
+-            userdata_impl_sub(lua, this, rhs)
++            Ok(a - b)
+         });
+     }
+ }
+diff --git a/crates/lune-roblox/src/datatypes/types/vector2.rs b/crates/lune-roblox/src/datatypes/types/vector2.rs
+--- a/crates/lune-roblox/src/datatypes/types/vector2.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2.rs
+@@ -10,6 +10,10 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, charge_host_nanos, datatype_price as price};
++use crate::datatypes::script_error::{
++    incompatible, invalid_argument, luau_arg, luau_number, luau_self, reflected_arg, reflected_float_arg, same_operands,
++    script_error, userdata_of,
++};
+ 
+ /**
+     An implementation of the [Vector2](https://create.roblox.com/docs/reference/engine/datatypes/Vector2)
+@@ -58,49 +62,87 @@ impl LuaUserData for Vector2 {
+     }
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+-        // Methods
++        // Methods, with a playing client's argument errors (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau).
++        // Abs, Ceil, Floor, Sign, Angle, FuzzyEq, Max and Min are checked as the client's Luau checks them, from the calling
++        // line (self named as a `.` call names it, a later argument as a `:` call does); Cross, Dot and Lerp go through its
++        // reflection ("Argument 2 missing or nil", "Unable to cast double to Vector2"), each in the order it checks.
++        for (name, op) in [("Abs", Vec2::abs as fn(Vec2) -> Vec2), ("Ceil", Vec2::ceil), ("Floor", Vec2::floor), ("Sign", Vec2::signum)] {
++            methods.add_function(name, move |_, args: LuaMultiValue| {
++                let this = luau_self::<Vector2>(&args, name, "Vector2")?;
++                Ok(Vector2(op(this.0)))
++            });
++        }
+         // atan2f(a x b, a . b) in floats, signed only when asked (Studio 0.744, tools/parity/probes/cframe_order.luau
+-        // measures the signed form; the unsigned one is its absolute value, as Roblox documents)
+-        methods.add_method("Angle", |_, this, (rhs, signed): (LuaUserDataRef<Vector2>, Option<bool>)| {
++        // measures the signed form; the unsigned one is its absolute value, as Roblox documents); fewer than two arguments
++        // is the client's count error, without a position
++        methods.add_function("Angle", |_, args: LuaMultiValue| {
++            if args.len() < 2 {
++                return Err(script_error(format!("Invalid number of arguments: {}, Vector2.Angle expects 2 or 3.", args.len()), false));
++            }
++            let this = luau_self::<Vector2>(&args, "Angle", "Vector2")?;
++            let rhs = luau_arg::<Vector2>(&args, 2, "Vector2")?;
++            let signed = match args.get(2) {
++                None => false,
++                Some(LuaValue::Boolean(signed)) => *signed,
++                Some(other) => return Err(invalid_argument(3, None, "boolean", other)),
++            };
+             let (a, b) = (this.0, rhs.0);
+             let angle = (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y);
+-            Ok(if signed.unwrap_or(false) { angle } else { angle.abs() })
++            Ok(if signed { angle } else { angle.abs() })
+         });
+-        methods.add_method("Cross", |_, this, rhs: LuaUserDataRef<Vector2>| {
++        methods.add_function("Cross", |_, args: LuaMultiValue| {
++            let rhs = reflected_arg::<Vector2>(&args, 2, "Vector2")?;
++            let this = reflected_arg::<Vector2>(&args, 1, "Vector2")?;
+             let this_v3 = Vec3::new(this.0.x, this.0.y, 0f32);
+             let rhs_v3 = Vec3::new(rhs.0.x, rhs.0.y, 0f32);
+             Ok(this_v3.cross(rhs_v3).z)
+         });
+-        methods.add_method("Dot", |_, this, rhs: LuaUserDataRef<Vector2>| {
++        methods.add_function("Dot", |_, args: LuaMultiValue| {
++            let this = reflected_arg::<Vector2>(&args, 1, "Vector2")?;
++            let rhs = reflected_arg::<Vector2>(&args, 2, "Vector2")?;
+             Ok(this.0.dot(rhs.0))
+         });
+-        methods.add_method(
+-            "FuzzyEq",
+-            |_, this, (rhs, epsilon): (LuaUserDataRef<Vector2>, f32)| {
+-                let eq_x = (rhs.0.x - this.0.x).abs() <= epsilon;
+-                let eq_y = (rhs.0.y - this.0.y).abs() <= epsilon;
+-                Ok(eq_x && eq_y)
+-            },
+-        );
++        // (an eps over 0.1 in size is the client's message, without a position; no eps is 1e-5)
++        methods.add_function("FuzzyEq", |lua, args: LuaMultiValue| {
++            if args.len() < 2 {
++                return Err(script_error(format!("Invalid number of arguments: {}, Vector2.FuzzyEq expects 2 or 3.", args.len()), false));
++            }
++            let this = luau_self::<Vector2>(&args, "FuzzyEq", "Vector2")?;
++            let rhs = luau_arg::<Vector2>(&args, 2, "Vector2")?;
++            let epsilon = match args.get(2) {
++                None => 1e-5f32,
++                Some(value) => luau_number(lua, value).ok_or_else(|| invalid_argument(3, None, "number", value))? as f32,
++            };
++            if epsilon.abs() > 0.1 {
++                return Err(script_error("The eps value provided to FuzzyEq should be a small positive value <= 0.1", false));
++            }
++            let eq_x = (rhs.0.x - this.0.x).abs() <= epsilon;
++            let eq_y = (rhs.0.y - this.0.y).abs() <= epsilon;
++            Ok(eq_x && eq_y)
++        });
+         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
+-        // a + (b - a) * t in floats (Studio 0.744, tools/parity/probes/cframe_order.luau)
+-        let lerp = |lua: &Lua, this: &Vector2, (rhs, alpha): (LuaUserDataRef<Vector2>, f32)| {
++        // a + (b - a) * t in floats (Studio 0.744, tools/parity/probes/cframe_order.luau); the reflection checks self, then
++        // the alpha, then the goal
++        let lerp = |lua: &Lua, args: LuaMultiValue| {
++            let this = reflected_arg::<Vector2>(&args, 1, "Vector2")?;
++            let alpha = reflected_float_arg(lua, &args, 3)? as f32;
++            let rhs = reflected_arg::<Vector2>(&args, 2, "Vector2")?;
+             charge_host_nanos(lua, price::VECTOR2_LERP);
+             let lerp = super::float32::lerp;
+             Ok(Vector2(Vec2::new(lerp(this.0.x, rhs.0.x, alpha), lerp(this.0.y, rhs.0.y, alpha))))
+         };
+-        methods.add_method("Lerp", lerp);
+-        methods.add_method("lerp", lerp);
+-        methods.add_method("Max", |_, this, rhs: LuaUserDataRef<Vector2>| {
+-            Ok(Vector2(this.0.max(rhs.0)))
+-        });
+-        methods.add_method("Min", |_, this, rhs: LuaUserDataRef<Vector2>| {
+-            Ok(Vector2(this.0.min(rhs.0)))
+-        });
+-        methods.add_method("Abs", |_, this, ()| Ok(Vector2(this.0.abs())));
+-        methods.add_method("Ceil", |_, this, ()| Ok(Vector2(this.0.ceil())));
+-        methods.add_method("Floor", |_, this, ()| Ok(Vector2(this.0.floor())));
+-        methods.add_method("Sign", |_, this, ()| Ok(Vector2(this.0.signum())));
++        methods.add_function("Lerp", lerp);
++        methods.add_function("lerp", lerp);
++        // Max and Min take any number of Vector2s after self (none: self)
++        for (name, op) in [("Max", Vec2::max as fn(Vec2, Vec2) -> Vec2), ("Min", Vec2::min)] {
++            methods.add_function(name, move |_, args: LuaMultiValue| {
++                let mut result = luau_self::<Vector2>(&args, name, "Vector2")?.0;
++                for index in 2..=args.len() {
++                    result = op(result, luau_arg::<Vector2>(&args, index, "Vector2")?.0);
++                }
++                Ok(Vector2(result))
++            });
++        }
+         // Metamethods
+         methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
+             charge_host_nanos(lua, price::EQ);
+@@ -111,40 +153,50 @@ impl LuaUserData for Vector2 {
+             charge_host_nanos(lua, price::ARITHMETIC);
+             userdata_impl_unm(lua, this, ())
+         });
+-        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<Vector2>| {
++        // + and - take two Vector2s, whichever side the Vector2 that runs them is on: a client's Luau checks raise the
++        // first that is not one, from the calling line ("invalid argument #2 (Vector2 expected, got number)")
++        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<Vector2>(&lhs, &rhs, "Vector2")?;
+             charge_host_nanos(lua, price::ARITHMETIC);
+-            userdata_impl_add(lua, this, rhs)
++            Ok(a + b)
+         });
+-        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<Vector2>| {
++        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<Vector2>(&lhs, &rhs, "Vector2")?;
+             charge_host_nanos(lua, price::ARITHMETIC);
+-            userdata_impl_sub(lua, this, rhs)
++            Ok(a - b)
+         });
+-        // Roblox also takes the number first (measured in Studio: 2 * v, 2 / v and 2 // v per
+-        // component)
++        // *, / and // take a Vector2 and a Vector2 or a number (a string Luau reads as one included), the number on either
++        // side (measured in Studio: 2 * v, 2 / v and 2 // v per component); anything else is the client's own message
+         methods.add_meta_function(LuaMetaMethod::Mul, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = scaled(lua, &lhs, &rhs, "multiply")?;
+             charge_host_nanos(lua, price::ARITHMETIC);
+-            match number_first(&lhs, &rhs)? {
+-                Some((n, v)) => Ok(Vector2(v.0 * n)),
+-                None => userdata_impl_mul_f32(lua, &*vector2_of(&lhs)?, rhs),
+-            }
++            Ok(Vector2(a * b))
+         });
+         methods.add_meta_function(LuaMetaMethod::Div, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = scaled(lua, &lhs, &rhs, "divide")?;
+             charge_host_nanos(lua, price::ARITHMETIC);
+-            match number_first(&lhs, &rhs)? {
+-                Some((n, v)) => Ok(Vector2(Vec2::splat(n) / v.0)),
+-                None => userdata_impl_div_f32(lua, &*vector2_of(&lhs)?, rhs),
+-            }
++            Ok(Vector2(a / b))
+         });
+         methods.add_meta_function(LuaMetaMethod::IDiv, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = scaled(lua, &lhs, &rhs, "floor divide")?;
+             charge_host_nanos(lua, price::ARITHMETIC);
+-            match number_first(&lhs, &rhs)? {
+-                Some((n, v)) => Ok(Vector2((Vec2::splat(n) / v.0).floor())),
+-                None => userdata_impl_idiv_f32(lua, &*vector2_of(&lhs)?, rhs),
+-            }
++            Ok(Vector2((a / b).floor()))
+         });
+     }
+ }
+ 
++/// The operands of a *, / or // as vectors (a number splatted), in their order.
++fn scaled(lua: &Lua, lhs: &LuaValue, rhs: &LuaValue, verb: &str) -> LuaResult<(Vec2, Vec2)> {
++    let side = |value: &LuaValue| match userdata_of::<Vector2>(Some(value)) {
++        Some(v) => Some((v.0, true)),
++        None => luau_number(lua, value).map(|n| (Vec2::splat(n as f32), false)),
++    };
++    match (side(lhs), side(rhs)) {
++        (Some((a, a_vector)), Some((b, b_vector))) if a_vector || b_vector => Ok((a, b)),
++        _ => Err(incompatible(verb, "Vector2")),
++    }
++}
++
+ fn magnitude(lua: &Lua, this: &Vector2) -> LuaResult<f32> {
+     charge_host_nanos(lua, price::VECTOR2_MAGNITUDE);
+     Ok(this.0.length())
+@@ -155,22 +207,7 @@ fn unit(lua: &Lua, this: &Vector2) -> LuaResult<Vector2> {
+     Ok(Vector2(this.0.normalize()))
+ }
+ 
+-fn vector2_of(value: &LuaValue) -> LuaResult<LuaUserDataRef<Vector2>> {
+-    match value {
+-        LuaValue::UserData(ud) => ud.borrow::<Vector2>(),
+-        _ => Err(LuaError::runtime(format!("Vector2 expected, got {}", value.type_name()))),
+-    }
+-}
+ 
+-/// `(number, vector)` when the number is the left operand and the Vector2 the right.
+-fn number_first(lhs: &LuaValue, rhs: &LuaValue) -> LuaResult<Option<(f32, Vector2)>> {
+-    let n = match lhs {
+-        LuaValue::Number(n) => *n as f32,
+-        LuaValue::Integer(i) => *i as f32,
+-        _ => return Ok(None),
+-    };
+-    Ok(Some((n, *vector2_of(rhs)?)))
+-}
+ 
+ impl fmt::Display for Vector2 {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+diff --git a/crates/lune-roblox/src/datatypes/types/vector2int16.rs b/crates/lune-roblox/src/datatypes/types/vector2int16.rs
+--- a/crates/lune-roblox/src/datatypes/types/vector2int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2int16.rs
+@@ -10,6 +10,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, vector3int16::int16_component};
++use crate::datatypes::script_error::{luau_number, same_operands};
+ 
+ /**
+     An implementation of the [Vector2int16](https://create.roblox.com/docs/reference/engine/datatypes/Vector2int16)
+@@ -25,7 +26,11 @@ impl LuaExportsTable for Vector2int16 {
+     const EXPORT_NAME: &'static str = "Vector2int16";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let vector2int16_new = |_: &Lua, (x, y): (Option<f64>, Option<f64>)| {
++        // (each component read as a client reads it: a number or a string Luau reads as one, anything else 0;
++        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let vector2int16_new = |lua: &Lua, args: LuaMultiValue| {
++            let x = args.get(0).and_then(|value| luau_number(lua, value));
++            let y = args.get(1).and_then(|value| luau_number(lua, value));
+             Ok(Vector2int16(IVec2 {
+                 x: int16_component(x),
+                 y: int16_component(y),
+@@ -51,8 +56,16 @@ impl LuaUserData for Vector2int16 {
+         methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+         methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
+-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
+-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
++        // (two Vector2int16s, whichever side: a client raises "invalid argument #2 (Vector2int16 expected, got number)" from the
++        // calling line, Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        methods.add_meta_function(LuaMetaMethod::Add, |_, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<Vector2int16>(&lhs, &rhs, "Vector2int16")?;
++            Ok(a + b)
++        });
++        methods.add_meta_function(LuaMetaMethod::Sub, |_, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<Vector2int16>(&lhs, &rhs, "Vector2int16")?;
++            Ok(a - b)
++        });
+         methods.add_meta_method(LuaMetaMethod::Mul, userdata_impl_mul_i32);
+         methods.add_meta_method(LuaMetaMethod::Div, userdata_impl_div_i32);
+     }
+diff --git a/crates/lune-roblox/src/datatypes/types/vector3int16.rs b/crates/lune-roblox/src/datatypes/types/vector3int16.rs
+--- a/crates/lune-roblox/src/datatypes/types/vector3int16.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector3int16.rs
+@@ -10,6 +10,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::super::*;
++use crate::datatypes::script_error::{luau_number, same_operands};
+ 
+ /**
+     An implementation of the [Vector3int16](https://create.roblox.com/docs/reference/engine/datatypes/Vector3int16)
+@@ -35,7 +36,12 @@ impl LuaExportsTable for Vector3int16 {
+     const EXPORT_NAME: &'static str = "Vector3int16";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        let vector3int16_new = |_: &Lua, (x, y, z): (Option<f64>, Option<f64>, Option<f64>)| {
++        // (each component read as a client reads it: a number or a string Luau reads as one, anything else 0;
++        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        let vector3int16_new = |lua: &Lua, args: LuaMultiValue| {
++            let x = args.get(0).and_then(|value| luau_number(lua, value));
++            let y = args.get(1).and_then(|value| luau_number(lua, value));
++            let z = args.get(2).and_then(|value| luau_number(lua, value));
+             Ok(Vector3int16(IVec3 {
+                 x: int16_component(x),
+                 y: int16_component(y),
+@@ -64,8 +70,16 @@ impl LuaUserData for Vector3int16 {
+         methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
+         methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
+-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
+-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
++        // (two Vector3int16s, whichever side: a client raises "invalid argument #2 (Vector3int16 expected, got number)" from the
++        // calling line, Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
++        methods.add_meta_function(LuaMetaMethod::Add, |_, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<Vector3int16>(&lhs, &rhs, "Vector3int16")?;
++            Ok(a + b)
++        });
++        methods.add_meta_function(LuaMetaMethod::Sub, |_, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (a, b) = same_operands::<Vector3int16>(&lhs, &rhs, "Vector3int16")?;
++            Ok(a - b)
++        });
+         methods.add_meta_method(LuaMetaMethod::Mul, userdata_impl_mul_i32);
+         methods.add_meta_method(LuaMetaMethod::Div, userdata_impl_div_i32);
+     }
+diff --git a/crates/lune-roblox/src/lib.rs b/crates/lune-roblox/src/lib.rs
+--- a/crates/lune-roblox/src/lib.rs
++++ b/crates/lune-roblox/src/lib.rs
+@@ -67,6 +67,8 @@ fn create_all_exports(lua: Lua) -> LuaResult<Vec<(&'static str, LuaValue)>> {
+ */
+ #[cfg(feature = "mlua")]
+ pub fn module(lua: Lua) -> LuaResult<LuaTable> {
++    // a datatype raises a script's plain string errors through mlua-sys's error hook (datatypes::script_error)
++    datatypes::script_error::install();
+     // FUTURE: We can probably create these lazily as users
+     // index the main exports (this return value) table and
+     // save some memory and startup time. The full exports

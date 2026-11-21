@@ -113,3 +113,46 @@ index 02ccf56..1ef5517 100644
 +pub unsafe extern "C-unwind" fn luaopen_integer(_L: *mut lua_State) -> c_int {
 +    0
 +}
+diff --git a/src/luau/lua.rs b/src/luau/lua.rs
+--- a/src/luau/lua.rs
++++ b/src/luau/lua.rs
+@@ -305,6 +305,29 @@ unsafe extern "C-unwind" {
+     pub fn lua_memorydump(L: *mut lua_State, file: *mut c_void, category_name: Option<lua_CategoryName>);
+ }
+ 
++//
++// The error hook (ree's): a function the host sets, run before `lua_error` raises the value at the top of the stack. mlua
++// raises a Rust callback's error through `lua_error`, as a userdata that holds the Rust error; the host's hook may replace
++// that value (ree's engine datatypes raise a script's plain string error, as a client does, from inside a callback)
++//
++static ERROR_HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++
++/// Sets the function [`lua_error`] runs first (None: none). Process-wide: every state's errors pass through it.
++pub fn lua_seterrorhook(hook: Option<unsafe extern "C-unwind" fn(L: *mut lua_State)>) {
++    ERROR_HOOK.store(hook.map_or(0, |hook| hook as usize), std::sync::atomic::Ordering::Release);
++}
++
++/// Raises the value at the top of the stack as an error, after the hook [`lua_seterrorhook`] set (if any) had a look at it.
++#[inline]
++pub unsafe fn lua_error(L: *mut lua_State) -> ! {
++    let hook = ERROR_HOOK.load(std::sync::atomic::Ordering::Acquire);
++    if hook != 0 {
++        let hook: unsafe extern "C-unwind" fn(*mut lua_State) = mem::transmute(hook);
++        hook(L);
++    }
++    lua_error_(L)
++}
++
+ //
+ // Memory statistics
+ //
+@@ -318,7 +341,8 @@ unsafe extern "C-unwind" {
+ // Miscellaneous functions
+ //
+ unsafe extern "C-unwind" {
+-    pub fn lua_error(L: *mut lua_State) -> !;
++    #[link_name = "lua_error"]
++    pub fn lua_error_(L: *mut lua_State) -> !;
+     pub fn lua_next(L: *mut lua_State, idx: c_int) -> c_int;
+     pub fn lua_rawiter(L: *mut lua_State, idx: c_int, iter: c_int) -> c_int;
+     pub fn lua_concat(L: *mut lua_State, n: c_int);

@@ -10,6 +10,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, Vector2};
+use crate::datatypes::script_error::{invalid_argument, luau_number, script_error, userdata_of};
 
 /**
     An implementation of the [Rect](https://create.roblox.com/docs/reference/engine/datatypes/Rect)
@@ -36,28 +37,23 @@ impl LuaExportsTable for Rect {
     const EXPORT_NAME: &'static str = "Rect";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        type ArgsVector2s = (
-            Option<LuaUserDataRef<Vector2>>,
-            Option<LuaUserDataRef<Vector2>>,
-        );
-        type ArgsNums = (Option<f32>, Option<f32>, Option<f32>, Option<f32>);
-
-        let rect_new = |lua: &Lua, args: LuaMultiValue| {
-            if let Ok((min, max)) = ArgsVector2s::from_lua_multi(args.clone(), lua) {
-                Ok(Rect::new(
-                    min.map(|m| *m).unwrap_or_default().0,
-                    max.map(|m| *m).unwrap_or_default().0,
-                ))
-            } else if let Ok((x0, y0, x1, y1)) = ArgsNums::from_lua_multi(args, lua) {
-                let min = Vec2::new(x0.unwrap_or_default(), y0.unwrap_or_default());
-                let max = Vec2::new(x1.unwrap_or_default(), y1.unwrap_or_default());
-                Ok(Rect::new(min, max))
-            } else {
-                // FUTURE: Better error message here using given arg types
-                Err(LuaError::RuntimeError(
-                    "Invalid arguments to constructor".to_string(),
-                ))
+        // Rect.new() (empty), Rect.new(min, max) with two Vector2s checked as a client's Luau checks them, or Rect.new(x0,
+        // y0, x1, y1) with four numbers read as a client reads them (a string Luau reads as one, anything else 0), the corners
+        // put in order; any other count is the client's count error, without a position (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let rect_new = |lua: &Lua, args: LuaMultiValue| match args.len() {
+            0 => Ok(Rect::new(Vec2::ZERO, Vec2::ZERO)),
+            2 => {
+                let corner = |index: usize| {
+                    let value = &args[index - 1];
+                    userdata_of::<Vector2>(Some(value)).map(|v| v.0).ok_or_else(|| invalid_argument(index, Some("new"), "Vector2", value))
+                };
+                Ok(Rect::new(corner(1)?, corner(2)?))
             }
+            4 => {
+                let n = args.iter().map(|value| luau_number(lua, value).unwrap_or(0.0) as f32).collect::<Vec<_>>();
+                Ok(Rect::new(Vec2::new(n[0], n[1]), Vec2::new(n[2], n[3])))
+            }
+            count => Err(script_error(format!("Invalid number of arguments: {count}"), false)),
         };
 
         TableBuilder::new(lua)?

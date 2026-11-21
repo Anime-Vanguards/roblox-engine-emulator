@@ -357,7 +357,7 @@ Fails("ColorSequence: all keypoints must be ordered by time", ColorSequence.new,
 -- The developer forum's case: times 0..7 are in order and end at 7
 Fails("ColorSequence must end at time=1.0", ColorSequence.new, { CK(0), CK(1), CK(2), CK(7) })
 Fails("ColorSequence must start at time=0.0", ColorSequence.new, { CK(0.5), CK(1) })
-Fails("ColorSequence.new(): table expected", ColorSequence.new)
+Fails("ColorSequence.new(): table expected.", ColorSequence.new)
 Fails("ColorSequence.new(): table of ColorSequenceKeypoints expected.", ColorSequence.new, { CK(0), 1 })
 assert(ColorSequence.new(Red, Color3.new(0, 0, 1)).Keypoints[2].Value == Color3.new(0, 0, 1))
 
@@ -443,7 +443,9 @@ assert(DateTime.fromIsoDate("2020-02-29T12:34:56+0200") == nil and DateTime.from
 -- formats: no ordinals, `SSSS` is milliseconds then tenths, the locale must be a string
 local Instant = DateTime.fromUnixTimestampMillis(1700000000123)
 assert(Instant:FormatUniversalTime("Do SSSS d [YYYY] LLLL", "en-us") == "14o 1231 2 YYYY Tuesday, November 14, 2023 10:13 PM")
-Fails("invalid argument #3 to 'FormatUniversalTime' (string expected, got nil)", Instant.FormatUniversalTime, Instant, "LL")
+Fails("invalid argument #3 to 'FormatUniversalTime' (string expected, got nil)", Instant.FormatUniversalTime, Instant, "LL", nil)
+-- (none passed is a missing argument: a 0.747 playing client, tools/parity/probes/datatype_errors.luau)
+Fails("missing argument #3 to 'FormatUniversalTime' (string expected)", Instant.FormatUniversalTime, Instant, "LL")
 -- os.date and os.time are Luau's, with its plain messages
 Fails("invalid argument #1 to 'date' (invalid conversion specifier)", os.date, "!%D", 0)
 Fails("invalid argument #1 to 'time' (table expected, got number)", os.time, 5)
@@ -834,9 +836,10 @@ end
 }
 
 /// Every CFrame constructor, member, method, deprecated alias and operator gives the same bits run after run
-/// (cframe_golden/ops.txt, printed with %.17g), and a misuse gives the same error text. Three misuse texts differ
-/// from the build before CFrame took and returned native vectors itself: a table where a Vector3 is expected names
-/// the type as 'Vector3' (it named the Rust type), and an integral number is a "number" (it was an "integer").
+/// (cframe_golden/ops.txt, printed with %.17g), and a misuse gives the same error text. The misuse texts are a playing
+/// client's since 2026-11-21 (Studio 0.747, tools/parity/probes/datatype_errors.luau: `invalid argument #2 (Vector3
+/// expected, got number)`, `Unable to cast double to CoordinateFrame`, `Invalid number of arguments: 4`; they were
+/// mlua's conversion errors); err2 asks for five arguments, since CFrame.new("a", 2, 3) reads "a" as 0, as a client does.
 /// The values are a playing client's order of float operations since 2026-11-07 (types::float32; 22 lines moved in
 /// their last digits from glam's quaternion and 4x4 forms: the Euler and look constructors, Inverse, Lerp,
 /// Orthonormalize, the spaces and the decompositions).
@@ -1341,5 +1344,75 @@ fn errors_name_proxy_values_by_their_type() {
         assert(Message(function() return #newproxy() end) == "attempt to get length of a userdata value")
         assert(type(RaycastParams.new()) == "userdata" and typeof(RaycastParams.new()) == "RaycastParams")
         "#,
+    );
+}
+
+/// A wrong operand, argument or self of a datatype raises a playing client's own one-line string (Studio 0.747,
+/// tools/parity/probes/datatype_errors.luau): from the calling line where its Luau checks raise it, without a position
+/// where its reflection does, never mlua's conversion error (which named Rust types and carried a traceback), and no
+/// callback error a script catches carries a traceback in its text.
+#[test]
+fn datatype_argument_errors_are_a_playing_clients() {
+    assert_script(
+        r#"
+local function Fails(Pattern, Function, ...)
+	local Ok, Message = pcall(Function, ...)
+	assert(not Ok, "no error, expected " .. Pattern)
+	assert(type(Message) == "string" and string.find(Message, Pattern) ~= nil, tostring(Message))
+	assert(not string.find(Message, "traceback", 1, true), Message)
+end
+local V2 = Vector2.new(1, 2)
+-- operators: Luau checks from the calling line, whichever side the value is on; Vector2's * its own message
+Fails("^Test:%d+: invalid argument #2 %(Vector2 expected, got number%)$", function() return V2 + 1 end)
+Fails("^Test:%d+: invalid argument #1 %(Vector2 expected, got Instance%)$", function() return game + V2 end)
+Fails("^attempt to multiply a Vector2 with an incompatible value type or nil$", function() return V2 * "x" end)
+assert(V2 * "2" == Vector2.new(2, 4) and 2 / V2 == Vector2.new(2, 1))
+Fails("^Test:%d+: invalid argument #2 %(Vector3 expected, got Vector2%)$", function() return CFrame.identity * V2 end)
+Fails("^Test:%d+: invalid argument #1 %(CFrame expected, got number%)$", function() return 1 + CFrame.identity end)
+Fails("^Test:%d+: invalid argument #2 %(UDim expected, got number%)$", function() return UDim.new() - 1 end)
+Fails("^Test:%d+: invalid argument #2 %(Vector3int16 expected, got Vector3%)$", function() return Vector3int16.new() + Vector3.one end)
+-- methods: the Luau-checked ones name the method for self, a reflected one says what it could not cast
+Fails("^Test:%d+: invalid argument #1 to 'Abs' %(Vector2 expected, got number%)$", function() return V2.Abs(5) end)
+Fails("^Test:%d+: invalid argument #2 %(Vector2 expected, got nil%)$", function() return V2:Max(nil) end)
+Fails("^Invalid number of arguments: 1, Vector2%.Angle expects 2 or 3%.$", function() return V2:Angle() end)
+Fails("^Unable to cast double to Vector2$", function() return V2:Dot(1) end)
+Fails("^Argument 3 missing or nil$", function() return V2:Lerp(1) end)
+Fails("^Unable to cast CoordinateFrame to Vector2$", function() return V2:Lerp(CFrame.identity, 0.5) end)
+assert(V2:Lerp(Vector2.zero, true) == Vector2.zero and V2:Lerp(Vector2.zero, "0x0") == V2)
+Fails("^Unable to cast double to CoordinateFrame$", function() return CFrame.identity:Lerp(5, 1) end)
+Fails("^Test:%d+: invalid argument #2 %(Vector3 expected, got number%)$", function() return CFrame.identity:PointToWorldSpace(5) end)
+Fails("^Invalid type 'KeyCode' for enum 'RotationOrder'$", function() return CFrame.identity:ToEulerAngles(Enum.KeyCode.A) end)
+assert(CFrame.new(1, 2, 3):ToWorldSpace() == CFrame.new(1, 2, 3))
+Fails("^Test:%d+: missing argument #2 %(Vector3 expected%)$", function() return Ray.new(Vector3.zero, Vector3.one):ClosestPoint() end)
+Fails("^Unable to cast string to float$", function() return Region3.new(Vector3.zero, Vector3.one):ExpandToGrid("x") end)
+Fails("^Test:%d+: invalid argument #1 to 'ToHex' %(Color3 expected, got nil%)$", function() return Color3.new().ToHex(nil) end)
+Fails("^Test:%d+: invalid argument #1 to 'Abs' %(Vector3 expected, got number%)$", function() return Vector3.one.Abs(5) end)
+Fails("^Test:%d+: invalid argument #2 %(Vector3 expected, got number%)$", function() return Vector3.one:Dot(1) end)
+Fails("^Test:%d+: missing argument #3 %(number expected%)$", function() return Vector3.one:Lerp(Vector3.zero) end)
+Fails("^Invalid number of arguments: 1, Vector3%.Angle expect 2 or 3$", function() return Vector3.one:Angle() end)
+Fails("^Unable to cast double to DateTime$", function() return DateTime.now().ToIsoDate(5) end)
+assert(DateTime.now().ToIsoDate("86400") == "1970-01-01T00:01:26Z")
+-- constructors
+Fails("^Test:%d+: invalid argument #1 to 'new' %(Vector3 expected, got string%)$", function() return CFrame.new("x") end)
+Fails("^Invalid number of arguments: 4$", function() return CFrame.new(1, 2, 3, 4) end)
+assert(CFrame.new(1, 2, "x") == CFrame.new(1, 2, 0))
+Fails("^Argument 3 missing or nil$", function() return CFrame.Angles(1, 2) end)
+Fails("^Test:%d+: missing argument #2 to 'lookAt' %(Vector3 expected%)$", function() return CFrame.lookAt(Vector3.one) end)
+Fails("^Invalid number of arguments: 1$", function() return Rect.new("x") end)
+assert(Rect.new(3, 4, 1, 2) == Rect.new(1, 2, 3, 4))
+Fails("^Test:%d+: missing argument #1 to 'new' %(number expected%)$", function() return NumberRange.new() end)
+Fails("^Color3%.fromHSV requires three arguments$", function() return Color3.fromHSV(1) end)
+Fails("^Unable to cast string to NormalId$", function() return Vector3.FromNormalId("x") end)
+assert(Vector3.FromNormalId(1) == Vector3.yAxis and Vector3.FromAxis(2) == Vector3.zAxis)
+Fails("^Unable to cast string to int$", function() return BrickColor.palette("x") end)
+Fails("^Test:%d+: invalid argument #1 to 'fromUnixTimestamp' %(number expected, got nil%)$", function() return DateTime.fromUnixTimestamp(nil, 1) end)
+Fails("^Invalid value for enum 'FontWeight'$", function() return Font.new("x", "y") end)
+assert(Vector3int16.new("x", "2") == Vector3int16.new(0, 2, 0))
+-- a `.` call through pcall itself has no calling line
+Fails("^invalid argument #1 to 'Abs' %(Vector2 expected, got number%)$", V2.Abs, 5)
+-- any other callback's error a script catches reads without mlua's traceback
+local Ok, Error = pcall(function() return Enum.KeyCode.GetEnumItems(5) end)
+assert(not Ok and string.find(tostring(Error), "calling member function", 1, true) and not string.find(tostring(Error), "traceback", 1, true), tostring(Error))
+"#,
     );
 }

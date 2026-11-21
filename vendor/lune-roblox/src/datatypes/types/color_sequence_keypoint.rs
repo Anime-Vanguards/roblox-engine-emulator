@@ -8,6 +8,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, Color3};
+use crate::datatypes::script_error::{ctor_number, script_error, userdata_of};
 
 /**
     An implementation of the [ColorSequenceKeypoint](https://create.roblox.com/docs/reference/engine/datatypes/ColorSequenceKeypoint) Roblox datatype.
@@ -24,8 +25,13 @@ impl LuaExportsTable for ColorSequenceKeypoint {
     const EXPORT_NAME: &'static str = "ColorSequenceKeypoint";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+        // (the time checked as a client's Luau checks it, naming the constructor; a color that is no Color3 is the client's
+        // own message, without a position: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
         let color_sequence_keypoint_new =
-            |lua: &Lua, (time, color): (f32, LuaUserDataRef<Color3>)| {
+            |lua: &Lua, args: LuaMultiValue| {
+                let time = ctor_number(lua, &args, 1, "new")? as f32;
+                let color = userdata_of::<Color3>(args.get(1))
+                    .ok_or_else(|| script_error("could not parse arg #2 to ColorSequenceKeypoint.new(), Color3 expected.", false))?;
                 super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
                 Ok(ColorSequenceKeypoint {
                     time,

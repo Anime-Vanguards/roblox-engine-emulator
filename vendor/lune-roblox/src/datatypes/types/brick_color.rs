@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, Color3};
+use crate::datatypes::script_error::{argument_missing, reflected_float, unable_to_cast};
 
 /**
     An implementation of the [BrickColor](https://create.roblox.com/docs/reference/engine/datatypes/BrickColor) Roblox datatype.
@@ -54,7 +55,13 @@ impl LuaExportsTable for BrickColor {
 
         // Roblox's documentation: a zero-based index (0 through 127); "An error is thrown if the
         // index is out of bounds" (the message is not measured in Studio)
-        let brick_color_palette = |_: &Lua, index: f64| {
+        // (the index as a playing client's reflection casts it to an int: "Argument 1 missing or nil", "Unable to cast
+        // string to int", a boolean 1 or 0; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let brick_color_palette = |lua: &Lua, args: LuaMultiValue| {
+            let index = match args.front() {
+                None | Some(LuaValue::Nil) => return Err(argument_missing(1)),
+                Some(value) => reflected_float(lua, value).ok_or_else(|| unable_to_cast(value, "int"))?,
+            };
             let index = index.trunc();
             if index >= 0.0 && index < BRICK_COLOR_PALETTE.len() as f64 {
                 Ok(color_from_number(BRICK_COLOR_PALETTE[index as usize]))

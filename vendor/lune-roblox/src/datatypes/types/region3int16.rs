@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, Vector3int16};
+use crate::datatypes::script_error::optional_ctor_arg;
 
 /**
     An implementation of the [Region3int16](https://create.roblox.com/docs/reference/engine/datatypes/Region3int16)
@@ -26,13 +27,13 @@ impl LuaExportsTable for Region3int16 {
     const EXPORT_NAME: &'static str = "Region3int16";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        let region3int16_new =
-            |_: &Lua, (min, max): (LuaUserDataRef<Vector3int16>, LuaUserDataRef<Vector3int16>)| {
-                Ok(Region3int16 {
-                    min: min.0,
-                    max: max.0,
-                })
-            };
+        // (two Vector3int16s checked as a client's Luau checks them, naming the constructor; one not passed is zero:
+        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let region3int16_new = |_: &Lua, args: LuaMultiValue| {
+            let min = optional_ctor_arg::<Vector3int16>(&args, 1, "new", "Vector3int16")?.map_or(Default::default(), |v| v.0);
+            let max = optional_ctor_arg::<Vector3int16>(&args, 2, "new", "Vector3int16")?.map_or(Default::default(), |v| v.0);
+            Ok(Region3int16 { min, max })
+        };
 
         TableBuilder::new(lua)?
             .with_function("new", region3int16_new)?

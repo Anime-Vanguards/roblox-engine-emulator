@@ -1,7 +1,7 @@
 #![allow(clippy::items_after_statements)]
 
 use core::fmt;
-use std::{ops, sync::Arc};
+use std::ops;
 
 use glam::{Mat3, Mat4, Vec3, Vec4};
 use mlua::{Variadic, prelude::*};
@@ -12,6 +12,10 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, Vector3, VectorArg, charge_host_nanos, float32 as f32m, native_vector};
+use crate::datatypes::script_error::{
+    argument_missing, cast_name, invalid_argument, luau_arg, luau_number, luau_self, missing_argument, reflected_arg,
+    reflected_float_arg, script_error, type_name, unable_to_cast, userdata_of,
+};
 
 /**
     An implementation of the [CFrame](https://create.roblox.com/docs/reference/engine/datatypes/CFrame)
@@ -322,13 +326,23 @@ unsafe extern "C-unwind" fn angle_between_c(state: *mut mlua::ffi::lua_State) ->
     }
 }
 
+/// A method under each of its names, made for each name by `$factory(name)` (it checks its own arguments, as a client
+/// does, and charges its price once they pass)
+macro_rules! aliased_named {
+    ($methods:ident, [$($name:literal),+], $factory:expr) => {
+        $($methods.add_function($name, ($factory)($name));)+
+    };
+}
+
 /// A method under each of its names, charged `price` nanoseconds
+#[allow(unused_macros)]
 macro_rules! aliased {
     ($methods:ident, $price:expr, [$($name:literal),+], $function:expr) => {
         $($methods.add_method($name, charged_method($price, $function));)+
     };
 }
 
+#[allow(dead_code)]
 fn charged_method<A, R>(
     price: i32,
     function: impl Fn(&Lua, &CFrame, A) -> LuaResult<R> + 'static,
@@ -339,12 +353,22 @@ fn charged_method<A, R>(
     }
 }
 
-/// An Enum.RotationOrder argument (the host's Enum items print as "Enum.RotationOrder.XYZ"; nil is XYZ):
-/// the order's name. Angles go by the letters of the name, x y z.
+/// An Enum.RotationOrder argument (the host's Enum items print as "Enum.RotationOrder.XYZ"; none is XYZ): the
+/// order's name. Angles go by the letters of the name, x y z. Anything else is a playing client's error, without a
+/// position (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau): `Invalid type 'KeyCode' for enum
+/// 'RotationOrder'` for an item of another enum, `Invalid value for enum 'RotationOrder'` for any other value, nil
+/// passed as one too.
 fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<&'static str> {
     let text = match order {
-        None | Some(LuaValue::Nil) => String::from("Enum.RotationOrder.XYZ"),
-        Some(item) => item.to_string()?,
+        None => String::from("Enum.RotationOrder.XYZ"),
+        Some(item @ LuaValue::UserData(_)) if type_name(item) == "EnumItem" => {
+            let text = item.to_string()?;
+            if !text.starts_with("Enum.RotationOrder.") {
+                return Err(script_error(format!("Invalid type '{}' for enum 'RotationOrder'", cast_name(item)), false));
+            }
+            text
+        }
+        Some(_) => String::new(),
     };
     Ok(match text.strip_prefix("Enum.RotationOrder.") {
         Some("XYZ") => "XYZ",
@@ -356,7 +380,7 @@ fn rotation_order(order: Option<&LuaValue>, function: &str) -> LuaResult<&'stati
         // (Studio's message for a string: "Invalid value for enum 'RotationOrder'")
         _ => {
             let _ = function;
-            return Err(LuaError::RuntimeError("Invalid value for enum 'RotationOrder'".to_string()));
+            return Err(script_error("Invalid value for enum 'RotationOrder'", false));
         }
     })
 }
@@ -432,79 +456,111 @@ impl LuaExportsTable for CFrame {
 
     #[allow(clippy::too_many_lines)]
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        let cframe_angles = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
+        // The constructors check their arguments as a playing client does (Studio 0.747, ree's
+        // tools/parity/probes/datatype_errors.luau): Angles, fromEulerAnglesXYZ / YXZ, fromOrientation and fromAxisAngle
+        // go through its reflection, which casts the last argument first ("Argument 3 missing or nil", "Unable to cast
+        // string to float"; a boolean is 1 or 0); the others as its Luau checks do, naming the constructor, from the
+        // calling line ("missing argument #2 to 'lookAt' (Vector3 expected)"), an optional argument passed as nil
+        // included; new counts its arguments first
+        let angles = |lua: &Lua, args: &LuaMultiValue| -> LuaResult<(f32, f32, f32)> {
+            let rz = reflected_float_arg(lua, args, 3)? as f32;
+            let ry = reflected_float_arg(lua, args, 2)? as f32;
+            let rx = reflected_float_arg(lua, args, 1)? as f32;
+            Ok((rx, ry, rz))
+        };
+
+        let cframe_angles = move |lua: &Lua, args: LuaMultiValue| {
+            let (rx, ry, rz) = angles(lua, &args)?;
             charge_host_nanos(lua, price::ANGLES);
             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("XYZ", rx, ry, rz)))
         };
 
-        let cframe_from_axis_angle = |lua: &Lua, (v, r): (VectorArg, f32)| {
+        let cframe_from_axis_angle = |lua: &Lua, args: LuaMultiValue| {
+            let r = reflected_float_arg(lua, &args, 2)? as f32;
+            let v = match args.front() {
+                None | Some(LuaValue::Nil) => return Err(argument_missing(1)),
+                Some(value) => VectorArg::from_lua(value.clone(), lua).map_err(|_| unable_to_cast(value, "Vector3"))?,
+            };
             charge_host_nanos(lua, price::FROM_AXIS_ANGLE);
             Ok(CFrame::from_parts([0.0; 3], f32m::from_axis_angle(array(v.0), r)))
         };
 
-        let cframe_from_euler_angles_xyz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
+        let cframe_from_euler_angles_xyz = move |lua: &Lua, args: LuaMultiValue| {
+            let (rx, ry, rz) = angles(lua, &args)?;
             charge_host_nanos(lua, price::ANGLES);
             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("XYZ", rx, ry, rz)))
         };
 
-        let cframe_from_euler_angles = |lua: &Lua, (rx, ry, rz, order): (f32, f32, f32, Option<LuaValue>)| {
+        // (the angles checked from the last, then the order: nil passed as one is no order)
+        let cframe_from_euler_angles = |lua: &Lua, args: LuaMultiValue| {
+            let mut angles = [0f32; 3];
+            for index in (1..=3).rev() {
+                angles[index - 1] = match args.get(index - 1) {
+                    None => return Err(missing_argument(index, Some("fromEulerAngles"), "number")),
+                    Some(value) => luau_number(lua, value).ok_or_else(|| invalid_argument(index, Some("fromEulerAngles"), "number", value))? as f32,
+                };
+            }
+            let name = rotation_order(args.get(3), "fromEulerAngles")?;
             charge_host_nanos(lua, price::ANGLES);
-            let name = rotation_order(order.as_ref(), "fromEulerAngles")?;
-            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler(name, rx, ry, rz)))
+            Ok(CFrame::from_parts([0.0; 3], f32m::from_euler(name, angles[0], angles[1], angles[2])))
         };
 
-        let cframe_from_euler_angles_yxz = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
+        let cframe_from_euler_angles_yxz = move |lua: &Lua, args: LuaMultiValue| {
+            let (rx, ry, rz) = angles(lua, &args)?;
             charge_host_nanos(lua, price::ANGLES);
             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
         };
 
-        let cframe_from_matrix = |lua: &Lua,
-                                  (pos, rx, ry, rz): (
-            VectorArg,
-            VectorArg,
-            VectorArg,
-            Option<VectorArg>,
-        )| {
+        let cframe_from_matrix = |lua: &Lua, args: LuaMultiValue| {
+            let pos = vector_arg(lua, &args, 1, "fromMatrix")?;
+            let rx = vector_arg(lua, &args, 2, "fromMatrix")?;
+            let ry = vector_arg(lua, &args, 3, "fromMatrix")?;
+            let rz = optional_vector_arg(lua, &args, 4, "fromMatrix")?;
             charge_host_nanos(lua, price::NEW_MATRIX);
             // (a missing Z column is X cross Y made a unit vector; not measured)
-            let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx.0), array(ry.0))), |r| array(r.0));
-            Ok(CFrame::from_parts(array(pos.0), f32m::from_columns(array(rx.0), array(ry.0), z)))
+            let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx), array(ry))), array);
+            Ok(CFrame::from_parts(array(pos), f32m::from_columns(array(rx), array(ry), z)))
         };
 
-        let cframe_from_orientation = |lua: &Lua, (rx, ry, rz): (f32, f32, f32)| {
+        let cframe_from_orientation = move |lua: &Lua, args: LuaMultiValue| {
+            let (rx, ry, rz) = angles(lua, &args)?;
             charge_host_nanos(lua, price::ANGLES);
             Ok(CFrame::from_parts([0.0; 3], f32m::from_euler("YXZ", rx, ry, rz)))
         };
 
         // (types::float32 `rotation_between`: the vectors as given, measured to the bit in a playing client)
-        let cframe_from_rotation_between_vectors = |lua: &Lua, (a, b): (VectorArg, VectorArg)| {
+        let cframe_from_rotation_between_vectors = |lua: &Lua, args: LuaMultiValue| {
+            let a = vector_arg(lua, &args, 1, "fromRotationBetweenVectors")?;
+            let b = vector_arg(lua, &args, 2, "fromRotationBetweenVectors")?;
             charge_host_nanos(lua, price::ROTATION_BETWEEN);
-            Ok(CFrame::from_parts([0.0; 3], f32m::rotation_between(array(a.0), array(b.0))))
+            Ok(CFrame::from_parts([0.0; 3], f32m::rotation_between(array(a), array(b))))
         };
 
-        let cframe_look_at = |lua: &Lua, (from, to, up): (VectorArg, VectorArg, Option<VectorArg>)| {
+        let cframe_look_at = |lua: &Lua, args: LuaMultiValue| {
+            let from = vector_arg(lua, &args, 1, "lookAt")?;
+            let to = vector_arg(lua, &args, 2, "lookAt")?;
+            let up = optional_vector_arg(lua, &args, 3, "lookAt")?;
             charge_host_nanos(lua, price::LOOK_AT);
-            Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
+            Ok(look_at(from, to, up.unwrap_or(Vec3::Y)))
         };
 
         // lookAlong takes the direction itself: far from the origin it is not lookAt(at, at + direction), whose sum
         // rounds (Studio 0.744, tools/parity/probes/cframe_order.luau)
-        let cframe_look_along = |lua: &Lua, (at, direction, up): (VectorArg, VectorArg, Option<VectorArg>)| {
+        let cframe_look_along = |lua: &Lua, args: LuaMultiValue| {
+            let at = vector_arg(lua, &args, 1, "lookAlong")?;
+            let direction = vector_arg(lua, &args, 2, "lookAlong")?;
+            let up = optional_vector_arg(lua, &args, 3, "lookAlong")?;
             charge_host_nanos(lua, price::LOOK_AT);
-            Ok(CFrame::from_parts(
-                array(at.0),
-                f32m::look_along(array(direction.0), array(up.map_or(Vec3::Y, |up| up.0))),
-            ))
+            Ok(CFrame::from_parts(array(at), f32m::look_along(array(direction), array(up.unwrap_or(Vec3::Y)))))
         };
 
         // Dynamic args constructor
-        type ArgsPos = VectorArg;
         type ArgsLook = (VectorArg, VectorArg, Option<VectorArg>);
 
-        type ArgsPosXYZ = (f32, f32, f32);
-        type ArgsPosXYZQuat = (f32, f32, f32, f32, f32, f32, f32);
-        type ArgsMatrix = (f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32, f32);
-
+        // new: 0 arguments (the identity), 1 (a position), 2 (a position looking at a point), 3 (three numbers, or three
+        // Vector3s: a position looking at a point with an up), 7 (a position and a quaternion) or 12 (a position and a
+        // matrix); any other count is the client's count error. Its numbers read as a client reads them: a number or a
+        // string Luau reads as one, anything else 0 (CFrame.new(1, 2, "x") is at 1, 2, 0)
         let cframe_new = |lua: &Lua, args: LuaMultiValue| {
             charge_host_nanos(lua, match (args.len(), args.front()) {
                 (1, _) => price::NEW_VECTOR,
@@ -515,75 +571,48 @@ impl LuaExportsTable for CFrame {
                 (12, _) => price::NEW_MATRIX,
                 _ => 0,
             });
+            let numbers = |args: &LuaMultiValue| args.iter().map(|value| luau_number(lua, value).unwrap_or(0.0) as f32).collect::<Vec<_>>();
             match args.len() {
             0 => Ok(CFrame(Mat4::IDENTITY)),
 
-            1 => match ArgsPos::from_lua_multi(args, lua) {
-                Ok(pos) => Ok(CFrame(Mat4::from_translation(pos.0))),
-                Err(err) => Err(err),
-            },
+            1 => Ok(CFrame(Mat4::from_translation(vector_arg(lua, &args, 1, "new")?))),
 
             // Roblox's CFrame.new(from, to): looking at `to`, as G3D's CoordinateFrame looks (types::float32)
             2 => {
-                let vector = |index: usize| {
-                    ArgsPos::from_lua(args[index].clone(), lua).map_err(|cause| {
-                        LuaError::BadArgument {
-                            to: Some("new".to_string()),
-                            pos: index + 1,
-                            name: None,
-                            cause: Arc::new(cause),
-                        }
-                    })
-                };
-                let (from, to) = (vector(0)?.0, vector(1)?.0);
+                let (from, to) = (vector_arg(lua, &args, 1, "new")?, vector_arg(lua, &args, 2, "new")?);
                 Ok(CFrame::from_parts(array(from), f32m::look_g3d(array(to - from))))
             }
 
             3 => {
-                // the position as plain numbers, without the argument conversions below
-                let number = |index: usize| match args[index] {
-                    LuaValue::Number(n) => Some(n as f32),
-                    LuaValue::Integer(n) => Some(n as f32),
-                    _ => None,
-                };
-                if let (Some(x), Some(y), Some(z)) = (number(0), number(1), number(2)) {
-                    Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
-                } else if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua) {
+                if let Ok((from, to, up)) = ArgsLook::from_lua_multi(args.clone(), lua)
+                    && !args.iter().any(|value| matches!(value, LuaValue::Number(_) | LuaValue::Integer(_)))
+                {
                     Ok(look_at(from.0, to.0, up.map_or(Vec3::Y, |up| up.0)))
-                } else if let Ok((x, y, z)) = ArgsPosXYZ::from_lua_multi(args, lua) {
-                    Ok(CFrame(Mat4::from_translation(Vec3::new(x, y, z))))
                 } else {
-                    // TODO: Make this error message better
-                    Err(LuaError::RuntimeError(
-                        "Invalid arguments to constructor".to_string(),
-                    ))
+                    let n = numbers(&args);
+                    Ok(CFrame(Mat4::from_translation(Vec3::new(n[0], n[1], n[2]))))
                 }
             }
 
             // The quaternion made unit first, then the matrix (types::float32 `rot_from_quat`, as Lerp makes one; a playing
             // client, 0.747, 134 quaternions to the bit: tools/parity/probes/cframe_new_quat.luau). A zero quaternion gives
             // not-a-number.
-            7 => match ArgsPosXYZQuat::from_lua_multi(args, lua) {
-                Ok((x, y, z, qx, qy, qz, qw)) => Ok(CFrame::from_parts([x, y, z], f32m::rot_from_quat([qx, qy, qz, qw]))),
-                Err(err) => Err(err),
-            },
+            7 => {
+                let n = numbers(&args);
+                Ok(CFrame::from_parts([n[0], n[1], n[2]], f32m::rot_from_quat([n[3], n[4], n[5], n[6]])))
+            }
 
-            12 => match ArgsMatrix::from_lua_multi(args, lua) {
-                Ok((x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22)) => {
-                    Ok(CFrame(Mat4::from_cols_array_2d(&[
-                        [r00, r10, r20, 0.0],
-                        [r01, r11, r21, 0.0],
-                        [r02, r12, r22, 0.0],
-                        [x, y, z, 1.0],
-                    ])))
-                }
-                Err(err) => Err(err),
-            },
+            12 => {
+                let n = numbers(&args);
+                Ok(CFrame(Mat4::from_cols_array_2d(&[
+                    [n[3], n[6], n[9], 0.0],
+                    [n[4], n[7], n[10], 0.0],
+                    [n[5], n[8], n[11], 0.0],
+                    [n[0], n[1], n[2], 1.0],
+                ])))
+            }
 
-            _ => Err(LuaError::RuntimeError(format!(
-                "Invalid number of arguments: expected 0, 1, 3, 7, or 12, got {}",
-                args.len()
-            ))),
+            count => Err(script_error(format!("Invalid number of arguments: {count}"), false)),
             }
         };
 
@@ -674,90 +703,67 @@ impl LuaUserData for CFrame {
 
     #[allow(clippy::too_many_lines)]
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
-        // Methods, and the deprecated lowercase names Roblox still answers
-        aliased!(methods, price::INVERSE, ["Inverse", "inverse"], |_, this, ()| Ok(this.inverse()));
-        aliased!(
-            methods,
-            price::LERP,
-            ["Lerp", "lerp"],
-            |_, this, (goal, alpha): (LuaUserDataRef<CFrame>, f32)| {
-                let (a, b) = (this.pos(), goal.pos());
-                let position = [0, 1, 2].map(|i| f32m::lerp(a[i], b[i], alpha));
-                Ok(CFrame::from_parts(position, f32m::lerp_rotation(&this.rot(), &goal.rot(), alpha)))
-            }
-        );
-        methods.add_method("Orthonormalize", charged_method(price::ORTHONORMALIZE, |_, this, ()| {
+        // Methods, and the deprecated lowercase names Roblox still answers, with a playing client's argument errors (Studio
+        // 0.747, ree's tools/parity/probes/datatype_errors.luau): Inverse and Lerp go through its reflection ("Argument 1
+        // missing or nil", "Unable to cast double to CoordinateFrame"), Lerp checking self, then the alpha, then the goal;
+        // the others are checked as its Luau checks them, from the calling line (self named as a `.` call names it, a later
+        // argument as a `:` call does), and the spaces take any number of frames or points after self
+        aliased_named!(methods, ["Inverse", "inverse"], |_| |lua: &Lua, args: LuaMultiValue| {
+            let this = reflected_arg::<CFrame>(&args, 1, "CoordinateFrame")?;
+            charge_host_nanos(lua, price::INVERSE);
+            Ok(this.inverse())
+        });
+        aliased_named!(methods, ["Lerp", "lerp"], |_| |lua: &Lua, args: LuaMultiValue| {
+            let this = reflected_arg::<CFrame>(&args, 1, "CoordinateFrame")?;
+            let alpha = reflected_float_arg(lua, &args, 3)? as f32;
+            let goal = reflected_arg::<CFrame>(&args, 2, "CoordinateFrame")?;
+            charge_host_nanos(lua, price::LERP);
+            let (a, b) = (this.pos(), goal.pos());
+            let position = [0, 1, 2].map(|i| f32m::lerp(a[i], b[i], alpha));
+            Ok(CFrame::from_parts(position, f32m::lerp_rotation(&this.rot(), &goal.rot(), alpha)))
+        });
+        methods.add_function("Orthonormalize", |lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, "Orthonormalize", "CFrame")?;
+            charge_host_nanos(lua, price::ORTHONORMALIZE);
             Ok(CFrame::from_parts(this.pos(), f32m::orthonormalize(&this.rot())))
-        }));
-        aliased!(
-            methods,
-            price::TO_WORLD,
-            ["ToWorldSpace", "toWorldSpace"],
-            |_, this, rhs: Variadic<LuaUserDataRef<CFrame>>| {
-                Ok(rhs
-                    .into_iter()
-                    .map(|cf| *this * *cf)
-                    .collect::<Variadic<_>>())
-            }
-        );
-        aliased!(
-            methods,
-            price::TO_OBJECT,
-            ["ToObjectSpace", "toObjectSpace"],
-            |_, this, rhs: Variadic<LuaUserDataRef<CFrame>>| {
-                let inverse = this.inverse();
-                Ok(rhs
-                    .into_iter()
-                    .map(|cf| inverse * *cf)
-                    .collect::<Variadic<_>>())
-            }
-        );
-        aliased!(
-            methods,
-            price::POINT_TO_WORLD,
-            ["PointToWorldSpace", "pointToWorldSpace"],
-            |_, this, rhs: Variadic<VectorArg>| {
-                Ok(rhs
-                    .into_iter()
-                    .map(|v3| native_vector(this.point_to_world(v3.0)))
-                    .collect::<Variadic<_>>())
-            }
-        );
-        aliased!(
-            methods,
-            price::POINT_TO_OBJECT,
-            ["PointToObjectSpace", "pointToObjectSpace"],
-            |_, this, rhs: Variadic<VectorArg>| {
-                Ok(rhs
-                    .into_iter()
-                    .map(|v3| native_vector(this.point_to_object(v3.0)))
-                    .collect::<Variadic<_>>())
-            }
-        );
-        aliased!(
-            methods,
-            price::VECTOR_TO_WORLD,
-            ["VectorToWorldSpace", "vectorToWorldSpace"],
-            |_, this, rhs: Variadic<VectorArg>| {
-                Ok(rhs
-                    .into_iter()
-                    .map(|v3| native_vector(this.vector_to_world(v3.0)))
-                    .collect::<Variadic<_>>())
-            }
-        );
-        aliased!(
-            methods,
-            price::VECTOR_TO_OBJECT,
-            ["VectorToObjectSpace", "vectorToObjectSpace"],
-            |_, this, rhs: Variadic<VectorArg>| {
-                Ok(rhs
-                    .into_iter()
-                    .map(|v3| native_vector(this.vector_to_object(v3.0)))
-                    .collect::<Variadic<_>>())
-            }
-        );
+        });
+        aliased_named!(methods, ["ToWorldSpace", "toWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            let frames = frames_of(&args)?;
+            charge_host_nanos(lua, price::TO_WORLD);
+            Ok(frames.into_iter().map(|cf| *this * cf).collect::<Variadic<_>>())
+        });
+        aliased_named!(methods, ["ToObjectSpace", "toObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            let frames = frames_of(&args)?;
+            charge_host_nanos(lua, price::TO_OBJECT);
+            let inverse = this.inverse();
+            Ok(frames.into_iter().map(|cf| inverse * cf).collect::<Variadic<_>>())
+        });
+        aliased_named!(methods, ["PointToWorldSpace", "pointToWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let (this, points) = points_of(lua, &args, name)?;
+            charge_host_nanos(lua, price::POINT_TO_WORLD);
+            Ok(points.into_iter().map(|v3| native_vector(this.point_to_world(v3))).collect::<Variadic<_>>())
+        });
+        aliased_named!(methods, ["PointToObjectSpace", "pointToObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let (this, points) = points_of(lua, &args, name)?;
+            charge_host_nanos(lua, price::POINT_TO_OBJECT);
+            Ok(points.into_iter().map(|v3| native_vector(this.point_to_object(v3))).collect::<Variadic<_>>())
+        });
+        aliased_named!(methods, ["VectorToWorldSpace", "vectorToWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let (this, points) = points_of(lua, &args, name)?;
+            charge_host_nanos(lua, price::VECTOR_TO_WORLD);
+            Ok(points.into_iter().map(|v3| native_vector(this.vector_to_world(v3))).collect::<Variadic<_>>())
+        });
+        aliased_named!(methods, ["VectorToObjectSpace", "vectorToObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let (this, points) = points_of(lua, &args, name)?;
+            charge_host_nanos(lua, price::VECTOR_TO_OBJECT);
+            Ok(points.into_iter().map(|v3| native_vector(this.vector_to_object(v3))).collect::<Variadic<_>>())
+        });
         #[rustfmt::skip]
-        aliased!(methods, price::COMPONENTS, ["GetComponents", "components"], |_, this, ()| {
+        aliased_named!(methods, ["GetComponents", "components"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            charge_host_nanos(lua, price::COMPONENTS);
             let pos = this.position();
             let transposed = this.orientation().transpose();
             Ok((
@@ -767,22 +773,32 @@ impl LuaUserData for CFrame {
                 transposed.z_axis.x, transposed.z_axis.y,   transposed.z_axis.z,
             ))
         });
-        aliased!(methods, price::EULER, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |_, this, ()| {
+        aliased_named!(methods, ["ToEulerAnglesXYZ", "toEulerAnglesXYZ"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            charge_host_nanos(lua, price::EULER);
             Ok(f32m::to_euler("XYZ", &this.rot()))
         });
         // (and their lowercase names, measured in a client: ree's tools/parity/probes/camelcase.luau)
-        aliased!(methods, price::EULER, ["ToEulerAnglesYXZ", "toEulerAnglesYXZ"], |_, this, ()| {
+        aliased_named!(methods, ["ToEulerAnglesYXZ", "toEulerAnglesYXZ"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            charge_host_nanos(lua, price::EULER);
             Ok(f32m::to_euler("YXZ", &this.rot()))
         });
-        aliased!(methods, price::EULER, ["ToOrientation", "toOrientation"], |_, this, ()| {
+        aliased_named!(methods, ["ToOrientation", "toOrientation"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            charge_host_nanos(lua, price::EULER);
             Ok(f32m::to_euler("YXZ", &this.rot()))
         });
         // ToEulerAngles(order = Enum.RotationOrder.XYZ): the three angles in x, y, z order for the rotation order named
-        aliased!(methods, price::EULER, ["ToEulerAngles", "toEulerAngles"], |_, this, order: Option<LuaValue>| {
-            let name = rotation_order(order.as_ref(), "ToEulerAngles")?;
-            Ok(f32m::to_euler(name, &this.rot()))
+        aliased_named!(methods, ["ToEulerAngles", "toEulerAngles"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            let order = rotation_order(args.get(1), name)?;
+            charge_host_nanos(lua, price::EULER);
+            Ok(f32m::to_euler(order, &this.rot()))
         });
-        aliased!(methods, price::AXIS_ANGLE, ["ToAxisAngle", "toAxisAngle"], |_, this, ()| {
+        aliased_named!(methods, ["ToAxisAngle", "toAxisAngle"], |name| move |lua: &Lua, args: LuaMultiValue| {
+            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            charge_host_nanos(lua, price::AXIS_ANGLE);
             let (axis, angle) = f32m::to_axis_angle(&this.rot());
             Ok((native_vector(Vec3::from_array(axis)), angle))
         });
@@ -792,7 +808,12 @@ impl LuaUserData for CFrame {
             userdata_impl_eq(lua, this, other)
         });
         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
-        methods.add_meta_method(LuaMetaMethod::Mul, |lua, this, rhs: LuaValue| {
+        // *, + and - check their operands as a client's Luau checks do, from the calling line: the first a CFrame
+        // ("invalid argument #1 (CFrame expected, got number)", the CFrame on the right of a type with no * of its own),
+        // the second a Vector3 (or a CFrame, for *)
+        methods.add_meta_function(LuaMetaMethod::Mul, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let this = *userdata_of::<CFrame>(Some(&lhs)).ok_or_else(|| invalid_argument(1, None, "CFrame", &lhs))?;
+            let this = &this;
             match &rhs {
                 LuaValue::Vector(v) => {
                     charge_host_nanos(lua, price::MUL_VECTOR);
@@ -811,30 +832,60 @@ impl LuaUserData for CFrame {
                 }
                 _ => {}
             }
-            Err(LuaError::FromLuaConversionError {
-                from: rhs.type_name(),
-                to: "userdata".to_string(),
-                message: Some(format!(
-                    "Expected CFrame or Vector3, got {}",
-                    rhs.type_name()
-                )),
-            })
+            Err(invalid_argument(2, None, "Vector3", &rhs))
         });
-        methods.add_meta_method(
-            LuaMetaMethod::Add,
-            |lua, this, vec: VectorArg| {
-                charge_host_nanos(lua, price::ADD_VECTOR);
-                Ok(*this + Vector3(vec.0))
-            },
-        );
-        methods.add_meta_method(
-            LuaMetaMethod::Sub,
-            |lua, this, vec: VectorArg| {
-                charge_host_nanos(lua, price::ADD_VECTOR);
-                Ok(*this - Vector3(vec.0))
-            },
-        );
+        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let (this, vec) = translation(lua, &lhs, &rhs)?;
+            charge_host_nanos(lua, price::ADD_VECTOR);
+            Ok(this + Vector3(vec))
+        });
+        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let (this, vec) = translation(lua, &lhs, &rhs)?;
+            charge_host_nanos(lua, price::ADD_VECTOR);
+            Ok(this - Vector3(vec))
+        });
     }
+}
+
+/// Argument `index` (1-based) of constructor `name` as a Vector3, checked as a client's Luau checks it.
+fn vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Vec3> {
+    match args.get(index - 1) {
+        None => Err(missing_argument(index, Some(name), "Vector3")),
+        Some(value) => VectorArg::from_lua(value.clone(), lua).map(|v| v.0).map_err(|_| invalid_argument(index, Some(name), "Vector3", value)),
+    }
+}
+
+/// An optional Vector3 argument: none when not passed, else checked as [`vector_arg`] (nil passed is no Vector3).
+fn optional_vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Option<Vec3>> {
+    if index > args.len() { Ok(None) } else { vector_arg(lua, args, index, name).map(Some) }
+}
+
+/// The CFrame and the Vector3 of a + or a -.
+fn translation(lua: &Lua, lhs: &LuaValue, rhs: &LuaValue) -> LuaResult<(CFrame, Vec3)> {
+    let this = *userdata_of::<CFrame>(Some(lhs)).ok_or_else(|| invalid_argument(1, None, "CFrame", lhs))?;
+    let vec = VectorArg::from_lua(rhs.clone(), lua).map_err(|_| invalid_argument(2, None, "Vector3", rhs))?;
+    Ok((this, vec.0))
+}
+
+/// Self and the points after it of a space method (PointToWorldSpace and the others).
+fn points_of(lua: &Lua, args: &LuaMultiValue, name: &str) -> LuaResult<(CFrame, Vec<Vec3>)> {
+    let this = *luau_self::<CFrame>(args, name, "CFrame")?;
+    let points = args
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(index, value)| VectorArg::from_lua(value.clone(), lua).map(|v| v.0).map_err(|_| invalid_argument(index + 1, None, "Vector3", value)))
+        .collect::<LuaResult<Vec<_>>>()?;
+    // (nothing after self is one zero vector, as a playing client answers: Studio 0.747, ree's datatype_errors.luau)
+    Ok((this, if points.is_empty() { vec![Vec3::ZERO] } else { points }))
+}
+
+/// The frames after self of ToWorldSpace or ToObjectSpace (none: one identity, as a playing client answers).
+fn frames_of(args: &LuaMultiValue) -> LuaResult<Vec<CFrame>> {
+    if args.len() < 2 {
+        return Ok(vec![CFrame::IDENTITY]);
+    }
+    (2..=args.len()).map(|index| luau_arg::<CFrame>(args, index, "CFrame").map(|cf| *cf)).collect()
 }
 
 impl fmt::Display for CFrame {

@@ -89,7 +89,7 @@ print("equal", tostring(A == A), tostring(A == B), tostring(A))
 print("typeof", typeof(A), typeof(A.Position), typeof(CFrame.new(1, 2, 3)))
 
 print("err1", Err(CFrame.new, 1, 2))
-print("err2", Err(CFrame.new, "a", 2, 3))
+print("err2", Err(CFrame.new, 1, 2, 3, 4, 5))
 print("err3", Err(CFrame.new, P, 5))
 print("err4", Err(CFrame.new, 5, P))
 print("err5", Err(CFrame.new, {}))

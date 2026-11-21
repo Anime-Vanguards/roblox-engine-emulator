@@ -10,6 +10,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, vector3int16::int16_component};
+use crate::datatypes::script_error::{luau_number, same_operands};
 
 /**
     An implementation of the [Vector2int16](https://create.roblox.com/docs/reference/engine/datatypes/Vector2int16)
@@ -25,7 +26,11 @@ impl LuaExportsTable for Vector2int16 {
     const EXPORT_NAME: &'static str = "Vector2int16";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        let vector2int16_new = |_: &Lua, (x, y): (Option<f64>, Option<f64>)| {
+        // (each component read as a client reads it: a number or a string Luau reads as one, anything else 0;
+        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let vector2int16_new = |lua: &Lua, args: LuaMultiValue| {
+            let x = args.get(0).and_then(|value| luau_number(lua, value));
+            let y = args.get(1).and_then(|value| luau_number(lua, value));
             Ok(Vector2int16(IVec2 {
                 x: int16_component(x),
                 y: int16_component(y),
@@ -51,8 +56,16 @@ impl LuaUserData for Vector2int16 {
         methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
         methods.add_meta_method(LuaMetaMethod::ToString, userdata_impl_to_string);
         methods.add_meta_method(LuaMetaMethod::Unm, userdata_impl_unm);
-        methods.add_meta_method(LuaMetaMethod::Add, userdata_impl_add);
-        methods.add_meta_method(LuaMetaMethod::Sub, userdata_impl_sub);
+        // (two Vector2int16s, whichever side: a client raises "invalid argument #2 (Vector2int16 expected, got number)" from the
+        // calling line, Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        methods.add_meta_function(LuaMetaMethod::Add, |_, (lhs, rhs): (LuaValue, LuaValue)| {
+            let (a, b) = same_operands::<Vector2int16>(&lhs, &rhs, "Vector2int16")?;
+            Ok(a + b)
+        });
+        methods.add_meta_function(LuaMetaMethod::Sub, |_, (lhs, rhs): (LuaValue, LuaValue)| {
+            let (a, b) = same_operands::<Vector2int16>(&lhs, &rhs, "Vector2int16")?;
+            Ok(a - b)
+        });
         methods.add_meta_method(LuaMetaMethod::Mul, userdata_impl_mul_i32);
         methods.add_meta_method(LuaMetaMethod::Div, userdata_impl_div_i32);
     }

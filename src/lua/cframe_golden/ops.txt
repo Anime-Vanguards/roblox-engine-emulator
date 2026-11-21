@@ -55,14 +55,14 @@ aliasaxis 0.5240744948387146 0.42391511797904968 0.73867583274841309 0.744064152
 equal true false 1, 2, 3, 0.808307052, -0.441580176, 0.389418334, 0.559005797, 0.783213913, -0.27219215, -0.184803188, 0.437701941, 0.879923165
 typeof CFrame Vector3 CFrame
 err1 invalid argument #1 to 'new' (Vector3 expected, got number)
-err2 Invalid arguments to constructor
+err2 Invalid number of arguments: 5
 err3 invalid argument #2 to 'new' (Vector3 expected, got number)
 err4 invalid argument #1 to 'new' (Vector3 expected, got number)
-err5 error converting Lua table to userdata (expected userdata of type 'Vector3')
-err6 Invalid number of arguments: expected 0, 1, 3, 7, or 12, got 4
+err5 invalid argument #1 to 'new' (Vector3 expected, got table)
+err6 Invalid number of arguments: 4
 err7 invalid argument #1 to 'lookAt' (Vector3 expected, got number)
-err8 invalid argument #1 to 'fromAxisAngle' (Vector3 expected, got number)
-err9 error converting Lua number to userdata (expected userdata of type 'Vector3')
-err10 error converting Lua string to userdata (Expected CFrame or Vector3, got string)
-err11 bad argument #2 to `CFrame.__add`: error converting Lua number to userdata (expected userdata of type 'Vector3')
-err13 bad argument #2 to `CFrame.Lerp`: error converting Lua number to userdata (expected userdata of type 'CFrame')
+err8 Unable to cast double to Vector3
+err9 invalid argument #2 (Vector3 expected, got number)
+err10 invalid argument #2 (Vector3 expected, got string)
+err11 invalid argument #2 (Vector3 expected, got number)
+err13 Unable to cast double to CoordinateFrame

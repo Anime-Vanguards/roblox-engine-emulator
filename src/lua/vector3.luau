@@ -102,29 +102,81 @@ local Cross = vector.cross
 
 local Charge, LerpCost, FuzzyEqCost, Atan2f = R.Charge, R.VectorLerpCost, R.VectorFuzzyEqCost, R.Atan2f
 
-local function Lerp(Self, Goal, Alpha)
-	Charge(LerpCost)
-	return Self + (Goal - Self) * Alpha
+-- A method's arguments as a playing client checks them (Studio 0.747, tools/parity/probes/datatype_errors.luau), from the
+-- calling line: self named as a `.` call names it (only a `.` call can pass a wrong one), a later argument as a `:` call
+-- reports it ("invalid argument #2 (Vector3 expected, got number)")
+local function TypeName(Value)
+	return if type(Value) == "vector" then "Vector3" else NativeTypeof(Value)
 end
 
+-- (the message for argument Index when it is no Vector3; the method raises it at level 2, which no inlining moves)
+local function VectorProblem(Value, Index, Count, Method)
+	if type(Value) == "vector" then
+		return nil
+	end
+	local To = if Index == 1 then ` to '{Method}'` else ""
+	if Index > Count then
+		return `missing argument #{Index}{To} (Vector3 expected)`
+	end
+	return `invalid argument #{Index}{To} (Vector3 expected, got {TypeName(Value)})`
+end
+
+local function Lerp(...)
+	local Count = select("#", ...)
+	local Self, Goal, Alpha = ...
+	local Problem = VectorProblem(Self, 1, Count, "Lerp") or VectorProblem(Goal, 2, Count, "Lerp")
+	if Problem then
+		error(Problem, 2)
+	end
+	local Number = if type(Alpha) == "number" then Alpha elseif type(Alpha) == "string" then tonumber(Alpha) else nil
+	if Number == nil then
+		error(if Count < 3 then "missing argument #3 (number expected)" else `invalid argument #3 (number expected, got {TypeName(Alpha)})`, 2)
+	end
+	Charge(LerpCost)
+	return Self + (Goal - Self) * Number
+end
+
+-- Abs, Ceil, Floor, Sign, Dot, Cross, Max and Min are the `vector` library's functions behind C functions of their own
+-- names that check the arguments first (lua/vector_methods.rs)
+local Native = R.VectorMethods
+
 local VectorMethods = {
-	Dot = Dot,
-	Cross = Cross,
-	Abs = vector.abs,
-	Ceil = vector.ceil,
-	Floor = vector.floor,
-	Sign = vector.sign,
-	Max = vector.max,
-	Min = vector.min,
+	Dot = Native.Dot,
+	Cross = Native.Cross,
+	Abs = Native.Abs,
+	Ceil = Native.Ceil,
+	Floor = Native.Floor,
+	Sign = Native.Sign,
+	Max = Native.Max,
+	Min = Native.Min,
 	Lerp = Lerp,
 	lerp = Lerp,
-	FuzzyEq = function(Self, Other, Epsilon)
+	-- (an eps that is no number reads as the default, measured only between equal vectors)
+	FuzzyEq = function(...)
+		local Count = select("#", ...)
+		local Self, Other, Epsilon = ...
+		local Problem = VectorProblem(Self, 1, Count, "FuzzyEq") or VectorProblem(Other, 2, Count, "FuzzyEq")
+		if Problem then
+			error(Problem, 2)
+		end
 		Charge(FuzzyEqCost)
 		local Difference = vector.abs(Self - Other)
-		local Limit = Epsilon or 1e-5
+		local Limit = (if type(Epsilon) == "number" or type(Epsilon) == "string" then tonumber(Epsilon) else nil) or 1e-5
 		return Difference.x <= Limit and Difference.y <= Limit and Difference.z <= Limit
 	end,
-	Angle = function(Self, Other, Axis)
+	-- (fewer than two arguments is the client's count error, without a position: "expect", without a full stop; an axis
+	-- passed, nil included, must be a Vector3)
+	Angle = function(...)
+		local Count = select("#", ...)
+		local Self, Other, Axis = ...
+		if Count < 2 then
+			error(`Invalid number of arguments: {Count}, Vector3.Angle expect 2 or 3`, 0)
+		end
+		local Problem = VectorProblem(Self, 1, Count, "Angle") or VectorProblem(Other, 2, Count, "Angle")
+			or (if Count >= 3 then VectorProblem(Axis, 3, Count, "Angle") else nil)
+		if Problem then
+			error(Problem, 2)
+		end
 		local Normal = Cross(Self, Other)
 		local Angle = Atan2f(Magnitude(Normal), Dot(Self, Other)) -- atan2f in floats, as a playing client (cframe_order probe)
 		if Axis ~= nil and Dot(Normal, Axis) < 0 then
@@ -189,6 +241,67 @@ local Library = {
 	min = vector.min,
 	max = vector.max,
 }
+
+-- Vector3.FromNormalId and FromAxis (and their lowercase names) take the item as a playing client's reflection casts it
+-- (Studio 0.747, tools/parity/probes/datatype_errors.luau): an item of the enum or its value as a number (1 is Top, Y);
+-- none or nil is "Argument 1 missing or nil", anything else "Unable to cast string to NormalId", without a position
+local EnumItemName, EnumItemType, GetEnumItem = R.EnumItemName, R.EnumItemType, R.GetEnumItem
+
+local function CastName(Value)
+	local Kind = type(Value)
+	if Kind == "number" then
+		return "double"
+	elseif Kind == "boolean" then
+		return "bool"
+	elseif Kind == "table" then
+		return if next(Value) == nil or #Value > 0 then "Array" else "Dictionary"
+	elseif Kind == "function" then
+		return "Function"
+	elseif Kind == "vector" then
+		return "Vector3"
+	end
+	local Type = EnumItemType(Value) or NativeTypeof(Value)
+	return if Type == "CFrame" then "CoordinateFrame" else Type
+end
+
+-- (the items' values, as Roblox's API dump lists them)
+local NormalIdNames = { [0] = "Right", "Top", "Back", "Left", "Bottom", "Front" }
+local AxisNames = { [0] = "X", "Y", "Z" }
+
+local function EnumArgument(Value, EnumName, Names)
+	if Value == nil then
+		error("Argument 1 missing or nil", 0)
+	end
+	local Name = if EnumItemType(Value) == EnumName then EnumItemName(Value)
+		elseif type(Value) == "number" then Names[Value]
+		elseif type(Value) == "string" and GetEnumItem(EnumName, Value) ~= nil then Value
+		else nil
+	if Name == nil then
+		error(`Unable to cast {CastName(Value)} to {EnumName}`, 0)
+	end
+	return Name
+end
+
+local Directions = {
+	Right = CreateVector(1, 0, 0),
+	Left = CreateVector(-1, 0, 0),
+	Top = CreateVector(0, 1, 0),
+	Bottom = CreateVector(0, -1, 0),
+	Back = CreateVector(0, 0, 1),
+	Front = CreateVector(0, 0, -1),
+}
+local Axes = { X = CreateVector(1, 0, 0), Y = CreateVector(0, 1, 0), Z = CreateVector(0, 0, 1) }
+
+function Library.FromNormalId(Item)
+	return Directions[EnumArgument(Item, "NormalId", NormalIdNames)]
+end
+
+function Library.FromAxis(Item)
+	return Axes[EnumArgument(Item, "Axis", AxisNames)]
+end
+
+Library.fromNormalId = Library.FromNormalId
+Library.fromAxis = Library.FromAxis
 
 -- Lune libraries whose functions take or return Vector3 values (the Vector3 library is native)
 local VectorLibraries = { Ray = true, Region3 = true }

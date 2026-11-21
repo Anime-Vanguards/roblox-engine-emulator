@@ -9,6 +9,8 @@ pub mod conversion;
 #[cfg(feature = "mlua")]
 pub mod result;
 #[cfg(feature = "mlua")]
+pub mod script_error;
+#[cfg(feature = "mlua")]
 pub mod types;
 
 #[cfg(feature = "mlua")]

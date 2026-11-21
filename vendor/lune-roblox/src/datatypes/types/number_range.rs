@@ -8,6 +8,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::super::*;
+use crate::datatypes::script_error::{ctor_number, luau_number};
 
 /**
     An implementation of the [NumberRange](https://create.roblox.com/docs/reference/engine/datatypes/NumberRange) Roblox datatype.
@@ -26,12 +27,15 @@ impl LuaExportsTable for NumberRange {
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
         // Roblox's documentation: "The minimum must be less than or equal to maximum" (not measured
         // in Studio; the message is rbxmk's wording). Lune swapped the two instead.
-        let number_range_new = |_: &Lua, (min, max): (f32, Option<f32>)| match max {
-            Some(max) if min > max => Err(LuaError::RuntimeError(
-                "NumberRange: invalid range".to_string(),
-            )),
-            Some(max) => Ok(NumberRange { min, max }),
-            None => Ok(NumberRange { min, max: min }),
+        // (the minimum checked as a client's Luau checks it, naming the constructor; a maximum that is no number is none:
+        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let number_range_new = |lua: &Lua, args: LuaMultiValue| {
+            let min = ctor_number(lua, &args, 1, "new")? as f32;
+            match args.get(1).and_then(|value| luau_number(lua, value)).map(|max| max as f32) {
+                Some(max) if min > max => Err(LuaError::RuntimeError("NumberRange: invalid range".to_string())),
+                Some(max) => Ok(NumberRange { min, max }),
+                None => Ok(NumberRange { min, max: min }),
+            }
         };
 
         TableBuilder::new(lua)?

@@ -23,6 +23,7 @@ pub mod raw;
 pub mod refs;
 pub mod stubs;
 pub mod types;
+pub mod vector_methods;
 
 #[cfg(test)]
 mod datatype_tests;
@@ -329,6 +330,53 @@ pub fn lock_metatable(lua: &Lua, sample: &LuaAnyUserData) -> LuaResult<()> {
                 ffi::lua_setfield(state, -2, c"__metatable".as_ptr());
                 ffi::lua_pop(state, 1);
             }
+        })
+    }
+}
+
+/// The text a script reads from an error a Rust callback raised through mlua (an mlua error object, caught by pcall) without
+/// the traceback mlua writes after the message: a client's errors are one line (`tostring` of the object; the engine's
+/// own report of an uncaught error leaves it out already: scheduler::error_message). The engine's datatypes raise plain
+/// strings (lune-roblox datatypes::script_error), so this is for any other callback's error. A panic's text has none.
+pub fn strip_callback_tracebacks(lua: &Lua) -> LuaResult<()> {
+    unsafe extern "C-unwind" fn tostring(state: *mut mlua::ffi::lua_State) -> std::ffi::c_int {
+        use mlua::ffi;
+        unsafe {
+            ffi::lua_settop(state, 1);
+            ffi::lua_pushvalue(state, ffi::lua_upvalueindex(1));
+            ffi::lua_insert(state, 1);
+            ffi::lua_call(state, 1, 1);
+            let mut length = 0;
+            let text = ffi::lua_tolstring(state, -1, &mut length);
+            if !text.is_null() {
+                let bytes = std::slice::from_raw_parts(text.cast::<u8>(), length);
+                let marker = b"\nstack traceback:";
+                if let Some(at) = bytes.windows(marker.len()).position(|window| window == marker) {
+                    ffi::lua_pushlstring(state, text, at);
+                }
+            }
+            1
+        }
+    }
+    let failing = lua.create_function(|_, ()| Err::<(), _>(LuaError::runtime("")))?;
+    unsafe {
+        lua.exec_raw::<()>(failing, |state| {
+            use mlua::ffi;
+            // (the error object pcall leaves is mlua's; its metatable is every such object's)
+            if ffi::lua_pcall(state, 0, 0, 0) != ffi::LUA_OK && ffi::lua_type(state, -1) == ffi::LUA_TUSERDATA && ffi::lua_getmetatable(state, -1) != 0 {
+                ffi::lua_pushstring(state, c"__tostring".as_ptr());
+                ffi::lua_rawget(state, -2);
+                if ffi::lua_type(state, -1) == ffi::LUA_TFUNCTION {
+                    ffi::lua_pushcclosurek(state, tostring, c"__tostring".as_ptr(), 1, None);
+                    ffi::lua_pushstring(state, c"__tostring".as_ptr());
+                    ffi::lua_insert(state, -2);
+                    ffi::lua_rawset(state, -3);
+                } else {
+                    ffi::lua_pop(state, 1);
+                }
+                ffi::lua_pop(state, 1);
+            }
+            ffi::lua_settop(state, 0);
         })
     }
 }

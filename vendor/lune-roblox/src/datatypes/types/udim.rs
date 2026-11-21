@@ -9,6 +9,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::super::*;
+use crate::datatypes::script_error::same_operands;
 
 /**
     An implementation of the [UDim](https://create.roblox.com/docs/reference/engine/datatypes/UDim) Roblox datatype.
@@ -61,13 +62,17 @@ impl LuaUserData for UDim {
             super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
             userdata_impl_unm(lua, this, ())
         });
-        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<UDim>| {
+        // (two UDims, whichever side: a client raises "invalid argument #2 (UDim expected, got number)" from the calling
+        // line, Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let (a, b) = same_operands::<UDim>(&lhs, &rhs, "UDim")?;
             super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
-            userdata_impl_add(lua, this, rhs)
+            Ok(a + b)
         });
-        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<UDim>| {
+        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let (a, b) = same_operands::<UDim>(&lhs, &rhs, "UDim")?;
             super::charge_host_nanos(lua, super::datatype_price::ARITHMETIC);
-            userdata_impl_sub(lua, this, rhs)
+            Ok(a - b)
         });
     }
 }

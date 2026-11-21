@@ -78,7 +78,8 @@ impl LuaExportsTable for ColorSequence {
             } else {
                 // Studio's message for a missing or non-table argument
                 Err(LuaError::RuntimeError(
-                    "ColorSequence.new(): table expected".to_string(),
+                    // (with its full stop, as a playing client's: Studio 0.747, ree's datatype_errors.luau)
+                    "ColorSequence.new(): table expected.".to_string(),
                 ))
             }
         };

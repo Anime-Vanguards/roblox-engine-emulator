@@ -11,6 +11,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, UDim};
+use crate::datatypes::script_error::{reflected_arg, reflected_float_arg, same_operands};
 
 /**
     An implementation of the [UDim2](https://create.roblox.com/docs/reference/engine/datatypes/UDim2) Roblox datatype.
@@ -99,7 +100,12 @@ impl LuaUserData for UDim2 {
         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
         // Each scale is a + (b - a) * t in floats, each offset the same rounded half away from zero (Studio 0.744,
         // tools/parity/probes/datatypes.luau)
-        let lerp = |lua: &Lua, this: &UDim2, (goal, alpha): (LuaUserDataRef<UDim2>, f32)| {
+        // (a playing client's reflection checks self, then the alpha, then the goal: "Argument 3 missing or nil", "Unable
+        // to cast double to UDim2"; Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let lerp = |lua: &Lua, args: LuaMultiValue| {
+            let this = reflected_arg::<UDim2>(&args, 1, "UDim2")?;
+            let alpha = reflected_float_arg(lua, &args, 3)? as f32;
+            let goal = reflected_arg::<UDim2>(&args, 2, "UDim2")?;
             super::charge_host_nanos(lua, super::datatype_price::UDIM2_LERP);
             let lerp = super::float32::lerp;
             let offset = |a: i32, b: i32| lerp(a as f32, b as f32, alpha).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
@@ -108,8 +114,8 @@ impl LuaUserData for UDim2 {
                 y: UDim { scale: lerp(this.y.scale, goal.y.scale, alpha), offset: offset(this.y.offset, goal.y.offset) },
             })
         };
-        methods.add_method("Lerp", lerp);
-        methods.add_method("lerp", lerp);
+        methods.add_function("Lerp", lerp);
+        methods.add_function("lerp", lerp);
         // Metamethods
         methods.add_meta_method(LuaMetaMethod::Eq, |lua, this, value: LuaValue| {
             super::charge_host_nanos(lua, super::datatype_price::EQ);
@@ -120,13 +126,16 @@ impl LuaUserData for UDim2 {
             super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
             userdata_impl_unm(lua, this, ())
         });
-        methods.add_meta_method(LuaMetaMethod::Add, |lua, this, rhs: LuaUserDataRef<UDim2>| {
+        // (two UDim2s, whichever side, as UDim's)
+        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let (a, b) = same_operands::<UDim2>(&lhs, &rhs, "UDim2")?;
             super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
-            userdata_impl_add(lua, this, rhs)
+            Ok(a + b)
         });
-        methods.add_meta_method(LuaMetaMethod::Sub, |lua, this, rhs: LuaUserDataRef<UDim2>| {
+        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
+            let (a, b) = same_operands::<UDim2>(&lhs, &rhs, "UDim2")?;
             super::charge_host_nanos(lua, super::datatype_price::UDIM2_ARITHMETIC);
-            userdata_impl_sub(lua, this, rhs)
+            Ok(a - b)
         });
     }
 }

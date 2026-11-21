@@ -822,38 +822,40 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
 
     let library = lua.create_table()?;
-    let weight = |lua: &Lua, engine: &Engine, value: &LuaValue, function: &str| -> Result<EnumItemId, Flow> {
+    // The constructors check their arguments as a playing client does (Studio 0.747, tools/parity/probes/datatype_errors.luau):
+    // the family or id as its Luau checks do, from the calling line (`missing argument #1 to 'new' (string expected)`, a
+    // number a string's text, `invalid argument #1 to 'fromId' (number expected, got string)`), the weight and style as
+    // its enum casts do, without a position (`Invalid value for enum 'FontWeight'`, `Invalid type 'KeyCode' for enum
+    // 'FontWeight'` for another enum's item); nil is the default
+    let enum_arg = |lua: &Lua, engine: &Engine, value: &LuaValue, enum_name: &str, default: &str| -> Result<EnumItemId, Flow> {
         if value.is_nil() {
-            return Ok(engine.reflection.enum_item("FontWeight", "Regular").unwrap_or(0));
+            return Ok(engine.reflection.enum_item(enum_name, default).unwrap_or(0));
         }
-        coerce_named_enum(lua, engine, "FontWeight", value).ok_or_else(|| {
-            Flow::Error(ScriptError::at_caller(format!(
-                "invalid argument #2 to '{function}' (Enum.FontWeight expected, got {})",
-                typeof_value(engine, value)
-            )))
+        coerce_named_enum(lua, engine, enum_name, value).ok_or_else(|| match enum_item_of(value) {
+            Some(item) => Flow::Error(ScriptError::plain(format!(
+                "Invalid type '{}' for enum '{enum_name}'",
+                engine.reflection.enum_item_type_name(item)
+            ))),
+            None => Flow::Error(ScriptError::plain(format!("Invalid value for enum '{enum_name}'"))),
         })
     };
-    let style = |lua: &Lua, engine: &Engine, value: &LuaValue, function: &str| -> Result<EnumItemId, Flow> {
-        if value.is_nil() {
-            return Ok(engine.reflection.enum_item("FontStyle", "Normal").unwrap_or(0));
+    let weight = move |lua: &Lua, engine: &Engine, value: &LuaValue, _: &str| enum_arg(lua, engine, value, "FontWeight", "Regular");
+    let style = move |lua: &Lua, engine: &Engine, value: &LuaValue, _: &str| enum_arg(lua, engine, value, "FontStyle", "Normal");
+    let family_arg = |lua: &Lua, engine: &Engine, args: &Args, function: &str| -> Result<String, Flow> {
+        match args.get(0) {
+            _ if args.is_empty() => raise_at_caller(format!("missing argument #1 to '{function}' (string expected)")),
+            value @ (LuaValue::String(_) | LuaValue::Number(_) | LuaValue::Integer(_)) => Ok(string_of(lua, value)?),
+            value => raise_at_caller(format!("invalid argument #1 to '{function}' (string expected, got {})", typeof_value(engine, value))),
         }
-        coerce_named_enum(lua, engine, "FontStyle", value).ok_or_else(|| {
-            Flow::Error(ScriptError::at_caller(format!(
-                "invalid argument #3 to '{function}' (Enum.FontStyle expected, got {})",
-                typeof_value(engine, value)
-            )))
-        })
     };
     let e = engine.clone();
     library.set(
         "new",
         wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
-            let Some(family) = args.string(0) else {
-                return raise_plain("invalid argument #1 to 'new' (string expected)");
-            };
+            let family = family_arg(lua, &e, &args, "new")?;
             let font = FontValue {
-                family: Str::new(&family.as_bytes()),
+                family: Str::new(family.as_bytes()),
                 weight: weight(lua, &e, args.get(1), "new")?,
                 style: style(lua, &e, args.get(2), "new")?,
             };
@@ -881,7 +883,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "fromName",
         wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
-            let name = string_of(lua, args.get(0))?;
+            let name = family_arg(lua, &e, &args, "fromName")?;
             let font = FontValue {
                 family: Str::from(format!("rbxasset://fonts/families/{name}.json")),
                 weight: weight(lua, &e, args.get(1), "fromName")?,
@@ -895,7 +897,12 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "fromId",
         wrapped(lua, engine, move |lua, args| {
             let args = Args::new(args);
-            let id = string_of(lua, args.get(0))?;
+            let id = match args.get(0) {
+                _ if args.is_empty() => return raise_at_caller("missing argument #1 to 'fromId' (number expected)"),
+                value @ (LuaValue::Number(_) | LuaValue::Integer(_)) => string_of(lua, value)?,
+                value @ LuaValue::String(_) if lua.coerce_number(value.clone()).ok().flatten().is_some() => string_of(lua, value)?,
+                value => return raise_at_caller(format!("invalid argument #1 to 'fromId' (number expected, got {})", typeof_value(&e, value))),
+            };
             let font = FontValue {
                 family: Str::from(format!("rbxassetid://{id}")),
                 weight: weight(lua, &e, args.get(1), "fromId")?,
@@ -1727,27 +1734,41 @@ const TIMESTAMP_OUT_OF_RANGE: &str =
 const FIELDS_OUT_OF_RANGE: &str = "Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.";
 const OVER_THE_MAX: &str = "Over the max DateTime supported: 9999-12-31T23:59:59Z";
 
-/// A DateTime constructor's numeric argument: nil is absent, a number or numeric string is read.
-fn date_time_number(lua: &Lua, args: &Args, index: usize, name: &str) -> Result<Option<f64>, Flow> {
+/// A DateTime constructor's numeric argument: one not passed is absent, a number or numeric string is read, anything
+/// else (nil passed included) raises from the calling line with the value's typeof (Studio 0.747,
+/// tools/parity/probes/datatype_errors.luau: `fromUnixTimestamp(nil, 1)` raises `invalid argument #1 to
+/// 'fromUnixTimestamp' (number expected, got nil)`, `fromUnixTimestamp()` is the epoch).
+fn date_time_number(lua: &Lua, engine: &Engine, args: &Args, index: usize, name: &str) -> Result<Option<f64>, Flow> {
+    if index >= args.len() {
+        return Ok(None);
+    }
     match args.get(index) {
-        LuaValue::Nil => Ok(None),
         LuaValue::Number(n) => Ok(Some(*n)),
         LuaValue::Integer(n) => Ok(Some(*n as f64)),
-        other => match lua.coerce_number(other.clone()).ok().flatten() {
-            Some(n) => Ok(Some(n)),
-            None => raise_plain(format!(
+        other => match other {
+            LuaValue::String(_) => lua.coerce_number(other.clone()).ok().flatten(),
+            _ => None,
+        }
+        .map(|n| Ok(Some(n)))
+        .unwrap_or_else(|| {
+            raise_at_caller(format!(
                 "invalid argument #{} to '{name}' (number expected, got {})",
                 index + 1,
-                other.type_name()
-            )),
-        },
+                super::typeof_value(engine, other)
+            ))
+        }),
     }
 }
 
 /// A DateTime method's string argument as Luau's checks read it: a string, or a number in its tostring form
-/// (`FormatUniversalTime(5, "en-us")` is "5"); anything else raises (Studio 0.744, tools/parity/probes/datetime.luau:
-/// `invalid argument #3 to 'FormatUniversalTime' (string expected, got nil)`).
-fn date_time_string(lua: &Lua, args: &Args, index: usize, name: &str) -> Result<String, Flow> {
+/// (`FormatUniversalTime(5, "en-us")` is "5"); anything else raises from the calling line (Studio 0.744,
+/// tools/parity/probes/datetime.luau: `invalid argument #3 to 'FormatUniversalTime' (string expected, got nil)`; 0.747,
+/// datatype_errors.luau: `missing argument #2 to 'FormatUniversalTime' (string expected)` when none was passed, and the
+/// value's typeof, `got DateTime`).
+fn date_time_string(lua: &Lua, engine: &Engine, args: &Args, index: usize, name: &str) -> Result<String, Flow> {
+    if index >= args.len() {
+        return raise_at_caller(format!("missing argument #{} to '{name}' (string expected)", index + 1));
+    }
     let value = args.get(index);
     let text = match value {
         LuaValue::String(text) => Some(text.clone()),
@@ -1756,12 +1777,64 @@ fn date_time_string(lua: &Lua, args: &Args, index: usize, name: &str) -> Result<
     };
     match text {
         Some(text) => Ok(text.to_string_lossy()),
-        None => raise_plain(format!(
+        None => raise_at_caller(format!(
             "invalid argument #{} to '{name}' (string expected, got {})",
             index + 1,
-            value.type_name()
+            super::typeof_value(engine, value)
         )),
     }
+}
+
+/// Self of ToUniversalTime, ToLocalTime and ToIsoDate as a playing client's reflection casts it (Studio 0.747,
+/// tools/parity/probes/datatype_errors.luau): `Argument 1 missing or nil`, `Unable to cast double to DateTime`; a string
+/// is read as milliseconds from its leading number, as C's strtod reads it ("86400" is 86.4 s, "2020-01-01T00:00:00Z"
+/// 2.02 s, "x" 0).
+fn date_time_self_cast(value: &LuaValue) -> Result<f64, Flow> {
+    if let Some(millis) = date_time_of(value) {
+        return Ok(millis);
+    }
+    match value {
+        LuaValue::Nil => raise_plain("Argument 1 missing or nil"),
+        LuaValue::String(text) => Ok(leading_number(&text.as_bytes())),
+        other => raise_plain(format!("Unable to cast {} to DateTime", lune_roblox::datatypes::script_error::cast_name(other))),
+    }
+}
+
+/// The decimal number a string starts with (spaces, a sign, digits, a fraction, an exponent), as strtod reads it; 0 when
+/// it starts with none.
+fn leading_number(bytes: &[u8]) -> f64 {
+    let mut end = 0;
+    while end < bytes.len() && bytes[end].is_ascii_whitespace() {
+        end += 1;
+    }
+    let start = end;
+    if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+        end += 1;
+    }
+    let digits = |from: usize| bytes[from..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+    let whole = digits(end);
+    end += whole;
+    let mut fraction = 0;
+    if end < bytes.len() && bytes[end] == b'.' {
+        fraction = digits(end + 1);
+        if whole + fraction > 0 {
+            end += 1 + fraction;
+        }
+    }
+    if whole + fraction == 0 {
+        return 0.0;
+    }
+    if end < bytes.len() && (bytes[end] == b'e' || bytes[end] == b'E') {
+        let mut exponent = end + 1;
+        if exponent < bytes.len() && (bytes[exponent] == b'+' || bytes[exponent] == b'-') {
+            exponent += 1;
+        }
+        let count = digits(exponent);
+        if count > 0 {
+            end = exponent + count;
+        }
+    }
+    std::str::from_utf8(&bytes[start..end]).ok().and_then(|text| text.parse().ok()).unwrap_or(0.0)
 }
 
 /// fromUniversalTime's instant for (year, month, day, hour, minute, second, millisecond) as a playing client reads them
@@ -1875,10 +1948,7 @@ fn make_date_time(lua: &Lua, millis: f64) -> LuaResult<LuaValue> {
 
 fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let methods = lua.create_table()?;
-    let this_millis = |args: &Args| match date_time_of(args.get(0)) {
-        Some(millis) => Ok(millis),
-        None => raise_plain("Expected ':' not '.' calling member function"),
-    };
+    let this_millis = |args: &Args| date_time_self_cast(args.get(0));
     methods.set(
         "ToUniversalTime",
         wrapped(lua, engine, move |lua, args| {
@@ -1899,17 +1969,25 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     // The locale must be a string; other locales than en-us are not emulated (Studio 0.744 formats `LL` in en-gb as
     // "14 November 2023"; an unknown locale or "" is en-us)
-    let format = |name: &'static str, parts: fn(f64) -> Parts| {
+    // (self as the client's Luau checks it, from the calling line: `missing argument #1 to 'FormatUniversalTime' (DateTime
+    // expected)`, `invalid argument #1 to ... (DateTime expected, got number)`; Studio 0.747, datatype_errors.luau)
+    let format = |name: &'static str, parts: fn(f64) -> Parts, engine: Rc<Engine>| {
         move |lua: &Lua, args: LuaMultiValue| -> Ret {
             let args = Args::new(args);
-            let millis = this_millis(&args)?;
-            let format = date_time_string(lua, &args, 1, name)?;
-            date_time_string(lua, &args, 2, name)?;
+            let millis = match date_time_of(args.get(0)) {
+                Some(millis) => millis,
+                None if args.is_empty() => return raise_at_caller(format!("missing argument #1 to '{name}' (DateTime expected)")),
+                None => {
+                    return raise_at_caller(format!("invalid argument #1 to '{name}' (DateTime expected, got {})", super::typeof_value(&engine, args.get(0))));
+                }
+            };
+            let format = date_time_string(lua, &engine, &args, 1, name)?;
+            date_time_string(lua, &engine, &args, 2, name)?;
             Ok(values([LuaValue::String(lua.create_string(format_parts(&parts(millis), &format))?)]))
         }
     };
-    methods.set("FormatUniversalTime", wrapped(lua, engine, format("FormatUniversalTime", universal_parts))?)?;
-    methods.set("FormatLocalTime", wrapped(lua, engine, format("FormatLocalTime", local_parts))?)?;
+    methods.set("FormatUniversalTime", wrapped(lua, engine, format("FormatUniversalTime", universal_parts, engine.clone()))?)?;
+    methods.set("FormatLocalTime", wrapped(lua, engine, format("FormatLocalTime", local_parts, engine.clone()))?)?;
     let index = wrapped(lua, engine, move |_, args| {
         let args = Args::new(args);
         let millis = date_time_of(args.get(0)).unwrap_or(0.0);
@@ -1970,10 +2048,10 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // fromUnixTimestampMillis truncates its milliseconds (1.5 is 1, -1.5 -1, -0.5 0) (Studio 0.744,
     // tools/parity/probes/datetime.luau). fromUnixTimestampMillis's out-of-range message is not measured (the seconds'
     // message here).
-    let timestamp = |name: &'static str, scale: f64| {
+    let timestamp = |name: &'static str, scale: f64, engine: Rc<Engine>| {
         move |lua: &Lua, args: LuaMultiValue| -> Ret {
             let args = Args::new(args);
-            let value = date_time_number(lua, &args, 0, name)?.unwrap_or(0.0).trunc();
+            let value = date_time_number(lua, &engine, &args, 0, name)?.unwrap_or(0.0).trunc();
             let millis = value * scale;
             if !(DATE_TIME_MIN_MILLIS..=DATE_TIME_MAX_MILLIS).contains(&millis) {
                 return raise_plain(TIMESTAMP_OUT_OF_RANGE);
@@ -1981,14 +2059,16 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(values([make_date_time(lua, millis)?]))
         }
     };
-    library.set("fromUnixTimestamp", wrapped(lua, engine, timestamp("fromUnixTimestamp", 1000.0))?)?;
-    library.set("fromUnixTimestampMillis", wrapped(lua, engine, timestamp("fromUnixTimestampMillis", 1.0))?)?;
-    let from_units = |name: &'static str, offset_millis: f64| {
+    library.set("fromUnixTimestamp", wrapped(lua, engine, timestamp("fromUnixTimestamp", 1000.0, engine.clone()))?)?;
+    library.set("fromUnixTimestampMillis", wrapped(lua, engine, timestamp("fromUnixTimestampMillis", 1.0, engine.clone()))?)?;
+    // (the units are checked from the last one passed to the first, as a client does: fromUniversalTime(Vector3.one, "x")
+    // raises for argument #2; Studio 0.747, datatype_errors.luau)
+    let from_units = |name: &'static str, offset_millis: f64, engine: Rc<Engine>| {
         move |lua: &Lua, args: LuaMultiValue| -> Ret {
             let args = Args::new(args);
             let mut fields = [None; 7];
-            for (index, field) in fields.iter_mut().enumerate() {
-                *field = date_time_number(lua, &args, index, name)?;
+            for (index, field) in fields.iter_mut().enumerate().rev() {
+                *field = date_time_number(lua, &engine, &args, index, name)?;
             }
             match date_time_millis(fields) {
                 Ok(millis) => Ok(values([make_date_time(lua, millis - offset_millis)?])),
@@ -1996,12 +2076,18 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             }
         }
     };
-    library.set("fromUniversalTime", wrapped(lua, engine, from_units("fromUniversalTime", 0.0))?)?;
-    library.set("fromLocalTime", wrapped(lua, engine, from_units("fromLocalTime", standard_offset_millis))?)?;
+    library.set("fromUniversalTime", wrapped(lua, engine, from_units("fromUniversalTime", 0.0, engine.clone()))?)?;
+    library.set("fromLocalTime", wrapped(lua, engine, from_units("fromLocalTime", standard_offset_millis, engine.clone()))?)?;
+    // (no argument at all answers nil, as text that is no date does; nil passed raises: Studio 0.747, datatype_errors.luau)
+    let e = engine.clone();
     library.set(
         "fromIsoDate",
-        wrapped(lua, engine, |lua, args| {
-            let text = date_time_string(lua, &Args::new(args), 0, "fromIsoDate")?;
+        wrapped(lua, engine, move |lua, args| {
+            let args = Args::new(args);
+            if args.is_empty() {
+                return Ok(values([LuaValue::Nil]));
+            }
+            let text = date_time_string(lua, &e, &args, 0, "fromIsoDate")?;
             Ok(values([match parse_iso_date(&text) {
                 Some(millis) => make_date_time(lua, millis)?,
                 None => LuaValue::Nil,

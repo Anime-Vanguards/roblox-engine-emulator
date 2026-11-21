@@ -8,6 +8,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::super::*;
+use crate::datatypes::script_error::{ctor_number, luau_number};
 
 /**
     An implementation of the [NumberSequenceKeypoint](https://create.roblox.com/docs/reference/engine/datatypes/NumberSequenceKeypoint) Roblox datatype.
@@ -25,8 +26,13 @@ impl LuaExportsTable for NumberSequenceKeypoint {
     const EXPORT_NAME: &'static str = "NumberSequenceKeypoint";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+        // (time and value checked as a client's Luau checks them, naming the constructor; an envelope that is no number is
+        // 0: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
         let number_sequence_keypoint_new =
-            |lua: &Lua, (time, value, envelope): (f32, f32, Option<f32>)| {
+            |lua: &Lua, args: LuaMultiValue| {
+                let time = ctor_number(lua, &args, 1, "new")? as f32;
+                let value = ctor_number(lua, &args, 2, "new")? as f32;
+                let envelope = args.get(2).and_then(|value| luau_number(lua, value)).map(|envelope| envelope as f32);
                 super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
                 // Roblox's documentation: "The envelope parameter must be a non-negative number"
                 // (the message is not measured in Studio)

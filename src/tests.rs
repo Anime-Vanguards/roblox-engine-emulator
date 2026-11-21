@@ -6522,7 +6522,8 @@ fn cframe_euler_angles_follow_the_rotation_order_as_studio_does() {
         Close("big ZYX", { Big:ToEulerAngles(Enum.RotationOrder.ZYX) }, { 1.156342, -0.532523, 2.107389 })
         -- fromEulerAngles: Studio's components for (0.3, 0.4, 0.5) in each order
         local function Rotation(Order)
-            local Parts = { CFrame.fromEulerAngles(0.3, 0.4, 0.5, Order):GetComponents() }
+            local Made = if Order then CFrame.fromEulerAngles(0.3, 0.4, 0.5, Order) else CFrame.fromEulerAngles(0.3, 0.4, 0.5)
+            local Parts = { Made:GetComponents() }
             return { Parts[4], Parts[5], Parts[6], Parts[10], Parts[11], Parts[12] }
         end
         Close("from XYZ", Rotation(), { 0.808307, -0.441580, 0.389418, -0.184803, 0.437702, 0.879923 })
@@ -6536,8 +6537,10 @@ fn cframe_euler_angles_follow_the_rotation_order_as_studio_does() {
             Close("round trip " .. Order.Name, { Again.RightVector.X, Again.UpVector.Y, Again.LookVector.Z }, { Cf.RightVector.X, Cf.UpVector.Y, Cf.LookVector.Z })
         end
         local Ok, Message = pcall(function() return Cf:ToEulerAngles("XYZ") end)
-        -- (a native CFrame method's error reaches a pcall as the host's error value, not a string: tostring reads its text)
-        assert(not Ok and string.find(tostring(Message), "Invalid value for enum 'RotationOrder'", 1, true), tostring(Message))
+        assert(not Ok and Message == "Invalid value for enum 'RotationOrder'", tostring(Message))
+        -- (nil passed as the order is no order, as a 0.747 playing client answers: tools/parity/probes/datatype_errors.luau)
+        Ok, Message = pcall(function() return CFrame.fromEulerAngles(0.3, 0.4, 0.5, nil) end)
+        assert(not Ok and Message == "Invalid value for enum 'RotationOrder'", tostring(Message))
         "#,
     );
 }

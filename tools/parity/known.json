@@ -51,28 +51,6 @@
 			"why": "an unknown datatype member: a client raises '<key> is not a valid member of <Type>' (some types quote the key); ree reads nil where a Lune type has fields and methods (mlua's __index), else raises mlua's 'attempt to get an unknown field'"
 		}
 	],
-	"cframe_rotation_between": [
-		{
-			"line": "args none error @123: missing argument #1 to 'fromRotationBetweenVectors' (Vector3 expected)",
-			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
-		},
-		{
-			"line": "args one error @126: missing argument #2 to 'fromRotationBetweenVectors' (Vector3 expected)",
-			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
-		},
-		{
-			"line": "args string error @129: invalid argument #1 to 'fromRotationBetweenVectors' (Vector3 expected, got string)",
-			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
-		},
-		{
-			"line": "args nil error @132: invalid argument #2 to 'fromRotationBetweenVectors' (Vector3 expected, got nil)",
-			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
-		},
-		{
-			"line": "args vector2 error @135: invalid argument #2 to 'fromRotationBetweenVectors' (Vector3 expected, got Vector2)",
-			"why": "a CFrame constructor's argument error: a client raises it at the calling line and says 'missing argument' for one not given (and names a Vector2); ree's constructor wrapper raises without the position and reads a missing argument as nil, as for every constructor"
-		}
-	],
 	"chunknames": [
 		{
 			"line": "odd-names info ReplicatedStorage.ParityProbes.Chunk",
@@ -155,10 +133,6 @@
 	],
 	"datatype_errors": [
 		{
-			"line": "op ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
 			"line": "member ",
 			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
 		},
@@ -167,47 +141,7 @@
 			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
 		},
 		{
-			"line": "method ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "unary ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "namecall ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "new ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "new-line ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "library ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "colon ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "self-string ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "self ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "lerp-alpha ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
-		},
-		{
-			"line": "int16 ",
+			"line": "member-more ",
 			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
 		},
 		{
@@ -215,16 +149,360 @@
 			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
 		},
 		{
-			"line": "call-property ",
+			"line": "library ",
 			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
 		},
 		{
-			"line": "member-more ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+			"line": "method Vector2:Angle | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
 		},
 		{
-			"line": "new-more ",
-			"why": "datatype misuse as ree answers it before the datatype error fixes: mlua's conversion errors with a traceback for a wrong operand, argument or self, nil or mlua's 'attempt to get an unknown field' for an unknown member, the VM's 'attempt to index' for an assignment, and operators a client lacks, where a client raises its own texts"
+			"line": "method Vector2.Angle | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector2:FuzzyEq | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector2.FuzzyEq | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector2:Max | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector2.Max | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector2:Min | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector2.Min | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3:Angle | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3.Angle | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3:Cross | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3:Dot | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3:FuzzyEq | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3:Lerp | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3.Lerp | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3 self Lerp | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3:Max | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3.Max | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3:Min | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Vector3.Min | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame self Inverse | ",
+			"why": "the identity's inverse: a client's position is 0, 0, 0, ree's -0, -0, -0 (the inverse negates each product)"
+		},
+		{
+			"line": "method CFrame:ToWorldSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame.ToWorldSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame:ToObjectSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame.ToObjectSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame:PointToWorldSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame.PointToWorldSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame self PointToWorldSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame:PointToObjectSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame.PointToObjectSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame self PointToObjectSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame:VectorToWorldSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame.VectorToWorldSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame self VectorToWorldSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame:VectorToObjectSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame.VectorToObjectSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame self VectorToObjectSpace | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame:FuzzyEq | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame.FuzzyEq | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method CFrame:AngleBetween | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "op Vector3int16 mul | ",
+			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
+		},
+		{
+			"line": "op Vector3int16 div | ",
+			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
+		},
+		{
+			"line": "op Vector2int16 mul | ",
+			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
+		},
+		{
+			"line": "op Vector2int16 div | ",
+			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
+		},
+		{
+			"line": "unary Rect | ",
+			"why": "Rect has no arithmetic in a client (unary minus, + and - are the VM's 'attempt to perform arithmetic' errors); Lune's Rect has unary minus, + and -"
+		},
+		{
+			"line": "op Rect add | ",
+			"why": "Rect has no arithmetic in a client (unary minus, + and - are the VM's 'attempt to perform arithmetic' errors); Lune's Rect has unary minus, + and -"
+		},
+		{
+			"line": "op Rect sub | ",
+			"why": "Rect has no arithmetic in a client (unary minus, + and - are the VM's 'attempt to perform arithmetic' errors); Lune's Rect has unary minus, + and -"
+		},
+		{
+			"line": "method Ray:ClosestPoint | ",
+			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
+		},
+		{
+			"line": "method Ray.ClosestPoint | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "method Ray:Distance | ",
+			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
+		},
+		{
+			"line": "method Ray.Distance | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "op DateTime lt | ",
+			"why": "DateTime has no < or <= in a client (the VM's 'attempt to compare DateTime < DateTime'); ree's DateTime compares instants"
+		},
+		{
+			"line": "op DateTime le | ",
+			"why": "DateTime has no < or <= in a client (the VM's 'attempt to compare DateTime < DateTime'); ree's DateTime compares instants"
+		},
+		{
+			"line": "unary Axes | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes add | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes sub | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes mul | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes div | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes idiv | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes mod | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes pow | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes lt | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes le | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Axes concat | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "unary Faces | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces add | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces sub | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces mul | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces div | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces idiv | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces mod | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces pow | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces lt | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces le | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Faces concat | ",
+			"why": "Axes and Faces are newproxy proxies of the prelude: the VM's errors and the datatypes' name them userdata, a client Axes and Faces"
+		},
+		{
+			"line": "op Random eq | ",
+			"why": "two Randoms made from one seed are == in a client (it compares what they would generate); ree's == compares the userdata"
+		},
+		{
+			"line": "namecall Ray:ClosestPoint | ",
+			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
+		},
+		{
+			"line": "namecall DateTime:FormatUniversalTime | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "new BrickColor.new | ",
+			"why": "not emulated: BrickColor.new's argument forms (none is Really black, numbers are RGB, a Color3 that is not one raises 'Color3 expected') and PhysicalProperties.new's (a client's count error lists the four ways to call it, a single argument is the default)"
+		},
+		{
+			"line": "new PhysicalProperties.new | ",
+			"why": "not emulated: BrickColor.new's argument forms (none is Really black, numbers are RGB, a Color3 that is not one raises 'Color3 expected') and PhysicalProperties.new's (a client's count error lists the four ways to call it, a single argument is the default)"
+		},
+		{
+			"line": "colon Ray | ",
+			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
+		},
+		{
+			"line": "colon DateTime | ",
+			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
+		},
+		{
+			"line": "int16 Vector3int16 mul | ",
+			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
+		},
+		{
+			"line": "int16 Vector3int16 div | ",
+			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
+		},
+		{
+			"line": "int16 Vector2int16 mul | ",
+			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
+		},
+		{
+			"line": "int16 Vector2int16 div | ",
+			"why": "Vector3int16 and Vector2int16 * and /: a client reads an operand that is no number or vector of the type as 0 (Vector3int16 truncates the number first, Vector2int16 multiplies in floats; x86's conversion turns an out-of-range result into 0) and raises 'Divide by zero exception' for an integer division by 0 (Vector2int16 also for a number); ree raises mlua's conversion error"
+		},
+		{
+			"line": "call-property | ",
+			"why": "a client's datatypes with methods answer a `:` call from their methods alone (V2:X() is 'X is not a valid member of Vector2'); ree's have no __namecall, find the property's value and call it"
+		},
+		{
+			"line": "new-more CFrame | ",
+			"why": "a not-a-number CFrame component prints as NAN in a client, -nan in ree (format_g)"
 		}
 	],
 	"datetime": [
@@ -239,20 +517,8 @@
 			"why": "Instance.new(5): a client names the number in its text; ree's text differs"
 		},
 		{
-			"line": "error vector3-arith-bad | @88: attempt to perform arithmetic (add) on Vector3 and number",
-			"why": "the VM names a native vector `vector` in its own errors (string.format, concatenation, arithmetic); a client names it Vector3"
-		},
-		{
 			"line": "error vector3-newindex | X cannot be assigned to",
 			"why": "assigning a component of a vector: the VM's own text, not the client's `X cannot be assigned to`"
-		},
-		{
-			"line": "error cframe-bad-arg | @91: invalid argument #1 to 'new' (Vector3 expected, got string)",
-			"why": "argument errors of Lune's datatype methods carry mlua's conversion text, not the client's"
-		},
-		{
-			"line": "error cframe-mul-bad | @92: invalid argument #2 (Vector3 expected, got number)",
-			"why": "argument errors of Lune's datatype methods carry mlua's conversion text, not the client's"
 		},
 		{
 			"line": "error color3-index | A is not a valid member of Color3",
@@ -887,12 +1153,6 @@
 		{
 			"line": "a family that is no file: error Temp read failed.",
 			"why": "a family file a client does not have: it raises reading it; ree cannot know which family files a client has, measures it as SourceSans and reports it missing"
-		}
-	],
-	"tostring": [
-		{
-			"line": "color3-lerp 0.416666657 0.333333343 0.666666627 | 0 0.75 -1 | error Argument 3 missing or nil",
-			"why": "error text: Color3:Lerp without its alpha raises \"Argument 3 missing or nil\" in a client, mlua's conversion error in ree"
 		}
 	],
 	"tween": [

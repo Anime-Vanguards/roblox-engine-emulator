@@ -335,6 +335,8 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // Vector3 is the native vector type, as in Roblox (vector3.luau, loaded by the prelude): vectors
     // get their members through the type's metatable, and Lune's CFrame / Ray / Region3 convert,
     // through their own metatables reached here (they are locked for scripts)
+    // (Vector3's native methods with a client's argument errors: lua/vector_methods.rs)
+    r.set("VectorMethods", super::vector_methods::methods(lua)?)?;
     r.set(
         "Vector3",
         crate::cost::engine_luau(
@@ -379,7 +381,8 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     refs.coroutine_close = Some(coroutine.get("close")?);
     refs.randomseed = Some(math.get("randomseed")?);
     refs.prelude = Some(Rc::new(prelude));
-    Ok(())
+    drop(refs);
+    super::strip_callback_tracebacks(lua)
 }
 
 /// Hooks.MissingChild (edit mode): the running client's PlayerGui a script waits for or indexes

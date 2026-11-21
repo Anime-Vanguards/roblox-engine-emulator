@@ -142,7 +142,7 @@ do
 	Datatypes.NumberSequence = setmetatable({
 		new = function(First, Second)
 			if type(First) == "number" then
-				local Last = if type(Second) == "number" then Second else First
+				local Last = if type(Second) == "number" then Second elseif Second == nil then First else error("NumberSequence.new() arg #2: Number expected.", 0)
 				return LuneNumberSequence.new({
 					Datatypes.NumberSequenceKeypoint.new(0, First),
 					Datatypes.NumberSequenceKeypoint.new(1, Last),
@@ -284,8 +284,8 @@ local LibraryExtras = {
 		end,
 	},
 	CFrame = {
-		lookAlong = function(At, Direction, Up)
-			return Datatypes.CFrame.lookAlong(At, Direction, Up)
+		lookAlong = function(...) -- (what it was given: an up passed as nil is no Vector3, none is the default)
+			return Datatypes.CFrame.lookAlong(...)
 		end,
 	},
 	BrickColor = {

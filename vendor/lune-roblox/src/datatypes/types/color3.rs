@@ -11,6 +11,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::super::*;
+use crate::datatypes::script_error::{luau_number, luau_self, reflected_arg, reflected_float_arg, script_error};
 
 /**
     An implementation of the [Color3](https://create.roblox.com/docs/reference/engine/datatypes/Color3) Roblox datatype.
@@ -40,7 +41,14 @@ impl LuaExportsTable for Color3 {
             })
         };
 
-        let color3_from_hsv = |lua: &Lua, (h, s, v): (f32, f32, f32)| {
+        // (fewer than three arguments is the client's own message, without a position; the three read as a client reads
+        // them, a string Luau reads as a number included and anything else 0: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let color3_from_hsv = |lua: &Lua, args: LuaMultiValue| {
+            if args.len() < 3 {
+                return Err(script_error("Color3.fromHSV requires three arguments", false));
+            }
+            let component = |index: usize| luau_number(lua, &args[index]).unwrap_or(0.0) as f32;
+            let (h, s, v) = (component(0), component(1), component(2));
             super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
             // https://axonflux.com/handy-rgb-to-hsl-and-rgb-to-hsv-color-model-c, in floats, the hue clamped to 0..1 first
             // (fromHSV(1.5, 1, 1) is fromHSV(1, 1, 1) and -0.25 is 0: Studio 0.744, tools/parity/probes/datatypes.luau)
@@ -64,7 +72,16 @@ impl LuaExportsTable for Color3 {
             Ok(Color3 { r, g, b })
         };
 
-        let color3_from_hex = |_: &Lua, hex: String| {
+        // (no argument is the client's own message; a number is its text, as Luau turns one into a string; any other value is
+        // malformed text: Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+        let color3_from_hex = |lua: &Lua, args: LuaMultiValue| {
+            let hex = match args.front() {
+                None => return Err(script_error("Color3.fromHex requires one argument", false)),
+                Some(value @ (LuaValue::String(_) | LuaValue::Number(_) | LuaValue::Integer(_))) => {
+                    lua.coerce_string(value.clone())?.map(|text| text.to_string_lossy()).unwrap_or_default()
+                }
+                Some(_) => return Err(script_error("Unable to convert characters to hex value", false)),
+            };
             let trimmed = hex.trim_start_matches('#').to_ascii_uppercase();
             let chars = if !trimmed.is_ascii() {
                 return Err(LuaError::RuntimeError("Unable to convert characters to hex value".to_string()));
@@ -140,7 +157,13 @@ impl LuaUserData for Color3 {
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         // Methods
         // a + (b - a) * t per channel in floats (Studio 0.744, tools/parity/probes/datatypes.luau)
-        let lerp = |lua: &Lua, this: &Color3, (rhs, alpha): (LuaUserDataRef<Color3>, f32)| {
+        // (a playing client's reflection checks self, then the alpha, then the goal: "Argument 3 missing or nil", "Unable
+        // to cast double to Color3"; ToHSV and ToHex check self in Luau, from the calling line; Studio 0.747, ree's
+        // tools/parity/probes/datatype_errors.luau)
+        let lerp = |lua: &Lua, args: LuaMultiValue| {
+            let this = reflected_arg::<Color3>(&args, 1, "Color3")?;
+            let alpha = reflected_float_arg(lua, &args, 3)? as f32;
+            let rhs = reflected_arg::<Color3>(&args, 2, "Color3")?;
             super::charge_host_nanos(lua, super::datatype_price::COLOR3_LERP);
             let lerp = super::float32::lerp;
             Ok(Color3 {
@@ -149,14 +172,18 @@ impl LuaUserData for Color3 {
                 b: lerp(this.b, rhs.b, alpha),
             })
         };
-        methods.add_method("Lerp", lerp);
-        methods.add_method("lerp", lerp);
+        methods.add_function("Lerp", lerp);
+        methods.add_function("lerp", lerp);
         // G3D's (Foley and van Dam) in floats: pure red's hue is 1 (Studio 0.744, tools/parity/probes/datatypes.luau,
         // cframe_order.luau)
-        methods.add_method("ToHSV", |_, this, ()| Ok(super::float32::to_hsv(this.r, this.g, this.b)));
+        methods.add_function("ToHSV", |_, args: LuaMultiValue| {
+            let this = luau_self::<Color3>(&args, "ToHSV", "Color3")?;
+            Ok(super::float32::to_hsv(this.r, this.g, this.b))
+        });
         // Lower-case hex of each channel times 255, rounded half away from zero and clamped to 0..255: 0.5 is 80,
         // 0.5 / 255 is 01, 2.5 / 255 is 03, -0.1 is 00 (Studio 0.744)
-        methods.add_method("ToHex", |_, this, ()| {
+        methods.add_function("ToHex", |_, args: LuaMultiValue| {
+            let this = luau_self::<Color3>(&args, "ToHex", "Color3")?;
             let byte = |value: f32| (value * 255.0).round().clamp(u8::MIN as f32, u8::MAX as f32) as u8;
             Ok(format!("{:02x}{:02x}{:02x}", byte(this.r), byte(this.g), byte(this.b)))
         });
