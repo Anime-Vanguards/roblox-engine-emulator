@@ -1,21 +1,29 @@
 //! The Camera's projections: WorldToViewportPoint / WorldToScreenPoint and ViewportPointToRay /
-//! ScreenPointToRay, from the camera's CFrame, its vertical FieldOfView and the ViewportSize the
-//! Camera reports. A perspective camera as Roblox documents it; not Studio-measured. The screen forms
+//! ScreenPointToRay, from the camera's CFrame, its vertical FieldOfView and its viewport. The screen forms
 //! are measured from below GuiService's top inset, where GUI positions are (AbsolutePosition,
 //! InputObject.Position): WorldToScreenPoint's Y is WorldToViewportPoint's less the inset, and
 //! ScreenPointToRay(x, y) is ViewportPointToRay(x, y + inset).
+//!
+//! Measured in Studio 0.748, a playing client (and its server, for the viewport and near plane):
+//! - Only the camera a run starts with has a viewport (the window) and a near plane 0.1 studs out (NearPlaneZ -0.1). Any other
+//!   camera reads ViewportSize 1, 1 and NearPlaneZ -0.5, also once it is made the CurrentCamera (the start camera keeps its
+//!   values when it is no longer current), and projects into that 1 x 1 viewport.
+//! - The projections use the viewport rounded to whole pixels (908.8 x 895.2 projects as 909 x 895: the centre is 454.5, 447.5).
+//! - A ray starts on the near plane (its point under the pixel, `-NearPlaneZ` along the look vector), `depth` studs further along
+//!   it; the point at the camera itself projects to NaN, NaN at depth 0.
 
 use std::rc::Rc;
 
 use glam::{Affine3A, Vec3};
 use lune_roblox::datatypes::types as lune;
+use lune_roblox::datatypes::types::float32 as f32m;
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
 
 use super::{cframe_name, frame, method, vector_arg};
 use crate::{
     Engine, InstanceId,
-    lua::{Args, Flow, raise},
+    lua::{Args, Flow, instance_id, raise, typeof_value},
 };
 
 struct View {
@@ -23,40 +31,80 @@ struct View {
     tan_y: f32,
     width: f32,
     height: f32,
+    near: f32,
+}
+
+/// The camera's ViewportSize: the run's screen (`--camera` / the viewport) for the camera the run starts with, 1 x 1 for any
+/// other camera.
+pub fn viewport_size(engine: &Engine, camera: InstanceId) -> (f32, f32) {
+    if camera == engine.world().camera {
+        let width = engine.options.camera_width.unwrap_or(engine.options.viewport_width).max(1.0);
+        let height = engine.options.camera_height.unwrap_or(engine.options.viewport_height).max(1.0);
+        (width as f32, height as f32)
+    } else {
+        (1.0, 1.0)
+    }
+}
+
+/// How far ahead of the camera its near plane is (`-NearPlaneZ`): 0.1 for the camera the run starts with, 0.5 for others.
+pub fn near_plane(engine: &Engine, camera: InstanceId) -> f32 {
+    if camera == engine.world().camera { 0.1 } else { 0.5 }
+}
+
+/// `tan(degrees / 2)` with the client's roundings: `degrees * pi / 180 / 2` in float32.
+fn half_tan(degrees: f32) -> f32 {
+    (degrees * std::f32::consts::PI / 180.0 / 2.0).tan()
 }
 
 fn view(engine: &Engine, camera: InstanceId) -> View {
     let state = engine.state.borrow();
     let transform = frame::affine_of(state.dom.raw_get(camera, cframe_name(engine)));
     let fov = engine.reflection.name_id("FieldOfView").and_then(|n| state.dom.number(camera, n)).unwrap_or(70.0);
-    let width = engine.options.camera_width.unwrap_or(engine.options.viewport_width).max(1.0);
-    let height = engine.options.camera_height.unwrap_or(engine.options.viewport_height).max(1.0);
-    View { transform, tan_y: (fov.to_radians() / 2.0).tan() as f32, width: width as f32, height: height as f32 }
+    let (width, height) = viewport_size(engine, camera);
+    View { transform, tan_y: half_tan(fov as f32), width: width.round().max(1.0), height: height.round().max(1.0), near: near_plane(engine, camera) }
 }
 
 impl View {
     /// The point in viewport pixels (x right, y down) and its depth in studs in front of the camera,
     /// and whether it is in front of the camera and inside the viewport.
+    ///
+    /// As a client computes it (18 of 18 measured values to the bit): the projection and view matrices multiplied into one in
+    /// float32 (`f = 1 / tan(v / 2)`, the x row scaled by `f / aspect`, the view's translation `-(row . camera)` folded in, so a
+    /// camera far from the origin loses bits to cancellation as a client does), the point through it, `1 / w` taken once.
     fn project(&self, point: Vec3) -> (Vec3, bool) {
-        let local = self.transform.inverse().transform_point3(point);
-        let depth = -local.z;
-        let aspect = self.width / self.height;
-        let x = (local.x / (depth * self.tan_y * aspect) + 1.0) * 0.5 * self.width;
-        let y = (1.0 - local.y / (depth * self.tan_y)) * 0.5 * self.height;
-        let visible = depth > 0.0 && (0.0..=self.width).contains(&x) && (0.0..=self.height).contains(&y);
-        (Vec3::new(x, y, depth), visible)
+        let m = self.transform.matrix3;
+        let c = Vec3::from(self.transform.translation);
+        let rows = [Vec3::from(m.x_axis), Vec3::from(m.y_axis), Vec3::from(m.z_axis)];
+        let shift = |row: Vec3| -((row.x * c.x + row.y * c.y) + row.z * c.z);
+        let f = 1.0 / self.tan_y;
+        let sx = f / (self.width / self.height);
+        let m0 = [sx * rows[0].x, sx * rows[0].y, sx * rows[0].z, sx * shift(rows[0])];
+        let m1 = [f * rows[1].x, f * rows[1].y, f * rows[1].z, f * shift(rows[1])];
+        let m3 = [-rows[2].x, -rows[2].y, -rows[2].z, -shift(rows[2])];
+        let dot = |r: [f32; 4]| ((r[0] * point.x + r[1] * point.y) + r[2] * point.z) + r[3];
+        let (cx, cy, cw) = (dot(m0), dot(m1), dot(m3));
+        let iw = 1.0 / cw;
+        let x = (cx * iw * 0.5 + 0.5) * self.width;
+        let y = (0.5 - cy * iw * 0.5) * self.height;
+        let visible = cw > 0.0 && (0.0..=self.width).contains(&x) && (0.0..=self.height).contains(&y);
+        (Vec3::new(x, y, cw), visible)
     }
 
-    /// The unit ray through a viewport pixel, starting `depth` studs along it from the camera.
+    /// The unit ray through a viewport pixel, from its point on the near plane, `depth` studs along it. As a client computes it
+    /// (21 of 21 origins and directions measured to the bit): the pixel's offset from the viewport's centre over the focal length
+    /// in pixels `(h / 2) / tan(v / 2)` (one for both axes), made a unit vector (lune's unit3), then the origin `near / -z` along it.
     fn ray(&self, x: f32, y: f32, depth: f32) -> (Vec3, Vec3) {
-        let aspect = self.width / self.height;
-        let local = Vec3::new((2.0 * x / self.width - 1.0) * self.tan_y * aspect, (1.0 - 2.0 * y / self.height) * self.tan_y, -1.0);
-        let direction = self.transform.transform_vector3(local).normalize();
-        (Vec3::from(self.transform.translation) + direction * depth, direction)
+        let focal = (self.height * 0.5) / self.tan_y;
+        let local = f32m::unit3([(x - self.width * 0.5) / focal, (self.height * 0.5 - y) / focal, -1.0]);
+        let direction = self.transform.transform_vector3(Vec3::from_array(local));
+        let along = self.near / (0.0 - local[2]);
+        let camera = Vec3::from(self.transform.translation);
+        (camera + direction * (along + depth), direction)
     }
 }
 
-/// ViewportPointToRay of `camera`: the ray through viewport point (x, y), `depth` studs along it (the PlayerMouse's UnitRay: world/mouse.rs).
+/// ViewportPointToRay of `camera`: the ray through viewport point (x, y), from the near plane, `depth` studs along it (the
+/// PlayerMouse's UnitRay: world/mouse.rs).
 pub fn viewport_ray(engine: &Engine, camera: InstanceId, x: f32, y: f32, depth: f32) -> (Vec3, Vec3) {
     view(engine, camera).ray(x, y, depth)
 }
@@ -70,12 +118,59 @@ fn ray(lua: &Lua, (origin, direction): (Vec3, Vec3)) -> LuaResult<LuaMultiValue>
     LuaValue::UserData(lua.create_userdata(ray)?).into_lua_multi(lua)
 }
 
-/// The world point argument of WorldTo*Point.
-fn world_point(args: &Args) -> Result<Vec3, Flow> {
-    match vector_arg(&args.get(1)) {
-        Some(point) => Ok(point),
-        None => raise("Argument 1 missing or nil (a Vector3)"),
+/// What a value is called in a cast error, as a client names it: a number "double", a boolean "bool", a table "Array" (empty or
+/// with an array part) or "Dictionary", a CFrame "CoordinateFrame", an instance "Object" (measured: "Unable to cast
+/// CoordinateFrame to Vector3", "Unable to cast Array to float").
+fn cast_name(engine: &Engine, value: &LuaValue) -> String {
+    match value {
+        LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
+        LuaValue::Boolean(_) => "bool".into(),
+        LuaValue::Table(table) => {
+            let array = table.raw_len() > 0 || table.clone().pairs::<LuaValue, LuaValue>().next().is_none();
+            (if array { "Array" } else { "Dictionary" }).into()
+        }
+        other if instance_id(other).is_some() => "Object".into(),
+        other => match typeof_value(engine, other).as_str() {
+            "CFrame" => "CoordinateFrame".into(),
+            name => name.into(),
+        },
     }
+}
+
+/// A float argument: a number, a boolean (true is 1), or a string that reads as a number; float32.
+fn float_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<f32, Flow> {
+    match args.get(at) {
+        LuaValue::Nil => raise(format!("Argument {at} missing or nil")),
+        LuaValue::Number(number) => Ok(*number as f32),
+        LuaValue::Integer(number) => Ok(*number as f32),
+        LuaValue::Boolean(on) => Ok(u8::from(*on) as f32),
+        value @ LuaValue::String(_) => match lua.coerce_number(value.clone())? {
+            Some(number) => Ok(number as f32),
+            None => raise("Unable to cast string to float"),
+        },
+        other => raise(format!("Unable to cast {} to float", cast_name(engine, other))),
+    }
+}
+
+/// The world point argument of WorldTo*Point.
+fn vector3_argument(engine: &Engine, args: &Args, at: usize) -> Result<Vec3, Flow> {
+    let value = args.get(at);
+    if value.is_nil() {
+        return raise(format!("Argument {at} missing or nil"));
+    }
+    match vector_arg(value) {
+        Some(vector) => Ok(vector),
+        None => raise(format!("Unable to cast {} to Vector3", cast_name(engine, value))),
+    }
+}
+
+/// A ViewportPointToRay / ScreenPointToRay call's (x, y, depth): y is checked first (no arguments raise "Argument 2 missing or
+/// nil"), the depth defaults to 0; each a float argument.
+fn ray_arguments(lua: &Lua, engine: &Engine, args: &Args) -> Result<(f32, f32, f32), Flow> {
+    let y = float_argument(lua, engine, args, 2)?;
+    let x = float_argument(lua, engine, args, 1)?;
+    let depth = if args.get(3).is_nil() { 0.0 } else { float_argument(lua, engine, args, 3)? };
+    Ok((x, y, depth))
 }
 
 pub fn install(engine: &Rc<Engine>) {
@@ -88,19 +183,22 @@ pub fn install(engine: &Rc<Engine>) {
         }
     };
     add("WorldToViewportPoint", method(|_, engine, id, args| {
-        let (at, visible) = view(engine, id).project(world_point(args)?);
+        let (at, visible) = view(engine, id).project(vector3_argument(engine, args, 1)?);
         Ok(point(at, visible)?)
     }));
     add("WorldToScreenPoint", method(move |_, engine, id, args| {
-        let (at, visible) = view(engine, id).project(world_point(args)?);
+        let (at, visible) = view(engine, id).project(vector3_argument(engine, args, 1)?);
         Ok(point(at - Vec3::new(0.0, inset, 0.0), visible)?)
     }));
     add("ViewportPointToRay", method(|lua, engine, id, args| {
-        let (x, y, depth) = (args.number(1).unwrap_or(0.0) as f32, args.number(2).unwrap_or(0.0) as f32, args.number(3).unwrap_or(0.0) as f32);
+        let (x, y, depth) = ray_arguments(lua, engine, args)?;
         Ok(ray(lua, view(engine, id).ray(x, y, depth))?)
     }));
     add("ScreenPointToRay", method(move |lua, engine, id, args| {
-        let (x, y, depth) = (args.number(1).unwrap_or(0.0) as f32, args.number(2).unwrap_or(0.0) as f32, args.number(3).unwrap_or(0.0) as f32);
+        let (x, y, depth) = ray_arguments(lua, engine, args)?;
         Ok(ray(lua, view(engine, id).ray(x, y + inset, depth))?)
     }));
+    if let Some(name) = engine.reflection.name_id("NearPlaneZ") {
+        behaviors.add_getter(camera, name, Rc::new(|_, engine, id| Ok(LuaValue::Number(-f64::from(near_plane(engine, id))))));
+    }
 }

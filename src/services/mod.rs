@@ -502,9 +502,11 @@ pub fn install(engine: &Rc<Engine>) {
         }));
     }
     if let Some(camera) = class(&reflection, "Camera") {
-        let width = options.camera_width.unwrap_or(options.viewport_width);
-        let height = options.camera_height.unwrap_or(options.viewport_height);
-        behaviors.add_getter(camera, K::ViewportSize as NameId, getter(move |lua, _, _| Ok(vector2(lua, width, height)?)));
+        // (the run's screen for the camera it starts with, 1 x 1 for others: world/camera.rs)
+        behaviors.add_getter(camera, K::ViewportSize as NameId, getter(|lua, engine, id| {
+            let (width, height) = crate::world::camera::viewport_size(engine, id);
+            Ok(vector2(lua, f64::from(width), f64::from(height))?)
+        }));
     }
 
     // Players / Player
