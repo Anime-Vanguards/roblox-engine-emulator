@@ -615,9 +615,10 @@ fn camera_projections() {
         assert(math.abs(Top.Y) < 1e-2, tostring(Top))
         local _, Behind = Camera:WorldToViewportPoint(Vector3.new(0, 0, 20))
         assert(not Behind)
-        -- the ray through the centre points at the origin, starting where asked
+        -- the ray through the centre points at the origin, starting on the near plane (0.1 studs ahead of the start camera) and
+        -- `depth` studs further
         local Ray = Camera:ViewportPointToRay(Size.X / 2, Size.Y / 2, 2)
-        assert((Ray.Direction - Vector3.new(0, 0, -1)).Magnitude < 1e-4 and (Ray.Origin - Vector3.new(0, 0, 8)).Magnitude < 1e-4, tostring(Ray.Origin))
+        assert((Ray.Direction - Vector3.new(0, 0, -1)).Magnitude < 1e-4 and (Ray.Origin - Vector3.new(0, 0, 7.9)).Magnitude < 1e-4, tostring(Ray.Origin))
         local Screen = Camera:ScreenPointToRay(Size.X / 2, Size.Y / 2)
         assert((Screen.Direction - Vector3.new(0, 0, -1)).Magnitude < 1e-4)
         "#,
@@ -650,6 +651,100 @@ fn camera_screen_points_are_measured_from_below_the_top_inset() {
         local FromScreen = Camera:ScreenPointToRay(Viewport.X, Viewport.Y - 58)
         assert((FromScreen.Direction - Toward).Magnitude < 1e-4, tostring(FromScreen.Direction))
         "#,
+    );
+}
+
+/// A client engine with Studio's measuring window (908.8 x 895.2) and its 58-pixel top inset.
+fn start_studio_window() -> (Lua, Rc<Engine>) {
+    let engine = Engine::new(Options { camera_width: Some(908.8), camera_height: Some(895.2), topbar_inset: 58.0, ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    (lua, engine)
+}
+
+/// Only the camera a run starts with has the viewport and a near plane 0.1 studs out; any other camera reads ViewportSize 1, 1
+/// and NearPlaneZ -0.5, also once it is the CurrentCamera, and the start camera keeps its own (measured in a playing client and
+/// its server, Studio 0.748). Both are read-only.
+#[test]
+fn only_the_start_camera_has_the_viewport_and_its_near_plane() {
+    let (lua, engine) = start_studio_window();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Fails(Message, F)
+            local Ok, E = pcall(F)
+            assert(not Ok and string.gsub(tostring(E), "^[^\n]-:%d+: ", "") == Message, tostring(E))
+        end
+        local Start = workspace.CurrentCamera
+        assert(Start.ViewportSize == Vector2.new(908.8, 895.2) and Start.NearPlaneZ == -0.10000000149011612, tostring(Start.ViewportSize))
+        local New = Instance.new("Camera")
+        New.Parent = workspace
+        assert(New.ViewportSize == Vector2.new(1, 1) and New.NearPlaneZ == -0.5, tostring(New.ViewportSize))
+        workspace.CurrentCamera = New
+        assert(New.ViewportSize == Vector2.new(1, 1) and New.NearPlaneZ == -0.5 and Start.ViewportSize == Vector2.new(908.8, 895.2))
+        workspace.CurrentCamera = Start
+        Fails("Unable to assign property NearPlaneZ. Property is read only", function() (New :: any).NearPlaneZ = 1 end)
+        Fails("Unable to assign property ViewportSize. Property is read only", function() (New :: any).ViewportSize = Vector2.one end)
+        "##,
+    );
+}
+
+/// The projections as a playing client computes them, to the bit (Studio 0.748, its start camera at (0, 500, 0) looking down -Z
+/// with a 70-degree field of view in a 908.8 x 895.2 window under a 58-pixel inset): the viewport rounded to whole pixels, one
+/// float projection-view matrix, rays from the near plane; a camera that is not current in its 1 x 1 viewport; the arguments.
+#[test]
+fn camera_projections_match_a_client_to_the_bit() {
+    let (lua, engine) = start_studio_window();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function F(...)
+            local T = table.pack(...)
+            for I = 1, T.n do
+                T[I] = string.format("%.9g", T[I])
+            end
+            return table.concat(T, " ")
+        end
+        local function V(Vector) return F(Vector.X, Vector.Y, Vector.Z) end
+        local function Fails(Message, Function, ...)
+            local Ok, E = pcall(Function, ...)
+            assert(not Ok and tostring(E) == Message, tostring(E))
+        end
+        local Camera = workspace.CurrentCamera
+        Camera.CFrame = CFrame.lookAt(Vector3.new(0, 500, 0), Vector3.new(0, 500, -100))
+        Camera.FieldOfView = 70
+        local P = Camera:WorldToViewportPoint(Vector3.new(3, 502, -10))
+        assert(V(P) == "646.228882 319.682251 10", V(P))
+        P = Camera:WorldToViewportPoint(Vector3.new(-50, 470, -20))
+        assert(V(P) == "-1143.24048 1406.14404 20", V(P))
+        P = Camera:WorldToScreenPoint(Vector3.new(3, 502, -10))
+        assert(V(P) == "646.228882 261.682251 10", V(P))
+        local Here, Seen = Camera:WorldToViewportPoint(Vector3.new(0, 500, 0))
+        assert(Here.X ~= Here.X and Here.Z == 0 and 1 / Here.Z > 0 and not Seen)
+        local R = Camera:ViewportPointToRay(0, 0)
+        assert(V(R.Origin) == "-0.07111606 500.070007 -0.100000009", V(R.Origin))
+        assert(V(R.Direction) == "-0.50336504 0.495612472 -0.707807839", V(R.Direction))
+        R = Camera:ViewportPointToRay(100, 250, 5)
+        assert(V(R.Origin) == "-2.39680266 501.335327 -4.3209796", V(R.Origin))
+        R = Camera:ScreenPointToRay(0, 0)
+        assert(V(R.Origin) == "-0.07111606 500.060944 -0.100000009", V(R.Origin))
+        assert(V(R.Direction) == "-0.519056022 0.444823593 -0.72987175", V(R.Direction))
+        -- a camera that is not current projects into its 1 x 1 viewport, its rays from 0.5 studs out
+        local New = Instance.new("Camera")
+        New.CFrame = Camera.CFrame
+        P = New:WorldToViewportPoint(Vector3.new(3, 502, -10))
+        assert(F(P.X, P.Y) == "0.714222193 0.357186884", F(P.X, P.Y))
+        R = New:ViewportPointToRay(0.5, 0.5)
+        assert(R.Origin == Vector3.new(0, 500, -0.5) and R.Direction == Vector3.new(0, 0, -1), tostring(R))
+        -- the arguments: y is checked first, a numeric string or true is taken
+        Fails("Argument 1 missing or nil", Camera.WorldToViewportPoint, Camera)
+        Fails("Unable to cast CoordinateFrame to Vector3", Camera.WorldToViewportPoint, Camera, CFrame.new())
+        Fails("Argument 2 missing or nil", Camera.ViewportPointToRay, Camera, 1)
+        Fails("Unable to cast string to float", Camera.ViewportPointToRay, Camera, "x", 1)
+        Camera:ViewportPointToRay("5" :: any, true :: any)
+        "##,
     );
 }
 
