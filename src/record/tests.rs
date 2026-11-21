@@ -1601,6 +1601,65 @@ fn a_mesh_parented_in_mid_run_draws_only_while_it_is_there() {
     assert!(held.len() == 1 && (held[0].0 - 0.1).abs() < 0.03 && held[0].1.is_empty(), "a mesh there from the start leaves when cleared: {held:?}");
 }
 
+/// A Humanoid draws nothing itself but makes its model a character: the renderer dresses the limbs of its
+/// RigType in the model's BodyColors, Shirt and Pants, and shows its name by its DisplayDistanceType. So a
+/// clothed R6 character's Humanoid is recorded beside its clothing with those properties, without what it
+/// holds (its Animator); one parented in mid-run stays out of the world until then, as clothing does, and
+/// its later writes play back.
+#[test]
+fn a_clothed_characters_humanoid_is_recorded() {
+    let (playback, _, scene, _) = record(
+        r#"
+        local function Character(Name)
+            local Model = Instance.new("Model")
+            Model.Name = Name
+            for _, Limb in { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg" } do
+                local Part = Instance.new("Part")
+                Part.Name = Limb
+                Part.Anchored = true
+                Part.Parent = Model
+            end
+            local Humanoid = Instance.new("Humanoid")
+            Humanoid.RigType = Enum.HumanoidRigType.R6
+            Humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+            Instance.new("Animator").Parent = Humanoid
+            Humanoid.Parent = Model
+            for _, Class in { "Shirt", "Pants", "BodyColors" } do
+                local Appearance = Instance.new(Class)
+                Appearance.Name = Class
+                Appearance.Parent = Model
+            end
+            return Model, Humanoid
+        end
+        Character("Dressed").Parent = workspace
+        local Late, LateHumanoid = Character("Late")
+        LateHumanoid.Parent = nil
+        Late.Parent = workspace
+        task.delay(0.1, function() LateHumanoid.Parent = Late end)
+        task.delay(0.15, function() LateHumanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Viewer end)
+        "#,
+        12,
+    );
+    let humanoid = instance(&scene, &["Dressed", "Humanoid"]);
+    assert_eq!(humanoid.class, "Humanoid");
+    assert_eq!(humanoid.properties.get(&"RigType".into()), Some(&Variant::Enum(rbx_dom_weak::types::Enum::from_u32(0))), "R6");
+    assert_eq!(humanoid.properties.get(&"DisplayDistanceType".into()), Some(&Variant::Enum(rbx_dom_weak::types::Enum::from_u32(2))), "None");
+    assert!(humanoid.children().is_empty(), "its Animator is not recorded");
+    for class in ["Shirt", "Pants", "BodyColors"] {
+        assert_eq!(instance(&scene, &["Dressed", class]).class, class);
+    }
+    assert_eq!(instance(&scene, &["Late", "Humanoid"]).class, "Humanoid", "the file keeps it in its model");
+    let parents: Vec<(f64, String)> = find(&playback["actions"], |a| a["target"] == "Late.Humanoid" && a["parent"].is_string())
+        .iter()
+        .map(|a| (a["at"].as_f64().unwrap(), a["parent"].as_str().unwrap().to_string()))
+        .collect();
+    assert!(parents.len() == 2 && parents[0] == (0.0, String::new()), "out at the start: {parents:?}");
+    assert!((parents[1].0 - 0.1).abs() < 0.03 && parents[1].1 == "Late", "in when parented: {parents:?}");
+    let shown = find(&playback["actions"], |a| a["target"] == "Late.Humanoid" && a["set"]["DisplayDistanceType"].is_number());
+    assert!(shown.len() == 1 && shown[0]["set"]["DisplayDistanceType"].as_f64() == Some(0.0) && (shown[0]["at"].as_f64().unwrap() - 0.15).abs() < 0.03, "{playback}");
+    assert!(find(&playback["actions"], |a| a["target"] == "Dressed.Humanoid").is_empty(), "one there from the start plays nothing: {playback}");
+}
+
 /// DrawImage and DrawRectangle combine as Roblox's ImageCombineType says: a crossfade of two images
 /// (the second drawn over the first after its alpha was cut with a Subtract rectangle) lands between them.
 #[test]

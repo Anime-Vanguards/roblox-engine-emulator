@@ -112,6 +112,7 @@ const VISUAL: &[(&str, &[(&str, Track)])] = {
         ("SpotLight", &[("Angle", Plain), ("Face", Plain)]),
         ("SurfaceLight", &[("Angle", Plain), ("Face", Plain)]),
         ("Highlight", &[("Enabled", Enabled), ("FillColor", Plain), ("FillTransparency", Plain), ("OutlineColor", Plain), ("OutlineTransparency", Plain), ("DepthMode", Plain)]),
+        ("Humanoid", &[("RigType", Plain), ("DisplayDistanceType", Plain), ("NameDisplayDistance", Plain)]),
         ("Attachment", &[("CFrame", Attachment)]),
         ("Bone", &[("Transform", Attachment)]),
         ("Fire", &[("Enabled", Enabled), ("Size", Plain), ("Heat", Plain), ("Color", Plain), ("SecondaryColor", Plain), ("TimeScale", TimeScale)]),
@@ -163,15 +164,31 @@ const CLEARABLE: &[&str] = &["ParticleEmitter", "Trail"];
 /// What a child of Lighting adds to the look.
 const LIGHTING_CHILDREN: &[&str] = &["Sky", "Atmosphere", "ColorCorrectionEffect", "BloomEffect", "BlurEffect", "SunRaysEffect", "DepthOfFieldEffect", "ColorGradingEffect"];
 /// What draws nothing itself but changes how its parent draws (a part's shape, a GUI's corners or layout, a
-/// character's clothing), with no property that hides it: out of the world while it is gone.
-const MODIFIERS: &[&str] = &["DataModelMesh", "UIComponent", "CharacterAppearance"];
+/// character's clothing, a model's Humanoid), with no property that hides it: out of the world while it is gone.
+const MODIFIERS: &[&str] = &["DataModelMesh", "UIComponent", "CharacterAppearance", "Humanoid"];
 /// Never recorded, with everything under them: code, sounds, values and the like draw nothing (and
 /// the Terrain's Clouds play on [`CLOUDS`]).
 const SKIPPED: &[&str] = &[
     "LuaSourceContainer", "Sound", "ValueBase", "BindableEvent", "BindableFunction", "RemoteEvent", "UnreliableRemoteEvent",
-    "RemoteFunction", "Animation", "AnimationController", "Animator", "Humanoid", "Configuration", "SoundEffect", "SoundGroup",
+    "RemoteFunction", "Animation", "AnimationController", "Animator", "Configuration", "SoundEffect", "SoundGroup",
     "Terrain", "Camera", "Clouds",
 ];
+/// Recorded without anything under them. A Humanoid makes its model a character: Studio dresses the
+/// limbs of its RigType in the model's BodyColors, Shirt, Pants and ShirtGraphic, and shows its name
+/// over the Head unless its DisplayDistanceType is None (Roblox's documentation), so the renderer reads
+/// both. What it holds (its Animator, HumanoidDescription and scale values) draws nothing.
+const CLOSED: &[&str] = &["Humanoid"];
+
+/// How the world's walk takes an instance of a class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Walk {
+    /// Not recorded, nor anything under it ([`SKIPPED`])
+    Skip,
+    /// Recorded, but nothing under it ([`CLOSED`])
+    Closed,
+    /// Recorded, and what is under it walked
+    Open,
+}
 /// The scene folder holding what the run parented to Lighting.
 const LIGHTING_FOLDER: &str = "~Lighting";
 /// The playback's target for the Terrain's Clouds: their path in a place, where ror keeps the clouds it
@@ -195,7 +212,7 @@ enum Visibility {
     /// Parented out of Lighting (skies, atmospheres, post effects)
     Lighting,
     /// Parented out of the world (SurfaceAppearances: a part shows the one it holds; meshes, UI
-    /// components and character appearances: [`MODIFIERS`]; Glass parts, which still draw at
+    /// components, character appearances and Humanoids: [`MODIFIERS`]; Glass parts, which still draw at
     /// Transparency 1: [`is_glass`])
     Detach,
     /// Never hidden: draws nothing and changes nothing its descendants do not hide themselves
@@ -330,8 +347,8 @@ struct Inner {
     /// ScreenGuis of the local player's PlayerGui (in it or a Folder of it), by that PlayerGui: drawn on
     /// the screen, recorded as the scene PlayerGui's children
     screens: FxHashMap<InstanceId, InstanceId>,
-    /// Per class: never recorded (SKIPPED)
-    skipped: Vec<Option<bool>>,
+    /// Per class: how the walk takes it (SKIPPED, CLOSED)
+    walks_by_class: Vec<Option<Walk>>,
     /// The ViewportFrame records each camera is the CurrentCamera of (their CameraCFrame and
     /// CameraFieldOfView follow it; a window's is skewed every frame to look through its face)
     viewports: FxHashMap<InstanceId, Vec<usize>>,
@@ -757,13 +774,21 @@ fn is_present(inner: &Inner, id: &InstanceId) -> bool {
     inner.by_id.get(id).is_some_and(|&index| inner.present.get(index).copied().unwrap_or(false))
 }
 
-fn skipped(inner: &mut Inner, engine: &Engine, class: ClassId) -> bool {
+fn walk_of(inner: &mut Inner, engine: &Engine, class: ClassId) -> Walk {
     // (known per class: a walk asks for each of a map's 20,000 instances)
     let slot = class as usize;
-    if inner.skipped.len() <= slot {
-        inner.skipped.resize(slot + 1, None);
+    if inner.walks_by_class.len() <= slot {
+        inner.walks_by_class.resize(slot + 1, None);
     }
-    *inner.skipped[slot].get_or_insert_with(|| SKIPPED.iter().any(|c| is_a(engine, class, c)))
+    *inner.walks_by_class[slot].get_or_insert_with(|| {
+        if SKIPPED.iter().any(|c| is_a(engine, class, c)) {
+            Walk::Skip
+        } else if CLOSED.iter().any(|c| is_a(engine, class, c)) {
+            Walk::Closed
+        } else {
+            Walk::Open
+        }
+    })
 }
 
 /// A ViewportFrame's CurrentCamera, when it has one.
@@ -1439,7 +1464,8 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
     let mut holders: FxHashSet<InstanceId> = FxHashSet::default();
     while let Some(id) = stack.pop() {
         let class = state.dom.at(id).class;
-        if skipped(inner, engine, class) {
+        let walk = walk_of(inner, engine, class);
+        if walk == Walk::Skip {
             if is_drawn_camera(&state, engine, id) || is_drawn_terrain(&state, engine, id) {
                 stack.extend(state.dom.children_of(id).iter().rev().copied());
             }
@@ -1448,12 +1474,16 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
         // (a Studio-only placeholder is not drawn for itself, whenever it was built; what the run put in it is, under the
         // placeholder folders and models above it)
         if state.dom.at(id).has(flags::STUDIO_ONLY) {
-            stack.extend(state.dom.children_of(id).iter().rev().copied());
+            if walk == Walk::Open {
+                stack.extend(state.dom.children_of(id).iter().rev().copied());
+            }
             continue;
         }
         push_holders(state, engine, id, &mut now, &mut holders);
         now.push(id);
-        stack.extend(state.dom.children_of(id).iter().rev().copied());
+        if walk == Walk::Open {
+            stack.extend(state.dom.children_of(id).iter().rev().copied());
+        }
     }
     // SurfaceGuis and BillboardGuis in the local player's PlayerGui adorned to something in the world
     // draw there as if parented to it (a portal window can host its SurfaceGui in PlayerGui); its
@@ -1485,7 +1515,8 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
             let mut subtree = vec![id];
             while let Some(item) = subtree.pop() {
                 let item_class = state.dom.at(item).class;
-                if skipped(inner, engine, item_class) {
+                let walk = walk_of(inner, engine, item_class);
+                if walk == Walk::Skip {
                     continue;
                 }
                 if screen && item != id && (is_a(engine, item_class, "SurfaceGuiBase") || is_a(engine, item_class, "BillboardGui")) {
@@ -1493,7 +1524,9 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
                     continue;
                 }
                 now.push(item);
-                subtree.extend(state.dom.children_of(item).iter().rev().copied());
+                if walk == Walk::Open {
+                    subtree.extend(state.dom.children_of(item).iter().rev().copied());
+                }
             }
         }
     }
