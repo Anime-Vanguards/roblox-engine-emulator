@@ -2061,3 +2061,99 @@ fn the_player_mouse_is_made_on_the_first_get_mouse() {
         "##,
     );
 }
+
+/// The Camera's simpler methods as a playing client answers them (Studio 0.748, new cameras and the CurrentCamera; the values to
+/// the bit, the errors as raised): SetRoll's roll, read back and in GetRenderCFrame, held in Scriptable only, kept through a CFrame
+/// write and dropped when CameraType leaves Scriptable; GetPanSpeed / GetTiltSpeed; SetCameraPanMode's argument; Zoom and
+/// SetImageServerView, which a game script cannot call.
+#[test]
+fn camera_roll_render_cframe_and_the_legacy_methods() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function C(Frame)
+            local T = { Frame:GetComponents() }
+            for I, X in T do
+                T[I] = string.format("%.9g", X)
+            end
+            return table.concat(T, " ")
+        end
+        local function Fails(Message, Function, ...)
+            local Ok, E = pcall(Function, ...)
+            assert(not Ok and tostring(E) == Message, tostring(E))
+        end
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        assert(Cam:GetRoll() == 0 and Cam:GetPanSpeed() == 0 and Cam:GetTiltSpeed() == 0)
+        assert(select("#", Cam:GetRoll()) == 1 and select("#", (Cam :: any):GetRoll(1, "x", {})) == 1)
+        -- the default camera's -0 terms read 0 in the render frame
+        assert(C(Cam:GetRenderCFrame()) == "0 20 20 1 0 0 0 0.707106829 0.707106829 0 -0.707106829 0.707106829", C(Cam:GetRenderCFrame()))
+        -- outside Scriptable SetRoll changes nothing (it warns)
+        assert(select("#", Cam:SetRoll(0.5)) == 0 and Cam:GetRoll() == 0)
+        Cam.CameraType = Enum.CameraType.Scriptable
+        Cam.CFrame = CFrame.new(1, 2, 3) * CFrame.Angles(0.1, 0.2, 0.3)
+        assert(select("#", Cam:SetRoll(0.5)) == 0 and Cam:GetRoll() == 0.5)
+        assert(C(Cam:GetRenderCFrame()) == "1 2 3 0.960530519 0.194709212 0.198669329 -0.178238362 0.979110718 -0.0978434011 -0.213570267 0.058571063 0.975170374", C(Cam:GetRenderCFrame()))
+        assert(C(Cam.CFrame) == "1 2 3 0.936293423 -0.289629489 0.198669329 0.312991828 0.944702566 -0.0978434011 -0.159345075 0.153791994 0.975170374", C(Cam.CFrame))
+        Cam:SetRoll(10)
+        assert(C(Cam:GetRenderCFrame()) == "1 2 3 -0.943181694 -0.266343564 0.198669329 0.251315594 -0.96294713 -0.0978434011 0.217368007 -0.0423553884 0.975170374", C(Cam:GetRenderCFrame()))
+        -- the roll is a float32; a numeric string or a boolean is taken
+        Cam:SetRoll(0.1)
+        assert(Cam:GetRoll() == 0.10000000149011612)
+        Cam:SetRoll(-7)
+        assert(Cam:GetRoll() == -7)
+        Cam:SetRoll(1e30)
+        assert(Cam:GetRoll() == 1.0000000150474662e+30)
+        Cam:SetRoll(0 / 0)
+        assert(Cam:GetRoll() ~= Cam:GetRoll())
+        Cam:SetRoll("0.25" :: any)
+        assert(Cam:GetRoll() == 0.25)
+        Fails("Argument 1 missing or nil", Cam.SetRoll, Cam)
+        Fails("Argument 1 missing or nil", Cam.SetRoll, Cam, nil)
+        Fails("Unable to cast string to float", Cam.SetRoll, Cam, "x")
+        Fails("Unable to cast Array to float", Cam.SetRoll, Cam, {})
+        Cam:SetRoll(true :: any)
+        assert(Cam:GetRoll() == 1)
+        -- kept through a CFrame write, dropped when CameraType leaves Scriptable
+        Cam:SetRoll(0.75)
+        Cam.CFrame = CFrame.new(5, 5, 5)
+        assert(Cam:GetRoll() == 0.75)
+        assert(C(Cam:GetRenderCFrame()) == "5 5 5 0.731688857 0.681638777 0 -0.681638777 0.731688857 0 0 0 1", C(Cam:GetRenderCFrame()))
+        Cam.CameraType = Enum.CameraType.Fixed
+        assert(Cam:GetRoll() == 0)
+        Cam.CameraType = Enum.CameraType.Scriptable
+        assert(Cam:GetRoll() == 0)
+        -- SetCameraPanMode checks a CameraPanMode, nil taking the default
+        assert(select("#", Cam:SetCameraPanMode()) == 0 and select("#", Cam:SetCameraPanMode(Enum.CameraPanMode.EdgeBump)) == 0)
+        Cam:SetCameraPanMode(1 :: any)
+        Cam:SetCameraPanMode("Classic" :: any)
+        Fails("Unable to cast double to CameraPanMode", Cam.SetCameraPanMode, Cam, 9)
+        Fails("Unable to cast string to CameraPanMode", Cam.SetCameraPanMode, Cam, "Nope")
+        Fails("Unable to cast CameraType to CameraPanMode", Cam.SetCameraPanMode, Cam, Enum.CameraType.Fixed)
+        Fails("Unable to cast Array to CameraPanMode", Cam.SetCameraPanMode, Cam, {})
+        -- RobloxScript members: a call raises, while reading them gives a function
+        Fails("The current thread cannot call 'Zoom' (lacking capability RobloxScript)", (Cam :: any).Zoom, Cam, 5)
+        Fails("The current thread cannot call 'SetImageServerView' (lacking capability RobloxScript)", (Cam :: any).SetImageServerView, Cam, CFrame.new())
+        assert(typeof((Cam :: any).Zoom) == "function")
+        Cam:Destroy()
+        assert(Cam:GetRoll() == 0 and C(Cam:GetRenderCFrame()) == "5 5 5 1 0 0 0 1 0 0 0 1", C(Cam:GetRenderCFrame()))
+        -- a camera outside the Workspace rolls too
+        local Loose = Instance.new("Camera")
+        Loose.CameraType = Enum.CameraType.Scriptable
+        Loose:SetRoll(0.2)
+        assert(Loose:GetRoll() == 0.20000000298023224)
+        assert(C(Loose:GetRenderCFrame()) == "0 20 20 0.980066597 0.198669329 0 -0.140480444 0.693011761 0.707106829 0.140480444 -0.693011761 0.707106829", C(Loose:GetRenderCFrame()))
+        -- the CurrentCamera, not Scriptable: no roll, the render frame its CFrame
+        local Current = workspace.CurrentCamera
+        assert(Current.CameraType ~= Enum.CameraType.Scriptable)
+        Current:SetRoll(0.3)
+        assert(Current:GetRoll() == 0 and Current:GetRenderCFrame() == Current.CFrame and Current:GetPanSpeed() == 0)
+        "##,
+    );
+    let state = engine.state.borrow();
+    let warned = state.log_history.iter().filter(|entry| entry.text == "SetRoll can only be used on Camera objects with a CameraType of Scriptable").count();
+    assert_eq!(warned, 2, "SetRoll's warnings, on the Fixed camera and the CurrentCamera");
+    assert!(!state.log_history.iter().any(|entry| entry.text.contains("is not emulated")));
+}

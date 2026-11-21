@@ -11,20 +11,33 @@
 //! - The projections use the viewport rounded to whole pixels (908.8 x 895.2 projects as 909 x 895: the centre is 454.5, 447.5).
 //! - A ray starts on the near plane (its point under the pixel, `-NearPlaneZ` along the look vector), `depth` studs further along
 //!   it; the point at the camera itself projects to NaN, NaN at depth 0.
+//!
+//! Also the Camera's simpler methods, as a playing client answers them (Studio 0.748: results, result counts, argument errors
+//! and values, on new cameras and the CurrentCamera): GetRoll / SetRoll and GetRenderCFrame, GetPanSpeed / GetTiltSpeed,
+//! SetCameraPanMode, and Zoom / SetImageServerView, which a game script cannot call.
 
 use std::rc::Rc;
 
-use glam::{Affine3A, Vec3};
+use glam::{Affine3A, Mat3, Vec3};
 use lune_roblox::datatypes::types as lune;
 use lune_roblox::datatypes::types::float32 as f32m;
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
+use rustc_hash::FxHashMap;
 
 use super::{cframe_name, frame, method, vector_arg};
 use crate::{
     Engine, InstanceId,
-    lua::{Args, Flow, instance_id, raise, typeof_value},
+    lua::{Args, Flow, convert, instance_id, raise, typeof_value, types::LEnumItem, values},
+    value::Value,
 };
+
+/// What cameras hold beyond their properties (`State::cameras`): the roll SetRoll gave a camera, float32. A CFrame write keeps
+/// it; CameraType leaving Scriptable drops it (measured: Fixed and back to Scriptable reads 0).
+#[derive(Default)]
+pub struct Cameras {
+    rolls: FxHashMap<InstanceId, f32>,
+}
 
 struct View {
     transform: Affine3A,
@@ -173,6 +186,79 @@ fn ray_arguments(lua: &Lua, engine: &Engine, args: &Args) -> Result<(f32, f32, f
     Ok((x, y, depth))
 }
 
+fn roll(engine: &Engine, camera: InstanceId) -> f32 {
+    engine.state.borrow().cameras.rolls.get(&camera).copied().unwrap_or(0.0)
+}
+
+/// Whether the camera's CameraType is Scriptable (SetRoll requires it).
+fn scriptable(engine: &Engine, camera: InstanceId) -> bool {
+    let (Some(name), Some(item)) = (engine.reflection.name_id("CameraType"), engine.reflection.enum_item("CameraType", "Scriptable")) else { return false };
+    engine.state.borrow().dom.raw_get(camera, name).and_then(Value::as_enum) == Some(item)
+}
+
+/// GetRenderCFrame: the CFrame turned by the roll about its look vector, `CFrame * CFrame.Angles(0, 0, -roll)` in float32 (lune's
+/// helpers, by rows; measured to the bit: roll 0.5 turns the right vector toward -up). Computed at roll 0 too, so the default
+/// camera's -0 terms read 0, as a client's do.
+fn render_cframe(engine: &Engine, camera: InstanceId) -> Affine3A {
+    let transform = frame::affine_of(engine.state.borrow().dom.raw_get(camera, cframe_name(engine)));
+    let m = transform.matrix3;
+    let rows = [[m.x_axis.x, m.y_axis.x, m.z_axis.x], [m.x_axis.y, m.y_axis.y, m.z_axis.y], [m.x_axis.z, m.y_axis.z, m.z_axis.z]];
+    let rows = f32m::mat_mul(&rows, &f32m::from_euler("XYZ", 0.0, 0.0, -roll(engine, camera)));
+    let column = |j: usize| Vec3::new(rows[0][j], rows[1][j], rows[2][j]);
+    Affine3A::from_mat3_translation(Mat3::from_cols(column(0), column(1), column(2)), frame::translation(&transform))
+}
+
+fn number(number: f32) -> Result<LuaMultiValue, Flow> {
+    Ok(values([LuaValue::Number(f64::from(number))]))
+}
+
+/// The methods in this module's second paragraph, and the hooks that keep the rolls: CameraType leaving Scriptable drops a
+/// camera's, a freed camera's goes.
+fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::MethodFn)) {
+    add("GetRoll", method(|_, engine, id, _| number(roll(engine, id))));
+    // (outside Scriptable it warns and changes nothing: measured on a Fixed camera and the CurrentCamera, Custom)
+    add("SetRoll", method(|lua, engine, id, args| {
+        let roll = float_argument(lua, engine, args, 1)?;
+        if scriptable(engine, id) {
+            engine.state.borrow_mut().cameras.rolls.insert(id, roll);
+        } else {
+            engine.warn("SetRoll can only be used on Camera objects with a CameraType of Scriptable");
+        }
+        Ok(LuaMultiValue::new())
+    }));
+    add("GetRenderCFrame", method(|lua, engine, id, _| Ok(values([convert::to_lua(lua, engine, &frame::cframe_value(&render_cframe(engine, id)))?]))));
+    // (documented as broken: 0 on every camera measured)
+    add("GetPanSpeed", method(|_, _, _, _| number(0.0)));
+    add("GetTiltSpeed", method(|_, _, _, _| number(0.0)));
+    // (no effect on a desktop client; the argument is checked as a CameraPanMode, nil taking the default, an item of another
+    // enum named by its enum: "Unable to cast CameraType to CameraPanMode")
+    add("SetCameraPanMode", method(|lua, engine, _, args| {
+        let value = args.get(1);
+        if value.is_nil() || engine.reflection.enum_id("CameraPanMode").and_then(|id| convert::coerce_enum(lua, engine, id, value)).is_some() {
+            return Ok(LuaMultiValue::new());
+        }
+        let other = match value {
+            LuaValue::UserData(ud) => ud.borrow::<LEnumItem>().ok().map(|item| engine.reflection.enum_item_type_name(item.0).to_string()),
+            _ => None,
+        };
+        raise(format!("Unable to cast {} to CameraPanMode", other.unwrap_or_else(|| cast_name(engine, value))))
+    }));
+    // (RobloxScript members: a game script's call raises, while reading them gives a function)
+    add("Zoom", method(|_, _, _, _| raise("The current thread cannot call 'Zoom' (lacking capability RobloxScript)")));
+    add("SetImageServerView", method(|_, _, _, _| raise("The current thread cannot call 'SetImageServerView' (lacking capability RobloxScript)")));
+    let mut hooks = engine.hooks.borrow_mut();
+    if let (Some(camera_type), Some(scriptable)) = (engine.reflection.name_id("CameraType"), engine.reflection.enum_item("CameraType", "Scriptable")) {
+        hooks.property_changed.push(Box::new(move |state, id, name| {
+            if name == camera_type && state.dom.raw_get(id, camera_type).and_then(Value::as_enum) != Some(scriptable) {
+                state.cameras.rolls.remove(&id);
+            }
+        }));
+    }
+    hooks.instance_freed.push(Box::new(|state, id| {
+        state.cameras.rolls.remove(&id);
+    }));
+}
+
 pub fn install(engine: &Rc<Engine>) {
     let Some(camera) = engine.reflection.class_id("Camera") else { return };
     let inset = engine.options.topbar_inset as f32;
@@ -198,6 +284,7 @@ pub fn install(engine: &Rc<Engine>) {
         let (x, y, depth) = ray_arguments(lua, engine, args)?;
         Ok(ray(lua, view(engine, id).ray(x, y + inset, depth))?)
     }));
+    install_methods(engine, &mut add);
     if let Some(name) = engine.reflection.name_id("NearPlaneZ") {
         behaviors.add_getter(camera, name, Rc::new(|_, engine, id| Ok(LuaValue::Number(-f64::from(near_plane(engine, id))))));
     }

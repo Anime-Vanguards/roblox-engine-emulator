@@ -635,6 +635,8 @@ pub struct State {
     pub joints: world::joints::Joints,
     /// Free fall: the unanchored parts in the Workspace and their velocities (world::gravity)
     pub gravity: world::gravity::Gravity,
+    /// What cameras hold beyond their properties: SetRoll's rolls (world::camera)
+    pub cameras: world::camera::Cameras,
     /// A loopback run's server: what changed this frame in the replicated containers, with its remote messages in their
     /// places (loopback/replicate.rs; None in every other engine)
     pub loopback_log: Option<Vec<loopback::replicate::Change>>,
@@ -736,6 +738,7 @@ impl Engine {
                 collection: Default::default(),
                 joints: Default::default(),
                 gravity: Default::default(),
+                cameras: Default::default(),
                 loopback_log: None,
                 quiet_write: false,
             }),
