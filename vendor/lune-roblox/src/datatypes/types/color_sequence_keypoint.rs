@@ -47,6 +47,8 @@ impl LuaExportsTable for ColorSequenceKeypoint {
 
 impl LuaUserData for ColorSequenceKeypoint {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("ColorSequenceKeypoint"));
         fields.add_field_method_get("Time", |_, this| Ok(this.time));
         // (a new Color3: datatype_price::MEMBER_NEW)
         fields.add_field_method_get("Value", |lua, this| {

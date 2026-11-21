@@ -57,6 +57,8 @@ impl LuaExportsTable for NumberSequenceKeypoint {
 
 impl LuaUserData for NumberSequenceKeypoint {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("NumberSequenceKeypoint"));
         fields.add_field_method_get("Time", |_, this| Ok(this.time));
         fields.add_field_method_get("Value", |_, this| Ok(this.value));
         fields.add_field_method_get("Envelope", |_, this| Ok(this.envelope));

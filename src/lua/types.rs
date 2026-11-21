@@ -213,6 +213,21 @@ fn key_text(key: &LuaValue) -> String {
     }
 }
 
+/// A member a datatype of the engine's own lacks, as a playing client raises it (Studio 0.747,
+/// tools/parity/probes/datatype_errors.luau): `Nope is not a valid member of DateTime` for a string key, without a
+/// position, or, for TweenInfo and Font, `'Nope' is not a valid member of TweenInfo`, the key quoted and a number key too
+/// (`'1'`); any other key (a number for the first kind) is `invalid argument #2 (string expected, got number)` from the
+/// calling line. (The same rules as Lune's datatypes: lune-roblox datatypes::script_error::UnknownMembers.)
+fn unknown_member<T>(engine: &Engine, key: &LuaValue, type_name: &str, quoted: bool) -> Result<T, Flow> {
+    match key {
+        LuaValue::String(text) if !quoted => raise(format!("{} is not a valid member of {type_name}", text.to_string_lossy())),
+        LuaValue::String(text) => raise(format!("'{}' is not a valid member of {type_name}", text.to_string_lossy())),
+        LuaValue::Number(n) if quoted => raise(format!("'{}' is not a valid member of {type_name}", lune_roblox::datatypes::types::format_g(*n, 14))),
+        LuaValue::Integer(n) if quoted => raise(format!("'{n}' is not a valid member of {type_name}")),
+        other => raise_at_caller(format!("invalid argument #2 (string expected, got {})", super::typeof_value(engine, other))),
+    }
+}
+
 fn read_only(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaFunction> {
     wrapped(lua, engine, |_, args| {
         let args = Args::new(args);
@@ -766,7 +781,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 _ => {}
             }
         }
-        raise(format!("{} is not a valid member of Font", key_text(args.get(1))))
+        unknown_member(&e, args.get(1), "Font", true)
     })?;
     let e = engine.clone();
     let newindex = wrapped(lua, engine, move |lua, args| {
@@ -1001,7 +1016,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 _ => {}
             }
         }
-        raise(format!("{} is not a valid member of Content", key_text(args.get(1))))
+        unknown_member(&e, args.get(1), "Content", false)
     })?;
     let tostring = lua.create_function(|lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
@@ -1095,7 +1110,7 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 _ => {}
             }
         }
-        raise(format!("{} is not a valid member of TweenInfo", key_text(args.get(1))))
+        unknown_member(&e, args.get(1), "TweenInfo", true)
     })?;
     // "Time:0.1 DelayTime:0.333333 RepeatCount:-1 Reverses:True ..." (Studio 0.744): the times with 6 significant digits,
     // the flag capitalized
@@ -1464,6 +1479,7 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let copy = lua.create_any_userdata(new_random(engine, random.get()))?;
         Ok(values([LuaValue::UserData(copy)]))
     })?;
+    let e = engine.clone();
     let index = wrapped(lua, engine, move |_, args| {
         let args = Args::new(args);
         let member: LuaValue = match args.get(1) {
@@ -1471,7 +1487,7 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             _ => LuaValue::Nil,
         };
         if member.is_nil() {
-            return raise(format!("{} is not a valid member of Random", key_text(args.get(1))));
+            return unknown_member(&e, args.get(1), "Random", false);
         }
         Ok(values([member]))
     })?;
@@ -1988,6 +2004,7 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     };
     methods.set("FormatUniversalTime", wrapped(lua, engine, format("FormatUniversalTime", universal_parts, engine.clone()))?)?;
     methods.set("FormatLocalTime", wrapped(lua, engine, format("FormatLocalTime", local_parts, engine.clone()))?)?;
+    let e = engine.clone();
     let index = wrapped(lua, engine, move |_, args| {
         let args = Args::new(args);
         let millis = date_time_of(args.get(0)).unwrap_or(0.0);
@@ -2004,7 +2021,7 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 }
             }
         }
-        raise(format!("{} is not a valid member of DateTime", key_text(args.get(1))))
+        unknown_member(&e, args.get(1), "DateTime", false)
     })?;
     let newindex = read_only(lua, engine)?;
     let compare = |f: fn(f64, f64) -> bool| {

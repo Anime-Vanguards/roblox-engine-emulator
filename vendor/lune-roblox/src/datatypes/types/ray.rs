@@ -56,6 +56,8 @@ impl LuaExportsTable for Ray {
 
 impl LuaUserData for Ray {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Ray"));
         fields.add_field_method_get("Origin", |_, this| Ok(Vector3(this.origin)));
         fields.add_field_method_get("Direction", |_, this| Ok(Vector3(this.direction)));
         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)

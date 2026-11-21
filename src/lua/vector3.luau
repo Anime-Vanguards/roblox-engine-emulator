@@ -193,6 +193,11 @@ local VectorMethods = {
 R.SetVectorMetatable({
 	__index = setmetatable(VectorMethods, {
 		__index = function(_, Key)
+			-- (a key that is no string is the client's Luau check, from the calling line: `Vector3.one[1]` raises "invalid
+			-- argument #2 (string expected, got number)" in Studio 0.747, tools/parity/probes/datatype_errors.luau)
+			if type(Key) ~= "string" then
+				error(`invalid argument #2 (string expected, got {TypeName(Key)})`, 2)
+			end
 			error(`{Key} is not a valid member of Vector3`, 0)
 		end,
 	}),

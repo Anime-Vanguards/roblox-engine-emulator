@@ -48,6 +48,8 @@ impl LuaExportsTable for UDim {
 
 impl LuaUserData for UDim {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("UDim"));
         fields.add_field_method_get("Scale", |_, this| Ok(this.scale));
         fields.add_field_method_get("Offset", |_, this| Ok(this.offset));
     }

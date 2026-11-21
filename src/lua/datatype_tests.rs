@@ -527,12 +527,15 @@ fn vector3_members_methods_and_errors_follow_studio() {
             { "Nope", function() return V.Nope end },
             { "Nope", function() return V:Nope() end },
             { "nope", function() local Key = "nope" return V[Key] end },
-            { "1", function() return V[1] end },
             { "Magnitudes", function() return V.Magnitudes end },
         } do
             local Ok, Message = pcall(Case[2])
             assert(not Ok and string.find(tostring(Message), "^" .. Case[1] .. " is not a valid member of Vector3$"), tostring(Message))
         end
+        -- a key that is no string is the client's Luau check, from the calling line (a 0.747 playing client,
+        -- tools/parity/probes/datatype_errors.luau; a 0.744 headless one had said "1 is not a valid member of Vector3")
+        local Ok, Message = pcall(function() return V[1] end)
+        assert(not Ok and string.find(tostring(Message), "^Test:%d+: invalid argument #2 %(string expected, got number%)$"), tostring(Message))
         "#,
     );
 }
@@ -1413,6 +1416,37 @@ Fails("^invalid argument #1 to 'Abs' %(Vector2 expected, got number%)$", V2.Abs,
 -- any other callback's error a script catches reads without mlua's traceback
 local Ok, Error = pcall(function() return Enum.KeyCode.GetEnumItems(5) end)
 assert(not Ok and string.find(tostring(Error), "calling member function", 1, true) and not string.find(tostring(Error), "traceback", 1, true), tostring(Error))
+"#,
+    );
+}
+
+/// A member a datatype lacks raises a playing client's error (Studio 0.747, tools/parity/probes/datatype_errors.luau):
+/// `Nope is not a valid member of Vector2` in a type with methods, `'Nope' is not a valid member of UDim`, the key quoted
+/// and a number key too, in one without, and `invalid argument #2 (string expected, got number)` from the calling line for
+/// another key. Lune's types read nil (Vector2, CFrame, UDim2, Color3, Region3, Ray) or raised mlua's "attempt to get an
+/// unknown field"; the members a type has read as before.
+#[test]
+fn unknown_datatype_members_raise_a_playing_clients_errors() {
+    assert_script(
+        r#"
+local function Fails(Pattern, Function)
+	local Ok, Message = pcall(Function)
+	assert(not Ok and type(Message) == "string" and string.find(Message, Pattern) ~= nil, tostring(Message))
+end
+Fails("^Nope is not a valid member of Vector2$", function() return Vector2.one.Nope end)
+Fails("^Test:%d+: invalid argument #2 %(string expected, got number%)$", function() return Vector2.one[1] end)
+Fails("^nope is not a valid member of CFrame$", function() return CFrame.identity.nope end)
+Fails("^Nope is not a valid member of CFrame$", function() return CFrame.identity:Nope() end)
+Fails("^x is not a valid member of UDim2$", function() return UDim2.new().x end)
+Fails("^Nope is not a valid member of Ray$", function() return Ray.new(Vector3.zero, Vector3.one).Nope end)
+Fails("^'Nope' is not a valid member of UDim$", function() return UDim.new().Nope end)
+Fails("^'1' is not a valid member of Rect$", function() return Rect.new()[1] end)
+Fails("^Test:%d+: invalid argument #2 %(string expected, got boolean%)$", function() return Vector3int16.new()[true] end)
+Fails("^'Nope' is not a valid member of TweenInfo$", function() return TweenInfo.new().Nope end)
+Fails("^Test:%d+: invalid argument #2 %(string expected, got number%)$", function() return DateTime.now()[1] end)
+Fails("^Test:%d+: invalid argument #2 %(string expected, got nil%)$", function() return Vector3.one[nil :: any] end)
+assert(Vector2.one.x == 1 and CFrame.identity.p == Vector3.zero and UDim.new(1, 2).Offset == 2 and Rect.new(1, 2, 3, 4).Width == 2)
+assert(CFrame.identity.FuzzyEq and Region3.new(Vector3.zero, Vector3.one).Size == Vector3.one and Color3.new(0.5, 0, 0).r == 0.5)
 "#,
     );
 }

@@ -92,6 +92,8 @@ impl LuaExportsTable for ColorSequence {
 
 impl LuaUserData for ColorSequence {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("ColorSequence"));
         // (a new table of new keypoints on every read)
         fields.add_field_method_get("Keypoints", |lua, this| {
             super::charge_host_nanos(lua, super::datatype_price::keypoints_read(super::datatype_price::COLOR_KEYPOINTS, this.keypoints.len()));

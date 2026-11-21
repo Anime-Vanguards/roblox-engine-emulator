@@ -97,6 +97,8 @@ impl LuaExportsTable for PhysicalProperties {
 
 impl LuaUserData for PhysicalProperties {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("PhysicalProperties"));
         fields.add_field_method_get("Density", |_, this| Ok(this.density));
         fields.add_field_method_get("Friction", |_, this| Ok(this.friction));
         fields.add_field_method_get("FrictionWeight", |_, this| Ok(this.friction_weight));

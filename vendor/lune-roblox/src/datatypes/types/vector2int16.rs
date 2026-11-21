@@ -45,6 +45,8 @@ impl LuaExportsTable for Vector2int16 {
 
 impl LuaUserData for Vector2int16 {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("Vector2int16"));
         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
         fields.add_field_method_get("Y", |_, this| Ok(this.0.y));
         // (Roblox's lowercase names, measured in a client: ree's tools/parity/probes/camelcase.luau)

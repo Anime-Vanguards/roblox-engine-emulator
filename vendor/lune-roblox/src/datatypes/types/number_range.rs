@@ -46,6 +46,8 @@ impl LuaExportsTable for NumberRange {
 
 impl LuaUserData for NumberRange {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("NumberRange"));
         fields.add_field_method_get("Min", |_, this| Ok(this.min));
         fields.add_field_method_get("Max", |_, this| Ok(this.max));
     }

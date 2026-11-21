@@ -64,6 +64,8 @@ impl LuaExportsTable for Rect {
 
 impl LuaUserData for Rect {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::without_methods("Rect"));
         fields.add_field_method_get("Min", |_, this| Ok(Vector2(this.min)));
         fields.add_field_method_get("Max", |_, this| Ok(Vector2(this.max)));
         fields.add_field_method_get("Width", |_, this| Ok(this.max.x - this.min.x));

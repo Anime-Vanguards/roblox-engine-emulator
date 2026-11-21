@@ -303,6 +303,104 @@ pub fn ctor_number(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) ->
     }
 }
 
+/// What a datatype does with a member it lacks, as a playing client does (Studio 0.747, ree's
+/// tools/parity/probes/datatype_errors.luau): raises `Nope is not a valid member of Vector2` for a string key, without a
+/// position, in a type with methods (Vector2, CFrame, UDim2, Color3, Region3, Ray), and `'Nope' is not a valid member of
+/// UDim`, the key quoted and a number key too (`'1'`), in a type without (UDim, Rect, Vector3int16, NumberRange, ...);
+/// any other key (a number in the first kind) is `invalid argument #2 (string expected, got number)` from the calling
+/// line. It is the type's `__index` meta field, which mlua's own `__index` reaches only once the type's fields and
+/// methods have no such key: for a type with methods a table (mlua puts the methods in it) whose own `__index` raises,
+/// for one without a function, so a member that exists is read through the same Luau as before.
+pub struct UnknownMembers {
+    type_name: &'static str,
+    methods: bool,
+}
+
+impl UnknownMembers {
+    /// A type with methods (or fields of a fixed value)
+    pub fn with_methods(type_name: &'static str) -> Self {
+        Self { type_name, methods: true }
+    }
+
+    /// A type with field getters only
+    pub fn without_methods(type_name: &'static str) -> Self {
+        Self { type_name, methods: false }
+    }
+}
+
+impl IntoLua for UnknownMembers {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let function = if self.methods { unknown_member as ffi::lua_CFunction } else { unknown_member_quoted };
+        let raise = unsafe {
+            lua.exec_raw::<LuaFunction>(self.type_name, |state| {
+                ffi::lua_pushcclosurek(state, function, c"__index".as_ptr(), 1, None);
+            })?
+        };
+        if !self.methods {
+            return Ok(LuaValue::Function(raise));
+        }
+        let methods = lua.create_table()?;
+        let meta = lua.create_table()?;
+        meta.raw_set("__index", raise)?;
+        methods.set_metatable(Some(meta))?;
+        Ok(LuaValue::Table(methods))
+    }
+}
+
+/// The key at 2 as an unknown member's message names it (a string, or a number in its Luau form when `numbers`), or
+/// None for a key of another type.
+unsafe fn member_key(state: *mut ffi::lua_State, numbers: bool) -> Option<String> {
+    unsafe {
+        let kind = ffi::lua_type(state, 2);
+        if kind != ffi::LUA_TSTRING && !(numbers && kind == ffi::LUA_TNUMBER) {
+            return None;
+        }
+        ffi::lua_pushvalue(state, 2);
+        let mut length = 0;
+        let text = ffi::lua_tolstring(state, -1, &mut length);
+        let key = String::from_utf8_lossy(std::slice::from_raw_parts(text.cast::<u8>(), length)).into_owned();
+        ffi::lua_pop(state, 1);
+        Some(key)
+    }
+}
+
+/// The type name upvalue of an [`UnknownMembers`] function.
+unsafe fn upvalue_name(state: *mut ffi::lua_State) -> String {
+    unsafe {
+        let mut length = 0;
+        let text = ffi::lua_tolstring(state, ffi::lua_upvalueindex(1), &mut length);
+        String::from_utf8_lossy(std::slice::from_raw_parts(text.cast::<u8>(), length)).into_owned()
+    }
+}
+
+/// `__index` of a type with methods' method table (the table, the key)
+unsafe extern "C-unwind" fn unknown_member(state: *mut ffi::lua_State) -> std::ffi::c_int {
+    unsafe {
+        let message = match member_key(state, false) {
+            Some(key) => format!("{key} is not a valid member of {}", upvalue_name(state)),
+            None => {
+                let message = format!("invalid argument #2 (string expected, got {})", type_name_at(state, 2));
+                raise_script(state, message, true)
+            }
+        };
+        raise_script(state, message, false)
+    }
+}
+
+/// `__index` fallback of a type without methods (the value, the key)
+unsafe extern "C-unwind" fn unknown_member_quoted(state: *mut ffi::lua_State) -> std::ffi::c_int {
+    unsafe {
+        let message = match member_key(state, true) {
+            Some(key) => format!("'{key}' is not a valid member of {}", upvalue_name(state)),
+            None => {
+                let message = format!("invalid argument #2 (string expected, got {})", type_name_at(state, 2));
+                raise_script(state, message, true)
+            }
+        };
+        raise_script(state, message, false)
+    }
+}
+
 /// `attempt to <verb> a <T> with an incompatible value type or nil`, without a position: what a client's `*`, `/` and
 /// `//` of a Vector2 raise for an operand they take no number from.
 pub fn incompatible(verb: &str, type_name: &str) -> LuaError {
