@@ -248,6 +248,11 @@ fn deferred_threads_survive_collected_cancelled_ones() {
     // Cancelled threads were listed by address forever, so a task.defer whose new thread was allocated where a
     // collected cancelled one had been never ran (a replay lost a third of its defers across Heartbeat:Wait)
     let (lua, engine) = start();
+    // collectgarbage("collect") is refused to game scripts (errors.luau); expose a test-only collector hook here.
+    {
+        let globals = engine.lua.borrow().shared_globals().expect("shared globals");
+        globals.raw_set("__test_gc", lua.create_function(|lua, ()| lua.gc_collect()).unwrap()).unwrap();
+    }
     run(
         &lua,
         &engine,
@@ -261,7 +266,7 @@ fn deferred_threads_survive_collected_cancelled_ones() {
                     task.cancel(coroutine.create(function() end))
                 end
                 task.wait()
-                collectgarbage("collect")
+                __test_gc()
                 for _ = 1, 50 do
                     _G.Queued += 1
                     local Id = _G.Queued

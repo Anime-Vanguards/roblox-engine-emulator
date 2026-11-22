@@ -1615,13 +1615,16 @@ fn modules_require_and_environments() {
     scheduler::run_until(&lua, &engine, 0.2).unwrap();
     let output = lines(&engine);
     assert_eq!(output[0], "print: 42 true true");
-    assert!(output[1].starts_with("print: false") && output[1].ends_with("Requested module was required recursively"), "{output:?}");
-    assert!(output[2].ends_with("Module code did not return exactly one value"), "{output:?}");
-    assert_eq!(output[3], "print: false boom");
-    assert!(output[4].ends_with("Requested module experienced an error while loading"), "{output:?}");
+    assert!(output.contains(&"error: Requested module was required recursively".to_string()), "{output:?}");
+    assert!(output.contains(&"error: boom".to_string()), "{output:?}");
+    let prints: Vec<&str> = output.iter().filter(|l| l.starts_with("print: ")).map(String::as_str).collect();
+    assert!(prints[1].ends_with("Requested module experienced an error while loading"), "{prints:?}");
+    assert!(prints[2].ends_with("Module code did not return exactly one value"), "{prints:?}");
+    assert!(prints[3].ends_with("Requested module experienced an error while loading"), "{prints:?}");
+    assert!(prints[4].ends_with("Requested module experienced an error while loading"), "{prints:?}");
     // (a playing client's text: measured, tools/parity/probes/errors.luau)
-    assert!(output[5].ends_with("require(assetId) cannot be called from a client.  assetId = 5"), "{output:?}");
-    assert!(output.contains(&"print: first late".to_string()) && output.contains(&"print: second late".to_string()), "{output:?}");
+    assert!(prints[5].ends_with("require(assetId) cannot be called from a client.  assetId = 5"), "{prints:?}");
+    assert!(prints.contains(&"print: first late") && prints.contains(&"print: second late"), "{prints:?}");
 }
 
 #[test]
@@ -9641,4 +9644,75 @@ fn a_method_takes_only_its_declaring_classs_instances_as_self() {
         assert((Part :: any).Clone(Folder).ClassName == "Folder")
         "#,
     );
+}
+
+/// Real-client parity behaviors: Model:MoveTo ignores models outside the DataModel, BasePart.Color quantizes to u8/255,
+/// collectgarbage / Instance.new(number) / EnumItem.__newindex / TweenService:Create type-mismatch error texts,
+/// and playing-client ScriptContext.Error with script and formatted trace.
+#[test]
+fn parity_behaviors_move_to_color_quantization_errors_and_client_script_context() {
+    let options = Options { mode: "play".into(), ..Options::default() };
+    let (lua, engine) = start_with(options);
+    run(
+        &lua,
+        &engine,
+        r#"
+        -- Model:MoveTo outside DataModel is a no-op
+        local LooseModel = Instance.new("Model")
+        local LoosePart = Instance.new("Part")
+        LoosePart.CFrame = CFrame.new(1, 2, 3)
+        LoosePart.Parent = LooseModel
+        LooseModel.PrimaryPart = LoosePart
+        LooseModel:MoveTo(Vector3.new(20, 30, 40))
+        assert(LoosePart.Position == Vector3.new(1, 2, 3), tostring(LoosePart.Position))
+
+        -- BasePart.Color truncates each channel to floor(c * 255) / 255
+        local P = Instance.new("Part")
+        P.Color = Color3.new(0.5, 0.25, 0.999)
+        assert(P.Color == Color3.fromRGB(127, 63, 254), tostring(P.Color))
+
+        -- Instance.new(number), EnumItem.__newindex, TweenService type mismatch, collectgarbage
+        local Ok1, Err1 = pcall(Instance.new, 5 :: any)
+        assert(not Ok1 and Err1 == 'Unable to create an Instance of type "5"', tostring(Err1))
+        local Ok2, Err2 = pcall(function() (Enum.Material.Plastic :: any).Value = 1 end)
+        assert(not Ok2 and Err2 == "Value is not a valid member of EnumItem", tostring(Err2))
+        local Ok3, Err3 = pcall(function()
+            game:GetService("TweenService"):Create(P, TweenInfo.new(1), { Size = 5 })
+        end)
+        assert(not Ok3 and Err3 == "TweenService:Create property named 'Size' cannot be tweened due to type mismatch (property is a 'Vector3', but given type is 'double')", tostring(Err3))
+        local Ok4, Err4 = pcall(collectgarbage)
+        assert(not Ok4 and Err4 == "missing argument #1 to 'collectgarbage' (string expected)", tostring(Err4))
+        local Ok5, Err5 = pcall(collectgarbage, "collect")
+        assert(not Ok5 and Err5 == "collectgarbage must be called with 'count'; use gcinfo() instead", tostring(Err5))
+
+        -- Playing-client ScriptContext.Error fires with real script and formatted trace; non-string errors do not
+        local Seen = {}
+        game:GetService("ScriptContext").Error:Connect(function(Msg, Trace, Src)
+            table.insert(Seen, { Msg = Msg, Trace = Trace, HasScript = typeof(Src) == "Instance" })
+        end)
+        _G.SeenErrors = Seen
+        task.spawn(function()
+            error("client boom", 0)
+        end)
+        task.spawn(function()
+            error({ code = 1 })
+        end)
+        "#,
+    );
+    scheduler::run_until(&lua, &engine, 0.1).unwrap();
+    let out = run(
+        &lua,
+        &engine,
+        r#"
+        local Seen = _G.SeenErrors
+        assert(#Seen == 1, tostring(#Seen))
+        assert(Seen[1].Msg == "client boom", tostring(Seen[1].Msg))
+        assert(Seen[1].HasScript == true)
+        assert(string.find(Seen[1].Trace, ", line ", 1, true) ~= nil, tostring(Seen[1].Trace))
+        print("ok")
+        "#,
+    );
+    assert!(out.contains(&"print: ok".to_string()), "{out:?}");
+    let all = lines(&engine);
+    assert!(all.iter().any(|l| l.contains("Error occurred, no output from Luau.")), "{all:?}");
 }

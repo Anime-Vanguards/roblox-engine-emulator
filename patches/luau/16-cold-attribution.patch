@@ -1532,7 +1532,7 @@ index 4580c65..9de58ff 100644
      t->tmcache = tt->tmcache;
      t->array = NULL;
 diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
-index 51474bb..97b7050 100644
+index 3247913..364b1eb 100644
 --- a/luau/VM/src/lvmexecute.cpp
 +++ b/luau/VM/src/lvmexecute.cpp
 @@ -82,7 +82,7 @@ LUAU_FASTFLAG(LuauRuntimeFeedback)
@@ -1660,7 +1660,7 @@ index 51474bb..97b7050 100644
          VM_COUNT_OP(dispatchOp);
  
      dispatchContinue:
-@@ -1180,7 +1185,9 @@ reentry:
+@@ -1182,7 +1187,9 @@ reentry:
  
                      // yield
                      if (n < 0)
@@ -1670,7 +1670,7 @@ index 51474bb..97b7050 100644
  
                      // ci is our callinfo, cip is our parent
                      CallInfo* ci = L->ci;
-@@ -1308,7 +1315,9 @@ reentry:
+@@ -1312,7 +1319,9 @@ reentry:
  
                      // yield
                      if (n < 0)
@@ -1680,7 +1680,7 @@ index 51474bb..97b7050 100644
  
                      // ci is our callinfo, cip is our parent
                      CallInfo* ci = L->ci;
-@@ -2565,7 +2574,7 @@ reentry:
+@@ -2569,7 +2578,7 @@ reentry:
  
                  // TODO: we really don't need this anymore
                  if (!ttistable(ra))
@@ -1689,7 +1689,7 @@ index 51474bb..97b7050 100644
  
                  int last = index + c - 1;
                  if (last > h->sizearray)
-@@ -2868,7 +2877,9 @@ reentry:
+@@ -2872,7 +2881,9 @@ reentry:
                      VM_PROTECT(yielded = luaD_performcally(L, ra + 3, uint8_t(aux)));
  
                      if (yielded)
@@ -1699,7 +1699,7 @@ index 51474bb..97b7050 100644
  
                      L->top = L->ci->top;
  
-@@ -3721,7 +3732,7 @@ reentry:
+@@ -3725,7 +3736,7 @@ reentry:
  
                          // yield
                          if (results < 0)
@@ -1708,7 +1708,7 @@ index 51474bb..97b7050 100644
  
                          // ci is our callinfo, cip is our parent
                          CallInfo* ci = L->ci;
-@@ -4057,15 +4068,34 @@ reentry:
+@@ -4061,15 +4072,34 @@ reentry:
                  VM_NEXT();
              }
  
@@ -1746,7 +1746,7 @@ index 51474bb..97b7050 100644
  }
  
  void luau_execute(lua_State* L)
-@@ -4075,17 +4105,23 @@ void luau_execute(lua_State* L)
+@@ -4079,17 +4109,23 @@ void luau_execute(lua_State* L)
      {
          luaP_Execute profiled(L);
          if (L->singlestep || luaP_stepping(L))

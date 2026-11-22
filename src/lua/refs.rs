@@ -98,6 +98,11 @@ impl Gauge {
         }
     }
 
+    /// Whether the reference thread has grown to capacity (within 1024 slots of [`SLOTS`]).
+    pub fn at_capacity(&self) -> bool {
+        unsafe { ffi::lua_gettop(self.thread) >= SLOTS - 1024 }
+    }
+
     /// Whether one more admission stays within `limit` held slots.
     pub fn admits(&self, limit: c_int) -> bool {
         if unsafe { ffi::lua_gettop(self.thread) } < limit {
@@ -137,11 +142,28 @@ pub fn message() -> String {
     format!("too many threads and values held for scripts (ree holds at most {SLOTS})")
 }
 
+/// Whether a panic or error message is mlua's for a full reference stack.
+pub fn is_exhaustion_text(text: &str) -> bool {
+    const TEXT: &str = "cannot create a Lua reference, out of auxiliary stack space";
+    text.starts_with(TEXT)
+}
+
+/// Whether an error message is mlua's `Error::StackError` returned by `try_ref_stack_pop` when the auxiliary
+/// reference stack cannot grow past [`SLOTS`].
+pub fn is_stack_error_text(text: &str) -> bool {
+    const TEXT: &str = "out of Lua stack, too many arguments to a Lua function or too many return values from a callback";
+    text.starts_with(TEXT)
+}
+
+/// Whether the VM's mlua reference thread has reached capacity.
+pub fn at_capacity(engine: &Engine) -> bool {
+    engine.lua.borrow().gauge.as_ref().is_some_and(Gauge::at_capacity)
+}
+
 /// Whether a panic is mlua's for a full reference stack.
 pub fn is_exhaustion(payload: &(dyn std::any::Any + Send)) -> bool {
-    const TEXT: &str = "cannot create a Lua reference, out of auxiliary stack space";
-    payload.downcast_ref::<String>().is_some_and(|text| text.starts_with(TEXT))
-        || payload.downcast_ref::<&str>().is_some_and(|text| text.starts_with(TEXT))
+    payload.downcast_ref::<String>().is_some_and(|text| is_exhaustion_text(text))
+        || payload.downcast_ref::<&str>().is_some_and(|text| is_exhaustion_text(text))
 }
 
 thread_local! {

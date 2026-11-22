@@ -662,9 +662,12 @@ fn reparent(
         fire_event_measured(state, old, K::ChildRemoved as NameId, vec![Value::Instance(id)], SignalKind::ChildRemoved);
     }
     if let Some(parent) = new_parent {
-        // (Studio: every DescendantAdded of the subtree, then ChildAdded)
+        // (Studio: every DescendantAdded of the subtree, then any before-child-added setup such as Players.PlayerAdded, then ChildAdded)
         let arriving: Vec<InstanceId> = new_chain.iter().copied().filter(|node| !old_chain.contains(node)).collect();
         fire_descendant_events(state, &arriving, id, K::DescendantAdded as NameId);
+        for hook in &hooks.before_child_added {
+            hook(state, hooks, id, old_parent, parent);
+        }
         if let Some(signal) = existing_event(state, parent, K::ChildAdded as NameId) {
             fire_measured(state, signal, vec![Value::Instance(id)], SignalKind::ChildAdded);
         }

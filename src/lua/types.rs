@@ -33,7 +33,7 @@ pub struct LFont(pub RefCell<FontValue>);
 /// A script's Content. One that holds an Object keeps it alive while the value lives, as Roblox's does (measured in a
 /// 0.747 client: an EditableImage only a Content holds stays usable after the collector ran; the Luau wrapper of the
 /// object is collected and `Object` answers a new one): the object is pinned until the value is collected.
-pub struct LContent(pub ContentValue, ObjectPin);
+pub struct LContent(pub ContentValue, #[allow(dead_code)] ObjectPin);
 
 impl LContent {
     /// A Content value of `lua`'s engine (an Object's is pinned while the value lives).
@@ -394,10 +394,14 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         Ok(engine.reflection.enum_item_path(item.borrow::<LEnumItem>()?.0))
     })?;
     let newindex = read_only(lua, engine)?;
+    let item_newindex = wrapped(lua, engine, |_, args| {
+        let args = Args::new(args);
+        raise(format!("{} is not a valid member of EnumItem", key_text(args.get(1))))
+    })?;
     lua.register_userdata_type::<LEnumItem>(|registry| {
         registry.add_meta_field("__type", "EnumItem");
         registry.add_meta_field("__index", item_index);
-        registry.add_meta_field("__newindex", newindex.clone());
+        registry.add_meta_field("__newindex", item_newindex);
         registry.add_meta_field("__tostring", item_tostring);
     })?;
 
@@ -1649,20 +1653,39 @@ fn local_parts(millis: f64) -> Parts {
     }
 }
 
-const MONTH_NAMES: [&str; 12] = [
+struct DateLocale {
+    months: [&'static str; 12],
+    months_short: [&'static str; 12],
+    /// Sunday (0) through Saturday (6)
+    days: [&'static str; 7],
+    days_short: [&'static str; 7],
+    days_min: [&'static str; 7],
+    am: (&'static str, &'static str),
+    pm: (&'static str, &'static str),
+    formats: [(&'static str, &'static str); 10],
+}
+
+const EN_MONTHS: [&str; 12] = [
     "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November",
     "December",
 ];
-const DAY_NAMES: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
+const EN_MONTHS_SHORT: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const EN_DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const EN_DAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const EN_DAYS_MIN: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
-/// FormatUniversalTime / FormatLocalTime as a playing client formats in en-us (Studio 0.744,
-/// tools/parity/probes/datetime.luau): the longest token at each place, `[...]` copied without its brackets, any other
-/// character as it is. There are no ordinal tokens (`Do` is the day and a literal o, `14o`), and `Y`, `Q`, `w`, `W`,
-/// `e`, `E`, `g`, `G`, `k`, `Z`, `X`, `x` are literals too. `DDD` / `DDDD` are the day of the year, `d` the weekday
-/// (0 Sunday), `dd` its first two letters, `S` / `SS` / `SSS` tenths, hundredths and milliseconds (`SSSS` is `SSS` then
-/// `S`). Other locales are not emulated (the en-us text is returned).
-fn format_parts(t: &Parts, format: &str) -> String {
-    const LOCALE_FORMATS: [(&str, &str); 10] = [
+/// Measured in a playing client (Studio 0.747: tools/parity/probes/datetime.luau, buffer_vector_time.luau, and
+/// per-month/day/token measurements for en-us, en-gb, fr-fr, de-de, ja-jp). Unknown or bare language tags ("fr", "")
+/// fall back to en-us.
+const LOCALE_EN_US: DateLocale = DateLocale {
+    months: EN_MONTHS,
+    months_short: EN_MONTHS_SHORT,
+    days: EN_DAYS,
+    days_short: EN_DAYS_SHORT,
+    days_min: EN_DAYS_MIN,
+    am: ("AM", "am"),
+    pm: ("PM", "pm"),
+    formats: [
         ("LLLL", "dddd, MMMM D, YYYY h:mm A"),
         ("llll", "ddd, MMM D, YYYY h:mm A"),
         ("LTS", "h:mm:ss A"),
@@ -1672,34 +1695,156 @@ fn format_parts(t: &Parts, format: &str) -> String {
         ("ll", "MMM D, YYYY"),
         ("LT", "h:mm A"),
         ("L", "MM/DD/YYYY"),
-        ("l", "MM/DD/YYYY"),
-    ];
+        ("l", "M/D/YYYY"),
+    ],
+};
+
+const LOCALE_EN_GB: DateLocale = DateLocale {
+    months: EN_MONTHS,
+    months_short: EN_MONTHS_SHORT,
+    days: EN_DAYS,
+    days_short: EN_DAYS_SHORT,
+    days_min: EN_DAYS_MIN,
+    am: ("AM", "am"),
+    pm: ("PM", "pm"),
+    formats: [
+        ("LLLL", "dddd, D MMMM YYYY HH:mm"),
+        ("llll", "ddd, D MMM YYYY HH:mm"),
+        ("LTS", "HH:mm:ss"),
+        ("LLL", "D MMMM YYYY HH:mm"),
+        ("lll", "D MMM YYYY HH:mm"),
+        ("LL", "D MMMM YYYY"),
+        ("ll", "D MMM YYYY"),
+        ("LT", "HH:mm"),
+        ("L", "DD/MM/YYYY"),
+        ("l", "D/M/YYYY"),
+    ],
+};
+
+const LOCALE_FR_FR: DateLocale = DateLocale {
+    months: [
+        "janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre",
+        "décembre",
+    ],
+    months_short: [
+        "janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc.",
+    ],
+    days: ["dimanche", "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi"],
+    days_short: ["dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."],
+    days_min: ["di", "lu", "ma", "me", "je", "ve", "sa"],
+    am: ("AM", "am"),
+    pm: ("PM", "pm"),
+    formats: [
+        ("LLLL", "dddd D MMMM YYYY HH:mm"),
+        ("llll", "ddd D MMM YYYY HH:mm"),
+        ("LTS", "HH:mm:ss"),
+        ("LLL", "D MMMM YYYY HH:mm"),
+        ("lll", "D MMM YYYY HH:mm"),
+        ("LL", "D MMMM YYYY"),
+        ("ll", "D MMM YYYY"),
+        ("LT", "HH:mm"),
+        ("L", "DD/MM/YYYY"),
+        ("l", "D/M/YYYY"),
+    ],
+};
+
+const LOCALE_DE_DE: DateLocale = DateLocale {
+    months: [
+        "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November",
+        "Dezember",
+    ],
+    months_short: [
+        "Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sep.", "Okt.", "Nov.", "Dez.",
+    ],
+    days: ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"],
+    days_short: ["So.", "Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa."],
+    days_min: ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"],
+    am: ("AM", "am"),
+    pm: ("PM", "pm"),
+    formats: [
+        ("LLLL", "dddd, D. MMMM YYYY HH:mm"),
+        ("llll", "ddd, D. MMM YYYY HH:mm"),
+        ("LTS", "HH:mm:ss"),
+        ("LLL", "D. MMMM YYYY HH:mm"),
+        ("lll", "D. MMM YYYY HH:mm"),
+        ("LL", "D. MMMM YYYY"),
+        ("ll", "D. MMM YYYY"),
+        ("LT", "HH:mm"),
+        ("L", "DD.MM.YYYY"),
+        ("l", "D.M.YYYY"),
+    ],
+};
+
+const LOCALE_JA_JP: DateLocale = DateLocale {
+    months: ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"],
+    months_short: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"],
+    days: ["日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"],
+    days_short: ["日", "月", "火", "水", "木", "金", "土"],
+    days_min: ["日", "月", "火", "水", "木", "金", "土"],
+    am: ("午前", "午前"),
+    pm: ("午後", "午後"),
+    formats: [
+        ("LLLL", "YYYY年M月D日 dddd HH:mm"),
+        ("llll", "YYYY年M月D日(ddd) HH:mm"),
+        ("LTS", "HH:mm:ss"),
+        ("LLL", "YYYY年M月D日 HH:mm"),
+        ("lll", "YYYY年M月D日 HH:mm"),
+        ("LL", "YYYY年M月D日"),
+        ("ll", "YYYY年M月D日"),
+        ("LT", "HH:mm"),
+        ("L", "YYYY/MM/DD"),
+        ("l", "YYYY/MM/DD"),
+    ],
+};
+
+fn date_locale(locale: &str) -> &'static DateLocale {
+    if locale.eq_ignore_ascii_case("en-gb") {
+        &LOCALE_EN_GB
+    } else if locale.eq_ignore_ascii_case("fr-fr") {
+        &LOCALE_FR_FR
+    } else if locale.eq_ignore_ascii_case("de-de") {
+        &LOCALE_DE_DE
+    } else if locale.eq_ignore_ascii_case("ja-jp") {
+        &LOCALE_JA_JP
+    } else {
+        &LOCALE_EN_US
+    }
+}
+
+/// FormatUniversalTime / FormatLocalTime as a playing client formats (Studio 0.744 / 0.747,
+/// tools/parity/probes/datetime.luau, buffer_vector_time.luau): the longest token at each place, `[...]` copied
+/// without its brackets, any other character as it is. There are no ordinal tokens (`Do` is the day and a literal o,
+/// `14o`), and `Y`, `Q`, `w`, `W`, `e`, `E`, `g`, `G`, `k`, `Z`, `X`, `x` are literals too. `DDD` / `DDDD` are the day
+/// of the year, `d` the weekday (0 Sunday), `dd` its short 2-letter form, `S` / `SS` / `SSS` tenths, hundredths and
+/// milliseconds (`SSSS` is `SSS` then `S`). Measured locales: en-us, en-gb, fr-fr, de-de, ja-jp (other or unknown
+/// locales fall back to en-us).
+fn format_parts(t: &Parts, format: &str, locale: &str) -> String {
     const TOKENS: [&str; 27] = [
         "YYYY", "MMMM", "DDDD", "dddd", "MMM", "DDD", "ddd", "SSS", "YY", "MM", "DD", "dd", "HH", "hh", "mm", "ss", "SS", "M",
         "D", "d", "H", "h", "m", "s", "S", "A", "a",
     ];
+    let loc = date_locale(locale);
     let days = days_from_civil(t.year, t.month, t.day);
-    let weekday_index = luau_mod(days + 4.0, 7.0); // 1970-01-01 was a Thursday; 0 is Sunday
-    let weekday = DAY_NAMES[luau_mod(days, 7.0) as usize];
+    let weekday_index = luau_mod(days + 4.0, 7.0) as usize; // 1970-01-01 was a Thursday; 0 is Sunday
     let day_of_year = days - days_from_civil(t.year, 1.0, 1.0) + 1.0;
     let hour12 = if luau_mod(t.hour, 12.0) == 0.0 { 12.0 } else { luau_mod(t.hour, 12.0) };
-    let month = MONTH_NAMES[(t.month as usize).clamp(1, 12) - 1];
+    let month_index = (t.month as usize).clamp(1, 12) - 1;
     let value = |token: &str| -> String {
         match token {
             "YYYY" => format!("{:04}", t.year as i64),
             "YY" => format!("{:02}", (t.year as i64).rem_euclid(100)),
-            "MMMM" => month.to_string(),
-            "MMM" => month[..3].to_string(),
+            "MMMM" => loc.months[month_index].to_string(),
+            "MMM" => loc.months_short[month_index].to_string(),
             "MM" => format!("{:02}", t.month as i64),
             "M" => format!("{}", t.month as i64),
             "DDDD" => format!("{:03}", day_of_year as i64),
             "DDD" => format!("{}", day_of_year as i64),
             "DD" => format!("{:02}", t.day as i64),
             "D" => format!("{}", t.day as i64),
-            "dddd" => weekday.to_string(),
-            "ddd" => weekday[..3].to_string(),
-            "dd" => weekday[..2].to_string(),
-            "d" => format!("{}", weekday_index as i64),
+            "dddd" => loc.days[weekday_index].to_string(),
+            "ddd" => loc.days_short[weekday_index].to_string(),
+            "dd" => loc.days_min[weekday_index].to_string(),
+            "d" => format!("{}", weekday_index),
             "HH" => format!("{:02}", t.hour as i64),
             "H" => format!("{}", t.hour as i64),
             "hh" => format!("{:02}", hour12 as i64),
@@ -1711,8 +1856,8 @@ fn format_parts(t: &Parts, format: &str) -> String {
             "SSS" => format!("{:03}", t.millisecond as i64),
             "SS" => format!("{:02}", (t.millisecond as i64) / 10),
             "S" => format!("{}", (t.millisecond as i64) / 100),
-            "A" => if t.hour < 12.0 { "AM" } else { "PM" }.to_string(),
-            "a" => if t.hour < 12.0 { "am" } else { "pm" }.to_string(),
+            "A" => if t.hour < 12.0 { loc.am.0 } else { loc.pm.0 }.to_string(),
+            "a" => if t.hour < 12.0 { loc.am.1 } else { loc.pm.1 }.to_string(),
             _ => String::new(),
         }
     };
@@ -1739,7 +1884,7 @@ fn format_parts(t: &Parts, format: &str) -> String {
                 continue;
             }
         }
-        if let Some((token, expansion)) = LOCALE_FORMATS.iter().find(|(token, _)| rest.starts_with(*token)) {
+        if let Some((token, expansion)) = loc.formats.iter().find(|(token, _)| rest.starts_with(*token)) {
             simple(expansion, &mut output);
             rest = &rest[token.len()..];
             continue;
@@ -1824,9 +1969,10 @@ fn date_time_number(lua: &Lua, engine: &Engine, args: &Args, index: usize, name:
 /// tools/parity/probes/datetime.luau: `invalid argument #3 to 'FormatUniversalTime' (string expected, got nil)`; 0.747,
 /// datatype_errors.luau: `missing argument #2 to 'FormatUniversalTime' (string expected)` when none was passed, and the
 /// value's typeof, `got DateTime`).
-fn date_time_string(lua: &Lua, engine: &Engine, args: &Args, index: usize, name: &str) -> Result<String, Flow> {
+fn date_time_string(lua: &Lua, engine: &Engine, args: &Args, index: usize, name: Option<&str>) -> Result<String, Flow> {
+    let to = name.map(|n| format!(" to '{n}'")).unwrap_or_default();
     if index >= args.len() {
-        return raise_at_caller(format!("missing argument #{} to '{name}' (string expected)", index + 1));
+        return raise_at_caller(format!("missing argument #{}{to} (string expected)", index + 1));
     }
     let value = args.get(index);
     let text = match value {
@@ -1837,7 +1983,7 @@ fn date_time_string(lua: &Lua, engine: &Engine, args: &Args, index: usize, name:
     match text {
         Some(text) => Ok(text.to_string_lossy()),
         None => raise_at_caller(format!(
-            "invalid argument #{} to '{name}' (string expected, got {})",
+            "invalid argument #{}{to} (string expected, got {})",
             index + 1,
             super::typeof_value(engine, value)
         )),
@@ -2007,46 +2153,50 @@ fn make_date_time(lua: &Lua, millis: f64) -> LuaResult<LuaValue> {
 
 fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let methods = lua.create_table()?;
+    let calls = lua.create_table()?;
     let this_millis = |args: &Args| date_time_self_cast(args.get(0));
-    methods.set(
-        "ToUniversalTime",
-        wrapped(lua, engine, move |lua, args| {
-            Ok(values([LuaValue::Table(parts_table(lua, &universal_parts(this_millis(&Args::new(args))?))?)]))
-        })?,
-    )?;
-    methods.set(
-        "ToLocalTime",
-        wrapped(lua, engine, move |lua, args| {
-            Ok(values([LuaValue::Table(parts_table(lua, &local_parts(this_millis(&Args::new(args))?))?)]))
-        })?,
-    )?;
-    methods.set(
-        "ToIsoDate",
-        wrapped(lua, engine, move |lua, args| {
-            Ok(values([LuaValue::String(lua.create_string(iso_date(this_millis(&Args::new(args))?))?)]))
-        })?,
-    )?;
-    // The locale must be a string; other locales than en-us are not emulated (Studio 0.744 formats `LL` in en-gb as
-    // "14 November 2023"; an unknown locale or "" is en-us)
-    // (self as the client's Luau checks it, from the calling line: `missing argument #1 to 'FormatUniversalTime' (DateTime
-    // expected)`, `invalid argument #1 to ... (DateTime expected, got number)`; Studio 0.747, datatype_errors.luau)
-    let format = |name: &'static str, parts: fn(f64) -> Parts, engine: Rc<Engine>| {
+    let add_cast = |name: &'static str, f: fn(&Lua, f64) -> Ret| -> LuaResult<()> {
+        methods.set(
+            name,
+            wrapped(lua, engine, move |lua, args| f(lua, this_millis(&Args::new(args))?))?,
+        )?;
+        calls.raw_set(
+            name,
+            lua.create_function(move |lua, args: LuaMultiValue| {
+                super::encode(lua, this_millis(&Args::new(args)).and_then(|millis| f(lua, millis)))
+            })?,
+        )?;
+        Ok(())
+    };
+    add_cast("ToUniversalTime", |lua, millis| Ok(values([LuaValue::Table(parts_table(lua, &universal_parts(millis))?)])))?;
+    add_cast("ToLocalTime", |lua, millis| Ok(values([LuaValue::Table(parts_table(lua, &local_parts(millis))?)])))?;
+    add_cast("ToIsoDate", |lua, millis| Ok(values([LuaValue::String(lua.create_string(iso_date(millis))?)])))?;
+    // A `.` call names the method (`to 'FormatUniversalTime'`), a `:` namecall omits it (Studio 0.747,
+    // tools/parity/probes/datatype_errors.luau).
+    let format = |name: Option<&'static str>, parts: fn(f64) -> Parts, engine: Rc<Engine>| {
         move |lua: &Lua, args: LuaMultiValue| -> Ret {
             let args = Args::new(args);
+            let to = name.map(|n| format!(" to '{n}'")).unwrap_or_default();
             let millis = match date_time_of(args.get(0)) {
                 Some(millis) => millis,
-                None if args.is_empty() => return raise_at_caller(format!("missing argument #1 to '{name}' (DateTime expected)")),
+                None if args.is_empty() => return raise_at_caller(format!("missing argument #1{to} (DateTime expected)")),
                 None => {
-                    return raise_at_caller(format!("invalid argument #1 to '{name}' (DateTime expected, got {})", super::typeof_value(&engine, args.get(0))));
+                    return raise_at_caller(format!(
+                        "invalid argument #1{to} (DateTime expected, got {})",
+                        super::typeof_value(&engine, args.get(0))
+                    ));
                 }
             };
             let format = date_time_string(lua, &engine, &args, 1, name)?;
-            date_time_string(lua, &engine, &args, 2, name)?;
-            Ok(values([LuaValue::String(lua.create_string(format_parts(&parts(millis), &format))?)]))
+            let locale = date_time_string(lua, &engine, &args, 2, name)?;
+            Ok(values([LuaValue::String(lua.create_string(format_parts(&parts(millis), &format, &locale))?)]))
         }
     };
-    methods.set("FormatUniversalTime", wrapped(lua, engine, format("FormatUniversalTime", universal_parts, engine.clone()))?)?;
-    methods.set("FormatLocalTime", wrapped(lua, engine, format("FormatLocalTime", local_parts, engine.clone()))?)?;
+    for (name, parts) in [("FormatUniversalTime", universal_parts as fn(f64) -> Parts), ("FormatLocalTime", local_parts as fn(f64) -> Parts)] {
+        methods.set(name, wrapped(lua, engine, format(Some(name), parts, engine.clone()))?)?;
+        let call = format(None, parts, engine.clone());
+        calls.raw_set(name, lua.create_function(move |lua, args: LuaMultiValue| super::encode(lua, call(lua, args)))?)?;
+    }
     let e = engine.clone();
     let index = wrapped(lua, engine, move |_, args| {
         let args = Args::new(args);
@@ -2089,6 +2239,7 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
     if let LuaValue::UserData(sample) = make_date_time(lua, 0.0)? {
         lock_metatable(lua, &sample)?;
+        super::raw::set_table_namecall(lua, &sample, calls, "DateTime", lua.create_table()?)?;
     }
 
     let standard_offset_millis = scheduler::standard_offset_min_seconds() * 1000.0;
@@ -2145,7 +2296,7 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             if args.is_empty() {
                 return Ok(values([LuaValue::Nil]));
             }
-            let text = date_time_string(lua, &e, &args, 0, "fromIsoDate")?;
+            let text = date_time_string(lua, &e, &args, 0, Some("fromIsoDate"))?;
             Ok(values([match parse_iso_date(&text) {
                 Some(millis) => make_date_time(lua, millis)?,
                 None => LuaValue::Nil,
@@ -2248,6 +2399,6 @@ mod tests {
         assert_eq!(civil_from_days(days), (2026.0, 9.0, 21.0));
         assert_eq!(iso_date(1767225600000.0), "2026-01-01T00:00:00Z");
         let parts = universal_parts(1767225600000.0 + 13.0 * 3600000.0 + 5.0 * 60000.0);
-        assert_eq!(format_parts(&parts, "LLLL"), "Thursday, January 1, 2026 1:05 PM");
+        assert_eq!(format_parts(&parts, "LLLL", "en-us"), "Thursday, January 1, 2026 1:05 PM");
     }
 }

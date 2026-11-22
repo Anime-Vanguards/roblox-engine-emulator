@@ -296,6 +296,31 @@ pub(crate) fn stack_frames(trace: &str) -> Vec<String> {
     frames
 }
 
+/// The frames of a Luau traceback formatted for `ScriptContext.Error`'s second argument (`<chunk>, line <n>[ - function <name>]\n`,
+/// empty string when there are no script frames: measured in Studio 0.747, tools/parity/probes/logservice_text.luau).
+pub(crate) fn script_error_trace(trace: &str) -> String {
+    let mut out = String::new();
+    for line in trace.lines() {
+        let (place, function) = match line.split_once(" function ") {
+            Some((place, function)) => (place, Some(function)),
+            None => (line, None),
+        };
+        let Some((chunk, number)) = place.rsplit_once(':') else { continue };
+        if chunk.starts_with("rur.") || chunk.starts_with('[') || number.parse::<u32>().is_err() {
+            continue;
+        }
+        match function {
+            Some(function) => {
+                out.push_str(&format!("{chunk}, line {number} - function {function}\n"));
+            }
+            None => {
+                out.push_str(&format!("{chunk}, line {number}\n"));
+            }
+        }
+    }
+    out
+}
+
 /// An output line LogService.MessageOut has yet to get ([`scheduler::deliver_log`]): its kind (print, info, warn, error), its
 /// text, and the converted context a LogService method gave (MessageOut's third argument; a line without one gets an empty table).
 pub struct LogLine {
@@ -655,6 +680,10 @@ pub struct Hooks {
     pub property_unchanged: Vec<Box<dyn Fn(&mut State, InstanceId, NameId)>>,
     /// A script's SetAttribute changed an attribute (set, changed or removed): (instance, attribute name)
     pub attribute_changed: Vec<Box<dyn Fn(&mut State, InstanceId, &str)>>,
+    /// Fired after an instance is attached to `new_parent` and `DescendantAdded` is queued, right before `ChildAdded`
+    /// (used by Players so team assignment and `PlayerAdded` precede `ChildAdded`, matching Roblox): (instance, old parent, new parent)
+    pub before_child_added:
+        Vec<Box<dyn Fn(&mut State, &Hooks, InstanceId, Option<InstanceId>, InstanceId)>>,
     /// An instance's parent changed: (instance, old parent, new parent)
     pub hierarchy_changed:
         Vec<Box<dyn Fn(&mut State, InstanceId, Option<InstanceId>, Option<InstanceId>)>>,
@@ -710,6 +739,8 @@ pub struct Engine {
     pub(crate) loopback: RefCell<Option<Rc<loopback::Endpoint>>>,
     /// A loopback run's client: the server it is linked to, stepped with it ([`loopback::step_pair`])
     pub(crate) peer: RefCell<Option<Box<loopback::Link>>>,
+    /// PhysicsService's collision-group registry (replicated in loopback runs)
+    pub(crate) physics: OnceCell<Rc<services::physics::Groups>>,
 }
 
 impl Engine {
@@ -755,6 +786,7 @@ impl Engine {
             world: Cell::new(None),
             loopback: RefCell::new(None),
             peer: RefCell::new(None),
+            physics: OnceCell::new(),
         }))
     }
 
@@ -837,9 +869,26 @@ impl Engine {
     /// Output.Add with the virtual clock, and the line for LogService.MessageOut, with `context` (a LogService method's converted
     /// context table) as its third argument. Kinds: print, info (MessageInfo: LogService:Info), warn, error.
     pub fn output_with_context(&self, kind: &'static str, message: impl Into<String>, trace: Option<String>, context: Option<Value>) {
+        self.output_full(kind, message.into(), trace, context, None, kind == "error");
+    }
+
+    /// An uncaught script error from the scheduler: logs to output and MessageOut, and when `fire_script_context` is true
+    /// (string/number errors, not plain table/nil throws) fires `ScriptContext.Error` with the originating script.
+    pub fn output_error_with_script(&self, message: String, trace: Option<String>, script: Option<InstanceId>, fire_script_context: bool) {
+        self.output_full("error", message, trace, None, script, fire_script_context);
+    }
+
+    fn output_full(
+        &self,
+        kind: &'static str,
+        message: String,
+        trace: Option<String>,
+        context: Option<Value>,
+        script: Option<InstanceId>,
+        fire_script_context: bool,
+    ) {
         let mut state = self.state.borrow_mut();
         let now = state.sched.now;
-        let message = message.into();
         let text = match &trace {
             Some(trace) if kind == "error" || kind == "warn" => client_error_text(&message, trace),
             _ => message.clone(),
@@ -851,9 +900,8 @@ impl Engine {
             }
             state.log_history.push_back(LogEntry { kind, text: text.clone(), timestamp });
         }
-        let server = self.options.server();
-        if server && kind == "error" {
-            self.fire_script_error(&mut state, &message, trace.as_deref());
+        if !self.options.edit_mode() && fire_script_context {
+            self.fire_script_error(&mut state, &message, trace.as_deref(), script);
         }
         if !self.options.edit_mode() && !state.sched.delivering_log {
             // LogService.MessageOut gets the line later in the frame, on a playing client and on a server alike
@@ -871,27 +919,31 @@ impl Engine {
     /// when it was called, so the thread's end logs no error line of its own but the stack, each line apart as MessageInfo:
     /// "Stack Begin", a `Script '<chunk>', Line <n>` line per frame, "Stack End". Measured in a playing client (Studio 0.744):
     /// so for a spawned thread, a deferred one, an event handler and a caught table thrown again; ScriptContext.Error gets the
-    /// error's text as for any error (fired where ree fires it: a server's).
-    pub fn uncaught_log_error(&self, message: &str, trace: Option<String>) {
+    /// error's text as for any error.
+    pub fn uncaught_log_error(&self, message: &str, trace: Option<String>, script: Option<InstanceId>) {
         self.output("info", "Stack Begin", None);
         for frame in trace.as_deref().map(stack_frames).unwrap_or_default() {
             self.output("info", frame, None);
         }
         self.output("info", "Stack End", None);
-        if self.options.server() {
-            self.fire_script_error(&mut self.state.borrow_mut(), message, trace.as_deref());
+        if !self.options.edit_mode() {
+            self.fire_script_error(&mut self.state.borrow_mut(), message, trace.as_deref(), script);
         }
     }
 
-    /// A server's ScriptContext.Error (message, stackTrace, script) for a script error, as Roblox's documentation describes it
-    /// (deferred handlers; the script argument is nil: the engine does not track which script a thread belongs to). Only when
-    /// the service was made and the event connected.
-    fn fire_script_error(&self, state: &mut State, message: &str, trace: Option<&str>) {
+    /// ScriptContext.Error (message, stackTrace, script) for a script error, on both playing clients and servers
+    /// (measured in Studio 0.747, tools/parity/probes/logservice.luau & logservice_text.luau). Only when the service
+    /// was made and the event connected.
+    fn fire_script_error(&self, state: &mut State, message: &str, trace: Option<&str>, script: Option<InstanceId>) {
         let Some(world) = self.world.get() else { return };
         let reflection = &self.reflection;
         let found = state.dom.at(world.game).children.iter().copied().find(|&child| &*reflection.class(state.dom.at(child).class).name == "ScriptContext");
         if let (Some(context), Some(event)) = (found, reflection.name_id("Error")) {
-            instance::fire_event(state, context, event, vec![Value::String(Str::from(message)), Value::String(Str::from(trace.unwrap_or_default())), Value::Nil]);
+            let formatted_trace = trace.map(script_error_trace).unwrap_or_default();
+            let script_value = script
+                .filter(|&id| state.dom.get(id).is_some())
+                .map_or(Value::Nil, Value::Instance);
+            instance::fire_event(state, context, event, vec![Value::String(Str::from(message)), Value::String(Str::from(formatted_trace)), script_value]);
         }
     }
 

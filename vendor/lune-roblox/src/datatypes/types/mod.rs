@@ -63,10 +63,22 @@ pub use vector3int16::Vector3int16;
 pub fn format_g(value: f64, precision: usize) -> String {
     let precision = precision.max(1);
     if value.is_nan() {
-        return if value.is_sign_negative() { "-nan".into() } else { "nan".into() };
+        return if precision >= 9 {
+            "NAN".into()
+        } else if value.is_sign_negative() {
+            "-nan".into()
+        } else {
+            "nan".into()
+        };
     }
     if value.is_infinite() {
-        return if value < 0.0 { "-inf".into() } else { "inf".into() };
+        return if precision >= 9 {
+            if value < 0.0 { "-INF".into() } else { "INF".into() }
+        } else if value < 0.0 {
+            "-inf".into()
+        } else {
+            "inf".into()
+        };
     }
     if value == 0.0 {
         return if value.is_sign_negative() { "-0".into() } else { "0".into() };

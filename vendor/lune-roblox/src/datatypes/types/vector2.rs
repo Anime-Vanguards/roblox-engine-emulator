@@ -11,8 +11,8 @@ use crate::exports::LuaExportsTable;
 
 use super::{super::*, charge_host_nanos, datatype_price as price};
 use crate::datatypes::script_error::{
-    incompatible, invalid_argument, luau_arg, luau_number, luau_self, reflected_arg, reflected_float_arg, same_operands,
-    script_error, userdata_of,
+    incompatible, invalid_method_arg, luau_arg_named, luau_number, luau_self, reflected_arg,
+    reflected_float_arg, same_operands, script_error, userdata_of, MethodMembers,
 };
 
 /**
@@ -51,8 +51,10 @@ impl LuaUserData for Vector2 {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Vector2"));
-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Vector2"));
+        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
+        let members = MethodMembers::new("Vector2");
+        fields.add_meta_field("__index", members.index());
+        fields.add_meta_field("__namecall", members.namecall());
         fields.add_field_method_get("Magnitude", magnitude);
         fields.add_field_method_get("Unit", unit);
         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
@@ -84,11 +86,11 @@ impl LuaUserData for Vector2 {
                 return Err(script_error(format!("Invalid number of arguments: {}, Vector2.Angle expects 2 or 3.", args.len()), false));
             }
             let this = luau_self::<Vector2>(&args, "Angle", "Vector2")?;
-            let rhs = luau_arg::<Vector2>(&args, 2, "Vector2")?;
+            let rhs = luau_arg_named::<Vector2>(&args, 2, "Angle", "Vector2")?;
             let signed = match args.get(2) {
                 None => false,
                 Some(LuaValue::Boolean(signed)) => *signed,
-                Some(other) => return Err(invalid_argument(3, None, "boolean", other)),
+                Some(other) => return Err(invalid_method_arg(3, "Angle", "boolean", other)),
             };
             let (a, b) = (this.0, rhs.0);
             let angle = (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y);
@@ -112,10 +114,10 @@ impl LuaUserData for Vector2 {
                 return Err(script_error(format!("Invalid number of arguments: {}, Vector2.FuzzyEq expects 2 or 3.", args.len()), false));
             }
             let this = luau_self::<Vector2>(&args, "FuzzyEq", "Vector2")?;
-            let rhs = luau_arg::<Vector2>(&args, 2, "Vector2")?;
+            let rhs = luau_arg_named::<Vector2>(&args, 2, "FuzzyEq", "Vector2")?;
             let epsilon = match args.get(2) {
                 None => 1e-5f32,
-                Some(value) => luau_number(lua, value).ok_or_else(|| invalid_argument(3, None, "number", value))? as f32,
+                Some(value) => luau_number(lua, value).ok_or_else(|| invalid_method_arg(3, "FuzzyEq", "number", value))? as f32,
             };
             if epsilon.abs() > 0.1 {
                 return Err(script_error("The eps value provided to FuzzyEq should be a small positive value <= 0.1", false));
@@ -142,7 +144,7 @@ impl LuaUserData for Vector2 {
             methods.add_function(name, move |_, args: LuaMultiValue| {
                 let mut result = luau_self::<Vector2>(&args, name, "Vector2")?.0;
                 for index in 2..=args.len() {
-                    result = op(result, luau_arg::<Vector2>(&args, index, "Vector2")?.0);
+                    result = op(result, luau_arg_named::<Vector2>(&args, index, name, "Vector2")?.0);
                 }
                 Ok(Vector2(result))
             });

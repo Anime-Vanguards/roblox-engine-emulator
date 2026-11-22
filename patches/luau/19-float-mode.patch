@@ -395,10 +395,10 @@ index 68c7753..b0389b2 100644
      g->profilecalls = 0;
      g->coldslot = 0;
 diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
-index 10187c7..82dce7d 100644
+index e7fc01e..89a9938 100644
 --- a/luau/VM/src/lstate.h
 +++ b/luau/VM/src/lstate.h
-@@ -310,6 +310,11 @@ typedef struct global_State
+@@ -311,6 +311,11 @@ typedef struct global_State
  
      struct LuaTable* typeofnames; // a host's names for its values, for the builtin typeof (lua_settypeofnames; NULL: none)
      TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
@@ -411,10 +411,10 @@ index 10187c7..82dce7d 100644
  // clang-format on
  
 diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
-index 00817cd..e21a73f 100644
+index 7eb2693..aebf536 100644
 --- a/luau/VM/src/lvmexecute.cpp
 +++ b/luau/VM/src/lvmexecute.cpp
-@@ -4134,6 +4134,7 @@ void luaP_executeprofiled(lua_State* L)
+@@ -4138,6 +4138,7 @@ void luaP_executeprofiled(lua_State* L)
  #else
  void luau_execute(lua_State* L)
  {

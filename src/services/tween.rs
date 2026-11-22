@@ -370,8 +370,9 @@ fn create(lua: &Lua, engine: &Rc<Engine>, tweens: &Shared, args: &super::Args) -
         let goal_type = typeof_value(engine, &goal);
         if goal_type != &*info.script_type_name {
             return raise_plain(format!(
-                "TweenService:Create property named '{key_text}' cannot be tweened due to type mismatch (property is a '{}', but given type is '{goal_type}')",
-                info.engine_type_name
+                "TweenService:Create property named '{key_text}' cannot be tweened due to type mismatch (property is a '{}', but given type is '{}')",
+                info.engine_type_name,
+                cast_name(engine, &goal)
             ));
         }
         let number = match (&*info.engine_type_name, info.engine_type) {

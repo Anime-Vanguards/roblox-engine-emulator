@@ -109,32 +109,77 @@ local function TypeName(Value)
 	return if type(Value) == "vector" then "Vector3" else NativeTypeof(Value)
 end
 
--- (the message for argument Index when it is no Vector3; the method raises it at level 2, which no inlining moves)
-local function VectorProblem(Value, Index, Count, Method)
+-- (the message for argument Index when it is no Vector3; the method raises it at level 2 for `.` and level 3 past
+-- `__namecall` for `:`)
+local function VectorProblem(Value, Index, Count, Method, Dotted)
 	if type(Value) == "vector" then
 		return nil
 	end
-	local To = if Index == 1 then ` to '{Method}'` else ""
+	local To = if Index == 1 or Dotted then ` to '{Method}'` else ""
 	if Index > Count then
 		return `missing argument #{Index}{To} (Vector3 expected)`
 	end
 	return `invalid argument #{Index}{To} (Vector3 expected, got {TypeName(Value)})`
 end
 
-local function Lerp(...)
-	local Count = select("#", ...)
-	local Self, Goal, Alpha = ...
-	local Problem = VectorProblem(Self, 1, Count, "Lerp") or VectorProblem(Goal, 2, Count, "Lerp")
-	if Problem then
-		error(Problem, 2)
+local function MakeLerp(Dotted)
+	local Level = if Dotted then 2 else 3
+	local To3 = if Dotted then " to 'Lerp'" else ""
+	return function(...)
+		local Count = select("#", ...)
+		local Self, Goal, Alpha = ...
+		local Problem = VectorProblem(Self, 1, Count, "Lerp", Dotted) or VectorProblem(Goal, 2, Count, "Lerp", Dotted)
+		if Problem then
+			error(Problem, Level)
+		end
+		local Number = if type(Alpha) == "number" then Alpha elseif type(Alpha) == "string" then tonumber(Alpha) else nil
+		if Number == nil then
+			error(if Count < 3 then `missing argument #3{To3} (number expected)` else `invalid argument #3{To3} (number expected, got {TypeName(Alpha)})`, Level)
+		end
+		Charge(LerpCost)
+		return Self + (Goal - Self) * Number
 	end
-	local Number = if type(Alpha) == "number" then Alpha elseif type(Alpha) == "string" then tonumber(Alpha) else nil
-	if Number == nil then
-		error(if Count < 3 then "missing argument #3 (number expected)" else `invalid argument #3 (number expected, got {TypeName(Alpha)})`, 2)
-	end
-	Charge(LerpCost)
-	return Self + (Goal - Self) * Number
 end
+
+local function MakeFuzzyEq(Dotted)
+	local Level = if Dotted then 2 else 3
+	return function(...)
+		local Count = select("#", ...)
+		local Self, Other, Epsilon = ...
+		local Problem = VectorProblem(Self, 1, Count, "FuzzyEq", Dotted) or VectorProblem(Other, 2, Count, "FuzzyEq", Dotted)
+		if Problem then
+			error(Problem, Level)
+		end
+		Charge(FuzzyEqCost)
+		local Difference = vector.abs(Self - Other)
+		local Limit = (if type(Epsilon) == "number" or type(Epsilon) == "string" then tonumber(Epsilon) else nil) or 1e-5
+		return Difference.x <= Limit and Difference.y <= Limit and Difference.z <= Limit
+	end
+end
+
+local function MakeAngle(Dotted)
+	local Level = if Dotted then 2 else 3
+	return function(...)
+		local Count = select("#", ...)
+		local Self, Other, Axis = ...
+		if Count < 2 then
+			error(`Invalid number of arguments: {Count}, Vector3.Angle expect 2 or 3`, 0)
+		end
+		local Problem = VectorProblem(Self, 1, Count, "Angle", Dotted) or VectorProblem(Other, 2, Count, "Angle", Dotted)
+			or (if Count >= 3 then VectorProblem(Axis, 3, Count, "Angle", Dotted) else nil)
+		if Problem then
+			error(Problem, Level)
+		end
+		local Normal = Cross(Self, Other)
+		local Angle = Atan2f(Magnitude(Normal), Dot(Self, Other)) -- atan2f in floats, as a playing client (cframe_order probe)
+		if Axis ~= nil and Dot(Normal, Axis) < 0 then
+			return -Angle
+		end
+		return Angle
+	end
+end
+
+local LerpDot, LerpColon = MakeLerp(true), MakeLerp(false)
 
 -- Abs, Ceil, Floor, Sign, Dot, Cross, Max and Min are the `vector` library's functions behind C functions of their own
 -- names that check the arguments first (lua/vector_methods.rs)
@@ -149,41 +194,15 @@ local VectorMethods = {
 	Sign = Native.Sign,
 	Max = Native.Max,
 	Min = Native.Min,
-	Lerp = Lerp,
-	lerp = Lerp,
-	-- (an eps that is no number reads as the default, measured only between equal vectors)
-	FuzzyEq = function(...)
-		local Count = select("#", ...)
-		local Self, Other, Epsilon = ...
-		local Problem = VectorProblem(Self, 1, Count, "FuzzyEq") or VectorProblem(Other, 2, Count, "FuzzyEq")
-		if Problem then
-			error(Problem, 2)
-		end
-		Charge(FuzzyEqCost)
-		local Difference = vector.abs(Self - Other)
-		local Limit = (if type(Epsilon) == "number" or type(Epsilon) == "string" then tonumber(Epsilon) else nil) or 1e-5
-		return Difference.x <= Limit and Difference.y <= Limit and Difference.z <= Limit
-	end,
-	-- (fewer than two arguments is the client's count error, without a position: "expect", without a full stop; an axis
-	-- passed, nil included, must be a Vector3)
-	Angle = function(...)
-		local Count = select("#", ...)
-		local Self, Other, Axis = ...
-		if Count < 2 then
-			error(`Invalid number of arguments: {Count}, Vector3.Angle expect 2 or 3`, 0)
-		end
-		local Problem = VectorProblem(Self, 1, Count, "Angle") or VectorProblem(Other, 2, Count, "Angle")
-			or (if Count >= 3 then VectorProblem(Axis, 3, Count, "Angle") else nil)
-		if Problem then
-			error(Problem, 2)
-		end
-		local Normal = Cross(Self, Other)
-		local Angle = Atan2f(Magnitude(Normal), Dot(Self, Other)) -- atan2f in floats, as a playing client (cframe_order probe)
-		if Axis ~= nil and Dot(Normal, Axis) < 0 then
-			return -Angle
-		end
-		return Angle
-	end,
+	Lerp = Native.Lerp,
+	lerp = Native.Lerp,
+	FuzzyEq = MakeFuzzyEq(true),
+	Angle = MakeAngle(true),
+}
+
+local ColonExtras = {
+	FuzzyEq = MakeFuzzyEq(false),
+	Angle = MakeAngle(false),
 }
 
 -- The VM answers a vector's own members: x / y / z in either case (a key the compiler could not fold, `v[axis]`,
@@ -201,6 +220,7 @@ R.SetVectorMetatable({
 			error(`{Key} is not a valid member of Vector3`, 0)
 		end,
 	}),
+	__namecall = R.MakeVectorNamecall(ColonExtras),
 	-- an assignment raises Studio's "X cannot be assigned to" for any string or number key (a vector is a value), any other
 	-- key the client's Luau check from the calling line (Studio 0.747, tools/parity/probes/datatype_errors.luau)
 	__newindex = function(_, Key)
@@ -240,9 +260,8 @@ local function ConvertMetatable(Sample, Aliases)
 	end
 end
 
-local Zero = LuneVector3New(0, 0, 0)
-ConvertMetatable(Datatypes.Ray.new(Zero, Zero))
-ConvertMetatable(Datatypes.Region3.new(Zero, Zero))
+-- Lune's CFrame / Ray / Region3 all take and return native vectors directly (vendor patch: VectorArg, native_vector)
+local VectorLibraries = {}
 
 -- The script library's own members (the prelude's ScriptLibrary takes these before Lune's)
 local Library = {
@@ -316,8 +335,5 @@ end
 
 Library.fromNormalId = Library.FromNormalId
 Library.fromAxis = Library.FromAxis
-
--- Lune libraries whose functions take or return Vector3 values (the Vector3 library is native)
-local VectorLibraries = { Ray = true, Region3 = true }
 
 return ToLune, ToNative, In, Out, VectorLibraries, Library

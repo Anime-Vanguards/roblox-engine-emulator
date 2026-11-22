@@ -218,6 +218,45 @@ pub unsafe fn script_position_on(state: *mut mlua::ffi::lua_State) -> Option<Str
     None
 }
 
+/// The innermost script `Instance` on `state`'s call stack (read from each non-engine Luau frame's `fenv.script`),
+/// for `ScriptContext.Error`'s third argument.
+///
+/// # Safety
+/// `state` must be a live thread of the running VM.
+pub unsafe fn script_of_thread(state: *mut mlua::ffi::lua_State) -> Option<InstanceId> {
+    use mlua::ffi;
+    unsafe {
+        let mut debug: ffi::lua_Debug = std::mem::zeroed();
+        let mut level = 0;
+        while level < 128 && ffi::lua_getinfo(state, level, c"slf".as_ptr(), &mut debug) != 0 {
+            level += 1;
+            let is_script = debug.currentline >= 0
+                && !debug.source.is_null()
+                && {
+                    let source = std::ffi::CStr::from_ptr(debug.source).to_string_lossy();
+                    let chunk = source.strip_prefix('=').or_else(|| source.strip_prefix('@')).unwrap_or(&source);
+                    chunk != "[C]" && !chunk.starts_with("rur.") && !chunk.starts_with("ree.")
+                };
+            if is_script {
+                ffi::lua_getfenv(state, -1);
+                if ffi::lua_type(state, -1) == ffi::LUA_TTABLE {
+                    ffi::lua_getfield(state, -1, c"script".as_ptr());
+                    let found = raw::stack_instance(state, -1);
+                    ffi::lua_pop(state, 3); // script, env, func
+                    if found.is_some() {
+                        return found;
+                    }
+                    continue;
+                }
+                ffi::lua_pop(state, 2); // env, func
+                continue;
+            }
+            ffi::lua_pop(state, 1); // func
+        }
+    }
+    None
+}
+
 /// typeof as scripts see it (registered table types, Vector3 for native vectors).
 pub fn typeof_value(engine: &Engine, value: &LuaValue) -> String {
     match value {

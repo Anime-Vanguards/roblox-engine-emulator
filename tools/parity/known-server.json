@@ -1,16 +1,4 @@
 {
-	"aliases": [
-		{
-			"line": "method-model | ok false | ok false",
-			"why": "Model:MoveTo itself: a client leaves a model outside the DataModel where it is (the exact name too); ree moves it"
-		}
-	],
-	"buffer_vector_time": [
-		{
-			"line": "DateTime-locales ok mardi 14 novembre 2023 22:13 | 2023年11月14日 火曜日 22:13 | 14. Nov. 2023 22:13",
-			"why": "DateTime formats only in en-us: other locales (en-gb, fr, ja, de) are not emulated"
-		}
-	],
 	"camera_cutoff": [
 		{
 			"line": "cut new, at the Heartbeat true 14.000",
@@ -21,16 +9,6 @@
 		{
 			"line": "PanUnits 28 5 0 nil 58.502 -4.399",
 			"why": "PanUnits' float steps are not all a client's (its angles within about 1e-6): this position falls on the other side of a third decimal"
-		}
-	],
-	"cframe_angle_between": [
-		{
-			"line": "args dot other error @92: invalid argument #2 to 'AngleBetween' (CFrame expected, got string)",
-			"why": "a '.' call names the method in argument #2's error ('to 'AngleBetween''), a ':' call does not; ree's AngleBetween is a C function found through __index (CFrame has no __namecall), which cannot tell the two apart, and gives the ':' call's text, as FuzzyEq does"
-		},
-		{
-			"line": "args stored error @96: invalid argument #2 to 'AngleBetween' (CFrame expected, got Vector3)",
-			"why": "a '.' call names the method in argument #2's error ('to 'AngleBetween''), a ':' call does not; ree's AngleBetween is a C function found through __index (CFrame has no __namecall), which cannot tell the two apart, and gives the ':' call's text, as FuzzyEq does"
 		}
 	],
 	"chunknames": [
@@ -81,22 +59,6 @@
 		{
 			"line": "long trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
 			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "require-broken false Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "require-broken-zero false Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "require-cycle false Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "require-string error error requiring \"ReplicatedStorage.ParityRequires.Two\": require path must start with a valid prefix: ./, ../, or @",
-			"why": "require by a string path: the client's text names the prefixes a path must start with (./, ../, @); ree's differs"
 		}
 	],
 	"core_services": [
@@ -121,242 +83,10 @@
 			"why": "a server has no NetworkClient; ree's probe line is the service it made"
 		}
 	],
-	"datatype_errors": [
-		{
-			"line": "method Vector2:Angle | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector2.Angle | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector2:FuzzyEq | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector2.FuzzyEq | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector2:Max | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector2.Max | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector2:Min | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector2.Min | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3:Angle | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3.Angle | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3:Cross | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3:Dot | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3:FuzzyEq | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3:Lerp | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3.Lerp | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3 self Lerp | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3:Max | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3.Max | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3:Min | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Vector3.Min | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame self Inverse | ",
-			"why": "the identity's inverse: a client's position is 0, 0, 0, ree's -0, -0, -0 (the inverse negates each product)"
-		},
-		{
-			"line": "method CFrame:ToWorldSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame.ToWorldSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame:ToObjectSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame.ToObjectSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame:PointToWorldSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame.PointToWorldSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame self PointToWorldSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame:PointToObjectSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame.PointToObjectSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame self PointToObjectSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame:VectorToWorldSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame.VectorToWorldSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame self VectorToWorldSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame:VectorToObjectSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame.VectorToObjectSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame self VectorToObjectSpace | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame:FuzzyEq | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame.FuzzyEq | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method CFrame:AngleBetween | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Ray:ClosestPoint | ",
-			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
-		},
-		{
-			"line": "method Ray.ClosestPoint | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "method Ray:Distance | ",
-			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
-		},
-		{
-			"line": "method Ray.Distance | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "namecall Ray:ClosestPoint | ",
-			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
-		},
-		{
-			"line": "namecall DateTime:FormatUniversalTime | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "new BrickColor.new | ",
-			"why": "not emulated: BrickColor.new's argument forms (none is Really black, numbers are RGB, a Color3 that is not one raises 'Color3 expected') and PhysicalProperties.new's (a client's count error lists the four ways to call it, a single argument is the default)"
-		},
-		{
-			"line": "new PhysicalProperties.new | ",
-			"why": "not emulated: BrickColor.new's argument forms (none is Really black, numbers are RGB, a Color3 that is not one raises 'Color3 expected') and PhysicalProperties.new's (a client's count error lists the four ways to call it, a single argument is the default)"
-		},
-		{
-			"line": "colon Ray | ",
-			"why": "Ray:ClosestPoint and Distance along a direction that is not unit: ree's float arithmetic (glam's) is a few ulps off a client's"
-		},
-		{
-			"line": "colon DateTime | ",
-			"why": "a `.` call names the method in an argument error after self ('invalid argument #2 to 'Max''), a `:` call does not; a datatype method is found through __index (no __namecall), which cannot tell the two apart, so ree gives the `:` call's text (DateTime's Format methods the `.` call's)"
-		},
-		{
-			"line": "call-property | ",
-			"why": "a client's datatypes with methods answer a `:` call from their methods alone (V2:X() is 'X is not a valid member of Vector2'); ree's have no __namecall, find the property's value and call it"
-		},
-		{
-			"line": "new-more CFrame | ",
-			"why": "a not-a-number CFrame component prints as NAN in a client, -nan in ree (format_g)"
-		}
-	],
-	"datetime": [
-		{
-			"line": "locale-default error invalid argument #3 to 'FormatUniversalTime' (string expected, got nil) | ok 14 November 2023 | ok November 14, 2023 | ok November 14, 2023 | ok 5",
-			"why": "DateTime formats only in en-us: other locales (en-gb, fr, ja, de) are not emulated"
-		}
-	],
 	"errors": [
-		{
-			"line": "error instance-new-number | Unable to create an Instance of type \"5\"",
-			"why": "Instance.new(5): a client names the number in its text; ree's text differs"
-		},
-		{
-			"line": "error enumitem-newindex | Value is not a valid member of EnumItem",
-			"why": "assigning an EnumItem's member: ree's text, not the client's `Value is not a valid member of EnumItem`"
-		},
-		{
-			"line": "error tween-bad-type | TweenService:Create property named 'Size' cannot be tweened due to type mismatch (property is a 'Vector3', but given type is 'double')",
-			"why": "TweenService:Create's type-mismatch text names the property's and the value's types as the client does not here"
-		},
 		{
 			"line": "error require-number | Downloading asset failed for asset id 5.  Is the asset id correct and is the asset type \"Model\"?",
 			"why": "require(assetId) on a server downloads the asset and names it when that fails (Downloading asset failed for asset id 5 ...); ree runs offline and refuses with its own message"
-		},
-		{
-			"line": "collectgarbage ok number | error missing argument #1 to 'collectgarbage' (string expected) | error collectgarbage must be called with 'count'; use gcinfo() instead | error collectgarbage must be called with 'count'; use gcinfo() instead",
-			"why": "collectgarbage's argument checks: the client's texts are not emulated"
 		}
 	],
 	"instances": [
@@ -389,52 +119,30 @@
 			"why": "require: Roblox's is one global function that finds the calling script; ree gives each script a require of its own, so a loaded module's is not the caller's"
 		}
 	],
-	"logservice": [
-		{
-			"line": "spawned-error after-spawn,error(parity-log spawned error;Instance),|Hear,out(MessageError:parity-log spawned error +2 lines)",
-			"why": "ScriptContext.Error: a server passes the erroring script as the third argument; ree passes nil"
-		},
-		{
-			"line": "index-error error(@103: attempt to index nil with 'parity-log field';Instance),|Hear,out(MessageError:@103: attempt to index nil with 'parity-log field' +3 lines)",
-			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
-		},
-		{
-			"line": "table-error |Hear,out(MessageError:Error occurred, no output from Luau. +3 lines)",
-			"why": "an error whose value is a table: a client logs `Error occurred, no output from Luau.` with the stack; ree logs the value's text"
-		},
-		{
-			"line": "handler-error after-fire,|Hear,error(@115: parity-log handler error;Instance),out(MessageError:@115: parity-log handler error +3 lines)",
-			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
-		},
-		{
-			"line": "deferred-error |Hear,error(parity-log deferred error;Instance),out(MessageError:parity-log deferred error +2 lines)",
-			"why": "ScriptContext.Error: a server passes the erroring script as the third argument; ree passes nil"
-		}
-	],
 	"logservice_text": [
 		{
 			"line": "nested-functions out MessageError[@41: parity-text named /     Stack Begin /     Script '<probe>', Line @41 - function Named /     Script '<probe>', Line @44 - function Outer /     Stack End] trace [ServerScriptService.ParityProbe, line 241 - function Named / ServerScriptService.ParityProbe, line 244 - function Outer / ]",
-			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
+			"why": "the ScriptContext.Error trace records each harness's chunk name and raw line numbers (probe only normalizes MessageOut, not trace)"
 		},
 		{
 			"line": "level0 out MessageError[parity-text level0 /     Stack Begin /     Script '<probe>', Line @51 /     Stack End] trace [ServerScriptService.ParityProbe, line 251 / ]",
-			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
+			"why": "the ScriptContext.Error trace records each harness's chunk name and raw line numbers (probe only normalizes MessageOut, not trace)"
 		},
 		{
 			"line": "level2 out MessageError[@58: parity-text level2 /     Stack Begin /     Script '<probe>', Line @56 - function Inner /     Script '<probe>', Line @58 /     Stack End] trace [ServerScriptService.ParityProbe, line 256 - function Inner / ServerScriptService.ParityProbe, line 258 / ]",
-			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
+			"why": "the ScriptContext.Error trace records each harness's chunk name and raw line numbers (probe only normalizes MessageOut, not trace)"
 		},
 		{
 			"line": "index out MessageError[@63: attempt to index nil with 'parity-text field' /     Stack Begin /     Script '<probe>', Line @63 /     Stack End] trace [ServerScriptService.ParityProbe, line 263 / ]",
-			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
+			"why": "the ScriptContext.Error trace records each harness's chunk name and raw line numbers (probe only normalizes MessageOut, not trace)"
 		},
 		{
 			"line": "handler out MessageError[@68: parity-text handler /     Stack Begin /     Script '<probe>', Line @68 /     Stack End] trace [ServerScriptService.ParityProbe, line 268 / ]",
-			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
+			"why": "the ScriptContext.Error trace records each harness's chunk name and raw line numbers (probe only normalizes MessageOut, not trace)"
 		},
 		{
 			"line": "deferred out MessageError[@73: parity-text deferred /     Stack Begin /     Script '<probe>', Line @73 /     Stack End] trace [ServerScriptService.ParityProbe, line 273 / ]",
-			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
+			"why": "the ScriptContext.Error trace records each harness's chunk name and raw line numbers (probe only normalizes MessageOut, not trace)"
 		}
 	],
 	"reflection": [
@@ -444,42 +152,6 @@
 		}
 	],
 	"require_errors": [
-		{
-			"line": "pcall-broken error Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "pcall-broken-log MessageError:ReplicatedStorage.ParityRequireLog.Broken:2: parity-req failed",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "pcall-table error Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "pcall-index error Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "pcall-index-log MessageError:ReplicatedStorage.ParityRequireLog.Indexer:2: attempt to index nil with 'parity-req index'",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "pcall-cycle error Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "pcall-cycle-log MessageError:Requested module was required recursively",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "spawned-log MessageError:ReplicatedStorage.ParityRequireLog.Spawned:1: parity-req spawned | MessageError:Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
-		{
-			"line": "pcall-outer-log MessageError:Requested module experienced an error while loading",
-			"why": "require of a module that errored or required itself: a client raises `Requested module experienced an error while loading` and logs the module's own error once (or `Requested module was required recursively`); ree raises the module's own error"
-		},
 		{
 			"line": "shared-after ReplicatedStorage.ParityRequireLog.Second | ReplicatedStorage.ParityRequireLog.Second",
 			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
@@ -518,13 +190,7 @@
 	"tween": [
 		{
 			"line": "tween-errors error TweenService:Create property named 'Value' cannot be tweened due to type mismatch (property is a 'double', but given type is 'string') | ok Tween | ok Tween",
-			"why": "TweenService:Create's type-mismatch text names the property's and the value's types as the client does not here"
-		}
-	],
-	"tween_color": [
-		{
-			"line": "class Part.Color floor(lin),floor(lin),floor(lin)",
-			"why": "a part keeps its Color in whole 1/255 steps (a client reads the tween's blend cut down, floor, to one); ree's BasePart.Color holds the float32 the write gave. The blend itself is the same (every other class's line)"
+			"why": "TweenService:Create with a string TweenInfo or nil instance returns a Tween in a client; ree rejects them (its type-mismatch text now matches)"
 		}
 	],
 	"values": [

@@ -893,14 +893,14 @@ do
 	local LunePhysical = Datatypes.PhysicalProperties
 	local LuneMaterials = Roblox.Enum.Material
 	ConstructorOverrides.PhysicalProperties = {
-		new = function(First, ...)
-			if EnumItemType(First) == "Material" then
-				local Name = EnumItemName(First)
-				return PassResults("new", pcall(function()
-					return LunePhysical.new(LuneMaterials[Name])
-				end))
+		new = function(...)
+			local First = ...
+			local Kind = if select("#", ...) == 1 then EnumItemType(First) else nil
+			if Kind ~= nil then
+				if Kind ~= "Material" then error("PhysicalProperties.new with 1 argument expects Enum.Material inputs", 0) end
+				return PassResults("new", pcall(LunePhysical.new, LuneMaterials[EnumItemName(First)]))
 			end
-			return PassResults("new", pcall(LunePhysical.new, First, ...))
+			return PassResults("new", pcall(LunePhysical.new, ...))
 		end,
 	}
 end

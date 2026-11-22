@@ -563,18 +563,9 @@ fn a_server_hears_its_output_through_log_service_and_script_context() {
         let now = engine.state.borrow().sched.now;
         scheduler::run_until(&lua, &engine, now + 0.2).unwrap();
         let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|e| format!("{}: {}", e.kind, e.message)).collect();
-        if run_context == RunContext::Server {
-            // (a server's error has its stack lines too: measured, run.mjs --server's logservice probes)
-            let heard = "print: heard MessageOutput=one 2;MessageWarning=careful;MessageError=boom
-    Stack Begin
-    Script 'Test', Line 11
-    Stack End";
-            assert!(has(&lines, heard), "{lines:?}");
-            assert!(has(&lines, "print: errors boom|true|nil"), "{lines:?}");
-        } else {
-            let heard = "print: heard MessageOutput=one 2;MessageWarning=careful;MessageError=boom\n    Stack Begin\n    Script 'Test', Line 11\n    Stack End";
-            assert!(has(&lines, heard) && has(&lines, "print: errors "), "{lines:?}");
-        }
+        let heard = "print: heard MessageOutput=one 2;MessageWarning=careful;MessageError=boom\n    Stack Begin\n    Script 'Test', Line 11\n    Stack End";
+        assert!(has(&lines, heard), "{run_context:?}: {lines:?}");
+        assert!(has(&lines, "print: errors boom|true|Test"), "{run_context:?}: {lines:?}");
     }
 }
 

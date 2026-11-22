@@ -136,8 +136,15 @@ impl Registry {
     }
 }
 
+/// One DataModel's collision-group registry as replicated from server to client (loopback/bridge.rs).
+#[derive(Clone)]
+pub struct Snapshot {
+    pub names: [Option<Box<[u8]>>; MAX_GROUPS],
+    pub masks: [u32; MAX_GROUPS],
+}
+
 /// What the methods, the part setters and the hierarchy hook share: one engine's registry and the names they use.
-struct Groups {
+pub(crate) struct Groups {
     registry: RefCell<Registry>,
     base_part: ClassId,
     /// BasePart.CollisionGroup and CollisionGroupId
@@ -146,6 +153,31 @@ struct Groups {
 }
 
 impl Groups {
+    fn snapshot(&self) -> Snapshot {
+        let registry = self.registry.borrow();
+        Snapshot { names: registry.names.clone(), masks: registry.masks }
+    }
+
+    fn apply_snapshot(&self, engine: &Engine, snapshot: Snapshot) {
+        {
+            let mut registry = self.registry.borrow_mut();
+            let non_default = snapshot.names[1..].iter().any(Option::is_some) || snapshot.masks[0] != u32::MAX;
+            registry.names = snapshot.names;
+            registry.masks = snapshot.masks;
+            if non_default {
+                registry.active = true;
+            }
+        }
+        self.resolve_placed(engine);
+    }
+
+    fn replicate(&self, engine: &Engine) {
+        let snapshot = self.snapshot();
+        if let Some(log) = engine.state.borrow_mut().loopback_log.as_mut() {
+            log.push(crate::loopback::replicate::Change::Message(crate::loopback::bridge::Msg::CollisionGroups(snapshot)));
+        }
+    }
+
     fn is_part(&self, reflection: &Reflection, state: &State, id: InstanceId) -> bool {
         reflection.class(state.dom.at(id).class).is_a(self.base_part)
     }
@@ -293,9 +325,22 @@ fn unregister(groups: Rc<Groups>, side_first: bool) -> MethodFn {
             registry.remove(id);
             drop(registry);
             groups.resolve_placed(engine);
+            groups.replicate(engine);
         }
         Ok(none())
     })
+}
+
+/// The engine's collision-group registry snapshot for loopback join replication.
+pub(crate) fn snapshot(engine: &Engine) -> Option<Snapshot> {
+    engine.physics.get().map(|groups| groups.snapshot())
+}
+
+/// Applies a replicated collision-group snapshot on a loopback client.
+pub(crate) fn apply_snapshot(engine: &Engine, snapshot: Snapshot) {
+    if let Some(groups) = engine.physics.get() {
+        groups.apply_snapshot(engine, snapshot);
+    }
 }
 
 pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
@@ -303,6 +348,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     let names = (reflection.class_id("PhysicsService"), reflection.class_id("BasePart"), reflection.name_id("CollisionGroup"), reflection.name_id("CollisionGroupId"));
     let (Some(service), Some(base_part), Some(group), Some(group_id)) = names else { return };
     let groups = Rc::new(Groups { registry: RefCell::new(Registry::new()), base_part, group, group_id });
+    let _ = engine.physics.set(groups.clone());
     let mut add = |name: &str, function: MethodFn| {
         if let Some(name) = reflection.name_id(name) {
             behaviors.add_method(service, name, function);
@@ -358,6 +404,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             registry.add(&name);
             drop(registry);
             shared.resolve_placed(engine);
+            shared.replicate(engine);
         }
         Ok(none())
     }));
@@ -376,6 +423,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let id = registry.add(&name);
         drop(registry);
         shared.resolve_placed(engine);
+        shared.replicate(engine);
         Ok(values([LuaValue::Number(id as f64)]))
     }));
     add("UnregisterCollisionGroup", unregister(groups.clone(), true));
@@ -392,6 +440,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             registry.names[id] = Some(to.into());
             drop(registry);
             shared.resolve_placed(engine);
+            shared.replicate(engine);
         }
         Ok(none())
     }));
@@ -404,6 +453,8 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let mut registry = shared.registry.borrow_mut();
         let (Some(a), Some(b)) = (registry.id(&first), registry.id(&second)) else { return raise("Both collision groups must be registered.") };
         registry.set_collidable(a, b, collidable);
+        drop(registry);
+        shared.replicate(engine);
         Ok(none())
     }));
 

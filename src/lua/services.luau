@@ -420,7 +420,7 @@ Method("Model", "SetPrimaryPartCFrame", function(Self, Target)
 	Self:PivotTo(Target)
 end)
 Method("Model", "MoveTo", function(Self, Position)
-	Self:PivotTo(CFrame.new(Position))
+	if Self:IsDescendantOf(game) then Self:PivotTo(CFrame.new(Position)) end
 end)
 Method("Model", "TranslateBy", function(Self, Offset)
 	Self:PivotTo(Self:GetPivot() + Offset)

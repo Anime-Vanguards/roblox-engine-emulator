@@ -8,6 +8,7 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, EnumItem};
+use crate::datatypes::script_error::{luau_number, script_error};
 
 /**
     An implementation of the [PhysicalProperties](https://create.roblox.com/docs/reference/engine/datatypes/PhysicalProperties) Roblox datatype.
@@ -22,9 +23,22 @@ pub struct PhysicalProperties {
     pub(crate) elasticity: f32,
     pub(crate) elasticity_weight: f32,
     pub(crate) acoustic_absorption: f32,
+    pub(crate) default: bool,
 }
 
 impl PhysicalProperties {
+    fn default_value() -> Self {
+        Self {
+            density: 0.0,
+            friction: 0.0,
+            friction_weight: 0.0,
+            elasticity: 0.0,
+            elasticity_weight: 0.0,
+            acoustic_absorption: 0.0,
+            default: true,
+        }
+    }
+
     pub(crate) fn from_material(material_enum_item: &EnumItem) -> Option<PhysicalProperties> {
         MATERIAL_ENUM_MAP
             .iter()
@@ -36,6 +50,7 @@ impl PhysicalProperties {
                 friction_weight: props.4,
                 elasticity_weight: props.5,
                 acoustic_absorption: props.6,
+                default: false,
             })
     }
 }
@@ -44,48 +59,40 @@ impl LuaExportsTable for PhysicalProperties {
     const EXPORT_NAME: &'static str = "PhysicalProperties";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        type ArgsMaterial = LuaUserDataRef<EnumItem>;
-        type ArgsNumbers = (f32, f32, f32, Option<f32>, Option<f32>, Option<f32>);
-
         let physical_properties_new = |lua: &Lua, args: LuaMultiValue| {
-            if let Ok(value) = ArgsMaterial::from_lua_multi(args.clone(), lua) {
-                if value.parent.desc.name == "Material" {
-                    match PhysicalProperties::from_material(&value) {
-                        Some(props) => Ok(props),
-                        None => Err(LuaError::RuntimeError(format!(
-                            "Found unknown Material '{}'",
-                            value.name
-                        ))),
+            match args.len() {
+                1 => {
+                    if let Some(LuaValue::UserData(ud)) = args.front()
+                        && let Ok(value) = ud.borrow::<EnumItem>()
+                    {
+                        if value.parent.desc.name == "Material" {
+                            Ok(PhysicalProperties::from_material(&value).unwrap_or_else(PhysicalProperties::default_value))
+                        } else {
+                            Err(script_error("PhysicalProperties.new with 1 argument expects Enum.Material inputs", false))
+                        }
+                    } else {
+                        Ok(PhysicalProperties::default_value())
                     }
-                } else {
-                    Err(LuaError::RuntimeError(format!(
-                        "Expected argument #1 to be a Material, got {}",
-                        value.parent.desc.name
-                    )))
                 }
-            } else if let Ok((
-                density,
-                friction,
-                elasticity,
-                friction_weight,
-                elasticity_weight,
-                acoustic_absorption,
-            )) = ArgsNumbers::from_lua_multi(args, lua)
-            {
-                // Roblox's documentation: each value is clamped to its acceptable range
-                Ok(PhysicalProperties {
-                    density: density.clamp(0.0001, 100.0),
-                    friction: friction.clamp(0.0, 2.0),
-                    friction_weight: friction_weight.unwrap_or(1.0).clamp(0.0, 100.0),
-                    elasticity: elasticity.clamp(0.0, 1.0),
-                    elasticity_weight: elasticity_weight.unwrap_or(1.0).clamp(0.0, 100.0),
-                    acoustic_absorption: acoustic_absorption.unwrap_or(1.0).clamp(0.0, 1.0),
-                })
-            } else {
-                // FUTURE: Better error message here using given arg types
-                Err(LuaError::RuntimeError(
-                    "Invalid arguments to constructor".to_string(),
-                ))
+                3 | 5 | 6 => {
+                    let num = |i: usize| args.get(i).and_then(|v| luau_number(lua, v)).unwrap_or(0.0) as f32;
+                    let opt = |i: usize| args.get(i).map_or(1.0, |v| luau_number(lua, v).unwrap_or(0.0) as f32);
+                    Ok(PhysicalProperties {
+                        density: num(0).clamp(0.0001, 100.0),
+                        friction: num(1).clamp(0.0, 2.0),
+                        elasticity: num(2).clamp(0.0, 1.0),
+                        friction_weight: opt(3).clamp(0.0, 100.0),
+                        elasticity_weight: opt(4).clamp(0.0, 100.0),
+                        acoustic_absorption: opt(5).clamp(0.0, 1.0),
+                        default: false,
+                    })
+                }
+                count => Err(script_error(
+                    format!(
+                        "Invalid number of arguments: {count}. Four ways to call PhysicalProperties.new:\n\t\t\t\t\t1. new(material: Material)  -- returns default properties for the given material\n\t\t\t\t\t2. new(density: number, friction: number, elasticity: number)\n\t\t\t\t\t3. new(density: number, friction: number, elasticity: number, frictionWeight: number, elasticityWeight: number)\n\t\t\t\t\t4. new(density: number, friction: number, elasticity: number, frictionWeight: number, elasticityWeight: number, acousticAbsorption: number)\n"
+                    ),
+                    false,
+                )),
             }
         };
 
@@ -117,6 +124,9 @@ impl LuaUserData for PhysicalProperties {
 
 impl fmt::Display for PhysicalProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.default {
+            return f.write_str("default");
+        }
         // six fields with AcousticAbsorption last, 9 significant digits each ("1, 0.300000012, 0.5, 1, 1, 1"; Studio 0.744)
         let g = |value: f32| super::format_g(f64::from(value), 9);
         write!(
@@ -141,6 +151,7 @@ impl From<DomCustomPhysicalProperties> for PhysicalProperties {
             elasticity: v.elasticity(),
             elasticity_weight: v.elasticity_weight(),
             acoustic_absorption: v.acoustic_absorption(),
+            default: false,
         }
     }
 }

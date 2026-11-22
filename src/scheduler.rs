@@ -308,6 +308,8 @@ pub struct Scheduler {
     /// Threads task.defer or task.delay queued that have not resumed since, by address, with their task-library state
     /// ('deferred', 'delayed'); the queued job or timer holds each one alive while it is listed
     task_states: FxHashMap<usize, &'static str>,
+    /// Originating script `Instance` recorded when a script spawns/defers/delays a C-function thread (`task.spawn(error, ...)`)
+    thread_scripts: FxHashMap<usize, InstanceId>,
     pattern_cache: Vec<(f64, Vec<Vec<f64>>)>,
     hooks: Vec<(Phase, PhaseHook)>,
 
@@ -443,6 +445,7 @@ impl Scheduler {
             timer_sequence: 0,
             cancelled: FxHashMap::default(),
             task_states: FxHashMap::default(),
+            thread_scripts: FxHashMap::default(),
             pattern_cache: Vec::new(),
             hooks: Vec::new(),
             main_thread: None,
@@ -953,6 +956,20 @@ impl Scheduler {
         }
     }
 
+    pub fn set_thread_script(&mut self, thread: &LuaThread, script: InstanceId) {
+        self.thread_scripts.insert(thread.to_pointer() as usize, script);
+    }
+
+    pub fn thread_script(&self, thread: &LuaThread) -> Option<InstanceId> {
+        self.thread_scripts.get(&(thread.to_pointer() as usize)).copied()
+    }
+
+    pub fn clear_thread_script(&mut self, thread: &LuaThread) {
+        if !self.thread_scripts.is_empty() {
+            self.thread_scripts.remove(&(thread.to_pointer() as usize));
+        }
+    }
+
     pub fn is_cancelled(&self, thread: &LuaThread) -> bool {
         !self.cancelled.is_empty() && self.cancelled.contains_key(&(thread.to_pointer() as usize))
     }
@@ -1148,6 +1165,143 @@ pub(crate) fn resume_ready(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, a
     resume_thread(lua, engine, thread, args, false)
 }
 
+enum ResumeError {
+    String(String, Option<InstanceId>),
+    LogError(String, Option<InstanceId>),
+    NonString,
+    Exhaustion,
+    Other(LuaError),
+}
+
+/// Resumes `thread` with `args`, leaving an error's stack intact long enough to inspect both its value type
+/// (string/number vs LogService error table vs non-string throw) and its innermost script frame.
+fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u64) -> Result<(), ResumeError> {
+    use mlua::ffi;
+    let nargs = args.len() as std::ffi::c_int;
+    let thread_state = thread.state();
+    let mut out: Result<(), ResumeError> = Ok(());
+    let exec = unsafe {
+        lua.exec_raw::<()>(args, |state| {
+            if nargs > 0 {
+                if ffi::lua_checkstack(thread_state, nargs) == 0 {
+                    out = Err(ResumeError::Other(LuaError::StackError));
+                    return;
+                }
+                ffi::lua_xmove(state, thread_state, nargs);
+            }
+            let status = ffi::lua_resume_(thread_state, state, nargs);
+            match status {
+                ffi::LUA_OK | ffi::LUA_YIELD => {
+                    ffi::lua_settop(thread_state, 0);
+                }
+                ffi::LUA_ERRMEM => {
+                    ffi::lua_settop(thread_state, 0);
+                    out = Err(ResumeError::String("not enough memory".into(), None));
+                }
+                _ => {
+                    let script = super::lua::script_of_thread(thread_state);
+                    let kind = ffi::lua_type(thread_state, -1);
+                    let outcome = match kind {
+                        ffi::LUA_TSTRING | ffi::LUA_TNUMBER => {
+                            ffi::lua_pushvalue(thread_state, -1);
+                            let mut len = 0usize;
+                            let data = ffi::lua_tolstring(thread_state, -1, &mut len);
+                            let text = if data.is_null() {
+                                String::new()
+                            } else {
+                                String::from_utf8_lossy(std::slice::from_raw_parts(data as *const u8, len)).into_owned()
+                            };
+                            ffi::lua_pop(thread_state, 1);
+                            ResumeError::String(text, script)
+                        }
+                        ffi::LUA_TTABLE => {
+                            let mut log_text = None;
+                            if ffi::lua_getmetatable(thread_state, -1) != 0 {
+                                ffi::lua_pushstring(thread_state, c"__tostring".as_ptr());
+                                ffi::lua_rawget(thread_state, -2);
+                                if ffi::lua_type(thread_state, -1) == ffi::LUA_TFUNCTION {
+                                    // Invoke __tostring on the resumer's thread (matching mlua::Thread::resume's
+                                    // error_traceback_thread, so LogService error tables record themselves via LogErrorText).
+                                    ffi::lua_pushvalue(thread_state, -3);
+                                    ffi::lua_xmove(thread_state, state, 2);
+                                    if ffi::lua_pcall(state, 1, 1, 0) == ffi::LUA_OK && ffi::lua_type(state, -1) == ffi::LUA_TSTRING {
+                                        let mut len = 0usize;
+                                        let data = ffi::lua_tolstring(state, -1, &mut len);
+                                        if !data.is_null() {
+                                            let text = String::from_utf8_lossy(std::slice::from_raw_parts(data as *const u8, len)).into_owned();
+                                            if super::lua::stubs::uncaught_log_error(log_errors, thread, &text) {
+                                                log_text = Some(text);
+                                            }
+                                        }
+                                    }
+                                    ffi::lua_pop(state, 1);
+                                } else {
+                                    ffi::lua_pop(thread_state, 1);
+                                }
+                                ffi::lua_pop(thread_state, 1);
+                            }
+                            match log_text {
+                                Some(text) => ResumeError::LogError(text, script),
+                                None => ResumeError::NonString,
+                            }
+                        }
+                        ffi::LUA_TUSERDATA => {
+                            // mlua's WrappedFailure userdata sets __type = "error" (for both Rust errors and caught
+                            // panics, including reference-stack exhaustion). Any other userdata (Instance, Roblox
+                            // datatypes, newproxy) is a script-thrown non-string error.
+                            let is_mlua_error = if ffi::lua_getmetatable(thread_state, -1) != 0 {
+                                ffi::lua_pushstring(thread_state, c"__type".as_ptr());
+                                ffi::lua_rawget(thread_state, -2);
+                                let matches = if ffi::lua_type(thread_state, -1) == ffi::LUA_TSTRING {
+                                    let mut len = 0usize;
+                                    let ptr = ffi::lua_tolstring(thread_state, -1, &mut len);
+                                    !ptr.is_null() && std::slice::from_raw_parts(ptr as *const u8, len) == b"error"
+                                } else {
+                                    false
+                                };
+                                ffi::lua_pop(thread_state, 2);
+                                matches
+                            } else {
+                                false
+                            };
+                            if !is_mlua_error {
+                                ResumeError::NonString
+                            } else {
+                                ffi::lua_pushvalue(thread_state, -1);
+                                ffi::lua_xmove(thread_state, state, 1);
+                                let mut len = 0usize;
+                                let data = ffi::luaL_tolstring(state, -1, &mut len);
+                                let raw = if data.is_null() {
+                                    String::new()
+                                } else {
+                                    String::from_utf8_lossy(std::slice::from_raw_parts(data as *const u8, len)).into_owned()
+                                };
+                                ffi::lua_pop(state, 2);
+                                if super::lua::refs::is_exhaustion_text(&raw) {
+                                    ResumeError::Exhaustion
+                                } else {
+                                    let stripped = match raw.rfind("\nstack traceback:\n") {
+                                        Some(index) => &raw[..index],
+                                        None => &raw,
+                                    };
+                                    let stripped = stripped.strip_prefix("runtime error: ").unwrap_or(stripped);
+                                    ResumeError::String(stripped.to_string(), script)
+                                }
+                            }
+                        }
+                        _ => ResumeError::NonString,
+                    };
+                    out = Err(outcome);
+                }
+            }
+        })
+    };
+    match exec {
+        Ok(()) => out,
+        Err(error) => Err(ResumeError::Other(error)),
+    }
+}
+
 /// `check_ready`: look at the thread first (`resume`), or trust the caller's [`can_resume`] (`resume_ready`)
 fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMultiValue, check_ready: bool) -> bool {
     let (top_level, _entered) = {
@@ -1176,18 +1330,39 @@ fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMu
     let log_errors = super::lua::stubs::log_error_texts();
     let resumed = {
         let _resuming = super::lua::refs::Resuming::enter();
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| thread.resume::<LuaMultiValue>(args)))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resume_raw(lua, thread, args, log_errors)))
     };
     engine.state.borrow_mut().sched.resume_depth -= 1;
     let ok = match resumed {
-        Ok(Ok(_)) => true,
-        Ok(Err(error)) => {
-            let message = error_message(&error);
+        Ok(Ok(())) => true,
+        Ok(Err(err)) => {
             let trace = super::lua::traceback(lua, thread);
-            if super::lua::stubs::uncaught_log_error(log_errors, thread, &message) {
-                engine.uncaught_log_error(&message, trace);
-            } else {
-                engine.output("error", message, trace);
+            // Clear the errored thread's stack now that traceback has been captured
+            unsafe { mlua::ffi::lua_settop(thread.state(), 0) };
+            let fallback_script = engine.state.borrow().sched.thread_script(thread);
+            match err {
+                ResumeError::LogError(message, script) => {
+                    engine.uncaught_log_error(&message, trace, script.or(fallback_script));
+                }
+                ResumeError::String(message, script) => {
+                    if super::lua::refs::is_stack_error_text(&message) && super::lua::refs::at_capacity(engine) {
+                        engine.output("error", super::lua::refs::message(), trace);
+                    } else {
+                        engine.output_error_with_script(message, trace, script.or(fallback_script), true);
+                    }
+                }
+                ResumeError::NonString => {
+                    // Non-string uncaught error (table, nil, etc.): logs "Error occurred, no output from Luau." with
+                    // stack and does not fire ScriptContext.Error (Studio 0.747, tools/parity/probes/logservice.luau).
+                    engine.output_error_with_script("Error occurred, no output from Luau.".into(), trace, None, false);
+                }
+                ResumeError::Exhaustion => {
+                    engine.output("error", super::lua::refs::message(), trace);
+                }
+                ResumeError::Other(error) => {
+                    let message = error_message(&error);
+                    engine.output_error_with_script(message, trace, fallback_script, true);
+                }
             }
             false
         }
@@ -1199,6 +1374,9 @@ fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMu
         }
         Err(panic) => std::panic::resume_unwind(panic),
     };
+    if thread.status() != LuaThreadStatus::Resumable {
+        engine.state.borrow_mut().sched.clear_thread_script(thread);
+    }
     if top_level {
         let mut state = engine.state.borrow_mut();
         state.sched.build_work_end = Some(state.sched.build_work);

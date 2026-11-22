@@ -40,6 +40,8 @@ pub enum Msg {
     Invoke { remote: InstanceId, call: u32, args: Box<[Wire]> },
     /// The answer to an `Invoke`: the callback's results, or its error's text
     Return { call: u32, result: Result<Box<[Wire]>, String> },
+    /// PhysicsService collision-group registry snapshot (names + collidable masks)
+    CollisionGroups(crate::services::physics::Snapshot),
 }
 
 /// One instance of a [`Msg::Tree`]: the server's id, its class, its parent's index in the tree (none: the root), its

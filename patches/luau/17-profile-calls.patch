@@ -331,7 +331,7 @@ index a4206ba..68c7753 100644
  
      g->lastprotoid = 1;
 diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
-index 041f2bb..10187c7 100644
+index b3cc72f..e7fc01e 100644
 --- a/luau/VM/src/lstate.h
 +++ b/luau/VM/src/lstate.h
 @@ -79,6 +79,7 @@ typedef struct CallInfo
@@ -339,10 +339,10 @@ index 041f2bb..10187c7 100644
  #define LUA_CALLINFO_NATIVE (1 << 2) // should this function be executed using execution callback for native code
  #define LUA_CALLINFO_OPYIELD (1 << 3) // call frame has yielded on a non-call opcode and requires luau_finishop
 +#define LUA_CALLINFO_PROFILECALL (1 << 8) // a host's profile sampled this call: its return calls the profile's call hook (lprofile.cpp)
+ #define LUA_CALLINFO_WORK_CCALL (1 << 9)  // this host C frame already charged a work.ccalls entry, so an inner C forward does not double-count
  #define LUA_CALLINFO_PCALL (1 << 4)   // call frame was setup by a synthetic protected call and requires luau_pospcallsuccess
  
- #define TAGGED_PAGESET_BASE (LUA_TSTRING)
-@@ -217,6 +218,7 @@ typedef struct global_State
+@@ -218,6 +219,7 @@ typedef struct global_State
      uint8_t gcstate; // state of garbage collector
      uint8_t gcdisabled;
      uint8_t coldon; // cold touches are tracked (lua_coldtracking; in the padding before gray: the state keeps its size)
@@ -351,7 +351,7 @@ index 041f2bb..10187c7 100644
      GCObject* gray;      // list of gray objects
      GCObject* grayagain; // list of objects to be traversed atomically
 diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
-index 97b7050..00817cd 100644
+index 364b1eb..7eb2693 100644
 --- a/luau/VM/src/lvmexecute.cpp
 +++ b/luau/VM/src/lvmexecute.cpp
 @@ -19,8 +19,15 @@
@@ -428,7 +428,7 @@ index 97b7050..00817cd 100644
                      // reentry
                      // codeentry may point to NATIVECALL instruction when proto is compiled to native code
                      // this will result in execution continuing in native code, and is equivalent to if (p->execdata) but has no additional overhead
-@@ -1282,6 +1300,10 @@ reentry:
+@@ -1284,6 +1302,10 @@ reentry:
                          setnilvalue(argi++); // complete missing arguments
                      L->top = p->is_vararg ? argi : ci->top;
  
@@ -439,7 +439,7 @@ index 97b7050..00817cd 100644
                      // reentry
                      // codeentry may point to NATIVECALL instruction when proto is compiled to native code
                      // this will result in execution continuing in native code, and is equivalent to if (p->execdata) but has no additional overhead
-@@ -1356,6 +1378,10 @@ reentry:
+@@ -1360,6 +1382,10 @@ reentry:
                  CallInfo* ci = L->ci;
                  CallInfo* cip = ci - 1;
  
@@ -450,7 +450,7 @@ index 97b7050..00817cd 100644
                  StkId res = ci->func; // note: we assume CALL always puts func+args and expects results to start at func
  
                  StkId vali = ra;
-@@ -4098,30 +4124,45 @@ exit:;
+@@ -4102,30 +4128,45 @@ exit:;
      return false;
  }
  
@@ -503,7 +503,7 @@ index 97b7050..00817cd 100644
  
  void luau_finishop(lua_State* L)
  {
-@@ -4201,6 +4242,10 @@ int luau_precall(lua_State* L, StkId func, int nresults)
+@@ -4205,6 +4246,10 @@ int luau_precall(lua_State* L, StkId func, int nresults)
              ci->flags = LUA_CALLINFO_NATIVE;
  #endif
  
@@ -514,7 +514,7 @@ index 97b7050..00817cd 100644
          return PCRLUA;
      }
      else
-@@ -4317,3 +4362,4 @@ void luau_pospcallsuccess(lua_State* L)
+@@ -4323,3 +4368,4 @@ void luau_pospcallsuccess(lua_State* L)
      L->base = cip->base;
      L->top = (calleeresults == LUA_MULTRET) ? res : cip->top;
  }

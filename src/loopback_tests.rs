@@ -991,3 +991,65 @@ return {
     assert!(has_name(&scene(&server), "Mover") && !has_name(&scene(&server), "ClientOnly"), "the server's world has no client part");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// CollisionGroups replicate from server to client at join and on later register/rename/unregister/collidable mutations,
+/// and Players.PlayerAdded fires before Players.ChildAdded for a joining player (with Team already assigned).
+#[test]
+fn loopback_replicates_collision_groups_and_orders_player_added_before_child_added() {
+    let summary = run_pair(
+        "cg-team-order",
+        r##"
+local PhysicsService = game:GetService("PhysicsService")
+local Players = game:GetService("Players")
+local Teams = game:GetService("Teams")
+local RunService = game:GetService("RunService")
+return {
+	Server = function()
+		local Team = Instance.new("Team")
+		Team.Name = "Red"
+		Team.TeamColor = BrickColor.new("Bright red")
+		Team.AutoAssignable = true
+		Team.Parent = Teams
+		local Order = {}
+		Players.PlayerAdded:Connect(function(Player)
+			table.insert(Order, "PlayerAdded:" .. (Player.Team and Player.Team.Name or "nil"))
+		end)
+		Players.ChildAdded:Connect(function(Child)
+			if Child:IsA("Player") then
+				table.insert(Order, "ChildAdded:" .. (Child.Team and Child.Team.Name or "nil"))
+			end
+		end)
+		PhysicsService:RegisterCollisionGroup("Early")
+		PhysicsService:CollisionGroupSetCollidable("Default", "Early", false)
+		task.wait(0.1)
+		print("order", table.concat(Order, ","))
+		PhysicsService:RegisterCollisionGroup("Late")
+		PhysicsService:CollisionGroupSetCollidable("Early", "Late", false)
+		task.wait(0.1)
+		PhysicsService:RenameCollisionGroup("Early", "Renamed")
+		PhysicsService:UnregisterCollisionGroup("Late")
+	end,
+	Client = function()
+		print("join", PhysicsService:IsCollisionGroupRegistered("Early"), PhysicsService:CollisionGroupsAreCollidable("Default", "Early"))
+		for _ = 1, 10 do
+			RunService.Heartbeat:Wait()
+		end
+		print("late", PhysicsService:IsCollisionGroupRegistered("Late"), PhysicsService:CollisionGroupsAreCollidable("Early", "Late"))
+		for _ = 1, 10 do
+			RunService.Heartbeat:Wait()
+		end
+		print("changed", PhysicsService:IsCollisionGroupRegistered("Renamed"), PhysicsService:IsCollisionGroupRegistered("Early"), PhysicsService:IsCollisionGroupRegistered("Late"))
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "server print: order PlayerAdded:Red,ChildAdded:Red"), "{lines:?}");
+    assert!(has(&lines, "client print: join true false"), "{lines:?}");
+    assert!(has(&lines, "client print: late true false"), "{lines:?}");
+    assert!(has(&lines, "client print: changed true false false"), "{lines:?}");
+}

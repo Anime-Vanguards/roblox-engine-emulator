@@ -687,7 +687,21 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     }
     crate::scheduler::start_cold_tracking(lua, engine);
     // (the engine's own C functions, mlua's callback among them: the objects they make for a script are priced with their operation)
-    crate::cost::mark_host_functions(lua, &[meta_index, meta_newindex, meta_namecall, meta_tostring, create_instance, instance_new, table_namecall, typeof_c])?;
+    crate::cost::mark_host_functions(
+        lua,
+        &[
+            meta_index,
+            meta_newindex,
+            meta_namecall,
+            meta_tostring,
+            create_instance,
+            instance_new,
+            table_namecall,
+            typeof_c,
+            super::vector_methods::vector_namecall,
+            lune_roblox::datatypes::script_error::datatype_namecall,
+        ],
+    )?;
 
     // Parent changes that move a subtree into or out of the DataModel re-anchor its userdata
     engine.hooks.borrow_mut().hierarchy_changed.push(Box::new(move |state, id, old, new| {
@@ -988,7 +1002,22 @@ unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
     let out = guard(|| unsafe {
         let api = &*(ffi::lua_touserdata(state, ffi::lua_upvalueindex(1)) as *const Api);
         let engine = api.engine();
-        let class_name = arg_bytes(state, 1).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+        let class_name = match arg_bytes(state, 1) {
+            Some(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+            None if ffi::lua_type(state, 1) == ffi::LUA_TNUMBER => {
+                ffi::lua_pushvalue(state, 1);
+                let mut len = 0usize;
+                let data = ffi::lua_tolstring(state, -1, &mut len);
+                let text = if data.is_null() {
+                    String::new()
+                } else {
+                    String::from_utf8_lossy(std::slice::from_raw_parts(data as *const u8, len)).into_owned()
+                };
+                ffi::lua_pop(state, 1);
+                text
+            }
+            None => String::new(),
+        };
         let parent = arg_instance(state, 2);
         let created = {
             let hooks = engine.hooks.borrow();

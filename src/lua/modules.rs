@@ -633,7 +633,7 @@ fn resolve_path(engine: &Rc<Engine>, path: &[u8], caller: InstanceId) -> Result<
     } else if let Some(alias) = first.strip_prefix('@') {
         (resolve_alias(engine, alias), 1)
     } else {
-        return Err("require path must start with a valid prefix: ./, ../, or @".into());
+        return Err(format!("error requiring \"{text}\": require path must start with a valid prefix: ./, ../, or @"));
     };
     for segment in &segments[start..] {
         let Some(node) = current else { break };
@@ -818,7 +818,21 @@ pub fn require_finish(lua: &Lua, engine: &Rc<Engine>, (module, results, vm): (Lu
     if !ok {
         let failure: LuaValue = results.get(2)?;
         finish(engine, vm, module, Err(()));
-        return Ok(LuaMultiValue::from_iter([LuaValue::Boolean(false), failure, LuaValue::Integer(0)]));
+        // Roblox logs the module's own string/number error once and raises the wrapper error to the caller
+        // (Studio 0.747, tools/parity/probes/require_errors.luau; table/non-string errors log nothing)
+        let logged = match &failure {
+            LuaValue::String(text) => Some(text.to_string_lossy()),
+            LuaValue::Number(_) | LuaValue::Integer(_) => lua.coerce_string(failure)?.map(|s| s.to_string_lossy()),
+            _ => None,
+        };
+        if let Some(message) = logged {
+            engine.output("error", message, None);
+        }
+        return Ok(LuaMultiValue::from_iter([
+            LuaValue::Boolean(false),
+            LuaValue::String(lua.create_string("Requested module experienced an error while loading")?),
+            LuaValue::Integer(0),
+        ]));
     }
     if count - 1 != 1 {
         finish(engine, vm, module, Err(()));

@@ -7246,3 +7246,839 @@ diff --git a/crates/lune-roblox/src/datatypes/types/cframe.rs b/crates/lune-robl
              }
  
              // The quaternion made unit first, then the matrix (types::float32 `rot_from_quat`, as Lerp makes one; a playing
+diff --git a/crates/lune-roblox/src/datatypes/script_error.rs b/crates/lune-roblox/src/datatypes/script_error.rs
+index e1f2ac4..249a15d 100644
+--- a/crates/lune-roblox/src/datatypes/script_error.rs
++++ b/crates/lune-roblox/src/datatypes/script_error.rs
+@@ -6,12 +6,18 @@
+ //! callback returns [`script_error`]'s error instead, and the hook mlua-sys runs before `lua_error` ([`install`]) raises
+ //! the string in its place.
+ 
+-use std::{cell::RefCell, ffi::CStr};
++use std::{cell::{Cell, RefCell}, ffi::CStr, rc::Rc};
+ 
+ use mlua::{ffi, prelude::*};
+ 
+ thread_local! {
+     static PENDING: RefCell<Option<Pending>> = const { RefCell::new(None) };
++    static IN_NAMECALL: Cell<u32> = const { Cell::new(0) };
++}
++
++/// Whether the running datatype method was invoked via `__namecall` (`:`) rather than `__index` (`.`).
++pub fn is_namecall() -> bool {
++    IN_NAMECALL.with(|depth| depth.get() > 0)
+ }
+ 
+ struct Pending {
+@@ -87,6 +93,7 @@ fn internal_chunk(source: &[u8]) -> bool {
+ pub unsafe fn caller_position(state: *mut ffi::lua_State) -> Option<String> {
+     unsafe {
+         let mut level = 1;
++        let mut skip_namecall = is_namecall();
+         while level < 64 {
+             let mut frame: ffi::lua_Debug = std::mem::zeroed();
+             if ffi::lua_getinfo(state, level, c"sl".as_ptr(), &mut frame) == 0 {
+@@ -98,6 +105,11 @@ pub unsafe fn caller_position(state: *mut ffi::lua_State) -> Option<String> {
+                 continue;
+             }
+             if frame.currentline < 0 {
++                if skip_namecall {
++                    skip_namecall = false;
++                    level += 1;
++                    continue;
++                }
+                 // a C function: one the host's own Luau called is part of that code
+                 let mut next: ffi::lua_Debug = std::mem::zeroed();
+                 if ffi::lua_getinfo(state, level + 1, c"s".as_ptr(), &mut next) != 0
+@@ -272,6 +284,31 @@ pub fn luau_self<T: LuaUserData + 'static>(args: &LuaMultiValue, method: &str, t
+     }
+ }
+ 
++/// Argument `index` (1-based, self being 1) of a method a client checks in Luau: names `method` on a `.` call and
++/// omits it on a `:` call.
++pub fn luau_arg_named<T: LuaUserData + 'static>(
++    args: &LuaMultiValue,
++    index: usize,
++    method: &str,
++    type_name: &str,
++) -> LuaResult<LuaUserDataRef<T>> {
++    let function = (!is_namecall()).then_some(method);
++    match args.get(index - 1) {
++        None => Err(missing_argument(index, function, type_name)),
++        Some(value) => userdata_of::<T>(Some(value)).ok_or_else(|| invalid_argument(index, function, type_name, value)),
++    }
++}
++
++/// Invalid argument `index` (1-based) of a method: names `method` on a `.` call and omits it on a `:` call.
++pub fn invalid_method_arg(index: usize, method: &str, expected: &str, value: &LuaValue) -> LuaError {
++    invalid_argument(index, (!is_namecall()).then_some(method), expected, value)
++}
++
++/// Missing argument `index` (1-based) of a method: names `method` on a `.` call and omits it on a `:` call.
++pub fn missing_method_arg(index: usize, method: &str, expected: &str) -> LuaError {
++    missing_argument(index, (!is_namecall()).then_some(method), expected)
++}
++
+ /// Argument `index` (1-based, self being 1) of a method a client checks in Luau, as a `:` call reports it (no name).
+ pub fn luau_arg<T: LuaUserData + 'static>(args: &LuaMultiValue, index: usize, type_name: &str) -> LuaResult<LuaUserDataRef<T>> {
+     match args.get(index - 1) {
+@@ -367,6 +404,103 @@ impl IntoLua for UnknownMembers {
+     }
+ }
+ 
++/// Pairs a datatype's `__index` method table (which mlua populates in-place with every registered method, while keeping
++/// property getters separate) with a `__namecall` dispatcher over that same table. A `:` call only resolves methods (so
++/// `V2:X()` raises `X is not a valid member of Vector2`) and marks [`is_namecall`] for the call's duration so Luau-checked
++/// argument errors after self omit ` to '<method>'` on `:` calls and include it on `.` calls.
++#[derive(Clone)]
++pub struct MethodMembers {
++    type_name: &'static str,
++    table: Rc<RefCell<Option<LuaTable>>>,
++}
++
++impl MethodMembers {
++    pub fn new(type_name: &'static str) -> Self {
++        Self {
++            type_name,
++            table: Rc::new(RefCell::new(None)),
++        }
++    }
++
++    pub fn index(&self) -> MethodIndex {
++        MethodIndex(self.clone())
++    }
++
++    pub fn namecall(&self) -> MethodNamecall {
++        MethodNamecall(self.clone())
++    }
++
++    fn methods_table(&self, lua: &Lua) -> LuaResult<LuaTable> {
++        if let Some(existing) = self.table.borrow().as_ref() {
++            return Ok(existing.clone());
++        }
++        let raise = unsafe {
++            lua.exec_raw::<LuaFunction>(self.type_name, |state| {
++                ffi::lua_pushcclosurek(state, unknown_member, c"__index".as_ptr(), 1, None);
++            })?
++        };
++        let methods = lua.create_table()?;
++        let meta = lua.create_table()?;
++        meta.raw_set("__index", raise)?;
++        methods.set_metatable(Some(meta))?;
++        *self.table.borrow_mut() = Some(methods.clone());
++        Ok(methods)
++    }
++}
++
++pub struct MethodIndex(MethodMembers);
++
++impl IntoLua for MethodIndex {
++    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
++        Ok(LuaValue::Table(self.0.methods_table(lua)?))
++    }
++}
++
++pub struct MethodNamecall(MethodMembers);
++
++impl IntoLua for MethodNamecall {
++    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
++        let methods = self.0.methods_table(lua)?;
++        let function = unsafe {
++            lua.exec_raw::<LuaFunction>((methods, self.0.type_name), |state| {
++                ffi::lua_pushcclosurek(state, datatype_namecall, c"__namecall".as_ptr(), 2, None);
++            })?
++        };
++        Ok(LuaValue::Function(function))
++    }
++}
++
++pub unsafe extern "C-unwind" fn datatype_namecall(state: *mut ffi::lua_State) -> std::ffi::c_int {
++    unsafe {
++        let key = ffi::lua_namecallatom(state, std::ptr::null_mut());
++        if key.is_null() {
++            raise_script(state, "invalid namecall".into(), false);
++        }
++        let bytes = CStr::from_ptr(key).to_bytes();
++        ffi::lua_pushlstring(state, bytes.as_ptr().cast(), bytes.len());
++        if ffi::lua_rawget(state, ffi::lua_upvalueindex(1)) == ffi::LUA_TFUNCTION {
++            ffi::lua_insert(state, 1);
++            let nargs = ffi::lua_gettop(state) - 1;
++            IN_NAMECALL.with(|depth| depth.set(depth.get() + 1));
++            let status = ffi::lua_pcall(state, nargs, ffi::LUA_MULTRET, 0);
++            IN_NAMECALL.with(|depth| depth.set(depth.get() - 1));
++            if status == ffi::LUA_OK {
++                return ffi::lua_gettop(state);
++            }
++            ffi::lua_error(state);
++        }
++        ffi::lua_pop(state, 1);
++        let key_name = String::from_utf8_lossy(bytes).into_owned();
++        let mut length = 0;
++        let type_ptr = ffi::lua_tolstring(state, ffi::lua_upvalueindex(2), &mut length);
++        let type_name = String::from_utf8_lossy(std::slice::from_raw_parts(type_ptr.cast::<u8>(), length)).into_owned();
++        let message = format!("{key_name} is not a valid member of {type_name}");
++        drop(key_name);
++        drop(type_name);
++        raise_script(state, message, false)
++    }
++}
++
+ /// What an assignment to a datatype raises, as a playing client raises it (Studio 0.747, ree's
+ /// tools/parity/probes/datatype_errors.luau): `X member of Vector2 is read-only and cannot be assigned to` for a property
+ /// (a member whose value is no function), `Nope is not a valid member of UDim` for anything else (a method, a key the type
+diff --git a/crates/lune-roblox/src/datatypes/types/brick_color.rs b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+index 2b67913..31372f6 100644
+--- a/crates/lune-roblox/src/datatypes/types/brick_color.rs
++++ b/crates/lune-roblox/src/datatypes/types/brick_color.rs
+@@ -9,7 +9,9 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, Color3};
+-use crate::datatypes::script_error::{argument_missing, reflected_float, script_error, unable_to_cast};
++use crate::datatypes::script_error::{
++    argument_missing, invalid_argument, luau_number, reflected_float, script_error, unable_to_cast,
++};
+ 
+ /**
+     An implementation of the [BrickColor](https://create.roblox.com/docs/reference/engine/datatypes/BrickColor) Roblox datatype.
+@@ -29,27 +31,45 @@ impl LuaExportsTable for BrickColor {
+     const EXPORT_NAME: &'static str = "BrickColor";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        type ArgsNumber = u16;
+-        type ArgsName = String;
+-        type ArgsRgb = (f32, f32, f32);
+-        type ArgsColor3 = LuaUserDataRef<Color3>;
+-
+-        // three numbers are 0-1 components before one is a number: (1, 0, 0) is Really red, not White
++        // BrickColor.new as a playing client parses it (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau):
++        // 0 args -> Really black (1003); 1 arg -> number/numeric string (truncated u16, else Medium stone grey),
++        // non-numeric string (by name), Color3, or invalid argument #1 to 'new' (Color3 expected, got <type>);
++        // 2+ args -> (r, g, b) components where non-numbers/missing default to 0.
+         let brick_color_new = |lua: &Lua, args: LuaMultiValue| {
+             super::charge_host_nanos(lua, super::datatype_price::BRICK_COLOR_NEW);
+-            if let Ok((r, g, b)) = ArgsRgb::from_lua_multi(args.clone(), lua) {
+-                Ok(color_from_rgb(r, g, b))
+-            } else if let Ok(number) = ArgsNumber::from_lua_multi(args.clone(), lua) {
+-                Ok(color_from_number(number))
+-            } else if let Ok(name) = ArgsName::from_lua_multi(args.clone(), lua) {
+-                Ok(color_from_name(name))
+-            } else if let Ok(color) = ArgsColor3::from_lua_multi(args.clone(), lua) {
+-                Ok(Self::from(*color))
+-            } else {
+-                // FUTURE: Better error message here using given arg types
+-                Err(LuaError::RuntimeError(
+-                    "Invalid arguments to constructor".to_string(),
+-                ))
++            let from_f64 = |n: f64| {
++                let t = n.trunc();
++                if t.is_finite() && (0.0..=f64::from(u16::MAX)).contains(&t) {
++                    color_from_number(t as u16)
++                } else {
++                    BrickColor::default()
++                }
++            };
++            match args.len() {
++                0 => Ok(color_from_number(1003)),
++                1 => match &args[0] {
++                    LuaValue::Number(n) => Ok(from_f64(*n)),
++                    LuaValue::Integer(n) => Ok(u16::try_from(*n).map_or_else(|_| BrickColor::default(), color_from_number)),
++                    LuaValue::String(s) => {
++                        if let Some(n) = lua.coerce_number(LuaValue::String(s.clone()))? {
++                            Ok(from_f64(n))
++                        } else {
++                            Ok(color_from_name(s.to_string_lossy()))
++                        }
++                    }
++                    LuaValue::UserData(ud) => {
++                        if let Ok(color) = ud.borrow::<Color3>() {
++                            Ok(Self::from(*color))
++                        } else {
++                            Err(invalid_argument(1, Some("new"), "Color3", &args[0]))
++                        }
++                    }
++                    other => Err(invalid_argument(1, Some("new"), "Color3", other)),
++                },
++                _ => {
++                    let comp = |i: usize| args.get(i).and_then(|v| luau_number(lua, v)).unwrap_or(0.0) as f32;
++                    Ok(color_from_rgb(comp(0), comp(1), comp(2)))
++                }
+             }
+         };
+ 
+diff --git a/crates/lune-roblox/src/datatypes/types/cframe.rs b/crates/lune-roblox/src/datatypes/types/cframe.rs
+index 254a8ba..2b4cf4b 100644
+--- a/crates/lune-roblox/src/datatypes/types/cframe.rs
++++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
+@@ -13,8 +13,9 @@ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, Vector3, VectorArg, charge_host_nanos, float32 as f32m, native_vector};
+ use crate::datatypes::script_error::{
+-    argument_missing, cast_name, invalid_argument, luau_arg, luau_number, luau_self, missing_argument, reflected_arg,
+-    reflected_float_arg, script_error, type_name, unable_to_cast, userdata_of,
++    argument_missing, cast_name, invalid_argument, invalid_method_arg, is_namecall, luau_arg_named, luau_number,
++    luau_self, missing_argument, raise_script, reflected_arg, reflected_float_arg, script_error, type_name,
++    unable_to_cast, userdata_of, MethodMembers,
+ };
+ 
+ /**
+@@ -246,20 +247,14 @@ unsafe extern "C-unwind" fn fuzzy_eq_c(state: *mut mlua::ffi::lua_State) -> std:
+         if status == 0 {
+             return 1;
+         }
++        let to = if is_namecall() { "" } else { " to 'FuzzyEq'" };
+         let message = match status {
+             1 => format!("invalid argument #1 to 'FuzzyEq' (CFrame expected, got {})", fuzzy_eq_type_name(state, 1)),
+-            2 => format!("invalid argument #2 (CFrame expected, got {})", fuzzy_eq_type_name(state, 2)),
+-            3 => format!("invalid argument #3 (number expected, got {})", fuzzy_eq_type_name(state, 3)),
++            2 => format!("invalid argument #2{to} (CFrame expected, got {})", fuzzy_eq_type_name(state, 2)),
++            3 => format!("invalid argument #3{to} (number expected, got {})", fuzzy_eq_type_name(state, 3)),
+             _ => String::from("The eps value provided to FuzzyEq should be a small positive value <= 0.1"),
+         };
+-        ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
+-        drop(message);
+-        if status != 4 {
+-            ffi::luaL_where(state, 1);
+-            ffi::lua_insert(state, -2);
+-            ffi::lua_concat(state, 2);
+-        }
+-        ffi::lua_error(state)
++        raise_script(state, message, status != 4)
+     }
+ }
+ 
+@@ -315,14 +310,10 @@ unsafe extern "C-unwind" fn angle_between_c(state: *mut mlua::ffi::lua_State) ->
+         let message = if status == 1 {
+             format!("invalid argument #1 to 'AngleBetween' (CFrame expected, got {})", fuzzy_eq_type_name(state, 1))
+         } else {
+-            format!("invalid argument #2 (CFrame expected, got {})", fuzzy_eq_type_name(state, 2))
++            let to = if is_namecall() { "" } else { " to 'AngleBetween'" };
++            format!("invalid argument #2{to} (CFrame expected, got {})", fuzzy_eq_type_name(state, 2))
+         };
+-        ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
+-        drop(message);
+-        ffi::luaL_where(state, 1);
+-        ffi::lua_insert(state, -2);
+-        ffi::lua_concat(state, 2);
+-        ffi::lua_error(state)
++        raise_script(state, message, true)
+     }
+ }
+ 
+@@ -428,7 +419,7 @@ impl CFrame {
+ 
+     fn inverse(&self) -> Self {
+         let (p, t) = (self.pos(), f32m::transpose(&self.rot()));
+-        let position = [0, 1, 2].map(|i| (-t[i][0] * p[0] + -t[i][1] * p[1]) + -t[i][2] * p[2]);
++        let position = [0, 1, 2].map(|i| 0.0 - ((t[i][0] * p[0] + t[i][1] * p[1]) + t[i][2] * p[2]));
+         Self::from_parts(position, t)
+     }
+ 
+@@ -627,8 +618,10 @@ impl LuaUserData for CFrame {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("CFrame"));
+-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("CFrame"));
++        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
++        let members = MethodMembers::new("CFrame");
++        fields.add_meta_field("__index", members.index());
++        fields.add_meta_field("__namecall", members.namecall());
+         // Vectors come back as Luau's native vector, which is what a script's Vector3 is; each read is
+         // charged to the script as the one Luau call the engine's prelude spent on it before it was native
+         fields.add_field_method_get("Position", |lua, this| {
+@@ -723,13 +716,13 @@ impl LuaUserData for CFrame {
+         });
+         aliased_named!(methods, ["ToWorldSpace", "toWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
+             let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+-            let frames = frames_of(&args)?;
++            let frames = frames_of(&args, name)?;
+             charge_host_nanos(lua, price::TO_WORLD);
+             Ok(frames.into_iter().map(|cf| *this * cf).collect::<Variadic<_>>())
+         });
+         aliased_named!(methods, ["ToObjectSpace", "toObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
+             let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+-            let frames = frames_of(&args)?;
++            let frames = frames_of(&args, name)?;
+             charge_host_nanos(lua, price::TO_OBJECT);
+             let inverse = this.inverse();
+             Ok(frames.into_iter().map(|cf| inverse * cf).collect::<Variadic<_>>())
+@@ -868,18 +861,18 @@ fn points_of(lua: &Lua, args: &LuaMultiValue, name: &str) -> LuaResult<(CFrame,
+         .iter()
+         .enumerate()
+         .skip(1)
+-        .map(|(index, value)| VectorArg::from_lua(value.clone(), lua).map(|v| v.0).map_err(|_| invalid_argument(index + 1, None, "Vector3", value)))
++        .map(|(index, value)| VectorArg::from_lua(value.clone(), lua).map(|v| v.0).map_err(|_| invalid_method_arg(index + 1, name, "Vector3", value)))
+         .collect::<LuaResult<Vec<_>>>()?;
+     // (nothing after self is one zero vector, as a playing client answers: Studio 0.747, ree's datatype_errors.luau)
+     Ok((this, if points.is_empty() { vec![Vec3::ZERO] } else { points }))
+ }
+ 
+ /// The frames after self of ToWorldSpace or ToObjectSpace (none: one identity, as a playing client answers).
+-fn frames_of(args: &LuaMultiValue) -> LuaResult<Vec<CFrame>> {
++fn frames_of(args: &LuaMultiValue, name: &str) -> LuaResult<Vec<CFrame>> {
+     if args.len() < 2 {
+         return Ok(vec![CFrame::IDENTITY]);
+     }
+-    (2..=args.len()).map(|index| luau_arg::<CFrame>(args, index, "CFrame").map(|cf| *cf)).collect()
++    (2..=args.len()).map(|index| luau_arg_named::<CFrame>(args, index, name, "CFrame").map(|cf| *cf)).collect()
+ }
+ 
+ impl fmt::Display for CFrame {
+diff --git a/crates/lune-roblox/src/datatypes/types/color3.rs b/crates/lune-roblox/src/datatypes/types/color3.rs
+index d15af16..91e66f3 100644
+--- a/crates/lune-roblox/src/datatypes/types/color3.rs
++++ b/crates/lune-roblox/src/datatypes/types/color3.rs
+@@ -147,8 +147,10 @@ impl LuaUserData for Color3 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Color3"));
+-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Color3"));
++        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
++        let members = crate::datatypes::script_error::MethodMembers::new("Color3");
++        fields.add_meta_field("__index", members.index());
++        fields.add_meta_field("__namecall", members.namecall());
+         fields.add_field_method_get("R", |_, this| Ok(this.r));
+         fields.add_field_method_get("G", |_, this| Ok(this.g));
+         fields.add_field_method_get("B", |_, this| Ok(this.b));
+diff --git a/crates/lune-roblox/src/datatypes/types/mod.rs b/crates/lune-roblox/src/datatypes/types/mod.rs
+index b795822..7c0409a 100644
+--- a/crates/lune-roblox/src/datatypes/types/mod.rs
++++ b/crates/lune-roblox/src/datatypes/types/mod.rs
+@@ -63,10 +63,22 @@ pub use vector3int16::Vector3int16;
+ pub fn format_g(value: f64, precision: usize) -> String {
+     let precision = precision.max(1);
+     if value.is_nan() {
+-        return if value.is_sign_negative() { "-nan".into() } else { "nan".into() };
++        return if precision >= 9 {
++            "NAN".into()
++        } else if value.is_sign_negative() {
++            "-nan".into()
++        } else {
++            "nan".into()
++        };
+     }
+     if value.is_infinite() {
+-        return if value < 0.0 { "-inf".into() } else { "inf".into() };
++        return if precision >= 9 {
++            if value < 0.0 { "-INF".into() } else { "INF".into() }
++        } else if value < 0.0 {
++            "-inf".into()
++        } else {
++            "inf".into()
++        };
+     }
+     if value == 0.0 {
+         return if value.is_sign_negative() { "-0".into() } else { "0".into() };
+diff --git a/crates/lune-roblox/src/datatypes/types/physical_properties.rs b/crates/lune-roblox/src/datatypes/types/physical_properties.rs
+index 126e2e5..8b7a358 100644
+--- a/crates/lune-roblox/src/datatypes/types/physical_properties.rs
++++ b/crates/lune-roblox/src/datatypes/types/physical_properties.rs
+@@ -8,6 +8,7 @@ use lune_utils::TableBuilder;
+ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, EnumItem};
++use crate::datatypes::script_error::{luau_number, script_error};
+ 
+ /**
+     An implementation of the [PhysicalProperties](https://create.roblox.com/docs/reference/engine/datatypes/PhysicalProperties) Roblox datatype.
+@@ -22,9 +23,22 @@ pub struct PhysicalProperties {
+     pub(crate) elasticity: f32,
+     pub(crate) elasticity_weight: f32,
+     pub(crate) acoustic_absorption: f32,
++    pub(crate) default: bool,
+ }
+ 
+ impl PhysicalProperties {
++    fn default_value() -> Self {
++        Self {
++            density: 0.0,
++            friction: 0.0,
++            friction_weight: 0.0,
++            elasticity: 0.0,
++            elasticity_weight: 0.0,
++            acoustic_absorption: 0.0,
++            default: true,
++        }
++    }
++
+     pub(crate) fn from_material(material_enum_item: &EnumItem) -> Option<PhysicalProperties> {
+         MATERIAL_ENUM_MAP
+             .iter()
+@@ -36,6 +50,7 @@ impl PhysicalProperties {
+                 friction_weight: props.4,
+                 elasticity_weight: props.5,
+                 acoustic_absorption: props.6,
++                default: false,
+             })
+     }
+ }
+@@ -44,48 +59,40 @@ impl LuaExportsTable for PhysicalProperties {
+     const EXPORT_NAME: &'static str = "PhysicalProperties";
+ 
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+-        type ArgsMaterial = LuaUserDataRef<EnumItem>;
+-        type ArgsNumbers = (f32, f32, f32, Option<f32>, Option<f32>, Option<f32>);
+-
+         let physical_properties_new = |lua: &Lua, args: LuaMultiValue| {
+-            if let Ok(value) = ArgsMaterial::from_lua_multi(args.clone(), lua) {
+-                if value.parent.desc.name == "Material" {
+-                    match PhysicalProperties::from_material(&value) {
+-                        Some(props) => Ok(props),
+-                        None => Err(LuaError::RuntimeError(format!(
+-                            "Found unknown Material '{}'",
+-                            value.name
+-                        ))),
++            match args.len() {
++                1 => {
++                    if let Some(LuaValue::UserData(ud)) = args.front()
++                        && let Ok(value) = ud.borrow::<EnumItem>()
++                    {
++                        if value.parent.desc.name == "Material" {
++                            Ok(PhysicalProperties::from_material(&value).unwrap_or_else(PhysicalProperties::default_value))
++                        } else {
++                            Err(script_error("PhysicalProperties.new with 1 argument expects Enum.Material inputs", false))
++                        }
++                    } else {
++                        Ok(PhysicalProperties::default_value())
+                     }
+-                } else {
+-                    Err(LuaError::RuntimeError(format!(
+-                        "Expected argument #1 to be a Material, got {}",
+-                        value.parent.desc.name
+-                    )))
+                 }
+-            } else if let Ok((
+-                density,
+-                friction,
+-                elasticity,
+-                friction_weight,
+-                elasticity_weight,
+-                acoustic_absorption,
+-            )) = ArgsNumbers::from_lua_multi(args, lua)
+-            {
+-                // Roblox's documentation: each value is clamped to its acceptable range
+-                Ok(PhysicalProperties {
+-                    density: density.clamp(0.0001, 100.0),
+-                    friction: friction.clamp(0.0, 2.0),
+-                    friction_weight: friction_weight.unwrap_or(1.0).clamp(0.0, 100.0),
+-                    elasticity: elasticity.clamp(0.0, 1.0),
+-                    elasticity_weight: elasticity_weight.unwrap_or(1.0).clamp(0.0, 100.0),
+-                    acoustic_absorption: acoustic_absorption.unwrap_or(1.0).clamp(0.0, 1.0),
+-                })
+-            } else {
+-                // FUTURE: Better error message here using given arg types
+-                Err(LuaError::RuntimeError(
+-                    "Invalid arguments to constructor".to_string(),
+-                ))
++                3 | 5 | 6 => {
++                    let num = |i: usize| args.get(i).and_then(|v| luau_number(lua, v)).unwrap_or(0.0) as f32;
++                    let opt = |i: usize| args.get(i).map_or(1.0, |v| luau_number(lua, v).unwrap_or(0.0) as f32);
++                    Ok(PhysicalProperties {
++                        density: num(0).clamp(0.0001, 100.0),
++                        friction: num(1).clamp(0.0, 2.0),
++                        elasticity: num(2).clamp(0.0, 1.0),
++                        friction_weight: opt(3).clamp(0.0, 100.0),
++                        elasticity_weight: opt(4).clamp(0.0, 100.0),
++                        acoustic_absorption: opt(5).clamp(0.0, 1.0),
++                        default: false,
++                    })
++                }
++                count => Err(script_error(
++                    format!(
++                        "Invalid number of arguments: {count}. Four ways to call PhysicalProperties.new:\n\t\t\t\t\t1. new(material: Material)  -- returns default properties for the given material\n\t\t\t\t\t2. new(density: number, friction: number, elasticity: number)\n\t\t\t\t\t3. new(density: number, friction: number, elasticity: number, frictionWeight: number, elasticityWeight: number)\n\t\t\t\t\t4. new(density: number, friction: number, elasticity: number, frictionWeight: number, elasticityWeight: number, acousticAbsorption: number)\n"
++                    ),
++                    false,
++                )),
+             }
+         };
+ 
+@@ -117,6 +124,9 @@ impl LuaUserData for PhysicalProperties {
+ 
+ impl fmt::Display for PhysicalProperties {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        if self.default {
++            return f.write_str("default");
++        }
+         // six fields with AcousticAbsorption last, 9 significant digits each ("1, 0.300000012, 0.5, 1, 1, 1"; Studio 0.744)
+         let g = |value: f32| super::format_g(f64::from(value), 9);
+         write!(
+@@ -141,6 +151,7 @@ impl From<DomCustomPhysicalProperties> for PhysicalProperties {
+             elasticity: v.elasticity(),
+             elasticity_weight: v.elasticity_weight(),
+             acoustic_absorption: v.acoustic_absorption(),
++            default: false,
+         }
+     }
+ }
+diff --git a/crates/lune-roblox/src/datatypes/types/ray.rs b/crates/lune-roblox/src/datatypes/types/ray.rs
+index 348ff47..6982a3f 100644
+--- a/crates/lune-roblox/src/datatypes/types/ray.rs
++++ b/crates/lune-roblox/src/datatypes/types/ray.rs
+@@ -8,8 +8,10 @@ use lune_utils::TableBuilder;
+ 
+ use crate::exports::LuaExportsTable;
+ 
+-use super::{super::*, Vector3};
+-use crate::datatypes::script_error::{luau_arg, luau_self, optional_ctor_arg};
++use super::{super::*, Vector3, VectorArg, native_vector};
++use crate::datatypes::script_error::{
++    invalid_argument, invalid_method_arg, luau_self, missing_method_arg, MethodMembers,
++};
+ 
+ /**
+     An implementation of the [Ray](https://create.roblox.com/docs/reference/engine/datatypes/Ray)
+@@ -24,12 +26,47 @@ pub struct Ray {
+ }
+ 
+ impl Ray {
++    fn closest_point_f64(&self, point: Vec3) -> [f64; 3] {
++        let o = [f64::from(self.origin.x), f64::from(self.origin.y), f64::from(self.origin.z)];
++        let d = [f64::from(self.direction.x), f64::from(self.direction.y), f64::from(self.direction.z)];
++        let p = [f64::from(point.x), f64::from(point.y), f64::from(point.z)];
++        let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
++        if dd == 0.0 {
++            return o;
++        }
++        let t = (((p[0] - o[0]) * d[0] + (p[1] - o[1]) * d[1] + (p[2] - o[2]) * d[2]) / dd).max(0.0);
++        [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t]
++    }
++
+     fn closest_point(&self, point: Vec3) -> Vec3 {
+-        let norm = self.direction.normalize();
+-        let lhs = point - self.origin;
++        let c = self.closest_point_f64(point);
++        Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32)
++    }
+ 
+-        let dot_product = lhs.dot(norm).max(0.0);
+-        self.origin + norm * dot_product
++    fn distance(&self, point: Vec3) -> f64 {
++        let c = self.closest_point_f64(point);
++        let dx = f64::from(point.x) - c[0];
++        let dy = f64::from(point.y) - c[1];
++        let dz = f64::from(point.z) - c[2];
++        (dx * dx + dy * dy + dz * dz).sqrt()
++    }
++}
++
++fn optional_vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Vec3> {
++    match args.get(index - 1) {
++        None => Ok(Vec3::ZERO),
++        Some(value) => VectorArg::from_lua(value.clone(), lua)
++            .map(|v| v.0)
++            .map_err(|_| invalid_argument(index, Some(name), "Vector3", value)),
++    }
++}
++
++fn method_vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, method: &str) -> LuaResult<Vec3> {
++    match args.get(index - 1) {
++        None => Err(missing_method_arg(index, method, "Vector3")),
++        Some(value) => VectorArg::from_lua(value.clone(), lua)
++            .map(|v| v.0)
++            .map_err(|_| invalid_method_arg(index, method, "Vector3", value)),
+     }
+ }
+ 
+@@ -39,13 +76,10 @@ impl LuaExportsTable for Ray {
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         // (two Vector3s checked as a client's Luau checks them, naming the constructor; one not passed is the zero vector:
+         // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+-        let ray_new = |_: &Lua, args: LuaMultiValue| {
+-            let origin = optional_ctor_arg::<Vector3>(&args, 1, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
+-            let direction = optional_ctor_arg::<Vector3>(&args, 2, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
+-            Ok(Ray {
+-                origin: origin.0,
+-                direction: direction.0,
+-            })
++        let ray_new = |lua: &Lua, args: LuaMultiValue| {
++            let origin = optional_vector_arg(lua, &args, 1, "new")?;
++            let direction = optional_vector_arg(lua, &args, 2, "new")?;
++            Ok(Ray { origin, direction })
+         };
+ 
+         TableBuilder::new(lua)?
+@@ -58,10 +92,12 @@ impl LuaUserData for Ray {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Ray"));
+-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Ray"));
+-        fields.add_field_method_get("Origin", |_, this| Ok(Vector3(this.origin)));
+-        fields.add_field_method_get("Direction", |_, this| Ok(Vector3(this.direction)));
++        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
++        let members = MethodMembers::new("Ray");
++        fields.add_meta_field("__index", members.index());
++        fields.add_meta_field("__namecall", members.namecall());
++        fields.add_field_method_get("Origin", |_, this| Ok(native_vector(this.origin)));
++        fields.add_field_method_get("Direction", |_, this| Ok(native_vector(this.direction)));
+         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
+         for name in ["Unit", "unit"] {
+             fields.add_field_method_get(name, |_, this| {
+@@ -75,18 +111,16 @@ impl LuaUserData for Ray {
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+         // Methods
+-        // (self named as a `.` call names it, the point as a `:` call reports it: "missing argument #2 (Vector3 expected)";
+-        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+-        methods.add_function("ClosestPoint", |_, args: LuaMultiValue| {
++        // (self named as a `.` call names it; point names the method on `.` and omits it on `:`: Studio 0.747)
++        methods.add_function("ClosestPoint", |lua, args: LuaMultiValue| {
+             let this = luau_self::<Ray>(&args, "ClosestPoint", "Ray")?;
+-            let to = luau_arg::<Vector3>(&args, 2, "Vector3")?;
+-            Ok(Vector3(this.closest_point(to.0)))
++            let to = method_vector_arg(lua, &args, 2, "ClosestPoint")?;
++            Ok(native_vector(this.closest_point(to)))
+         });
+-        methods.add_function("Distance", |_, args: LuaMultiValue| {
++        methods.add_function("Distance", |lua, args: LuaMultiValue| {
+             let this = luau_self::<Ray>(&args, "Distance", "Ray")?;
+-            let to = luau_arg::<Vector3>(&args, 2, "Vector3")?;
+-            let closest = this.closest_point(to.0);
+-            Ok((closest - to.0).length())
++            let to = method_vector_arg(lua, &args, 2, "Distance")?;
++            Ok(this.distance(to))
+         });
+         // Metamethods
+         methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);
+diff --git a/crates/lune-roblox/src/datatypes/types/region3.rs b/crates/lune-roblox/src/datatypes/types/region3.rs
+index e5013eb..a54b96f 100644
+--- a/crates/lune-roblox/src/datatypes/types/region3.rs
++++ b/crates/lune-roblox/src/datatypes/types/region3.rs
+@@ -8,8 +8,8 @@ use lune_utils::TableBuilder;
+ 
+ use crate::exports::LuaExportsTable;
+ 
+-use super::{super::*, CFrame, Vector3};
+-use crate::datatypes::script_error::{optional_ctor_arg, reflected_arg, reflected_float_arg};
++use super::{super::*, CFrame, Vector3, VectorArg, native_vector};
++use crate::datatypes::script_error::{invalid_argument, reflected_arg, reflected_float_arg, MethodMembers};
+ 
+ /**
+     An implementation of the [Region3](https://create.roblox.com/docs/reference/engine/datatypes/Region3)
+@@ -29,13 +29,18 @@ impl LuaExportsTable for Region3 {
+     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
+         // (two Vector3s checked as a client's Luau checks them, naming the constructor; one not passed is the zero vector:
+         // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
+-        let region3_new = |_: &Lua, args: LuaMultiValue| {
+-            let min = optional_ctor_arg::<Vector3>(&args, 1, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
+-            let max = optional_ctor_arg::<Vector3>(&args, 2, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
+-            Ok(Region3 {
+-                min: min.0,
+-                max: max.0,
+-            })
++        let region3_new = |lua: &Lua, args: LuaMultiValue| {
++            let vector_at = |index: usize| -> LuaResult<Vec3> {
++                match args.get(index - 1) {
++                    None => Ok(Vec3::ZERO),
++                    Some(value) => VectorArg::from_lua(value.clone(), lua)
++                        .map(|v| v.0)
++                        .map_err(|_| invalid_argument(index, Some("new"), "Vector3", value)),
++                }
++            };
++            let min = vector_at(1)?;
++            let max = vector_at(2)?;
++            Ok(Region3 { min, max })
+         };
+ 
+         TableBuilder::new(lua)?
+@@ -48,12 +53,14 @@ impl LuaUserData for Region3 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Region3"));
+-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Region3"));
++        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
++        let members = MethodMembers::new("Region3");
++        fields.add_meta_field("__index", members.index());
++        fields.add_meta_field("__namecall", members.namecall());
+         fields.add_field_method_get("CFrame", |_, this| {
+             Ok(CFrame(Mat4::from_translation(this.min.lerp(this.max, 0.5))))
+         });
+-        fields.add_field_method_get("Size", |_, this| Ok(Vector3(this.max - this.min)));
++        fields.add_field_method_get("Size", |_, this| Ok(native_vector(this.max - this.min)));
+     }
+ 
+     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+diff --git a/crates/lune-roblox/src/datatypes/types/udim2.rs b/crates/lune-roblox/src/datatypes/types/udim2.rs
+index 3c83925..7fa43ea 100644
+--- a/crates/lune-roblox/src/datatypes/types/udim2.rs
++++ b/crates/lune-roblox/src/datatypes/types/udim2.rs
+@@ -78,8 +78,10 @@ impl LuaUserData for UDim2 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("UDim2"));
+-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("UDim2"));
++        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
++        let members = crate::datatypes::script_error::MethodMembers::new("UDim2");
++        fields.add_meta_field("__index", members.index());
++        fields.add_meta_field("__namecall", members.namecall());
+         // (each makes a new UDim: datatype_price::MEMBER_NEW)
+         fields.add_field_method_get("X", |lua, this| {
+             super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);
+diff --git a/crates/lune-roblox/src/datatypes/types/vector2.rs b/crates/lune-roblox/src/datatypes/types/vector2.rs
+index f8adabf..485b514 100644
+--- a/crates/lune-roblox/src/datatypes/types/vector2.rs
++++ b/crates/lune-roblox/src/datatypes/types/vector2.rs
+@@ -11,8 +11,8 @@ use crate::exports::LuaExportsTable;
+ 
+ use super::{super::*, charge_host_nanos, datatype_price as price};
+ use crate::datatypes::script_error::{
+-    incompatible, invalid_argument, luau_arg, luau_number, luau_self, reflected_arg, reflected_float_arg, same_operands,
+-    script_error, userdata_of,
++    incompatible, invalid_method_arg, luau_arg_named, luau_number, luau_self, reflected_arg,
++    reflected_float_arg, same_operands, script_error, userdata_of, MethodMembers,
+ };
+ 
+ /**
+@@ -51,8 +51,10 @@ impl LuaUserData for Vector2 {
+     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
+         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Vector2"));
+-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
+-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Vector2"));
++        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
++        let members = MethodMembers::new("Vector2");
++        fields.add_meta_field("__index", members.index());
++        fields.add_meta_field("__namecall", members.namecall());
+         fields.add_field_method_get("Magnitude", magnitude);
+         fields.add_field_method_get("Unit", unit);
+         fields.add_field_method_get("X", |_, this| Ok(this.0.x));
+@@ -84,11 +86,11 @@ impl LuaUserData for Vector2 {
+                 return Err(script_error(format!("Invalid number of arguments: {}, Vector2.Angle expects 2 or 3.", args.len()), false));
+             }
+             let this = luau_self::<Vector2>(&args, "Angle", "Vector2")?;
+-            let rhs = luau_arg::<Vector2>(&args, 2, "Vector2")?;
++            let rhs = luau_arg_named::<Vector2>(&args, 2, "Angle", "Vector2")?;
+             let signed = match args.get(2) {
+                 None => false,
+                 Some(LuaValue::Boolean(signed)) => *signed,
+-                Some(other) => return Err(invalid_argument(3, None, "boolean", other)),
++                Some(other) => return Err(invalid_method_arg(3, "Angle", "boolean", other)),
+             };
+             let (a, b) = (this.0, rhs.0);
+             let angle = (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y);
+@@ -112,10 +114,10 @@ impl LuaUserData for Vector2 {
+                 return Err(script_error(format!("Invalid number of arguments: {}, Vector2.FuzzyEq expects 2 or 3.", args.len()), false));
+             }
+             let this = luau_self::<Vector2>(&args, "FuzzyEq", "Vector2")?;
+-            let rhs = luau_arg::<Vector2>(&args, 2, "Vector2")?;
++            let rhs = luau_arg_named::<Vector2>(&args, 2, "FuzzyEq", "Vector2")?;
+             let epsilon = match args.get(2) {
+                 None => 1e-5f32,
+-                Some(value) => luau_number(lua, value).ok_or_else(|| invalid_argument(3, None, "number", value))? as f32,
++                Some(value) => luau_number(lua, value).ok_or_else(|| invalid_method_arg(3, "FuzzyEq", "number", value))? as f32,
+             };
+             if epsilon.abs() > 0.1 {
+                 return Err(script_error("The eps value provided to FuzzyEq should be a small positive value <= 0.1", false));
+@@ -142,7 +144,7 @@ impl LuaUserData for Vector2 {
+             methods.add_function(name, move |_, args: LuaMultiValue| {
+                 let mut result = luau_self::<Vector2>(&args, name, "Vector2")?.0;
+                 for index in 2..=args.len() {
+-                    result = op(result, luau_arg::<Vector2>(&args, index, "Vector2")?.0);
++                    result = op(result, luau_arg_named::<Vector2>(&args, index, name, "Vector2")?.0);
+                 }
+                 Ok(Vector2(result))
+             });

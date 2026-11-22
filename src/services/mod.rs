@@ -564,36 +564,46 @@ pub fn install(engine: &Rc<Engine>) {
             name(&reflection, "CharacterAdded"),
         ) {
             let weak = Rc::downgrade(engine);
-            let reflection_for_parent = engine.reflection.clone();
+            let reflection_for_enter = engine.reflection.clone();
             let server = options.server();
             let mut hooks = engine.hooks.borrow_mut();
-            hooks.hierarchy_changed.push(Box::new(move |state, id, old, new| {
+            // Joining player setup (containers, team auto-assignment + Team.PlayerAdded, Players.PlayerAdded) runs before
+            // Players.ChildAdded (measured in Studio 0.747, tools/parity/probes/loopback/team_join.luau).
+            hooks.before_child_added.push(Box::new(move |state, hooks, id, old, new| {
                 let Some(engine) = weak.upgrade() else { return };
-                if !reflection_for_parent.is_a(state.dom.at(id).class, "Player") || engine.world().local_player == Some(id) {
+                if state.dom.at(new).class != players
+                    || !reflection_for_enter.is_a(state.dom.at(id).class, "Player")
+                    || engine.world().local_player == Some(id)
+                {
                     return;
                 }
-                let is_players = |state: &State, parent: Option<InstanceId>| {
-                    parent.is_some_and(|parent| state.dom.at(parent).class == players)
-                };
-                if is_players(state, old) {
-                    core::fire_event(state, old.unwrap(), removing, vec![Value::Instance(id)]);
-                }
-                if is_players(state, new) {
-                    if server && !is_players(state, old) {
-                        for name in JOINED_PLAYER_CONTAINERS {
-                            if state.dom.find_child(id, name.as_bytes()).is_some() {
-                                continue;
-                            }
-                            if let Some(class) = reflection_for_parent.class_id(name) {
-                                let child = core::create_named(state, &reflection_for_parent, class, name);
-                                state.dom.attach(child, id);
-                            }
+                let was_in_players = old.is_some_and(|parent| state.dom.at(parent).class == players);
+                if server && !was_in_players {
+                    for name in JOINED_PLAYER_CONTAINERS {
+                        if state.dom.find_child(id, name.as_bytes()).is_some() {
+                            continue;
                         }
-                        // (its team before PlayerAdded: the team's PlayerAdded fires first, teams.rs)
-                        let hooks = engine.hooks.borrow();
-                        teams::assign_joining(state, &reflection_for_parent, &hooks, engine.world().game, id);
+                        if let Some(class) = reflection_for_enter.class_id(name) {
+                            let child = core::create_named(state, &reflection_for_enter, class, name);
+                            state.dom.attach(child, id);
+                        }
                     }
-                    core::fire_event(state, new.unwrap(), added, vec![Value::Instance(id)]);
+                    // (its team before PlayerAdded: the team's PlayerAdded fires first, teams.rs)
+                    teams::assign_joining(state, &reflection_for_enter, hooks, engine.world().game, id);
+                }
+                core::fire_event(state, new, added, vec![Value::Instance(id)]);
+            }));
+            let weak = Rc::downgrade(engine);
+            let reflection_for_leave = engine.reflection.clone();
+            hooks.hierarchy_changed.push(Box::new(move |state, id, old, _new| {
+                let Some(engine) = weak.upgrade() else { return };
+                if !reflection_for_leave.is_a(state.dom.at(id).class, "Player") || engine.world().local_player == Some(id) {
+                    return;
+                }
+                if let Some(old_parent) = old
+                    && state.dom.at(old_parent).class == players
+                {
+                    core::fire_event(state, old_parent, removing, vec![Value::Instance(id)]);
                 }
             }));
             hooks.property_changed.push(Box::new(move |state, id, changed| {

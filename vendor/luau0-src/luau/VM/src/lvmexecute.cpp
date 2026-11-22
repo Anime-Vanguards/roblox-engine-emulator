@@ -1197,6 +1197,8 @@ reentry:
                     if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
                     {
                         L->global->work.ccalls++;
+                        if (luaE_hostcall(L))
+                            ci->flags |= LUA_CALLINFO_WORK_CCALL;
                         luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
                     }
                     int n = func(L);
@@ -1331,6 +1333,8 @@ reentry:
                     if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
                     {
                         L->global->work.ccalls++;
+                        if (luaE_hostcall(L))
+                            ci->flags |= LUA_CALLINFO_WORK_CCALL;
                         luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
                     }
                     int n = func(L);
@@ -4252,9 +4256,11 @@ int luau_precall(lua_State* L, StkId func, int nresults)
     else
     {
         lua_CFunction func = ccl->c.f;
-        if (luaE_scriptwork(L))
+        if (luaE_scriptwork(L) && !((L->ci - 1)->flags & LUA_CALLINFO_WORK_CCALL))
         {
             L->global->work.ccalls++;
+            if (luaE_hostcall(L))
+                ci->flags |= LUA_CALLINFO_WORK_CCALL;
             luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
         }
         int n = func(L);

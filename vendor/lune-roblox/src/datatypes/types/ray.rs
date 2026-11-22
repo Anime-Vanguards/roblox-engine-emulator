@@ -8,8 +8,10 @@ use lune_utils::TableBuilder;
 
 use crate::exports::LuaExportsTable;
 
-use super::{super::*, Vector3};
-use crate::datatypes::script_error::{luau_arg, luau_self, optional_ctor_arg};
+use super::{super::*, Vector3, VectorArg, native_vector};
+use crate::datatypes::script_error::{
+    invalid_argument, invalid_method_arg, luau_self, missing_method_arg, MethodMembers,
+};
 
 /**
     An implementation of the [Ray](https://create.roblox.com/docs/reference/engine/datatypes/Ray)
@@ -24,12 +26,47 @@ pub struct Ray {
 }
 
 impl Ray {
-    fn closest_point(&self, point: Vec3) -> Vec3 {
-        let norm = self.direction.normalize();
-        let lhs = point - self.origin;
+    fn closest_point_f64(&self, point: Vec3) -> [f64; 3] {
+        let o = [f64::from(self.origin.x), f64::from(self.origin.y), f64::from(self.origin.z)];
+        let d = [f64::from(self.direction.x), f64::from(self.direction.y), f64::from(self.direction.z)];
+        let p = [f64::from(point.x), f64::from(point.y), f64::from(point.z)];
+        let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+        if dd == 0.0 {
+            return o;
+        }
+        let t = (((p[0] - o[0]) * d[0] + (p[1] - o[1]) * d[1] + (p[2] - o[2]) * d[2]) / dd).max(0.0);
+        [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t]
+    }
 
-        let dot_product = lhs.dot(norm).max(0.0);
-        self.origin + norm * dot_product
+    fn closest_point(&self, point: Vec3) -> Vec3 {
+        let c = self.closest_point_f64(point);
+        Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32)
+    }
+
+    fn distance(&self, point: Vec3) -> f64 {
+        let c = self.closest_point_f64(point);
+        let dx = f64::from(point.x) - c[0];
+        let dy = f64::from(point.y) - c[1];
+        let dz = f64::from(point.z) - c[2];
+        (dx * dx + dy * dy + dz * dz).sqrt()
+    }
+}
+
+fn optional_vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Vec3> {
+    match args.get(index - 1) {
+        None => Ok(Vec3::ZERO),
+        Some(value) => VectorArg::from_lua(value.clone(), lua)
+            .map(|v| v.0)
+            .map_err(|_| invalid_argument(index, Some(name), "Vector3", value)),
+    }
+}
+
+fn method_vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, method: &str) -> LuaResult<Vec3> {
+    match args.get(index - 1) {
+        None => Err(missing_method_arg(index, method, "Vector3")),
+        Some(value) => VectorArg::from_lua(value.clone(), lua)
+            .map(|v| v.0)
+            .map_err(|_| invalid_method_arg(index, method, "Vector3", value)),
     }
 }
 
@@ -39,13 +76,10 @@ impl LuaExportsTable for Ray {
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
         // (two Vector3s checked as a client's Luau checks them, naming the constructor; one not passed is the zero vector:
         // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
-        let ray_new = |_: &Lua, args: LuaMultiValue| {
-            let origin = optional_ctor_arg::<Vector3>(&args, 1, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
-            let direction = optional_ctor_arg::<Vector3>(&args, 2, "new", "Vector3")?.unwrap_or(Vector3(Vec3::ZERO));
-            Ok(Ray {
-                origin: origin.0,
-                direction: direction.0,
-            })
+        let ray_new = |lua: &Lua, args: LuaMultiValue| {
+            let origin = optional_vector_arg(lua, &args, 1, "new")?;
+            let direction = optional_vector_arg(lua, &args, 2, "new")?;
+            Ok(Ray { origin, direction })
         };
 
         TableBuilder::new(lua)?
@@ -58,10 +92,12 @@ impl LuaUserData for Ray {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("Ray"));
-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("Ray"));
-        fields.add_field_method_get("Origin", |_, this| Ok(Vector3(this.origin)));
-        fields.add_field_method_get("Direction", |_, this| Ok(Vector3(this.direction)));
+        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
+        let members = MethodMembers::new("Ray");
+        fields.add_meta_field("__index", members.index());
+        fields.add_meta_field("__namecall", members.namecall());
+        fields.add_field_method_get("Origin", |_, this| Ok(native_vector(this.origin)));
+        fields.add_field_method_get("Direction", |_, this| Ok(native_vector(this.direction)));
         // (and Roblox's deprecated lowercase name, measured in a client: ree's tools/parity/probes/camelcase.luau)
         for name in ["Unit", "unit"] {
             fields.add_field_method_get(name, |_, this| {
@@ -75,18 +111,16 @@ impl LuaUserData for Ray {
 
     fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
         // Methods
-        // (self named as a `.` call names it, the point as a `:` call reports it: "missing argument #2 (Vector3 expected)";
-        // Studio 0.747, ree's tools/parity/probes/datatype_errors.luau)
-        methods.add_function("ClosestPoint", |_, args: LuaMultiValue| {
+        // (self named as a `.` call names it; point names the method on `.` and omits it on `:`: Studio 0.747)
+        methods.add_function("ClosestPoint", |lua, args: LuaMultiValue| {
             let this = luau_self::<Ray>(&args, "ClosestPoint", "Ray")?;
-            let to = luau_arg::<Vector3>(&args, 2, "Vector3")?;
-            Ok(Vector3(this.closest_point(to.0)))
+            let to = method_vector_arg(lua, &args, 2, "ClosestPoint")?;
+            Ok(native_vector(this.closest_point(to)))
         });
-        methods.add_function("Distance", |_, args: LuaMultiValue| {
+        methods.add_function("Distance", |lua, args: LuaMultiValue| {
             let this = luau_self::<Ray>(&args, "Distance", "Ray")?;
-            let to = luau_arg::<Vector3>(&args, 2, "Vector3")?;
-            let closest = this.closest_point(to.0);
-            Ok((closest - to.0).length())
+            let to = method_vector_arg(lua, &args, 2, "Distance")?;
+            Ok(this.distance(to))
         });
         // Metamethods
         methods.add_meta_method(LuaMetaMethod::Eq, userdata_impl_eq);

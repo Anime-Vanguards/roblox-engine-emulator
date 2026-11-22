@@ -6,12 +6,18 @@
 //! callback returns [`script_error`]'s error instead, and the hook mlua-sys runs before `lua_error` ([`install`]) raises
 //! the string in its place.
 
-use std::{cell::RefCell, ffi::CStr};
+use std::{cell::{Cell, RefCell}, ffi::CStr, rc::Rc};
 
 use mlua::{ffi, prelude::*};
 
 thread_local! {
     static PENDING: RefCell<Option<Pending>> = const { RefCell::new(None) };
+    static IN_NAMECALL: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Whether the running datatype method was invoked via `__namecall` (`:`) rather than `__index` (`.`).
+pub fn is_namecall() -> bool {
+    IN_NAMECALL.with(|depth| depth.get() > 0)
 }
 
 struct Pending {
@@ -87,6 +93,7 @@ fn internal_chunk(source: &[u8]) -> bool {
 pub unsafe fn caller_position(state: *mut ffi::lua_State) -> Option<String> {
     unsafe {
         let mut level = 1;
+        let mut skip_namecall = is_namecall();
         while level < 64 {
             let mut frame: ffi::lua_Debug = std::mem::zeroed();
             if ffi::lua_getinfo(state, level, c"sl".as_ptr(), &mut frame) == 0 {
@@ -98,6 +105,11 @@ pub unsafe fn caller_position(state: *mut ffi::lua_State) -> Option<String> {
                 continue;
             }
             if frame.currentline < 0 {
+                if skip_namecall {
+                    skip_namecall = false;
+                    level += 1;
+                    continue;
+                }
                 // a C function: one the host's own Luau called is part of that code
                 let mut next: ffi::lua_Debug = std::mem::zeroed();
                 if ffi::lua_getinfo(state, level + 1, c"s".as_ptr(), &mut next) != 0
@@ -272,6 +284,31 @@ pub fn luau_self<T: LuaUserData + 'static>(args: &LuaMultiValue, method: &str, t
     }
 }
 
+/// Argument `index` (1-based, self being 1) of a method a client checks in Luau: names `method` on a `.` call and
+/// omits it on a `:` call.
+pub fn luau_arg_named<T: LuaUserData + 'static>(
+    args: &LuaMultiValue,
+    index: usize,
+    method: &str,
+    type_name: &str,
+) -> LuaResult<LuaUserDataRef<T>> {
+    let function = (!is_namecall()).then_some(method);
+    match args.get(index - 1) {
+        None => Err(missing_argument(index, function, type_name)),
+        Some(value) => userdata_of::<T>(Some(value)).ok_or_else(|| invalid_argument(index, function, type_name, value)),
+    }
+}
+
+/// Invalid argument `index` (1-based) of a method: names `method` on a `.` call and omits it on a `:` call.
+pub fn invalid_method_arg(index: usize, method: &str, expected: &str, value: &LuaValue) -> LuaError {
+    invalid_argument(index, (!is_namecall()).then_some(method), expected, value)
+}
+
+/// Missing argument `index` (1-based) of a method: names `method` on a `.` call and omits it on a `:` call.
+pub fn missing_method_arg(index: usize, method: &str, expected: &str) -> LuaError {
+    missing_argument(index, (!is_namecall()).then_some(method), expected)
+}
+
 /// Argument `index` (1-based, self being 1) of a method a client checks in Luau, as a `:` call reports it (no name).
 pub fn luau_arg<T: LuaUserData + 'static>(args: &LuaMultiValue, index: usize, type_name: &str) -> LuaResult<LuaUserDataRef<T>> {
     match args.get(index - 1) {
@@ -364,6 +401,103 @@ impl IntoLua for UnknownMembers {
         meta.raw_set("__index", raise)?;
         methods.set_metatable(Some(meta))?;
         Ok(LuaValue::Table(methods))
+    }
+}
+
+/// Pairs a datatype's `__index` method table (which mlua populates in-place with every registered method, while keeping
+/// property getters separate) with a `__namecall` dispatcher over that same table. A `:` call only resolves methods (so
+/// `V2:X()` raises `X is not a valid member of Vector2`) and marks [`is_namecall`] for the call's duration so Luau-checked
+/// argument errors after self omit ` to '<method>'` on `:` calls and include it on `.` calls.
+#[derive(Clone)]
+pub struct MethodMembers {
+    type_name: &'static str,
+    table: Rc<RefCell<Option<LuaTable>>>,
+}
+
+impl MethodMembers {
+    pub fn new(type_name: &'static str) -> Self {
+        Self {
+            type_name,
+            table: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    pub fn index(&self) -> MethodIndex {
+        MethodIndex(self.clone())
+    }
+
+    pub fn namecall(&self) -> MethodNamecall {
+        MethodNamecall(self.clone())
+    }
+
+    fn methods_table(&self, lua: &Lua) -> LuaResult<LuaTable> {
+        if let Some(existing) = self.table.borrow().as_ref() {
+            return Ok(existing.clone());
+        }
+        let raise = unsafe {
+            lua.exec_raw::<LuaFunction>(self.type_name, |state| {
+                ffi::lua_pushcclosurek(state, unknown_member, c"__index".as_ptr(), 1, None);
+            })?
+        };
+        let methods = lua.create_table()?;
+        let meta = lua.create_table()?;
+        meta.raw_set("__index", raise)?;
+        methods.set_metatable(Some(meta))?;
+        *self.table.borrow_mut() = Some(methods.clone());
+        Ok(methods)
+    }
+}
+
+pub struct MethodIndex(MethodMembers);
+
+impl IntoLua for MethodIndex {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        Ok(LuaValue::Table(self.0.methods_table(lua)?))
+    }
+}
+
+pub struct MethodNamecall(MethodMembers);
+
+impl IntoLua for MethodNamecall {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let methods = self.0.methods_table(lua)?;
+        let function = unsafe {
+            lua.exec_raw::<LuaFunction>((methods, self.0.type_name), |state| {
+                ffi::lua_pushcclosurek(state, datatype_namecall, c"__namecall".as_ptr(), 2, None);
+            })?
+        };
+        Ok(LuaValue::Function(function))
+    }
+}
+
+pub unsafe extern "C-unwind" fn datatype_namecall(state: *mut ffi::lua_State) -> std::ffi::c_int {
+    unsafe {
+        let key = ffi::lua_namecallatom(state, std::ptr::null_mut());
+        if key.is_null() {
+            raise_script(state, "invalid namecall".into(), false);
+        }
+        let bytes = CStr::from_ptr(key).to_bytes();
+        ffi::lua_pushlstring(state, bytes.as_ptr().cast(), bytes.len());
+        if ffi::lua_rawget(state, ffi::lua_upvalueindex(1)) == ffi::LUA_TFUNCTION {
+            ffi::lua_insert(state, 1);
+            let nargs = ffi::lua_gettop(state) - 1;
+            IN_NAMECALL.with(|depth| depth.set(depth.get() + 1));
+            let status = ffi::lua_pcall(state, nargs, ffi::LUA_MULTRET, 0);
+            IN_NAMECALL.with(|depth| depth.set(depth.get() - 1));
+            if status == ffi::LUA_OK {
+                return ffi::lua_gettop(state);
+            }
+            ffi::lua_error(state);
+        }
+        ffi::lua_pop(state, 1);
+        let key_name = String::from_utf8_lossy(bytes).into_owned();
+        let mut length = 0;
+        let type_ptr = ffi::lua_tolstring(state, ffi::lua_upvalueindex(2), &mut length);
+        let type_name = String::from_utf8_lossy(std::slice::from_raw_parts(type_ptr.cast::<u8>(), length)).into_owned();
+        let message = format!("{key_name} is not a valid member of {type_name}");
+        drop(key_name);
+        drop(type_name);
+        raise_script(state, message, false)
     }
 }
 

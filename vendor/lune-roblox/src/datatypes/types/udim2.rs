@@ -78,8 +78,10 @@ impl LuaUserData for UDim2 {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("UDim2"));
-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("UDim2"));
+        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
+        let members = crate::datatypes::script_error::MethodMembers::new("UDim2");
+        fields.add_meta_field("__index", members.index());
+        fields.add_meta_field("__namecall", members.namecall());
         // (each makes a new UDim: datatype_price::MEMBER_NEW)
         fields.add_field_method_get("X", |lua, this| {
             super::charge_host_nanos(lua, super::datatype_price::MEMBER_NEW);

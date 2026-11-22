@@ -248,7 +248,7 @@ pub fn install(engine: &Rc<Engine>) {
     color_view(&mut derive_wrapper(&mut views, &mut derive), "GuiObject", "BorderColor", "BorderColor3", &reflection);
     // A part's BrickColor is the nearest palette colour to its Color, and writing it sets Color (measured in a playing
     // client, Studio 0.744: either write fires BrickColor's events and then Color's, tools/parity/probes/changed.luau and
-    // derived_changed.luau; ree kept the two apart, so a BrickColor write never reached the part's colour)
+    // derived_changed.luau; ree kept the two apart, so a BrickColor write never reached the part's colour).
     color_view(&mut derive_wrapper(&mut views, &mut derive), "BasePart", "BrickColor", "Color", &reflection);
 
     // Measured: Transparency reads BackgroundTransparency; on text objects writing it also sets
@@ -343,6 +343,29 @@ pub fn install(engine: &Rc<Engine>) {
             }
         });
         derive(&mut views, &class_name, &name, &source_name, ViewEvents::Before, read, write);
+    }
+
+    // BasePart.Color is stored in 1/255 steps (`uint8_t(int(channel * 255.0f)) / 255.0f`, measured in Studio 0.747:
+    // direct writes and TweenService blends both cut each channel down to whole 1/255 steps, tools/parity/probes/tween_color.luau).
+    if let (Some(base_part), Some(color)) = (reflection.class_id("BasePart"), reflection.name_id("Color"))
+        && let Some(info) = reflection.class_property(base_part, color).cloned()
+    {
+        setters.push((
+            base_part,
+            color,
+            Rc::new(move |lua, engine, id, value| {
+                let coerced = convert::coerce(lua, engine, &info, &value)?;
+                let quantized = match coerced {
+                    Value::Color3(c) => {
+                        let q = |channel: f32| ((channel * 255.0) as i32 as u8) as f32 / 255.0;
+                        Value::Color3(dom::Color3::new(q(c.r), q(c.g), q(c.b)))
+                    }
+                    other => other,
+                };
+                crate::lua::instance::set_property(engine, id, color, quantized);
+                Ok(())
+            }),
+        ));
     }
 
     let mut behaviors = engine.behaviors.borrow_mut();

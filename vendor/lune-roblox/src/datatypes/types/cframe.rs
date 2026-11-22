@@ -13,8 +13,9 @@ use crate::exports::LuaExportsTable;
 
 use super::{super::*, Vector3, VectorArg, charge_host_nanos, float32 as f32m, native_vector};
 use crate::datatypes::script_error::{
-    argument_missing, cast_name, invalid_argument, luau_arg, luau_number, luau_self, missing_argument, reflected_arg,
-    reflected_float_arg, script_error, type_name, unable_to_cast, userdata_of,
+    argument_missing, cast_name, invalid_argument, invalid_method_arg, is_namecall, luau_arg_named, luau_number,
+    luau_self, missing_argument, raise_script, reflected_arg, reflected_float_arg, script_error, type_name,
+    unable_to_cast, userdata_of, MethodMembers,
 };
 
 /**
@@ -246,20 +247,14 @@ unsafe extern "C-unwind" fn fuzzy_eq_c(state: *mut mlua::ffi::lua_State) -> std:
         if status == 0 {
             return 1;
         }
+        let to = if is_namecall() { "" } else { " to 'FuzzyEq'" };
         let message = match status {
             1 => format!("invalid argument #1 to 'FuzzyEq' (CFrame expected, got {})", fuzzy_eq_type_name(state, 1)),
-            2 => format!("invalid argument #2 (CFrame expected, got {})", fuzzy_eq_type_name(state, 2)),
-            3 => format!("invalid argument #3 (number expected, got {})", fuzzy_eq_type_name(state, 3)),
+            2 => format!("invalid argument #2{to} (CFrame expected, got {})", fuzzy_eq_type_name(state, 2)),
+            3 => format!("invalid argument #3{to} (number expected, got {})", fuzzy_eq_type_name(state, 3)),
             _ => String::from("The eps value provided to FuzzyEq should be a small positive value <= 0.1"),
         };
-        ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
-        drop(message);
-        if status != 4 {
-            ffi::luaL_where(state, 1);
-            ffi::lua_insert(state, -2);
-            ffi::lua_concat(state, 2);
-        }
-        ffi::lua_error(state)
+        raise_script(state, message, status != 4)
     }
 }
 
@@ -315,14 +310,10 @@ unsafe extern "C-unwind" fn angle_between_c(state: *mut mlua::ffi::lua_State) ->
         let message = if status == 1 {
             format!("invalid argument #1 to 'AngleBetween' (CFrame expected, got {})", fuzzy_eq_type_name(state, 1))
         } else {
-            format!("invalid argument #2 (CFrame expected, got {})", fuzzy_eq_type_name(state, 2))
+            let to = if is_namecall() { "" } else { " to 'AngleBetween'" };
+            format!("invalid argument #2{to} (CFrame expected, got {})", fuzzy_eq_type_name(state, 2))
         };
-        ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
-        drop(message);
-        ffi::luaL_where(state, 1);
-        ffi::lua_insert(state, -2);
-        ffi::lua_concat(state, 2);
-        ffi::lua_error(state)
+        raise_script(state, message, true)
     }
 }
 
@@ -428,7 +419,7 @@ impl CFrame {
 
     fn inverse(&self) -> Self {
         let (p, t) = (self.pos(), f32m::transpose(&self.rot()));
-        let position = [0, 1, 2].map(|i| (-t[i][0] * p[0] + -t[i][1] * p[1]) + -t[i][2] * p[2]);
+        let position = [0, 1, 2].map(|i| 0.0 - ((t[i][0] * p[0] + t[i][1] * p[1]) + t[i][2] * p[2]));
         Self::from_parts(position, t)
     }
 
@@ -627,8 +618,10 @@ impl LuaUserData for CFrame {
     fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
         // (an assignment raises as a client's does: datatypes::script_error::AssignMembers)
         fields.add_meta_field("__newindex", crate::datatypes::script_error::AssignMembers("CFrame"));
-        // (a member it lacks raises as a client's does: datatypes::script_error::UnknownMembers)
-        fields.add_meta_field("__index", crate::datatypes::script_error::UnknownMembers::with_methods("CFrame"));
+        // (a member it lacks raises as a client's does, and `:` resolves methods only: datatypes::script_error::MethodMembers)
+        let members = MethodMembers::new("CFrame");
+        fields.add_meta_field("__index", members.index());
+        fields.add_meta_field("__namecall", members.namecall());
         // Vectors come back as Luau's native vector, which is what a script's Vector3 is; each read is
         // charged to the script as the one Luau call the engine's prelude spent on it before it was native
         fields.add_field_method_get("Position", |lua, this| {
@@ -723,13 +716,13 @@ impl LuaUserData for CFrame {
         });
         aliased_named!(methods, ["ToWorldSpace", "toWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
             let this = luau_self::<CFrame>(&args, name, "CFrame")?;
-            let frames = frames_of(&args)?;
+            let frames = frames_of(&args, name)?;
             charge_host_nanos(lua, price::TO_WORLD);
             Ok(frames.into_iter().map(|cf| *this * cf).collect::<Variadic<_>>())
         });
         aliased_named!(methods, ["ToObjectSpace", "toObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
             let this = luau_self::<CFrame>(&args, name, "CFrame")?;
-            let frames = frames_of(&args)?;
+            let frames = frames_of(&args, name)?;
             charge_host_nanos(lua, price::TO_OBJECT);
             let inverse = this.inverse();
             Ok(frames.into_iter().map(|cf| inverse * cf).collect::<Variadic<_>>())
@@ -868,18 +861,18 @@ fn points_of(lua: &Lua, args: &LuaMultiValue, name: &str) -> LuaResult<(CFrame, 
         .iter()
         .enumerate()
         .skip(1)
-        .map(|(index, value)| VectorArg::from_lua(value.clone(), lua).map(|v| v.0).map_err(|_| invalid_argument(index + 1, None, "Vector3", value)))
+        .map(|(index, value)| VectorArg::from_lua(value.clone(), lua).map(|v| v.0).map_err(|_| invalid_method_arg(index + 1, name, "Vector3", value)))
         .collect::<LuaResult<Vec<_>>>()?;
     // (nothing after self is one zero vector, as a playing client answers: Studio 0.747, ree's datatype_errors.luau)
     Ok((this, if points.is_empty() { vec![Vec3::ZERO] } else { points }))
 }
 
 /// The frames after self of ToWorldSpace or ToObjectSpace (none: one identity, as a playing client answers).
-fn frames_of(args: &LuaMultiValue) -> LuaResult<Vec<CFrame>> {
+fn frames_of(args: &LuaMultiValue, name: &str) -> LuaResult<Vec<CFrame>> {
     if args.len() < 2 {
         return Ok(vec![CFrame::IDENTITY]);
     }
-    (2..=args.len()).map(|index| luau_arg::<CFrame>(args, index, "CFrame").map(|cf| *cf)).collect()
+    (2..=args.len()).map(|index| luau_arg_named::<CFrame>(args, index, name, "CFrame").map(|cf| *cf)).collect()
 }
 
 impl fmt::Display for CFrame {

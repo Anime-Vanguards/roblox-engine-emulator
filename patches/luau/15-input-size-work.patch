@@ -466,10 +466,18 @@ index 49f8f6b..98086ee 100644
  // table an instruction with an inline cache reaches first has the charge told apart (lua_ProfileCacheSite.firsttouch)
  LUAI_FUNC void luaP_coldtouch(lua_State* L, GCObject* o);
 diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
-index cbaaf5e..041f2bb 100644
+index cbaaf5e..b3cc72f 100644
 --- a/luau/VM/src/lstate.h
 +++ b/luau/VM/src/lstate.h
-@@ -420,5 +420,35 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
+@@ -79,6 +79,7 @@ typedef struct CallInfo
+ #define LUA_CALLINFO_HANDLE (1 << 1) // should the error thrown during execution get handled by continuation from this callinfo? func must be C
+ #define LUA_CALLINFO_NATIVE (1 << 2) // should this function be executed using execution callback for native code
+ #define LUA_CALLINFO_OPYIELD (1 << 3) // call frame has yielded on a non-call opcode and requires luau_finishop
++#define LUA_CALLINFO_WORK_CCALL (1 << 9)  // this host C frame already charged a work.ccalls entry, so an inner C forward does not double-count
+ #define LUA_CALLINFO_PCALL (1 << 4)   // call frame was setup by a synthetic protected call and requires luau_pospcallsuccess
+ 
+ #define TAGGED_PAGESET_BASE (LUA_TSTRING)
+@@ -420,5 +421,35 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
  #define luaE_scriptframe(L, ci) (luaE_workframe(L, ci) == 1)
  #define luaE_scriptwork(L) luaE_scriptframe(L, (L)->ci)
  
@@ -879,3 +887,38 @@ index a45db25..7ce3cf7 100644
          lua_pushinteger(L, n + 1);
          lua_pushinteger(L, code);
          return 2;
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index 51474bb..3247913 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -1174,6 +1174,8 @@ reentry:
+                     if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                     {
+                         L->global->work.ccalls++;
++                        if (luaE_hostcall(L))
++                            ci->flags |= LUA_CALLINFO_WORK_CCALL;
+                         luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
+                     }
+                     int n = func(L);
+@@ -1302,6 +1304,8 @@ reentry:
+                     if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                     {
+                         L->global->work.ccalls++;
++                        if (luaE_hostcall(L))
++                            ci->flags |= LUA_CALLINFO_WORK_CCALL;
+                         luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
+                     }
+                     int n = func(L);
+@@ -4170,9 +4174,11 @@ int luau_precall(lua_State* L, StkId func, int nresults)
+     else
+     {
+         lua_CFunction func = ccl->c.f;
+-        if (luaE_scriptwork(L))
++        if (luaE_scriptwork(L) && !((L->ci - 1)->flags & LUA_CALLINFO_WORK_CCALL))
+         {
+             L->global->work.ccalls++;
++            if (luaE_hostcall(L))
++                ci->flags |= LUA_CALLINFO_WORK_CCALL;
+             luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
+         }
+         int n = func(L);

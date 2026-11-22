@@ -80,6 +80,7 @@ typedef struct CallInfo
 #define LUA_CALLINFO_NATIVE (1 << 2) // should this function be executed using execution callback for native code
 #define LUA_CALLINFO_OPYIELD (1 << 3) // call frame has yielded on a non-call opcode and requires luau_finishop
 #define LUA_CALLINFO_PROFILECALL (1 << 8) // a host's profile sampled this call: its return calls the profile's call hook (lprofile.cpp)
+#define LUA_CALLINFO_WORK_CCALL (1 << 9)  // this host C frame already charged a work.ccalls entry, so an inner C forward does not double-count
 #define LUA_CALLINFO_PCALL (1 << 4)   // call frame was setup by a synthetic protected call and requires luau_pospcallsuccess
 
 #define TAGGED_PAGESET_BASE (LUA_TSTRING)

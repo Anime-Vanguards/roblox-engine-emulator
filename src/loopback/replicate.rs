@@ -237,6 +237,10 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
             mark(&mut state, service, true, &excluded);
         }
     }
+    // Copy the server's collision-group registry before client scripts run (tools/parity/probes/loopback/collision_groups.luau)
+    if let Some(snapshot) = crate::services::physics::snapshot(server) {
+        crate::services::physics::apply_snapshot(client, snapshot);
+    }
     server.state.borrow_mut().loopback_log = Some(Vec::new());
     install(server, bridge, filter, excluded);
     install_client(client, bridge);
@@ -677,6 +681,9 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
                 client.state.borrow_mut().dom.unpin(copy);
             }
             let _ = crate::lua::instance::destroy(lua, client, copy);
+        }
+        Msg::CollisionGroups(snapshot) => {
+            crate::services::physics::apply_snapshot(client, snapshot);
         }
         Msg::Event { .. } | Msg::Invoke { .. } | Msg::Return { .. } => {}
     }

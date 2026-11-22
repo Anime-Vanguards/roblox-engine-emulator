@@ -1,22 +1,4 @@
 {
-	"collision_groups": [
-		{
-			"line": "client: join 2 Default=-3 LoopEarly=-2",
-			"why": "a client gets its server's collision groups and collidable pairs, at its join and as they change; ree replicates none (services/physics.rs), so a loopback client keeps its own registry, Default alone"
-		},
-		{
-			"line": "client: late 3 Default=-3 LoopEarly=-6 LoopLate=-3",
-			"why": "a client gets its server's collision groups and collidable pairs, at its join and as they change; ree replicates none (services/physics.rs), so a loopback client keeps its own registry, Default alone"
-		},
-		{
-			"line": "client: late-collidable ok false",
-			"why": "a client gets its server's collision groups and collidable pairs, at its join and as they change; ree replicates none (services/physics.rs), so a loopback client keeps its own registry, Default alone"
-		},
-		{
-			"line": "client: changed 2 Default=-3 LoopRenamed=-2",
-			"why": "a client gets its server's collision groups and collidable pairs, at its join and as they change; ree replicates none (services/physics.rs), so a loopback client keeps its own registry, Default alone"
-		}
-	],
 	"remote_latency": [
 		{
 			"line": "client: InvokeServer round trip: 60 answered, fewest frames 1",
@@ -39,16 +21,8 @@
 			"why": "a real session rounds a CFrame's rotation when it sends it (by about 1e-5); ree sends it exactly"
 		},
 		{
-			"line": "server: from-player case 33 n=2 | Random equal | number 4",
-			"why": "a Random arrives with its state in both, but ree's Random == compares the objects, a real client's their state (a datatype rule outside the loopback)"
-		},
-		{
 			"line": "client: case 18 n=1 | CFrame 1 2 3 1 0 0 0 0.877587557 -0.47941637 0 0.47941637 0.877587557",
 			"why": "a real session rounds a CFrame's rotation when it sends it (by about 1e-5); ree sends it exactly"
-		},
-		{
-			"line": "client: case 33 n=2 | Random equal | number 4",
-			"why": "a Random arrives with its state in both, but ree's Random == compares the objects, a real client's their state (a datatype rule outside the loopback)"
 		}
 	],
 	"replicated_properties": [
@@ -93,12 +67,6 @@
 		{
 			"line": "client: time(): client below the server's true",
 			"why": "ree's server and client start at the same virtual time and a message arrives in the client frame stepped after the server's, at the same frame time: the client's clocks are not later than the server's, as a real client's are"
-		}
-	],
-	"team_join": [
-		{
-			"line": "server: ChildAdded team=Red color=Bright red neutral=false",
-			"why": "a joining player fires Players.PlayerAdded before Players.ChildAdded in a real session; ree fires ChildAdded first (set_parent queues it before the hierarchy hooks, where the Players hook fires PlayerAdded), so the ChildAdded line comes before the team and PlayerAdded lines"
 		}
 	]
 }

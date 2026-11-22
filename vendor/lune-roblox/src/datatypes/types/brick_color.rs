@@ -9,7 +9,9 @@ use lune_utils::TableBuilder;
 use crate::exports::LuaExportsTable;
 
 use super::{super::*, Color3};
-use crate::datatypes::script_error::{argument_missing, reflected_float, script_error, unable_to_cast};
+use crate::datatypes::script_error::{
+    argument_missing, invalid_argument, luau_number, reflected_float, script_error, unable_to_cast,
+};
 
 /**
     An implementation of the [BrickColor](https://create.roblox.com/docs/reference/engine/datatypes/BrickColor) Roblox datatype.
@@ -29,27 +31,45 @@ impl LuaExportsTable for BrickColor {
     const EXPORT_NAME: &'static str = "BrickColor";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        type ArgsNumber = u16;
-        type ArgsName = String;
-        type ArgsRgb = (f32, f32, f32);
-        type ArgsColor3 = LuaUserDataRef<Color3>;
-
-        // three numbers are 0-1 components before one is a number: (1, 0, 0) is Really red, not White
+        // BrickColor.new as a playing client parses it (Studio 0.747, ree's tools/parity/probes/datatype_errors.luau):
+        // 0 args -> Really black (1003); 1 arg -> number/numeric string (truncated u16, else Medium stone grey),
+        // non-numeric string (by name), Color3, or invalid argument #1 to 'new' (Color3 expected, got <type>);
+        // 2+ args -> (r, g, b) components where non-numbers/missing default to 0.
         let brick_color_new = |lua: &Lua, args: LuaMultiValue| {
             super::charge_host_nanos(lua, super::datatype_price::BRICK_COLOR_NEW);
-            if let Ok((r, g, b)) = ArgsRgb::from_lua_multi(args.clone(), lua) {
-                Ok(color_from_rgb(r, g, b))
-            } else if let Ok(number) = ArgsNumber::from_lua_multi(args.clone(), lua) {
-                Ok(color_from_number(number))
-            } else if let Ok(name) = ArgsName::from_lua_multi(args.clone(), lua) {
-                Ok(color_from_name(name))
-            } else if let Ok(color) = ArgsColor3::from_lua_multi(args.clone(), lua) {
-                Ok(Self::from(*color))
-            } else {
-                // FUTURE: Better error message here using given arg types
-                Err(LuaError::RuntimeError(
-                    "Invalid arguments to constructor".to_string(),
-                ))
+            let from_f64 = |n: f64| {
+                let t = n.trunc();
+                if t.is_finite() && (0.0..=f64::from(u16::MAX)).contains(&t) {
+                    color_from_number(t as u16)
+                } else {
+                    BrickColor::default()
+                }
+            };
+            match args.len() {
+                0 => Ok(color_from_number(1003)),
+                1 => match &args[0] {
+                    LuaValue::Number(n) => Ok(from_f64(*n)),
+                    LuaValue::Integer(n) => Ok(u16::try_from(*n).map_or_else(|_| BrickColor::default(), color_from_number)),
+                    LuaValue::String(s) => {
+                        if let Some(n) = lua.coerce_number(LuaValue::String(s.clone()))? {
+                            Ok(from_f64(n))
+                        } else {
+                            Ok(color_from_name(s.to_string_lossy()))
+                        }
+                    }
+                    LuaValue::UserData(ud) => {
+                        if let Ok(color) = ud.borrow::<Color3>() {
+                            Ok(Self::from(*color))
+                        } else {
+                            Err(invalid_argument(1, Some("new"), "Color3", &args[0]))
+                        }
+                    }
+                    other => Err(invalid_argument(1, Some("new"), "Color3", other)),
+                },
+                _ => {
+                    let comp = |i: usize| args.get(i).and_then(|v| luau_number(lua, v)).unwrap_or(0.0) as f32;
+                    Ok(color_from_rgb(comp(0), comp(1), comp(2)))
+                }
             }
         };
 

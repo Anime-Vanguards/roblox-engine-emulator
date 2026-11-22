@@ -216,6 +216,9 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let thread = to_thread(lua, engine, args.get(0), 1, "spawn")?;
                 refs::admit(engine, Hold::Work, "task.spawn")?;
                 charge_thread(lua, engine, args.get(0), "spawn");
+                if let Some(script) = unsafe { super::script_of_thread(lua.current_thread().state()) } {
+                    engine.state.borrow_mut().sched.set_thread_script(&thread, script);
+                }
                 scheduler::resume(lua, engine, &thread, args.rest(1));
                 Ok(values([LuaValue::Thread(thread)]))
             })())
@@ -229,9 +232,13 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let thread = to_thread(lua, engine, args.get(0), 1, "defer")?;
                 refs::admit(engine, Hold::Work, "task.defer")?;
                 charge_thread(lua, engine, args.get(0), "defer");
+                let caller_script = unsafe { super::script_of_thread(lua.current_thread().state()) };
                 let rest: Vec<Value> = args.0.iter().skip(1).map(super::convert::from_lua).collect();
                 if engine.state.borrow().sched.can_defer_event() {
                     let mut state = engine.state.borrow_mut();
+                    if let Some(script) = caller_script {
+                        state.sched.set_thread_script(&thread, script);
+                    }
                     state.sched.defer_task(scheduler::JobTarget::Thread(thread.clone()), rest);
                     state.sched.set_task_state(&thread, "deferred");
                 } else {
@@ -256,8 +263,12 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 // (its timer, a thread or a function's: cost.rs DELAYED)
                 engine.state.borrow().sched.charge(crate::cost::DELAYED);
                 crate::boundary::add_cost(crate::cost::DELAYED);
+                let caller_script = unsafe { super::script_of_thread(lua.current_thread().state()) };
                 let rest: Vec<Value> = args.0.iter().skip(2).map(super::convert::from_lua).collect();
                 let mut state = engine.state.borrow_mut();
+                if let Some(script) = caller_script {
+                    state.sched.set_thread_script(&thread, script);
+                }
                 state.sched.schedule_call(TimerKind::Delay, delay, thread.clone(), rest);
                 state.sched.set_task_state(&thread, "delayed");
                 Ok(values([LuaValue::Thread(thread)]))
@@ -345,6 +356,10 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // through their own metatables reached here (they are locked for scripts)
     // (Vector3's native methods with a client's argument errors: lua/vector_methods.rs)
     r.set("VectorMethods", super::vector_methods::methods(lua)?)?;
+    r.set(
+        "MakeVectorNamecall",
+        lua.create_function(|lua, extras: LuaTable| super::vector_methods::namecall(lua, extras))?,
+    )?;
     r.set(
         "Vector3",
         crate::cost::engine_luau(
@@ -697,13 +712,16 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     shared.raw_set("unpack", table.get::<LuaValue>("unpack")?)?;
     shared.raw_set("ypcall", globals.get::<LuaValue>("pcall")?)?;
     let gcinfo: LuaFunction = globals.get("gcinfo")?;
+    // Roblox accepts only collectgarbage("count") (Studio 0.747, tools/parity/probes/errors.luau)
     shared.raw_set(
         "collectgarbage",
-        lua.create_function(move |_, option: Option<String>| {
-            if option.as_deref() == Some("count") {
-                return gcinfo.call::<LuaValue>(());
+        wrapped(lua, engine, move |_, args| {
+            let args = Args::new(args);
+            match args.get(0) {
+                LuaValue::Nil => raise_plain("missing argument #1 to 'collectgarbage' (string expected)"),
+                LuaValue::String(option) if &*option.as_bytes() == b"count" => Ok(values([gcinfo.call::<LuaValue>(())?])),
+                _ => raise_plain("collectgarbage must be called with 'count'; use gcinfo() instead"),
             }
-            Ok(LuaValue::Integer(0))
         })?,
     )?;
     shared.raw_set("coroutine", exports.get::<LuaValue>("Coroutine")?)?;

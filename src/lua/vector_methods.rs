@@ -7,7 +7,7 @@
 //! line. The library's own checks say `vector expected` and name the library function (`to 'abs'`). A call is one C call
 //! as before: the library function runs on the wrapper's own stack, without a call of its own.
 
-use std::{ffi::c_int, sync::OnceLock};
+use std::{ffi::{c_int, CStr}, sync::OnceLock};
 
 use lune_roblox::datatypes::script_error::{raise_script, type_name_at};
 use mlua::{ffi, prelude::*};
@@ -58,7 +58,7 @@ pub fn methods(lua: &Lua) -> LuaResult<LuaTable> {
     let _ = LIBRARY.set(library);
 
     let table = lua.create_table()?;
-    let entries: [(&std::ffi::CStr, ffi::lua_CFunction); 8] = [
+    let entries: [(&std::ffi::CStr, ffi::lua_CFunction); 9] = [
         (c"Abs", abs),
         (c"Ceil", ceil),
         (c"Floor", floor),
@@ -67,6 +67,7 @@ pub fn methods(lua: &Lua) -> LuaResult<LuaTable> {
         (c"Cross", cross),
         (c"Max", max),
         (c"Min", min),
+        (c"Lerp", lerp),
     ];
     for (name, function) in entries {
         let method = unsafe {
@@ -79,9 +80,58 @@ pub fn methods(lua: &Lua) -> LuaResult<LuaTable> {
     Ok(table)
 }
 
-/// Checks the arguments of method `name` (self a Vector3, then `rest`), raising the client's error, then runs library
-/// function `index` on this stack.
-unsafe fn checked(state: *mut ffi::lua_State, name: &str, rest: Rest, index: usize) -> c_int {
+unsafe extern "C-unwind" {
+    fn lua_workhostnanos(state: *mut ffi::lua_State, nanos: c_int);
+}
+
+unsafe fn checked_lerp(state: *mut ffi::lua_State, dotted: bool) -> c_int {
+    unsafe {
+        let count = ffi::lua_gettop(state);
+        if count < 1 {
+            raise_script(state, "missing argument #1 to 'Lerp' (Vector3 expected)".into(), true);
+        }
+        if ffi::lua_type(state, 1) != ffi::LUA_TVECTOR {
+            let message = format!("invalid argument #1 to 'Lerp' (Vector3 expected, got {})", type_name_at(state, 1));
+            raise_script(state, message, true);
+        }
+        let to = if dotted { " to 'Lerp'" } else { "" };
+        if count < 2 {
+            raise_script(state, format!("missing argument #2{to} (Vector3 expected)"), true);
+        }
+        if ffi::lua_type(state, 2) != ffi::LUA_TVECTOR {
+            let message = format!("invalid argument #2{to} (Vector3 expected, got {})", type_name_at(state, 2));
+            raise_script(state, message, true);
+        }
+        if count < 3 {
+            raise_script(state, format!("missing argument #3{to} (number expected)"), true);
+        }
+        let kind = ffi::lua_type(state, 3);
+        let mut isnum: c_int = 0;
+        let alpha = if kind == ffi::LUA_TNUMBER || kind == ffi::LUA_TSTRING {
+            ffi::lua_tonumberx(state, 3, &mut isnum)
+        } else {
+            0.0
+        };
+        if isnum == 0 {
+            let message = format!("invalid argument #3{to} (number expected, got {})", type_name_at(state, 3));
+            raise_script(state, message, true);
+        }
+        // Priced to match the parity bench's 14.9 ns whole (11 ns call + 4 ns here)
+        lua_workhostnanos(state, 4);
+        let a = ffi::lua_tovector(state, 1);
+        let b = ffi::lua_tovector(state, 2);
+        let t = alpha as f32;
+        let x = *a + (*b - *a) * t;
+        let y = *a.add(1) + (*b.add(1) - *a.add(1)) * t;
+        let z = *a.add(2) + (*b.add(2) - *a.add(2)) * t;
+        ffi::lua_pushvector(state, x, y, z);
+        1
+    }
+}
+
+/// Checks the arguments of method `name` (self a Vector3, then `rest`), raising the client's error (naming the method
+/// on `.` calls, omitting it after self on `:` calls), then runs library function `index` on this stack.
+unsafe fn checked(state: *mut ffi::lua_State, name: &str, rest: Rest, index: usize, dotted: bool) -> c_int {
     unsafe {
         let count = ffi::lua_gettop(state);
         if count < 1 {
@@ -96,12 +146,13 @@ unsafe fn checked(state: *mut ffi::lua_State, name: &str, rest: Rest, index: usi
             Rest::One => 2,
             Rest::Any => count.max(1),
         };
+        let to = if dotted { format!(" to '{name}'") } else { String::new() };
         for argument in 2..=last {
             if argument > count {
-                raise_script(state, format!("missing argument #{argument} (Vector3 expected)"), true);
+                raise_script(state, format!("missing argument #{argument}{to} (Vector3 expected)"), true);
             }
             if ffi::lua_type(state, argument) != ffi::LUA_TVECTOR {
-                let message = format!("invalid argument #{argument} (Vector3 expected, got {})", type_name_at(state, argument));
+                let message = format!("invalid argument #{argument}{to} (Vector3 expected, got {})", type_name_at(state, argument));
                 raise_script(state, message, true);
             }
         }
@@ -110,34 +161,85 @@ unsafe fn checked(state: *mut ffi::lua_State, name: &str, rest: Rest, index: usi
     }
 }
 
+/// `__namecall` for native Vector3: runs the 8 native methods directly in `:` mode (no ` to '<method>'` after self),
+/// dispatches the remaining Luau methods (`Lerp`, `lerp`, `FuzzyEq`, `Angle`) from upvalue 1 (`extras`), and raises
+/// `<name> is not a valid member of Vector3` for properties or unknown members.
+pub fn namecall(lua: &Lua, extras: LuaTable) -> LuaResult<LuaFunction> {
+    unsafe {
+        lua.exec_raw::<LuaFunction>(extras, |state| {
+            ffi::lua_pushcclosurek(state, vector_namecall, c"__namecall".as_ptr(), 1, None);
+        })
+    }
+}
+
+pub unsafe extern "C-unwind" fn vector_namecall(state: *mut ffi::lua_State) -> c_int {
+    unsafe {
+        let key = ffi::lua_namecallatom(state, std::ptr::null_mut());
+        if key.is_null() {
+            raise_script(state, "invalid namecall".into(), false);
+        }
+        let bytes = CStr::from_ptr(key).to_bytes();
+        match bytes {
+            b"Abs" => return checked(state, "Abs", Rest::None, ABS, false),
+            b"Ceil" => return checked(state, "Ceil", Rest::None, CEIL, false),
+            b"Floor" => return checked(state, "Floor", Rest::None, FLOOR, false),
+            b"Sign" => return checked(state, "Sign", Rest::None, SIGN, false),
+            b"Dot" => return checked(state, "Dot", Rest::One, DOT, false),
+            b"Cross" => return checked(state, "Cross", Rest::One, CROSS, false),
+            b"Max" => return checked(state, "Max", Rest::Any, MAX, false),
+            b"Min" => return checked(state, "Min", Rest::Any, MIN, false),
+            b"Lerp" | b"lerp" => return checked_lerp(state, false),
+            _ => {}
+        }
+        ffi::lua_pushlstring(state, bytes.as_ptr().cast(), bytes.len());
+        if ffi::lua_rawget(state, ffi::lua_upvalueindex(1)) == ffi::LUA_TFUNCTION {
+            ffi::lua_insert(state, 1);
+            let nargs = ffi::lua_gettop(state) - 1;
+            let overhead = (5.77 + bytes.len() as f64 * 0.169).round() as c_int;
+            lua_workhostnanos(state, -overhead);
+            ffi::lua_call(state, nargs, ffi::LUA_MULTRET);
+            return ffi::lua_gettop(state);
+        }
+        ffi::lua_pop(state, 1);
+        let name = String::from_utf8_lossy(bytes).into_owned();
+        let message = format!("{name} is not a valid member of Vector3");
+        drop(name);
+        raise_script(state, message, false)
+    }
+}
+
+unsafe extern "C-unwind" fn lerp(state: *mut ffi::lua_State) -> c_int {
+    unsafe { checked_lerp(state, true) }
+}
+
 unsafe extern "C-unwind" fn abs(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked(state, "Abs", Rest::None, ABS) }
+    unsafe { checked(state, "Abs", Rest::None, ABS, true) }
 }
 
 unsafe extern "C-unwind" fn ceil(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked(state, "Ceil", Rest::None, CEIL) }
+    unsafe { checked(state, "Ceil", Rest::None, CEIL, true) }
 }
 
 unsafe extern "C-unwind" fn floor(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked(state, "Floor", Rest::None, FLOOR) }
+    unsafe { checked(state, "Floor", Rest::None, FLOOR, true) }
 }
 
 unsafe extern "C-unwind" fn sign(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked(state, "Sign", Rest::None, SIGN) }
+    unsafe { checked(state, "Sign", Rest::None, SIGN, true) }
 }
 
 unsafe extern "C-unwind" fn dot(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked(state, "Dot", Rest::One, DOT) }
+    unsafe { checked(state, "Dot", Rest::One, DOT, true) }
 }
 
 unsafe extern "C-unwind" fn cross(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked(state, "Cross", Rest::One, CROSS) }
+    unsafe { checked(state, "Cross", Rest::One, CROSS, true) }
 }
 
 unsafe extern "C-unwind" fn max(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked(state, "Max", Rest::Any, MAX) }
+    unsafe { checked(state, "Max", Rest::Any, MAX, true) }
 }
 
 unsafe extern "C-unwind" fn min(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked(state, "Min", Rest::Any, MIN) }
+    unsafe { checked(state, "Min", Rest::Any, MIN, true) }
 }

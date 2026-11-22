@@ -1558,3 +1558,83 @@ assert(A ~= Random.new(1))
 "#,
     );
 }
+
+/// Datatype __namecall vs `.` method calls, Ray f64 ClosestPoint/Distance, CFrame:Inverse zero signs,
+/// uppercase NaN/Inf in 9-digit datatype tostring, BrickColor.new forms, PhysicalProperties.new forms,
+/// and DateTime locale formatting (Studio 0.747, tools/parity/probes/datatype_errors.luau, datetime.luau).
+#[test]
+fn datatype_namecall_constructors_precision_and_locales_follow_client() {
+    assert_script(
+        r#"
+local function Fails(Pattern, Function, ...)
+	local Ok, Message = pcall(Function, ...)
+	assert(not Ok and type(Message) == "string" and string.find(Message, Pattern) ~= nil, `got "{Message}" for {Pattern}`)
+end
+
+-- `.` names the method in argument errors; `:` omits it; calling a property with `:` says not a valid member
+local V2, V3, CF = Vector2.one, Vector3.one, CFrame.identity
+local R = Ray.new(Vector3.zero, Vector3.new(1, 2, 3))
+local DT = DateTime.fromUnixTimestamp(1700000000)
+
+Fails("^Test:%d+: invalid argument #2 to 'Max' %(Vector2 expected, got number%)$", function() return V2.Max(V2, 1) end)
+Fails("^Test:%d+: invalid argument #2 %(Vector2 expected, got number%)$", function() return V2:Max(1) end)
+Fails("^Test:%d+: invalid argument #2 to 'Cross' %(Vector3 expected, got number%)$", function() return V3.Cross(V3, 1) end)
+Fails("^Test:%d+: invalid argument #2 %(Vector3 expected, got number%)$", function() return V3:Cross(1) end)
+Fails("^Test:%d+: invalid argument #2 to 'Lerp' %(Vector3 expected, got number%)$", function() return V3.Lerp(V3, 1, 0.5) end)
+Fails("^Test:%d+: invalid argument #2 %(Vector3 expected, got number%)$", function() return V3:Lerp(1, 0.5) end)
+Fails("^Test:%d+: invalid argument #2 to 'AngleBetween' %(CFrame expected, got string%)$", function() return CF.AngleBetween(CF, "x") end)
+Fails("^Test:%d+: invalid argument #2 %(CFrame expected, got string%)$", function() return CF:AngleBetween("x") end)
+Fails("^Test:%d+: invalid argument #2 to 'ClosestPoint' %(Vector3 expected, got number%)$", function() return R.ClosestPoint(R, 1) end)
+Fails("^Test:%d+: invalid argument #2 %(Vector3 expected, got number%)$", function() return R:ClosestPoint(1) end)
+Fails("^Test:%d+: invalid argument #3 to 'FormatUniversalTime' %(string expected, got boolean%)$", function() return DT.FormatUniversalTime(DT, "LL", true :: any) end)
+Fails("^Test:%d+: invalid argument #3 %(string expected, got boolean%)$", function() return DT:FormatUniversalTime("LL", true :: any) end)
+
+Fails("^X is not a valid member of Vector2$", function() return (V2 :: any):X() end)
+Fails("^X is not a valid member of Vector3$", function() return (V3 :: any):X() end)
+Fails("^Position is not a valid member of CFrame$", function() return (CF :: any):Position() end)
+Fails("^Origin is not a valid member of Ray$", function() return (R :: any):Origin() end)
+Fails("^R is not a valid member of Color3$", function() return (Color3.new() :: any):R() end)
+Fails("^X is not a valid member of UDim2$", function() return (UDim2.new() :: any):X() end)
+Fails("^UnixTimestamp is not a valid member of DateTime$", function() return (DT :: any):UnixTimestamp() end)
+
+-- Ray:ClosestPoint and Ray:Distance clamp t >= 0 and compute in f64 along non-unit directions (Studio 0.747)
+local NonUnit = Ray.new(Vector3.new(1, 2, 3), Vector3.new(3, 4, 5))
+local Behind = Vector3.new(5, -1, 2)
+assert(NonUnit:ClosestPoint(Behind) == Vector3.new(1, 2, 3), tostring(NonUnit:ClosestPoint(Behind)))
+assert(string.format("%.17g", NonUnit:Distance(Behind)) == "5.0990195135927845", string.format("%.17g", NonUnit:Distance(Behind)))
+local Ahead = Vector3.new(5, 6, 8)
+local Closest = NonUnit:ClosestPoint(Ahead)
+assert(Closest == Vector3.new(4.18, 6.24, 8.3), tostring(Closest))
+assert(string.format("%.17g", NonUnit:Distance(Ahead)) == "0.90553851381374217", string.format("%.17g", NonUnit:Distance(Ahead)))
+assert(NonUnit:ClosestPoint(Vector3.new(10, 14, 18)) == Vector3.new(10, 14, 18))
+assert(NonUnit:Distance(Vector3.new(10, 14, 18)) == 0)
+assert(Ray.new(Vector3.new(1, 2, 3), Vector3.zero):ClosestPoint(Ahead) == Vector3.new(1, 2, 3))
+assert(string.format("%.17g", Ray.new(Vector3.new(1, 2, 3), Vector3.zero):Distance(Ahead)) == "7.5498344352707498")
+
+-- CFrame:Inverse keeps +0 on zero position components; NaN/Inf print uppercase
+assert(tostring(CFrame.identity:Inverse()) == "0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1", tostring(CFrame.identity:Inverse()))
+assert(tostring(CFrame.new(0 / 0, math.huge, -math.huge)) == "NAN, INF, -INF, 1, 0, 0, 0, 1, 0, 0, 0, 1", tostring(CFrame.new(0 / 0, math.huge, -math.huge)))
+
+-- BrickColor.new forms
+assert(BrickColor.new().Name == "Really black" and BrickColor.new().Number == 1003)
+assert(BrickColor.new("1").Name == "White" and BrickColor.new(1.9).Name == "White")
+assert(BrickColor.new(1, 0).Name == "Really red" and BrickColor.new("x", "y").Name == "Really black")
+Fails("^Test:%d+: invalid argument #1 to 'new' %(Color3 expected, got boolean%)$", function() return BrickColor.new(true :: any) end)
+
+-- PhysicalProperties.new forms and default sentinel
+local Def = PhysicalProperties.new(nil :: any)
+assert(tostring(Def) == "default" and Def.Density == 0 and Def == PhysicalProperties.new(1 :: any))
+assert(Def ~= PhysicalProperties.new(0, 0, 0, 0, 0))
+Fails("^PhysicalProperties%.new with 1 argument expects Enum%.Material inputs$", PhysicalProperties.new, Enum.KeyCode.A :: any)
+Fails("^Invalid number of arguments: 0", PhysicalProperties.new)
+Fails("^Invalid number of arguments: 2", PhysicalProperties.new, 1, 2)
+
+-- DateTime locale formatting
+assert(DT:FormatUniversalTime("LL", "en-gb") == "14 November 2023")
+assert(DT:FormatUniversalTime("llll", "fr-fr") == "mar. 14 nov. 2023 22:13")
+assert(DT:FormatUniversalTime("LLLL", "fr-fr") == "mardi 14 novembre 2023 22:13")
+assert(DT:FormatUniversalTime("LLLL", "ja-jp") == "2023年11月14日 火曜日 22:13")
+assert(DT:FormatUniversalTime("lll", "de-de") == "14. Nov. 2023 22:13")
+"#
+    );
+}
