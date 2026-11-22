@@ -974,6 +974,19 @@ pub const RAY_CROSSED: f64 = 0.0424e-6;
 pub const OBSCURING_POINT: f64 = 0.8e-6;
 pub const OBSCURING_LISTED: f64 = 1.1e-6;
 pub const OBSCURING_CALL: f64 = 0.9e-6;
+/// A PlayerMouse ray read (Target, target, TargetSurface; Hit and hit add [`MOUSE_FRAME`]: world/mouse.rs) beyond [`READ`], in a
+/// playing client (roblox-sim, Studio 0.747, a headless client; os.clock around 2,000 reads, the median of 21 samples less an empty
+/// loop and a plain read, two passes; a scratch probe through tools/parity's capture harness). Each read casts the mouse's ray its
+/// 10,000 studs: a miss 0.44 us for Target, 0.48 for TargetSurface and 0.64 for Hit; the parts off the ray cost nothing (5,000
+/// behind the camera, 200 in TargetFilter). The parts it meets up to its hit (the hit, and those under TargetFilter before it,
+/// which a client casts past again) are paid as a ray's: [`RAY_MET`] for the first and [`MOUSE_FILTERED`] for each after it; a hit
+/// adds [`MOUSE_HIT`]. Measured: a hit 0.24 to 0.31 us (more with parts close behind it; the parts further behind cost nothing, a
+/// stack of 50 what one of 10 does), parts under TargetFilter on a miss one 0.21, five 0.76, 24 2.69, and 12 before a hit 1.58
+/// more than the hit alone. Fitted within x0.83 to x1.08 per read, x1.06 on average, over 18 scenes of the three members.
+pub const MOUSE_RAY: f64 = 0.46e-6;
+pub const MOUSE_FRAME: f64 = 0.19e-6;
+pub const MOUSE_HIT: f64 = 0.10e-6;
+pub const MOUSE_FILTERED: f64 = 0.115e-6;
 /// A Spherecast's and a Blockcast's part after the first it crosses (the bench's `workspace.Spherecast.hit_stack` and
 /// `Blockcast.hit_stack`, a 1-stud ball and a 2-stud box through the stack of 24: 9.68 and 6.35 us at the fastest of six sessions,
 /// their misses 0.18 and 0.22 like a ray's). A shape sweeps more of each part than a ray does; Shapecast, unmeasured, borrows the

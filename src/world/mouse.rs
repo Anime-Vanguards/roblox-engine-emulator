@@ -13,6 +13,8 @@
 //!   `o + d * 10000`, to the bit; `Target` (`target`) is that part or nil, `TargetSurface` the face it was hit on, `Right` when
 //!   none was. Every part counts (CanQuery, CanCollide, CanTouch and Transparency do not matter), but TargetFilter and its
 //!   descendants. They follow the camera within the frame.
+//! - Reading Hit, Target or TargetSurface casts that ray: it costs the work clock what a client spends on it (cost.rs
+//!   MOUSE_RAY; roblox-sim, Studio 0.747) and takes nothing into the spatial index ([`pointed`]).
 //! - The computed members are read-only ("Unable to assign property Hit. Property is read only"); Icon and TargetFilter are not.
 //!
 //! The host's record (`shared.__rurMouse`, a plain table made at start: roblox-ui-renderer's input layer reads it) holds X, Y,
@@ -124,34 +126,49 @@ fn aimed(origin: Vec3, direction: Vec3) -> Affine3A {
     Affine3A::from_mat3_translation(Mat3::from_cols(column(0), column(1), column(2)), origin)
 }
 
-/// The parts the mouse sees: every BasePart in the Workspace but Terrain, TargetFilter and its descendants left out. CanQuery,
-/// CanCollide, CanTouch and Transparency do not matter (measured: a wall with each turned off, or fully transparent, is Target).
-fn targets(engine: &Engine, skip: Option<InstanceId>) -> Vec<query::Solid> {
-    let state = engine.state.borrow();
-    let reflection = &engine.reflection;
-    let (Some(base_part), Some(terrain)) = (reflection.class_id("BasePart"), reflection.class_id("Terrain")) else { return Vec::new() };
-    let mut result = Vec::new();
-    for id in state.dom.descendants(engine.world().workspace) {
-        let info = reflection.class(state.dom.at(id).class);
-        if !info.is_a(base_part) || info.is_a(terrain) || skip.is_some_and(|skip| id == skip || state.dom.is_descendant_of(id, skip)) {
-            continue;
-        }
-        result.push(query::solid(&state, engine, id));
-    }
-    result
-}
-
-/// Where the ray first meets a part the mouse sees: the point, and the part with its face's normal in the part's frame.
-fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, origin: Vec3, direction: Vec3) -> (Vec3, Option<(InstanceId, Vec3)>) {
+/// Where the ray first meets a part the mouse sees: the point, and the part with its face's normal in the part's frame. The mouse
+/// sees every BasePart in the Workspace but Terrain, TargetFilter and its descendants left out; CanQuery, CanCollide, CanTouch and
+/// Transparency do not matter (measured: a wall with each turned off, or fully transparent, is Target).
+///
+/// The parts come from the spatial queries' cache (world/query.rs), TargetFilter's among them: the ray meets those too, and a
+/// client pays for them. The read is charged as the ray it is: [`crate::cost::MOUSE_RAY`] and the member's `price`, then the parts
+/// it meets up to its hit (the hit and those under TargetFilter before it) and the hit's own. It takes nothing into the spatial
+/// index: after any member is read, GetLargestCutoffDistance still misses a part that just entered the Workspace
+/// (tools/parity/probes/mouse_index.luau). (A client's read does not see that part either until the index has it; ree's does,
+/// as before: the probe's known lines.)
+fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, origin: Vec3, direction: Vec3, price: f64) -> (Vec3, Option<(InstanceId, Vec3)>) {
     let skip = match target_filter.and_then(|name| engine.state.borrow().dom.raw_get(mouse, name).cloned()) {
         Some(Value::Instance(skip)) => Some(skip),
         _ => None,
     };
-    let solids = targets(engine, skip);
-    match query::cast_ray(&solids, origin, direction * REACH, 0.0, None) {
-        Some(hit) => {
-            let local = solids.iter().find(|solid| solid.part == hit.part).map_or(hit.normal, |solid| solid.frame.inverse().transform_vector3(hit.normal));
-            (origin + direction * hit.distance, Some((hit.part, local)))
+    let solids = query::cached_solids_unindexed(engine, &query::Filter { unqueryable: true, ..query::Filter::default() });
+    let reach = direction * REACH;
+    let length = reach.length();
+    // (query::cast_ray's choice among the parts TargetFilter leaves, the first of equals; and how far along the ray each part
+    // under TargetFilter is)
+    let mut best: Option<(f32, &query::Solid, Vec3)> = None;
+    let mut filtered = Vec::new();
+    {
+        let state = engine.state.borrow();
+        for solid in solids.iter() {
+            let Some((t, local)) = query::ray_solid(solid, origin, reach, 0.0) else { continue };
+            let distance = length * t;
+            if skip.is_some_and(|skip| solid.part == skip || state.dom.is_descendant_of(solid.part, skip)) {
+                filtered.push(distance);
+            } else if best.is_none_or(|(nearest, ..)| distance < nearest) {
+                best = Some((distance, solid, local));
+            }
+        }
+    }
+    let nearer = |distance: f32| best.is_none_or(|(nearest, ..)| distance < nearest);
+    let met = usize::from(best.is_some()) + filtered.iter().filter(|&&distance| nearer(distance)).count();
+    query::charge_query(engine, crate::cost::MOUSE_RAY + price + if best.is_some() { crate::cost::MOUSE_HIT } else { 0.0 });
+    query::charge_crossed(engine, met, crate::cost::MOUSE_FILTERED, 0);
+    match best {
+        Some((distance, solid, local)) => {
+            // (the face's normal as query::cast_ray gives it, in the world, then back in the part's frame)
+            let normal = solid.frame.transform_vector3(local).normalize_or(Vec3::Y);
+            (origin + direction * distance, Some((solid.part, solid.frame.inverse().transform_vector3(normal))))
         }
         None => (origin + direction * REACH, None),
     }
@@ -196,14 +213,14 @@ pub fn install(engine: &Rc<Engine>) {
     let hit: GetterFn = Rc::new(move |lua, engine, id| {
         let (origin, direction) = unit_ray(engine);
         let mut frame = aimed(origin, direction);
-        frame.translation = pointed(engine, filter, id, origin, direction).0.into();
+        frame.translation = pointed(engine, filter, id, origin, direction, crate::cost::MOUSE_FRAME).0.into();
         Ok(cframe_value(lua, engine, &frame)?)
     });
     members.push(("Hit", hit.clone()));
     members.push(("hit", hit));
     let target: GetterFn = Rc::new(move |lua, engine, id| {
         let (origin, direction) = unit_ray(engine);
-        match pointed(engine, filter, id, origin, direction).1 {
+        match pointed(engine, filter, id, origin, direction, 0.0).1 {
             Some((part, _)) => Ok(instance_value(lua, engine, part)?),
             None => Ok(LuaValue::Nil),
         }
@@ -212,7 +229,7 @@ pub fn install(engine: &Rc<Engine>) {
     members.push(("target", target));
     members.push(("TargetSurface", Rc::new(move |lua, engine, id| {
         let (origin, direction) = unit_ray(engine);
-        let item = match pointed(engine, filter, id, origin, direction).1 {
+        let item = match pointed(engine, filter, id, origin, direction, 0.0).1 {
             Some((_, local)) => normal_id.and_then(|_| engine.reflection.enum_item("NormalId", surface(local))),
             None => right,
         };

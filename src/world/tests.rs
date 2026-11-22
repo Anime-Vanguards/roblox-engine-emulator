@@ -2062,6 +2062,87 @@ fn the_player_mouse_is_made_on_the_first_get_mouse() {
     );
 }
 
+/// The PlayerMouse's ray reads cost the work clock what a playing client spent on them beyond a plain read (roblox-sim, Studio
+/// 0.747, cost.rs MOUSE_RAY): a miss 0.44 us for Target and 0.64 for Hit, whatever lies off the ray; a hit 0.68 and 0.90; 24 parts
+/// under TargetFilter across the ray 3.13 and 3.76. A read takes nothing into the spatial index: GetLargestCutoffDistance misses a
+/// part that just entered the Workspace after one, and sees it after a Raycast (tools/parity/probes/mouse_index.luau).
+#[test]
+fn player_mouse_rays_cost_what_a_client_spent() {
+    let (lua, engine) = start();
+    crate::lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local M = game:GetService("Players").LocalPlayer:GetMouse()
+        workspace.CurrentCamera.CFrame = CFrame.lookAt(Vector3.new(0, 500, 0), Vector3.new(0, 500, -100))
+        local Ray = M.UnitRay
+        local function Beyond(Read)
+            local N, V = 20, nil
+            local Start = os.clock()
+            Read(N)
+            local Middle = os.clock()
+            for _ = 1, N do V = M.X end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local function Hit(N) local V for _ = 1, N do V = M.Hit end return V end
+        local function Target(N) local V for _ = 1, N do V = M.Target end return V end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        local function Part(Size, At, Parent)
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.Size = Size
+            P.CFrame = At
+            P.Parent = Parent or workspace
+            return P
+        end
+        local function Across(Distance, Parent)
+            return Part(Vector3.new(40, 40, 0.5), CFrame.lookAt(Ray.Origin + Ray.Direction * Distance, Ray.Origin + Ray.Direction * (Distance + 1)), Parent)
+        end
+        -- 500 parts off the ray
+        local Off = Instance.new("Folder")
+        Off.Parent = workspace
+        for I = 1, 500 do
+            Part(Vector3.one, CFrame.new(500 + I * 3, 5, -500), Off)
+        end
+        assert(M.Target == nil)
+        Within("Target, a miss", Beyond(Target), 0.40, 0.52)
+        Within("Hit, a miss", Beyond(Hit), 0.58, 0.72)
+        local Wall = Across(50)
+        assert(M.Target == Wall)
+        Within("Target, a hit", Beyond(Target), 0.64, 0.80)
+        Within("Hit, a hit", Beyond(Hit), 0.84, 1.0)
+        Wall:Destroy()
+        local Filtered = Instance.new("Folder")
+        Filtered.Parent = workspace
+        for I = 1, 24 do
+            Across(50 + I * 2, Filtered)
+        end
+        M.TargetFilter = Filtered
+        assert(M.Target == nil)
+        Within("Target, 24 filtered", Beyond(Target), 2.9, 3.5)
+        Within("Hit, 24 filtered", Beyond(Hit), 3.3, 4.0)
+        M.TargetFilter = nil
+        Filtered:Destroy()
+        Off:Destroy()
+
+        local O = Vector3.new(200, 100, 200)
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.lookAt(O + Vector3.new(0, 5, 30), O + Vector3.new(0, 5, 0))
+        Cam.Focus = CFrame.new(O + Vector3.new(0, 5, 0))
+        Part(Vector3.new(60, 60, 1), CFrame.new(O + Vector3.new(0, 5, 12)))
+        local _ = M.Hit, M.Target, M.TargetSurface
+        assert(Cam:GetLargestCutoffDistance({}) == 0)
+        workspace:Raycast(Vector3.new(1000, 1000, 1000), Vector3.yAxis)
+        assert(math.abs(Cam:GetLargestCutoffDistance({}) - 18) < 1e-3)
+        "##,
+    );
+}
+
 /// The Camera's simpler methods as a playing client answers them (Studio 0.748, new cameras and the CurrentCamera; the values to
 /// the bit, the errors as raised): SetRoll's roll, read back and in GetRenderCFrame, held in Scriptable only, kept through a CFrame
 /// write and dropped when CameraType leaves Scriptable; GetPanSpeed / GetTiltSpeed; SetCameraPanMode's argument; Zoom and

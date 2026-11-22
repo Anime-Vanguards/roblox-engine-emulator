@@ -87,8 +87,8 @@ pub struct Filter {
     pub include_instances: Listed,
     pub respect_can_collide: bool,
     pub max_parts: usize,
-    /// Parts with CanQuery off are seen too (GetPartsObscuringTarget's view of the Workspace: world/camera.rs); never set from
-    /// a query's params
+    /// Parts with CanQuery off are seen too (GetPartsObscuringTarget's and the PlayerMouse's view of the Workspace: world/camera.rs,
+    /// world/mouse.rs); never set from a query's params
     pub unqueryable: bool,
 }
 
@@ -288,6 +288,11 @@ const CACHED_FILTERS: usize = 8;
 /// the last one or the physics step (world/camera_moves.rs: GetLargestCutoffDistance, which does not, sees it from then).
 pub(crate) fn cached_solids(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
     super::camera_moves::index_parts(&mut engine.state.borrow_mut());
+    cached_solids_unindexed(engine, filter)
+}
+
+/// [`cached_solids`] that leaves the spatial index as it is: the PlayerMouse's reads take nothing into it (world/mouse.rs).
+pub(crate) fn cached_solids_unindexed(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
     let stamp = {
         let state = engine.state.borrow();
         (state.dom.structure_version, state.dom.write_version)
@@ -683,7 +688,7 @@ fn charge_cast(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32, each: 
 }
 
 /// What a path that crossed `crossed` parts pays: [`crate::cost::RAY_MET`] when it met any, and `each` for every part after the
-/// first ([`charge_cast`]; GetPartsObscuringTarget's segments: world/camera.rs).
+/// first ([`charge_cast`]; GetPartsObscuringTarget's segments: world/camera.rs; the PlayerMouse's ray: world/mouse.rs).
 pub(crate) fn charge_crossed(engine: &Engine, crossed: usize, each: f64, kinds: u8) {
     if crossed > 0 {
         let seconds = crate::cost::RAY_MET + (crossed - 1) as f64 * each;

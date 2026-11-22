@@ -501,6 +501,28 @@
 			"why": "ScriptContext.Error: a client fires it when the error is raised, with the script and a `<chunk>, line <n> - function <f>` trace; ree fires it on a server only, with nil and Luau's trace"
 		}
 	],
+	"mouse_index": [
+		{
+			"line": "target across, new false Enum.NormalId.Right",
+			"why": "a part that just entered the Workspace: a client's Target and Hit miss it until the spatial index takes it in (the next physics step or another spatial query), ree's mouse sees it at once (kept: the mouse's tests)"
+		},
+		{
+			"line": "target across, new again false",
+			"why": "a part that just entered the Workspace: a client's Target and Hit miss it until the spatial index takes it in (the next physics step or another spatial query), ree's mouse sees it at once (kept: the mouse's tests)"
+		},
+		{
+			"line": "target across, back false",
+			"why": "a part that just entered the Workspace: a client's Target and Hit miss it until the spatial index takes it in (the next physics step or another spatial query), ree's mouse sees it at once (kept: the mouse's tests)"
+		},
+		{
+			"line": "target across, back, after Mouse.Hit false",
+			"why": "a part that just entered the Workspace: a client's Target and Hit miss it until the spatial index takes it in (the next physics step or another spatial query), ree's mouse sees it at once (kept: the mouse's tests)"
+		},
+		{
+			"line": "target across, back, canquery off false",
+			"why": "a part that just entered the Workspace: a client's Target and Hit miss it until the spatial index takes it in (the next physics step or another spatial query), ree's mouse sees it at once (kept: the mouse's tests)"
+		}
+	],
 	"path2d_layout": [
 		{
 			"line": "screen Vector2(1920 1080) frame Vector2(50 -28) Vector2(200 100)",

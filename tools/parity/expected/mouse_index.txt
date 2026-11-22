@@ -1,0 +1,28 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+cut empty 0.000
+cut new 0.000
+cut new, after a Raycast 18.000
+cut new, after Mouse.X 0.000
+cut new, after Mouse.UnitRay 0.000
+cut new, after Mouse.Origin 0.000
+cut new, after Mouse.Icon 0.000
+cut new, after Mouse.TargetFilter 0.000
+cut new, after Mouse.Hit 0.000
+cut new, after Mouse.hit 0.000
+cut new, after Mouse.Target 0.000
+cut new, after Mouse.target 0.000
+cut new, after Mouse.TargetSurface 0.000
+cut new, after Mouse.Hit with a TargetFilter 0.000
+cut new, after Mouse.Hit, the new part the TargetFilter 0.000
+target across, new false Enum.NormalId.Right
+cut new, after Mouse.Target hit a new part 0.000
+target across, after a Raycast true Enum.NormalId.Back
+target across, new again false
+target across, a frame later true Enum.NormalId.Back
+target across, moved and turned true Enum.NormalId.Front
+target across, removed false
+target across, back false
+target across, back, after Mouse.Hit false
+target across, back, canquery off false
+cut cleared 0.000
