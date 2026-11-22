@@ -87,6 +87,9 @@ pub struct Filter {
     pub include_instances: Listed,
     pub respect_can_collide: bool,
     pub max_parts: usize,
+    /// Parts with CanQuery off are seen too (GetPartsObscuringTarget's view of the Workspace: world/camera.rs); never set from
+    /// a query's params
+    pub unqueryable: bool,
 }
 
 /// An instance list that may be nil (`{Instance}?`): `given` false for nil; the instances sorted,
@@ -141,6 +144,7 @@ impl Filter {
     fn sees_as(&self, other: &Filter) -> bool {
         self.include == other.include
             && self.respect_can_collide == other.respect_can_collide
+            && self.unqueryable == other.unqueryable
             && self.instances == other.instances
             && self.exclude_instances == other.exclude_instances
             && self.include_instances == other.include_instances
@@ -156,6 +160,7 @@ impl Filter {
             Some((data, false)) => data.get::<LuaValue>(key).unwrap_or(LuaValue::Nil),
             None => LuaValue::Nil,
         };
+        self.unqueryable = false;
         // FilterType Exclude by default, Include also for the legacy Whitelist
         self.include = match get("FilterType") {
             LuaValue::UserData(ud) => ud
@@ -227,7 +232,7 @@ pub fn solids(engine: &Engine, filter: &Filter) -> Vec<Solid> {
         if !info.is_a(base_part) || info.is_a(terrain) {
             continue;
         }
-        if can_query.and_then(|n| state.dom.boolean(id, n)) == Some(false) {
+        if !filter.unqueryable && can_query.and_then(|n| state.dom.boolean(id, n)) == Some(false) {
             continue;
         }
         if filter.respect_can_collide && can_collide.and_then(|n| state.dom.boolean(id, n)) == Some(false) {
@@ -281,7 +286,7 @@ const CACHED_FILTERS: usize = 8;
 
 /// [`solids`] through the engine's [`QueryCache`]. A spatial query takes into the index what entered the Workspace since
 /// the last one or the physics step (world/camera_moves.rs: GetLargestCutoffDistance, which does not, sees it from then).
-fn cached_solids(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
+pub(crate) fn cached_solids(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
     super::camera_moves::index_parts(&mut engine.state.borrow_mut());
     let stamp = {
         let state = engine.state.borrow();
@@ -307,7 +312,7 @@ fn cached_solids(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
 
 /// Where a ray from `origin` along `direction` (its length the reach) first enters `solid`:
 /// (fraction of the direction, local normal), or None (a ray starting inside does not hit).
-fn ray_solid(solid: &Solid, origin: Vec3, direction: Vec3, grow: f32) -> Option<(f32, Vec3)> {
+pub(crate) fn ray_solid(solid: &Solid, origin: Vec3, direction: Vec3, grow: f32) -> Option<(f32, Vec3)> {
     // a ray passing beyond the solid's bounding sphere misses it, found before the frame's inverse (most of a map's solids)
     let center = frame::translation(&solid.frame);
     let reach = solid.half_extents().length() + grow;
@@ -674,6 +679,12 @@ fn limited(max_parts: usize, parts: Vec<InstanceId>) -> Vec<InstanceId> {
 /// broadphase meets them all before the filter is asked
 fn charge_cast(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32, each: f64, kinds: u8) {
     let crossed = cached_solids(engine, &Filter::default()).iter().filter(|solid| ray_solid(solid, origin, direction, grow).is_some()).count();
+    charge_crossed(engine, crossed, each, kinds);
+}
+
+/// What a path that crossed `crossed` parts pays: [`crate::cost::RAY_MET`] when it met any, and `each` for every part after the
+/// first ([`charge_cast`]; GetPartsObscuringTarget's segments: world/camera.rs).
+pub(crate) fn charge_crossed(engine: &Engine, crossed: usize, each: f64, kinds: u8) {
     if crossed > 0 {
         let seconds = crate::cost::RAY_MET + (crossed - 1) as f64 * each;
         charge_query(engine, seconds);
@@ -682,7 +693,7 @@ fn charge_cast(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32, each: 
 }
 
 /// A spatial query's charge beyond its call's price (cost.rs QUERY_BOX_PART, RAY_CROSSED)
-fn charge_query(engine: &Engine, seconds: f64) {
+pub(crate) fn charge_query(engine: &Engine, seconds: f64) {
     if seconds > 0.0 {
         engine.state.borrow().sched.charge(seconds);
         crate::boundary::add_cost(seconds);

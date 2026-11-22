@@ -16,6 +16,9 @@
 //! Also the Camera's simpler methods, as a playing client answers them (Studio 0.748: results, result counts, argument errors
 //! and values, on new cameras and the CurrentCamera): GetRoll / SetRoll and GetRenderCFrame, GetPanSpeed / GetTiltSpeed,
 //! and SetCameraPanMode. (Zoom and SetImageServerView, which a game script cannot call, are reflection.rs CAPABILITY_CALLS.)
+//!
+//! And GetPartsObscuringTarget, as a client answers it (measured on new cameras and the CurrentCamera: which parts, in what
+//! order, the ignore list and the argument errors).
 
 use std::rc::Rc;
 
@@ -24,12 +27,12 @@ use lune_roblox::datatypes::types as lune;
 use lune_roblox::datatypes::types::float32 as f32m;
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{cframe_name, frame, method, vector_arg};
+use super::{cframe_name, frame, method, query, vector_arg};
 use crate::{
     Engine, InstanceId, NameId,
-    lua::{Args, Flow, convert, instance_id, raise, typeof_value, types::LEnumItem, values},
+    lua::{Args, Flow, convert, instance_id, instance_value, raise, typeof_value, types::LEnumItem, values},
     value::Value,
 };
 
@@ -229,7 +232,99 @@ fn number(number: f32) -> Result<LuaMultiValue, Flow> {
     Ok(values([LuaValue::Number(f64::from(number))]))
 }
 
-/// The methods in this module's second paragraph, and the hooks that keep the rolls: CameraType leaving Scriptable drops a
+/// GetPartsObscuringTarget's ignore list: a table whose array part holds instances (nil holes are skipped), sorted, without
+/// repeats. Measured: nil "Expected table argument, got nil", a string "... got string", a number in it "Unable to cast value to
+/// Object".
+fn ignore_list(engine: &Engine, value: &LuaValue) -> Result<Vec<InstanceId>, Flow> {
+    let LuaValue::Table(table) = value else {
+        return raise(format!("Expected table argument, got {}", typeof_value(engine, value)));
+    };
+    let mut ids = Vec::new();
+    for index in 1..=table.raw_len() {
+        let item: LuaValue = table.raw_get(index)?;
+        if item.is_nil() {
+            continue;
+        }
+        match instance_id(&item) {
+            Some(id) => ids.push(id),
+            None => return raise("Unable to cast value to Object"),
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// Whether `part` or an ancestor of it is in `ignored` (sorted).
+fn is_ignored(engine: &Engine, ignored: &[InstanceId], part: InstanceId) -> bool {
+    let state = engine.state.borrow();
+    let mut node = Some(part);
+    while let Some(at) = node {
+        if ignored.binary_search(&at).is_ok() {
+            return true;
+        }
+        node = state.dom.at(at).parent;
+    }
+    false
+}
+
+/// GetPartsObscuringTarget: for each cast point in turn (entries that are no Vector3 are skipped), the parts the segment from the
+/// camera's position to it enters before reaching it, nearest first, each part once over all the points. A part the segment only
+/// touches at the point is not counted, a point inside a part counts it, a part holding the camera is not counted (a ray starting
+/// inside does not hit). The camera's orientation does not matter.
+///
+/// The parts are the Workspace's every BasePart but Terrain, whatever its Transparency, CanCollide or CanQuery (measured), from
+/// the spatial queries' cache (world/query.rs); an ignored instance or descendant is left out as it is met. What a client spends
+/// on it is charged as the work goes (cost.rs OBSCURING_POINT): each point, its segment as a ray for the parts it crosses
+/// (ignored ones too: the broadphase meets them all), and each part returned.
+fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Args) -> Result<LuaMultiValue, Flow> {
+    let points = super::array_arg(engine, args.get(1), 1)?;
+    let ignored = ignore_list(engine, args.get(2))?;
+    let origin = frame::translation(&frame::affine_of(engine.state.borrow().dom.raw_get(camera, cframe_name(engine))));
+    let solids = query::cached_solids(engine, &query::Filter { unqueryable: true, ..query::Filter::default() });
+    // (the parts listed so far, in order, and every part already decided: listed or ignored)
+    let (mut found, mut decided): (Vec<InstanceId>, FxHashSet<InstanceId>) = (Vec::new(), FxHashSet::default());
+    let mut targets = Vec::new();
+    for index in 1..=points.raw_len() {
+        let value: LuaValue = points.raw_get(index)?;
+        if let Some(point) = vector_arg(&value) {
+            targets.push(point);
+        }
+    }
+    // (a segment lies in the box around the camera and every point, so only the parts whose bounding sphere meets that box can be
+    // crossed: found once a call, so each point is tested against those alone, as a broadphase would)
+    let (low, high) = targets.iter().fold((origin, origin), |(low, high), point| (low.min(*point), high.max(*point)));
+    let near: Vec<&query::Solid> = solids
+        .iter()
+        .filter(|solid| {
+            let center = frame::translation(&solid.frame);
+            let radius = solid.half_extents().length();
+            center.clamp(low, high).distance(center) <= radius * 1.0001 + 1e-4
+        })
+        .collect();
+    let mut hits: Vec<(f32, InstanceId)> = Vec::new();
+    for point in targets {
+        let direction = point - origin;
+        hits.clear();
+        hits.extend(near.iter().filter_map(|solid| query::ray_solid(solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, solid.part))));
+        query::charge_query(engine, crate::cost::OBSCURING_POINT);
+        query::charge_crossed(engine, hits.len(), crate::cost::RAY_CROSSED, 0);
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for &(_, part) in &hits {
+            if decided.insert(part) && (ignored.is_empty() || !is_ignored(engine, &ignored, part)) {
+                found.push(part);
+            }
+        }
+    }
+    query::charge_query(engine, crate::cost::OBSCURING_CALL + found.len() as f64 * crate::cost::OBSCURING_LISTED);
+    let table = lua.create_table()?;
+    for part in found {
+        table.raw_push(instance_value(lua, engine, part)?)?;
+    }
+    Ok(values([LuaValue::Table(table)]))
+}
+
+/// The methods in this module's notes after the projections, and the hooks that keep the rolls: CameraType leaving Scriptable drops a
 /// camera's, a freed camera's goes.
 fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::MethodFn)) {
     add("GetRoll", method(|_, engine, id, _| number(roll(engine, id))));
@@ -260,6 +355,7 @@ fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::Method
         };
         raise(format!("Unable to cast {} to CameraPanMode", other.unwrap_or_else(|| cast_name(engine, value))))
     }));
+    add("GetPartsObscuringTarget", method(parts_obscuring));
     let mut hooks = engine.hooks.borrow_mut();
     if let (Some(camera_type), Some(scriptable)) = (engine.reflection.name_id("CameraType"), engine.reflection.enum_item("CameraType", "Scriptable")) {
         hooks.property_changed.push(Box::new(move |state, id, name| {

@@ -2637,3 +2637,146 @@ fn camera_interpolate() {
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     run(&lua, &engine, r##"assert(table.find(shared.InterpolateLog, "other finished"), table.concat(shared.InterpolateLog, ", "))"##);
 }
+
+/// GetPartsObscuringTarget as a playing client answers it (Studio 0.748, a new Scriptable camera and the CurrentCamera): the parts
+/// the segment from the camera to each point enters before the point, nearest first and each once, whatever their Transparency,
+/// CanCollide or CanQuery; the ignore list with its descendants; a point on a part's near face does not count it, one inside
+/// does; entries that are no Vector3 are skipped; the camera's orientation does not matter; the argument errors as raised.
+#[test]
+fn camera_parts_obscuring_a_target_follow_a_client() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Fails(Message, F, ...)
+            local Ok, E = pcall(F, ...)
+            if Ok or tostring(E) ~= Message then
+                error(tostring(E), 2)
+            end
+        end
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local function Part(Name, Z, Props)
+            local P = Instance.new("Part")
+            P.Name = Name
+            P.Anchored = true
+            P.Size = Vector3.new(4, 4, 1)
+            P.CFrame = CFrame.new(0, 5, Z)
+            for K, V in Props or {} do
+                (P :: any)[K] = V
+            end
+            P.Parent = Folder
+            return P
+        end
+        local A = Part("A", 20)
+        local B = Part("B", 16, { Transparency = 0.5 })
+        Part("C", 12, { CanCollide = false })
+        Part("D", 10, { CanQuery = false })
+        Part("E", 8, { Transparency = 1 })
+        Part("H", -10)
+        Part("I", 15).CFrame = CFrame.new(12, 5, 15)
+        local Model = Instance.new("Model")
+        Model.Parent = Folder
+        Part("M", 4).Parent = Model
+        local Ball = Part("Ball", 22, { Shape = Enum.PartType.Ball, Size = Vector3.new(3, 3, 3) })
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CameraType = Enum.CameraType.Scriptable
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 5, 30), Vector3.new(0, 5, 0))
+        local Target = Vector3.new(0, 5, 0)
+        local function Names(Camera, ...)
+            local List = Camera:GetPartsObscuringTarget(...)
+            local Out = {}
+            for I, P in List do
+                Out[I] = P.Name
+            end
+            return table.concat(Out, " ")
+        end
+        local All = "Ball A B C D E M"
+        assert(Names(Cam, { Target }, {}) == All, Names(Cam, { Target }, {}))
+        assert(Names(Cam, { Target }, { A }) == "Ball B C D E M")
+        assert(Names(Cam, { Target }, { Model }) == "Ball A B C D E")
+        assert(Names(Cam, { Target }, { Folder }) == "")
+        assert(Names(Cam, { Target }, { A, nil, B }) == "Ball C D E M")
+        -- the points in turn, each part once
+        assert(Names(Cam, { Target, Vector3.new(0, 5, -20) }, {}) == All .. " H")
+        assert(Names(Cam, { Target, Target, "x" :: any, CFrame.new(Target) :: any, vector.create(0, 5, 0) }, {}) == All)
+        assert(Names(Cam, { 1, 2 } :: any, {}) == "" and Names(Cam, {}, {}) == "")
+        -- a point inside a part counts it, one on its near face does not, nor the camera's own point
+        assert(Names(Cam, { Vector3.new(0, 5, 20) }, {}) == "Ball A")
+        assert(Names(Cam, { Vector3.new(0, 5, 20.5) }, {}) == "Ball")
+        assert(Names(Cam, { Vector3.new(0, 5, 30) }, {}) == "")
+        assert(Names(Cam, { Vector3.new(12, 5, 15) }, {}) == "I")
+        -- the camera's orientation does not matter; the CurrentCamera answers the same
+        Cam.CFrame = CFrame.new(0, 5, 30) * CFrame.Angles(1, 2, 3)
+        assert(Names(Cam, { Target }, {}) == All)
+        local Current = workspace.CurrentCamera
+        Current.CameraType = Enum.CameraType.Scriptable
+        Current.CFrame = CFrame.lookAt(Vector3.new(0, 5, 30), Vector3.new(0, 5, 0))
+        assert(Names(Current, { Target }, {}) == All)
+        Fails("Argument 1 missing or nil", Cam.GetPartsObscuringTarget, Cam, nil, {})
+        Fails("Unable to cast string to Array", Cam.GetPartsObscuringTarget, Cam, "x", {})
+        Fails("Unable to cast Dictionary to Array", Cam.GetPartsObscuringTarget, Cam, { a = Target }, {})
+        Fails("Expected table argument, got nil", Cam.GetPartsObscuringTarget, Cam, { Target }, nil)
+        Fails("Expected table argument, got string", Cam.GetPartsObscuringTarget, Cam, { Target }, "x")
+        Fails("Unable to cast value to Object", Cam.GetPartsObscuringTarget, Cam, { Target }, { 1 })
+        Folder:Destroy()
+        assert(Names(Cam, { Target }, {}) == "")
+        "##,
+    );
+    assert!(!engine.state.borrow().log_history.iter().any(|entry| entry.text.contains("is not emulated")));
+}
+
+/// GetPartsObscuringTarget costs the work clock what a playing client spent on it (Studio 0.748, cost.rs OBSCURING_POINT): 0.8 us a
+/// point, the parts each segment crosses as a ray's, 1.1 us a part returned and 1.0 us a call, whatever else the Workspace holds;
+/// 1,000 points crossing nothing took 811-1,203 us, crossing 10 parts 1,243-1,313 us, and one point crossing 10 parts 12.7-13.6 us.
+#[test]
+fn camera_parts_obscuring_a_target_cost_what_a_client_spent() {
+    let (lua, engine) = start();
+    crate::lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Per(Body)
+            local N = 5
+            local Start = os.clock()
+            Body(N)
+            local Middle = os.clock()
+            for _ = 1, N do end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local Cam = Instance.new("Camera")
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 5, 60), Vector3.new(0, 5, 0))
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        for I = 1, 500 do
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.Size = Vector3.new(1, 1, 1)
+            P.CFrame = CFrame.new(500 + I * 3, 5, -500)
+            P.Parent = Folder
+        end
+        local Points = table.create(1000)
+        for I = 1, 1000 do
+            Points[I] = Vector3.new((I % 10) * 0.5, 5 + (I // 10 % 10) * 0.5, 0)
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        Within("1,000 points crossing nothing", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget(Points, {}) end end), 750, 1250)
+        for I = 1, 10 do
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.Size = Vector3.new(40, 40, 0.5)
+            P.CFrame = CFrame.new(0, 5, 2 + I * 4)
+            P.Parent = Folder
+        end
+        Within("1,000 points crossing 10 parts", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget(Points, {}) end end), 1150, 1450)
+        Within("one point crossing 10 parts", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget({ Points[1] }, {}) end end), 11, 15)
+        Folder:Destroy()
+        "##,
+    );
+}
