@@ -2289,3 +2289,56 @@ fn camera_parts_obscuring_a_target_follow_a_client() {
     );
     assert!(!engine.state.borrow().log_history.iter().any(|entry| entry.text.contains("is not emulated")));
 }
+
+/// GetPartsObscuringTarget costs the work clock what a playing client spent on it (Studio 0.748, cost.rs OBSCURING_POINT): 0.8 us a
+/// point, the parts each segment crosses as a ray's, 1.1 us a part returned and 1.0 us a call, whatever else the Workspace holds;
+/// 1,000 points crossing nothing took 811-1,203 us, crossing 10 parts 1,243-1,313 us, and one point crossing 10 parts 12.7-13.6 us.
+#[test]
+fn camera_parts_obscuring_a_target_cost_what_a_client_spent() {
+    let (lua, engine) = start();
+    crate::lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Per(Body)
+            local N = 5
+            local Start = os.clock()
+            Body(N)
+            local Middle = os.clock()
+            for _ = 1, N do end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local Cam = Instance.new("Camera")
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 5, 60), Vector3.new(0, 5, 0))
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        for I = 1, 500 do
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.Size = Vector3.new(1, 1, 1)
+            P.CFrame = CFrame.new(500 + I * 3, 5, -500)
+            P.Parent = Folder
+        end
+        local Points = table.create(1000)
+        for I = 1, 1000 do
+            Points[I] = Vector3.new((I % 10) * 0.5, 5 + (I // 10 % 10) * 0.5, 0)
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        Within("1,000 points crossing nothing", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget(Points, {}) end end), 750, 1250)
+        for I = 1, 10 do
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.Size = Vector3.new(40, 40, 0.5)
+            P.CFrame = CFrame.new(0, 5, 2 + I * 4)
+            P.Parent = Folder
+        end
+        Within("1,000 points crossing 10 parts", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget(Points, {}) end end), 1150, 1450)
+        Within("one point crossing 10 parts", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget({ Points[1] }, {}) end end), 11, 15)
+        Folder:Destroy()
+        "##,
+    );
+}

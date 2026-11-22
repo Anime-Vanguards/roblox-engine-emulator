@@ -27,7 +27,7 @@ use lune_roblox::datatypes::types as lune;
 use lune_roblox::datatypes::types::float32 as f32m;
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{cframe_name, frame, method, query, vector_arg};
 use crate::{
@@ -239,57 +239,68 @@ fn ignore_list(engine: &Engine, value: &LuaValue) -> Result<Vec<InstanceId>, Flo
     Ok(ids)
 }
 
-/// The Workspace's parts GetPartsObscuringTarget sees: every BasePart but Terrain, whatever its Transparency, CanCollide or
-/// CanQuery (measured), but `ignored` and their descendants.
-fn obscuring_solids(engine: &Engine, ignored: &[InstanceId]) -> Vec<query::Solid> {
+/// Whether `part` or an ancestor of it is in `ignored` (sorted).
+fn is_ignored(engine: &Engine, ignored: &[InstanceId], part: InstanceId) -> bool {
     let state = engine.state.borrow();
-    let reflection = &engine.reflection;
-    let (Some(base_part), Some(terrain)) = (reflection.class_id("BasePart"), reflection.class_id("Terrain")) else { return Vec::new() };
-    let mut result = Vec::new();
-    for id in state.dom.descendants(engine.world().workspace) {
-        let info = reflection.class(state.dom.at(id).class);
-        if !info.is_a(base_part) || info.is_a(terrain) {
-            continue;
+    let mut node = Some(part);
+    while let Some(at) = node {
+        if ignored.binary_search(&at).is_ok() {
+            return true;
         }
-        let mut node = Some(id);
-        let mut skip = false;
-        while let Some(at) = node {
-            if ignored.binary_search(&at).is_ok() {
-                skip = true;
-                break;
-            }
-            node = state.dom.at(at).parent;
-        }
-        if !skip {
-            result.push(query::solid(&state, engine, id));
-        }
+        node = state.dom.at(at).parent;
     }
-    result
+    false
 }
 
 /// GetPartsObscuringTarget: for each cast point in turn (entries that are no Vector3 are skipped), the parts the segment from the
 /// camera's position to it enters before reaching it, nearest first, each part once over all the points. A part the segment only
 /// touches at the point is not counted, a point inside a part counts it, a part holding the camera is not counted (a ray starting
 /// inside does not hit). The camera's orientation does not matter.
+///
+/// The parts are the Workspace's every BasePart but Terrain, whatever its Transparency, CanCollide or CanQuery (measured), from
+/// the spatial queries' cache (world/query.rs); an ignored instance or descendant is left out as it is met. What a client spends
+/// on it is charged as the work goes (cost.rs OBSCURING_POINT): each point, its segment as a ray for the parts it crosses
+/// (ignored ones too: the broadphase meets them all), and each part returned.
 fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Args) -> Result<LuaMultiValue, Flow> {
     let points = super::array_arg(engine, args.get(1), 1)?;
     let ignored = ignore_list(engine, args.get(2))?;
     let origin = frame::translation(&frame::affine_of(engine.state.borrow().dom.raw_get(camera, cframe_name(engine))));
-    let solids = obscuring_solids(engine, &ignored);
-    let mut found: Vec<InstanceId> = Vec::new();
+    let solids = query::cached_solids(engine, &query::Filter { unqueryable: true, ..query::Filter::default() });
+    // (the parts listed so far, in order, and every part already decided: listed or ignored)
+    let (mut found, mut decided): (Vec<InstanceId>, FxHashSet<InstanceId>) = (Vec::new(), FxHashSet::default());
+    let mut targets = Vec::new();
     for index in 1..=points.raw_len() {
         let value: LuaValue = points.raw_get(index)?;
-        let Some(point) = vector_arg(&value) else { continue };
+        if let Some(point) = vector_arg(&value) {
+            targets.push(point);
+        }
+    }
+    // (a segment lies in the box around the camera and every point, so only the parts whose bounding sphere meets that box can be
+    // crossed: found once a call, so each point is tested against those alone, as a broadphase would)
+    let (low, high) = targets.iter().fold((origin, origin), |(low, high), point| (low.min(*point), high.max(*point)));
+    let near: Vec<&query::Solid> = solids
+        .iter()
+        .filter(|solid| {
+            let center = frame::translation(&solid.frame);
+            let radius = solid.half_extents().length();
+            center.clamp(low, high).distance(center) <= radius * 1.0001 + 1e-4
+        })
+        .collect();
+    let mut hits: Vec<(f32, InstanceId)> = Vec::new();
+    for point in targets {
         let direction = point - origin;
-        let mut hits: Vec<(f32, InstanceId)> =
-            solids.iter().filter_map(|solid| query::ray_solid(solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, solid.part))).collect();
+        hits.clear();
+        hits.extend(near.iter().filter_map(|solid| query::ray_solid(solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, solid.part))));
+        query::charge_query(engine, crate::cost::OBSCURING_POINT);
+        query::charge_crossed(engine, hits.len(), crate::cost::RAY_CROSSED, 0);
         hits.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, part) in hits {
-            if !found.contains(&part) {
+        for &(_, part) in &hits {
+            if decided.insert(part) && (ignored.is_empty() || !is_ignored(engine, &ignored, part)) {
                 found.push(part);
             }
         }
     }
+    query::charge_query(engine, crate::cost::OBSCURING_CALL + found.len() as f64 * crate::cost::OBSCURING_LISTED);
     let table = lua.create_table()?;
     for part in found {
         table.raw_push(instance_value(lua, engine, part)?)?;

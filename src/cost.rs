@@ -966,6 +966,14 @@ pub const LOG_CALL: f64 = 1.0e-6;
 /// earlier job's parts too: three stacks of 24, which the first fit read as a ray's or a query's dearness.)
 pub const RAY_MET: f64 = 0.175e-6;
 pub const RAY_CROSSED: f64 = 0.0424e-6;
+/// Camera:GetPartsObscuringTarget beyond its call (world/camera.rs), in a playing client (Studio 0.748, os.clock, 1 to 1,000 points,
+/// segments crossing 0, 1 or 10 parts, with and without 5,000 other parts in the Workspace, two runs): 0.8 us a point, its segment the
+/// parts it crosses as a ray's ([`RAY_MET`], [`RAY_CROSSED`]: 0.04 us a part measured), 1.1 us a part it returns, and 1.0 us a call,
+/// of which ree's call to the method counts 0.09; the parts off every segment cost nothing (the broadphase). Fitted within x1.13 on
+/// average over the 48 cases.
+pub const OBSCURING_POINT: f64 = 0.8e-6;
+pub const OBSCURING_LISTED: f64 = 1.1e-6;
+pub const OBSCURING_CALL: f64 = 0.9e-6;
 /// A Spherecast's and a Blockcast's part after the first it crosses (the bench's `workspace.Spherecast.hit_stack` and
 /// `Blockcast.hit_stack`, a 1-stud ball and a 2-stud box through the stack of 24: 9.68 and 6.35 us at the fastest of six sessions,
 /// their misses 0.18 and 0.22 like a ray's). A shape sweeps more of each part than a ray does; Shapecast, unmeasured, borrows the
