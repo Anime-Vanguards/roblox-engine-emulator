@@ -87,7 +87,7 @@
 //! integer key a read finds, the empty slots a conversion walks and the entries `clear` frees. A read of a 16-byte string now
 //! costs what a client's does ([`cost::SHARED_MADE_STRING`]). Not matched yet: a read by a 16-byte key took a client 0.059 to
 //! 0.080 us (ree charges 0.03); a loop's step over 16-byte string values 0.025 to 0.029 more than over numbers (ree 0.003); an
-//! update with a trivial callback 0.70 in one probe and 0.38 to 0.43 in another (ree 0.32); increment 0.07 to 0.21 in three
+//! update with a trivial callback 0.70 in one probe and 0.38 to 0.43 in another (ree 0.33); increment 0.07 to 0.21 in three
 //! probes against an older probe's 0.37 to 0.43 ([`cost::SHARED_INCREMENT`]; ree charges 0.40); one key added and taken out
 //! again and again 0.22 to 0.31 us a pair (ree 0.62, an add and a removal); reads of one list of colliding
 //! keys again and again about a third of ree's price (a client's cache: 2.0 to 2.4 us for the oldest of 1,024, ree 7.6; read
@@ -961,6 +961,15 @@ fn made_string(bytes: usize) -> f64 {
     bytes as f64 * cost::LUAU_STRING_BYTE * 1e-9
 }
 
+/// SharedTableRegistry's name for a buffer (services.luau `RegistryName`): its contents as a string, charged before it is copied
+/// as a string the script built ([`made_string`], cost.rs LUAU_STRING_BYTE a byte). A Get keeps a table under every new name
+/// for the session, so a name made of a buffer's bytes is paid for as the script's own string of them would be.
+pub fn buffer_name(lua: &Lua, engine: &Engine, value: &LuaValue) -> LuaResult<LuaString> {
+    let LuaValue::Buffer(buffer) = value else { return Err(LuaError::runtime("BufferRegistryName: a buffer expected")) };
+    charge(engine, made_string(buffer.len()));
+    lua.create_string(buffer.to_vec())
+}
+
 /// What a string of `bytes` bytes a read makes for a script costs (a read, update's old value): [`made_string`]'s price and a
 /// client's base for a string a read makes (cost.rs [`cost::SHARED_MADE_STRING`]), and from [`cost::SHARED_LARGE_STRING`]
 /// bytes, where a client's reads step as its writes do, a client's (cost.rs [`cost::SHARED_LOADED_STRING`]). A loop's keys and
@@ -1780,7 +1789,10 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         Err(Flow::Yield) => Err(LuaError::runtime("SharedTable.update cannot yield")),
         Err(Flow::Fail(error)) => Err(error),
     })?;
-    let update_fn: LuaFunction = lua.load(UPDATE_WRAPPER).set_name("=ree.sharedtable").call(checked)?;
+    // (engine Luau, as increment's wrapper and the prelude's are: its instructions are not the script's, Studio's update being one
+    // C call)
+    let update_wrapper = crate::cost::engine_luau(lua, lua.load(UPDATE_WRAPPER).set_name("=ree.sharedtable").into_function()?)?;
+    let update_fn: LuaFunction = update_wrapper.call(checked)?;
     library.set("update", update_fn)?;
     library.set_readonly(true);
     engine.lua.borrow_mut().libraries.insert("SharedTable", library);

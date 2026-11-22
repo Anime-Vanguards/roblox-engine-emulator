@@ -7369,6 +7369,63 @@ fn shared_table_registry_names_cast_as_a_client_does() {
     assert!(!warned("number"), "{output:?}");
 }
 
+/// SharedTableRegistry pays for what it copies and runs nothing of a script's: a buffer used as a name is copied into the name
+/// at the VM's price for a string the script built (cost.rs LUAU_STRING_BYTE, 0.169 ns a byte: 10 MB is 1.69 ms), since a Get
+/// keeps the name for the session; SetSharedTable names a table it refuses by its raw length, as SetAttribute does, so a
+/// `__len` neither runs nor changes the name (measured, a playing client, Studio 0.748, two runs: `{ a = 1 }` with a `__len` of
+/// 3 is a Dictionary, `{}` with one that raises an Array, and no `__len` ran). The old code copied the buffer for a method
+/// call's price and called `__len`.
+#[test]
+fn shared_table_registry_pays_for_a_buffer_name_and_runs_no_len() {
+    assert_shared_prices(
+        r#"
+        local Registry = game:GetService("SharedTableRegistry")
+        local Big = buffer.create(10000000)
+        local Start = os.clock()
+        Registry:GetSharedTable(Big)
+        local Took = (os.clock() - Start) * 1e3
+        Registry:SetSharedTable(Big, nil)
+        assert(Took > 1.6 and Took < 3, `a 10 MB buffer name cost {Took} ms`)
+        local Ran = false
+        local _, Dictionary = pcall(Registry.SetSharedTable, Registry, "x", setmetatable({ a = 1 }, { __len = function() Ran = true return 3 end }))
+        local _, Empty = pcall(Registry.SetSharedTable, Registry, "x", setmetatable({}, { __len = function() error("boom") end }))
+        local _, Array = pcall(Registry.SetSharedTable, Registry, "x", setmetatable({ 1 }, { __len = function() Ran = true return 0 end }))
+        assert(Dictionary == "Unable to cast Dictionary to SharedTable" and Empty == "Unable to cast Array to SharedTable", `{Dictionary} {Empty}`)
+        assert(Array == "Unable to cast Array to SharedTable" and not Ran, `{Array} {Ran}`)
+        "#,
+    );
+}
+
+/// SharedTable.update's Luau wrapper is the engine's own, as increment's is (Studio's update is one C call): a script's call to
+/// it is priced as a call into an engine function (cost.rs LUAU_HOSTCALL) and the wrapper's instructions are not the script's,
+/// so update costs its inner C function's price plus about the difference between the two kinds of call (9 ns: 8.98 here,
+/// 9.23 in a harness run, where nothing else is interpreted). The old code ran the wrapper as script Luau: update cost 0.88 ns less than its own C function.
+#[test]
+fn shared_table_update_is_an_engine_call() {
+    let expected = crate::cost::LUAU_HOSTCALL - crate::cost::LUAU_CCALL;
+    assert_shared_prices(&format!(
+        r#"
+        local S = SharedTable.new({{ n = 0 }})
+        local function Same(V) return V end
+        local Update = SharedTable.update
+        local Checked
+        Update(S, "n", function(V)
+            Checked = debug.info(2, "f")
+            return V
+        end)
+        local function Per(F)
+            local Start = os.clock()
+            for _ = 1, 10000 do
+                F(S, "n", Same)
+            end
+            return (os.clock() - Start) / 10000 * 1e9
+        end
+        local Difference = Per(Update) - Per(Checked)
+        assert(math.abs(Difference - {expected}) < 2, `update cost {{Difference}} ns more than its C function`)
+        "#
+    ));
+}
+
 /// A value a SharedTable pools (one the engine has no value of its own for) reads back as a new object each time, `==` to the
 /// one written (Studio 0.748, a playing client: Ray, Region3, PhysicalProperties, NumberSequenceKeypoint, ColorSequenceKeypoint,
 /// TweenInfo, Faces, Axes and Path2DControlPoint were never rawequal to the value written or to another read, and in a second

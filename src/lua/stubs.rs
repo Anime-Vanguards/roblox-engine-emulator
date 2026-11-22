@@ -235,6 +235,9 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(())
         })?,
     )?;
+    // SharedTableRegistry's name for a buffer: its contents, charged as a string the script built (shared_table.rs `buffer_name`)
+    let e = engine.clone();
+    r.set("BufferRegistryName", lua.create_function(move |lua, held: LuaValue| super::shared_table::buffer_name(lua, &e, &held))?)?;
     // Model:PivotTo / ScaleTo: many part moves as one step (world::joints batches)
     let e = engine.clone();
     r.set(

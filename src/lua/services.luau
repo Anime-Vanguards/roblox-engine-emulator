@@ -1107,6 +1107,7 @@ end)
 -- Not matched: a subnormal number's name (a client writes its digits; ree's formatting flushes it to "0").
 local SharedTableName = newproxy()
 local BufferNames = setmetatable({}, { __mode = "v" }) -- (a content's name lives while SharedTables holds it)
+local BufferRegistryName = R.BufferRegistryName -- (the contents as a string, charged as one the script built: shared_table.rs)
 local function RegistryName(Name)
 	local Kind = type(Name)
 	if Kind == "string" then
@@ -1138,7 +1139,7 @@ local function RegistryName(Name)
 	elseif Type == "SharedTable" then
 		return SharedTableName
 	elseif Type == "buffer" then
-		local Contents = buffer.tostring(Name)
+		local Contents = BufferRegistryName(Name)
 		local Found = BufferNames[Contents]
 		if Found == nil then
 			Found = newproxy()
@@ -1172,7 +1173,8 @@ Method("SharedTableRegistry", "GetSharedTable", function(_, Name)
 end)
 Method("SharedTableRegistry", "SetSharedTable", function(_, Name, Value)
 	if Value ~= nil and typeof(Value) ~= "SharedTable" then
-		local Kind = if type(Value) == "table" then (if #Value > 0 or next(Value) == nil then "Array" else "Dictionary") else typeof(Value)
+		-- (a table's raw length, as SetAttribute names one: a client runs no __len here, measured)
+		local Kind = if type(Value) == "table" then (if rawlen(Value) > 0 or next(Value) == nil then "Array" else "Dictionary") else typeof(Value)
 		Kind = if Kind == "EnumItem" then tostring(Value.EnumType) else RegistryCastNames[Kind] or Kind
 		error(`Unable to cast {Kind} to SharedTable`, 0)
 	end

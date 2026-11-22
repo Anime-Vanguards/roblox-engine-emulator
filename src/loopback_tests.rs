@@ -567,6 +567,54 @@ return {
     assert!(has(&lines, "client print: late 1 2 3"), "{lines:?}");
 }
 
+/// A SharedTable sent through a remote arrives as nil, each way, as a client and its server measured (Studio 0.748, two runs:
+/// loopback/wire.rs): alone, and inside a table, where it leaves a hole in an array and drops its dictionary entry. On main,
+/// where SharedTable was a Lua table, it arrived as a copied table.
+#[test]
+fn shared_tables_cross_remotes_as_nil_each_way() {
+    let summary = run_pair(
+        "shared-table-remotes",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local function Show(...)
+	local Alone, Array, Dictionary = ...
+	return `{tostring(Alone)} [{tostring(Array[1])} {tostring(Array[2])} {tostring(Array[3])}] [{tostring(Dictionary.s)} {tostring(Dictionary.n)}] {select("#", ...)}`
+end
+return {
+	Server = function(Context)
+		local Remote = Instance.new("RemoteEvent")
+		Remote.Name = "SharedTables"
+		Remote.Parent = Storage
+		Remote.OnServerEvent:Connect(function(Player, ...)
+			print("server got", Show(...))
+			local S = SharedTable.new({ x = 1 })
+			Remote:FireClient(Player, S, { 1, S, 3 }, { s = S, n = 2 })
+		end)
+	end,
+	Client = function(Context)
+		local Remote = Storage:WaitForChild("SharedTables")
+		Remote.OnClientEvent:Connect(function(...)
+			print("client got", Show(...))
+		end)
+		local S = SharedTable.new({ x = 1 })
+		Remote:FireServer(S, { 1, S, 3 }, { s = S, n = 2 })
+		for _ = 1, 10 do
+			RunService.Heartbeat:Wait()
+		end
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "server print: server got nil [1 nil 3] [nil 2] 3"), "{lines:?}");
+    assert!(has(&lines, "client print: client got nil [1 nil 3] [nil 2] 3"), "{lines:?}");
+}
+
 /// A remote copies a table once for each place it appears, as Roblox does (a 0.747 session carried one table of 1,000
 /// numbers held 1,000 times each way, and an UnreliableRemoteEvent's warning counted every byte of it), and ree stops a copy
 /// past its guard (lua/bindable.rs `COPY_VALUES`) at the sender with its own error. The big table holds 200 references to a
