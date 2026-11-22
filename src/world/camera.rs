@@ -11,6 +11,7 @@
 //! - The projections use the viewport rounded to whole pixels (908.8 x 895.2 projects as 909 x 895: the centre is 454.5, 447.5).
 //! - A ray starts on the near plane (its point under the pixel, `-NearPlaneZ` along the look vector), `depth` studs further along
 //!   it; the point at the camera itself projects to NaN, NaN at depth 0.
+//! - FieldOfView stays within 1 to 120 degrees; a NaN written is ignored.
 //!
 //! Also the Camera's simpler methods, as a playing client answers them (Studio 0.748: results, result counts, argument errors
 //! and values, on new cameras and the CurrentCamera): GetRoll / SetRoll and GetRenderCFrame, GetPanSpeed / GetTiltSpeed,
@@ -284,5 +285,24 @@ pub fn install(engine: &Rc<Engine>) {
     install_methods(engine, &mut add);
     if let Some(name) = engine.reflection.name_id("NearPlaneZ") {
         behaviors.add_getter(camera, name, Rc::new(|_, engine, id| Ok(LuaValue::Number(-f64::from(near_plane(engine, id))))));
+    }
+    // FieldOfView stays within 1 to 120 degrees, and a NaN written leaves it as it was (measured on a new camera and the
+    // CurrentCamera: 0.5, -0, 1e-40 and -inf read 1, 120.5 and inf 120, a string that is no number 1 as it reads 0; a tween
+    // past 120 ends at 120, and writing 200 at 120 fires no Changed)
+    if let Some(name) = engine.reflection.name_id("FieldOfView")
+        && let Some(info) = engine.reflection.class_property(camera, name).cloned()
+    {
+        behaviors.add_setter(
+            camera,
+            name,
+            Rc::new(move |lua, engine, id, value| {
+                if let Value::Number(degrees) = convert::coerce(lua, engine, &info, &value)?
+                    && !degrees.is_nan()
+                {
+                    crate::lua::instance::set_property(engine, id, name, Value::Number(degrees.clamp(1.0, 120.0)));
+                }
+                Ok(())
+            }),
+        );
     }
 }
