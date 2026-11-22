@@ -1196,8 +1196,8 @@ pub const MODEL_QUERY: f64 = 0.015e-6;
 pub const REPARENTED: f64 = 0.51e-6;
 pub const REPARENTED_LOOSE: f64 = 0.15e-6;
 /// The parallel bridge's machinery (an empty test place's client, an actor_cost probe, one session, 2026-10-23): BindableFunction:Invoke into an
-/// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5), SharedTable.increment 370-429 (counts 31.5); reads (29 ns) and writes (298 ns)
-/// are not priced beyond the engine call ree's SharedTable makes of them (lua/shared_table.rs). Charged on top of what the instructions count.
+/// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5), SharedTable.increment 370-429 (counts 31.5); a read (29 ns) is not priced beyond
+/// the engine call ree's SharedTable makes of it, a write is ([`SHARED_OVERWRITE_STRING`] and after). Charged on top of what the instructions count.
 pub const ACTOR_INVOKE: f64 = 0.94e-6;
 pub const SHARED_INCREMENT: f64 = 0.37e-6;
 /// SharedTable's calls by the entries they handle, beyond the call (lua/shared_table.rs), in seconds. A playing client (Studio 0.748,
@@ -1214,6 +1214,21 @@ pub const SHARED_DEEP_TABLE: f64 = 0.52e-6;
 pub const SHARED_LOOP: f64 = 0.4e-6;
 pub const SHARED_LOOP_STRING_ENTRY: f64 = 0.029e-6;
 pub const SHARED_LOOP_INTEGER_ENTRY: f64 = 0.021e-6;
+/// A SharedTable write beyond the VM's call to it (lua/shared_table.rs `write_price`), in seconds, by its key's kind. A playing client (Studio
+/// 0.748, os.clock over tables of 10 to 10,000 entries, two runs): an overwrite of a key the table has took 0.07-0.09 us with a string key and
+/// 0.10-0.11 with an integer key; a key added took 0.31-0.45 and 0.19-0.23, one taken out (written nil) 0.23-0.39 and 0.15-0.23. Right after a
+/// shallow clone a write copies the path it changes, which the clone shares: the first took 0.47 to 1.16 us with string keys and 0.55 to 1.10
+/// with integer keys as the table grew from 10 entries to 10,000, the next ones as much again where their paths were still shared (a 10-entry
+/// table's second write cost an overwrite). Priced as an overwrite or a key added or taken out, plus each node of ree's trie the write copied
+/// because a copy shared it, fitted for the least relative error over the 64 measured cases of each kind (within x1.20 on average with string
+/// keys, x1.25 with integer keys, whose trie copies seven small nodes where a client's cost grows with the table); the VM already charges
+/// 0.02 us of each write's call.
+pub const SHARED_OVERWRITE_STRING: f64 = 0.065e-6;
+pub const SHARED_OVERWRITE_INTEGER: f64 = 0.10e-6;
+pub const SHARED_CHANGE_STRING: f64 = 0.29e-6;
+pub const SHARED_CHANGE_INTEGER: f64 = 0.17e-6;
+pub const SHARED_COPIED_STRING_NODE: f64 = 0.24e-6;
+pub const SHARED_COPIED_INTEGER_NODE: f64 = 0.065e-6;
 /// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 11.8 us; a
 /// Studio client and edit DataModel 6.7-6.9 for FredokaOne)
 pub const TEXT_MEASURED: f64 = 11.7e-6;

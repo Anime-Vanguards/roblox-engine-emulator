@@ -7418,6 +7418,55 @@ fn shared_table_conversions_stop_where_robloxs_stack_does() {
     );
 }
 
+/// A table is converted once for each place it appears, as Roblox converts it, so one small table can stand for a conversion
+/// of any size; ree stops it past its guard on a copy (bindable.rs `COPY_VALUES`: the value written, and every entry walked, a
+/// table each time it appears) with the guard's error, as every other copy of a script's table does: `new`, a write and
+/// update's result. The big tables here hold a table of 100,000 threads 200 times first (threads are dropped, so their entries
+/// make nothing) and then a table of 100,000 numbers 100,000 times, and a tree of `{ t, t }` 40 deep is 2^40 tables: each stops
+/// before a number is stored. A conversion at the guard goes through.
+#[test]
+fn shared_table_conversions_stop_at_rees_guard_on_a_copy() {
+    let (lua, engine) = start();
+    let guard = crate::lua::bindable::COPY_VALUES;
+    run(
+        &lua,
+        &engine,
+        &r#"
+        local Thread = coroutine.running()
+        local Threads = table.create(100000, Thread)
+        local Numbers = table.create(100000, 1)
+        local Huge = table.create(100200)
+        for Index = 1, 200 do
+            Huge[Index] = Threads
+        end
+        for Index = 201, 100200 do
+            Huge[Index] = Numbers
+        end
+        local Tree = {}
+        for _ = 1, 40 do
+            Tree = { Threads, Tree, Tree }
+        end
+        local Message = "ree: this copy would make more than GUARD values (a table is copied once for each place it appears)"
+        local function Fails(F, ...)
+            local Ok, E = pcall(F, ...)
+            if Ok or E ~= Message then
+                error(tostring(E), 2)
+            end
+        end
+        Fails(SharedTable.new, Huge)
+        Fails(SharedTable.new, Tree)
+        local S = SharedTable.new()
+        Fails(function() S.k = Huge end)
+        Fails(SharedTable.update, S, "k", function() return Tree end)
+        assert(S.k == nil)
+        -- the value and GUARD - 1 entries: at the guard; one entry more is past it
+        assert(SharedTable.size(SharedTable.new(table.create(GUARD - 1, Thread))) == 0)
+        Fails(SharedTable.new, table.create(GUARD, Thread))
+        "#
+        .replace("GUARD", &guard.to_string()),
+    );
+}
+
 /// A chain of SharedTables a script builds one write at a time, each holding the next, is deep-copied and let go of whatever its
 /// length (Studio deep-copies a chain 1,000 long): neither nests a call once a link, which would overflow the engine's stack.
 #[test]
@@ -7494,6 +7543,64 @@ fn shared_table_bulk_calls_cost_what_studio_spent() {
         assert(math.abs(CloneBig - CloneSmall) < 1, "a shallow clone at 1,000 and 10 entries (us): " .. CloneBig .. " " .. CloneSmall)
         assert(Written > 280 and Written < 380, "1,000 entries written to a key (us): " .. Written)
         assert(Failed > 150 and Failed < 250, "new failing at its 1,000th entry (us): " .. Failed)
+        print("ok")
+        "#,
+    );
+    assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
+}
+
+/// A SharedTable write costs the work clock what a playing client spent on it (Studio 0.748, cost.rs SHARED_OVERWRITE_STRING): an
+/// overwrite 0.07-0.09 us with a string key and 0.10-0.11 with an integer key, a key added 0.31-0.45 and 0.19-0.23, one taken out
+/// 0.23-0.39 and 0.15-0.23; the first write after a shallow clone of 1,000 string-keyed entries 0.68-0.81, as it copies the path
+/// the clone shares, while a 10-entry clone's second write, whose path is already its own, costs an overwrite again (0.08).
+#[test]
+fn shared_table_writes_cost_what_studio_spent() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Per(Body)
+            local N = 200
+            local start = os.clock()
+            Body(N)
+            local middle = os.clock()
+            for _ = 1, N do end
+            return ((middle - start) - (os.clock() - middle)) / N * 1e6
+        end
+        local Strings, Integers, Small = {}, {}, {}
+        for I = 1, 1000 do
+            Strings["k" .. I] = I
+            Integers[I] = I
+        end
+        for I = 1, 10 do
+            Small["k" .. I] = I
+        end
+        local Fresh = {}
+        for I = 1, 200 do
+            Fresh[I] = "n" .. I
+        end
+        local S, T = SharedTable.new(Strings), SharedTable.new(Integers)
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        Within("a string key overwritten", Per(function(N) for _ = 1, N do S.k1 = 2 end end), 0.06, 0.11)
+        Within("a string key added", Per(function(N) for I = 1, N do S[Fresh[I]] = 1 end end), 0.25, 0.45)
+        Within("a string key taken out", Per(function(N) for I = 1, N do S[Fresh[I]] = nil end end), 0.23, 0.39)
+        Within("an integer key overwritten", Per(function(N) for _ = 1, N do T[1] = 2 end end), 0.09, 0.14)
+        Within("an integer key added", Per(function(N) for I = 1, N do T[1000 + I] = 1 end end), 0.15, 0.25)
+        Within("an integer key taken out", Per(function(N) for I = 1, N do T[1000 + I] = nil end end), 0.15, 0.25)
+        local Clones, Smalls = {}, {}
+        local Base = SharedTable.new(Small)
+        for I = 1, 200 do
+            Clones[I] = SharedTable.clone(S)
+            Smalls[I] = SharedTable.clone(Base)
+        end
+        Within("the first write after a clone of 1,000", Per(function(N) for I = 1, N do Clones[I].k1 = 3 end end), 0.6, 0.9)
+        Per(function(N) for I = 1, N do Smalls[I].k1 = 3 end end)
+        Within("a 10-entry clone's second write", Per(function(N) for I = 1, N do Smalls[I].k2 = 3 end end), 0.06, 0.11)
         print("ok")
         "#,
     );
