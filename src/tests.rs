@@ -1140,6 +1140,146 @@ fn the_task_library_raises_robloxs_errors() {
     );
 }
 
+/// The refusal of a call that would yield where the thread cannot (a table.sort comparator here; a string.gsub callback and
+/// an __index metamethod alike), as tools/parity/probes/yield_refused.luau measured in a 0.747 playing client and server.
+const REFUSED: &str = r#"
+    local function Refused(Body)
+        local Message
+        table.sort({ 2, 1 }, function(A, B)
+            if not Message then
+                local Ok, Problem = pcall(Body)
+                Message = if Ok then "ok" else Problem
+            end
+            return A < B
+        end)
+        return Message
+    end
+"#;
+
+/// A wait where the thread cannot yield raises a client's error before it registers anything, so the thread's later waits
+/// take their own time and return their own results; WaitForChild of a child that exists and an Invoke whose handler does
+/// not yield answer, and a handler that yields goes on on its own thread. (The refusal was the VM's "attempt to yield across
+/// metamethod/C-call boundary", after the wait had registered: its timer, the event's fire or the child's arrival resumed the
+/// thread's next wait early with the refused wait's values.)
+#[test]
+fn a_wait_where_the_thread_cannot_yield_raises_and_leaves_nothing_behind() {
+    let (lua, engine) = start();
+    let source = format!(
+        "{REFUSED}{}",
+        r#"
+        local Event = Instance.new("BindableEvent")
+        local Folder = Instance.new("Folder")
+        local Existing = Instance.new("Folder")
+        Existing.Name = "Existing"
+        Existing.Parent = Folder
+        local Quiet = Instance.new("BindableFunction")
+        Quiet.OnInvoke = function(Value) return Value * 2 end
+        local Slow = Instance.new("BindableFunction")
+        Slow.OnInvoke = function() task.wait(0.05) print("handler went on", coroutine.isyieldable()) return 1 end
+        local Unhandled = Instance.new("BindableFunction")
+        print("task.wait", Refused(function() task.wait(0.1) end))
+        print("task.wait-string", Refused(function() task.wait("x") end))
+        print("wait", Refused(function() wait(0.1) end))
+        print("Wait", Refused(function() Event.Event:Wait() end))
+        print("Wait-indexed", Refused(function() Event.Event.Wait(Event.Event) end))
+        print("WaitForChild", Refused(function() Folder:WaitForChild("Missing", 0.1) end))
+        print("WaitForChild-nil", Refused(function() Folder:WaitForChild(nil) end))
+        print("WaitForChild-existing", Refused(function() assert(Folder:WaitForChild("Existing") == Existing) end))
+        print("Invoke-quiet", Refused(function() assert(Quiet:Invoke(21) == 42) end))
+        print("Invoke-slow", Refused(function() Slow:Invoke() end))
+        print("Invoke-unhandled", Refused(function() Unhandled:Invoke() end))
+        print("coroutine.yield", Refused(function() coroutine.yield() end))
+        print("task.wait-string-yieldable", select(2, pcall(function() task.wait("x") end)))
+        task.delay(0.05, function() Event:Fire("refused") end)
+        local Started = os.clock()
+        local Waited = task.wait(0.2)
+        print("next wait", Waited >= 0.19, os.clock() - Started >= 0.19)
+        task.delay(0.1, function() Event:Fire("later") end)
+        print("next Wait", Event.Event:Wait())
+        task.delay(0.1, function()
+            local Child = Instance.new("Folder")
+            Child.Name = "Late"
+            Child.Parent = Folder
+        end)
+        print("next WaitForChild", Folder:WaitForChild("Late").Name)
+        "#
+    );
+    run(&lua, &engine, &source);
+    scheduler::run_until(&lua, &engine, 1.0).unwrap();
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: task.wait thread is not yieldable",
+            "print: task.wait-string thread is not yieldable",
+            "print: wait thread is not yieldable",
+            "print: Wait thread cannot be yielded to Wait",
+            "print: Wait-indexed thread cannot be yielded to Wait",
+            "print: WaitForChild thread is not yieldable",
+            "print: WaitForChild-nil Argument 1 missing or nil",
+            "print: WaitForChild-existing ok",
+            "print: Invoke-quiet ok",
+            "print: Invoke-slow thread is not yieldable",
+            "print: Invoke-unhandled thread is not yieldable",
+            "print: coroutine.yield attempt to yield across metamethod/C-call boundary",
+            "print: task.wait-string-yieldable Test:36: invalid argument #1 to 'wait' (number expected, got string)",
+            "print: handler went on true",
+            "print: next wait true true",
+            "print: next Wait later",
+            "print: next WaitForChild Late",
+        ]
+    );
+}
+
+/// require where the thread cannot yield: of a module another thread is loading it raises `thread is not yieldable`; a module
+/// that must load loads on a thread of its own, which owns it (a require of itself from its chunk is recursive), and the
+/// require gets its result when it loads without yielding, else raises `thread is not yieldable` while it goes on, and a later
+/// require gets its result (measured in a 0.747 playing client and server: tools/parity/probes/yield_refused_require.luau).
+#[test]
+fn a_require_where_the_thread_cannot_yield_loads_the_module_on_a_thread_of_its_own() {
+    let (lua, engine) = start();
+    let source = format!(
+        "{REFUSED}{}",
+        r#"
+        local function Make(Name, Source)
+            local Module = Instance.new("ModuleScript")
+            Module.Name = Name
+            __setSource(Module, Source)
+            Module.Parent = workspace
+            return Module
+        end
+        local Loading = Make("Loading", "task.wait(0.1) return 'loaded'")
+        task.spawn(function() print("first", require(Loading)) end)
+        print("loading", Refused(function() require(Loading) end))
+        local Waits = Make("Waits", "task.wait(0.1) print('module went on') return 'waited'")
+        print("waits", Refused(function() require(Waits) end))
+        local Plain = Make("Plain", "return 'plain'")
+        print("plain", Refused(function() assert(require(Plain) == "plain") end))
+        local Recursive = Make("Recursive", "return require(script)")
+        print("recursive", Refused(function() require(Recursive) end))
+        local Started = os.clock()
+        task.wait(0.3)
+        print("next wait", os.clock() - Started >= 0.29)
+        print("again", require(Loading), require(Waits))
+        "#
+    );
+    run(&lua, &engine, &source);
+    scheduler::run_until(&lua, &engine, 1.0).unwrap();
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: loading thread is not yieldable",
+            "print: waits thread is not yieldable",
+            "print: plain ok",
+            "error: Requested module was required recursively",
+            "print: recursive Requested module experienced an error while loading",
+            "print: first loaded",
+            "print: module went on",
+            "print: next wait true",
+            "print: again loaded waited",
+        ]
+    );
+}
+
 #[test]
 fn a_once_connection_reads_disconnected_from_the_fire_on() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/signals.luau): Connected is false right after the

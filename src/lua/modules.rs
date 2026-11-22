@@ -727,11 +727,25 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
                     if record.owner.as_ref().map(thread_key) == Some(thread_key(&current)) {
                         return error_result(lua, "Requested module was required recursively".into(), 0);
                     }
+                    // (a thread that cannot yield does not wait for it: lua/mod.rs NOT_YIELDABLE; measured in a 0.747
+                    // playing client and server, tools/parity/probes/yield_refused_require.luau)
+                    if !super::yieldable(&current) {
+                        return error_result(lua, super::NOT_YIELDABLE.into(), 0);
+                    }
                     record.waiting.push(current);
                     return Ok(LuaMultiValue::from_iter([LuaValue::Integer(2)]));
                 }
             }
         }
+    }
+    // A module that must load, required from a thread that cannot yield (a metamethod, a sort comparator), loads on a thread
+    // of its own (prelude.luau RequireApart): its answer when it loads without yielding, else `thread is not yieldable` while
+    // it goes on loading, and a later require gets its result (measured in a 0.747 playing client and server,
+    // tools/parity/probes/yield_refused_require.luau). The loading thread owns the module, so a require of it from its own
+    // chunk is recursive.
+    if !super::yieldable(&current) {
+        let apart: LuaFunction = engine.prelude().exports.get("RequireApart")?;
+        return apart.call((target, caller, vm));
     }
 
     crate::profiler::caches::miss(crate::profiler::caches::Cache::Requires);

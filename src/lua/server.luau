@@ -1359,13 +1359,13 @@ for _, Class in { "RemoteEvent", "UnreliableRemoteEvent" } do
 	end)
 end
 Method("RemoteFunction", "InvokeServer", function()
-	Raise("InvokeServer can only be called from the client")
+	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end Raise("InvokeServer can only be called from the client") -- (the refusal first: tools/parity/probes/yield_refused.luau)
 end)
 Method("RemoteFunction", "InvokeClient", function(Self, Player)
-	if not IsPlayer(Player) then
+	if Player == nil then error("Argument 1 missing or nil", 0) elseif not IsPlayer(Player) then -- (nil, then the refusal: tools/parity/probes/yield_refused.luau)
 		Raise("InvokeClient: player argument must be a Player object")
 	end
-	if Player.Parent == Players then Missing("RemoteFunction", "InvokeClient")
+	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end if Player.Parent == Players then Missing("RemoteFunction", "InvokeClient")
 		local Thread = coroutine.running()
 		local Connection
 		Connection = Players.PlayerRemoving:Connect(function(Leaving)

@@ -929,22 +929,37 @@ fn attribute_to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaV
 
 /// WaitForChild: the existing child, or yields until a child with the name is added (a
 /// ChildAdded connection resumes the thread), the timeout passes, or forever (with the
-/// "Infinite yield possible" warning after 5 s).
+/// "Infinite yield possible" warning after 5 s). A nil name raises "Argument 1 missing or nil"; a thread that cannot yield
+/// gets an existing child and raises `thread is not yieldable` for a missing one, whatever its timeout (in this order, and
+/// without a position: measured in a 0.747 playing client and server, tools/parity/probes/yield_refused.luau).
 fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -> Ret {
     let name = args.get(1).clone();
+    if name.is_nil() {
+        return raise("Argument 1 missing or nil");
+    }
     let name_string = name_arg(&name);
     let name_bytes = name_string.as_ref().map(|s| s.as_bytes());
     if let Some(existing) = find_first_child(engine, id, name_bytes.as_deref(), false) {
         return optional_instance(lua, engine, Some(existing));
     }
+    let thread = lua.current_thread();
+    let yieldable = super::yieldable(&thread);
     if let LuaValue::String(s) = &name {
-        // (services port: the yieldable lookup runs a pending rur.json clientGui mount first)
-        if let Some(child) = super::globals::missing_child_yieldable(lua, engine, id, &s.as_bytes())? {
+        // (services port: the yieldable lookup runs a pending rur.json clientGui mount first; one that cannot yield is an
+        // index's, globals::missing_child)
+        let found = if yieldable {
+            super::globals::missing_child_yieldable(lua, engine, id, &s.as_bytes())?
+        } else {
+            super::globals::missing_child(lua, engine, id, &s.as_bytes())?
+        };
+        if let Some(child) = found {
             return optional_instance(lua, engine, Some(child));
         }
     }
+    if !yieldable {
+        return raise(super::NOT_YIELDABLE);
+    }
     super::refs::admit(engine, super::refs::Hold::Wait, "WaitForChild")?;
-    let thread = lua.current_thread();
     let done = Rc::new(Cell::new(false));
     let connection_slot = Rc::new(Cell::new(None));
     let callback = {

@@ -1,0 +1,136 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+sort-yieldable ok false
+gsub-yieldable ok false
+index-yieldable ok false
+sort-task.wait error thread is not yieldable
+sort-task.wait-none error thread is not yieldable
+sort-task.wait-string error thread is not yieldable
+sort-task.wait-table error thread is not yieldable
+sort-wait error thread is not yieldable
+sort-wait-none error thread is not yieldable
+sort-wait-string error thread is not yieldable
+sort-Wait error thread cannot be yielded to Wait
+sort-wait-lower error thread cannot be yielded to Wait
+sort-Wait-indexed error thread cannot be yielded to Wait
+sort-Wait-misused error @136: invalid argument #1 to 'Wait' (RBXScriptSignal expected, got number)
+sort-Heartbeat-Wait error thread cannot be yielded to Wait
+sort-WaitForChild-missing error thread is not yieldable
+sort-WaitForChild-timeout error thread is not yieldable
+sort-WaitForChild-existing ok Instance Existing
+sort-WaitForChild-nil error Argument 1 missing or nil
+sort-WaitForChild-bad-timeout error thread is not yieldable
+sort-Invoke-quiet ok handled 1
+sort-Invoke-slow error thread is not yieldable
+sort-Invoke-slow-handler start yieldable=true,resumed
+sort-Invoke-unhandled error thread is not yieldable
+sort-InvokeServer error thread is not yieldable
+sort-coroutine.yield error attempt to yield across metamethod/C-call boundary
+sort-synchronize error task.synchronize() may only be called from a script that is a descendant of an Actor
+sort-desynchronize error task.desynchronize() may only be called from a script that is a descendant of an Actor
+sort-PreloadAsync ok (none)
+sort-PreloadAsync-folder ok (none)
+sort-InvokeClient error thread is not yieldable
+sort-InvokeClient-nil error Argument 1 missing or nil
+gsub-task.wait error thread is not yieldable
+gsub-task.wait-none error thread is not yieldable
+gsub-task.wait-string error thread is not yieldable
+gsub-task.wait-table error thread is not yieldable
+gsub-wait error thread is not yieldable
+gsub-wait-none error thread is not yieldable
+gsub-wait-string error thread is not yieldable
+gsub-Wait error thread cannot be yielded to Wait
+gsub-wait-lower error thread cannot be yielded to Wait
+gsub-Wait-indexed error thread cannot be yielded to Wait
+gsub-Wait-misused error @136: invalid argument #1 to 'Wait' (RBXScriptSignal expected, got number)
+gsub-Heartbeat-Wait error thread cannot be yielded to Wait
+gsub-WaitForChild-missing error thread is not yieldable
+gsub-WaitForChild-timeout error thread is not yieldable
+gsub-WaitForChild-existing ok Instance Existing
+gsub-WaitForChild-nil error Argument 1 missing or nil
+gsub-WaitForChild-bad-timeout error thread is not yieldable
+gsub-Invoke-quiet ok handled 1
+gsub-Invoke-slow error thread is not yieldable
+gsub-Invoke-slow-handler start yieldable=true,resumed
+gsub-Invoke-unhandled error thread is not yieldable
+gsub-InvokeServer error thread is not yieldable
+gsub-coroutine.yield error attempt to yield across metamethod/C-call boundary
+gsub-synchronize error task.synchronize() may only be called from a script that is a descendant of an Actor
+gsub-desynchronize error task.desynchronize() may only be called from a script that is a descendant of an Actor
+gsub-PreloadAsync ok (none)
+gsub-PreloadAsync-folder ok (none)
+gsub-InvokeClient error thread is not yieldable
+gsub-InvokeClient-nil error Argument 1 missing or nil
+index-task.wait error thread is not yieldable
+index-task.wait-none error thread is not yieldable
+index-task.wait-string error thread is not yieldable
+index-task.wait-table error thread is not yieldable
+index-wait error thread is not yieldable
+index-wait-none error thread is not yieldable
+index-wait-string error thread is not yieldable
+index-Wait error thread cannot be yielded to Wait
+index-wait-lower error thread cannot be yielded to Wait
+index-Wait-indexed error thread cannot be yielded to Wait
+index-Wait-misused error @136: invalid argument #1 to 'Wait' (RBXScriptSignal expected, got number)
+index-Heartbeat-Wait error thread cannot be yielded to Wait
+index-WaitForChild-missing error thread is not yieldable
+index-WaitForChild-timeout error thread is not yieldable
+index-WaitForChild-existing ok Instance Existing
+index-WaitForChild-nil error Argument 1 missing or nil
+index-WaitForChild-bad-timeout error thread is not yieldable
+index-Invoke-quiet ok handled 1
+index-Invoke-slow error thread is not yieldable
+index-Invoke-slow-handler start yieldable=true,resumed
+index-Invoke-unhandled error thread is not yieldable
+index-InvokeServer error thread is not yieldable
+index-coroutine.yield error attempt to yield across metamethod/C-call boundary
+index-synchronize error task.synchronize() may only be called from a script that is a descendant of an Actor
+index-desynchronize error task.desynchronize() may only be called from a script that is a descendant of an Actor
+index-PreloadAsync ok (none)
+index-PreloadAsync-folder ok (none)
+index-InvokeClient error thread is not yieldable
+index-InvokeClient-nil error Argument 1 missing or nil
+yieldable-task.wait-string error @128: invalid argument #1 to 'wait' (number expected, got string)
+yieldable-task.wait-table error @129: invalid argument #1 to 'wait' (number expected, got table)
+yieldable-wait-string ok number number
+yieldable-Wait-misused error @136: invalid argument #1 to 'Wait' (RBXScriptSignal expected, got number)
+yieldable-WaitForChild-nil error Argument 1 missing or nil
+yieldable-InvokeClient-nil error Argument 1 missing or nil
+yieldable-PreloadAsync 0 (none) yielded=false frame-passed=false | 1 (none) yielded=false frame-passed=false
+after-task.wait-waits error thread is not yieldable | wait1 full elapsed-full | wait2 full elapsed-full | wait3 full elapsed-full
+after-task.wait-legacy-wait error thread is not yieldable | wait full elapsed-full
+after-task.wait-event error thread is not yieldable | Wait full fired-later
+after-task.wait-child error thread is not yieldable | WaitForChild full Instance Later
+after-task.wait-park error thread is not yieldable | yield full timer
+after-wait-waits error thread is not yieldable | wait1 full elapsed-full | wait2 full elapsed-full | wait3 full elapsed-full
+after-wait-legacy-wait error thread is not yieldable | wait full elapsed-full
+after-wait-event error thread is not yieldable | Wait full fired-later
+after-wait-child error thread is not yieldable | WaitForChild full Instance Later
+after-wait-park error thread is not yieldable | yield full timer
+after-Wait-waits error thread cannot be yielded to Wait | wait1 full elapsed-full | wait2 full elapsed-full | wait3 full elapsed-full
+after-Wait-legacy-wait error thread cannot be yielded to Wait | wait full elapsed-full
+after-Wait-event error thread cannot be yielded to Wait | Wait full fired-later
+after-Wait-child error thread cannot be yielded to Wait | WaitForChild full Instance Later
+after-Wait-park error thread cannot be yielded to Wait | yield full timer
+after-WaitForChild-waits error thread is not yieldable | wait1 full elapsed-full | wait2 full elapsed-full | wait3 full elapsed-full
+after-WaitForChild-legacy-wait error thread is not yieldable | wait full elapsed-full
+after-WaitForChild-event error thread is not yieldable | Wait full fired-later
+after-WaitForChild-child error thread is not yieldable | WaitForChild full Instance Later
+after-WaitForChild-park error thread is not yieldable | yield full timer
+after-WaitForChild-timeout-waits error thread is not yieldable | wait1 full elapsed-full | wait2 full elapsed-full | wait3 full elapsed-full
+after-WaitForChild-timeout-legacy-wait error thread is not yieldable | wait full elapsed-full
+after-WaitForChild-timeout-event error thread is not yieldable | Wait full fired-later
+after-WaitForChild-timeout-child error thread is not yieldable | WaitForChild full Instance Later
+after-WaitForChild-timeout-park error thread is not yieldable | yield full timer
+after-Invoke-waits error thread is not yieldable | wait1 full elapsed-full | wait2 full elapsed-full | wait3 full elapsed-full
+after-Invoke-legacy-wait error thread is not yieldable | wait full elapsed-full
+after-Invoke-event error thread is not yieldable | Wait full fired-later
+after-Invoke-child error thread is not yieldable | WaitForChild full Instance Later
+after-Invoke-park error thread is not yieldable | yield full timer
+after-coroutine.yield-waits error attempt to yield across metamethod/C-call boundary | wait1 full elapsed-full | wait2 full elapsed-full | wait3 full elapsed-full
+after-coroutine.yield-legacy-wait error attempt to yield across metamethod/C-call boundary | wait full elapsed-full
+after-coroutine.yield-event error attempt to yield across metamethod/C-call boundary | Wait full fired-later
+after-coroutine.yield-child error attempt to yield across metamethod/C-call boundary | WaitForChild full Instance Later
+after-coroutine.yield-park error attempt to yield across metamethod/C-call boundary | yield full timer
+threads ok made | defer,delay,legacy-delay,spawn,spawn-after-wait,wrap 2 20
+spawned-errors thread is not yieldable / trace @328 / @327 || thread cannot be yielded to Wait / trace @334 / @333

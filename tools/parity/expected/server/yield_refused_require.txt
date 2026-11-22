@@ -1,0 +1,10 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (loadstring in the server's bridge, script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+require-loading error thread is not yieldable
+require-loading-next-wait full elapsed-full
+require-loading-first ok loaded
+require-loading-again ok loaded
+require-waits error thread is not yieldable
+require-waits-next-wait full elapsed-full
+require-waits-again ok waited
+require-plain ok plain

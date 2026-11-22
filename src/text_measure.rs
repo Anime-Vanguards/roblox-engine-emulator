@@ -313,9 +313,7 @@ fn get_text_bounds(lua: &Lua, engine: &Rc<Engine>, service: crate::InstanceId, a
     // The first call of a face waits for it to load (a call that cannot yield raises, and the load goes on: a later call finds it
     // loaded). The client resumes the call when the load is done, which depends on the machine; here at the next resumption point.
     let thread = lua.current_thread();
-    if unsafe { mlua::ffi::lua_isyieldable(thread.state()) } == 0 {
-        return raise("thread is not yieldable");
-    }
+    crate::lua::refuse_unyieldable(&thread, crate::lua::NOT_YIELDABLE)?;
     engine.state.borrow_mut().sched.defer(JobTarget::Thread(thread), vec![bounds]);
     Err(Flow::Yield)
 }

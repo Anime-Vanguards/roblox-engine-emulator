@@ -1269,6 +1269,9 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let Some(uri) = content_uri(args.get(1)) else {
             return Err(err("CreateEditableMeshAsync: expected a mesh Content"));
         };
+        // (an asset's mesh waits for its load: a thread that cannot yield raises before anything is made, by the rule
+        // measured for the engine's other yielding calls, lua/mod.rs NOT_YIELDABLE; not measured for this method)
+        crate::lua::refuse_unyieldable(&lua.current_thread(), crate::lua::NOT_YIELDABLE)?;
         // Studio's wait (crate::cost): the asset's first fetch in the session, else its decode
         let first = !extension(engine).assets.borrow().contains_key(&uri);
         let mesh = match load_asset(engine, &uri) {

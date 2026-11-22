@@ -22,7 +22,7 @@ use std::rc::Rc;
 use mlua::prelude::*;
 use rustc_hash::FxHashMap;
 
-use super::modules::{self, vm_key};
+use super::{Flow, modules::{self, vm_key}};
 use crate::{Engine, InstanceId};
 
 /// The Actor `id` is or is under, the nearest.
@@ -142,15 +142,21 @@ fn key(thread: &LuaThread) -> usize {
 }
 
 /// task.synchronize (`to_serial`) or task.desynchronize of the running thread: true when it must yield now, because it is a
-/// parallel handler's thread of a running phase that is leaving its part for the other.
-pub fn park(lua: &Lua, engine: &Engine, to_serial: bool) -> bool {
+/// parallel handler's thread of a running phase that is leaving its part for the other. Where the thread cannot yield it
+/// raises `thread is not yieldable` and stays in its part (by the rule measured for the engine's other yielding calls,
+/// lua/mod.rs NOT_YIELDABLE; not measured in an Actor).
+pub fn park(lua: &Lua, engine: &Engine, to_serial: bool) -> Result<bool, Flow> {
     let thread = lua.current_thread();
     let mut modules = engine.modules.borrow_mut();
     let parallel = &mut modules.parallel;
-    let Some(&in_parallel) = parallel.modes.get(&key(&thread)) else { return false };
-    let Some(phase) = parallel.phases.last_mut() else { return false };
+    let Some(&in_parallel) = parallel.modes.get(&key(&thread)) else { return Ok(false) };
+    let Some(phase) = parallel.phases.last_mut() else { return Ok(false) };
     if in_parallel != to_serial {
-        return false;
+        return Ok(false);
+    }
+    if !super::yieldable(&thread) {
+        drop(modules);
+        return super::raise_plain(super::NOT_YIELDABLE);
     }
     parallel.modes.insert(key(&thread), !to_serial);
     if to_serial {
@@ -158,7 +164,7 @@ pub fn park(lua: &Lua, engine: &Engine, to_serial: bool) -> bool {
     } else {
         phase.desynchronized.push_back(thread);
     }
-    true
+    Ok(true)
 }
 
 /// A fire's parallel handlers, after its serial ones: `threads` are their threads with the arguments of the fire.

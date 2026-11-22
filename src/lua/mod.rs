@@ -109,6 +109,28 @@ pub fn raise_at_caller<T>(message: impl Into<String>) -> Result<T, Flow> {
     Err(Flow::Error(ScriptError::at_caller(message)))
 }
 
+/// Whether `thread`, the running one, may yield where it is: not inside a metamethod, a `table.sort` comparator, a
+/// `string.gsub` callback or another function called from C (Luau's `lua_isyieldable`; a method call through a C
+/// `__namecall` with a continuation keeps its caller's answer).
+pub fn yieldable(thread: &LuaThread) -> bool {
+    unsafe { mlua::ffi::lua_isyieldable(thread.state()) != 0 }
+}
+
+/// What a yielding engine call raises, without a position, where the running thread cannot yield: it is checked before
+/// the call registers anything with the scheduler (a refused yield leaves no resumption behind, so the thread's later
+/// waits take their own time and return their own results). `thread is not yieldable` for task.wait, wait, WaitForChild of
+/// a missing child, require, a BindableFunction Invoke whose handler yields and the remote invokes; a signal's Wait raises
+/// [`NOT_YIELDABLE_WAIT`]. coroutine.yield keeps the VM's own error. Measured in a 0.747 playing client and server, also
+/// that task.wait checks it before its argument: tools/parity/probes/yield_refused.luau.
+pub const NOT_YIELDABLE: &str = "thread is not yieldable";
+/// RBXScriptSignal:Wait's [`NOT_YIELDABLE`]
+pub const NOT_YIELDABLE_WAIT: &str = "thread cannot be yielded to Wait";
+
+/// [`NOT_YIELDABLE`] (or `message`) unless `thread` may yield.
+pub fn refuse_unyieldable(thread: &LuaThread, message: &str) -> Result<(), Flow> {
+    if yieldable(thread) { Ok(()) } else { raise_plain(message) }
+}
+
 pub fn values<const N: usize>(items: [LuaValue; N]) -> LuaMultiValue {
     LuaMultiValue::from_iter(items)
 }

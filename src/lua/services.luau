@@ -1023,7 +1023,7 @@ Method("ContentProvider", "PreloadAsync", function(_, Items, Callback)
 	local Wait = R.PreloadAnimations(Items)
 	if Wait > 0 then
 		task.wait(Wait)
-	else
+	elseif coroutine.isyieldable() then -- (with nothing to load a client returns at once, also where the thread cannot yield: tools/parity/probes/yield_refused.luau; here one that can still waits a frame)
 		task.wait()
 	end
 	if Callback then
@@ -1249,13 +1249,13 @@ end
 
 -- Remotes never reach a server offline; invocations yield forever like a dropped connection.
 Method("RemoteFunction", "InvokeServer", function(Self)
-	Missing("RemoteFunction", `InvokeServer ({Self:GetFullName()}) never returns offline`)
+	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end Missing("RemoteFunction", `InvokeServer ({Self:GetFullName()}) never returns offline`) -- (refused first: tools/parity/probes/yield_refused.luau)
 	return coroutine.yield()
 end)
 Method("BindableFunction", "Invoke", function(Self, ...)
 	local Callback = R.GetCallback(Self, "OnInvoke")
-	if not Callback then
-		return coroutine.yield()
+	if not Callback or not coroutine.isyieldable() then -- (where the thread cannot yield: R.InvokeApart, at the end)
+		if Callback then return R.InvokeApart(Self, Callback, ...) elseif coroutine.isyieldable() then return coroutine.yield() end error("thread is not yieldable", 0)
 	end
 	if Self:GetActor() then
 		Charge(Cost.ActorInvoke) -- (a call into an Actor's VM: 1.0 us in Studio)
@@ -1487,5 +1487,27 @@ Method("LogService", "Log", Priced(function(Self, MessageType, Message, Context)
 	end
 	LogLine(LogKinds[Item.Name], Message, Context, 3)
 end))
+
+-- BindableFunction:Invoke from a thread that cannot yield (a metamethod, a sort comparator): the handler runs on a thread of
+-- its own; the call returns what it returns when it ends without yielding, else raises `thread is not yieldable` while the
+-- handler goes on (a call with no handler raises it too). Measured in a 0.747 playing client and server:
+-- tools/parity/probes/yield_refused.luau. (Here at the end: the stubs above keep their line numbers.)
+R.InvokeApart = function(Self, Callback, ...)
+	if Self:GetActor() then
+		Charge(Cost.ActorInvoke)
+	end
+	local Outcome
+	local Handler = coroutine.create(function(...)
+		Outcome = table.pack(Callback(...))
+	end)
+	local Resumed, Problem = coroutine.resume(Handler, R.CopiedArguments(...))
+	if not Resumed then
+		error(Problem, 0)
+	end
+	if not Outcome then
+		error("thread is not yieldable", 0)
+	end
+	return R.Copied(table.unpack(Outcome, 1, Outcome.n))
+end
 
 return true

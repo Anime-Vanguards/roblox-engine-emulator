@@ -722,5 +722,51 @@
 			"line": "value SharedTable typeof=SharedTable type=userdata tostring=SharedTable: ADDR",
 			"why": "SharedTable is a userdata in a client; ree makes it a table"
 		}
+	],
+	"yield_refused": [
+		{
+			"line": "sort-synchronize",
+			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
+		},
+		{
+			"line": "sort-desynchronize",
+			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
+		},
+		{
+			"line": "sort-InvokeClient",
+			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
+		},
+		{
+			"line": "gsub-synchronize",
+			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
+		},
+		{
+			"line": "gsub-desynchronize",
+			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
+		},
+		{
+			"line": "gsub-InvokeClient",
+			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
+		},
+		{
+			"line": "index-synchronize",
+			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
+		},
+		{
+			"line": "index-desynchronize",
+			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
+		},
+		{
+			"line": "index-InvokeClient",
+			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
+		},
+		{
+			"line": "yieldable-InvokeClient-nil",
+			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
+		},
+		{
+			"line": "yieldable-PreloadAsync",
+			"why": "ContentProvider:PreloadAsync of a list with nothing to load returns at once in a client; ree waits a frame where the thread can yield (where it cannot, it returns at once, as a client does)"
+		}
 	]
 }

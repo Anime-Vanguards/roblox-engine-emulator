@@ -244,7 +244,9 @@ fn send(engine: &Engine, endpoint: &Rc<Endpoint>, message: Msg) {
 }
 
 /// loopback.luau's Call(remote, toServer, player, ...): InvokeServer or InvokeClient; the call goes out and the caller yields
-/// until its answer; ("fake") for a harness's player
+/// until its answer; ("fake") for a harness's player. A thread that cannot yield raises `thread is not yieldable` after
+/// InvokeClient's player check (a nil player: "Argument 1 missing or nil") and before the side checks, and sends nothing (measured in a 0.747 playing client and server,
+/// tools/parity/probes/yield_refused.luau; its order against an argument that cannot be sent is not measured)
 fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
     let Some(endpoint) = engine.loopback() else { return raise("not a loopback run") };
     let Some(remote) = crate::lua::instance_id(args.get(0)) else { return raise("Expected ':' not '.' calling member function InvokeServer") };
@@ -252,14 +254,16 @@ fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
     // (the call's frame as Roblox's: `self` and the arguments, the player among them for InvokeClient; wire.rs)
     let skip = 3;
     let height = args.0.len().saturating_sub(skip) + if client_call { 1 } else { 2 };
+    let player = if client_call { None } else { is_player(engine, args.get(2)) };
+    if !client_call && player.is_none() {
+        return raise(if args.get(2).is_nil() { "Argument 1 missing or nil" } else { "Argument 1 is invalid: expected 'Player' instance type" });
+    }
+    crate::lua::refuse_unyieldable(&lua.current_thread(), crate::lua::NOT_YIELDABLE)?;
     if client_call {
         if side == Side::Server {
             return raise("InvokeServer can only be called from the client");
         }
-    } else {
-        let Some(player) = is_player(engine, args.get(2)) else {
-            return raise("Argument 1 is invalid: expected 'Player' instance type");
-        };
+    } else if let Some(player) = player {
         if side == Side::Client {
             return raise("InvokeClient can only be called from the server");
         }

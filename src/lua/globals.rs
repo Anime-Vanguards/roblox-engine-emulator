@@ -84,7 +84,8 @@ fn legacy_thread(lua: &Lua, value: &LuaValue) -> Result<LuaThread, Flow> {
 }
 
 /// task.delay's and task.wait's seconds: nil is none; a number, or a string Luau reads as one, goes; anything else is
-/// `invalid argument #1 to 'delay' (number expected, got string)` (measured likewise; raised without a position).
+/// `invalid argument #1 to 'delay' (number expected, got string)` (measured likewise; raised without a position: task.wait's
+/// names its caller's line, ScheduleWait).
 fn task_seconds(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) -> Result<Option<f64>, Flow> {
     match value {
         LuaValue::Nil => Ok(None),
@@ -275,15 +276,23 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             })())
         })?,
     )?;
-    // (the prelude's Pass raises a refusal and yields after: no values, the thread is registered)
+    // (the prelude's Pass raises a refusal and yields after: no values, the thread is registered. Where the thread cannot
+    // yield both raise `thread is not yieldable` first, before task.wait reads its argument, and register nothing: lua/mod.rs
+    // NOT_YIELDABLE. task.wait's argument error names the line that called it, none from pcall(task.wait, "x"): measured in a
+    // 0.747 playing client and server, tools/parity/probes/yield_refused.luau and task_order.luau)
     r.set(
         "ScheduleWait",
         primitive(lua, engine, |lua, engine, args| {
             super::encode(lua, (|| {
                 let args = Args::new(args);
-                let delay = task_seconds(lua, engine, args.get(0), "wait")?.unwrap_or(0.0);
+                let thread = lua.current_thread();
+                super::refuse_unyieldable(&thread, super::NOT_YIELDABLE)?;
+                let delay = match task_seconds(lua, engine, args.get(0), "wait") {
+                    Err(Flow::Error(error)) => return super::raise_at_caller(error.message),
+                    seconds => seconds?.unwrap_or(0.0),
+                };
                 refs::admit(engine, Hold::Wait, "task.wait")?;
-                engine.state.borrow_mut().sched.schedule_call(TimerKind::Wait, delay, lua.current_thread(), Vec::new());
+                engine.state.borrow_mut().sched.schedule_call(TimerKind::Wait, delay, thread, Vec::new());
                 Ok(none())
             })())
         })?,
@@ -293,9 +302,11 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         primitive(lua, engine, |lua, engine, args| {
             super::encode(lua, (|| {
                 let args = Args::new(args);
+                let thread = lua.current_thread();
+                super::refuse_unyieldable(&thread, super::NOT_YIELDABLE)?;
                 let duration = args.number(0);
                 refs::admit(engine, Hold::Wait, "wait")?;
-                engine.state.borrow_mut().sched.schedule_legacy(TimerKind::LegacyWait, duration, lua.current_thread());
+                engine.state.borrow_mut().sched.schedule_legacy(TimerKind::LegacyWait, duration, thread);
                 Ok(none())
             })())
         })?,
@@ -331,13 +342,14 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             modules::require_begin(lua, engine, (args.get(0).clone(), args.get(1).clone(), vm_of(args.get(2))))
         })?,
     )?;
-    // task.synchronize / task.desynchronize of a parallel handler's thread: whether to yield (actors.rs)
+    // task.synchronize / task.desynchronize of a parallel handler's thread: whether to yield (actors.rs), through the prelude's
+    // Pass (a thread that cannot yield raises)
     r.set(
         "ParallelPark",
         primitive(lua, engine, |lua, engine, args| {
             let args = Args::new(args);
             let to_serial = matches!(args.get(0), LuaValue::Boolean(true));
-            Ok(values([LuaValue::Boolean(actors::park(lua, engine, to_serial))]))
+            super::encode(lua, actors::park(lua, engine, to_serial).map(|park| values([LuaValue::Boolean(park)])))
         })?,
     )?;
     r.set(

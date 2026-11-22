@@ -536,7 +536,8 @@ fn signal_of(engine: &Engine, value: &LuaValue) -> Option<Option<SignalId>> {
 }
 
 /// `Signal.Wait()`: "missing argument #1 to 'Wait' (RBXScriptSignal expected)" at the caller (measured,
-/// tools/parity/probes/errors.luau); with a value that is no signal, the invalid-argument text Connect gives (not measured)
+/// tools/parity/probes/errors.luau); with a value that is no signal, the invalid-argument text Connect gives (measured,
+/// before the yieldability check: tools/parity/probes/yield_refused.luau)
 fn wait_misuse<T>(engine: &Engine, value: &LuaValue) -> Result<T, Flow> {
     if value.is_nil() {
         return super::raise_at_caller("missing argument #1 to 'Wait' (RBXScriptSignal expected)");
@@ -627,9 +628,12 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let Some(signal) = signal_of(&e, args.get(0)) else {
             return wait_misuse(&e, args.get(0));
         };
+        // (where the thread cannot yield: raised before the thread waits on the signal, lua/mod.rs NOT_YIELDABLE)
+        let thread = lua.current_thread();
+        super::refuse_unyieldable(&thread, super::NOT_YIELDABLE_WAIT)?;
         if let Some(signal) = signal {
             refs::admit(&e, Hold::Wait, "Wait")?;
-            e.state.borrow_mut().signals.wait(signal, lua.current_thread());
+            e.state.borrow_mut().signals.wait(signal, thread);
         }
         Err(Flow::Yield)
     })?;
@@ -728,11 +732,16 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let raw_wait = lua.create_function(move |lua, args: LuaMultiValue| {
         let args = Args::new(args);
         let outcome = match signal_of(&e, args.get(0)) {
-            Some(Some(signal)) => refs::admit(&e, Hold::Wait, "Wait").and_then(|()| {
-                e.state.borrow_mut().signals.wait(signal, lua.current_thread());
-                Err(Flow::Yield)
-            }),
-            Some(None) => Err(Flow::Yield),
+            Some(signal) => {
+                let thread = lua.current_thread();
+                super::refuse_unyieldable(&thread, super::NOT_YIELDABLE_WAIT).and_then(|()| match signal {
+                    Some(signal) => refs::admit(&e, Hold::Wait, "Wait").and_then(|()| {
+                        e.state.borrow_mut().signals.wait(signal, thread);
+                        Err(Flow::Yield)
+                    }),
+                    None => Err(Flow::Yield),
+                })
+            }
             None => wait_misuse(&e, args.get(0)),
         };
         super::encode(lua, outcome)

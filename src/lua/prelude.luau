@@ -625,8 +625,8 @@ local Task = {
 		end
 		return Pass(R.TaskCancel(...))
 	end,
-	synchronize = function() if R.ParallelPark(true) then yield() end end, -- (a parallel handler's thread leaves the phase: actors.rs)
-	desynchronize = function() if R.ParallelPark(false) then yield() end end,
+	synchronize = function() if Pass(R.ParallelPark(true)) then yield() end end, -- (a parallel handler's thread leaves the phase: actors.rs)
+	desynchronize = function() if Pass(R.ParallelPark(false)) then yield() end end,
 }
 
 local function LegacyWait(Duration)
@@ -1357,6 +1357,38 @@ local ValueCurveKeyLibrary = table.freeze({
 	end,
 })
 
+-- require of a module that must load, from a thread that cannot yield (modules.rs require_begin): the module loads on a
+-- thread of its own, as in a client. RequireBegin answers with its outcome (0, value or 1, message, level) when it loads
+-- without yielding; when it yields, with `thread is not yieldable` while it goes on loading, and a later require gets its
+-- result (measured in a 0.747 playing client and server: tools/parity/probes/yield_refused_require.luau). (Below the
+-- traced functions: rur's golden traces record prelude line numbers.)
+local function RequireApart(Target, Caller, Vm)
+	local Outcome
+	local Loader = coroutine.create(function()
+		while true do
+			local Status, A, B = RequireBegin(Target, Caller, Vm)
+			if Status == 2 then
+				yield()
+			elseif Status == 3 then
+				local Finished, Message, Level = RequireFinish(B, table.pack(pcall(A)), Vm)
+				Outcome = if Finished then { 0, Message } else { 1, Message, Level }
+				return
+			else
+				Outcome = { Status, A, B }
+				return
+			end
+		end
+	end)
+	local Resumed, Problem = coroutine.resume(Loader)
+	if not Resumed then
+		error(Problem, 0)
+	end
+	if Outcome then
+		return Outcome[1], Outcome[2], Outcome[3]
+	end
+	return 1, "thread is not yieldable", 0
+end
+
 return {
 	Wrap = Wrap,
 	WrapIndex = WrapIndex,
@@ -1399,6 +1431,7 @@ return {
 	Warn = Warn,
 	Stringify = Stringify,
 	Require = Require,
+	RequireApart = RequireApart,
 	Environment = Environment,
 	CallBody = CallBody,
 }
