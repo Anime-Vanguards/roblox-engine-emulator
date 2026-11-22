@@ -540,6 +540,15 @@ impl Scheduler {
             crate::cost::tally_charge(seconds);
             crate::boundary::charged(seconds);
             self.work.set(self.work.get() + seconds);
+            self.watch_charge(seconds);
+        }
+    }
+
+    /// A large charge arms the script timeout of the running resumption at once (watchdog.rs `ScriptTimeout::charged`)
+    #[inline]
+    fn watch_charge(&self, seconds: f64) {
+        if let Some(timeout) = &self.timeout {
+            timeout.charged(seconds);
         }
     }
 
@@ -551,6 +560,7 @@ impl Scheduler {
             crate::cost::tally_charge(seconds);
             crate::boundary::dispatched(seconds);
             self.work.set(self.work.get() + seconds);
+            self.watch_charge(seconds);
             if let Some(totals) = &self.kinds {
                 totals.add(crate::cost::kind::DISPATCH | kinds, seconds);
             }
@@ -564,6 +574,7 @@ impl Scheduler {
             crate::cost::tally_charge(seconds);
             crate::boundary::charged(seconds);
             self.work.set(self.work.get() + seconds);
+            self.watch_charge(seconds);
             if let Some(totals) = &self.kinds {
                 totals.add(kinds, seconds);
             }
@@ -585,6 +596,7 @@ impl Scheduler {
         crate::boundary::charged(seconds);
         crate::boundary::add_cost(seconds);
         self.work.set(self.work.get() + seconds);
+        self.watch_charge(seconds);
     }
 
     /// The work charged since the last take: the engine calls' and the VM's own since then, in the clock's seconds (the device's

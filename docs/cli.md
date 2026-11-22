@@ -163,7 +163,7 @@ Through `--service`, the client exits with the job's code, and `ree serve --stat
 
 | Guard | Default | Flag / Env | Exit code |
 |---|---|---|---|
-| Script execution timeout | 10 s work clock (or 60 s host) per non-yielding resumption | `--script-timeout <s>` / `REE_SCRIPT_TIMEOUT` (`0` = off) | Raises `Script timeout: exhausted allowed execution time` on every safepoint (un-catchable by `pcall`); logs `ree: script timeout <n> at <stack>` |
+| Script execution timeout | 10 s of the work clock (or 60 s host) per non-yielding resumption, counted from its start (a long call in it included; the same safepoint in every run, with or without `--profile`) | `--script-timeout <s>` / `REE_SCRIPT_TIMEOUT` (`0` = off) | Raises `Script timeout: exhausted allowed execution time` on every safepoint (un-catchable by `pcall`); logs `ree: script timeout <n> at <stack>` |
 | Max script timeouts | 3 timeouts abort the run | `--max-script-timeouts <n>` / `REE_MAX_SCRIPT_TIMEOUTS` (`0` = never) | `126` (status `error` in summary) |
 | Wall-clock cap | `600 + 20 * --seconds` s | `--max-wall-seconds <s>` / `REE_MAX_WALL_SECONDS` (`0` = off) | `124` |
 | Parent process watchdog | Exits immediately if spawning process dies | `--no-parent-watch` / `REE_PARENT_WATCH=0` | `125` |

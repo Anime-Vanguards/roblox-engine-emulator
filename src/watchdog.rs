@@ -15,11 +15,19 @@
 //! - [`cap_run`]: a wall-clock cap per process, from `--seconds` with a generous margin; ree exits with [`EXIT_CAP`].
 //! - [`watch_parent`]: ree exits with [`EXIT_ORPHANED`] when the process that started it is gone.
 //!
-//! The timeout costs nothing while scripts yield: the engine bumps an atomic epoch when a top-level resumption begins and
-//! ends ([`enter`], from `scheduler::resume`), and a watchdog thread that finds one resumption still running after a tick
-//! (0.1 s of host time) installs the VM's interrupt (Luau's REPL sets it from a signal handler the same way). The interrupt
-//! then counts the work charged from then on (the first tick's work is not counted: the timeout never fires early) and
-//! removes itself once the resumption is over.
+//! The timeout costs little while scripts yield: the engine bumps an atomic epoch when a top-level resumption begins and
+//! ends ([`enter`], from `scheduler::resume`) and copies the VM's work counters as the resumption begins, and a watchdog
+//! thread that finds one resumption still running after a tick (0.1 s of host time, less for a limit under 0.8 s: [`tick`])
+//! installs the VM's interrupt (Luau's REPL sets it from a signal handler the same way); an engine charge of an eighth of the
+//! limit or more arms it at once ([`ScriptTimeout::charged`]). The interrupt counts the resumption's whole work, from that
+//! copy on (the work before the watchdog came too: a long call at its start, or the script work before one), and removes
+//! itself once the resumption is over. It looks at the work clock at the first safepoint after the arming, at every
+//! [`LOOK_STEPS`]th script call or loop step, and at the first safepoint after a call whose size work or engine charges passed
+//! a multiple of [`LOOK_UNITS`] or [`LOOK_ENGINE`]: all counted by the VM and the engine alike in every run, so a timeout fires
+//! at the same safepoint in every run of a script, with a profile's interrupt or without, once its resumption has run past
+//! the limit (never before), and a single call that takes the resumption past it is followed by the timeout at the next
+//! safepoint, as a client's script that ran too long in one call is (roblox-sim, Studio 0.747). Every [`HOST_LOOK_EVERY`]th
+//! safepoint looks at host time alone, for natively compiled code, which moves no counts.
 
 use std::{
     cell::Cell,
@@ -59,11 +67,46 @@ pub const EXIT_SCRIPT_TIMEOUTS: i32 = 126;
 /// script ran 10 s of every frame and its 80 s scene would have taken hours.
 pub const DEFAULT_STOP_AFTER: u32 = 3;
 
-/// How often the watchdog thread looks at the running resumptions
-const TICK: Duration = Duration::from_millis(100);
+/// How often the watchdog thread looks at the running resumptions (a shorter limit's [`tick`] is shorter)
+const TICK: f64 = 0.1;
 
-/// Safepoints between two looks at a long resumption (its work clock, whether it has ended)
-const CHECK_EVERY: u32 = 1024;
+/// The shortest tick: a limit of a few milliseconds still lets the thread sleep
+const MIN_TICK: f64 = 0.005;
+
+/// A VM's tick, in host seconds, for its `limit`: [`TICK`], or an eighth of a shorter limit, down to [`MIN_TICK`]. The watchdog arms
+/// a resumption that has run a tick, so a short limit's is armed within a quarter of the limit in host time, before a call that
+/// charges the whole limit ends.
+fn tick_of(limit: f64) -> f64 {
+    (limit / 8.0).clamp(MIN_TICK, TICK)
+}
+
+/// How long the watchdog thread sleeps: the shortest tick of the running VMs'
+fn tick(limits: impl Iterator<Item = f64>) -> Duration {
+    Duration::from_secs_f64(limits.map(tick_of).fold(TICK, f64::min))
+}
+
+/// A charge of the engine's of at least this share of the limit arms the running resumption's timeout at once ([`ScriptTimeout::charged`]),
+/// so the resumption's next safepoint weighs it however briefly the call ran in host time
+const ARM_SHARE: f64 = 1.0 / 8.0;
+
+/// Luau's CALL, JUMPBACK, FORNLOOP and FORGLOOP: one of them begins every call and ends every turn of a loop. The VM counts them
+/// for scripts (`VmCounters::ops`, `nativeops`), the same in every run, so they time the check's regular looks
+const STEP_OPS: [usize; 4] = [21, 24, 57, 58];
+
+/// Script steps ([`STEP_OPS`]) between two regular looks at a long resumption (its work clock, whether it has ended)
+const LOOK_STEPS: u64 = 1024;
+
+/// The check also looks at the first safepoint after a call once the counts of a call's size work (elements, bytes, steps,
+/// objects: [`size_units`]) pass a multiple of this, so a long library call (a sort of millions) is followed by a look
+const LOOK_UNITS: u64 = 65536;
+
+/// The same for the engine calls' charges, in seconds of the work clock
+const LOOK_ENGINE: f64 = 1e-4;
+
+/// Safepoints between two looks at host time alone ([`HOST_BACKSTOP`]) and at whether the resumption has ended: natively compiled
+/// code moves no step counts (the VM counts no instructions there, nor does the work clock charge them), yet a loop of it must
+/// end by host time. These looks weigh no work, so where a timeout of the work clock falls stays the counts' to say.
+const HOST_LOOK_EVERY: u32 = 1024;
 
 /// The timeout's state for one VM, shared by its thread and the watchdog thread.
 pub struct Watch {
@@ -81,6 +124,8 @@ pub struct Watch {
     slot: Mutex<()>,
     /// Seconds of the work clock a resumption may run without yielding
     limit: f64,
+    /// Host time that fires the timeout too, in multiples of the limit ([`HOST_BACKSTOP`])
+    backstop: f64,
     /// Script timeouts after which the process exits (0: never)
     stop_after: u32,
     /// Script timeouts so far
@@ -96,16 +141,20 @@ pub struct Watch {
 
 struct Registry {
     watches: Vec<Weak<Watch>>,
-    started: bool,
+    /// The watchdog thread, once started (a new VM wakes it: its limit may shorten the tick)
+    thread: Option<std::thread::Thread>,
 }
 
-static REGISTRY: Mutex<Registry> = Mutex::new(Registry { watches: Vec::new(), started: false });
+static REGISTRY: Mutex<Registry> = Mutex::new(Registry { watches: Vec::new(), thread: None });
 
 /// The next watch's serial
 static SERIALS: AtomicU64 = AtomicU64::new(1);
 
 /// Whether the watchdog has armed any VM's timeout yet: until then a profile's interrupt skips the check at once
 static ARMED: AtomicBool = AtomicBool::new(false);
+
+/// How many times the watchdog has armed a timeout: the first safepoint after each arming looks at the work clock
+static ARMINGS: AtomicU64 = AtomicU64::new(0);
 
 /// What the interrupt measured of the resumption it times (the VM's thread)
 #[derive(Clone, Copy)]
@@ -119,10 +168,24 @@ struct Timing {
     raised: bool,
 }
 
+/// Where the check's looks stood at the last safepoint it saw ([`look_due`]): the VM's counters it read (their address) and,
+/// counted from them, the multiples of [`LOOK_STEPS`], [`LOOK_UNITS`] and [`LOOK_ENGINE`] reached, the C and engine calls made
+/// (the size and engine counts are read again only after a call), and the watchdog's armings
+#[derive(Clone, Copy)]
+struct Looked {
+    counters: usize,
+    steps: u64,
+    calls: u64,
+    units: u64,
+    engine: u64,
+    armings: u64,
+}
+
 thread_local! {
+    /// Safepoints the check has seen on this thread ([`HOST_LOOK_EVERY`])
+    static SAFEPOINTS: Cell<u32> = const { Cell::new(0) };
     static TIMING: Cell<Timing> = const { Cell::new(Timing { serial: 0, epoch: 0, work: 0.0, host: None, raised: false }) };
-    /// Safepoints the timeout's check has seen on this thread
-    static CALLS: Cell<u32> = const { Cell::new(0) };
+    static LOOKED: Cell<Looked> = const { Cell::new(Looked { counters: 0, steps: 0, calls: 0, units: 0, engine: 0, armings: 0 }) };
     /// The check looks at every safepoint: a timeout is due, or the run stops
     static EAGER: Cell<bool> = const { Cell::new(false) };
     /// This thread's VMs with a timeout, for the interrupt (one or two: a service worker holds a prepared run beside the one
@@ -133,11 +196,25 @@ thread_local! {
 /// A VM's timeout on its own thread: its callbacks (the key), its watch and its scheduler's work clock cells
 struct Local {
     callbacks: usize,
+    /// The watch's serial ([`enter`] finds its VM's by it)
+    serial: u64,
     watch: Weak<Watch>,
     /// What the engine calls charged since the last clock read, and what clock reads took out of it so far (Scheduler's
     /// `work` and `work_drained`)
     work: Rc<Cell<f64>>,
     drained: Rc<Cell<f64>>,
+    /// The VM's work counters (`lua_workcounters`: they live as long as the VM, which [`ScriptTimeout::detach`] outlives)
+    counters: *const crate::cost::VmCounters,
+    /// The work the current outermost resumption began with
+    start: Start,
+}
+
+/// The work a resumption began with ([`enter`]): its epoch, the engine calls' charges so far and a copy of the VM's counters,
+/// priced only when the resumption runs long enough for the watchdog ([`start_work`])
+struct Start {
+    epoch: u64,
+    engine: f64,
+    counters: Box<crate::cost::VmCounters>,
 }
 
 /// The script timeout of one VM: [`ScriptTimeout::install`] makes it, the engine's scheduler holds it.
@@ -150,14 +227,24 @@ impl ScriptTimeout {
     /// [`ScriptTimeout::stopped`]). The engine's scheduler must hold the result ([`crate::scheduler::Scheduler`]'s
     /// `timeout`), and [`ScriptTimeout::detach`] must run before the VM is dropped ([`crate::Emulator`] does).
     pub fn install(lua: &mlua::Lua, engine: &crate::Engine, limit: f64, stop_after: u32) -> Option<ScriptTimeout> {
+        Self::install_with(lua, engine, limit, stop_after, HOST_BACKSTOP)
+    }
+
+    /// [`ScriptTimeout::install`] with host time past `backstop` times the limit firing the timeout too (infinite: only the work
+    /// clock fires it, as a test that weighs work exactly needs on a busy machine)
+    pub(crate) fn install_with(lua: &mlua::Lua, engine: &crate::Engine, limit: f64, stop_after: u32, backstop: f64) -> Option<ScriptTimeout> {
         if !(limit > 0.0 && limit.is_finite()) {
             return None;
         }
         let mut callbacks = std::ptr::null_mut();
+        let mut counters = std::ptr::null();
         unsafe {
-            let _ = lua.exec_raw::<()>((), |state| callbacks = mlua::ffi::lua_callbacks(state));
+            let _ = lua.exec_raw::<()>((), |state| {
+                callbacks = mlua::ffi::lua_callbacks(state);
+                counters = crate::cost::lua_workcounters(state);
+            });
         }
-        if callbacks.is_null() {
+        if callbacks.is_null() || counters.is_null() {
             return None;
         }
         let watch = Arc::new(Watch {
@@ -168,6 +255,7 @@ impl ScriptTimeout {
             callbacks: AtomicPtr::new(callbacks),
             slot: Mutex::new(()),
             limit,
+            backstop,
             stop_after,
             timeouts: AtomicU32::new(0),
             host_timeouts: AtomicU32::new(0),
@@ -178,16 +266,21 @@ impl ScriptTimeout {
             let state = engine.state.borrow();
             (state.sched.work.clone(), state.sched.work_drained.clone())
         };
+        // (all integers: zero is a valid VmCounters)
+        let start = Start { epoch: 0, engine: 0.0, counters: Box::new(unsafe { std::mem::zeroed() }) };
+        LOOKED.with(|looked| looked.set(Looked { counters: 0, ..looked.get() }));
+        EAGER.with(|eager| eager.set(false));
         WATCHES.with(|watches| {
             let mut watches = watches.borrow_mut();
             watches.retain(|local| local.watch.strong_count() > 0);
-            watches.push(Local { callbacks: callbacks as usize, watch: Arc::downgrade(&watch), work, drained });
+            watches.push(Local { callbacks: callbacks as usize, serial: watch.serial, watch: Arc::downgrade(&watch), work, drained, counters, start });
         });
         let mut registry = REGISTRY.lock().unwrap_or_else(|poison| poison.into_inner());
         registry.watches.retain(|weak| weak.strong_count() > 0);
         registry.watches.push(Arc::downgrade(&watch));
-        if !registry.started {
-            registry.started = std::thread::Builder::new().name("ree-script-timeout".into()).spawn(watchdog).is_ok();
+        match &registry.thread {
+            Some(thread) => thread.unpark(),
+            None => registry.thread = std::thread::Builder::new().name("ree-script-timeout".into()).spawn(watchdog).ok().map(|handle| handle.thread().clone()),
         }
         Some(ScriptTimeout(watch))
     }
@@ -201,11 +294,27 @@ impl ScriptTimeout {
             unsafe { clear_timeout_interrupt(callbacks) };
         }
         WATCHES.with(|watches| watches.borrow_mut().retain(|local| local.callbacks != callbacks as usize));
+        LOOKED.with(|looked| looked.set(Looked { counters: 0, ..looked.get() }));
+        EAGER.with(|eager| eager.set(false));
     }
 
     /// The seconds of the work clock a resumption may run without yielding
     pub fn limit(&self) -> f64 {
         self.0.limit
+    }
+
+    /// The engine charged `seconds` (scheduler.rs `charge`): a charge of [`ARM_SHARE`] of the limit or more arms the running
+    /// resumption's timeout now, as the watchdog thread would once it had run a tick, so its next safepoint weighs its work
+    /// however briefly the call ran in host time (the timeout fires only past the limit; arming only makes the check look)
+    #[inline]
+    pub fn charged(&self, seconds: f64) {
+        if seconds >= self.0.limit * ARM_SHARE {
+            let watch = &*self.0;
+            let epoch = watch.epoch.load(Ordering::Acquire);
+            if epoch % 2 == 1 && watch.due.load(Ordering::Acquire) != epoch {
+                arm(watch, epoch);
+            }
+        }
     }
 
     /// Script timeouts so far
@@ -237,15 +346,41 @@ impl ScriptTimeout {
 /// every resumption of its VM.
 pub struct Entered(*const Watch);
 
-/// The engine begins a resumption (`scheduler::resume`): the outermost one of a nest bumps the epoch now and when it ends.
+/// The engine begins a resumption (`scheduler::resume`): the outermost one of a nest bumps the epoch now and when it ends, and
+/// keeps the work it begins with ([`Start`]).
 #[inline]
 pub fn enter(timeout: Option<&ScriptTimeout>) -> Entered {
     let Some(timeout) = timeout else { return Entered(std::ptr::null()) };
     let watch = &*timeout.0;
     if watch.depth.fetch_add(1, Ordering::Relaxed) == 0 {
-        watch.epoch.fetch_add(1, Ordering::Release);
+        let epoch = watch.epoch.fetch_add(1, Ordering::Release) + 1;
+        begin(watch.serial, epoch);
     }
     Entered(watch)
+}
+
+/// Keeps the work the outermost resumption `epoch` of the watch `serial` begins with: the engine calls' charges so far and a
+/// copy of the VM's counters (6 KB: a fraction of a resumption's own cost; pricing them is the watchdog's, for the few that
+/// run long)
+fn begin(serial: u64, epoch: u64) {
+    WATCHES.with(|watches| {
+        let Ok(mut watches) = watches.try_borrow_mut() else { return };
+        if let Some(local) = watches.iter_mut().find(|local| local.serial == serial) {
+            local.start.epoch = epoch;
+            local.start.engine = local.work.get() + local.drained.get();
+            // (the VM's own thread: nothing else writes its counters)
+            unsafe { std::ptr::copy_nonoverlapping(local.counters, &mut *local.start.counters, 1) };
+        }
+    });
+}
+
+/// The work clock at the start of the outermost resumption `epoch` of the VM with these `callbacks`, when [`begin`] kept it
+fn start_work(callbacks: usize, epoch: u64) -> Option<f64> {
+    WATCHES.with(|watches| {
+        let watches = watches.try_borrow().ok()?;
+        let local = watches.iter().find(|local| local.callbacks == callbacks)?;
+        (local.start.epoch == epoch).then(|| local.start.engine + crate::cost::luau(&local.start.counters))
+    })
 }
 
 impl Drop for Entered {
@@ -270,36 +405,47 @@ unsafe fn clear_timeout_interrupt(callbacks: *mut lua_Callbacks) {
     let _ = slot.compare_exchange(timeout_interrupt as usize, 0, Ordering::AcqRel, Ordering::Relaxed);
 }
 
-/// The watchdog thread: arms the interrupt of a VM whose resumption has run a whole tick.
+/// Arms `watch`'s timeout for its resumption `epoch`: the check looks at its next safepoint, from the timeout's own interrupt
+/// (installed now unless another, a profile's or a host's, holds the slot: that one calls the check itself)
+fn arm(watch: &Watch, epoch: u64) {
+    // (under the slot's lock: the VM's thread disarms under it too, so it never clears a fresh arming)
+    let _slot = watch.slot.lock().unwrap_or_else(|poison| poison.into_inner());
+    watch.due.store(epoch, Ordering::Release);
+    ARMINGS.fetch_add(1, Ordering::Release);
+    ARMED.store(true, Ordering::Release);
+    let callbacks = watch.callbacks.load(Ordering::Acquire);
+    if !callbacks.is_null() {
+        // (a profile's interrupt, already there, checks `due` itself: luau_profile)
+        let slot = unsafe { interrupt_slot(callbacks) };
+        let _ = slot.compare_exchange(0, timeout_interrupt as usize, Ordering::AcqRel, Ordering::Relaxed);
+    }
+}
+
+/// The watchdog thread: arms the interrupt of a VM whose resumption has run a whole tick of its own ([`tick_of`]).
 fn watchdog() {
-    let mut seen: Vec<(u64, u64)> = Vec::new();
+    // each watch's serial, the epoch it was at and when the thread first saw it there
+    let mut seen: Vec<(u64, u64, Instant)> = Vec::new();
     loop {
-        std::thread::sleep(TICK);
         let watches: Vec<Arc<Watch>> = {
             let mut registry = REGISTRY.lock().unwrap_or_else(|poison| poison.into_inner());
             registry.watches.retain(|weak| weak.strong_count() > 0);
             registry.watches.iter().filter_map(Weak::upgrade).collect()
         };
+        let now = Instant::now();
         let mut next = Vec::with_capacity(watches.len());
         for watch in &watches {
             let key = watch.serial;
             let epoch = watch.epoch.load(Ordering::Acquire);
-            let before = seen.iter().find(|(k, _)| *k == key).map(|(_, e)| *e);
-            if epoch % 2 == 1 && before == Some(epoch) && watch.due.load(Ordering::Acquire) != epoch {
-                // (under the slot's lock: the VM's thread disarms under it too, so it never clears a fresh arming)
-                let _slot = watch.slot.lock().unwrap_or_else(|poison| poison.into_inner());
-                watch.due.store(epoch, Ordering::Release);
-                ARMED.store(true, Ordering::Release);
-                let callbacks = watch.callbacks.load(Ordering::Acquire);
-                if !callbacks.is_null() {
-                    // (a profile's interrupt, already there, checks `due` itself: luau_profile)
-                    let slot = unsafe { interrupt_slot(callbacks) };
-                    let _ = slot.compare_exchange(0, timeout_interrupt as usize, Ordering::AcqRel, Ordering::Relaxed);
-                }
+            let since = seen.iter().find(|(k, e, _)| *k == key && *e == epoch).map_or(now, |(_, _, since)| *since);
+            let ran = now.duration_since(since).as_secs_f64();
+            if epoch % 2 == 1 && ran >= tick_of(watch.limit) && watch.due.load(Ordering::Acquire) != epoch {
+                arm(watch, epoch);
             }
-            next.push((key, epoch));
+            next.push((key, epoch, since));
         }
         seen = next;
+        // (a new VM unparks it early, so a shorter limit's tick applies at once)
+        std::thread::park_timeout(tick(watches.iter().map(|watch| watch.limit)));
     }
 }
 
@@ -321,18 +467,13 @@ pub unsafe fn check(state: *mut lua_State) {
     if !ARMED.load(Ordering::Relaxed) {
         return;
     }
-    // every safepoint of an armed VM comes here (an empty loop's every step): only one in CHECK_EVERY looks further, unless
-    // a timeout is due and waits for a script frame (a loop's period can keep every sampled safepoint in the engine's Luau)
-    if !EAGER.with(Cell::get) {
-        let calls = CALLS.with(|calls| {
-            let count = calls.get().wrapping_add(1);
-            calls.set(count);
-            count
-        });
-        if calls % CHECK_EVERY != 0 {
-            return;
-        }
-    }
+    // every safepoint of an armed VM comes here (an empty loop's every step): only the ones look_due names look further,
+    // unless a timeout is due and waits for a script frame (a loop's period can keep every looked-at safepoint in the
+    // engine's Luau)
+    let full = EAGER.with(Cell::get) || match unsafe { look_due(state) } {
+        Some(full) => full,
+        None => return,
+    };
     let callbacks = unsafe { mlua::ffi::lua_callbacks(state) } as usize;
     let found = WATCHES.with(|watches| {
         let watches = watches.borrow();
@@ -369,15 +510,20 @@ pub unsafe fn check(state: *mut lua_State) {
         }
         return;
     }
-    let timing = TIMING.with(Cell::get);
+    let mut timing = TIMING.with(Cell::get);
     if timing.epoch != due || timing.serial != watch.serial {
-        TIMING.with(|cell| cell.set(Timing { serial: watch.serial, epoch: due, work: work(state), host: Some(Instant::now()), raised: false }));
-        return;
+        // the first look at this resumption: its work counts from its start (enter), the calls before the watchdog came too,
+        // and is weighed at once (a long call at its start is followed by the timeout at the first safepoint after it)
+        let start = start_work(callbacks, due).unwrap_or_else(|| work(state));
+        timing = Timing { serial: watch.serial, epoch: due, work: start, host: Some(Instant::now()), raised: false };
+        TIMING.with(|cell| cell.set(timing));
+        // (an earlier resumption's timeout, due or raised, left the check looking at every safepoint)
+        EAGER.with(|eager| eager.set(false));
     }
     let mut by_host = false;
     if !timing.raised {
-        let over_work = work(state) - timing.work >= watch.limit;
-        let over_host = timing.host.is_some_and(|host| host.elapsed().as_secs_f64() >= watch.limit * HOST_BACKSTOP);
+        let over_work = full && work(state) - timing.work >= watch.limit;
+        let over_host = timing.host.is_some_and(|host| host.elapsed().as_secs_f64() >= watch.limit * watch.backstop);
         if !(over_work || over_host) {
             return;
         }
@@ -403,6 +549,66 @@ pub unsafe fn check(state: *mut lua_State) {
     }
     drop(watch);
     unsafe { raise(state) }
+}
+
+/// Whether the check looks at this safepoint of `state`: `Some(true)` to weigh the work clock, at the first safepoint after the
+/// watchdog armed a timeout, one where the script's calls and loop steps ([`STEP_OPS`]) reach a multiple of [`LOOK_STEPS`], or
+/// the first after a C or engine call that took the size work ([`size_units`]) or the engine calls' charges past a multiple of
+/// [`LOOK_UNITS`] or [`LOOK_ENGINE`]; `Some(false)` at every [`HOST_LOOK_EVERY`]th safepoint, for host time alone. The counts are
+/// the VM's and the engine's, the same in every run of a script and with or without a profile's interrupt, so the work clock is
+/// weighed at the same safepoints; a long call is followed by a look.
+///
+/// # Safety
+/// As [`check`].
+#[inline]
+unsafe fn look_due(state: *mut lua_State) -> Option<bool> {
+    let seen = SAFEPOINTS.with(|seen| {
+        let count = seen.get().wrapping_add(1);
+        seen.set(count);
+        count
+    });
+    let counters = unsafe { &*crate::cost::lua_workcounters(state) };
+    let key = counters as *const crate::cost::VmCounters as usize;
+    let armings = ARMINGS.load(Ordering::Acquire);
+    let steps = STEP_OPS.iter().fold(0u64, |sum, &op| sum.wrapping_add(counters.ops[op]).wrapping_add(counters.nativeops[op])) / LOOK_STEPS;
+    let calls = counters.ccalls.wrapping_add(counters.tmcalls).wrapping_add(counters.hostcalls);
+    let last = LOOKED.with(Cell::get);
+    let fresh = last.counters != key;
+    let mut look = fresh || last.armings != armings || last.steps != steps;
+    let mut next = Looked { counters: key, steps, calls, armings, ..last };
+    if fresh || calls != last.calls {
+        next.units = size_units(counters) / LOOK_UNITS;
+        next.engine = engine_ticks(state);
+        look |= next.units != last.units || next.engine != last.engine;
+    }
+    LOOKED.with(|looked| looked.set(next));
+    if look {
+        Some(true)
+    } else {
+        seen.is_multiple_of(HOST_LOOK_EVERY).then_some(false)
+    }
+}
+
+/// What a script's work did besides its instructions, in the VM's own counts summed as they come (elements, bytes, pattern
+/// steps, objects, nanoseconds of native datatype work): a library call that runs long moves them by its input's size
+fn size_units(c: &crate::cost::VmCounters) -> u64 {
+    let scalars = [
+        c.allocated, c.objects, c.stored, c.rehashed, c.hostnanos as u64, c.numtostr, c.sortcompares, c.sortcalls, c.createitems, c.cloneitems,
+        c.concatitems, c.splitparts, c.formats, c.formatspecs, c.newstrings,
+    ];
+    let special = &c.hostops[crate::cost::FIRST_SPECIAL_SLOT..];
+    scalars.iter().chain(special).fold(0u64, |sum, &count| sum.wrapping_add(count))
+}
+
+/// The engine calls' charges to the VM with `state`'s callbacks so far, in [`LOOK_ENGINE`]s
+fn engine_ticks(state: *mut lua_State) -> u64 {
+    let callbacks = unsafe { mlua::ffi::lua_callbacks(state) } as usize;
+    WATCHES.with(|watches| {
+        let watches = watches.try_borrow().ok()?;
+        let local = watches.iter().find(|local| local.callbacks == callbacks)?;
+        Some(((local.work.get() + local.drained.get()) / LOOK_ENGINE) as u64)
+    })
+    .unwrap_or(0)
 }
 
 /// Where `state` runs, innermost first: `name chunk:line` for up to 6 Luau frames
@@ -712,10 +918,25 @@ mod tests {
     };
 
     fn start(limit: f64, stop_after: u32) -> (Lua, Rc<Engine>, ScriptTimeout) {
+        start_with(limit, stop_after, super::HOST_BACKSTOP)
+    }
+
+    /// [`start`] with only the work clock firing the timeout, on interpreted scripts: a test that weighs work exactly, which a
+    /// busy machine's host time must not decide
+    fn start_exact(limit: f64) -> (Lua, Rc<Engine>, ScriptTimeout) {
+        start_with(limit, 0, f64::INFINITY)
+    }
+
+    fn start_with(limit: f64, stop_after: u32, backstop: f64) -> (Lua, Rc<Engine>, ScriptTimeout) {
         let engine = Engine::new(Options::default()).expect("engine");
         let lua = Lua::new();
         engine_lua::start(&lua, &engine).expect("start");
-        let timeout = ScriptTimeout::install(&lua, &engine, limit, stop_after).expect("a timeout");
+        if backstop.is_infinite() {
+            // (scripts interpreted, as `ree run` and `ree record` run them: the VM counts their instructions and the work clock
+            // charges them; natively compiled, a loop's work is not counted and only host time ends it)
+            engine_lua::modules::interpret_all(&lua, &engine);
+        }
+        let timeout = ScriptTimeout::install_with(&lua, &engine, limit, stop_after, backstop).expect("a timeout");
         engine.state.borrow_mut().sched.timeout = Some(timeout.clone());
         (lua, engine, timeout)
     }
@@ -740,6 +961,162 @@ mod tests {
         outcome.contains(TIMEOUT_MESSAGE)
     }
 
+    /// The `shared` table every script of the engine sees
+    fn shared(engine: &Rc<Engine>) -> LuaTable {
+        engine.lua.borrow().shared.clone().expect("shared globals").get("shared").expect("shared")
+    }
+
+    /// How a call of `source` ended ([`call`]) and the work it charged (seconds of the work clock at desktop prices)
+    fn charged(lua: &Lua, engine: &Rc<Engine>, source: &str) -> (String, f64) {
+        let before = engine.state.borrow().sched.work_total();
+        let outcome = call(lua, engine, source);
+        (outcome, engine.state.borrow().sched.work_total() - before)
+    }
+
+    /// The timeout's check runs at every safepoint from now on, as from a profile's interrupt (luau_profile's
+    /// `sampling_interrupt`, which holds the slot from the start), without the profile's own work
+    fn check_every_safepoint(lua: &Lua) {
+        unsafe extern "C-unwind" fn every(state: *mut mlua::ffi::lua_State, gc: std::ffi::c_int) {
+            if gc < 0 {
+                unsafe { super::check(state) }
+            }
+        }
+        unsafe {
+            let _ = lua.exec_raw::<()>((), |state| (*mlua::ffi::lua_callbacks(state)).interrupt = Some(every));
+        }
+    }
+
+    /// `shared.Make(N)`: a table of N numbers, 1,003 values over and over (a sort of it charges the same in every run), made with
+    /// a few library calls
+    const MAKE: &str = "shared.Make = function(N)
+        local Base = table.create(1000)
+        for I = 1, 1000 do Base[I] = (I * 7919) % 1003 end
+        local Made = table.create(N)
+        for K = 0, N // 1000 - 1 do table.move(Base, 1, 1000, K * 1000 + 1, Made) end
+        return Made
+    end";
+
+    /// What a sort of a fresh `shared.Make(1e6)` charges, and what making it does
+    fn sort_charge() -> (f64, f64) {
+        let (lua, engine, timeout) = start_exact(1000.0);
+        assert_eq!(call(&lua, &engine, MAKE), "finished");
+        let (_, made) = charged(&lua, &engine, "shared.Data = shared.Make(1e6)");
+        let (outcome, sorted) = charged(&lua, &engine, "table.sort(shared.Data)");
+        assert_eq!(outcome, "finished");
+        timeout.detach();
+        (sorted, made)
+    }
+
+    /// A call that alone charges past the limit, after some script work in its resumption (here before the first frame, a
+    /// build, where os.clock takes no charges) or at the start of one after the frames have begun: the timeout's error comes
+    /// at the first safepoint after the call, from the timeout's own interrupt and from a profile's alike. A client stops such
+    /// a script there too (roblox-sim, Studio 0.747, ScriptContext:SetTimeout at half a 3,000,000-number sort's time: a sort
+    /// at a resumption's start, or after a third of the limit of busy work, raised the timeout's error at the next safepoint).
+    /// The watchdog's count began at its first look, after the call, so a plain run went on, while under a profile, whose
+    /// interrupt had looked before the call, the same script timed out.
+    #[test]
+    fn a_long_call_is_followed_by_the_timeout_at_the_next_safepoint() {
+        let (sort, made) = sort_charge();
+        assert!(made < 0.3 * sort, "making the table charges {made} s, its sort {sort} s");
+        for (frames, source) in [
+            (false, "local Sum = 0 for I = 1, 1e4 do Sum += I end shared.Stage = 1 table.sort(shared.Data) shared.Stage = 2 print('after') shared.Stage = 3"),
+            (true, "table.sort(shared.Data) shared.Stage = 2 print('after') shared.Stage = 3"),
+        ] {
+            for profile in [false, true] {
+                let (lua, engine, timeout) = start_exact(0.8 * sort);
+                if profile {
+                    check_every_safepoint(&lua);
+                }
+                if frames {
+                    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+                }
+                assert_eq!(call(&lua, &engine, MAKE), "finished");
+                assert_eq!(call(&lua, &engine, "shared.Data = shared.Make(1e6)"), "finished");
+                let outcome = call(&lua, &engine, source);
+                let stage: i64 = shared(&engine).get("Stage").unwrap();
+                assert!(timed_out(&outcome) && stage == 2, "frames {frames}, profile {profile}: {outcome}, stage {stage}");
+                assert_eq!(timeout.timeouts(), 1);
+                assert!(!engine.state.borrow().output.entries.iter().any(|entry| entry.message == "after"));
+                timeout.detach();
+            }
+        }
+    }
+
+    /// Script work and a call each under the limit and together past it, in one resumption: the timeout's error comes at the
+    /// first safepoint after the call, as a client's (roblox-sim, Studio 0.747, a 0.5 s limit: 0.3 s busy, then a 0.43 s sort);
+    /// the call alone runs to its end
+    #[test]
+    fn script_work_and_a_call_each_under_the_limit_time_out_together() {
+        let (sort, _) = sort_charge();
+        let limit = sort / 0.85;
+        let turns = {
+            let (lua, engine, timeout) = start_exact(1000.0);
+            let (_, looped) = charged(&lua, &engine, "local X = 1 for I = 1, 1e5 do X = (X * 7 + 3) % 1000003 end");
+            timeout.detach();
+            (0.6 * limit / (looped / 1e5)).round()
+        };
+        for profile in [false, true] {
+            let (lua, engine, timeout) = start_exact(limit);
+            if profile {
+                check_every_safepoint(&lua);
+            }
+            assert_eq!(call(&lua, &engine, MAKE), "finished");
+            assert_eq!(call(&lua, &engine, "shared.Data = shared.Make(1e6)"), "finished");
+            assert_eq!(call(&lua, &engine, "table.sort(shared.Data)"), "finished", "profile {profile}: the sort alone");
+            assert_eq!(call(&lua, &engine, "shared.Data = shared.Make(1e6)"), "finished");
+            let source = format!("local X = 1 for I = 1, {turns} do X = (X * 7 + 3) % 1000003 end shared.Stage = 1 table.sort(shared.Data) shared.Stage = 2 print('after') shared.Stage = 3");
+            let outcome = call(&lua, &engine, &source);
+            let stage: i64 = shared(&engine).get("Stage").unwrap();
+            assert!(timed_out(&outcome) && stage == 2, "profile {profile}: {outcome}, stage {stage}");
+            assert_eq!(timeout.timeouts(), 1);
+            timeout.detach();
+        }
+    }
+
+    /// A timeout falls on the same safepoint in every run and with a profile's interrupt: the check looks at safepoints the VM
+    /// counts alike (here a busy loop's turns when it stopped). Where it fell depended on when the watchdog's thread came and
+    /// on how many safepoints the check had seen (a profile's interrupt calls it at every one).
+    #[test]
+    fn a_timeout_falls_on_the_same_safepoint_in_every_run_and_with_a_profiles_interrupt() {
+        let mut counts = Vec::new();
+        for profile in [false, false, false, true, true] {
+            let (lua, engine, timeout) = start_exact(0.05);
+            if profile {
+                check_every_safepoint(&lua);
+            }
+            let outcome = call(&lua, &engine, "shared.Count = 0 local X = 1 while true do shared.Count += 1 X = (X * 7 + 3) % 1000003 end");
+            assert!(timed_out(&outcome), "{outcome}");
+            counts.push(shared(&engine).get::<i64>("Count").unwrap());
+            timeout.detach();
+        }
+        assert!(counts.iter().all(|&count| count == counts[0]), "turns before the timeout, plain then with a profile's interrupt: {counts:?}");
+    }
+
+    /// os.clock across a call reads what the call charged, after script work in the same resumption and at the start of a
+    /// fresh one alike, once the frames have begun; before the first frame (a build) the clock takes no charges and reads 0
+    /// across it, while the timeout counts that work (above)
+    #[test]
+    fn os_clock_across_a_call_reads_its_charge_wherever_it_sits_in_a_resumption() {
+        let (lua, engine, timeout) = start_exact(1000.0);
+        assert_eq!(call(&lua, &engine, MAKE), "finished");
+        let measured = "local Before = os.clock() table.sort(shared.Data) shared.Took = os.clock() - Before";
+        let took = |source: &str| -> f64 {
+            assert_eq!(call(&lua, &engine, "shared.Data = shared.Make(1e6)"), "finished");
+            assert_eq!(call(&lua, &engine, source), "finished");
+            shared(&engine).get("Took").unwrap()
+        };
+        assert_eq!(took(measured), 0.0, "before the first frame");
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        assert_eq!(call(&lua, &engine, "shared.Data = shared.Make(1e6)"), "finished");
+        let (_, sort) = charged(&lua, &engine, "table.sort(shared.Data)");
+        let fresh = took(measured);
+        let after_work = took(&format!("local Sum = 0 for I = 1, 1e4 do Sum += I end {measured}"));
+        for (name, took) in [("fresh", fresh), ("after script work", after_work)] {
+            assert!((took - sort).abs() < 1e-5, "{name}: os.clock read {took} s across a sort that charged {sort} s");
+        }
+        timeout.detach();
+    }
+
     fn interrupt_installed(lua: &Lua) -> bool {
         let mut installed = false;
         unsafe {
@@ -750,24 +1127,29 @@ mod tests {
 
     /// JSONEncode prices its values on the work clock (cost.rs `json`) as it writes them: one whose own price passes the
     /// script timeout raises the timeout's error then, its work so far charged, instead of writing on past what a script may
-    /// run; one under it writes as before
+    /// run, and its resumption, now past the limit, has the timeout's error at its next safepoint (the charge arms the check
+    /// however briefly the encode ran); one under it writes as before
     #[test]
     fn a_json_encode_whose_own_price_passes_the_timeout_raises_the_timeouts_error() {
-        let (lua, engine, timeout) = start(0.01, 0);
+        let (lua, engine, timeout) = start_exact(0.01);
         let outcome = call(
             &lua,
             &engine,
             r#"
             local HttpService = game:GetService("HttpService")
-            local Long, Short = table.create(300000, 0), table.create(100000, 0)
+            local Long = table.create(300000, 0)
             local Ok, Message = pcall(function() return #HttpService:JSONEncode(Long) end)
-            print("long", Ok, Message)
-            print("short", pcall(function() return #HttpService:JSONEncode(Short) end))
+            shared.Long = { Ok, Message }
+            print("after")
             "#,
         );
+        assert!(timed_out(&outcome), "{outcome}");
+        let long: LuaTable = shared(&engine).get("Long").unwrap();
+        assert_eq!((long.get::<bool>(1).unwrap(), long.get::<String>(2).unwrap()), (false, TIMEOUT_MESSAGE.to_string()));
+        let outcome = call(&lua, &engine, r#"print("short", pcall(function() return #game:GetService("HttpService"):JSONEncode(table.create(100000, 0)) end))"#);
         assert_eq!(outcome, "finished");
         let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|entry| entry.message.clone()).collect();
-        assert_eq!(lines, [format!("long false {TIMEOUT_MESSAGE}"), "short true 200001".to_string()]);
+        assert_eq!(lines, ["short true 200001"]);
         timeout.detach();
     }
 

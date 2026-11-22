@@ -71,6 +71,47 @@ fn repeated_script_timeouts_stop_the_run_with_126_and_its_output() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A call that takes its resumption past the script timeout is followed by the timeout's error at the next safepoint, under
+/// `--profile work` as without a profile (src/watchdog.rs): a sort of 3,000,000 numbers, after some script work in a resumption
+/// after the first frame, past a 0.05 s limit. The plain run went on (the watchdog counted the resumption's work from its first
+/// look, after the sort) while the profiled one timed out after the sort.
+#[test]
+fn a_long_call_is_followed_by_the_script_timeout_with_or_without_a_profile() {
+    let root = scratch("long-call");
+    let sorts = harness(
+        &root,
+        "return function()
+	local Base = table.create(1000)
+	for I = 1, 1000 do Base[I] = (I * 7919) % 1003 end
+	local T = table.create(3e6)
+	for K = 0, 2999 do table.move(Base, 1, 1000, K * 1000 + 1, T) end
+	task.wait()
+	local Sum = 0
+	for I = 1, 1e4 do Sum += I end
+	print('before', Sum)
+	table.sort(T)
+	print('after')
+end",
+    );
+    let mut outputs = Vec::new();
+    for profile in [None, Some(root.join("profile"))] {
+        let mut command = ree(&root, &sorts, &["--seconds", "0.1", "--script-timeout", "0.05", "--max-script-timeouts", "0"]);
+        if let Some(profile) = &profile {
+            command.args(["--profile", "work", "--profile-out", &profile.to_string_lossy()]);
+        }
+        let done = command.output().unwrap();
+        let (stdout, stderr) = (String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+        assert!(stderr.contains("ree: script timeout 1 at") && stderr.contains("Guard:11"), "profile {profile:?}: {stderr}");
+        let summary: serde_json::Value = serde_json::from_str(stdout.trim()).expect("the summary on stdout");
+        assert_eq!(summary["script_timeouts"], 1, "profile {profile:?}: {summary}");
+        let lines: Vec<String> = summary["output"].as_array().unwrap().iter().map(|entry| entry["message"].as_str().unwrap().to_string()).collect();
+        assert_eq!(lines[..2], ["before 50005000", "Script timeout: exhausted allowed execution time"], "profile {profile:?}");
+        outputs.push(lines);
+    }
+    assert_eq!(outputs[0], outputs[1], "the plain run's output, then the profiled run's");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_run_whose_harness_fails_exits_1_with_its_whole_summary() {
     // it exited 0 with status `error` in its summary, which a caller that checks the exit code first read as a pass
