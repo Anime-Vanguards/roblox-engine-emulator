@@ -456,7 +456,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set(
         "JsonEncode",
         lua.create_function(|lua, value: LuaValue| {
-            let safe = crate::services::json_safe(lua, &value, &mut Vec::new()).map_err(|flow| match flow {
+            let safe = crate::services::json_safe(lua, &value, &mut Vec::new(), &mut super::bindable::Tally::default()).map_err(|flow| match flow {
                 Flow::Error(error) => LuaError::runtime(error.message),
                 Flow::Fail(error) => error,
                 Flow::Yield => LuaError::runtime("JsonEncode yielded"),

@@ -485,6 +485,24 @@
 			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
 		}
 	],
+	"table_breadth": [
+		{
+			"line": "json fan 10000x1000: ok 20020001",
+			"why": "ree stops a copy past its own guard of 4,194,304 values (lua/bindable.rs COPY_VALUES); a 0.747 client and server wrote all 10,000,000"
+		},
+		{
+			"line": "datastore-set fan 2100x1000: ok",
+			"why": "a capture server's local data store enforces no size limit (it took 16 MB of JSON); ree keeps Roblox's documented limit (4 MB: 105)"
+		},
+		{
+			"line": "sortedmap-set fan 20x1000: ok",
+			"why": "a capture server's local memory store enforces no size limit (it took 16 MB of JSON); ree keeps Roblox's documented limit (32 KB: ItemValueSizeTooLarge)"
+		},
+		{
+			"line": "messaging fan 1x600: ok",
+			"why": "a capture server's local MessagingService enforces no size limit (it took 16 MB of JSON); ree keeps Roblox's documented limit (1 kB)"
+		}
+	],
 	"tween": [
 		{
 			"line": "tween-errors error TweenService:Create property named 'Value' cannot be tweened due to type mismatch (property is a 'double', but given type is 'string') | ok Tween | ok Tween",

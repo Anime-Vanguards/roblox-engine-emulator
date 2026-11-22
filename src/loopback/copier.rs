@@ -10,32 +10,38 @@ use std::ffi::{c_int, c_void};
 use mlua::{ffi, prelude::*};
 
 use super::wire::{Key, Wire};
-use crate::{Engine, InstanceId};
+use crate::{Engine, InstanceId, lua::bindable::{self, Tally}};
 
 /// A value whose capture mlua finishes (an object's slot in the side table)
 const PENDING: u32 = u32::MAX;
 
 /// Captures the tables among `values` (the rest as wire.rs captures them) into wire values, tables starting above the call's
-/// frame of `height` values (wire.rs `capture_all`)
+/// frame of `height` values (wire.rs `capture_all`), the call's copy counted against ree's guard (bindable.rs [`Tally`])
 pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], height: usize) -> Result<Box<[Wire]>, String> {
     let mut out = Vec::with_capacity(values.len());
+    let mut tally = Tally::default();
     for value in values {
+        tally.add(super::wire::bytes_of(value))?;
         out.push(match value {
-            LuaValue::Table(table) => capture_table(lua, engine, table, height)?,
-            other => super::wire::capture(lua, engine, other, &mut Vec::new(), height)?,
+            LuaValue::Table(table) => capture_table(lua, engine, table, height, &mut tally)?,
+            other => super::wire::capture(lua, engine, other, &mut Vec::new(), height, &mut tally)?,
         });
     }
     Ok(out.into_boxed_slice())
 }
 
 /// What a raw walk found: the tree with objects left as `Wire::Pending`-like placeholders, and those objects' order
-struct Walk {
+struct Walk<'a> {
     error: Option<String>,
     objects: u32,
+    /// What the call's copy has made so far
+    tally: &'a mut Tally,
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize) -> Result<Wire, String> {
-    let mut walk = Walk { error: None, objects: 0 };
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, tally: &mut Tally) -> Result<Wire, String> {
+    // (a walk that falls back to the typed copier counts its table again from here)
+    let counted = (tally.values, tally.bytes);
+    let mut walk = Walk { error: None, objects: 0, tally };
     let mut tree: Option<Wire> = None;
     // (the side table: the objects' values in the order the walk met them, finished by mlua below)
     let objects: LuaTable = unsafe {
@@ -56,7 +62,8 @@ fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize) ->
     .map_err(|error| error.to_string())?;
     if let Some(message) = walk.error {
         if message == FALLBACK {
-            return super::wire::capture(lua, engine, &LuaValue::Table(table.clone()), &mut Vec::new(), height);
+            (walk.tally.values, walk.tally.bytes) = counted;
+            return super::wire::capture(lua, engine, &LuaValue::Table(table.clone()), &mut Vec::new(), height, walk.tally);
         }
         return Err(message);
     }
@@ -65,7 +72,8 @@ fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize) ->
         let mut finished = Vec::with_capacity(walk.objects as usize);
         for index in 1..=walk.objects {
             let value: LuaValue = objects.raw_get(index).map_err(|error| error.to_string())?;
-            finished.push(super::wire::capture(lua, engine, &value, &mut Vec::new(), height)?);
+            // (an object, counted by the walk: no table)
+            finished.push(super::wire::capture(lua, engine, &value, &mut Vec::new(), height, &mut Tally::default())?);
         }
         let mut next = finished.into_iter();
         fill_objects(&mut tree, &mut next);
@@ -109,12 +117,13 @@ unsafe fn walk_table(state: *mut ffi::lua_State, index: c_int, side: c_int, ance
         let length = ffi::lua_objlen(state, index) as usize;
         let mut entries: Vec<(Key, Wire)> = Vec::new();
         if length > 0 {
-            entries.reserve_exact(length);
+            entries.reserve_exact(length.min(bindable::PRESIZE_LIMIT));
             // (each item at the slot above the table's walk; lua_rawgeti gives its type)
             let top = ffi::lua_gettop(state) + 1;
             for item in 1..=length {
                 let kind = ffi::lua_rawgeti_(state, index, item as c_int);
-                let wire = match item_height(kind, height, true) {
+                // (every slot, a hole too: walking it is the copy's work)
+                let wire = match walk.tally.add(stack_bytes(state, top, kind)).and_then(|()| item_height(kind, height, true)) {
                     Ok(inner) => walk_typed(state, top, kind, side, ancestors, inner, walk),
                     Err(message) => Err(message),
                 };
@@ -139,7 +148,7 @@ unsafe fn walk_table(state: *mut ffi::lua_State, index: c_int, side: c_int, ance
                     }
                 };
                 let kind = ffi::lua_type(state, top);
-                let wire = match item_height(kind, height, false) {
+                let wire = match walk.tally.add(key.len() + stack_bytes(state, top, kind)).and_then(|()| item_height(kind, height, false)) {
                     Ok(inner) => walk_typed(state, top, kind, side, ancestors, inner, walk),
                     Err(message) => Err(message),
                 };
@@ -177,6 +186,12 @@ fn keep_later(entries: &mut Vec<(Key, Wire)>) {
     }
     kept.reverse();
     *entries = kept;
+}
+
+/// The bytes a copy of the string or buffer at stack slot `index` (of type `kind`) makes; 0 for other values
+#[inline]
+unsafe fn stack_bytes(state: *mut ffi::lua_State, index: c_int, kind: c_int) -> usize {
+    if kind == ffi::LUA_TSTRING || kind == ffi::LUA_TBUFFER { unsafe { ffi::lua_objlen(state, index) as usize } } else { 0 }
 }
 
 /// A string or number key's text without mlua (a number truncated to a 64-bit integer, as bindable.rs `key_name`)

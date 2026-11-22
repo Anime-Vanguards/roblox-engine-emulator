@@ -1009,8 +1009,9 @@ pub fn install(engine: &Rc<Engine>) {
             let mut arguments: Vec<Value> = Vec::with_capacity(args.0.len().saturating_sub(1));
             // (a table's copy starts above the call's frame, `self` and the arguments: lua/bindable.rs)
             let height = args.0.len();
+            let mut tally = super::lua::bindable::Tally::default();
             for argument in args.0.iter().skip(1) {
-                match super::lua::bindable::sent_value(lua, engine, argument, height) {
+                match super::lua::bindable::sent_value(lua, engine, argument, height, &mut tally) {
                     Ok(value) => arguments.push(value),
                     Err(message) => return super::lua::raise(message),
                 }
@@ -1097,8 +1098,12 @@ const JSON_DEPTH: usize = 256;
 
 /// Services.JsonSafe: engine values become JSON-encodable data as HttpService makes them (non-JSON types are dropped).
 /// `path` holds the tables being copied: a table inside itself (that copy never ended, and overflowed the stack) and
-/// nesting past [`JSON_DEPTH`] are the script's errors.
-pub(crate) fn json_safe(lua: &Lua, value: &LuaValue, path: &mut Vec<*const std::ffi::c_void>) -> Result<LuaValue, Flow> {
+/// nesting past [`JSON_DEPTH`] are the script's errors, as is a copy past ree's guard (lua/bindable.rs `Tally`: a table is
+/// copied for each place it appears).
+pub(crate) fn json_safe(lua: &Lua, value: &LuaValue, path: &mut Vec<*const std::ffi::c_void>, tally: &mut super::lua::bindable::Tally) -> Result<LuaValue, Flow> {
+    if let Err(message) = tally.add(if let LuaValue::String(text) = value { text.as_bytes().len() } else { 0 }) {
+        return raise(message);
+    }
     Ok(match value {
         LuaValue::Table(table) => {
             let pointer = table.to_pointer();
@@ -1113,7 +1118,7 @@ pub(crate) fn json_safe(lua: &Lua, value: &LuaValue, path: &mut Vec<*const std::
             let result = lua.create_table()?;
             for pair in table.pairs::<LuaValue, LuaValue>() {
                 let (key, item) = pair?;
-                result.raw_set(key, json_safe(lua, &item, path)?)?;
+                result.raw_set(key, json_safe(lua, &item, path, tally)?)?;
             }
             path.pop();
             LuaValue::Table(result)

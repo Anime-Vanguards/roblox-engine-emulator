@@ -1381,6 +1381,89 @@ fn copies_refuse_tables_nested_past_the_lua_stack() {
     assert_eq!(lines(&engine), wanted);
 }
 
+/// A table is copied once for each place it appears, as Roblox copies it (lua/bindable.rs), so a small table can stand for
+/// a copy of any size, and ree stops a copy past its guard (bindable.rs `COPY_VALUES`: the outermost table, every array
+/// slot and dictionary entry walked, a table each time it appears, the call's values together) with its own error. Each
+/// big table here holds 200 references to a table of 100,000 threads first (threads arrive as nil, so their slots make
+/// nothing) and only then 100,000 references to a table of 100,000 numbers: 10^10 numbers without the guard, as a tree of
+/// `{ t, t }` 40 deep is 2^40 tables; the guard stops each copy before a number is copied. A copy below it arrives whole.
+#[test]
+fn copies_stop_at_rees_guard_on_a_table_copied_for_each_place_it_appears() {
+    let (lua, engine) = start();
+    let guard = crate::lua::bindable::COPY_VALUES;
+    run(
+        &lua,
+        &engine,
+        &r##"
+        local Thread = coroutine.running()
+        local Threads = table.create(100000, Thread)
+        local Numbers = table.create(100000, 1)
+        local Huge = table.create(100200)
+        for Index = 1, 200 do
+            Huge[Index] = Threads
+        end
+        for Index = 201, 100200 do
+            Huge[Index] = Numbers
+        end
+        local Tree = {}
+        for _ = 1, 40 do
+            Tree = { Threads, Tree, Tree }
+        end
+        local function Try(Name, Call)
+            print(Name, pcall(Call))
+        end
+        local Event = Instance.new("BindableEvent")
+        local Got = {}
+        Event.Event:Connect(function(Value)
+            local Last = Value[#Value]
+            table.insert(Got, `{#Value} {if type(Last) == "table" then #Last else 0} {Value[1] ~= Value[2]}`)
+        end)
+        Try("fire huge", function() Event:Fire(Huge) end)
+        Try("fire tree", function() Event:Fire(Tree) end)
+        Try("fire at the guard", function() Event:Fire(table.create(GUARD - 1, Thread)) end)
+        Try("fire past the guard", function() Event:Fire(table.create(GUARD, Thread)) end)
+        Try("fire two halves", function() Event:Fire(table.create(GUARD // 2, Thread), table.create(GUARD // 2, Thread)) end)
+        local Fan = table.create(300, table.create(1000, 1))
+        Try("fire fan", function() Event:Fire(Fan) end)
+        task.wait()
+        print("received", table.concat(Got, ", "))
+        local Echo = Instance.new("BindableFunction")
+        Echo.OnInvoke = function(Value) return #Value end
+        local Maker = Instance.new("BindableFunction")
+        Maker.OnInvoke = function() return Huge end
+        Try("invoke huge", function() return Echo:Invoke(Huge) end)
+        Try("invoke fan", function() return Echo:Invoke(Fan) end)
+        Try("result huge", function() return Maker:Invoke() end)
+        Try("key huge", function() return ValueCurveKey.new(0, Huge) end)
+        local Key = ValueCurveKey.new(0, 1)
+        Try("key write tree", function() Key.Value = Tree end)
+        Try("key fan", function() return #ValueCurveKey.new(0, Fan).Value end)
+        "##
+        .replace("GUARD", &guard.to_string()),
+    );
+    for _ in 0..4 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let past = crate::lua::bindable::too_large(guard, "values");
+    let wanted = [
+        format!("print: fire huge false {past}"),
+        format!("print: fire tree false {past}"),
+        "print: fire at the guard true".into(),
+        format!("print: fire past the guard false {past}"),
+        format!("print: fire two halves false {past}"),
+        "print: fire fan true".into(),
+        // (the threads arrive as nil: an empty table)
+        "print: received 0 0 false, 300 1000 true".into(),
+        format!("print: invoke huge false {past}"),
+        "print: invoke fan true 300".into(),
+        format!("print: result huge false {past}"),
+        format!("print: key huge false {past}"),
+        format!("print: key write tree false {past}"),
+        "print: key fan true 300".into(),
+    ];
+    assert_eq!(lines(&engine), wanted);
+}
+
 #[test]
 fn number_and_boolean_properties_take_any_value_as_in_roblox() {
     // Measured in a playing client (Studio 0.744, tools/parity/probes/coercion.luau)
@@ -7387,6 +7470,49 @@ fn json_encode_refuses_cycles_and_deep_nesting() {
     assert!(output.contains(&format!("print: false {deep}")), "{output:?}");
     // (a cycle closing one level past the limit raises the depth's error, as in a 0.747 client: table_depth.luau)
     assert!(output.contains(&format!("print: ring false {deep}")), "{output:?}");
+}
+
+/// JSONEncode writes a table out each time it appears, as Roblox does (a 0.747 client wrote 10,000,000 values, 20 MB, in
+/// 0.31 s), and stops past ree's guard on a copy (lua/bindable.rs `COPY_VALUES`, every value written counted) with its own
+/// error: the same 100,000 zeros held 100,000 times (10^10 values, 20 GB of text without the guard) and a tree of
+/// `{ t, t }` 40 deep raise it once 4,194,304 values are written (about 8 MB); a table of 1,000 zeros held 1,000 times is
+/// written whole.
+#[test]
+fn json_encode_stops_at_rees_guard_on_a_table_written_for_each_place_it_appears() {
+    let (lua, engine) = start();
+    let guard = crate::lua::bindable::COPY_VALUES;
+    let output = run(
+        &lua,
+        &engine,
+        &r#"
+        local HttpService = game:GetService("HttpService")
+        local Huge = table.create(100000, table.create(100000, 0))
+        local Tree = {}
+        for _ = 1, 40 do
+            Tree = { Tree, Tree }
+        end
+        local function Try(Name, Value)
+            print(Name, pcall(function() return #HttpService:JSONEncode(Value) end))
+        end
+        Try("huge", Huge)
+        Try("tree", Tree)
+        Try("dictionaries", table.create(100000, { a = table.create(100000, 0) }))
+        Try("at the guard", table.create(GUARD - 1, 0))
+        Try("past the guard", table.create(GUARD, 0))
+        Try("fan", table.create(1000, table.create(1000, 0)))
+        "#
+        .replace("GUARD", &guard.to_string()),
+    );
+    let past = crate::lua::bindable::too_large(guard, "values");
+    let wanted = [
+        format!("print: huge false {past}"),
+        format!("print: tree false {past}"),
+        format!("print: dictionaries false {past}"),
+        format!("print: at the guard true {}", 2 * (guard - 1) + 1),
+        format!("print: past the guard false {past}"),
+        "print: fan true 2002001".to_string(),
+    ];
+    assert_eq!(output, wanted);
 }
 
 /// HttpService:JSONEncode and JSONDecode as a playing client runs them (Studio 0.744, tools/parity/probes/json.luau,

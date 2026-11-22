@@ -748,6 +748,29 @@ mod tests {
         installed
     }
 
+    /// JSONEncode prices its values on the work clock (cost.rs `json`) as it writes them: one whose own price passes the
+    /// script timeout raises the timeout's error then, its work so far charged, instead of writing on past what a script may
+    /// run; one under it writes as before
+    #[test]
+    fn a_json_encode_whose_own_price_passes_the_timeout_raises_the_timeouts_error() {
+        let (lua, engine, timeout) = start(0.01, 0);
+        let outcome = call(
+            &lua,
+            &engine,
+            r#"
+            local HttpService = game:GetService("HttpService")
+            local Long, Short = table.create(300000, 0), table.create(100000, 0)
+            local Ok, Message = pcall(function() return #HttpService:JSONEncode(Long) end)
+            print("long", Ok, Message)
+            print("short", pcall(function() return #HttpService:JSONEncode(Short) end))
+            "#,
+        );
+        assert_eq!(outcome, "finished");
+        let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|entry| entry.message.clone()).collect();
+        assert_eq!(lines, [format!("long false {TIMEOUT_MESSAGE}"), "short true 200001".to_string()]);
+        timeout.detach();
+    }
+
     #[test]
     fn a_script_that_never_yields_errors_with_robloxs_timeout_and_a_pcall_does_not_keep_it_running() {
         let (lua, engine, timeout) = start(0.02, 0);

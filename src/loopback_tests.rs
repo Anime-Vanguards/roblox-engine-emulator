@@ -567,6 +567,88 @@ return {
     assert!(has(&lines, "client print: late 1 2 3"), "{lines:?}");
 }
 
+/// A remote copies a table once for each place it appears, as Roblox does (a 0.747 session carried one table of 1,000
+/// numbers held 1,000 times each way, and an UnreliableRemoteEvent's warning counted every byte of it), and ree stops a copy
+/// past its guard (lua/bindable.rs `COPY_VALUES`) at the sender with its own error. The big table holds 200 references to a
+/// table of 100,000 functions first (functions arrive as nil, so their slots make nothing) and then 100,000 references to a
+/// table of 100,000 numbers, 10^10 numbers without the guard: FireServer, an unreliable FireServer, InvokeServer, a
+/// callback's results and FireClient raise the guard's error before a number is copied. A copy below it arrives whole.
+#[test]
+fn remotes_stop_at_rees_guard_on_a_table_copied_for_each_place_it_appears() {
+    let summary = run_pair(
+        "remote-breadth",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local function Huge()
+	local Functions = table.create(100000, print)
+	local Numbers = table.create(100000, 1)
+	local Value = table.create(100200)
+	for Index = 1, 200 do
+		Value[Index] = Functions
+	end
+	for Index = 201, 100200 do
+		Value[Index] = Numbers
+	end
+	return Value
+end
+return {
+	Server = function(Context)
+		local Event = Instance.new("RemoteEvent")
+		Event.Name = "Breadth"
+		Event.Parent = Storage
+		local Unreliable = Instance.new("UnreliableRemoteEvent")
+		Unreliable.Name = "BreadthUnreliable"
+		Unreliable.Parent = Storage
+		local Call = Instance.new("RemoteFunction")
+		Call.Name = "BreadthCall"
+		Call.OnServerInvoke = function(_, Value)
+			if Value == "huge" then
+				return Huge()
+			end
+			return #Value
+		end
+		Call.Parent = Storage
+		Event.OnServerEvent:Connect(function(Player, Value)
+			print("got", #Value, #Value[#Value], Value[1] ~= Value[2])
+			print("client huge", pcall(Event.FireClient, Event, Player, Huge()))
+		end)
+	end,
+	Client = function(Context)
+		local Event = Storage:WaitForChild("Breadth")
+		local Unreliable = Storage:WaitForChild("BreadthUnreliable")
+		local Call = Storage:WaitForChild("BreadthCall")
+		print("server huge", pcall(Event.FireServer, Event, Huge()))
+		print("unreliable huge", pcall(Unreliable.FireServer, Unreliable, Huge()))
+		print("invoke huge", pcall(Call.InvokeServer, Call, Huge()))
+		print("invoke result huge", pcall(Call.InvokeServer, Call, "huge"))
+		print("invoke fan", pcall(Call.InvokeServer, Call, table.create(300, table.create(1000, 1))))
+		Event:FireServer(table.create(300, table.create(1000, 1)))
+		for _ = 1, 10 do
+			task.wait()
+		end
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    let past = crate::lua::bindable::too_large(crate::lua::bindable::COPY_VALUES, "values");
+    for wanted in [
+        format!("client print: server huge false {past}"),
+        format!("client print: unreliable huge false {past}"),
+        format!("client print: invoke huge false {past}"),
+        format!("client print: invoke result huge false {past}"),
+        "client print: invoke fan true 300".into(),
+        "server print: got 300 1000 true".into(),
+        format!("server print: client huge false {past}"),
+    ] {
+        assert!(has(&lines, &wanted), "{wanted}: {lines:?}");
+    }
+}
+
 /// A remote's tables are walked on the Lua stack as an event's are (bindable.rs `nested_height`), from the call's frame:
 /// `self` and the arguments (the player among them for FireClient), a callback's results alone. So a dictionary nests half
 /// as deep as an array, each further argument takes a level, and a callback may return an array 300 deep (measured each

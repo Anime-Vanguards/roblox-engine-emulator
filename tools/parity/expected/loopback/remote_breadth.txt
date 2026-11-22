@@ -1,0 +1,19 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+# repeated: 3 captures, the same lines
+server: server reliable fan 1000x1000: ok 
+server: server reliable fan then ring: error tables cannot be cyclic
+server: server unreliable fan 10x1000: ok 
+server: server unreliable fan 1000x1000: ok 
+server: server unreliable fan then ring: error tables cannot be cyclic
+server: server warnings: Unreliable Event dropped as its payload is too large. Consider reducing the total size of the arguments. Payload went over by: 89032 bytes / Unreliable Event dropped as its payload is too large. Consider reducing the total size of the arguments. Payload went over by: 9002003 bytes
+server: server got: 1000 1000 1000000 true
+client: client got: 1000 1000 1000000 true
+client: client reliable fan 1000x1000: ok 
+client: client reliable fan then ring: error tables cannot be cyclic
+client: client unreliable fan 10x1000: ok 
+client: client unreliable fan 1000x1000: ok 
+client: client unreliable fan then ring: error tables cannot be cyclic
+client: client warnings: Unreliable Event dropped as its payload is too large. Consider reducing the total size of the arguments. Payload went over by: 89032 bytes / Unreliable Event dropped as its payload is too large. Consider reducing the total size of the arguments. Payload went over by: 9002003 bytes
+client: client invoke fan 1000x1000 argument: ok 1000 1000 1000000 true
+client: client invoke fan 1000x1000 result: ok 1000 1000 1000000 true

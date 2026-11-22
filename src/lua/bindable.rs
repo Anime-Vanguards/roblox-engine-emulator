@@ -22,6 +22,11 @@
 //!   the same way from heights of their own (loopback/wire.rs, server.luau `Data`).
 //! - A thread arrives as nil (in an array it leaves a hole, in a dictionary its entry is dropped); a buffer as a
 //!   new buffer with the same bytes; everything else (functions, Instances, datatypes, strings) as it is.
+//! - The copy takes time in proportion to what it makes, a shared table counted each time it appears, and has no limit
+//!   of its own (a 0.747 playing client, one table of 1,000 numbers held 3,000 times: Fire 38 ms and each handler's copy
+//!   33 ms more; held 10,000 times, Fire 0.34 s). Since one small table may stand for a copy of any size (one holding the
+//!   same 100,000-item table 100,000 times is 10^10 values), ree stops a copy past [`COPY_VALUES`] values or
+//!   [`COPY_BYTES`] bytes with [`too_large`]'s error, a guard of its own ([`Tally`]).
 //!
 //! Not measured: other userdata keys (named here by their typeof, e.g. `<Color3> (1, 0, 0)`), and whether a table
 //! key's text calls its `__tostring` (it does here).
@@ -59,6 +64,56 @@ pub const STACK_LIMIT: usize = 300;
 /// The error of a table nested too deep for the stack.
 pub const STACK_FULL: &str = "Max lua stack size reached";
 
+/// ree's guard on one copy: the values an engine call's copy may make (each argument, each array slot walked, holes
+/// included, and each dictionary entry, a table counted each time it appears). Roblox has no limit but memory (10,000,000
+/// values crossed Fire, Invoke, a ValueCurveKey and JSONEncode in a 0.747 client: the module's notes); this is hundreds of
+/// times what a game sends, and ree's copy of this many holds about half a gigabyte.
+pub const COPY_VALUES: u64 = 1 << 22;
+
+/// ree's guard on the bytes one copy makes: the strings and dictionary keys it writes out and buffers' bytes (a string a
+/// bindable passes on is shared, not counted); as much as one Luau string may hold.
+pub const COPY_BYTES: u64 = 1 << 30;
+
+/// What one engine call's copy has made so far, against ree's guard ([`COPY_VALUES`], [`COPY_BYTES`]). Every copy of script
+/// tables counts as it goes (this module's, loopback/copier.rs and wire.rs, services/json.rs; server.luau `Data` keeps a
+/// count of its own), so a table copied once for each place it appears stops at the guard.
+#[derive(Default)]
+pub struct Tally {
+    pub values: u64,
+    pub bytes: u64,
+}
+
+impl Tally {
+    /// One more value copied, making `bytes` bytes: [`too_large`]'s error past the guard
+    #[inline]
+    pub fn add(&mut self, bytes: usize) -> Result<(), String> {
+        self.values += 1;
+        self.bytes += bytes as u64;
+        if self.values > COPY_VALUES || self.bytes > COPY_BYTES { Err(self.too_large()) } else { Ok(()) }
+    }
+
+    /// `bytes` more bytes made beside a value (a dictionary key JSONEncode writes): [`too_large`]'s error past the guard
+    #[inline]
+    pub fn add_bytes(&mut self, bytes: usize) -> Result<(), String> {
+        self.bytes += bytes as u64;
+        if self.bytes > COPY_BYTES { Err(self.too_large()) } else { Ok(()) }
+    }
+
+    #[cold]
+    fn too_large(&self) -> String {
+        if self.values > COPY_VALUES { too_large(COPY_VALUES, "values") } else { too_large(COPY_BYTES, "bytes") }
+    }
+}
+
+/// The most entries a copy reserves ahead for an array: a table's border (`#t`) can stand for an array part far larger than
+/// what it holds (`table.create(n)` with only its last slot set), so a longer array's copy grows as it fills
+pub const PRESIZE_LIMIT: usize = 1 << 16;
+
+/// The error of a copy past ree's guard ([`Tally`]): more than `limit` `what` (values, bytes)
+pub fn too_large(limit: u64, what: &str) -> String {
+    format!("ree: this copy would make more than {limit} {what} (a table is copied once for each place it appears)")
+}
+
 /// The stack height of a table found inside one at `height`: an array's item sits one slot above it, a dictionary's value
 /// two (above its key); an error when that is above [`STACK_LIMIT`].
 pub fn nested_height(height: usize, array: bool) -> Result<usize, String> {
@@ -68,48 +123,58 @@ pub fn nested_height(height: usize, array: bool) -> Result<usize, String> {
 
 /// A value as it is sent: an error when a table cannot be (cyclic, nested too deep, or a key of a kind that cannot be
 /// sent). `height`: the call's frame, where the value's outermost table sits (the module's notes).
-pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize) -> Result<Sent, String> {
-    Ok(capture_value(lua, engine, value, height, &mut Vec::new())?.unwrap_or(Sent::Value(LuaValue::Nil)))
+/// `tally`: what the call's copy has made so far, its other values' included ([`Tally`]).
+pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, tally: &mut Tally) -> Result<Sent, String> {
+    tally.add(buffer_bytes(value))?;
+    Ok(capture_value(lua, engine, value, height, &mut Vec::new(), tally)?.unwrap_or(Sent::Value(LuaValue::Nil)))
+}
+
+/// The bytes a copy of `value` makes: a buffer's
+#[inline]
+fn buffer_bytes(value: &LuaValue) -> usize {
+    if let LuaValue::Buffer(buffer) = value { buffer.len() } else { 0 }
 }
 
 /// `None`: a value that does not arrive (a thread).
-fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, ancestors: &mut Vec<*const c_void>) -> Result<Option<Sent>, String> {
+fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Sent>, String> {
     Ok(Some(match value {
         LuaValue::Thread(_) => return Ok(None),
-        LuaValue::Table(table) => capture_table(lua, engine, table, height, ancestors)?,
+        LuaValue::Table(table) => capture_table(lua, engine, table, height, ancestors, tally)?,
         LuaValue::Buffer(buffer) => Sent::Buffer(buffer.to_vec().into()),
         other => Sent::Value(other.clone()),
     }))
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>) -> Result<Sent, String> {
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Sent, String> {
     let pointer = table.to_pointer();
     if ancestors.contains(&pointer) {
         return Err("tables cannot be cyclic".into());
     }
     ancestors.push(pointer);
-    let entries = capture_entries(lua, engine, table, height, ancestors);
+    let entries = capture_entries(lua, engine, table, height, ancestors, tally);
     ancestors.pop();
     Ok(Sent::Table(entries?))
 }
 
 /// The copy of a value held by a table at `height`: a table is checked against the stack ([`nested_height`]) before it is
 /// walked, so one too deep is refused before a cycle through it is found
-fn capture_item(lua: &Lua, engine: &Engine, item: &LuaValue, height: usize, array: bool, ancestors: &mut Vec<*const c_void>) -> Result<Option<Sent>, String> {
+fn capture_item(lua: &Lua, engine: &Engine, item: &LuaValue, height: usize, array: bool, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Sent>, String> {
     let height = if matches!(item, LuaValue::Table(_)) { nested_height(height, array)? } else { height };
-    capture_value(lua, engine, item, height, ancestors)
+    capture_value(lua, engine, item, height, ancestors, tally)
 }
 
-fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>) -> Result<Vec<(Key, Sent)>, String> {
+fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Vec<(Key, Sent)>, String> {
     let mut entries = Vec::new();
     let length = table.raw_len();
     if length > 0 {
         for index in 1..=length {
             let item: LuaValue = table.raw_get(index).map_err(|error| error.to_string())?;
+            // (every slot, a hole too: walking it is the copy's work)
+            tally.add(buffer_bytes(&item))?;
             if item.is_nil() {
                 continue;
             }
-            if let Some(copy) = capture_item(lua, engine, &item, height, true, ancestors)? {
+            if let Some(copy) = capture_item(lua, engine, &item, height, true, ancestors, tally)? {
                 entries.push((Key::Index(index as i64), copy));
             }
         }
@@ -118,7 +183,8 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, 
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
         let key = key_name(lua, engine, &key)?;
-        if let Some(copy) = capture_item(lua, engine, &item, height, false, ancestors)? {
+        tally.add(key.len() + buffer_bytes(&item))?;
+        if let Some(copy) = capture_item(lua, engine, &item, height, false, ancestors, tally)? {
             entries.push((Key::Name(key), copy));
         }
     }
@@ -178,11 +244,11 @@ pub fn rebuild(lua: &Lua, sent: &Sent) -> LuaResult<LuaValue> {
 
 /// The engine value BindableEvent:Fire queues for an argument: a table or buffer as a [`Copied`] that every
 /// receiver rebuilds, a thread as nil, anything else converted as usual. `height`: the call's frame (`self` and the
-/// arguments).
-pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize) -> Result<Value, String> {
+/// arguments); `tally`: what the call's copy has made so far ([`Tally`]).
+pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, tally: &mut Tally) -> Result<Value, String> {
     match value {
         LuaValue::Table(_) | LuaValue::Buffer(_) => {
-            let sent = capture(lua, engine, value, height)?;
+            let sent = capture(lua, engine, value, height, tally)?;
             let userdata = lua.create_userdata(Copied(Rc::new(sent))).map_err(|error| error.to_string())?;
             Ok(Value::Lua(Box::new(LuaValue::UserData(userdata))))
         }
@@ -195,12 +261,34 @@ pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize) -
 /// value's tables sitting at `height` (the call's frame: [`capture`]).
 pub fn copied(lua: &Lua, engine: &Engine, values: LuaMultiValue, height: usize) -> Ret {
     let mut out = LuaMultiValue::with_capacity(values.len());
+    let mut tally = Tally::default();
     for value in values.iter() {
-        let sent = match capture(lua, engine, value, height) {
+        let sent = match capture(lua, engine, value, height, &mut tally) {
             Ok(sent) => sent,
             Err(message) => return raise(message),
         };
         out.push_back(rebuild(lua, &sent)?);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{COPY_BYTES, COPY_VALUES, Tally, too_large};
+
+    /// A copy's tally passes the guard's last value and refuses the next, and refuses a byte past [`COPY_BYTES`] with or
+    /// without a value; server.luau's walk keeps the same guard
+    #[test]
+    fn a_copy_stops_one_past_rees_guard() {
+        let mut tally = Tally { values: COPY_VALUES - 1, bytes: 0 };
+        assert_eq!(tally.add(0), Ok(()));
+        assert_eq!(tally.add(0), Err(too_large(COPY_VALUES, "values")));
+        let mut tally = Tally::default();
+        assert_eq!(tally.add(COPY_BYTES as usize), Ok(()));
+        assert_eq!(tally.add_bytes(1), Err(too_large(COPY_BYTES, "bytes")));
+        let mut tally = Tally::default();
+        assert_eq!(tally.add(COPY_BYTES as usize + 1), Err(too_large(COPY_BYTES, "bytes")));
+        let line = include_str!("server.luau").lines().find(|line| line.starts_with("local COPY_VALUES = ")).expect("server.luau's guard");
+        assert_eq!(line.trim_end(), format!("local COPY_VALUES = {COPY_VALUES}"));
+    }
 }

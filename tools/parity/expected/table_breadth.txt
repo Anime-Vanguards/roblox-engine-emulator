@@ -1,0 +1,10 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+fire fan 1000x1000: 1000 1000 1000000 true; the two handlers' copies differ true
+fire tree 17: 262143 tables
+invoke fan 1000x1000 argument: ok 1000 1000 1000000 true
+invoke fan 1000x1000 result: ok 1000 1000 1000000 true
+key fan 1000x1000: ok 1000 1000 1000000 true
+json fan 1000x1000: ok 2002001
+json tree 17: ok 655357
+json fan 10000x1000: ok 20020001

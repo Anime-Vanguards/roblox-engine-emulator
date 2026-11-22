@@ -25,7 +25,7 @@ use lune_roblox::datatypes::types as lune;
 use mlua::prelude::*;
 use rbx_dom_weak::types::{self as dom, Variant};
 
-use crate::{Engine, InstanceId, lua::bindable, value::Value};
+use crate::{Engine, InstanceId, lua::bindable::{self, Tally}, value::Value};
 
 /// A sent value.
 #[derive(Clone, Debug)]
@@ -77,9 +77,19 @@ fn map_instances(wire: &mut Wire, map: &dyn Fn(InstanceId) -> Option<InstanceId>
     }
 }
 
+/// The bytes a copy of `value` makes: a string's or a buffer's (bindable.rs [`Tally`])
+#[inline]
+pub fn bytes_of(value: &LuaValue) -> usize {
+    match value {
+        LuaValue::String(text) => text.as_bytes().len(),
+        LuaValue::Buffer(buffer) => buffer.len(),
+        _ => 0,
+    }
+}
+
 /// A value as it is sent. `ancestors`: the tables it is inside of; `height`: the stack slot a table sits at (bindable.rs
-/// `nested_height`).
-pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize) -> Result<Wire, String> {
+/// `nested_height`); `tally`: what the call's copy has made so far, each of a table's entries counted as it is walked.
+pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Wire, String> {
     Ok(match value {
         LuaValue::Nil => Wire::Nil,
         LuaValue::Boolean(flag) => Wire::Bool(*flag),
@@ -88,7 +98,7 @@ pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec
         LuaValue::String(text) => Wire::String(text.as_bytes().to_vec().into_boxed_slice()),
         LuaValue::Buffer(buffer) => Wire::Buffer(buffer.to_vec().into_boxed_slice()),
         LuaValue::Vector(vector) => Wire::Vector([vector.x(), vector.y(), vector.z()]),
-        LuaValue::Table(table) => capture_table(lua, engine, table, ancestors, height)?,
+        LuaValue::Table(table) => capture_table(lua, engine, table, ancestors, height, tally)?,
         LuaValue::UserData(userdata) => capture_userdata(userdata),
         // functions, threads, light userdata, errors: nil
         _ => Wire::Nil,
@@ -163,13 +173,13 @@ fn capture_userdata(userdata: &LuaAnyUserData) -> Wire {
     }
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize) -> Result<Wire, String> {
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Wire, String> {
     let pointer = table.to_pointer();
     if ancestors.contains(&pointer) {
         return Err("tables cannot be cyclic".into());
     }
     ancestors.push(pointer);
-    let entries = capture_entries(lua, engine, table, ancestors, height);
+    let entries = capture_entries(lua, engine, table, ancestors, height, tally);
     ancestors.pop();
     Ok(Wire::Table(entries?.into_boxed_slice()))
 }
@@ -180,14 +190,16 @@ fn item_height(item: &LuaValue, height: usize, array: bool) -> Result<usize, Str
     if matches!(item, LuaValue::Table(_)) { bindable::nested_height(height, array) } else { Ok(height) }
 }
 
-fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize) -> Result<Vec<(Key, Wire)>, String> {
+fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Vec<(Key, Wire)>, String> {
     let length = table.raw_len();
     if length > 0 {
         // an array: indices 1 to the border, a value that does not arrive leaving a hole
-        let mut entries = Vec::with_capacity(length);
+        let mut entries = Vec::with_capacity(length.min(bindable::PRESIZE_LIMIT));
         for index in 1..=length {
             let item: LuaValue = table.raw_get(index).map_err(|error| error.to_string())?;
-            let wire = capture(lua, engine, &item, ancestors, item_height(&item, height, true)?)?;
+            // (every slot, a hole too: walking it is the copy's work)
+            tally.add(bytes_of(&item))?;
+            let wire = capture(lua, engine, &item, ancestors, item_height(&item, height, true)?, tally)?;
             if !matches!(wire, Wire::Nil) {
                 entries.push((Key::Index(index as u32), wire));
             }
@@ -198,7 +210,8 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
         let key = bindable::key_name(lua, engine, &key)?;
-        let wire = capture(lua, engine, &item, ancestors, item_height(&item, height, false)?)?;
+        tally.add(key.len() + bytes_of(&item))?;
+        let wire = capture(lua, engine, &item, ancestors, item_height(&item, height, false)?, tally)?;
         if !matches!(wire, Wire::Nil) {
             // (keys that end up equal keep the later one, as a table's set does)
             entries.retain(|(existing, _): &(Key, Wire)| !matches!(existing, Key::Name(name) if **name == *key));

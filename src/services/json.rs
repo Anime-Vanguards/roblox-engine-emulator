@@ -8,7 +8,9 @@
 //!   a boolean or thread key raises `Invalid table key type used`). An empty table is `[]`. Metatables are not
 //!   consulted; a table inside itself raises `tables cannot be cyclic`, nesting past [`ENCODE_DEPTH`] `Max lua stack
 //!   size reached`, the depth checked first (a cycle closing one level past the limit raises the depth's error:
-//!   table_depth.luau, Studio 0.747).
+//!   table_depth.luau, Studio 0.747). A table that appears several times is written each time, with no limit of its own
+//!   (a 0.747 client wrote 10,000,000 values, 20 MB, in 0.31 s); ree stops one past its guard on a copy (bindable.rs
+//!   `Tally`), and one whose own price on the work clock passes the run's script timeout with the timeout's error.
 //! - A number has Grisu2's digits (Loitsch 2010, the rapidjson form) with its last digit rounded toward the value only
 //!   when at most eight digits came from the fraction loop (600 of 600 random doubles in json_numbers.luau), laid out
 //!   as ECMAScript's Number::toString lays digits out but without `+` in an exponent (`1e21`, `100000000000000000000`,
@@ -31,7 +33,7 @@ use std::ffi::c_void;
 use mlua::prelude::*;
 use rustc_hash::FxHashMap;
 
-use crate::Engine;
+use crate::{Engine, lua::bindable::Tally};
 
 /// What JSONEncode and JSONDecode handled on this thread (os.workcounters' `jsonbytes` and `jsonvalues`; the work clock prices each
 /// call by its own: cost.rs `json`)
@@ -85,17 +87,53 @@ pub(crate) struct Counted<T> {
     pub values: u64,
 }
 
-/// HttpService:JSONEncode of `value`, or the message it raises. The writers add each value they write to `values`, one count for the
-/// whole call.
-pub(crate) fn encode_counted(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Counted<String>, String> {
-    let mut text = String::new();
-    let mut values = 0;
-    write_value(lua, engine, value, &mut text, &mut Vec::new(), &mut values)?;
-    Ok(Counted { result: text, values })
+/// What an encode has written so far: its values (which price it: [`priced`]) and the bytes of its strings, buffers and keys,
+/// against ree's guard on a copy (bindable.rs [`Tally`]), and the script timeout its own price may not pass
+struct Written<'a> {
+    engine: &'a Engine,
+    tally: Tally,
+    /// The run's script timeout, in seconds of the work clock (watchdog.rs; None: none)
+    timeout: Option<f64>,
 }
 
-fn write_value(lua: &Lua, engine: &Engine, value: &LuaValue, out: &mut String, path: &mut Vec<*const c_void>, values: &mut u64) -> Result<(), String> {
-    *values += 1;
+/// Values written between two looks at the encode's price against the script timeout
+const TIMEOUT_EVERY: u64 = 1024;
+
+impl Written<'_> {
+    /// One more value written, of `bytes` bytes: an error past ree's guard, or the timeout's once the values written cost the
+    /// work clock the script timeout (what they cost is charged first, as a finished encode's is)
+    #[inline]
+    fn value(&mut self, bytes: usize) -> Result<(), String> {
+        self.tally.add(bytes)?;
+        if self.tally.values % TIMEOUT_EVERY == 0 {
+            if let Some(limit) = self.timeout {
+                let cost = crate::cost::json(0, self.tally.values, false);
+                if cost >= limit {
+                    self.engine.state.borrow().sched.charge(priced(0, self.tally.values, false));
+                    return Err(crate::watchdog::TIMEOUT_MESSAGE.into());
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// HttpService:JSONEncode of `value`, or the message it raises. The writers count each value they write ([`Written`]), one count
+/// for the whole call.
+pub(crate) fn encode_counted(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Counted<String>, String> {
+    let mut text = String::new();
+    let timeout = engine.state.borrow().sched.timeout.as_ref().map(|timeout| timeout.limit()).filter(|limit| *limit > 0.0);
+    let mut written = Written { engine, tally: Tally::default(), timeout };
+    write_value(lua, engine, value, &mut text, &mut Vec::new(), &mut written)?;
+    Ok(Counted { result: text, values: written.tally.values })
+}
+
+fn write_value(lua: &Lua, engine: &Engine, value: &LuaValue, out: &mut String, path: &mut Vec<*const c_void>, written: &mut Written) -> Result<(), String> {
+    written.value(match value {
+        LuaValue::String(text) => text.as_bytes().len(),
+        LuaValue::Buffer(buffer) => buffer.len(),
+        _ => 0,
+    })?;
     match value {
         LuaValue::Nil => out.push_str("null"),
         LuaValue::Boolean(flag) => out.push_str(if *flag { "true" } else { "false" }),
@@ -117,16 +155,16 @@ fn write_value(lua: &Lua, engine: &Engine, value: &LuaValue, out: &mut String, p
                 return Err("tables cannot be cyclic".into());
             }
             path.push(pointer);
-            let written = write_table(lua, engine, table, out, path, values);
+            let wrote = write_table(lua, engine, table, out, path, written);
             path.pop();
-            written?;
+            wrote?;
         }
         _ => out.push_str("null"),
     }
     Ok(())
 }
 
-fn write_table(lua: &Lua, engine: &Engine, table: &LuaTable, out: &mut String, path: &mut Vec<*const c_void>, values: &mut u64) -> Result<(), String> {
+fn write_table(lua: &Lua, engine: &Engine, table: &LuaTable, out: &mut String, path: &mut Vec<*const c_void>, written: &mut Written) -> Result<(), String> {
     let length = table.raw_len();
     if length > 0 {
         out.push('[');
@@ -135,7 +173,7 @@ fn write_table(lua: &Lua, engine: &Engine, table: &LuaTable, out: &mut String, p
                 out.push(',');
             }
             let item: LuaValue = table.raw_get(index).map_err(|error| error.to_string())?;
-            write_value(lua, engine, &item, out, path, values)?;
+            write_value(lua, engine, &item, out, path, written)?;
         }
         out.push(']');
         return Ok(());
@@ -147,8 +185,9 @@ fn write_table(lua: &Lua, engine: &Engine, table: &LuaTable, out: &mut String, p
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
         let key = crate::lua::bindable::key_name(lua, engine, &key)?;
+        written.tally.add_bytes(key.len())?;
         let mut text = String::new();
-        write_value(lua, engine, &item, &mut text, path, values)?;
+        write_value(lua, engine, &item, &mut text, path, written)?;
         match places.get(&key) {
             Some(&place) => entries[place].1 = text,
             None => {

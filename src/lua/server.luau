@@ -67,6 +67,12 @@ end
 -- nested 300 deep is stored, a dictionary 150), 6 for an UpdateAsync transform's result (295 and 148), 4 for PublishAsync
 -- (297 and 149). Measured in a 0.747 playing server (tools/parity/probes/table_depth.luau); metadata's are not measured
 -- (taken as SetAsync's and UpdateAsync's values').
+--
+-- The conversion writes a table out each time it appears, its time growing with what it writes (the same server: SetAsync
+-- of one table of 1,000 numbers held 8,000 times took 0.4 s), and a cycle after all of it still raises first. Data counts the
+-- value's JSON length as it walks and stops copying once that passes what the store takes (the value cannot be stored, but
+-- the walk goes on for the errors that win over its size), and ree stops the walk past its own guard on a copy
+-- (COPY_VALUES): the store then raises its size error, as a value of that many parts is larger than any store takes.
 
 local function JsonStringLength(Text)
 	local _, Escaped = string.gsub(Text, '[%c"\\]', "")
@@ -75,55 +81,87 @@ end
 
 local STACK_LIMIT = 300
 
+-- ree's guard on a copy (lua/bindable.rs COPY_VALUES): the values Data and Converted walk at most in one value, each array
+-- slot and dictionary entry counted, a table each time it appears
+local COPY_VALUES = 4194304
+local PAST_GUARD = `ree: this copy would make more than {COPY_VALUES} values (a table is copied once for each place it appears)`
+
 -- The conversion's errors in a table at Height that Data stopped short of (it ends at the first thing it cannot store),
--- walked as the conversion walks it: an array to its border, anything else by its pairs
+-- walked as the conversion walks it: an array to its border, anything else by its pairs. Walk: Ancestors (the tables it is
+-- inside of) and Count (values walked: past COPY_VALUES it stops, no error found)
 local Converted
-local function ConvertedItem(Item, Height, Ancestors)
-	if type(Item) ~= "table" then
+local function ConvertedItem(Item, Height, Walk)
+	Walk.Count += 1
+	if type(Item) ~= "table" or Walk.Count > COPY_VALUES then
 		return
 	elseif Height > STACK_LIMIT then
 		error("Max lua stack size reached", 0)
-	elseif Ancestors[Item] then
+	elseif Walk.Ancestors[Item] then
 		error("tables cannot be cyclic", 0)
 	end
-	Converted(Item, Height, Ancestors)
+	Converted(Item, Height, Walk)
 end
-function Converted(Value, Height, Ancestors)
-	Ancestors[Value] = true
+function Converted(Value, Height, Walk)
+	Walk.Ancestors[Value] = true
 	local Length = rawlen(Value)
 	if Length > 0 then
 		for Index = 1, Length do
-			ConvertedItem(rawget(Value, Index), Height + 1, Ancestors)
+			ConvertedItem(rawget(Value, Index), Height + 1, Walk)
+			if Walk.Count > COPY_VALUES then
+				return
+			end
 		end
 	else
 		for _, Item in next, Value do
-			ConvertedItem(Item, Height + 2, Ancestors)
+			ConvertedItem(Item, Height + 2, Walk)
+			if Walk.Count > COPY_VALUES then
+				return
+			end
 		end
 	end
-	Ancestors[Value] = nil
+	Walk.Ancestors[Value] = nil
 end
 
-local function Data(Value, Seen, Height)
+-- The copy of Value (nil once the value is longer than State.Limit), or nil and the kind that cannot be stored. State: Seen
+-- (the tables Data is inside of), Size (the value's JSON length so far: each part counted as the walk reaches it, a separator
+-- before each entry but the first, so it only grows and ends at the whole length), Limit, Count (values walked) and Past (the
+-- walk passed COPY_VALUES and stopped)
+local function Data(Value, State, Height)
+	local Walked = State.Count + 1
+	State.Count = Walked
+	if Walked > COPY_VALUES then
+		State.Past = true
+		return nil
+	end
 	local Kind = type(Value)
 	if Kind == "nil" then
-		return nil, 4
+		State.Size += 4
+		return nil
 	elseif Kind == "boolean" then
-		return Value, if Value then 4 else 5
+		State.Size += if Value then 4 else 5
+		return Value
 	elseif Kind == "number" then
-		return Value, #tostring(Value)
+		State.Size += #tostring(Value)
+		return Value
 	elseif Kind == "string" then
 		if utf8.len(Value) == nil then
-			return nil, nil, "string"
+			return nil, "string"
 		end
-		return Value, JsonStringLength(Value)
+		State.Size += JsonStringLength(Value)
+		return Value
 	elseif Kind == "buffer" then
 		local Length = buffer.len(Value)
+		State.Size += 36 + math.ceil(Length / 3) * 4
+		if State.Size > State.Limit then
+			return nil
+		end
 		local Copy = buffer.create(Length)
 		buffer.copy(Copy, 0, Value)
-		return Copy, 36 + math.ceil(Length / 3) * 4
+		return Copy
 	elseif Kind ~= "table" then
-		return nil, nil, typeof(Value)
+		return nil, typeof(Value)
 	end
+	local Seen = State.Seen
 	if Height > STACK_LIMIT then
 		error("Max lua stack size reached", 0)
 	elseif Seen[Value] then
@@ -143,46 +181,64 @@ local function Data(Value, Seen, Height)
 			end
 		end
 	end
-	local Copy, Size = {}, 2
+	State.Size += 2
+	local Copy = if State.Size > State.Limit then nil else {}
 	if IsArray then
 		for Index = 1, Length do
-			local Item, ItemSize, Bad = Data(rawget(Value, Index), Seen, Height + 1)
-			if Bad then
-				return nil, nil, Bad
+			if Index > 1 then
+				State.Size += 1
 			end
-			Copy[Index] = Item
-			Size += ItemSize + 1
+			local Item, Bad = Data(rawget(Value, Index), State, Height + 1)
+			if Bad or State.Past then
+				return nil, Bad
+			elseif Copy then
+				if State.Size > State.Limit then
+					Copy = nil
+				else
+					Copy[Index] = Item
+				end
+			end
 		end
 	else
+		local First = true
 		for Key, Item in next, Value do
 			if type(Key) ~= "string" then
-				return nil, nil, if type(Key) == "number" then "Array" else "Dictionary"
+				return nil, if type(Key) == "number" then "Array" else "Dictionary"
 			elseif utf8.len(Key) == nil then
-				return nil, nil, "string"
+				return nil, "string"
 			end
-			local Copied, ItemSize, Bad = Data(Item, Seen, Height + 2)
-			if Bad then
-				return nil, nil, Bad
+			-- (the key, its colon, and a separator before each entry but the first)
+			State.Size += JsonStringLength(Key) + if First then 1 else 2
+			First = false
+			local Copied, Bad = Data(Item, State, Height + 2)
+			if Bad or State.Past then
+				return nil, Bad
+			elseif Copy then
+				if State.Size > State.Limit then
+					Copy = nil
+				else
+					Copy[Key] = Copied
+				end
 			end
-			Copy[Key] = Copied
-			Size += JsonStringLength(Key) + ItemSize + 2
 		end
 	end
-	-- (each entry above counted a separator after it: the last has none)
-	if Count > 0 then
-		Size -= 1
-	end
 	Seen[Value] = nil
-	return Copy, Size
+	return Copy
 end
 
--- Data of a value whose outermost table sits at Height, the conversion's errors anywhere in it raised first
-local function Stored(Value, Height)
-	local Copy, Size, Bad = Data(Value, {}, Height)
+-- Data of a value whose outermost table sits at Height, for a store that takes at most Limit bytes (nil: no limit), the
+-- conversion's errors anywhere in it raised first: its copy (nil when longer than Limit), its JSON length (math.huge past
+-- ree's guard, larger than any store takes) and the kind that cannot be stored
+local function Stored(Value, Height, Limit)
+	local State = { Seen = {}, Size = 0, Limit = Limit or math.huge, Count = 0, Past = false }
+	local Copy, Bad = Data(Value, State, Height)
 	if Bad and type(Value) == "table" then
-		Converted(Value, Height, {})
+		Converted(Value, Height, { Ancestors = {}, Count = 0 })
 	end
-	return Copy, Size, Bad
+	if State.Past then
+		return nil, math.huge, nil
+	end
+	return Copy, State.Size, Bad
 end
 
 local function Clone(Value)
@@ -203,6 +259,7 @@ end
 -- DataStoreService
 
 local MAX_VALUE = 4194304
+local MAX_METADATA = 300
 local MAX_NAME = 50
 
 local Stores = {}
@@ -212,7 +269,7 @@ local OptionMetadata = setmetatable({}, { __mode = "k" })
 local Serial = 0
 
 local function Storable(Value, At, Height)
-	local Copy, Size, Bad = Stored(Value, Height)
+	local Copy, Size, Bad = Stored(Value, Height, MAX_VALUE)
 	if Bad then
 		Fail(`104: Cannot store {Bad} in data store. Data stores can only accept valid UTF-8 characters.`, At)
 	elseif Size > MAX_VALUE then
@@ -261,10 +318,10 @@ local function CheckMetadata(Metadata, At, Height)
 	if type(Metadata) ~= "table" then
 		Fail("513: Attribute metadata format is invalid.", At)
 	end
-	local Copy, Size, Bad = Stored(Metadata, Height)
+	local Copy, Size, Bad = Stored(Metadata, Height, MAX_METADATA)
 	if Bad or (next(Metadata) ~= nil and #Metadata > 0) then
 		Fail("513: Attribute metadata format is invalid.", At)
-	elseif Size > 300 then
+	elseif Size > MAX_METADATA then
 		Fail("511: Metadata attribute size exceeds 300 limit.", At)
 	end
 	return Copy
@@ -756,7 +813,7 @@ local function MemoryKey(Key, At)
 end
 
 local function MemoryValue(Value, At, Height)
-	local Copy, Size, Bad = Stored(Value, Height)
+	local Copy, Size, Bad = Stored(Value, Height, MAX_ITEM)
 	if Bad or Value == nil then
 		MemoryFail("InvalidRequest", "Unable to convert value to json.", At)
 	elseif Size > MAX_ITEM then
@@ -1099,6 +1156,8 @@ end)
 -- ({Data, Sent}) to this server's subscribers (the only server there is) a frame after it is called
 
 local Topics = {}
+-- (a message of at most 1 kB: Roblox's documentation)
+local MAX_MESSAGE = 1024
 
 local function Topic(Name, At)
 	if type(Name) ~= "string" then
@@ -1124,10 +1183,10 @@ Method("MessagingService", "SubscribeAsync", function(_, Name, Callback)
 end)
 Method("MessagingService", "PublishAsync", function(_, Name, Message)
 	Name = Topic(Name, At)
-	local Copy, Size, Bad = Stored(Message, 4)
+	local Copy, Size, Bad = Stored(Message, 4, MAX_MESSAGE)
 	if Bad then
 		Fail(`PublishAsync: cannot send {Bad}`, At)
-	elseif Size > 1024 then
+	elseif Size > MAX_MESSAGE then
 		Fail("PublishAsync: the message is larger than 1 kB", At)
 	end
 	task.wait()
@@ -1170,8 +1229,10 @@ R.SetJoinData = function(Player, Given)
 		JoinData[Player] = nil
 		return
 	end
-	local Copy, _, Bad = Stored(Given, 1)
-	if type(Copy) ~= "table" or Bad then
+	local Copy, Size, Bad = Stored(Given, 1)
+	if Size == math.huge then
+		error(`SetJoinData: {PAST_GUARD}`, 2)
+	elseif type(Copy) ~= "table" or Bad then
 		error(`SetJoinData: join data is a table of JSON-like data{if Bad then ` (not {Bad})` else ""}`, 2)
 	end
 	JoinData[Player] = Copy

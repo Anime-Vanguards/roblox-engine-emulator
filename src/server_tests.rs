@@ -294,6 +294,56 @@ fn stores_refuse_tables_nested_past_the_lua_stack() {
     }
 }
 
+/// A store converts a value as an event copies it, a table once for each place it appears (lua/bindable.rs), its time
+/// growing with what it writes (a 0.747 server: SetAsync of one table of 1,000 numbers held 8,000 times took 0.4 s, and a
+/// cycle after all of it still raised first). ree stops copying once the value's JSON is longer than the store takes, goes
+/// on looking for the errors that win over its size, and stops looking past its guard on a copy (bindable.rs
+/// `COPY_VALUES`) with the store's size error: the same 100,000 trues held 100,000 times (10^10 values without the guard)
+/// raise each store's size error, a cycle after 5 MB of them is still found, and a function before them still gives the 104
+/// error once the walk for a cycle stops at the guard. A value below the limits is stored whole, a table for each place.
+#[test]
+fn stores_stop_at_rees_guard_on_a_table_converted_for_each_place_it_appears() {
+    let lines = run(
+        RunContext::Server,
+        r#"
+        local Huge = table.create(100000, table.create(100000, true))
+        local Big = table.create(1000, table.create(1000, true))
+        local Ring = {}
+        Ring[1] = Ring
+        local function Try(Name, Call)
+            print(Name, pcall(Call))
+        end
+        local Store = game:GetService("DataStoreService"):GetDataStore("Breadth")
+        local Map = game:GetService("MemoryStoreService"):GetSortedMap("Breadth")
+        local Messaging = game:GetService("MessagingService")
+        Try("set huge", function() Store:SetAsync("k", Huge) end)
+        Try("update huge", function() Store:UpdateAsync("k", function() return Huge end) end)
+        Try("sorted huge", function() Map:SetAsync("k", Huge, 30) end)
+        Try("publish huge", function() Messaging:PublishAsync("t", Huge) end)
+        Try("set big", function() Store:SetAsync("k", Big) end)
+        Try("set big then ring", function() Store:SetAsync("k", { Big, Ring }) end)
+        Try("set function then huge", function() Store:SetAsync("k", { print, Huge }) end)
+        Try("set fan", function() Store:SetAsync("k", table.create(100, table.create(1000, true))) end)
+        local Read = Store:GetAsync("k")
+        print("read", #Read, #Read[100], Read[1] ~= Read[2])
+        "#,
+        3.0,
+    );
+    for (label, message) in [
+        ("set huge", "105: Serialized value exceeds 4MB limit."),
+        ("update huge", "105: Serialized value exceeds 4MB limit."),
+        ("sorted huge", "Code: ItemValueSizeTooLarge, Error: Value size exceeds limit (32 KB)."),
+        ("publish huge", "PublishAsync: the message is larger than 1 kB"),
+        ("set big", "105: Serialized value exceeds 4MB limit."),
+        ("set big then ring", "tables cannot be cyclic"),
+        ("set function then huge", "104: Cannot store function in data store. Data stores can only accept valid UTF-8 characters."),
+    ] {
+        assert!(has_error(&lines, &format!("{label} false"), message), "{label}: {lines:?}");
+    }
+    assert!(has(&lines, "print: set fan true"), "{lines:?}");
+    assert!(has(&lines, "print: read 100 1000 true"), "{lines:?}");
+}
+
 #[test]
 fn ordered_data_stores_page_by_value() {
     let lines = run(

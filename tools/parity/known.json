@@ -851,6 +851,12 @@
 			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
 		}
 	],
+	"table_breadth": [
+		{
+			"line": "json fan 10000x1000: ok 20020001",
+			"why": "ree stops a copy past its own guard of 4,194,304 values (lua/bindable.rs COPY_VALUES); a 0.747 client and server wrote all 10,000,000"
+		}
+	],
 	"text_bounds": [
 		{
 			"line": "Size = 0.5 reads 1 measures 4 1",
