@@ -246,3 +246,215 @@ interpolate scriptable ok
 loose pan ok  -14.142 0.000 14.142 0.707 0.000 -0.707 0.000 1.000 0.000 0.707 0.000 0.707
 loose tilt ok true -13.927 -3.473 13.927 0.707 -0.123 -0.696 0.000 0.985 -0.174 0.707 0.123 0.696
 loose zoom ok  -1.051 -0.262 1.051 0.707 -0.123 -0.696 0.000 0.985 -0.174 0.707 0.123 0.696
+cast string ScreenPointToRay x error Unable to cast string to float y error Unable to cast string to float depth error Unable to cast string to float
+cast string ViewportPointToRay x error Unable to cast string to float y error Unable to cast string to float depth error Unable to cast string to float
+cast string SetRoll error Unable to cast string to float 0
+cast string WorldToScreenPoint error Unable to cast string to Vector3 WorldToViewportPoint error Unable to cast string to Vector3
+cast string SetCameraPanMode error Unable to cast string to CameraPanMode
+cast string ZoomToExtents error Unable to cast string to CoordinateFrame size error Unable to cast string to Vector3
+cast string Interpolate error Unable to cast string to CoordinateFrame focus error Unable to cast string to CoordinateFrame duration error Unable to cast string to float
+cast string PanUnits error Unable to cast string to int
+cast numeric-string ScreenPointToRay x ok Ray -0.175051913 5.17505169 29.5 -0.313752234 0.313752234 -0.896169126 y ok Ray -0.175051913 5.17505169 29.5 -0.313752234 0.313752234 -0.896169126 depth ok Ray -0.253489971 4.74651003 29.2759571 -0.313752234 -0.313752234 -0.896169126
+cast numeric-string ViewportPointToRay x ok Ray -0.175051913 5.17505169 29.5 -0.313752234 0.313752234 -0.896169126 y ok Ray -0.175051913 5.17505169 29.5 -0.313752234 0.313752234 -0.896169126 depth ok Ray -0.253489971 4.74651003 29.2759571 -0.313752234 -0.313752234 -0.896169126
+cast numeric-string SetRoll ok 0.25
+cast numeric-string WorldToScreenPoint error Unable to cast string to Vector3 WorldToViewportPoint error Unable to cast string to Vector3
+cast numeric-string SetCameraPanMode error Unable to cast string to CameraPanMode
+cast numeric-string ZoomToExtents error Unable to cast string to CoordinateFrame size error Unable to cast string to Vector3
+cast numeric-string Interpolate error Unable to cast string to CoordinateFrame focus error Unable to cast string to CoordinateFrame duration error Attempted to use interpolation with a camera mode other than scriptable.
+cast numeric-string PanUnits ok
+cast true ScreenPointToRay x ok Ray 0.350103825 5.17505169 29.5 0.551350892 0.275675446 -0.787410557 y ok Ray -0.175051913 4.64989614 29.5 -0.275675446 -0.551350892 -0.787410557 depth ok Ray -0.488804162 4.51119566 28.6038303 -0.313752234 -0.313752234 -0.896169126
+cast true ViewportPointToRay x ok Ray 0.350103825 5.17505169 29.5 0.551350892 0.275675446 -0.787410557 y ok Ray -0.175051913 4.64989614 29.5 -0.275675446 -0.551350892 -0.787410557 depth ok Ray -0.488804162 4.51119566 28.6038303 -0.313752234 -0.313752234 -0.896169126
+cast true SetRoll ok 1
+cast true WorldToScreenPoint error Unable to cast bool to Vector3 WorldToViewportPoint error Unable to cast bool to Vector3
+cast true SetCameraPanMode error Unable to cast bool to CameraPanMode
+cast true ZoomToExtents error Unable to cast bool to CoordinateFrame size error Unable to cast bool to Vector3
+cast true Interpolate error Unable to cast bool to CoordinateFrame focus error Unable to cast bool to CoordinateFrame duration error Attempted to use interpolation with a camera mode other than scriptable.
+cast true PanUnits ok
+cast false ScreenPointToRay x ok Ray -0.350103825 5.17505169 29.5 -0.551350892 0.275675446 -0.787410557 y ok Ray -0.175051913 5.35010386 29.5 -0.275675446 0.551350892 -0.787410557 depth ok Ray -0.175051913 4.82494831 29.5 -0.313752234 -0.313752234 -0.896169126
+cast false ViewportPointToRay x ok Ray -0.350103825 5.17505169 29.5 -0.551350892 0.275675446 -0.787410557 y ok Ray -0.175051913 5.35010386 29.5 -0.275675446 0.551350892 -0.787410557 depth ok Ray -0.175051913 4.82494831 29.5 -0.313752234 -0.313752234 -0.896169126
+cast false SetRoll ok 0
+cast false WorldToScreenPoint error Unable to cast bool to Vector3 WorldToViewportPoint error Unable to cast bool to Vector3
+cast false SetCameraPanMode error Unable to cast bool to CameraPanMode
+cast false ZoomToExtents error Unable to cast bool to CoordinateFrame size error Unable to cast bool to Vector3
+cast false Interpolate error Unable to cast bool to CoordinateFrame focus error Unable to cast bool to CoordinateFrame duration error Interpolation time must be positive.
+cast false PanUnits ok
+cast array ScreenPointToRay x error Unable to cast Array to float y error Unable to cast Array to float depth error Unable to cast Array to float
+cast array ViewportPointToRay x error Unable to cast Array to float y error Unable to cast Array to float depth error Unable to cast Array to float
+cast array SetRoll error Unable to cast Array to float 0
+cast array WorldToScreenPoint error Unable to cast Array to Vector3 WorldToViewportPoint error Unable to cast Array to Vector3
+cast array SetCameraPanMode error Unable to cast Array to CameraPanMode
+cast array ZoomToExtents error Unable to cast Array to CoordinateFrame size error Unable to cast Array to Vector3
+cast array Interpolate error Unable to cast Array to CoordinateFrame focus error Unable to cast Array to CoordinateFrame duration error Unable to cast Array to float
+cast array PanUnits error Unable to cast Array to int
+cast empty-table ScreenPointToRay x error Unable to cast Array to float y error Unable to cast Array to float depth error Unable to cast Array to float
+cast empty-table ViewportPointToRay x error Unable to cast Array to float y error Unable to cast Array to float depth error Unable to cast Array to float
+cast empty-table SetRoll error Unable to cast Array to float 0
+cast empty-table WorldToScreenPoint error Unable to cast Array to Vector3 WorldToViewportPoint error Unable to cast Array to Vector3
+cast empty-table SetCameraPanMode error Unable to cast Array to CameraPanMode
+cast empty-table ZoomToExtents error Unable to cast Array to CoordinateFrame size error Unable to cast Array to Vector3
+cast empty-table Interpolate error Unable to cast Array to CoordinateFrame focus error Unable to cast Array to CoordinateFrame duration error Unable to cast Array to float
+cast empty-table PanUnits error Unable to cast Array to int
+cast dictionary ScreenPointToRay x error Unable to cast Dictionary to float y error Unable to cast Dictionary to float depth error Unable to cast Dictionary to float
+cast dictionary ViewportPointToRay x error Unable to cast Dictionary to float y error Unable to cast Dictionary to float depth error Unable to cast Dictionary to float
+cast dictionary SetRoll error Unable to cast Dictionary to float 0
+cast dictionary WorldToScreenPoint error Unable to cast Dictionary to Vector3 WorldToViewportPoint error Unable to cast Dictionary to Vector3
+cast dictionary SetCameraPanMode error Unable to cast Dictionary to CameraPanMode
+cast dictionary ZoomToExtents error Unable to cast Dictionary to CoordinateFrame size error Unable to cast Dictionary to Vector3
+cast dictionary Interpolate error Unable to cast Dictionary to CoordinateFrame focus error Unable to cast Dictionary to CoordinateFrame duration error Unable to cast Dictionary to float
+cast dictionary PanUnits error Unable to cast Dictionary to int
+cast Instance ScreenPointToRay x error Unable to cast Instance to float y error Unable to cast Instance to float depth error Unable to cast Instance to float
+cast Instance ViewportPointToRay x error Unable to cast Instance to float y error Unable to cast Instance to float depth error Unable to cast Instance to float
+cast Instance SetRoll error Unable to cast Instance to float 0
+cast Instance WorldToScreenPoint error Unable to cast Instance to Vector3 WorldToViewportPoint error Unable to cast Instance to Vector3
+cast Instance SetCameraPanMode error Unable to cast Instance to CameraPanMode
+cast Instance ZoomToExtents error Unable to cast Instance to CoordinateFrame size error Unable to cast Instance to Vector3
+cast Instance Interpolate error Unable to cast Instance to CoordinateFrame focus error Unable to cast Instance to CoordinateFrame duration error Unable to cast Instance to float
+cast Instance PanUnits error Unable to cast Instance to int
+cast Vector3 ScreenPointToRay x error Unable to cast Vector3 to float y error Unable to cast Vector3 to float depth error Unable to cast Vector3 to float
+cast Vector3 ViewportPointToRay x error Unable to cast Vector3 to float y error Unable to cast Vector3 to float depth error Unable to cast Vector3 to float
+cast Vector3 SetRoll error Unable to cast Vector3 to float 0
+cast Vector3 WorldToScreenPoint ok 0.524623215 0.59849298 29 boolean true WorldToViewportPoint ok 0.524623215 0.59849298 29 boolean true
+cast Vector3 SetCameraPanMode error Unable to cast Vector3 to CameraPanMode
+cast Vector3 ZoomToExtents error Unable to cast Vector3 to CoordinateFrame size ok
+cast Vector3 Interpolate error Unable to cast Vector3 to CoordinateFrame focus error Unable to cast Vector3 to CoordinateFrame duration error Unable to cast Vector3 to float
+cast Vector3 PanUnits error Unable to cast Vector3 to int
+cast Vector2 ScreenPointToRay x error Unable to cast Vector2 to float y error Unable to cast Vector2 to float depth error Unable to cast Vector2 to float
+cast Vector2 ViewportPointToRay x error Unable to cast Vector2 to float y error Unable to cast Vector2 to float depth error Unable to cast Vector2 to float
+cast Vector2 SetRoll error Unable to cast Vector2 to float 0
+cast Vector2 WorldToScreenPoint error Unable to cast Vector2 to Vector3 WorldToViewportPoint error Unable to cast Vector2 to Vector3
+cast Vector2 SetCameraPanMode error Unable to cast Vector2 to CameraPanMode
+cast Vector2 ZoomToExtents error Unable to cast Vector2 to CoordinateFrame size error Unable to cast Vector2 to Vector3
+cast Vector2 Interpolate error Unable to cast Vector2 to CoordinateFrame focus error Unable to cast Vector2 to CoordinateFrame duration error Unable to cast Vector2 to float
+cast Vector2 PanUnits error Unable to cast Vector2 to int
+cast CFrame ScreenPointToRay x error Unable to cast CoordinateFrame to float y error Unable to cast CoordinateFrame to float depth error Unable to cast CoordinateFrame to float
+cast CFrame ViewportPointToRay x error Unable to cast CoordinateFrame to float y error Unable to cast CoordinateFrame to float depth error Unable to cast CoordinateFrame to float
+cast CFrame SetRoll error Unable to cast CoordinateFrame to float 0
+cast CFrame WorldToScreenPoint error Unable to cast CoordinateFrame to Vector3 WorldToViewportPoint error Unable to cast CoordinateFrame to Vector3
+cast CFrame SetCameraPanMode error Unable to cast CoordinateFrame to CameraPanMode
+cast CFrame ZoomToExtents ok size error Unable to cast CoordinateFrame to Vector3
+cast CFrame Interpolate error Attempted to use interpolation with a camera mode other than scriptable. focus error Attempted to use interpolation with a camera mode other than scriptable. duration error Unable to cast CoordinateFrame to float
+cast CFrame PanUnits error Unable to cast CoordinateFrame to int
+cast Color3 ScreenPointToRay x error Unable to cast Color3 to float y error Unable to cast Color3 to float depth error Unable to cast Color3 to float
+cast Color3 ViewportPointToRay x error Unable to cast Color3 to float y error Unable to cast Color3 to float depth error Unable to cast Color3 to float
+cast Color3 SetRoll error Unable to cast Color3 to float 0
+cast Color3 WorldToScreenPoint error Unable to cast Color3 to Vector3 WorldToViewportPoint error Unable to cast Color3 to Vector3
+cast Color3 SetCameraPanMode error Unable to cast Color3 to CameraPanMode
+cast Color3 ZoomToExtents error Unable to cast Color3 to CoordinateFrame size error Unable to cast Color3 to Vector3
+cast Color3 Interpolate error Unable to cast Color3 to CoordinateFrame focus error Unable to cast Color3 to CoordinateFrame duration error Unable to cast Color3 to float
+cast Color3 PanUnits error Unable to cast Color3 to int
+cast KeyCode ScreenPointToRay x error Unable to cast KeyCode to float y error Unable to cast KeyCode to float depth error Unable to cast KeyCode to float
+cast KeyCode ViewportPointToRay x error Unable to cast KeyCode to float y error Unable to cast KeyCode to float depth error Unable to cast KeyCode to float
+cast KeyCode SetRoll error Unable to cast KeyCode to float 0
+cast KeyCode WorldToScreenPoint error Unable to cast KeyCode to Vector3 WorldToViewportPoint error Unable to cast KeyCode to Vector3
+cast KeyCode SetCameraPanMode error Unable to cast KeyCode to CameraPanMode
+cast KeyCode ZoomToExtents error Unable to cast KeyCode to CoordinateFrame size error Unable to cast KeyCode to Vector3
+cast KeyCode Interpolate error Unable to cast KeyCode to CoordinateFrame focus error Unable to cast KeyCode to CoordinateFrame duration error Unable to cast KeyCode to float
+cast KeyCode PanUnits error Unable to cast KeyCode to int
+cast CameraPanMode ScreenPointToRay x error Unable to cast CameraPanMode to float y error Unable to cast CameraPanMode to float depth error Unable to cast CameraPanMode to float
+cast CameraPanMode ViewportPointToRay x error Unable to cast CameraPanMode to float y error Unable to cast CameraPanMode to float depth error Unable to cast CameraPanMode to float
+cast CameraPanMode SetRoll error Unable to cast CameraPanMode to float 0
+cast CameraPanMode WorldToScreenPoint error Unable to cast CameraPanMode to Vector3 WorldToViewportPoint error Unable to cast CameraPanMode to Vector3
+cast CameraPanMode SetCameraPanMode ok
+cast CameraPanMode ZoomToExtents error Unable to cast CameraPanMode to CoordinateFrame size error Unable to cast CameraPanMode to Vector3
+cast CameraPanMode Interpolate error Unable to cast CameraPanMode to CoordinateFrame focus error Unable to cast CameraPanMode to CoordinateFrame duration error Unable to cast CameraPanMode to float
+cast CameraPanMode PanUnits error Unable to cast CameraPanMode to int
+cast Enum ScreenPointToRay x error Unable to cast null to float y error Unable to cast null to float depth error Unable to cast null to float
+cast Enum ViewportPointToRay x error Unable to cast null to float y error Unable to cast null to float depth error Unable to cast null to float
+cast Enum SetRoll error Unable to cast null to float 0
+cast Enum WorldToScreenPoint error Unable to cast null to Vector3 WorldToViewportPoint error Unable to cast null to Vector3
+cast Enum SetCameraPanMode error Unable to cast null to CameraPanMode
+cast Enum ZoomToExtents error Unable to cast null to CoordinateFrame size error Unable to cast null to Vector3
+cast Enum Interpolate error Unable to cast null to CoordinateFrame focus error Unable to cast null to CoordinateFrame duration error Unable to cast null to float
+cast Enum PanUnits error Unable to cast null to int
+cast Enums ScreenPointToRay x error Unable to cast null to float y error Unable to cast null to float depth error Unable to cast null to float
+cast Enums ViewportPointToRay x error Unable to cast null to float y error Unable to cast null to float depth error Unable to cast null to float
+cast Enums SetRoll error Unable to cast null to float 0
+cast Enums WorldToScreenPoint error Unable to cast null to Vector3 WorldToViewportPoint error Unable to cast null to Vector3
+cast Enums SetCameraPanMode error Unable to cast null to CameraPanMode
+cast Enums ZoomToExtents error Unable to cast null to CoordinateFrame size error Unable to cast null to Vector3
+cast Enums Interpolate error Unable to cast null to CoordinateFrame focus error Unable to cast null to CoordinateFrame duration error Unable to cast null to float
+cast Enums PanUnits error Unable to cast null to int
+cast function ScreenPointToRay x error Unable to cast Function to float y error Unable to cast Function to float depth error Unable to cast Function to float
+cast function ViewportPointToRay x error Unable to cast Function to float y error Unable to cast Function to float depth error Unable to cast Function to float
+cast function SetRoll error Unable to cast Function to float 0
+cast function WorldToScreenPoint error Unable to cast Function to Vector3 WorldToViewportPoint error Unable to cast Function to Vector3
+cast function SetCameraPanMode error Unable to cast Function to CameraPanMode
+cast function ZoomToExtents error Unable to cast Function to CoordinateFrame size error Unable to cast Function to Vector3
+cast function Interpolate error Unable to cast Function to CoordinateFrame focus error Unable to cast Function to CoordinateFrame duration error Unable to cast Function to float
+cast function PanUnits error Unable to cast Function to int
+cast thread ScreenPointToRay x error Unable to cast null to float y error Unable to cast null to float depth error Unable to cast null to float
+cast thread ViewportPointToRay x error Unable to cast null to float y error Unable to cast null to float depth error Unable to cast null to float
+cast thread SetRoll error Unable to cast null to float 0
+cast thread WorldToScreenPoint error Unable to cast null to Vector3 WorldToViewportPoint error Unable to cast null to Vector3
+cast thread SetCameraPanMode error Unable to cast null to CameraPanMode
+cast thread ZoomToExtents error Unable to cast null to CoordinateFrame size error Unable to cast null to Vector3
+cast thread Interpolate error Unable to cast null to CoordinateFrame focus error Unable to cast null to CoordinateFrame duration error Unable to cast null to float
+cast thread PanUnits error Unable to cast null to int
+cast buffer ScreenPointToRay x error Unable to cast buffer to float y error Unable to cast buffer to float depth error Unable to cast buffer to float
+cast buffer ViewportPointToRay x error Unable to cast buffer to float y error Unable to cast buffer to float depth error Unable to cast buffer to float
+cast buffer SetRoll error Unable to cast buffer to float 0
+cast buffer WorldToScreenPoint error Unable to cast buffer to Vector3 WorldToViewportPoint error Unable to cast buffer to Vector3
+cast buffer SetCameraPanMode error Unable to cast buffer to CameraPanMode
+cast buffer ZoomToExtents error Unable to cast buffer to CoordinateFrame size error Unable to cast buffer to Vector3
+cast buffer Interpolate error Unable to cast buffer to CoordinateFrame focus error Unable to cast buffer to CoordinateFrame duration error Unable to cast buffer to float
+cast buffer PanUnits error Unable to cast buffer to int
+cast userdata ScreenPointToRay x error Unable to cast null to float y error Unable to cast null to float depth error Unable to cast null to float
+cast userdata ViewportPointToRay x error Unable to cast null to float y error Unable to cast null to float depth error Unable to cast null to float
+cast userdata SetRoll error Unable to cast null to float 0
+cast userdata WorldToScreenPoint error Unable to cast null to Vector3 WorldToViewportPoint error Unable to cast null to Vector3
+cast userdata SetCameraPanMode error Unable to cast null to CameraPanMode
+cast userdata ZoomToExtents error Unable to cast null to CoordinateFrame size error Unable to cast null to Vector3
+cast userdata Interpolate error Unable to cast null to CoordinateFrame focus error Unable to cast null to CoordinateFrame duration error Unable to cast null to float
+cast userdata PanUnits error Unable to cast null to int
+cast RBXScriptSignal ScreenPointToRay x error Unable to cast EventInstance to float y error Unable to cast EventInstance to float depth error Unable to cast EventInstance to float
+cast RBXScriptSignal ViewportPointToRay x error Unable to cast EventInstance to float y error Unable to cast EventInstance to float depth error Unable to cast EventInstance to float
+cast RBXScriptSignal SetRoll error Unable to cast EventInstance to float 0
+cast RBXScriptSignal WorldToScreenPoint error Unable to cast EventInstance to Vector3 WorldToViewportPoint error Unable to cast EventInstance to Vector3
+cast RBXScriptSignal SetCameraPanMode error Unable to cast EventInstance to CameraPanMode
+cast RBXScriptSignal ZoomToExtents error Unable to cast EventInstance to CoordinateFrame size error Unable to cast EventInstance to Vector3
+cast RBXScriptSignal Interpolate error Unable to cast EventInstance to CoordinateFrame focus error Unable to cast EventInstance to CoordinateFrame duration error Unable to cast EventInstance to float
+cast RBXScriptSignal PanUnits error Unable to cast EventInstance to int
+cast nan ScreenPointToRay x ok Ray nan nan nan nan nan nan y ok Ray nan nan nan nan nan nan depth ok Ray nan nan nan -0.313752234 -0.313752234 -0.896169126
+cast nan ViewportPointToRay x ok Ray nan nan nan nan nan nan y ok Ray nan nan nan nan nan nan depth ok Ray nan nan nan -0.313752234 -0.313752234 -0.896169126
+cast nan SetRoll ok nan
+cast nan WorldToScreenPoint error Unable to cast double to Vector3 WorldToViewportPoint error Unable to cast double to Vector3
+cast nan SetCameraPanMode error Unable to cast double to CameraPanMode
+cast nan ZoomToExtents error Unable to cast double to CoordinateFrame size error Unable to cast double to Vector3
+cast nan Interpolate error Unable to cast double to CoordinateFrame focus error Unable to cast double to CoordinateFrame duration error Attempted to use interpolation with a camera mode other than scriptable.
+cast nan PanUnits ok
+cast inf ScreenPointToRay x ok Ray nan nan nan nan nan nan y ok Ray nan nan nan nan nan nan depth ok Ray -inf -inf -inf -0.313752234 -0.313752234 -0.896169126
+cast inf ViewportPointToRay x ok Ray nan nan nan nan nan nan y ok Ray nan nan nan nan nan nan depth ok Ray -inf -inf -inf -0.313752234 -0.313752234 -0.896169126
+cast inf SetRoll ok inf
+cast inf WorldToScreenPoint error Unable to cast double to Vector3 WorldToViewportPoint error Unable to cast double to Vector3
+cast inf SetCameraPanMode error Unable to cast double to CameraPanMode
+cast inf ZoomToExtents error Unable to cast double to CoordinateFrame size error Unable to cast double to Vector3
+cast inf Interpolate error Unable to cast double to CoordinateFrame focus error Unable to cast double to CoordinateFrame duration error Attempted to use interpolation with a camera mode other than scriptable.
+cast inf PanUnits ok
+cast -0 ScreenPointToRay x ok Ray -0.350103825 5.17505169 29.5 -0.551350892 0.275675446 -0.787410557 y ok Ray -0.175051913 5.35010386 29.5 -0.275675446 0.551350892 -0.787410557 depth ok Ray -0.175051913 4.82494831 29.5 -0.313752234 -0.313752234 -0.896169126
+cast -0 ViewportPointToRay x ok Ray -0.350103825 5.17505169 29.5 -0.551350892 0.275675446 -0.787410557 y ok Ray -0.175051913 5.35010386 29.5 -0.275675446 0.551350892 -0.787410557 depth ok Ray -0.175051913 4.82494831 29.5 -0.313752234 -0.313752234 -0.896169126
+cast -0 SetRoll ok -0
+cast -0 WorldToScreenPoint error Unable to cast double to Vector3 WorldToViewportPoint error Unable to cast double to Vector3
+cast -0 SetCameraPanMode ok
+cast -0 ZoomToExtents error Unable to cast double to CoordinateFrame size error Unable to cast double to Vector3
+cast -0 Interpolate error Unable to cast double to CoordinateFrame focus error Unable to cast double to CoordinateFrame duration error Interpolation time must be positive.
+cast -0 PanUnits ok
+cast 1e40 ScreenPointToRay x ok Ray nan nan nan nan nan nan y ok Ray nan nan nan nan nan nan depth ok Ray -inf -inf -inf -0.313752234 -0.313752234 -0.896169126
+cast 1e40 ViewportPointToRay x ok Ray nan nan nan nan nan nan y ok Ray nan nan nan nan nan nan depth ok Ray -inf -inf -inf -0.313752234 -0.313752234 -0.896169126
+cast 1e40 SetRoll ok inf
+cast 1e40 WorldToScreenPoint error Unable to cast double to Vector3 WorldToViewportPoint error Unable to cast double to Vector3
+cast 1e40 SetCameraPanMode error Unable to cast double to CameraPanMode
+cast 1e40 ZoomToExtents error Unable to cast double to CoordinateFrame size error Unable to cast double to Vector3
+cast 1e40 Interpolate error Unable to cast double to CoordinateFrame focus error Unable to cast double to CoordinateFrame duration error Attempted to use interpolation with a camera mode other than scriptable.
+cast 1e40 PanUnits ok
+args ScreenPointToRay none error Argument 2 missing or nil x only error Argument 2 missing or nil nil nil error Argument 2 missing or nil nil y error Argument 1 missing or nil
+args ScreenPointToRay x nil error Argument 2 missing or nil depth nil ok Ray -0.175051913 4.82494831 29.5 -0.313752234 -0.313752234 -0.896169126 extra ok Ray -0.488804162 4.51119566 28.6038303 -0.313752234 -0.313752234 -0.896169126
+args ScreenPointToRay x and y bad error Unable to cast Instance to float x and depth bad error Unable to cast KeyCode to float all bad error Unable to cast KeyCode to float
+args ViewportPointToRay none error Argument 2 missing or nil x only error Argument 2 missing or nil nil nil error Argument 2 missing or nil nil y error Argument 1 missing or nil
+args ViewportPointToRay x nil error Argument 2 missing or nil depth nil ok Ray -0.175051913 4.82494831 29.5 -0.313752234 -0.313752234 -0.896169126 extra ok Ray -0.488804162 4.51119566 28.6038303 -0.313752234 -0.313752234 -0.896169126
+args ViewportPointToRay x and y bad error Unable to cast Instance to float x and depth bad error Unable to cast KeyCode to float all bad error Unable to cast KeyCode to float
+args SetRoll none error Argument 1 missing or nil nil error Argument 1 missing or nil extra ok 0.5
+args WorldToScreenPoint none error Argument 1 missing or nil nil error Argument 1 missing or nil extra ok 0.523802459 0.476197541 30 boolean true
+args WorldToViewportPoint none error Argument 1 missing or nil nil error Argument 1 missing or nil extra ok 0.523802459 0.476197541 30 boolean true
+args SetCameraPanMode none ok nil ok extra ok
+cast SetCameraPanMode fractional ok ok ok error Unable to cast double to CameraPanMode
+cast current error Unable to cast Instance to float error Unable to cast KeyCode to float error Unable to cast Instance to Vector3 error Unable to cast KeyCode to Vector3 error Unable to cast Instance to float error Unable to cast Instance to CameraPanMode

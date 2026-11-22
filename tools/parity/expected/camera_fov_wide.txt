@@ -103,3 +103,59 @@ cutoff plate from y 0.065000000000000002 37.950
 cutoff plate from y 0.069000000000000006 37.950
 cutoff plate from y 0.070999999999999994 0.000
 cutoff plate from y 0.074999999999999997 0.000
+screen start viewport 1920 1080 -0.10000000149011612
+screen start ray 0 0 is the viewport ray at y + inset true
+screen start ray 0.25 0.75 is the viewport ray at y + inset true
+screen start ray 1 1 is the viewport ray at y + inset true
+screen start ray 300 100 is the viewport ray at y + inset true
+screen start ray 960 482 is the viewport ray at y + inset true
+screen start ray 1919 1021 is the viewport ray at y + inset true
+screen start point is the viewport point less the inset true 1017.83972 501.440063 40 true
+screen start point is the viewport point less the inset true 960 540 30 true
+screen start point is the viewport point less the inset true 863.599915 588.200073 80 true
+screen start point is the viewport point less the inset true 960 540 -10 false
+screen new viewport 1 1 -0.5
+screen new ray 0 0 is the viewport ray at y true
+screen new ray 0.25 0.75 is the viewport ray at y true
+screen new ray 1 1 is the viewport ray at y true
+screen new ray 300 100 is the viewport ray at y true
+screen new ray 960 482 is the viewport ray at y true
+screen new ray 1919 1021 is the viewport ray at y true
+screen new point is the viewport point true 0.553555667 0.464296341 40 true
+screen new point is the viewport point true 0.5 0.5 30 true
+screen new point is the viewport point true 0.410740852 0.544629693 80 true
+screen new point is the viewport point true 0.5 0.5 -10 false
+screen loose viewport 1 1 -0.5
+screen loose ray 0 0 is the viewport ray at y true
+screen loose ray 0.25 0.75 is the viewport ray at y true
+screen loose ray 1 1 is the viewport ray at y true
+screen loose ray 300 100 is the viewport ray at y true
+screen loose ray 960 482 is the viewport ray at y true
+screen loose ray 1919 1021 is the viewport ray at y true
+screen loose point is the viewport point true 0.553555667 0.464296341 40 true
+screen loose point is the viewport point true 0.5 0.5 30 true
+screen loose point is the viewport point true 0.410740852 0.544629693 80 true
+screen loose point is the viewport point true 0.5 0.5 -10 false
+screen new, just made current viewport 1 1 -0.5
+screen new, just made current ray 0 0 is the viewport ray at y true
+screen new, just made current ray 0.25 0.75 is the viewport ray at y true
+screen new, just made current ray 1 1 is the viewport ray at y true
+screen new, just made current ray 300 100 is the viewport ray at y true
+screen new, just made current ray 960 482 is the viewport ray at y true
+screen new, just made current ray 1919 1021 is the viewport ray at y true
+screen new, just made current point is the viewport point true 0.553555667 0.464296341 40 true
+screen new, just made current point is the viewport point true 0.5 0.5 30 true
+screen new, just made current point is the viewport point true 0.410740852 0.544629693 80 true
+screen new, just made current point is the viewport point true 0.5 0.5 -10 false
+screen start, no longer current viewport 1920 1080 -0.10000000149011612
+screen start, no longer current ray 0 0 is the viewport ray at y + inset true
+screen start, no longer current ray 0.25 0.75 is the viewport ray at y + inset true
+screen start, no longer current ray 1 1 is the viewport ray at y + inset true
+screen start, no longer current ray 300 100 is the viewport ray at y + inset true
+screen start, no longer current ray 960 482 is the viewport ray at y + inset true
+screen start, no longer current ray 1919 1021 is the viewport ray at y + inset true
+screen start, no longer current point is the viewport point less the inset true 1017.83972 501.440063 40 true
+screen start, no longer current point is the viewport point less the inset true 960 540 30 true
+screen start, no longer current point is the viewport point less the inset true 863.599915 588.200073 80 true
+screen start, no longer current point is the viewport point less the inset true 960 540 -10 false
+screen new, a frame after it was made current viewport 1920 1080 -0.10000000149011612

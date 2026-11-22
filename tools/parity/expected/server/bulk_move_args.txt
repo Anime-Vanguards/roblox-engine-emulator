@@ -1,0 +1,46 @@
+# engine: Roblox Studio 0.748.0.7481526, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+bulk none error Argument 2 missing or nil
+bulk nil error Argument 2 missing or nil
+bulk nil nil error Argument 2 missing or nil
+bulk list nil error Argument 2 missing or nil
+bulk nil list error Expected table argument, got nil
+bulk list only error Argument 2 missing or nil
+bulk string string error Unable to cast string to Array
+bulk Instance Instance error Unable to cast Instance to Array
+bulk string list error Expected table argument, got string
+bulk list string error Unable to cast string to Array
+bulk dictionary list ok 
+bulk dictionary dictionary error Unable to cast Dictionary to Array
+bulk part, string error Unable to cast string to Array
+bulk bad entry, string error Unable to cast string to Array
+bulk bad entry, dictionary error Unable to cast Dictionary to Array
+bulk part, no frames error Length of part list (1) and length of CFrame list (0) do not match.
+bulk no parts, a frame error Length of part list (0) and length of CFrame list (1) do not match.
+bulk vector entry, no frames error Unable to cast value to Object
+bulk Instance list error Expected table argument, got userdata
+bulk Instance nil error Argument 2 missing or nil
+bulk nil Instance error Unable to cast Instance to Array
+bulk KeyCode list error Expected table argument, got userdata
+bulk list KeyCode error Unable to cast KeyCode to Array
+bulk Vector3 list error Expected table argument, got vector
+bulk function list error Expected table argument, got function
+bulk list function error Unable to cast Function to Array
+bulk hole ok 
+bulk frame entry number error CFrame list must only contain CFrames, cframeList[1] is a double.
+bulk frame entry boolean error CFrame list must only contain CFrames, cframeList[1] is a bool.
+bulk frame entry string error CFrame list must only contain CFrames, cframeList[1] is a string.
+bulk frame entry Instance error CFrame list must only contain CFrames, cframeList[1] is a Instance.
+bulk frame entry EnumItem error CFrame list must only contain CFrames, cframeList[1] is a KeyCode.
+bulk frame entry Vector3 error CFrame list must only contain CFrames, cframeList[1] is a Vector3.
+bulk frame entry table error CFrame list must only contain CFrames, cframeList[1] is a Array.
+bulk frame entry function error CFrame list must only contain CFrames, cframeList[1] is a Function.
+bulk mode string x error Unable to cast string to BulkMoveMode
+bulk mode number 0.5 ok 
+bulk mode number 5 error Unable to cast double to BulkMoveMode
+bulk mode EnumItem Enum.KeyCode.A error Unable to cast KeyCode to BulkMoveMode
+bulk mode Instance Workspace error Unable to cast Instance to BulkMoveMode
+bulk mode string FireCFrameChanged ok 
+bulk mode number 1 ok 
+bulk mode EnumItem Enum.BulkMoveMode.FireAllEvents ok 
+bulk mode order error Unable to cast string to BulkMoveMode error Unable to cast string to BulkMoveMode error Unable to cast string to BulkMoveMode

@@ -154,3 +154,85 @@ Loose.Focus = CFrame.new(0, 0, 0)
 print("loose pan", P.try(Loose.PanUnits, Loose, 1), C(Loose.CFrame))
 print("loose tilt", P.try(Loose.TiltUnits, Loose, 1), C(Loose.CFrame))
 print("loose zoom", P.try(Loose.ZoomToExtents, Loose, CFrame.new(), Vector3.one), C(Loose.CFrame))
+
+-- The argument casts of the projections, SetRoll, SetCameraPanMode, ZoomToExtents, Interpolate and PanUnits, a line for each
+-- value and method (each argument in turn, the others valid): an Instance is named Instance, an EnumItem by its enum, a
+-- function Function, a signal EventInstance, an Enum, Enums, thread or plain userdata null (world/camera.rs cast_name). A ray's
+-- zero components print as 0 (their sign is not modelled).
+do
+	local function N(X)
+		return if X == 0 then "0" else P.f32(X)
+	end
+	local function Show(V)
+		local T = typeof(V)
+		if T == "Ray" then
+			return "Ray " .. table.concat({ N(V.Origin.X), N(V.Origin.Y), N(V.Origin.Z), N(V.Direction.X), N(V.Direction.Y), N(V.Direction.Z) }, " ")
+		elseif T == "Vector3" then
+			return table.concat({ N(V.X), N(V.Y), N(V.Z) }, " ")
+		end
+		return T .. " " .. tostring(V)
+	end
+	local function Try(F, ...)
+		local Out = table.pack(pcall(F, ...))
+		if not Out[1] then
+			return "error " .. P.err(Out[2])
+		end
+		local Parts = { "ok" }
+		for I = 2, Out.n do
+			table.insert(Parts, Show(Out[I]))
+		end
+		return table.concat(Parts, " ")
+	end
+	local Kinds = {
+		{ "string", "x" }, { "numeric-string", "0.25" }, { "true", true }, { "false", false }, { "array", { 1 } },
+		{ "empty-table", {} }, { "dictionary", { a = 1 } }, { "Instance", workspace }, { "Vector3", Vector3.one },
+		{ "Vector2", Vector2.one }, { "CFrame", CFrame.new() }, { "Color3", Color3.new() }, { "KeyCode", Enum.KeyCode.A },
+		{ "CameraPanMode", Enum.CameraPanMode.EdgeBump }, { "Enum", Enum.KeyCode }, { "Enums", Enum }, { "function", print },
+		{ "thread", coroutine.create(function() end) }, { "buffer", buffer.create(1) }, { "userdata", newproxy() },
+		{ "RBXScriptSignal", workspace.Changed }, { "nan", 0 / 0 }, { "inf", math.huge }, { "-0", -0 }, { "1e40", 1e40 },
+	}
+	local Caster = Instance.new("Camera")
+	Caster.CameraType = Enum.CameraType.Scriptable
+	Caster.CFrame = CFrame.lookAt(Vector3.new(0, 5, 30), Vector3.new(0, 5, 0))
+	Caster.Parent = workspace
+	-- (Fixed: Interpolate casts its arguments before it checks CameraType)
+	local Still = Instance.new("Camera")
+	Still.Parent = workspace
+	local Zoomer = Instance.new("Camera")
+	Zoomer.Parent = workspace
+	local From, To = CFrame.new(1, 2, 3), CFrame.new(4, 5, 6)
+	local W = Vector3.new(1, 6, 0)
+	for _, K in Kinds do
+		local Name, X = K[1], K[2]
+		for _, M in { "ScreenPointToRay", "ViewportPointToRay" } do
+			local F = (Caster :: any)[M]
+			print("cast", Name, M, "x", Try(F, Caster, X, 0.25), "y", Try(F, Caster, 0.25, X), "depth", Try(F, Caster, 0.25, 0.75, X))
+		end
+		print("cast", Name, "SetRoll", Try(Caster.SetRoll, Caster, X), P.num(Caster:GetRoll()))
+		Caster:SetRoll(0)
+		print("cast", Name, "WorldToScreenPoint", Try(Caster.WorldToScreenPoint, Caster, X), "WorldToViewportPoint", Try(Caster.WorldToViewportPoint, Caster, X))
+		print("cast", Name, "SetCameraPanMode", Try(Caster.SetCameraPanMode, Caster, X))
+		print("cast", Name, "ZoomToExtents", Try(Zoomer.ZoomToExtents, Zoomer, X, Vector3.one), "size", Try(Zoomer.ZoomToExtents, Zoomer, CFrame.new(), X))
+		print("cast", Name, "Interpolate", Try(Still.Interpolate, Still, X, To, 1), "focus", Try(Still.Interpolate, Still, From, X, 1), "duration", Try(Still.Interpolate, Still, From, To, X))
+		print("cast", Name, "PanUnits", Try(Still.PanUnits, Still, X))
+	end
+	-- missing, nil and extra arguments; the rays check theirs from the last to the first
+	for _, M in { "ScreenPointToRay", "ViewportPointToRay" } do
+		local F = (Caster :: any)[M]
+		print("args", M, "none", Try(F, Caster), "x only", Try(F, Caster, 1), "nil nil", Try(F, Caster, nil, nil), "nil y", Try(F, Caster, nil, 1))
+		print("args", M, "x nil", Try(F, Caster, 1, nil), "depth nil", Try(F, Caster, 0.25, 0.75, nil), "extra", Try(F, Caster, 0.25, 0.75, 1, "extra", workspace))
+		print("args", M, "x and y bad", Try(F, Caster, "a", workspace), "x and depth bad", Try(F, Caster, workspace, 1, Enum.KeyCode.A), "all bad", Try(F, Caster, workspace, "a", Enum.KeyCode.A))
+	end
+	print("args SetRoll", "none", Try(Caster.SetRoll, Caster), "nil", Try(Caster.SetRoll, Caster, nil), "extra", Try(Caster.SetRoll, Caster, 0.5, workspace), P.num(Caster:GetRoll()))
+	Caster:SetRoll(0)
+	for _, M in { "WorldToScreenPoint", "WorldToViewportPoint" } do
+		local F = (Caster :: any)[M]
+		print("args", M, "none", Try(F, Caster), "nil", Try(F, Caster, nil), "extra", Try(F, Caster, W, workspace, "x"))
+	end
+	print("args SetCameraPanMode", "none", Try(Caster.SetCameraPanMode, Caster), "nil", Try(Caster.SetCameraPanMode, Caster, nil), "extra", Try(Caster.SetCameraPanMode, Caster, Enum.CameraPanMode.Classic, workspace))
+	-- a fractional number takes the item it truncates to
+	print("cast SetCameraPanMode fractional", Try(Caster.SetCameraPanMode, Caster, 0.5), Try(Caster.SetCameraPanMode, Caster, 1.99), Try(Caster.SetCameraPanMode, Caster, -0.99), Try(Caster.SetCameraPanMode, Caster, 2.5))
+	-- the CurrentCamera casts as any camera does
+	local Current = workspace.CurrentCamera
+	print("cast current", Try(Current.ScreenPointToRay, Current, workspace, 1), Try(Current.ViewportPointToRay, Current, 1, Enum.KeyCode.A), Try(Current.WorldToScreenPoint, Current, workspace), Try(Current.WorldToViewportPoint, Current, Enum.KeyCode.A), Try(Current.SetRoll, Current, workspace), Try(Current.SetCameraPanMode, Current, workspace))
+end

@@ -1,4 +1,10 @@
 {
+	"bulk_move_args": [
+		{
+			"line": "bulk mode number 0.5",
+			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
+		}
+	],
 	"camera_fov_wide": [
 		{
 			"line": "write DiagonalFieldOfView 90 52.233852386474609",
@@ -7,12 +13,20 @@
 		{
 			"line": "write DiagonalFieldOfView 120 65.661827087402344",
 			"why": "a DiagonalFieldOfView write on a wide viewport: 2 of 50 inverses (90 and 120) read FieldOfView one or two float32 steps off a client's"
+		},
+		{
+			"line": "screen new, a frame after it was made current viewport",
+			"why": "a camera made the CurrentCamera takes the screen's viewport (and a near plane 0.1 out) at the render step after the PreRender handlers; not emulated: a script's write of Workspace.CurrentCamera does not take, and only the start camera has the screen"
 		}
 	],
 	"camera_units": [
 		{
 			"line": "PanUnits 28 5 0 nil 58.502 -4.399",
 			"why": "PanUnits' float steps are not all a client's (its angles within about 1e-6): this position falls on the other side of a third decimal"
+		},
+		{
+			"line": "cast SetCameraPanMode fractional",
+			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
 		}
 	],
 	"chunknames": [

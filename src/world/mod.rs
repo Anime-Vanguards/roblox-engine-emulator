@@ -134,19 +134,35 @@ pub fn cframe_of(value: &Value) -> Option<Affine3A> {
     }
 }
 
-/// BulkMoveTo's part and frame lists, checked as a Studio 0.746 playing client checks them before any part moves (each message
-/// measured):
-/// - The arguments, the frame list's first: "Argument 2 missing or nil", "Unable to cast CoordinateFrame to Array".
+/// BulkMoveTo's arguments, checked as a Studio 0.746 playing client checks them before any part moves, from the last to the first
+/// (each message measured; the mode, the part list's checks and the names in the casts on 0.748):
+/// - The mode, a BulkMoveMode (an item, its name or its value; nil takes FireAllEvents): "Unable to cast string to BulkMoveMode",
+///   "Unable to cast KeyCode to BulkMoveMode".
+/// - The frame list, an Array: "Argument 2 missing or nil", "Unable to cast CoordinateFrame to Array".
+/// - The part list, a list of Instances (objects_arg: "Expected table argument, got userdata" for an Instance; a dictionary is an
+///   empty list), each entry cast before the lengths are compared: "Unable to cast value to Object".
 /// - The lengths: "Length of part list (2) and length of CFrame list (1) do not match."
-/// - Each part: "Unable to cast value to Object" for a value that is no Instance, "Can only call BulkMoveTo on BaseParts,
-///   partList[1] is a Folder."
-/// - Each frame: "CFrame list must only contain CFrames, cframeList[1] is a Vector3."
+/// - Each part: "Can only call BulkMoveTo on BaseParts, partList[1] is a Folder."
+/// - Each frame: "CFrame list must only contain CFrames, cframeList[1] is a Vector3." (a number "double", as casts name it).
 ///
 /// A nil in the part list leaves its frame unused, and the lists still pair by index. Destroyed parts, parts with no parent
 /// and parts outside the Workspace move.
-fn bulk_moves(engine: &Engine, args: &Args, base_part: Option<crate::ClassId>) -> Result<Vec<(InstanceId, Affine3A)>, Flow> {
+fn bulk_moves(lua: &Lua, engine: &Engine, args: &Args, base_part: Option<crate::ClassId>) -> Result<BulkMoves, Flow> {
+    let mode = match args.get(3) {
+        LuaValue::Nil => None,
+        value => match engine.reflection.enum_id("BulkMoveMode").and_then(|id| convert::coerce_enum(lua, engine, id, value)) {
+            Some(item) => Some(item),
+            None => return raise(format!("Unable to cast {} to BulkMoveMode", camera::cast_name(engine, value))),
+        },
+    };
     let cframes = array_arg(engine, args.get(2), 2)?;
-    let parts = array_arg(engine, args.get(1), 1)?;
+    let parts = objects_arg(args, 1)?;
+    for index in 1..=parts.raw_len() {
+        let part: LuaValue = parts.raw_get(index).map_err(Flow::from)?;
+        if !part.is_nil() && super::lua::instance_id(&part).is_none() {
+            return raise("Unable to cast value to Object");
+        }
+    }
     let (count, frames) = (parts.raw_len(), cframes.raw_len());
     if count != frames {
         return raise(format!("Length of part list ({count}) and length of CFrame list ({frames}) do not match."));
@@ -168,30 +184,49 @@ fn bulk_moves(engine: &Engine, args: &Args, base_part: Option<crate::ClassId>) -
         }
         let frame: LuaValue = cframes.raw_get(index).map_err(Flow::from)?;
         let Some(target) = cframe_arg(&frame) else {
-            return raise(format!("CFrame list must only contain CFrames, cframeList[{index}] is a {}.", super::lua::typeof_value(engine, &frame)));
+            return raise(format!("CFrame list must only contain CFrames, cframeList[{index}] is a {}.", camera::cast_name(engine, &frame)));
         };
         moves.push((id, target));
     }
-    Ok(moves)
+    Ok(BulkMoves { moves, mode })
+}
+
+/// What BulkMoveTo was asked: each part's target and the mode it gave (None: the default, FireAllEvents).
+struct BulkMoves {
+    moves: Vec<(InstanceId, Affine3A)>,
+    mode: Option<u32>,
 }
 
 /// An argument a method takes as an Array: a table keyed 1..n only, or an empty one. Measured: nil "Argument 2 missing or nil", a
-/// CFrame "Unable to cast CoordinateFrame to Array", a table with other keys "Unable to cast Dictionary to Array" (other values
-/// are named as the engine names their type in its other casts, not measured here).
+/// CFrame "Unable to cast CoordinateFrame to Array", a table with other keys "Unable to cast Dictionary to Array", an Instance
+/// "Unable to cast Instance to Array"; every other value named as camera.rs cast_name names it (measured with each kind of value
+/// on GetPartsObscuringTarget's points and BulkMoveTo's frame list).
 fn array_arg(engine: &Engine, value: &LuaValue, index: usize) -> Result<LuaTable, Flow> {
     match value {
         LuaValue::Nil => raise(format!("Argument {index} missing or nil")),
         LuaValue::Table(table) if table.raw_len() > 0 || table.clone().pairs::<LuaValue, LuaValue>().next().is_none() => Ok(table.clone()),
         LuaValue::Table(_) => raise("Unable to cast Dictionary to Array"),
+        other => raise(format!("Unable to cast {} to Array", camera::cast_name(engine, other))),
+    }
+}
+
+/// An argument a method takes as a list of Instances (an ignore list, BulkMoveTo's part list), as a client checks it: any table
+/// (a dictionary too: its array part is the list), else "Argument <n> missing or nil" when the call has no such argument and
+/// "Expected table argument, got <type>" for one it has, the type as Luau's `type()` names it: nil, userdata (an Instance, an
+/// EnumItem, a CFrame), vector (a Vector3), number, string, boolean, function, thread or buffer (measured, Studio 0.748).
+pub(super) fn objects_arg(args: &Args, index: usize) -> Result<LuaTable, Flow> {
+    if args.len() <= index {
+        return raise(format!("Argument {index} missing or nil"));
+    }
+    match args.get(index) {
+        LuaValue::Table(table) => Ok(table.clone()),
         other => {
-            let name = match super::lua::typeof_value(engine, other).as_str() {
-                "CFrame" => "CoordinateFrame".to_string(),
-                "number" => "double".to_string(),
-                "boolean" => "bool".to_string(),
-                "Instance" => "Object".to_string(),
-                kind => kind.to_string(),
+            let kind = match other {
+                LuaValue::Number(_) | LuaValue::Integer(_) => "number",
+                LuaValue::UserData(_) | LuaValue::LightUserData(_) => "userdata",
+                other => other.type_name(),
             };
-            raise(format!("Unable to cast {name} to Array"))
+            raise(format!("Expected table argument, got {kind}"))
         }
     }
 }
@@ -518,11 +553,11 @@ pub fn install(engine: &Rc<Engine>) {
     // (bulk_moves)
     if let (Some(world_root), Some(bulk)) = (reflection.class_id("WorldRoot"), name(engine, "BulkMoveTo")) {
         let base_part = reflection.class_id("BasePart");
-        behaviors.add_method(world_root, bulk, method(move |_, engine, _, args| {
-            let moves = bulk_moves(engine, args, base_part)?;
+        behaviors.add_method(world_root, bulk, method(move |lua, engine, _, args| {
+            let BulkMoves { moves, mode } = bulk_moves(lua, engine, args, base_part)?;
             // (the default mode fires every event; Studio: 1.03 us a part, FireCFrameChanged 0.42)
-            let each = match convert::from_lua(args.get(3)) {
-                Value::EnumItem(item) if &*engine.reflection.enum_item_info(item).name == "FireCFrameChanged" => crate::cost::BULK_MOVED,
+            let each = match mode {
+                Some(item) if &*engine.reflection.enum_item_info(item).name == "FireCFrameChanged" => crate::cost::BULK_MOVED,
                 _ => crate::cost::BULK_MOVED_ALL_EVENTS,
             };
             // (the frame's first BulkMoveTo runs the engine's code for it cold, and a part the frame had not touched is read cold with

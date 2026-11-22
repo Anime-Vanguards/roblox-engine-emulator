@@ -99,3 +99,41 @@ cut arg instance error Expected table argument, got userdata
 cut arg mixed error Unable to cast value to Object
 cut arg dictionary ok 0
 cut loose ok 0
+obscuring cast string points error Unable to cast string to Array ignore error Expected table argument, got string both error Expected table argument, got string
+cut cast string error Expected table argument, got string
+obscuring cast true points error Unable to cast bool to Array ignore error Expected table argument, got boolean both error Expected table argument, got boolean
+cut cast true error Expected table argument, got boolean
+obscuring cast number points error Unable to cast double to Array ignore error Expected table argument, got number both error Expected table argument, got number
+cut cast number error Expected table argument, got number
+obscuring cast array points ok table 0 ignore error Unable to cast value to Object both error Unable to cast value to Object
+cut cast array error Unable to cast value to Object
+obscuring cast empty-table points ok table 0 ignore ok table 0 both ok table 0
+cut cast empty-table ok 0.000
+obscuring cast dictionary points error Unable to cast Dictionary to Array ignore ok table 0 both error Unable to cast Dictionary to Array
+cut cast dictionary ok 0.000
+obscuring cast Instance points error Unable to cast Instance to Array ignore error Expected table argument, got userdata both error Expected table argument, got userdata
+cut cast Instance error Expected table argument, got userdata
+obscuring cast Vector3 points error Unable to cast Vector3 to Array ignore error Expected table argument, got vector both error Expected table argument, got vector
+cut cast Vector3 error Expected table argument, got vector
+obscuring cast Vector2 points error Unable to cast Vector2 to Array ignore error Expected table argument, got userdata both error Expected table argument, got userdata
+cut cast Vector2 error Expected table argument, got userdata
+obscuring cast CFrame points error Unable to cast CoordinateFrame to Array ignore error Expected table argument, got userdata both error Expected table argument, got userdata
+cut cast CFrame error Expected table argument, got userdata
+obscuring cast KeyCode points error Unable to cast KeyCode to Array ignore error Expected table argument, got userdata both error Expected table argument, got userdata
+cut cast KeyCode error Expected table argument, got userdata
+obscuring cast Enum points error Unable to cast null to Array ignore error Expected table argument, got userdata both error Expected table argument, got userdata
+cut cast Enum error Expected table argument, got userdata
+obscuring cast function points error Unable to cast Function to Array ignore error Expected table argument, got function both error Expected table argument, got function
+cut cast function error Expected table argument, got function
+obscuring cast thread points error Unable to cast null to Array ignore error Expected table argument, got thread both error Expected table argument, got thread
+cut cast thread error Expected table argument, got thread
+obscuring cast buffer points error Unable to cast buffer to Array ignore error Expected table argument, got buffer both error Expected table argument, got buffer
+cut cast buffer error Expected table argument, got buffer
+obscuring cast userdata points error Unable to cast null to Array ignore error Expected table argument, got userdata both error Expected table argument, got userdata
+cut cast userdata error Expected table argument, got userdata
+obscuring cast RBXScriptSignal points error Unable to cast EventInstance to Array ignore error Expected table argument, got userdata both error Expected table argument, got userdata
+cut cast RBXScriptSignal error Expected table argument, got userdata
+obscuring args none error Argument 2 missing or nil nil nil error Expected table argument, got nil points only error Argument 2 missing or nil nil ignore error Argument 1 missing or nil extra ok table 0
+obscuring ignore entries mixed error Unable to cast value to Object hole ok table 0 vector error Unable to cast value to Object enum error Unable to cast value to Object string error Unable to cast value to Object
+obscuring order bad points and entry error Unable to cast value to Object dictionary points, bad ignore error Expected table argument, got string bad points, nil ignore error Expected table argument, got nil
+obscuring current none error Argument 2 missing or nil Instance error Expected table argument, got userdata

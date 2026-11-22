@@ -162,3 +162,42 @@ print("cut arg mixed", P.try(Cam.GetLargestCutoffDistance, Cam, { workspace, 5 }
 print("cut arg dictionary", P.try(Cam.GetLargestCutoffDistance, Cam, { a = workspace }))
 local Loose = Instance.new("Camera")
 print("cut loose", P.try(Loose.GetLargestCutoffDistance, Loose, {}))
+
+-- GetPartsObscuringTarget's arguments: the ignore list first (none given "Argument 2 missing or nil", any value but a table
+-- "Expected table argument, got <type()>"), then the points as an Array (named as world/camera.rs cast_name names values);
+-- and GetLargestCutoffDistance's ignore list, checked the same way
+do
+	local function Try(F, ...)
+		local Out = table.pack(pcall(F, ...))
+		if not Out[1] then
+			return "error " .. P.err(Out[2])
+		end
+		local Parts = { "ok" }
+		for I = 2, Out.n do
+			local V = Out[I]
+			table.insert(Parts, if type(V) == "table" then "table " .. #V elseif type(V) == "number" then R(V) else typeof(V))
+		end
+		return table.concat(Parts, " ")
+	end
+	local Kinds = {
+		{ "string", "x" }, { "true", true }, { "number", 5 }, { "array", { 1 } }, { "empty-table", {} }, { "dictionary", { a = 1 } },
+		{ "Instance", workspace }, { "Vector3", Vector3.one }, { "Vector2", Vector2.one }, { "CFrame", CFrame.new() },
+		{ "KeyCode", Enum.KeyCode.A }, { "Enum", Enum.KeyCode }, { "function", print }, { "thread", coroutine.create(function() end) },
+		{ "buffer", buffer.create(1) }, { "userdata", newproxy() }, { "RBXScriptSignal", workspace.Changed },
+	}
+	local Obscurer = Instance.new("Camera")
+	Obscurer.CFrame = CFrame.new(O + Vector3.new(0, 50, 0))
+	Obscurer.Parent = workspace
+	local V = O + Vector3.new(0, 50, -5)
+	local F = Obscurer.GetPartsObscuringTarget
+	for _, K in Kinds do
+		local Name, X = K[1], K[2]
+		print("obscuring cast", Name, "points", Try(F, Obscurer, X, {}), "ignore", Try(F, Obscurer, { V }, X), "both", Try(F, Obscurer, X, X))
+		print("cut cast", Name, Try(Cam.GetLargestCutoffDistance, Cam, X))
+	end
+	print("obscuring args", "none", Try(F, Obscurer), "nil nil", Try(F, Obscurer, nil, nil), "points only", Try(F, Obscurer, { V }), "nil ignore", Try(F, Obscurer, nil, {}), "extra", Try(F, Obscurer, { V }, {}, workspace))
+	print("obscuring ignore entries", "mixed", Try(F, Obscurer, { V }, { workspace, 5 }), "hole", Try(F, Obscurer, { V }, { workspace, nil, workspace }), "vector", Try(F, Obscurer, { V }, { Vector3.one }), "enum", Try(F, Obscurer, { V }, { Enum.KeyCode.A }), "string", Try(F, Obscurer, { V }, { "x" }))
+	print("obscuring order", "bad points and entry", Try(F, Obscurer, "x", { 1 }), "dictionary points, bad ignore", Try(F, Obscurer, { a = V }, "x"), "bad points, nil ignore", Try(F, Obscurer, workspace, nil))
+	local Current = workspace.CurrentCamera
+	print("obscuring current", "none", Try(Current.GetPartsObscuringTarget, Current), "Instance", Try(Current.GetPartsObscuringTarget, Current, {}, workspace))
+end

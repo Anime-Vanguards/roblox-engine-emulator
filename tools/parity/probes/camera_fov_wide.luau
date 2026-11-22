@@ -88,3 +88,47 @@ for _, Y in { 0.065, 0.069, 0.071, 0.075 } do
 	print("cutoff plate from y", P.num(Y), R(Camera:GetLargestCutoffDistance({})))
 	Clear()
 end
+
+-- The screen forms against the viewport forms (world/camera.rs): GuiService's top inset applies only to a camera with the
+-- screen's viewport, the start camera, current or not; a new camera, one outside the Workspace and one just made current read
+-- 1 x 1 and their screen forms are their viewport forms. The relations are printed, since the inset is the host's.
+do
+	local Inset = game:GetService("GuiService"):GetGuiInset()
+	local Start = workspace.CurrentCamera
+	local At = CFrame.lookAt(O + Vector3.new(0, 5, 30), O + Vector3.new(0, 5, 0))
+	local function SameRay(A, B)
+		return A.Origin == B.Origin and A.Direction == B.Direction
+	end
+	local function Forms(Name, Cam, Shifted)
+		Cam.CFrame = At
+		print("screen", Name, "viewport", P.f32s(Cam.ViewportSize.X, Cam.ViewportSize.Y), P.num(Cam.NearPlaneZ))
+		for _, XY in { { 0, 0 }, { 0.25, 0.75 }, { 1, 1 }, { 300, 100 }, { 960, 482 }, { 1919, 1021 } } do
+			local X, Y = XY[1], XY[2]
+			local S = Cam:ScreenPointToRay(X, Y, 2)
+			local Shown = if Shifted
+				then "at y + inset " .. tostring(SameRay(S, Cam:ViewportPointToRay(X, Y + Inset.Y, 2)))
+				else "at y " .. tostring(SameRay(S, Cam:ViewportPointToRay(X, Y, 2)))
+			print("screen", Name, "ray", P.num(X), P.num(Y), "is the viewport ray", Shown)
+		end
+		for _, W in { O + Vector3.new(3, 7, -10), O + Vector3.new(0, 5, 0), O + Vector3.new(-10, 0, -50), O + Vector3.new(0, 5, 40) } do
+			local S, SeenS = Cam:WorldToScreenPoint(W)
+			local V, SeenV = Cam:WorldToViewportPoint(W)
+			local Want = if Shifted then Vector3.new(V.X, V.Y - Inset.Y, V.Z) else V
+			print("screen", Name, "point", if Shifted then "is the viewport point less the inset" else "is the viewport point", tostring(S == Want and SeenS == SeenV), P.f32s(V.X, V.Y, V.Z), tostring(SeenV))
+		end
+	end
+	Forms("start", Start, true)
+	local New = Instance.new("Camera")
+	New.CameraType = Enum.CameraType.Scriptable
+	New.Parent = workspace
+	Forms("new", New, false)
+	local Loose = Instance.new("Camera")
+	Forms("loose", Loose, false)
+	workspace.CurrentCamera = New
+	Forms("new, just made current", New, false)
+	Forms("start, no longer current", Start, true)
+	-- the render step after the PreRender handlers gives the camera made current the screen's viewport (not emulated: here
+	-- a script's CurrentCamera write does not take)
+	task.wait()
+	print("screen", "new, a frame after it was made current", "viewport", P.f32s(New.ViewportSize.X, New.ViewportSize.Y), P.num(New.NearPlaneZ))
+end

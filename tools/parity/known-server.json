@@ -1,4 +1,10 @@
 {
+	"bulk_move_args": [
+		{
+			"line": "bulk mode number 0.5",
+			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
+		}
+	],
 	"camera_cutoff": [
 		{
 			"line": "cut new, at the Heartbeat true 14.000",
@@ -9,6 +15,10 @@
 		{
 			"line": "PanUnits 28 5 0 nil 58.502 -4.399",
 			"why": "PanUnits' float steps are not all a client's (its angles within about 1e-6): this position falls on the other side of a third decimal"
+		},
+		{
+			"line": "cast SetCameraPanMode fractional",
+			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
 		}
 	],
 	"chunknames": [

@@ -1,13 +1,17 @@
 //! The Camera's projections: WorldToViewportPoint / WorldToScreenPoint and ViewportPointToRay /
-//! ScreenPointToRay, from the camera's CFrame, its vertical FieldOfView and its viewport. The screen forms
-//! are measured from below GuiService's top inset, where GUI positions are (AbsolutePosition,
-//! InputObject.Position): WorldToScreenPoint's Y is WorldToViewportPoint's less the inset, and
-//! ScreenPointToRay(x, y) is ViewportPointToRay(x, y + inset).
+//! ScreenPointToRay, from the camera's CFrame, its vertical FieldOfView and its viewport. On the camera with the
+//! screen's viewport the screen forms are measured from below GuiService's top inset, where GUI positions are
+//! (AbsolutePosition, InputObject.Position): WorldToScreenPoint's Y is WorldToViewportPoint's less the inset, and
+//! ScreenPointToRay(x, y) is ViewportPointToRay(x, y + inset). A camera in a 1 x 1 viewport takes no inset: its screen
+//! forms are its viewport forms (measured on a rendered desktop client under a 58-pixel inset: a new camera, one outside
+//! the Workspace and one just made current; the start camera keeps the inset when another is made current).
 //!
 //! Measured in Studio 0.748, a playing client (and its server, for the viewport and near plane):
 //! - Only the camera a run starts with has a viewport (the window) and a near plane 0.1 studs out (NearPlaneZ -0.1). Any other
-//!   camera reads ViewportSize 1, 1 and NearPlaneZ -0.5, also once it is made the CurrentCamera (the start camera keeps its
-//!   values when it is no longer current), and projects into that 1 x 1 viewport.
+//!   camera reads ViewportSize 1, 1 and NearPlaneZ -0.5 and projects into that 1 x 1 viewport (the start camera keeps its
+//!   values when it is no longer current). A camera made the CurrentCamera reads 1 x 1 until the render step after the
+//!   PreRender handlers, which gives it the window and a near plane 0.1 out (both Changed fire) for good. Not emulated: here a
+//!   script's write of Workspace.CurrentCamera does not take, so the start camera stays the current one.
 //! - The projections use the viewport rounded to whole pixels (908.8 x 895.2 projects as 909 x 895: the centre is 454.5, 447.5).
 //! - A ray starts on the near plane (its point under the pixel, `-NearPlaneZ` along the look vector), `depth` studs further along
 //!   it; the point at the camera itself projects to NaN, NaN at depth 0.
@@ -67,10 +71,15 @@ struct View {
     near: f32,
 }
 
+/// Whether the camera has the run's screen for its viewport: only the camera the run starts with does.
+pub fn has_screen(engine: &Engine, camera: InstanceId) -> bool {
+    camera == engine.world().camera
+}
+
 /// The camera's ViewportSize: the run's screen (`--camera` / the viewport) for the camera the run starts with, 1 x 1 for any
 /// other camera.
 pub fn viewport_size(engine: &Engine, camera: InstanceId) -> (f32, f32) {
-    if camera == engine.world().camera {
+    if has_screen(engine, camera) {
         let width = engine.options.camera_width.unwrap_or(engine.options.viewport_width).max(1.0);
         let height = engine.options.camera_height.unwrap_or(engine.options.viewport_height).max(1.0);
         (width as f32, height as f32)
@@ -81,7 +90,13 @@ pub fn viewport_size(engine: &Engine, camera: InstanceId) -> (f32, f32) {
 
 /// How far ahead of the camera its near plane is (`-NearPlaneZ`): 0.1 for the camera the run starts with, 0.5 for others.
 pub fn near_plane(engine: &Engine, camera: InstanceId) -> f32 {
-    if camera == engine.world().camera { 0.1 } else { 0.5 }
+    if has_screen(engine, camera) { 0.1 } else { 0.5 }
+}
+
+/// The top inset the camera's screen forms measure from: GuiService's (`Options::topbar_inset`) for the camera with the screen's
+/// viewport, none for a camera in its 1 x 1 viewport, whose screen forms are its viewport forms.
+fn screen_inset(engine: &Engine, camera: InstanceId) -> Option<f32> {
+    has_screen(engine, camera).then_some(engine.options.topbar_inset as f32)
 }
 
 /// `tan(degrees / 2)` with the client's roundings: `degrees * pi / 180 / 2` in float32.
@@ -152,8 +167,10 @@ fn ray(lua: &Lua, (origin, direction): (Vec3, Vec3)) -> LuaResult<LuaMultiValue>
 }
 
 /// What a value is called in a cast error, as a client names it: a number "double", a boolean "bool", a table "Array" (empty or
-/// with an array part) or "Dictionary", a CFrame "CoordinateFrame", an instance "Object" (measured: "Unable to cast
-/// CoordinateFrame to Vector3", "Unable to cast Array to float").
+/// with an array part) or "Dictionary", an Instance "Instance", an EnumItem its enum ("Unable to cast KeyCode to float"), a CFrame
+/// "CoordinateFrame", a function "Function", an RBXScriptSignal "EventInstance", an Enum, Enums, thread or plain userdata "null",
+/// any other value its typeof. Measured on a playing client and its server (Studio 0.748), the same in each of the Camera's casts
+/// (to float, int, Vector3, CoordinateFrame, CameraPanMode and Array) and in BulkMoveTo's.
 pub(super) fn cast_name(engine: &Engine, value: &LuaValue) -> String {
     match value {
         LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
@@ -162,11 +179,22 @@ pub(super) fn cast_name(engine: &Engine, value: &LuaValue) -> String {
             let array = table.raw_len() > 0 || table.clone().pairs::<LuaValue, LuaValue>().next().is_none();
             (if array { "Array" } else { "Dictionary" }).into()
         }
-        other if instance_id(other).is_some() => "Object".into(),
-        other => match typeof_value(engine, other).as_str() {
-            "CFrame" => "CoordinateFrame".into(),
-            name => name.into(),
-        },
+        LuaValue::Function(_) => "Function".into(),
+        LuaValue::Thread(_) => "null".into(),
+        other if instance_id(other).is_some() => "Instance".into(),
+        other => {
+            if let LuaValue::UserData(ud) = other
+                && let Ok(item) = ud.borrow::<LEnumItem>()
+            {
+                return engine.reflection.enum_item_type_name(item.0).to_string();
+            }
+            match typeof_value(engine, other).as_str() {
+                "CFrame" => "CoordinateFrame".into(),
+                "RBXScriptSignal" => "EventInstance".into(),
+                "Enum" | "Enums" | "userdata" => "null".into(),
+                name => name.into(),
+            }
+        }
     }
 }
 
@@ -197,12 +225,13 @@ fn vector3_argument(engine: &Engine, args: &Args, at: usize) -> Result<Vec3, Flo
     }
 }
 
-/// A ViewportPointToRay / ScreenPointToRay call's (x, y, depth): y is checked first (no arguments raise "Argument 2 missing or
-/// nil"), the depth defaults to 0; each a float argument.
+/// A ViewportPointToRay / ScreenPointToRay call's (x, y, depth), each a float argument, checked from the last to the first: the
+/// depth (nil takes 0), then y, then x (measured: no arguments raise "Argument 2 missing or nil", (Instance, 1, KeyCode) "Unable to
+/// cast KeyCode to float").
 fn ray_arguments(lua: &Lua, engine: &Engine, args: &Args) -> Result<(f32, f32, f32), Flow> {
+    let depth = if args.get(3).is_nil() { 0.0 } else { float_argument(lua, engine, args, 3)? };
     let y = float_argument(lua, engine, args, 2)?;
     let x = float_argument(lua, engine, args, 1)?;
-    let depth = if args.get(3).is_nil() { 0.0 } else { float_argument(lua, engine, args, 3)? };
     Ok((x, y, depth))
 }
 
@@ -232,13 +261,11 @@ fn number(number: f32) -> Result<LuaMultiValue, Flow> {
     Ok(values([LuaValue::Number(f64::from(number))]))
 }
 
-/// GetPartsObscuringTarget's ignore list: a table whose array part holds instances (nil holes are skipped), sorted, without
-/// repeats. Measured: nil "Expected table argument, got nil", a string "... got string", a number in it "Unable to cast value to
-/// Object".
-fn ignore_list(engine: &Engine, value: &LuaValue) -> Result<Vec<InstanceId>, Flow> {
-    let LuaValue::Table(table) = value else {
-        return raise(format!("Expected table argument, got {}", typeof_value(engine, value)));
-    };
+/// GetPartsObscuringTarget's ignore list, its second argument, checked before the points: a table whose array part holds instances
+/// (nil holes are skipped), sorted, without repeats. Measured: none given "Argument 2 missing or nil", nil "Expected table argument,
+/// got nil", an Instance "... got userdata" (world/mod.rs objects_arg), a number in it "Unable to cast value to Object".
+fn ignore_list(args: &Args) -> Result<Vec<InstanceId>, Flow> {
+    let table = super::objects_arg(args, 2)?;
     let mut ids = Vec::new();
     for index in 1..=table.raw_len() {
         let item: LuaValue = table.raw_get(index)?;
@@ -278,8 +305,9 @@ fn is_ignored(engine: &Engine, ignored: &[InstanceId], part: InstanceId) -> bool
 /// on it is charged as the work goes (cost.rs OBSCURING_POINT): each point, its segment as a ray for the parts it crosses
 /// (ignored ones too: the broadphase meets them all), and each part returned.
 fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Args) -> Result<LuaMultiValue, Flow> {
+    // (the ignore list is checked first: measured, ("x", "y") raises "Expected table argument, got string")
+    let ignored = ignore_list(args)?;
     let points = super::array_arg(engine, args.get(1), 1)?;
-    let ignored = ignore_list(engine, args.get(2))?;
     let origin = frame::translation(&frame::affine_of(engine.state.borrow().dom.raw_get(camera, cframe_name(engine))));
     let solids = query::cached_solids(engine, &query::Filter { unqueryable: true, ..query::Filter::default() });
     // (the parts listed so far, in order, and every part already decided: listed or ignored)
@@ -349,11 +377,7 @@ fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::Method
         if value.is_nil() || engine.reflection.enum_id("CameraPanMode").and_then(|id| convert::coerce_enum(lua, engine, id, value)).is_some() {
             return Ok(LuaMultiValue::new());
         }
-        let other = match value {
-            LuaValue::UserData(ud) => ud.borrow::<LEnumItem>().ok().map(|item| engine.reflection.enum_item_type_name(item.0).to_string()),
-            _ => None,
-        };
-        raise(format!("Unable to cast {} to CameraPanMode", other.unwrap_or_else(|| cast_name(engine, value))))
+        raise(format!("Unable to cast {} to CameraPanMode", cast_name(engine, value)))
     }));
     add("GetPartsObscuringTarget", method(parts_obscuring));
     let mut hooks = engine.hooks.borrow_mut();
@@ -375,7 +399,6 @@ fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::Method
 
 pub fn install(engine: &Rc<Engine>) {
     let Some(camera) = engine.reflection.class_id("Camera") else { return };
-    let inset = engine.options.topbar_inset as f32;
     let mut behaviors = engine.behaviors.borrow_mut();
     let mut add = |member: &str, f: super::MethodFn| {
         if let Some(name) = engine.reflection.name_id(member) {
@@ -386,17 +409,22 @@ pub fn install(engine: &Rc<Engine>) {
         let (at, visible) = view(engine, id).project(vector3_argument(engine, args, 1)?);
         Ok(point(at, visible)?)
     }));
-    add("WorldToScreenPoint", method(move |_, engine, id, args| {
+    add("WorldToScreenPoint", method(|_, engine, id, args| {
         let (at, visible) = view(engine, id).project(vector3_argument(engine, args, 1)?);
-        Ok(point(at - Vec3::new(0.0, inset, 0.0), visible)?)
+        let at = match screen_inset(engine, id) {
+            Some(inset) => at - Vec3::new(0.0, inset, 0.0),
+            None => at,
+        };
+        Ok(point(at, visible)?)
     }));
     add("ViewportPointToRay", method(|lua, engine, id, args| {
         let (x, y, depth) = ray_arguments(lua, engine, args)?;
         Ok(ray(lua, view(engine, id).ray(x, y, depth))?)
     }));
-    add("ScreenPointToRay", method(move |lua, engine, id, args| {
+    add("ScreenPointToRay", method(|lua, engine, id, args| {
         let (x, y, depth) = ray_arguments(lua, engine, args)?;
-        Ok(ray(lua, view(engine, id).ray(x, y + inset, depth))?)
+        let y = screen_inset(engine, id).map_or(y, |inset| y + inset);
+        Ok(ray(lua, view(engine, id).ray(x, y, depth))?)
     }));
     install_methods(engine, &mut add);
     super::camera_fov::install(engine, &mut behaviors, camera);

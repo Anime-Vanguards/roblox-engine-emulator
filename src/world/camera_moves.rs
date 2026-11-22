@@ -44,7 +44,7 @@ use super::{camera, camera_fov, cframe_arg, cframe_name, frame, query, vector_ar
 use crate::{
     ClassId, Engine, InstanceId, K, NameId, State,
     instance as core,
-    lua::{Args, Flow, instance_id, raise, types::LEnumItem, values},
+    lua::{Args, Flow, instance_id, raise, values},
     services::Behaviors,
     value::Value,
 };
@@ -108,20 +108,6 @@ fn write(engine: &Engine, camera: InstanceId, name: NameId, transform: &Affine3A
 
 // PanUnits / TiltUnits
 
-/// What an int argument is called in its cast error: an Instance "Instance", an EnumItem its enum's name, else as a float
-/// argument names it (measured: "Unable to cast Instance to int", "Unable to cast CameraType to int").
-fn int_cast_name(engine: &Engine, value: &LuaValue) -> String {
-    if instance_id(value).is_some() {
-        return "Instance".into();
-    }
-    if let LuaValue::UserData(ud) = value
-        && let Ok(item) = ud.borrow::<LEnumItem>()
-    {
-        return engine.reflection.enum_item_type_name(item.0).to_string();
-    }
-    camera::cast_name(engine, value)
-}
-
 /// An int argument as a client casts it: rounded half away from zero, the int's least past its range.
 fn int_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<i32, Flow> {
     let value = args.get(at);
@@ -134,7 +120,7 @@ fn int_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<i3
             Some(number) => number,
             None => return raise("Unable to cast string to int"),
         },
-        other => return raise(format!("Unable to cast {} to int", int_cast_name(engine, other))),
+        other => return raise(format!("Unable to cast {} to int", camera::cast_name(engine, other))),
     };
     let rounded = number.round();
     Ok(if (-2147483648.0..=2147483647.0).contains(&rounded) { rounded as i32 } else { i32::MIN })
@@ -222,19 +208,9 @@ fn in_workspace(state: &State, workspace: ClassId, node: InstanceId) -> bool {
     false
 }
 
-/// GetLargestCutoffDistance's ignore list: a table of Instances (its array part).
+/// GetLargestCutoffDistance's ignore list: a table of Instances (its array part), checked as world/mod.rs objects_arg says.
 fn ignore_list(args: &Args) -> Result<Vec<InstanceId>, Flow> {
-    if args.len() < 2 {
-        return raise("Argument 1 missing or nil");
-    }
-    let LuaValue::Table(table) = args.get(1) else {
-        let kind = match args.get(1) {
-            LuaValue::Number(_) | LuaValue::Integer(_) => "number",
-            LuaValue::UserData(_) | LuaValue::LightUserData(_) => "userdata",
-            other => other.type_name(),
-        };
-        return raise(format!("Expected table argument, got {kind}"));
-    };
+    let table = super::objects_arg(args, 1)?;
     let mut ids = Vec::new();
     for index in 1..=table.raw_len() {
         match instance_id(&table.raw_get::<LuaValue>(index)?) {

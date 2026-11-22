@@ -654,6 +654,99 @@ fn camera_screen_points_are_measured_from_below_the_top_inset() {
     );
 }
 
+/// Only the camera with the screen's viewport takes the top inset: a camera in its 1 x 1 viewport (in the Workspace or not)
+/// projects its screen forms as its viewport forms (measured on a rendered desktop client under a 58-pixel inset, Studio 0.748,
+/// tools/parity camera_fov_wide: these values to the bit), while the start camera keeps the inset.
+#[test]
+fn only_the_camera_with_the_screen_takes_the_top_inset() {
+    let (lua, engine) = start_studio_window();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function F(...)
+            local T = table.pack(...)
+            for I = 1, T.n do
+                T[I] = string.format("%.9g", T[I])
+            end
+            return table.concat(T, " ")
+        end
+        local function Same(A, B)
+            return A.Origin == B.Origin and A.Direction == B.Direction
+        end
+        local At = CFrame.lookAt(Vector3.new(200, 105, 230), Vector3.new(200, 105, 200))
+        local W = Vector3.new(203, 107, 190)
+        local Start = workspace.CurrentCamera
+        Start.CFrame = At
+        assert(Same(Start:ScreenPointToRay(100, 200, 2), Start:ViewportPointToRay(100, 258, 2)))
+        local S, V = Start:WorldToScreenPoint(W), Start:WorldToViewportPoint(W)
+        assert(S == Vector3.new(V.X, V.Y - 58, V.Z), `start: screen {S} for viewport {V}`)
+        local New = Instance.new("Camera")
+        New.Parent = workspace
+        local Loose = Instance.new("Camera")
+        for _, Cam in { New, Loose } do
+            Cam.CFrame = At
+            local R = Cam:ScreenPointToRay(0.5, 0.5, 2)
+            assert(F(R.Origin.X, R.Origin.Y, R.Origin.Z, R.Direction.Z) == "200 105 227.5 -1", tostring(R))
+            assert(Same(Cam:ScreenPointToRay(0.25, 0.75, 2), Cam:ViewportPointToRay(0.25, 0.75, 2)))
+            local P, Seen = Cam:WorldToScreenPoint(W)
+            assert(F(P.X, P.Y, P.Z) == "0.553555667 0.464296341 40" and Seen, F(P.X, P.Y, P.Z))
+            assert(P == Cam:WorldToViewportPoint(W))
+        end
+        "##,
+    );
+}
+
+/// The Camera's casts name a value as a playing client does (Studio 0.748, tools/parity camera_units, camera_cutoff,
+/// bulk_move_args): an Instance "Instance", an EnumItem its enum, a function "Function", a signal "EventInstance", an Enum, Enums,
+/// thread or plain userdata "null", in each float, int, Vector3, CoordinateFrame, CameraPanMode and Array cast; the rays check
+/// their arguments from the last to the first.
+#[test]
+fn camera_casts_name_values_as_a_client_does() {
+    check(
+        r#"
+        local function Fails(Message, F, ...)
+            local Ok, E = pcall(F, ...)
+            if Ok or tostring(E) ~= Message then
+                error(`{Message}: got {Ok} {E}`, 2)
+            end
+        end
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        local A = CFrame.new()
+        Fails("Unable to cast Instance to float", Cam.ScreenPointToRay, Cam, workspace, 1)
+        Fails("Unable to cast KeyCode to float", Cam.ViewportPointToRay, Cam, 1, Enum.KeyCode.A)
+        Fails("Unable to cast Instance to float", Cam.ScreenPointToRay, Cam, 1, 1, workspace)
+        Fails("Unable to cast KeyCode to float", Cam.ViewportPointToRay, Cam, workspace, 1, Enum.KeyCode.A)
+        Fails("Unable to cast Instance to float", Cam.ViewportPointToRay, Cam, "a", workspace)
+        Fails("Argument 2 missing or nil", Cam.ScreenPointToRay, Cam, nil, nil, 1)
+        Fails("Unable to cast CameraPanMode to float", Cam.SetRoll, Cam, Enum.CameraPanMode.EdgeBump)
+        Fails("Unable to cast Instance to float", Cam.SetRoll, Cam, workspace)
+        Fails("Unable to cast KeyCode to Vector3", Cam.WorldToScreenPoint, Cam, Enum.KeyCode.A)
+        Fails("Unable to cast Instance to Vector3", Cam.WorldToViewportPoint, Cam, workspace)
+        Fails("Unable to cast Instance to CameraPanMode", Cam.SetCameraPanMode, Cam, workspace)
+        Fails("Unable to cast KeyCode to CameraPanMode", Cam.SetCameraPanMode, Cam, Enum.KeyCode.A)
+        Fails("Unable to cast KeyCode to CoordinateFrame", Cam.Interpolate, Cam, Enum.KeyCode.A, A, 1)
+        Fails("Unable to cast Instance to float", Cam.Interpolate, Cam, A, A, workspace)
+        Fails("Unable to cast Instance to Vector3", Cam.ZoomToExtents, Cam, A, workspace)
+        Fails("Unable to cast Instance to CoordinateFrame", Cam.ZoomToExtents, Cam, workspace, Vector3.one)
+        Fails("Unable to cast Function to float", Cam.SetRoll, Cam, print)
+        Fails("Unable to cast EventInstance to Vector3", Cam.WorldToScreenPoint, Cam, workspace.Changed)
+        Fails("Unable to cast null to float", Cam.SetRoll, Cam, Enum.KeyCode)
+        Fails("Unable to cast null to float", Cam.ScreenPointToRay, Cam, 1, Enum)
+        Fails("Unable to cast null to int", Cam.PanUnits, Cam, coroutine.create(print))
+        Fails("Unable to cast null to CameraPanMode", Cam.SetCameraPanMode, Cam, newproxy())
+        Fails("Unable to cast Instance to Array", Cam.GetPartsObscuringTarget, Cam, workspace, {})
+        Fails("Unable to cast KeyCode to Array", Cam.GetPartsObscuringTarget, Cam, Enum.KeyCode.A, {})
+        Fails("Unable to cast Function to Array", workspace.BulkMoveTo, workspace, {}, print)
+        -- other datatypes keep their own names
+        Fails("Unable to cast Color3 to float", Cam.SetRoll, Cam, Color3.new())
+        Fails("Unable to cast buffer to Vector3", Cam.WorldToScreenPoint, Cam, buffer.create(1))
+        Fails("Unable to cast CoordinateFrame to Vector3", Cam.WorldToScreenPoint, Cam, A)
+        "#,
+    );
+}
+
 /// A client engine with Studio's measuring window (908.8 x 895.2) and its 58-pixel top inset.
 fn start_studio_window() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options { camera_width: Some(908.8), camera_height: Some(895.2), topbar_inset: 58.0, ..Options::default() }).expect("engine");
@@ -1287,6 +1380,31 @@ fn bulk_move_to_checks_its_lists_as_a_playing_client_does() {
         Fails("Unable to cast Dictionary to Array", function()
             workspace:BulkMoveTo({ x = A } :: any, { x = CFrame.new() } :: any)
         end)
+        -- (Studio 0.748, tools/parity bulk_move_args) the mode is cast first, then the frame list; the part list is a list of
+        -- Instances (named as type() names a value, a dictionary an empty list) whose entries are cast before the lengths compare
+        Fails("Unable to cast string to BulkMoveMode", function()
+            workspace:BulkMoveTo("x" :: any, "y" :: any, "z" :: any)
+        end)
+        Fails("Unable to cast KeyCode to BulkMoveMode", function()
+            workspace:BulkMoveTo({ A }, { CFrame.new() }, Enum.KeyCode.A :: any)
+        end)
+        Fails("Expected table argument, got userdata", function()
+            workspace:BulkMoveTo(A :: any, {})
+        end)
+        Fails("Expected table argument, got nil", function()
+            workspace:BulkMoveTo(nil :: any, {})
+        end)
+        Fails("Unable to cast Instance to Array", function()
+            workspace:BulkMoveTo({}, A :: any)
+        end)
+        Fails("Unable to cast value to Object", function()
+            workspace:BulkMoveTo({ Vector3.one } :: any, {})
+        end)
+        Fails("CFrame list must only contain CFrames, cframeList[1] is a double.", function()
+            workspace:BulkMoveTo({ A }, { 5 } :: any)
+        end)
+        workspace:BulkMoveTo({ x = A } :: any, {})
+        workspace:BulkMoveTo({ A }, { A.CFrame }, "FireCFrameChanged" :: any)
         -- a nil in the part list leaves its frame unused: the lists pair by index
         workspace:BulkMoveTo({ A, nil, B }, { CFrame.new(14, 60, 0), CFrame.new(15, 60, 0), CFrame.new(16, 60, 0) })
         assert(A.Position == Vector3.new(14, 60, 0) and B.Position == Vector3.new(16, 60, 0), "the lists did not pair by index")
@@ -2897,6 +3015,16 @@ fn camera_parts_obscuring_a_target_follow_a_client() {
         Fails("Expected table argument, got nil", Cam.GetPartsObscuringTarget, Cam, { Target }, nil)
         Fails("Expected table argument, got string", Cam.GetPartsObscuringTarget, Cam, { Target }, "x")
         Fails("Unable to cast value to Object", Cam.GetPartsObscuringTarget, Cam, { Target }, { 1 })
+        -- the ignore list is checked first, entries and all, and named as type() names a value; a call without one misses argument 2
+        Fails("Argument 2 missing or nil", Cam.GetPartsObscuringTarget, Cam)
+        Fails("Argument 2 missing or nil", Cam.GetPartsObscuringTarget, Cam, { Target })
+        Fails("Expected table argument, got nil", Cam.GetPartsObscuringTarget, Cam, nil, nil)
+        Fails("Expected table argument, got string", Cam.GetPartsObscuringTarget, Cam, "x", "y")
+        Fails("Unable to cast value to Object", Cam.GetPartsObscuringTarget, Cam, "x", { 1 })
+        Fails("Expected table argument, got userdata", Cam.GetPartsObscuringTarget, Cam, { Target }, workspace)
+        Fails("Expected table argument, got userdata", Cam.GetPartsObscuringTarget, Cam, { Target }, Enum.KeyCode.A)
+        Fails("Expected table argument, got vector", Cam.GetPartsObscuringTarget, Cam, { Target }, Target)
+        Fails("Unable to cast Instance to Array", Cam.GetPartsObscuringTarget, Cam, workspace, {})
         Folder:Destroy()
         assert(Names(Cam, { Target }, {}) == "")
         "##,
