@@ -17,7 +17,7 @@
 # call reads a 100,000-element table.find or a 1 MB gsub as a short one. Roblox's VM runs on the real clock and needs no counts.
 
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index 266cc46..117bdec 100644
+index 65229d4..d078099 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
 @@ -417,6 +417,34 @@ LUA_API void lua_coldframe(lua_State* L);
@@ -337,7 +337,7 @@ index a3bff68..f3d93c0 100644
      if (LUAU_UNLIKELY(!!g->cb.onallocate))
      {
 diff --git a/luau/VM/src/lprofile.cpp b/luau/VM/src/lprofile.cpp
-index 8cbf613..ec0c8fb 100644
+index c1386c8..1c717b7 100644
 --- a/luau/VM/src/lprofile.cpp
 +++ b/luau/VM/src/lprofile.cpp
 @@ -416,6 +416,8 @@ struct lua_ProfileState

@@ -112,6 +112,42 @@ fn charge_thread(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) {
     }
 }
 
+/// SharedTable.new and clone (`copy`) and clear on a script's table, before the prelude does them with table.clone or
+/// table.clear: the engine's own Luau does that work, which the VM does not count as a script's, so this charges what a script's
+/// own table.clone or table.clear of the table pays (cost.rs table_clone, table_clear: by its slots, as those count them), and a
+/// copy first counts the table and every slot it copies against ree's guard on a copy (bindable.rs Tally), raising the guard's
+/// error past it. Returns the value; what table.clone or table.clear refuses before it does any work (anything but a table, a
+/// table with a protected metatable to copy, a frozen one to clear) is left to the prelude's own line to refuse, as before.
+fn shared_table_work(engine: &Engine, value: LuaValue, copy: bool) -> LuaResult<LuaValue> {
+    let LuaValue::Table(table) = &value else { return Ok(value) };
+    let refused = if copy {
+        table.metatable().is_some_and(|meta| !matches!(meta.raw_get::<LuaValue>("__metatable"), Ok(LuaValue::Nil)))
+    } else {
+        table.is_readonly()
+    };
+    if refused {
+        return Ok(value);
+    }
+    // (its sizes, read at once whatever they are: the guard looks at a table past it without walking it)
+    let Some((array, nodes)) = (unsafe { crate::profiler::vm::table_slots(table.to_pointer().cast_mut()) }) else { return Ok(value) };
+    let (array, nodes) = (u64::from(array), u64::from(nodes));
+    let seconds = if copy {
+        let mut tally = super::bindable::Tally::default();
+        if let Err(message) = tally.add(0).and_then(|()| tally.add_values(array + nodes)) {
+            return Err(lune_roblox::datatypes::script_error::script_error(message, false));
+        }
+        crate::cost::table_clone(array, nodes)
+    } else {
+        crate::cost::table_clear(array, nodes)
+    };
+    let state = engine.state.borrow();
+    state.sched.charge(seconds);
+    if !state.sched.is_muted() {
+        crate::boundary::add_cost(seconds);
+    }
+    Ok(value)
+}
+
 fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let r = lua.create_table()?;
     r.set("SIGNAL", super::signal_marker())?;
@@ -135,6 +171,12 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(())
         })?,
     )?;
+    // SharedTable's table work (prelude.luau), at what a script doing it itself pays (cost.rs table_clone and below)
+    r.set("SharedSizeEntryCost", crate::cost::table_counted_entry())?;
+    let e = engine.clone();
+    r.set("SharedTableCopy", lua.create_function(move |_, value: LuaValue| shared_table_work(&e, value, true))?)?;
+    let e = engine.clone();
+    r.set("SharedTableClear", lua.create_function(move |_, value: LuaValue| shared_table_work(&e, value, false))?)?;
     r.set(
         "EnumItemName",
         lua.create_function(|lua, value: LuaValue| {

@@ -196,7 +196,7 @@ index ad5a92e..ebd7694 100644
  
      char* copy = static_cast<char*>(malloc(result.size()));
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index 8d68469..1bddd09 100644
+index 48f5576..3f89a6c 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
 @@ -403,6 +403,18 @@ LUA_API void lua_workmute(lua_State* L, int on);

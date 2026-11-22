@@ -3003,15 +3003,18 @@ int lua_profiletable(void* ptr, int* arrayslots, int* arrayused, int* nodes, int
     if (o->gch.tt != LUA_TTABLE)
         return 0;
     LuaTable* h = gco2h(o);
+    // (the used counts walk every slot: only when asked for, so the sizes alone take no time whatever the table's size)
     int used = 0;
-    for (int i = 0; i < h->sizearray; ++i)
-        if (!ttisnil(&h->array[i]))
-            used++;
+    if (arrayused)
+        for (int i = 0; i < h->sizearray; ++i)
+            if (!ttisnil(&h->array[i]))
+                used++;
     int size = h->node == &luaH_dummynode ? 0 : sizenode(h);
     int nodeused = 0;
-    for (int i = 0; i < size; ++i)
-        if (!ttisnil(gval(&h->node[i])))
-            nodeused++;
+    if (nodesused)
+        for (int i = 0; i < size; ++i)
+            if (!ttisnil(gval(&h->node[i])))
+                nodeused++;
     if (arrayslots)
         *arrayslots = h->sizearray;
     if (arrayused)

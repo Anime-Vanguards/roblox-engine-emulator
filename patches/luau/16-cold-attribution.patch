@@ -38,7 +38,7 @@ index 4d81cc8..e49b908 100644
  // ABC encoding: three 8-bit values, containing registers or small numbers
  #define LUAU_INSN_A(insn) (((insn) >> 8) & 0xff)
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index 117bdec..bf40018 100644
+index d078099..9feed76 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
 @@ -532,6 +532,15 @@ typedef struct lua_ProfileInline
@@ -606,7 +606,7 @@ index 6890f7e..7c8cb13 100644
      uint8_t* lineinfo;      // for each instruction, line number as a delta from baseline
      int* abslineinfo;       // baseline line info, one entry for each 1<<linegaplog2 instructions; allocated after lineinfo
 diff --git a/luau/VM/src/lprofile.cpp b/luau/VM/src/lprofile.cpp
-index ec0c8fb..890b9a3 100644
+index 1c717b7..c35ef8f 100644
 --- a/luau/VM/src/lprofile.cpp
 +++ b/luau/VM/src/lprofile.cpp
 @@ -26,6 +26,7 @@

@@ -9,7 +9,7 @@
 # Why upstream lacks it: a real CPU pays those misses itself; an emulator on a warm host has to count them.
 
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index fc397d9..266cc46 100644
+index 5c92bb3..65229d4 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
 @@ -403,6 +403,21 @@ LUA_API void lua_workmute(lua_State* L, int on);

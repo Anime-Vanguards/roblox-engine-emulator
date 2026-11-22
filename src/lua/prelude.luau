@@ -477,7 +477,7 @@ end
 
 local SharedTable = {}
 function SharedTable.new(Initial)
-	local Self = if Initial then table.clone(Initial) else {}
+	local Self = if Initial then table.clone(R.SharedTableCopy(Initial)) else {}
 	Register(Self, "SharedTable")
 	return Self
 end
@@ -490,10 +490,10 @@ function SharedTable.size(Value)
 	for _ in Value do
 		Count += 1
 	end
-	return Count
+	R.Charge(Count * R.SharedSizeEntryCost); return Count
 end
 function SharedTable.clear(Value)
-	table.clear(Value)
+	table.clear(R.SharedTableClear(Value))
 end
 function SharedTable.isFrozen(_Value)
 	return false

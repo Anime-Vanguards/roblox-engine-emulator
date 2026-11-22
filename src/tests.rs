@@ -5706,6 +5706,100 @@ fn the_shared_table_registry_makes_a_table_per_name() {
     assert!(output.contains(&"print: ok".to_string()), "{output:?}");
 }
 
+/// The SharedTable library (a plain table here: prelude.luau) does its table work in the engine's own Luau, which the VM does
+/// not count as a script's: new, clone and cloneAndFreeze copy with table.clone, size counts the entries in a loop and clear
+/// clears with table.clear. Each pays the work clock what a script doing that itself pays for the table's size (cost.rs
+/// table_clone, table_clear, table_counted_entry), and a copy counts the table and every slot it copies against ree's guard on
+/// a copy before it copies (bindable.rs `COPY_VALUES`), raising the guard's error past it, as a Fire of that table does.
+#[test]
+fn shared_table_functions_pay_for_their_table_work_as_a_script_does() {
+    let (lua, engine) = start();
+    // (interpreted, as `ree run` runs scripts: native code counts no instructions)
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let guard = crate::lua::bindable::COPY_VALUES;
+    let output = run(
+        &lua,
+        &engine,
+        &r#"
+        local Dense = table.create(1000000, true)
+        local Keyed = {}
+        for Index = 1, tonumber("100000") do
+            Keyed["k" .. Index] = Index
+        end
+        local Small = { true }
+        -- the work of one call on a fresh argument, after a first call (the frame's first calls cost more)
+        local function Work(Call, Make)
+            Call(Make())
+            local Argument = Make()
+            local Start = os.clock()
+            Call(Argument)
+            return (os.clock() - Start) * 1e9
+        end
+        local function Count(Value)
+            local Counted = 0
+            for _ in Value do
+                Counted += 1
+            end
+            return Counted
+        end
+        local Pairs = {
+            { "new", SharedTable.new, table.clone },
+            { "clone", SharedTable.clone, table.clone },
+            { "cloneAndFreeze", SharedTable.cloneAndFreeze, table.clone },
+            { "size", SharedTable.size, Count },
+            { "clear", SharedTable.clear, table.clear },
+        }
+        for _, Shape in { { "dense", Dense }, { "keyed", Keyed } } do
+            for _, Pair in Pairs do
+                local Name, Mine, Own = Pair[1], Pair[2], Pair[3]
+                local function Of(Value)
+                    return if Name == "clear" then function() return table.clone(Value) end else function() return Value end
+                end
+                -- (each less its work on a table of one, which leaves the table's size)
+                local Paid = Work(Mine, Of(Shape[2])) - Work(Mine, Of(Small))
+                local Script = Work(Own, Of(Shape[2])) - Work(Own, Of(Small))
+                print(Name, Shape[1], Script > 20000, string.format("%.3f", Paid / Script))
+            end
+        end
+
+        local Past = table.create(GUARD)
+        local Before = collectgarbage("count")
+        local Kept = {}
+        for _, Name in { "new", "clone", "cloneAndFreeze" } do
+            local Ok, Result = pcall(SharedTable[Name], Past)
+            Kept[Name] = Result
+            print("past the guard", Name, Ok, Result)
+        end
+        print("copied nothing", collectgarbage("count") - Before < 1024)
+        local At = SharedTable.new(table.create(GUARD - 1, true))
+        print("at the guard", typeof(At), SharedTable.size(At))
+        local Copy = SharedTable.clone(SharedTable.new({ 1, 2, k = 3 }))
+        print("small", typeof(Copy), Copy[1], Copy[2], Copy.k, SharedTable.size(Copy))
+        SharedTable.clear(Copy)
+        print("cleared", SharedTable.size(Copy), next(Copy))
+        "#
+        .replace("GUARD", &guard.to_string()),
+    );
+    let past = crate::lua::bindable::too_large(guard, "values");
+    let mut wanted = Vec::new();
+    for shape in ["dense", "keyed"] {
+        for name in ["new", "clone", "cloneAndFreeze", "size", "clear"] {
+            wanted.push(format!("print: {name} {shape} true 1.000"));
+        }
+    }
+    for name in ["new", "clone", "cloneAndFreeze"] {
+        wanted.push(format!("print: past the guard {name} false {past}"));
+    }
+    wanted.extend([
+        "print: copied nothing true".to_string(),
+        format!("print: at the guard SharedTable {}", guard - 1),
+        "print: small SharedTable 1 2 3 3".into(),
+        "print: cleared 0 nil".into(),
+    ]);
+    assert_eq!(output, wanted);
+}
+
 /// A harness can add players to a run (a lobby's other players): a Player parented to Players is listed by
 /// GetPlayers, found by GetPlayerByUserId and (through its Character) by GetPlayerFromCharacter, and fires
 /// PlayerAdded, PlayerRemoving and CharacterAdded; the local player stays first and fires none of them.

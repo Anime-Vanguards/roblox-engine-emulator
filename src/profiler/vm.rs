@@ -897,6 +897,17 @@ pub unsafe fn table_shape(ptr: *mut c_void) -> Option<TableShape> {
     table.then(|| TableShape { array: array.max(0) as u32, array_used: array_used.max(0) as u32, nodes: nodes.max(0) as u32, nodes_used: nodes_used.max(0) as u32 })
 }
 
+/// The sizes of the table at `ptr` (its array part's slots and its hash part's nodes, 0 for none), read at once whatever the
+/// table's size, as [`table_shape`]'s used counts are not; None when it is not a table
+///
+/// # Safety
+/// `ptr` is a live collectable object (a table's `to_pointer` while the table is held).
+pub unsafe fn table_slots(ptr: *mut c_void) -> Option<(u32, u32)> {
+    let (mut array, mut nodes): (c_int, c_int) = (0, 0);
+    let table = unsafe { lua_profiletable(ptr, &mut array, std::ptr::null_mut(), &mut nodes, std::ptr::null_mut()) } != 0;
+    table.then(|| (array.max(0) as u32, nodes.max(0) as u32))
+}
+
 /// The bytes of a table itself, of an array slot and of a hash node (a table's size is the first plus its parts)
 pub fn table_bytes() -> (u64, u64, u64) {
     let (mut header, mut slot, mut node) = (0usize, 0usize, 0usize);

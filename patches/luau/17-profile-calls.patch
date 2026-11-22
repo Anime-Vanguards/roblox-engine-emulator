@@ -19,7 +19,7 @@
 # call's entry and return; a hardware-counter profile needs both, and cheaply enough to skip most calls.
 
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index bf40018..8d68469 100644
+index 9feed76..48f5576 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
 @@ -668,6 +668,21 @@ LUA_API int lua_profileentries(lua_State* L, int* incfunction);
@@ -94,7 +94,7 @@ index 95d4a32..fe8e129 100644
          L->base = L->ci->base;
          restore_stack_limit(L);
 diff --git a/luau/VM/src/lprofile.cpp b/luau/VM/src/lprofile.cpp
-index 890b9a3..f5520cc 100644
+index c35ef8f..4a09e0f 100644
 --- a/luau/VM/src/lprofile.cpp
 +++ b/luau/VM/src/lprofile.cpp
 @@ -445,6 +445,31 @@ const BuiltinShape kBuiltins[] = {

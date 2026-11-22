@@ -35,10 +35,10 @@
 # per-instruction cost.
 
 diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
-index 6024f78..fc397d9 100644
+index 6024f78..5c92bb3 100644
 --- a/luau/VM/include/lua.h
 +++ b/luau/VM/include/lua.h
-@@ -410,6 +410,197 @@ LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
+@@ -410,6 +410,198 @@ LUA_API void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud);
  // weak keys).
  LUA_API void lua_settypeofnames(lua_State* L, int idx, const char* vectorname);
  
@@ -210,7 +210,8 @@ index 6024f78..fc397d9 100644
 +LUA_API void lua_setprofilerehash(lua_State* L,
 +    void (*rehash)(void* ud, lua_State* L, void* table, int oldarray, int oldnodes, int newarray, int newnodes, int keys, int script), void* ud);
 +// a table's shape (ptr as lua_enumheap names it: the table): its array part's slots and how many hold a value, its hash part's
-+// nodes (0: none) and how many hold a value; 0 when ptr is not a table
++// nodes (0: none) and how many hold a value; 0 when ptr is not a table. Any out-pointer may be NULL; the sizes alone are read at
++// once, the used counts walk the parts
 +LUA_API int lua_profiletable(void* ptr, int* arrayslots, int* arrayused, int* nodes, int* nodesused);
 +// the bytes of a table itself, of an array slot and of a hash node
 +LUA_API void lua_profiletablebytes(size_t* header, size_t* slot, size_t* node);
@@ -473,10 +474,10 @@ index 09210ac..1f71bb6 100644
      return result;
 diff --git a/luau/VM/src/lprofile.cpp b/luau/VM/src/lprofile.cpp
 new file mode 100644
-index 0000000..8cbf613
+index 0000000..c1386c8
 --- /dev/null
 +++ b/luau/VM/src/lprofile.cpp
-@@ -0,0 +1,2822 @@
+@@ -0,0 +1,2825 @@
 +// This file is part of the Luau programming language and is licensed under MIT License; see LICENSE.txt for details
 +// A host's profile of the interpreter (lua.h "profiling"; the engine's patches/luau/12-profiling.patch). While a profile steps, every thread of its
 +// VM runs luau_execute's single-step variant, whose dispatch calls luaP_step before each instruction:
@@ -2846,15 +2847,18 @@ index 0000000..8cbf613
 +    if (o->gch.tt != LUA_TTABLE)
 +        return 0;
 +    LuaTable* h = gco2h(o);
++    // (the used counts walk every slot: only when asked for, so the sizes alone take no time whatever the table's size)
 +    int used = 0;
-+    for (int i = 0; i < h->sizearray; ++i)
-+        if (!ttisnil(&h->array[i]))
-+            used++;
++    if (arrayused)
++        for (int i = 0; i < h->sizearray; ++i)
++            if (!ttisnil(&h->array[i]))
++                used++;
 +    int size = h->node == &luaH_dummynode ? 0 : sizenode(h);
 +    int nodeused = 0;
-+    for (int i = 0; i < size; ++i)
-+        if (!ttisnil(gval(&h->node[i])))
-+            nodeused++;
++    if (nodesused)
++        for (int i = 0; i < size; ++i)
++            if (!ttisnil(gval(&h->node[i])))
++                nodeused++;
 +    if (arrayslots)
 +        *arrayslots = h->sizearray;
 +    if (arrayused)

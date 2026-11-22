@@ -76,7 +76,8 @@ pub const COPY_BYTES: u64 = 1 << 30;
 
 /// What one engine call's copy has made so far, against ree's guard ([`COPY_VALUES`], [`COPY_BYTES`]). Every copy of script
 /// tables counts as it goes (this module's, loopback/copier.rs and wire.rs, services/json.rs; server.luau `Data` keeps a
-/// count of its own), so a table copied once for each place it appears stops at the guard.
+/// count of its own), so a table copied once for each place it appears stops at the guard; SharedTable.new and clone, which
+/// copy a table's slots whole, count them before they copy (globals.rs `shared_table_work`).
 #[derive(Default)]
 pub struct Tally {
     pub values: u64,
@@ -90,6 +91,13 @@ impl Tally {
         self.values += 1;
         self.bytes += bytes as u64;
         if self.values > COPY_VALUES || self.bytes > COPY_BYTES { Err(self.too_large()) } else { Ok(()) }
+    }
+
+    /// `count` more values copied at once (the slots of a table SharedTable.new copies whole): [`too_large`]'s error past the guard
+    #[inline]
+    pub fn add_values(&mut self, count: u64) -> Result<(), String> {
+        self.values += count;
+        if self.values > COPY_VALUES { Err(self.too_large()) } else { Ok(()) }
     }
 
     /// `bytes` more bytes made beside a value (a dictionary key JSONEncode writes): [`too_large`]'s error past the guard

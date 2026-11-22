@@ -1200,6 +1200,35 @@ pub const REPARENTED_LOOSE: f64 = 0.15e-6;
 /// and writes (298 ns) are not priced: a SharedTable is a plain table here. Charged on top of what the instructions count.
 pub const ACTOR_INVOKE: f64 = 0.94e-6;
 pub const SHARED_INCREMENT: f64 = 0.37e-6;
+
+/// What SharedTable.new and clone pay for copying a table of `array` array slots and `nodes` hash nodes (0: none): the engine's own
+/// Luau copies it with table.clone (prelude.luau), work the VM does not count as a script's ([`engine_luau`]), so it charges what a
+/// script's own table.clone of that table pays beyond the call, as the VM counts it (patches/luau 02 and 15: every slot copied, the new
+/// table and its parts' bytes, a part over 1 KB a block of the host's allocator). Roblox's own SharedTable copy was not measured.
+pub fn table_clone(array: u64, nodes: u64) -> f64 {
+    let (header, slot, node) = crate::profiler::vm::table_bytes();
+    let (array_bytes, node_bytes) = (array * slot, nodes * node);
+    let blocks = u64::from(array_bytes > 1024) + u64::from(node_bytes > 1024);
+    1e-9 * ((array + nodes) as f64 * LUAU_CLONE_ITEM
+        + (header + array_bytes + node_bytes) as f64 * LUAU_ALLOCATED_BYTE
+        + LUAU_LIBRARY_OBJECT
+        + LUAU_COLLECTOR_OBJECT
+        + blocks as f64 * LUAU_LARGE_BLOCK)
+}
+
+/// What SharedTable.clear pays for clearing a table of `array` array slots and `nodes` hash nodes: what a script's own table.clear
+/// of it pays beyond the call (every slot cleared, [`LUAU_MOVED`]), as [`table_clone`] says
+pub fn table_clear(array: u64, nodes: u64) -> f64 {
+    1e-9 * (array + nodes) as f64 * LUAU_MOVED
+}
+
+/// What SharedTable.size pays for each entry it counts: what a script's own `for _ in t do n += 1 end` pays an entry (a loop step
+/// and an add, [`INTERPRETED_OPS`]), as [`table_clone`] says
+pub fn table_counted_entry() -> f64 {
+    let op = |name: &str| crate::profiler::vm::OPCODES.iter().position(|op| *op == name).expect("a Luau opcode");
+    1e-9 * (INTERPRETED_OPS[op("FORGLOOP")] + INTERPRETED_OPS[op("ADDK")])
+}
+
 /// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 11.8 us; a
 /// Studio client and edit DataModel 6.7-6.9 for FredokaOne)
 pub const TEXT_MEASURED: f64 = 11.7e-6;

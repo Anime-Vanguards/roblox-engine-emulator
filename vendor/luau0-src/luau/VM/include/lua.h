@@ -718,7 +718,8 @@ LUA_API void lua_setprofilefreed(lua_State* L, void (*freed)(void* ud, void* blo
 LUA_API void lua_setprofilerehash(lua_State* L,
     void (*rehash)(void* ud, lua_State* L, void* table, int oldarray, int oldnodes, int newarray, int newnodes, int keys, int script), void* ud);
 // a table's shape (ptr as lua_enumheap names it: the table): its array part's slots and how many hold a value, its hash part's
-// nodes (0: none) and how many hold a value; 0 when ptr is not a table
+// nodes (0: none) and how many hold a value; 0 when ptr is not a table. Any out-pointer may be NULL; the sizes alone are read at
+// once, the used counts walk the parts
 LUA_API int lua_profiletable(void* ptr, int* arrayslots, int* arrayused, int* nodes, int* nodesused);
 // the bytes of a table itself, of an array slot and of a hash node
 LUA_API void lua_profiletablebytes(size_t* header, size_t* slot, size_t* node);
