@@ -2159,3 +2159,43 @@ fn camera_roll_render_cframe_and_the_legacy_methods() {
     assert_eq!(warned, 2, "SetRoll's warnings, on the Fixed camera and the CurrentCamera");
     assert!(!state.log_history.iter().any(|entry| entry.text.contains("is not emulated")));
 }
+
+/// A camera's FieldOfView stays within 1 to 120 degrees and ignores a NaN written, on a new camera and the CurrentCamera alike, also
+/// at the end of a tween (measured in a playing client, Studio 0.748); a write the limit leaves as it was fires no Changed.
+#[test]
+fn camera_field_of_view_stays_within_its_limits() {
+    check_running(
+        "play",
+        r#"
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        local function Set(Camera, Value)
+            Camera.FieldOfView = 70
+            Camera.FieldOfView = Value
+            return Camera.FieldOfView
+        end
+        for _, Camera in { Cam, workspace.CurrentCamera } do
+            for _, Case in { { 0.5, 1 }, { 1, 1 }, { 120, 120 }, { 120.5, 120 }, { math.huge, 120 }, { -math.huge, 1 }, { 1e-40, 1 }, { -0, 1 }, { 0 / 0, 70 }, { 200, 120 }, { -5, 1 }, { 33.3, 33.299999237060547 }, { "60", 60 }, { "x", 1 } } do
+                local Got = Set(Camera, Case[1] :: any)
+                assert(Got == Case[2] and 1 / Got > 0, `{Camera.Name} {Case[1]}: {Got}`)
+            end
+        end
+        Cam.FieldOfView = 120
+        local Fired = 0
+        Cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+            Fired += 1
+        end)
+        Cam.FieldOfView = 200
+        task.wait()
+        assert(Fired == 0, Fired)
+        Cam.FieldOfView = 60
+        task.wait()
+        assert(Fired == 1, Fired)
+        Cam.FieldOfView = 70
+        game:GetService("TweenService"):Create(Cam, TweenInfo.new(0.1), { FieldOfView = 200 }):Play()
+        task.wait(0.3)
+        assert(Cam.FieldOfView == 120, Cam.FieldOfView)
+        "#,
+        1.0,
+    );
+}
