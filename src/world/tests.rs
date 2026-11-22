@@ -2133,10 +2133,12 @@ fn camera_roll_render_cframe_and_the_legacy_methods() {
         Fails("Unable to cast string to CameraPanMode", Cam.SetCameraPanMode, Cam, "Nope")
         Fails("Unable to cast CameraType to CameraPanMode", Cam.SetCameraPanMode, Cam, Enum.CameraType.Fixed)
         Fails("Unable to cast Array to CameraPanMode", Cam.SetCameraPanMode, Cam, {})
-        -- RobloxScript members: a call raises, while reading them gives a function
+        -- RobloxScript members: a call raises, also without the camera or on another instance, while reading them gives a function
         Fails("The current thread cannot call 'Zoom' (lacking capability RobloxScript)", (Cam :: any).Zoom, Cam, 5)
+        Fails("The current thread cannot call 'Zoom' (lacking capability RobloxScript)", (Cam :: any).Zoom)
         Fails("The current thread cannot call 'SetImageServerView' (lacking capability RobloxScript)", (Cam :: any).SetImageServerView, Cam, CFrame.new())
-        assert(typeof((Cam :: any).Zoom) == "function")
+        Fails("The current thread cannot call 'SetImageServerView' (lacking capability RobloxScript)", (Cam :: any).SetImageServerView, workspace, {})
+        assert(typeof((Cam :: any).Zoom) == "function" and (Cam :: any).Zoom == (workspace.CurrentCamera :: any).Zoom)
         Cam:Destroy()
         assert(Cam:GetRoll() == 0 and C(Cam:GetRenderCFrame()) == "5 5 5 1 0 0 0 1 0 0 0 1", C(Cam:GetRenderCFrame()))
         -- a camera outside the Workspace rolls too

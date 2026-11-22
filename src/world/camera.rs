@@ -14,7 +14,7 @@
 //!
 //! Also the Camera's simpler methods, as a playing client answers them (Studio 0.748: results, result counts, argument errors
 //! and values, on new cameras and the CurrentCamera): GetRoll / SetRoll and GetRenderCFrame, GetPanSpeed / GetTiltSpeed,
-//! SetCameraPanMode, and Zoom / SetImageServerView, which a game script cannot call.
+//! and SetCameraPanMode. (Zoom and SetImageServerView, which a game script cannot call, are reflection.rs CAPABILITY_CALLS.)
 
 use std::rc::Rc;
 
@@ -243,9 +243,6 @@ fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::Method
         };
         raise(format!("Unable to cast {} to CameraPanMode", other.unwrap_or_else(|| cast_name(engine, value))))
     }));
-    // (RobloxScript members: a game script's call raises, while reading them gives a function)
-    add("Zoom", method(|_, _, _, _| raise("The current thread cannot call 'Zoom' (lacking capability RobloxScript)")));
-    add("SetImageServerView", method(|_, _, _, _| raise("The current thread cannot call 'SetImageServerView' (lacking capability RobloxScript)")));
     let mut hooks = engine.hooks.borrow_mut();
     if let (Some(camera_type), Some(scriptable)) = (engine.reflection.name_id("CameraType"), engine.reflection.enum_item("CameraType", "Scriptable")) {
         hooks.property_changed.push(Box::new(move |state, id, name| {
