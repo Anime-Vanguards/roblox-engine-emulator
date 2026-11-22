@@ -1,0 +1,490 @@
+//! The Camera's methods that move it or look through it, as a playing client answers them (Studio 0.748, roblox-sim's
+//! headless and rendered clients and its server: tools/parity/probes/camera_units.luau, camera_cutoff.luau,
+//! camera_interpolate.luau).
+//!
+//! - PanUnits(n) / TiltUnits(n), on any camera of any CameraType: the yaw of the LookVector snapped to the nearest 45 degrees
+//!   and turned by n steps of 45 (n = 1 turns right), or its pitch snapped to the nearest 10 degrees and raised by n steps of
+//!   10, held within 81 degrees; the camera then looks along that from Focus less the look times its distance from Focus (1
+//!   when it sits on Focus), with no roll, G3D's aim (up is X once the look is within 0.99 of Y). Focus does not move.
+//!   PanUnits returns nothing, TiltUnits whether the pitch changed (the camera untouched when it did not). The argument is an int: a number rounds half away from zero, a
+//!   number past the int's range (or NaN, an infinity) is the int's least, a numeric string or a boolean is taken, another
+//!   value raises "Unable to cast <type> to int" (an Instance "Instance", an EnumItem its enum's name), none "Argument 1
+//!   missing or nil". The angles are a client's to about 1e-6: its float steps were not worked out (positions within a few
+//!   float32 steps, rotation entries within 1e-6).
+//! - ZoomToExtents(cframe, size), size checked first: the rotation kept, the camera backed off from the box's centre along
+//!   its look until the sphere around the box's world-aligned bounds (`|R| * size / 2`, the size's sign kept) fits the wider
+//!   half angle of the view, `radius / sin(half angle)` (the horizontal one on a wide viewport); a radius under 0.5 counts
+//!   as 0.5. Focus becomes the centre, unrotated. 37 of 54 measured positions to the bit, the rest one or two float32 steps
+//!   off.
+//! - GetLargestCutoffDistance(ignore): five parallel rays, from Focus and from Focus moved by each near-plane corner's offset,
+//!   to the near plane's centre and corners; against parts that can collide and are at most 0.95 transparent, the ignore
+//!   list and its descendants left out. The largest `length - distance to the first hit`, or 0. A part entering the
+//!   Workspace is not seen until the spatial index takes it in: at the next physics step or another spatial query
+//!   (Raycast, GetPartBoundsInBox, ...; `Cameras::unindexed`), with the parts moved in with it; a moved, resized or removed
+//!   part counts at once.
+//! - Interpolate(endCFrame, endFocus, duration): the casts from the last argument to the first, then "Interpolation time
+//!   must be positive." (NaN passes; also on a camera that is not Scriptable), then "Attempted to use interpolation with a
+//!   camera mode other than scriptable.". A Focus write ends the tween (any camera's) at the next render step and InterpolationFinished
+//!   fires after its PreRender handlers' deferred work, CFrame and Focus as written; CameraType leaving Scriptable cancels
+//!   it, unfired; a new call replaces it, and the replaced one never fires (all measured). How it moves was reported, not
+//!   measured (neither roblox-sim's clients nor a Studio left alone run its step): only the CurrentCamera's tween steps,
+//!   at the start of each render step before the BindToRenderStep callbacks, by that step's delta; the position, the focus
+//!   point and the up vector go linearly, the camera aims from the position at the focus point (G3D's aim with that up),
+//!   Focus is the position plus 20 studs along the look, and InterpolationFinished fires once after the PreRender handlers
+//!   of the step that reaches the end. A CFrame write mid-tween becomes its end.
+
+use std::f32::consts::PI;
+use std::rc::Rc;
+
+use glam::{Affine3A, Mat3, Vec3};
+use lune_roblox::datatypes::types::float32 as f32m;
+use mlua::prelude::*;
+
+use super::{camera, camera_fov, cframe_arg, cframe_name, frame, query, vector_arg};
+use crate::{
+    ClassId, Engine, InstanceId, K, NameId, State,
+    instance as core,
+    lua::{Args, Flow, instance_id, raise, types::LEnumItem, values},
+    services::Behaviors,
+    value::Value,
+};
+
+type V = [f32; 3];
+
+fn rows_of(transform: &Affine3A) -> f32m::Rot {
+    let m = transform.matrix3;
+    [[m.x_axis.x, m.y_axis.x, m.z_axis.x], [m.x_axis.y, m.y_axis.y, m.z_axis.y], [m.x_axis.z, m.y_axis.z, m.z_axis.z]]
+}
+
+fn affine(rows: &f32m::Rot, position: V) -> Affine3A {
+    let column = |j: usize| Vec3::new(rows[0][j], rows[1][j], rows[2][j]);
+    Affine3A::from_mat3_translation(Mat3::from_cols(column(0), column(1), column(2)), Vec3::from_array(position))
+}
+
+fn add(a: V, b: V) -> V {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub(a: V, b: V) -> V {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale(a: V, s: f32) -> V {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+
+fn lerp(a: V, b: V, t: f32) -> V {
+    [f32m::lerp(a[0], b[0], t), f32m::lerp(a[1], b[1], t), f32m::lerp(a[2], b[2], t)]
+}
+
+struct Names {
+    cframe: NameId,
+    focus: NameId,
+    transparency: Option<NameId>,
+    finished: Option<NameId>,
+}
+
+fn names(engine: &Engine) -> Names {
+    let reflection = &engine.reflection;
+    Names {
+        cframe: cframe_name(engine),
+        focus: reflection.name_id("Focus").expect("the reflection names Focus"),
+        transparency: reflection.name_id("Transparency"),
+        finished: reflection.name_id("InterpolationFinished"),
+    }
+}
+
+/// The camera's CFrame and Focus.
+fn frames(engine: &Engine, names: &Names, camera: InstanceId) -> (Affine3A, Affine3A) {
+    let state = engine.state.borrow();
+    (frame::affine_of(state.dom.raw_get(camera, names.cframe)), frame::affine_of(state.dom.raw_get(camera, names.focus)))
+}
+
+fn write(engine: &Engine, camera: InstanceId, name: NameId, transform: &Affine3A) {
+    let hooks = engine.hooks.borrow();
+    let mut state = engine.state.borrow_mut();
+    core::raw_set(&mut state, &engine.reflection, &hooks, camera, name, frame::cframe_value(transform));
+}
+
+// PanUnits / TiltUnits
+
+/// What an int argument is called in its cast error: an Instance "Instance", an EnumItem its enum's name, else as a float
+/// argument names it (measured: "Unable to cast Instance to int", "Unable to cast CameraType to int").
+fn int_cast_name(engine: &Engine, value: &LuaValue) -> String {
+    if instance_id(value).is_some() {
+        return "Instance".into();
+    }
+    if let LuaValue::UserData(ud) = value
+        && let Ok(item) = ud.borrow::<LEnumItem>()
+    {
+        return engine.reflection.enum_item_type_name(item.0).to_string();
+    }
+    camera::cast_name(engine, value)
+}
+
+/// An int argument as a client casts it: rounded half away from zero, the int's least past its range.
+fn int_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<i32, Flow> {
+    let value = args.get(at);
+    let number = match value {
+        LuaValue::Nil => return raise(format!("Argument {at} missing or nil")),
+        LuaValue::Number(number) => *number,
+        LuaValue::Integer(number) => *number as f64,
+        LuaValue::Boolean(on) => f64::from(u8::from(*on)),
+        LuaValue::String(_) => match lua.coerce_number(value.clone())? {
+            Some(number) => number,
+            None => return raise("Unable to cast string to int"),
+        },
+        other => return raise(format!("Unable to cast {} to int", int_cast_name(engine, other))),
+    };
+    let rounded = number.round();
+    Ok(if (-2147483648.0..=2147483647.0).contains(&rounded) { rounded as i32 } else { i32::MIN })
+}
+
+/// Turns the camera about Focus: `turn` takes the look's (yaw, pitch) and gives the new ones.
+fn orbit(engine: &Engine, names: &Names, camera: InstanceId, tilting: bool, turn: impl Fn(f32, f32) -> (f32, f32)) -> bool {
+    let (transform, focus) = frames(engine, names, camera);
+    let rows = rows_of(&transform);
+    let position = frame::translation(&transform).to_array();
+    let focus = frame::translation(&focus).to_array();
+    // (the look as R * (0, 0, -1): its sums turn -0 into +0, so a look straight down reads yaw -180 as a client's does)
+    let look = [0.0 - rows[0][2], 0.0 - rows[1][2], 0.0 - rows[2][2]];
+    let offset = sub(position, focus);
+    let mut distance = f32m::dot3(offset, offset).sqrt();
+    if distance == 0.0 {
+        distance = 1.0;
+    }
+    let pitch_before = look[1].clamp(-1.0, 1.0).asin();
+    let (yaw, pitch) = turn((-look[0]).atan2(-look[2]), pitch_before);
+    if tilting && pitch == pitch_before {
+        return false;
+    }
+    let aimed = f32m::look_g3d([-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos()]);
+    let position = add(focus, scale(f32m::column(&aimed, 2), distance));
+    write(engine, camera, names.cframe, &affine(&aimed, position));
+    pitch != pitch_before
+}
+
+fn pan(engine: &Engine, names: &Names, camera: InstanceId, units: i32) {
+    let step = PI / 4.0;
+    orbit(engine, names, camera, false, |yaw, pitch| ((yaw / step).round() * step - units as f32 * step, pitch));
+}
+
+/// TiltUnits: whether the pitch changed; when it did not, the camera is left as it is (measured: TiltUnits(0) on a camera
+/// off the 10-degree steps returns true, on one looking level false and a rolled one keeps its roll, at the 81-degree limit
+/// true while the float pitch still moves).
+
+fn tilt(engine: &Engine, names: &Names, camera: InstanceId, units: i32) -> bool {
+    let step = PI / 18.0;
+    let limit = 81.0 * PI / 180.0;
+    orbit(engine, names, camera, true, |yaw, pitch| (yaw, ((pitch / step).round() * step + units as f32 * step).clamp(-limit, limit)))
+}
+
+// ZoomToExtents
+
+fn zoom_to_extents(engine: &Engine, names: &Names, camera: InstanceId, center: &Affine3A, size: Vec3) {
+    let r = rows_of(center);
+    let half = [size.x * 0.5, size.y * 0.5, size.z * 0.5];
+    let reach = |row: [f32; 3]| (row[0].abs() * half[0] + row[1].abs() * half[1]) + row[2].abs() * half[2];
+    let bounds = [reach(r[0]), reach(r[1]), reach(r[2])];
+    let mut radius = f32m::dot3(bounds, bounds).sqrt();
+    if radius < 0.5 {
+        radius = 0.5;
+    }
+    let radians = camera_fov::radians(&engine.state.borrow(), engine.reflection.name_id("FieldOfView").expect("FieldOfView"), camera);
+    let (width, height) = camera_fov::viewport(engine, camera);
+    let vertical = radians * 0.5;
+    let horizontal = ((radians * 0.5).tan() * (width / height)).atan();
+    let distance = radius / horizontal.max(vertical).sin();
+    let (transform, _) = frames(engine, names, camera);
+    let rows = rows_of(&transform);
+    let centre = frame::translation(center).to_array();
+    write(engine, camera, names.cframe, &affine(&rows, add(centre, scale(f32m::column(&rows, 2), distance))));
+    write(engine, camera, names.focus, &Affine3A::from_translation(Vec3::from_array(centre)));
+}
+
+// GetLargestCutoffDistance and the spatial index's lag
+
+/// The spatial index takes in what entered the Workspace (the physics step, a spatial query other than
+/// GetLargestCutoffDistance).
+pub fn index_parts(state: &mut State) {
+    state.cameras.unindexed.clear();
+}
+
+/// Whether `node` is the Workspace or in it.
+fn in_workspace(state: &State, workspace: ClassId, node: InstanceId) -> bool {
+    let mut current = Some(node);
+    while let Some(id) = current {
+        if state.dom.at(id).class == workspace {
+            return true;
+        }
+        current = state.dom.parent_of(id);
+    }
+    false
+}
+
+/// GetLargestCutoffDistance's ignore list: a table of Instances (its array part).
+fn ignore_list(args: &Args) -> Result<Vec<InstanceId>, Flow> {
+    if args.len() < 2 {
+        return raise("Argument 1 missing or nil");
+    }
+    let LuaValue::Table(table) = args.get(1) else {
+        let kind = match args.get(1) {
+            LuaValue::Number(_) | LuaValue::Integer(_) => "number",
+            LuaValue::UserData(_) | LuaValue::LightUserData(_) => "userdata",
+            other => other.type_name(),
+        };
+        return raise(format!("Expected table argument, got {kind}"));
+    };
+    let mut ids = Vec::new();
+    for index in 1..=table.raw_len() {
+        match instance_id(&table.raw_get::<LuaValue>(index)?) {
+            Some(id) => ids.push(id),
+            None => return raise("Unable to cast value to Object"),
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// The parts GetLargestCutoffDistance's rays meet: in the Workspace (not Terrain) and in the spatial index, CanCollide on
+/// (CanQuery does not matter: measured, a part with CanQuery off and CanCollide on blocks), at most 0.95 transparent
+/// (float32), neither in the ignore list nor under what it lists.
+fn cutoff_solids(engine: &Engine, names: &Names, ignore: &[InstanceId]) -> Vec<query::Solid> {
+    let state = engine.state.borrow();
+    let reflection = &engine.reflection;
+    let (Some(base_part), Some(terrain)) = (reflection.class_id("BasePart"), reflection.class_id("Terrain")) else { return Vec::new() };
+    let can_collide = reflection.name_id("CanCollide");
+    let mut result = Vec::new();
+    for id in state.dom.descendants(engine.world().workspace) {
+        let info = reflection.class(state.dom.at(id).class);
+        if !info.is_a(base_part) || info.is_a(terrain) || state.cameras.unindexed.contains(&id) {
+            continue;
+        }
+        if can_collide.and_then(|n| state.dom.boolean(id, n)) == Some(false) || names.transparency.and_then(|n| state.dom.number(id, n)).is_some_and(|t| t as f32 > 0.95) {
+            continue;
+        }
+        if ignore.iter().any(|&listed| listed == id || state.dom.is_descendant_of(id, listed)) {
+            continue;
+        }
+        result.push(query::solid(&state, engine, id));
+    }
+    result
+}
+
+fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Vec<InstanceId>) -> f32 {
+    let solids = cutoff_solids(engine, names, &ignore);
+    if solids.is_empty() {
+        return 0.0;
+    }
+    let (transform, focus) = frames(engine, names, camera);
+    let rows = rows_of(&transform);
+    let (right, up) = (f32m::column(&rows, 0), f32m::column(&rows, 1));
+    let look = scale(f32m::column(&rows, 2), -1.0);
+    let near = camera::near_plane(engine, camera);
+    let radians = camera_fov::radians(&engine.state.borrow(), engine.reflection.name_id("FieldOfView").expect("FieldOfView"), camera);
+    let (width, height) = camera_fov::viewport(engine, camera);
+    let half_y = near * (radians * 0.5).tan();
+    let half_x = half_y * (width / height);
+    let centre = add(frame::translation(&transform).to_array(), scale(look, near));
+    let focus = frame::translation(&focus).to_array();
+    let along = sub(centre, focus);
+    let length = f32m::dot3(along, along).sqrt();
+    let mut largest = 0.0f32;
+    for (x, y) in [(0.0, 0.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+        let offset = add(scale(right, x * half_x), scale(up, y * half_y));
+        let origin = add(focus, offset);
+        if let Some(hit) = query::cast_ray(&solids, Vec3::from_array(origin), Vec3::from_array(along), 0.0, None) {
+            largest = largest.max(length - hit.distance);
+        }
+    }
+    largest
+}
+
+// Interpolate
+
+/// An Interpolate tween: where it starts and ends (position, focus point, up vector), its length and how far it is.
+pub struct Tween {
+    from: [V; 3],
+    to: [V; 3],
+    duration: f32,
+    elapsed: f32,
+    /// A Focus write: the tween ends at the next render step
+    ending: bool,
+}
+
+fn ends(transform: &Affine3A, focus: &Affine3A) -> [V; 3] {
+    [frame::translation(transform).to_array(), frame::translation(focus).to_array(), f32m::column(&rows_of(transform), 1)]
+}
+
+/// G3D's aim at `target` with an up vector: `up` normalized, X once the look is within 0.99 of it, then as lune's look_g3d.
+fn aim(from: V, target: V, up: V) -> f32m::Rot {
+    let look = f32m::unit3(sub(target, from));
+    let mut up = f32m::unit3(up);
+    if f32m::dot3(look, up).abs() > 0.99 {
+        up = [1.0, 0.0, 0.0];
+        if f32m::dot3(look, up).abs() > 0.99 {
+            up = [0.0, 1.0, 0.0];
+        }
+    }
+    let d = f32m::dot3(look, up);
+    let u = f32m::unit3(sub(up, scale(look, d)));
+    let z = scale(look, -1.0);
+    let x = f32m::unit3(scale(f32m::cross3(z, u), -1.0));
+    let y = f32m::cross3(z, x);
+    f32m::from_columns(x, y, z)
+}
+
+fn current_camera(engine: &Engine) -> Option<InstanceId> {
+    match engine.state.borrow().dom.at(engine.world().workspace).stored(K::CurrentCamera as NameId) {
+        Some(Value::Instance(id)) => Some(*id),
+        _ => None,
+    }
+}
+
+/// The CurrentCamera's tween steps by `delta`, at the start of a client's render step (before the BindToRenderStep
+/// callbacks; services' render-step hook).
+pub fn step(engine: &Engine, delta: f64) {
+    if engine.state.borrow().cameras.tweens.is_empty() {
+        return;
+    }
+    // (a Focus write ends a tween on any camera: measured, a camera that is not the CurrentCamera fires too)
+    {
+        let mut state = engine.state.borrow_mut();
+        let cameras = &mut state.cameras;
+        let mut ended: Vec<InstanceId> = cameras.tweens.iter().filter(|(_, tween)| tween.ending).map(|(&id, _)| id).collect();
+        ended.sort_unstable();
+        for id in ended {
+            cameras.tweens.remove(&id);
+            cameras.finished.push(id);
+        }
+    }
+    let Some(camera) = current_camera(engine) else { return };
+    let Some(mut tween) = engine.state.borrow_mut().cameras.tweens.remove(&camera) else { return };
+    if !tween.ending {
+        let names = names(engine);
+        tween.elapsed += delta as f32;
+        let alpha = (tween.elapsed / tween.duration).min(1.0);
+        let position = lerp(tween.from[0], tween.to[0], alpha);
+        let target = lerp(tween.from[1], tween.to[1], alpha);
+        let rows = aim(position, target, lerp(tween.from[2], tween.to[2], alpha));
+        let focus = add(position, scale(f32m::column(&rows, 2), -20.0));
+        engine.state.borrow_mut().cameras.stepping = true;
+        write(engine, camera, names.cframe, &affine(&rows, position));
+        write(engine, camera, names.focus, &Affine3A::from_translation(Vec3::from_array(focus)));
+        engine.state.borrow_mut().cameras.stepping = false;
+        if alpha < 1.0 {
+            engine.state.borrow_mut().cameras.tweens.insert(camera, tween);
+            return;
+        }
+    }
+    engine.state.borrow_mut().cameras.finished.push(camera);
+}
+
+fn camera_argument(engine: &Engine, args: &Args, at: usize) -> Result<Affine3A, Flow> {
+    let value = args.get(at);
+    if value.is_nil() {
+        return raise(format!("Argument {at} missing or nil"));
+    }
+    cframe_arg(value).map_or_else(|| raise(format!("Unable to cast {} to CoordinateFrame", camera::cast_name(engine, value))), Ok)
+}
+
+/// Camera's deprecated CoordinateFrame and focus read and write CFrame and Focus; a CFrame change fires CoordinateFrame's
+/// Changed after CFrame's, a Focus change none for focus (measured: PanUnits fires "CFrame, CoordinateFrame",
+/// ZoomToExtents "CFrame, CoordinateFrame, Focus"). Called once the camera's behaviours are in (derived::add_view takes them).
+pub(super) fn install_aliases(engine: &Rc<Engine>) {
+    for (alias, source, events) in [("CoordinateFrame", "CFrame", crate::derived::ViewEvents::After), ("focus", "Focus", crate::derived::ViewEvents::None)] {
+        let Some(target) = engine.reflection.name_id(source) else { continue };
+        let read: crate::derived::ReadFn = Rc::new(|value| value.cloned().unwrap_or_else(|| frame::cframe_value(&Affine3A::IDENTITY)));
+        let write: crate::derived::WriteFn = Rc::new(move |state, reflection, hooks, id, value| {
+            core::raw_set(state, reflection, hooks, id, target, value);
+        });
+        crate::derived::add_view(engine, "Camera", alias, source, events, read, write);
+    }
+}
+
+pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_class: ClassId) {
+    let mut add_method = |member: &str, f: crate::services::MethodFn| {
+        if let Some(name) = engine.reflection.name_id(member) {
+            behaviors.add_method(camera_class, name, f);
+        }
+    };
+    add_method("PanUnits", Rc::new(|lua, engine, id, args| {
+        let units = int_argument(lua, engine, args, 1)?;
+        pan(engine, &names(engine), id, units);
+        Ok(LuaMultiValue::new())
+    }));
+    add_method("TiltUnits", Rc::new(|lua, engine, id, args| {
+        let units = int_argument(lua, engine, args, 1)?;
+        Ok(values([LuaValue::Boolean(tilt(engine, &names(engine), id, units))]))
+    }));
+    add_method("ZoomToExtents", Rc::new(|_, engine, id, args| {
+        let size = match args.get(2) {
+            LuaValue::Nil => return raise("Argument 2 missing or nil"),
+            value => vector_arg(value).map_or_else(|| raise(format!("Unable to cast {} to Vector3", camera::cast_name(engine, value))), Ok)?,
+        };
+        let center = camera_argument(engine, args, 1)?;
+        zoom_to_extents(engine, &names(engine), id, &center, size);
+        Ok(LuaMultiValue::new())
+    }));
+    add_method("GetLargestCutoffDistance", Rc::new(|_, engine, id, args| {
+        let ignore = ignore_list(args)?;
+        Ok(values([LuaValue::Number(f64::from(largest_cutoff(engine, &names(engine), id, ignore)))]))
+    }));
+    add_method("Interpolate", Rc::new(|lua, engine, id, args| {
+        let duration = camera::float_argument(lua, engine, args, 3)?;
+        let end_focus = camera_argument(engine, args, 2)?;
+        let end = camera_argument(engine, args, 1)?;
+        if duration <= 0.0 {
+            return raise("Interpolation time must be positive.");
+        }
+        if !camera::scriptable(engine, id) {
+            return raise("Attempted to use interpolation with a camera mode other than scriptable.");
+        }
+        let names = names(engine);
+        let (transform, focus) = frames(engine, &names, id);
+        let tween = Tween { from: ends(&transform, &focus), to: ends(&end, &end_focus), duration, elapsed: 0.0, ending: false };
+        engine.state.borrow_mut().cameras.tweens.insert(id, tween);
+        Ok(LuaMultiValue::new())
+    }));
+
+    let names = names(engine);
+    let (cframe, focus, finished) = (names.cframe, names.focus, names.finished);
+    let workspace = engine.reflection.class_id("Workspace");
+    let mut hooks = engine.hooks.borrow_mut();
+    // A script's write mid-tween: a CFrame becomes the end, a Focus ends it at the next render step
+    hooks.property_changed.push(Box::new(move |state, id, name| {
+        if state.cameras.stepping || state.cameras.tweens.is_empty() || (name != cframe && name != focus) {
+            return;
+        }
+        let written = frame::affine_of(state.dom.raw_get(id, name));
+        let Some(tween) = state.cameras.tweens.get_mut(&id) else { return };
+        if name == focus {
+            tween.ending = true;
+        } else {
+            tween.to[0] = frame::translation(&written).to_array();
+            tween.to[2] = f32m::column(&rows_of(&written), 1);
+        }
+    }));
+    // The parts that enter the Workspace (with what they are moved in) wait for the spatial index
+    if let (Some(workspace), Some(base_part)) = (workspace, engine.reflection.class_id("BasePart")) {
+        let reflection = engine.reflection.clone();
+        hooks.hierarchy_changed.push(Box::new(move |state, id, old, new| {
+            if new.is_some_and(|parent| in_workspace(state, workspace, parent)) && !old.is_some_and(|parent| in_workspace(state, workspace, parent)) {
+                let entered: Vec<InstanceId> = std::iter::once(id).chain(state.dom.descendants(id)).filter(|&node| reflection.class(state.dom.at(node).class).is_a(base_part)).collect();
+                state.cameras.unindexed.extend(entered);
+            }
+        }));
+    }
+    drop(hooks);
+    // InterpolationFinished, after the PreRender handlers (and what they deferred)
+    if let Some(finished) = finished {
+        engine.state.borrow_mut().sched.add_hook(crate::scheduler::Phase::PreRender, Rc::new(move |_, engine, _| {
+            let mut state = engine.state.borrow_mut();
+            for camera in std::mem::take(&mut state.cameras.finished) {
+                core::fire_event(&mut state, camera, finished, Vec::new());
+            }
+            Ok(())
+        }));
+    }
+}

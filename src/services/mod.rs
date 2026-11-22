@@ -673,6 +673,8 @@ pub fn install(engine: &Rc<Engine>) {
             if server {
                 return Ok(());
             }
+            // Camera:Interpolate's step: at the start of the render step, before the bindings (world/camera_moves.rs)
+            crate::world::camera_moves::step(engine, delta);
             let snapshot: Vec<Rc<RenderStep>> = hook_steps.borrow().clone();
             for step in snapshot {
                 // Unbound by an earlier callback of this render step: skipped
@@ -708,8 +710,9 @@ pub fn install(engine: &Rc<Engine>) {
             super::scheduler::flush_deferred(lua, engine)?;
             // Motor6D.Transform: applied in a batch after PreSimulation (Roblox's Motor6D docs)
             crate::luau_profile::engine_step("joints", || crate::world::joints::step_transforms(engine));
-            // The physics step: free assemblies fall (world::gravity)
+            // The physics step: free assemblies fall (world::gravity); the spatial index takes in what entered the Workspace
             crate::luau_profile::engine_step("physics", || crate::world::gravity::step(engine, delta));
+            crate::world::camera_moves::index_parts(&mut engine.state.borrow_mut());
             fire_frame_event(lua, engine, K::PostSimulation as NameId, &[Value::Number(delta)])
         }));
         state.sched.add_hook(Phase::Heartbeat, Rc::new(|lua, engine, delta| {

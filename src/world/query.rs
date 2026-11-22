@@ -279,8 +279,10 @@ fn keep_filter(engine: &Engine, filter: Filter) {
 /// How many filters' solids the cache keeps at once (the most recent)
 const CACHED_FILTERS: usize = 8;
 
-/// [`solids`] through the engine's [`QueryCache`].
+/// [`solids`] through the engine's [`QueryCache`]. A spatial query takes into the index what entered the Workspace since
+/// the last one or the physics step (world/camera_moves.rs: GetLargestCutoffDistance, which does not, sees it from then).
 fn cached_solids(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
+    super::camera_moves::index_parts(&mut engine.state.borrow_mut());
     let stamp = {
         let state = engine.state.borrow();
         (state.dom.structure_version, state.dom.write_version)

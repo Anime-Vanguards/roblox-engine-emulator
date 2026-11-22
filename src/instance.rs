@@ -381,6 +381,12 @@ fn notify_changed_hooks(state: &mut State, reflection: &Reflection, hooks: &Hook
     super::world::joints::property_changed(state, reflection, hooks, id, name, old.as_ref());
 }
 
+/// Changed and the property's own signal for a property the engine computes rather than stores (no hooks run): Camera's
+/// DiagonalFieldOfView and MaxAxisFieldOfView beside FieldOfView (world/camera_fov.rs).
+pub fn fire_computed_changed(state: &mut State, reflection: &Reflection, id: InstanceId, name: NameId) {
+    fire_changed(state, reflection, id, name);
+}
+
 fn fire_changed(state: &mut State, reflection: &Reflection, id: InstanceId, name: NameId) {
     let Some(signals) = state.dom.at(id).signals.as_deref() else {
         return;

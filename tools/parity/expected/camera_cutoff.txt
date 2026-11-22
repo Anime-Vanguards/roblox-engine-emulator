@@ -1,0 +1,101 @@
+# engine: Roblox Studio 0.748.0.7481526, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+cut empty true 0.000 2
+cut wall true 20.000 2
+cut wall ignored true 0.000 2
+cut wall in a model, the model ignored true 0.000 2
+cut wall in a model, the model ignored twice true 0.000 2
+cut transparency 0.5 true 20.000 2
+cut transparency 0.94999999999999996 true 20.000 2
+cut transparency 0.95000010000000001 true 0.000 2
+cut transparency 0.95099999999999996 true 0.000 2
+cut transparency 1 true 0.000 2
+cut cancollide off true 0.000 2
+cut cancollide off, canquery off true 0.000 2
+cut canquery off true 20.000 2
+cut cantouch off true 20.000 2
+cut moved true 10.000 2
+cut resized true 11.000 2
+cut behind the focus true 0.000 2
+cut removed true 0.000 2
+cut back true 0.000 2
+cut back, a frame later true 21.000 2
+cut new true 0.000 2
+cut new, again true 0.000 2
+cut new, after a Raycast true 18.000 2
+cut new, after GetPartBoundsInBox true 16.000 2
+cut new, at the Heartbeat true 0.000 2
+cut new, a frame later true 14.000 2
+cut new and moved true 0.000 2
+cut new and moved, a frame later true 22.000 2
+cut moved into a folder in the Workspace true 22.000 2
+cut random 1 true 12.799 2
+cut random 2 true 9.855 2
+cut random 3 true 13.304 2
+cut random 4 true 9.798 2
+cut random 5 true 11.985 2
+cut random 6 true 7.711 2
+cut random 7 true 23.759 2
+cut random 8 true 8.668 2
+cut random 9 true 18.210 2
+cut random 10 true 5.080 2
+cut random 11 true 16.475 2
+cut random 12 true 18.063 2
+cut random 13 true 11.890 2
+cut random 14 true 12.994 2
+cut random 15 true 9.160 2
+cut random 16 true 5.094 2
+cut random 17 true 10.468 2
+cut random 18 true 5.375 2
+cut random 19 true 2.932 2
+cut random 20 true 16.086 2
+cut random 21 true 8.882 2
+cut random 22 true 13.303 2
+cut random 23 true 26.055 2
+cut random 24 true 18.859 2
+cut random 25 true 22.511 2
+cut random 26 true 21.586 2
+cut random 27 true 16.367 2
+cut random 28 true 29.098 2
+cut random 29 true 10.371 2
+cut random 30 true 12.242 2
+cut corner 0.000 0.000 z 1 true 38.550 2
+cut converging 0.000 0.000 z 1 true 38.550 2
+cut corner 0.000 0.000 z 20 true 19.550 2
+cut converging 0.000 0.000 z 20 true 19.550 2
+cut corner 0.000 0.000 z 39 true 0.550 2
+cut converging 0.000 0.000 z 39 true 0.550 2
+cut corner 0.600 0.600 z 1 true 0.000 2
+cut converging 0.600 0.600 z 1 true 38.550 2
+cut corner 0.600 0.600 z 20 true 0.000 2
+cut converging 0.600 0.600 z 20 true 0.000 2
+cut corner 0.600 0.600 z 39 true 0.000 2
+cut converging 0.600 0.600 z 39 true 0.000 2
+cut corner -0.850 0.850 z 1 true 38.550 2
+cut converging -0.850 0.850 z 1 true 38.550 2
+cut corner -0.850 0.850 z 20 true 19.550 2
+cut converging -0.850 0.850 z 20 true 0.000 2
+cut corner -0.850 0.850 z 39 true 0.550 2
+cut converging -0.850 0.850 z 39 true 0.550 2
+cut corner 0.850 -0.850 z 1 true 38.550 2
+cut converging 0.850 -0.850 z 1 true 38.550 2
+cut corner 0.850 -0.850 z 20 true 19.550 2
+cut converging 0.850 -0.850 z 20 true 0.000 2
+cut corner 0.850 -0.850 z 39 true 0.550 2
+cut converging 0.850 -0.850 z 39 true 0.550 2
+cut corner 0.850 0.000 z 1 true 0.000 2
+cut converging 0.850 0.000 z 1 true 38.550 2
+cut corner 0.850 0.000 z 20 true 0.000 2
+cut converging 0.850 0.000 z 20 true 0.000 2
+cut corner 0.850 0.000 z 39 true 0.000 2
+cut converging 0.850 0.000 z 39 true 0.000 2
+cut focus inside true 0.000 2
+cut camera inside true 1.500 2
+cut arg none error Argument 1 missing or nil
+cut arg nil error Expected table argument, got nil
+cut arg number error Expected table argument, got number
+cut arg string error Expected table argument, got string
+cut arg instance error Expected table argument, got userdata
+cut arg mixed error Unable to cast value to Object
+cut arg dictionary ok 0
+cut loose ok 0

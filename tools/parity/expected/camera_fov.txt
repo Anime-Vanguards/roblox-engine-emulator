@@ -1,0 +1,106 @@
+# engine: Roblox Studio 0.748.0.7481526, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+default 70 88.876533508300781 70
+fov 1 0.017454177141189575 1
+fov 2 0.069827347993850708 2
+fov 5 0.43688464164733887 5
+fov 10 1.7540916204452515 10
+fov 15 3.9706990718841553 15
+fov 20 7.1164169311523438 20
+fov 30 16.342891693115234 30
+fov 33.299999999999997 20.283367156982422 33.299999237060547
+fov 40 29.678958892822266 40
+fov 45 37.878879547119141 45
+fov 50 47.007064819335938 50
+fov 60 67.380126953125 60
+fov 70 88.876533508300781 70
+fov 71.700000000000003 92.475006103515625 71.699996948242188
+fov 75 99.324302673339844 75
+fov 80 109.23996734619141 80
+fov 90 126.86989593505859 90
+fov 100 141.21136474609375 100
+fov 110 152.45169067382812 110
+fov 119 160.31578063964844 119.00000762939453
+fov 120 161.07534790039062 120
+write DiagonalFieldOfView 0.5 true  5.3485016822814941 0.50000005960464478 5.3485016822814941
+write DiagonalFieldOfView 1 true  7.5585122108459473 1.0000001192092896 7.5585122108459473
+write DiagonalFieldOfView 5 true  16.809446334838867 5 16.809446334838867
+write DiagonalFieldOfView 10 true  23.626411437988281 10 23.626411437988281
+write DiagonalFieldOfView 30 true  40.207820892333984 30.000003814697266 40.207820892333984
+write DiagonalFieldOfView 50 true  51.548084259033203 50 51.548084259033203
+write DiagonalFieldOfView 60 true  56.496936798095703 60 56.496936798095703
+write DiagonalFieldOfView 70 true  61.225242614746094 70 61.225242614746094
+write DiagonalFieldOfView 80 true  65.864410400390625 79.999984741210938 65.864410400390625
+write DiagonalFieldOfView 88.879999999999995 true  70.001640319824219 88.879997253417969 70.001640319824219
+write DiagonalFieldOfView 90 true  70.528778076171875 89.999992370605469 70.528778076171875
+write DiagonalFieldOfView 100 true  75.331291198730469 100 75.331291198730469
+write DiagonalFieldOfView 110 true  80.397552490234375 109.99998474121094 80.397552490234375
+write DiagonalFieldOfView 120 true  85.882797241210938 120 85.882797241210938
+write DiagonalFieldOfView 130 true  91.998138427734375 130 91.998138427734375
+write DiagonalFieldOfView 140 true  99.058769226074219 140 99.058769226074219
+write DiagonalFieldOfView 150 true  107.58795928955078 150 107.58795928955078
+write DiagonalFieldOfView 160 true  118.59236145019531 160 118.59236145019531
+write DiagonalFieldOfView 170 true  120 161.07534790039062 120
+write DiagonalFieldOfView 179 true  120 161.07534790039062 120
+write DiagonalFieldOfView 180 true  nan nan nan
+write DiagonalFieldOfView 200 true  nan nan nan
+write DiagonalFieldOfView 0 true  1 0.017454177141189575 1
+write DiagonalFieldOfView -10 true  nan nan nan
+write DiagonalFieldOfView nan true  70 88.876533508300781 70
+write DiagonalFieldOfView inf true  nan nan nan
+write DiagonalFieldOfView string true  51.548084259033203 50 51.548084259033203
+write DiagonalFieldOfView string true  1 0.017454177141189575 1
+write DiagonalFieldOfView boolean true  1 0.017454177141189575 1
+write DiagonalFieldOfView table true  1 0.017454177141189575 1
+write DiagonalFieldOfView Vector3 true  1 0.017454177141189575 1
+write MaxAxisFieldOfView 0.5 true  1 0.017454177141189575 1
+write MaxAxisFieldOfView 1 true  1 0.017454177141189575 1
+write MaxAxisFieldOfView 5 true  5 0.43688464164733887 5
+write MaxAxisFieldOfView 10 true  10 1.7540916204452515 10
+write MaxAxisFieldOfView 30 true  30 16.342891693115234 30
+write MaxAxisFieldOfView 50 true  50 47.007064819335938 50
+write MaxAxisFieldOfView 60 true  60 67.380126953125 60
+write MaxAxisFieldOfView 70 true  70 88.876533508300781 70
+write MaxAxisFieldOfView 80 true  80 109.23996734619141 80
+write MaxAxisFieldOfView 88.879999999999995 true  88.879997253417969 125.05690002441406 88.879997253417969
+write MaxAxisFieldOfView 90 true  90 126.86989593505859 90
+write MaxAxisFieldOfView 100 true  100 141.21136474609375 100
+write MaxAxisFieldOfView 110 true  110 152.45169067382812 110
+write MaxAxisFieldOfView 120 true  120 161.07534790039062 120
+write MaxAxisFieldOfView 130 true  120 161.07534790039062 120
+write MaxAxisFieldOfView 140 true  120 161.07534790039062 120
+write MaxAxisFieldOfView 150 true  120 161.07534790039062 120
+write MaxAxisFieldOfView 160 true  120 161.07534790039062 120
+write MaxAxisFieldOfView 170 true  120 161.07534790039062 120
+write MaxAxisFieldOfView 179 true  120 161.07534790039062 120
+write MaxAxisFieldOfView 180 true  1 0.017454177141189575 1
+write MaxAxisFieldOfView 200 true  1 0.017454177141189575 1
+write MaxAxisFieldOfView 0 true  1 0.017454177141189575 1
+write MaxAxisFieldOfView -10 true  1 0.017454177141189575 1
+write MaxAxisFieldOfView nan true  70 88.876533508300781 70
+write MaxAxisFieldOfView inf true  nan nan nan
+write MaxAxisFieldOfView string true  50 47.007064819335938 50
+write MaxAxisFieldOfView string true  1 0.017454177141189575 1
+write MaxAxisFieldOfView boolean true  1 0.017454177141189575 1
+write MaxAxisFieldOfView table true  1 0.017454177141189575 1
+write MaxAxisFieldOfView Vector3 true  1 0.017454177141189575 1
+self 30 DiagonalFieldOfView 30 16.342891693115234 30
+self 30 MaxAxisFieldOfView 30 16.342891693115234 30
+self 60 DiagonalFieldOfView 60 67.380126953125 60
+self 60 MaxAxisFieldOfView 60 67.380126953125 60
+self 90 DiagonalFieldOfView 90 126.86989593505859 90
+self 90 MaxAxisFieldOfView 90 126.86989593505859 90
+self 110 DiagonalFieldOfView 110 152.45169067382812 110
+self 110 MaxAxisFieldOfView 110 152.45169067382812 110
+changed FieldOfView 50 FieldOfView, signal FieldOfView, DiagonalFieldOfView, signal DiagonalFieldOfView, MaxAxisFieldOfView, signal MaxAxisFieldOfView
+changed DiagonalFieldOfView 60 DiagonalFieldOfView, signal DiagonalFieldOfView, FieldOfView, signal FieldOfView, MaxAxisFieldOfView, signal MaxAxisFieldOfView
+changed MaxAxisFieldOfView 60 MaxAxisFieldOfView, signal MaxAxisFieldOfView, FieldOfView, signal FieldOfView, DiagonalFieldOfView, signal DiagonalFieldOfView
+changed FieldOfView 60 
+changed MaxAxisFieldOfView 60 
+changed DiagonalFieldOfView 88.876533508300781 DiagonalFieldOfView, signal DiagonalFieldOfView, FieldOfView, signal FieldOfView, MaxAxisFieldOfView, signal MaxAxisFieldOfView
+changed DiagonalFieldOfView nan 
+changed MaxAxisFieldOfView 500 MaxAxisFieldOfView, signal MaxAxisFieldOfView, FieldOfView, signal FieldOfView, DiagonalFieldOfView, signal DiagonalFieldOfView
+changed MaxAxisFieldOfView 500 
+mode FieldOfViewMode 120 161.07534790039062 120
+mode writes FieldOfView, signal FieldOfView, DiagonalFieldOfView, signal DiagonalFieldOfView, MaxAxisFieldOfView, signal MaxAxisFieldOfView, FieldOfViewMode, DiagonalFieldOfView, signal DiagonalFieldOfView, FieldOfView, signal FieldOfView, MaxAxisFieldOfView, signal MaxAxisFieldOfView 75.331291198730469 100 75.331291198730469
+loose 51.548084259033203 50 51.548084259033203

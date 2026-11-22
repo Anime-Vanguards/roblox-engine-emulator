@@ -30,7 +30,7 @@ src/
   timing.rs, files.rs  `--profile` phase timers and cache file stamps
   watchdog.rs          Script timeout, wall-clock cap, and parent-death watchdog
   lua/                 Luau-facing API: Instance userdata, datatypes, globals, require, Luau stubs
-  world/               3D world transforms, spatial queries, Camera projections
+  world/               3D world transforms, spatial queries, Camera projections, fields of view and moves
   record/              3D scene & timeline recorder (`ree record`)
   animation/           AnimationTracks, Animator stepping, KeyframeSequence & CurveAnimation loaders
   meshes.rs            EditableMesh and FileMesh snapshot export

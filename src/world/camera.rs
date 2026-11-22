@@ -28,16 +28,32 @@ use rustc_hash::FxHashMap;
 
 use super::{cframe_name, frame, method, vector_arg};
 use crate::{
-    Engine, InstanceId,
+    Engine, InstanceId, NameId,
     lua::{Args, Flow, convert, instance_id, raise, typeof_value, types::LEnumItem, values},
     value::Value,
 };
 
 /// What cameras hold beyond their properties (`State::cameras`): the roll SetRoll gave a camera, float32. A CFrame write keeps
-/// it; CameraType leaving Scriptable drops it (measured: Fixed and back to Scriptable reads 0).
+/// it; CameraType leaving Scriptable drops it (measured: Fixed and back to Scriptable reads 0). Also the field of view a
+/// DiagonalFieldOfView or MaxAxisFieldOfView write left in radians, Interpolate's tweens and the parts the spatial index has
+/// not taken in yet (camera_fov.rs, camera_moves.rs).
 #[derive(Default)]
 pub struct Cameras {
     rolls: FxHashMap<InstanceId, f32>,
+    /// A client keeps the field of view in radians: what a DiagonalFieldOfView / MaxAxisFieldOfView write stored, with the
+    /// FieldOfView it reads as (float32 bits), while FieldOfView still holds that
+    pub(super) radians: FxHashMap<InstanceId, (u32, f32)>,
+    /// The field-of-view member a write is going through (its own Changed fired first)
+    pub(super) writing_view: Option<NameId>,
+    /// Interpolate's tweens, by camera
+    pub(super) tweens: FxHashMap<InstanceId, super::camera_moves::Tween>,
+    /// Cameras whose tween ended this render step: InterpolationFinished fires after the PreRender handlers
+    pub(super) finished: Vec<InstanceId>,
+    /// An Interpolate step is writing CFrame and Focus (not a script's write)
+    pub(super) stepping: bool,
+    /// What entered the Workspace since the spatial index last took parts in (the physics step, another spatial query):
+    /// GetLargestCutoffDistance does not see it yet
+    pub(super) unindexed: Vec<InstanceId>,
 }
 
 struct View {
@@ -135,7 +151,7 @@ fn ray(lua: &Lua, (origin, direction): (Vec3, Vec3)) -> LuaResult<LuaMultiValue>
 /// What a value is called in a cast error, as a client names it: a number "double", a boolean "bool", a table "Array" (empty or
 /// with an array part) or "Dictionary", a CFrame "CoordinateFrame", an instance "Object" (measured: "Unable to cast
 /// CoordinateFrame to Vector3", "Unable to cast Array to float").
-fn cast_name(engine: &Engine, value: &LuaValue) -> String {
+pub(super) fn cast_name(engine: &Engine, value: &LuaValue) -> String {
     match value {
         LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
         LuaValue::Boolean(_) => "bool".into(),
@@ -152,7 +168,7 @@ fn cast_name(engine: &Engine, value: &LuaValue) -> String {
 }
 
 /// A float argument: a number, a boolean (true is 1), or a string that reads as a number; float32.
-fn float_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<f32, Flow> {
+pub(super) fn float_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<f32, Flow> {
     match args.get(at) {
         LuaValue::Nil => raise(format!("Argument {at} missing or nil")),
         LuaValue::Number(number) => Ok(*number as f32),
@@ -192,7 +208,7 @@ fn roll(engine: &Engine, camera: InstanceId) -> f32 {
 }
 
 /// Whether the camera's CameraType is Scriptable (SetRoll requires it).
-fn scriptable(engine: &Engine, camera: InstanceId) -> bool {
+pub(super) fn scriptable(engine: &Engine, camera: InstanceId) -> bool {
     let (Some(name), Some(item)) = (engine.reflection.name_id("CameraType"), engine.reflection.enum_item("CameraType", "Scriptable")) else { return false };
     engine.state.borrow().dom.raw_get(camera, name).and_then(Value::as_enum) == Some(item)
 }
@@ -249,11 +265,15 @@ fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::Method
         hooks.property_changed.push(Box::new(move |state, id, name| {
             if name == camera_type && state.dom.raw_get(id, camera_type).and_then(Value::as_enum) != Some(scriptable) {
                 state.cameras.rolls.remove(&id);
+                // (an Interpolate tween is cancelled, InterpolationFinished never fires: measured, a Fixed write mid-tween)
+                state.cameras.tweens.remove(&id);
             }
         }));
     }
     hooks.instance_freed.push(Box::new(|state, id| {
         state.cameras.rolls.remove(&id);
+        state.cameras.radians.remove(&id);
+        state.cameras.tweens.remove(&id);
     }));
 }
 
@@ -283,6 +303,8 @@ pub fn install(engine: &Rc<Engine>) {
         Ok(ray(lua, view(engine, id).ray(x, y + inset, depth))?)
     }));
     install_methods(engine, &mut add);
+    super::camera_fov::install(engine, &mut behaviors, camera);
+    super::camera_moves::install(engine, &mut behaviors, camera);
     if let Some(name) = engine.reflection.name_id("NearPlaneZ") {
         behaviors.add_getter(camera, name, Rc::new(|_, engine, id| Ok(LuaValue::Number(-f64::from(near_plane(engine, id))))));
     }
@@ -305,4 +327,6 @@ pub fn install(engine: &Rc<Engine>) {
             }),
         );
     }
+    drop(behaviors);
+    super::camera_moves::install_aliases(engine);
 }

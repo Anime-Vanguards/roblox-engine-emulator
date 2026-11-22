@@ -18,6 +18,8 @@
 //! CFrame times its own); their change events fire after the CFrame's.
 
 pub mod camera;
+mod camera_fov;
+pub(crate) mod camera_moves;
 pub mod frame;
 pub mod gravity;
 pub mod joints;

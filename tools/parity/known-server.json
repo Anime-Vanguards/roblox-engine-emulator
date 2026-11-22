@@ -11,6 +11,18 @@
 			"why": "DateTime formats only in en-us: other locales (en-gb, fr, ja, de) are not emulated"
 		}
 	],
+	"camera_cutoff": [
+		{
+			"line": "cut new, at the Heartbeat true 14.000",
+			"why": "a server runs its physics step between a task.wait resumption and that frame's Heartbeat, so the part is in the spatial index there; ree's frame (and a client's) has none between them"
+		}
+	],
+	"camera_units": [
+		{
+			"line": "PanUnits 28 5 0 nil 58.502 -4.399",
+			"why": "PanUnits' float steps are not all a client's (its angles within about 1e-6): this position falls on the other side of a third decimal"
+		}
+	],
 	"cframe_angle_between": [
 		{
 			"line": "args dot other error @92: invalid argument #2 to 'AngleBetween' (CFrame expected, got string)",

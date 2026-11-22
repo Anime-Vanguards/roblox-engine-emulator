@@ -1,0 +1,11 @@
+# engine: Roblox Studio 0.748.0.7481526, a rendered desktop playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-22
+call 0
+focus write wrote Focus, preRender, deferred by preRender, finished 0, preRender, deferred by preRender, preRender, deferred by preRender fired 1
+finished in the render step after the write true
+focus as written true
+a second write fires nothing 1
+cancelled 0
+replaced 1
+other ok 
+other fired 1

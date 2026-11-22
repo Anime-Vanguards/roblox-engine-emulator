@@ -2199,3 +2199,441 @@ fn camera_field_of_view_stays_within_its_limits() {
         1.0,
     );
 }
+
+/// A playing client's engine (one Heartbeat a frame, a playing client's render step).
+fn start_play() -> (Lua, Rc<Engine>) {
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    (lua, engine)
+}
+
+/// DiagonalFieldOfView and MaxAxisFieldOfView as a playing client reads and writes them (Studio 0.748, to the bit:
+/// tools/parity/probes/camera_fov.luau on a 1 x 1 camera, camera_fov_wide.luau on the 1920 x 1080 start camera): views of
+/// FieldOfView through the viewport, kept in radians, written through the inverse within 1 and 120 degrees, a NaN ignored
+/// and a value that is no number 0; their Changed after FieldOfView's, the member written first.
+#[test]
+fn camera_diagonal_and_max_axis_fields_of_view() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function N(...)
+            local T = table.pack(...)
+            for I = 1, T.n do
+                T[I] = if T[I] ~= T[I] then "nan" else string.format("%.17g", T[I])
+            end
+            return table.concat(T, " ")
+        end
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        local function All()
+            return N(Cam.FieldOfView, Cam.DiagonalFieldOfView, Cam.MaxAxisFieldOfView)
+        end
+        assert(All() == "70 88.876533508300781 70", All())
+        Cam.FieldOfView = 33.3
+        assert(N(Cam.DiagonalFieldOfView, Cam.MaxAxisFieldOfView) == "20.283367156982422 33.299999237060547")
+        -- (a client reads FieldOfView 119 back as 119.00000762939453 too; ree keeps the degrees written)
+        Cam.FieldOfView = 119
+        assert(N(Cam.DiagonalFieldOfView, Cam.MaxAxisFieldOfView) == "160.31578063964844 119.00000762939453")
+        local function Write(Member, Value)
+            Cam.FieldOfView = 70;
+            (Cam :: any)[Member] = Value
+            return All()
+        end
+        assert(Write("DiagonalFieldOfView", 30) == "40.207820892333984 30.000003814697266 40.207820892333984")
+        assert(Write("DiagonalFieldOfView", 170) == "120 161.07534790039062 120")
+        assert(Write("DiagonalFieldOfView", 180) == "nan nan nan")
+        assert(Write("DiagonalFieldOfView", 0) == "1 0.017454177141189575 1")
+        assert(Write("DiagonalFieldOfView", 0 / 0) == "70 88.876533508300781 70")
+        assert(Write("DiagonalFieldOfView", math.huge) == "nan nan nan")
+        assert(Write("DiagonalFieldOfView", "50") == "51.548084259033203 50 51.548084259033203")
+        assert(Write("DiagonalFieldOfView", true) == "1 0.017454177141189575 1")
+        assert(Write("DiagonalFieldOfView", {}) == "1 0.017454177141189575 1")
+        assert(Write("MaxAxisFieldOfView", 30) == "30 16.342891693115234 30")
+        assert(Write("MaxAxisFieldOfView", 170) == "120 161.07534790039062 120")
+        assert(Write("MaxAxisFieldOfView", 180) == "1 0.017454177141189575 1")
+        -- a member written its own value reads it back
+        Cam.FieldOfView = 60
+        Cam.DiagonalFieldOfView = Cam.DiagonalFieldOfView
+        assert(All() == "60 67.380126953125 60", All())
+        -- the start camera's 1920 x 1080 viewport
+        local Start = workspace.CurrentCamera
+        assert(N(Start.DiagonalFieldOfView, Start.MaxAxisFieldOfView) == "127.76887512207031 102.44786071777344")
+        Start.DiagonalFieldOfView = 50
+        assert(N(Start.FieldOfView, Start.DiagonalFieldOfView, Start.MaxAxisFieldOfView) == "37.019374847412109 50.000003814697266 61.51971435546875")
+        Start.MaxAxisFieldOfView = 50
+        assert(N(Start.FieldOfView, Start.DiagonalFieldOfView, Start.MaxAxisFieldOfView) == "29.394956588745117 31.946813583374023 50.000003814697266")
+        -- Changed: the member written first, then FieldOfView, then the third; a write that changes nothing fires nothing
+        Cam.FieldOfView = 70
+        local Log = {}
+        Cam.Changed:Connect(function(Name)
+            table.insert(Log, Name)
+        end)
+        shared.CameraFovLog = Log
+        Cam.FieldOfView = 50
+        shared.CameraFovCamera = Cam
+        "##,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Log, Cam = shared.CameraFovLog, shared.CameraFovCamera
+        assert(table.concat(Log, ",") == "FieldOfView,DiagonalFieldOfView,MaxAxisFieldOfView", table.concat(Log, ","))
+        table.clear(Log)
+        Cam.DiagonalFieldOfView = 60
+        Cam.MaxAxisFieldOfView = Cam.MaxAxisFieldOfView
+        "##,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Log, Cam = shared.CameraFovLog, shared.CameraFovCamera
+        assert(table.concat(Log, ",") == "DiagonalFieldOfView,FieldOfView,MaxAxisFieldOfView", table.concat(Log, ","))
+        table.clear(Log)
+        Cam.MaxAxisFieldOfView = 60
+        "##,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, r##"assert(table.concat(shared.CameraFovLog, ",") == "MaxAxisFieldOfView,FieldOfView,DiagonalFieldOfView", table.concat(shared.CameraFovLog, ","))"##);
+}
+
+/// PanUnits and TiltUnits as a playing client answers them (Studio 0.748: tools/parity/probes/camera_units.luau; positions and
+/// rotations to 3 decimals, a client's angles being matched to about 1e-6): the yaw snapped to 45 degrees and turned, the pitch
+/// snapped to 10 and raised within 81, the camera about Focus with no roll; the int argument; TiltUnits' answer; a look
+/// straight down reads yaw -180; the CoordinateFrame alias's Changed.
+#[test]
+fn camera_pan_and_tilt_units() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function R(...)
+            local T = table.pack(...)
+            for I = 1, T.n do
+                local S = string.format("%.3f", T[I])
+                T[I] = if S == "-0.000" then "0.000" else S
+            end
+            return table.concat(T, " ")
+        end
+        local function C(Frame)
+            return R(Frame:GetComponents())
+        end
+        local function Fails(Message, Function, ...)
+            local Ok, E = pcall(Function, ...)
+            assert(not Ok and tostring(E) == Message, tostring(E))
+        end
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.lookAt(Vector3.new(3, 4, 20), Vector3.new(0, 0, 0))
+        Cam.Focus = CFrame.new(0, 0, 0)
+        assert(select("#", Cam:PanUnits(1)) == 0)
+        assert(C(Cam.CFrame) == "-14.300 4.000 14.300 0.707 0.137 -0.694 0.000 0.981 0.194 0.707 -0.137 0.694", C(Cam.CFrame))
+        Cam:PanUnits(1)
+        assert(C(Cam.CFrame) == "-20.224 4.000 0.000 0.000 0.194 -0.981 0.000 0.981 0.194 1.000 0.000 0.000", C(Cam.CFrame))
+        assert(Cam.Focus == CFrame.new(0, 0, 0))
+        Cam.CFrame = CFrame.lookAt(Vector3.new(3, 4, 20), Vector3.new(0, 0, 0))
+        local Steps = {}
+        for _ = 1, 11 do
+            table.insert(Steps, tostring(Cam:TiltUnits(1)))
+        end
+        assert(table.concat(Steps, " ") == string.rep("true ", 10) .. "true")
+        assert(C(Cam.CFrame) == "0.478 -20.362 3.189 0.989 0.147 0.023 0.000 0.156 -0.988 -0.148 0.977 0.155", C(Cam.CFrame))
+        -- the argument: an int, rounded half away from zero, the int's least past its range
+        local function Turned(Method, A)
+            Cam.CFrame = CFrame.lookAt(Vector3.new(0, 0, 20), Vector3.new(0, 0, 0))
+            Cam.Focus = CFrame.new(0, 0, 0);
+            (Cam :: any)[Method](Cam, A)
+            local Look = Cam.CFrame.LookVector
+            return R(math.deg(math.atan2(-Look.X, -Look.Z)), math.deg(math.asin(Look.Y)))
+        end
+        assert(Turned("PanUnits", 2.5) == "-135.000 0.000" and Turned("PanUnits", -0.5) == "45.000 0.000" and Turned("PanUnits", true) == "-45.000 0.000")
+        assert(Turned("PanUnits", 2 ^ 31 - 1) == "-169.163 0.000" and Turned("PanUnits", 0 / 0) == "169.163 0.000")
+        assert(Turned("TiltUnits", 2.5) == "0.000 30.000" and Turned("TiltUnits", -0.5) == "0.000 -10.000" and Turned("TiltUnits", "1e1") == "0.000 81.000")
+        assert(Turned("TiltUnits", 0 / 0) == "0.000 -81.000")
+        Fails("Unable to cast string to int", Cam.PanUnits, Cam, "x")
+        Fails("Unable to cast Array to int", Cam.TiltUnits, Cam, {})
+        Fails("Unable to cast Dictionary to int", Cam.PanUnits, Cam, { a = 1 })
+        Fails("Unable to cast CoordinateFrame to int", Cam.PanUnits, Cam, CFrame.new())
+        Fails("Unable to cast CameraType to int", Cam.TiltUnits, Cam, Enum.CameraType.Fixed)
+        Fails("Unable to cast Instance to int", Cam.PanUnits, Cam, workspace)
+        Fails("Argument 1 missing or nil", Cam.TiltUnits, Cam)
+        -- TiltUnits: whether the pitch changed; a level camera keeps its roll
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 0, 20), Vector3.new(0, 0, 0)) * CFrame.Angles(0, 0, 0.5)
+        local Rolled = Cam.CFrame
+        assert(Cam:TiltUnits(0) == false and Cam.CFrame == Rolled)
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 0, 20), Vector3.new(0, 0, 20) + Vector3.new(0, math.sin(math.rad(21)), -math.cos(math.rad(21))))
+        assert(Cam:TiltUnits(0) == true)
+        assert(C(Cam.CFrame) == "0.000 -6.840 18.794 1.000 0.000 0.000 0.000 0.940 -0.342 0.000 0.342 0.940", C(Cam.CFrame))
+        -- a look straight down: yaw -180 (the look's signed zeros as a client's sums leave them)
+        Cam.CFrame = CFrame.new(2.58636475, 10.5392456, 2.67944336, 0.115252346, 0.99333626, -0, 0, 0, 1, 0.99333626, -0.115252346, 0)
+        Cam.Focus = CFrame.new(2.58636475, -9.38588715, 2.67944336)
+        Cam:TiltUnits(1)
+        assert(C(Cam.CFrame) == "2.586 10.237 -0.781 -1.000 0.000 0.000 0.000 0.174 0.985 0.000 0.985 -0.174", C(Cam.CFrame))
+        -- the deprecated CoordinateFrame and focus read CFrame and Focus
+        assert(Cam.CoordinateFrame == Cam.CFrame and Cam.focus == Cam.Focus)
+        Cam.CoordinateFrame = CFrame.new(1, 2, 3)
+        assert(Cam.CFrame == CFrame.new(1, 2, 3))
+        local Log = {}
+        Cam.Changed:Connect(function(Name)
+            table.insert(Log, Name)
+        end)
+        shared.CameraUnitsLog = Log
+        Cam.Focus = CFrame.new(0, 0, 0)
+        Cam:PanUnits(1)
+        "##,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, r##"assert(table.concat(shared.CameraUnitsLog, ",") == "Focus,CFrame,CoordinateFrame", table.concat(shared.CameraUnitsLog, ","))"##);
+}
+
+/// ZoomToExtents as a playing client answers it (Studio 0.748: camera_units.luau, camera_fov_wide.luau): the size checked
+/// before the frame; the rotation kept and the camera backed off from the box's centre by its world-aligned bounding sphere
+/// over the sine of the view's wider half angle, the radius at least 0.5; Focus the centre, unrotated.
+#[test]
+fn camera_zoom_to_extents() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Fails(Message, Function, ...)
+            local Ok, E = pcall(Function, ...)
+            assert(not Ok and tostring(E) == Message, tostring(E))
+        end
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.FieldOfView = 90
+        local function Radius(Size)
+            Cam.CFrame = CFrame.new()
+            Cam:ZoomToExtents(CFrame.new(), Size)
+            return string.format("%.3f", Cam.CFrame.Position.Z * math.sin(math.rad(45)))
+        end
+        assert(Radius(Vector3.zero) == "0.500" and Radius(Vector3.new(0.57, 0.57, 0.57)) == "0.500" and Radius(Vector3.new(0.58, 0.58, 0.58)) == "0.502")
+        assert(Radius(Vector3.new(-0.6, -0.6, -0.6)) == "0.520" and Radius(Vector3.new(1.02, 0, 0)) == "0.510")
+        -- a rotated box: |R| times the half size, the size's sign kept (to the bit)
+        Cam.CFrame = CFrame.new(13.6367798, 31.8280029, 25.982666, -0.838941455, 0, -0.54422164, -0.435151905, 0.600551844, 0.670805693, 0.326833308, 0.799585819, -0.50382781)
+        local Box = CFrame.new(-10.1687622, 27.9455566, -29.9414062, 0.0862564668, -0.389287055, -0.917068899, 0.886146069, 0.450656772, -0.107951567, 0.455307484, -0.803345442, 0.383837283)
+        assert(select("#", Cam:ZoomToExtents(Box, Vector3.new(-1.05041504, 8.34655762, 5.02349854))) == 0)
+        local P = Cam.CFrame.Position
+        assert(string.format("%.9g %.9g %.9g", P.X, P.Y, P.Z) == "-14.69244 33.5214272 -34.1293221", tostring(P))
+        assert(Cam.CFrame.Rotation == CFrame.new(0, 0, 0, -0.838941455, 0, -0.54422164, -0.435151905, 0.600551844, 0.670805693, 0.326833308, 0.799585819, -0.50382781).Rotation)
+        assert(Cam.Focus == CFrame.new(-10.1687622, 27.9455566, -29.9414062))
+        -- the start camera's wide viewport: the horizontal half angle
+        local Start = workspace.CurrentCamera
+        Start.FieldOfView = 70
+        Start.CFrame = CFrame.new()
+        Start:ZoomToExtents(CFrame.new(), Vector3.new(2, 2, 2))
+        local Expected = math.sqrt(3) / math.sin(math.atan(math.tan(math.rad(35)) * 1920 / 1080))
+        assert(math.abs(Start.CFrame.Position.Z - Expected) < 1e-4, tostring(Start.CFrame.Position))
+        Fails("Argument 2 missing or nil", Cam.ZoomToExtents, Cam)
+        Fails("Unable to cast string to Vector3", Cam.ZoomToExtents, Cam, "x", "y")
+        Fails("Unable to cast Vector3 to CoordinateFrame", Cam.ZoomToExtents, Cam, Vector3.one, Vector3.one)
+        Fails("Unable to cast CoordinateFrame to Vector3", Cam.ZoomToExtents, Cam, CFrame.new(), CFrame.new())
+        Fails("Argument 1 missing or nil", Cam.ZoomToExtents, Cam, nil, Vector3.one)
+        Fails("Unable to cast Array to Vector3", Cam.ZoomToExtents, Cam, CFrame.new(), { 1, 2, 3 })
+        "##,
+    );
+}
+
+/// GetLargestCutoffDistance as a playing client answers it (Studio 0.748: camera_cutoff.luau, camera_fov_wide.luau): five
+/// parallel rays from Focus to the near plane; parts that can collide (CanQuery aside) and are at most 0.95 transparent; the
+/// ignore list; a part entering the Workspace unseen until the physics step or another spatial query; the argument's errors.
+#[test]
+fn camera_largest_cutoff_distance_and_the_spatial_index() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Fails(Message, Function, ...)
+            local Ok, E = pcall(Function, ...)
+            assert(not Ok and tostring(E) == Message, tostring(E))
+        end
+        local function R(Value)
+            return string.format("%.3f", Value)
+        end
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 5, 30), Vector3.new(0, 5, 0))
+        Cam.Focus = CFrame.new(0, 5, 0)
+        assert(Cam:GetLargestCutoffDistance({}) == 0)
+        local Wall = Instance.new("Part")
+        Wall.Anchored = true
+        Wall.Size = Vector3.new(60, 60, 1)
+        Wall.CFrame = CFrame.new(0, 5, 10)
+        Wall.Parent = workspace
+        -- not in the spatial index yet, until another query
+        assert(Cam:GetLargestCutoffDistance({}) == 0 and Cam:GetLargestCutoffDistance({}) == 0)
+        workspace:Raycast(Vector3.new(1000, 1000, 1000), Vector3.new(0, 1, 0))
+        assert(R(Cam:GetLargestCutoffDistance({})) == "20.000")
+        assert(Cam:GetLargestCutoffDistance({ Wall }) == 0)
+        Wall.Transparency = 0.95
+        assert(R(Cam:GetLargestCutoffDistance({})) == "20.000")
+        Wall.Transparency = 0.9500001
+        assert(Cam:GetLargestCutoffDistance({}) == 0)
+        Wall.Transparency = 0
+        Wall.CanQuery = false
+        assert(R(Cam:GetLargestCutoffDistance({})) == "20.000")
+        Wall.CanCollide = false
+        assert(Cam:GetLargestCutoffDistance({}) == 0)
+        Wall.CanCollide = true
+        Wall.CanQuery = true
+        -- moved at once; removed at once; back in the Workspace unseen
+        Wall.CFrame = CFrame.new(0, 5, 20)
+        assert(R(Cam:GetLargestCutoffDistance({})) == "10.000")
+        Wall.Parent = nil
+        assert(Cam:GetLargestCutoffDistance({}) == 0)
+        Wall.Parent = workspace
+        assert(Cam:GetLargestCutoffDistance({}) == 0)
+        shared.CutoffCamera = Cam
+        -- the rays are parallel: a small block on a corner ray near Focus
+        local Corner = Instance.new("Camera")
+        Corner.Parent = workspace
+        Corner.CFrame = CFrame.lookAt(Vector3.new(100, 0, 40), Vector3.new(100, 0, 0))
+        Corner.Focus = CFrame.new(100, 0, 0)
+        Corner.FieldOfView = 120
+        local Block = Instance.new("Part")
+        Block.Anchored = true
+        Block.Size = Vector3.new(0.1, 0.1, 0.1)
+        Block.CFrame = CFrame.new(100.85, 0.85, 1)
+        Block.Parent = workspace
+        workspace:GetPartBoundsInBox(CFrame.new(1000, 1000, 1000), Vector3.one)
+        assert(R(Corner:GetLargestCutoffDistance({})) == "38.550", R(Corner:GetLargestCutoffDistance({})))
+        Block.CFrame = CFrame.new(100.6, 0.6, 1)
+        assert(Corner:GetLargestCutoffDistance({}) == 0)
+        Fails("Argument 1 missing or nil", Cam.GetLargestCutoffDistance, Cam)
+        Fails("Expected table argument, got nil", Cam.GetLargestCutoffDistance, Cam, nil)
+        Fails("Expected table argument, got number", Cam.GetLargestCutoffDistance, Cam, 5)
+        Fails("Expected table argument, got userdata", Cam.GetLargestCutoffDistance, Cam, workspace)
+        Fails("Unable to cast value to Object", Cam.GetLargestCutoffDistance, Cam, { workspace, 5 })
+        -- (the dictionary's entries are no list; GetPartBoundsInBox above took the wall back in)
+        assert(R(Cam:GetLargestCutoffDistance({ a = workspace })) == "10.000")
+        Wall.Parent = nil
+        Wall.Parent = workspace
+        assert(Cam:GetLargestCutoffDistance({}) == 0)
+        "##,
+    );
+    // the physics step takes the wall in
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, r##"assert(string.format("%.3f", shared.CutoffCamera:GetLargestCutoffDistance({})) == "10.000")"##);
+}
+
+/// Interpolate (Studio 0.748: camera_units.luau's checks, camera_interpolate.luau's endings): the checks' order; a Focus write
+/// ends a tween at the next render step and InterpolationFinished fires after the PreRender handlers' deferred work; CameraType
+/// leaving Scriptable cancels it; a replaced tween never fires. The movement is as reported, not measured: the CurrentCamera
+/// alone, from the start of the next render step, linear in the position, the focus point and the up vector, Focus 20 studs
+/// along the look, InterpolationFinished once at the end.
+#[test]
+fn camera_interpolate() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Fails(Message, Function, ...)
+            local Ok, E = pcall(Function, ...)
+            assert(not Ok and tostring(E) == Message, tostring(E))
+        end
+        local Cam = workspace.CurrentCamera
+        local A, B = CFrame.new(1, 2, 3), CFrame.new(4, 5, 6)
+        Fails("Argument 3 missing or nil", Cam.Interpolate, Cam)
+        Fails("Argument 2 missing or nil", Cam.Interpolate, Cam, A, nil, 1)
+        Fails("Unable to cast string to float", Cam.Interpolate, Cam, "z", "y", "x")
+        Fails("Unable to cast string to CoordinateFrame", Cam.Interpolate, Cam, "z", B, 0)
+        Fails("Interpolation time must be positive.", Cam.Interpolate, Cam, A, B, 0)
+        Fails("Attempted to use interpolation with a camera mode other than scriptable.", Cam.Interpolate, Cam, A, B, 0 / 0)
+        Cam.CameraType = Enum.CameraType.Scriptable
+        Fails("Interpolation time must be positive.", Cam.Interpolate, Cam, A, B, -0)
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 10, 30), Vector3.new(0, 0, 0))
+        Cam.Focus = CFrame.new(0, 0, 0)
+        local Log = {}
+        shared.InterpolateLog = Log
+        game:GetService("RunService").PreRender:Connect(function()
+            table.insert(Log, "preRender")
+            task.defer(table.insert, Log, "deferred")
+        end)
+        Cam.InterpolationFinished:Connect(function()
+            table.insert(Log, "finished")
+        end)
+        game:GetService("RunService"):BindToRenderStep("probe", 0, function()
+            table.insert(Log, "bind " .. string.format("%.3f %.3f %.3f", Cam.CFrame.X, Cam.CFrame.Y, Cam.CFrame.Z))
+        end)
+        assert(select("#", Cam:Interpolate(CFrame.lookAt(Vector3.new(30, 10, 0), Vector3.new(0, 0, 0)), CFrame.new(0, 0, 0), 4 / 60)) == 0)
+        assert(Cam.CFrame.Position == Vector3.new(0, 10, 30))
+        "##,
+    );
+    for _ in 0..5 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Log, Cam = shared.InterpolateLog, workspace.CurrentCamera
+        local Text = table.concat(Log, ", ")
+        -- moved before the bindings, by a quarter a frame; finished once, after the PreRender handlers' deferred work
+        assert(Text == "bind 7.500 10.000 22.500, preRender, deferred, bind 15.000 10.000 15.000, preRender, deferred, "
+            .. "bind 22.500 10.000 7.500, preRender, deferred, bind 30.000 10.000 0.000, preRender, deferred, finished, "
+            .. "bind 30.000 10.000 0.000, preRender, deferred", Text)
+        local Look = Cam.CFrame.LookVector
+        assert((Cam.Focus.Position - (Cam.CFrame.Position + Look * 20)).Magnitude < 1e-4 and (Look - Vector3.new(-1, -1 / 3, 0).Unit).Magnitude < 1e-5)
+        table.clear(Log)
+        -- a Focus write ends it at the next render step, Focus as written; a replaced tween never fires
+        Cam:Interpolate(CFrame.new(0, 50, 0), CFrame.new(0, 0, 0), 1000)
+        Cam:Interpolate(CFrame.new(0, 60, 0), CFrame.new(0, 0, 0), 1000)
+        "##,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, r##"table.clear(shared.InterpolateLog) workspace.CurrentCamera.Focus = CFrame.new(3, 3, 3)"##);
+    for _ in 0..3 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Log, Cam = shared.InterpolateLog, workspace.CurrentCamera
+        local Text = table.concat(Log, ", "):gsub("bind [%d%.%- ]+", "bind")
+        assert(Text == "bind, preRender, deferred, finished, bind, preRender, deferred, bind, preRender, deferred", Text)
+        assert(Cam.Focus == CFrame.new(3, 3, 3))
+        table.clear(Log)
+        -- CameraType leaving Scriptable cancels it, unfired
+        Cam:Interpolate(CFrame.new(0, 50, 0), CFrame.new(0, 0, 0), 1000)
+        Cam.CameraType = Enum.CameraType.Fixed
+        Cam.CameraType = Enum.CameraType.Scriptable
+        Cam.Focus = CFrame.new(5, 5, 5)
+        -- another camera's tween does not move, and a Focus write ends it too
+        local Other = Instance.new("Camera")
+        Other.Parent = workspace
+        Other.CameraType = Enum.CameraType.Scriptable
+        Other.InterpolationFinished:Connect(function()
+            table.insert(Log, "other finished")
+        end)
+        Other.CFrame = CFrame.new()
+        Other:Interpolate(CFrame.new(10, 0, 0), CFrame.new(10, 0, -5), 1 / 60)
+        shared.OtherCamera = Other
+        "##,
+    );
+    for _ in 0..3 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Log = shared.InterpolateLog
+        assert(not table.find(Log, "finished") and not table.find(Log, "other finished"), table.concat(Log, ", "))
+        assert(shared.OtherCamera.CFrame == CFrame.new())
+        shared.OtherCamera.Focus = CFrame.new(1, 1, 1)
+        "##,
+    );
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, r##"assert(table.find(shared.InterpolateLog, "other finished"), table.concat(shared.InterpolateLog, ", "))"##);
+}
