@@ -9498,3 +9498,50 @@ fn settings_makes_its_tree_on_the_first_call() {
     assert_eq!(engine.state.borrow().dom.live_count(), before + 1 + 9);
     assert_eq!(engine.state.borrow_mut().dom.count_of_class(class), 1);
 }
+
+/// A method called with another value as self raises "Expected ':' not '.'" unless that value is an instance of the class that
+/// declares the method, as a missing self does and before the arguments are looked at; a subclass's instance and an ancestor's
+/// member take it (measured in a playing client, Studio 0.748).
+#[test]
+fn a_method_takes_only_its_declaring_classs_instances_as_self() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Fails(Name, F)
+            local Ok, E = pcall(F)
+            if Ok or E ~= "Expected ':' not '.' calling member function " .. Name then
+                error(tostring(E), 2)
+            end
+        end
+        local Part = Instance.new("Part")
+        Part.Anchored = true
+        Part.Parent = workspace
+        local Mesh = Instance.new("MeshPart")
+        Mesh.Anchored = true
+        Mesh.Parent = workspace
+        local Model = Instance.new("Model")
+        Model.Parent = workspace
+        local Cam = Instance.new("Camera")
+        local Folder = Instance.new("Folder")
+        Fails("GetRoll", function() return (Cam :: any).GetRoll(workspace) end)
+        Fails("GetRoll", function() return (Cam :: any).GetRoll(Part) end)
+        Fails("GetRoll", function() return (Cam :: any).GetRoll("x") end)
+        Fails("WorldToViewportPoint", function() return (Cam :: any).WorldToViewportPoint(Part) end)
+        Fails("GetMass", function() return (Part :: any).GetMass(workspace) end)
+        Fails("GetMass", function() return (Part :: any).GetMass(Folder) end)
+        Fails("ApplyImpulse", function() return (Part :: any).ApplyImpulse(Model, Vector3.zero) end)
+        Fails("GetService", function() return (game :: any).GetService(workspace, "Players") end)
+        Fails("GetPlayers", function() return (game:GetService("Players") :: any).GetPlayers(workspace) end)
+        Fails("GetServerTimeNow", function() return (workspace :: any).GetServerTimeNow(Part) end)
+        Fails("Raycast", function() return (workspace :: any).Raycast(game, Vector3.zero, Vector3.one) end)
+        Fails("Create", function() return (game:GetService("TweenService") :: any).Create(workspace, Part, TweenInfo.new(), {}) end)
+        -- a subclass's instance, and the members of an ancestor of the class, take any instance of it
+        assert((Part :: any).GetMass(Mesh) == Mesh:GetMass() and (Mesh :: any).GetMass(Part) == Part:GetMass())
+        assert((workspace :: any).Raycast(Instance.new("WorldModel"), Vector3.zero, Vector3.one) == nil)
+        assert(game.FindFirstChild(workspace, "x") == nil and #workspace.GetChildren(Folder) == 0 and Folder.IsA(Part, "BasePart"))
+        assert((Part :: any).Clone(Folder).ClassName == "Folder")
+        "#,
+    );
+}

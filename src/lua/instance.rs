@@ -117,11 +117,20 @@ fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name
     }
     let e = engine.clone();
     let method_name = engine.reflection.name(name).to_string();
+    // (self must be an instance of the class that declares the method, a subclass's too: measured in a playing client, Studio
+    // 0.748, Camera.GetRoll(workspace), Part.GetMass(workspace), game.GetService(workspace, "Players") and workspace.Raycast(game,
+    // ...) raise as a missing self does, before the arguments are looked at, while Part.GetMass(aMeshPart),
+    // Model.GetPivot(aPart), workspace.Raycast(aWorldModel, ...) and game.FindFirstChild(workspace, "x") run)
+    let declaring = engine.reflection.declaring_class(owner, name);
     let function = wrapped(lua, engine, move |lua, args| {
         let args = Args::new(args);
         let Some(id) = args.instance(0) else {
             return raise(format!("Expected ':' not '.' calling member function {method_name}"));
         };
+        let class = e.state.borrow().dom.get(id).map(|instance| instance.class);
+        if class.is_some_and(|class| !e.reflection.class(class).is_a(declaring)) {
+            return raise(format!("Expected ':' not '.' calling member function {method_name}"));
+        }
         project::before_method(&mut e.state.borrow_mut(), &e.reflection, id, name);
         method(lua, &e, id, &args)
     })?;
