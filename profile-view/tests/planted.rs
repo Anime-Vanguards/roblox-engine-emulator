@@ -750,8 +750,10 @@ fn run_with(temp: &Temp, case: &str, name: &str, source: &str, harness: &str, op
     // No wall-clock cap: a process is guarded once, from its first run, and this one runs every test's runs one after
     // another, so on a busy machine the first run's 10 minutes ended the whole binary in the middle of a later test.
     args.extend(["--max-wall-seconds", "0"].map(str::to_string));
-    // (on a thread with a service worker's stack, as the ree binary runs its commands)
-    let code = std::thread::Builder::new().stack_size(64 << 20).spawn(move || roblox_engine_emulator::record::run::cli(&args, &roblox_engine_emulator::launch::Host::default(), false)).unwrap().join().unwrap();
+    // (on a thread with a service worker's stack, as the ree binary runs its commands; the test's folder for its checkout, so the
+    // run's state, `.cache/record`, goes with the test: engine.rs run_engine_with)
+    let repo = temp.path().to_path_buf();
+    let code = std::thread::Builder::new().stack_size(64 << 20).spawn(move || roblox_engine_emulator::record::run::cli(&args, &roblox_engine_emulator::launch::Host { repo, ..Default::default() }, false)).unwrap().join().unwrap();
     assert_eq!(code, 0, "{case}");
     let app = cli::open(std::slice::from_ref(&out), ThemeKind::Dark).unwrap();
     (out, app)

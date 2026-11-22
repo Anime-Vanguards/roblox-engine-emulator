@@ -39,14 +39,20 @@ fn run_engine(harness: &std::path::Path, out: &std::path::Path) -> i32 {
     run_engine_with(harness, out, &[])
 }
 
-/// [`run_engine`] with more of `ree run`'s arguments (`--context`)
+/// [`run_engine`] with more of `ree run`'s arguments (`--context`).
+///
+/// The run's host is ree's own with the harness's folder, the test's, as its checkout. A run keeps its state in its checkout's
+/// `.cache` (`record/<key>.txt`, the module files a later run of the same harness reads ahead), and ree's default checkout is the
+/// one above the test binary, or the folder cargo runs the tests in (profile-view/) when the target directory lies outside the
+/// source tree: the test's folder keeps that state out of the source tree and goes with the test (planted.rs runs alike).
 fn run_engine_with(harness: &std::path::Path, out: &std::path::Path, more: &[&str]) -> i32 {
     let mut args: Vec<String> = ["--harness", harness.to_str().unwrap(), "--seconds", "1", "--profile", "all", "--profile-out", out.to_str().unwrap()].iter().map(|s| s.to_string()).collect();
     args.extend(more.iter().map(|s| s.to_string()));
+    let repo = harness.parent().unwrap().to_path_buf();
     // (on a thread with a service worker's stack, as the ree binary runs its commands)
     std::thread::Builder::new()
         .stack_size(64 << 20)
-        .spawn(move || roblox_engine_emulator::record::run::cli(&args, &roblox_engine_emulator::launch::Host::default(), false))
+        .spawn(move || roblox_engine_emulator::record::run::cli(&args, &roblox_engine_emulator::launch::Host { repo, ..Default::default() }, false))
         .unwrap()
         .join()
         .unwrap()
@@ -206,4 +212,21 @@ fn a_handler_that_clones_a_larger_model_is_not_priced_differently() {
         let is_spawner_handler = pair.label.starts_with("anonymous") && pair.label.contains("Spawner");
         assert!(!(is_spawner_handler && pair.price_only), "{pairs:#?}");
     }
+}
+
+/// A run in a test keeps its state (`record/<key>.txt`, the module files a later run of the same harness reads ahead) in the
+/// test's own folder, which goes with the test: not in the folder cargo runs the tests in (profile-view/), where it landed when
+/// the target directory lay outside the source tree, nor in the checkout.
+#[test]
+fn a_run_keeps_its_state_in_the_tests_folder() {
+    let temp = Temp::new("state");
+    let harness = temp.path().join("Sorter.luau");
+    std::fs::write(&harness, HARNESS).unwrap();
+    let out = temp.path().join("profile");
+    assert_eq!(run_engine(&harness, &out), 0);
+    let lists = temp.path().join(".cache").join("record");
+    let kept: Vec<std::path::PathBuf> = std::fs::read_dir(&lists).map(|entries| entries.flatten().map(|entry| entry.path()).collect()).unwrap_or_default();
+    assert_eq!(kept.len(), 1, "{}: {kept:?}", lists.display());
+    let read = std::fs::read_to_string(&kept[0]).unwrap();
+    assert_eq!(read.lines().next(), harness.to_str(), "{read}");
 }
