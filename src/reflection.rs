@@ -467,8 +467,9 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
 /// (tools/parity/probes/engine_capabilities.luau). ree answered nil (not emulated), so a settings helper that falls back
 /// on its default when the define raises went on with nil. At identity 4 (the command bar's) the RobloxScript ones raise
 /// the same and the LocalUser ones answer; a plugin lacks LocalUser too (the developer forum's identity table, not
-/// measured), and the edit run context, where plugin code runs, raises them all. services::install_capability_calls
-/// gives each its function.
+/// measured), and the edit run context, where plugin code runs, raises them all. Camera's two were measured the same in a
+/// playing client and its server (Studio 0.748: with and without the camera, on another instance, with any arguments; both
+/// cameras read the same function). services::install_capability_calls gives each its function.
 pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "DefineFastFlag", "RobloxScript"),
     ("DataModel", "DefineFastInt", "RobloxScript"),
@@ -478,6 +479,8 @@ pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "GetFastString", "LocalUser"),
     ("DataModel", "GetEngineFeature", "LocalUser"),
     ("GuiService", "GetResolutionScale", "RobloxScript"),
+    ("Camera", "Zoom", "RobloxScript"),
+    ("Camera", "SetImageServerView", "RobloxScript"),
 ];
 
 // Callbacks the dump leaves out (it lists none for any class): every callback Roblox's API dump lets
