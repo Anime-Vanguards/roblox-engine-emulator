@@ -5,9 +5,11 @@
 //!
 //! - The count of arguments, trailing nils included, arrives. Numbers arrive as they are, NaN, infinities and -0 too, but a
 //!   subnormal double arrives as 0; strings and buffers byte for byte; a vector as a Vector3 (floats).
-//! - A function, a thread, a newproxy userdata, an Enum and a RaycastParams arrive as nil. CFrame, Color3, UDim, UDim2,
-//!   Vector2, BrickColor, NumberRange, NumberSequence, ColorSequence, Rect, Ray, Font, DateTime, PhysicalProperties,
-//!   Random, TweenInfo and EnumItems arrive equal.
+//! - A function, a thread, a newproxy userdata, an Enum, a RaycastParams and a SharedTable arrive as nil (a SharedTable alike over
+//!   every remote, each way, at any size and without a warning: Studio 0.748, a play session's server and client, two runs; in a
+//!   table it leaves a hole in an array, its dictionary entry is dropped, and as a key it is named `<SharedTable> (SharedTable:
+//!   0x...)`). CFrame, Color3, UDim, UDim2, Vector2, BrickColor, NumberRange, NumberSequence, ColorSequence, Rect, Ray, Font,
+//!   DateTime, PhysicalProperties, Random, TweenInfo and EnumItems arrive equal.
 //! - An Instance arrives as the receiver's own when it has it (mapped at delivery, after the batch's earlier creations), else
 //!   as nil: a server-only instance, a parentless one, a client-made one.
 //! - Tables as BindableEvent copies them (lua/bindable.rs: the border decides array or dictionary, a dictionary's keys

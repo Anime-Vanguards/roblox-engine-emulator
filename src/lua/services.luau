@@ -1090,19 +1090,96 @@ Method("TextService", "GetFamilyInfoAsync", function(_, AssetId)
 end)
 
 -- SharedTableRegistry: a name holds one SharedTable, made on the first Get (measured in Studio 2026-10-23: a
--- fresh name returns a SharedTable, the same one on every call; SetSharedTable registers a given one). Without
--- Actors there is nothing to share it with, so a SharedTable is a plain table here.
+-- fresh name returns a SharedTable, the same one on every call; SetSharedTable registers a given one, and nil
+-- removes the name). SetSharedTable takes nothing else (Studio 0.748: "Unable to cast double to SharedTable", a
+-- table named an Array or a Dictionary). SharedTables are userdata (lua/shared_table.rs), and each Get returns a new
+-- handle of the name's table, == to the others but not rawequal (Studio 0.748, a playing client).
+--
+-- A name is cast to a string as a client casts it (Studio 0.748, a playing client): a string as it is (a NUL and 70,000
+-- bytes kept), a number as `%.20g` writes it (0.1 is "0.10000000000000000555", 2^63 "9223372036854775808", -0 "-0"),
+-- NaN "NAN" and the infinities "INF" and "-INF". Anything else warns with the script's stack ("argument #1 expects a
+-- string, but boolean was passed") and is then named as the engine writes that type: a table "{}", an Instance
+-- "Instance", a function "function", a thread, an Enum or a newproxy "nil", an EnumItem its Name, the rest as tostring
+-- writes it (a boolean, a Vector3, a CFrame, a Color3, a UDim2; not matched: a client writes a Vector3's fractional
+-- components with nine digits, 0.100000001 where tostring gives 0.10000000149011612). A buffer is named by its contents and every SharedTable
+-- by one name, neither of which any text tried reached ("abc", "", "{}", tostring, ...): here keys no string can be. nil
+-- raises "Argument 1 missing or nil", and SetSharedTable checks its value first (SetSharedTable(nil, 5) raises the cast).
+-- Not matched: a subnormal number's name (a client writes its digits; ree's formatting flushes it to "0").
+local SharedTableName = newproxy()
+local BufferNames = setmetatable({}, { __mode = "v" }) -- (a content's name lives while SharedTables holds it)
+local BufferRegistryName = R.BufferRegistryName -- (the contents as a string, charged as one the script built: shared_table.rs)
+local function RegistryName(Name)
+	local Kind = type(Name)
+	if Kind == "string" then
+		return Name
+	elseif Kind == "number" then
+		if Name ~= Name then
+			return "NAN"
+		elseif Name == math.huge then
+			return "INF"
+		elseif Name == -math.huge then
+			return "-INF"
+		end
+		return string.format("%.20g", Name)
+	elseif Name == nil then
+		error("Argument 1 missing or nil", 0)
+	end
+	local Type = typeof(Name)
+	R.LogWarn(`argument #1 expects a string, but {Type} was passed`, debug.traceback())
+	if Type == "table" then
+		return "{}"
+	elseif Type == "Instance" then
+		return "Instance"
+	elseif Type == "function" then
+		return "function"
+	elseif Type == "thread" or Type == "Enum" or Type == "Enums" or Type == "userdata" then -- (the Enum global as an enum: not measured)
+		return "nil"
+	elseif Type == "EnumItem" then
+		return Name.Name
+	elseif Type == "SharedTable" then
+		return SharedTableName
+	elseif Type == "buffer" then
+		local Contents = BufferRegistryName(Name)
+		local Found = BufferNames[Contents]
+		if Found == nil then
+			Found = newproxy()
+			BufferNames[Contents] = Found
+		end
+		return Found
+	end
+	return tostring(Name)
+end
+
+-- What SetSharedTable's cast error calls a value that is not a SharedTable (measured): a number "double", a boolean "bool",
+-- a table "Array" (empty or with an array part) or "Dictionary", a function "Function", a CFrame "CoordinateFrame", an
+-- EnumItem its enum's name ("Material"), a thread, the Enum global or a newproxy "null" (an enum, as the global: not
+-- measured), anything else its type.
+local RegistryCastNames = { number = "double", boolean = "bool", ["function"] = "Function", CFrame = "CoordinateFrame", thread = "null", Enums = "null", Enum = "null", userdata = "null" }
+
+-- A table the registry holds is marked, as a client marks it (lua/shared_table.rs `Shared::mark`, measured: the table Set
+-- gets, also when its name then raises, and the one a Get makes).
 local SharedTables = {}
+local SharedTableHandle = R.SharedTableHandle
+local MarkSharedTable = R.MarkSharedTable
 Method("SharedTableRegistry", "GetSharedTable", function(_, Name)
+	Name = RegistryName(Name)
 	local Found = SharedTables[Name]
 	if Found == nil then
 		Found = SharedTable.new()
+		MarkSharedTable(Found)
 		SharedTables[Name] = Found
 	end
-	return Found
+	return SharedTableHandle(Found)
 end)
 Method("SharedTableRegistry", "SetSharedTable", function(_, Name, Value)
-	SharedTables[Name] = Value
+	if Value ~= nil and typeof(Value) ~= "SharedTable" then
+		-- (a table's raw length, as SetAttribute names one: a client runs no __len here, measured)
+		local Kind = if type(Value) == "table" then (if rawlen(Value) > 0 or next(Value) == nil then "Array" else "Dictionary") else typeof(Value)
+		Kind = if Kind == "EnumItem" then tostring(Value.EnumType) else RegistryCastNames[Kind] or Kind
+		error(`Unable to cast {Kind} to SharedTable`, 0)
+	end
+	MarkSharedTable(Value)
+	SharedTables[RegistryName(Name)] = Value
 end)
 
 -- (CollectionService:GetAllTags is Rust: services/mod.rs)

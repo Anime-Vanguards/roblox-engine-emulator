@@ -21,6 +21,7 @@ pub mod modules;
 pub mod normalize;
 pub mod raw;
 pub mod refs;
+pub mod shared_table;
 pub mod stubs;
 pub mod types;
 pub mod vector_methods;

@@ -1196,39 +1196,152 @@ pub const MODEL_QUERY: f64 = 0.015e-6;
 pub const REPARENTED: f64 = 0.51e-6;
 pub const REPARENTED_LOOSE: f64 = 0.15e-6;
 /// The parallel bridge's machinery (an empty test place's client, an actor_cost probe, one session, 2026-10-23): BindableFunction:Invoke into an
-/// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5), SharedTable.increment 370-429 (counts 31.5); reads (29 ns) are close to a table's
-/// and writes (298 ns) are not priced: a SharedTable is a plain table here. Charged on top of what the instructions count.
+/// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5), SharedTable.increment 370-429 (counts 31.5); a read (29 ns) is not priced beyond
+/// the engine call ree's SharedTable makes of it but by its key's bytes, an integer key it finds and the value it makes ([`SHARED_KEY_BYTE`],
+/// [`SHARED_FOUND_INTEGER`], [`SHARED_MADE_VALUE`] and after, [`SHARED_LOADED_BUFFER`]), a write is ([`SHARED_OVERWRITE_STRING`] and after).
+/// Charged on top of what the instructions count.
 pub const ACTOR_INVOKE: f64 = 0.94e-6;
 pub const SHARED_INCREMENT: f64 = 0.37e-6;
-
-/// What SharedTable.new and clone pay for copying a table of `array` array slots and `nodes` hash nodes (0: none): the engine's own
-/// Luau copies it with table.clone (prelude.luau), work the VM does not count as a script's ([`engine_luau`]), so it charges what a
-/// script's own table.clone of that table pays beyond the call, as the VM counts it (patches/luau 02 and 15: every slot copied, the new
-/// table and its parts' bytes, a part over 1 KB a block of the host's allocator). Roblox's own SharedTable copy was not measured.
-pub fn table_clone(array: u64, nodes: u64) -> f64 {
-    let (header, slot, node) = crate::profiler::vm::table_bytes();
-    let (array_bytes, node_bytes) = (array * slot, nodes * node);
-    let blocks = u64::from(array_bytes > 1024) + u64::from(node_bytes > 1024);
-    1e-9 * ((array + nodes) as f64 * LUAU_CLONE_ITEM
-        + (header + array_bytes + node_bytes) as f64 * LUAU_ALLOCATED_BYTE
-        + LUAU_LIBRARY_OBJECT
-        + LUAU_COLLECTOR_OBJECT
-        + blocks as f64 * LUAU_LARGE_BLOCK)
-}
-
-/// What SharedTable.clear pays for clearing a table of `array` array slots and `nodes` hash nodes: what a script's own table.clear
-/// of it pays beyond the call (every slot cleared, [`LUAU_MOVED`]), as [`table_clone`] says
-pub fn table_clear(array: u64, nodes: u64) -> f64 {
-    1e-9 * (array + nodes) as f64 * LUAU_MOVED
-}
-
-/// What SharedTable.size pays for each entry it counts: what a script's own `for _ in t do n += 1 end` pays an entry (a loop step
-/// and an add, [`INTERPRETED_OPS`]), as [`table_clone`] says
-pub fn table_counted_entry() -> f64 {
-    let op = |name: &str| crate::profiler::vm::OPCODES.iter().position(|op| *op == name).expect("a Luau opcode");
-    1e-9 * (INTERPRETED_OPS[op("FORGLOOP")] + INTERPRETED_OPS[op("ADDK")])
-}
-
+/// SharedTable's calls by the entries they handle, beyond the call (lua/shared_table.rs), in seconds. A playing client (Studio 0.748,
+/// os.clock over 10 to 10,000 entries, string and integer keys, two runs, fitted for the least relative error): SharedTable.new from a
+/// table 0.32 us an entry with a string key and 0.19 with an integer key (a nested table's entries counted alike: 1,000 one-entry tables
+/// took 0.71 ms; a table written to a key converts at the same price, and a conversion that fails pays for what it walked); a deep clone or cloneAndFreeze 10 and 6 ns an entry and 0.52 us a SharedTable it copies; a loop 0.4 us to start and
+/// 37 and 29 ns an entry, of which the VM already charges each step's call (8 ns here), so 29 and 21 ns on top, charged at its start and at
+/// each step (a loop stopped at its first entry took 0.24 to 0.29 us from 10 entries to 100,000, two runs, and 0.38 to 0.73 in another
+/// probe at 3 to 200,000: Roblox walks a snapshot of its trie, not a list of its entries). A shallow clone, cloneAndFreeze, size and a
+/// shallow clone's clear took 0.1 to 0.3 us at 10 entries as at 10,000 (Roblox shares the structure), so they cost only the call; a clear
+/// of a table that alone holds its entries frees them ([`SHARED_CLEARED_ENTRY`]).
+pub const SHARED_NEW_STRING_ENTRY: f64 = 0.32e-6;
+pub const SHARED_NEW_INTEGER_ENTRY: f64 = 0.19e-6;
+pub const SHARED_DEEP_STRING_ENTRY: f64 = 0.010e-6;
+pub const SHARED_DEEP_INTEGER_ENTRY: f64 = 0.006e-6;
+pub const SHARED_DEEP_TABLE: f64 = 0.52e-6;
+pub const SHARED_LOOP: f64 = 0.4e-6;
+pub const SHARED_LOOP_STRING_ENTRY: f64 = 0.029e-6;
+pub const SHARED_LOOP_INTEGER_ENTRY: f64 = 0.021e-6;
+/// A SharedTable write beyond the VM's call to it (lua/shared_table.rs `write_price`), in seconds, by its key's kind. A playing client (Studio
+/// 0.748, os.clock over tables of 10 to 10,000 entries, two runs): an overwrite of a key the table has took 0.07-0.09 us with a string key and
+/// 0.10-0.11 with an integer key; a key added took 0.31-0.45 and 0.19-0.23, one taken out (written nil) 0.23-0.39 and 0.15-0.23. Right after a
+/// shallow clone a write copies the path it changes, which the clone shares: the first took 0.47 to 1.16 us with string keys and 0.55 to 1.10
+/// with integer keys as the table grew from 10 entries to 10,000, the next ones as much again where their paths were still shared (a 10-entry
+/// table's second write cost an overwrite). Priced as an overwrite or a key added or taken out, plus each node of ree's trie the write copied
+/// because a copy shared it, fitted for the least relative error over the 64 measured cases of each kind (within x1.20 on average with string
+/// keys, x1.25 with integer keys, whose trie copies seven small nodes where a client's cost grows with the table); the VM already charges
+/// 0.02 us of each write's call.
+pub const SHARED_OVERWRITE_STRING: f64 = 0.065e-6;
+pub const SHARED_OVERWRITE_INTEGER: f64 = 0.10e-6;
+pub const SHARED_CHANGE_STRING: f64 = 0.29e-6;
+pub const SHARED_CHANGE_INTEGER: f64 = 0.17e-6;
+pub const SHARED_COPIED_STRING_NODE: f64 = 0.24e-6;
+pub const SHARED_COPIED_INTEGER_NODE: f64 = 0.065e-6;
+/// Keys whose 64-bit hashes are equal, which a SharedTable keeps in one list past its trie's last level, newest first (lua/shared_table.rs
+/// `find`), in seconds: an entry a search compared and a byte its comparison read, an entry of a list a key joined or left (rebuilt), and
+/// an entry of a list a write copied because a shallow copy (or update's own copy) shared it. A playing client (Studio 0.748, real 64-bit
+/// FNV-1a collisions, 208-byte keys at 256 to 8,192 a list, and 255 keys sharing a 64 KB prefix; one op on each of 20 clones): the oldest
+/// key read 3.4 / 13.7 / 52.6 us at 256 / 1,024 / 4,096 keys (37.9 us at 8,192 read again and again), 557 to 892 us with the 64 KB
+/// prefix; a key added 6.9 / 39.5 / 145.7 us, the oldest taken out 9.0 / 42.3 / 173.8 and the newest 7.1 / 30.3 / 126.1; the first write
+/// after a clone 20 to 37 / 88 to 94 / 300 to 343 us whatever it wrote; update on its own list of 2,048 keys 290 to 306 us; Roblox's
+/// search compares the keys byte by byte from the front. Fitted for the least relative error on the 41 rows (within x0.52 to 1.64; reads
+/// of a list a client's cache holds come out dearer, of one it does not cheaper). A key added to a list of 8,192 so costs 0.3 ms, as a
+/// client's 438 us does, and a list grows only as fast as a script can pay for it: ree sets no cap (a client kept 8,192 keys of one hash, the
+/// most tried, so it has none up to there).
+pub const SHARED_LIST_SCANNED: f64 = 5.2e-9;
+pub const SHARED_COMPARED_BYTE: f64 = 0.031e-9;
+pub const SHARED_LIST_REBUILT: f64 = 31e-9;
+pub const SHARED_LIST_COPIED: f64 = 90e-9;
+/// A string key's bytes, which a SharedTable call hashes once (a read, a write, increment, update, each string key a conversion walks, and
+/// a key a slot split moves down, hashed again), and the bytes of a key a write or a conversion adds, which it copies in, in seconds a
+/// byte. A playing client (Studio 0.748, os.clock, keys of 16 bytes to 4 MB, two and three sessions of each probe, the 8- or 16-byte row
+/// of each call taken off): below 64 KB a read took 0.76 to 0.82 ns a byte, a hit and a miss and a key read again alike (Roblox hashes
+/// the whole key on every call), an overwrite 0.78 to 0.84, a removal 0.89, increment 0.82 and update 0.81, a key added 1.14 and new(t)
+/// 0.93 a key; a 3-byte key added and taken out beside a 1 MB key that shares its first slot took 793 us, beside one that does not 0.16.
+/// Fitted for the least relative error on the 108 rows below 65,488 bytes, where a client's time steps (a key of 65,440 bytes read in 54
+/// us, one of 65,488 in 83 to 98; within x0.79 to 1.19). From there a client takes longer, which these leave out (most likely a copy of
+/// the key into a block of its own, inferred from the timings' shape, not observed): reads take x0.54 to 0.94 of it, writes x0.48 to 0.98,
+/// increment x0.38 to 0.66 and update x0.26 to 0.53. An update whose callback is called again pays for its key again
+/// (lua/shared_table.rs `update`).
+pub const SHARED_KEY_BYTE: f64 = 0.81e-9;
+pub const SHARED_KEY_ADDED_BYTE: f64 = 0.19e-9;
+/// A string or buffer a SharedTable write stores (or update's result), in seconds: a byte copied below [`SHARED_LARGE_STRING`] bytes for a
+/// string and [`SHARED_LARGE_BUFFER`] for a buffer, and from there a block and a byte (a client's time steps there, most likely as the
+/// copy needs a block of its own, which is inferred from the timings, not observed: a string of 65,440 bytes written in 1.7 to 2.0 us, one
+/// of 65,480 in 1.39 and one of 65,488 in 88 to 138; a buffer of 65,488 in 1.4 and one of 65,504 in 30 to 32; a key steps where a string
+/// does, [`SHARED_KEY_BYTE`]). A playing client (Studio 0.748, os.clock, 16 bytes to 4 MB and a bisection of the step, three sessions): a
+/// string 0.016 to 0.022 ns a byte below the step, 31 to 138 us at 64 KB and 322 to 781 at 1 MB; a buffer 0.011 below, 18 to 94 us at 64
+/// KB and 165 to 556 at 1 MB (sessions up to 2.4x apart above the step). Fitted for the least relative error on the 156 rows (within x0.52
+/// to 1.58 below the step, x0.36 to 2.93 from it).
+pub const SHARED_COPIED_BYTE: f64 = 0.017e-9;
+pub const SHARED_LARGE_STRING: usize = 65_488;
+pub const SHARED_LARGE_BUFFER: usize = 65_504;
+pub const SHARED_LARGE_COPY_BLOCK: f64 = 21.2e-6;
+pub const SHARED_LARGE_COPY_BYTE: f64 = 0.44e-9;
+/// A byte of a string or buffer a SharedTable conversion copies in (SharedTable.new, or a table written to a key), in seconds. A playing
+/// client (Studio 0.748, new of 1 and of 16 entries of 16 bytes to 4 MB, two sessions): strings 0.17 ns a byte below 64 KB and 0.28 above,
+/// buffers 0.16 and 0.12. Fitted for the least relative error on the 60 rows (within x0.31 to 3.1).
+pub const SHARED_CONVERTED_BYTE: f64 = 0.25e-9;
+/// A buffer a SharedTable read or a loop's step makes (a new buffer each time), in seconds: one of [`SHARED_LOADED_BUFFER_FROM`] bytes or
+/// more (a block apart from Luau's pages), and a byte. A playing client (Studio 0.748, os.clock, 16 bytes to 4 MB, two and three
+/// sessions): 48 ns at 16 bytes, 0.32 us at 256 and 2.4 to 3.5 at 1,024, 26 to 83 us at 64 KB and 279 to 371 at 1 MB; a loop's buffer
+/// values alike. Fitted for the least relative error on the 86 rows of 1 KB and more (within x0.40 to 2.11).
+pub const SHARED_LOADED_BUFFER: f64 = 2.5e-6;
+pub const SHARED_LOADED_BUFFER_FROM: usize = 1024;
+pub const SHARED_LOADED_BUFFER_BYTE: f64 = 0.47e-9;
+/// A string a SharedTable read makes for a script (a read, update's old value) of [`SHARED_LARGE_STRING`] bytes or more, where a client's
+/// reads step as its writes do, in seconds: a block and a byte. Below it the string is priced as the VM prices its own
+/// ([`LUAU_STRING_BYTE`]: a client's reads 0.13 to 0.18 ns a byte) plus [`SHARED_MADE_STRING`], and a loop's keys and values at any size
+/// as the VM prices them alone (a client's 0.13 ns a byte, with no step). A playing client (Studio 0.748, os.clock, 16 bytes to 4 MB and a
+/// bisection of the step, two and three sessions): 65,440 bytes read in 11.5 us, 65,488 in 71 to 104, 128 KB in 50, 1 MB in 294 to 357.
+/// Fitted for the least relative error on the 38 rows from the step (within x0.42 to 1.85; the 40 rows from 1 KB below it come within
+/// x0.76 to 1.29 of the VM's price).
+pub const SHARED_LOADED_STRING: f64 = 26.1e-6;
+pub const SHARED_LOADED_STRING_BYTE: f64 = 0.27e-9;
+/// A string a SharedTable read makes for a script below [`SHARED_LARGE_STRING`] bytes (a read, update's old value; not a loop's step), on
+/// top of the VM's price a byte, in seconds. A playing client (Studio 0.748, os.clock, 100,000-read batches, two runs): a 16-byte string
+/// read by the short string key "k5" took 0.063-0.069 us at 10 entries and 0.076-0.081 at 100,000, by the integer key 5 0.088-0.099 and
+/// 0.088-0.091, 0.038 to 0.048 us more than the same reads of a number; a 1 KB string 0.20-0.21 us (ree 0.19 before this price, 0.23 with
+/// it).
+pub const SHARED_MADE_STRING: f64 = 0.04e-6;
+/// The object a SharedTable read or update's old value makes for a script (a loop's step: [`SHARED_LOOP_MADE_VALUE`]), in seconds: a value type's userdata (CFrame,
+/// Color3, UDim2, EnumItem, BrickColor, Faces, Axes, Ray, the keypoints, the int16 types, ...), one of the wider value types (TweenInfo,
+/// Region3, PhysicalProperties and Path2DControlPoint, lua/shared_table.rs `WIDE`), and a nested SharedTable's new handle; a number, a
+/// boolean and a native vector make none. A playing client (Studio 0.748, os.clock, medians of 7 batches of 50,000 reads of the key "v" of
+/// a two-entry table, two runs, us a read): a number 0.0234-0.0239, a Vector3 0.0242-0.0247; BrickColor 0.031-0.036, Faces 0.031-0.037,
+/// Axes 0.037, Ray 0.038-0.043, CFrame 0.038-0.053, Color3 0.039-0.040, EnumItem 0.039, NumberSequenceKeypoint 0.039-0.040, UDim2
+/// 0.041-0.043; PhysicalProperties 0.045-0.046, TweenInfo 0.047-0.053, Path2DControlPoint 0.046-0.053, Region3 0.056-0.059; a SharedTable
+/// 0.057 (0.047 in an earlier probe). Part of each median is a client's collector (the batches' minimums are 0.027-0.032 for the userdata
+/// types), which these include. ree charged a number's price for each (0.019).
+pub const SHARED_MADE_VALUE: f64 = 0.017e-6;
+pub const SHARED_MADE_WIDE_VALUE: f64 = 0.03e-6;
+pub const SHARED_MADE_HANDLE: f64 = 0.03e-6;
+/// The object a SharedTable loop's step makes for a script, whatever its kind (a value type's userdata, a pooled value's copy, a
+/// SharedTable's new handle), in seconds: a client's steps have no dearer kinds, as its reads do. A playing client (Studio 0.748,
+/// os.clock, loops over 1,000 and 10,000 string-keyed entries, 20 to 200 a batch, two runs, us an entry beyond a loop over numbers,
+/// 0.033 and 0.049): CFrame 0.024-0.026 at 1,000 and 0.023-0.026 at 10,000, Ray 0.019-0.020 and 0.011-0.020, TweenInfo
+/// 0.022-0.023 and 0.020-0.023, Path2DControlPoint 0.020-0.022 and 0.018-0.025, a SharedTable 0.022 and 0.019-0.029. ree charged
+/// a read's prices and, for a TweenInfo or a Path2DControlPoint, what the VM counted of the copy's own calls (0.012 to 0.015 more),
+/// 0.017 to 0.045 in all.
+pub const SHARED_LOOP_MADE_VALUE: f64 = 0.022e-6;
+/// A SharedTable read by an integer key that finds a value, beyond a string key's, in seconds (update's old value too). A playing client
+/// (Studio 0.748, os.clock, 100,000- and 50,000-read batches, two runs): a number or a boolean read by the key 5 took 0.049-0.052 us at 10
+/// entries and at 100,000 alike, the key 500 of a 1,000-entry array 0.050-0.051, by the short string key "k5" 0.0245-0.0258 at 10 entries;
+/// a missing key costs what a string key's miss does (0.019-0.029). ree charged 0.018.
+pub const SHARED_FOUND_INTEGER: f64 = 0.03e-6;
+/// An empty array slot or hash node of a table a SharedTable conversion walks, in seconds. A playing client (Studio 0.748, os.clock, two
+/// runs): SharedTable.new of `table.create(n)` holding one entry took 19.9-20.0 us at n = 100,000 and 196-213 at 1,000,000 (0.20 to
+/// 0.21 ns a slot), of `{x = 1}` 0.33-0.37. Fitted up to 1,000,000 slots. From there a client's time a slot grows, which this leaves out
+/// (not matched): at 2,000,000 slots it took 529-533 us (0.27 ns a slot; ree 400, x0.75), and `table.create(4000000)` (4,000,000 slots)
+/// took a client 4,634 us in an earlier session (1.16 ns a slot; ree 800). Only an array was measured, and an empty hash node is priced
+/// as an array slot.
+pub const SHARED_EMPTY_SLOT: f64 = 0.2e-9;
+/// An entry SharedTable.clear frees, the table alone holding it, in seconds. A playing client (Studio 0.748, os.clock, two runs each,
+/// tables of `k<i>` keys): at 1,000 entries 37-41 us, cleared right after new, a frame after it or built by writes (60 tables), and
+/// 25-26 in a sub-millisecond batch (20 tables); at 10,000 205-218 us (3 tables), 260-279 (3 tables) and 262-268 (5 tables) in
+/// sub-millisecond batches, 355-361 (10 tables) and 453-478 made 10 frames before (5 tables); a shallow clone's 0.02 to 0.77 us at any
+/// size. 40 ns sits at the top of the warm rows and the bottom of the cold ones: ree's 40 and 400 us are 1.44 to 1.95x a client's in
+/// the sub-millisecond batches, 0.98 to 1.13x in the 37-41 and 355-361 us rows, 0.84 to 0.88x in the 453-478 us one, and 0.48 to
+/// 0.72x of an earlier session's 554-596 us at 10,000 and 7,676-8,397 at 100,000, most likely a colder state (10 entries took 0.25
+/// and 0.27 us, 1.6x under it).
+pub const SHARED_CLEARED_ENTRY: f64 = 40e-9;
 /// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 11.8 us; a
 /// Studio client and edit DataModel 6.7-6.9 for FredokaOne)
 pub const TEXT_MEASURED: f64 = 11.7e-6;
