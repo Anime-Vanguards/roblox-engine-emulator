@@ -1989,7 +1989,8 @@ fn player_mouse_is_an_instance_whose_rays_follow_the_camera() {
         assert(M.UnitRay.Origin == Ray.Origin and M.UnitRay.Direction == Ray.Direction)
         assert(M.Origin == CFrame.new(Ray.Origin, Ray.Origin + Ray.Direction))
         assert(M.Hit.Position == Ray.Origin + Ray.Direction * 10000 and M.Target == nil and M.TargetSurface == Enum.NormalId.Right)
-        -- a wall across the view, whatever its CanQuery, is the target, hit on its Back face
+        -- a wall across the view, whatever its CanQuery, is the target, hit on its Back face, once the spatial index has it
+        -- (a part that just entered the Workspace is not seen until a spatial query or the physics step takes it in)
         local Wall = Instance.new("Part")
         Wall.Anchored = true
         Wall.CanQuery = false
@@ -1997,6 +1998,8 @@ fn player_mouse_is_an_instance_whose_rays_follow_the_camera() {
         Wall.Size = Vector3.new(1e6, 1e6, 4)
         Wall.CFrame = CFrame.new(0, 500, -60)
         Wall.Parent = workspace
+        assert(M.Target == nil and M.TargetSurface == Enum.NormalId.Right and M.Hit.Position == Ray.Origin + Ray.Direction * 10000, tostring(M.Target))
+        workspace:Raycast(Vector3.new(1000, 1000, 1000), Vector3.yAxis)
         assert(M.Target == Wall and M.target == Wall and M.TargetSurface == Enum.NormalId.Back, tostring(M.Target))
         assert(math.abs(M.Hit.Position.Z + 58) < 1e-3 and M.Hit.Rotation == M.Origin.Rotation, tostring(M.Hit))
         M.TargetFilter = Wall
@@ -2006,6 +2009,50 @@ fn player_mouse_is_an_instance_whose_rays_follow_the_camera() {
         assert(M.UnitRay.Origin == Camera:ViewportPointToRay(M.X, M.Y).Origin)
         "##,
     );
+}
+
+/// The PlayerMouse sees the parts the spatial index has (Studio 0.747, a playing client: tools/parity/probes/mouse_index.luau):
+/// a part that just entered the Workspace is no Target until a spatial query (a Raycast) or the physics step takes it in, and
+/// no mouse read takes it in; a part moved or turned counts at once, one removed is gone at once, and one put back waits for
+/// the index again, whatever its CanQuery.
+#[test]
+fn player_mouse_sees_a_new_part_once_the_spatial_index_has_it() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local M = game:GetService("Players").LocalPlayer:GetMouse()
+        workspace.CurrentCamera.CFrame = CFrame.lookAt(Vector3.new(200, 500, 200), Vector3.new(200, 500, 100))
+        local Ray = M.UnitRay
+        local function Across(Distance)
+            local Made = Instance.new("Part")
+            Made.Anchored = true
+            Made.Size = Vector3.new(100, 100, 1)
+            Made.CFrame = CFrame.lookAt(Ray.Origin + Ray.Direction * Distance, Ray.Origin + Ray.Direction * (Distance + 1))
+            Made.Parent = workspace
+            return Made
+        end
+        local Part = Across(50)
+        assert(M.Target == nil and M.TargetSurface == Enum.NormalId.Right)
+        local _ = M.Hit, M.hit, M.target, M.TargetSurface
+        assert(M.Target == nil and M.Hit.Position == Ray.Origin + Ray.Direction * 10000)
+        workspace:Raycast(Vector3.new(1000, 1000, 1000), Vector3.yAxis)
+        assert(M.Target == Part and M.TargetSurface == Enum.NormalId.Back, tostring(M.Target))
+        Part.CFrame = CFrame.lookAt(Ray.Origin + Ray.Direction * 40, Ray.Origin + Ray.Direction * 39)
+        assert(M.Target == Part and M.TargetSurface == Enum.NormalId.Front)
+        Part.Parent = nil
+        assert(M.Target == nil)
+        Part.Parent = workspace
+        assert(M.Target == nil)
+        Part.CanQuery = false
+        assert(M.Target == nil)
+        shared.MouseIndexPart = Part
+        "##,
+    );
+    // the physics step takes it in
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, r##"assert(game:GetService("Players").LocalPlayer:GetMouse().Target == shared.MouseIndexPart)"##);
 }
 
 #[test]
@@ -2064,8 +2111,9 @@ fn the_player_mouse_is_made_on_the_first_get_mouse() {
 
 /// The PlayerMouse's ray reads cost the work clock what a playing client spent on them beyond a plain read (roblox-sim, Studio
 /// 0.747, cost.rs MOUSE_RAY): a miss 0.44 us for Target and 0.64 for Hit, whatever lies off the ray; a hit 0.68 and 0.90; 24 parts
-/// under TargetFilter across the ray 3.13 and 3.76. A read takes nothing into the spatial index: GetLargestCutoffDistance misses a
-/// part that just entered the Workspace after one, and sees it after a Raycast (tools/parity/probes/mouse_index.luau).
+/// under TargetFilter across the ray 3.13 and 3.76 (each scene's parts taken into the spatial index first: the mouse sees no others). A
+/// read takes nothing into the spatial index: GetLargestCutoffDistance misses a part that just entered the Workspace after one, and
+/// sees it after a Raycast (tools/parity/probes/mouse_index.luau).
 #[test]
 fn player_mouse_rays_cost_what_a_client_spent() {
     let (lua, engine) = start();
@@ -2102,16 +2150,22 @@ fn player_mouse_rays_cost_what_a_client_spent() {
         local function Across(Distance, Parent)
             return Part(Vector3.new(40, 40, 0.5), CFrame.lookAt(Ray.Origin + Ray.Direction * Distance, Ray.Origin + Ray.Direction * (Distance + 1)), Parent)
         end
+        -- (a spatial query takes what entered the Workspace into the index)
+        local function Index()
+            workspace:Raycast(Vector3.new(1000, 1000, 1000), Vector3.yAxis)
+        end
         -- 500 parts off the ray
         local Off = Instance.new("Folder")
         Off.Parent = workspace
         for I = 1, 500 do
             Part(Vector3.one, CFrame.new(500 + I * 3, 5, -500), Off)
         end
+        Index()
         assert(M.Target == nil)
         Within("Target, a miss", Beyond(Target), 0.40, 0.52)
         Within("Hit, a miss", Beyond(Hit), 0.58, 0.72)
         local Wall = Across(50)
+        Index()
         assert(M.Target == Wall)
         Within("Target, a hit", Beyond(Target), 0.64, 0.80)
         Within("Hit, a hit", Beyond(Hit), 0.84, 1.0)
@@ -2121,6 +2175,7 @@ fn player_mouse_rays_cost_what_a_client_spent() {
         for I = 1, 24 do
             Across(50 + I * 2, Filtered)
         end
+        Index()
         M.TargetFilter = Filtered
         assert(M.Target == nil)
         Within("Target, 24 filtered", Beyond(Target), 2.9, 3.5)

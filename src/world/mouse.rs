@@ -14,7 +14,8 @@
 //!   none was. Every part counts (CanQuery, CanCollide, CanTouch and Transparency do not matter), but TargetFilter and its
 //!   descendants. They follow the camera within the frame.
 //! - Reading Hit, Target or TargetSurface casts that ray: it costs the work clock what a client spends on it (cost.rs
-//!   MOUSE_RAY; roblox-sim, Studio 0.747) and takes nothing into the spatial index ([`pointed`]).
+//!   MOUSE_RAY; roblox-sim, Studio 0.747), sees only the parts the spatial index has taken in, and takes nothing into it
+//!   ([`pointed`]).
 //! - The computed members are read-only ("Unable to assign property Hit. Property is read only"); Icon and TargetFilter are not.
 //!
 //! The host's record (`shared.__rurMouse`, a plain table made at start: roblox-ui-renderer's input layer reads it) holds X, Y,
@@ -132,10 +133,11 @@ fn aimed(origin: Vec3, direction: Vec3) -> Affine3A {
 ///
 /// The parts come from the spatial queries' cache (world/query.rs), TargetFilter's among them: the ray meets those too, and a
 /// client pays for them. The read is charged as the ray it is: [`crate::cost::MOUSE_RAY`] and the member's `price`, then the parts
-/// it meets up to its hit (the hit and those under TargetFilter before it) and the hit's own. It takes nothing into the spatial
-/// index: after any member is read, GetLargestCutoffDistance still misses a part that just entered the Workspace
-/// (tools/parity/probes/mouse_index.luau). (A client's read does not see that part either until the index has it; ree's does,
-/// as before: the probe's known lines.)
+/// it meets up to its hit (the hit and those under TargetFilter before it) and the hit's own. It sees the parts the spatial index
+/// has: one that entered the Workspace since a spatial query or the physics step last took parts in (`Cameras::unindexed`,
+/// world/camera_moves.rs) is neither met nor paid for, and the read takes nothing in (measured: a client's Target misses such a
+/// part until a Raycast or the next frame, and GetLargestCutoffDistance still misses it after any member is read;
+/// tools/parity/probes/mouse_index.luau).
 fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, origin: Vec3, direction: Vec3, price: f64) -> (Vec3, Option<(InstanceId, Vec3)>) {
     let skip = match target_filter.and_then(|name| engine.state.borrow().dom.raw_get(mouse, name).cloned()) {
         Some(Value::Instance(skip)) => Some(skip),
@@ -152,6 +154,10 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
         let state = engine.state.borrow();
         for solid in solids.iter() {
             let Some((t, local)) = query::ray_solid(solid, origin, reach, 0.0) else { continue };
+            // (looked up only for the few parts the ray meets: the list is short, emptied at every physics step)
+            if state.cameras.unindexed.contains(&solid.part) {
+                continue;
+            }
             let distance = length * t;
             if skip.is_some_and(|skip| solid.part == skip || state.dom.is_descendant_of(solid.part, skip)) {
                 filtered.push(distance);

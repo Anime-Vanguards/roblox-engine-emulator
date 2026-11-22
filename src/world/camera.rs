@@ -55,7 +55,7 @@ pub struct Cameras {
     /// An Interpolate step is writing CFrame and Focus (not a script's write)
     pub(super) stepping: bool,
     /// What entered the Workspace since the spatial index last took parts in (the physics step, another spatial query):
-    /// GetLargestCutoffDistance does not see it yet
+    /// GetLargestCutoffDistance and the PlayerMouse's rays do not see it yet (camera_moves.rs, mouse.rs)
     pub(super) unindexed: Vec<InstanceId>,
 }
 
