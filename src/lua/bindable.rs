@@ -77,8 +77,9 @@ pub const COPY_BYTES: u64 = 1 << 30;
 
 /// What one engine call's copy has made so far, against ree's guard ([`COPY_VALUES`], [`COPY_BYTES`]). Every copy of script
 /// tables counts as it goes (this module's, loopback/copier.rs and wire.rs, services/json.rs; server.luau `Data` keeps a
-/// count of its own), so a table copied once for each place it appears stops at the guard; SharedTable.new and clone, which
-/// copy a table's slots whole, count them before they copy (globals.rs `shared_table_work`).
+/// count of its own), so a table copied once for each place it appears stops at the guard; a SharedTable conversion checks a
+/// table's slots against it before it walks them, and counts the empty ones it walks and the trie slots a deep copy copies
+/// (lua/shared_table.rs).
 #[derive(Default)]
 pub struct Tally {
     pub values: u64,
@@ -94,11 +95,19 @@ impl Tally {
         if self.values > COPY_VALUES || self.bytes > COPY_BYTES { Err(self.too_large()) } else { Ok(()) }
     }
 
-    /// `count` more values copied at once (the slots of a table SharedTable.new copies whole): [`too_large`]'s error past the guard
+    /// `count` more values made at once (the empty slots a SharedTable conversion walks, the slots of a node its deep copy
+    /// copies): [`too_large`]'s error past the guard
     #[inline]
     pub fn add_values(&mut self, count: u64) -> Result<(), String> {
         self.values += count;
         if self.values > COPY_VALUES { Err(self.too_large()) } else { Ok(()) }
+    }
+
+    /// Whether `count` more values would still be within the guard, counting nothing: [`too_large`]'s error when they would not
+    /// (a SharedTable conversion's check of a table's slots, read at once, before it walks them)
+    #[inline]
+    pub fn check_values(&self, count: u64) -> Result<(), String> {
+        if self.values.saturating_add(count) > COPY_VALUES { Err(too_large(COPY_VALUES, "values")) } else { Ok(()) }
     }
 
     /// `bytes` more bytes made beside a value (a dictionary key JSONEncode writes): [`too_large`]'s error past the guard

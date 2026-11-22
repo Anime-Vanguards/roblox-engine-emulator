@@ -7369,6 +7369,27 @@ fn shared_table_registry_names_cast_as_a_client_does() {
     assert!(!warned("number"), "{output:?}");
 }
 
+/// A table past ree's guard on a copy by its slots alone raises the guard's error before its slots are walked: the slots are
+/// read at once (profiler::vm::table_slots) and every one counts against the guard, so the walk could only reach the same
+/// error. The old code walked and priced every slot first (5,000,000 empty slots charged 1 ms, at 0.2 ns a slot).
+#[test]
+fn a_table_past_the_guard_raises_before_its_slots_are_walked() {
+    assert_shared_prices(
+        r#"
+        local Big = table.create(5000000)
+        Big[1] = 1
+        local S = SharedTable.new()
+        for _, Call in { function() return SharedTable.new(Big) end, function() S.k = Big end, function() return SharedTable.new({ Big }) end } do
+            local Start = os.clock()
+            local Ok, E = pcall(Call)
+            local Took = (os.clock() - Start) * 1e3
+            assert(not Ok and string.find(tostring(E), "more than 4194304 values", 1, true), tostring(E))
+            assert(Took < 0.1, `charged {Took} ms before raising`)
+        end
+        "#,
+    );
+}
+
 /// SharedTableRegistry pays for what it copies and runs nothing of a script's: a buffer used as a name is copied into the name
 /// at the VM's price for a string the script built (cost.rs LUAU_STRING_BYTE, 0.169 ns a byte: 10 MB is 1.69 ms), since a Get
 /// keeps the name for the session; SetSharedTable names a table it refuses by its raw length, as SetAttribute does, so a

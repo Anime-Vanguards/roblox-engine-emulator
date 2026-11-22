@@ -1145,9 +1145,10 @@ fn empty_slots(table: &LuaTable) -> usize {
 /// A table as a new SharedTable (its own tables converted too), its entries counted as they go (also those walked before a
 /// failure), each string key hashed once and copied in. A table inside another sits [`NESTED`] slots above it; one that is
 /// already open closes a cycle, and otherwise one above [`STACK_LIMIT`] is too deep (in that order, measured: a cycle closing
-/// at the limit raises the cyclic message). The outermost table is never refused. Its empty array slots and hash nodes are
-/// walked as Roblox walks them, priced (cost.rs [`cost::SHARED_EMPTY_SLOT`]) and counted against ree's guard on a copy as a
-/// copy's holes are, before its entries.
+/// at the limit raises the cyclic message). The outermost table is never refused. Its slots, read at once, are checked against
+/// ree's guard on a copy before any is walked (each counts against it, an entry or an empty slot, so a table past it raises
+/// at once, the same error the walk would reach); its empty array slots and hash nodes are then walked as Roblox walks them,
+/// priced (cost.rs [`cost::SHARED_EMPTY_SLOT`]) and counted against the guard as a copy's holes are, before its entries.
 fn converted(lua: &Lua, engine: &Engine, store: &Store, table: &LuaTable, conversion: &mut Conversion) -> Result<Rc<Shared>, Flow> {
     let pointer = table.to_pointer();
     if conversion.open.contains(&pointer) {
@@ -1155,6 +1156,12 @@ fn converted(lua: &Lua, engine: &Engine, store: &Store, table: &LuaTable, conver
     }
     if !conversion.open.is_empty() && conversion.height > STACK_LIMIT {
         return raise(STACK_FULL);
+    }
+    // SAFETY: the table is held for the call (its pointer read while `table` lives)
+    if let Some((array, nodes)) = unsafe { crate::profiler::vm::table_slots(table.to_pointer().cast_mut()) }
+        && let Err(message) = conversion.made.check_values(u64::from(array) + u64::from(nodes))
+    {
+        return raise(message);
     }
     let empty = empty_slots(table);
     conversion.tally.seconds += empty as f64 * cost::SHARED_EMPTY_SLOT;
