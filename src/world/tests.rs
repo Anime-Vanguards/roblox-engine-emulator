@@ -2199,3 +2199,93 @@ fn camera_field_of_view_stays_within_its_limits() {
         1.0,
     );
 }
+
+/// GetPartsObscuringTarget as a playing client answers it (Studio 0.748, a new Scriptable camera and the CurrentCamera): the parts
+/// the segment from the camera to each point enters before the point, nearest first and each once, whatever their Transparency,
+/// CanCollide or CanQuery; the ignore list with its descendants; a point on a part's near face does not count it, one inside
+/// does; entries that are no Vector3 are skipped; the camera's orientation does not matter; the argument errors as raised.
+#[test]
+fn camera_parts_obscuring_a_target_follow_a_client() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Fails(Message, F, ...)
+            local Ok, E = pcall(F, ...)
+            if Ok or tostring(E) ~= Message then
+                error(tostring(E), 2)
+            end
+        end
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local function Part(Name, Z, Props)
+            local P = Instance.new("Part")
+            P.Name = Name
+            P.Anchored = true
+            P.Size = Vector3.new(4, 4, 1)
+            P.CFrame = CFrame.new(0, 5, Z)
+            for K, V in Props or {} do
+                (P :: any)[K] = V
+            end
+            P.Parent = Folder
+            return P
+        end
+        local A = Part("A", 20)
+        local B = Part("B", 16, { Transparency = 0.5 })
+        Part("C", 12, { CanCollide = false })
+        Part("D", 10, { CanQuery = false })
+        Part("E", 8, { Transparency = 1 })
+        Part("H", -10)
+        Part("I", 15).CFrame = CFrame.new(12, 5, 15)
+        local Model = Instance.new("Model")
+        Model.Parent = Folder
+        Part("M", 4).Parent = Model
+        local Ball = Part("Ball", 22, { Shape = Enum.PartType.Ball, Size = Vector3.new(3, 3, 3) })
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CameraType = Enum.CameraType.Scriptable
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 5, 30), Vector3.new(0, 5, 0))
+        local Target = Vector3.new(0, 5, 0)
+        local function Names(Camera, ...)
+            local List = Camera:GetPartsObscuringTarget(...)
+            local Out = {}
+            for I, P in List do
+                Out[I] = P.Name
+            end
+            return table.concat(Out, " ")
+        end
+        local All = "Ball A B C D E M"
+        assert(Names(Cam, { Target }, {}) == All, Names(Cam, { Target }, {}))
+        assert(Names(Cam, { Target }, { A }) == "Ball B C D E M")
+        assert(Names(Cam, { Target }, { Model }) == "Ball A B C D E")
+        assert(Names(Cam, { Target }, { Folder }) == "")
+        assert(Names(Cam, { Target }, { A, nil, B }) == "Ball C D E M")
+        -- the points in turn, each part once
+        assert(Names(Cam, { Target, Vector3.new(0, 5, -20) }, {}) == All .. " H")
+        assert(Names(Cam, { Target, Target, "x" :: any, CFrame.new(Target) :: any, vector.create(0, 5, 0) }, {}) == All)
+        assert(Names(Cam, { 1, 2 } :: any, {}) == "" and Names(Cam, {}, {}) == "")
+        -- a point inside a part counts it, one on its near face does not, nor the camera's own point
+        assert(Names(Cam, { Vector3.new(0, 5, 20) }, {}) == "Ball A")
+        assert(Names(Cam, { Vector3.new(0, 5, 20.5) }, {}) == "Ball")
+        assert(Names(Cam, { Vector3.new(0, 5, 30) }, {}) == "")
+        assert(Names(Cam, { Vector3.new(12, 5, 15) }, {}) == "I")
+        -- the camera's orientation does not matter; the CurrentCamera answers the same
+        Cam.CFrame = CFrame.new(0, 5, 30) * CFrame.Angles(1, 2, 3)
+        assert(Names(Cam, { Target }, {}) == All)
+        local Current = workspace.CurrentCamera
+        Current.CameraType = Enum.CameraType.Scriptable
+        Current.CFrame = CFrame.lookAt(Vector3.new(0, 5, 30), Vector3.new(0, 5, 0))
+        assert(Names(Current, { Target }, {}) == All)
+        Fails("Argument 1 missing or nil", Cam.GetPartsObscuringTarget, Cam, nil, {})
+        Fails("Unable to cast string to Array", Cam.GetPartsObscuringTarget, Cam, "x", {})
+        Fails("Unable to cast Dictionary to Array", Cam.GetPartsObscuringTarget, Cam, { a = Target }, {})
+        Fails("Expected table argument, got nil", Cam.GetPartsObscuringTarget, Cam, { Target }, nil)
+        Fails("Expected table argument, got string", Cam.GetPartsObscuringTarget, Cam, { Target }, "x")
+        Fails("Unable to cast value to Object", Cam.GetPartsObscuringTarget, Cam, { Target }, { 1 })
+        Folder:Destroy()
+        assert(Names(Cam, { Target }, {}) == "")
+        "##,
+    );
+    assert!(!engine.state.borrow().log_history.iter().any(|entry| entry.text.contains("is not emulated")));
+}

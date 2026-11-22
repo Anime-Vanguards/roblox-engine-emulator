@@ -305,7 +305,7 @@ fn cached_solids(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
 
 /// Where a ray from `origin` along `direction` (its length the reach) first enters `solid`:
 /// (fraction of the direction, local normal), or None (a ray starting inside does not hit).
-fn ray_solid(solid: &Solid, origin: Vec3, direction: Vec3, grow: f32) -> Option<(f32, Vec3)> {
+pub(crate) fn ray_solid(solid: &Solid, origin: Vec3, direction: Vec3, grow: f32) -> Option<(f32, Vec3)> {
     // a ray passing beyond the solid's bounding sphere misses it, found before the frame's inverse (most of a map's solids)
     let center = frame::translation(&solid.frame);
     let reach = solid.half_extents().length() + grow;
