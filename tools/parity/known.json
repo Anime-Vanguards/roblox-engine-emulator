@@ -731,12 +731,6 @@
 			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
 		}
 	],
-	"values": [
-		{
-			"line": "value SharedTable typeof=SharedTable type=userdata tostring=SharedTable: ADDR",
-			"why": "SharedTable is a userdata in a client; ree makes it a table"
-		}
-	],
 	"yield_refused": [
 		{
 			"line": "sort-synchronize",

@@ -21,7 +21,8 @@
 //!   playing client and server, tools/parity/probes/table_depth.luau). Remotes, data stores and MessagingService walk
 //!   the same way from heights of their own (loopback/wire.rs, server.luau `Data`).
 //! - A thread arrives as nil (in an array it leaves a hole, in a dictionary its entry is dropped); a buffer as a
-//!   new buffer with the same bytes; everything else (functions, Instances, datatypes, strings) as it is.
+//!   new buffer with the same bytes; a SharedTable as a new handle of the same table (Studio 0.748, [`rebuild`]); everything
+//!   else (functions, Instances, datatypes, strings) as it is.
 //! - The copy takes time in proportion to what it makes, a shared table counted each time it appears, and has no limit
 //!   of its own (a 0.747 playing client, one table of 1,000 numbers held 3,000 times: Fire 38 ms and each handler's copy
 //!   33 ms more; held 10,000 times, Fire 0.34 s). Since one small table may stand for a copy of any size (one holding the
@@ -149,7 +150,12 @@ fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, an
         LuaValue::Thread(_) => return Ok(None),
         LuaValue::Table(table) => capture_table(lua, engine, table, height, ancestors, tally)?,
         LuaValue::Buffer(buffer) => Sent::Buffer(buffer.to_vec().into()),
-        other => Sent::Value(other.clone()),
+        other => {
+            // (a SharedTable sent is marked, at top level and in a table, Invoke's results too: shared_table.rs `mark_value`,
+            // measured; a ValueCurveKey's Value, copied alike, not measured)
+            super::shared_table::mark_value(other);
+            Sent::Value(other.clone())
+        }
     }))
 }
 
@@ -230,9 +236,14 @@ fn integer_of(number: f64) -> i64 {
     }
 }
 
-/// A receiver's copy of a sent value.
+/// A receiver's copy of a sent value. A SharedTable arrives as a new handle of the same table, at top level and inside a table
+/// (measured, Studio 0.748, a playing client: Fire, and Invoke's arguments and results, deliver one `==` to the one sent but not
+/// rawequal, its tostring different; lua/shared_table.rs `handle`).
 pub fn rebuild(lua: &Lua, sent: &Sent) -> LuaResult<LuaValue> {
     Ok(match sent {
+        Sent::Value(LuaValue::UserData(held)) if held.is::<super::shared_table::LSharedTable>() => {
+            LuaValue::UserData(super::shared_table::fresh_handle(lua, held)?)
+        }
         Sent::Value(value) => value.clone(),
         Sent::Buffer(bytes) => LuaValue::Buffer(lua.create_buffer(&bytes[..])?),
         Sent::Table(entries) => {
@@ -251,13 +262,19 @@ pub fn rebuild(lua: &Lua, sent: &Sent) -> LuaResult<LuaValue> {
 }
 
 /// The engine value BindableEvent:Fire queues for an argument: a table or buffer as a [`Copied`] that every
-/// receiver rebuilds, a thread as nil, anything else converted as usual. `height`: the call's frame (`self` and the
-/// arguments); `tally`: what the call's copy has made so far ([`Tally`]).
+/// receiver rebuilds, a SharedTable as one that gives every receiver a new handle ([`rebuild`]), a thread as nil, anything
+/// else converted as usual. `height`: the call's frame (`self` and the arguments); `tally`: what the call's copy has made so
+/// far ([`Tally`]).
 pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, tally: &mut Tally) -> Result<Value, String> {
     match value {
         LuaValue::Table(_) | LuaValue::Buffer(_) => {
             let sent = capture(lua, engine, value, height, tally)?;
             let userdata = lua.create_userdata(Copied(Rc::new(sent))).map_err(|error| error.to_string())?;
+            Ok(Value::Lua(Box::new(LuaValue::UserData(userdata))))
+        }
+        LuaValue::UserData(held) if held.is::<super::shared_table::LSharedTable>() => {
+            super::shared_table::mark_value(value);
+            let userdata = lua.create_userdata(Copied(Rc::new(Sent::Value(value.clone())))).map_err(|error| error.to_string())?;
             Ok(Value::Lua(Box::new(LuaValue::UserData(userdata))))
         }
         LuaValue::Thread(_) => Ok(Value::Nil),

@@ -184,6 +184,14 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(none())
         })?,
     )?;
+    // print and warn's mark on a SharedTable they write (lua/shared_table.rs `mark_value`)
+    r.set(
+        "MarkSharedTable",
+        lua.create_function(|_, value: LuaValue| {
+            super::shared_table::mark_value(&value);
+            Ok(())
+        })?,
+    )?;
     // ValueCurveKey's table values, copied as an event's argument is (lua/bindable.rs): `R.Copied(height, value)`, the height
     // of the frame the copy starts above; and SecurityCapabilities.fromCurrent's report in the edit run context, where a
     // plugin's set was not measured (prelude.luau)

@@ -225,6 +225,16 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(())
         })?,
     )?;
+    // SharedTableRegistry:GetSharedTable: a new handle of the SharedTable a name holds (shared_table.rs `fresh_handle`)
+    r.set("SharedTableHandle", lua.create_function(|lua, held: LuaAnyUserData| super::shared_table::fresh_handle(lua, &held))?)?;
+    // SharedTableRegistry's mark on a table it holds (shared_table.rs `mark_value`; anything else is left alone)
+    r.set(
+        "MarkSharedTable",
+        lua.create_function(|_, value: LuaValue| {
+            super::shared_table::mark_value(&value);
+            Ok(())
+        })?,
+    )?;
     // Model:PivotTo / ScaleTo: many part moves as one step (world::joints batches)
     let e = engine.clone();
     r.set(

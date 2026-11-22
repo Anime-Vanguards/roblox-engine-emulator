@@ -351,6 +351,9 @@ local function ScriptLibrary(Name)
 	return Result
 end
 
+-- The proxy value types a SharedTable copies on a write and a read (lua/shared_table.rs, through CopyProxy): a copy of one, by type
+local ProxyCopies = {}
+
 -- Faces / Axes (Lune's versions only accept Lune's own EnumItems)
 
 local function FlagSet(TypeName, Names, Resolve, Shown)
@@ -379,6 +382,21 @@ local function FlagSet(TypeName, Names, Resolve, Shown)
 			return table.concat(Parts, ", ")
 		end,
 	}
+	local function Index(Self, Key)
+		local Value = Info[Self][Key]
+		if Value == nil then
+			Members.ReadMiss(TypeName, Key, true)
+		end
+		return Value
+	end
+	local function NewIndex(Self, Key)
+		Members.WriteMiss(TypeName, Key, Info[Self][Key] ~= nil)
+	end
+	local function Make(Flags)
+		local Object = Proxy(TypeName, Index, NewIndex, Meta) -- (every flag is read-only)
+		Info[Object] = Flags
+		return Object
+	end
 	function Library.new(...)
 		local Flags = {}
 		for _, Name in Names do
@@ -390,15 +408,10 @@ local function FlagSet(TypeName, Names, Resolve, Shown)
 				Flags[Name] = true
 			end
 		end
-		local Object = Proxy(TypeName, function(Self, Key)
-			local Value = Info[Self][Key]
-			if Value == nil then
-				Members.ReadMiss(TypeName, Key, true)
-			end
-			return Value
-		end, function(Self, Key) Members.WriteMiss(TypeName, Key, Info[Self][Key] ~= nil) end, Meta) -- (every flag is read-only)
-		Info[Object] = Flags
-		return Object
+		return Make(Flags)
+	end
+	ProxyCopies[TypeName] = function(Object) -- (its flags are read-only, so the copy shares them)
+		return Make(Info[Object])
 	end
 	return Library
 end
@@ -607,12 +620,16 @@ local function Traceback(Thread)
 end
 
 -- print / warn (output.luau Stringify)
-local Output = R.Output
+local Output, MarkSharedTable = R.Output, R.MarkSharedTable
 local function Stringify(...)
 	local Count = select("#", ...)
 	local Parts = table.create(Count)
 	for Index = 1, Count do
-		Parts[Index] = tostring((select(Index, ...)))
+		local Value = select(Index, ...)
+		if NativeTypeof(Value) == "SharedTable" then
+			MarkSharedTable(Value) -- (a SharedTable printed or warned is marked, as a client's is: lua/shared_table.rs `Shared::mark`)
+		end
+		Parts[Index] = tostring(Value)
 	end
 	return table.concat(Parts, " ")
 end
@@ -927,6 +944,11 @@ function Path2DControlPoint.new(...)
 	Path2DPoints[Point] = Fields
 	return Point
 end
+function ProxyCopies.Path2DControlPoint(Object)
+	local Point = Proxy("Path2DControlPoint", Path2DPointIndex, Path2DPointNewIndex, Path2DPointMeta)
+	Path2DPoints[Point] = table.clone(Path2DPoints[Object])
+	return Point
+end
 
 -- Keys a proxy type has no member for, as a client words them (a 0.747 playing client and server,
 -- tools/parity/probes/proxy_values.luau). A read of a string names the key, quoted ("'Nope' is not a valid member of
@@ -1167,6 +1189,9 @@ local function Capabilities(Set)
 	CapabilitySets[Object] = Set
 	return Object
 end
+function ProxyCopies.SecurityCapabilities(Object) -- (a set is never changed once made, so the copy shares it)
+	return Capabilities(CapabilitySets[Object])
+end
 -- (a method's set; called by the method itself, so level 3 is the script's line: a table's function, which the compiler
 -- does not inline into the method as it would a local one)
 function Members.CapabilitySet(Self, Method)
@@ -1357,7 +1382,16 @@ local function RequireApart(Target, Caller, Vm)
 	return 1, "thread is not yieldable", 0
 end
 
+-- A proxy value a SharedTable stores or hands out: a new one with the same fields (Faces, Axes, Path2DControlPoint,
+-- SecurityCapabilities; measured, each read back not rawequal to what was written, and a Path2DControlPoint changed after it
+-- was stored not changed in the SharedTable), any other as it is
+local function CopyProxy(Value)
+	local Copy = ProxyCopies[Typeof(Value)]
+	return if Copy then Copy(Value) else Value
+end
+
 return {
+	CopyProxy = CopyProxy,
 	Wrap = Wrap,
 	WrapIndex = WrapIndex,
 	WrapNewIndex = WrapNewIndex,

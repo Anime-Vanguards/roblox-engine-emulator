@@ -1377,6 +1377,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         if !value.is_nil() && handle.is_none() {
             let kind = typeof_value(engine, value);
             if !ATTRIBUTE_TYPES.contains(&kind.as_str()) {
+                // (a SharedTable given is marked before it is refused, as a client marks it: lua/shared_table.rs `mark_value`)
+                super::shared_table::mark_value(value);
                 // (Roblox names a table an Array and a function a Function: measured, {} and print; other values by
                 // typeof, buffer in lower case. Not measured: a table with string keys, here a Dictionary)
                 let kind = match value {

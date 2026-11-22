@@ -7029,14 +7029,15 @@ fn shared_table_increment_needs_the_key_as_studio_does() {
         assert(SharedTable.increment(Counts, "N", 2) == 5 and Counts.N == 7, "increment adds and returns the old value")
         local Ok, Message = pcall(SharedTable.increment, Counts, "M", 1)
         assert(not Ok and string.find(tostring(Message), 'Unable to increment the value for key "M" because it does not exist in the SharedTable.', 1, true), tostring(Message))
-        assert(Counts.M == nil, "a failed increment made the key")
+        assert(Counts.M == nil, "a failed increment gave the key a value")
         "#,
     );
 }
 
 /// A SharedTable is a userdata, as in Roblox: the table functions refuse it and the VM names it, it takes Roblox's keys and
 /// values, converts tables, and raises Roblox's messages, the key's at the script's line (measured in a playing client, Studio
-/// 0.748; ree's was a plain table that took anything).
+/// 0.748; ree's was a plain table that took anything). A frozen table converts a table written to it before it says it is
+/// frozen, as a client's does (two runs; ree said it was frozen first).
 #[test]
 fn a_shared_table_is_a_userdata_with_roblox_keys_and_values() {
     assert_script(
@@ -7100,10 +7101,15 @@ fn a_shared_table_is_a_userdata_with_roblox_keys_and_values() {
         Fails("Cannot convert a cyclic table to a SharedTable", function() S.cyclic = Cyclic end)
         S.a = nil
         assert(S.a == nil)
-        -- the key first, then the frozen flag, then the value; only the key's errors (and the library's arguments) are positioned
+        -- the key first, then a table value's conversion, then the frozen flag, then any other value (a client's frozen table
+        -- written { print } or a cyclic table raised the conversion's error, two runs); only the key's errors (and the library's
+        -- arguments) are positioned
         local F = SharedTable.cloneAndFreeze(SharedTable.new({ y = 2 })) :: any
         Fails("SharedTable is frozen", function() F.y = 3 end)
         Fails("SharedTable is frozen", function() F.y = print end)
+        Fails("SharedTable is frozen", function() F.y = { 1 } end)
+        Fails("Functions can not be stored in a SharedTable", function() F.y = { print } end)
+        Fails("Cannot convert a cyclic table to a SharedTable", function() F.y = Cyclic end)
         Fails("SharedTable keys can only be strings or numbers.", function() F[true] = 1 end)
         assert(F.y == 2)
         assert(Positioned(function() S[true] = 1 end) and Positioned(function() return SharedTable.size(1 :: any) end))
@@ -7196,6 +7202,30 @@ fn the_shared_table_library_follows_roblox() {
         local Frozen, DeepFrozen = SharedTable.cloneAndFreeze(S), SharedTable.cloneAndFreeze(S, true)
         assert(SharedTable.isFrozen(Frozen) and not SharedTable.isFrozen(Frozen.t) and Frozen.t == S.t)
         assert(SharedTable.isFrozen(DeepFrozen.t) and DeepFrozen.t ~= S.t and not SharedTable.isFrozen(SharedTable.clone(Frozen)))
+        -- a deep copy copies each SharedTable it reaches once (a playing client, Studio 0.748): a table held twice is one copy, one
+        -- that holds itself (twice) holds its copy, a ring stays a ring, and shallow clones are copies of their own whose shared
+        -- table is copied once; frozen too by cloneAndFreeze
+        local A = SharedTable.new({ x = 1 })
+        local Twice = SharedTable.new()
+        Twice.a, Twice.b, Twice[1] = A, A, A
+        local D, DF = SharedTable.clone(Twice, true), SharedTable.cloneAndFreeze(Twice, true)
+        assert(D.a == D.b and D.a == D[1] and D.a ~= A and DF.a == DF.b and SharedTable.isFrozen(DF.a) and not SharedTable.isFrozen(D.a))
+        local Own = SharedTable.new()
+        Own.self, Own.again = Own, Own
+        local DOwn = SharedTable.clone(Own, true)
+        assert(DOwn.self == DOwn and DOwn.again == DOwn and DOwn.self ~= Own)
+        local R1, R2 = SharedTable.new(), SharedTable.new()
+        R1.next, R2.next = R2, R1
+        local DR = SharedTable.clone(R1, true)
+        assert(DR.next.next == DR and DR.next ~= R2)
+        local Inner = SharedTable.new({ y = 1 })
+        local T = SharedTable.new({ inner = Inner, n = 1 })
+        local V = SharedTable.new()
+        V.c1, V.c2, V.t = SharedTable.clone(T), SharedTable.clone(T), T
+        local DV = SharedTable.clone(V, true)
+        assert(DV.c1 ~= DV.c2 and DV.c1 ~= DV.t and DV.c1.inner == DV.c2.inner and DV.c2.inner == DV.t.inner and DV.c1.inner ~= Inner)
+        local Empty = SharedTable.clone(SharedTable.new(), true)
+        assert(SharedTable.size(Empty) == 0)
         Fails("invalid argument #1 to 'clone' (SharedTable expected, got table)", Any.clone, {})
         Fails("invalid argument #2 to 'clone' (boolean expected, got string)", Any.clone, S, "x")
         Fails("invalid argument #2 to 'cloneAndFreeze' (boolean expected, got nil)", Any.cloneAndFreeze, S, nil)
@@ -7250,8 +7280,9 @@ fn the_shared_table_library_follows_roblox() {
 }
 
 /// SharedTableRegistry:SetSharedTable takes a SharedTable, or nil to forget the name (Studio 0.748: anything else raises
-/// "Unable to cast double to SharedTable", a table named an Array or a Dictionary); a SharedTable passes a BindableEvent as itself,
-/// alone or in a table.
+/// "Unable to cast double to SharedTable", a table named an Array or a Dictionary); a SharedTable a BindableEvent or a
+/// BindableFunction delivers, alone or in a table, is a new handle of the same table (Studio 0.748, a playing client, two runs:
+/// `==` true, rawequal false, tostring different, for Fire and for Invoke's arguments and results). ree delivered the handle sent.
 #[test]
 fn shared_tables_meet_the_registry_and_bindables_as_in_roblox() {
     let (lua, engine) = start();
@@ -7271,14 +7302,112 @@ fn shared_tables_meet_the_registry_and_bindables_as_in_roblox() {
         Registry:SetSharedTable("Given", nil)
         print(Same, Registry:GetSharedTable("Given") ~= Given)
         local Event = Instance.new("BindableEvent")
-        Event.Event:Connect(function(Alone, Held) print(Alone == Given, Held.s == Given) end)
+        Event.Event:Connect(function(Alone, Held)
+            print("fired", Alone == Given, Held.s == Given, rawequal(Alone, Given), rawequal(Held.s, Given), tostring(Alone) == tostring(Given))
+        end)
         Event:Fire(Given, { s = Given })
+        local Function = Instance.new("BindableFunction")
+        Function.OnInvoke = function(Got, Held) return Got, rawequal(Got, Given), Got == Given, rawequal(Held[1], Given), Held[1] == Given end
+        local Back, Raw, Same, HeldRaw, HeldSame = Function:Invoke(Given, { Given })
+        print("invoked", Raw, Same, HeldRaw, HeldSame, rawequal(Back, Given), Back == Given)
         "##,
     );
     assert!(output.contains(&"print: Unable to cast double to SharedTable Unable to cast string to SharedTable Unable to cast bool to SharedTable Unable to cast Array to SharedTable Unable to cast Dictionary to SharedTable Unable to cast Instance to SharedTable".to_string()), "{output:?}");
     assert!(output.contains(&"print: true true".to_string()), "{output:?}");
+    assert!(output.contains(&"print: invoked false true false true false true".to_string()), "{output:?}");
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    assert_eq!(lines(&engine).iter().filter(|line| *line == "print: true true").count(), 2, "{:?}", lines(&engine));
+    assert!(lines(&engine).contains(&"print: fired true true false false false".to_string()), "{:?}", lines(&engine));
+}
+
+/// SharedTableRegistry casts a name to a string as a playing client does (Studio 0.748): a number as `%.20g` writes it, NaN and
+/// the infinities as "NAN", "INF" and "-INF"; any other value warns ("argument #1 expects a string, but boolean was passed")
+/// and is named as the engine writes its type (a buffer by its contents and every SharedTable by one name, which no text
+/// reaches). SetSharedTable checks its value before its name, and names a value it refuses as a client's cast does.
+#[test]
+fn shared_table_registry_names_cast_as_a_client_does() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r##"
+        local Registry = game:GetService("SharedTableRegistry")
+        local function Err(...)
+            local Ok, E = pcall(...)
+            return if Ok then "ok" else tostring(E)
+        end
+        print(Err(Registry.SetSharedTable, Registry, nil, 5), "|", Err(Registry.SetSharedTable, Registry), "|", Err(Registry.GetSharedTable, Registry))
+        local function Named(Name, Text)
+            local T = SharedTable.new()
+            Registry:SetSharedTable(Name, T)
+            return Registry:GetSharedTable(Text) == T and Registry:GetSharedTable(Name) == T
+        end
+        print("numbers", Named(15, "15"), Named(0.1, "0.10000000000000000555"), Named(1 / 3, "0.33333333333333331483"), Named(2 ^ 63, "9223372036854775808"),
+            Named(1e20, "1e+20"), Named(-0.0, "-0"), Named(0 / 0, "NAN"), Named(math.huge, "INF"), Named(-math.huge, "-INF"))
+        print("others", Named(true, "true"), Named({ 1 }, "{}"), Named(workspace, "Instance"), Named(print, "function"), Named(coroutine.create(print), "nil"),
+            Named(Enum.Material, "nil"), Named(newproxy(), "nil"), Named(Enum.Material.Plastic, "Plastic"), Named(Vector3.new(1, 2, 3), "1, 2, 3"))
+        local T, Other = SharedTable.new(), SharedTable.new()
+        Registry:SetSharedTable(buffer.fromstring("abc"), T)
+        Registry:SetSharedTable(SharedTable.new(), Other)
+        print("apart", Registry:GetSharedTable(buffer.fromstring("abc")) == T, Registry:GetSharedTable(buffer.fromstring("abd")) == T,
+            Registry:GetSharedTable("abc") == T, Registry:GetSharedTable(SharedTable.new({ 1 })) == Other)
+        local function Cast(Value)
+            return Err(Registry.SetSharedTable, Registry, "x", Value)
+        end
+        print(Cast(print), "|", Cast(coroutine.create(print)), "|", Cast(Enum.Material.Plastic), "|", Cast(Enum), "|", Cast(newproxy()), "|", Cast(CFrame.new()))
+        "##,
+    );
+    assert!(output.contains(&"print: Unable to cast double to SharedTable | Argument 1 missing or nil | Argument 1 missing or nil".to_string()), "{output:?}");
+    assert!(output.contains(&"print: numbers true true true true true true true true true".to_string()), "{output:?}");
+    assert!(output.contains(&"print: others true true true true true true true true true".to_string()), "{output:?}");
+    assert!(output.contains(&"print: apart true false false true".to_string()), "{output:?}");
+    assert!(
+        output.contains(&"print: Unable to cast Function to SharedTable | Unable to cast null to SharedTable | Unable to cast Material to SharedTable | Unable to cast null to SharedTable | Unable to cast null to SharedTable | Unable to cast CoordinateFrame to SharedTable".to_string()),
+        "{output:?}"
+    );
+    let warned = |kind: &str| output.iter().any(|line| line.contains(&format!("argument #1 expects a string, but {kind} was passed")) && !line.starts_with("print"));
+    assert!(["boolean", "table", "Instance", "function", "thread", "Enum", "userdata", "EnumItem", "Vector3", "buffer", "SharedTable"].iter().all(|kind| warned(kind)), "{output:?}");
+    assert!(!warned("number"), "{output:?}");
+}
+
+/// A value a SharedTable pools (one the engine has no value of its own for) reads back as a new object each time, `==` to the
+/// one written (Studio 0.748, a playing client: Ray, Region3, PhysicalProperties, NumberSequenceKeypoint, ColorSequenceKeypoint,
+/// TweenInfo, Faces, Axes and Path2DControlPoint were never rawequal to the value written or to another read, and in a second
+/// session, two runs, Region3int16, Vector2int16, Vector3int16 and SecurityCapabilities, which ree read back as the very object
+/// written), through a read, a loop and a clone alike.
+#[test]
+fn pooled_shared_table_values_read_back_as_new_objects() {
+    assert_script(
+        r#"
+        local Values = {
+            Ray.new(Vector3.new(1, 2, 3), Vector3.new(0.1, 0.2, 0.3)),
+            Region3.new(Vector3.new(0.1, 0.2, 0.3), Vector3.new(4, 5, 6)),
+            PhysicalProperties.new(0.7, 0.3, 0.5, 1, 1),
+            NumberSequenceKeypoint.new(0.5, 0.25, 0.1),
+            ColorSequenceKeypoint.new(0.5, Color3.new(0.1, 0.2, 0.3)),
+            TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In, 2, true, 0.25),
+            Faces.new(Enum.NormalId.Top, Enum.NormalId.Left),
+            Axes.new(Enum.Axis.X, Enum.NormalId.Top),
+            Path2DControlPoint.new(UDim2.new(1, 2, 3, 4), UDim2.new(0, 1, 0, 1), UDim2.new(0, 2, 0, 2)),
+            Region3int16.new(Vector3int16.new(1, 2, 3), Vector3int16.new(4, 5, 6)),
+            Vector2int16.new(1, 2),
+            Vector3int16.new(1, 2, 3),
+            SecurityCapabilities.new(Enum.SecurityCapability.Network, Enum.SecurityCapability.UI),
+        }
+        local S = SharedTable.new()
+        for I, V in Values do
+            S[I] = V
+            local A, B = S[I], S[I]
+            assert(typeof(A) == typeof(V) and A == V and B == V and A == B and tostring(A) == tostring(V), typeof(V))
+            assert(not rawequal(A, V) and not rawequal(A, B), typeof(V) .. " is a new object on each read")
+        end
+        for I, V in S do
+            assert(V == Values[I] and not rawequal(V, Values[I]), "a loop's value")
+        end
+        local C = SharedTable.clone(S)
+        assert(C[6] == Values[6] and not rawequal(C[6], S[6]), "a clone's read")
+        assert(S[2].CFrame == Values[2].CFrame and S[2].Size == Values[2].Size, "the Region3 kept to the bit")
+        "#,
+    );
 }
 
 /// A SharedTable keeps its values in the engine's own data, so filling one takes none of mlua's reference slots (lua/refs.rs):
@@ -7467,6 +7596,46 @@ fn shared_table_conversions_stop_at_rees_guard_on_a_copy() {
     );
 }
 
+/// A deep copy walks only to the SharedTables the tables it copies hold, while the work clock is charged for every entry of every
+/// table, as Studio copies them (a playing client, Studio 0.748: 100 shallow clones of 10,000 entries 10.5 ms, 9.3 to 10.9 ns an
+/// entry from 10 clones of 1,000 entries to 1,000 of 1,000; one SharedTable among 10,000 entries the same as none). 20,000 shallow
+/// clones of a table of 1,000,000 numbers and one SharedTable are 2 * 10^10 entries: charged 200 s, walked in a moment.
+#[test]
+fn a_deep_copy_of_shallow_clones_walks_only_to_the_tables_they_hold() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let started = std::time::Instant::now();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Big = {}
+        for I = 1, 1000000 do
+            Big["k" .. I] = I
+        end
+        Big.inner = { 1 }
+        local T = SharedTable.new(Big)
+        local U = SharedTable.new()
+        for I = 1, 20000 do
+            U[I] = SharedTable.clone(T)
+        end
+        local Before = os.clock()
+        local D = SharedTable.clone(U, true)
+        local Spent = os.clock() - Before
+        print(string.format("%.6f", Spent))
+        assert(D[1] ~= T and D[1] ~= D[2] and D[1].inner == D[20000].inner and D[1].inner ~= T.inner and D[1].k7 == 7 and D[1].inner[1] == 1)
+        "#,
+    );
+    let elapsed = started.elapsed();
+    let spent: f64 = output.iter().find_map(|line| line.strip_prefix("print: ")?.parse().ok()).expect("the price");
+    let expected = 20_000.0 * 1_000_001.0 * crate::cost::SHARED_DEEP_STRING_ENTRY
+        + 20_001.0 * crate::cost::SHARED_DEEP_INTEGER_ENTRY
+        + 40_000.0 * crate::cost::SHARED_DEEP_TABLE;
+    assert!((spent - expected).abs() < 1e-6 * expected, "charged {spent} s, Studio's per-entry price {expected} s");
+    assert!(elapsed < std::time::Duration::from_secs(20), "the copy walked every entry: {elapsed:?}");
+}
+
 /// A chain of SharedTables a script builds one write at a time, each holding the next, is deep-copied and let go of whatever its
 /// length (Studio deep-copies a chain 1,000 long): neither nests a call once a link, which would overflow the engine's stack.
 #[test]
@@ -7540,6 +7709,14 @@ fn shared_table_bulk_calls_cost_what_studio_spent() {
         assert(New > 280 and New < 380, "new from 1,000 entries (us): " .. New)
         assert(Loop > 30 and Loop < 45, "a loop over 1,000 entries (us): " .. Loop)
         assert(Deep > 8 and Deep < 14, "a deep clone of 1,000 entries (us): " .. Deep)
+        -- Studio copies every entry of every table a deep copy reaches, shallow clones included: 100 clones of 1,000 entries
+        -- 925 and 1,573 us (two sessions), so 100,000 entries' worth, however little ree's copy walks
+        local Clones = SharedTable.new()
+        for I = 1, 100 do
+            Clones[I] = SharedTable.clone(S)
+        end
+        local DeepClones = Per(function(N) for _ = 1, N do SharedTable.clone(Clones, true) end end)
+        assert(DeepClones > 850 and DeepClones < 1300, "a deep clone of 100 shallow clones of 1,000 entries (us): " .. DeepClones)
         assert(math.abs(CloneBig - CloneSmall) < 1, "a shallow clone at 1,000 and 10 entries (us): " .. CloneBig .. " " .. CloneSmall)
         assert(Written > 280 and Written < 380, "1,000 entries written to a key (us): " .. Written)
         assert(Failed > 150 and Failed < 250, "new failing at its 1,000th entry (us): " .. Failed)
@@ -7641,6 +7818,825 @@ fn a_call_into_an_actor_and_a_shared_increment_cost_what_studio_spent() {
         "#,
     );
     assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
+}
+
+/// The Luau a SharedTable price test measures with: `Per(N, Body)`, what `Body(N)` cost the work clock a call (us), an empty loop
+/// taken off, and `Within(Label, Value, Low, High)`.
+const SHARED_PER: &str = r#"
+local function Per(N, Body)
+    local Start = os.clock()
+    Body(N)
+    local Middle = os.clock()
+    for _ = 1, N do end
+    return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+end
+local function Within(Label, Value, Low, High)
+    assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+end
+"#;
+
+/// Runs a SharedTable price test (`SHARED_PER` first) with the work clock running, and checks it printed "ok".
+fn assert_shared_prices(source: &str) {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, &format!("{SHARED_PER}\n{source}\nprint(\"ok\")"));
+    assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
+}
+
+/// A SharedTable call costs the bytes of its key, hashed once a call, and of the strings and buffers it copies in or makes, as
+/// a playing client spends them (Studio 0.748, three sessions; cost.rs SHARED_KEY_BYTE and after): with a 1 MB key a read
+/// 926-1,060 us, an overwrite 1,118-1,243, increment 1,288-1,455, update 1,633-1,927; a 1 MB string written 322-781 and read
+/// 294-357, a 1 MB buffer read 279-371; new of a 1 MB key 1,074 a key, of a 1 MB string 288-292; a loop's step over a 1 MB key
+/// 142-146. ree charged 0.02 to 0.4 us for each, whatever the size. A string written or read steps at 65,488 bytes, a buffer
+/// written at 65,504 (a bisection, two sessions: a string of 65,440 bytes written in 1.7 to 2.0 us and read in 11.5, one of 65,488
+/// written in 88 to 138 and read in 71 to 104; a buffer of 65,488 written in 1.4, of 65,504 in 30 to 32); ree stepped both at
+/// 65,504 and priced reads by the VM's price a byte at any size.
+#[test]
+fn shared_table_key_and_value_bytes_cost_what_studio_spent() {
+    assert_shared_prices(
+        r#"
+        local L = 1048576
+        local K = string.rep("a", L - 1) .. "k"
+        local V = string.rep("v", L - 1) .. "w"
+        local S = SharedTable.new({ x = 1 })
+        S[K] = 1
+        S.v = V
+        S.b = buffer.create(L)
+        local function Same(X) return X end
+        Within("a 1 MB key read", Per(4, function(N) for _ = 1, N do local _ = S[K] end end), 600, 1400)
+        Within("a 1 MB key overwritten", Per(4, function(N) for _ = 1, N do S[K] = 2 end end), 700, 1600)
+        Within("a 1 MB key incremented", Per(4, function(N) for _ = 1, N do SharedTable.increment(S, K, 1) end end), 700, 1800)
+        Within("a 1 MB key updated", Per(4, function(N) for _ = 1, N do SharedTable.update(S, K, Same) end end), 700, 2400)
+        Within("a 1 MB string written", Per(4, function(N) for _ = 1, N do S.v = V end end), 300, 1000)
+        Within("a 1 MB string read", Per(4, function(N) for _ = 1, N do local _ = S.v end end), 150, 450)
+        Within("a 1 MB buffer read", Per(4, function(N) for _ = 1, N do local _ = S.b end end), 250, 700)
+        local Keyed, Valued = { [K] = 1 }, { V }
+        Within("new with a 1 MB key", Per(4, function(N) for _ = 1, N do SharedTable.new(Keyed) end end), 650, 1500)
+        Within("new with a 1 MB string", Per(4, function(N) for _ = 1, N do SharedTable.new(Valued) end end), 150, 500)
+        local Loop = SharedTable.new(Keyed)
+        Within("a loop over one 1 MB key", Per(4, function(N) for _ = 1, N do for _ in Loop do end end end), 70, 250)
+        -- a string written steps where a client's does: 65,480 bytes 1.39 us, 65,488 88 to 138, 65,504 44.8; a buffer 16 bytes
+        -- later: 65,488 bytes 1.4 us, 65,504 30 to 32
+        local Under, At, Over = string.rep("u", 65480), string.rep("t", 65488), string.rep("o", 65504)
+        Within("a string of 65,480 bytes written", Per(20, function(N) for _ = 1, N do S.v = Under end end), 0, 2)
+        Within("a string of 65,488 bytes written", Per(20, function(N) for _ = 1, N do S.v = At end end), 25, 150)
+        Within("a string of 65,504 bytes written", Per(20, function(N) for _ = 1, N do S.v = Over end end), 25, 70)
+        local Small, Large = buffer.create(65488), buffer.create(65504)
+        Within("a buffer of 65,488 bytes written", Per(20, function(N) for _ = 1, N do S.w = Small end end), 0, 3)
+        Within("a buffer of 65,504 bytes written", Per(20, function(N) for _ = 1, N do S.w = Large end end), 25, 70)
+        -- and a string read steps where a string written does: 65,440 bytes 11.5 us, 65,488 71 to 104
+        S.r, S.t = string.rep("r", 65440), At
+        Within("a string of 65,440 bytes read", Per(20, function(N) for _ = 1, N do local _ = S.r end end), 5, 20)
+        Within("a string of 65,488 bytes read", Per(20, function(N) for _ = 1, N do local _ = S.t end end), 25, 110)
+        "#,
+    );
+}
+
+/// A key added to a slot another key holds moves both down, which hashes the key held again, once (a playing client, Studio
+/// 0.748: "s58" added and taken out beside a 1 MB key whose first slot it shares 793 us, beside one it does not 0.16; ree charged
+/// 0.62 us either way).
+#[test]
+fn a_slot_split_hashes_the_held_key_again() {
+    assert_shared_prices(
+        r#"
+        -- (the first 1 MB key's hash and "s58"'s share their lowest five bits, the second's do not)
+        local S, T = SharedTable.new(), SharedTable.new()
+        S[string.rep("a", 1048575) .. "k"] = 1
+        T[string.rep("a", 1048575) .. "m"] = 1
+        local function AddRemove(Table) return Per(1, function() Table.s58 = 1 Table.s58 = nil end) end
+        Within("s58 added and taken out beside a 1 MB key in its slot", AddRemove(S), 500, 1100)
+        Within("s58 added and taken out beside a 1 MB key elsewhere", AddRemove(T), 0, 2)
+        "#,
+    );
+}
+
+/// An update whose callback is called again, as the table changed while it ran, looks its key up again each time, and pays for
+/// hashing it again (not measured in Studio: every lookup a client makes hashes its key, measured for reads, 0.81 ns a byte). ree
+/// charged the key once a call however often the callback ran: 100 calls with a 1 MB key 0.9 ms.
+#[test]
+fn an_update_called_again_pays_for_its_key_again() {
+    assert_shared_prices(
+        r#"
+        local K = string.rep("k", 1048576)
+        local S = SharedTable.new()
+        S[K] = 0
+        local Calls = 0
+        local Spent = Per(1, function()
+            SharedTable.update(S, K, function(V)
+                Calls += 1
+                if Calls < 100 then
+                    S[1] = Calls
+                end
+                return V
+            end)
+        end)
+        assert(Calls == 100, Calls)
+        -- (at least 100 hashes of 1 MB, 84.9 ms)
+        Within("update of a 1 MB key whose callback changed the table on its first 99 calls", Spent, 84000, 200000)
+        "#,
+    );
+}
+
+/// Updates nested in their callbacks go as deep as a client's, one C call a level, and stop with the VM's own message (a playing
+/// client, Studio 0.748: depth 199 in a script, then "C stack overflow"). The depth is the VM's limit of 200 C calls less those
+/// the thread already holds, which depends on how the engine resumed it (195 to 199 here). ree called each callback two C calls
+/// deep: depth 100, "runtime error: C stack overflow".
+#[test]
+fn nested_updates_stop_where_robloxs_c_stack_does() {
+    assert_script(
+        r#"
+        local S = SharedTable.new()
+        local Depth = 0
+        local function Deeper()
+            Depth += 1
+            if Depth < 1000 then
+                SharedTable.update(S, "k" .. Depth, Deeper)
+            end
+            return Depth
+        end
+        local Ok, E = pcall(Deeper)
+        assert(not Ok and E == "C stack overflow" and Depth >= 190 and Depth <= 199, `{Ok} {E} {Depth}`)
+        -- an error the callback raises still comes back as it was raised
+        local Thrown = {}
+        local Ok2, E2 = pcall(SharedTable.update, S, "x", function() error(Thrown) end)
+        assert(not Ok2 and rawequal(E2, Thrown))
+        "#,
+    );
+}
+
+/// SharedTable.update holds a copy of the table while it runs, as Roblox's does, so its write copies the key's path, as a first
+/// write after a clone does (a playing client, Studio 0.748: update 0.58 / 0.78 / 1.2 us at 10 / 1,000 / 100,000 entries, an
+/// overwrite 0.065 / 0.078 / 0.088, the first write after a clone 0.48 / 0.82 / 1.0; ree charged 0.088 at every size).
+#[test]
+fn shared_table_update_copies_its_path_as_in_roblox() {
+    assert_shared_prices(
+        r#"
+        local function Same(X) return X end
+        for _, Count in { 10, 1000, 100000 } do
+            local T = {}
+            for I = 1, Count do
+                T["k" .. I] = I
+            end
+            local S = SharedTable.new(T)
+            local Update = Per(200, function(N) for _ = 1, N do SharedTable.update(S, "k1", Same) end end)
+            local Overwrite = Per(200, function(N) for _ = 1, N do S.k1 = 1 end end)
+            assert(Update > Overwrite + 0.2, `update {Update} and an overwrite {Overwrite} (us) at {Count} entries`)
+            if Count == 1000 then
+                Within("update of a 1,000-entry table", Update, 0.4, 1.0)
+            end
+        end
+        "#,
+    );
+}
+
+/// The Luau of 2^n keys whose 64-bit FNV-1a hashes are all equal: `Key(I)` takes `A[J]` or `B[J]` by bit `J - 1` of `I` (real
+/// collisions, pairs of 16-byte blocks of equal hash found offline, chained: 3 pairs give 8 keys of 48 bytes, 10 give 1,024 of 160).
+const COLLIDING_KEYS: &str = r#"
+local A = { "amacobmcimlpggfd", "gajldeibogfilcdn", "oaomcbcfamgpdfnp", "khjepnbhcdemjbkn", "nfladgmnibaleboe", "bbjhbacpjdmklnif", "leihpdkifpiicohb", "aipaghcphiiglmmm", "ainkaeaampcncieb", "bpldhobacbicbjla" }
+local B = { "jadnfnainmlpjeik", "picgfcflgnjiaddi", "okpppjoaaachdced", "ggjepnplckhjkffl", "nhcpmfbfeilolakc", "fiimifegkmekkjco", "lmabnookgcnneemf", "ajahofibjdciefbh", "ekioneijhelamfcp", "mpkhfagpfpinikcj" }
+local function Key(I, Pairs)
+    local Parts = {}
+    for J = 1, Pairs do
+        Parts[J] = if bit32.btest(I, bit32.lshift(1, J - 1)) then B[J] else A[J]
+    end
+    return table.concat(Parts)
+end
+"#;
+
+/// Keys whose 64-bit hashes are equal walk as a playing client walks them (Studio 0.748, eight such keys, each sequence printed
+/// by the client): the newest written first; a removal keeps the others' order; an overwrite or increment in the table's own
+/// list stays in place, while a write or removal after a shallow clone moves the key written first (the clone keeps its order);
+/// update moves its key first; a deep clone keeps the order; new(t) walks in the reverse of t's pairs order. A loop that ran to its
+/// end still shares the list until the collector takes it, so a write right after one moves the key first as after a clone
+/// (order.luau, each write right after a walk: "overwrite 5: 5,3,7,6,4,2,1,0", "increment 0, update 1: 1,0,5,3,7,6,4,2"; ree's
+/// ended loop let go of the list and printed 3,7,6,5,4,2,1,0 and 1,3,7,6,5,4,2,0). ree walked them by their bytes.
+#[test]
+fn colliding_string_keys_walk_as_roblox_orders_them() {
+    assert_script(&format!(
+        "{COLLIDING_KEYS}\n{}",
+        r#"
+        local Keys, IndexOf = {}, {}
+        for I = 0, 7 do
+            Keys[I] = Key(I, 3)
+            IndexOf[Keys[I]] = I
+        end
+        local function Walk(S)
+            local Seen = {}
+            for K in S do table.insert(Seen, IndexOf[K] or K) end
+            return table.concat(Seen, ",")
+        end
+        local function Fill()
+            local S = SharedTable.new()
+            for I = 0, 7 do S[Keys[I]] = I end
+            return S
+        end
+        local S1 = Fill()
+        local S2 = Fill() S2[Keys[3]] = nil local W2 = Walk(S2) S2[Keys[3]] = 3
+        local S3 = Fill() S3[Keys[5]] = 55
+        local S4 = Fill() local C4 = SharedTable.clone(S4) S4[Keys[5]] = 55
+        local S5 = Fill() SharedTable.update(S5, Keys[2], function(V) return V end)
+        local S6 = Fill() SharedTable.increment(S6, Keys[1], 1)
+        local S7 = Fill() local C7 = SharedTable.clone(S7) S7[Keys[6]] = nil
+        local S8 = Fill() local C8 = SharedTable.clone(S8) SharedTable.increment(S8, Keys[1], 1)
+        local Walks = {
+            Walk(S1), W2, Walk(S2), Walk(S3), Walk(S4), Walk(C4), Walk(S5), Walk(S6), Walk(S7), Walk(C7), Walk(S8), Walk(C8),
+            Walk(SharedTable.clone(S1, true)), Walk(SharedTable.cloneAndFreeze(S1, true)),
+        }
+        assert(table.concat(Walks, " | ") == "7,6,5,4,3,2,1,0 | 7,6,5,4,2,1,0 | 3,7,6,5,4,2,1,0 | 7,6,5,4,3,2,1,0 | 5,7,6,4,3,2,1,0 | 7,6,5,4,3,2,1,0 | 2,7,6,5,4,3,1,0 | 7,6,5,4,3,2,1,0 | 7,5,4,3,2,1,0 | 7,6,5,4,3,2,1,0 | 1,7,6,5,4,3,2,0 | 7,6,5,4,3,2,1,0 | 7,6,5,4,3,2,1,0 | 7,6,5,4,3,2,1,0", table.concat(Walks, " | "))
+        assert(SharedTable.size(S1) == 8 and S1[Keys[0]] == 0 and S1[Keys[7]] == 7 and S3[Keys[5]] == 55 and C4[Keys[5]] == 5 and S7[Keys[6]] == nil)
+        -- new(t) adds t's keys in its pairs order, so they walk the other way
+        local Plain = {}
+        for _, I in { 5, 2, 7, 0, 3, 6, 1, 4 } do Plain[Keys[I]] = I end
+        local Reversed = {}
+        for K in pairs(Plain) do table.insert(Reversed, 1, IndexOf[K]) end
+        assert(Walk(SharedTable.new(Plain)) == table.concat(Reversed, ","))
+        -- among other keys: "alpha" shares the list's first slot, "beta" does not
+        local M = SharedTable.new()
+        M.alpha = 1
+        for I = 0, 3 do M[Keys[I]] = I end
+        M.beta = 2
+        assert(Walk(M) == "beta,alpha,3,2,1,0", Walk(M))
+        -- each write right after a loop that ran to its end, as order.luau did
+        local O = Fill()
+        local Seq = { Walk(O) }
+        O[Keys[3]] = nil
+        table.insert(Seq, Walk(O))
+        O[Keys[3]] = 3
+        table.insert(Seq, Walk(O))
+        O[Keys[5]] = 55
+        table.insert(Seq, Walk(O))
+        SharedTable.increment(O, Keys[0], 1)
+        SharedTable.update(O, Keys[1], function(V) return V end)
+        table.insert(Seq, Walk(O))
+        local Want = "7,6,5,4,3,2,1,0 | 7,6,5,4,2,1,0 | 3,7,6,5,4,2,1,0 | 5,3,7,6,4,2,1,0 | 1,0,5,3,7,6,4,2"
+        assert(table.concat(Seq, " | ") == Want, table.concat(Seq, " | "))
+        assert(O[Keys[5]] == 55 and O[Keys[0]] == 1 and O[Keys[1]] == 1)
+        "#
+    ));
+}
+
+/// Keys whose 64-bit hashes are equal cost what a playing client spends on them, by the entries of their list (Studio 0.748,
+/// 1,024 keys of 208 bytes: the oldest read 2.6-13.7 us, a key added 39.5, the newest taken out 30.3, the first write after a
+/// shallow clone 88-94; update on its own list about 150, 290-306 at 2,048 keys): a list is searched from the front, rebuilt when
+/// a key joins or leaves it and copied when a clone shares it. ree charged 0.03 / 0.32 / 0.32 / 3.5 / 0.09 us.
+#[test]
+fn colliding_keys_cost_per_entry_as_in_roblox() {
+    assert_shared_prices(&format!(
+        "{COLLIDING_KEYS}\n{}",
+        r#"
+        local Keys = {}
+        for I = 0, 1023 do Keys[I] = Key(I, 10) end
+        local T = SharedTable.new()
+        for I = 0, 1022 do T[Keys[I]] = I end
+        local function Same(X) return X end
+        Within("the oldest of 1,023 keys read", Per(20, function(N) for _ = 1, N do local _ = T[Keys[0]] end end), 2, 15)
+        Within("a key added to 1,023", Per(1, function() T[Keys[1023]] = 1 end), 20, 60)
+        Within("the newest of 1,024 taken out", Per(1, function() T[Keys[1023]] = nil end), 15, 60)
+        local C = SharedTable.clone(T)
+        Within("the first write after a clone", Per(1, function() C[Keys[1022]] = 0 end), 50, 130)
+        Within("update on its own list", Per(1, function() SharedTable.update(T, Keys[0], Same) end), 80, 220)
+        assert(T[Keys[0]] == 0 and C[Keys[1022]] == 0 and T[Keys[1022]] == 1022 and SharedTable.size(T) == 1023)
+        "#
+    ));
+}
+
+/// A loop walks a snapshot of the trie an entry a step, so one stopped at its first entry costs the same at any size, as a
+/// playing client's does (Studio 0.748: 0.24 to 0.29 us from 10 entries to 100,000, 0.38 to 0.73 from 3 to 200,000); ree took
+/// its snapshot entry by entry and charged every entry at the start (2.9 ms at 100,000).
+#[test]
+fn a_shared_table_loop_costs_its_start_and_each_step() {
+    assert_shared_prices(
+        r#"
+        local Big = {}
+        for I = 1, 100000 do
+            Big["k" .. I] = I
+        end
+        local S, T = SharedTable.new(Big), SharedTable.new({ a = 1, b = 2, c = 3 })
+        local function Stopped(Table) return Per(20, function(N) for _ = 1, N do for _ in Table do break end end end) end
+        Stopped(S)
+        Stopped(T)
+        local First, Small = Stopped(S), Stopped(T)
+        Within("a loop over 100,000 entries stopped at its first", First, 0.3, 1.0)
+        assert(math.abs(First - Small) < 0.1, `{First} {Small}`)
+        "#,
+    );
+}
+
+/// SharedTable.clear costs the entries it frees when the table alone holds them, as a playing client's does (Studio 0.748, two
+/// runs of each setup: 262 to 478 us at 10,000 entries, by how recently the tables were made, 37 to 41 at 1,000; cost.rs
+/// SHARED_CLEARED_ENTRY), and a shallow clone's only the call (0.02 to 0.20 us); ree charged the call alone for both, then 65 ns
+/// an entry from an earlier session (553 to 596 us at 10,000).
+#[test]
+fn clearing_a_shared_table_costs_the_entries_it_frees() {
+    assert_shared_prices(
+        r#"
+        local T = {}
+        for I = 1, 10000 do
+            T["k" .. I] = I
+        end
+        local S = SharedTable.new(T)
+        local Owned, Clones = {}, {}
+        for I = 1, 5 do
+            Owned[I] = SharedTable.new(T)
+            Clones[I] = SharedTable.clone(S)
+        end
+        local At = 0
+        local ClearOwned = Per(5, function(N) for _ = 1, N do At += 1 SharedTable.clear(Owned[At]) end end)
+        At = 0
+        local ClearShared = Per(5, function(N) for _ = 1, N do At += 1 SharedTable.clear(Clones[At]) end end)
+        Within("clear of 10,000 entries the table alone holds", ClearOwned, 250, 500)
+        Within("clear of a shallow clone", ClearShared, 0, 1)
+        assert(SharedTable.size(Owned[5]) == 0 and SharedTable.size(Clones[5]) == 0 and SharedTable.size(S) == 10000)
+        "#,
+    );
+}
+
+/// Each time a SharedTable reaches a script it is a new userdata, as in a playing client (Studio 0.748: `S.t` read twice, a
+/// loop's value against a read, a value written and read back, the registry's Get called twice are `==` but not rawequal, their
+/// tostring differs, and a table keyed by one is not found by another; two SharedTables, a clone and its original among them,
+/// are not `==`). ree kept one handle a table.
+#[test]
+fn each_shared_table_a_script_gets_is_a_new_handle() {
+    assert_script(
+        r#"
+        local S = SharedTable.new({ t = {} })
+        local A, B = S.t, S.t
+        assert(A == B and not rawequal(A, B) and tostring(A) ~= tostring(B))
+        local Keyed = {}
+        Keyed[A] = true
+        assert(Keyed[B] == nil and Keyed[A] == true)
+        local FromLoop
+        for _, V in S do
+            FromLoop = V
+        end
+        assert(FromLoop == A and not rawequal(FromLoop, A))
+        local N = SharedTable.new()
+        S.n = N
+        assert(S.n == N and not rawequal(S.n, N))
+        local C = SharedTable.clone(S)
+        assert(S.t ~= N and (S.t :: any) ~= {} and C ~= S and C.t == S.t and not rawequal(C.t, S.t))
+        local Registry = game:GetService("SharedTableRegistry")
+        local R1, R2 = Registry:GetSharedTable("Handles"), Registry:GetSharedTable("Handles")
+        assert(R1 == R2 and not rawequal(R1, R2) and R1 ~= S)
+        "#,
+    );
+}
+
+/// SharedTable.update calls its callback again, with the value then current, whenever a write, increment, clear or update of the
+/// table completed while it ran, and stores the result of a call during which none did (a playing client, Studio 0.748, each
+/// callback changing the table on its first call only: a write of the same key, of another key, of the same value again, an
+/// increment, a nested update and a clear give two calls, the second seeing the current value; a read and a clone of it, a
+/// SharedTable made, and a write to another SharedTable one). ree called it once and stored its result over what it wrote. One
+/// that changes nothing counts too (the same client, two runs of two probes: nil or a thread written to a key the table does not
+/// hold, a clear of an empty table and a nested update storing nil there each gave two calls, nil written on the first two calls
+/// three), while a call that raised does not (a function written, a failed increment, a nested update whose callback raised or
+/// returned a function: one call); ree counted none of the first.
+#[test]
+fn shared_table_update_calls_again_when_the_table_changed() {
+    assert_script(
+        r#"
+        local S = SharedTable.new()
+        local Log = {}
+        local function Counted(Key, First)
+            local Calls, Seen = 0, {}
+            SharedTable.update(S, Key, function(V)
+                Calls += 1
+                table.insert(Seen, tostring(V))
+                if Calls == 1 then
+                    First()
+                end
+                if Calls > 50 then
+                    error("stop")
+                end
+                return "result" .. Calls
+            end)
+            table.insert(Log, `{Key} {Calls} {table.concat(Seen, ",")} {tostring(S[Key])}`)
+        end
+        S.a = "a0"
+        Counted("a", function() S.a = "inner" end)
+        S.b = "b0"
+        Counted("b", function() S.other = "x" end)
+        S.c = "c0"
+        Counted("c", function() local _ = S.c local _ = SharedTable.clone(S) end)
+        S.d = 1
+        Counted("d", function() SharedTable.increment(S, "d", 1) end)
+        S.e = "e0"
+        Counted("e", function() SharedTable.update(S, "e", function() return "nested" end) end)
+        S.f = "f0"
+        Counted("f", function() S.f = "f0" end)
+        S.g = "g0"
+        Counted("g", function() SharedTable.clear(S) end)
+        S.h = "h0"
+        Counted("h", function() local T = SharedTable.new() T.x = 1 end)
+        S.t = SharedTable.new({ x = 1 })
+        S.i = "i0"
+        Counted("i", function() S.t.x = 2 end)
+        local Want = "a 2 a0,inner result2|b 2 b0,b0 result2|c 1 c0 result1|d 2 1,2 result2|e 2 e0,nested result2|f 2 f0,f0 result2|g 2 g0,nil result2|h 1 h0 result1|i 1 i0 result1"
+        assert(table.concat(Log, "|") == Want, table.concat(Log, "|"))
+        assert(S.other == nil and S.t.x == 2)
+        -- a change that changes nothing, made on the first call (or the first two), counts; a call that raised does not (capped
+        -- at 51 calls)
+        local function Calls(Table, Change, Times)
+            local Count = 0
+            pcall(SharedTable.update, Table, "k", function()
+                Count += 1
+                if Count > 50 then
+                    error("stop")
+                end
+                if Count <= (Times or 1) then
+                    Change()
+                end
+                return Count
+            end)
+            return Count
+        end
+        local N, E = SharedTable.new({ x = 1 }), SharedTable.new()
+        local NoOps = {
+            Calls(N, function() N.missing = nil end),
+            Calls(N, function() N.missing = coroutine.create(print) end),
+            Calls(E, function() SharedTable.clear(E) end),
+            Calls(N, function() SharedTable.update(N, "missing", function() return nil end) end),
+            Calls(N, function() N.missing = nil end, 2),
+        }
+        assert(table.concat(NoOps, ",") == "2,2,2,2,3", table.concat(NoOps, ","))
+        assert(N.k == 3 and E.k == 2 and N.missing == nil)
+        local Raised = {
+            Calls(N, function() pcall(function() N.f = print end) end),
+            Calls(N, function() pcall(SharedTable.increment, N, "missing", 1) end),
+            Calls(N, function() pcall(SharedTable.update, N, "y", function() error("e") end) end),
+            Calls(N, function() pcall(SharedTable.update, N, "y", function() return print end) end),
+        }
+        assert(table.concat(Raised, ",") == "1,1,1,1", table.concat(Raised, ","))
+        -- the result is converted right after each call, so one that cannot be stored raises at once, before the change check, and
+        -- the change the callback made stays (the same client: "Functions can not be stored in a SharedTable" after one call; ree
+        -- called it again and stored the second result)
+        local R, Count = SharedTable.new({ a = 0 }), 0
+        local Ok, Message = pcall(SharedTable.update, R, "a", function()
+            Count += 1
+            if Count == 1 then
+                R.b = 1
+                return print
+            end
+            return 5
+        end)
+        assert(not Ok and Message == "Functions can not be stored in a SharedTable" and Count == 1 and R.a == 0 and R.b == 1, `{Message} {Count} {R.a}`)
+        "#,
+    );
+}
+
+/// A failed increment of a key the table does not hold leaves the key with no value, as a playing client's does (Studio 0.748,
+/// two runs of each probe, after the key, delta and frozen checks pass): size counts it, a loop gives it as (key, nil) in its
+/// key's place, clones keep it, a read and update's callback get nil, another increment still says it does not exist, and nil
+/// written, a dropped value, update's nil result and clear take it out; it is not a change for update. Only in a table no engine
+/// value was made of, though: a client marks a SharedTable for good once it stores it in a SharedTable (a frozen one too), the
+/// registry, a bindable's copy, SetAttribute, print or warn, deep-copies it or updates it, and a marked one gets no such key (the
+/// same client, two runs of three probes, each case below; inside an update's callback too). ree left nothing, then left the key
+/// in every table.
+#[test]
+fn a_failed_increment_leaves_its_key_with_no_value() {
+    assert_script(
+        r#"
+        local function Dump(S)
+            local Out = {}
+            for K, V in S do
+                table.insert(Out, `{K}={V}`)
+            end
+            return table.concat(Out, " ")
+        end
+        local S = SharedTable.new({ a = 1, [1] = 10, [2] = 20 })
+        local Ok, E = pcall(SharedTable.increment, S, "e", 1)
+        assert(not Ok and E == 'Unable to increment the value for key "e" because it does not exist in the SharedTable.', E)
+        pcall(SharedTable.increment, S, 7, 1)
+        pcall(SharedTable.increment, S, 0, -1)
+        assert(SharedTable.size(S) == 6 and S.e == nil and S[7] == nil and S[0] == nil, SharedTable.size(S))
+        assert(Dump(S) == "0=nil 1=10 2=20 7=nil e=nil a=1", Dump(S))
+        local Ok2, E2 = pcall(SharedTable.increment, S, "e", 1)
+        assert(not Ok2 and E2 == E and SharedTable.size(S) == 6)
+        -- copies keep it; one left in a shallow clone is the clone's alone
+        assert(Dump(SharedTable.clone(S)) == Dump(S) and Dump(SharedTable.clone(S, true)) == Dump(S) and Dump(SharedTable.cloneAndFreeze(S, true)) == Dump(S))
+        local C = SharedTable.clone(S)
+        pcall(SharedTable.increment, C, "c", 1)
+        assert(SharedTable.size(C) == 7 and SharedTable.size(S) == 6)
+        -- update's callback gets nil, and its nil result takes it out, as nil and a dropped value written do
+        local Got = "unset"
+        SharedTable.update(S, "e", function(V)
+            Got = V
+            return nil
+        end)
+        S[7] = nil
+        S[0] = coroutine.create(print)
+        assert(Got == nil and Dump(S) == "1=10 2=20 a=1", Dump(S))
+        -- a value written over it is stored as any other
+        local W = SharedTable.new()
+        pcall(SharedTable.increment, W, "w", 1)
+        assert(SharedTable.size(W) == 1)
+        W.w = 5
+        assert(SharedTable.increment(W, "w", 1) == 5 and W.w == 6 and SharedTable.size(W) == 1)
+        -- not left when the frozen flag, the delta or the key refuse the call, or the entry is not a number
+        local F = SharedTable.cloneAndFreeze(SharedTable.new())
+        local T = SharedTable.new({ s = "x" })
+        pcall(SharedTable.increment, F, "q", 1)
+        pcall(SharedTable.increment, T, "q", "1")
+        pcall(SharedTable.increment, T, "q", nil)
+        pcall(SharedTable.increment :: any, T, "q")
+        pcall(SharedTable.increment :: any, T, true, 1)
+        pcall(SharedTable.increment, T, "s", 1)
+        assert(SharedTable.size(F) == 0 and SharedTable.size(T) == 1)
+        -- clear takes it out, and a loop that adds up the values fails on it, as a client's does
+        local L = SharedTable.new({ n = 1 })
+        pcall(SharedTable.increment, L, "zz", 1)
+        assert(not pcall(function()
+            local Total = 0
+            for _, V in L do
+                Total += V
+            end
+        end))
+        SharedTable.clear(L)
+        assert(SharedTable.size(L) == 0)
+        -- an update marks its table first, so a failed increment in its callback leaves nothing, inside it or after (it is not a
+        -- change for update either), while a key with no value left before stays
+        local U, Calls, Inside = SharedTable.new({ a = 1 }), 0, nil
+        SharedTable.update(U, "a", function(V)
+            Calls += 1
+            pcall(SharedTable.increment, U, "zz", 1)
+            Inside = SharedTable.size(U)
+            return V + 1
+        end)
+        assert(Calls == 1 and Inside == 1 and U.a == 2 and SharedTable.size(U) == 1, `{Calls} {Inside} {SharedTable.size(U)}`)
+        pcall(SharedTable.increment, U, "zz", 1)
+        local K = SharedTable.new({ a = 1 })
+        pcall(SharedTable.increment, K, "zz", 1)
+        SharedTable.update(K, "a", function(V) return V + 1 end)
+        pcall(SharedTable.increment, K, "yy", 1)
+        assert(SharedTable.size(U) == 1 and SharedTable.size(K) == 2 and K.a == 2, `{SharedTable.size(U)} {SharedTable.size(K)}`)
+        -- a table an engine value was made of gets no such key (each measured): the size after a failed increment of "zz"
+        local Reg = game:GetService("SharedTableRegistry")
+        local function Left(Prepare)
+            local S = SharedTable.new({ a = 1 })
+            local Target = Prepare(S) or S
+            pcall(SharedTable.increment, Target, "zz", 1)
+            return SharedTable.size(Target)
+        end
+        local function Nested() return { inner = { a = 1 } } end
+        local Frozen = function() return SharedTable.cloneAndFreeze(SharedTable.new()) :: any end
+        local Marked = {
+            Left(function(S) Reg:SetSharedTable("set", S) Reg:SetSharedTable("set", nil) end),
+            Left(function(S) local G = Reg:GetSharedTable("made") Reg:SetSharedTable("made", nil) return G end),
+            Left(function(S) pcall(function() Reg:SetSharedTable(nil :: any, S) end) end),
+            Left(function(S) local T = SharedTable.new() T.x = S end),
+            Left(function(S) SharedTable.new({ S }) end),
+            Left(function(S) return SharedTable.new(Nested()).inner end),
+            Left(function(S) local T = SharedTable.new() T.x = Nested() return T.x.inner end),
+            Left(function(S) local T = SharedTable.new() SharedTable.update(T, "x", function() return S end) end),
+            Left(function(S) local F = Frozen() pcall(function() F.x = S end) end),
+            Left(function(S) local F = Frozen() pcall(function() F.x = { { S } } end) end),
+            Left(function(S) local T = SharedTable.new() pcall(function() T.x = { S, print } end) end),
+            Left(function(S) local B = Instance.new("BindableEvent") B:Fire(S) B:Destroy() end),
+            Left(function(S) local B = Instance.new("BindableEvent") B:Fire({ x = S }) B:Destroy() end),
+            Left(function(S) local B = Instance.new("BindableFunction") B.OnInvoke = function() return S end B:Invoke() B:Destroy() end),
+            Left(function(S) local B = Instance.new("BindableFunction") B.OnInvoke = function() return 1 end B:Invoke({ S }) B:Destroy() end),
+            Left(function(S) SharedTable.clone(S, true) end),
+            Left(function(S) return SharedTable.clone(SharedTable.new(Nested()), true).inner end),
+            Left(function(S) SharedTable.update(S, "a", function(V) return V end) end),
+            Left(function(S) pcall(SharedTable.update, S, "a", function() error("x") end) end),
+            Left(function(S) print(S) end),
+            Left(function(S) warn(S) end),
+            Left(function(S) local P = Instance.new("Folder") pcall(P.SetAttribute, P, "x", S) P:Destroy() end),
+        }
+        assert(table.concat(Marked, ",") == "1,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1", table.concat(Marked, ","))
+        -- and nothing else marks one, a copy of a marked table neither
+        local Unmarked = {
+            Left(function(S) end),
+            Left(function(S) return SharedTable.clone(S) end),
+            Left(function(S) return SharedTable.clone(S, true) end),
+            Left(function(S) local T = SharedTable.new() T.x = S return SharedTable.clone(S, true) end),
+            Left(function(S) local _ = tostring(S) .. SharedTable.size(S) for _ in S do end end),
+            Left(function(S) local T = SharedTable.new() pcall(function() T[-1] = S end) end),
+            Left(function(S) local T = SharedTable.new() pcall(function() T.x = { print, S } end) end),
+            Left(function(S) pcall(SharedTable.update, S, "a", 5 :: any) end),
+            Left(function(S) pcall(SharedTable.update, S, true :: any, function(V) return V end) end),
+            Left(function(S) pcall(function() game:GetService("HttpService"):JSONEncode(S) end) end),
+            Left(function(S) local V = Instance.new("StringValue") pcall(function() V.Value = S :: any end) V:Destroy() end),
+            Left(function(S) local T = SharedTable.new({ x = 1 }) SharedTable.update(T, "x", function(V) local _ = SharedTable.size(S) return V end) end),
+        }
+        assert(table.concat(Unmarked, ",") == "2,2,2,2,2,2,2,2,2,2,2,2", table.concat(Unmarked, ","))
+        "#,
+    );
+}
+
+/// A failed increment that leaves its key in a list of colliding keys searches the list once, as a write adding the key does
+/// (cost.rs SHARED_LIST_SCANNED; ree searched it again to add the key, 7.5 us more at 1,023 keys).
+#[test]
+fn a_failed_increment_searches_a_colliding_list_once() {
+    assert_shared_prices(&format!(
+        "{COLLIDING_KEYS}\n{}",
+        r#"
+        local Keys = {}
+        for I = 0, 1023 do Keys[I] = Key(I, 10) end
+        local T = SharedTable.new()
+        for I = 0, 1022 do T[Keys[I]] = I end
+        local Added = Per(1, function() T[Keys[1023]] = 1 end)
+        T[Keys[1023]] = nil
+        local Failed = Per(1, function() pcall(SharedTable.increment, T, Keys[1023], 1) end)
+        assert(SharedTable.size(T) == 1024)
+        Within("a failed increment's key added to 1,023 beyond a write's", Failed - Added, -1, 1)
+        "#
+    ));
+}
+
+/// The SharedTable library's argument errors as a playing client words and orders them (Studio 0.748, two runs of each probe): a
+/// call with no argument at all raises Luau's "missing argument #1 to 'size' (SharedTable expected)" at the script's line, nil
+/// "invalid argument #1 ... got nil"; clone and cloneAndFreeze given two arguments or more check `deep` before the table;
+/// increment with its delta left out raises "Failed to get value for insertion into SharedTable", after the key's check and
+/// before the frozen flag's, a nil delta "Variant cast failed". ree said "got no value", checked the table first, and gave
+/// "Variant cast failed" or "SharedTable is frozen" for a delta left out. The library's keys loop in a client's order too.
+#[test]
+fn shared_table_library_arguments_are_checked_as_a_client_does() {
+    assert_script(
+        r##"
+        local function Fails(Message, F, ...)
+            local Ok, E = pcall(F, ...)
+            assert(not Ok and string.gsub(tostring(E), "^[^\n]-:%d+: ", "") == Message, tostring(E))
+        end
+        local function Positioned(F)
+            local _, E = pcall(F)
+            return string.match(tostring(E), "^[^\n]-:%d+: ") ~= nil
+        end
+        local Any = SharedTable :: any
+        local S = SharedTable.new({ a = 1 })
+        local F = SharedTable.cloneAndFreeze(S)
+        for _, Name in { "clone", "cloneAndFreeze", "isFrozen", "size", "clear", "increment", "update" } do
+            Fails(`missing argument #1 to '{Name}' (SharedTable expected)`, Any[Name])
+            Fails(`invalid argument #1 to '{Name}' (SharedTable expected, got nil)`, Any[Name], nil)
+            assert(Positioned(function() return Any[Name]() end), Name)
+        end
+        Fails("invalid argument #2 to 'clone' (boolean expected, got number)", Any.clone, 5, 5)
+        Fails("invalid argument #2 to 'cloneAndFreeze' (boolean expected, got nil)", Any.cloneAndFreeze, nil, nil)
+        Fails("invalid argument #2 to 'clone' (boolean expected, got Instance)", Any.clone, workspace, workspace)
+        Fails("invalid argument #1 to 'clone' (SharedTable expected, got number)", Any.clone, 5)
+        Fails("invalid argument #1 to 'cloneAndFreeze' (SharedTable expected, got number)", Any.cloneAndFreeze, 5, true)
+        Fails("Failed to get value for insertion into SharedTable", Any.increment, S, "a")
+        Fails("Failed to get value for insertion into SharedTable", Any.increment, S, "missing")
+        Fails("Failed to get value for insertion into SharedTable", Any.increment, F, "a")
+        Fails("SharedTable keys can only be strings or numbers.", Any.increment, S, true)
+        Fails("Variant cast failed", Any.increment, S, "a", nil)
+        Fails("SharedTable is frozen", Any.increment, F, "a", nil)
+        assert(not Positioned(function() return Any.increment(S, "a") end) and SharedTable.size(S) == 1 and S.a == 1)
+        local Names = {}
+        for Name in SharedTable do
+            table.insert(Names, Name)
+        end
+        assert(table.concat(Names, ",") == "cloneAndFreeze,clear,clone,isFrozen,size,increment,update,new", table.concat(Names, ","))
+        "##,
+    );
+}
+
+/// A SharedTable stores a copy of a Path2DControlPoint, every way in, as a playing client does (Studio 0.748, two runs: a write,
+/// new, a table nested in new or in a write, update's result alone and in a table; changing the script's object afterwards left
+/// each stored value as it was, and a read is a copy as well). ree pooled the script's own object, so the change showed through.
+#[test]
+fn a_shared_table_stores_a_copy_of_a_path2d_control_point() {
+    assert_script(
+        r#"
+        local function Point()
+            return Path2DControlPoint.new(UDim2.new(0, 1, 0, 1), UDim2.new(0, 2, 0, 2), UDim2.new(0, 3, 0, 3))
+        end
+        local Want = Point()
+        local A, B, C, D, E, G = Point(), Point(), Point(), Point(), Point(), Point()
+        local S = SharedTable.new({ b = B, n = { c = C } })
+        S.a = A
+        S.t = { d = D }
+        SharedTable.update(S, "e", function() return E end)
+        SharedTable.update(S, "g", function() return { g = G } end)
+        for _, Changed in { A, B, C, D, E, G } do
+            Changed.Position = UDim2.new(0, 50, 0, 50)
+        end
+        assert(S.a == Want and S.b == Want and S.n.c == Want and S.t.d == Want and S.e == Want and S.g.g == Want, tostring(S.a))
+        local Read = S.a
+        Read.LeftTangent = UDim2.new(0, 70, 0, 70)
+        assert(S.a == Want and Read ~= Want)
+        "#,
+    );
+}
+
+/// A SharedTable read costs the object it makes for the script and an integer key it finds, as a playing client's does (Studio
+/// 0.748, medians of 7 batches, two runs; cost.rs SHARED_MADE_VALUE and after): a number 0.023-0.024 us, a CFrame 0.038-0.053,
+/// an EnumItem 0.039, a TweenInfo 0.047-0.053, a Region3 0.056-0.059, a SharedTable 0.047-0.057; a number by an integer key
+/// 0.049-0.052; a 16-byte string by a short string key 0.063-0.069 and by an integer key 0.088-0.099. ree charged 0.018-0.022
+/// for each. A loop's step pays for its value's object as a read does.
+#[test]
+fn shared_table_reads_cost_the_objects_they_make() {
+    assert_shared_prices(
+        r#"
+        local T = SharedTable.new({ x = 1 })
+        local function Read(Value)
+            T.v = Value
+            return Per(2000, function(N) for _ = 1, N do local _ = T.v end end)
+        end
+        Within("a number read", Read(12345.5), 0.015, 0.03)
+        Within("a CFrame read", Read(CFrame.new(1, 2, 3)), 0.03, 0.06)
+        Within("an EnumItem read", Read(Enum.Material.Plastic), 0.03, 0.05)
+        Within("a TweenInfo read", Read(TweenInfo.new(1)), 0.04, 0.065)
+        Within("a Region3 read", Read(Region3.new(Vector3.zero, Vector3.one)), 0.045, 0.07)
+        Within("a SharedTable read", Read(SharedTable.new({ a = 1 })), 0.04, 0.065)
+        local Array = SharedTable.new({ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 })
+        Within("a number read by an integer key", Per(2000, function(N) for _ = 1, N do local _ = Array[5] end end), 0.04, 0.06)
+        T.s, Array[5] = "abcdefghijklmnop", "abcdefghijklmnop"
+        Within("a 16-byte string read by a string key", Per(2000, function(N) for _ = 1, N do local _ = T.s end end), 0.05, 0.08)
+        Within("a 16-byte string read by an integer key", Per(2000, function(N) for _ = 1, N do local _ = Array[5] end end), 0.075, 0.11)
+        local function Filled(Make)
+            local Plain = {}
+            for I = 1, 1000 do
+                Plain["k" .. I] = Make(I)
+            end
+            return SharedTable.new(Plain)
+        end
+        local function Loop(Table) return Per(20, function(N) for _ = 1, N do for _ in Table do end end end) / 1000 end
+        local Numbers = Loop(Filled(function(I) return I + 0.5 end))
+        Within("a loop's step over CFrames beyond one over numbers", Loop(Filled(function(I) return CFrame.new(I, 0, 0) end)) - Numbers, 0.019, 0.026)
+        Within("a loop's step over Rays beyond one over numbers", Loop(Filled(function(I) return Ray.new(Vector3.new(I, 0, 0), Vector3.yAxis) end)) - Numbers, 0.019, 0.026)
+        Within("a loop's step over TweenInfos beyond one over numbers", Loop(Filled(function(I) return TweenInfo.new(I) end)) - Numbers, 0.019, 0.026)
+        Within("a loop's step over Path2DControlPoints beyond one over numbers", Loop(Filled(function(I) return Path2DControlPoint.new(UDim2.fromOffset(I, 0)) end)) - Numbers, 0.019, 0.026)
+        Within("a loop's step over SharedTables beyond one over numbers", Loop(Filled(function(I) return { a = I } end)) - Numbers, 0.019, 0.026)
+        "#,
+    );
+}
+
+/// A loop's step pays one price for the object it makes, whatever its kind, as a playing client's does (Studio 0.748, os.clock,
+/// loops over 1,000 and 10,000 string-keyed entries, two runs: 0.019 to 0.026 us beyond a step over numbers at 1,000 entries for a
+/// CFrame, a Ray, a TweenInfo, a Path2DControlPoint and a SharedTable alike; cost.rs SHARED_LOOP_MADE_VALUE), and an update's old
+/// value (and its result) a read's price: the VM's count of a copy's own calls is not the script's. ree charged a step a read's
+/// price, a TweenInfo's and a Path2DControlPoint's with the VM's count of the copy's calls on top (0.0415 and 0.045 beyond a
+/// number's), and an update of a TweenInfo or a Path2DControlPoint 0.023 and 0.030 us more than its read's price.
+#[test]
+fn shared_table_loop_steps_and_update_values_cost_their_object_once() {
+    assert_shared_prices(
+        r#"
+        local T = SharedTable.new({ x = 1 })
+        local function Same(V) return V end
+        local function Updated(Value)
+            T.v = Value
+            return Per(2000, function(N) for _ = 1, N do SharedTable.update(T, "v", Same) end end)
+        end
+        -- (a read's prices: a TweenInfo or a Path2DControlPoint 0.03 us, a CFrame or a Ray 0.017)
+        local Frame = Updated(CFrame.new(1, 2, 3))
+        Within("an update's old TweenInfo beyond a CFrame", Updated(TweenInfo.new(1)) - Frame, 0.012, 0.014)
+        Within("an update's old Path2DControlPoint beyond a CFrame", Updated(Path2DControlPoint.new()) - Frame, 0.012, 0.014)
+        Within("an update's old Ray beyond a CFrame", Updated(Ray.new(Vector3.zero, Vector3.one)) - Frame, -0.001, 0.001)
+        "#,
+    );
+}
+
+/// A conversion walks every slot of a table's array and hash parts, empty or not, and pays for the empty ones as a playing client
+/// does (Studio 0.748, two runs: new of `table.create(n)` holding one entry 20 us at 100,000, 196 to 213 at 1,000,000, 529 to 533
+/// at 2,000,000, about 0.2 ns a slot; of `{ x = 1 }` 0.33 to 0.37; an empty hash node is priced as a slot, not measured); they count
+/// against ree's guard on a copy as a copy's holes do. ree charged one entry, then 1.16 ns a slot from an earlier session's one row
+/// (`table.create(4000000)`, 4,634 us).
+#[test]
+fn a_shared_table_conversion_pays_for_the_empty_slots_it_walks() {
+    let guard = crate::lua::bindable::COPY_VALUES;
+    assert_shared_prices(
+        &r#"
+        local Sparse = table.create(1000000)
+        Sparse.x = 1
+        Within("new of a 1,000,000-slot array holding one entry", Per(5, function(N) for _ = 1, N do SharedTable.new(Sparse) end end), 150, 260)
+        Within("new of { x = 1 }", Per(5, function(N) for _ = 1, N do SharedTable.new({ x = 1 }) end end), 0, 5)
+        local Target = SharedTable.new()
+        Within("a 1,000,000-slot array written to a key", Per(5, function(N) for _ = 1, N do Target.k = Sparse end end), 150, 260)
+        local Huge = table.create(GUARD + 1)
+        Huge.x = 1
+        local Ok, E = pcall(SharedTable.new, Huge)
+        assert(not Ok and E == "ree: this copy would make more than GUARD values (a table is copied once for each place it appears)", tostring(E))
+        "#
+        .replace("GUARD", &guard.to_string()),
+    );
+}
+
+/// SharedTable.increment's messages quote the key as a playing client's do (Studio 0.748: "a\0b" quoted "a", a message of a 1 MB
+/// key 1,000,000 bytes long), and their bytes are priced as a string made (a client's increment of a missing 16 MB key took 1.6 ns
+/// a byte, its message included). ree quoted the whole key and charged neither.
+#[test]
+fn shared_table_increment_messages_quote_the_key_as_roblox_does() {
+    assert_shared_prices(
+        r#"
+        local S = SharedTable.new({ s = "x" })
+        local function Message(Key)
+            local _, E = pcall(SharedTable.increment, S, Key, 1)
+            return tostring(E)
+        end
+        assert(Message("a\0b") == 'Unable to increment the value for key "a" because it does not exist in the SharedTable.', Message("a\0b"))
+        assert(Message("s") == 'Unable to increment the value for key "s" because it is not a number value.')
+        -- (the key's own bytes, UTF-8 or not)
+        assert(Message("a\xffb") == 'Unable to increment the value for key "a\xffb" because it does not exist in the SharedTable.', Message("a\xffb"))
+        S["b\xff"] = "x"
+        assert(Message("b\xff") == 'Unable to increment the value for key "b\xff" because it is not a number value.', Message("b\xff"))
+        local Long = string.rep("k", 1048576)
+        local Text = Message(Long)
+        assert(#Text == 1000000 and string.sub(Text, 1, 39) == 'Unable to increment the value for key "' and string.sub(Text, -3) == "kkk", #Text)
+        Within("increment of a missing 1 MB key", Per(2, function(N) for _ = 1, N do pcall(SharedTable.increment, S, Long, 1) end end), 700, 2000)
+        "#,
+    );
 }
 
 /// SocialService:GetUpcomingExperienceEventsAsync and GroupService:GetRolesInGroupAsync returned nil, so a lobby's event handler
