@@ -16,6 +16,8 @@
 //! - Reading Hit, Target or TargetSurface casts that ray: it costs the work clock what a client spends on it (cost.rs
 //!   MOUSE_RAY; roblox-sim, Studio 0.747), sees only the parts the spatial index has taken in, and takes nothing into it
 //!   ([`pointed`]).
+//! - Reading Icon, UnitRay or Origin costs the work clock what a client spends on it beyond a plain read (cost.rs MOUSE_ICON: Icon
+//!   4.49 us, UnitRay 0.06, Origin 0.09; roblox-sim, Studio 0.747).
 //! - The computed members are read-only ("Unable to assign property Hit. Property is read only"); Icon and TargetFilter are not.
 //!
 //! The host's record (`shared.__rurMouse`, a plain table made at start: roblox-ui-renderer's input layer reads it) holds X, Y,
@@ -208,13 +210,25 @@ pub fn install(engine: &Rc<Engine>) {
         members.push((key, Rc::new(move |_, engine, _| Ok(LuaValue::Number(recorded(engine, key, default))))));
     }
     members.push(("UnitRay", Rc::new(|lua, engine, _| {
+        query::charge_query(engine, crate::cost::MOUSE_UNIT_RAY);
         let (origin, direction) = unit_ray(engine);
         let ray = lune::Ray::from(dom::Ray::new(dom::Vector3::new(origin.x, origin.y, origin.z), dom::Vector3::new(direction.x, direction.y, direction.z)));
         Ok(LuaValue::UserData(lua.create_userdata(ray)?))
     })));
     members.push(("Origin", Rc::new(|lua, engine, _| {
+        query::charge_query(engine, crate::cost::MOUSE_ORIGIN);
         let (origin, direction) = unit_ray(engine);
         Ok(cframe_value(lua, engine, &aimed(origin, direction))?)
+    })));
+    // Icon is a plain property, read at what a client spends on it
+    let icon = engine.reflection.name_id("Icon");
+    members.push(("Icon", Rc::new(move |lua, engine, id| {
+        query::charge_query(engine, crate::cost::MOUSE_ICON);
+        let value = icon.and_then(|name| engine.state.borrow().dom.raw_get(id, name).cloned());
+        Ok(match value {
+            Some(value) => convert::to_lua(lua, engine, &value)?,
+            None => LuaValue::Nil,
+        })
     })));
     let hit: GetterFn = Rc::new(move |lua, engine, id| {
         let (origin, direction) = unit_ray(engine);

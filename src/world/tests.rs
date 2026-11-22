@@ -2198,6 +2198,46 @@ fn player_mouse_rays_cost_what_a_client_spent() {
     );
 }
 
+/// Reading the PlayerMouse's Icon, UnitRay and Origin costs the work clock what a playing client spent on them beyond a plain read of
+/// the mouse (X) (roblox-sim, Studio 0.747, a headless client; cost.rs MOUSE_ICON, MOUSE_UNIT_RAY, MOUSE_ORIGIN): Icon 4.49 us, with an
+/// Icon set or not, UnitRay 0.06 and Origin 0.09.
+#[test]
+fn player_mouse_icon_unit_ray_and_origin_cost_what_a_client_spent() {
+    let (lua, engine) = start();
+    crate::lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local M = game:GetService("Players").LocalPlayer:GetMouse()
+        -- (the frame's first read of a member costs more)
+        local _ = M.X, M.Icon, M.UnitRay, M.Origin
+        local function Beyond(Read)
+            local N, V = 100, nil
+            local Start = os.clock()
+            Read(N)
+            local Middle = os.clock()
+            for _ = 1, N do V = M.X end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local function Icon(N) local V for _ = 1, N do V = M.Icon end return V end
+        local function UnitRay(N) local V for _ = 1, N do V = M.UnitRay end return V end
+        local function Origin(N) local V for _ = 1, N do V = M.Origin end return V end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        assert(M.Icon == "")
+        Within("Icon", Beyond(Icon), 4.47, 4.51)
+        Within("UnitRay", Beyond(UnitRay), 0.055, 0.065)
+        Within("Origin", Beyond(Origin), 0.085, 0.095)
+        M.Icon = "rbxasset://textures/ArrowFarCursor.png"
+        assert(M.Icon == "rbxasset://textures/ArrowFarCursor.png")
+        Within("Icon, set", Beyond(Icon), 4.47, 4.51)
+        "##,
+    );
+}
+
 /// The Camera's simpler methods as a playing client answers them (Studio 0.748, new cameras and the CurrentCamera; the values to
 /// the bit, the errors as raised): SetRoll's roll, read back and in GetRenderCFrame, held in Scriptable only, kept through a CFrame
 /// write and dropped when CameraType leaves Scriptable; GetPanSpeed / GetTiltSpeed; SetCameraPanMode's argument; Zoom and

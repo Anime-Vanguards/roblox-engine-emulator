@@ -989,6 +989,13 @@ pub const MOUSE_RAY: f64 = 0.46e-6;
 pub const MOUSE_FRAME: f64 = 0.19e-6;
 pub const MOUSE_HIT: f64 = 0.10e-6;
 pub const MOUSE_FILTERED: f64 = 0.115e-6;
+/// Reading a PlayerMouse's Icon, UnitRay and Origin beyond a plain read of the mouse (X; world/mouse.rs), in a playing client
+/// (roblox-sim, Studio 0.747, a headless client; os.clock around 2,000 reads, the median of 21 samples less an empty loop, three
+/// sessions): Icon 4.48 to 4.65 us in all with no Icon set, 4.66 to 5.20 with one, UnitRay 0.113 to 0.123 and Origin 0.143 to 0.152,
+/// where X reads 0.056 to 0.058 (and a part's Transparency 0.026).
+pub const MOUSE_ICON: f64 = 4.49e-6;
+pub const MOUSE_UNIT_RAY: f64 = 0.06e-6;
+pub const MOUSE_ORIGIN: f64 = 0.09e-6;
 /// A Spherecast's and a Blockcast's part tied with its hit, after the first, that its filter admits (the bench's
 /// `workspace.Spherecast.hit_stack` and `Blockcast.hit_stack`, a 1-stud ball and a 2-stud box into the stack of 24 coincident parts:
 /// 9.68 and 6.35 us at the fastest of six sessions, their misses 0.18 and 0.22 like a ray's). A shape tests more of each part it
