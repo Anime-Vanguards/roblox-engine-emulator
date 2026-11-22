@@ -957,8 +957,10 @@ pub const REFLECTED_CLASS_TESTED: f64 = 0.006e-6;
 /// A LogService logging call (Output, Info, Warn, Error, Log), whole: the same client, `LogService:Info("L {a}", { a = 1 })` 1.10 us
 /// with the Luau around it (20 calls a sample, the median of 15 samples), the table constructor about 0.1 of that.
 pub const LOG_CALL: f64 = 1.0e-6;
-/// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path crosses, whether
-/// its filter admits them or not: one that crosses any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`]. The parity
+/// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path meets up to its hit,
+/// whether its filter admits them or not, and none behind the hit (world/query.rs charge_cast: a client's cast stops there, measured
+/// on Studio 0.747 for all four): one that meets any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`] (but a shape
+/// cast's parts tied with its hit: [`SPHERE_CROSSED`], [`BLOCK_CROSSED`]). The parity
 /// bench's rays, on geometry of their own that both sides find the same parts in (Meta.queries), beyond the Luau around the call: a
 /// miss with an Include filter 0.27 us, an Exclude filter of the one part a ray crosses 0.45, a ray through a stack of 24 parts 1.50 and
 /// the same with an Include filter of one of them 1.35; held out: a miss with no filter 0.17, a hit on one part 0.41. (The bench's sim
@@ -987,10 +989,13 @@ pub const MOUSE_RAY: f64 = 0.46e-6;
 pub const MOUSE_FRAME: f64 = 0.19e-6;
 pub const MOUSE_HIT: f64 = 0.10e-6;
 pub const MOUSE_FILTERED: f64 = 0.115e-6;
-/// A Spherecast's and a Blockcast's part after the first it crosses (the bench's `workspace.Spherecast.hit_stack` and
-/// `Blockcast.hit_stack`, a 1-stud ball and a 2-stud box through the stack of 24: 9.68 and 6.35 us at the fastest of six sessions,
-/// their misses 0.18 and 0.22 like a ray's). A shape sweeps more of each part than a ray does; Shapecast, unmeasured, borrows the
-/// Blockcast's (a defaulted price).
+/// A Spherecast's and a Blockcast's part tied with its hit, after the first, that its filter admits (the bench's
+/// `workspace.Spherecast.hit_stack` and `Blockcast.hit_stack`, a 1-stud ball and a 2-stud box into the stack of 24 coincident parts:
+/// 9.68 and 6.35 us at the fastest of six sessions, their misses 0.18 and 0.22 like a ray's). A shape tests more of each part it
+/// admits than a ray does; a part its filter leaves out costs it a ray's [`RAY_CROSSED`] (a headless 0.747 client, the stack with an
+/// Include filter of one part, or 23 excluded walls before the hit: 0.02 to 0.03 us a part for a Raycast, Spherecast, Blockcast and
+/// Shapecast alike), and one behind the hit nothing. Shapecast's parts tied with its hit, unmeasured, borrow the Blockcast's (a
+/// defaulted price).
 pub const SPHERE_CROSSED: f64 = 0.405e-6;
 pub const BLOCK_CROSSED: f64 = 0.259e-6;
 /// A part GetPartBoundsInBox returns and one GetPartBoundsInRadius returns (the same geometry: an empty box 0.15 us whether it is 4

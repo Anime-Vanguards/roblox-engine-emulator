@@ -680,15 +680,45 @@ fn limited(max_parts: usize, parts: Vec<InstanceId>) -> Vec<InstanceId> {
     if max_parts > 0 { parts.into_iter().take(max_parts).collect() } else { parts }
 }
 
-/// What a cast pays for the parts its path crosses, whatever its filter admits (cost.rs RAY_MET, RAY_CROSSED): the engine's
-/// broadphase meets them all before the filter is asked
-fn charge_cast(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32, each: f64, kinds: u8) {
-    let crossed = cached_solids(engine, &Filter::default()).iter().filter(|solid| ray_solid(solid, origin, direction, grow).is_some()).count();
-    charge_crossed(engine, crossed, each, kinds);
+/// What a cast pays for the parts on its path, as a playing client's does (cost.rs RAY_MET, RAY_CROSSED; roblox-sim, Studio 0.747,
+/// a headless client): the parts it meets up to its hit (`hit`, the distance along `direction`), whatever its filter admits, since
+/// the engine's broadphase meets them before the filter is asked, and nothing for the parts behind the hit, where a client's cast
+/// stops (24 walls 2 studs apart behind the hit cost a Raycast 0.05 us over the hit alone, a Spherecast or Blockcast 0.07, filtered
+/// out or not; 10 studs apart nothing). The first part met pays RAY_MET; each other part the filter leaves out pays RAY_CROSSED,
+/// whatever the cast's shape (23 excluded walls before the hit 0.027 to 0.031 us each for a Raycast, a Spherecast, a Blockcast and
+/// a Shapecast alike); each other part it admits, one tied with the hit (a stack), pays `each`, the cast's own test (a Spherecast
+/// 0.09 us, a Blockcast 0.12, a Raycast 0.023 a coincident wall). A miss pays for every part its path crosses.
+fn charge_cast(engine: &Engine, filter: &Filter, hit: Option<f32>, origin: Vec3, direction: Vec3, grow: f32, each: f64, kinds: u8) {
+    let solids = cached_solids(engine, &Filter::default());
+    let length = direction.length();
+    let (mut met, mut admitted) = (0usize, 0usize);
+    {
+        let state = engine.state.borrow();
+        let can_collide = engine.reflection.name_id("CanCollide").filter(|_| filter.respect_can_collide);
+        for solid in solids.iter() {
+            let Some((t, _)) = ray_solid(solid, origin, direction, grow) else { continue };
+            // (the hit's own distance is reckoned the same way: the hit and the parts tied with it are met)
+            if hit.is_some_and(|distance| length * t > distance) {
+                continue;
+            }
+            met += 1;
+            // (the default filter's solids are the cast's and the parts its filter leaves out)
+            let collides = can_collide.is_none_or(|name| state.dom.boolean(solid.part, name) != Some(false));
+            if hit.is_some() && collides && filter.admits(&state, solid.part) {
+                admitted += 1;
+            }
+        }
+    }
+    if met > 0 {
+        let tied = admitted.saturating_sub(1);
+        let seconds = crate::cost::RAY_MET + tied as f64 * each + (met - 1 - tied) as f64 * crate::cost::RAY_CROSSED;
+        charge_query(engine, seconds);
+        engine.state.borrow().sched.touched.borrow().book_kinds(kinds, seconds);
+    }
 }
 
 /// What a path that crossed `crossed` parts pays: [`crate::cost::RAY_MET`] when it met any, and `each` for every part after the
-/// first ([`charge_cast`]; GetPartsObscuringTarget's segments: world/camera.rs; the PlayerMouse's ray: world/mouse.rs).
+/// first (GetPartsObscuringTarget's segments: world/camera.rs; the PlayerMouse's ray: world/mouse.rs).
 pub(crate) fn charge_crossed(engine: &Engine, crossed: usize, each: f64, kinds: u8) {
     if crossed > 0 {
         let seconds = crate::cost::RAY_MET + (crossed - 1) as f64 * each;
@@ -722,8 +752,8 @@ pub fn install(engine: &Rc<Engine>) {
         };
         let filter = take_filter(engine, args.get(3));
         let hit = cast_ray(&cached_solids(engine, &filter), origin, direction, 0.0, None);
+        charge_cast(engine, &filter, hit.map(|hit| hit.distance), origin, direction, 0.0, crate::cost::RAY_CROSSED, 0);
         keep_filter(engine, filter);
-        charge_cast(engine, origin, direction, 0.0, crate::cost::RAY_CROSSED, 0);
         hit_values(lua, engine, hit)
     })));
     members.push(("Spherecast", method(|lua, engine, _, args| {
@@ -732,8 +762,8 @@ pub fn install(engine: &Rc<Engine>) {
         };
         let filter = take_filter(engine, args.get(4));
         let hit = cast_ray(&cached_solids(engine, &filter), center, direction, radius.max(0.0) as f32, None);
+        charge_cast(engine, &filter, hit.map(|hit| hit.distance), center, direction, radius.max(0.0) as f32, crate::cost::SPHERE_CROSSED, 0);
         keep_filter(engine, filter);
-        charge_cast(engine, center, direction, radius.max(0.0) as f32, crate::cost::SPHERE_CROSSED, 0);
         hit_values(lua, engine, hit)
     })));
     members.push(("Blockcast", method(|lua, engine, _, args| {
@@ -742,9 +772,9 @@ pub fn install(engine: &Rc<Engine>) {
         };
         let filter = take_filter(engine, args.get(4));
         let hit = cast_box(&cached_solids(engine, &filter), &frame, size, direction, None);
-        keep_filter(engine, filter);
         // (a box's path counted as its centre's, grown by its half diagonal)
-        charge_cast(engine, frame::translation(&frame), direction, size.length() * 0.5, crate::cost::BLOCK_CROSSED, 0);
+        charge_cast(engine, &filter, hit.map(|hit| hit.distance), frame::translation(&frame), direction, size.length() * 0.5, crate::cost::BLOCK_CROSSED, 0);
+        keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
     members.push(("Shapecast", method(|lua, engine, _, args| {
@@ -766,14 +796,14 @@ pub fn install(engine: &Rc<Engine>) {
             cast
         };
         let solids = cached_solids(engine, &filter);
-        keep_filter(engine, filter);
         // the part being cast is never hit (documented); what it holds can be
         let hit = match cast.shape {
             Shape::Ball(radius) => cast_ray(&solids, frame::translation(&cast.frame), direction, radius, Some(part)),
             _ => cast_box(&solids, &cast.frame, cast.half_extents() * 2.0, direction, Some(part)),
         };
-        // (unmeasured: a Blockcast's price for what it crosses, borrowed)
-        charge_cast(engine, frame::translation(&cast.frame), direction, cast.half_extents().length(), crate::cost::BLOCK_CROSSED, crate::cost::kind::DEFAULTED);
+        // (it stops at its hit as the other casts do: measured; the parts tied with the hit at a Blockcast's price, borrowed)
+        charge_cast(engine, &filter, hit.map(|hit| hit.distance), frame::translation(&cast.frame), direction, cast.half_extents().length(), crate::cost::BLOCK_CROSSED, crate::cost::kind::DEFAULTED);
+        keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
     members.push(("GetPartBoundsInBox", method(|lua, engine, _, args| {

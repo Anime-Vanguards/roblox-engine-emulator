@@ -8425,6 +8425,103 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
     assert!((16000.0..18600.0).contains(&numbers[7]), "a part among 23 others: {line}");
 }
 
+/// A cast stops at its first hit, as a playing client's does (roblox-sim, Studio 0.747, a headless client: 24 walls 2 studs apart
+/// behind a Raycast's hit 0.47 us against 0.42 for the wall alone, a Spherecast's 0.56 against 0.48, a Blockcast's 0.73 against 0.66,
+/// a Shapecast's alike): the parts behind it cost nothing, filtered out or not. The parts before it that its filter leaves out cost
+/// what a ray's do whatever the cast's shape (23 excluded walls in front 0.027 to 0.031 us each for every kind), and the parts tied
+/// with the hit the cast's own price (cost.rs RAY_CROSSED, SPHERE_CROSSED, BLOCK_CROSSED; the stack of a_spatial_query_pays_for_the_parts_it_meets).
+#[test]
+fn a_cast_pays_for_the_parts_up_to_its_hit() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local O = Vector3.new(300, 100, 300)
+        local From, Dir = O + Vector3.new(0, 0, 50), Vector3.new(0, 0, -400)
+        local Scene = Instance.new("Folder")
+        Scene.Parent = workspace
+        local Front = Instance.new("Folder")
+        local function Wall(Z, Parent)
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Size = Vector3.new(40, 40, 0.5)
+            Part.CFrame = CFrame.new(O + Vector3.new(0, 0, Z))
+            Part.Parent = Parent
+            return Part
+        end
+        local Box = Instance.new("Part")
+        Box.Anchored = true
+        Box.Size = Vector3.new(2, 2, 2)
+        Box.CFrame = CFrame.new(From)
+        local Casts = {
+            Raycast = function(Params) return workspace:Raycast(From, Dir, Params) end,
+            Spherecast = function(Params) return workspace:Spherecast(From, 1, Dir, Params) end,
+            Blockcast = function(Params) return workspace:Blockcast(CFrame.new(From), Vector3.new(2, 2, 2), Dir, Params) end,
+            Shapecast = function(Params) return workspace:Shapecast(Box, Dir, Params) end,
+        }
+        -- every scene excludes Front (empty but in the excluded walls' scenes), so each pays for the same filter
+        local function Build(Kind)
+            Front.Parent = nil
+            Front:ClearAllChildren()
+            Scene:ClearAllChildren()
+            if Kind == "one" then
+                Wall(0, Scene)
+            elseif Kind == "behind" then
+                for I = 1, 24 do Wall(-2 * (I - 1), Scene) end
+            elseif Kind == "excluded_behind" then
+                Wall(0, Scene)
+                for I = 2, 24 do Wall(-2 * (I - 1), Front) end
+            elseif Kind == "excluded_in_front" then
+                for I = 1, 23 do Wall(2 * I, Front) end
+                Wall(0, Scene)
+            elseif Kind == "tied" then
+                for _ = 1, 24 do Wall(0, Scene) end
+            end
+            Front.Parent = Scene
+            local Params = RaycastParams.new()
+            Params.FilterType = Enum.RaycastFilterType.Exclude
+            Params.FilterDescendantsInstances = { Front }
+            return Params
+        end
+        local function Per(Cast, Params)
+            local N = 100
+            local Start = os.clock()
+            for _ = 1, N do Cast(Params) end
+            return (os.clock() - Start) / N * 1e9
+        end
+        -- (a first pass for the frame's first calls, which cost more)
+        local Params = Build("one")
+        for _, Cast in Casts do Per(Cast, Params) end
+        for _, Kind in { "one", "behind", "excluded_behind", "excluded_in_front", "tied" } do
+            Params = Build(Kind)
+            for Name, Cast in Casts do
+                local Hit = Cast(Params)
+                assert(Hit and Hit.Instance.Parent == Scene and math.abs(Hit.Position.Z - (O.Z + 0.25)) < 1e-3, `{Name} {Kind}: {Hit and Hit.Position}`)
+                print(Name, Kind, string.format("%.1f", Per(Cast, Params)))
+            end
+        end
+        "#,
+    );
+    let mut ns = std::collections::HashMap::new();
+    for line in output.iter().filter_map(|line| line.strip_prefix("print: ")) {
+        let parts: Vec<&str> = line.split(' ').collect();
+        ns.insert((parts[0].to_string(), parts[1].to_string()), parts[2].parse::<f64>().unwrap());
+    }
+    let at = |cast: &str, kind: &str| *ns.get(&(cast.to_string(), kind.to_string())).unwrap_or_else(|| panic!("{cast} {kind}: {output:?}"));
+    for (cast, each) in [("Raycast", crate::cost::RAY_CROSSED), ("Spherecast", crate::cost::SPHERE_CROSSED), ("Blockcast", crate::cost::BLOCK_CROSSED), ("Shapecast", crate::cost::BLOCK_CROSSED)] {
+        let one = at(cast, "one");
+        assert!((at(cast, "behind") - one).abs() < 0.5, "{cast}: 23 walls behind the hit cost {} ns", at(cast, "behind") - one);
+        assert!((at(cast, "excluded_behind") - one).abs() < 0.5, "{cast}: 23 excluded walls behind the hit cost {} ns", at(cast, "excluded_behind") - one);
+        let front = at(cast, "excluded_in_front") - one;
+        assert!((front - 23.0 * crate::cost::RAY_CROSSED * 1e9).abs() < 2.0, "{cast}: 23 excluded walls in front of the hit cost {front} ns");
+        let tied = at(cast, "tied") - one;
+        assert!((tied - 23.0 * each * 1e9).abs() < 2.0, "{cast}: 23 walls tied with the hit cost {tied} ns");
+    }
+}
+
 /// `--device phone` (Options::device) emulates a touch device and scales the script work the clock charges by a sim-to-phone
 /// calibration of script time (cost.rs PHONE_SCRIPTS, 2.77): a conversion of the desktop prices, not a measurement on a phone.
 #[test]
