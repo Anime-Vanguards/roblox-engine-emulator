@@ -452,7 +452,8 @@ pub fn cast_ray(state: &State, root: InstanceId, near: &[(InstanceId, Entry)], s
         .filter(|(part, _)| except != Some(*part))
         .filter_map(|(part, entry)| ray_solid(&entry.solid, origin, direction, grow).filter(|_| sees(*part, entry)).map(|(t, normal)| (&entry.solid, t, normal)))
         .collect();
-    broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
+    let steps = broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
+    charge_order(state, steps, entered.len());
     let mut best: Option<Hit> = None;
     for (solid, t, local_normal) in entered {
         let distance = direction.length() * t;
@@ -553,7 +554,8 @@ pub fn cast_box(state: &State, root: InstanceId, near: &[(InstanceId, Entry)], s
             sweep_boxes(&moving, direction, &other).filter(|_| sees(*part, entry)).map(|(t, normal)| (&entry.solid, t, normal))
         })
         .collect();
-    broadphase::sort_by_order(&state.dom, root, &mut touched, |(solid, ..)| solid.part);
+    let steps = broadphase::sort_by_order(&state.dom, root, &mut touched, |(solid, ..)| solid.part);
+    charge_order(state, steps, touched.len());
     let mut best: Option<Hit> = None;
     for (solid, t, normal) in touched {
         let distance = direction.length() * t;
@@ -786,6 +788,16 @@ pub(crate) fn charge_crossed(engine: &Engine, crossed: usize, each: f64, kinds: 
     }
 }
 
+/// What the walk that put a query's `items` parts in the Workspace's order took `steps` for costs past what the parts' own prices
+/// cover (world/broadphase.rs order_cost, cost.rs QUERY_ORDER_STEP), charged as [`charge_query`] charges
+pub(crate) fn charge_order(state: &State, steps: usize, items: usize) {
+    let seconds = broadphase::order_cost(steps, items);
+    if seconds > 0.0 {
+        state.sched.charge(seconds);
+        crate::boundary::add_cost(seconds);
+    }
+}
+
 /// A spatial query's charge beyond its call's price (cost.rs QUERY_BOX_PART, RAY_CROSSED)
 pub(crate) fn charge_query(engine: &Engine, seconds: f64) {
     if seconds > 0.0 {
@@ -807,7 +819,11 @@ fn overlapping(engine: &Engine, filter: Filter, center: Vec3, extent: Option<Vec
             near.iter().filter(|(part, entry)| keep(&entry.solid) && filter.sees(&state, *part, entry)).map(|(part, _)| *part).collect::<Vec<_>>()
         },
     );
-    broadphase::sort_by_order(&engine.state.borrow().dom, root, &mut parts, |part| *part);
+    {
+        let state = engine.state.borrow();
+        let steps = broadphase::sort_by_order(&state.dom, root, &mut parts, |part| *part);
+        charge_order(&state, steps, parts.len());
+    }
     let max_parts = filter.max_parts;
     keep_filter(engine, filter);
     limited(max_parts, parts)

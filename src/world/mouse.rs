@@ -168,7 +168,8 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
     let mut filtered = Vec::new();
     {
         let state = engine.state.borrow();
-        super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
+        let steps = super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
+        query::charge_order(&state, steps, entered.len());
         for (solid, t, local) in &entered {
             let distance = length * t;
             if skip.is_some_and(|skip| solid.part == skip || state.dom.is_descendant_of(solid.part, skip)) {

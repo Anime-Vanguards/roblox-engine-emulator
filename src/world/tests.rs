@@ -4043,6 +4043,241 @@ fn query_results_follow_the_order_the_workspace_lists_its_parts() {
     check("one replaced in its place");
 }
 
+/// broadphase::sort_by_order, which reads the order from a trie that walks up from every part at once build only as far as the
+/// parts' paths meet, puts any list of instances in exactly the order its first form did (each one's whole list of attach numbers
+/// from below the root, compared as lists in a stable sort: broadphase::sort_by_order_lists): random trees with folder chains up
+/// to 3,000 deep, parts under parts, models and folders moved, destroyed and parented out of the Workspace, and a folder
+/// replaced in its place (dom.rs replace_child), whose detached old self keeps the attach number its replacement takes, so a list
+/// holding parts of both has two tops with one number and the trie with one node for each list (Trie::keyed) orders it; random
+/// lists of 2 to 400 instances with repeats, the Workspace itself and instances outside it among them, against the Workspace
+/// and the DataModel as the root. Its walks take a step onto each instance on the paths at most, and one more for each part where
+/// its walk meets another's; parts in one folder at the bottom of a deep chain take one step each.
+#[test]
+fn query_order_is_the_order_of_whole_attach_number_lists() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Seed = 777
+        local function R()
+            Seed = Seed * 48271 % 2147483647
+            return Seed / 2147483647
+        end
+        local function Pick(List) return List[1 + math.floor(R() * #List)] end
+        local Outside = Instance.new("Folder")
+        Outside.Parent = game:GetService("ReplicatedStorage")
+        local All = { workspace, Outside }
+        for I = 1, 1500 do
+            local Made = Instance.new(if R() < 0.5 then "Part" elseif R() < 0.5 then "Folder" else "Model")
+            pcall(function() Made.Parent = Pick(All) end)
+            table.insert(All, Made)
+            if R() < 0.01 then
+                -- (a chain below it, made from the bottom up, with a part at the bottom)
+                local Top = Instance.new("Part")
+                table.insert(All, Top)
+                for _ = 1, math.floor(R() * 3000) do
+                    local Folder = Instance.new("Folder")
+                    Top.Parent = Folder
+                    Top = Folder
+                end
+                Top.Parent = Made
+            end
+            if R() < 0.15 then
+                local Moved = Pick(All)
+                pcall(function() Moved.Parent = if R() < 0.2 then Outside else Pick(All) end)
+            end
+            if R() < 0.02 then
+                pcall(function() Pick(All):Destroy() end)
+            end
+        end
+        -- 50 parts in a folder at the bottom of a chain 2,000 deep
+        local Bottom = Instance.new("Folder")
+        Bottom.Name = "Bottom"
+        for _ = 1, 50 do
+            Instance.new("Part").Parent = Bottom
+        end
+        local Top = Bottom
+        for _ = 1, 2000 do
+            local Folder = Instance.new("Folder")
+            Top.Parent = Folder
+            Top = Folder
+        end
+        Top.Parent = workspace
+        shared.Bottom = Bottom
+        "##,
+    );
+    let workspace = engine.world().workspace;
+    // a folder replaced in its place, each holding parts
+    let replaced = {
+        let mut state = engine.state.borrow_mut();
+        let (folder, part) = (engine.reflection.class_id("Folder").expect("Folder"), engine.reflection.class_id("Part").expect("Part"));
+        let (old, new) = (state.dom.create(&engine.reflection, folder), state.dom.create(&engine.reflection, folder));
+        state.dom.reparent(old, Some(workspace));
+        for holder in [old, new] {
+            for _ in 0..5 {
+                let made = state.dom.create(&engine.reflection, part);
+                state.dom.reparent(made, Some(holder));
+            }
+        }
+        state.dom.replace_child(workspace, old, new);
+        assert_eq!(state.dom.attached_order(old), state.dom.attached_order(new), "the replacement takes the old folder's number");
+        old
+    };
+    let state = engine.state.borrow();
+    let game = state.dom.parent_of(workspace).expect("the DataModel");
+    let mut pool = vec![game, workspace, replaced];
+    pool.extend(state.dom.descendants(game));
+    pool.extend(state.dom.descendants(replaced));
+    assert!(pool.len() > 10_000, "{} instances", pool.len());
+    let on_paths = |items: &[crate::InstanceId], root: crate::InstanceId| {
+        let mut seen = rustc_hash::FxHashSet::default();
+        for &item in items {
+            let mut node = state.dom.parent_of(item);
+            while let Some(id) = node.filter(|&id| id != root) {
+                if !seen.insert(id) {
+                    break;
+                }
+                node = state.dom.parent_of(id);
+            }
+        }
+        seen.len()
+    };
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = |below: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % below as u64) as usize
+    };
+    let keyed = super::broadphase::KEYED.with(|keyed| keyed.get());
+    for round in 0..400 {
+        let root = if round % 4 == 3 { game } else { workspace };
+        let count = 2 + next(399);
+        let mut items: Vec<crate::InstanceId> = (0..count).map(|_| pool[next(pool.len())]).collect();
+        if round % 10 == 0 {
+            // (parts of both folders, the replaced one and its replacement)
+            items.extend(state.dom.at(replaced).children.iter().copied());
+            items.extend(state.dom.at(state.dom.at(workspace).children.iter().copied().find(|&child| state.dom.attached_order(child) == state.dom.attached_order(replaced)).expect("the replacement")).children.iter().copied());
+            let at = next(items.len());
+            items.rotate_left(at);
+        }
+        let mut lists = items.clone();
+        super::broadphase::sort_by_order_lists(&state.dom, root, &mut lists, |id| *id);
+        let mut sorted = items.clone();
+        let steps = super::broadphase::sort_by_order(&state.dom, root, &mut sorted, |id| *id);
+        assert!(sorted == lists, "round {round}: {count} instances ordered as their whole lists are");
+        assert!(steps <= on_paths(&items, root) + items.len(), "round {round}: {steps} steps for {} instances on the paths", on_paths(&items, root));
+    }
+    assert!(super::broadphase::KEYED.with(|keyed| keyed.get()) > keyed, "the lists with two tops of one number were ordered by the keyed trie");
+    // the folder at the bottom of the chain: one step a part
+    let bottom = *pool.iter().find(|&&id| state.dom.get(id).is_some_and(|instance| &*instance.name.to_str_lossy() == "Bottom")).expect("the bottom folder");
+    let mut parts: Vec<_> = state.dom.at(bottom).children.iter().rev().copied().collect();
+    let steps = super::broadphase::sort_by_order(&state.dom, workspace, &mut parts, |id| *id);
+    assert!(parts == state.dom.at(bottom).children, "the parts in their folder's order");
+    assert_eq!(steps, 50, "one step for each of the 50 parts, 2,000 folders deep");
+}
+
+/// A spatial query puts what it keeps in the Workspace's order with walks up from the parts that stop where the parts' paths meet
+/// (world/broadphase.rs sort_by_order), so 2,000 parts in a folder at the bottom of a 10,000-deep chain cost GetPartBoundsInBox,
+/// GetPartsObscuringTarget and a Raycast through them about as much host work as the same parts in a folder of the Workspace, in
+/// the same order, and the work clock charges each the same, as a playing client's queries cost the same at any depth (Studio
+/// 0.747: 100 parts 12.1 us in the Workspace, 12.2 1,000 deep, 12.5 3,000 deep). Making each part's whole list of attach numbers
+/// and comparing them took 0.2 s of host time a query here and 262 MB of heap. Parts whose paths meet only far up (50 parts, each at
+/// the bottom of a 1,000-deep chain of its own) still walk every instance between, and pay cost.rs QUERY_ORDER_STEP for each
+/// step past QUERY_ORDER_FREE a part.
+#[test]
+fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        -- (a chain of folders `Depth` deep holding `Inner`, made from the bottom up so that making it walks nothing)
+        local function Wrap(Inner, Depth)
+            local Outer = Inner
+            for _ = 1, Depth do
+                local Folder = Instance.new("Folder")
+                Outer.Parent = Folder
+                Outer = Folder
+            end
+            return Outer
+        end
+        -- `Count` parts in a stack along Z at X, in a folder `Depth` deep, or each in a chain of its own `Apart` deep
+        local function Scene(X, Count, Depth, Apart)
+            local Parts = {}
+            local Holder = Instance.new("Folder")
+            for I = 1, Count do
+                local Part = Instance.new("Part")
+                Part.Anchored, Part.Size, Part.CFrame = true, Vector3.new(1, 1, 0.5), CFrame.new(X, 50, -I * 0.01)
+                if Apart then
+                    local Box = Instance.new("Folder")
+                    Part.Parent = Box
+                    Wrap(Box, Apart - 1).Parent = workspace
+                else
+                    Part.Parent = Holder
+                end
+                Parts[I] = Part
+            end
+            if not Apart then
+                Wrap(Holder, Depth).Parent = workspace
+            end
+            return { X = X, Parts = Parts }
+        end
+        shared.Scenes = { Flat = Scene(0, 2000, 0), Deep = Scene(1000, 2000, 10000), Few = Scene(2000, 50, 0), Apart = Scene(3000, 50, 0, 1000) }
+        workspace:Raycast(Vector3.new(0, 5000, 0), Vector3.new(0, 1, 0))
+        shared.Work = {}
+        local Camera = workspace.CurrentCamera
+        local function Pass(S)
+            local X, Count = S.X, #S.Parts
+            for _ = 1, 5 do
+                local Found = workspace:GetPartBoundsInBox(CFrame.new(X, 50, -Count * 0.005), Vector3.new(0.5, 0.5, Count * 0.01 + 1))
+                assert(#Found == Count, `the box found {#Found} of {Count}`)
+                for I, Part in Found do
+                    assert(Part == S.Parts[I], "the parts in the Workspace's order")
+                end
+                Camera.CFrame = CFrame.new(X, 50, 10)
+                local Obscuring = Camera:GetPartsObscuringTarget({ Vector3.new(X, 50, -Count * 0.01 - 5) }, {})
+                assert(#Obscuring == Count, `{#Obscuring} parts obscure the point`)
+                local Hit = workspace:Raycast(Vector3.new(X, 50, 10), Vector3.new(0, 0, -Count * 0.01 - 20))
+                assert(Hit and Hit.Instance == S.Parts[1], "the ray hits the first part")
+            end
+        end
+        -- each scene twice, the second pass timed (the first warms the members and instances the frame touches)
+        function shared.Use(Name)
+            Pass(shared.Scenes[Name])
+            local Start = os.clock()
+            Pass(shared.Scenes[Name])
+            shared.Work[Name] = os.clock() - Start
+        end
+        "#,
+    );
+    let mut host = Vec::new();
+    for name in ["Flat", "Deep", "Few", "Apart"] {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.Use(\"{name}\")"));
+        host.push(start.elapsed().as_secs_f64());
+    }
+    // (each of the 50 parts apart walks its 1,000 instances: 50,000 steps a query, 15 queries)
+    let apart = 15.0 * super::broadphase::order_cost(50 * 1000, 50);
+    assert!(apart > 1e-3, "the walks apart are charged: {apart} s");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+            local Work = shared.Work
+            assert(Work.Flat > 0, "the passes cost work")
+            assert(math.abs(Work.Deep - Work.Flat) < 1e-9, `the deep scene's pass cost {{Work.Deep}} s of work where the flat one's {{Work.Flat}}`)
+            assert(math.abs(Work.Apart - Work.Few - {apart}) < 1e-9, `the parts apart cost {{Work.Apart - Work.Few}} s more work than the few in a folder, not {apart}`)
+            "#
+        ),
+    );
+    let (flat, deep) = (host[0], host[1]);
+    assert!(deep < 0.25, "two passes of 15 queries of 2,000 parts 10,000 deep took {deep:.3} s, {flat:.3} s in the Workspace");
+}
+
 /// A spatial query pays for the parts it takes into the spatial index as a client's does (cost.rs QUERY_TAKE_IN, QUERY_TAKEN_PART;
 /// Studio 0.747: 0.5 us and 1.1 us for each part that entered the Workspace since the last query or the physics step), and nothing
 /// for parts moved or taken out since, nor again for parts it took in; the PlayerMouse's ray and GetLargestCutoffDistance take

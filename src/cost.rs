@@ -1000,6 +1000,19 @@ pub const RAY_CROSSED: f64 = 0.0424e-6;
 /// PlayerMouse's rays take nothing in and pay nothing for it.
 pub const QUERY_TAKE_IN: f64 = 0.5e-6;
 pub const QUERY_TAKEN_PART: f64 = 1.1e-6;
+/// A step up the tree of the walks that put what a spatial query keeps in the Workspace's order (world/broadphase.rs
+/// sort_by_order: up from the parts at once until their paths meet), past [`QUERY_ORDER_FREE`] steps for each part it orders: ree's
+/// own host work, as a playing client's queries cost the same however deep their parts are (roblox-sim, Studio 0.747, a headless
+/// client; os.clock around 100 calls, the median of 15 less an empty loop: GetPartBoundsInBox finding 100 parts 12.1 to 12.2 us
+/// in a folder of the Workspace, 12.2 at the bottom of a 1,000-deep folder chain, 12.5 at 3,000, 17.3 with each part 300 deep in
+/// a chain of its own; 1,000 parts 17.7 to 25.0 in a folder, 22.9 1,000 deep, 18.0 each 30 deep; a Raycast through the first
+/// hundred 1.7 to 2.7 us in every scene). Parts in folders and models take about a step each, within the allowance, so their
+/// queries pay nothing more; parts whose paths meet only far up (each in a deep chain of its own, or one in the Workspace and
+/// one deep down) pay for the walk ree still takes, measured in `ree run` with os.realclock: 10 to 35 ns of host time a step
+/// (one part 10,000 deep beside one in the Workspace 10, 1,000 parts each 100 deep 15 to 21, 100 parts each 1,000 deep 24 to
+/// 35, a Raycast entering those 15 to 26), 20 on average.
+pub const QUERY_ORDER_STEP: f64 = 20e-9;
+pub const QUERY_ORDER_FREE: usize = 2;
 /// Camera:GetPartsObscuringTarget beyond its call (world/camera.rs), in a playing client (Studio 0.748, os.clock, 1 to 1,000 points,
 /// segments crossing 0, 1 or 10 parts, with and without 5,000 other parts in the Workspace, two runs): 0.8 us a point, its segment the
 /// parts it crosses as a ray's ([`RAY_MET`], [`RAY_CROSSED`]: 0.04 us a part measured), 1.1 us a part it returns, and 1.0 us a call,

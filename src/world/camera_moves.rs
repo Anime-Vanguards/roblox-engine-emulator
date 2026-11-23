@@ -296,7 +296,8 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
             }
         });
         let state = engine.state.borrow();
-        super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(part, _)| *part);
+        let steps = super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(part, _)| *part);
+        query::charge_order(&state, steps, entered.len());
         let mut nearest: Option<f32> = None;
         for &(part, distance) in &entered {
             met.push(distance);

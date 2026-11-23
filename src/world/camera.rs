@@ -341,7 +341,11 @@ fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Ar
         query::charge_query(engine, crate::cost::OBSCURING_POINT);
         query::charge_crossed(engine, hits.len(), crate::cost::RAY_CROSSED, 0);
         // (in the Workspace's order, then nearest first: the stable sort keeps that order among equals)
-        super::broadphase::sort_by_order(&engine.state.borrow().dom, root, &mut hits, |(_, part)| *part);
+        {
+            let state = engine.state.borrow();
+            let steps = super::broadphase::sort_by_order(&state.dom, root, &mut hits, |(_, part)| *part);
+            query::charge_order(&state, steps, hits.len());
+        }
         hits.sort_by(|a, b| a.0.total_cmp(&b.0));
         for &(_, part) in &hits {
             if decided.insert(part) && (ignored.is_empty() || !is_ignored(engine, &ignored, part)) {
