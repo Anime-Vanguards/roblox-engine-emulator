@@ -977,6 +977,17 @@ pub const COLLISION_GROUP_CHANGED: f64 = 0.38e-6;
 /// earlier job's parts too: three stacks of 24, which the first fit read as a ray's or a query's dearness.)
 pub const RAY_MET: f64 = 0.175e-6;
 pub const RAY_CROSSED: f64 = 0.0424e-6;
+/// What a spatial query that takes parts into the spatial index pays for them, beyond its own price (world/query.rs take_in: the
+/// parts that entered the Workspace since the last such query or the physics step, camera_moves.rs `Cameras::unindexed`), in a
+/// playing client (Studio 0.747, a headless client; os.clock around K parts parented into the Workspace, a Raycast or
+/// GetPartBoundsInBox and the parts parented out again, less the same without the query and the query alone, the median of 31 or
+/// 41 samples, two passes beside no other parts and beside 100,000 parts away): K = 1 1.48-1.61 us, 10 9.2-10.6, 100 95-122,
+/// 1,000 1,110-1,380, beside 100,000 parts as beside none, so [`QUERY_TAKEN_PART`] a part and [`QUERY_TAKE_IN`] once. Moving
+/// parts costs the next query nothing (1, 10 or 100 moved: within 0.3 us of a query after none, with no growth), and so does
+/// taking them out (100 or 1,000 parented out: within 0.06 us a part of none, either way). GetLargestCutoffDistance and the
+/// PlayerMouse's rays take nothing in and pay nothing for it.
+pub const QUERY_TAKE_IN: f64 = 0.5e-6;
+pub const QUERY_TAKEN_PART: f64 = 1.1e-6;
 /// Camera:GetPartsObscuringTarget beyond its call (world/camera.rs), in a playing client (Studio 0.748, os.clock, 1 to 1,000 points,
 /// segments crossing 0, 1 or 10 parts, with and without 5,000 other parts in the Workspace, two runs): 0.8 us a point, its segment the
 /// parts it crosses as a ray's ([`RAY_MET`], [`RAY_CROSSED`]: 0.04 us a part measured), 1.1 us a part it returns, and 1.0 us a call,

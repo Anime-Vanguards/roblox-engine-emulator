@@ -10267,6 +10267,8 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
         local Include = RaycastParams.new()
         Include.FilterType = Enum.RaycastFilterType.Include
         Include.FilterDescendantsInstances = { Stack[1] }
+        -- (an untimed query takes the new parts into the spatial index first: cost.rs QUERY_TAKEN_PART)
+        workspace:Raycast(Far, Down)
         local Miss = Per(function() return workspace:Raycast(Far, Down, Include) end)
         local Through = Per(function() return workspace:Raycast(At + Vector3.new(0, 10, 0), Down) end)
         local Filtered = Per(function() return workspace:Raycast(At + Vector3.new(0, 10, 0), Down, Include) end)
@@ -10281,6 +10283,7 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
             return Part
         end
         local Small, Large = Lone(2, 200), Lone(40, 500)
+        workspace:Raycast(Far, Down)
         local Alone = Per(function() return workspace:GetPartsInPart(Small) end)
         local Wide = Per(function() return workspace:GetPartsInPart(Large) end)
         local Inside = Per(function() return workspace:GetPartsInPart(Stack[1]) end)

@@ -245,9 +245,18 @@ fn keep_filter(engine: &Engine, filter: Filter) {
 
 /// What a spatial query does first: the spatial index takes in what entered the Workspace since the last query or the physics
 /// step (world/camera_moves.rs `index_parts`: GetLargestCutoffDistance and the PlayerMouse, which take nothing in, see it from
-/// then), and the broadphase takes the dom's changes ([`refresh`]).
+/// then), which the query pays for as a client's does (cost.rs QUERY_TAKE_IN and QUERY_TAKEN_PART for each part; moved and
+/// removed parts cost it nothing), and the broadphase takes the dom's changes ([`refresh`]).
 pub(crate) fn take_in(engine: &Engine) {
-    super::camera_moves::index_parts(&mut engine.state.borrow_mut());
+    let waiting = {
+        let mut state = engine.state.borrow_mut();
+        let waiting = state.cameras.unindexed.len();
+        super::camera_moves::index_parts(&mut state);
+        waiting
+    };
+    if waiting > 0 {
+        charge_query(engine, crate::cost::QUERY_TAKE_IN + waiting as f64 * crate::cost::QUERY_TAKEN_PART);
+    }
     refresh(engine);
 }
 

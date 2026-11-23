@@ -3592,6 +3592,82 @@ fn query_results_follow_the_order_the_workspace_lists_its_parts() {
     check("one replaced in its place");
 }
 
+/// A spatial query pays for the parts it takes into the spatial index as a client's does (cost.rs QUERY_TAKE_IN, QUERY_TAKEN_PART;
+/// Studio 0.747: 0.5 us and 1.1 us for each part that entered the Workspace since the last query or the physics step), and nothing
+/// for parts moved or taken out since, nor again for parts it took in; the PlayerMouse's ray and GetLargestCutoffDistance take
+/// nothing in and pay nothing for it, GetPartsObscuringTarget and the bounds queries do; the physics step takes parts in unpaid.
+#[test]
+fn a_query_pays_for_the_parts_it_takes_into_the_spatial_index() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Pool = {}
+        for I = 1, 100 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.CFrame = CFrame.new(1000 + I * 3, 0, 0)
+            Pool[I] = Part
+        end
+        local O, Up = Vector3.new(0, 50, 0), Vector3.new(0, 10, 0)
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 50, 0), Vector3.new(0, 50, 20))
+        Cam.Focus = CFrame.new(0, 50, 10)
+        local Mouse = game:GetService("Players").LocalPlayer:GetMouse()
+        local function Spent(F)
+            local T0 = os.clock()
+            F()
+            return (os.clock() - T0) * 1e6
+        end
+        local Calls = {
+            Raycast = function() workspace:Raycast(O, Up) end,
+            Box = function() workspace:GetPartBoundsInBox(CFrame.new(O), Vector3.one) end,
+            Obscuring = function() Cam:GetPartsObscuringTarget({ O + Up }, {}) end,
+            Cutoff = function() Cam:GetLargestCutoffDistance({}) end,
+            Mouse = function() local _ = Mouse.Target end,
+        }
+        local Alone = {}
+        for Name, Call in Calls do
+            Call()
+            Alone[Name] = Spent(Call)
+        end
+        local function Enter(K) for J = 1, K do Pool[J].Parent = workspace end end
+        local function Leave(K) for J = 1, K do Pool[J].Parent = nil end end
+        local function Paid(Name) return Spent(Calls[Name]) - Alone[Name] end
+        local function Near(Got, Want, What) assert(math.abs(Got - Want) < 1e-3, What .. ": " .. Got .. " where " .. Want) end
+        for _, K in { 1, 10, 100 } do
+            Enter(K)
+            Near(Paid("Mouse"), 0, K .. " waiting, a mouse read")
+            Near(Paid("Cutoff"), 0, K .. " waiting, GetLargestCutoffDistance")
+            Near(Paid("Raycast"), 0.5 + 1.1 * K, K .. " taken in by a Raycast")
+            Near(Paid("Raycast"), 0, K .. " already in")
+            for J = 1, K do
+                Pool[J].CFrame = Pool[J].CFrame + Vector3.new(0, 1, 0)
+            end
+            Near(Paid("Raycast"), 0, K .. " moved")
+            Leave(K)
+            Near(Paid("Raycast"), 0, K .. " taken out")
+        end
+        Enter(10)
+        Leave(10)
+        Near(Paid("Raycast"), 0, "in and out before the query")
+        Enter(10)
+        Near(Paid("Box"), 0.5 + 11, "taken in by GetPartBoundsInBox")
+        Leave(10)
+        Enter(10)
+        Near(Paid("Obscuring"), 0.5 + 11, "taken in by GetPartsObscuringTarget")
+        Leave(10)
+        Enter(10)
+        "##,
+    );
+    assert_eq!(engine.state.borrow().cameras.unindexed.len(), 10, "ten waiting");
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    assert_eq!(engine.state.borrow().cameras.unindexed.len(), 0, "the physics step took them in: no query pays for them");
+}
+
 /// The broadphase follows the dom without walking the Workspace: a part moved, resized and turned off (CanQuery), one moved out and
 /// back, a model moved in whole, a part destroyed and collected, an instance given a part's class where it stands (a bundle's root
 /// revealed: dom.rs set_class) are each seen by the next query; more changes before a query than the log keeps (dom.rs
