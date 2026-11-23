@@ -102,10 +102,11 @@ impl Behaviors {
     }
 
     /// [`Self::find_method`], and for a deprecated lower-case method with no behaviour of its own the behaviour of the method
-    /// it stands for (Reflection::method_alias: `getService` does GetService's work, through a function of its own).
+    /// it stands for (Reflection::method_alias: `getService` does GetService's work, through a function of its own, and the
+    /// Workspace's `breakJoints` Model's BreakJoints work, not the Workspace's own BreakJoints').
     pub fn find_method_or_alias(&self, reflection: &Reflection, class: ClassId, name: NameId) -> Option<(ClassId, &Method)> {
         find(&self.methods, reflection, class, name)
-            .or_else(|| reflection.method_alias(class, name).and_then(|twin| find(&self.methods, reflection, class, twin)))
+            .or_else(|| reflection.method_alias(class, name).and_then(|(twin, from)| find(&self.methods, reflection, from, twin)))
     }
 
     pub fn find_getter(&self, reflection: &Reflection, class: ClassId, name: NameId) -> Option<&GetterFn> {
@@ -394,11 +395,17 @@ struct RenderStep {
 }
 
 /// The methods only Roblox's own scripts may call (reflection.rs CAPABILITY_CALLS): each is a function that raises the
-/// client's error whatever it is called with, in every run context. Plain functions, not instance methods, because the
-/// error comes before the instance is checked (`game.DefineFastInt("x", 1)` raises it too, not "Expected ':' not '.'").
-/// Installed with the core's behaviours, before a host's layers, which may replace them.
+/// client's error whatever it is called with, in every run context (but for the Plugin ones in edit mode, below). Plain
+/// functions, not instance methods, because the error comes before the instance is checked (`game.DefineFastInt("x", 1)`
+/// raises it too, not "Expected ':' not '.'").
+/// Installed with the core's behaviours, before a host's layers, which may replace them. A plugin has the Plugin capability, so
+/// in edit mode, where a plugin's code runs, the methods that lack only that one are left to report themselves not emulated.
 pub fn install_capability_calls(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
+    let plugin = engine.options.edit_mode();
     for &(class_name, member, capability) in crate::reflection::CAPABILITY_CALLS {
+        if plugin && capability == "Plugin" {
+            continue;
+        }
         let (Some(owner), Some(name)) = (class(&engine.reflection, class_name), engine.reflection.name_id(member)) else { continue };
         let message = format!("The current thread cannot call '{member}' (lacking capability {capability})");
         let function = super::lua::wrapped(lua, engine, move |_, _| raise(message.clone()))?;
