@@ -383,6 +383,11 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         modules::require_finish(lua, engine, (args.get(0).clone(), results, vm_of(args.get(2))))
     })?;
     r.set("RequireFinish", require_finish.clone())?;
+    {
+        let mut refs = engine.lua.borrow_mut();
+        refs.require_begin = Some(require_begin.clone());
+        refs.require_finish = Some(require_finish.clone());
+    }
     // a script's require (prelude.luau Environment): `MakeRequire(Script, Vm)`, a C function of its own (lua/builtins.rs)
     r.set(
         "MakeRequire",

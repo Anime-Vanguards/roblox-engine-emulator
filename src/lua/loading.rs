@@ -160,16 +160,11 @@ pub fn loadmodule(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue) -> Ret {
         };
         let decode = lua.create_function(move |lua, ()| modules::json_to_lua(lua, &parsed).map_err(LuaError::runtime))?;
         let env = modules::environment(lua, engine, module)?;
-        let chunk = lua
-            .load(modules::json_wrapper_bytecode())
-            .set_mode(mlua::chunk::ChunkMode::Binary)
-            .set_name(format!("={name}"))
-            .set_environment(env);
-        let function: LuaFunction = modules::load(lua, engine, chunk)?.call(decode)?;
-        let cleanup = lua.create_function(|_, _: LuaMultiValue| Ok(()))?;
+        let function = modules::wrap_json_loadmodule(lua, engine, &name, decode, env)?;
+        let cleanup = modules::noop_cleanup(lua, engine)?;
         return Ok(values([LuaValue::Function(function), LuaValue::Nil, LuaValue::Function(cleanup)]));
     }
-    let source = match modules::source_rc(engine, module) {
+    let source = match modules::source_rc_opts(engine, module, !engine.options.native) {
         Some(source) => source,
         // (a module the project has no source for: an empty function would pass for its code)
         None if studio_only => {
@@ -181,7 +176,7 @@ pub fn loadmodule(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue) -> Ret {
     };
     match modules::compile_for_loadmodule(lua, engine, module, &source) {
         Ok(function) => {
-            let cleanup = lua.create_function(|_, _: LuaMultiValue| Ok(()))?;
+            let cleanup = modules::noop_cleanup(lua, engine)?;
             Ok(values([LuaValue::Function(function), LuaValue::Nil, LuaValue::Function(cleanup)]))
         }
         Err(error) => Ok(values([LuaValue::Nil, LuaValue::String(lua.create_string(scheduler::error_message(&error))?)])),

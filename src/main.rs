@@ -122,7 +122,7 @@ static GLOBAL: dhat::Alloc = dhat::Alloc;
 // (mimalloc: the allocator above, and the service's idle collection)
 extern crate mimalloc;
 
-const USAGE: &str = "usage: ree record --harness <file.luau> --out <dir> [--seconds 3] [--fps 60] [--context <json|file>]\n                  [--assets-at <Service.Path>] [--assets <prefix>,...] [engine options]\n       ree run --harness <file.luau> [--seconds 3] [--fps 60] [--context <json|file>] [engine options]\n       ree record|run --service ...   (run by the warm service, started when missing; --profile prints timings)\n       ree run ... --profile boundary [--profile-out <file.json>] [--profile-phase <a,b|all>] [--profile-top <n>]\n                   (Luau-to-engine crossings per call site, priced; not through --service)\n       ree record|run ... --profile <kinds> [--profile-out <dir>] [--profile-top <n>] [--profile-phase <a,b|all>] [--profile-counters <a,b>]\n                   kinds: work, caches, alloc, heap, timeline, cpu, phases, time, hw, boundary, all (docs/cli.md)\n       ree profile diff <before dir> <after dir> [--out <dir>]   |   ree profile report <dir>\n       ree profile try <file.luau> [--sizes a,b] [--variants a,b] [--out <dir>]   (variants side by side)\n       ree serve [--status | --stop] [--idle <s>] [--workers <n>]\nengine options: --roots \"<dir>;<dir>\" [--project <dir>] [--place <name>], --mount Service/Name=<dir|file>,\n                --instance Service/Name=<ClassName>, --rojo <file.project.json> [--rojo-at Service/Name],\n                --snapshot-dir <dir>, --mode play|edit, --player <name>,\n                --place-id <n>, --streaming <radius>, --viewport WxH, --offline, --native, --verbose (docs/cli.md)";
+const USAGE: &str = "usage: ree record --harness <file.luau> --out <dir> [--seconds 3] [--fps 60] [--context <json|file>]\n                  [--assets-at <Service.Path>] [--assets <prefix>,...] [engine options]\n       ree run --harness <file.luau> [--seconds 3] [--fps 60] [--context <json|file>] [engine options]\n       ree run --batch <jobs.json>   (run multiple independent jobs in one process sharing compiled bytecode and caches)\n       ree record|run --service ...   (run by the warm service, started when missing; --profile prints timings)\n       ree run ... --profile boundary [--profile-out <file.json>] [--profile-phase <a,b|all>] [--profile-top <n>]\n                   (Luau-to-engine crossings per call site, priced; not through --service)\n       ree record|run ... --profile <kinds> [--profile-out <dir>] [--profile-top <n>] [--profile-phase <a,b|all>] [--profile-counters <a,b>]\n                   kinds: work, caches, alloc, heap, timeline, cpu, phases, time, hw, boundary, all (docs/cli.md)\n       ree profile diff <before dir> <after dir> [--out <dir>]   |   ree profile report <dir>\n       ree profile try <file.luau> [--sizes a,b] [--variants a,b] [--out <dir>]   (variants side by side)\n       ree serve [--status | --stop] [--idle <s>] [--workers <n>]\nengine options: --roots \"<dir>;<dir>\" [--project <dir>] [--place <name>], --mount Service/Name=<dir|file>,\n                --instance Service/Name=<ClassName>, --rojo <file.project.json> [--rojo-at Service/Name],\n                --snapshot-dir <dir>, --mode play|edit, --player <name>,\n                --place-id <n>, --streaming <radius>, --viewport WxH, --offline, --native, --verbose (docs/cli.md)";
 
 #[cfg(feature = "dhat-heap")]
 static PROFILER: std::sync::Mutex<Option<dhat::Profiler>> = std::sync::Mutex::new(None);
@@ -230,10 +230,12 @@ fn run_command(argv: &[String], service: bool) -> i32 {
         println!("{USAGE}");
         return 0;
     }
+    let batch = argv.iter().any(|arg| arg == "--batch" || arg.starts_with("--batch="));
     let host = Host::default();
     let code = match argv.get(1).map(String::as_str) {
         Some("record") if service => serve::client::cli(&argv[2..], true),
         Some("run") if service => serve::client::cli(&argv[2..], false),
+        Some("run") if batch => record::run::batch_cli(&argv[2..], &host),
         Some("record") => record::run::cli(&argv[2..], &host, true),
         Some("run") => record::run::cli(&argv[2..], &host, false),
         Some("serve") => serve::cli(&argv[2..]),

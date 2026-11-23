@@ -174,6 +174,11 @@ pub struct LuaRefs {
     pub prelude: Option<Rc<Prelude>>,
     /// The shared global table every script environment inherits
     pub shared: Option<LuaTable>,
+    /// Frozen `{ __index = shared }` metatable shared across per-script environments
+    pub shared_meta: Option<LuaTable>,
+    /// Rust halves of a script's `require` closure (stored for fast Rust-side environment creation)
+    pub require_begin: Option<LuaFunction>,
+    pub require_finish: Option<LuaFunction>,
     /// Signal / connection member functions
     pub signal_members: Option<LuaTable>,
     pub connection_members: Option<LuaTable>,

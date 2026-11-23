@@ -461,3 +461,36 @@ fn native_mode_disables_work_counting_and_reuses_json_cache() {
     let _ = std::fs::remove_dir_all(&folder);
     check(&lines, &["fresh 999 10 3"]);
 }
+
+#[test]
+fn native_loadmodule_template_cache_isolates_envs_and_invalidates_on_change() {
+    let source = format!(
+        "{MODULES}{}",
+        r##"
+        -- Pure straight-line data module (skips JIT codegen) still clones cleanly and isolates tables/envs.
+        local Data = Make("PureData", "return { Value = Marker or 10, Script = script.Name, Items = { 1, 2 } }")
+        local First = debug.loadmodule(Data)
+        local Second = debug.loadmodule(Data)
+        setfenv(First, setmetatable({ Marker = 111 }, { __index = getfenv(First) }))
+        setfenv(Second, setmetatable({ Marker = 222 }, { __index = getfenv(Second) }))
+        local A = First()
+        local B = Second()
+        A.Items[1] = 99
+        print("data", First ~= Second, A.Value, B.Value, A.Items[1], B.Items[1], A.Script, debug.info(First, "s"))
+
+        -- Editing Source or Name invalidates the cached template immediately.
+        Data.Source = "return { Value = 333 }"
+        Data.Name = "PureDataV2"
+        local Third = debug.loadmodule(Data)
+        print("invalidated", Third().Value, debug.info(Third, "s"), debug.info(First, "s"))
+        "##
+    );
+    let lines = run(Options { load_module: true, native: true, ..Options::default() }, &source);
+    check(
+        &lines,
+        &[
+            "data true 111 222 99 1 PureData ReplicatedStorage.PureData",
+            "invalidated 333 ReplicatedStorage.PureDataV2 ReplicatedStorage.PureData",
+        ],
+    );
+}

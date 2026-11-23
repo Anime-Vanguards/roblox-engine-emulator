@@ -219,6 +219,151 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
     }
 }
 
+/// `ree run --batch <jobs.json>`: runs multiple independent `run` jobs concurrently in one process
+/// while sharing compiled module bytecode, parsed JSON caches, reflection, and directory listings.
+pub fn batch_cli(args: &[String], host: &Host) -> i32 {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(serde::Deserialize)]
+    struct BatchSpec {
+        workers: Option<usize>,
+        jobs: Vec<BatchJob>,
+    }
+    #[derive(serde::Deserialize)]
+    struct BatchJob {
+        id: String,
+        args: Vec<String>,
+        #[serde(default)]
+        dependencies: bool,
+    }
+
+    let args = launch::split_equals(args);
+    if let Err(error) = crate::require_standalone_state(&host.repo) {
+        eprintln!("{} run --batch: {error}", host.name);
+        return 1;
+    }
+    if !args.iter().any(|arg| arg == "--no-parent-watch") {
+        crate::watchdog::watch_parent("run --batch");
+    }
+    let Some(spec_path) = args.iter().position(|arg| arg == "--batch").and_then(|index| args.get(index + 1)) else {
+        eprintln!("{} run --batch: --batch <jobs.json> is required", host.name);
+        return 2;
+    };
+    let text = match std::fs::read_to_string(spec_path) {
+        Ok(text) => text,
+        Err(error) => {
+            eprintln!("{} run --batch: {spec_path}: {error}", host.name);
+            return 2;
+        }
+    };
+    let spec: BatchSpec = match serde_json::from_str(&text) {
+        Ok(spec) => spec,
+        Err(error) => {
+            eprintln!("{} run --batch: {spec_path}: {error}", host.name);
+            return 2;
+        }
+    };
+
+    modules::reuse_compiled_modules();
+    modules::set_batch_frozen(true);
+    let total = spec.jobs.len();
+    if total == 0 {
+        println!("{{\"results\":[]}}");
+        return 0;
+    }
+    let workers = spec
+        .workers
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |count| count.get()))
+        .clamp(1, total);
+
+    let queue = Arc::new(Mutex::new(spec.jobs.into_iter().enumerate().collect::<VecDeque<_>>()));
+    let results: Arc<Mutex<Vec<Option<Json>>>> = Arc::new(Mutex::new(vec![None; total]));
+    let mut handles = Vec::with_capacity(workers);
+    let host_name = host.name;
+    let host_repo = host.repo.clone();
+    for worker_index in 0..workers {
+        let queue = queue.clone();
+        let results = results.clone();
+        let host_repo = host_repo.clone();
+        let handle = std::thread::Builder::new()
+            .name(format!("ree-batch-{worker_index}"))
+            .stack_size(64 << 20)
+            .spawn(move || {
+                let host = Host { name: host_name, repo: host_repo, ..Host::default() };
+                loop {
+                    let next = queue.lock().ok().and_then(|mut q| q.pop_front());
+                    let Some((index, job)) = next else { break };
+                    let started = std::time::Instant::now();
+                    let job_args = launch::split_equals(&job.args);
+                    let outcome = parse(&job_args, false).and_then(|parsed| {
+                        let (done, emulator) = execute_with(&parsed, &host, false, false)?;
+                        let deps = if job.dependencies {
+                            let mut list: Vec<String> = modules::read_files(&emulator.engine).into_iter().collect();
+                            list.sort();
+                            Some(list)
+                        } else {
+                            None
+                        };
+                        #[cfg(feature = "bundles")]
+                        project::model_assets::stop(&emulator.engine);
+                        crate::animation::source::stop(&emulator.engine);
+                        drop(emulator);
+                        Ok((done, deps))
+                    });
+                    let wall = started.elapsed().as_secs_f64();
+                    let entry = match outcome {
+                        Ok((done, deps)) => {
+                            eprintln!("{}", done.line);
+                            let mut obj = json!({
+                                "id": job.id,
+                                "code": done.code,
+                                "wallSeconds": wall,
+                                "summary": done.summary,
+                            });
+                            if let Some(deps) = deps {
+                                obj["dependencies"] = json!(deps);
+                            }
+                            obj
+                        }
+                        Err(error) => {
+                            eprintln!("{} run ({}): {error}", host.name, job.id);
+                            json!({
+                                "id": job.id,
+                                "code": 1,
+                                "wallSeconds": wall,
+                                "error": error,
+                            })
+                        }
+                    };
+                    if let Ok(mut out) = results.lock() {
+                        out[index] = Some(entry);
+                    }
+                }
+            });
+        match handle {
+            Ok(handle) => handles.push(handle),
+            Err(error) => {
+                eprintln!("{} run --batch: failed to start worker {worker_index}: {error}", host.name);
+                return 1;
+            }
+        }
+    }
+    for handle in handles {
+        if handle.join().is_err() {
+            eprintln!("{} run --batch: a batch worker panicked", host.name);
+            return 1;
+        }
+    }
+    let final_results: Vec<Json> = results
+        .lock()
+        .map(|mut slots| slots.drain(..).map(|slot| slot.unwrap_or_else(|| json!({ "code": 1, "error": "missing result" }))).collect())
+        .unwrap_or_default();
+    let payload = serde_json::to_string(&json!({ "results": final_results })).unwrap_or_default();
+    println!("{payload}");
+    0
+}
+
 /// A profile's directory when `--profile-out` names none: `<out>/profile` for a recording, else `ree-profile` in state
 /// for a standalone run or in the current folder for a host.
 fn default_profile_dir(args: &[String], record: bool) -> PathBuf {
@@ -436,13 +581,17 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
     }
     let history = History::new(host, args, &prepared.place_roots());
     // (a process that keeps compiled modules compiles the ones it lacks into them)
-    let prefetch = match &history.modules {
-        Some(files) if modules::reusing_compiled_modules() => {
-            modules::precompile(files.clone());
-            None
+    let prefetch = if modules::is_batch_frozen() {
+        None
+    } else {
+        match &history.modules {
+            Some(files) if modules::reusing_compiled_modules() => {
+                modules::precompile(files.clone());
+                None
+            }
+            Some(files) => Some(modules::Prefetch::start(files.clone())),
+            None => None,
         }
-        Some(files) => Some(modules::Prefetch::start(files.clone())),
-        None => None,
     };
     let mut options = prepared.options.clone();
     options.clock_probe = args.clock_probe;

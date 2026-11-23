@@ -141,3 +141,87 @@ fn standalone_checks_accept_linked_and_canonical_temporary_folders() {
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
+
+#[test]
+fn run_batch_executes_jobs_in_parallel_and_reports_dependencies() {
+    let root = std::env::temp_dir().join(format!("ree-run-batch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let source_dir = root.join("src").join("ReplicatedStorage");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(source_dir.join("Helper.luau"), "return { Double = function(x) return x * 2 end }\n").unwrap();
+    std::fs::write(source_dir.join("Config.json"), r#"{"Offset": 7}"#).unwrap();
+    let harness = root.join("harness.luau");
+    std::fs::write(
+        &harness,
+        r#"return function(Context)
+    local RS = game:GetService("ReplicatedStorage")
+    local Helper = require(RS.Helper)
+    local Config = debug.loadmodule(RS.Config)()
+    print("@res " .. tostring(Helper.Double(Context.Input) + Config.Offset))
+    print("@done")
+end
+"#,
+    )
+    .unwrap();
+    let ctx1 = root.join("ctx1.json");
+    let ctx2 = root.join("ctx2.json");
+    std::fs::write(&ctx1, r#"{"Input": 5}"#).unwrap();
+    std::fs::write(&ctx2, r#"{"Input": 20}"#).unwrap();
+    let batch_file = root.join("batch.json");
+    let common = |ctx: &Path| {
+        vec![
+            "--native".to_string(),
+            "--harness".to_string(),
+            harness.to_string_lossy().into_owned(),
+            "--roots".to_string(),
+            root.join("src").to_string_lossy().into_owned(),
+            "--mode".to_string(),
+            "edit".to_string(),
+            "--run-context".to_string(),
+            "edit".to_string(),
+            "--load-module".to_string(),
+            "--offline".to_string(),
+            "--seconds".to_string(),
+            "10".to_string(),
+            "--context".to_string(),
+            ctx.to_string_lossy().into_owned(),
+        ]
+    };
+    let spec = serde_json::json!({
+        "workers": 2,
+        "jobs": [
+            { "id": "first", "args": common(&ctx1), "dependencies": true },
+            { "id": "second", "args": common(&ctx2), "dependencies": false },
+        ]
+    });
+    std::fs::write(&batch_file, serde_json::to_string(&spec).unwrap()).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_ree"))
+        .args(["run", "--batch"])
+        .arg(&batch_file)
+        .output()
+        .expect("ree run --batch executes");
+    assert!(output.status.success(), "{}", describe(&output));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid batch JSON");
+    let results = report["results"].as_array().expect("results array");
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["id"], "first");
+    assert_eq!(results[1]["id"], "second");
+    let first_msg = results[0]["summary"]["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|entry| entry["message"].as_str().filter(|m| m.starts_with("@res ")));
+    let second_msg = results[1]["summary"]["output"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|entry| entry["message"].as_str().filter(|m| m.starts_with("@res ")));
+    assert_eq!(first_msg, Some("@res 17"));
+    assert_eq!(second_msg, Some("@res 47"));
+    let deps = results[0]["dependencies"].as_array().expect("dependencies reported for first job");
+    assert!(deps.iter().any(|p| p.as_str().is_some_and(|s| s.ends_with("Helper.luau"))), "{deps:?}");
+    assert!(deps.iter().any(|p| p.as_str().is_some_and(|s| s.ends_with("Config.json"))), "{deps:?}");
+    assert!(results[1].get("dependencies").is_none());
+    let _ = std::fs::remove_dir_all(&root);
+}
