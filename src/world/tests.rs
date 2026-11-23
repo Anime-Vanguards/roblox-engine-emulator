@@ -3681,9 +3681,10 @@ fn camera_parts_obscuring_a_target_follow_a_client() {
     assert!(!engine.state.borrow().log_history.iter().any(|entry| entry.text.contains("is not emulated")));
 }
 
-/// GetPartsObscuringTarget costs the work clock what a playing client spent on it (Studio 0.748, cost.rs OBSCURING_POINT): 0.8 us a
-/// point, the parts each segment crosses as a ray's, 1.1 us a part returned and 1.0 us a call, whatever else the Workspace holds;
-/// 1,000 points crossing nothing took 811-1,203 us, crossing 10 parts 1,243-1,313 us, and one point crossing 10 parts 12.7-13.6 us.
+/// GetPartsObscuringTarget costs the work clock what a playing client spent on it (cost.rs OBSCURING_CALL to OBSCURING_STEP),
+/// whatever else the Workspace holds: one point crossing 10 parts took a client 12.7-13.6 us (Studio 0.748) and 11.6-12.7 (0.747),
+/// 1,000 points crossing 10 parts 1,243-1,313 us (0.748; on 0.747 100 such points 117-223), and 1,000 points crossing nothing
+/// 172-179 us 300 studs out (0.747; a session at the origin, where the player's character stands, read 811-1,203 on 0.748).
 #[test]
 fn camera_parts_obscuring_a_target_cost_what_a_client_spent() {
     let (lua, engine) = start();
@@ -3719,7 +3720,9 @@ fn camera_parts_obscuring_a_target_cost_what_a_client_spent() {
         local function Within(Label, Value, Low, High)
             assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
         end
-        Within("1,000 points crossing nothing", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget(Points, {}) end end), 750, 1250)
+        -- (the first query takes the parts just made into the spatial index, at cost.rs QUERY_TAKEN_PART each: not the timed calls')
+        Cam:GetPartsObscuringTarget({}, {})
+        Within("1,000 points crossing nothing", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget(Points, {}) end end), 150, 200)
         for I = 1, 10 do
             local P = Instance.new("Part")
             P.Anchored = true
@@ -3727,7 +3730,7 @@ fn camera_parts_obscuring_a_target_cost_what_a_client_spent() {
             P.CFrame = CFrame.new(0, 5, 2 + I * 4)
             P.Parent = Folder
         end
-        Within("1,000 points crossing 10 parts", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget(Points, {}) end end), 1150, 1450)
+        Within("1,000 points crossing 10 parts", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget(Points, {}) end end), 850, 1450)
         Within("one point crossing 10 parts", Per(function(N) for _ = 1, N do Cam:GetPartsObscuringTarget({ Points[1] }, {}) end end), 11, 15)
         Folder:Destroy()
         "##,
@@ -4261,11 +4264,12 @@ fn query_order_is_the_order_of_whole_attach_number_lists() {
 /// A spatial query puts what it keeps in the Workspace's order with walks up from the parts that stop where the parts' paths meet
 /// (world/broadphase.rs sort_by_order), so 2,000 parts in a folder at the bottom of a 10,000-deep chain cost GetPartBoundsInBox,
 /// GetPartsObscuringTarget and a Raycast through them about as much host work as the same parts in a folder of the Workspace, in
-/// the same order, and the work clock charges each the same, as a playing client's queries cost the same at any depth (Studio
-/// 0.747: 100 parts 12.1 us in the Workspace, 12.2 1,000 deep, 12.5 3,000 deep). Making each part's whole list of attach numbers
-/// and comparing them took 0.2 s of host time a query here and 262 MB of heap. Parts whose paths meet only far up (50 parts, each at
-/// the bottom of a 1,000-deep chain of its own) still walk every instance between, and pay cost.rs QUERY_ORDER_STEP for each
-/// step past QUERY_ORDER_FREE a part.
+/// the same order, and the work clock charges the box and the Raycast the same, as a playing client's cost the same at any depth
+/// (Studio 0.747: 100 parts 12.1 us in the Workspace, 12.2 1,000 deep, 12.5 3,000 deep); GetPartsObscuringTarget costs more by
+/// the walks a client's casts take up its parts (camera.rs parts_obscuring: its ancestors' answers kept for the call, so the
+/// host walks them once). Making each part's whole list of attach numbers and comparing them took 0.2 s of host time a query here
+/// and 262 MB of heap. Parts whose paths meet only far up (50 parts, each at the bottom of a 1,000-deep chain of its own) still walk
+/// every instance between, and pay cost.rs QUERY_ORDER_STEP for each step past QUERY_ORDER_FREE a part.
 #[test]
 fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
     let (lua, engine) = start_play();
@@ -4318,18 +4322,26 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
                     assert(Part == S.Parts[I], "the parts in the Workspace's order")
                 end
                 Camera.CFrame = CFrame.new(X, 50, 10)
+                local Before = os.clock()
                 local Obscuring = Camera:GetPartsObscuringTarget({ Vector3.new(X, 50, -Count * 0.01 - 5) }, {})
+                S.Obscuring += os.clock() - Before
                 assert(#Obscuring == Count, `{#Obscuring} parts obscure the point`)
                 local Hit = workspace:Raycast(Vector3.new(X, 50, 10), Vector3.new(0, 0, -Count * 0.01 - 20))
                 assert(Hit and Hit.Instance == S.Parts[1], "the ray hits the first part")
             end
         end
         -- each scene twice, the second pass timed (the first warms the members and instances the frame touches)
+        shared.Obscuring = {}
         function shared.Use(Name)
-            Pass(shared.Scenes[Name])
+            local S = shared.Scenes[Name]
+            S.Obscuring = 0
+            Pass(S)
+            S.Obscuring = 0
             local Start = os.clock()
-            Pass(shared.Scenes[Name])
-            shared.Work[Name] = os.clock() - Start
+            Pass(S)
+            -- (GetPartsObscuringTarget's own work apart: it grows with depth)
+            shared.Work[Name] = os.clock() - Start - S.Obscuring
+            shared.Obscuring[Name] = S.Obscuring
         end
         "#,
     );
@@ -4339,8 +4351,9 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
         run(&lua, &engine, &format!("shared.Use(\"{name}\")"));
         host.push(start.elapsed().as_secs_f64());
     }
-    // (each of the 50 parts apart walks its 1,000 instances: 50,000 steps a query, 15 queries)
-    let apart = 15.0 * super::broadphase::order_cost(50 * 1000, 50);
+    // (each of the 50 parts apart walks its 1,000 instances: 50,000 steps a query, 10 queries but GetPartsObscuringTarget's, whose
+    // work is apart)
+    let apart = 10.0 * super::broadphase::order_cost(50 * 1000, 50);
     assert!(apart > 1e-3, "the walks apart are charged: {apart} s");
     run(
         &lua,
@@ -4354,6 +4367,13 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
             "#
         ),
     );
+    // GetPartsObscuringTarget's five calls: the wall at place i is checked 2,000 - i + 1 times, each walking up for the i walls listed
+    // before it, 3 ancestors in the Workspace's folder and 10,003 at the bottom of the chain
+    let count = 2000usize;
+    let checks: f64 = (0..count).map(|place| ((count - place + 1) * place) as f64).sum();
+    let walks = |ancestors: u32| checks * f64::from(ancestors) * crate::cost::filter_step(ancestors) * crate::cost::OBSCURING_STEP;
+    let deeper = 5.0 * (walks(10_003) - walks(3));
+    run(&lua, &engine, &format!("assert(math.abs((shared.Obscuring.Deep - shared.Obscuring.Flat) / {deeper:e} - 1) < 1e-9, `GetPartsObscuringTarget deep cost {{shared.Obscuring.Deep - shared.Obscuring.Flat}} s more than in the Workspace, not {deeper:e}`)"));
     let (flat, deep) = (host[0], host[1]);
     assert!(deep < 0.25, "two passes of 15 queries of 2,000 parts 10,000 deep took {deep:.3} s, {flat:.3} s in the Workspace");
 }
@@ -4495,6 +4515,81 @@ fn parts_waiting_for_the_spatial_index_are_not_handed_to_the_mouse_or_the_cutoff
     run(&lua, &engine, "workspace:Raycast(Vector3.new(0, 5000, 0), Vector3.new(0, 1, 0))");
     assert!(engine.state.borrow().cameras.unindexed.is_empty(), "the Raycast took them in");
     run(&lua, &engine, "shared.Reads(10, true, \"Seen\")");
+}
+
+/// Camera:GetPartsObscuringTarget costs the work clock what a client's casts spend (cost.rs OBSCURING_CALL to OBSCURING_NOT_FINITE,
+/// Studio 0.747): a client casts again for each part it lists, each cast checking the parts before its hit against the script's
+/// ignore list and the parts listed so far, so ten walls 100 folders deep behind an ignore list of five parts cost eleven casts,
+/// 65 checks and their walks; an entry of the points that is no Vector3 and a point that is not finite cost what a client spends
+/// skipping them. The prices before charged 0.8 us a point, a ray's price for the walls and 1.1 us a wall listed, and nothing for
+/// the depth, the ignore list's walks or the skipped entries.
+#[test]
+fn obscuring_parts_cost_what_a_clients_casts_spend() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Far = Instance.new("Folder")
+        Far.Parent = workspace
+        local Ignore = {}
+        for I = 1, 5 do
+            local Part = Instance.new("Part")
+            Part.Anchored, Part.Position = true, Vector3.new(3000 + I * 3, 500, 3000)
+            Part.Parent = Far
+            Ignore[I] = Part
+        end
+        -- 100 folders: a wall at the bottom has 102 ancestors (the Workspace and the DataModel)
+        local Node = workspace
+        for _ = 1, 100 do
+            local Folder = Instance.new("Folder")
+            Folder.Parent = Node
+            Node = Folder
+        end
+        local O = Vector3.new(0, 2000, 0)
+        for I = 1, 10 do
+            local Wall = Instance.new("Part")
+            Wall.Anchored, Wall.Size, Wall.Position = true, Vector3.new(8, 8, 0.2), O + Vector3.new(0, 0, I * 2)
+            Wall.Parent = Node
+        end
+        local Cam = Instance.new("Camera")
+        Cam.CFrame = CFrame.lookAt(O + Vector3.new(0, 0, 250), O)
+        Cam.Parent = workspace
+        local Behind, Open = { O }, { O + Vector3.new(500, 0, 0) }
+        local Skips, Unfinite = table.create(101, 5), table.create(11, Vector3.new(0 / 0, 0, 0))
+        Skips[101], Unfinite[11] = Open[1], Open[1]
+        local function Cost(Call)
+            Call()
+            local Start = os.clock()
+            Call()
+            return os.clock() - Start
+        end
+        assert(#Cam:GetPartsObscuringTarget(Behind, Ignore) == 10, "the ten walls")
+        shared.Obscuring = {
+            Walls = Cost(function() Cam:GetPartsObscuringTarget(Behind, Ignore) end) - Cost(function() Cam:GetPartsObscuringTarget(Open, Ignore) end),
+            Skipped = Cost(function() Cam:GetPartsObscuringTarget(Skips, Ignore) end) - Cost(function() Cam:GetPartsObscuringTarget(Open, Ignore) end),
+            Unfinite = Cost(function() Cam:GetPartsObscuringTarget(Unfinite, Ignore) end) - Cost(function() Cam:GetPartsObscuringTarget(Open, Ignore) end),
+        }
+        "##,
+    );
+    // ten walls: ten more casts than the open point's one; the wall at place i (0-based) is checked by the 10 - i casts whose hit
+    // is at or past it and the last, each check walking up 102 steps for each of the five ignored parts and the i listed before it
+    let (walls, ancestors, ignored) = (10usize, 102.0, 5.0);
+    let mut checks = 0.0;
+    let mut steps = 0.0;
+    for place in 0..walls {
+        let times = (walls - place + 1) as f64;
+        checks += times;
+        steps += times * (ignored + place as f64) * ancestors;
+    }
+    let walls_cost = walls as f64 * (crate::cost::OBSCURING_CAST + crate::cost::OBSCURING_LISTED)
+        + checks * crate::cost::OBSCURING_CHECKED
+        + steps * crate::cost::filter_step(102) * crate::cost::OBSCURING_STEP;
+    let checks_list = [("Walls", walls_cost), ("Skipped", 100.0 * crate::cost::OBSCURING_SKIPPED), ("Unfinite", 10.0 * crate::cost::OBSCURING_NOT_FINITE)];
+    for (name, price) in checks_list {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Obscuring.{name} - {price:e}) < 1e-9, `{name}: {{shared.Obscuring.{name}}} s more work, not {price:e}`)"));
+    }
 }
 
 /// The walks up a query's parts that a client's filters take cost the work clock what a client spends on them (cost.rs

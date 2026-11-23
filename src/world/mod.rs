@@ -248,8 +248,20 @@ pub(super) fn objects_arg(args: &Args, index: usize) -> Result<LuaTable, Flow> {
 /// client spends reading it (cost.rs IGNORE_LISTED, IGNORE_HOLE), and each entry before one that raises LIST_CAST_FAILED; the
 /// holes are counted, not kept.
 pub(super) fn ignore_list(engine: &Engine, args: &Args, index: usize) -> Result<Vec<InstanceId>, Flow> {
+    Ok(ordered_ignore_list(engine, args, index)?.ids)
+}
+
+/// An ignore list's Instances as [`ignore_list`] reads them, each with its first place among them (the order a client checks
+/// them in: camera.rs parts_obscuring), and how many it holds, repeats counted.
+pub(super) struct IgnoreList {
+    pub ids: Vec<InstanceId>,
+    pub places: Vec<u32>,
+    pub count: usize,
+}
+
+pub(super) fn ordered_ignore_list(engine: &Engine, args: &Args, index: usize) -> Result<IgnoreList, Flow> {
     let table = objects_arg(args, index)?;
-    let (mut ids, mut holes) = (Vec::new(), 0usize);
+    let (mut pairs, mut holes) = (Vec::new(), 0usize);
     for at in 1..=table.raw_len() {
         let item: LuaValue = table.raw_get(at).map_err(Flow::from)?;
         if item.is_nil() {
@@ -257,17 +269,20 @@ pub(super) fn ignore_list(engine: &Engine, args: &Args, index: usize) -> Result<
             continue;
         }
         match super::lua::instance_id(&item) {
-            Some(id) => ids.push(id),
+            Some(id) => pairs.push((id, pairs.len() as u32)),
             None => {
                 query::charge_query(engine, (at - 1) as f64 * crate::cost::LIST_CAST_FAILED);
                 return raise("Unable to cast value to Object");
             }
         }
     }
-    query::charge_query(engine, ids.len() as f64 * crate::cost::IGNORE_LISTED + holes as f64 * crate::cost::IGNORE_HOLE);
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids)
+    let count = pairs.len();
+    query::charge_query(engine, count as f64 * crate::cost::IGNORE_LISTED + holes as f64 * crate::cost::IGNORE_HOLE);
+    // (each instance once, at its first place)
+    pairs.sort_unstable();
+    pairs.dedup_by_key(|(id, _)| *id);
+    let (ids, places) = pairs.into_iter().unzip();
+    Ok(IgnoreList { ids, places, count })
 }
 
 /// The interned name "CFrame" (not one of reflection.rs's pre-interned names).

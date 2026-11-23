@@ -266,17 +266,36 @@ fn number(number: f32) -> Result<LuaMultiValue, Flow> {
     Ok(values([LuaValue::Number(f64::from(number))]))
 }
 
-/// Whether `part` or an ancestor of it is in `ignored` (sorted).
-fn is_ignored(engine: &Engine, ignored: &[InstanceId], part: InstanceId) -> bool {
-    let state = engine.state.borrow();
-    let mut node = Some(part);
-    while let Some(at) = node {
-        if ignored.binary_search(&at).is_ok() {
-            return true;
+/// How a client's check of `part` against GetPartsObscuringTarget's ignore list goes: the first instance of the list, in its
+/// order, that is the part or an ancestor of it (its place and how many steps up it is), and how many ancestors the part has (a
+/// walk that finds nothing goes to the top). Each instance's answer is kept in `known` for the call, so the parts of one folder
+/// walk its ancestors once, however deep it is.
+type Walk = (Option<(u32, u32)>, u32);
+fn ignore_walk(state: &crate::State, ignored: &super::IgnoreList, part: InstanceId, known: &mut FxHashMap<InstanceId, Walk>) -> Walk {
+    // (up to the first instance already answered, or past the top; then down again, each answer from its parent's)
+    let (mut chain, mut current, mut above) = (Vec::new(), Some(part), None);
+    while let Some(node) = current {
+        if let Some(&answer) = known.get(&node) {
+            above = Some(answer);
+            break;
         }
-        node = state.dom.at(at).parent;
+        chain.push(node);
+        current = state.dom.at(node).parent;
     }
-    false
+    for &node in chain.iter().rev() {
+        let (inherited, depth) = match above {
+            Some((first, depth)) => (first.map(|(place, up): (u32, u32)| (place, up + 1)), depth + 1),
+            None => (None, 0),
+        };
+        let own = ignored.ids.binary_search(&node).ok().map(|at| (ignored.places[at], 0));
+        let first = match (own, inherited) {
+            (Some(own), Some(inherited)) => Some(if own.0 < inherited.0 { own } else { inherited }),
+            (own, inherited) => own.or(inherited),
+        };
+        known.insert(node, (first, depth));
+        above = Some((first, depth));
+    }
+    above.unwrap_or((None, 0))
 }
 
 /// GetPartsObscuringTarget: for each cast point in turn (entries that are no Vector3 are skipped), the parts the segment from the
@@ -286,32 +305,40 @@ fn is_ignored(engine: &Engine, ignored: &[InstanceId], part: InstanceId) -> bool
 ///
 /// The parts are the Workspace's every BasePart but Terrain, whatever its Transparency, CanCollide or CanQuery (measured), from
 /// the spatial queries' broadphase (world/broadphase.rs: each segment tests only the parts near it); an ignored instance or
-/// descendant is left out as it is met. What a client spends on it is charged as the work goes (cost.rs OBSCURING_POINT): each
-/// point, its segment as a ray for the parts it crosses (ignored ones too: the broadphase meets them all), and each part
-/// returned.
+/// descendant is left out as it is met. What a client spends on it is charged as a client's work goes (Studio 0.747, cost.rs
+/// OBSCURING_CAST): for each point a client casts from the camera again and again, each cast to the nearest part not ignored and
+/// not listed yet, which it lists and adds to its ignore list, until a cast finds none; each cast checks every part before its
+/// hit against that list (the script's instances, then the parts listed, in order), walking up from the part for each instance
+/// until one is the part or an ancestor of it, each walk before it to the top (cost.rs filter_step for the part's depth,
+/// OBSCURING_STEP times). So a call costs OBSCURING_CALL, each cast OBSCURING_CAST, each part listed OBSCURING_LISTED, each
+/// part a cast checks OBSCURING_CHECKED and each step of those walks, counted here in a pass over each point's parts (a part
+/// at the k-th place among a point's parts is checked by each cast whose hit is at or past it, and by the last); an entry of the
+/// points that is no Vector3 costs OBSCURING_SKIPPED, a point that is not finite OBSCURING_NOT_FINITE.
 fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Args) -> Result<LuaMultiValue, Flow> {
     // (the ignore list, its second argument, is checked first: measured, ("x", "y") raises "Expected table argument, got string";
     // none given "Argument 2 missing or nil", nil "Expected table argument, got nil", an Instance "... got userdata")
-    let ignored = super::ignore_list(engine, args, 2)?;
+    let ignored = super::ordered_ignore_list(engine, args, 2)?;
     let points = super::array_arg(engine, args.get(1), 1)?;
     let origin = frame::translation(&frame::affine_of(engine.state.borrow().dom.raw_get(camera, cframe_name(engine))));
     query::take_in(engine);
     let root = engine.world().workspace;
-    // (the parts listed so far, in order, and every part already decided: listed or ignored)
-    let (mut found, mut decided): (Vec<InstanceId>, FxHashSet<InstanceId>) = (Vec::new(), FxHashSet::default());
+    // (the parts listed so far, in order, each with its place in the list)
+    let (mut found, mut listed): (Vec<InstanceId>, FxHashMap<InstanceId, u32>) = (Vec::new(), FxHashMap::default());
+    // (each instance's check against the script's ignore list, walked once a call: ignore_walk)
+    let mut walks: FxHashMap<InstanceId, Walk> = FxHashMap::default();
     let mut targets = Vec::new();
+    let (mut skipped, mut unfinite) = (0usize, 0usize);
     for index in 1..=points.raw_len() {
         let value: LuaValue = points.raw_get(index)?;
         // (a point that is not finite lists nothing and leaves the other points as they are: measured,
         // tools/parity/probes/query_finite.luau; a camera whose position is not finite, which a client's never is, reaches none)
-        if let Some(point) = vector_arg(&value)
-            && point.is_finite()
-            && origin.is_finite()
-            && (point - origin).length().is_finite()
-        {
-            targets.push(point);
+        match vector_arg(&value) {
+            Some(point) if point.is_finite() && origin.is_finite() && (point - origin).length().is_finite() => targets.push(point),
+            Some(_) => unfinite += 1,
+            None => skipped += 1,
         }
     }
+    let (mut casts, mut checks, mut steps) = (0usize, 0usize, 0.0f64);
     // (a segment lies in the box around the camera and every point, so only the parts whose bounding sphere meets that box can be
     // crossed; each segment takes the parts near it from the broadphase and tests those of them)
     let (low, high) = targets.iter().fold((origin, origin), |(low, high), point| (low.min(*point), high.max(*point)));
@@ -327,22 +354,48 @@ fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Ar
         query::near_segment(engine, origin, direction, 0.0, |parts| {
             hits.extend(parts.iter().filter(|(_, entry)| near(&entry.solid)).filter_map(|(part, entry)| query::ray_solid(&entry.solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, *part))));
         });
-        query::charge_query(engine, crate::cost::OBSCURING_POINT);
-        query::charge_crossed(engine, hits.len(), crate::cost::RAY_CROSSED, 0);
         // (in the Workspace's order, then nearest first: the stable sort keeps that order among equals)
-        {
-            let state = engine.state.borrow();
-            let steps = super::broadphase::sort_by_order(&state.dom, root, &mut hits, |(_, part)| *part);
-            query::charge_order(&state, steps, hits.len());
-        }
+        let state = engine.state.borrow();
+        let order = super::broadphase::sort_by_order(&state.dom, root, &mut hits, |(_, part)| *part);
+        query::charge_order(&state, order, hits.len());
         hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // (the parts this point's casts list: those neither ignored nor listed by an earlier point)
+        let mut fresh = 0usize;
         for &(_, part) in &hits {
-            if decided.insert(part) && (ignored.is_empty() || !is_ignored(engine, &ignored, part)) {
-                found.push(part);
-            }
+            let (first, _) = ignore_walk(&state, &ignored, part, &mut walks);
+            fresh += usize::from(first.is_none() && !listed.contains_key(&part));
+        }
+        casts += fresh + 1;
+        let (count, mut seen) = (ignored.count as f64, 0usize);
+        for &(_, part) in &hits {
+            let (first, ancestors) = walks[&part];
+            // (checked by every cast whose hit is at or past it, and by the last)
+            let times = (fresh - seen + 1) as f64;
+            checks += fresh - seen + 1;
+            let walked = match (first, listed.get(&part)) {
+                (Some((place, up)), _) => f64::from(place) * f64::from(ancestors) + f64::from(up),
+                (None, Some(&place)) => (count + f64::from(place)) * f64::from(ancestors),
+                (None, None) => {
+                    // (its own cast's check and every later one walk the list before it was listed: the script's and the parts
+                    // listed so far)
+                    seen += 1;
+                    let place = found.len() as u32;
+                    listed.insert(part, place);
+                    found.push(part);
+                    (count + f64::from(place)) * f64::from(ancestors)
+                }
+            };
+            steps += times * walked * crate::cost::filter_step(ancestors);
         }
     }
-    query::charge_query(engine, crate::cost::OBSCURING_CALL + found.len() as f64 * crate::cost::OBSCURING_LISTED);
+    let cost = crate::cost::OBSCURING_CALL
+        + casts as f64 * crate::cost::OBSCURING_CAST
+        + found.len() as f64 * crate::cost::OBSCURING_LISTED
+        + checks as f64 * crate::cost::OBSCURING_CHECKED
+        + steps * crate::cost::OBSCURING_STEP
+        + skipped as f64 * crate::cost::OBSCURING_SKIPPED
+        + unfinite as f64 * crate::cost::OBSCURING_NOT_FINITE;
+    query::charge_query(engine, cost);
     let table = lua.create_table()?;
     for part in found {
         table.raw_push(instance_value(lua, engine, part)?)?;

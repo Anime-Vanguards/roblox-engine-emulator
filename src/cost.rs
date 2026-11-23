@@ -1013,14 +1013,26 @@ pub const QUERY_TAKEN_PART: f64 = 1.1e-6;
 /// 35, a Raycast entering those 15 to 26), 20 on average.
 pub const QUERY_ORDER_STEP: f64 = 20e-9;
 pub const QUERY_ORDER_FREE: usize = 2;
-/// Camera:GetPartsObscuringTarget beyond its call (world/camera.rs), in a playing client (Studio 0.748, os.clock, 1 to 1,000 points,
-/// segments crossing 0, 1 or 10 parts, with and without 5,000 other parts in the Workspace, two runs): 0.8 us a point, its segment the
-/// parts it crosses as a ray's ([`RAY_MET`], [`RAY_CROSSED`]: 0.04 us a part measured), 1.1 us a part it returns, and 1.0 us a call,
-/// of which ree's call to the method counts 0.09; the parts off every segment cost nothing (the broadphase). Fitted within x1.13 on
-/// average over the 48 cases.
-pub const OBSCURING_POINT: f64 = 0.8e-6;
-pub const OBSCURING_LISTED: f64 = 1.1e-6;
-pub const OBSCURING_CALL: f64 = 0.9e-6;
+/// Camera:GetPartsObscuringTarget beyond its call (world/camera.rs parts_obscuring), in a playing client (roblox-sim, Studio 0.747, a
+/// headless client; os.clock around calls, 15 samples less an empty loop, two rounds of 90 cases: 0 to 100 walls across a point's
+/// segment, in a folder or at the bottom of chains of 10 to 300 folders, ignore lists of 1 to 1,000 parts elsewhere or of the walls'
+/// folder, 1 to 1,000 points behind the same walls, behind a wall each or behind none). A client casts again for each part it lists,
+/// checking the parts before each hit against its growing ignore list, so a call grows with the cube of the parts a segment crosses
+/// and with their depth: 10 walls 12 us, 20 32 to 34, 50 214 to 392, 100 1.0 to 1.9 ms; 20 walls 300 folders deep 2.0 ms; 10 walls
+/// 100 deep behind an ignore list of 1,000 9.2 to 9.4 ms; a point behind nothing 0.17 us. The prices: [`OBSCURING_CALL`] (0.495 us
+/// with ree's call to the method, 0.1), [`OBSCURING_CAST`] (from the points behind nothing), and [`OBSCURING_LISTED`],
+/// [`OBSCURING_CHECKED`] and [`OBSCURING_STEP`] (times [`filter_step`] for the part's depth) fitted for the least relative error:
+/// within x0.40 to x1.80 of the 180 cases, median 0.93 (the client's two rounds differ by up to 1.9x). The prices before (0.8 us a
+/// point, a ray's for the parts it crossed, 1.1 a part listed), fitted on up to 10 parts in the Workspace, read 0.002 to 5.0 of
+/// these. An entry of the points that is no Vector3 costs [`OBSCURING_SKIPPED`] (a number 14 ns, a string 17, an Instance or a
+/// CFrame 25, a Vector2 36: 1,000 of them beside a point), a point that is not finite [`OBSCURING_NOT_FINITE`] (ten 1.6 us, one 0.7).
+pub const OBSCURING_CALL: f64 = 0.4e-6;
+pub const OBSCURING_CAST: f64 = 0.175e-6;
+pub const OBSCURING_LISTED: f64 = 0.418e-6;
+pub const OBSCURING_CHECKED: f64 = 0.070e-6;
+pub const OBSCURING_STEP: f64 = 2.7;
+pub const OBSCURING_SKIPPED: f64 = 0.02e-6;
+pub const OBSCURING_NOT_FINITE: f64 = 0.1e-6;
 /// An entry of Camera:GetPartsObscuringTarget's or GetLargestCutoffDistance's ignore list read (world/mod.rs ignore_list), in a
 /// playing client (roblox-sim, Studio 0.747, a headless client; os.clock around 10 to 200 calls in pcall, the median of 15 less
 /// a pcall of an empty function, lists of 0 to 10,000 parts, two sessions): an Instance 19 ns on a GetPartsObscuringTarget that
