@@ -18,7 +18,7 @@
 //!   off.
 //! - GetLargestCutoffDistance(ignore): five parallel rays, from Focus and from Focus moved by each near-plane corner's offset,
 //!   to the near plane's centre and corners; against parts that can collide and are at most 0.95 transparent, the ignore
-//!   list and its descendants left out. The largest `length - distance to the first hit`, or 0. A part entering the
+//!   list (nil holes in it skipped) and its descendants left out. The largest `length - distance to the first hit`, or 0. A part entering the
 //!   Workspace is not seen until the spatial index takes it in: at the next physics step or another spatial query
 //!   (Raycast, GetPartBoundsInBox, ...; `Cameras::unindexed`, a set of the waiting parts still in the Workspace), with the
 //!   parts moved in with it; a moved, resized or removed part counts at once.
@@ -209,12 +209,18 @@ fn in_workspace(state: &State, workspace: ClassId, node: InstanceId) -> bool {
     false
 }
 
-/// GetLargestCutoffDistance's ignore list: a table of Instances (its array part), checked as world/mod.rs objects_arg says.
+/// GetLargestCutoffDistance's ignore list: a table of Instances (its array part), checked as world/mod.rs objects_arg says, nil
+/// holes skipped and any other entry that is no Instance "Unable to cast value to Object" (measured: a playing client's call with
+/// holes before, between or after its Instances goes on; tools/parity/probes/ignore_list_holes.luau).
 fn ignore_list(args: &Args) -> Result<Vec<InstanceId>, Flow> {
     let table = super::objects_arg(args, 1)?;
     let mut ids = Vec::new();
     for index in 1..=table.raw_len() {
-        match instance_id(&table.raw_get::<LuaValue>(index)?) {
+        let item: LuaValue = table.raw_get(index)?;
+        if item.is_nil() {
+            continue;
+        }
+        match instance_id(&item) {
             Some(id) => ids.push(id),
             None => return raise("Unable to cast value to Object"),
         }
