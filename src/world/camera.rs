@@ -266,27 +266,6 @@ fn number(number: f32) -> Result<LuaMultiValue, Flow> {
     Ok(values([LuaValue::Number(f64::from(number))]))
 }
 
-/// GetPartsObscuringTarget's ignore list, its second argument, checked before the points: a table whose array part holds instances
-/// (nil holes are skipped), sorted, without repeats. Measured: none given "Argument 2 missing or nil", nil "Expected table argument,
-/// got nil", an Instance "... got userdata" (world/mod.rs objects_arg), a number in it "Unable to cast value to Object".
-fn ignore_list(args: &Args) -> Result<Vec<InstanceId>, Flow> {
-    let table = super::objects_arg(args, 2)?;
-    let mut ids = Vec::new();
-    for index in 1..=table.raw_len() {
-        let item: LuaValue = table.raw_get(index)?;
-        if item.is_nil() {
-            continue;
-        }
-        match instance_id(&item) {
-            Some(id) => ids.push(id),
-            None => return raise("Unable to cast value to Object"),
-        }
-    }
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids)
-}
-
 /// Whether `part` or an ancestor of it is in `ignored` (sorted).
 fn is_ignored(engine: &Engine, ignored: &[InstanceId], part: InstanceId) -> bool {
     let state = engine.state.borrow();
@@ -311,8 +290,9 @@ fn is_ignored(engine: &Engine, ignored: &[InstanceId], part: InstanceId) -> bool
 /// point, its segment as a ray for the parts it crosses (ignored ones too: the broadphase meets them all), and each part
 /// returned.
 fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Args) -> Result<LuaMultiValue, Flow> {
-    // (the ignore list is checked first: measured, ("x", "y") raises "Expected table argument, got string")
-    let ignored = ignore_list(args)?;
+    // (the ignore list, its second argument, is checked first: measured, ("x", "y") raises "Expected table argument, got string";
+    // none given "Argument 2 missing or nil", nil "Expected table argument, got nil", an Instance "... got userdata")
+    let ignored = super::ignore_list(engine, args, 2)?;
     let points = super::array_arg(engine, args.get(1), 1)?;
     let origin = frame::translation(&frame::affine_of(engine.state.borrow().dom.raw_get(camera, cframe_name(engine))));
     query::take_in(engine);

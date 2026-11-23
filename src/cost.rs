@@ -1021,6 +1021,16 @@ pub const QUERY_ORDER_FREE: usize = 2;
 pub const OBSCURING_POINT: f64 = 0.8e-6;
 pub const OBSCURING_LISTED: f64 = 1.1e-6;
 pub const OBSCURING_CALL: f64 = 0.9e-6;
+/// An entry of Camera:GetPartsObscuringTarget's or GetLargestCutoffDistance's ignore list read (world/mod.rs ignore_list), in a
+/// playing client (roblox-sim, Studio 0.747, a headless client; os.clock around 10 to 200 calls in pcall, the median of 15 less
+/// a pcall of an empty function, lists of 0 to 10,000 parts, two sessions): an Instance 19 ns on a GetPartsObscuringTarget that
+/// goes on and 25 on a GetLargestCutoffDistance (10 when the points after the list raise), a nil hole 46 and 48. When an entry
+/// is no Instance the call raises, and each entry before it cost 177 to 221 ns in all three of these lists' calls (BulkMoveTo's
+/// part list 200 in that session, 339 in the next) and the bad entry itself the error's own few microseconds; a client reads
+/// the rest of the list too (40 to 84 ns an entry after a bad first one), which ree does not read and does not charge.
+pub const IGNORE_LISTED: f64 = 0.022e-6;
+pub const IGNORE_HOLE: f64 = 0.047e-6;
+pub const LIST_CAST_FAILED: f64 = 0.19e-6;
 /// Camera:GetLargestCutoffDistance beyond its call (world/camera_moves.rs), in a playing client (roblox-sim, Studio 0.747, a headless
 /// client; os.clock around 200 calls on a new camera, the median of 21 samples less an empty loop, two passes of each scene): its
 /// five rays missing 1.12 us whether the Workspace holds 0, 1,000, 5,000 or 20,000 parts off them (in models or not: the
@@ -1225,6 +1235,11 @@ pub const DELAYED: f64 = 0.14e-6;
 /// share kept as the playtest measured it)
 pub const BULK_MOVED: f64 = 1.05e-6;
 pub const BULK_MOVED_ALL_EVENTS: f64 = 2.58e-6;
+/// BulkMoveTo's part list read (world/mod.rs bulk_moves; the sessions of [`IGNORE_LISTED`]): each entry 43 ns on a call that then
+/// raises because the lists' lengths differ and 66 ns on one that raises at a part that is no BasePart (each entry of the
+/// list, wherever the bad part stands), and a nil hole 81 ns on a call that moves (its parts pay [`BULK_MOVED`])
+pub const BULK_LISTED: f64 = 0.055e-6;
+pub const BULK_HOLE: f64 = 0.081e-6;
 /// Model:PivotTo, a part it moves (client: 0.48 us in the workspace; 0.15 a call), a Part:PivotTo 1.14 us
 /// (the parity bench, a rendered client of a game's match place: Model:PivotTo of 10 parts 10.65 us, Part:PivotTo 1.44)
 pub const PIVOT_PART: f64 = 1.05e-6;

@@ -141,13 +141,16 @@ pub fn cframe_of(value: &Value) -> Option<Affine3A> {
 ///   "Unable to cast KeyCode to BulkMoveMode".
 /// - The frame list, an Array: "Argument 2 missing or nil", "Unable to cast CoordinateFrame to Array".
 /// - The part list, a list of Instances (objects_arg: "Expected table argument, got userdata" for an Instance; a dictionary is an
-///   empty list), each entry cast before the lengths are compared: "Unable to cast value to Object".
+///   empty list), each entry cast before the lengths are compared: "Unable to cast value to Object" (each entry before it costs
+///   cost.rs LIST_CAST_FAILED).
 /// - The lengths: "Length of part list (2) and length of CFrame list (1) do not match."
 /// - Each part: "Can only call BulkMoveTo on BaseParts, partList[1] is a Folder."
 /// - Each frame: "CFrame list must only contain CFrames, cframeList[1] is a Vector3." (a number "double", as casts name it).
 ///
 /// A nil in the part list leaves its frame unused, and the lists still pair by index. Destroyed parts, parts with no parent
-/// and parts outside the Workspace move.
+/// and parts outside the Workspace move. The list is read once, its Instances kept with their places and its holes counted, not
+/// kept; a call that raises past the casts costs each entry's read (cost.rs BULK_LISTED), and one that moves its holes'
+/// (BULK_HOLE), as a client spends them.
 fn bulk_moves(lua: &Lua, engine: &Engine, args: &Args, base_part: Option<crate::ClassId>) -> Result<BulkMoves, Flow> {
     let mode = match args.get(3) {
         LuaValue::Nil => None,
@@ -158,37 +161,44 @@ fn bulk_moves(lua: &Lua, engine: &Engine, args: &Args, base_part: Option<crate::
     };
     let cframes = array_arg(engine, args.get(2), 2)?;
     let parts = objects_arg(args, 1)?;
-    for index in 1..=parts.raw_len() {
-        let part: LuaValue = parts.raw_get(index).map_err(Flow::from)?;
-        if !part.is_nil() && super::lua::instance_id(&part).is_none() {
-            return raise("Unable to cast value to Object");
-        }
-    }
-    let (count, frames) = (parts.raw_len(), cframes.raw_len());
-    if count != frames {
-        return raise(format!("Length of part list ({count}) and length of CFrame list ({frames}) do not match."));
-    }
-    let mut moves = Vec::with_capacity(count);
+    let count = parts.raw_len();
+    let mut listed: Vec<(usize, InstanceId)> = Vec::new();
     for index in 1..=count {
         let part: LuaValue = parts.raw_get(index).map_err(Flow::from)?;
         if part.is_nil() {
             continue;
         }
-        let Some(id) = super::lua::instance_id(&part) else {
-            return raise("Unable to cast value to Object");
-        };
+        match super::lua::instance_id(&part) {
+            Some(id) => listed.push((index, id)),
+            None => {
+                query::charge_query(engine, (index - 1) as f64 * crate::cost::LIST_CAST_FAILED);
+                return raise("Unable to cast value to Object");
+            }
+        }
+    }
+    let (read, holes) = (count as f64 * crate::cost::BULK_LISTED, count - listed.len());
+    let frames = cframes.raw_len();
+    if count != frames {
+        query::charge_query(engine, read);
+        return raise(format!("Length of part list ({count}) and length of CFrame list ({frames}) do not match."));
+    }
+    let mut moves = Vec::with_capacity(listed.len());
+    for (index, id) in listed {
         // (an instance the engine has already freed has nothing to move)
         let Some(class) = engine.state.borrow().dom.get(id).map(|instance| instance.class) else { continue };
         let info = engine.reflection.class(class);
         if !base_part.is_some_and(|base| info.is_a(base)) {
+            query::charge_query(engine, read);
             return raise(format!("Can only call BulkMoveTo on BaseParts, partList[{index}] is a {}.", info.name));
         }
         let frame: LuaValue = cframes.raw_get(index).map_err(Flow::from)?;
         let Some(target) = cframe_arg(&frame) else {
+            query::charge_query(engine, read);
             return raise(format!("CFrame list must only contain CFrames, cframeList[{index}] is a {}.", camera::cast_name(engine, &frame)));
         };
         moves.push((id, target));
     }
+    query::charge_query(engine, holes as f64 * crate::cost::BULK_HOLE);
     Ok(BulkMoves { moves, mode })
 }
 
@@ -230,6 +240,34 @@ pub(super) fn objects_arg(args: &Args, index: usize) -> Result<LuaTable, Flow> {
             raise(format!("Expected table argument, got {kind}"))
         }
     }
+}
+
+/// An ignore list (GetPartsObscuringTarget's, GetLargestCutoffDistance's): the table [`objects_arg`] takes, its Instances sorted
+/// without repeats, nil holes skipped and any other entry that is no Instance "Unable to cast value to Object" (measured, Studio
+/// 0.748 and 0.747, tools/parity/probes/camera_cutoff.luau and ignore_list_holes.luau). Each entry read costs what a playing
+/// client spends reading it (cost.rs IGNORE_LISTED, IGNORE_HOLE), and each entry before one that raises LIST_CAST_FAILED; the
+/// holes are counted, not kept.
+pub(super) fn ignore_list(engine: &Engine, args: &Args, index: usize) -> Result<Vec<InstanceId>, Flow> {
+    let table = objects_arg(args, index)?;
+    let (mut ids, mut holes) = (Vec::new(), 0usize);
+    for at in 1..=table.raw_len() {
+        let item: LuaValue = table.raw_get(at).map_err(Flow::from)?;
+        if item.is_nil() {
+            holes += 1;
+            continue;
+        }
+        match super::lua::instance_id(&item) {
+            Some(id) => ids.push(id),
+            None => {
+                query::charge_query(engine, (at - 1) as f64 * crate::cost::LIST_CAST_FAILED);
+                return raise("Unable to cast value to Object");
+            }
+        }
+    }
+    query::charge_query(engine, ids.len() as f64 * crate::cost::IGNORE_LISTED + holes as f64 * crate::cost::IGNORE_HOLE);
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
 }
 
 /// The interned name "CFrame" (not one of reflection.rs's pre-interned names).

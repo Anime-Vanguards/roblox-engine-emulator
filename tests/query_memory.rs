@@ -1,6 +1,7 @@
-//! What the spatial queries hold while they work (src/world/broadphase.rs sort_by_order): the walks that put what a query keeps
-//! in the Workspace's order hold memory for the parts and the instances up to where their paths meet, not for how deep the
-//! parts are. This binary counts its own thread's heap, and its peak, with a global allocator of its own.
+//! What the world's calls hold while they work: the walks that put what a spatial query keeps in the Workspace's order hold
+//! memory for the parts and the instances up to where their paths meet, not for how deep the parts are (src/world/broadphase.rs
+//! sort_by_order), and BulkMoveTo keeps room for the parts its list holds, not for its holes (src/world/mod.rs bulk_moves). This
+//! binary counts its own thread's heap, and its peak, with a global allocator of its own.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -118,4 +119,28 @@ fn a_query_holds_memory_for_its_parts_not_for_how_deep_they_are() {
     eprintln!("peak heap over the queries: {flat} B in a folder of the Workspace, {deep} B 10,000 folders deep");
     assert!(flat < 4_000_000, "the queries in the Workspace rose {flat} B");
     assert!(deep < flat + 1_000_000, "the queries 10,000 folders deep rose {deep} B, {flat} B in the Workspace");
+}
+
+/// BulkMoveTo keeps room for the parts its list holds, not for its holes: a list of 1,000,000 holes and one part (and 1,000,001
+/// frames) moves that part with the heap a few hundred bytes higher, where room for a move for every entry took 80 MB.
+#[test]
+fn bulk_move_to_keeps_no_room_for_the_holes_in_its_list() {
+    let emulator = Emulator::start(Engine::new(Options { mode: "play".into(), ..Options::default() }).unwrap(), &ProjectSpec::default()).unwrap();
+    run(
+        &emulator,
+        "Lists",
+        r#"
+        local Part = Instance.new("Part")
+        Part.Anchored = true
+        local List = table.create(1000001)
+        List[1000001] = Part
+        shared.Part, shared.List, shared.Frames = Part, List, table.create(1000001, CFrame.new(0, 10, 0))
+        workspace:BulkMoveTo(shared.List, shared.Frames)
+        "#,
+    );
+    let peak = peak_during(|| {
+        run(&emulator, "Move", "workspace:BulkMoveTo(shared.List, shared.Frames) assert(shared.Part.Position.Y == 10, 'the part moved')");
+    });
+    eprintln!("peak heap over a BulkMoveTo of 1,000,000 holes and a part: {peak} B");
+    assert!(peak < 100_000, "the move rose the heap {peak} B");
 }

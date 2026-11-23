@@ -1873,6 +1873,86 @@ fn bulk_move_to_checks_its_lists_as_a_playing_client_does() {
     );
 }
 
+/// A list of Instances costs the work clock what a playing client spends reading it, also when the call then raises (world/mod.rs
+/// ignore_list and bulk_moves; cost.rs LIST_CAST_FAILED, BULK_LISTED, BULK_HOLE, IGNORE_LISTED and IGNORE_HOLE, Studio 0.747): a
+/// BulkMoveTo whose lists' lengths differ pays for each of its entries, one whose last entry is a number for each entry
+/// before it, and so do GetPartsObscuringTarget and GetLargestCutoffDistance before a number; their lists cost each entry and
+/// each hole when the call goes on, and a BulkMoveTo that moves each of its holes. Each of these read its whole list for nothing.
+#[test]
+fn list_reads_cost_what_a_client_spends_reading_them() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Pool = {}
+        for I = 1, 10000 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Pool[I] = Part
+        end
+        local function Copy(Count, Tail)
+            local List = table.move(Pool, 1, Count, 1, table.create(Count + 1))
+            if Tail ~= nil then
+                table.insert(List, Tail)
+            end
+            return List
+        end
+        local function Holes(Count, Last)
+            local List = table.create(Count + 1)
+            List[Count + 1] = Last
+            return List
+        end
+        local Part = Pool[1]
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.new(0, 5000, 0)
+        Cam.Focus = CFrame.new(0, 5000, -10)
+        local Many, ManyBad, ManyHoles, Lots = Copy(10000), Copy(10000, 5), Holes(10000, Part), Holes(100000, Part)
+        local Frames, LotsFrames, One = table.create(10001, CFrame.new()), table.create(100001, CFrame.new()), { CFrame.new() }
+        -- (lengths of as many digits, so that both errors are as long)
+        local Nine, NineFrames, Thousand, ThousandFrames = Copy(9000), table.create(9001, CFrame.new()), Copy(1000), table.create(1001, CFrame.new())
+        local Fast = Enum.BulkMoveMode.FireCFrameChanged
+        -- (every list made here: a list made in the timed call costs its instructions)
+        local None, Bad, Single, NoPoints = {}, { 5 }, { Part }, {}
+        -- (each call once before it is timed: a frame's first call of an engine function is priced cold)
+        local function Cost(Call)
+            pcall(Call)
+            local Start = os.clock()
+            pcall(Call)
+            return os.clock() - Start
+        end
+        local function Extra(Big, Small)
+            return Cost(Big) - Cost(Small)
+        end
+        shared.Extra = {
+            BulkLengths = Extra(function() workspace:BulkMoveTo(Nine, NineFrames, Fast) end, function() workspace:BulkMoveTo(Thousand, ThousandFrames, Fast) end),
+            BulkCast = Extra(function() workspace:BulkMoveTo(ManyBad, Frames, Fast) end, function() workspace:BulkMoveTo(Bad, One, Fast) end),
+            BulkHoles = Extra(function() workspace:BulkMoveTo(Lots, LotsFrames, Fast) end, function() workspace:BulkMoveTo(Single, One, Fast) end),
+            ObscuringCast = Extra(function() Cam:GetPartsObscuringTarget(NoPoints, ManyBad) end, function() Cam:GetPartsObscuringTarget(NoPoints, Bad) end),
+            ObscuringListed = Extra(function() Cam:GetPartsObscuringTarget(NoPoints, Many) end, function() Cam:GetPartsObscuringTarget(NoPoints, None) end),
+            ObscuringHoles = Extra(function() Cam:GetPartsObscuringTarget(NoPoints, ManyHoles) end, function() Cam:GetPartsObscuringTarget(NoPoints, Single) end),
+            CutoffCast = Extra(function() Cam:GetLargestCutoffDistance(ManyBad) end, function() Cam:GetLargestCutoffDistance(Bad) end),
+            CutoffListed = Extra(function() Cam:GetLargestCutoffDistance(Many) end, function() Cam:GetLargestCutoffDistance(None) end),
+            CutoffHoles = Extra(function() Cam:GetLargestCutoffDistance(ManyHoles) end, function() Cam:GetLargestCutoffDistance(Single) end),
+        }
+        "##,
+    );
+    let cost = |name: &str, seconds: f64| format!("assert(math.abs(shared.Extra.{name} - {seconds:e}) < 1e-9, `{name}: {{shared.Extra.{name}}} s more work, not {seconds:e}`)\n");
+    let mut checks = String::new();
+    checks += &cost("BulkLengths", 8_000.0 * crate::cost::BULK_LISTED);
+    checks += &cost("BulkCast", 10_000.0 * crate::cost::LIST_CAST_FAILED);
+    checks += &cost("BulkHoles", 100_000.0 * crate::cost::BULK_HOLE);
+    checks += &cost("ObscuringCast", 10_000.0 * crate::cost::LIST_CAST_FAILED);
+    checks += &cost("ObscuringListed", 10_000.0 * crate::cost::IGNORE_LISTED);
+    checks += &cost("ObscuringHoles", 10_000.0 * crate::cost::IGNORE_HOLE);
+    checks += &cost("CutoffCast", 10_000.0 * crate::cost::LIST_CAST_FAILED);
+    checks += &cost("CutoffListed", 10_000.0 * crate::cost::IGNORE_LISTED);
+    checks += &cost("CutoffHoles", 10_000.0 * crate::cost::IGNORE_HOLE);
+    run(&lua, &engine, &checks);
+}
+
 #[test]
 fn an_anchored_root_stays_when_a_pose_lands_while_it_moves() {
     check_running(

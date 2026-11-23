@@ -44,7 +44,7 @@ use super::{camera, camera_fov, cframe_arg, cframe_name, frame, query, vector_ar
 use crate::{
     ClassId, Engine, InstanceId, K, NameId, State,
     instance as core,
-    lua::{Args, Flow, instance_id, raise, values},
+    lua::{Args, Flow, raise, values},
     services::Behaviors,
     value::Value,
 };
@@ -207,27 +207,6 @@ fn in_workspace(state: &State, workspace: ClassId, node: InstanceId) -> bool {
         current = state.dom.home_step(id);
     }
     false
-}
-
-/// GetLargestCutoffDistance's ignore list: a table of Instances (its array part), checked as world/mod.rs objects_arg says, nil
-/// holes skipped and any other entry that is no Instance "Unable to cast value to Object" (measured: a playing client's call with
-/// holes before, between or after its Instances goes on; tools/parity/probes/ignore_list_holes.luau).
-fn ignore_list(args: &Args) -> Result<Vec<InstanceId>, Flow> {
-    let table = super::objects_arg(args, 1)?;
-    let mut ids = Vec::new();
-    for index in 1..=table.raw_len() {
-        let item: LuaValue = table.raw_get(index)?;
-        if item.is_nil() {
-            continue;
-        }
-        match instance_id(&item) {
-            Some(id) => ids.push(id),
-            None => return raise("Unable to cast value to Object"),
-        }
-    }
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids)
 }
 
 /// Whether a part GetLargestCutoffDistance's ray meets stops it: in the spatial index, CanCollide on (CanQuery does not matter:
@@ -453,7 +432,7 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
         Ok(LuaMultiValue::new())
     }));
     add_method("GetLargestCutoffDistance", Rc::new(|_, engine, id, args| {
-        let ignore = ignore_list(args)?;
+        let ignore = super::ignore_list(engine, args, 1)?;
         Ok(values([LuaValue::Number(f64::from(largest_cutoff(engine, &names(engine), id, ignore)))]))
     }));
     add_method("Interpolate", Rc::new(|lua, engine, id, args| {
