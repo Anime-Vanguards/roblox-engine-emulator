@@ -155,7 +155,8 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
         let state = engine.state.borrow();
         for (part, entry) in parts {
             let Some((t, local)) = query::ray_solid(&entry.solid, origin, reach, 0.0) else { continue };
-            // (looked up only for the parts the ray meets, in a set emptied at every physics step)
+            // (looked up only for the parts the ray meets, in a set emptied at every physics step; a waiting part comes here only
+            // with every part, from a ray that is not finite: the broadphase keeps the others out of its tree)
             if state.cameras.unindexed.contains(part) {
                 continue;
             }

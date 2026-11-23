@@ -194,6 +194,7 @@ fn zoom_to_extents(engine: &Engine, names: &Names, camera: InstanceId, center: &
 /// GetLargestCutoffDistance).
 pub fn index_parts(state: &mut State) {
     state.cameras.unindexed.clear();
+    state.cameras.taken_in += 1;
 }
 
 /// Whether `node` is the Workspace or in it: a look at `node` and the homes above it (dom.rs Dom::home_step), however deep it is.
@@ -288,6 +289,8 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
                     continue;
                 }
                 let Some((t, _)) = query::ray_solid(&entry.solid, origin, direction, 0.0) else { continue };
+                // (a waiting part comes here only with every part, from a ray that is not finite: the broadphase keeps the
+                // others out of its tree)
                 if state.cameras.unindexed.contains(part) {
                     continue;
                 }

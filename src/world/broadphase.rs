@@ -18,6 +18,12 @@
 //! those of a test of every part in that order. A part whose bounds are not finite (a NaN or infinite position or size) is
 //! taken by every query, and a query whose own geometry is not finite takes every part.
 //!
+//! A part that waits for the spatial index (camera.rs `Cameras::unindexed`: it entered the Workspace since a query or the
+//! physics step last took parts in) is kept out of the tree, and so out of what the PlayerMouse's ray and
+//! GetLargestCutoffDistance, which take nothing in and do not see it, are handed; it goes in when the index takes parts in
+//! (`Cameras::taken_in` moved on), which every other query does first. A query whose geometry is not finite still takes
+//! every part, waiting ones too.
+//!
 //! The tree is Box2D's dynamic AABB tree (surface-area insertion, rotations that keep it balanced), with leaves bounded
 //! exactly (a moved part is put in again), and every walk of it iterative over a stack of its own.
 
@@ -31,6 +37,8 @@ use crate::{
 };
 
 const NONE: u32 = u32::MAX;
+/// An entry's leaf while its part waits for the spatial index ([`Index::waiting`])
+const WAITS: u32 = u32::MAX - 1;
 
 /// A part in the index: its solid and what the queries' filters read of it, as the dom last held them
 #[derive(Clone, Copy, Debug)]
@@ -40,7 +48,8 @@ pub struct Entry {
     pub can_query: bool,
     /// CanCollide is not false
     pub can_collide: bool,
-    /// Its leaf, or NONE: its bounds are not finite, and it is among the parts every query takes
+    /// Its leaf; NONE: its bounds are not finite, and it is among the parts every query takes; WAITS: its part waits for the
+    /// spatial index, and it is in neither
     leaf: u32,
 }
 
@@ -340,6 +349,12 @@ pub struct Index {
     by_slot: Vec<u32>,
     /// The entries whose bounds are not finite
     loose: Vec<u32>,
+    /// The entries whose parts wait for the spatial index (camera.rs `Cameras::unindexed`), in no tree or list a query near
+    /// something reads, until it takes parts in
+    waiting: FxHashSet<u32>,
+    /// How many times the spatial index had taken parts in (camera.rs `Cameras::taken_in`) when the waiting entries were last
+    /// placed
+    taken_in: u64,
     tree: Tree,
     stack: Vec<u32>,
     seen: FxHashSet<InstanceId>,
@@ -387,6 +402,7 @@ impl Index {
             self.rebuild(state, engine, names, workspace);
             return;
         }
+        self.take_waiting(state);
         let watch = state.dom.watch.as_mut().expect("watched");
         if watch.moved.is_empty() && watch.written.is_empty() {
             crate::profiler::caches::hit(crate::profiler::caches::Cache::Queries);
@@ -463,6 +479,8 @@ impl Index {
         self.free_entries.clear();
         self.by_slot.clear();
         self.loose.clear();
+        self.waiting.clear();
+        self.taken_in = state.cameras.taken_in;
         self.tree.clear();
         self.walk.clear();
         self.walk.extend(state.dom.at(workspace).children.iter().rev());
@@ -480,6 +498,23 @@ impl Index {
         state.dom.watch = Some(Watch::new(workspace, self.limit()));
     }
 
+    /// The waiting entries placed by their bounds, once the spatial index has taken parts in since they were put (their parts no
+    /// longer wait: a part that came back in since is in the log, and waits again when it is read)
+    fn take_waiting(&mut self, state: &State) {
+        if self.taken_in == state.cameras.taken_in {
+            return;
+        }
+        self.taken_in = state.cameras.taken_in;
+        let mut waiting = std::mem::take(&mut self.waiting);
+        for &entry in &waiting {
+            self.entries[entry as usize].leaf = NONE;
+            let bounds = bounds(&self.entries[entry as usize].solid);
+            self.place(entry, bounds, false);
+        }
+        waiting.clear();
+        self.waiting = waiting;
+    }
+
     fn entry_of(&self, id: InstanceId) -> Option<u32> {
         let entry = self.by_slot.get(id.index as usize).copied().filter(|&e| e != 0)? - 1;
         (self.parts[entry as usize] == id).then_some(entry)
@@ -491,6 +526,7 @@ impl Index {
         let not_false = |name: Option<NameId>| name.and_then(|n| state.dom.boolean(part, n)) != Some(false);
         let (can_query, can_collide) = (not_false(names.can_query), not_false(names.can_collide));
         let bounds = bounds(&solid);
+        let waits = !state.cameras.unindexed.is_empty() && state.cameras.unindexed.contains(&part);
         let slot = part.index as usize;
         if self.by_slot.len() <= slot {
             self.by_slot.resize(slot + 1, 0);
@@ -498,10 +534,14 @@ impl Index {
         let entry = match self.entry_of(part) {
             Some(entry) => {
                 let old = self.entries[entry as usize];
-                let same = old.leaf != NONE && bounds.is_some_and(|(lo, hi)| {
-                    let node = self.tree.node(old.leaf);
-                    node.lo == lo && node.hi == hi
-                });
+                let same = if waits {
+                    old.leaf == WAITS
+                } else {
+                    old.leaf != NONE && old.leaf != WAITS && bounds.is_some_and(|(lo, hi)| {
+                        let node = self.tree.node(old.leaf);
+                        node.lo == lo && node.hi == hi
+                    })
+                };
                 if !same {
                     self.unplace(entry);
                 }
@@ -535,16 +575,28 @@ impl Index {
                 entry
             }
         };
+        self.place(entry, bounds, waits);
+    }
+
+    /// Puts `entry` (in none of them) in the tree by `bounds`, in the loose list without, or among the waiting entries.
+    fn place(&mut self, entry: u32, bounds: Option<(Vec3, Vec3)>, waits: bool) {
+        if waits {
+            self.entries[entry as usize].leaf = WAITS;
+            self.waiting.insert(entry);
+            return;
+        }
         match bounds {
             Some((lo, hi)) => self.entries[entry as usize].leaf = self.tree.insert(entry, lo, hi),
             None => self.loose.push(entry),
         }
     }
 
-    /// Takes `entry` out of the tree or the loose list.
+    /// Takes `entry` out of the tree, the loose list or the waiting entries.
     fn unplace(&mut self, entry: u32) {
         let leaf = self.entries[entry as usize].leaf;
-        if leaf != NONE {
+        if leaf == WAITS {
+            self.waiting.remove(&entry);
+        } else if leaf != NONE {
             self.tree.remove(leaf);
         } else if let Some(at) = self.loose.iter().position(|&e| e == entry) {
             self.loose.swap_remove(at);
@@ -584,7 +636,8 @@ impl Index {
     }
 
     /// The parts whose bounds may meet the segment from `origin` along `direction` with a sphere of radius `grow` swept along
-    /// it (every part when the segment is not finite), into `out`, in no particular order.
+    /// it, but those that wait for the spatial index (every part when the segment is not finite), into `out`, in no particular
+    /// order.
     pub fn near_segment(&mut self, origin: Vec3, direction: Vec3, grow: f32, out: &mut Vec<(InstanceId, Entry)>) {
         let end = origin + direction;
         let finite = origin.is_finite() && direction.is_finite() && end.is_finite() && grow.is_finite();
@@ -598,8 +651,8 @@ impl Index {
         taken(out.len() - before);
     }
 
-    /// The parts whose bounds may meet the box `center` +- `extent` (every part when there is none or it is not finite), into
-    /// `out`, in no particular order.
+    /// The parts whose bounds may meet the box `center` +- `extent`, but those that wait for the spatial index (every part when
+    /// there is none or it is not finite), into `out`, in no particular order.
     pub fn near_box(&mut self, center: Vec3, extent: Option<Vec3>, out: &mut Vec<(InstanceId, Entry)>) {
         let Some(extent) = extent.map(Vec3::abs) else { return self.all_parts(out) };
         let finite = center.is_finite() && extent.is_finite() && (center + extent).is_finite() && (center - extent).is_finite();

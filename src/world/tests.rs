@@ -4354,6 +4354,69 @@ fn a_query_pays_for_the_parts_it_takes_into_the_spatial_index() {
     assert_eq!(engine.state.borrow().cameras.unindexed.len(), 0, "the physics step took them in: no query pays for them");
 }
 
+/// Parts that entered the Workspace and wait for the spatial index (camera.rs Cameras::unindexed) stay out of the broadphase's tree
+/// until a query or the physics step takes them in, so the PlayerMouse's ray and GetLargestCutoffDistance, which do not see them,
+/// are not handed them: with 10,000 waiting parts across the mouse's ray and 10,000 across the cutoff's rays, 2,000 reads of each
+/// take from the index what they take beside none, cost about its host work and the same work clock, as a playing client's reads
+/// cost the same beside 0 or 10,000 waiting parts (Studio 0.747: Target 0.44 us, GetLargestCutoffDistance 1.26 us). Each read
+/// used to test and skip every one of them (2,000 reads took 120 million parts from the index). A Raycast then takes them in, and
+/// both see them.
+#[test]
+fn parts_waiting_for_the_spatial_index_are_not_handed_to_the_mouse_or_the_cutoff() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Mouse = game:GetService("Players").LocalPlayer:GetMouse()
+        local Ray = Mouse.UnitRay
+        local O = Vector3.new(0, 300, 0)
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.lookAt(O + Vector3.new(0, 5, 30), O + Vector3.new(0, 5, 0))
+        Cam.Focus = CFrame.new(O + Vector3.new(0, 5, 0))
+        local OnRay = CFrame.lookAt(Ray.Origin + Ray.Direction * 50, Ray.Origin + Ray.Direction * 51)
+        local OnCut = CFrame.new(O + Vector3.new(0, 5, 12))
+        function shared.Add(Count)
+            for I = 1, Count do
+                for _, Where in { OnRay, OnCut } do
+                    local Part = Instance.new("Part")
+                    Part.Anchored, Part.Size, Part.CFrame = true, Vector3.new(4, 4, 1), Where * CFrame.new(0, 0, -I * 0.001)
+                    Part.Parent = workspace
+                end
+            end
+        end
+        shared.Work = {}
+        function shared.Reads(Count, Seen, Label)
+            local Start = os.clock()
+            for _ = 1, Count do
+                assert((Mouse.Target ~= nil) == Seen, "the mouse's target")
+                assert((Cam:GetLargestCutoffDistance({}) > 0) == Seen, "the cutoff")
+            end
+            shared.Work[Label] = os.clock() - Start
+        end
+        shared.Reads(10, false, "Warm")
+        "##,
+    );
+    let taken = || super::broadphase::TAKEN.with(|taken| taken.get());
+    let reads = |label: &str| {
+        let (before, start) = (taken(), std::time::Instant::now());
+        run(&lua, &engine, &format!("shared.Reads(2000, false, \"{label}\")"));
+        (taken() - before, start.elapsed().as_secs_f64())
+    };
+    let (alone, alone_host) = reads("Alone");
+    run(&lua, &engine, "shared.Add(10000)");
+    assert_eq!(engine.state.borrow().cameras.unindexed.len(), 20_000, "every new part waits");
+    let (waiting, waiting_host) = reads("Waiting");
+    assert_eq!(waiting, alone, "the reads took {waiting} parts from the index beside the waiting parts, {alone} beside none");
+    run(&lua, &engine, "assert(math.abs(shared.Work.Waiting - shared.Work.Alone) < 1e-9, `the reads cost {shared.Work.Waiting} s of work beside the waiting parts, {shared.Work.Alone} s beside none`)");
+    assert!(waiting_host < 0.25, "2,000 reads beside 20,000 waiting parts took {waiting_host:.3} s of host time, {alone_host:.3} s beside none");
+    run(&lua, &engine, "workspace:Raycast(Vector3.new(0, 5000, 0), Vector3.new(0, 1, 0))");
+    assert!(engine.state.borrow().cameras.unindexed.is_empty(), "the Raycast took them in");
+    run(&lua, &engine, "shared.Reads(10, true, \"Seen\")");
+}
+
 /// The broadphase follows the dom without walking the Workspace: a part moved, resized and turned off (CanQuery), one moved out and
 /// back, a model moved in whole, a part destroyed and collected, an instance given a part's class where it stands (a bundle's root
 /// revealed: dom.rs set_class) are each seen by the next query; more changes before a query than the log keeps (dom.rs

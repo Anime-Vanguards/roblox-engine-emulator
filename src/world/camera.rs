@@ -63,6 +63,9 @@ pub struct Cameras {
     /// mouse.rs). A set, each part once however often it came back in, and a part that leaves drops out, so it holds at
     /// most the Workspace's parts and a ray's lookup costs the same whatever it holds
     pub(super) unindexed: FxHashSet<InstanceId>,
+    /// How many times the spatial index has taken parts in ([`super::camera_moves::index_parts`]): the broadphase keeps the
+    /// waiting parts out of its tree until this moves on (world/broadphase.rs)
+    pub(super) taken_in: u64,
 }
 
 struct View {
