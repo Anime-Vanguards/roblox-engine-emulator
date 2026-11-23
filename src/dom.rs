@@ -651,6 +651,12 @@ pub struct Dom {
     home_classes: Vec<bool>,
     /// A stack reused to walk a subtree whose home changed
     home_walk: Vec<InstanceId>,
+    /// The instances of the classes [`Dom::log_homes`] names (by id; empty while none is) whose home changed since
+    /// [`Dom::take_home_log`] last took them, logged by whatever changed it (world/joints.rs: which rigid joints are in a world),
+    /// and whether more changed than the log keeps (twice the slots and 4,096 more), which it then stops logging
+    home_logged: Vec<bool>,
+    home_log: Vec<InstanceId>,
+    home_log_full: bool,
 }
 
 /// What changed under `root` (the Workspace) since the spatial index last took the log (world/broadphase.rs): the instances
@@ -877,6 +883,39 @@ impl Dom {
         if self.is_home(parent) { Some(parent) } else { self.home(parent) }
     }
 
+    /// Logs each instance of a class `logged` marks (by class id) whose home changes from now on, whatever changes it
+    /// ([`Dom::take_home_log`]).
+    pub fn log_homes(&mut self, logged: Vec<bool>) {
+        self.home_logged = logged;
+    }
+
+    /// The logged instances whose home changed since the last take, in the order they changed ([`Dom::log_homes`]): one can be
+    /// there more than once, or freed since. None when more changed than the log keeps: then any of them may have.
+    pub fn take_home_log(&mut self) -> Option<Vec<InstanceId>> {
+        if std::mem::take(&mut self.home_log_full) {
+            return None;
+        }
+        Some(std::mem::take(&mut self.home_log))
+    }
+
+    /// Gives the live instance `id` the home `home`, logged when it is another and its class is ([`Dom::log_homes`]).
+    #[inline]
+    fn put_home(&mut self, id: InstanceId, home: Option<InstanceId>) {
+        let slot = id.index as usize;
+        if self.homes[slot] == home {
+            return;
+        }
+        self.homes[slot] = home;
+        if self.home_logged.get(self.at(id).class as usize).copied().unwrap_or(false) && !self.home_log_full {
+            if self.home_log.len() < 2 * self.slots.len() + 4096 {
+                self.home_log.push(id);
+            } else {
+                self.home_log_full = true;
+                self.home_log = Vec::new();
+            }
+        }
+    }
+
     /// `child`'s home now that its parent changed: when it is another than it was, `child` and the descendants that take theirs
     /// from it get the new one (a walk of the subtree down to the homes in it). A subtree moved within its world walks nothing.
     fn rehome(&mut self, child: InstanceId) {
@@ -884,11 +923,10 @@ impl Dom {
             return;
         }
         let home = self.at(child).parent.and_then(|parent| self.home_below(parent));
-        let slot = child.index as usize;
-        if self.homes[slot] == home {
+        if self.homes[child.index as usize] == home {
             return;
         }
-        self.homes[slot] = home;
+        self.put_home(child, home);
         if !self.is_home(child) {
             self.spread_home(child, home);
         }
@@ -900,7 +938,7 @@ impl Dom {
         walk.clear();
         walk.extend_from_slice(&self.at(id).children);
         while let Some(node) = walk.pop() {
-            self.homes[node.index as usize] = home;
+            self.put_home(node, home);
             if !self.is_home(node) {
                 walk.extend_from_slice(&self.at(node).children);
             }
@@ -1214,7 +1252,7 @@ impl Dom {
         // their homes are worked out again, whatever the new child's own was)
         if !self.home_classes.is_empty() {
             let home = self.home_below(parent);
-            self.homes[new.index as usize] = home;
+            self.put_home(new, home);
             let below = if self.is_home(new) { Some(new) } else { home };
             self.spread_home(new, below);
         }
@@ -1533,7 +1571,7 @@ mod tests {
     /// another's place (`replace_child` after the children were handed over, as a project mount does), freed and made again in
     /// the same slot, and given a WorldRoot's class or a Folder's where they stand (`set_class`, a placeholder revealed); homes
     /// kept from a tree that already existed too. Whether an instance is below one of them, read from the homes, is what the walk
-    /// says too.
+    /// says too, and each change of a weld's home is in the log of the classes logged ([`Dom::log_homes`]).
     #[test]
     fn homes_are_what_a_walk_up_the_tree_finds() {
         let reflection = Reflection::shared().unwrap();
@@ -1571,6 +1609,20 @@ mod tests {
             }
         };
         check(&dom, &live, "kept from the start");
+        // each weld whose home changed is in the log, whatever changed it: one missing from it since the last look has the home
+        // it had then (a new one none)
+        let weld = class("Weld");
+        dom.log_homes((0..reflection.classes.len()).map(|id| id == weld as usize).collect());
+        let mut seen: std::collections::HashMap<InstanceId, Option<InstanceId>> = std::collections::HashMap::new();
+        let mut check_log = |dom: &mut Dom, live: &[InstanceId], step: &str| {
+            let logged: std::collections::HashSet<InstanceId> = dom.take_home_log().expect("the log kept every change").into_iter().collect();
+            for &id in live.iter().filter(|&&id| dom.at(id).class == weld) {
+                if !logged.contains(&id) {
+                    assert_eq!(seen.get(&id).copied().flatten(), dom.home(id), "{step}: {} changed home unlogged", dom.full_name(&reflection, id));
+                }
+                seen.insert(id, dom.home(id));
+            }
+        };
         // whether each is below the Workspace, JointsService or a WorldModel, read from the homes (is_descendant_of_home), is what
         // the walk up the tree says; a stale ancestor is below nothing
         let check_below = |dom: &Dom, live: &[InstanceId], stale: Option<InstanceId>, step: &str| {
@@ -1672,11 +1724,15 @@ mod tests {
             if round % 100 == 0 {
                 check(&dom, &live, &format!("round {round}"));
             }
+            if round % 20 == 0 {
+                check_log(&mut dom, &live, &format!("round {round}"));
+            }
             if round % 500 == 0 {
                 check_below(&dom, &live, stale, &format!("round {round}"));
             }
         }
         check(&dom, &live, "the end");
+        check_log(&mut dom, &live, "the end");
         check_below(&dom, &live, stale, "the end");
         // a JointsService between: its own home is none, those below it have it
         let weld = dom.create(&reflection, class("Weld"));

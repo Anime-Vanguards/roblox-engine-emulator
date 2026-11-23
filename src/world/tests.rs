@@ -1490,8 +1490,9 @@ fn assembly_lookups_cost_the_same_however_deep_their_parts_are() {
         r#"
         local Work = shared.Work
         assert(Work.Shallow > 0, "the passes cost work")
-        assert(math.abs(Work.Deep - Work.Shallow) < 1e-12, `the deep scene's pass cost {Work.Deep} s of work where the shallow one's {Work.Shallow}`)
-        assert(math.abs(Work.Apart - Work.Shallow) < 1e-12, `the scene apart cost {Work.Apart} s of work where the shallow one's {Work.Shallow}`)
+        -- (os.clock reads about 10,000 s, where its last bit is 1.8e-12 s: two passes that cost the same can read a bit apart)
+        assert(math.abs(Work.Deep - Work.Shallow) < 1e-11, `the deep scene's pass cost {Work.Deep} s of work where the shallow one's {Work.Shallow}`)
+        assert(math.abs(Work.Apart - Work.Shallow) < 1e-11, `the scene apart cost {Work.Apart} s of work where the shallow one's {Work.Shallow}`)
         "#,
     );
     let (shallow, deep, apart) = (host[0], host[1], host[2]);
@@ -1620,7 +1621,246 @@ fn a_parts_joints_keep_their_order_as_joints_come_and_go() {
         run(&lua, &engine, "shared.Round()");
         run(&lua, &engine, &format!("shared.Check({round})"));
     }
-    super::joints::check_index(&engine.state.borrow()).expect("the joint index");
+    super::joints::check_index(&mut engine.state.borrow_mut()).expect("the joint index");
+}
+
+/// A part entering a world pays for its joints (world/joints.rs reparented, cost.rs joints_entering), as a playing client's move
+/// does (Studio 0.747): beyond the same part's move with none, 1,000 welds in the world that cannot link (disabled) cost the
+/// Parent write 0.05 us each (looked at), 1,000 that link it to anchored parts 0.7 us each (looked at from both their parts and
+/// linked), 1,000 outside every world nothing, and 1,000 carried in under it at least 0.4 us each (looked at from both parts and
+/// brought into the world, besides what the write pays for carrying them), into the Workspace and into a WorldModel alike. The
+/// write used to cost the same with any number of joints.
+#[test]
+fn a_part_entering_a_world_pays_for_its_joints() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let (looked, linked, entered) = (crate::cost::JOINT_LOOKED_AT, crate::cost::JOINT_LINKED, crate::cost::JOINT_ENTERED);
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        local LOOKED, LINKED, ENTERED, N = {looked:e}, {linked:e}, {entered:e}, 1000
+        local function Part(Name, Anchored)
+            local P = Instance.new("Part")
+            P.Name, P.Anchored, P.CanCollide, P.CFrame = Name, Anchored, false, CFrame.new(0, 50, 0)
+            return P
+        end
+        local World = Instance.new("WorldModel")
+        World.Parent = game:GetService("ReplicatedStorage")
+        for _, Into in {{ workspace, World }} do
+            local Work = {{}}
+            for _, Kind in {{ "none", "outside", "inactive", "linked", "carried" }} do
+                local Box = Instance.new("Folder")
+                Box.Parent = Into
+                local P = Part("P", false)
+                for _ = 1, if Kind == "none" then 0 else N do
+                    local Q = Part("Q", true)
+                    Q.Parent = Box
+                    local W = Instance.new("Weld")
+                    W.Part0, W.Part1, W.Enabled = P, Q, Kind ~= "inactive" and Kind ~= "carried"
+                    W.Parent = if Kind == "outside" then nil elseif Kind == "carried" then P else Q
+                end
+                -- (the second move timed: the first takes the frame's first entry)
+                P.Parent = Into
+                P.Parent = nil
+                local Start = os.clock()
+                P.Parent = Into
+                Work[Kind] = os.clock() - Start
+                P.Parent = nil
+                Box:Destroy()
+            end
+            local function Is(Kind, Want)
+                local Got = Work[Kind] - Work.none
+                assert(math.abs(Got - Want) < 1e-9, `{{Into.Name}}: {{Kind}} welds cost the move {{Got * 1e6}} us beyond none, where {{Want * 1e6}}`)
+            end
+            Is("outside", 0)
+            Is("inactive", N * LOOKED)
+            Is("linked", N * (2 * LOOKED + LINKED))
+            local Carried = Work.carried - Work.none
+            assert(Carried >= N * (2 * LOOKED + ENTERED), `{{Into.Name}}: welds carried in cost the move {{Carried * 1e6}} us beyond none`)
+        end
+        "#
+        ),
+    );
+}
+
+/// A part entering a world looks only at its joints in a world (world/joints.rs PartJoints), as a client does (Studio 0.747: a
+/// part named by 10,000 welds outside every world entered as fast as one named by none): a part named by 50,000 welds outside
+/// every world, moved into the Workspace and out 200 times and into a WorldModel and out 200 times, costs about the host time of
+/// a part named by none, and the work clock charges the two the same. Each move used to look at each of its welds: at 10,000,
+/// 0.13 to 0.23 ms a move.
+#[test]
+fn a_part_entering_a_world_skips_its_joints_outside_every_world() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Part()
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide = true, false
+            return P
+        end
+        local Lone, Named = Part(), Part()
+        for _ = 1, 50000 do
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1 = Named, Part()
+        end
+        local World = Instance.new("WorldModel")
+        World.Parent = game:GetService("ReplicatedStorage")
+        shared.Parts, shared.Work = { Lone = Lone, Named = Named }, {}
+        local function Moves(P)
+            for _ = 1, 200 do
+                P.Parent = workspace
+                P.Parent = nil
+                P.Parent = World
+                P.Parent = nil
+            end
+        end
+        function shared.Move(Name)
+            local P = shared.Parts[Name]
+            Moves(P)
+            local Start = os.clock()
+            Moves(P)
+            shared.Work[Name] = os.clock() - Start
+        end
+        "#,
+    );
+    let mut host = Vec::new();
+    for name in ["Lone", "Named"] {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.Move(\"{name}\")"));
+        host.push(start.elapsed().as_secs_f64());
+    }
+    // (os.clock reads about 10,000 s, where its last bit is 1.8e-12 s)
+    run(&lua, &engine, r#"assert(math.abs(shared.Work.Named - shared.Work.Lone) < 1e-11, `the named part's moves cost {shared.Work.Named} s of work where the lone one's {shared.Work.Lone}`)"#);
+    let (lone, named) = (host[0], host[1]);
+    assert!(named < 2.0 * lone + 0.05, "1,600 moves took {named:.3} s of host time for a part named by 50,000 welds outside every world, {lone:.3} s for one named by none");
+}
+
+/// Which of a part's joints are in a world is marked in its list as the dom logs their homes (dom.rs Dom::log_homes), whatever
+/// moves them: 60 welds, 40 parts, folders and WorldModels moved between the Workspace, WorldModels, JointsService, storage and
+/// nil, re-pointed, models of them cloned and destroyed, 2,000 times at random, and each joint in each list is marked as in
+/// a world exactly when it has a home, its walks taking up exactly those, in order.
+#[test]
+fn a_joints_mark_follows_its_home_however_it_moves() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Storage, Service = game:GetService("ReplicatedStorage"), game:GetService("JointsService")
+        local Holders, Parts, Welds, Movable = { workspace, Storage, Service }, {}, {}, {}
+        local Dice = Random.new(11)
+        local function Pick(List)
+            return List[Dice:NextInteger(1, #List)]
+        end
+        for I = 1, 6 do
+            local Holder = Instance.new(if I % 2 == 0 then "WorldModel" else "Folder")
+            Holder.Parent = Pick(Holders)
+            table.insert(Holders, Holder)
+            table.insert(Movable, Holder)
+        end
+        for I = 1, 40 do
+            local P = Instance.new("Part")
+            P.Anchored = I % 3 == 0
+            P.CanCollide = false
+            P.Parent = Pick(Holders)
+            table.insert(Parts, P)
+            table.insert(Movable, P)
+        end
+        for _ = 1, 60 do
+            local W = Instance.new(if Dice:NextInteger(1, 3) == 1 then "WeldConstraint" else "Weld")
+            W.Part0, W.Part1 = Pick(Parts), Pick(Parts)
+            W.Parent = if Dice:NextInteger(1, 4) == 1 then nil else Pick(Holders)
+            table.insert(Welds, W)
+            table.insert(Movable, W)
+        end
+        -- (a model of two parts and their weld, cloned with what it holds)
+        local Template = Instance.new("Model")
+        local A, B = Instance.new("Part"), Instance.new("Part")
+        A.Parent, B.Parent = Template, Template
+        local Joint = Instance.new("Weld")
+        Joint.Part0, Joint.Part1, Joint.Parent = A, B, A
+        function shared.Round()
+            for _ = 1, 100 do
+                local Roll = Dice:NextInteger(1, 10)
+                if Roll <= 5 then
+                    local Moved = Pick(Movable)
+                    local To = if Dice:NextInteger(1, 6) == 1 then nil else Pick(Holders)
+                    pcall(function()
+                        Moved.Parent = To
+                    end)
+                elseif Roll <= 7 then
+                    local W = Pick(Welds)
+                    if Dice:NextInteger(1, 2) == 1 then
+                        W.Part0 = Pick(Parts)
+                    else
+                        W.Part1 = if Dice:NextInteger(1, 5) == 1 then nil else Pick(Parts)
+                    end
+                elseif Roll == 8 then
+                    local Copy = Template:Clone()
+                    Copy.Parent = if Dice:NextInteger(1, 4) == 1 then nil else Pick(Holders)
+                    table.insert(Movable, Copy)
+                    for _, Item in Copy:GetDescendants() do
+                        table.insert(if Item:IsA("BasePart") then Parts else Welds, Item)
+                        table.insert(Movable, Item)
+                    end
+                elseif Roll == 9 then
+                    local W = Pick(Welds)
+                    W:Destroy()
+                else
+                    local _ = Pick(Parts).AssemblyRootPart
+                end
+            end
+        end
+        "#,
+    );
+    for round in 1..=20 {
+        run(&lua, &engine, "shared.Round()");
+        if let Err(message) = super::joints::check_index(&mut engine.state.borrow_mut()) {
+            panic!("round {round}: {message}");
+        }
+    }
+}
+
+/// The dom's log of the joints' homes (dom.rs Dom::log_homes) keeps twice the dom's slots and 4,096 more; past that it says so,
+/// and the next walk marks every indexed joint again: a weld out of the Workspace (marked so), moved in and out 100,000 times
+/// straight through the dom, never by a Parent write, and left in, links its parts at the next lookup, and its marks match its
+/// home.
+#[test]
+fn a_joints_mark_follows_its_home_when_the_log_overflows() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local A, B = Instance.new("Part"), Instance.new("Part")
+        A.Anchored, A.CanCollide, B.CanCollide = true, false, false
+        A.Parent, B.Parent = workspace, workspace
+        local Weld = Instance.new("Weld")
+        Weld.Part0, Weld.Part1 = A, B
+        Weld.Parent = workspace
+        assert(B.AssemblyRootPart == A, "the weld links its parts")
+        Weld.Parent = nil
+        assert(B.AssemblyRootPart == B, "out of the Workspace the weld links nothing")
+        shared.A, shared.B = A, B
+        "#,
+    );
+    {
+        let mut state = engine.state.borrow_mut();
+        let class = |name: &str| engine.reflection.class_id(name).expect("class");
+        let (weld, workspace) = (state.dom.instances_of_class(class("Weld"))[0], state.dom.instances_of_class(class("Workspace"))[0]);
+        for _ in 0..100_000 {
+            state.dom.reparent(weld, Some(workspace));
+            state.dom.reparent(weld, None);
+        }
+        state.dom.reparent(weld, Some(workspace));
+    }
+    run(&lua, &engine, r#"assert(shared.B.AssemblyRootPart == shared.A, "the weld moved back into the Workspace links its parts")"#);
+    super::joints::check_index(&mut engine.state.borrow_mut()).expect("the joint index");
 }
 
 /// A write that changes a part's property is priced by whether the part is in the Workspace (cost.rs write), read from the

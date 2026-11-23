@@ -50,7 +50,13 @@
 //! The index lists each part's joints in the order they were indexed under it, and each joint keeps its
 //! place in its parts' lists ([`PartJoints`]): making, re-pointing or taking out a joint costs the same
 //! however many joints name its parts (each used to search the part's whole list: 5 to 8.5 us a write
-//! at 40,000 joints), and the joints a walk takes up come in the same order as before.
+//! at 40,000 joints), and the joints a walk takes up come in the same order as before. Each list marks
+//! which of its joints are in a world or JointsService, as the dom logs their homes (dom.rs
+//! Dom::log_homes, taken before each walk: [`take_homes`]), and the walks look at those alone, as a
+//! playing client does (Studio 0.747, headless: a part named by 10,000 welds outside every world
+//! enters a world as fast as one named by none; each weld in a world that cannot link costs it 0.04
+//! to 0.09 us). A Parent write that takes parts or joints into a world pays for its joints (cost.rs
+//! joints_entering): each joint its walks look at, each link it makes and each joint it brings in.
 //!
 //! Not modelled: Motor.CurrentAngle / DesiredAngle (the legacy motors' rotation), AnimationConstraint,
 //! RigidConstraint and the other constraints (solver-driven, nothing is simulated), and the members
@@ -117,6 +123,8 @@ pub struct Joints {
     by_part: FxHashMap<InstanceId, PartJoints>,
     /// Each indexed joint's parts and its place in each one's list
     indexed: FxHashMap<InstanceId, Indexed>,
+    /// How many times the dom's log of homes was taken ([`take_homes`])
+    takes: u64,
     /// Motor6Ds whose Transform changed since the last simulation step
     pending: Vec<InstanceId>,
     /// While positive, CFrame and joint writes are the assembly code's own (already consistent)
@@ -130,27 +138,108 @@ pub struct Joints {
 
 /// The rigid joints indexed under one part, in the order they were indexed under it. A joint taken out leaves a hole at its
 /// place (kept with the joint: [`Indexed`]), so the others keep their order and indexing or taking out a joint costs the same
-/// however many joints name the part; the holes close up once they outnumber the joints.
+/// however many joints name the part; the holes close up once they outnumber the joints. A bit for each place says whether
+/// its joint is in a world or JointsService (has a home: dom.rs Dom::home), and the walks look at those alone, in order, as a
+/// client looks only at a part's joints that are in one: 4,096 joints outside every world cost a walk one look.
 #[derive(Default)]
 struct PartJoints {
     slots: Vec<Option<InstanceId>>,
+    /// The places whose joint has a home, in blocks of 4,096: a word saying which of the block's words hold any, then its words,
+    /// 64 places a word ([`BLOCK`])
+    bits: Vec<u64>,
     live: usize,
 }
 
+/// The words of a block of [`PartJoints::bits`]: its summary and its 64 words
+const BLOCK: usize = 65;
+
+/// The word of [`PartJoints::bits`] that holds `place`'s bit, and its block's summary word.
+fn word_of(place: usize) -> (usize, usize) {
+    let block = place / 4096 * BLOCK;
+    (block + 1 + place % 4096 / 64, block)
+}
+
+/// The places of the bits set in `bits`, from `base`, lowest first.
+fn ones(bits: u64, base: usize) -> impl Iterator<Item = usize> {
+    let mut bits = bits;
+    std::iter::from_fn(move || {
+        if bits == 0 {
+            return None;
+        }
+        let bit = bits.trailing_zeros() as usize;
+        bits &= bits - 1;
+        Some(base + bit)
+    })
+}
+
 impl PartJoints {
+    /// Puts `joint` after the others; its place.
+    fn push(&mut self, joint: InstanceId, homed: bool) -> u32 {
+        let place = self.slots.len();
+        self.slots.push(Some(joint));
+        if place.is_multiple_of(4096) {
+            self.bits.push(0);
+        }
+        if place.is_multiple_of(64) {
+            self.bits.push(0);
+        }
+        self.live += 1;
+        self.mark(place, homed);
+        place as u32
+    }
+
+    /// Marks whether the joint at `place` has a home.
+    fn mark(&mut self, place: usize, homed: bool) {
+        let ((word, summary), bit) = (word_of(place), 1u64 << (place % 64));
+        if homed {
+            self.bits[word] |= bit;
+        } else {
+            self.bits[word] &= !bit;
+        }
+        let bit = 1u64 << (place % 4096 / 64);
+        if self.bits[word] != 0 {
+            self.bits[summary] |= bit;
+        } else {
+            self.bits[summary] &= !bit;
+        }
+    }
+
+    /// Whether the joint at `place` has a home.
+    fn is_homed(&self, place: usize) -> bool {
+        self.bits[word_of(place).0] >> (place % 64) & 1 != 0
+    }
+
+    /// Takes the joint at `place` out, leaving a hole.
+    fn remove_at(&mut self, place: usize) {
+        self.slots[place] = None;
+        self.mark(place, false);
+        self.live -= 1;
+    }
+
     /// The joints, in the order they were indexed
+    #[cfg(test)]
     fn iter(&self) -> impl Iterator<Item = InstanceId> + '_ {
         self.slots.iter().flatten().copied()
     }
 
+    /// The joints that have a home, in the order they were indexed
+    fn homed(&self) -> impl Iterator<Item = InstanceId> + '_ {
+        (0..self.bits.len().div_ceil(BLOCK))
+            .flat_map(|block| ones(self.bits[block * BLOCK], 0).map(move |word| (block, word)))
+            .flat_map(|(block, word)| ones(self.bits[block * BLOCK + 1 + word], block * 4096 + word * 64))
+            .filter_map(|place| self.slots[place])
+    }
+
     /// Closes the holes, keeping the joints' order, and gives each joint its new place under `part`.
     fn close_holes(&mut self, part: InstanceId, indexed: &mut FxHashMap<InstanceId, Indexed>) {
-        self.slots.retain(Option::is_some);
-        for (place, joint) in self.slots.iter().flatten().enumerate() {
-            if let Some(entry) = indexed.get_mut(joint) {
+        let old = std::mem::take(self);
+        for (place, slot) in old.slots.iter().enumerate() {
+            let Some(joint) = *slot else { continue };
+            let moved = self.push(joint, old.is_homed(place));
+            if let Some(entry) = indexed.get_mut(&joint) {
                 for side in 0..2 {
                     if entry.parts[side] == Some(part) {
-                        entry.places[side] = place as u32;
+                        entry.places[side] = moved;
                     }
                 }
             }
@@ -164,6 +253,8 @@ impl PartJoints {
 struct Indexed {
     parts: [Option<InstanceId>; 2],
     places: [u32; 2],
+    /// The last take of the dom's log of homes that marked it ([`take_homes`]: a joint the log names twice is marked once)
+    taken: u64,
 }
 
 /// One assembly: its parts as a tree, the root first, each after its parent.
@@ -263,7 +354,11 @@ pub fn install(engine: &Rc<Engine>) {
         seats: ["Seat", "VehicleSeat"].iter().filter_map(|text| class(text)).collect(),
         kinds,
     };
-    engine.state.borrow_mut().joints.setup = Some(Rc::new(setup));
+    let mut state = engine.state.borrow_mut();
+    // (which rigid joints are in a world is read from the dom's log of their homes: take_homes)
+    state.dom.log_homes(setup.kinds.iter().map(|&kind| kind != Kind::Other).collect());
+    state.joints.setup = Some(Rc::new(setup));
+    drop(state);
     engine.hooks.borrow_mut().instance_freed.push(Box::new(|state, id| state.joints.forget(id)));
     if let Some(root_name) = name("AssemblyRootPart") {
         engine.behaviors.borrow_mut().add_getter(base_part, root_name, crate::services::getter(|lua, engine, id| {
@@ -303,11 +398,13 @@ impl Joints {
             }
             // (a freed part's list went with it)
             let Some(list) = self.by_part.get_mut(&part) else { continue };
-            let slot = list.slots.get_mut(old.places[side] as usize).filter(|slot| **slot == Some(joint));
-            debug_assert!(slot.is_some(), "a joint is at its place in its part's list");
-            let Some(slot) = slot else { continue };
-            *slot = None;
-            list.live -= 1;
+            let place = old.places[side] as usize;
+            let there = list.slots.get(place) == Some(&Some(joint));
+            debug_assert!(there, "a joint is at its place in its part's list");
+            if !there {
+                continue;
+            }
+            list.remove_at(place);
             if list.live == 0 {
                 self.by_part.remove(&part);
             } else if list.slots.len() > 2 * list.live {
@@ -348,6 +445,7 @@ fn is_part(state: &State, reflection: &Reflection, setup: &Setup, id: InstanceId
 /// the cost of one, however many joints name the part.
 fn index_joint(state: &mut State, setup: &Setup, joint: InstanceId) {
     let parts = parts_of(state, setup, joint);
+    let homed = joint_home(state, joint).is_some();
     let joints = &mut state.joints;
     match joints.indexed.get(&joint) {
         Some(old) if old.parts == parts => return,
@@ -364,18 +462,54 @@ fn index_joint(state: &mut State, setup: &Setup, joint: InstanceId) {
             places[1] = places[0];
             continue;
         }
-        let list = joints.by_part.entry(part).or_default();
-        places[side] = list.slots.len() as u32;
-        list.slots.push(Some(joint));
-        list.live += 1;
+        places[side] = joints.by_part.entry(part).or_default().push(joint, homed);
     }
-    joints.indexed.insert(joint, Indexed { parts, places });
+    joints.indexed.insert(joint, Indexed { parts, places, taken: 0 });
 }
 
-/// Whether the joint index holds together (tests): each indexed joint at its place in its live parts' lists (one place when it
-/// names one part as both), each list holding each of its joints once, as many as it counts, and none empty.
+/// Takes the dom's log of the rigid joints whose home changed, by whatever moved them (dom.rs Dom::log_homes), and marks each
+/// indexed one in its parts' lists as in a world or not; every indexed joint when the log overflowed.
+fn take_homes(state: &mut State) {
+    let log = state.dom.take_home_log();
+    let State { dom, joints, .. } = state;
+    let mark = |by_part: &mut FxHashMap<InstanceId, PartJoints>, joint: InstanceId, entry: &Indexed| {
+        let homed = dom.home(joint).is_some();
+        for side in 0..2 {
+            let Some(part) = entry.parts[side] else { continue };
+            if side == 1 && entry.parts[0] == Some(part) {
+                continue;
+            }
+            let place = entry.places[side] as usize;
+            if let Some(list) = by_part.get_mut(&part).filter(|list| list.slots.get(place) == Some(&Some(joint))) {
+                list.mark(place, homed);
+            }
+        }
+    };
+    match log {
+        Some(log) if !log.is_empty() => {
+            joints.takes += 1;
+            for joint in log {
+                if let Some(entry) = joints.indexed.get_mut(&joint).filter(|entry| entry.taken != joints.takes) {
+                    entry.taken = joints.takes;
+                    mark(&mut joints.by_part, joint, entry);
+                }
+            }
+        }
+        Some(_) => {}
+        None => {
+            for (&joint, entry) in &joints.indexed {
+                mark(&mut joints.by_part, joint, entry);
+            }
+        }
+    }
+}
+
+/// Whether the joint index holds together (tests), once it took the homes the dom logged: each indexed joint at its place in its
+/// live parts' lists (one place when it names one part as both), marked there as in a world exactly when it has a home, each
+/// list holding each of its joints once, as many as it counts, and none empty.
 #[cfg(test)]
-pub(crate) fn check_index(state: &State) -> Result<(), String> {
+pub(crate) fn check_index(state: &mut State) -> Result<(), String> {
+    take_homes(state);
     let joints = &state.joints;
     for (&joint, entry) in &joints.indexed {
         for side in 0..2 {
@@ -396,23 +530,35 @@ pub(crate) fn check_index(state: &State) -> Result<(), String> {
         if let Some(joint) = listed.iter().find(|joint| !joints.indexed.get(joint).is_some_and(|entry| entry.parts.contains(&Some(part)))) {
             return Err(format!("{part:?} lists {joint:?}, which is not indexed under it"));
         }
+        for (place, slot) in list.slots.iter().enumerate() {
+            let homed = slot.is_some_and(|joint| joint_home(state, joint).is_some());
+            if list.is_homed(place) != homed {
+                return Err(format!("{part:?} marks {slot:?} at {place} as in a world: {}, where it is: {homed}", list.is_homed(place)));
+            }
+        }
+        let walked: Vec<InstanceId> = list.homed().collect();
+        let homed: Vec<InstanceId> = listed.iter().copied().filter(|&joint| joint_home(state, joint).is_some()).collect();
+        if walked != homed {
+            return Err(format!("{part:?}'s walk takes up {walked:?} where its joints in a world are {homed:?}"));
+        }
     }
     Ok(())
 }
 
-/// Indexes every rigid joint the engine holds, once (those made before anything needed the index).
+/// Readies the index for a walk: every rigid joint the engine holds indexed, once (those made before anything needed the
+/// index), and each marked as in a world or not as the dom last logged its home ([`take_homes`]).
 fn ensure_scanned(state: &mut State, setup: &Setup) {
-    if state.joints.scanned {
-        return;
+    if !state.joints.scanned {
+        state.joints.scanned = true;
+        let joints: Vec<InstanceId> = (0..state.dom.slot_count() as u32)
+            .filter_map(|slot| state.dom.id_at_slot(slot))
+            .filter(|&id| setup.kind(state.dom.at(id).class) != Kind::Other)
+            .collect();
+        for joint in joints {
+            index_joint(state, setup, joint);
+        }
     }
-    state.joints.scanned = true;
-    let joints: Vec<InstanceId> = (0..state.dom.slot_count() as u32)
-        .filter_map(|slot| state.dom.id_at_slot(slot))
-        .filter(|&id| setup.kind(state.dom.at(id).class) != Kind::Other)
-        .collect();
-    for joint in joints {
-        index_joint(state, setup, joint);
-    }
+    take_homes(state);
 }
 
 /// The WorldRoot an instance is in (its nearest WorldRoot ancestor), from the homes the dom keeps: no walk up the tree, however
@@ -427,9 +573,19 @@ fn joint_home(state: &State, id: InstanceId) -> Option<InstanceId> {
     state.dom.home(id)
 }
 
+/// What the walks of one change looked at, for its price ([`reparented`]): the joints looked at in their parts' lists, and the
+/// links found that the change made (their joint or one of their parts is among `moved`), each found from both its parts.
+#[derive(Default)]
+struct Walk<'a> {
+    moved: Option<&'a FxHashSet<InstanceId>>,
+    looked: usize,
+    made: usize,
+}
+
 /// The joints that link `part` to another part now, with that part. Each candidate joint costs a few lookups (its parts, the
-/// other part's world, the joint's home), whatever the depth of the parts and joints in the tree.
-fn edges(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId) -> Vec<(InstanceId, InstanceId)> {
+/// other part's world, the joint's home), whatever the depth of the parts and joints in the tree; the candidates are the
+/// part's joints in a world, which `walk` counts.
+fn edges(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId, walk: &mut Walk) -> Vec<(InstanceId, InstanceId)> {
     let Some(candidates) = state.joints.by_part.get(&part) else {
         return Vec::new();
     };
@@ -438,7 +594,8 @@ fn edges(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId
         return Vec::new();
     };
     let mut found = Vec::new();
-    for joint in candidates.iter() {
+    for joint in candidates.homed() {
+        walk.looked += 1;
         let Some(instance) = state.dom.get(joint) else { continue };
         if setup.kind(instance.class) == Kind::Other || state.dom.boolean(joint, setup.enabled) == Some(false) {
             continue;
@@ -460,6 +617,9 @@ fn edges(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId
         match joint_home(state, joint) {
             Some(home) if home == world || Some(state.dom.at(home).class) == setup.joints_service => {}
             _ => continue,
+        }
+        if walk.moved.is_some_and(|moved| moved.contains(&joint) || moved.contains(&part) || moved.contains(&other)) {
+            walk.made += 1;
         }
         found.push((joint, other));
     }
@@ -505,14 +665,15 @@ pub fn root_part(state: &mut State, reflection: &Reflection, part: InstanceId) -
         return Some(part);
     }
     ensure_scanned(state, &setup);
-    assemblies(state, reflection, &setup, part)
+    assemblies(state, reflection, &setup, part, &mut Walk::default())
         .into_iter()
         .find(|assembly| assembly.nodes.iter().any(|node| node.part == part))
         .map(|assembly| assembly.nodes[0].part)
 }
 
-/// The assemblies of the parts linked to `start` (several when more than one is anchored).
-fn assemblies(state: &mut State, reflection: &Reflection, setup: &Setup, start: InstanceId) -> Vec<Assembly> {
+/// The assemblies of the parts linked to `start` (several when more than one is anchored), what their walk looked at counted
+/// in `walk`.
+fn assemblies(state: &mut State, reflection: &Reflection, setup: &Setup, start: InstanceId, walk: &mut Walk) -> Vec<Assembly> {
     // The linked parts and their edges
     let mut component = vec![start];
     let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
@@ -521,7 +682,7 @@ fn assemblies(state: &mut State, reflection: &Reflection, setup: &Setup, start: 
     let mut index = 0;
     while index < component.len() {
         let part = component[index];
-        let found = edges(state, reflection, setup, part);
+        let found = edges(state, reflection, setup, part, walk);
         for &(_, other) in &found {
             if seen.insert(other) {
                 component.push(other);
@@ -596,7 +757,7 @@ pub fn linked_parts(state: &mut State, reflection: &Reflection, part: InstanceId
     seen.insert(part);
     let mut index = 0;
     while index < component.len() {
-        for (_, other) in edges(state, reflection, &setup, component[index]) {
+        for (_, other) in edges(state, reflection, &setup, component[index], &mut Walk::default()) {
             if seen.insert(other) {
                 component.push(other);
             }
@@ -678,14 +839,14 @@ fn settle(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
     }
 }
 
-/// Settles the assemblies of `seeds` from their roots.
-fn settle_from_roots(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, seeds: &[InstanceId]) {
+/// Settles the assemblies of `seeds` from their roots, what their walks looked at counted in `walk`.
+fn settle_from_roots(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, seeds: &[InstanceId], walk: &mut Walk) {
     let mut visited: FxHashSet<InstanceId> = FxHashSet::default();
     for &seed in seeds {
         if visited.contains(&seed) || !is_part(state, reflection, setup, seed) {
             continue;
         }
-        for assembly in assemblies(state, reflection, setup, seed) {
+        for assembly in assemblies(state, reflection, setup, seed, walk) {
             visited.extend(assembly.nodes.iter().map(|node| node.part));
             if assembly.nodes.len() > 1 {
                 settle(state, reflection, hooks, setup, &assembly, Anchor::Root, true);
@@ -731,7 +892,7 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
             state.joints.batch_seeds.extend(seeds);
             return;
         }
-        settle_from_roots(state, reflection, hooks, &setup, &seeds);
+        settle_from_roots(state, reflection, hooks, &setup, &seeds, &mut Walk::default());
     } else if name == setup.anchored {
         // Anchoring splits or joins assemblies: a joint that links up again moves what hangs below it
         if state.joints.quiet > 0 || !reflection.class(state.dom.at(id).class).is_a(setup.base_part) || !state.joints.by_part.contains_key(&id) {
@@ -741,7 +902,8 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
             state.joints.batch_seeds.push(id);
             return;
         }
-        settle_from_roots(state, reflection, hooks, &setup, &[id]);
+        ensure_scanned(state, &setup);
+        settle_from_roots(state, reflection, hooks, &setup, &[id], &mut Walk::default());
     } else if name == setup.transform {
         let is_motor = setup.motor6d.is_some_and(|motor| reflection.class(state.dom.at(id).class).is_a(motor));
         if is_motor && !state.joints.pending.contains(&id) {
@@ -780,7 +942,7 @@ fn part_moved(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
     if !state.joints.by_part.contains_key(&part) {
         return;
     }
-    for assembly in assemblies(state, reflection, setup, part) {
+    for assembly in assemblies(state, reflection, setup, part, &mut Walk::default()) {
         if assembly.nodes.len() < 2 {
             continue;
         }
@@ -793,7 +955,9 @@ fn part_moved(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
 }
 
 /// An instance's parent changed (instance::set_parent): joints and parts entering a WorldRoot
-/// link up, and their assemblies settle from their roots.
+/// link up, and their assemblies settle from their roots. The work clock charges each joint the
+/// walks look at, each link the move makes and each joint it brings into the world (cost.rs
+/// joints_entering), beyond what the move pays for the instances it carries.
 pub fn reparented(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: InstanceId, old_parent: Option<InstanceId>, new_parent: Option<InstanceId>) {
     let Some(setup) = setup_of(state) else { return };
     let Some(new_parent) = new_parent else { return };
@@ -811,6 +975,10 @@ pub fn reparented(state: &mut State, reflection: &Reflection, hooks: &Hooks, id:
     }
     ensure_scanned(state, &setup);
     let mut seeds = Vec::new();
+    // (the joints it carries and its parts that joints name: each link it makes has one of them; and how many of those joints
+    // it brings into this world)
+    let mut moved: FxHashSet<InstanceId> = FxHashSet::default();
+    let mut entered = 0usize;
     let mut nodes = vec![id];
     nodes.extend(state.dom.descendants(id));
     for node in nodes {
@@ -818,18 +986,29 @@ pub fn reparented(state: &mut State, reflection: &Reflection, hooks: &Hooks, id:
         if setup.kind(class) != Kind::Other {
             index_joint(state, &setup, node);
             seeds.extend(parts_of(state, &setup, node).into_iter().flatten());
+            moved.insert(node);
+            entered += usize::from(joint_home(state, node) == Some(world));
         } else if reflection.class(class).is_a(setup.base_part) && state.joints.by_part.contains_key(&node) {
             seeds.push(node);
+            moved.insert(node);
         }
     }
-    if seeds.is_empty() || state.joints.quiet > 0 {
+    if state.joints.quiet > 0 {
         return;
     }
-    if state.joints.batch > 0 {
-        state.joints.batch_seeds.extend(seeds);
-        return;
+    let mut walk = Walk { moved: Some(&moved), ..Walk::default() };
+    if !seeds.is_empty() {
+        if state.joints.batch > 0 {
+            state.joints.batch_seeds.extend(seeds);
+        } else {
+            settle_from_roots(state, reflection, hooks, &setup, &seeds, &mut walk);
+        }
     }
-    settle_from_roots(state, reflection, hooks, &setup, &seeds);
+    let work = crate::cost::joints_entering(walk.looked, walk.made, entered);
+    if work > 0.0 {
+        state.sched.charge(work);
+        crate::boundary::add_cost(work);
+    }
 }
 
 /// BasePart Position / Orientation / Rotation: the part moves alone. Each Weld or Motor6D joined to
@@ -843,7 +1022,7 @@ pub fn move_alone(state: &mut State, reflection: &Reflection, hooks: &Hooks, par
     state.joints.quiet += 1;
     core::raw_set(state, reflection, hooks, part, name, frame::cframe_value(cframe));
     ensure_scanned(state, &setup);
-    for (joint, _) in edges(state, reflection, &setup, part) {
+    for (joint, _) in edges(state, reflection, &setup, part, &mut Walk::default()) {
         match setup.kind(state.dom.at(joint).class) {
             Kind::WeldConstraint => derive_weld(state, reflection, &setup, joint),
             Kind::Joint => {
@@ -892,7 +1071,7 @@ pub fn end_batch(state: &mut State, reflection: &Reflection, hooks: &Hooks) {
         if visited.contains(&seed) || !state.joints.by_part.contains_key(&seed) || !is_part(state, reflection, &setup, seed) {
             continue;
         }
-        for assembly in assemblies(state, reflection, &setup, seed) {
+        for assembly in assemblies(state, reflection, &setup, seed, &mut Walk::default()) {
             visited.extend(assembly.nodes.iter().map(|node| node.part));
             if assembly.nodes.len() < 2 {
                 continue;
@@ -932,5 +1111,62 @@ pub fn step_transforms(engine: &Engine) {
             seeds.extend(parts_of(&state, &setup, motor).into_iter().flatten());
         }
     }
-    settle_from_roots(&mut state, &engine.reflection, &hooks, &setup, &seeds);
+    settle_from_roots(&mut state, &engine.reflection, &hooks, &setup, &seeds, &mut Walk::default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A part's list walks the joints marked as in a world in the order they were put in, wherever they stand among 20,000 places
+    /// (blocks of 4,096 places and the words in them), as joints are put in, marked and taken out at random and the holes close,
+    /// each joint keeping its place.
+    #[test]
+    fn a_list_walks_its_joints_in_a_world_in_order() {
+        let part = InstanceId { index: 0, generation: 0 };
+        let mut list = PartJoints::default();
+        let mut indexed: FxHashMap<InstanceId, Indexed> = FxHashMap::default();
+        // (the joints in order, and whether each is in a world)
+        let mut model: Vec<(InstanceId, bool)> = Vec::new();
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for round in 0..60_000u32 {
+            let roll = if round < 20_000 { 0 } else { next(4) };
+            if roll <= 1 || model.is_empty() {
+                let joint = InstanceId { index: round + 1, generation: 0 };
+                let homed = next(3) == 0;
+                let place = list.push(joint, homed);
+                indexed.insert(joint, Indexed { parts: [Some(part), None], places: [place, 0], taken: 0 });
+                model.push((joint, homed));
+            } else {
+                let index = next(model.len());
+                let joint = model[index].0;
+                let place = indexed[&joint].places[0] as usize;
+                assert_eq!(list.slots[place], Some(joint), "round {round}: the joint's place");
+                if roll == 2 {
+                    let homed = next(2) == 0;
+                    list.mark(place, homed);
+                    model[index].1 = homed;
+                } else {
+                    list.remove_at(place);
+                    indexed.remove(&joint);
+                    model.remove(index);
+                    if list.slots.len() > 2 * list.live {
+                        list.close_holes(part, &mut indexed);
+                    }
+                }
+            }
+            if round % 997 == 0 || round == 59_999 {
+                let walked: Vec<InstanceId> = list.homed().collect();
+                let want: Vec<InstanceId> = model.iter().filter(|(_, homed)| *homed).map(|&(joint, _)| joint).collect();
+                assert_eq!(walked, want, "round {round}: the joints walked");
+                assert_eq!(list.live, model.len(), "round {round}: the joints counted");
+            }
+        }
+    }
 }

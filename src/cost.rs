@@ -1418,6 +1418,27 @@ pub const WORLD_MODEL_PART: f64 = 0.70e-6;
 /// 0.15 headless, 0.10 to 0.33 rendered).
 pub const PLACED_PART: f64 = 0.20e-6;
 pub const PLACED_OTHER: f64 = 0.10e-6;
+/// What a Parent change that takes parts or joints into a world spends on their joints (world/joints.rs reparented), beyond the
+/// instances it carries: each joint the walks of its assemblies look at in their parts' lists ([`JOINT_LOOKED_AT`]: a joint that
+/// links is looked at from both its parts), each joint it links ([`JOINT_LINKED`]) and each it brings into the world itself
+/// ([`JOINT_ENTERED`]). A playing client (roblox-sim, Studio 0.747, headless; os.clock around single moves of a Part named by N
+/// Welds into the Workspace and into a WorldModel in ReplicatedStorage, from nil and from ReplicatedStorage, the median of 11 at a
+/// frame's start, N = 1,000 and 10,000, less the same move of a Part with none; docs/engine.md "Rigid assemblies") spent 0.043 to
+/// 0.089 us a weld in a world that could not link (disabled, Part1 nil, its other part outside every world or in another world, in
+/// JointsService), 0.08 to 0.09 us a part of an assembly of N it joined, 0.58 to 0.99 us a weld that linked it to an anchored part,
+/// and 0.33 to 0.63 us a weld carried in under it that could not link; a weld outside every world cost it nothing, and the walks
+/// do not look at those. Fitted: x0.56 to x1.61 of each case, x0.96 to x1.0 for 10,000 welds that link. Not modelled: a link that joins unanchored
+/// parts into one assembly cost that client 2.9 to 8.5 us a weld at N = 1,000 and 10,000, a weld carried in that links 3.2 to 7.3,
+/// and a Model of unanchored parts welded in a chain or a star grows with the square of its parts (14 to 18 us a part at 100, 92
+/// to 100 at 1,000, a chain 951 at 10,000); all anchored, 1.3 us a weld (charged 1.0).
+pub const JOINT_LOOKED_AT: f64 = 0.05e-6;
+pub const JOINT_LINKED: f64 = 0.6e-6;
+pub const JOINT_ENTERED: f64 = 0.3e-6;
+/// What a Parent change's joints cost ([`JOINT_LOOKED_AT`]): `looked` joints looked at, `made` links it made, each counted from both
+/// its parts, and `entered` joints it brought into the world.
+pub fn joints_entering(looked: usize, made: usize, entered: usize) -> f64 {
+    looked as f64 * JOINT_LOOKED_AT + made as f64 * 0.5 * JOINT_LINKED + entered as f64 * JOINT_ENTERED
+}
 /// An ancestor IsDescendantOf, IsAncestorOf and the FindFirstAncestor finds look at, beyond [`method`]'s price for the call: the same
 /// client called them on a Part at the bottom of a chain of D Folders in the Workspace (os.clock around 5 to 20,000 calls, the median of
 /// 15, less an empty loop): 0.046 to 0.075 us a call at D = 1 and 10, 0.12 to 0.16 at 100, 1.13 to 1.34 at 1,000, 5.1 to 6.4 at 4,000,
