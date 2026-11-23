@@ -196,9 +196,14 @@ end
     });
     std::fs::write(&batch_file, serde_json::to_string(&spec).unwrap()).unwrap();
 
+    // The binary under test is the build's own: in its checkout its state is the checkout's `.cache` (built elsewhere,
+    // the user's ree cache), and the release smoke running beside this test fails when the checkout changes. The jobs'
+    // module lists (record/<hash>.txt) go to this test's folder instead.
+    let state = root.join("state");
     let output = Command::new(env!("CARGO_BIN_EXE_ree"))
         .args(["run", "--batch"])
         .arg(&batch_file)
+        .env("RUR_STATE_DIR", &state)
         .output()
         .expect("ree run --batch executes");
     assert!(output.status.success(), "{}", describe(&output));
@@ -223,5 +228,7 @@ end
     assert!(deps.iter().any(|p| p.as_str().is_some_and(|s| s.ends_with("Helper.luau"))), "{deps:?}");
     assert!(deps.iter().any(|p| p.as_str().is_some_and(|s| s.ends_with("Config.json"))), "{deps:?}");
     assert!(results[1].get("dependencies").is_none());
+    let lists = std::fs::read_dir(state.join("record")).map(|entries| entries.count()).unwrap_or(0);
+    assert!(lists > 0, "the batch's module lists belong in the redirected state dir {}", state.display());
     let _ = std::fs::remove_dir_all(&root);
 }

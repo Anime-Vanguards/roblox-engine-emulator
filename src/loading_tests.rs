@@ -494,3 +494,42 @@ fn native_loadmodule_template_cache_isolates_envs_and_invalidates_on_change() {
         ],
     );
 }
+
+/// Without `--native` each `debug.loadmodule` is the module's chunk loaded in its own environment, as `require` loads
+/// one: its `script` resolves at load (a shared template's run-time lookups were charged 7.9 ns a read), and its
+/// environment's metatable is its own and writable, as prelude.luau Environment makes it.
+#[test]
+fn loadmodule_without_native_loads_each_chunk_in_its_own_environment() {
+    let engine = Engine::new(Options { load_module: true, ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    // as `ree run` and `ree record` load modules: interpreted, in safe environments whose imports resolve at load
+    engine_lua::modules::interpret_modules(&engine);
+    engine_lua::start(&lua, &engine).expect("start");
+    let source = format!(
+        "{MODULES}{}",
+        r##"
+        -- (os.clock charges a script's work from its first frame)
+        task.wait()
+        local Counter = Make("Counter", "return function(Count) local N = 0 for _ = 1, Count do if script then N += 1 end end return N end")
+        local function Cost(Run)
+            local Start = os.clock()
+            Run(1000)
+            return os.clock() - Start
+        end
+        local Required = Cost(require(Counter))
+        local Loaded = Cost(debug.loadmodule(Counter)())
+        local Again = Cost(debug.loadmodule(Counter)())
+        print("script reads cost as required", Required > 0, math.abs(Loaded - Required) < 1e-7, math.abs(Again - Required) < 1e-7)
+
+        local Reader = Make("Reader", "return function() return getfenv(1) end")
+        local First = getmetatable(debug.loadmodule(Reader)()())
+        local Second = getmetatable(debug.loadmodule(Reader)()())
+        local Wrote = pcall(function()
+            First.Marker = true
+        end)
+        print("metatables shared", rawequal(First, Second), "frozen", table.isfrozen(First), "writable", Wrote)
+        "##
+    );
+    let lines = script(&lua, &engine, &source);
+    check(&lines, &["script reads cost as required true true true", "metatables shared false frozen false writable true"]);
+}

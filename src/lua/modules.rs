@@ -574,18 +574,6 @@ pub fn environment(lua: &Lua, engine: &Rc<Engine>, script: InstanceId) -> LuaRes
     environment_in(lua, engine, script, None)
 }
 
-/// Frozen `{ __index = shared }` metatable shared by every per-script environment in this VM.
-fn shared_meta(lua: &Lua, engine: &Engine, shared: &LuaTable) -> LuaResult<LuaTable> {
-    if let Some(meta) = engine.lua.borrow().shared_meta.clone() {
-        return Ok(meta);
-    }
-    let meta = lua.create_table_with_capacity(0, 1)?;
-    meta.raw_set("__index", shared.clone())?;
-    meta.set_readonly(true);
-    engine.lua.borrow_mut().shared_meta = Some(meta.clone());
-    Ok(meta)
-}
-
 /// Clones a loaded top-level chunk template into a fresh closure bound to `env`, reusing the
 /// immutable `Proto` and its already-compiled native machine code without re-loading or re-JITing.
 fn clone_with_env(lua: &Lua, template: &LuaFunction, env: &LuaTable) -> LuaResult<LuaFunction> {
@@ -614,7 +602,10 @@ pub fn environment_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, vm: Vm
         if let (Some(req_begin), Some(req_finish)) = (req_begin, req_finish) {
             let script_val = instance_value(lua, engine, script)?;
             let require_fn = super::builtins::require_function(lua, script_val.clone(), LuaValue::Nil, req_begin, req_finish)?;
-            let meta = shared_meta(lua, engine, &shared)?;
+            // prelude.luau Environment's shape: each environment has a metatable of its own that the script may change
+            // (one frozen metatable shared by every environment refused those writes, and each script held one table less)
+            let meta = lua.create_table_with_capacity(0, 1)?;
+            meta.raw_set("__index", shared)?;
             let env = lua.create_table_with_capacity(0, 2)?;
             env.raw_set("script", script_val)?;
             env.raw_set("require", require_fn)?;
@@ -656,10 +647,17 @@ fn should_jit_chunk(source: &[u8]) -> bool {
     has(b"function") || has(b"for") || has(b"while") || has(b"repeat") || has(b"--!native")
 }
 
-/// Compiles a ModuleScript for `debug.loadmodule`, caching the loaded `Proto` (and its native
-/// machine code under `--native`) per `(script, source, full_name)` so repeated loads clone the
-/// closure into a fresh environment instead of re-loading and re-JITing on every reload.
+/// Compiles a ModuleScript for `debug.loadmodule`. Under `--native` it compiles with mutable sandbox globals, marks
+/// the chunk for safe-sandbox `setfenv` preservation and keeps the loaded `Proto` (and its native machine code) per
+/// `(script, source, full_name)`, so a repeated load clones the closure into a fresh environment instead of loading
+/// and compiling it again. Without `--native` every load is a module's chunk loaded afresh in its own environment
+/// ([`compile_in`]), as before: a shared template resolves its imports once, against an environment without the
+/// script's `script` and `require`, so each of their reads became a run-time lookup the work clock charges
+/// ([`crate::cost::LUAU_SLOW_IMPORT`]: 20,000 `script` reads cost a loaded module 214 us against a required one's 56).
 pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[u8]) -> LuaResult<LuaFunction> {
+    if !engine.options.native {
+        return compile_in(lua, engine, script, source, None);
+    }
     let env = environment_in(lua, engine, script, None)?;
     let name = engine.state.borrow().dom.full_name(&engine.reflection, script);
     if crate::profiler::active() {
@@ -679,92 +677,48 @@ pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId
         return clone_with_env(lua, &template, &env);
     }
 
-    let native = engine.options.native;
-    let bytecode = if native {
-        let cached = engine
-            .modules
-            .borrow()
-            .loadmodule_bytecode
-            .get(&script)
-            .and_then(|(cached_src, cached_bc)| (cached_src.as_ref() == &*source).then(|| cached_bc.clone()));
-        match cached {
-            Some(bc) => Some(bc),
-            None => {
-                let from_kept = matches!(&source, std::borrow::Cow::Borrowed(_))
-                    .then(|| kept_loadmodule_bytecode(engine, script, &source))
-                    .flatten();
-                if let Some(bc) = from_kept {
-                    let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                    engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                    Some(rc_bc)
-                } else {
-                    engine.modules.borrow_mut().text_compiles += 1;
-                    match loadmodule_compiler().compile(&*source) {
-                        Ok(bc) => {
-                            if matches!(&source, std::borrow::Cow::Borrowed(_)) {
-                                store_loadmodule_bytecode(engine, script, &source, &bc);
-                            }
-                            let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                            engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                            Some(rc_bc)
+    let cached = engine
+        .modules
+        .borrow()
+        .loadmodule_bytecode
+        .get(&script)
+        .and_then(|(cached_src, cached_bc)| (cached_src.as_ref() == &*source).then(|| cached_bc.clone()));
+    let bytecode = match cached {
+        Some(bc) => Some(bc),
+        None => {
+            let from_kept = matches!(&source, std::borrow::Cow::Borrowed(_))
+                .then(|| kept_loadmodule_bytecode(engine, script, &source))
+                .flatten();
+            if let Some(bc) = from_kept {
+                let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
+                engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
+                Some(rc_bc)
+            } else {
+                engine.modules.borrow_mut().text_compiles += 1;
+                match loadmodule_compiler().compile(&*source) {
+                    Ok(bc) => {
+                        if matches!(&source, std::borrow::Cow::Borrowed(_)) {
+                            store_loadmodule_bytecode(engine, script, &source, &bc);
                         }
-                        Err(_) => None,
+                        let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
+                        engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
+                        Some(rc_bc)
                     }
-                }
-            }
-        }
-    } else {
-        let cached = engine
-            .modules
-            .borrow()
-            .bytecode
-            .get(&script)
-            .and_then(|(cached_src, cached_bc)| (cached_src.as_ref() == &*source).then(|| cached_bc.clone()));
-        match cached {
-            Some(bc) => Some(bc),
-            None => {
-                let from_kept = matches!(&source, std::borrow::Cow::Borrowed(_))
-                    .then(|| kept_bytecode(engine, script, &source))
-                    .flatten();
-                if let Some(bc) = from_kept {
-                    let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                    engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                    Some(rc_bc)
-                } else {
-                    engine.modules.borrow_mut().text_compiles += 1;
-                    match compiler().compile(&*source) {
-                        Ok(bc) => {
-                            let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                            engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                            Some(rc_bc)
-                        }
-                        Err(_) => None,
-                    }
+                    Err(_) => None,
                 }
             }
         }
     };
 
-    // Load the cached template against a clean shared environment (no `script`/`require` keys) so
-    // `luau_load` resolves immutable library imports without baking per-script globals or retaining
-    // any caller's test environment in the template cache.
-    let shared = engine.lua.borrow().shared.clone().expect("shared globals");
-    let template_env = if native {
-        shared
-    } else {
-        let meta = shared_meta(lua, engine, &shared)?;
-        let clean = lua.create_table()?;
-        clean.set_metatable(Some(meta))?;
-        if engine.modules.borrow().interpreted || cfg!(not(feature = "jit")) {
-            unsafe { lua.exec_raw::<()>(&clean, |state| mlua::ffi::lua_setsafeenv(state, -1, 1))? };
-        }
-        clean
-    };
+    // The template is loaded against the shared globals (no `script`/`require` keys: the loadmodule compiler keeps
+    // those and the other sandbox-overridden globals mutable, so they are never imports) so `luau_load` resolves the
+    // library imports without baking per-script globals or keeping any caller's environment in the template cache.
+    let template_env = engine.lua.borrow().shared.clone().expect("shared globals");
     let chunk = match &bytecode {
         Some(bytecode) => lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
-        None => lua.load(&*source).set_compiler(if native { loadmodule_compiler() } else { compiler() }),
+        None => lua.load(&*source).set_compiler(loadmodule_compiler()),
     };
-    let skip_jit = native && !should_jit_chunk(&source);
+    let skip_jit = !should_jit_chunk(&source);
     let template = if skip_jit {
         #[cfg(feature = "jit")]
         let was_interpreted = engine.modules.borrow().interpret_all;
@@ -781,9 +735,7 @@ pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId
     } else {
         load(lua, engine, chunk.set_name(format!("={name}")).set_environment(template_env))?
     };
-    if native {
-        crate::cost::set_safe_sandbox(lua, &template)?;
-    }
+    crate::cost::set_safe_sandbox(lua, &template)?;
     engine
         .modules
         .borrow_mut()
@@ -1000,10 +952,15 @@ pub fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> Result<LuaValue, Str
     json_value_to_lua(lua, value).map_err(|error| error.to_string())
 }
 
-/// Loads the tiny precompiled JSON module wrapper without JIT codegen (avoiding thousands of
-/// redundant machine-code compiles for data-only JSON modules) while preserving the module's
-/// `={name}` chunk name (`debug.info(fn, "s")`) and per-load environment.
+/// Loads the tiny precompiled JSON module wrapper with the module's `={name}` chunk name (`debug.info(fn, "s")`) and
+/// per-load environment. Under `--native` it skips JIT codegen (avoiding thousands of redundant machine-code compiles
+/// for data-only JSON modules); otherwise it loads as every module chunk does ([`load`]), so a VM that compiles or
+/// defers native code still runs it as before.
 pub fn wrap_json_loadmodule(lua: &Lua, engine: &Rc<Engine>, name: &str, decode: LuaFunction, env: LuaTable) -> LuaResult<LuaFunction> {
+    if !engine.options.native {
+        let chunk = lua.load(json_wrapper_bytecode()).set_mode(mlua::chunk::ChunkMode::Binary).set_name(format!("={name}")).set_environment(env);
+        return load(lua, engine, chunk)?.call(decode);
+    }
     #[cfg(feature = "jit")]
     let was_interpreted = engine.modules.borrow().interpret_all;
     #[cfg(feature = "jit")]
