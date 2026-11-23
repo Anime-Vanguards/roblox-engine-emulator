@@ -85,8 +85,8 @@
 //! integer key a read finds, the empty slots a conversion walks and the entries `clear` frees. A read of a 16-byte string now
 //! costs what a client's does ([`cost::SHARED_MADE_STRING`]). Not matched yet: a read by a 16-byte key took a client 0.059 to
 //! 0.080 us (ree charges 0.03); a loop's step over 16-byte string values 0.025 to 0.029 more than over numbers (ree 0.003); an
-//! update with a trivial callback 0.70 in one probe and 0.38 to 0.43 in another (ree 0.33); increment 0.07 to 0.21 in three
-//! probes against an older probe's 0.37 to 0.43 ([`cost::SHARED_INCREMENT`]; ree charges 0.40); one key added and taken out
+//! update with a trivial callback 0.70 in one probe and 0.38 to 0.43 in another (ree 0.32); increment 0.07 to 0.21 in three
+//! probes against an older probe's 0.37 to 0.43 ([`cost::SHARED_INCREMENT`]; ree charges 0.39); one key added and taken out
 //! again and again 0.22 to 0.31 us a pair (ree 0.62, an add and a removal); reads of one list of colliding
 //! keys again and again about a third of ree's price (a client's cache: 2.0 to 2.4 us for the oldest of 1,024, ree 7.6; read
 //! once in each of 200 tables 8.4 to 8.7, matched); SharedTableRegistry's GetSharedTable 0.17 to 0.19 us and SetSharedTable
@@ -1570,12 +1570,12 @@ unsafe fn library<'a>(state: *mut ffi::lua_State) -> &'a Library {
     unsafe { &*(ffi::lua_touserdata(state, ffi::lua_upvalueindex(1)) as *const Library) }
 }
 
-/// An update in progress (SharedTable.update: [`update_c`]): its table, the values on the stack below its callback's result
-/// (update's arguments and the result: [`Conversion::new`]), and the table's version when update took its copy of the entries
-/// and the copy itself, which update holds while its callback runs. A local of update's C function, which holds no other Rust
-/// value while Luau runs: it is dropped as update returns, and as an error the callback raises passes through update (Luau
-/// raises C++ exceptions, and Rust drops its values on their way through `C-unwind` frames), so update lets go of its copy as
-/// it leaves, as a client's does.
+/// An update in progress (SharedTable.update: [`update_c`]): its table, its key (looked at and hashed once, in
+/// [`update_begin`], its string borrowed as a call's key is), the values on the stack below its callback's result (update's
+/// arguments and the result: [`Conversion::new`]), and the table's version when update took its copy of the entries and the
+/// copy itself, which update holds while its callback runs. A local of update's C function, which holds no other Rust value
+/// while Luau runs: it is dropped as update returns, and as an error the callback raises passes through update (see the
+/// comment at the callback's call in [`update_c`]), so update lets go of its copy as it leaves, as a client's does.
 ///
 /// Roblox calls the callback again, with the value then current, whenever a write, increment, clear or update of the table
 /// completed while it ran, and stores the result only of a call during which none did (measured in a playing client, Studio
@@ -1593,6 +1593,7 @@ unsafe fn library<'a>(state: *mut ffi::lua_State) -> &'a Library {
 /// own list).
 struct Updating {
     shared: Rc<Shared>,
+    key: Probe,
     height: usize,
     version: u64,
     snapshot: Option<Entries>,
@@ -1600,20 +1601,21 @@ struct Updating {
 
 impl Updating {
     /// The copy for a call of the callback, and the value that call gets.
-    fn copy(&mut self, lua: &Lua, engine: &Engine, store: &Store, key: &Probe) -> LuaResult<LuaValue> {
+    fn copy(&mut self, lua: &Lua, engine: &Engine, store: &Store) -> LuaResult<LuaValue> {
         self.version = self.shared.version.get();
         let snapshot = self.shared.entries.borrow().clone();
-        let old = read(lua, engine, store, &snapshot, key)?;
+        let old = read(lua, engine, store, &snapshot, &self.key)?;
         self.snapshot = Some(snapshot);
         Ok(old)
     }
 }
 
 /// SharedTable.update's checks, in a client's order, and the copy for its callback's first call (`updating`): the value the
-/// callback gets.
+/// callback gets. `count` is the call's count of arguments, of which only the first three are in the bridge ([`update_c`]):
+/// they are all update looks at, and give the same answers to its checks (an argument missing or nil).
 fn update_begin(lua: &Lua, library: &Library, count: c_int, updating: &mut Option<Updating>) -> Result<Vec<LuaValue>, Flow> {
     let (engine, store) = (&*library.engine, &*library.store);
-    let args = library.args(count)?;
+    let args = library.args(count.min(3))?;
     let shared = shared_arg(engine, &args, 0, "update")?;
     let key = key_of(args.get(1))?;
     charge(engine, key.price());
@@ -1623,16 +1625,15 @@ fn update_begin(lua: &Lua, library: &Library, count: c_int, updating: &mut Optio
     }
     // (an update whose checks passed marks its table before the first call: [`Shared::mark`])
     shared.mark();
-    let updating = updating.insert(Updating { shared, height: args.len() + 1, version: 0, snapshot: None });
-    Ok(vec![updating.copy(lua, engine, store, &key)?])
+    let updating = updating.insert(Updating { shared, key, height: count as usize + 1, version: 0, snapshot: None });
+    Ok(vec![updating.copy(lua, engine, store)?])
 }
 
-/// The callback's result for the update in progress (bridge slot 1, the key in slot 2): stored when no write, increment, clear
-/// or update of the table completed during the call (no value), else the value then current for another call.
+/// The callback's result for the update in progress (bridge slot 1): stored when no write, increment, clear or update of the
+/// table completed during the call (no value), else the value then current for another call.
 fn update_commit(lua: &Lua, library: &Library, updating: &mut Option<Updating>) -> Result<Vec<LuaValue>, Flow> {
     let (engine, store) = (&*library.engine, &*library.store);
-    let (result, key) = (library.take(1)?, library.take(2)?);
-    let key = key_of(&key)?;
+    let result = library.take(1)?;
     let Some(updating) = updating else { return raise("SharedTable.update has no update in progress") };
     // (the result converted first, above update's arguments, the copy still held: it raises before the change check)
     let value = convert_value(lua, engine, store, &result, updating.height, 0.0);
@@ -1640,12 +1641,12 @@ fn update_commit(lua: &Lua, library: &Library, updating: &mut Option<Updating>) 
     let (value, Some(mut entries)) = (value?, snapshot) else { return raise("SharedTable.update holds no copy") };
     if updating.shared.version.get() != updating.version {
         drop((value, entries));
-        charge(engine, key.price());
-        return Ok(vec![updating.copy(lua, engine, store, &key)?]);
+        charge(engine, updating.key.price());
+        return Ok(vec![updating.copy(lua, engine, store)?]);
     }
     // (stored in update's copy, which then becomes the table's entries: the table has not changed since the copy was taken,
     // as every change counts but a failed increment's key with no value, which the table, marked, no longer gets)
-    let replaced = put(engine, &mut entries, &key, value);
+    let replaced = put(engine, &mut entries, &updating.key, value);
     let before = updating.shared.entries.replace(entries);
     updating.shared.changed();
     drop((replaced, before));
@@ -1665,7 +1666,8 @@ pub(crate) unsafe extern "C-unwind" fn update_c(state: *mut ffi::lua_State) -> c
         let library = library(state);
         let count = ffi::lua_gettop(state);
         ffi::luaL_checkstack(state, 4, c"update".as_ptr());
-        bridge_in(state, 1, count);
+        // (update looks at its first three arguments only: the bridge takes no more, however many a script passes)
+        bridge_in(state, 1, count.min(3));
         let mut updating = None;
         if let Step::Raise(message, level) = library.step(|lua| update_begin(lua, library, count, &mut updating)) {
             drop(updating);
@@ -1678,10 +1680,15 @@ pub(crate) unsafe extern "C-unwind" fn update_c(state: *mut ffi::lua_State) -> c
             // (the callback, update's third argument, which update_begin checked)
             ffi::lua_pushvalue(state, 3);
             ffi::lua_pushvalue(state, value);
+            // (`updating` is alive across this call, unlike raw.rs's rule for raw C functions that no Rust value be alive at a
+            // raise: an error the callback raises unwinds through this frame and drops it, letting go of update's copy and of
+            // the key's string. That is sound only because this build's Luau raises C++ exceptions (luau0-src's `use_longjmp`
+            // is false) and Rust runs its drops for them on their way through `C-unwind` frames; a longjmp would skip them,
+            // which is undefined behaviour. `an_update_whose_callback_raised_lets_go_of_its_copy` in src/tests.rs guards it.
+            // update's own raises below drop `updating` first, as raw.rs's rule says.)
             ffi::lua_call(state, 1, 1);
-            // (its result and the key, for update_commit)
-            ffi::lua_pushvalue(state, 2);
-            bridge_in(state, value + 1, value + 2);
+            // (its result, for update_commit)
+            bridge_in(state, value + 1, value + 1);
             ffi::lua_settop(state, value);
             match library.step(|lua| update_commit(lua, library, &mut updating)) {
                 Step::Values(0) => {
@@ -1710,9 +1717,10 @@ pub(crate) unsafe extern "C-unwind" fn increment_c(state: *mut ffi::lua_State) -
         let library = library(state);
         let count = ffi::lua_gettop(state);
         ffi::luaL_checkstack(state, 4, c"increment".as_ptr());
-        bridge_in(state, 1, count);
+        // (increment looks at its first three arguments only, and they give the same answers to its checks: a delta left out)
+        bridge_in(state, 1, count.min(3));
         let step = library.step(|lua| {
-            let args = library.args(count)?;
+            let args = library.args(count.min(3))?;
             Ok(increment(lua, &library.engine, &args)?.into_vec())
         });
         if let Step::Raise(message, level) = step {
