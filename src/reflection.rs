@@ -245,8 +245,9 @@ pub struct ClassInfo {
     pub subclasses: Box<[ClassId]>,
     /// The dump's own deprecated lower-case members (inherited) and the member each stands for, by kind
     /// ([`Reflection::property_alias`], [`Reflection::method_alias`]): `brickColor` is BrickColor, `getService` GetService
+    /// (a method's with the class its behaviour is looked up from, [`Reflection::alias_lookup_class`])
     property_aliases: FxHashMap<NameId, NameId>,
-    method_aliases: FxHashMap<NameId, NameId>,
+    method_aliases: FxHashMap<NameId, (NameId, ClassId)>,
     own_properties: Vec<u32>,
     own_events: Vec<NameId>,
     own_methods: Vec<NameId>,
@@ -465,11 +466,18 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
 /// 'DefineFastInt' (lacking capability RobloxScript)", a string error pcall catches, before the arguments or the
 /// instance are looked at: with none, with tables, on another instance or on no instance at all it is the same error
 /// (tools/parity/probes/engine_capabilities.luau). ree answered nil (not emulated), so a settings helper that falls back
-/// on its default when the define raises went on with nil. At identity 4 (the command bar's) the RobloxScript ones raise
-/// the same and the LocalUser ones answer; a plugin lacks LocalUser too (the developer forum's identity table, not
-/// measured), and the edit run context, where plugin code runs, raises them all. Camera's two were measured the same in a
-/// playing client and its server (Studio 0.748: with and without the camera, on another instance, with any arguments; both
-/// cameras read the same function). services::install_capability_calls gives each its function.
+/// on its default when the define raises went on with nil. At identity 4 (the command bar's) DefineFastFlag, DefineFastInt,
+/// DefineFastString and GetResolutionScale raise the same and GetFastFlag, GetFastInt, GetFastString and GetEngineFeature
+/// answer; a plugin lacks LocalUser too (the developer forum's identity table; measured with the Workspace's two, below),
+/// and the edit run context, where plugin code runs, raises all but the ones that lack Plugin (below). Camera's two were
+/// measured the same in a playing client and its server (Studio 0.748: with and without the camera, on another instance,
+/// with any arguments; both cameras read the same function). So were the Workspace and WorldRoot ones (Studio 0.748; a
+/// WorldRoot one reads the same function on the Workspace and on a WorldModel and raises on both; the Workspace's
+/// BreakJoints and MakeJoints take a part list, and a Model's are other members). A plugin's code (Studio 0.748, edit
+/// mode) raises the same for those that lack RobloxScript, RobloxEngine or LocalUser, and gets past the check for the six
+/// that lack Plugin (Plugin Security in Roblox's API reference: `StepPhysics()` and `BreakJoints()` raise "Argument 1
+/// missing or nil"), so in edit mode, where ree runs a plugin's code, those six report themselves not emulated instead.
+/// services::install_capability_calls gives each its function.
 pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "DefineFastFlag", "RobloxScript"),
     ("DataModel", "DefineFastInt", "RobloxScript"),
@@ -481,6 +489,28 @@ pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("GuiService", "GetResolutionScale", "RobloxScript"),
     ("Camera", "Zoom", "RobloxScript"),
     ("Camera", "SetImageServerView", "RobloxScript"),
+    ("WorldRoot", "GetAwakeContactNormals", "RobloxScript"),
+    ("WorldRoot", "GetAwakeContactParts", "RobloxScript"),
+    ("WorldRoot", "GetAwakeContactPositions", "RobloxScript"),
+    ("WorldRoot", "GetAwakeRootParts", "RobloxScript"),
+    ("WorldRoot", "SetInsertPoint", "RobloxScript"),
+    ("WorldRoot", "CacheCurrentTerrain", "RobloxScript"),
+    ("WorldRoot", "ClearCachedTerrain", "RobloxScript"),
+    ("WorldRoot", "RaycastCachedTerrain", "RobloxScript"),
+    ("WorldRoot", "Simulate", "RobloxEngine"),
+    ("WorldRoot", "StepPhysics", "Plugin"),
+    ("WorldRoot", "IKMoveTo", "Plugin"),
+    ("Workspace", "CalculateJumpDistance", "RobloxScript"),
+    ("Workspace", "CalculateJumpHeight", "RobloxScript"),
+    ("Workspace", "CalculateJumpPower", "RobloxScript"),
+    ("Workspace", "SetAvatarUnificationMode", "RobloxScript"),
+    ("Workspace", "SetMeshPartHeadsAndAccessories", "RobloxScript"),
+    ("Workspace", "ZoomToExtents", "Plugin"),
+    ("Workspace", "ApplyRecommendedStreamingSettings", "Plugin"),
+    ("Workspace", "ExperimentalSolverIsEnabled", "LocalUser"),
+    ("Workspace", "SetPhysicsThrottleEnabled", "LocalUser"),
+    ("Workspace", "BreakJoints", "Plugin"),
+    ("Workspace", "MakeJoints", "Plugin"),
 ];
 
 // Callbacks the dump leaves out (it lists none for any class): every callback Roblox's API dump lets
@@ -901,7 +931,8 @@ impl Reflection {
     /// archivable, workspace), and such a method (getService, getChildren, takeDamage), plus the two Players methods
     /// named otherwise. A client treats each as the member itself: an alias property reads and writes the other's value
     /// and its Changed names the other; an alias method does the other's work through a function of its own (measured in
-    /// a playing client, tools/parity/probes/aliases.luau). Events keep signals of their own (lua/instance.rs fires them).
+    /// a playing client, tools/parity/probes/aliases.luau), the work of the member its own class declares
+    /// ([`Self::alias_lookup_class`]). Events keep signals of their own (lua/instance.rs fires them).
     fn link_aliases(&mut self) {
         const NAMED_OTHERWISE: &[(&str, &str, &str)] =
             &[("Players", "players", "GetPlayers"), ("Players", "playerFromCharacter", "GetPlayerFromCharacter")];
@@ -927,7 +958,7 @@ impl Reflection {
             let mut methods = FxHashMap::default();
             for &name in &class.methods {
                 if let Some(twin) = upper(&self.names, &self.name_ids, name).filter(|twin| class.methods.contains(twin)) {
-                    methods.insert(name, twin);
+                    methods.insert(name, (twin, self.alias_lookup_class(id as ClassId, name, twin)));
                 }
             }
             for &(class_name, alias, twin) in NAMED_OTHERWISE {
@@ -935,7 +966,7 @@ impl Reflection {
                     && class.is_a(*owner)
                     && class.methods.contains(alias)
                 {
-                    methods.insert(*alias, *twin);
+                    methods.insert(*alias, (*twin, self.alias_lookup_class(id as ClassId, *alias, *twin)));
                 }
             }
             let class = &mut self.classes[id];
@@ -953,11 +984,24 @@ impl Reflection {
         if aliases.is_empty() { None } else { aliases.get(&name).copied() }
     }
 
-    /// The method whose work a deprecated lower-case method of `class` does ([`Self::link_aliases`]): `getService` -> GetService.
+    /// The method whose work a deprecated lower-case method of `class` does ([`Self::link_aliases`]): `getService` -> GetService,
+    /// with the class its behaviour is looked up from ([`Self::alias_lookup_class`]).
     #[inline]
-    pub fn method_alias(&self, class: ClassId, name: NameId) -> Option<NameId> {
+    pub fn method_alias(&self, class: ClassId, name: NameId) -> Option<(NameId, ClassId)> {
         let aliases = &self.classes[class as usize].method_aliases;
         if aliases.is_empty() { None } else { aliases.get(&name).copied() }
+    }
+
+    /// The class a deprecated lower-case method `alias` of `class` finds the behaviour of its `twin` from: `class` itself, but
+    /// where a class below the one that declares the alias declares a member of the twin's name of its own, the declaring
+    /// class, whose member the alias stands for. The Workspace's `breakJoints` and `makeJoints` are Model's: a playing client
+    /// and its server (Studio 0.748) read the same function on the Workspace as on a Model and run it with no capability
+    /// check (`workspace:breakJoints()` returns, a Model's welds break), where the Workspace's own BreakJoints and MakeJoints,
+    /// which take a part list, lack Plugin. Selection's `remove` is Instance's in the same way (the Parent lock's error where
+    /// its own Remove lacks Plugin).
+    fn alias_lookup_class(&self, class: ClassId, alias: NameId, twin: NameId) -> ClassId {
+        let owner = self.declaring_class(class, alias);
+        if self.declaring_class(class, twin) == self.declaring_class(owner, twin) { class } else { owner }
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -10863,6 +10863,105 @@ fn engine_only_methods_raise_a_game_scripts_capability_error_in_every_run_contex
     }
 }
 
+/// Workspace's and WorldRoot's engine-only methods raise a game script's capability error as a playing client and its server
+/// do (Studio 0.748): the method reads as a function, a call raises before the arguments or the instance are looked at, and a
+/// WorldRoot one is the same function on the Workspace and on a WorldModel. They answered nil and reported themselves
+/// missing. A plugin's code (edit mode) may call the six that lack only Plugin, which still report themselves not emulated.
+/// The Workspace's BreakJoints and MakeJoints are its own: a Model's are other members, which a game script may call, and so
+/// are the lower-case `breakJoints` and `makeJoints` the Workspace inherits from Model (a playing client and its server run
+/// them with no capability check), as Instance's `remove` is on Selection, whose own Remove lacks Plugin.
+#[test]
+fn workspace_and_world_root_engine_only_methods_raise_a_game_scripts_capability_error() {
+    use super::RunContext;
+    // (name, the capability a game script lacks, declared by WorldRoot)
+    const METHODS: &[(&str, &str, bool)] = &[
+        ("GetAwakeContactNormals", "RobloxScript", true),
+        ("GetAwakeContactParts", "RobloxScript", true),
+        ("GetAwakeContactPositions", "RobloxScript", true),
+        ("GetAwakeRootParts", "RobloxScript", true),
+        ("SetInsertPoint", "RobloxScript", true),
+        ("CacheCurrentTerrain", "RobloxScript", true),
+        ("ClearCachedTerrain", "RobloxScript", true),
+        ("RaycastCachedTerrain", "RobloxScript", true),
+        ("Simulate", "RobloxEngine", true),
+        ("StepPhysics", "Plugin", true),
+        ("IKMoveTo", "Plugin", true),
+        ("CalculateJumpDistance", "RobloxScript", false),
+        ("CalculateJumpHeight", "RobloxScript", false),
+        ("CalculateJumpPower", "RobloxScript", false),
+        ("SetAvatarUnificationMode", "RobloxScript", false),
+        ("SetMeshPartHeadsAndAccessories", "RobloxScript", false),
+        ("ZoomToExtents", "Plugin", false),
+        ("ApplyRecommendedStreamingSettings", "Plugin", false),
+        ("ExperimentalSolverIsEnabled", "LocalUser", false),
+        ("SetPhysicsThrottleEnabled", "LocalUser", false),
+        ("BreakJoints", "Plugin", false),
+        ("MakeJoints", "Plugin", false),
+    ];
+    let list: Vec<String> = METHODS.iter().map(|(name, _, root)| format!("{{ \"{name}\", {root} }}")).collect();
+    let script = r#"
+        local Model = Instance.new("WorldModel")
+        for _, Entry in { METHODS } do
+            local Name, Root = Entry[1], Entry[2]
+            local Ok, Message = pcall(workspace[Name], workspace)
+            if Ok then
+                print(Name, "answers", Message)
+                continue
+            end
+            -- arguments of any type, no instance, or another instance: the same error
+            local Typed = select(2, pcall(workspace[Name], workspace, {}, {}))
+            local NoSelf = select(2, pcall(workspace[Name]))
+            local OtherSelf = select(2, pcall(workspace[Name], game))
+            local Line = { Name, typeof(workspace[Name]), tostring(Ok), type(Message), Message, tostring(Typed == Message and NoSelf == Message and OtherSelf == Message) }
+            if Root then
+                local ModelOk, ModelMessage = pcall(Model[Name], Model)
+                table.insert(Line, tostring(Model[Name] == workspace[Name]))
+                table.insert(Line, tostring(not ModelOk and ModelMessage == Message))
+            end
+            print(table.concat(Line, " "))
+        end
+        local Plain = Instance.new("Model")
+        for _, Name in { "BreakJoints", "MakeJoints" } do
+            local Ok, Message = pcall(Plain[Name], Plain)
+            print("Model", Name, typeof(Plain[Name]), tostring(Plain[Name] ~= workspace[Name]), tostring(Ok or not string.find(Message, "lacking capability", 1, true)))
+        end
+        -- Model's lower-case breakJoints and makeJoints, which the Workspace inherits, are Model's members, not the
+        -- Workspace's own BreakJoints and MakeJoints; Instance's remove is not Selection's own Remove
+        for _, Name in { "breakJoints", "makeJoints" } do
+            local Ok, Message = pcall((workspace :: any)[Name], workspace)
+            print("workspace", Name, tostring(Ok or not string.find(Message, "lacking capability", 1, true)))
+        end
+        local Selection = game:GetService("Selection")
+        local _, Removed = pcall((Selection :: any).remove, Selection)
+        print("Selection remove", tostring(string.find(Removed, "The Parent property of Selection is locked", 1, true) == 1))
+    "#
+    .replace("METHODS", &list.join(", "));
+    for (mode, run_context) in [("play", RunContext::Client), ("play", RunContext::Server), ("edit", RunContext::Edit), ("edit", RunContext::Client)] {
+        let mut want = Vec::new();
+        for &(name, capability, root) in METHODS {
+            if mode == "edit" && capability == "Plugin" {
+                want.push(format!("missing: Workspace.{name} is not emulated"));
+                want.push(format!("print: {name} answers nil"));
+                continue;
+            }
+            let both = if root { " true true" } else { "" };
+            want.push(format!("print: {name} function false string The current thread cannot call '{name}' (lacking capability {capability}) true{both}"));
+        }
+        for name in ["BreakJoints", "MakeJoints"] {
+            want.push(format!("missing: Model.{name} is not emulated"));
+            want.push(format!("print: Model {name} function true true"));
+        }
+        for name in ["breakJoints", "makeJoints"] {
+            want.push(format!("missing: Workspace.{name} is not emulated"));
+            want.push(format!("print: workspace {name} true"));
+        }
+        want.push("print: Selection remove true".into());
+        let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, &script);
+        assert_eq!(output, want, "{mode} {run_context:?}");
+    }
+}
+
 /// What Studio 0.747's dump adds and ree does not emulate reports itself (an Output line of kind `missing` at its first use)
 /// and answers nil; what the dump drops is no member any more.
 #[test]
