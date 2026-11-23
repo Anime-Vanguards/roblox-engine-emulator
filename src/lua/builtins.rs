@@ -62,10 +62,11 @@ const TARGET: c_int = 1;
 const PHASE: c_int = 2;
 const KEY: c_int = 3;
 const CHUNK: c_int = 4;
+// (phases are the VM's integer, which is i32 on wasm32: the browser build matches them against lua_tointegerx)
 /// Waiting on another thread's load: ask again when resumed
-const WAITING: i64 = 1;
+const WAITING: ffi::lua_Integer = 1;
 /// Running the module's chunk: report its outcome
-const RUNNING: i64 = 2;
+const RUNNING: ffi::lua_Integer = 2;
 
 unsafe fn require_body(state: *mut ffi::lua_State) -> c_int {
     unsafe {
@@ -98,12 +99,12 @@ unsafe fn require_ask(state: *mut ffi::lua_State) -> c_int {
             }
             2 => {
                 ffi::lua_settop(state, TARGET);
-                ffi::lua_pushinteger(state, WAITING as _);
+                ffi::lua_pushinteger(state, WAITING);
                 ffi::lua_yield(state, 0)
             }
             _ => {
                 // (3: run the chunk A, then report its outcome for the module B)
-                ffi::lua_pushinteger(state, RUNNING as _);
+                ffi::lua_pushinteger(state, RUNNING);
                 ffi::lua_replace(state, PHASE);
                 // (stack: target, phase, A, B: the key goes to 3, the chunk to 4)
                 ffi::lua_insert(state, KEY);
