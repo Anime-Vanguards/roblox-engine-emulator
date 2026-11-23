@@ -4562,7 +4562,8 @@ fn the_broadphase_follows_the_dom_and_starts_over_past_its_log() {
     }
     run(&lua, &engine, r##"assert(workspace:Raycast(Vector3.new(0, 10, 0), Vector3.new(0, -20, 0)).Instance.Name == "Revealed", "revealed")"##);
     assert_eq!(walks(), 1, "no walk for the reveal");
-    // past the log: 3,000 parts moved out of the Workspace and back twice (12,000 entries) before a query
+    // past the log: more distinct instances changed before a query than it keeps, 3,000 parts moved out of the Workspace and
+    // back and 4,000 new folders put in it (7,000 entries, past twice the 3,006 parts held)
     run(
         &lua,
         &engine,
@@ -4578,11 +4579,12 @@ fn the_broadphase_follows_the_dom_and_starts_over_past_its_log() {
             Many[I] = Piece
         end
         assert(#workspace:GetPartBoundsInBox(CFrame.new(150, 0, 60), Vector3.new(200, 2, 200)) == 3000)
-        for _ = 1, 2 do
-            for _, Piece in Many do
-                Piece.Parent = nil
-                Piece.Parent = Folder
-            end
+        for _, Piece in Many do
+            Piece.Parent = nil
+            Piece.Parent = Folder
+        end
+        for _ = 1, 4000 do
+            Instance.new("Folder").Parent = Folder
         end
         Many[1].Parent = nil
         assert(#workspace:GetPartBoundsInBox(CFrame.new(150, 0, 60), Vector3.new(200, 2, 200)) == 2999, "after the overflow")
@@ -4591,4 +4593,256 @@ fn the_broadphase_follows_the_dom_and_starts_over_past_its_log() {
     assert_eq!(walks(), 2, "the overflowed log made one walk");
     let (_, sound, parts) = super::query::index_state(&engine);
     assert!(sound && parts == 1 + 5 + 2999, "{parts} parts");
+}
+
+/// Changes to instances the log holds already add nothing to it (dom.rs Watch::logged, flags::LOGGED): a part moved back and forth
+/// 10,000 times between two queries, one written 100,000 times, and 3,000 parts moved out of the Workspace and back twice log each
+/// instance once, so the next query takes them from the log without walking the Workspace (the moves made 20,000 and 12,000
+/// entries, past the log's 6,000, and the query walked it), and its answers are right.
+#[test]
+fn changes_to_the_same_instances_never_overflow_the_broadphase_log() {
+    let (lua, engine) = start_play();
+    let walks = || super::broadphase::WORKSPACE_WALKS.with(|walks| walks.get());
+    run(
+        &lua,
+        &engine,
+        r##"
+        local A, B = Instance.new("Folder"), Instance.new("Folder")
+        A.Parent, B.Parent = workspace, workspace
+        local Many = {}
+        for I = 1, 3000 do
+            local Piece = Instance.new("Part")
+            Piece.Anchored = true
+            Piece.CFrame = CFrame.new(100 + (I % 50) * 2, 0, (I // 50) * 2)
+            Piece.Parent = A
+            Many[I] = Piece
+        end
+        local Lone = Instance.new("Part")
+        Lone.Anchored = true
+        Lone.Size = Vector3.new(4, 4, 4)
+        Lone.Parent = A
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(150, 0, 60), Vector3.new(200, 2, 200)) == 3000)
+        shared.A, shared.B, shared.Many, shared.Lone = A, B, Many, Lone
+        "##,
+    );
+    super::broadphase::WORKSPACE_WALKS.with(|walks| walks.set(0));
+    run(
+        &lua,
+        &engine,
+        r##"
+        local A, B, Lone = shared.A, shared.B, shared.Lone
+        for I = 1, 10000 do
+            Lone.Parent = if I % 2 == 1 then B else A
+        end
+        Lone.CFrame = CFrame.new(0, -50, 0)
+        local Hit = workspace:Raycast(Vector3.new(0, -40, 0), Vector3.new(0, -20, 0))
+        assert(Hit and Hit.Instance == Lone and Lone.Parent == A, "moved 10,000 times")
+        "##,
+    );
+    assert_eq!(walks(), 0, "a part moved 10,000 times came from the log");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Lone = shared.Lone
+        for I = 1, 100000 do
+            Lone.CFrame = CFrame.new(I % 7, -50, 0)
+        end
+        local Hit = workspace:Raycast(Vector3.new(100000 % 7, -40, 0), Vector3.new(0, -20, 0))
+        assert(Hit and Hit.Instance == Lone, "written 100,000 times")
+        "##,
+    );
+    assert_eq!(walks(), 0, "a part written 100,000 times came from the log");
+    run(
+        &lua,
+        &engine,
+        r##"
+        for _ = 1, 2 do
+            for _, Piece in shared.Many do
+                Piece.Parent = nil
+                Piece.Parent = shared.B
+            end
+        end
+        shared.Many[1].Parent = nil
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(150, 0, 60), Vector3.new(200, 2, 200)) == 2999, "moved out and back twice")
+        "##,
+    );
+    assert_eq!(walks(), 0, "3,000 parts moved out and back twice came from the log");
+    super::query::index_matches_a_walk(&engine).unwrap();
+}
+
+/// The log keeps as many instances as the last walk of the Workspace visited (broadphase.rs Index::limit), so a walk an overflow
+/// forces follows as many changed instances as it visits: beside 20,000 folders and 10 parts, 10,000 folders moved between two
+/// queries come from the log (they overflowed a log of 4,096 entries and the query walked the Workspace), and only more instances
+/// than the walk visited start the index over.
+#[test]
+fn the_broadphase_log_keeps_as_many_instances_as_its_walk_visits() {
+    let (lua, engine) = start_play();
+    let walks = || super::broadphase::WORKSPACE_WALKS.with(|walks| walks.get());
+    super::broadphase::WORKSPACE_WALKS.with(|walks| walks.set(0));
+    run(
+        &lua,
+        &engine,
+        r##"
+        local A, B = Instance.new("Folder"), Instance.new("Folder")
+        A.Parent, B.Parent = workspace, workspace
+        local Folders = {}
+        for I = 1, 20000 do
+            Folders[I] = Instance.new("Folder")
+            Folders[I].Parent = A
+        end
+        for I = 1, 10 do
+            local Piece = Instance.new("Part")
+            Piece.Anchored = true
+            Piece.CFrame = CFrame.new(I * 4, 0, 0)
+            Piece.Parent = A
+        end
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(22, 0, 0), Vector3.new(44, 2, 2)) == 10)
+        shared.A, shared.B, shared.Folders = A, B, Folders
+        "##,
+    );
+    assert_eq!(walks(), 1, "the first query made the index");
+    run(
+        &lua,
+        &engine,
+        r##"
+        for I = 1, 10000 do
+            shared.Folders[I].Parent = shared.B
+        end
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(22, 0, 0), Vector3.new(44, 2, 2)) == 10)
+        "##,
+    );
+    assert_eq!(walks(), 1, "10,000 folders moved came from the log");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local C = Instance.new("Folder")
+        C.Parent = workspace
+        for _, Folder in shared.Folders do
+            Folder.Parent = C
+        end
+        for _ = 1, 1000 do
+            Instance.new("Folder").Parent = C
+        end
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(22, 0, 0), Vector3.new(44, 2, 2)) == 10)
+        "##,
+    );
+    assert_eq!(walks(), 2, "21,000 instances changed, more than the walk visited: one walk");
+    super::query::index_matches_a_walk(&engine).unwrap();
+}
+
+/// A chain of parts, each parented under the one before, that moves costs the broadphase's next query a look at each part once:
+/// 2,000 parts moved within the Workspace, parented out of it, and built inside it part by part between two queries each take
+/// a few thousand looks at instances (broadphase::SYNC_VISITS), where each part's walk went down the rest of the chain again
+/// (2 million: 0.45 s of host time at 4,000 parts), and the index and the answers stay right.
+#[test]
+fn a_chain_of_parts_that_moves_costs_the_broadphase_its_length() {
+    let (lua, engine) = start_play();
+    let visits = || super::broadphase::SYNC_VISITS.with(|visits| visits.replace(0));
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Holder, Other = Instance.new("Folder"), Instance.new("Folder")
+        Holder.Parent, Other.Parent = workspace, workspace
+        function shared.Chain(Count)
+            local First, At = nil, Holder
+            for I = 1, Count do
+                local Piece = Instance.new("Part")
+                Piece.Anchored = true
+                Piece.Size = Vector3.new(1, 1, 1)
+                Piece.CFrame = CFrame.new(I * 2, 0, 0)
+                Piece.Parent = At
+                First = First or Piece
+                At = Piece
+            end
+            return First
+        end
+        function shared.Count()
+            return #workspace:GetPartBoundsInBox(CFrame.new(2001, 0, 0), Vector3.new(4002, 2, 2))
+        end
+        shared.First, shared.Other = shared.Chain(2000), Other
+        assert(shared.Count() == 2000)
+        "##,
+    );
+    visits();
+    run(&lua, &engine, r##"shared.First.Parent = shared.Other assert(shared.Count() == 2000, "moved within the Workspace")"##);
+    let moved = visits();
+    super::query::index_matches_a_walk(&engine).unwrap();
+    run(&lua, &engine, r##"shared.First.Parent = nil assert(shared.Count() == 0, "parented out")"##);
+    let out = visits();
+    super::query::index_matches_a_walk(&engine).unwrap();
+    run(&lua, &engine, r##"shared.Chain(2000) assert(shared.Count() == 2000, "built inside")"##);
+    let built = visits();
+    super::query::index_matches_a_walk(&engine).unwrap();
+    for (what, visits) in [("moved within the Workspace", moved), ("parented out", out), ("built inside", built)] {
+        assert!(visits <= 2 * 2000 + 10, "a chain of 2,000 parts {what}: the next query looked at {visits} instances");
+    }
+}
+
+/// The broadphase holds what a walk of the Workspace finds after random rounds of parts moved below one another (chains and
+/// trees of parts), out of the Workspace and back, destroyed, written and made, several changes to the same instances in a round,
+/// before each round's query: its walks of what moved, each instance looked at once, take what each part's own walk took.
+#[test]
+fn the_broadphase_follows_parts_moved_below_one_another() {
+    for seed in [3, 77, 4242] {
+        let (lua, engine) = start_play();
+        run(
+            &lua,
+            &engine,
+            &r##"
+            local Rng = Random.new(__SEED__)
+            local Store = Instance.new("Folder")
+            Store.Parent = game:GetService("ReplicatedStorage")
+            local Holders = { workspace, Store }
+            for I = 1, 3 do
+                local Holder = Instance.new(if I == 3 then "Model" else "Folder")
+                Holder.Parent = workspace
+                table.insert(Holders, Holder)
+            end
+            local Parts = {}
+            local function NewPart()
+                local Piece = Instance.new("Part")
+                Piece.Anchored = true
+                Piece.Size = Vector3.new(1, 1, 1)
+                Piece.CFrame = CFrame.new(Rng:NextInteger(-50, 50), Rng:NextInteger(-50, 50), 0)
+                Piece.Parent = if #Parts > 0 and Rng:NextNumber() < 0.6 then Parts[Rng:NextInteger(1, #Parts)] else Holders[Rng:NextInteger(1, #Holders)]
+                table.insert(Parts, Piece)
+            end
+            for _ = 1, 200 do
+                NewPart()
+            end
+            function shared.Round()
+                for _ = 1, 60 do
+                    local Piece = Parts[Rng:NextInteger(1, #Parts)]
+                    local Roll = Rng:NextNumber()
+                    pcall(function()
+                        if Roll < 0.45 then
+                            Piece.Parent = Parts[Rng:NextInteger(1, #Parts)]
+                        elseif Roll < 0.6 then
+                            Piece.Parent = Holders[Rng:NextInteger(1, #Holders)]
+                        elseif Roll < 0.7 then
+                            Piece.Parent = nil
+                        elseif Roll < 0.85 then
+                            Piece.CFrame = CFrame.new(Rng:NextInteger(-50, 50), Rng:NextInteger(-50, 50), 0)
+                        elseif Roll < 0.9 then
+                            Piece:Destroy()
+                        else
+                            NewPart()
+                        end
+                    end)
+                end
+                return #workspace:GetPartBoundsInBox(CFrame.new(), Vector3.new(120, 120, 4))
+            end
+            "##
+            .replace("__SEED__", &seed.to_string()),
+        );
+        for round in 0..40 {
+            run(&lua, &engine, "shared.Round()");
+            super::query::index_matches_a_walk(&engine).unwrap_or_else(|error| panic!("seed {seed}, round {round}: {error}"));
+        }
+        let (_, sound, _) = super::query::index_state(&engine);
+        assert!(sound, "seed {seed}: the tree's links and boxes hold");
+    }
 }

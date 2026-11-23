@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     reflection::{ClassId, K, NameId, Reflection},
@@ -656,9 +656,10 @@ pub struct Dom {
 /// What changed under `root` (the Workspace) since the spatial index last took the log (world/broadphase.rs): the instances
 /// attached below it, detached from it (with the indexed instances below one, which may leave it later without passing through
 /// the root: Destroy takes a model out first), put in place of another there or given another class there, and the indexed
-/// instances freed (`moved`, every time), and the indexed instances written (`written`, once until taken: [`flags::LOGGED`]). Each entry
-/// is a few ids of work for the index, so a change costs it what the change touched, never a walk of the root. Past `limit`
-/// entries the log stops and says so (`overflowed`), and the index starts over from the root, so a run that stops querying
+/// instances freed (`moved`), and the indexed instances written (`written`), each instance once until the index takes the log
+/// (`moved`: [`Watch::logged`]; `written`: [`flags::LOGGED`]), however often it moves or is written. Each entry is a few ids of
+/// work for the index, so a change costs it what the change touched, never a walk of the root. Past `limit` entries (distinct
+/// instances) the log stops and says so (`overflowed`), and the index starts over from the root, so a run that stops querying
 /// keeps no more than that.
 pub struct Watch {
     pub root: InstanceId,
@@ -666,13 +667,15 @@ pub struct Watch {
     pub written: Vec<InstanceId>,
     pub limit: usize,
     pub overflowed: bool,
+    /// The instances in `moved` (a stale id stays apart from its slot's next instance)
+    logged: FxHashSet<InstanceId>,
     /// A leaving subtree's walk (Dom::log_leaving)
     walk: Vec<InstanceId>,
 }
 
 impl Watch {
     pub fn new(root: InstanceId, limit: usize) -> Self {
-        Watch { root, moved: Vec::new(), written: Vec::new(), limit, overflowed: false, walk: Vec::new() }
+        Watch { root, moved: Vec::new(), written: Vec::new(), limit, overflowed: false, logged: FxHashSet::default(), walk: Vec::new() }
     }
 
     fn room(&mut self) -> bool {
@@ -680,8 +683,16 @@ impl Watch {
             self.overflowed = true;
             self.moved = Vec::new();
             self.written = Vec::new();
+            self.logged = FxHashSet::default();
         }
         !self.overflowed
+    }
+
+    /// What the log holds, `moved` and `written`, taken by the index: the log starts again with nothing in it (the caller clears
+    /// the written instances' [`flags::LOGGED`]).
+    pub fn take(&mut self) -> (Vec<InstanceId>, Vec<InstanceId>) {
+        self.logged.clear();
+        (std::mem::take(&mut self.moved), std::mem::take(&mut self.written))
     }
 }
 
@@ -1244,10 +1255,13 @@ impl Dom {
         false
     }
 
+    /// Logs `id` among the instances that moved, unless it is there already.
     fn log_moved(&mut self, id: InstanceId) {
         if let Some(watch) = &mut self.watch
+            && !watch.logged.contains(&id)
             && watch.room()
         {
+            watch.logged.insert(id);
             watch.moved.push(id);
         }
     }

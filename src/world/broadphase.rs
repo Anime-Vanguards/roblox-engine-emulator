@@ -7,9 +7,10 @@
 //! The index follows the dom through its change log (dom.rs `Watch`): the instances attached below the Workspace, detached
 //! from it, replaced or given another class there, the indexed parts freed, and the indexed parts written. A query first takes
 //! what the log holds: an instance that moved has its subtree's parts put in or taken out, a written part its solid and flags
-//! read again. So a query after a change does work for what changed, never a walk of the Workspace; the walk happens when the
-//! index is first made and when the log overflowed (dom.rs `Watch::limit`, at least twice the parts the index holds), which
-//! takes as many changes as the walk visits parts.
+//! read again, each instance once however often it changed and however many of its ancestors moved too. So a query after a
+//! change does work for what changed, never a walk of the Workspace; the walk happens when the index is first made and when the
+//! log overflowed (dom.rs `Watch::limit`: at least twice the parts the index holds and the instances the last walk visited, each
+//! instance logged once until taken), which takes as many distinct instances changed as the walk visits.
 //!
 //! What a query asks of the index is a superset: the parts whose bounds, a box around each part's bounding sphere (the sphere
 //! query.rs `ray_solid` first tests against), meet the query's box or segment, both grown by more than float32 rounding can
@@ -329,12 +330,20 @@ thread_local! {
     pub(crate) static TAKEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// How many times [`sort_by_order`] has ordered by the trie with one node for each list ([`Trie::keyed`]) on this thread (tests)
     pub(crate) static KEYED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// How many instances the walks of what moved have looked at, taking the log, on this thread (tests)
+    pub(crate) static SYNC_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Counts what a query took ([`TAKEN`], tests)
 fn taken(_count: usize) {
     #[cfg(test)]
     TAKEN.with(|taken| taken.set(taken.get() + _count as u64));
+}
+
+/// Counts an instance a walk of what moved looked at ([`SYNC_VISITS`], tests)
+fn visited() {
+    #[cfg(test)]
+    SYNC_VISITS.with(|visits| visits.set(visits.get() + 1));
 }
 
 /// The Workspace's parts in a tree ([`Index::sync`] keeps it in step with the dom)
@@ -359,6 +368,8 @@ pub struct Index {
     stack: Vec<u32>,
     seen: FxHashSet<InstanceId>,
     walk: Vec<InstanceId>,
+    /// How many instances the last walk of the Workspace visited ([`Index::limit`])
+    walked: usize,
     names: Option<Names>,
 }
 
@@ -409,9 +420,15 @@ impl Index {
             return;
         }
         crate::profiler::caches::miss(crate::profiler::caches::Cache::Queries);
-        let (mut moved, mut written) = (std::mem::take(&mut watch.moved), std::mem::take(&mut watch.written));
+        let (mut moved, mut written) = watch.take();
         let mut removed = 0u64;
-        // what moved first (a part written and then moved out is gone before its write is looked at)
+        // what moved first (a part written and then moved out is gone before its write is looked at). Each instance is looked at
+        // once: a walk does not go into an instance an earlier walk reached, whose subtree that walk took whole with the same
+        // answer (the tree stays as it is while the log is taken, and an instance below the Workspace or out of it has its subtree
+        // with it), so a chain of parts that moved costs the walk its length, where each part's walk went down the rest of it.
+        // (A log naming the Workspace itself, given another class, walks each entry's subtree whole, as each did: that walk's
+        // answer is not its descendants'.)
+        let once = !moved.contains(&workspace);
         self.seen.clear();
         for &id in &moved {
             if !self.seen.insert(id) {
@@ -425,9 +442,15 @@ impl Index {
             self.walk.clear();
             self.walk.push(id);
             while let Some(node) = self.walk.pop() {
+                visited();
                 let (class, indexed) = {
                     let instance = state.dom.at(node);
-                    self.walk.extend_from_slice(&instance.children);
+                    if once {
+                        let seen = &mut self.seen;
+                        self.walk.extend(instance.children.iter().filter(|&&child| seen.insert(child)));
+                    } else {
+                        self.walk.extend_from_slice(&instance.children);
+                    }
                     (instance.class, instance.flags & flags::INDEXED != 0)
                 };
                 if inside && is_part(engine, names, class) {
@@ -459,8 +482,10 @@ impl Index {
         }
     }
 
+    /// The log's limit: twice the parts held and the instances the last walk of the Workspace visited, so the log overflows only
+    /// after as many distinct instances changed (each is logged once until taken) as the walk it forces visits
     fn limit(&self) -> usize {
-        (self.len() * 2).max(4096)
+        (self.len() * 2).max(self.walked).max(4096)
     }
 
     fn rebuild(&mut self, state: &mut State, engine: &Engine, names: Names, workspace: InstanceId) {
@@ -484,7 +509,9 @@ impl Index {
         self.tree.clear();
         self.walk.clear();
         self.walk.extend(state.dom.at(workspace).children.iter().rev());
+        self.walked = 0;
         while let Some(node) = self.walk.pop() {
+            self.walked += 1;
             let class = {
                 let instance = state.dom.at(node);
                 self.walk.extend(instance.children.iter().rev());
