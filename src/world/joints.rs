@@ -47,6 +47,11 @@
 //! with 1 to 1,000 joints to parts 0 to 1,000 folders deep), and the work clock charges them its flat
 //! read price.
 //!
+//! The index lists each part's joints in the order they were indexed under it, and each joint keeps its
+//! place in its parts' lists ([`PartJoints`]): making, re-pointing or taking out a joint costs the same
+//! however many joints name its parts (each used to search the part's whole list: 5 to 8.5 us a write
+//! at 40,000 joints), and the joints a walk takes up come in the same order as before.
+//!
 //! Not modelled: Motor.CurrentAngle / DesiredAngle (the legacy motors' rotation), AnimationConstraint,
 //! RigidConstraint and the other constraints (solver-driven, nothing is simulated), and the members
 //! that report assemblies other than AssemblyRootPart (GetRootPart, GetConnectedParts,
@@ -108,9 +113,10 @@ pub struct Joints {
     /// Whether the joints made before the index existed have been indexed
     scanned: bool,
     /// Rigid joints by the parts they named when last indexed (candidates: a joint's current Part0
-    /// and Part1 are checked when it is used)
-    by_part: FxHashMap<InstanceId, Vec<InstanceId>>,
-    indexed: FxHashMap<InstanceId, [Option<InstanceId>; 2]>,
+    /// and Part1 are checked when it is used), each part's in the order they were indexed under it
+    by_part: FxHashMap<InstanceId, PartJoints>,
+    /// Each indexed joint's parts and its place in each one's list
+    indexed: FxHashMap<InstanceId, Indexed>,
     /// Motor6Ds whose Transform changed since the last simulation step
     pending: Vec<InstanceId>,
     /// While positive, CFrame and joint writes are the assembly code's own (already consistent)
@@ -120,6 +126,44 @@ pub struct Joints {
     batch: u32,
     batch_parts: Vec<(InstanceId, Affine3A)>,
     batch_seeds: Vec<InstanceId>,
+}
+
+/// The rigid joints indexed under one part, in the order they were indexed under it. A joint taken out leaves a hole at its
+/// place (kept with the joint: [`Indexed`]), so the others keep their order and indexing or taking out a joint costs the same
+/// however many joints name the part; the holes close up once they outnumber the joints.
+#[derive(Default)]
+struct PartJoints {
+    slots: Vec<Option<InstanceId>>,
+    live: usize,
+}
+
+impl PartJoints {
+    /// The joints, in the order they were indexed
+    fn iter(&self) -> impl Iterator<Item = InstanceId> + '_ {
+        self.slots.iter().flatten().copied()
+    }
+
+    /// Closes the holes, keeping the joints' order, and gives each joint its new place under `part`.
+    fn close_holes(&mut self, part: InstanceId, indexed: &mut FxHashMap<InstanceId, Indexed>) {
+        self.slots.retain(Option::is_some);
+        for (place, joint) in self.slots.iter().flatten().enumerate() {
+            if let Some(entry) = indexed.get_mut(joint) {
+                for side in 0..2 {
+                    if entry.parts[side] == Some(part) {
+                        entry.places[side] = place as u32;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Where a joint is indexed: the parts it named when last indexed and its place in each one's list (a joint naming one part
+/// as both is listed once, at the first's place).
+#[derive(Clone, Copy)]
+struct Indexed {
+    parts: [Option<InstanceId>; 2],
+    places: [u32; 2],
 }
 
 /// One assembly: its parts as a tree, the root first, each after its parent.
@@ -244,19 +288,30 @@ impl Joints {
     }
 
     fn forget(&mut self, id: InstanceId) {
-        if let Some(parts) = self.indexed.remove(&id) {
-            self.unindex(id, &parts);
+        if let Some(old) = self.indexed.remove(&id) {
+            self.unindex(id, &old);
         }
         self.by_part.remove(&id);
     }
 
-    fn unindex(&mut self, joint: InstanceId, parts: &[Option<InstanceId>; 2]) {
-        for part in parts.iter().flatten() {
-            if let Some(list) = self.by_part.get_mut(part) {
-                list.retain(|&other| other != joint);
-                if list.is_empty() {
-                    self.by_part.remove(part);
-                }
+    /// Takes `joint` out of the lists of the parts it was indexed under, from its places in them.
+    fn unindex(&mut self, joint: InstanceId, old: &Indexed) {
+        for side in 0..2 {
+            let Some(part) = old.parts[side] else { continue };
+            if side == 1 && old.parts[0] == Some(part) {
+                continue;
+            }
+            // (a freed part's list went with it)
+            let Some(list) = self.by_part.get_mut(&part) else { continue };
+            let slot = list.slots.get_mut(old.places[side] as usize).filter(|slot| **slot == Some(joint));
+            debug_assert!(slot.is_some(), "a joint is at its place in its part's list");
+            let Some(slot) = slot else { continue };
+            *slot = None;
+            list.live -= 1;
+            if list.live == 0 {
+                self.by_part.remove(&part);
+            } else if list.slots.len() > 2 * list.live {
+                list.close_holes(part, &mut self.indexed);
             }
         }
     }
@@ -289,25 +344,60 @@ fn is_part(state: &State, reflection: &Reflection, setup: &Setup, id: InstanceId
     state.dom.get(id).is_some_and(|instance| reflection.class(instance.class).is_a(setup.base_part))
 }
 
-/// (Re)indexes a joint under the parts it names now.
+/// (Re)indexes a joint under the parts it names now: out of its old parts' lists and onto the end of its new ones', each at
+/// the cost of one, however many joints name the part.
 fn index_joint(state: &mut State, setup: &Setup, joint: InstanceId) {
     let parts = parts_of(state, setup, joint);
     let joints = &mut state.joints;
     match joints.indexed.get(&joint) {
-        Some(old) if *old == parts => return,
+        Some(old) if old.parts == parts => return,
         Some(old) => {
             let old = *old;
             joints.unindex(joint, &old);
         }
         None => {}
     }
-    for part in parts.iter().flatten() {
-        let list = joints.by_part.entry(*part).or_default();
-        if !list.contains(&joint) {
-            list.push(joint);
+    let mut places = [0; 2];
+    for side in 0..2 {
+        let Some(part) = parts[side] else { continue };
+        if side == 1 && parts[0] == Some(part) {
+            places[1] = places[0];
+            continue;
+        }
+        let list = joints.by_part.entry(part).or_default();
+        places[side] = list.slots.len() as u32;
+        list.slots.push(Some(joint));
+        list.live += 1;
+    }
+    joints.indexed.insert(joint, Indexed { parts, places });
+}
+
+/// Whether the joint index holds together (tests): each indexed joint at its place in its live parts' lists (one place when it
+/// names one part as both), each list holding each of its joints once, as many as it counts, and none empty.
+#[cfg(test)]
+pub(crate) fn check_index(state: &State) -> Result<(), String> {
+    let joints = &state.joints;
+    for (&joint, entry) in &joints.indexed {
+        for side in 0..2 {
+            let Some(part) = entry.parts[side] else { continue };
+            match joints.by_part.get(&part) {
+                Some(list) if list.slots.get(entry.places[side] as usize).copied().flatten() == Some(joint) => {}
+                None if !alive(state, part) => {}
+                _ => return Err(format!("{joint:?} is not at its place {} under {part:?}", entry.places[side])),
+            }
         }
     }
-    joints.indexed.insert(joint, parts);
+    for (&part, list) in &joints.by_part {
+        let listed: Vec<InstanceId> = list.iter().collect();
+        let distinct: FxHashSet<InstanceId> = listed.iter().copied().collect();
+        if listed.is_empty() || listed.len() != list.live || distinct.len() != listed.len() {
+            return Err(format!("{part:?} lists {} joints ({} distinct) where it counts {}", listed.len(), distinct.len(), list.live));
+        }
+        if let Some(joint) = listed.iter().find(|joint| !joints.indexed.get(joint).is_some_and(|entry| entry.parts.contains(&Some(part)))) {
+            return Err(format!("{part:?} lists {joint:?}, which is not indexed under it"));
+        }
+    }
+    Ok(())
 }
 
 /// Indexes every rigid joint the engine holds, once (those made before anything needed the index).
@@ -348,7 +438,7 @@ fn edges(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId
         return Vec::new();
     };
     let mut found = Vec::new();
-    for &joint in candidates {
+    for joint in candidates.iter() {
         let Some(instance) = state.dom.get(joint) else { continue };
         if setup.kind(instance.class) == Kind::Other || state.dom.boolean(joint, setup.enabled) == Some(false) {
             continue;

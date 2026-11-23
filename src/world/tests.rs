@@ -1498,6 +1498,131 @@ fn assembly_lookups_cost_the_same_however_deep_their_parts_are() {
     assert!(deep < 0.15 && apart < 0.15, "two passes of 1,040 lookups took {deep:.3} s 10,000 deep and {apart:.3} s 4,000 deep apart, {shallow:.3} s in the Workspace");
 }
 
+/// Indexing a joint under the parts it names (world/joints.rs index_joint) costs the same however many joints name the part:
+/// 60,000 welds made to name one part, re-pointed to another and back, then cleared, cost each write about the host time 2,000
+/// do (each part's list keeps every joint's place in it). Each write used to look through the part's whole list to add the
+/// joint and again to take it out: at 40,000 joints a write took 5 to 8.5 us, at 1,000 0.4 to 0.7.
+#[test]
+fn indexing_a_joint_costs_the_same_however_many_joints_name_its_part() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        function shared.Index(N)
+            local P, Other = Instance.new("Part"), Instance.new("Part")
+            local Welds = table.create(N)
+            for I = 1, N do
+                Welds[I] = Instance.new("Weld")
+            end
+            for _, To in { P, Other, P } do
+                for I = 1, N do
+                    Welds[I].Part0 = To
+                end
+            end
+            -- (taken out from the front of the list)
+            for I = 1, N do
+                Welds[I].Part0 = nil
+            end
+        end
+        "#,
+    );
+    let per_weld = |count: usize| {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.Index({count})"));
+        start.elapsed().as_secs_f64() / count as f64
+    };
+    per_weld(2_000);
+    let (few, many) = (per_weld(2_000), per_weld(60_000));
+    assert!(many < 3.0 * few, "four writes of a weld cost {:.2} us of host time with 60,000 naming its part, {:.2} us with 2,000", many * 1e6, few * 1e6);
+}
+
+/// A part's joints are taken up in the order they were indexed under it, however many came and went before (each part's list
+/// leaves a hole where a joint left and closes its holes, in order, once they outnumber its joints): 300 welds on one part,
+/// re-pointed to another part, cleared, pointed back and disabled at random 2,000 times, and after each 100 a Position write
+/// to the part rewrites the C0 of each enabled weld still on it in the order of a list that each re-pointing takes the weld
+/// out of and appends it to (their Changed events, in order), and the index keeps each joint's place in its parts' lists.
+#[test]
+fn a_parts_joints_keep_their_order_as_joints_come_and_go() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Anchored(Name)
+            local Part = Instance.new("Part")
+            Part.Name, Part.Anchored, Part.CanCollide = Name, true, false
+            Part.Parent = workspace
+            return Part
+        end
+        local P, Other = Anchored("P"), Anchored("Other")
+        local Welds, Order, Fired = {}, {}, {}
+        -- (a change of a weld's parts takes it out of each list it was in and onto the end of its new parts' lists)
+        local function Point(W, To)
+            if W.Part0 == To then
+                return
+            end
+            local Index = table.find(Order, W)
+            if Index then
+                table.remove(Order, Index)
+            end
+            W.Part0 = To
+            if To == P then
+                table.insert(Order, W)
+            end
+        end
+        for I = 1, 300 do
+            local W = Instance.new("Weld")
+            W.Name = "W" .. I
+            W.Part1 = Anchored("Q" .. I)
+            W.Parent = W.Part1
+            W.Changed:Connect(function(Name)
+                if Name == "C0" then
+                    table.insert(Fired, W.Name)
+                end
+            end)
+            Welds[I] = W
+            Point(W, P)
+        end
+        local Dice = Random.new(7)
+        function shared.Round()
+            for _ = 1, 100 do
+                local W = Welds[Dice:NextInteger(1, #Welds)]
+                local Roll = Dice:NextInteger(1, 4)
+                if Roll == 1 then
+                    Point(W, Other)
+                elseif Roll == 2 then
+                    Point(W, nil)
+                elseif Roll == 3 then
+                    Point(W, P)
+                else
+                    W.Enabled = not W.Enabled
+                end
+            end
+            table.clear(Fired)
+            P.Position += Vector3.new(0, 0, 1)
+        end
+        function shared.Check(Round)
+            local Want = {}
+            for _, W in Order do
+                if W.Enabled then
+                    table.insert(Want, W.Name)
+                end
+            end
+            local Got, Expected = table.concat(Fired, " "), table.concat(Want, " ")
+            assert(#Want > 0, `round {Round}: no weld left on the part`)
+            assert(Got == Expected, `round {Round}: the welds were taken up as {Got} where {Expected}`)
+        end
+        "#,
+    );
+    for round in 1..=20 {
+        // (the Changed events fire as the call ends)
+        run(&lua, &engine, "shared.Round()");
+        run(&lua, &engine, &format!("shared.Check({round})"));
+    }
+    super::joints::check_index(&engine.state.borrow()).expect("the joint index");
+}
+
 /// A write that changes a part's property is priced by whether the part is in the Workspace (cost.rs write), read from the
 /// homes the dom keeps (dom.rs Dom::is_descendant_of_home), so writes to a part 10,000 folders deep cost about as much host work
 /// as to one right in its parent, and the work clock charges the same: Transparency, Position (a view's setter), CFrame and
