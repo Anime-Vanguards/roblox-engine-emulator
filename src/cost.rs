@@ -1087,6 +1087,15 @@ pub const QUERY_SIDE_NOT_FINITE: f64 = 1.3e-6;
 /// which ree charges first: 2.9 to 4.1 us more. The error is the cost: FindFirstChild(nil) and GetAttribute(nil) read 3.5, and
 /// BulkMoveTo 3.9, which ree does not charge.
 pub const QUERY_RAISED: f64 = 3.4e-6;
+/// A RaycastParams' or OverlapParams' instance list a query reads (world/query.rs list_reads: FilterDescendantsInstances,
+/// ExcludeInstances, IncludeInstances), in a playing client (roblox-sim, Studio 0.747, a headless client; os.clock around calls,
+/// 15 samples less an empty loop, two rounds; lists of 0, 10, 100, 1,000 and 10,000 parts away from the query, which it finds
+/// nothing near): a GetPartBoundsInBox 0.13 to 0.2 us with an empty list, 0.31 with 10, 1.03 with 100, 7.96 with 1,000 and 78
+/// with 10,000, whichever list, Exclude or Include; a Raycast's miss 0.30, 0.51, 1.30, 8.73 and 83.5: 7.8 to 8.3 ns an entry at
+/// every query ([`PARAMS_LISTED`]) and about 0.1 us a list that holds any ([`PARAMS_LIST`]). Assigning a list costs a client
+/// 13.6 ns an entry more (FilterDescendantsInstances of 10,000 parts 137 us), which ree's prelude does not charge.
+pub const PARAMS_LIST: f64 = 0.1e-6;
+pub const PARAMS_LISTED: f64 = 7.8e-9;
 /// A part GetPartsInPart returns (the 23 others of a stack 17.3 us), and its own work by the query part's size: [`method`]'s price for
 /// a part of no size, and [`QUERY_PART_SIZE`] for each stud of the square root of its box's surface area (beyond the Luau around the
 /// call, touching nothing: a 2-stud cube 0.27 us, 12 studs 0.45, 20 studs 0.95, 40 studs 1.26, a 2 x 2 x 40 rod 0.46; held out: a 6-stud
@@ -1776,7 +1785,9 @@ pub fn method(name: &str) -> f64 {
         "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" => 0.20,
         "GetAttribute" => 0.039,
         "Create" => 1.31,
-        "Raycast" => 0.27,
+        // (a miss with no filter: the bench's held-out 0.17 us, a headless 0.747 client 0.19 to 0.23; its miss with an Include
+        // filter of one part, 0.27 here before, is this and the list's read, PARAMS_LIST: 0.31 to 0.33 on the same client)
+        "Raycast" => 0.19,
         // (the bench's misses: a ray's; what they cross: SPHERE_CROSSED, BLOCK_CROSSED)
         "Blockcast" | "Spherecast" | "Shapecast" => 0.27,
         "GetPartBoundsInBox" | "GetPartBoundsInRadius" => 0.15,

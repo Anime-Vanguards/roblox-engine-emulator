@@ -4497,6 +4497,62 @@ fn parts_waiting_for_the_spatial_index_are_not_handed_to_the_mouse_or_the_cutoff
     run(&lua, &engine, "shared.Reads(10, true, \"Seen\")");
 }
 
+/// A query's params lists cost the work clock what a client spends reading them at every query (cost.rs PARAMS_LIST,
+/// PARAMS_LISTED; Studio 0.747: 7.8 ns an entry and 0.1 us a list that holds any): FilterDescendantsInstances, ExcludeInstances
+/// and IncludeInstances of 10,000 parts away from a box query and a Raycast, against the same queries with lists of one. Each
+/// query read its lists for nothing.
+#[test]
+fn params_lists_cost_what_a_client_spends_reading_them_at_every_query() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Far = Instance.new("Folder")
+        Far.Parent = workspace
+        local Pool = table.create(10000)
+        for I = 1, 10000 do
+            local Part = Instance.new("Part")
+            Part.Anchored, Part.Position = true, Vector3.new(3000 + (I % 100) * 3, 500, 3000 + (I // 100) * 3)
+            Part.Parent = Far
+            Pool[I] = Part
+        end
+        local function Params(Class, Field, Count)
+            local Made = Class.new()
+            Made[Field] = table.move(Pool, 1, Count, 1, table.create(Count))
+            return Made
+        end
+        local Box, Size, V, Down = CFrame.new(0, 2000, 0), Vector3.one, Vector3.new(0, 2000, 0), Vector3.new(0, -10, 0)
+        local function Cost(Call)
+            Call()
+            local Start = os.clock()
+            Call()
+            return os.clock() - Start
+        end
+        local function Extra(Class, Field, Query)
+            local Many, One = Params(Class, Field, 10000), Params(Class, Field, 1)
+            return Cost(function() Query(Many) end) - Cost(function() Query(One) end)
+        end
+        local function Bounds(P) workspace:GetPartBoundsInBox(Box, Size, P) end
+        local function Cast(P) workspace:Raycast(V, Down, P) end
+        local Empty, Single = OverlapParams.new(), Params(OverlapParams, "FilterDescendantsInstances", 1)
+        shared.Lists = {
+            Descendants = Extra(OverlapParams, "FilterDescendantsInstances", Bounds),
+            Excluded = Extra(OverlapParams, "ExcludeInstances", Bounds),
+            Included = Extra(OverlapParams, "IncludeInstances", Bounds),
+            Ray = Extra(RaycastParams, "FilterDescendantsInstances", Cast),
+            List = Cost(function() Bounds(Single) end) - Cost(function() Bounds(Empty) end),
+        }
+        "##,
+    );
+    let many = 9_999.0 * crate::cost::PARAMS_LISTED;
+    let checks = [("Descendants", many), ("Excluded", many), ("Included", many), ("Ray", many), ("List", crate::cost::PARAMS_LIST + crate::cost::PARAMS_LISTED)];
+    for (name, price) in checks {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Lists.{name} - {price:e}) < 1e-9, `{name}: {{shared.Lists.{name}}} s more work, not {price:e}`)"));
+    }
+}
+
 /// A spatial query that raises costs the work clock what a client spends on the error (cost.rs QUERY_RAISED, Studio 0.747: 2.9 to
 /// 4.1 us past the call's price, whatever raised): a missing or wrong argument, a value that is not finite, a list entry that is
 /// no Instance, on the WorldRoot queries, GetPartsObscuringTarget and GetLargestCutoffDistance. Each of these was charged its

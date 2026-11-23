@@ -10642,7 +10642,8 @@ fn a_native_modules_instructions_cost_what_native_code_takes() {
 /// for the parts it returns and the size of the part it is given (cost.rs RAY_MET, RAY_CROSSED, QUERY_BOX_PART, QUERY_PART_EXACT,
 /// QUERY_PART_SIZE: the parity bench's rays and queries, on geometry both sides find the same parts in, beyond the Luau around the
 /// call: a miss with an Include filter 0.27 us, a ray through 24 stacked parts 1.50, an empty box 0.15, a box of 10 parts 1.54, a
-/// 2-stud part touching nothing 0.27 and a 40-stud one 1.26, the 23 others of a stack 17.3).
+/// 2-stud part touching nothing 0.27 and a 40-stud one 1.26, the 23 others of a stack 17.3; a headless 0.747 client's miss with an
+/// Include filter of one part 0.31 to 0.33, with none 0.19 to 0.23: the filter's list, PARAMS_LIST).
 #[test]
 fn a_spatial_query_pays_for_the_parts_it_meets() {
     let (lua, engine) = start();
@@ -10697,10 +10698,12 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
     );
     let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("{output:?}"));
     let numbers: Vec<f64> = line.split(' ').map(|n| n.parse().unwrap()).collect();
-    // a call 0.27 us; a path through 24 parts 0.175 + 23 x 0.042 more, filtered or not; a box 0.15, and 0.14 a part it returns;
-    // GetPartsInPart 0.243 + 0.011 a stud of the root of its part's surface area, and 0.74 a part it returns
-    assert!((250.0..330.0).contains(&numbers[0]), "a miss: {line}");
-    assert!((1300.0..1650.0).contains(&numbers[1]) && (numbers[1] - numbers[2]).abs() < 100.0, "through the stack, filtered or not: {line}");
+    // a call 0.19 us and the Include filter's list 0.108 (cost.rs PARAMS_LIST, PARAMS_LISTED); a path through 24 parts 0.175 + 23 x
+    // 0.042 more, and the filter's list again; a box 0.15, and 0.14 a part it returns; GetPartsInPart 0.243 + 0.011 a stud of the
+    // root of its part's surface area, and 0.74 a part it returns
+    let list = (crate::cost::PARAMS_LIST + crate::cost::PARAMS_LISTED) * 1e9;
+    assert!((250.0..360.0).contains(&numbers[0]), "a miss: {line}");
+    assert!((1300.0..1650.0).contains(&numbers[1]) && (numbers[2] - numbers[1] - list).abs() < 100.0, "through the stack, filtered or not: {line}");
     assert!((140.0..220.0).contains(&numbers[3]), "an empty box: {line}");
     assert!((3200.0..3900.0).contains(&numbers[4]), "a box of 24 parts: {line}");
     assert!((270.0..360.0).contains(&numbers[5]), "a 2-stud part touching nothing: {line}");

@@ -103,11 +103,17 @@ pub struct Listed {
 
 impl Listed {
     /// `value` read into this list (its storage kept): a table's array part, or a lone instance,
-    /// as the legacy list reads; anything else is nil.
-    fn read(&mut self, value: &LuaValue) {
+    /// as the legacy list reads; anything else is nil. How many entries it read.
+    fn read(&mut self, value: &LuaValue) -> usize {
         self.given = matches!(value, LuaValue::Table(_)) || instance_id(value).is_some();
-        read_instances(value, &mut self.ids);
+        read_instances(value, &mut self.ids)
     }
+}
+
+/// What a query pays for reading its params' lists (FilterDescendantsInstances, ExcludeInstances, IncludeInstances), as a client
+/// reads them at every query: cost.rs PARAMS_LIST for each list that holds anything and PARAMS_LISTED for each entry it holds.
+fn list_reads(lists: [usize; 3]) -> f64 {
+    lists.into_iter().filter(|&entries| entries > 0).map(|entries| crate::cost::PARAMS_LIST + entries as f64 * crate::cost::PARAMS_LISTED).sum()
 }
 
 impl Filter {
@@ -170,10 +176,11 @@ impl Filter {
             LuaValue::Integer(n) if n > 0 => n as usize,
             _ => 0,
         };
-        read_instances(&get("FilterDescendantsInstances"), &mut self.instances);
-        self.exclude_instances.read(&get("ExcludeInstances"));
-        self.include_instances.read(&get("IncludeInstances"));
+        let descendants = read_instances(&get("FilterDescendantsInstances"), &mut self.instances);
+        let excluded = self.exclude_instances.read(&get("ExcludeInstances"));
+        let included = self.include_instances.read(&get("IncludeInstances"));
         self.respect_can_collide = matches!(get("RespectCanCollide"), LuaValue::Boolean(true));
+        charge_query(engine, list_reads([descendants, excluded, included]));
     }
 
     /// A legacy FindPartOnRay filter: `list` (an ignore list, or with `include` a whitelist) alone.
@@ -699,15 +706,20 @@ fn params_data(engine: &Engine, params: &LuaValue) -> Option<(LuaTable, bool)> {
 }
 
 /// The instances of an instance list (a table's array part, or a lone instance) into `ids`, sorted,
-/// without repeats (the filters search them).
-fn read_instances(value: &LuaValue, ids: &mut Vec<InstanceId>) {
+/// without repeats (the filters search them); how many entries it read.
+fn read_instances(value: &LuaValue, ids: &mut Vec<InstanceId>) -> usize {
     ids.clear();
+    let mut read = 0;
     match value {
-        LuaValue::Table(table) => ids.extend(table.sequence_values::<LuaValue>().filter_map(|v| v.ok()).filter_map(|v| instance_id(&v))),
-        other => ids.extend(instance_id(other)),
+        LuaValue::Table(table) => ids.extend(table.sequence_values::<LuaValue>().filter_map(|v| v.ok()).inspect(|_| read += 1).filter_map(|v| instance_id(&v))),
+        other => {
+            ids.extend(instance_id(other));
+            read = ids.len();
+        }
     }
     ids.sort_unstable();
     ids.dedup();
+    read
 }
 
 fn material_of(engine: &Engine, part: InstanceId) -> Option<EnumItemId> {
