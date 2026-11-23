@@ -151,18 +151,21 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
     let length = reach.length();
     // (the parts the ray meets, in the Workspace's order)
     let mut entered: Vec<(query::Solid, f32, Vec3)> = Vec::new();
-    query::near_segment(engine, origin, reach, 0.0, |parts| {
-        let state = engine.state.borrow();
-        for (part, entry) in parts {
-            let Some((t, local)) = query::ray_solid(&entry.solid, origin, reach, 0.0) else { continue };
-            // (looked up only for the parts the ray meets, in a set emptied at every physics step; a waiting part comes here only
-            // with every part, from a ray that is not finite: the broadphase keeps the others out of its tree)
-            if state.cameras.unindexed.contains(part) {
-                continue;
+    // (a ray that is not finite, from a camera whose CFrame is not, meets nothing and tests no part, as a Raycast's)
+    if origin.is_finite() && reach.is_finite() && length.is_finite() {
+        query::near_segment(engine, origin, reach, 0.0, |parts| {
+            let state = engine.state.borrow();
+            for (part, entry) in parts {
+                let Some((t, local)) = query::ray_solid(&entry.solid, origin, reach, 0.0) else { continue };
+                // (looked up only for the parts the ray meets, in a set emptied at every physics step; a waiting part comes here
+                // only with every part, in the broadphase's scan mode: it keeps them out of its tree)
+                if state.cameras.unindexed.contains(part) {
+                    continue;
+                }
+                entered.push((entry.solid, t, local));
             }
-            entered.push((entry.solid, t, local));
-        }
-    });
+        });
+    }
     // (query::cast_ray's choice among the parts TargetFilter leaves, the first of equals; and how far along the ray each part
     // under TargetFilter is)
     let mut best: Option<(f32, &query::Solid, Vec3)> = None;

@@ -1072,6 +1072,13 @@ pub const BLOCK_CROSSED: f64 = 0.259e-6;
 /// studs or 40 across, a line of 10 parts in a box 1.54, a radius that touches 2 parts 0.33; held out: a box of 24 parts 3.80)
 pub const QUERY_BOX_PART: f64 = 0.14e-6;
 pub const QUERY_RADIUS_PART: f64 = 0.09e-6;
+/// What an overlap query whose geometry is not finite costs beyond its call (world/query.rs), in a playing client (roblox-sim,
+/// Studio 0.747, a headless client; os.clock around calls in pcall, 15 samples less an empty loop, beside 0, 1,000, 5,000 and
+/// 10,000 parts, which change nothing): GetPartBoundsInBox with a frame that is not finite 2.9 to 3.1 us where one that finds
+/// a part reads 0.40, GetPartBoundsInRadius with a position that is not finite 2.7 to 3.0 ([`QUERY_NOT_FINITE`]); a NaN radius
+/// 1.3 to 1.5 and a box with a NaN or infinite side 1.5 to 2.3 ([`QUERY_SIDE_NOT_FINITE`]); neither tests a part.
+pub const QUERY_NOT_FINITE: f64 = 2.7e-6;
+pub const QUERY_SIDE_NOT_FINITE: f64 = 1.3e-6;
 /// A part GetPartsInPart returns (the 23 others of a stack 17.3 us), and its own work by the query part's size: [`method`]'s price for
 /// a part of no size, and [`QUERY_PART_SIZE`] for each stud of the square root of its box's surface area (beyond the Luau around the
 /// call, touching nothing: a 2-stud cube 0.27 us, 12 studs 0.45, 20 studs 0.95, 40 studs 1.26, a 2 x 2 x 40 rod 0.46; held out: a 6-stud

@@ -302,7 +302,13 @@ fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Ar
     let mut targets = Vec::new();
     for index in 1..=points.raw_len() {
         let value: LuaValue = points.raw_get(index)?;
-        if let Some(point) = vector_arg(&value) {
+        // (a point that is not finite lists nothing and leaves the other points as they are: measured,
+        // tools/parity/probes/query_finite.luau; a camera whose position is not finite, which a client's never is, reaches none)
+        if let Some(point) = vector_arg(&value)
+            && point.is_finite()
+            && origin.is_finite()
+            && (point - origin).length().is_finite()
+        {
             targets.push(point);
         }
     }

@@ -267,6 +267,11 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
     for origin in origins {
         met.clear();
         entered.clear();
+        // (a ray that is not finite meets nothing and tests no part, as a Raycast's: a client's cutoff with a NaN or infinite
+        // Focus reads 0, tools/parity/probes/query_finite.luau)
+        if !(origin.is_finite() && direction.is_finite() && reach.is_finite()) {
+            continue;
+        }
         query::near_segment(engine, origin, direction, 0.0, |parts| {
             let state = engine.state.borrow();
             for (part, entry) in parts {
@@ -274,8 +279,7 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
                     continue;
                 }
                 let Some((t, _)) = query::ray_solid(&entry.solid, origin, direction, 0.0) else { continue };
-                // (a waiting part comes here only with every part, from a ray that is not finite: the broadphase keeps the
-                // others out of its tree)
+                // (a waiting part comes here only with every part, in the broadphase's scan mode: it keeps them out of its tree)
                 if state.cameras.unindexed.contains(part) {
                     continue;
                 }

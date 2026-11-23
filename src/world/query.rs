@@ -321,6 +321,72 @@ pub(crate) fn near_segment<R>(engine: &Engine, origin: Vec3, direction: Vec3, gr
     with_near(engine, |index, out| index.near_segment(origin, direction, grow, out), then)
 }
 
+/// Whether a ray or a shape cast's path from `origin` along `direction` can meet anything: both finite, and the direction's length
+/// too. A playing client's Raycast and FindPartOnRay with a NaN or infinite origin or direction, or a direction whose length
+/// overflows a float (1e20 studs), find nothing and test no part (Studio 0.747, client and server: 0.17 us beside 0 or 5,000
+/// parts, cheaper than a miss; tools/parity/probes/query_finite.luau); a shape cast with a NaN direction alike.
+fn finite_path(origin: Vec3, direction: Vec3) -> bool {
+    origin.is_finite() && direction.is_finite() && direction.length().is_finite()
+}
+
+/// Whether every number of a frame is finite (its rotation and its position).
+fn finite_frame(frame: &Affine3A) -> bool {
+    frame.matrix3.x_axis.is_finite() && frame.matrix3.y_axis.is_finite() && frame.matrix3.z_axis.is_finite() && frame.translation.is_finite()
+}
+
+/// The largest radius a Spherecast takes, the largest side a Blockcast's or Shapecast's box takes and the longest path a shape cast
+/// takes (measured, Studio 0.747, a playing client and a server: 256 and 512 pass, 256.001 and 512.001 raise; 1,024 studs pass,
+/// 1,025 raise; a Raycast has no such limit, 1,000,000 studs hit)
+const SPHERECAST_RADIUS: f32 = 256.0;
+const SHAPECAST_SIDE: f32 = 512.0;
+const SHAPECAST_DISTANCE: f32 = 1024.0;
+
+/// A shape cast's direction as a client checks it: an infinite component raises (a NaN passes, and the cast then finds nothing),
+/// and so does a path longer than [`SHAPECAST_DISTANCE`] (its length as a float32 written `%f`).
+fn shapecast_direction(direction: Vec3) -> Result<(), Flow> {
+    if direction.x.is_infinite() || direction.y.is_infinite() || direction.z.is_infinite() {
+        return raise("Invalid direction. Must contain finite values.");
+    }
+    let distance = direction.length();
+    if distance > SHAPECAST_DISTANCE {
+        return raise(format!("Attempt to shapecast with distance {:.6}. The maximum distance is 1024.", f64::from(distance)));
+    }
+    Ok(())
+}
+
+/// A Blockcast's or Shapecast's box size as a client checks it: every component finite, none past [`SHAPECAST_SIDE`] (the first
+/// such, x then y then z, written `%f`); a negative side passes.
+fn shapecast_size(size: Vec3) -> Result<(), Flow> {
+    if !size.is_finite() {
+        return raise("Invalid size. Must contain finite values.");
+    }
+    match size.to_array().into_iter().find(|side| *side > SHAPECAST_SIDE) {
+        Some(side) => raise(format!("Attempt to shapecast with side length {:.6}. The maximum side length is 512.000000.", f64::from(side))),
+        None => Ok(()),
+    }
+}
+
+/// A shape cast's frame as a client checks it, after its size and direction: every number finite.
+fn shapecast_frame(frame: &Affine3A) -> Result<(), Flow> {
+    if finite_frame(frame) { Ok(()) } else { raise("Invalid CFrame. Must contain finite values.") }
+}
+
+/// A GetPartBoundsInBox size as a client reads it: a NaN or negative side is 0 (measured: a box of size (NaN, 1, 1) or (-inf, 1, 1)
+/// at a part's centre finds it and one beside it nothing, as a box of no width does; (-4, 1, 1) beside a face finds nothing where
+/// (4, 1, 1) finds the part), and an infinite side reaches without end, held as [`UNBOUNDED`].
+fn box_size(size: Vec3) -> Vec3 {
+    Vec3::from_array(size.to_array().map(|side| if side > 0.0 { side.min(UNBOUNDED) } else { 0.0 }))
+}
+
+/// How far an infinite side of a GetPartBoundsInBox reaches: finite, so that a box's tests multiply it by an axis's zero
+/// component to 0 (infinity's product is NaN)
+const UNBOUNDED: f32 = 1e30;
+
+/// How far the broadphase looks along a box's infinite side ([`UNBOUNDED`]): ten million studs from its centre, so that its
+/// float32 slack (world/broadphase.rs, a share of the largest coordinate) stays some studs and it still prunes along the box's
+/// other axes; a part beyond that is not found
+const UNBOUNDED_REACH: f32 = 1e7;
+
 /// The world box around an oriented box (its frame's axes as given, `size` its size), or None when the frame is skewed and its
 /// box is no box (world/broadphase.rs skewed).
 fn box_extent(frame: &Affine3A, size: Vec3) -> Option<Vec3> {
@@ -662,6 +728,22 @@ fn hit_values(lua: &Lua, engine: &Rc<Engine>, hit: Option<Hit>) -> Result<LuaMul
     })
 }
 
+/// A cast whose path can meet nothing ([`finite_path`]): nil, no part tested. It takes in what entered the Workspace, as any
+/// query does ([`take_in`]).
+fn missed(lua: &Lua, engine: &Rc<Engine>, filter: Filter) -> Result<LuaMultiValue, Flow> {
+    take_in(engine);
+    keep_filter(engine, filter);
+    hit_values(lua, engine, None)
+}
+
+/// An overlap query whose geometry can find nothing (not finite): an empty table, no part tested, what entered the Workspace
+/// taken in.
+fn found_nothing(lua: &Lua, engine: &Rc<Engine>, filter: Filter) -> Result<LuaMultiValue, Flow> {
+    take_in(engine);
+    keep_filter(engine, filter);
+    parts_table(lua, engine, std::iter::empty())
+}
+
 fn parts_table(lua: &Lua, engine: &Rc<Engine>, parts: impl IntoIterator<Item = InstanceId>) -> Result<LuaMultiValue, Flow> {
     let table = lua.create_table()?;
     for part in parts {
@@ -673,21 +755,34 @@ fn parts_table(lua: &Lua, engine: &Rc<Engine>, parts: impl IntoIterator<Item = I
 /// The legacy FindPartOnRay family: (part, position, normal, material); the ray's end, a zero
 /// normal and Air when nothing is hit.
 fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, ray: &LuaValue, list: &LuaValue, include: bool) -> Result<LuaMultiValue, Flow> {
-    let ray = match ray {
+    let converted = match ray {
         LuaValue::UserData(ud) => ud.borrow::<lune::Ray>().ok().map(|ray| dom::Ray::from(*ray)),
         _ => None,
     };
-    let Some(ray) = ray else { return raise("Unable to cast value to Ray") };
-    let origin = Vec3::new(ray.origin.x, ray.origin.y, ray.origin.z);
-    let direction = Vec3::new(ray.direction.x, ray.direction.y, ray.direction.z);
+    let Some(converted) = converted else { return raise("Unable to cast value to Ray") };
+    let mut origin = Vec3::new(converted.origin.x, converted.origin.y, converted.origin.z);
+    let mut direction = Vec3::new(converted.direction.x, converted.direction.y, converted.direction.z);
+    // (the conversion rounds each component's fraction, which makes an infinity NaN: a ray that is not finite is read back
+    // through its members, so its end keeps the infinity a client's does)
+    if !(origin.is_finite() && direction.is_finite())
+        && let LuaValue::UserData(ud) = ray
+        && let (Some(own_origin), Some(own_direction)) = (ud.get::<LuaValue>("Origin").ok().and_then(|v| vector_arg(&v)), ud.get::<LuaValue>("Direction").ok().and_then(|v| vector_arg(&v)))
+    {
+        (origin, direction) = (own_origin, own_direction);
+    }
     let mut filter = query_cache(engine).spare.take();
     filter.read_list(list, include);
     take_in(engine);
     let root = engine.world().workspace;
-    let hit = near_segment(engine, origin, direction, 0.0, |near| {
-        let state = engine.state.borrow();
-        cast_ray(&state, root, near, |part, entry| filter.sees(&state, part, entry), origin, direction, 0.0, None)
-    });
+    // (a ray that is not finite finds nothing and tests no part: its end is still origin + direction, an infinity kept)
+    let hit = if finite_path(origin, direction) {
+        near_segment(engine, origin, direction, 0.0, |near| {
+            let state = engine.state.borrow();
+            cast_ray(&state, root, near, |part, entry| filter.sees(&state, part, entry), origin, direction, 0.0, None)
+        })
+    } else {
+        None
+    };
     keep_filter(engine, filter);
     let air = engine.reflection.enum_item("Material", "Air");
     Ok(match hit {
@@ -842,6 +937,9 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("Raycast: origin and direction must be Vector3s");
         };
         let filter = take_filter(engine, args.get(3));
+        if !finite_path(origin, direction) {
+            return missed(lua, engine, filter);
+        }
         let (hit, counts) = cast_and_count(engine, &filter, origin, direction, 0.0, 0.0, false, |state, root, near| cast_ray(state, root, near, |part, entry| filter.sees(state, part, entry), origin, direction, 0.0, None));
         charge_cast(engine, counts, crate::cost::RAY_CROSSED, 0);
         keep_filter(engine, filter);
@@ -851,8 +949,24 @@ pub fn install(engine: &Rc<Engine>) {
         let (Some(center), Some(radius), Some(direction)) = (vector_arg(args.get(1)), args.number(2), vector_arg(args.get(3))) else {
             return raise("Spherecast: position, radius and direction expected");
         };
+        // (a client checks the radius, then the direction, then the position: measured, tools/parity/probes/query_finite.luau)
+        let radius = radius as f32;
+        if !radius.is_finite() {
+            return raise("Invalid Radius. Must contain finite values.");
+        } else if radius < 0.0 {
+            return raise(format!("Invalid Radius. Must be greater than or equal to 0, got {:.6}.", f64::from(radius)));
+        } else if radius > SPHERECAST_RADIUS {
+            return raise(format!("Attempt to spherecast with radius {:.6}. The maximum radius is 256.000000.", f64::from(radius)));
+        }
+        shapecast_direction(direction)?;
+        if !center.is_finite() {
+            return raise("Invalid position. Must contain finite values.");
+        }
         let filter = take_filter(engine, args.get(4));
-        let grow = radius.max(0.0) as f32;
+        if !finite_path(center, direction) {
+            return missed(lua, engine, filter);
+        }
+        let grow = radius;
         let (hit, counts) = cast_and_count(engine, &filter, center, direction, grow, grow, false, |state, root, near| cast_ray(state, root, near, |part, entry| filter.sees(state, part, entry), center, direction, grow, None));
         charge_cast(engine, counts, crate::cost::SPHERE_CROSSED, 0);
         keep_filter(engine, filter);
@@ -862,7 +976,14 @@ pub fn install(engine: &Rc<Engine>) {
         let (Some(frame), Some(size), Some(direction)) = (cframe_arg(args.get(1)), vector_arg(args.get(2)), vector_arg(args.get(3))) else {
             return raise("Blockcast: cframe, size and direction expected");
         };
+        // (the size, then the direction, then the frame: measured)
+        shapecast_size(size)?;
+        shapecast_direction(direction)?;
+        shapecast_frame(&frame)?;
         let filter = take_filter(engine, args.get(4));
+        if !finite_path(frame::translation(&frame), direction) {
+            return missed(lua, engine, filter);
+        }
         // (a box's path counted as its centre's, grown by its half diagonal: its bounding sphere, so also what the cast can touch
         // unless its frame is skewed)
         let skewed = broadphase::skewed(&unit_frame(&frame));
@@ -875,9 +996,33 @@ pub fn install(engine: &Rc<Engine>) {
         let (Some(part), Some(direction)) = (args.instance(1), vector_arg(args.get(2))) else {
             return raise("Shapecast: part and direction expected");
         };
-        let filter = take_filter(engine, args.get(3));
         // the part's shape where it is, or where cframeOverride puts it and at sizeOverride's size
-        // (WorldRoot:Shapecast's optional parameters; Roblox's reference)
+        // (WorldRoot:Shapecast's optional parameters; Roblox's reference), checked as a client checks them: a negative side of
+        // sizeOverride, then the size as a Blockcast's, the direction and the frame (measured)
+        let (frame, size) = {
+            let state = engine.state.borrow();
+            let frame = cframe_arg(args.get(4)).unwrap_or_else(|| frame::affine_of(state.dom.raw_get(part, cframe_name(engine))));
+            let size = match vector_arg(args.get(5)) {
+                Some(size) => {
+                    if size.x < 0.0 || size.y < 0.0 || size.z < 0.0 {
+                        return raise("Invalid sizeOverride. Must contain values greater than or equal to 0.");
+                    }
+                    size
+                }
+                None => match state.dom.raw_get(part, K::Size as NameId) {
+                    Some(Value::Vector3(v)) => Vec3::new(v.x, v.y, v.z),
+                    _ => Vec3::ONE,
+                },
+            };
+            (frame, size)
+        };
+        shapecast_size(size)?;
+        shapecast_direction(direction)?;
+        shapecast_frame(&frame)?;
+        let filter = take_filter(engine, args.get(3));
+        if !finite_path(frame::translation(&frame), direction) {
+            return missed(lua, engine, filter);
+        }
         let cast = {
             let state = engine.state.borrow();
             let mut cast = solid(&state, engine, part);
@@ -907,7 +1052,18 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("GetPartBoundsInBox: cframe and size expected");
         };
         let filter = take_filter(engine, args.get(3));
-        let parts = overlapping(engine, filter, frame::translation(&frame), box_extent(&frame, size), |s| overlaps_box(s, &frame, size));
+        // (a frame that is not finite finds nothing, rotation or position: measured; it and a side that is not finite cost a
+        // client what it spends on them, cost.rs QUERY_NOT_FINITE, QUERY_SIDE_NOT_FINITE)
+        if !finite_frame(&frame) {
+            charge_query(engine, crate::cost::QUERY_NOT_FINITE);
+            return found_nothing(lua, engine, filter);
+        }
+        if !size.is_finite() {
+            charge_query(engine, crate::cost::QUERY_SIDE_NOT_FINITE);
+        }
+        let size = box_size(size);
+        let extent = box_extent(&frame, size).map(|extent| extent.min(Vec3::splat(UNBOUNDED_REACH)));
+        let parts = overlapping(engine, filter, frame::translation(&frame), extent, |s| overlaps_box(s, &frame, size));
         charge_query(engine, parts.len() as f64 * crate::cost::QUERY_BOX_PART);
         parts_table(lua, engine, parts)
     })));
@@ -916,6 +1072,12 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("GetPartBoundsInRadius: position and radius expected");
         };
         let filter = take_filter(engine, args.get(3));
+        // (a NaN radius or a position that is not finite finds nothing: measured, at what a client spends on it; an infinite
+        // radius every part)
+        if radius.is_nan() || !center.is_finite() {
+            charge_query(engine, if center.is_finite() { crate::cost::QUERY_SIDE_NOT_FINITE } else { crate::cost::QUERY_NOT_FINITE });
+            return found_nothing(lua, engine, filter);
+        }
         let parts = overlapping(engine, filter, center, sphere_extent(radius as f32), |s| overlaps_sphere(s, center, radius as f32));
         charge_query(engine, parts.len() as f64 * crate::cost::QUERY_RADIUS_PART);
         parts_table(lua, engine, parts)

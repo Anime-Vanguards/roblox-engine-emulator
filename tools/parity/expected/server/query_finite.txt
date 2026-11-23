@@ -1,0 +1,144 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+ray ok Wall 300.00 90.50 300.00 9.50
+Raycast origin.x nan ok nil
+Raycast origin.y nan ok nil
+Raycast direction.x nan ok nil
+Raycast direction.y nan ok nil
+FindPartOnRay direction nan ok nil (300.00, nan, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+FindPartOnRay origin nan ok nil (nan, 80.00, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+FindPartOnRayWithIgnoreList direction nan ok nil (300.00, nan, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+Spherecast position nan error Invalid position. Must contain finite values.
+Spherecast radius nan error Invalid Radius. Must contain finite values.
+Spherecast direction nan ok nil
+Blockcast position nan error Invalid CFrame. Must contain finite values.
+Blockcast rotation nan error Invalid CFrame. Must contain finite values.
+Blockcast size nan error Invalid size. Must contain finite values.
+Blockcast direction nan ok nil
+Shapecast direction nan ok nil
+Shapecast cframe nan error Invalid CFrame. Must contain finite values.
+Shapecast size nan error Invalid size. Must contain finite values.
+GetPartBoundsInBox position nan ok {}
+GetPartBoundsInBox rotation nan ok {}
+GetPartBoundsInBox size.x on Wall nan ok {Wall}
+GetPartBoundsInBox size.x off Wall nan ok {}
+GetPartBoundsInBox size.y nan ok {Caster}
+GetPartBoundsInBox size nan ok {Wall}
+GetPartBoundsInBox turned size.x nan ok {}
+GetPartBoundsInRadius radius nan ok {}
+GetPartBoundsInRadius position nan ok {}
+GetPartsObscuringTarget point.y nan ok {}
+GetPartsObscuringTarget point.x nan ok {}
+GetPartsObscuringTarget nan then Wall ok {Wall}
+GetPartsObscuringTarget Wall then nan ok {Wall}
+Raycast origin.x inf ok nil
+Raycast origin.y inf ok nil
+Raycast direction.x inf ok nil
+Raycast direction.y inf ok nil
+FindPartOnRay direction inf ok nil (300.00, inf, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+FindPartOnRay origin inf ok nil (inf, 80.00, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+FindPartOnRayWithIgnoreList direction inf ok nil (300.00, inf, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+Spherecast position inf error Invalid position. Must contain finite values.
+Spherecast radius inf error Invalid Radius. Must contain finite values.
+Spherecast direction inf error Invalid direction. Must contain finite values.
+Blockcast position inf error Invalid CFrame. Must contain finite values.
+Blockcast rotation inf error Invalid CFrame. Must contain finite values.
+Blockcast size inf error Invalid size. Must contain finite values.
+Blockcast direction inf error Invalid direction. Must contain finite values.
+Shapecast direction inf error Invalid direction. Must contain finite values.
+Shapecast cframe inf error Invalid CFrame. Must contain finite values.
+Shapecast size inf error Invalid size. Must contain finite values.
+GetPartBoundsInBox position inf ok {}
+GetPartBoundsInBox rotation inf ok {}
+GetPartBoundsInBox size.x on Wall inf ok {Wall}
+GetPartBoundsInBox size.x off Wall inf ok {Wall}
+GetPartBoundsInBox size.y inf ok {Caster,High,Wall}
+GetPartBoundsInBox size inf ok {Caster,High,Side,Wall}
+GetPartBoundsInBox turned size.x inf ok {}
+GetPartBoundsInRadius radius inf ok {Caster,High,Side,Wall}
+GetPartBoundsInRadius position inf ok {}
+GetPartsObscuringTarget point.y inf ok {}
+GetPartsObscuringTarget point.x inf ok {}
+GetPartsObscuringTarget inf then Wall ok {Wall}
+GetPartsObscuringTarget Wall then inf ok {Wall}
+Raycast origin.x -inf ok nil
+Raycast origin.y -inf ok nil
+Raycast direction.x -inf ok nil
+Raycast direction.y -inf ok nil
+FindPartOnRay direction -inf ok nil (300.00, -inf, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+FindPartOnRay origin -inf ok nil (-inf, 80.00, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+FindPartOnRayWithIgnoreList direction -inf ok nil (300.00, -inf, 300.00) (0.00, 0.00, 0.00) Enum.Material.Air
+Spherecast position -inf error Invalid position. Must contain finite values.
+Spherecast radius -inf error Invalid Radius. Must contain finite values.
+Spherecast direction -inf error Invalid direction. Must contain finite values.
+Blockcast position -inf error Invalid CFrame. Must contain finite values.
+Blockcast rotation -inf error Invalid CFrame. Must contain finite values.
+Blockcast size -inf error Invalid size. Must contain finite values.
+Blockcast direction -inf error Invalid direction. Must contain finite values.
+Shapecast direction -inf error Invalid direction. Must contain finite values.
+Shapecast cframe -inf error Invalid CFrame. Must contain finite values.
+Shapecast size -inf error Invalid sizeOverride. Must contain values greater than or equal to 0.
+GetPartBoundsInBox position -inf ok {}
+GetPartBoundsInBox rotation -inf ok {}
+GetPartBoundsInBox size.x on Wall -inf ok {Wall}
+GetPartBoundsInBox size.x off Wall -inf ok {}
+GetPartBoundsInBox size.y -inf ok {Caster}
+GetPartBoundsInBox size -inf ok {Wall}
+GetPartBoundsInBox turned size.x -inf ok {}
+GetPartBoundsInRadius radius -inf ok {}
+GetPartBoundsInRadius position -inf ok {}
+GetPartsObscuringTarget point.y -inf ok {}
+GetPartsObscuringTarget point.x -inf ok {}
+GetPartsObscuringTarget -inf then Wall ok {Wall}
+GetPartsObscuringTarget Wall then -inf ok {Wall}
+Raycast length 16000 ok Wall 300.00 90.50 300.00 9.50
+Raycast length 1000000 ok Wall 300.00 90.50 300.00 9.50
+Raycast length 100000000000000000000 ok nil
+Spherecast distance 1024 ok Wall 300.00 90.50 300.00 9.00
+Blockcast distance 1024 ok Wall 300.00 90.50 300.00 9.00
+Shapecast distance 1024 ok Wall 300.00 90.50 300.00 19.00
+Spherecast distance 1025 error Attempt to shapecast with distance 1025.000000. The maximum distance is 1024.
+Blockcast distance 1025 error Attempt to shapecast with distance 1025.000000. The maximum distance is 1024.
+Shapecast distance 1025 error Attempt to shapecast with distance 1025.000000. The maximum distance is 1024.
+Spherecast distance 15001 error Attempt to shapecast with distance 15001.000000. The maximum distance is 1024.
+Blockcast distance 15001 error Attempt to shapecast with distance 15001.000000. The maximum distance is 1024.
+Shapecast distance 15001 error Attempt to shapecast with distance 15001.000000. The maximum distance is 1024.
+Spherecast distance nan ok nil
+Spherecast radius 0 ok nil
+Spherecast radius 256 ok nil
+Spherecast radius 256.001 error Attempt to spherecast with radius 256.001007. The maximum radius is 256.000000.
+Spherecast radius 257 error Attempt to spherecast with radius 257.000000. The maximum radius is 256.000000.
+Spherecast radius -1 error Invalid Radius. Must be greater than or equal to 0, got -1.000000.
+Spherecast radius -0.5 error Invalid Radius. Must be greater than or equal to 0, got -0.500000.
+Blockcast size.x 512 ok nil
+Blockcast size.z 512 ok nil
+Blockcast size.x 512.001 error Attempt to shapecast with side length 512.000977. The maximum side length is 512.000000.
+Blockcast size.z 512.001 error Attempt to shapecast with side length 512.000977. The maximum side length is 512.000000.
+Blockcast size.x 513 error Attempt to shapecast with side length 513.000000. The maximum side length is 512.000000.
+Blockcast size.z 513 error Attempt to shapecast with side length 513.000000. The maximum side length is 512.000000.
+Blockcast size -600 ok nil
+GetPartBoundsInBox size.x -4 beside Wall ok {}
+GetPartBoundsInBox size.x 4 beside Wall ok {Wall}
+Shapecast part over 512 error Attempt to shapecast with side length 600.000000. The maximum side length is 512.000000.
+Shapecast size over 512 error Attempt to shapecast with side length 600.000000. The maximum side length is 512.000000.
+Spherecast all three error Invalid Radius. Must contain finite values.
+Spherecast position and direction error Invalid direction. Must contain finite values.
+Spherecast position and distance error Attempt to shapecast with distance 2000.000000. The maximum distance is 1024.
+Spherecast radius and direction error Invalid Radius. Must contain finite values.
+Spherecast position and radius error Invalid Radius. Must contain finite values.
+Spherecast negative radius and direction error Invalid Radius. Must be greater than or equal to 0, got -1.000000.
+Spherecast radius over 256 and direction error Attempt to spherecast with radius 300.000000. The maximum radius is 256.000000.
+Spherecast radius over 256 and distance error Attempt to spherecast with radius 300.000000. The maximum radius is 256.000000.
+Blockcast all three error Invalid size. Must contain finite values.
+Blockcast frame and direction error Invalid direction. Must contain finite values.
+Blockcast frame and distance error Attempt to shapecast with distance 2000.000000. The maximum distance is 1024.
+Blockcast size and direction error Invalid size. Must contain finite values.
+Blockcast frame and size error Invalid size. Must contain finite values.
+Blockcast size over 512 and direction error Attempt to shapecast with side length 600.000000. The maximum side length is 512.000000.
+Blockcast size over 512 and frame error Attempt to shapecast with side length 600.000000. The maximum side length is 512.000000.
+Blockcast size over 512 and distance error Attempt to shapecast with side length 600.000000. The maximum side length is 512.000000.
+Shapecast frame and size error Invalid size. Must contain finite values.
+Shapecast frame and direction error Invalid direction. Must contain finite values.
+Shapecast size and direction error Invalid size. Must contain finite values.
+Shapecast size over 512 and distance error Attempt to shapecast with side length 600.000000. The maximum side length is 512.000000.
+Shapecast frame and distance error Attempt to shapecast with distance 2000.000000. The maximum distance is 1024.

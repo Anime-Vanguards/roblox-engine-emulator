@@ -4497,6 +4497,89 @@ fn parts_waiting_for_the_spatial_index_are_not_handed_to_the_mouse_or_the_cutoff
     run(&lua, &engine, "shared.Reads(10, true, \"Seen\")");
 }
 
+/// A query whose geometry is not finite tests no part, as a client's spends nothing on the parts (Studio 0.747: a NaN or infinite
+/// ray 0.17 us beside 0 or 5,000 parts, a NaN box 3.1, a NaN radius 1.5): rays, shape casts with a NaN direction, boxes with a
+/// NaN frame, NaN radii and positions, GetPartsObscuringTarget's points and GetLargestCutoffDistance's Focus that are not finite
+/// take nothing from the broadphase beside 20,000 parts, and a box infinite along one axis takes only the parts along it; they
+/// answer as a client does (tools/parity/probes/query_finite.luau). Each of these took every part.
+#[test]
+fn queries_whose_geometry_is_not_finite_test_no_part() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Far = Instance.new("Folder")
+        Far.Parent = workspace
+        for I = 1, 20000 do
+            local Part = Instance.new("Part")
+            Part.Anchored, Part.Size, Part.Position = true, Vector3.one, Vector3.new(-3000 + (I % 100) * 3, 400 + (I // 1000) * 3, -3000 + ((I // 100) % 10) * 3)
+            Part.Parent = Far
+        end
+        local Wall = Instance.new("Part")
+        Wall.Anchored, Wall.Size, Wall.Position, Wall.Name = true, Vector3.new(10, 1, 10), Vector3.new(300, 90, 300), "Wall"
+        Wall.Parent = workspace
+        local Caster = Instance.new("Part")
+        Caster.Anchored, Caster.Position = true, Vector3.new(300, 110, 300)
+        Caster.Parent = workspace
+        local Cam = Instance.new("Camera")
+        Cam.CFrame = CFrame.new(300, 100, 300)
+        Cam.Focus = CFrame.new(0 / 0, 0, 0)
+        Cam.Parent = workspace
+        workspace:Raycast(Vector3.new(5000, 5000, 5000), Vector3.new(0, 1, 0))
+        local NaN, Inf, V, Down = 0 / 0, math.huge, Vector3.new(300, 100, 300), Vector3.new(0, -20, 0)
+        shared.Queries = function()
+            assert(workspace:Raycast(Vector3.new(NaN, 100, 300), Down) == nil, "a NaN origin")
+            assert(workspace:Raycast(V, Vector3.new(0, -Inf, 0)) == nil, "an infinite direction")
+            assert(workspace:Raycast(V, Vector3.new(0, -1e20, 0)) == nil, "a direction whose length overflows")
+            local Part, End = workspace:FindPartOnRay(Ray.new(V, Vector3.new(0, -Inf, 0)))
+            assert(Part == nil and End.Y == -Inf, "FindPartOnRay's end keeps the infinity")
+            assert(workspace:Spherecast(V, 1, Vector3.new(0, NaN, 0)) == nil, "a Spherecast with a NaN direction")
+            assert(workspace:Blockcast(CFrame.new(V), Vector3.one, Vector3.new(NaN, -5, 0)) == nil, "a Blockcast with a NaN direction")
+            assert(workspace:Shapecast(Caster, Vector3.new(0, NaN, 0)) == nil, "a Shapecast with a NaN direction")
+            assert(#workspace:GetPartBoundsInBox(CFrame.new(NaN, 90, 300), Vector3.one) == 0, "a NaN frame")
+            assert(#workspace:GetPartBoundsInBox(CFrame.new(300, 90, 300, NaN, 0, 0, 0, 1, 0, 0, 0, 1), Vector3.one) == 0, "a NaN rotation")
+            local Along = workspace:GetPartBoundsInBox(CFrame.new(320, 90, 300), Vector3.new(Inf, 1, 1))
+            assert(#Along == 1 and Along[1] == Wall, "a box infinite along x finds the part on its line")
+            assert(#workspace:GetPartBoundsInBox(CFrame.new(300, 90, 300), Vector3.new(NaN, 1, 1)) == 1, "a NaN side is no width")
+            assert(#workspace:GetPartBoundsInRadius(V, NaN) == 0, "a NaN radius")
+            assert(#workspace:GetPartBoundsInRadius(Vector3.new(NaN, 0, 0), 5) == 0, "a NaN position")
+            local Listed = Cam:GetPartsObscuringTarget({ Vector3.new(300, -Inf, 300), Vector3.new(300, 80, 300), Vector3.new(NaN, 0, 0) }, {})
+            assert(#Listed == 1 and Listed[1] == Wall, "the finite point lists the wall, the others nothing")
+            assert(Cam:GetLargestCutoffDistance({}) == 0, "a NaN Focus")
+        end
+        shared.Queries()
+        -- (each call once before it is timed: a frame's first call of an engine function is priced cold)
+        local function Cost(Call)
+            Call()
+            local Start = os.clock()
+            Call()
+            return os.clock() - Start
+        end
+        local Empty, One, Nowhere = CFrame.new(0, -500, 0), Vector3.one, Vector3.new(0, -500, 0)
+        local NaNFrame, NaNSide, NaNWhere = CFrame.new(NaN, -500, 0), Vector3.new(NaN, 1, 1), Vector3.new(NaN, -500, 0)
+        shared.Extra = {
+            Frame = Cost(function() workspace:GetPartBoundsInBox(NaNFrame, One) end) - Cost(function() workspace:GetPartBoundsInBox(Empty, One) end),
+            Side = Cost(function() workspace:GetPartBoundsInBox(Empty, NaNSide) end) - Cost(function() workspace:GetPartBoundsInBox(Empty, One) end),
+            Radius = Cost(function() workspace:GetPartBoundsInRadius(Nowhere, NaN) end) - Cost(function() workspace:GetPartBoundsInRadius(Nowhere, 1) end),
+            Position = Cost(function() workspace:GetPartBoundsInRadius(NaNWhere, 1) end) - Cost(function() workspace:GetPartBoundsInRadius(Nowhere, 1) end),
+        }
+        "##,
+    );
+    let taken = || super::broadphase::TAKEN.with(|taken| taken.get());
+    let (before, start) = (taken(), std::time::Instant::now());
+    run(&lua, &engine, "for _ = 1, 20 do shared.Queries() end");
+    let (took, host) = (taken() - before, start.elapsed().as_secs_f64());
+    // (the finite point's segment and the box along x take the parts near them: a few)
+    assert!(took <= 20 * 4, "20 rounds of the queries took {took} parts from the broadphase beside 20,000");
+    assert!(host < 0.25, "20 rounds took {host:.3} s of host time");
+    // what a client spends on such geometry beyond the call (cost.rs QUERY_NOT_FINITE, QUERY_SIDE_NOT_FINITE)
+    for (name, price) in [("Frame", crate::cost::QUERY_NOT_FINITE), ("Side", crate::cost::QUERY_SIDE_NOT_FINITE), ("Radius", crate::cost::QUERY_SIDE_NOT_FINITE), ("Position", crate::cost::QUERY_NOT_FINITE)] {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Extra.{name} - {price:e}) < 1e-9, `{name}: {{shared.Extra.{name}}} s more work, not {price:e}`)"));
+    }
+}
+
 /// The broadphase follows the dom without walking the Workspace: a part moved, resized and turned off (CanQuery), one moved out and
 /// back, a model moved in whole, a part destroyed and collected, an instance given a part's class where it stands (a bundle's root
 /// revealed: dom.rs set_class) are each seen by the next query; more changes before a query than the log keeps (dom.rs
