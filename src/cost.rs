@@ -1096,6 +1096,42 @@ pub const QUERY_RAISED: f64 = 3.4e-6;
 /// 13.6 ns an entry more (FilterDescendantsInstances of 10,000 parts 137 us), which ree's prelude does not charge.
 pub const PARAMS_LIST: f64 = 0.1e-6;
 pub const PARAMS_LISTED: f64 = 7.8e-9;
+/// A step of a client's FilterDescendantsInstances check of a query's part (world/query.rs Filter::check): for each instance of
+/// the list in its order until one is the part or an ancestor of it, a walk up from the part, to the top of the tree for each
+/// instance before it. In a playing client (roblox-sim, Studio 0.747, a headless client; os.clock around GetPartBoundsInBox
+/// finding 1 or 10 parts at the bottom of a chain of 1 to 998 folders, lists of 1 to 1,000 parts elsewhere, an Exclude filter;
+/// less the same query with no list and the list's read, [`PARAMS_LISTED`]), each step of each walk: 0.17 to 0.29 ns with 3 to
+/// 30 ancestors, 0.40 at 60, 0.50 at 100 and 0.80 to 0.89 from 200 to 1,000 (a deep part's ancestors no longer in a cache):
+/// [`QUERY_FILTER_STEP`] to 30 ancestors, [`QUERY_FILTER_DEEP_STEP`] from 200, and between them in proportion ([`filter_step`]).
+/// 100 parts 1,000 deep behind a list of 10,000 cost one query 826 ms on a client.
+pub const QUERY_FILTER_STEP: f64 = 0.25e-9;
+pub const QUERY_FILTER_DEEP_STEP: f64 = 0.85e-9;
+pub fn filter_step(ancestors: u32) -> f64 {
+    let deep = ((f64::from(ancestors) - 30.0) / 170.0).clamp(0.0, 1.0);
+    QUERY_FILTER_STEP + deep * (QUERY_FILTER_DEEP_STEP - QUERY_FILTER_STEP)
+}
+/// An instance an ExcludeInstances or IncludeInstances check looks at, walking up from a query's part until either list names
+/// one (world/query.rs Filter::check), for each list that holds any: [`QUERY_LISTED_STEP`] and [`QUERY_LISTED_SEARCH`] for each
+/// doubling of the list (the same sessions, 10 parts 98 to 998 folders deep: 0.83 to 1.05 ns a step with a list of 1, 1.8 to 2.1
+/// with 10, 2.8 to 3.0 with 100, 4.0 to 4.3 with 1,000 and 6.4 to 7.8 with 10,000; [`listed_step`]).
+pub const QUERY_LISTED_STEP: f64 = 0.85e-9;
+pub const QUERY_LISTED_SEARCH: f64 = 0.3e-9;
+pub fn listed_step(entries: usize) -> f64 {
+    QUERY_LISTED_STEP + QUERY_LISTED_SEARCH * (entries.max(1) as f64).log2()
+}
+/// A part an overlap query's filter leaves out, past its walk (world/query.rs overlapping; the same sessions): 10 parts left out
+/// by an Include filter of nothing 0.60 us, 100 parts by an Exclude of their folder 5.5 to 5.9; a part found costs
+/// [`QUERY_BOX_PART`] instead.
+pub const QUERY_FILTERED_PART: f64 = 0.058e-6;
+/// A step of the PlayerMouse's TargetFilter check (world/mouse.rs pointed): up from each part its ray meets before its hit to
+/// the TargetFilter, and from the hit to the top of the tree. The same client, Target with 20 walls under the TargetFilter on its
+/// ray and a wall behind them: 2.5 us with the walls 2 folders deep, 23.4 at 300 and 52 at 1,000 (2.5 to 3.5 ns a step).
+pub const MOUSE_FILTER_STEP: f64 = 2.8e-9;
+/// A step of GetLargestCutoffDistance's ignore list check (world/camera_moves.rs blocks): up from a part one of its rays meets
+/// before its hit to an ignored instance or the top of the tree. The same client, ten walls across the five rays under an ignored
+/// folder: 3.1 us 2 deep, 23.6 at 300 and 59.3 at 1,000 (1.1 to 1.4 ns a step of each part each ray meets); with an empty list
+/// the call costs the same at any depth (2.1 to 2.3 us), so no walk is taken.
+pub const CUTOFF_IGNORE_STEP: f64 = 1.2e-9;
 /// A part GetPartsInPart returns (the 23 others of a stack 17.3 us), and its own work by the query part's size: [`method`]'s price for
 /// a part of no size, and [`QUERY_PART_SIZE`] for each stud of the square root of its box's surface area (beyond the Luau around the
 /// call, touching nothing: a 2-stud cube 0.27 us, 12 studs 0.45, 20 studs 0.95, 40 studs 1.26, a 2 x 2 x 40 rod 0.46; held out: a 6-stud

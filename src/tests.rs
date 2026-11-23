@@ -10802,9 +10802,13 @@ fn a_cast_pays_for_the_parts_up_to_its_hit() {
         assert!((at(cast, "behind") - one).abs() < 0.5, "{cast}: 23 walls behind the hit cost {} ns", at(cast, "behind") - one);
         assert!((at(cast, "excluded_behind") - one).abs() < 0.5, "{cast}: 23 excluded walls behind the hit cost {} ns", at(cast, "excluded_behind") - one);
         let front = at(cast, "excluded_in_front") - one;
-        assert!((front - 23.0 * crate::cost::RAY_CROSSED * 1e9).abs() < 2.0, "{cast}: 23 excluded walls in front of the hit cost {front} ns");
+        // (each excluded wall's filter walk one step up to the excluded folder, at its depth's price: cost.rs filter_step)
+        let excluded = 23.0 * (crate::cost::RAY_CROSSED + crate::cost::filter_step(4)) * 1e9;
+        assert!((front - excluded).abs() < 2.0, "{cast}: 23 excluded walls in front of the hit cost {front} ns, not {excluded}");
+        // (and each tied wall's filter walk, the list's one entry, to the top: 3 steps)
         let tied = at(cast, "tied") - one;
-        assert!((tied - 23.0 * each * 1e9).abs() < 2.0, "{cast}: 23 walls tied with the hit cost {tied} ns");
+        let tied_price = 23.0 * (each + 3.0 * crate::cost::filter_step(3)) * 1e9;
+        assert!((tied - tied_price).abs() < 2.0, "{cast}: 23 walls tied with the hit cost {tied} ns, not {tied_price}");
     }
 }
 

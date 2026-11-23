@@ -211,19 +211,24 @@ fn in_workspace(state: &State, workspace: ClassId, node: InstanceId) -> bool {
 
 /// Whether a part GetLargestCutoffDistance's ray meets stops it: in the spatial index, CanCollide on (CanQuery does not matter:
 /// measured, a part with CanQuery off and CanCollide on blocks), at most 0.95 transparent (float32), neither in the ignore list
-/// (sorted) nor under what it lists.
-fn blocks(state: &State, names: &Names, can_collide: Option<NameId>, ignore: &[InstanceId], part: InstanceId) -> bool {
+/// (sorted) nor under what it lists; and how many steps up the ignore list's check walked (none with an empty list: a client's
+/// call costs the same at any depth then), which a client pays cost.rs CUTOFF_IGNORE_STEP for.
+fn blocks(state: &State, names: &Names, can_collide: Option<NameId>, ignore: &[InstanceId], part: InstanceId) -> (bool, u32) {
     if can_collide.and_then(|n| state.dom.boolean(part, n)) == Some(false) || names.transparency.and_then(|n| state.dom.number(part, n)).is_some_and(|t| t as f32 > 0.95) {
-        return false;
+        return (false, 0);
     }
-    let mut node = Some(part);
+    if ignore.is_empty() {
+        return (true, 0);
+    }
+    let (mut node, mut steps) = (Some(part), 0u32);
     while let Some(id) = node {
         if ignore.binary_search(&id).is_ok() {
-            return false;
+            return (false, steps);
         }
         node = state.dom.parent_of(id);
+        steps += u32::from(node.is_some());
     }
-    true
+    (true, steps)
 }
 
 /// The five rays against the Workspace's parts (not Terrain) as the spatial queries keep them (world/broadphase.rs, the
@@ -263,6 +268,7 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
     let mut largest = 0.0f32;
     let mut met: Vec<f32> = Vec::new();
     let mut entered: Vec<(InstanceId, f32)> = Vec::new();
+    let mut walked: Vec<(f32, u32)> = Vec::new();
     let mut charge = crate::cost::CUTOFF_CALL;
     for origin in origins {
         met.clear();
@@ -291,9 +297,13 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
         let steps = super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(part, _)| *part);
         query::charge_order(&state, steps, entered.len());
         let mut nearest: Option<f32> = None;
+        // (each part's ignore check is asked of every part met up to the hit, as a client's ray asks it: its steps kept)
+        walked.clear();
         for &(part, distance) in &entered {
             met.push(distance);
-            if nearest.is_none_or(|nearest| distance < nearest) && blocks(&state, names, can_collide, &ignore, part) {
+            let (stops, steps) = blocks(&state, names, can_collide, &ignore, part);
+            walked.push((distance, steps));
+            if stops && nearest.is_none_or(|nearest| distance < nearest) {
                 nearest = Some(distance);
             }
         }
@@ -304,6 +314,8 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
         if crossed > 0 {
             charge += crate::cost::CUTOFF_MET + (crossed - 1) as f64 * crate::cost::RAY_CROSSED;
         }
+        let steps: u32 = walked.iter().filter(|(distance, _)| nearest.is_none_or(|hit| *distance <= hit)).map(|(_, steps)| steps).sum();
+        charge += f64::from(steps) * crate::cost::CUTOFF_IGNORE_STEP;
     }
     query::charge_query(engine, charge);
     largest

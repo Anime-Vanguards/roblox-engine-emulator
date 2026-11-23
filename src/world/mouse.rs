@@ -169,14 +169,19 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
     // (query::cast_ray's choice among the parts TargetFilter leaves, the first of equals; and how far along the ray each part
     // under TargetFilter is)
     let mut best: Option<(f32, &query::Solid, Vec3)> = None;
-    let mut filtered = Vec::new();
+    // (how far along the ray each part under TargetFilter is, and each part's TargetFilter check: its distance and the steps up)
+    let (mut filtered, mut walks) = (Vec::new(), Vec::new());
     {
         let state = engine.state.borrow();
         let steps = super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
         query::charge_order(&state, steps, entered.len());
         for (solid, t, local) in &entered {
             let distance = length * t;
-            if skip.is_some_and(|skip| solid.part == skip || state.dom.is_descendant_of(solid.part, skip)) {
+            let under = skip.map(|skip| query::steps_up_to(&state, solid.part, skip));
+            if let Some((_, steps)) = under {
+                walks.push((distance, steps));
+            }
+            if under.is_some_and(|(found, _)| found) {
                 filtered.push(distance);
             } else if best.is_none_or(|(nearest, ..)| distance < nearest) {
                 best = Some((distance, solid, *local));
@@ -187,6 +192,11 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
     let met = usize::from(best.is_some()) + filtered.iter().filter(|&&distance| nearer(distance)).count();
     query::charge_query(engine, crate::cost::MOUSE_RAY + price + if best.is_some() { crate::cost::MOUSE_HIT } else { 0.0 });
     query::charge_crossed(engine, met, crate::cost::MOUSE_FILTERED, 0);
+    // (a client checks TargetFilter for each part its ray meets up to its hit: up to the TargetFilter from a part under it, to the
+    // top from one that is not, at cost.rs MOUSE_FILTER_STEP a step)
+    let reach = best.map(|(nearest, ..)| nearest);
+    let steps: u32 = walks.iter().filter(|(distance, _)| reach.is_none_or(|hit| *distance <= hit)).map(|(_, steps)| steps).sum();
+    query::charge_query(engine, f64::from(steps) * crate::cost::MOUSE_FILTER_STEP);
     match best {
         Some((distance, solid, local)) => {
             // (the face's normal as query::cast_ray gives it, in the world, then back in the part's frame)

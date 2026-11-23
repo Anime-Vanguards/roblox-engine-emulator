@@ -4497,6 +4497,133 @@ fn parts_waiting_for_the_spatial_index_are_not_handed_to_the_mouse_or_the_cutoff
     run(&lua, &engine, "shared.Reads(10, true, \"Seen\")");
 }
 
+/// The walks up a query's parts that a client's filters take cost the work clock what a client spends on them (cost.rs
+/// filter_step, listed_step, QUERY_FILTERED_PART, MOUSE_FILTER_STEP, CUTOFF_IGNORE_STEP; Studio 0.747): with parts 300 folders
+/// deep, a box's FilterDescendantsInstances of 100 parts elsewhere walks each part to the top once for each entry, an Exclude of
+/// the chain's top walks each part to it and leaves it out, ExcludeInstances walks each part to the top once; a Raycast's walks
+/// the part it hits; the PlayerMouse's TargetFilter walks the parts under it to it and the hit to the top; GetLargestCutoffDistance's
+/// ignore list walks each part its rays meet. Each of these walked for nothing.
+#[test]
+fn filter_walks_cost_what_a_client_spends_on_them() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Far = Instance.new("Folder")
+        Far.Parent = workspace
+        local Pool = table.create(100)
+        for I = 1, 100 do
+            local Part = Instance.new("Part")
+            Part.Anchored, Part.Position = true, Vector3.new(3000 + I * 3, 500, 3000)
+            Part.Parent = Far
+            Pool[I] = Part
+        end
+        -- 300 folders: a part at the bottom has 302 ancestors (the Workspace and the DataModel)
+        local function Chain(Parent)
+            local Top = Instance.new("Folder")
+            Top.Parent = Parent
+            local Node = Top
+            for _ = 2, 300 do
+                local Folder = Instance.new("Folder")
+                Folder.Parent = Node
+                Node = Folder
+            end
+            return Top, Node
+        end
+        local Top, Bottom = Chain(workspace)
+        for I = 1, 10 do
+            local Part = Instance.new("Part")
+            Part.Anchored, Part.Size, Part.Position = true, Vector3.one, Vector3.new(I * 2, 1000, 0)
+            Part.Parent = Bottom
+        end
+        local Wall = Instance.new("Part")
+        Wall.Anchored, Wall.Size, Wall.Position = true, Vector3.new(4, 1, 4), Vector3.new(100, 1000, 0)
+        Wall.Parent = Bottom
+        local function Params(Class, Field, Kind, List)
+            local Made = Class.new()
+            Made.FilterType = Kind
+            Made[Field] = List
+            return Made
+        end
+        local Exclude = Enum.RaycastFilterType.Exclude
+        local Box, Size, None = CFrame.new(11, 1000, 0), Vector3.new(24, 2, 2), OverlapParams.new()
+        local FarList, Topped = Params(OverlapParams, "FilterDescendantsInstances", Exclude, Pool), Params(OverlapParams, "FilterDescendantsInstances", Exclude, { Top })
+        local Excluded = Params(OverlapParams, "ExcludeInstances", Exclude, Pool)
+        local Cast, Plain = Params(RaycastParams, "FilterDescendantsInstances", Exclude, Pool), RaycastParams.new()
+        local From, Down = Vector3.new(100, 1010, 0), Vector3.new(0, -20, 0)
+        local function Cost(Call)
+            Call()
+            local Start = os.clock()
+            Call()
+            return os.clock() - Start
+        end
+        local function Extra(A, B)
+            return Cost(A) - Cost(B)
+        end
+        local function Bounds(P)
+            return function() workspace:GetPartBoundsInBox(Box, Size, P) end
+        end
+        -- the mouse: five walls under a chain of its own across its ray, and a wall behind them in the Workspace
+        local Mouse = game:GetService("Players").LocalPlayer:GetMouse()
+        local Ray = Mouse.UnitRay
+        local MouseTop, MouseBottom = Chain(workspace)
+        for I = 1, 6 do
+            local At = Ray.Origin + Ray.Direction.Unit * (40 + I * 2)
+            local Made = Instance.new("Part")
+            Made.Anchored, Made.Size, Made.CFrame = true, Vector3.new(6, 6, 0.2), CFrame.lookAt(At, At + Ray.Direction)
+            Made.Parent = if I == 6 then workspace else MouseBottom
+        end
+        -- the cutoff: three big walls between Focus and the camera, under a chain of their own
+        local CutTop, CutBottom = Chain(workspace)
+        local O = Vector3.new(0, 3000, 0)
+        local Cam = Instance.new("Camera")
+        Cam.CFrame, Cam.Focus = CFrame.lookAt(O + Vector3.new(0, 0, 30), O), CFrame.new(O)
+        Cam.Parent = workspace
+        for I = 1, 3 do
+            local Made = Instance.new("Part")
+            Made.Anchored, Made.Size, Made.Position = true, Vector3.new(60, 60, 0.2), O + Vector3.new(0, 0, 2 + I * 2)
+            Made.Parent = CutBottom
+        end
+        workspace:Raycast(Vector3.new(0, 9000, 0), Vector3.new(0, 1, 0))
+        local NoIgnore, Ignored = {}, { CutTop }
+        local function Target(Filter)
+            return function()
+                Mouse.TargetFilter = Filter
+                local _ = Mouse.Target
+            end
+        end
+        shared.Walks = {
+            Descendants = Extra(Bounds(FarList), Bounds(None)),
+            LeftOut = Extra(Bounds(Topped), Bounds(None)),
+            Excluded = Extra(Bounds(Excluded), Bounds(None)),
+            Ray = Extra(function() workspace:Raycast(From, Down, Cast) end, function() workspace:Raycast(From, Down, Plain) end),
+            Mouse = Extra(Target(MouseTop), Target(nil)),
+            Cutoff = Extra(function() Cam:GetLargestCutoffDistance(Ignored) end, function() Cam:GetLargestCutoffDistance(NoIgnore) end),
+        }
+        "##,
+    );
+    let cost = crate::cost::filter_step(302);
+    let read = |entries: f64| crate::cost::PARAMS_LIST + entries * crate::cost::PARAMS_LISTED;
+    let checks = [
+        // (each of the 10 parts walked to the top for each of the 100 entries)
+        ("Descendants", read(100.0) + 10.0 * 100.0 * 302.0 * cost),
+        // (each walked 300 steps to the top folder and left out: no QUERY_BOX_PART)
+        ("LeftOut", read(1.0) + 10.0 * (300.0 * cost + crate::cost::QUERY_FILTERED_PART - crate::cost::QUERY_BOX_PART)),
+        // (each part and its 302 ancestors looked at in a list of 100)
+        ("Excluded", read(100.0) + 10.0 * 303.0 * crate::cost::listed_step(100)),
+        ("Ray", read(100.0) + 100.0 * 302.0 * cost),
+        // (five walls under the filter, each 300 steps to it, and the hit in the Workspace 2 to the top; the five paid as met)
+        ("Mouse", 5.0 * crate::cost::MOUSE_FILTERED + (5.0 * 300.0 + 2.0) * crate::cost::MOUSE_FILTER_STEP),
+        // (five rays each meeting three ignored walls, each 300 steps to the top folder, instead of hitting the first)
+        ("Cutoff", crate::cost::IGNORE_LISTED + 5.0 * 2.0 * crate::cost::RAY_CROSSED + 5.0 * 3.0 * 300.0 * crate::cost::CUTOFF_IGNORE_STEP),
+    ];
+    for (name, price) in checks {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Walks.{name} - {price:e}) < 1e-9, `{name}: {{shared.Walks.{name}}} s more work, not {price:e}`)"));
+    }
+}
+
 /// A query's params lists cost the work clock what a client spends reading them at every query (cost.rs PARAMS_LIST,
 /// PARAMS_LISTED; Studio 0.747: 7.8 ns an entry and 0.1 us a list that holds any): FilterDescendantsInstances, ExcludeInstances
 /// and IncludeInstances of 10,000 parts away from a box query and a Raycast, against the same queries with lists of one. Each

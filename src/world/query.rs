@@ -82,6 +82,12 @@ pub struct Filter {
     pub include: bool,
     /// FilterDescendantsInstances, sorted, without repeats
     pub instances: Vec<InstanceId>,
+    /// Each of `instances`' first place among the list's instances, the order a client checks them in
+    positions: Vec<u32>,
+    /// How many instances FilterDescendantsInstances holds, repeats counted
+    scanned: usize,
+    /// The list read with each instance's place (storage kept between queries)
+    pairs: Vec<(InstanceId, u32)>,
     /// ExcludeInstances
     pub exclude_instances: Listed,
     /// IncludeInstances
@@ -124,32 +130,77 @@ impl Filter {
     /// `{}` nothing). That is the announcement's own sample (devforum.roblox.com/t/4563575), except
     /// its last line, `return include ~= nil`, which inverts what its text says of nil and `{}`.
     fn admits(&self, state: &State, id: InstanceId) -> bool {
+        self.check(state, id, false).0
+    }
+
+    /// [`Filter::admits`]'s answer, and with `costed` what a client spends on deciding it (else 0): for FilterDescendantsInstances,
+    /// a walk up from the part for each instance of the list in its order until one is the part or an ancestor of it, every walk
+    /// before it to the top of the tree, each step at cost.rs filter_step for the part's depth; for ExcludeInstances and
+    /// IncludeInstances, one walk up until either list names an instance, each instance looked at a cost.rs listed_step for each
+    /// list that holds any.
+    pub(crate) fn check(&self, state: &State, id: InstanceId, costed: bool) -> (bool, f64) {
         let (exclude, include) = (&self.exclude_instances.ids, &self.include_instances.ids);
         let lists = !exclude.is_empty() || !include.is_empty();
-        let (mut listed, mut decided) = (false, None);
-        let mut current = Some(id);
+        let scanning = !self.instances.is_empty();
+        // (the first instance of FilterDescendantsInstances, in the list's order, that is the part or an ancestor: its place and
+        // how far up it is)
+        let mut first: Option<(u32, u32)> = None;
+        let (mut decided, mut looked) = (None, 0u32);
+        let (mut current, mut up) = (Some(id), 0u32);
         while let Some(node) = current {
-            listed = listed || self.instances.binary_search(&node).is_ok();
+            if scanning
+                && let Ok(at) = self.instances.binary_search(&node)
+                && first.is_none_or(|(place, _)| self.positions[at] < place)
+            {
+                first = Some((self.positions[at], up));
+            }
             if lists && decided.is_none() {
+                looked += 1;
                 if exclude.binary_search(&node).is_ok() {
                     decided = Some(false);
                 } else if include.binary_search(&node).is_ok() {
                     decided = Some(true);
                 }
             }
-            // (nothing further up can change either answer)
-            if (listed || self.instances.is_empty()) && (decided.is_some() || !lists) {
+            // (nothing further up can change either answer, nor, once the list's first instance is found, what it costs; else
+            // the walk goes on to the top, as a client's check of each instance before the first it finds does)
+            let scanned = !scanning || if costed { first.is_some_and(|(place, _)| place == 0) } else { first.is_some() };
+            if scanned && (decided.is_some() || !lists) {
                 break;
             }
             current = state.dom.at(node).parent;
+            up += u32::from(current.is_some());
         }
-        listed == self.include && decided.unwrap_or(!self.include_instances.given)
+        let admitted = first.is_some() == self.include && decided.unwrap_or(!self.include_instances.given);
+        if !costed {
+            return (admitted, 0.0);
+        }
+        let mut seconds = 0.0;
+        if scanning {
+            // (past the top, `up` is how many ancestors the part has: what a walk that finds nothing takes)
+            let steps = match first {
+                Some((place, at)) => f64::from(place) * f64::from(up) + f64::from(at),
+                None => self.scanned as f64 * f64::from(up),
+            };
+            seconds += steps * crate::cost::filter_step(up);
+        }
+        if lists {
+            let step: f64 = [exclude, include].iter().filter(|ids| !ids.is_empty()).map(|ids| crate::cost::listed_step(ids.len())).sum();
+            seconds += f64::from(looked) * step;
+        }
+        (admitted, seconds)
     }
 
     /// Whether a query with this filter sees the indexed part `part` (world/broadphase.rs): CanQuery off left out (unless the
     /// view takes such parts), CanCollide off left out with RespectCanCollide, and what [`Filter::admits`] says.
     pub(crate) fn sees(&self, state: &State, part: InstanceId, entry: &Entry) -> bool {
-        (self.unqueryable || entry.can_query) && (!self.respect_can_collide || entry.can_collide) && self.admits(state, part)
+        self.flags_pass(entry) && self.admits(state, part)
+    }
+
+    /// Whether the indexed part's flags let a query with this filter see it, before its lists are asked: CanQuery (unless the view
+    /// takes parts with it off) and CanCollide with RespectCanCollide.
+    fn flags_pass(&self, entry: &Entry) -> bool {
+        (self.unqueryable || entry.can_query) && (!self.respect_can_collide || entry.can_collide)
     }
 
     /// RaycastParams / OverlapParams (a prelude proxy, or a table passed in its place) read into this
@@ -176,17 +227,47 @@ impl Filter {
             LuaValue::Integer(n) if n > 0 => n as usize,
             _ => 0,
         };
-        let descendants = read_instances(&get("FilterDescendantsInstances"), &mut self.instances);
+        let descendants = self.read_scanned(&get("FilterDescendantsInstances"));
         let excluded = self.exclude_instances.read(&get("ExcludeInstances"));
         let included = self.include_instances.read(&get("IncludeInstances"));
         self.respect_can_collide = matches!(get("RespectCanCollide"), LuaValue::Boolean(true));
         charge_query(engine, list_reads([descendants, excluded, included]));
     }
 
+    /// FilterDescendantsInstances (or a legacy list) into `instances` and `positions`; how many entries it read.
+    fn read_scanned(&mut self, value: &LuaValue) -> usize {
+        let pairs = &mut self.pairs;
+        pairs.clear();
+        let mut read = 0;
+        match value {
+            LuaValue::Table(table) => {
+                for value in table.sequence_values::<LuaValue>().filter_map(|v| v.ok()) {
+                    read += 1;
+                    if let Some(id) = instance_id(&value) {
+                        pairs.push((id, pairs.len() as u32));
+                    }
+                }
+            }
+            other => {
+                pairs.extend(instance_id(other).map(|id| (id, 0)));
+                read = pairs.len();
+            }
+        }
+        self.scanned = pairs.len();
+        // (each instance once, at its first place)
+        pairs.sort_unstable();
+        pairs.dedup_by_key(|(id, _)| *id);
+        self.instances.clear();
+        self.instances.extend(pairs.iter().map(|(id, _)| *id));
+        self.positions.clear();
+        self.positions.extend(pairs.iter().map(|(_, place)| *place));
+        read
+    }
+
     /// A legacy FindPartOnRay filter: `list` (an ignore list, or with `include` a whitelist) alone.
     fn read_list(&mut self, list: &LuaValue, include: bool) {
         self.include = include;
-        read_instances(list, &mut self.instances);
+        self.read_scanned(list);
         self.exclude_instances.read(&LuaValue::Nil);
         self.include_instances.read(&LuaValue::Nil);
         self.respect_can_collide = false;
@@ -857,9 +938,9 @@ fn charge_cast(engine: &Engine, (met, admitted): (usize, usize), each: f64, kind
 /// `direction`, grown by `grow`, meets up to its hit (`hit`, the distance along `direction`), and how many of those its filter
 /// admits when it hit something: what [`charge_cast`] charges for.
 #[allow(clippy::too_many_arguments)]
-fn cast_counts(state: &State, near: &[(InstanceId, Entry)], filter: &Filter, hit: Option<f32>, origin: Vec3, direction: Vec3, grow: f32) -> (usize, usize) {
+fn cast_counts(state: &State, near: &[(InstanceId, Entry)], filter: &Filter, hit: Option<f32>, origin: Vec3, direction: Vec3, grow: f32) -> (usize, usize, f64) {
     let length = direction.length();
-    let (mut met, mut admitted) = (0usize, 0usize);
+    let (mut met, mut admitted, mut walks) = (0usize, 0usize, 0.0);
     for (part, entry) in near {
         // (the parts a query with no filter sees: CanQuery off left out)
         if !entry.can_query {
@@ -872,11 +953,14 @@ fn cast_counts(state: &State, near: &[(InstanceId, Entry)], filter: &Filter, hit
         }
         met += 1;
         let collides = !filter.respect_can_collide || entry.can_collide;
-        if hit.is_some() && collides && filter.admits(state, *part) {
+        // (a client's cast asks its filter of each part it meets, at what a client spends on it: Filter::check)
+        let (admits, walk) = if collides { filter.check(state, *part, true) } else { (false, 0.0) };
+        walks += walk;
+        if hit.is_some() && admits {
             admitted += 1;
         }
     }
-    (met, admitted)
+    (met, admitted, walks)
 }
 
 /// A cast's hit and what it is charged for: the parts near its path (a segment from `origin` along `direction`, grown by `grow`
@@ -892,8 +976,9 @@ fn cast_and_count(engine: &Engine, filter: &Filter, origin: Vec3, direction: Vec
         |near| {
             let state = engine.state.borrow();
             let hit = cast(&state, root, near);
-            let counts = cast_counts(&state, near, filter, hit.map(|hit| hit.distance), origin, direction, grow);
-            (hit, counts)
+            let (met, admitted, walks) = cast_counts(&state, near, filter, hit.map(|hit| hit.distance), origin, direction, grow);
+            charge_query(engine, walks);
+            (hit, (met, admitted))
         },
     )
 }
@@ -918,6 +1003,21 @@ pub(crate) fn charge_order(state: &State, steps: usize, items: usize) {
     }
 }
 
+/// Whether `target` is `part` or an ancestor of it, and how many steps up a client's walk from `part` takes to find it: to it, or
+/// to the top of the tree when it is not there (the part's ancestors). The PlayerMouse's TargetFilter and the ignore lists of
+/// GetLargestCutoffDistance and GetPartsObscuringTarget are checked so (world/mouse.rs, camera_moves.rs, camera.rs).
+pub(crate) fn steps_up_to(state: &State, part: InstanceId, target: InstanceId) -> (bool, u32) {
+    let (mut current, mut steps) = (Some(part), 0u32);
+    while let Some(node) = current {
+        if node == target {
+            return (true, steps);
+        }
+        current = state.dom.at(node).parent;
+        steps += u32::from(current.is_some());
+    }
+    (false, steps)
+}
+
 /// A spatial query's charge beyond its call's price (cost.rs QUERY_BOX_PART, RAY_CROSSED)
 pub(crate) fn charge_query(engine: &Engine, seconds: f64) {
     if seconds > 0.0 {
@@ -931,14 +1031,29 @@ pub(crate) fn charge_query(engine: &Engine, seconds: f64) {
 fn overlapping(engine: &Engine, filter: Filter, center: Vec3, extent: Option<Vec3>, keep: impl Fn(&Solid) -> bool) -> Vec<InstanceId> {
     take_in(engine);
     let root = engine.world().workspace;
-    let mut parts = with_near(
+    let parts = with_near(
         engine,
         |index, out| index.near_box(center, extent, out),
         |near| {
             let state = engine.state.borrow();
-            near.iter().filter(|(part, entry)| keep(&entry.solid) && filter.sees(&state, *part, entry)).map(|(part, _)| *part).collect::<Vec<_>>()
+            let mut seconds = 0.0;
+            let parts = near
+                .iter()
+                .filter(|(part, entry)| {
+                    if !keep(&entry.solid) || !filter.flags_pass(entry) {
+                        return false;
+                    }
+                    let (admitted, walk) = filter.check(&state, *part, true);
+                    seconds += walk + if admitted { 0.0 } else { crate::cost::QUERY_FILTERED_PART };
+                    admitted
+                })
+                .map(|(part, _)| *part)
+                .collect::<Vec<_>>();
+            (parts, seconds)
         },
     );
+    let (mut parts, filtered) = parts;
+    charge_query(engine, filtered);
     {
         let state = engine.state.borrow();
         let steps = broadphase::sort_by_order(&state.dom, root, &mut parts, |part| *part);
