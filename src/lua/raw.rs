@@ -699,6 +699,8 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             table_namecall,
             typeof_c,
             super::vector_methods::vector_namecall,
+            super::shared_table::update_c,
+            super::shared_table::increment_c,
             lune_roblox::datatypes::script_error::datatype_namecall,
         ],
     )?;
@@ -872,7 +874,7 @@ unsafe fn raise(state: *mut ffi::lua_State, message: String, level: u8) -> ! {
 }
 
 /// Raises the message on top of the stack (with the calling line's position unless level is 0).
-unsafe fn raise_top(state: *mut ffi::lua_State, level: c_int) -> ! {
+pub(crate) unsafe fn raise_top(state: *mut ffi::lua_State, level: c_int) -> ! {
     unsafe {
         if level != 0 {
             ffi::luaL_where(state, 1);
