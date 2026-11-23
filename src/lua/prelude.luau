@@ -707,24 +707,27 @@ local function Environment(Shared, Script, Vm)
 	return setmetatable(Env, { __index = Shared })
 end
 
--- RaycastParams / OverlapParams:AddToFilter(Instance | {Instance}) adds to FilterDescendantsInstances
--- (documented), as a new list: a table the script assigned earlier is not changed under it. (Kept below
--- the traced functions: rur's golden traces record prelude line numbers.)
+-- RaycastParams / OverlapParams:AddToFilter(Instance | {Instance}) adds to FilterDescendantsInstances (documented), in place
+-- (the object's own list, a copy of the one assigned), each entry checked first, at what a client spends appending them
+-- (cost.rs PARAMS_LIST_WRITE, PARAMS_WRITTEN an entry). (Below the traced functions: rur's goldens record prelude lines.)
 local FilterMethods = {
 	AddToFilter = function(Data, Instances)
-		local List = table.clone(Data.FilterDescendantsInstances or {})
-		if Typeof(Instances) == "Instance" then
-			table.insert(List, Instances)
-		elseif type(Instances) == "table" then
-			for _, Item in Instances do
-				if Typeof(Item) ~= "Instance" then
-					error(`Unable to cast {Typeof(Item)} to Instance`, 3)
-				end
-				table.insert(List, Item)
-			end
-		else
+		local List = if type(Data.FilterDescendantsInstances) == "table" then Data.FilterDescendantsInstances else table.clone(Data.FilterDescendantsInstances or {})
+		local Added = if Typeof(Instances) == "Instance" then { Instances } else Instances
+		if type(Added) ~= "table" then
 			error(`Unable to cast {Typeof(Instances)} to Instance`, 3)
 		end
+		local Count = 0
+		for _, Item in Added do
+			if Typeof(Item) ~= "Instance" then
+				error(`Unable to cast {Typeof(Item)} to Instance`, 3)
+			end
+			Count += 1
+		end
+		for _, Item in Added do
+			table.insert(List, Item)
+		end
+		R.Charge(R.ParamsListWriteCost + Count * R.ParamsWrittenCost)
 		Data.FilterDescendantsInstances = List
 	end,
 }
@@ -733,10 +736,15 @@ local FilterMethods = {
 -- 2026, ExcludeInstances and IncludeInstances ({Instance}?, nil until assigned), hold a copy of the table assigned and answer
 -- a copy, as Roblox's array properties do: changing a table afterwards changes no filter (a script assigns it again, as
 -- Roblox's engineer advises in the announcement's thread). The queries read what is stored through ParamsData
--- (world/query.rs), not through the proxy.
+-- (world/query.rs), not through the proxy. A copy costs what a client spends on it past the proxy's host call: written,
+-- cost.rs PARAMS_LIST_WRITE and the list's price an entry (PARAMS_WRITTEN, PARAMS_FILTER_WRITTEN); read, PARAMS_LIST_READ and
+-- PARAMS_READ an entry; the copy of the table given to `new` nothing (a client ignores that table).
 local ParamsData = setmetatable({}, { __mode = "k" })
-local FilterLists = { FilterDescendantsInstances = true, ExcludeInstances = true, IncludeInstances = true }
-local function ListCopy(Value)
+local FilterLists = { FilterDescendantsInstances = R.ParamsWrittenCost, ExcludeInstances = R.ParamsFilterWrittenCost, IncludeInstances = R.ParamsFilterWrittenCost }
+local function ListCopy(Value, Base, Each)
+	if type(Value) == "table" and Base then
+		R.Charge(Base + #Value * Each)
+	end
 	return if type(Value) == "table" then table.move(Value, 1, #Value, 1, table.create(#Value)) else Value
 end
 -- `Fields`: every member a script reads and writes besides AddToFilter, with the default a new one reads (FilterType's,
@@ -756,6 +764,8 @@ local function FilterParamsType(TypeName, Fields, Meta)
 				Defaults.FilterType = GetEnumItem("RaycastFilterType", "Exclude")
 			end
 			local Data = table.clone(Defaults)
+			-- (a list of its own, which AddToFilter adds to)
+			Data.FilterDescendantsInstances = {}
 			for Key, Value in Initial or {} do
 				Data[Key] = if FilterLists[Key] then ListCopy(Value) else Value
 			end
@@ -769,12 +779,12 @@ local function FilterParamsType(TypeName, Fields, Meta)
 					Members.ReadMiss(TypeName, Key, false)
 				end
 				local Value = Data[Key]
-				return if FilterLists[Key] then ListCopy(Value) else Value
+				return if FilterLists[Key] then ListCopy(Value, R.ParamsListReadCost, R.ParamsReadCost) else Value
 			end, function(_, Key, Value)
 				if not Known[Key] then
 					Members.WriteMiss(TypeName, Key, false)
 				end
-				Data[Key] = if FilterLists[Key] then ListCopy(Value) else Value
+				Data[Key] = if FilterLists[Key] then ListCopy(Value, R.ParamsListWriteCost, FilterLists[Key]) else Value
 			end, Meta and Meta(Data))
 			ParamsData[Object] = Data
 			return Object
@@ -785,16 +795,6 @@ end
 -- coroutine.create / wrap make a thread, which Studio charges the script for as task.spawn does (cost.rs THREAD): C functions
 -- of the engine's own over the VM's (lua/builtins.rs coroutine_function, set by lua/globals.rs)
 local Coroutine = table.clone(coroutine)
---
---
---
---
---
---
---
---
---
---
 --
 
 -- tostring of the parameter objects as a playing client prints them (Studio 0.744): Roblox's fields in its order, an

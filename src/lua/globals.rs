@@ -121,6 +121,12 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set("ThreadCost", crate::cost::THREAD)?;
     r.set("VectorLerpCost", crate::cost::VECTOR_LERP)?;
     r.set("VectorFuzzyEqCost", crate::cost::VECTOR_FUZZY_EQ)?;
+    // (what copying a RaycastParams' or OverlapParams' instance list costs a script: prelude.luau ListCopy, AddToFilter)
+    r.set("ParamsListWriteCost", crate::cost::PARAMS_LIST_WRITE)?;
+    r.set("ParamsWrittenCost", crate::cost::PARAMS_WRITTEN)?;
+    r.set("ParamsFilterWrittenCost", crate::cost::PARAMS_FILTER_WRITTEN)?;
+    r.set("ParamsListReadCost", crate::cost::PARAMS_LIST_READ)?;
+    r.set("ParamsReadCost", crate::cost::PARAMS_READ)?;
     // Vector3:Angle's atan2 in floats (the C runtime's atan2f), as a playing client takes it (Studio 0.744,
     // tools/parity/probes/cframe_order.luau and datatypes.luau: math.atan2's doubles differ in the last digits)
     r.set("Atan2f", lua.create_function(|_, (y, x): (f64, f64)| Ok(f64::from((y as f32).atan2(x as f32))))?)?;

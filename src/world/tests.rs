@@ -303,6 +303,10 @@ fn add_to_filter_extends_the_filter() {
         assert(#List == 2 and List[1] == Top and List[2] == Middle, "the list")
         assert(workspace:Raycast(Vector3.new(0, 10, 0), Down, Params).Instance == Bottom, "an array")
         assert(not pcall(function() Params:AddToFilter(5) end), "a number is not an instance")
+        assert(not pcall(function() Params:AddToFilter({Bottom, 5}) end) and #Params.FilterDescendantsInstances == 2, "a table with an entry that is no Instance adds none")
+        local Fresh = RaycastParams.new()
+        Fresh:AddToFilter(Top)
+        assert(#Fresh.FilterDescendantsInstances == 1 and #RaycastParams.new().FilterDescendantsInstances == 0, "a new object's list is its own")
         local Overlap = OverlapParams.new()
         Overlap:AddToFilter({Top, Bottom})
         local Parts = workspace:GetPartBoundsInBox(CFrame.new(0, 3, 0), Vector3.new(4, 10, 4), Overlap)
@@ -5137,6 +5141,76 @@ fn params_lists_cost_what_a_client_spends_reading_them_at_every_query() {
     let checks = [("Descendants", many), ("Excluded", many), ("Included", many), ("Ray", many), ("List", crate::cost::PARAMS_LIST + crate::cost::PARAMS_LISTED)];
     for (name, price) in checks {
         run(&lua, &engine, &format!("assert(math.abs(shared.Lists.{name} - {price:e}) < 1e-9, `{name}: {{shared.Lists.{name}}} s more work, not {price:e}`)"));
+    }
+}
+
+/// A params object's instance list costs the work clock what a client spends copying it (cost.rs PARAMS_LIST_WRITE,
+/// PARAMS_WRITTEN, PARAMS_FILTER_WRITTEN, PARAMS_LIST_READ, PARAMS_READ; Studio 0.747: 13.6 ns an entry assigned to
+/// FilterDescendantsInstances, 11 read): each list assigned 10,000 instances against an empty one, read back, AddToFilter of
+/// 1,000, and of one onto a list of 10,000 against onto an empty one (a client appends: what the list holds costs nothing). Each
+/// copy cost the proxy's host call alone, whatever its length.
+#[test]
+fn params_lists_cost_what_a_client_spends_copying_them() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Pool = table.create(10000)
+        for I = 1, 10000 do
+            Pool[I] = Instance.new("Folder")
+        end
+        local Thousand, Empty = table.move(Pool, 1, 1000, 1, table.create(1000)), {}
+        local function Cost(Call)
+            Call()
+            local Start = os.clock()
+            Call()
+            return os.clock() - Start
+        end
+        local Ray, Overlap = RaycastParams.new(), OverlapParams.new()
+        local function Write(Params, Field)
+            return Cost(function() Params[Field] = Pool end) - Cost(function() Params[Field] = Empty end)
+        end
+        local function Read(Params, Field)
+            Params[Field] = Pool
+            local Many = Cost(function() local _ = Params[Field] end)
+            Params[Field] = Empty
+            return Many - Cost(function() local _ = Params[Field] end)
+        end
+        local function Append(List)
+            Ray.FilterDescendantsInstances = List
+            return Cost(function() Ray:AddToFilter(Pool[1]) end)
+        end
+        shared.Copies = {
+            Descendants = Write(Ray, "FilterDescendantsInstances"),
+            Overlap = Write(Overlap, "FilterDescendantsInstances"),
+            Excluded = Write(Ray, "ExcludeInstances"),
+            Included = Write(Overlap, "IncludeInstances"),
+            Read = Read(Ray, "FilterDescendantsInstances"),
+            ReadIncluded = Read(Overlap, "IncludeInstances"),
+            Written = Cost(function() Ray.FilterDescendantsInstances = Empty end) - Cost(function() Ray.IgnoreWater = true end),
+            Copied = Cost(function() local _ = Ray.FilterDescendantsInstances end) - Cost(function() local _ = Ray.IgnoreWater end),
+            Added = Cost(function() Ray.FilterDescendantsInstances = Empty Ray:AddToFilter(Thousand) end)
+                - Cost(function() Ray.FilterDescendantsInstances = Empty Ray:AddToFilter(Empty) end),
+            Appended = Append(Pool) - Append(Empty),
+        }
+        "##,
+    );
+    let checks = [
+        ("Descendants", 10_000.0 * crate::cost::PARAMS_WRITTEN),
+        ("Overlap", 10_000.0 * crate::cost::PARAMS_WRITTEN),
+        ("Excluded", 10_000.0 * crate::cost::PARAMS_FILTER_WRITTEN),
+        ("Included", 10_000.0 * crate::cost::PARAMS_FILTER_WRITTEN),
+        ("Read", 10_000.0 * crate::cost::PARAMS_READ),
+        ("ReadIncluded", 10_000.0 * crate::cost::PARAMS_READ),
+        ("Written", crate::cost::PARAMS_LIST_WRITE),
+        ("Copied", crate::cost::PARAMS_LIST_READ),
+        ("Added", 1_000.0 * crate::cost::PARAMS_WRITTEN),
+        ("Appended", 0.0),
+    ];
+    for (name, price) in checks {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Copies.{name} - {price:e}) < 1e-9, `{name}: {{shared.Copies.{name}}} s more work, not {price:e}`)"));
     }
 }
 

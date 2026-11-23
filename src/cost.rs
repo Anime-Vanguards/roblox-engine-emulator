@@ -1107,10 +1107,29 @@ pub const QUERY_RAISED: f64 = 3.4e-6;
 /// 15 samples less an empty loop, two rounds; lists of 0, 10, 100, 1,000 and 10,000 parts away from the query, which it finds
 /// nothing near): a GetPartBoundsInBox 0.13 to 0.2 us with an empty list, 0.31 with 10, 1.03 with 100, 7.96 with 1,000 and 78
 /// with 10,000, whichever list, Exclude or Include; a Raycast's miss 0.30, 0.51, 1.30, 8.73 and 83.5: 7.8 to 8.3 ns an entry at
-/// every query ([`PARAMS_LISTED`]) and about 0.1 us a list that holds any ([`PARAMS_LIST`]). Assigning a list costs a client
-/// 13.6 ns an entry more (FilterDescendantsInstances of 10,000 parts 137 us), which ree's prelude does not charge.
+/// every query ([`PARAMS_LISTED`]) and about 0.1 us a list that holds any ([`PARAMS_LIST`]). Assigning or reading a list costs
+/// a client its copy ([`PARAMS_WRITTEN`] and below).
 pub const PARAMS_LIST: f64 = 0.1e-6;
 pub const PARAMS_LISTED: f64 = 7.8e-9;
+/// The copy a RaycastParams' or OverlapParams' instance list costs a script when it is assigned or read (the prelude's
+/// FilterParamsType ListCopy) or added to (AddToFilter), past the proxy's host call (LUAU_HOSTCALL, what a write of IgnoreWater
+/// costs a client too). In a playing client and a server (roblox-sim, Studio 0.747, headless; os.clock around 13 to 20,000 calls
+/// in pcall, 15 samples less an empty pcall, two sessions; lists of 0, 1, 10, 100, 1,000 and 10,000 parts): assigning
+/// FilterDescendantsInstances 0.14 us with an empty list, 0.22 with 10, 1.37-1.41 with 100, 13.1-13.4 with 1,000 and 137-139
+/// with 10,000, either params type ([`PARAMS_LIST_WRITE`], [`PARAMS_WRITTEN`] an entry: x0.71 for the empty list, x0.90 to x1.13
+/// the others); ExcludeInstances and IncludeInstances 0.09, 0.22, 1.57, 16.7-17.8 and 206-210 ([`PARAMS_FILTER_WRITTEN`] an
+/// entry: a client's grows from 13 ns an entry at 10 to 20.6 at 10,000, and this is its 1,000's; x0.82 to x1.23); reading any of
+/// them 0.03, 0.12-0.14, 0.9-1.1, 9.6-10.1 and 114-119 ([`PARAMS_LIST_READ`], [`PARAMS_READ`] an entry; x0.76 to x1.20);
+/// AddToFilter of a list onto an empty one 0.22, 0.39, 1.58, 13.4 and 141, its write included (the write's prices for the
+/// entries it adds, x0.91 to x1.08: a client appends them, and adding one costs it 0.03 to 0.6 us onto a list of 0 or 10,000
+/// alike). Main charged the host call alone (0.018 us) whatever the length, where its copy of 10,000 entries took 27 us of host
+/// time. A table given to RaycastParams.new costs nothing: a client ignores it (a 0.747 client and server read the new object's
+/// defaults).
+pub const PARAMS_LIST_WRITE: f64 = 0.08e-6;
+pub const PARAMS_WRITTEN: f64 = 13.6e-9;
+pub const PARAMS_FILTER_WRITTEN: f64 = 17e-9;
+pub const PARAMS_LIST_READ: f64 = 0.02e-6;
+pub const PARAMS_READ: f64 = 11e-9;
 /// A step of a client's FilterDescendantsInstances check of a query's part (world/query.rs Filter::check): for each instance of
 /// the list in its order until one is the part or an ancestor of it, a walk up from the part, to the top of the tree for each
 /// instance before it. In a playing client (roblox-sim, Studio 0.747, a headless client; os.clock around GetPartBoundsInBox
