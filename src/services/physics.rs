@@ -24,9 +24,11 @@
 //!   "" for a free id, "The Collision group Id must be between 0 and 32" outside 0..=31.
 //! - A playing client may read the registry but not change it: Register, Unregister, Rename, SetCollidable, Create and
 //!   Remove raise "This API can only be used on the server!" (Create and Remove after their name checks, the others before).
-//!   A client sees the groups its server registers, from its join on; ree replicates none of them (a loopback client starts
-//!   with Default only). A server and Studio's edit DataModel may change it (the edit one by Roblox's documentation of the
-//!   Collision Groups editor, not measured).
+//!   A client sees the groups its server registers, from its join on. A loopback client gets its server's registry at the
+//!   join and, after a server frame that changed it, once at that frame's flush, as the frame left it (a property's changes
+//!   in a frame go out once the same way): it works out its parts' ids again when a group's name changed (or the registry
+//!   is new to it), and a mask alone leaves them, as SetCollidable does on the server. A server and Studio's edit DataModel
+//!   may change it (the edit one by Roblox's documentation of the Collision Groups editor, not measured).
 //! - Arguments are cast from the last to the first, before any other check: a missing one "Argument n missing or nil". A
 //!   name casts any value to text (lua::convert::cast_text: 5 is "5", true "true", a table "{}"). The collidable flag
 //!   takes a boolean, a number (0 is false, any other true) or "true" / "false" in any case; another string "Unable to
@@ -44,9 +46,11 @@
 //!   the Workspace it keeps what it had, and a name written there leaves it. Each change fires Changed as a write does.
 //!   ree works it out once the run has touched collision groups (a group registered or created, or a script's write to
 //!   either property): until then a part keeps the id it was loaded with.
+//! - What a group change costs: a server spends 1.7 ns on each part in the Workspace and 0.38 us more on each whose id
+//!   changes (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED), charged as the parts are worked out.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::{Rc, Weak},
 };
 
@@ -141,6 +145,17 @@ impl Registry {
 pub struct Snapshot {
     pub names: [Option<Box<[u8]>>; MAX_GROUPS],
     pub masks: [u32; MAX_GROUPS],
+    /// A frame's snapshot: one of the changes since the last flush left the registry with more than Default (or Default not
+    /// colliding with all), so the client follows it from now on, as that change's own snapshot would have made it (false at
+    /// the join, whose snapshot decides that alone)
+    pub touched: bool,
+}
+
+impl Registry {
+    /// More than Default, or Default not colliding with all: a client that receives it follows the registry
+    fn non_default(names: &[Option<Box<[u8]>>; MAX_GROUPS], masks: &[u32; MAX_GROUPS]) -> bool {
+        names[1..].iter().any(Option::is_some) || masks[0] != u32::MAX
+    }
 }
 
 /// What the methods, the part setters and the hierarchy hook share: one engine's registry and the names they use.
@@ -150,31 +165,52 @@ pub(crate) struct Groups {
     /// BasePart.CollisionGroup and CollisionGroupId
     group: NameId,
     group_id: NameId,
+    /// A loopback server's registry changed since the frame's last flush: its log holds the one marker that sends it
+    /// ([`Groups::replicate`]), and whether a change left it other than Default alone ([`Snapshot::touched`])
+    queued: Cell<bool>,
+    touched: Cell<bool>,
 }
 
 impl Groups {
     fn snapshot(&self) -> Snapshot {
         let registry = self.registry.borrow();
-        Snapshot { names: registry.names.clone(), masks: registry.masks }
+        Snapshot { names: registry.names.clone(), masks: registry.masks, touched: false }
     }
 
+    /// The server's registry, at the join or in a frame's changes. Every part in the Workspace takes its group's id again,
+    /// unless the registry was already followed and no group's name changed: a mask alone leaves the ids, as
+    /// CollisionGroupSetCollidable leaves them on the server.
     fn apply_snapshot(&self, engine: &Engine, snapshot: Snapshot) {
-        {
+        let resolve = {
             let mut registry = self.registry.borrow_mut();
-            let non_default = snapshot.names[1..].iter().any(Option::is_some) || snapshot.masks[0] != u32::MAX;
-            registry.names = snapshot.names;
-            registry.masks = snapshot.masks;
-            if non_default {
+            let (followed, renamed) = (registry.active, registry.names != snapshot.names);
+            if Registry::non_default(&snapshot.names, &snapshot.masks) || snapshot.touched {
                 registry.active = true;
             }
+            registry.names = snapshot.names;
+            registry.masks = snapshot.masks;
+            !followed || renamed
+        };
+        if resolve {
+            self.resolve_placed(engine);
         }
-        self.resolve_placed(engine);
     }
 
+    /// A change a loopback client hears of: the first since the frame's last flush logs a marker, in its place among the
+    /// frame's changes, and the flush sends the registry as it is then (loopback/replicate.rs flush, [`flushed`]), as a
+    /// property's changes in a frame go out once with its last value. A frame that changes the groups many times sends one
+    /// snapshot, and its client takes the parts' ids in once.
     fn replicate(&self, engine: &Engine) {
-        let snapshot = self.snapshot();
-        if let Some(log) = engine.state.borrow_mut().loopback_log.as_mut() {
-            log.push(crate::loopback::replicate::Change::Message(crate::loopback::bridge::Msg::CollisionGroups(snapshot)));
+        let mut state = engine.state.borrow_mut();
+        let Some(log) = state.loopback_log.as_mut() else { return };
+        {
+            let registry = self.registry.borrow();
+            if Registry::non_default(&registry.names, &registry.masks) {
+                self.touched.set(true);
+            }
+        }
+        if !self.queued.replace(true) {
+            log.push(crate::loopback::replicate::Change::CollisionGroups);
         }
     }
 
@@ -183,23 +219,33 @@ impl Groups {
     }
 
     /// The part takes the id of the group its CollisionGroup names, -1 for a name that is not registered (Changed fires
-    /// when that differs, as for a write).
-    fn resolve(&self, state: &mut State, reflection: &Reflection, hooks: &Hooks, registry: &Registry, part: InstanceId) {
+    /// when that differs, as for a write). Returns whether the id changed.
+    fn resolve(&self, state: &mut State, reflection: &Reflection, hooks: &Hooks, registry: &Registry, part: InstanceId) -> bool {
         let id = state.dom.raw_get(part, self.group).and_then(Value::as_str).and_then(|name| registry.id(name.as_bytes()));
-        core::raw_set(state, reflection, hooks, part, self.group_id, Value::Number(id.map_or(-1.0, |id| id as f64)));
+        core::raw_set(state, reflection, hooks, part, self.group_id, Value::Number(id.map_or(-1.0, |id| id as f64)))
     }
 
-    /// Every part in the Workspace takes its group's id again: a group came, went or changed its name.
-    fn resolve_placed(&self, engine: &Engine) {
-        let Some(world) = engine.world.get() else { return };
+    /// Every part in the Workspace takes its group's id again: a group came, went or changed its name. Returns how many
+    /// parts it looked at and how many of their ids changed.
+    fn resolve_placed(&self, engine: &Engine) -> Resolved {
+        let Some(world) = engine.world.get() else { return Resolved::default() };
         let reflection = &engine.reflection;
         let hooks = engine.hooks.borrow();
         let mut state = engine.state.borrow_mut();
         let parts = state.dom.descendants_where(world.workspace, |instance| reflection.class(instance.class).is_a(self.base_part));
         let registry = self.registry.borrow();
+        let mut resolved = Resolved { parts: parts.len(), changed: 0 };
         for part in parts {
-            self.resolve(&mut state, reflection, &hooks, &registry, part);
+            resolved.changed += usize::from(self.resolve(&mut state, reflection, &hooks, &registry, part));
         }
+        resolved
+    }
+
+    /// A script's group change (a server's, or in edit): every part in the Workspace takes its id again, at what a server
+    /// spends on that ([`Resolved::charge`]), and a loopback client hears of it.
+    fn changed(&self, engine: &Engine) {
+        self.resolve_placed(engine).charge(engine);
+        self.replicate(engine);
     }
 
     /// A part's CollisionGroup written, by the property or SetPartCollisionGroup: "" is ignored and a longer name cut to
@@ -218,6 +264,24 @@ impl Groups {
         }
         if engine.world.get().is_some_and(|world| state.dom.is_descendant_of(part, world.workspace)) {
             self.resolve(&mut state, reflection, &hooks, &self.registry.borrow(), part);
+        }
+    }
+}
+
+/// The parts a group change looked at and those whose CollisionGroupId it changed.
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+struct Resolved {
+    parts: usize,
+    changed: usize,
+}
+
+impl Resolved {
+    /// What a server spends on them beyond the call (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED).
+    fn charge(self, engine: &Engine) {
+        let seconds = self.parts as f64 * crate::cost::COLLISION_GROUP_PART + self.changed as f64 * crate::cost::COLLISION_GROUP_CHANGED;
+        if seconds > 0.0 {
+            engine.state.borrow().sched.charge(seconds);
+            crate::boundary::add_cost(seconds);
         }
     }
 }
@@ -324,8 +388,7 @@ fn unregister(groups: Rc<Groups>, side_first: bool) -> MethodFn {
         if let Some(id) = registry.id(&name) {
             registry.remove(id);
             drop(registry);
-            groups.resolve_placed(engine);
-            groups.replicate(engine);
+            groups.changed(engine);
         }
         Ok(none())
     })
@@ -334,6 +397,16 @@ fn unregister(groups: Rc<Groups>, side_first: bool) -> MethodFn {
 /// The engine's collision-group registry snapshot for loopback join replication.
 pub(crate) fn snapshot(engine: &Engine) -> Option<Snapshot> {
     engine.physics.get().map(|groups| groups.snapshot())
+}
+
+/// A loopback server's frame is being flushed (its log taken): the registry as it is now if it changed since the last flush,
+/// for the place of the log's marker; the next change logs a marker again.
+pub(crate) fn flushed(engine: &Engine) -> Option<Snapshot> {
+    let groups = engine.physics.get()?;
+    if !groups.queued.replace(false) {
+        return None;
+    }
+    Some(Snapshot { touched: groups.touched.replace(false), ..groups.snapshot() })
 }
 
 /// Applies a replicated collision-group snapshot on a loopback client.
@@ -347,7 +420,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     let reflection = engine.reflection.clone();
     let names = (reflection.class_id("PhysicsService"), reflection.class_id("BasePart"), reflection.name_id("CollisionGroup"), reflection.name_id("CollisionGroupId"));
     let (Some(service), Some(base_part), Some(group), Some(group_id)) = names else { return };
-    let groups = Rc::new(Groups { registry: RefCell::new(Registry::new()), base_part, group, group_id });
+    let groups = Rc::new(Groups { registry: RefCell::new(Registry::new()), base_part, group, group_id, queued: Cell::new(false), touched: Cell::new(false) });
     let _ = engine.physics.set(groups.clone());
     let mut add = |name: &str, function: MethodFn| {
         if let Some(name) = reflection.name_id(name) {
@@ -403,8 +476,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         if registry.id(&name).is_none() {
             registry.add(&name);
             drop(registry);
-            shared.resolve_placed(engine);
-            shared.replicate(engine);
+            shared.changed(engine);
         }
         Ok(none())
     }));
@@ -422,8 +494,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         }
         let id = registry.add(&name);
         drop(registry);
-        shared.resolve_placed(engine);
-        shared.replicate(engine);
+        shared.changed(engine);
         Ok(values([LuaValue::Number(id as f64)]))
     }));
     add("UnregisterCollisionGroup", unregister(groups.clone(), true));
@@ -439,8 +510,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         if let (Some(id), None) = (registry.id(&from), registry.id(&to)) {
             registry.names[id] = Some(to.into());
             drop(registry);
-            shared.resolve_placed(engine);
-            shared.replicate(engine);
+            shared.changed(engine);
         }
         Ok(none())
     }));

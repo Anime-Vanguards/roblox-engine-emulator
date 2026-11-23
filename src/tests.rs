@@ -11264,6 +11264,98 @@ fn each_engine_has_its_own_collision_groups() {
     assert_eq!(run(&second_lua, &second, count), ["print: 1"]);
 }
 
+/// A group change works out every part's CollisionGroupId in the Workspace again, and costs the work clock what a server spends
+/// on that (roblox-sim, Studio 0.747: cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED): 1.7 ns a part whose id stays and
+/// 0.38 us more for each whose id changes, so a register or unregister beside 5,000 parts reads 8.5 us more than beside none,
+/// and with 1,000 of them in the group 380 more again (each read a flat 0.08 us). CollisionGroupSetCollidable works out no ids
+/// and stays at its call's price.
+#[test]
+fn a_collision_group_change_costs_what_a_server_spends_on_the_workspaces_parts() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        local function Each(Change)
+            local N = 10
+            local Start = os.clock()
+            for _ = 1, N do
+                Change()
+            end
+            local Middle = os.clock()
+            for _ = 1, N do
+            end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local function Toggle()
+            PhysicsService:RegisterCollisionGroup("A")
+            PhysicsService:UnregisterCollisionGroup("A")
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        local Alone = Each(Toggle)
+        Within("a register and an unregister with no parts", Alone, 0.1, 0.4)
+        local Folder = Instance.new("Folder")
+        for _ = 1, 5000 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Parent = Folder
+        end
+        Folder.Parent = workspace
+        Within("a change beside 5,000 parts", (Each(Toggle) - Alone) / 2, 8.3, 8.7)
+        for Index, Part in Folder:GetChildren() do
+            if Index <= 1000 then
+                Part.CollisionGroup = "A"
+            end
+        end
+        Within("a change of 1,000 of their ids", (Each(Toggle) - Alone) / 2, 8.5 + 370, 8.5 + 390)
+        Within("a collidable pair", Each(function()
+            PhysicsService:CollisionGroupSetCollidable("Default", "Default", true)
+        end), 0.0, 0.3)
+        "#,
+    );
+}
+
+/// On a loopback server a frame's collision-group changes reach the client as one snapshot of the registry as the frame left it,
+/// in the place of the first change (loopback/replicate.rs flush): 101 changes log one marker (each logged a snapshot of its own,
+/// so the client took every part's id in 101 times), the flush reads the registry then, and the next change logs a marker again.
+#[test]
+fn a_frames_collision_group_changes_log_one_snapshot_on_a_loopback_server() {
+    use super::RunContext;
+    use crate::loopback::{bridge::Msg, replicate::Change};
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine.state.borrow_mut().loopback_log = Some(Vec::new());
+    let logged = |engine: &Engine| engine.state.borrow().loopback_log.as_ref().unwrap().iter().filter(|change| matches!(change, Change::CollisionGroups | Change::Message(Msg::CollisionGroups(_)))).count();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        for _ = 1, 25 do
+            PhysicsService:RegisterCollisionGroup("A")
+            PhysicsService:CollisionGroupSetCollidable("A", "Default", false)
+            PhysicsService:RenameCollisionGroup("A", "B")
+            PhysicsService:UnregisterCollisionGroup("B")
+        end
+        PhysicsService:RegisterCollisionGroup("Kept")
+        "#,
+    );
+    assert_eq!(logged(&engine), 1, "one marker for the frame's changes");
+    let snapshot = crate::services::physics::flushed(&engine).expect("the frame's snapshot");
+    let names: Vec<Option<&[u8]>> = snapshot.names.iter().map(Option::as_deref).collect();
+    assert_eq!(&names[..3], [Some(&b"Default"[..]), Some(&b"Kept"[..]), None]);
+    assert!(snapshot.touched && snapshot.masks.iter().all(|&mask| mask == u32::MAX));
+    assert!(crate::services::physics::flushed(&engine).is_none(), "nothing more to send");
+    engine.state.borrow_mut().loopback_log.as_mut().unwrap().clear();
+    run(&lua, &engine, r#"game:GetService("PhysicsService"):CollisionGroupSetCollidable("Kept", "Default", false)"#);
+    assert_eq!(logged(&engine), 1, "the next frame's change");
+}
+
 /// settings() is refused to a game script, which a play run's scripts are, and the settings services are no children of the
 /// DataModel's or of UserSettings()' (measured in a 0.747 client and server: tools/parity/probes/global_settings.luau). It was a
 /// table of tables, and GetService made a settings service, or any other, under either.

@@ -957,6 +957,15 @@ pub const REFLECTED_CLASS_TESTED: f64 = 0.006e-6;
 /// A LogService logging call (Output, Info, Warn, Error, Log), whole: the same client, `LogService:Info("L {a}", { a = 1 })` 1.10 us
 /// with the Luau around it (20 calls a sample, the median of 15 samples), the table constructor about 0.1 of that.
 pub const LOG_CALL: f64 = 1.0e-6;
+/// A PhysicsService group change that works out every part's CollisionGroupId in the Workspace again (Register, Create, Unregister,
+/// Remove, Rename: services/physics.rs), beyond the call: a part it looks at, and one whose id it changes. A server (roblox-sim,
+/// Studio 0.747, a Script of a headless play session; os.clock around single calls, the median of 15, two passes of each scene):
+/// with 0, 1,000, 5,000 and 20,000 parts whose id stays, a register 0.5, 2.2, 8.7-8.8 and 34.7-34.9 us (unregister and rename
+/// alike), so 1.7 ns a part, in models or not; with parts of the group, whose id changes each time, 360-364 us at 1,000 and
+/// 1,866-1,910 at 5,000 (0.36-0.38 us a part more; 0.43-0.44 at 20,000, 0.45 in models). CollisionGroupSetCollidable also costs a
+/// server 1.7 ns a part (43 us at 20,000), which ree, keeping no ids by mask, does not charge.
+pub const COLLISION_GROUP_PART: f64 = 1.7e-9;
+pub const COLLISION_GROUP_CHANGED: f64 = 0.38e-6;
 /// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path meets up to its hit,
 /// whether its filter admits them or not, and none behind the hit (world/query.rs charge_cast: a client's cast stops there, measured
 /// on Studio 0.747 for all four): one that meets any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`] (but a shape

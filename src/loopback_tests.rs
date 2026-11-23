@@ -1101,3 +1101,66 @@ return {
     assert!(has(&lines, "client print: late true false"), "{lines:?}");
     assert!(has(&lines, "client print: changed true false false"), "{lines:?}");
 }
+
+/// A frame's collision-group changes reach the client as one snapshot of the registry as the frame left it: 20 registers and
+/// unregisters of a part's group and one more register change the client's copy of its CollisionGroupId once (it changed 41
+/// times, a snapshot a change, the client taking every part's id in each time). A snapshot in which no group's name changed (a
+/// collidable pair) leaves the ids, as CollisionGroupSetCollidable leaves them on the server: a client script's write stays.
+#[test]
+fn a_frames_collision_group_changes_reach_the_client_once() {
+    let summary = run_pair(
+        "cg-once",
+        r##"
+local PhysicsService = game:GetService("PhysicsService")
+local RunService = game:GetService("RunService")
+return {
+	Server = function()
+		local Part = Instance.new("Part")
+		Part.Name = "Grouped"
+		Part.Anchored = true
+		Part.CollisionGroup = "G"
+		Part.Parent = workspace
+		task.wait(0.2)
+		for _ = 1, 20 do
+			PhysicsService:RegisterCollisionGroup("G")
+			PhysicsService:UnregisterCollisionGroup("G")
+		end
+		PhysicsService:RegisterCollisionGroup("G")
+		task.wait(0.3)
+		PhysicsService:CollisionGroupSetCollidable("G", "Default", false)
+	end,
+	Client = function()
+		local Part = workspace:WaitForChild("Grouped")
+		local Changes = 0
+		Part:GetPropertyChangedSignal("CollisionGroupId"):Connect(function()
+			Changes += 1
+		end)
+		print("start", Part.CollisionGroupId)
+		while not PhysicsService:IsCollisionGroupRegistered("G") do
+			RunService.Heartbeat:Wait()
+		end
+		for _ = 1, 3 do
+			RunService.Heartbeat:Wait()
+		end
+		print("registered", Part.CollisionGroupId, Changes)
+		Part.CollisionGroupId = 9
+		while PhysicsService:CollisionGroupsAreCollidable("G", "Default") do
+			RunService.Heartbeat:Wait()
+		end
+		for _ = 1, 3 do
+			RunService.Heartbeat:Wait()
+		end
+		print("collidable", Part.CollisionGroupId)
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: start -1"), "{lines:?}");
+    assert!(has(&lines, "client print: registered 1 1"), "{lines:?}");
+    assert!(has(&lines, "client print: collidable 9"), "{lines:?}");
+}

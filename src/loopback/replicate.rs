@@ -67,6 +67,9 @@ pub enum Change {
     Tag(InstanceId, Str),
     /// A remote message, in its place among the changes
     Message(Msg),
+    /// The collision-group registry changed (services/physics.rs): logged at the first change since the last flush, which
+    /// sends the registry as it then is in this place, once however often it changed
+    CollisionGroups,
 }
 
 /// Which properties replicate ([`NOT_REPLICATED`])
@@ -388,6 +391,8 @@ pub fn install_client(client: &Rc<Engine>, bridge: &Rc<Bridge>) {
 pub fn flush(server: &Engine, bridge: &Bridge) {
     let mut state = server.state.borrow_mut();
     let Some(log) = state.loopback_log.as_mut().filter(|log| !log.is_empty()).map(std::mem::take) else { return };
+    // (the collision groups as they are now, if they changed since the last flush: sent in the place of the first change)
+    let mut groups = crate::services::physics::flushed(server);
     let Some(filter) = bridge.filter.borrow().clone() else { return };
     let reflection = &server.reflection;
     let mut out: Vec<Msg> = Vec::with_capacity(log.len());
@@ -402,6 +407,11 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
     for change in log {
         match change {
             Change::Message(message) => out.push(message),
+            Change::CollisionGroups => {
+                if let Some(snapshot) = groups.take() {
+                    out.push(Msg::CollisionGroups(snapshot));
+                }
+            }
             Change::Moved(id) => {
                 if moved.insert(id) {
                     created += flush_move(&mut state, reflection, &filter, id, &mut out, &mut whole);
