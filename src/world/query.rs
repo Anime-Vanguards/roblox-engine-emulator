@@ -216,9 +216,17 @@ fn shape_of(state: &State, engine: &Engine, part: InstanceId, size: Vec3) -> Sha
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times [`solids`] has walked the Workspace on this thread (tests)
+    pub(crate) static WORKSPACE_WALKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// The parts of the Workspace `filter` admits, as query solids (Terrain, CanQuery off and, with
 /// RespectCanCollide, CanCollide off are left out).
 pub fn solids(engine: &Engine, filter: &Filter) -> Vec<Solid> {
+    #[cfg(test)]
+    WORKSPACE_WALKS.with(|walks| walks.set(walks.get() + 1));
     let state = engine.state.borrow();
     let reflection = &engine.reflection;
     let (Some(base_part), Some(terrain)) = (reflection.class_id("BasePart"), reflection.class_id("Terrain")) else { return Vec::new() };

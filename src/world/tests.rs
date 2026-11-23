@@ -2819,6 +2819,71 @@ fn camera_largest_cutoff_distance_and_the_spatial_index() {
     run(&lua, &engine, r##"assert(string.format("%.3f", shared.CutoffCamera:GetLargestCutoffDistance({})) == "10.000")"##);
 }
 
+/// GetLargestCutoffDistance costs the work clock what a playing client spent on it (roblox-sim, Studio 0.747, cost.rs CUTOFF_CALL):
+/// 1.12 us for five rays that miss, with 5,000 parts off them as with none, and 1.80 when each meets a wall (it read a flat 0.07). Its
+/// rays read the spatial queries' cached parts, so 100 calls in an unchanged Workspace walk it once (each call walked every part of
+/// it), and a part written in between is seen at once.
+#[test]
+fn camera_largest_cutoff_distance_costs_what_a_client_spent() {
+    let (lua, engine) = start_play();
+    crate::lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local O = Vector3.new(200, 100, 200)
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.lookAt(O + Vector3.new(0, 5, 30), O + Vector3.new(0, 5, 0))
+        Cam.Focus = CFrame.new(O + Vector3.new(0, 5, 0))
+        local Ignore = {}
+        local function Each(N)
+            local Start = os.clock()
+            for _ = 1, N do
+                Cam:GetLargestCutoffDistance(Ignore)
+            end
+            local Middle = os.clock()
+            for _ = 1, N do
+            end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        -- (a spatial query takes what entered the Workspace into the index)
+        local function Index()
+            workspace:Raycast(Vector3.new(1000, 1000, 1000), Vector3.yAxis)
+        end
+        Within("a miss", Each(20), 1.05, 1.20)
+        local Off = Instance.new("Folder")
+        for I = 1, 5000 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Size = Vector3.one
+            Part.CFrame = CFrame.new(-3000 + (I % 100) * 2, 500 + (I // 100) * 2, -3000)
+            Part.Parent = Off
+        end
+        Off.Parent = workspace
+        Index()
+        Within("a miss beside 5,000 parts", Each(20), 1.05, 1.20)
+        local Wall = Instance.new("Part")
+        Wall.Anchored = true
+        Wall.Size = Vector3.new(60, 60, 1)
+        Wall.CFrame = CFrame.new(O + Vector3.new(0, 5, 10))
+        Wall.Parent = workspace
+        Index()
+        Within("each ray meeting a wall", Each(20), 1.72, 1.90)
+        assert(string.format("%.3f", Cam:GetLargestCutoffDistance(Ignore)) == "20.000")
+        shared.Cam, shared.Wall = Cam, Wall
+        "##,
+    );
+    super::query::WORKSPACE_WALKS.with(|walks| walks.set(0));
+    run(&lua, &engine, r##"for _ = 1, 100 do assert(shared.Cam:GetLargestCutoffDistance({}) > 19) end"##);
+    assert_eq!(super::query::WORKSPACE_WALKS.with(|walks| walks.get()), 1, "100 calls in an unchanged Workspace walk it once");
+    run(&lua, &engine, r##"shared.Wall.CFrame = shared.Wall.CFrame + Vector3.new(0, 0, 10) assert(string.format("%.3f", shared.Cam:GetLargestCutoffDistance({})) == "10.000")"##);
+}
+
 /// The parts waiting for the spatial index (camera.rs `Cameras::unindexed`, which a PlayerMouse ray and GetLargestCutoffDistance
 /// look each part they meet up in) are each held once and only while in the Workspace: a model of 200 parts moved out of the
 /// Workspace and back 50 times in one frame leaves 200 waiting (it held 10,200, every entry again), a model that leaves takes its

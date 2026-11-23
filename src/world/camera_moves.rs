@@ -223,36 +223,32 @@ fn ignore_list(args: &Args) -> Result<Vec<InstanceId>, Flow> {
     Ok(ids)
 }
 
-/// The parts GetLargestCutoffDistance's rays meet: in the Workspace (not Terrain) and in the spatial index, CanCollide on
-/// (CanQuery does not matter: measured, a part with CanQuery off and CanCollide on blocks), at most 0.95 transparent
-/// (float32), neither in the ignore list nor under what it lists.
-fn cutoff_solids(engine: &Engine, names: &Names, ignore: &[InstanceId]) -> Vec<query::Solid> {
-    let state = engine.state.borrow();
-    let reflection = &engine.reflection;
-    let (Some(base_part), Some(terrain)) = (reflection.class_id("BasePart"), reflection.class_id("Terrain")) else { return Vec::new() };
-    let can_collide = reflection.name_id("CanCollide");
-    let mut result = Vec::new();
-    for id in state.dom.descendants(engine.world().workspace) {
-        let info = reflection.class(state.dom.at(id).class);
-        if !info.is_a(base_part) || info.is_a(terrain) || state.cameras.unindexed.contains(&id) {
-            continue;
-        }
-        if can_collide.and_then(|n| state.dom.boolean(id, n)) == Some(false) || names.transparency.and_then(|n| state.dom.number(id, n)).is_some_and(|t| t as f32 > 0.95) {
-            continue;
-        }
-        if ignore.iter().any(|&listed| listed == id || state.dom.is_descendant_of(id, listed)) {
-            continue;
-        }
-        result.push(query::solid(&state, engine, id));
+/// Whether a part GetLargestCutoffDistance's ray meets stops it: in the spatial index, CanCollide on (CanQuery does not matter:
+/// measured, a part with CanQuery off and CanCollide on blocks), at most 0.95 transparent (float32), neither in the ignore list
+/// (sorted) nor under what it lists.
+fn blocks(state: &State, names: &Names, can_collide: Option<NameId>, ignore: &[InstanceId], part: InstanceId) -> bool {
+    if can_collide.and_then(|n| state.dom.boolean(part, n)) == Some(false) || names.transparency.and_then(|n| state.dom.number(part, n)).is_some_and(|t| t as f32 > 0.95) {
+        return false;
     }
-    result
+    let mut node = Some(part);
+    while let Some(id) = node {
+        if ignore.binary_search(&id).is_ok() {
+            return false;
+        }
+        node = state.dom.parent_of(id);
+    }
+    true
 }
 
+/// The five rays against the Workspace's parts (not Terrain) as the spatial queries keep them (world/query.rs, the PlayerMouse's
+/// and GetPartsObscuringTarget's view: CanQuery off included), so a call walks nothing while the Workspace is unchanged: the parts
+/// whose bounding sphere meets the box around the rays are found once, each ray is tested against those, and what decides whether
+/// a part stops it ([`blocks`]) is looked at only for a part it meets nearer than its hit so far. A part waiting for the spatial
+/// index is not met. What a client spends is charged as a client's rays pay (Studio 0.747, cost.rs CUTOFF_CALL): the call, and
+/// each ray the parts it meets up to its hit (all of them on a miss), the first [`crate::cost::CUTOFF_MET`] and each other a
+/// Raycast's [`crate::cost::RAY_CROSSED`]; the parts off the rays cost nothing (the broadphase).
 fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Vec<InstanceId>) -> f32 {
-    let solids = cutoff_solids(engine, names, &ignore);
-    if solids.is_empty() {
-        return 0.0;
-    }
+    let solids = query::cached_solids_unindexed(engine, &query::Filter { unqueryable: true, ..query::Filter::default() });
     let (transform, focus) = frames(engine, names, camera);
     let rows = rows_of(&transform);
     let (right, up) = (f32m::column(&rows, 0), f32m::column(&rows, 1));
@@ -266,14 +262,49 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
     let focus = frame::translation(&focus).to_array();
     let along = sub(centre, focus);
     let length = f32m::dot3(along, along).sqrt();
+    let origins = [(0.0, 0.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)].map(|(x, y)| Vec3::from_array(add(focus, add(scale(right, x * half_x), scale(up, y * half_y)))));
+    let direction = Vec3::from_array(along);
+    let reach = direction.length();
+    // (each ray lies in the box around its two ends, so only the parts whose bounding sphere meets the box around all ten can be
+    // met, as in camera.rs parts_obscuring)
+    let (low, high) = origins.iter().fold((origins[0], origins[0]), |(low, high), &origin| (low.min(origin).min(origin + direction), high.max(origin).max(origin + direction)));
+    let near: Vec<&query::Solid> = solids
+        .iter()
+        .filter(|solid| {
+            let center = frame::translation(&solid.frame);
+            center.clamp(low, high).distance(center) <= solid.half_extents().length() * 1.0001 + 1e-4
+        })
+        .collect();
+    let can_collide = engine.reflection.name_id("CanCollide");
+    let state = engine.state.borrow();
     let mut largest = 0.0f32;
-    for (x, y) in [(0.0, 0.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
-        let offset = add(scale(right, x * half_x), scale(up, y * half_y));
-        let origin = add(focus, offset);
-        if let Some(hit) = query::cast_ray(&solids, Vec3::from_array(origin), Vec3::from_array(along), 0.0, None) {
-            largest = largest.max(length - hit.distance);
+    let mut met: Vec<f32> = Vec::new();
+    let mut charge = crate::cost::CUTOFF_CALL;
+    for origin in origins {
+        met.clear();
+        let mut nearest: Option<f32> = None;
+        for solid in &near {
+            let Some((t, _)) = query::ray_solid(solid, origin, direction, 0.0) else { continue };
+            if state.cameras.unindexed.contains(&solid.part) {
+                continue;
+            }
+            // (query::cast_ray's distance; the nearest part that stops the ray is its hit)
+            let distance = reach * t;
+            met.push(distance);
+            if nearest.is_none_or(|nearest| distance < nearest) && blocks(&state, names, can_collide, &ignore, solid.part) {
+                nearest = Some(distance);
+            }
+        }
+        if let Some(hit) = nearest {
+            largest = largest.max(length - hit);
+        }
+        let crossed = met.iter().filter(|&&distance| nearest.is_none_or(|hit| distance <= hit)).count();
+        if crossed > 0 {
+            charge += crate::cost::CUTOFF_MET + (crossed - 1) as f64 * crate::cost::RAY_CROSSED;
         }
     }
+    drop(state);
+    query::charge_query(engine, charge);
     largest
 }
 

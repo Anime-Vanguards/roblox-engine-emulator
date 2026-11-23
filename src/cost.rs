@@ -976,6 +976,14 @@ pub const RAY_CROSSED: f64 = 0.0424e-6;
 pub const OBSCURING_POINT: f64 = 0.8e-6;
 pub const OBSCURING_LISTED: f64 = 1.1e-6;
 pub const OBSCURING_CALL: f64 = 0.9e-6;
+/// Camera:GetLargestCutoffDistance beyond its call (world/camera_moves.rs), in a playing client (roblox-sim, Studio 0.747, a headless
+/// client; os.clock around 200 calls on a new camera, the median of 21 samples less an empty loop, two passes of each scene): its
+/// five rays missing 1.12 us whether the Workspace holds 0, 1,000, 5,000 or 20,000 parts off them (in models or not: the
+/// broadphase), of which ree's call to the method counts 0.07; the five each meeting a wall 1.80, so 0.137 a ray that meets a
+/// part ([`CUTOFF_MET`]; a Raycast's hit over its miss read 0.19 in the same session). Each further part a ray meets before its
+/// hit, unmeasured, pays a Raycast's [`RAY_CROSSED`].
+pub const CUTOFF_CALL: f64 = 1.055e-6;
+pub const CUTOFF_MET: f64 = 0.137e-6;
 /// A PlayerMouse ray read (Target, target, TargetSurface; Hit and hit add [`MOUSE_FRAME`]: world/mouse.rs) beyond [`READ`], in a
 /// playing client (roblox-sim, Studio 0.747, a headless client; os.clock around 2,000 reads, the median of 21 samples less an empty
 /// loop and a plain read, two passes; a scratch probe through tools/parity's capture harness). Each read casts the mouse's ray its
