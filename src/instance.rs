@@ -282,7 +282,7 @@ fn store(state: &mut State, reflection: &Reflection, id: InstanceId, name: NameI
         state.dom.touch_rigs_for_property(id, name);
     }
     if changed {
-        state.dom.bump_version(id);
+        state.dom.bump_version_of(id, name);
     }
     (changed, old)
 }

@@ -666,13 +666,16 @@ pub struct Dom {
 /// (`moved`: [`Watch::logged`]; `written`: [`flags::LOGGED`]), however often it moves or is written. Each entry is a few ids of
 /// work for the index, so a change costs it what the change touched, never a walk of the root. Past `limit` entries (distinct
 /// instances) the log stops and says so (`overflowed`), and the index starts over from the root, so a run that stops querying
-/// keeps no more than that.
+/// keeps no more than that. A write of a property the index never reads (`unread`) is not logged.
 pub struct Watch {
     pub root: InstanceId,
     pub moved: Vec<InstanceId>,
     pub written: Vec<InstanceId>,
     pub limit: usize,
     pub overflowed: bool,
+    /// The properties whose writes leave an instance out of `written` ([`Dom::bump_version_of`]): what the index holds of a part
+    /// does not read them
+    pub unread: Vec<NameId>,
     /// The instances in `moved` (a stale id stays apart from its slot's next instance)
     logged: FxHashSet<InstanceId>,
     /// A leaving subtree's walk (Dom::log_leaving)
@@ -681,7 +684,7 @@ pub struct Watch {
 
 impl Watch {
     pub fn new(root: InstanceId, limit: usize) -> Self {
-        Watch { root, moved: Vec::new(), written: Vec::new(), limit, overflowed: false, logged: FxHashSet::default(), walk: Vec::new() }
+        Watch { root, moved: Vec::new(), written: Vec::new(), limit, overflowed: false, unread: Vec::new(), logged: FxHashSet::default(), walk: Vec::new() }
     }
 
     fn room(&mut self) -> bool {
@@ -1517,6 +1520,19 @@ impl Dom {
         self.write_version = self.write_version.wrapping_add(1);
         if indexed {
             self.note_written(id);
+        }
+    }
+
+    /// [`Dom::bump_version`] for a write of the property `name`: one the spatial index never reads ([`Watch::unread`], a part's
+    /// collision group) leaves the instance out of its log, so a collision-group change does not have the index read every part
+    /// whose id it changed again.
+    pub fn bump_version_of(&mut self, id: InstanceId, name: NameId) {
+        if self.watch.as_ref().is_some_and(|watch| watch.unread.contains(&name)) {
+            let instance = self.at_mut(id);
+            instance.version = instance.version.wrapping_add(1);
+            self.write_version = self.write_version.wrapping_add(1);
+        } else {
+            self.bump_version(id);
         }
     }
 }

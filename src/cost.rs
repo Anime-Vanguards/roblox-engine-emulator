@@ -976,6 +976,8 @@ pub const LOG_CALL: f64 = 1.0e-6;
 /// alike), so 1.7 ns a part, in models or not; with parts of the group, whose id changes each time, 360-364 us at 1,000 and
 /// 1,866-1,910 at 5,000 (0.36-0.38 us a part more; 0.43-0.44 at 20,000, 0.45 in models). CollisionGroupSetCollidable also costs a
 /// server 1.7 ns a part (43 us at 20,000), which ree, keeping no ids by mask, does not charge.
+/// The Workspace's other instances cost a change next to nothing (a register and an unregister 4.0-6.8 us beside 100,000
+/// Folders, 1.8-3.4 beside none), and ree looks at none of them.
 pub const COLLISION_GROUP_PART: f64 = 1.7e-9;
 pub const COLLISION_GROUP_CHANGED: f64 = 0.38e-6;
 /// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path meets up to its hit,
@@ -1001,7 +1003,8 @@ pub const RAY_CROSSED: f64 = 0.0424e-6;
 pub const QUERY_TAKE_IN: f64 = 0.5e-6;
 pub const QUERY_TAKEN_PART: f64 = 1.1e-6;
 /// A step up the tree of the walks that put what a spatial query keeps in the Workspace's order (world/broadphase.rs
-/// sort_by_order: up from the parts at once until their paths meet), past [`QUERY_ORDER_FREE`] steps for each part it orders: ree's
+/// sort_by_order: up from the parts at once until their paths meet; a collision-group change's parts whose ids change too,
+/// services/physics.rs), past [`QUERY_ORDER_FREE`] steps for each part it orders: ree's
 /// own host work, as a playing client's queries cost the same however deep their parts are (roblox-sim, Studio 0.747, a headless
 /// client; os.clock around 100 calls, the median of 15 less an empty loop: GetPartBoundsInBox finding 100 parts 12.1 to 12.2 us
 /// in a folder of the Workspace, 12.2 at the bottom of a 1,000-deep folder chain, 12.5 at 3,000, 17.3 with each part 300 deep in

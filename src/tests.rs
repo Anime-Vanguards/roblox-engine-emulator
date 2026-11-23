@@ -11969,6 +11969,277 @@ fn parts_coming_into_the_workspace_pay_for_the_collision_group_ids_they_take() {
     );
 }
 
+/// A group change works out the ids of the parts the spatial queries' broadphase holds, the Workspace's, and of the Terrain:
+/// the Workspace's other instances are not looked at, as a server's change costs next to nothing more beside 100,000 Folders
+/// (roblox-sim, Studio 0.747, a server Script, a register and an unregister timed together, the median of 11 samples: 1.8-3.4
+/// us beside nothing, 4.0-6.8 beside 100,000 Folders flat or in chains of 100, 5.5 beside 1,000 parts and 8.4-9.5 beside both,
+/// 94 beside 20,000 parts). 100 changes beside 100,000 Folders and 10 parts look at those 10 parts each, and the broadphase,
+/// made by the first change, walks nothing more; each change walked every instance of the Workspace before.
+#[test]
+fn a_collision_group_change_looks_at_the_workspaces_parts_alone() {
+    use super::RunContext;
+    use crate::{
+        services::physics::LOOKED_AT,
+        world::broadphase::{SYNC_VISITS, WORKSPACE_WALKS},
+    };
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        for _ = 1, 100000 do
+            Instance.new("Folder").Parent = Folder
+        end
+        for _ = 1, 10 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Parent = Folder
+        end
+        Folder.Parent = workspace
+        game:GetService("PhysicsService"):RegisterCollisionGroup("Kept")
+        "#,
+    );
+    LOOKED_AT.with(|looked| looked.set(0));
+    WORKSPACE_WALKS.with(|walks| walks.set(0));
+    SYNC_VISITS.with(|visits| visits.set(0));
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        for _ = 1, 50 do
+            PhysicsService:RegisterCollisionGroup("A")
+            PhysicsService:UnregisterCollisionGroup("A")
+        end
+        print(#workspace:GetDescendants())
+        "#,
+    );
+    assert_eq!(output.last().map(String::as_str), Some("print: 100012"), "the Workspace's instances");
+    assert_eq!(LOOKED_AT.with(|looked| looked.get()), 100 * 10, "the 10 parts, 100 times");
+    assert_eq!(WORKSPACE_WALKS.with(|walks| walks.get()), 0, "no walk of the Workspace");
+    assert_eq!(SYNC_VISITS.with(|visits| visits.get()), 0, "nothing moved");
+}
+
+/// A group change fires its parts' CollisionGroupId changes in the order the Workspace's descendants are listed, as the walk of
+/// the Workspace it replaced did, whatever order the broadphase holds them in: parts put in folders attached before them, below
+/// a part, in a WorldModel, 50 folders deep, with bounds that are not finite, moved and destroyed once the broadphase was made,
+/// and the Terrain; a part that never came into the Workspace keeps the id it was made with.
+#[test]
+fn a_collision_group_change_fires_its_parts_changes_in_the_workspaces_order() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        PhysicsService:RegisterCollisionGroup("A")
+        local Label, Order = {}, {}
+        local function Watch(Part, Name)
+            Label[Part] = Name
+            Part:GetPropertyChangedSignal("CollisionGroupId"):Connect(function()
+                table.insert(Order, Name)
+            end)
+        end
+        local First, Second = Instance.new("Folder"), Instance.new("Model")
+        First.Parent = workspace
+        Second.Parent = workspace
+        local World = Instance.new("WorldModel")
+        World.Parent = First
+        local Deep = First
+        for _ = 1, 50 do
+            local Folder = Instance.new("Folder")
+            Folder.Parent = Deep
+            Deep = Folder
+        end
+        local Parts = {}
+        for Index = 1, 12 do
+            local Part = Instance.new(if Index % 3 == 0 then "WedgePart" else "Part")
+            Part.Anchored = true
+            Part.CollisionGroup = "A"
+            Watch(Part, "P" .. Index)
+            Parts[Index] = Part
+        end
+        Parts[12].Parent = First
+        Parts[1].Parent = Second
+        Parts[2].Parent = First
+        Parts[3].Parent = Parts[1]
+        Parts[4].Parent = workspace
+        Parts[5].Parent = World
+        Parts[6].Position = Vector3.new(0 / 0, 0, 0)
+        Parts[6].Parent = Second
+        Parts[7].Parent = Deep
+        Parts[8].Parent = Second
+        Parts[9].Parent = game:GetService("ReplicatedStorage")
+        Parts[10].Parent = First
+        Parts[11].Parent = workspace
+        workspace.Terrain.CollisionGroup = "A"
+        Watch(workspace.Terrain, "Terrain")
+        -- (the broadphase is made here; what follows reaches it through the dom's log)
+        PhysicsService:RegisterCollisionGroup("B")
+        Parts[8].Parent = First
+        Parts[2].Parent = Second
+        Parts[12]:Destroy()
+        Parts[10].Parent = Deep
+        local function Listed()
+            local List = {}
+            for _, Descendant in workspace:GetDescendants() do
+                if Label[Descendant] then
+                    table.insert(List, Label[Descendant])
+                end
+            end
+            return table.concat(List, " ")
+        end
+        local function Ids()
+            local List = {}
+            for Index = 1, 11 do
+                table.insert(List, Parts[Index].CollisionGroupId)
+            end
+            table.insert(List, workspace.Terrain.CollisionGroupId)
+            return table.concat(List, " ")
+        end
+        local function Change(Label, Make)
+            table.clear(Order)
+            Make()
+            local Expected = Listed()
+            task.defer(function()
+                local Fired = table.concat(Order, " ")
+                assert(Fired == Expected, `{Label}: {Fired} against {Expected}`)
+                print(Label, Fired)
+                print("ids", Ids())
+            end)
+        end
+        task.defer(function()
+            Change("unregistered", function()
+                PhysicsService:UnregisterCollisionGroup("A")
+            end)
+            task.defer(function()
+                Change("renamed", function()
+                    PhysicsService:RenameCollisionGroup("B", "A")
+                end)
+            end)
+        end)
+        "#,
+    );
+    let order = "P5 P7 P10 P8 P1 P3 P6 P2 P4 P11 Terrain";
+    assert_eq!(
+        output,
+        [
+            format!("print: unregistered {order}"),
+            "print: ids -1 -1 -1 -1 -1 -1 -1 -1 0 -1 -1 -1".into(),
+            format!("print: renamed {order}"),
+            "print: ids 2 2 2 2 2 2 2 2 0 2 2 2".into(),
+        ]
+    );
+}
+
+/// Putting a group change's changed parts in the Workspace's order walks up from them until their paths meet (broadphase.rs
+/// sort_by_order), ree's own work, which costs the work clock as a spatial query's ordering does (cost.rs QUERY_ORDER_STEP past
+/// QUERY_ORDER_FREE steps a part): two parts of a group, each at the bottom of a 1,000-deep chain of folders of its own, read
+/// 40 us more a change than the same two in one folder, where the walk takes a step each and costs nothing. The walk of the
+/// Workspace that ordered them before cost nothing however deep they were.
+#[test]
+fn ordering_a_group_changes_parts_deep_in_chains_of_their_own_costs_its_walk() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        PhysicsService:RegisterCollisionGroup("A")
+        local function Grouped(Parent)
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.CollisionGroup = "A"
+            Part.Parent = Parent
+        end
+        local function Chain(Depth)
+            local Root = Instance.new("Folder")
+            local At = Root
+            for _ = 2, Depth do
+                local Folder = Instance.new("Folder")
+                Folder.Parent = At
+                At = Folder
+            end
+            Grouped(At)
+            return Root
+        end
+        local function Each()
+            local N = 10
+            local Start = os.clock()
+            for _ = 1, N do
+                PhysicsService:UnregisterCollisionGroup("A")
+                PhysicsService:RegisterCollisionGroup("A")
+            end
+            local Middle = os.clock()
+            for _ = 1, N do
+            end
+            return ((Middle - Start) - (os.clock() - Middle)) / N / 2 * 1e6
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        local Flat = Instance.new("Folder")
+        Grouped(Flat)
+        Grouped(Flat)
+        Flat.Parent = workspace
+        local Near = Each()
+        Flat.Parent = nil
+        local First, Second = Chain(1000), Chain(1000)
+        First.Parent, Second.Parent = workspace, workspace
+        Within("two parts 1,000 deep in chains of their own", Each() - Near, 39.5, 40.5)
+        "#,
+    );
+}
+
+/// The spatial index reads no part's collision group (world/query.rs: the queries model none), so a write of CollisionGroup or
+/// CollisionGroupId does not log the part for it (dom.rs Watch::unread): a group change that gives 1,000 parts new ids, and a
+/// script's writes of both properties, leave its log empty, where they logged every part, which the next query or group change
+/// read again. A write of another property still logs the part.
+#[test]
+fn collision_group_writes_leave_the_spatial_index_log_alone() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    let logged = |engine: &Engine| engine.state.borrow().dom.watch.as_ref().map(|watch| watch.written.len());
+    run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        PhysicsService:RegisterCollisionGroup("A")
+        local Folder = Instance.new("Folder")
+        Folder.Name = "Grouped"
+        for _ = 1, 1000 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.CollisionGroup = "A"
+            Part.Parent = Folder
+        end
+        Folder.Parent = workspace
+        workspace:Raycast(Vector3.zero, Vector3.yAxis)
+        PhysicsService:UnregisterCollisionGroup("A")
+        assert(Folder:GetChildren()[1].CollisionGroupId == -1, "the ids changed")
+        "#,
+    );
+    assert_eq!(logged(&engine), Some(0), "a group change's ids");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Part = workspace.Grouped:GetChildren()[1]
+        Part.CollisionGroup = "B"
+        Part.CollisionGroupId = 7
+        "#,
+    );
+    assert_eq!(logged(&engine), Some(0), "a script's writes of both");
+    run(&lua, &engine, "workspace.Grouped:GetChildren()[1].Transparency = 0.5");
+    assert_eq!(logged(&engine), Some(1), "another property's write");
+}
+
 /// On a loopback server a frame's collision-group changes reach the client as one snapshot of the registry as the frame left it,
 /// in the place of the first change (loopback/replicate.rs flush): 101 changes log one marker (each logged a snapshot of its own,
 /// so the client took every part's id in 101 times), the flush reads the registry then, and the next change logs a marker again.

@@ -2,7 +2,8 @@
 //! mouse.rs): the Workspace's parts, every BasePart in it but Terrain, as query solids in a dynamic bounding-volume tree, so a
 //! query looks only at the parts whose bounds come near it, as a client's does (Studio 0.747, a headless client: a Raycast,
 //! Spherecast, Blockcast, Shapecast, GetPartBoundsInBox, GetPartBoundsInRadius or GetPartsInPart beside 0, 10,000 or 100,000
-//! parts away from it costs the same).
+//! parts away from it costs the same). A collision-group change lists the parts it holds ([`Index::part_ids`],
+//! services/physics.rs), so it looks at none of the Workspace's other instances.
 //!
 //! The index follows the dom through its change log (dom.rs `Watch`): the instances attached below the Workspace, detached
 //! from it, replaced or given another class there, the indexed parts freed, and the indexed parts written. A query first takes
@@ -354,6 +355,10 @@ pub struct Index {
     /// Each entry's part (stale for a free entry)
     parts: Vec<InstanceId>,
     free_entries: Vec<u32>,
+    /// The entries in use, in no particular order, and each one's place in that list ([`Index::part_ids`] reads the parts held
+    /// without the free entries, which the lists above keep however many parts left)
+    live: Vec<u32>,
+    live_at: Vec<u32>,
     /// A dom slot's entry, plus one (0: none)
     by_slot: Vec<u32>,
     /// The entries whose bounds are not finite
@@ -379,6 +384,9 @@ struct Names {
     terrain: ClassId,
     can_query: Option<NameId>,
     can_collide: Option<NameId>,
+    /// BasePart.CollisionGroup and CollisionGroupId, which no entry reads (the queries model no collision groups: query.rs)
+    collision_group: Option<NameId>,
+    collision_group_id: Option<NameId>,
 }
 
 impl Index {
@@ -386,7 +394,14 @@ impl Index {
         if self.names.is_none() {
             let reflection = &engine.reflection;
             let (base_part, terrain) = (reflection.class_id("BasePart")?, reflection.class_id("Terrain")?);
-            self.names = Some(Names { base_part, terrain, can_query: reflection.name_id("CanQuery"), can_collide: reflection.name_id("CanCollide") });
+            self.names = Some(Names {
+                base_part,
+                terrain,
+                can_query: reflection.name_id("CanQuery"),
+                can_collide: reflection.name_id("CanCollide"),
+                collision_group: reflection.name_id("CollisionGroup"),
+                collision_group_id: reflection.name_id("CollisionGroupId"),
+            });
         }
         self.names
     }
@@ -502,6 +517,8 @@ impl Index {
         self.entries.clear();
         self.parts.clear();
         self.free_entries.clear();
+        self.live.clear();
+        self.live_at.clear();
         self.by_slot.clear();
         self.loose.clear();
         self.waiting.clear();
@@ -522,7 +539,9 @@ impl Index {
             }
         }
         self.built = true;
-        state.dom.watch = Some(Watch::new(workspace, self.limit()));
+        let mut watch = Watch::new(workspace, self.limit());
+        watch.unread.extend([names.collision_group, names.collision_group_id].into_iter().flatten());
+        state.dom.watch = Some(watch);
     }
 
     /// The waiting entries placed by their bounds, once the spatial index has taken parts in since they were put (their parts no
@@ -598,6 +617,11 @@ impl Index {
                     }
                 };
                 self.by_slot[slot] = entry + 1;
+                if self.live_at.len() <= entry as usize {
+                    self.live_at.resize(entry as usize + 1, 0);
+                }
+                self.live_at[entry as usize] = self.live.len() as u32;
+                self.live.push(entry);
                 state.dom.at_mut(part).flags |= flags::INDEXED;
                 entry
             }
@@ -637,6 +661,11 @@ impl Index {
         self.unplace(entry);
         self.by_slot[part.index as usize] = 0;
         self.free_entries.push(entry);
+        let at = self.live_at[entry as usize] as usize;
+        self.live.swap_remove(at);
+        if let Some(&moved) = self.live.get(at) {
+            self.live_at[moved as usize] = at as u32;
+        }
         if let Some(instance) = dom.get_mut(part) {
             instance.flags &= !(flags::INDEXED | flags::LOGGED);
         }
@@ -649,6 +678,12 @@ impl Index {
             return true;
         }
         false
+    }
+
+    /// Every part held, into `out`, in no particular order: one step for each, however many instances the Workspace holds
+    /// beside them and however many parts it held before (a list of its own, not a query's take: [`TAKEN`] leaves them out)
+    pub fn part_ids(&self, out: &mut Vec<InstanceId>) {
+        out.extend(self.live.iter().map(|&entry| self.parts[entry as usize]));
     }
 
     /// Every part, into `out`

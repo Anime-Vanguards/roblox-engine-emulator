@@ -354,6 +354,15 @@ pub(crate) fn refresh(engine: &Engine) {
     query_cache(engine).index.borrow_mut().sync(engine);
 }
 
+/// The Workspace's parts but Terrain, from the broadphase brought up to the dom's changes as [`refresh`] brings it, into `out`
+/// in no particular order: what a collision-group change works out the ids of (services/physics.rs), without a walk of the
+/// Workspace's other instances.
+pub(crate) fn placed_parts(engine: &Engine, out: &mut Vec<InstanceId>) {
+    let mut index = query_cache(engine).index.borrow_mut();
+    index.sync(engine);
+    index.part_ids(out);
+}
+
 /// `then` on the parts `gather` takes from the broadphase for a query (the Workspace's parts near it, or all of them, in no
 /// particular order: the caller tests each and orders what it keeps).
 pub(crate) fn with_near<R>(engine: &Engine, gather: impl FnOnce(&mut Index, &mut Vec<(InstanceId, Entry)>), then: impl FnOnce(&[(InstanceId, Entry)]) -> R) -> R {

@@ -49,7 +49,13 @@
 //!   either property): until then a part keeps the id it was loaded with.
 //! - What a group change costs: a server spends 1.7 ns on each part in the Workspace and 0.38 us more on each whose id
 //!   changes (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED), charged as the parts are worked out. A tree coming into
-//!   the Workspace pays the same for the parts it brings, as they take their ids.
+//!   the Workspace pays the same for the parts it brings, as they take their ids. The Workspace's other instances cost it next
+//!   to nothing (0.747 server, a register and an unregister timed together, the median of 11: 1.8-3.4 us beside nothing,
+//!   4.0-6.8 beside 100,000 Folders flat or in chains of 100, 5.5 beside 1,000 parts, 8.4-9.5 beside both, 94 beside 20,000
+//!   parts), so ree takes the parts from the spatial queries' broadphase, which holds them (world/query.rs `placed_parts`), and
+//!   the Terrain, which it leaves out, and looks at no other instance. The parts whose ids change take them in the order the
+//!   Workspace's descendants are listed (broadphase.rs `sort_by_order`), and the walk up from them that orders them costs what
+//!   a spatial query's does past its allowance (cost.rs QUERY_ORDER_STEP: parts whose paths meet only far up).
 
 use std::{
     cell::{Cell, RefCell},
@@ -164,6 +170,8 @@ impl Registry {
 pub(crate) struct Groups {
     registry: RefCell<Registry>,
     base_part: ClassId,
+    /// The Terrain, a part the broadphase leaves out ([`Groups::resolve_placed`])
+    terrain: Option<ClassId>,
     /// BasePart.CollisionGroup and CollisionGroupId
     group: NameId,
     group_id: NameId,
@@ -220,25 +228,53 @@ impl Groups {
         reflection.class(state.dom.at(id).class).is_a(self.base_part)
     }
 
-    /// The part takes the id of the group its CollisionGroup names, -1 for a name that is not registered (Changed fires
-    /// when that differs, as for a write). Returns whether the id changed.
-    fn resolve(&self, state: &mut State, reflection: &Reflection, hooks: &Hooks, registry: &Registry, part: InstanceId) -> bool {
+    /// The id of the group the part's CollisionGroup names, -1 for a name that is not registered, as CollisionGroupId holds it.
+    fn group_id_of(&self, state: &State, registry: &Registry, part: InstanceId) -> Value {
         let id = state.dom.raw_get(part, self.group).and_then(Value::as_str).and_then(|name| registry.id(name.as_bytes()));
-        core::raw_set(state, reflection, hooks, part, self.group_id, Value::Number(id.map_or(-1.0, |id| id as f64)))
+        Value::Number(id.map_or(-1.0, |id| id as f64))
     }
 
-    /// Every part in the Workspace takes its group's id again: a group came, went or changed its name. Returns how many
-    /// parts it looked at and how many of their ids changed.
+    /// The part takes the id of the group its CollisionGroup names (Changed fires when that differs, as for a write). Returns
+    /// whether the id changed.
+    fn resolve(&self, state: &mut State, reflection: &Reflection, hooks: &Hooks, registry: &Registry, part: InstanceId) -> bool {
+        let id = self.group_id_of(state, registry, part);
+        core::raw_set(state, reflection, hooks, part, self.group_id, id)
+    }
+
+    /// Every part in the Workspace takes its group's id again: a group came, went or changed its name. The parts are those the
+    /// spatial queries' broadphase holds (world/query.rs `placed_parts`, brought up to the dom's changes), and the Terrain in
+    /// the Workspace, which it leaves out: the Workspace's other instances are not looked at, as a server's change costs next
+    /// to nothing more beside 100,000 Folders (the module's notes). A part whose id stays stores it, firing nothing, in the
+    /// broadphase's order; the parts whose ids change take theirs, firing Changed, in the order the Workspace's descendants are
+    /// listed (broadphase.rs `sort_by_order`), the order a walk of the Workspace gave them. Returns how many parts it looked
+    /// at, how many of their ids changed and what putting those in order costs.
     fn resolve_placed(&self, engine: &Engine) -> Resolved {
         let Some(world) = engine.world.get() else { return Resolved::default() };
+        let mut parts = Vec::new();
+        crate::world::query::placed_parts(engine, &mut parts);
         let reflection = &engine.reflection;
         let hooks = engine.hooks.borrow();
         let mut state = engine.state.borrow_mut();
-        let parts = state.dom.descendants_where(world.workspace, |instance| reflection.class(instance.class).is_a(self.base_part));
+        looked_at(parts.len());
+        if let Some(terrain) = self.terrain {
+            let terrains = state.dom.instances_of_class(terrain);
+            looked_at(terrains.len());
+            parts.extend(terrains.into_iter().filter(|&id| state.dom.is_descendant_of_home(id, world.workspace)));
+        }
         let registry = self.registry.borrow();
-        let mut resolved = Resolved { parts: parts.len(), changed: 0 };
-        for part in parts {
-            resolved.changed += usize::from(self.resolve(&mut state, reflection, &hooks, &registry, part));
+        let mut changes = Vec::new();
+        for &part in &parts {
+            let id = self.group_id_of(&state, &registry, part);
+            if state.dom.raw_get(part, self.group_id).is_some_and(|held| held.same(&id)) {
+                core::raw_set(&mut state, reflection, &hooks, part, self.group_id, id);
+            } else {
+                changes.push((part, id));
+            }
+        }
+        let steps = crate::world::broadphase::sort_by_order(&state.dom, world.workspace, &mut changes, |(part, _)| *part);
+        let mut resolved = Resolved { parts: parts.len(), changed: 0, ordered: crate::world::broadphase::order_cost(steps, changes.len()) };
+        for (part, id) in changes {
+            resolved.changed += usize::from(core::raw_set(&mut state, reflection, &hooks, part, self.group_id, id));
         }
         resolved
     }
@@ -270,22 +306,38 @@ impl Groups {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many instances the group changes have looked at on this thread, each Terrain and each part they work out (tests)
+    pub(crate) static LOOKED_AT: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Counts instances a group change looked at ([`LOOKED_AT`], tests)
+fn looked_at(_count: usize) {
+    #[cfg(test)]
+    LOOKED_AT.with(|looked| looked.set(looked.get() + _count as u64));
+}
+
 /// The parts a group change looked at and those whose CollisionGroupId it changed.
 #[derive(Default, Clone, Copy, Debug, PartialEq)]
 struct Resolved {
     parts: usize,
     changed: usize,
+    /// What the walks that put the changed parts in the Workspace's order cost past their allowance (broadphase.rs
+    /// `order_cost`: ree's own work, for parts whose paths meet only far up), in seconds
+    ordered: f64,
 }
 
 impl Resolved {
-    /// What a server spends on them beyond the call (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED).
+    /// What a server spends on them beyond the call (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED), and ree's walks
+    /// that order them.
     fn charge(self, engine: &Engine) {
         self.charge_in(&engine.state.borrow());
     }
 
     /// [`Resolved::charge`] where the state is borrowed already.
     fn charge_in(self, state: &State) {
-        let seconds = self.parts as f64 * crate::cost::COLLISION_GROUP_PART + self.changed as f64 * crate::cost::COLLISION_GROUP_CHANGED;
+        let seconds = self.parts as f64 * crate::cost::COLLISION_GROUP_PART + self.changed as f64 * crate::cost::COLLISION_GROUP_CHANGED + self.ordered;
         if seconds > 0.0 {
             state.sched.charge(seconds);
             crate::boundary::add_cost(seconds);
@@ -428,7 +480,8 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     let reflection = engine.reflection.clone();
     let names = (reflection.class_id("PhysicsService"), reflection.class_id("BasePart"), reflection.name_id("CollisionGroup"), reflection.name_id("CollisionGroupId"));
     let (Some(service), Some(base_part), Some(group), Some(group_id)) = names else { return };
-    let groups = Rc::new(Groups { registry: RefCell::new(Registry::new()), base_part, group, group_id, queued: Cell::new(false), touched: Cell::new(false) });
+    let terrain = reflection.class_id("Terrain");
+    let groups = Rc::new(Groups { registry: RefCell::new(Registry::new()), base_part, terrain, group, group_id, queued: Cell::new(false), touched: Cell::new(false) });
     let _ = engine.physics.set(groups.clone());
     let mut add = |name: &str, function: MethodFn| {
         if let Some(name) = reflection.name_id(name) {
@@ -596,7 +649,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         parts.extend(state.dom.descendants_where(id, |instance| reflection.class(instance.class).is_a(groups.base_part)));
         let hooks = engine.hooks.borrow();
         let registry = groups.registry.borrow();
-        let mut resolved = Resolved { parts: parts.len(), changed: 0 };
+        let mut resolved = Resolved { parts: parts.len(), ..Resolved::default() };
         for part in parts {
             resolved.changed += usize::from(groups.resolve(state, reflection, &hooks, &registry, part));
         }
