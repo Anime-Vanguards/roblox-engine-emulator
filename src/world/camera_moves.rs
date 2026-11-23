@@ -20,8 +20,8 @@
 //!   to the near plane's centre and corners; against parts that can collide and are at most 0.95 transparent, the ignore
 //!   list and its descendants left out. The largest `length - distance to the first hit`, or 0. A part entering the
 //!   Workspace is not seen until the spatial index takes it in: at the next physics step or another spatial query
-//!   (Raycast, GetPartBoundsInBox, ...; `Cameras::unindexed`), with the parts moved in with it; a moved, resized or removed
-//!   part counts at once.
+//!   (Raycast, GetPartBoundsInBox, ...; `Cameras::unindexed`, a set of the waiting parts still in the Workspace), with the
+//!   parts moved in with it; a moved, resized or removed part counts at once.
 //! - Interpolate(endCFrame, endFocus, duration): the casts from the last argument to the first, then "Interpolation time
 //!   must be positive." (NaN passes; also on a camera that is not Scriptable), then "Attempted to use interpolation with a
 //!   camera mode other than scriptable.". A Focus write ends the tween (any camera's) at the next render step and InterpolationFinished
@@ -442,13 +442,22 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
             tween.to[2] = f32m::column(&rows_of(&written), 1);
         }
     }));
-    // The parts that enter the Workspace (with what they are moved in) wait for the spatial index
+    // The parts that enter the Workspace (with what they are moved in) wait for the spatial index; those that leave it before
+    // then drop out of the wait (whatever is not in the Workspace is not seen anyway)
     if let (Some(workspace), Some(base_part)) = (workspace, engine.reflection.class_id("BasePart")) {
         let reflection = engine.reflection.clone();
         hooks.hierarchy_changed.push(Box::new(move |state, id, old, new| {
-            if new.is_some_and(|parent| in_workspace(state, workspace, parent)) && !old.is_some_and(|parent| in_workspace(state, workspace, parent)) {
-                let entered: Vec<InstanceId> = std::iter::once(id).chain(state.dom.descendants(id)).filter(|&node| reflection.class(state.dom.at(node).class).is_a(base_part)).collect();
-                state.cameras.unindexed.extend(entered);
+            let (was, now) = (old.is_some_and(|parent| in_workspace(state, workspace, parent)), new.is_some_and(|parent| in_workspace(state, workspace, parent)));
+            if now && !was {
+                for node in std::iter::once(id).chain(state.dom.descendants(id)) {
+                    if reflection.class(state.dom.at(node).class).is_a(base_part) {
+                        state.cameras.unindexed.insert(node);
+                    }
+                }
+            } else if was && !now && !state.cameras.unindexed.is_empty() {
+                for node in std::iter::once(id).chain(state.dom.descendants(id)) {
+                    state.cameras.unindexed.remove(&node);
+                }
             }
         }));
     }

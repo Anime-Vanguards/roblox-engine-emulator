@@ -2819,6 +2819,59 @@ fn camera_largest_cutoff_distance_and_the_spatial_index() {
     run(&lua, &engine, r##"assert(string.format("%.3f", shared.CutoffCamera:GetLargestCutoffDistance({})) == "10.000")"##);
 }
 
+/// The parts waiting for the spatial index (camera.rs `Cameras::unindexed`, which a PlayerMouse ray and GetLargestCutoffDistance
+/// look each part they meet up in) are each held once and only while in the Workspace: a model of 200 parts moved out of the
+/// Workspace and back 50 times in one frame leaves 200 waiting (it held 10,200, every entry again), a model that leaves takes its
+/// parts out (it kept them), and what waits is still unseen until a spatial query takes it in.
+#[test]
+fn parts_waiting_for_the_spatial_index_are_held_once_while_in_the_workspace() {
+    let (lua, engine) = start_play();
+    let waiting = || engine.state.borrow().cameras.unindexed.len();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Store = game:GetService("ReplicatedStorage")
+        local Model = Instance.new("Model")
+        for I = 1, 200 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Size = Vector3.new(60, 60, 1)
+            Part.CFrame = CFrame.new(0, 5, 10)
+            Part.Parent = Model
+        end
+        Instance.new("Folder").Parent = Model
+        Model.Parent = workspace
+        for _ = 1, 50 do
+            Model.Parent = Store
+            Model.Parent = workspace
+        end
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 5, 30), Vector3.new(0, 5, 0))
+        Cam.Focus = CFrame.new(0, 5, 0)
+        assert(Cam:GetLargestCutoffDistance({}) == 0)
+        shared.Model, shared.Cam = Model, Cam
+        "##,
+    );
+    assert_eq!(waiting(), 200, "each waiting part once");
+    // leaving by an ancestor, then by itself
+    run(&lua, &engine, r##"local Folder = Instance.new("Folder") Folder.Parent = workspace shared.Model.Parent = Folder Folder.Parent = nil"##);
+    assert_eq!(waiting(), 0, "a model that leaves the Workspace takes its parts out");
+    run(&lua, &engine, r##"shared.Model.Parent = workspace local Part = shared.Model:FindFirstChildWhichIsA("Part") Part.Parent = nil Part:Destroy()"##);
+    assert_eq!(waiting(), 199, "a part that leaves alone");
+    run(
+        &lua,
+        &engine,
+        r##"
+        assert(shared.Cam:GetLargestCutoffDistance({}) == 0)
+        workspace:Raycast(Vector3.new(1000, 1000, 1000), Vector3.new(0, 1, 0))
+        assert(string.format("%.3f", shared.Cam:GetLargestCutoffDistance({})) == "20.000")
+        "##,
+    );
+    assert_eq!(waiting(), 0, "a spatial query takes them in");
+}
+
 /// Interpolate (Studio 0.748: camera_units.luau's checks, camera_interpolate.luau's endings): the checks' order; a Focus write
 /// ends a tween at the next render step and InterpolationFinished fires after the PreRender handlers' deferred work; CameraType
 /// leaving Scriptable cancels it; a replaced tween never fires. The movement is as reported, not measured: the CurrentCamera

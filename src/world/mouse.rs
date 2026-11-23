@@ -156,7 +156,7 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
         let state = engine.state.borrow();
         for solid in solids.iter() {
             let Some((t, local)) = query::ray_solid(solid, origin, reach, 0.0) else { continue };
-            // (looked up only for the few parts the ray meets: the list is short, emptied at every physics step)
+            // (looked up only for the parts the ray meets, in a set emptied at every physics step)
             if state.cameras.unindexed.contains(&solid.part) {
                 continue;
             }

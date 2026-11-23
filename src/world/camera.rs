@@ -58,9 +58,11 @@ pub struct Cameras {
     pub(super) finished: Vec<InstanceId>,
     /// An Interpolate step is writing CFrame and Focus (not a script's write)
     pub(super) stepping: bool,
-    /// What entered the Workspace since the spatial index last took parts in (the physics step, another spatial query):
-    /// GetLargestCutoffDistance and the PlayerMouse's rays do not see it yet (camera_moves.rs, mouse.rs)
-    pub(super) unindexed: Vec<InstanceId>,
+    /// The parts that entered the Workspace since the spatial index last took parts in (the physics step, another spatial
+    /// query) and are still in it: GetLargestCutoffDistance and the PlayerMouse's rays do not see them yet (camera_moves.rs,
+    /// mouse.rs). A set, each part once however often it came back in, and a part that leaves drops out, so it holds at
+    /// most the Workspace's parts and a ray's lookup costs the same whatever it holds
+    pub(super) unindexed: FxHashSet<InstanceId>,
 }
 
 struct View {
