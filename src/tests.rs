@@ -7320,10 +7320,12 @@ fn shared_tables_meet_the_registry_and_bindables_as_in_roblox() {
     assert!(lines(&engine).contains(&"print: fired true true false false false".to_string()), "{:?}", lines(&engine));
 }
 
-/// SharedTableRegistry casts a name to a string as a playing client does (Studio 0.748): a number as `%.20g` writes it, NaN and
-/// the infinities as "NAN", "INF" and "-INF"; any other value warns ("argument #1 expects a string, but boolean was passed")
-/// and is named as the engine writes its type (a buffer by its contents and every SharedTable by one name, which no text
-/// reaches). SetSharedTable checks its value before its name, and names a value it refuses as a client's cast does.
+/// SharedTableRegistry casts a name to a string as a playing client does (Studio 0.748): a number as `%.20g` writes it, a
+/// subnormal one too (its digits, where the scripts' float mode flushed Luau's `string.format` to "0"), NaN and the infinities
+/// as "NAN", "INF" and "-INF"; any other value warns ("argument #1 expects a string, but boolean was passed") and is named as
+/// the engine writes its type (a Vector3 with nine digits a component, where tostring writes doubles; a buffer by its
+/// contents and every SharedTable by one name, which no text reaches). SetSharedTable checks its value before its name, and
+/// names a value it refuses as a client's cast does.
 #[test]
 fn shared_table_registry_names_cast_as_a_client_does() {
     let (lua, engine) = start();
@@ -7344,8 +7346,13 @@ fn shared_table_registry_names_cast_as_a_client_does() {
         end
         print("numbers", Named(15, "15"), Named(0.1, "0.10000000000000000555"), Named(1 / 3, "0.33333333333333331483"), Named(2 ^ 63, "9223372036854775808"),
             Named(1e20, "1e+20"), Named(-0.0, "-0"), Named(0 / 0, "NAN"), Named(math.huge, "INF"), Named(-math.huge, "-INF"))
+        print("subnormal", Named(tonumber("1e-310"), "9.9999999999999694493e-311"), Named(tonumber("5e-324"), "4.9406564584124654418e-324"),
+            Named(tonumber("2.2250738585072009e-308"), "2.225073858507200889e-308"))
         print("others", Named(true, "true"), Named({ 1 }, "{}"), Named(workspace, "Instance"), Named(print, "function"), Named(coroutine.create(print), "nil"),
             Named(Enum.Material, "nil"), Named(newproxy(), "nil"), Named(Enum.Material.Plastic, "Plastic"), Named(Vector3.new(1, 2, 3), "1, 2, 3"))
+        print("vectors", Named(Vector3.new(0.1, 1 / 3, 2), "0.100000001, 0.333333343, 2"), Named(Vector3.new(1e20, 123456.789, -0.0), "1.00000002e+20, 123456.789, -0"),
+            Named(Vector3.new(0 / 0, math.huge, -math.huge), "NAN, INF, -INF"), Named(Vector2.new(0.1, 1 / 3), "0.100000001, 0.333333343"),
+            Named(CFrame.new(0.1, 0, 0), "0.100000001, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1"))
         local T, Other = SharedTable.new(), SharedTable.new()
         Registry:SetSharedTable(buffer.fromstring("abc"), T)
         Registry:SetSharedTable(SharedTable.new(), Other)
@@ -7359,7 +7366,9 @@ fn shared_table_registry_names_cast_as_a_client_does() {
     );
     assert!(output.contains(&"print: Unable to cast double to SharedTable | Argument 1 missing or nil | Argument 1 missing or nil".to_string()), "{output:?}");
     assert!(output.contains(&"print: numbers true true true true true true true true true".to_string()), "{output:?}");
+    assert!(output.contains(&"print: subnormal true true true".to_string()), "{output:?}");
     assert!(output.contains(&"print: others true true true true true true true true true".to_string()), "{output:?}");
+    assert!(output.contains(&"print: vectors true true true true true".to_string()), "{output:?}");
     assert!(output.contains(&"print: apart true false false true".to_string()), "{output:?}");
     assert!(
         output.contains(&"print: Unable to cast Function to SharedTable | Unable to cast null to SharedTable | Unable to cast Material to SharedTable | Unable to cast null to SharedTable | Unable to cast null to SharedTable | Unable to cast CoordinateFrame to SharedTable".to_string()),
@@ -7368,6 +7377,45 @@ fn shared_table_registry_names_cast_as_a_client_does() {
     let warned = |kind: &str| output.iter().any(|line| line.contains(&format!("argument #1 expects a string, but {kind} was passed")) && !line.starts_with("print"));
     assert!(["boolean", "table", "Instance", "function", "thread", "Enum", "userdata", "EnumItem", "Vector3", "buffer", "SharedTable"].iter().all(|kind| warned(kind)), "{output:?}");
     assert!(!warned("number"), "{output:?}");
+}
+
+/// A Vector3 and a number given to a method's string parameter are written as a client writes them (measured, Studio 0.748:
+/// MarkerCurve:InsertMarkerAtTime's value and LogService:Info's message on a playing client, PhysicsService's group names on
+/// a server): a Vector3 with nine significant digits a component, NaN and the infinities as "NAN", "INF" and "-INF" (tostring
+/// writes doubles and "nan"), and a number as `%.20g` writes it, a subnormal one with its digits. LogService wrote numbers as
+/// tostring does ("0.1", "1e-310") and a Vector3 as tostring does, as MarkerCurve and PhysicsService wrote a Vector3.
+#[test]
+fn string_parameters_cast_a_vector3_and_a_number_as_a_client_does() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Values = { Vector3.new(0.1, 1 / 3, 2), Vector3.new(0 / 0, math.huge, -math.huge), tonumber("1e-310"), 0.1 }
+        local Curve = Instance.new("MarkerCurve")
+        local PhysicsService = game:GetService("PhysicsService")
+        local LogService = game:GetService("LogService")
+        for I, Value in Values do
+            Curve:InsertMarkerAtTime(I, Value)
+            PhysicsService:RegisterCollisionGroup(Value)
+            LogService:Info(Value)
+        end
+        local Markers, Groups = {}, {}
+        for _, Marker in Curve:GetMarkers() do
+            table.insert(Markers, Marker.Value)
+        end
+        for _, Group in PhysicsService:GetRegisteredCollisionGroups() do
+            table.insert(Groups, Group.name)
+        end
+        print("markers", table.concat(Markers, " | "))
+        print("groups", table.concat(Groups, " | "))
+        "#,
+    );
+    let written = "0.100000001, 0.333333343, 2 | NAN, INF, -INF | 9.9999999999999694493e-311 | 0.10000000000000000555";
+    assert!(output.contains(&format!("print: markers {written}")), "{output:?}");
+    assert!(output.contains(&format!("print: groups Default | {written}")), "{output:?}");
+    let logged: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("info: ")).collect();
+    assert_eq!(logged.join(" | "), written, "{output:?}");
 }
 
 /// A table past ree's guard on a copy by its slots alone raises the guard's error before its slots are walked: the slots are

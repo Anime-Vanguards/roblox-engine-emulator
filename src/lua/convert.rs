@@ -472,15 +472,26 @@ pub fn cast_number_text(number: f64) -> String {
     }
 }
 
+/// A Vector3 as a method's string parameter reads it: each component with nine significant digits, NaN and the infinities
+/// as `NAN`, `INF` and `-INF`, as a Vector2's tostring writes its own (measured, Studio 0.748 on a playing client:
+/// `0.100000001, 0.333333343, 2` where tostring gives `0.10000000149011612, 0.3333333432674408, 2`, and `NAN, INF, -INF`).
+pub fn cast_vector_text(vector: mlua::Vector) -> String {
+    let digits = |component: f32| lune_roblox::datatypes::types::format_g(component as f64, 9);
+    format!("{}, {}, {}", digits(vector.x()), digits(vector.y()), digits(vector.z()))
+}
+
 /// A value as a method's string parameter casts it (measured, Studio 0.747: MarkerCurve:InsertMarkerAtTime's value and
-/// PhysicsService's group names): a string as it is, a number by [`cast_number_text`], a boolean's name, an EnumItem's
-/// name, "Instance" for an instance, "{}" for a table, "function", "nil" for an Enum, a thread or a plain userdata,
-/// "buffer { Size = 2 }", and a datatype as `tostring` writes it. (nil is the caller's: "Argument n missing or nil".)
+/// PhysicsService's group names): a string as it is, a number by [`cast_number_text`], a Vector3 by [`cast_vector_text`], a
+/// boolean's name, an EnumItem's name, "Instance" for an instance, "{}" for a table, "function", "nil" for an Enum, a thread
+/// or a plain userdata, "buffer { Size = 2 }", and another datatype as `tostring` writes it. (nil is the caller's: "Argument
+/// n missing or nil".) The number and the Vector3 are written in Rust, so a subnormal number keeps its digits in the
+/// scripts' float mode (lua/float_mode.rs), as a client writes them (Studio 0.748: 1e-310 is `9.9999999999999694493e-311`).
 pub fn cast_text(lua: &Lua, engine: &Engine, value: &LuaValue) -> LuaResult<Vec<u8>> {
     Ok(match value {
         LuaValue::String(text) => text.as_bytes().to_vec(),
         LuaValue::Number(number) => cast_number_text(*number).into_bytes(),
         LuaValue::Integer(number) => cast_number_text(*number as f64).into_bytes(),
+        LuaValue::Vector(vector) => cast_vector_text(*vector).into_bytes(),
         LuaValue::Boolean(flag) => flag.to_string().into_bytes(),
         LuaValue::Table(_) => b"{}".to_vec(),
         LuaValue::Function(_) => b"function".to_vec(),

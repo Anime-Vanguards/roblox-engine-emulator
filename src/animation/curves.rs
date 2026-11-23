@@ -33,7 +33,9 @@
 //!   max string size is 64"): a string as it is, a number with up to 20 significant digits
 //!   (`0.10000000000000000555`, `1e+20`, `INF`, `NAN`), a boolean's name, an EnumItem's name,
 //!   "Instance" for an instance, "{}" for a table, "function", "nil" for an Enum, a thread or a
-//!   plain userdata, "buffer { Size = 2 }", and a datatype as `tostring` writes it.
+//!   plain userdata, "buffer { Size = 2 }", a Vector3 with nine significant digits a component
+//!   (`0.100000001, 0.333333343, 2`, `NAN, INF, -INF`: Studio 0.748, a playing client), and another
+//!   datatype as `tostring` writes it.
 //!
 //! Not emulated: a curve that came whole (a clone, a model file) takes its channels by name when one
 //! of these members first looks at it or a child comes or goes, where Studio took them when it was
