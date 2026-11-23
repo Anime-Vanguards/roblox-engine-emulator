@@ -259,6 +259,79 @@ pub fn method(f: impl Fn(&Lua, &Rc<Engine>, InstanceId, &Args) -> Ret + 'static)
     Rc::new(f)
 }
 
+/// A method's string parameter ([`strings`]): its place among the call's arguments (`index`, 1 for the first after self), the
+/// number its warning names (`argument`), the number "Argument n missing or nil" names when it is nil (`missing`; None leaves nil
+/// to the method), and whether a client warns before it casts a value (a method that yields casts without the warning).
+#[derive(Clone, Copy, Debug)]
+pub struct StringParam {
+    pub index: usize,
+    pub argument: usize,
+    pub missing: Option<usize>,
+    pub warn: bool,
+}
+
+impl StringParam {
+    /// The parameter at `index`, named by its place
+    pub const fn at(index: usize) -> Self {
+        Self { index, argument: index, missing: Some(index), warn: true }
+    }
+
+    /// [`Self::at`] of a method that yields: cast without the warning
+    pub const fn quiet(index: usize) -> Self {
+        Self { warn: false, ..Self::at(index) }
+    }
+}
+
+/// The call's arguments with the string parameters `params` read as a client reads them (lua/convert.rs string_param), the last
+/// first, as a client casts a call's arguments (measured: CollisionGroupsAreCollidable(true, {}) warns for the second, then the
+/// first): None when every one is a string already, else the arguments with each other value replaced by its text; nil raises
+/// "Argument n missing or nil".
+pub fn cast_strings(lua: &Lua, engine: &Engine, args: &Args, params: &[StringParam]) -> Result<Option<Args>, Flow> {
+    let mut cast: Option<Args> = None;
+    for param in params.iter().rev() {
+        let value = args.get(param.index);
+        match value {
+            LuaValue::String(_) => continue,
+            LuaValue::Nil => match param.missing {
+                Some(number) => return raise(format!("Argument {number} missing or nil")),
+                None => continue,
+            },
+            _ => {
+                let text = lua.create_string(crate::lua::convert::string_param(lua, engine, value, param.argument, param.warn)?)?;
+                let cast = cast.get_or_insert_with(|| Args(args.0.clone()));
+                if let Some(slot) = cast.0.get_mut(param.index) {
+                    *slot = LuaValue::String(text);
+                }
+            }
+        }
+    }
+    Ok(cast)
+}
+
+/// `method` given its string parameters `params` as a client reads them ([`cast_strings`]): a string the method gets as it is,
+/// so its answers for strings and the work clock's prices stay those of the method alone.
+pub fn strings(params: &'static [StringParam], method: MethodFn) -> MethodFn {
+    if params.is_empty() {
+        return method;
+    }
+    Rc::new(move |lua, engine, id, args| match cast_strings(lua, engine, args, params)? {
+        Some(cast) => method(lua, engine, id, &cast),
+        None => method(lua, engine, id, args),
+    })
+}
+
+/// No string parameter ([`strings`] passes the call on as it is)
+const NONE: &[StringParam] = &[];
+/// The first argument a string parameter
+pub(crate) const FIRST: &[StringParam] = &[StringParam::at(1)];
+/// The first two arguments string parameters
+const FIRST_TWO: &[StringParam] = &[StringParam::at(1), StringParam::at(2)];
+/// [`FIRST`] of a method that yields: cast without the warning
+const QUIET_FIRST: &[StringParam] = &[StringParam::quiet(1)];
+/// CollectionService:AddTag, RemoveTag and HasTag's tag: the second argument, named so in the warning, and the third in "Argument 3
+/// missing or nil" (measured, Studio 0.747)
+const TAG: &[StringParam] = &[StringParam { index: 2, argument: 2, missing: Some(3), warn: true }];
+
 /// A behaviour getter from a closure ([`Behaviors::add_getter`]).
 pub fn getter(f: impl Fn(&Lua, &Rc<Engine>, InstanceId) -> Result<LuaValue, Flow> + 'static) -> GetterFn {
     Rc::new(f)
@@ -376,6 +449,36 @@ pub fn user_settings(engine: &Engine) -> Option<InstanceId> {
     Some(id)
 }
 
+/// GetService's and FindService's name as a client reads it (convert::string_param): a string as it is, any other value but nil
+/// its text after the warning. The flag says the name is a cast's that a client answers nil for when it names no service: the
+/// text of an Instance, an EnumItem, an Enum, the Enums, a function, a thread, a plain userdata or a signal ("Instance", the item's
+/// name, "nil", "function", "EventInstance"), which a client takes for a name it knows that is no service's, as it takes a class
+/// name that is no service's (measured, Studio 0.747, a playing client and a server: GetService(workspace),
+/// GetService(Enum.Material.Plastic), GetService(print) are nil, GetService(Enum.CoreGuiType.Chat) the Chat service, and
+/// GetService(true), GetService({}), GetService(Vector3.new()) and GetService(5) raise `'<text>' is not a valid Service name`).
+/// Not matched: a string that names no service raises here, as before, where a client answers nil for one it knows (`Part`,
+/// `Instance`, `Plastic`, `Anchored`, `nil`, `function`; `Nope`, `true` and `Lighting ` raise there too).
+fn service_param(lua: &Lua, engine: &Engine, args: &Args) -> Result<(String, bool), Flow> {
+    let value = args.get(1);
+    match value {
+        LuaValue::String(name) => Ok((name.to_string_lossy(), false)),
+        LuaValue::Nil => raise("Argument 1 missing or nil"),
+        _ => {
+            let text = String::from_utf8_lossy(&convert::string_param(lua, engine, value, 1, true)?).into_owned();
+            let known = matches!(
+                super::lua::typeof_value(engine, value).as_str(),
+                "Instance" | "EnumItem" | "Enum" | "Enums" | "function" | "thread" | "userdata" | "RBXScriptSignal"
+            );
+            Ok((text, known))
+        }
+    }
+}
+
+/// Whether `name` is a service's class name.
+fn names_service(engine: &Engine, name: &str) -> bool {
+    engine.reflection.class_by_name(name).is_some_and(|class| class.service)
+}
+
 pub fn find_service(engine: &Engine, game: InstanceId, service_name: &str) -> Option<InstanceId> {
     let state = engine.state.borrow();
     state
@@ -423,7 +526,10 @@ pub fn install(engine: &Rc<Engine>) {
     // DataModel
     if let Some(data_model) = class(&reflection, "DataModel") {
         let get = method(|lua, engine, id, args| {
-            let service_name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
+            let (service_name, known) = service_param(lua, engine, args)?;
+            if known && !names_service(engine, &service_name) {
+                return Ok(values([LuaValue::Nil]));
+            }
             if ROBLOX_ONLY_SERVICES.contains(&&*service_name) {
                 return Ok(values([LuaValue::Nil]));
             }
@@ -438,9 +544,12 @@ pub fn install(engine: &Rc<Engine>) {
         behaviors.add_method(data_model, K::GetService as NameId, get.clone());
         behaviors.add_method(data_model, K::service as NameId, get);
         behaviors.add_method(data_model, K::FindService as NameId, method(|lua, engine, id, args| {
-            let service_name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
+            let (service_name, known) = service_param(lua, engine, args)?;
+            if known && !names_service(engine, &service_name) {
+                return Ok(values([LuaValue::Nil]));
+            }
             // (a name that is no service's raises as GetService does: tools/parity/probes/core_services.luau)
-            if !engine.reflection.class_by_name(&service_name).is_some_and(|class| class.service) && !settings::found_nowhere(&service_name) {
+            if !names_service(engine, &service_name) && !settings::found_nowhere(&service_name) {
                 return raise(format!("'{service_name}' is not a valid Service name"));
             }
             Ok(values([match find_service(engine, id, &service_name).filter(|_| !ROBLOX_ONLY_SERVICES.contains(&&*service_name)) {
@@ -556,7 +665,7 @@ pub fn install(engine: &Rc<Engine>) {
             }));
         }
         if let Some(n) = name(&reflection, "GetUserIdFromNameAsync") {
-            behaviors.add_method(players, n, constant(|_| Ok(LuaValue::Number(1.0))));
+            behaviors.add_method(players, n, strings(QUIET_FIRST, constant(|_| Ok(LuaValue::Number(1.0)))));
         }
         // Players a harness adds after the run started: PlayerAdded when a Player is parented to Players,
         // PlayerRemoving when it leaves, and Player.CharacterAdded when its Character is set to a model
@@ -657,7 +766,7 @@ pub fn install(engine: &Rc<Engine>) {
         let steps: Rc<RefCell<Vec<Rc<RenderStep>>>> = Rc::default();
         let sequence = Rc::new(std::cell::Cell::new(0u64));
         let bind_steps = steps.clone();
-        behaviors.add_method(run_service, K::BindToRenderStep as NameId, method(move |lua, _, _, args| {
+        behaviors.add_method(run_service, K::BindToRenderStep as NameId, method(move |lua, engine, _, args| {
             let LuaValue::Function(callback) = args.get(3).clone() else {
                 return raise("Argument 3 missing or nil");
             };
@@ -672,18 +781,22 @@ pub fn install(engine: &Rc<Engine>) {
             };
             sequence.set(sequence.get() + 1);
             let level = if level >= 0.0 { level.floor() } else { level.ceil() };
-            let name = lua.coerce_string(args.get(1).clone())?.map(|s| s.to_string_lossy()).unwrap_or_else(|| "nil".into());
+            // (the name last, as a client casts the arguments from the last: services::cast_strings)
+            let name = match args.get(1) {
+                LuaValue::Nil => return raise("Argument 1 missing or nil"),
+                value => String::from_utf8_lossy(&convert::string_param(lua, engine, value, 1, true)?).into_owned(),
+            };
             let mut list = bind_steps.borrow_mut();
             list.push(Rc::new(RenderStep { name, priority: level, callback, sequence: sequence.get() }));
             list.sort_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal).then(a.sequence.cmp(&b.sequence)));
             Ok(none())
         }));
         let unbind_steps = steps.clone();
-        behaviors.add_method(run_service, K::UnbindFromRenderStep as NameId, method(move |lua, _, _, args| {
-            let name = lua.coerce_string(args.get(1).clone())?.map(|s| s.to_string_lossy());
+        behaviors.add_method(run_service, K::UnbindFromRenderStep as NameId, strings(FIRST, method(move |_, _, _, args| {
+            let name = args.string(1).map(|s| s.to_string_lossy());
             unbind_steps.borrow_mut().retain(|step| Some(&step.name) != name.as_ref());
             Ok(none())
-        }));
+        })));
         let mut state = engine.state.borrow_mut();
         let hook_steps = steps;
         state.sched.add_hook(Phase::RenderStep, Rc::new(move |lua, engine, delta| {
@@ -756,7 +869,7 @@ pub fn install(engine: &Rc<Engine>) {
     // CollectionService
     if let Some(collection) = class(&reflection, "CollectionService") {
         if let Some(n) = name(&reflection, "GetTagged") {
-            behaviors.add_method(collection, n, method(|lua, engine, _, args| {
+            behaviors.add_method(collection, n, strings(FIRST, method(|lua, engine, _, args| {
                 let tag = args.string(1).map(|s| Str::new(&s.as_bytes())).unwrap_or_default();
                 let game = engine.world().game;
                 let tagged = tagged_below(&mut engine.state.borrow_mut(), game, &tag);
@@ -769,7 +882,7 @@ pub fn install(engine: &Rc<Engine>) {
                     table.raw_push(instance_value(lua, engine, id)?)?;
                 }
                 Ok(values([LuaValue::Table(table)]))
-            }));
+            })));
         }
         // GetAllTags: every tag in the DataModel, in first-seen order of a depth-first walk
         if let Some(n) = name(&reflection, "GetAllTags") {
@@ -795,18 +908,30 @@ pub fn install(engine: &Rc<Engine>) {
         }
         for (member, added) in [("GetInstanceAddedSignal", true), ("GetInstanceRemovedSignal", false)] {
             if let Some(n) = name(&reflection, member) {
-                behaviors.add_method(collection, n, method(move |lua, engine, _, args| {
+                behaviors.add_method(collection, n, strings(FIRST, method(move |lua, engine, _, args| {
                     let tag = args.string(1).map(|s| Str::new(&s.as_bytes())).unwrap_or_default();
                     let (a, r) = tag_signals(&mut engine.state.borrow_mut(), &tag);
                     Ok(values([signal_value(lua, engine, if added { a } else { r })?]))
-                }));
+                })));
             }
         }
         for member in ["AddTag", "RemoveTag", "HasTag", "GetTags"] {
             if let Some(n) = name(&reflection, member) {
                 let forward = n;
+                let tagged = member != "GetTags";
                 behaviors.add_method(collection, n, method(move |lua, engine, _, args| {
+                    // (the tag first, as a client casts the arguments from the last: a nil one raises "Argument 3 missing or nil" and
+                    // another value warns "argument #2", measured, Studio 0.747)
+                    let cast = if tagged && args.len() > 2 { cast_strings(lua, engine, args, TAG)? } else { None };
+                    let args = cast.as_ref().unwrap_or(args);
                     let Some(target) = args.instance(1) else { return raise("Argument 1 missing or nil") };
+                    // (a call with the instance and no tag at all warns as if the instance were the tag, "argument #1 expects a
+                    // string, but Instance was passed", and changes nothing: measured likewise. Not matched: HasTag then answered
+                    // true in one call and false in two others, tagged or not; here false)
+                    if tagged && args.len() == 2 {
+                        convert::warn_string_param(lua, engine, args.get(1), 1);
+                        return Ok(if member == "HasTag" { values([LuaValue::Boolean(false)]) } else { none() });
+                    }
                     let target_class = engine.state.borrow().dom.at(target).class;
                     let Some((_, f)) = engine.behaviors.borrow().find_method(&engine.reflection, target_class, forward).map(|(c, f)| (c, f.clone())) else {
                         return Ok(none());
@@ -835,15 +960,15 @@ pub fn install(engine: &Rc<Engine>) {
         }
         // (no inspect menu opens without a GUI layer, so there is none to close, and no selection group to remove but one
         // AddSelectionParent made, which reports itself)
-        for member in ["CloseInspectMenu", "RemoveSelectionGroup"] {
+        for (member, params) in [("CloseInspectMenu", NONE), ("RemoveSelectionGroup", FIRST)] {
             if let Some(n) = name(&reflection, member) {
-                behaviors.add_method(gui, n, method(|_, _, _, _| Ok(none())));
+                behaviors.add_method(gui, n, strings(params, method(|_, _, _, _| Ok(none()))));
             }
         }
         // (not kept: GetEmotesMenuOpen stays false, SelectedObject unset)
-        for member in ["SetEmotesMenuOpen", "Select", "AddSelectionParent"] {
+        for (member, params) in [("SetEmotesMenuOpen", NONE), ("Select", NONE), ("AddSelectionParent", FIRST)] {
             if let Some(n) = name(&reflection, member) {
-                behaviors.add_method(gui, n, unemulated("GuiService", member));
+                behaviors.add_method(gui, n, strings(params, unemulated("GuiService", member)));
             }
         }
     }
@@ -915,17 +1040,18 @@ pub fn install(engine: &Rc<Engine>) {
     // StarterGui / ContextActionService / Debris / Sound
     if let Some(starter) = class(&reflection, "StarterGui") {
         // (Roblox's own UI is not emulated: GetCore and GetCoreGuiEnabled keep their first answers)
-        for member in ["SetCore", "SetCoreGuiEnabled"] {
+        for (member, params) in [("SetCore", FIRST), ("SetCoreGuiEnabled", NONE)] {
             if let Some(n) = name(&reflection, member) {
-                behaviors.add_method(starter, n, unemulated("StarterGui", member));
+                behaviors.add_method(starter, n, strings(params, unemulated("StarterGui", member)));
             }
         }
+        // (GetCore yields on a server until the core scripts register the name: a client casts its name without the warning)
         if let Some(n) = name(&reflection, "GetCore") {
-            behaviors.add_method(starter, n, method(|_, _, _, args| {
+            behaviors.add_method(starter, n, strings(QUIET_FIRST, method(|_, _, _, args| {
                 let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
                 let active = matches!(name.as_str(), "ChatActive" | "PointsNotificationsActive" | "BadgesNotificationsActive");
                 Ok(values([if active { LuaValue::Boolean(true) } else { LuaValue::Nil }]))
-            }));
+            })));
         }
         if let Some(n) = name(&reflection, "GetCoreGuiEnabled") {
             behaviors.add_method(starter, n, constant(|_| Ok(LuaValue::Boolean(true))));
@@ -934,22 +1060,31 @@ pub fn install(engine: &Rc<Engine>) {
     if let Some(actions) = class(&reflection, "ContextActionService") {
         // Without an input layer no binding is kept (GetBoundActionInfo answers none), so a bind and a binding's touch button
         // settings report themselves, and an unbind has nothing to remove
-        for member in ["BindAction", "BindActionAtPriority", "SetTitle", "SetImage", "SetDescription", "SetPosition", "BindActivate"] {
+        // (an action's name, and a binding's title, image and description, are read as a client reads a string parameter)
+        for (member, params) in [
+            ("BindAction", FIRST),
+            ("BindActionAtPriority", FIRST),
+            ("SetTitle", FIRST_TWO),
+            ("SetImage", FIRST_TWO),
+            ("SetDescription", FIRST_TWO),
+            ("SetPosition", FIRST),
+            ("BindActivate", NONE),
+        ] {
             if let Some(n) = name(&reflection, member) {
-                behaviors.add_method(actions, n, unemulated("ContextActionService", member));
+                behaviors.add_method(actions, n, strings(params, unemulated("ContextActionService", member)));
             }
         }
-        for member in ["UnbindAction", "UnbindAllActions", "UnbindActivate"] {
+        for (member, params) in [("UnbindAction", FIRST), ("UnbindAllActions", NONE), ("UnbindActivate", NONE)] {
             if let Some(n) = name(&reflection, member) {
-                behaviors.add_method(actions, n, method(|_, _, _, _| Ok(none())));
+                behaviors.add_method(actions, n, strings(params, method(|_, _, _, _| Ok(none()))));
             }
         }
         if let Some(n) = name(&reflection, "GetButton") {
-            behaviors.add_method(actions, n, constant(|_| Ok(LuaValue::Nil)));
+            behaviors.add_method(actions, n, strings(FIRST, constant(|_| Ok(LuaValue::Nil))));
         }
-        for member in ["GetAllBoundActionInfo", "GetBoundActionInfo"] {
+        for (member, params) in [("GetAllBoundActionInfo", NONE), ("GetBoundActionInfo", FIRST)] {
             if let Some(n) = name(&reflection, member) {
-                behaviors.add_method(actions, n, constant(|lua| Ok(LuaValue::Table(lua.create_table()?))));
+                behaviors.add_method(actions, n, strings(params, constant(|lua| Ok(LuaValue::Table(lua.create_table()?)))));
             }
         }
     }
@@ -1065,17 +1200,11 @@ pub fn install(engine: &Rc<Engine>) {
             }));
         }
         if let Some(n) = name(&reflection, "JSONDecode") {
-            behaviors.add_method(http, n, method(|lua, engine, _, args| {
-                // a number or boolean is read as its text (12.5, true; measured); nil is a missing argument
-                let text = match args.get(1) {
-                    LuaValue::String(text) => text.as_bytes().to_vec(),
-                    LuaValue::Nil => return raise("Argument 1 missing or nil"),
-                    number @ (LuaValue::Number(_) | LuaValue::Integer(_)) => lua.coerce_string(number.clone())?.map(|text| text.as_bytes().to_vec()).unwrap_or_default(),
-                    LuaValue::Boolean(flag) => if *flag { b"true".to_vec() } else { b"false".to_vec() },
-                    // a table, array or dictionary, decodes to a new empty table (json_limits.luau)
-                    LuaValue::Table(_) => return Ok(values([LuaValue::Table(lua.create_table()?)])),
-                    _ => return raise("Can't parse JSON"),
-                };
+            // (any other value is read as its text, as a client reads a string parameter: 12.5 and true parse, a table is "{}" and
+            // decodes to a new empty table, an Instance is "Instance", which does not parse; measured, json_limits.luau and
+            // string_parameter_methods.luau)
+            behaviors.add_method(http, n, strings(FIRST, method(|lua, engine, _, args| {
+                let text = args.string(1).map(|text| text.as_bytes().to_vec()).unwrap_or_default();
                 match json::decode_counted(lua, &text) {
                     Ok(decoded) => {
                         // (priced by the text it parsed and the values it made: cost.rs json)
@@ -1084,7 +1213,7 @@ pub fn install(engine: &Rc<Engine>) {
                     }
                     Err(message) => raise(message),
                 }
-            }));
+            })));
         }
         for member in ["GetAsync", "PostAsync", "RequestAsync"] {
             if let Some(n) = name(&reflection, member) {
@@ -1092,7 +1221,7 @@ pub fn install(engine: &Rc<Engine>) {
             }
         }
         if let Some(n) = name(&reflection, "UrlEncode") {
-            behaviors.add_method(http, n, method(|lua, _, _, args| {
+            behaviors.add_method(http, n, strings(FIRST, method(|lua, _, _, args| {
                 let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
                 let mut encoded = String::new();
                 for byte in text {
@@ -1104,7 +1233,7 @@ pub fn install(engine: &Rc<Engine>) {
                     }
                 }
                 Ok(values([string_value(lua, &encoded)?]))
-            }));
+            })));
         }
     }
     drop(behaviors);

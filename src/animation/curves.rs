@@ -35,11 +35,11 @@
 //!   "Instance" for an instance, "{}" for a table, "function", "nil" for an Enum, a thread or a
 //!   plain userdata, "buffer { Size = 2 }", a Vector3 with nine significant digits a component
 //!   (`0.100000001, 0.333333343, 2`, `NAN, INF, -INF`: Studio 0.748, a playing client), and another
-//!   datatype as `tostring` writes it. Not matched: a client first warns `argument #2 expects a
-//!   string, but <type> was passed` for a value that is neither a string nor a number, which ree
-//!   does not (measured, Studio 0.748, a playing client: for a boolean, a Vector3, Vector2, CFrame,
-//!   Color3, UDim2, BrickColor, table, Instance, function, EnumItem, Enum, buffer, thread and
-//!   newproxy alike; a number and a string give none).
+//!   datatype as `tostring` writes it, after the warning a client gives first, `argument #2 expects a
+//!   string, but <type> was passed`, for a value that is neither a string nor a number (measured,
+//!   Studio 0.748, a playing client: for a boolean, a Vector3, Vector2, CFrame, Color3, UDim2,
+//!   BrickColor, table, Instance, function, EnumItem, Enum, buffer, thread and newproxy alike; a
+//!   number and a string give none: convert::string_param).
 //!
 //! Not emulated: a curve that came whole (a clone, a model file) takes its channels by name when one
 //! of these members first looks at it or a child comes or goes, where Studio took them when it was
@@ -272,10 +272,9 @@ impl Channels {
     }
 }
 
-/// InsertMarkerAtTime's value as the text a marker holds (the module's notes): the engine's cast of a value to a
-/// string parameter (convert::cast_text), at most 64 bytes.
-fn marker_text(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Vec<u8>, Flow> {
-    let text = convert::cast_text(lua, engine, value)?;
+/// InsertMarkerAtTime's value as the text a marker holds (the module's notes): the engine's reading of a string parameter
+/// (convert::string_param: warned about and cast to text), at most 64 bytes.
+fn marker_text(text: Vec<u8>) -> Result<Vec<u8>, Flow> {
     if text.len() > 64 {
         return raise("Invalid marker passed to InsertMarkerAtTime, max string size is 64");
     }
@@ -503,8 +502,10 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         if args.get(2).is_nil() {
             return raise("Argument 2 missing or nil");
         }
+        // (the value is read first, as a client casts the arguments from the last: services::cast_strings)
+        let text = convert::string_param(lua, engine, args.get(2), 2, true)?;
         let time = time_arg(lua, engine, args, 1)?;
-        let value = marker_text(lua, engine, args.get(2))?;
+        let value = marker_text(text)?;
         let mut found = markers(engine, id);
         let outcome = curve::insert(&mut found, MarkerKey { tick: curve::tick_of(time), value });
         keep(engine, id, found);

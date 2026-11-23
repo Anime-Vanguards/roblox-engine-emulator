@@ -26,7 +26,7 @@ use std::rc::Rc;
 
 use mlua::prelude::*;
 
-use super::{Behaviors, find_service, getter, method};
+use super::{Behaviors, FIRST, find_service, getter, method, strings};
 use crate::{
     ClassId, Engine, InstanceId, K, NameId, Reflection,
     dom::flags,
@@ -286,9 +286,10 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     let class = |name: &str| reflection.class_id(name);
     let n = |name: &str| reflection.name_id(name);
 
+    // (the name read as a client reads a string parameter, the method answering then as for that string: services::strings)
     if let Some(generic) = class("GenericSettings") {
-        behaviors.add_method(generic, K::GetService as NameId, method(|lua, engine, id, args| get_service(lua, engine, id, &service_name(args))));
-        behaviors.add_method(generic, K::FindService as NameId, method(|lua, engine, id, args| {
+        behaviors.add_method(generic, K::GetService as NameId, strings(FIRST, method(|lua, engine, id, args| get_service(lua, engine, id, &service_name(args)))));
+        behaviors.add_method(generic, K::FindService as NameId, strings(FIRST, method(|lua, engine, id, args| {
             let name = service_name(args);
             if engine.reflection.class_id(&name).is_none() {
                 return raise(format!("'{name}' is not a valid Service name"));
@@ -297,7 +298,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                 Some(service) => instance_value(lua, engine, service)?,
                 None => LuaValue::Nil,
             }]))
-        }));
+        })));
     }
 
     // a settings service keeps its name: a write reads back the old one, with no error (each of settings()' eight and

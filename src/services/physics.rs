@@ -30,7 +30,8 @@
 //!   is new to it), and a mask alone leaves them, as SetCollidable does on the server. A server and Studio's edit DataModel
 //!   may change it (the edit one by Roblox's documentation of the Collision Groups editor, not measured).
 //! - Arguments are cast from the last to the first, before any other check: a missing one "Argument n missing or nil". A
-//!   name casts any value to text (lua::convert::cast_text: 5 is "5", true "true", a table "{}"). The collidable flag
+//!   name casts any value to text (lua::convert::string_param: 5 is "5", true "true" after the warning a client gives for a
+//!   value that is neither a string nor a number, a table "{}"). The collidable flag
 //!   takes a boolean, a number (0 is false, any other true) or "true" / "false" in any case; another string "Unable to
 //!   cast string to bool", another value "Unable to cast <type> to bool" (Array, Function, buffer, Instance, Vector3, an
 //!   EnumItem's enum name). GetCollisionGroupName's id is a number rounded half away from zero, a boolean, or a numeric
@@ -300,11 +301,12 @@ fn cast_name(engine: &Engine, value: &LuaValue) -> String {
     }
 }
 
-/// A group name argument (1 is the first after self): any value but nil, cast to text.
+/// A group name argument (1 is the first after self): any value but nil, read as a client reads a string parameter (warned about
+/// and cast to text: convert::string_param).
 fn name_arg(lua: &Lua, engine: &Engine, args: &Args, index: usize) -> Result<Vec<u8>, Flow> {
     match args.get(index) {
         LuaValue::Nil => raise(format!("Argument {index} missing or nil")),
-        value => Ok(convert::cast_text(lua, engine, value)?),
+        value => Ok(convert::string_param(lua, engine, value, index, true)?),
     }
 }
 

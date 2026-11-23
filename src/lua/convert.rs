@@ -481,11 +481,13 @@ pub fn cast_vector_text(vector: mlua::Vector) -> String {
 }
 
 /// A value as a method's string parameter casts it (measured, Studio 0.747: MarkerCurve:InsertMarkerAtTime's value and
-/// PhysicsService's group names): a string as it is, a number by [`cast_number_text`], a Vector3 by [`cast_vector_text`], a
-/// boolean's name, an EnumItem's name, "Instance" for an instance, "{}" for a table, "function", "nil" for an Enum, a thread
-/// or a plain userdata, "buffer { Size = 2 }", and another datatype as `tostring` writes it. (nil is the caller's: "Argument
-/// n missing or nil".) The number and the Vector3 are written in Rust, so a subnormal number keeps its digits in the
-/// scripts' float mode (lua/float_mode.rs), as a client writes them (Studio 0.748: 1e-310 is `9.9999999999999694493e-311`).
+/// PhysicsService's group names, and every Instance and service method tools/parity/probes/string_parameter_methods.luau
+/// tries): a string as it is, a number by [`cast_number_text`], a Vector3 by [`cast_vector_text`], a boolean's name, an
+/// EnumItem's name, "Instance" for an instance, "{}" for a table, "function", "EventInstance" for a signal, "nil" for an
+/// Enum, the Enums, a thread or a plain userdata, "buffer { Size = 2 }", and another datatype as `tostring` writes it. (nil
+/// is the caller's: "Argument n missing or nil".) The number and the Vector3 are written in Rust, so a subnormal number keeps
+/// its digits in the scripts' float mode (lua/float_mode.rs), as a client writes them (Studio 0.748: 1e-310 is
+/// `9.9999999999999694493e-311`).
 pub fn cast_text(lua: &Lua, engine: &Engine, value: &LuaValue) -> LuaResult<Vec<u8>> {
     Ok(match value {
         LuaValue::String(text) => text.as_bytes().to_vec(),
@@ -501,13 +503,38 @@ pub fn cast_text(lua: &Lua, engine: &Engine, value: &LuaValue) -> LuaResult<Vec<
             let written = || -> LuaResult<Vec<u8>> { Ok(lua.globals().get::<LuaFunction>("tostring")?.call::<LuaString>(other.clone())?.as_bytes().to_vec()) };
             match typeof_value(engine, other).as_str() {
                 "Instance" => b"Instance".to_vec(),
-                "Enum" | "userdata" => b"nil".to_vec(),
+                "Enum" | "Enums" | "userdata" => b"nil".to_vec(),
+                "RBXScriptSignal" => b"EventInstance".to_vec(),
                 // (`Enum.Material.Plastic` is "Plastic")
                 "EnumItem" => written()?.rsplit(|&byte| byte == b'.').next().unwrap_or_default().to_vec(),
                 _ => written()?,
             }
         }
     })
+}
+
+/// A method's string parameter (`argument`: its number, 1 for the first after self) given `value`, which is not nil, as a client
+/// reads it (measured, Studio 0.747, a playing client and a server alike: tools/parity/probes/string_parameter_methods.luau): a
+/// string as it is, a number as [`cast_text`] writes it, and anything else as [`cast_text`] writes it after the engine warns
+/// `argument #<n> expects a string, but <typeof> was passed` with the script's stack, as an engine warning carries it. A method
+/// that yields casts without the warning (`warn` false: WaitForChild, StarterGui:GetCore, Players:GetUserIdFromNameAsync).
+pub fn string_param(lua: &Lua, engine: &Engine, value: &LuaValue, argument: usize, warn: bool) -> LuaResult<Vec<u8>> {
+    match value {
+        LuaValue::String(text) => Ok(text.as_bytes().to_vec()),
+        LuaValue::Number(_) | LuaValue::Integer(_) => cast_text(lua, engine, value),
+        _ => {
+            if warn {
+                warn_string_param(lua, engine, value, argument);
+            }
+            cast_text(lua, engine, value)
+        }
+    }
+}
+
+/// The warning a client gives before it casts a value that is neither a string nor a number to a string parameter ([`string_param`]).
+pub fn warn_string_param(lua: &Lua, engine: &Engine, value: &LuaValue, argument: usize) {
+    let message = format!("argument #{argument} expects a string, but {} was passed", typeof_value(engine, value));
+    engine.output("warn", message, Some(super::script_traceback(lua)));
 }
 
 /// Enums.Coerce: an EnumItem of the type, an item name or an item value.

@@ -28,7 +28,7 @@ use crate::{
     Engine, K, NameId, Value,
     lua::{Args, Flow, Ret, convert, raise, types::font_to_enum, values},
     scheduler::JobTarget,
-    services::{Behaviors, method},
+    services::{Behaviors, FIRST, method, strings},
     value::FontValue,
 };
 
@@ -235,7 +235,8 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         behaviors.add_method(class, name, method(get_text_bounds));
     }
     let Some(name) = reflection.name_id("GetTextSize") else { return };
-    behaviors.add_method(class, name, method(|lua, engine, _, args| {
+    // (its text read as a client reads a string parameter, on a server too: services::strings)
+    behaviors.add_method(class, name, strings(FIRST, method(|lua, engine, _, args| {
         if engine.options.server() {
             // (a server has no typesetting: every size is (0, 0), measured)
             return Ok(values([convert::to_lua(lua, engine, &Value::Vector2(rbx_dom_weak::types::Vector2::new(0.0, 0.0)))?]));
@@ -254,7 +255,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let (x, y) = measure(&font, &text, size, limit);
         let size = Value::Vector2(rbx_dom_weak::types::Vector2::new(x as f32, y as f32));
         Ok(values([convert::to_lua(lua, engine, &size)?]))
-    }));
+    })));
 }
 
 /// TextService:GetTextBoundsAsync (measured in a playing client and a server, Studio 0.747: tools/parity/probes/text_bounds.luau).

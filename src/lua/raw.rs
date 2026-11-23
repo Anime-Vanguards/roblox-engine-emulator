@@ -1710,22 +1710,43 @@ fn is_a_bytes(engine: &Engine, class: ClassId, wanted: Option<&[u8]>) -> bool {
     }
 }
 
+/// A base method's string parameter (stack index 2) as the inline call reads it, as a client casts it (services::strings): a string
+/// as it is, a number as its `%.20g` text (convert::cast_number_text, which calls nothing in the VM, so the call keeps its price),
+/// nil "Argument 1 missing or nil"; any other value is the behaviour's (Out::General), which warns and casts it.
+unsafe fn param_text<'a>(state: *mut ffi::lua_State) -> Result<std::borrow::Cow<'a, [u8]>, Out> {
+    unsafe {
+        match ffi::lua_type(state, 2) {
+            ffi::LUA_TSTRING => Ok(std::borrow::Cow::Borrowed(arg_bytes(state, 2).unwrap_or_default())),
+            ffi::LUA_TNUMBER => {
+                let number = ffi::lua_tonumberx(state, 2, std::ptr::null_mut());
+                Ok(std::borrow::Cow::Owned(super::convert::cast_number_text(number).into_bytes()))
+            }
+            kind if kind <= ffi::LUA_TNIL => Err(Out::Raise("Argument 1 missing or nil".into(), 0)),
+            _ => Err(Out::General),
+        }
+    }
+}
+
 /// The base Instance methods inline (same semantics as lua/instance.rs install_base).
 unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: InstanceId, class: ClassId, base: Base) -> Out {
     unsafe {
         match base {
             Base::FindFirstChild => {
-                // (a missing name raises in the behaviour: `Argument 1 missing or nil`)
-                if ffi::lua_type(state, 2) <= ffi::LUA_TNIL {
-                    return Out::General;
-                }
+                let name = match param_text(state) {
+                    Ok(name) => name,
+                    Err(out) => return out,
+                };
                 let (recursive, mut looked) = (ffi::lua_toboolean(state, 3) != 0, 0);
-                let found = linstance::find_first_child_counting(engine, id, arg_bytes(state, 2), recursive, &mut looked);
+                let found = linstance::find_first_child_counting(engine, id, Some(&name), recursive, &mut looked);
                 linstance::charge_find(engine, looked, recursive);
                 push_optional_instance(state, api, engine, found)
             }
             Base::IsA => {
-                ffi::lua_pushboolean(state, is_a_bytes(engine, class, arg_bytes(state, 2)) as c_int);
+                let wanted = match param_text(state) {
+                    Ok(wanted) => wanted,
+                    Err(out) => return out,
+                };
+                ffi::lua_pushboolean(state, is_a_bytes(engine, class, Some(&wanted)) as c_int);
                 Out::Ret(1)
             }
             Base::GetChildren => {
@@ -1775,17 +1796,29 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 push_instance_list(state, api, &dom_state, &descendants)
             }
             Base::FindFirstChildOfClass => {
+                let wanted = match param_text(state) {
+                    Ok(wanted) => wanted,
+                    Err(out) => return out,
+                };
+                let wanted = Some(&*wanted);
                 materialize(engine, id);
-                let wanted = arg_bytes(state, 2);
                 let found = linstance::find_child_where(engine, id, |dom_state, child| class_name_is(engine, dom_state.dom.at(child).class, wanted));
                 push_optional_instance(state, api, engine, found)
             }
             Base::FindFirstChildWhichIsA => {
-                let found = find_first_child_which_is_a(engine, id, arg_bytes(state, 2), ffi::lua_toboolean(state, 3) != 0);
+                let wanted = match param_text(state) {
+                    Ok(wanted) => wanted,
+                    Err(out) => return out,
+                };
+                let found = find_first_child_which_is_a(engine, id, Some(&wanted), ffi::lua_toboolean(state, 3) != 0);
                 push_optional_instance(state, api, engine, found)
             }
             Base::FindFirstAncestor => {
-                let wanted = arg_bytes(state, 2);
+                let wanted = match param_text(state) {
+                    Ok(wanted) => wanted,
+                    Err(out) => return out,
+                };
+                let wanted = Some(&*wanted);
                 let found = {
                     let dom_state = engine.state.borrow();
                     let mut current = dom_state.dom.at(id).parent;
@@ -1800,7 +1833,11 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 push_optional_instance(state, api, engine, found)
             }
             Base::FindFirstAncestorOfClass => {
-                let wanted = arg_bytes(state, 2);
+                let wanted = match param_text(state) {
+                    Ok(wanted) => wanted,
+                    Err(out) => return out,
+                };
+                let wanted = Some(&*wanted);
                 let found = {
                     let dom_state = engine.state.borrow();
                     let mut current = dom_state.dom.at(id).parent;
@@ -1815,7 +1852,11 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 push_optional_instance(state, api, engine, found)
             }
             Base::FindFirstAncestorWhichIsA => {
-                let wanted = arg_bytes(state, 2);
+                let wanted = match param_text(state) {
+                    Ok(wanted) => wanted,
+                    Err(out) => return out,
+                };
+                let wanted = Some(&*wanted);
                 let found = {
                     let dom_state = engine.state.borrow();
                     let mut current = dom_state.dom.at(id).parent;
@@ -1863,14 +1904,9 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 Out::Ret(1)
             }
             Base::GetAttribute => {
-                let Some(name) = arg_bytes(state, 2) else {
-                    // (a number names the attribute of its text, as SetAttribute takes it: the behaviour)
-                    if ffi::lua_type(state, 2) == ffi::LUA_TNUMBER {
-                        return Out::General;
-                    }
-                    ffi::lua_pushnil(state);
-                    return Out::Ret(1);
-                };
+                // (a number names the attribute of its text, as SetAttribute takes it, and any other value but a string is cast or
+                // raises: the behaviour)
+                let Some(name) = arg_bytes(state, 2) else { return Out::General };
                 let dom_state = engine.state.borrow();
                 let value = dom_state.dom.at(id).attribute(name);
                 match value {
@@ -1931,7 +1967,11 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 }
             }
             Base::HasTag => {
-                let has = arg_bytes(state, 2).is_some_and(|tag| engine.state.borrow().dom.at(id).tags.iter().any(|t| t.as_bytes() == tag));
+                let tag = match param_text(state) {
+                    Ok(tag) => tag,
+                    Err(out) => return out,
+                };
+                let has = engine.state.borrow().dom.at(id).tags.iter().any(|t| t.as_bytes() == &*tag);
                 ffi::lua_pushboolean(state, has as c_int);
                 Out::Ret(1)
             }

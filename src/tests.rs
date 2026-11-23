@@ -7418,6 +7418,173 @@ fn string_parameters_cast_a_vector3_and_a_number_as_a_client_does() {
     assert_eq!(logged.join(" | "), written, "{output:?}");
 }
 
+/// An Instance method's string parameter reads any other value as a client reads it (measured, Studio 0.747, a playing client and
+/// a server: tools/parity/probes/string_parameter_methods.luau): a number as `%.20g` writes it, anything else as the engine
+/// writes its type ("true", "Instance", an EnumItem's name, "nil" for an Enum, "EventInstance" for a signal, "{}") after a
+/// warning with the script's stack, `argument #1 expects a string, but <type> was passed`, and the method then answers as for
+/// that text; nil raises "Argument 1 missing or nil"; WaitForChild, which yields, casts without the warning. ree matched no
+/// name but a string's: FindFirstChild(5) was nil, IsA(workspace) false, GetAttribute(nil) nil, and nothing warned.
+#[test]
+fn instance_methods_read_a_string_parameter_as_a_client_does() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Holder = Instance.new("Folder")
+        for _, Text in { "5", "0.10000000000000000555", "true", "Instance", "Camera", "nil", "EventInstance", "{}", "1e+20" } do
+            local Child = Instance.new("Folder")
+            Child.Name = Text
+            Child.Parent = Holder
+            pcall(Holder.SetAttribute, Holder, Text, Text)
+            Holder:AddTag(Text)
+        end
+        local Root = Instance.new("Camera")
+        Root.Parent = Holder
+        local function Name(Found)
+            return if Found then Found.Name else "none"
+        end
+        print("find", Name(Holder:FindFirstChild(5)), Name(Holder:FindFirstChild(0.1)), Name(Holder:FindFirstChild(1e20)), Name(Holder:FindFirstChild(true)),
+            Name(Holder:FindFirstChild(workspace)), Name(Holder:FindFirstChild(Enum.RenderPriority.Camera)), Name(Holder:FindFirstChild(Enum.Material)),
+            Name(Holder:FindFirstChild(workspace.Changed)), Name(Holder:FindFirstChild({})))
+        print("dot", Name(Holder.FindFirstChild(Holder, 5)), Name(Holder.FindFirstChild(Holder, true)))
+        print("wait", Name(Holder:WaitForChild(5)), Name(Holder:WaitForChild(true)), Name(Holder:WaitForChild(workspace)))
+        print("class", Root:IsA(workspace), Root:IsA(Enum.RenderPriority.Camera), Root:IsA(5), Name(Holder:FindFirstChildWhichIsA(workspace)),
+            Name(Holder:FindFirstChildOfClass(Enum.RenderPriority.Camera)), Name(Holder:FindFirstChildOfClass(true)))
+        print("attribute", Holder:GetAttribute(5), Holder:GetAttribute(0.1), Holder:GetAttribute(true))
+        print("tag", Holder:HasTag(5), Holder:HasTag(true), Holder:HasTag(workspace), Holder:HasTag(7))
+        print("missing", select(2, pcall(Holder.GetAttribute, Holder, nil)), select(2, pcall(Holder.IsA, Holder)),
+            select(2, pcall(function() return Root:IsA(nil) end)), select(2, pcall(function() return Holder:HasTag() end)),
+            select(2, pcall(Holder.FindFirstAncestor, Holder, nil)))
+        print("property", select(2, pcall(Holder.GetPropertyChangedSignal, Holder, 0.1)), select(2, pcall(Holder.GetPropertyChangedSignal, Holder, Vector3.new(0.1, 1 / 3, 2))))
+        local Calls = {}
+        function Calls.Nested()
+            return Holder:FindFirstAncestor(true)
+        end
+        Calls.Nested()
+        "#,
+    );
+    assert!(output.contains(&"print: find 5 0.10000000000000000555 1e+20 true Instance Camera nil EventInstance {}".to_string()), "{output:?}");
+    assert!(output.contains(&"print: dot 5 true".to_string()), "{output:?}");
+    assert!(output.contains(&"print: wait 5 true Instance".to_string()), "{output:?}");
+    assert!(output.contains(&"print: class true true false 5 Camera none".to_string()), "{output:?}");
+    assert!(output.contains(&"print: attribute 5 0.10000000000000000555 true".to_string()), "{output:?}");
+    assert!(output.contains(&"print: tag true true true false".to_string()), "{output:?}");
+    assert!(output.contains(&format!("print: missing{}", " Argument 1 missing or nil".repeat(5))), "{output:?}");
+    assert!(
+        output.contains(&"print: property 0.10000000000000000555 is not a valid property name. 0.100000001, 0.333333343, 2 is not a valid property name.".to_string()),
+        "{output:?}"
+    );
+    // a warning for each value that is neither a string nor a number, WaitForChild's none
+    let warned: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("warn: argument #1 expects a string, but ")).collect();
+    let kinds = "boolean Instance EnumItem Enum RBXScriptSignal table boolean Instance EnumItem Instance EnumItem boolean boolean boolean Instance Vector3 boolean";
+    assert_eq!(warned.iter().map(|line| line.trim_end_matches(" was passed")).collect::<Vec<_>>().join(" "), kinds, "{output:?}");
+    // with the stack of the script's call, as an engine warning carries it
+    let state = engine.state.borrow();
+    let nested = state.output.entries.iter().rev().find(|entry| entry.kind == "warn").expect("the nested call's warning");
+    let trace = nested.trace.as_deref().unwrap_or_default();
+    assert!(trace.starts_with("Test:30 function Nested\nTest:32\n"), "{trace:?}");
+}
+
+/// A service method's string parameter reads any other value as a client reads it (measured as above): GetService and FindService
+/// raise `'<text>' is not a valid Service name` for a number's, a boolean's, a table's or a datatype's text and answer nil for an
+/// Instance, an EnumItem, an Enum, a function or a signal unless its text names a service (Enum.CoreGuiType.Chat is the Chat
+/// service), after the warning; CollectionService's tag is its second argument (nil "Argument 3 missing or nil"); a method that
+/// yields (Players:GetUserIdFromNameAsync, StarterGui:GetCore) reads it without the warning. ree raised `'' is not a valid Service
+/// name` for every value that was no string and read no other value as its text.
+#[test]
+fn service_methods_read_a_string_parameter_as_a_client_does() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local function Try(Function, ...)
+            local Ok, Result = pcall(Function, ...)
+            if not Ok then
+                return Result
+            elseif typeof(Result) == "Instance" then
+                return Result.ClassName
+            end
+            return tostring(Result)
+        end
+        print("get", Try(game.GetService, game, 5), Try(game.GetService, game, true), Try(game.GetService, game, workspace), Try(game.GetService, game, Enum.Material.Plastic),
+            Try(game.GetService, game, Enum.CoreGuiType.Chat), Try(game.GetService, game, print), Try(game.GetService, game, nil), Try(game.GetService, game, "Lighting"))
+        print("find", Try(game.FindService, game, 0.1), Try(game.FindService, game, workspace.Changed), Try(game.FindService, game, Enum.CoreGuiType.Chat), Try(game.FindService, game))
+        local CollectionService = game:GetService("CollectionService")
+        local Part = Instance.new("Part")
+        CollectionService:AddTag(Part, 5)
+        CollectionService:AddTag(Part, true)
+        CollectionService:AddTag(Part)
+        local Tags = Part:GetTags()
+        table.sort(Tags)
+        print("tags", table.concat(Tags, ","), CollectionService:HasTag(Part, 5), Try(CollectionService.HasTag, CollectionService, Part, nil), #CollectionService:GetTagged(0.5))
+        local HttpService = game:GetService("HttpService")
+        print("http", HttpService:JSONDecode(true), #HttpService:JSONDecode({ 1, 2 }), HttpService:UrlEncode(5), HttpService:UrlEncode(workspace))
+        print("class", game:GetService("ReflectionService"):GetClass(workspace).Name, Try(game:GetService("ReflectionService").GetClass, game:GetService("ReflectionService"), nil))
+        print("render", Try(game:GetService("RunService").BindToRenderStep, game:GetService("RunService"), nil, 1, function() end))
+        print("yields", game:GetService("Players"):GetUserIdFromNameAsync(true), Try(game:GetService("Players").GetUserIdFromNameAsync, game:GetService("Players"), nil))
+        "#,
+    );
+    assert!(
+        output.contains(&"print: get '5' is not a valid Service name 'true' is not a valid Service name nil nil Chat nil Argument 1 missing or nil Lighting".to_string()),
+        "{output:?}"
+    );
+    assert!(output.contains(&"print: find '0.10000000000000000555' is not a valid Service name nil Chat Argument 1 missing or nil".to_string()), "{output:?}");
+    assert!(output.contains(&"print: tags 5,true true Argument 3 missing or nil 0".to_string()), "{output:?}");
+    assert!(output.contains(&"print: http true 0 5 Instance".to_string()), "{output:?}");
+    assert!(output.contains(&"print: class Instance Argument 2 missing or nil".to_string()), "{output:?}");
+    assert!(output.contains(&"print: render Argument 1 missing or nil".to_string()), "{output:?}");
+    assert!(output.contains(&"print: yields 1 Argument 1 missing or nil".to_string()), "{output:?}");
+    let warned: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("warn: ")).collect();
+    let expected = [
+        "#1 expects a string, but boolean", "#1 expects a string, but Instance", "#1 expects a string, but EnumItem", "#1 expects a string, but EnumItem",
+        "#1 expects a string, but function", "#1 expects a string, but RBXScriptSignal", "#1 expects a string, but EnumItem", "#2 expects a string, but boolean",
+        "#1 expects a string, but Instance", "#1 expects a string, but boolean", "#1 expects a string, but table", "#1 expects a string, but Instance",
+        "#1 expects a string, but Instance",
+    ];
+    assert_eq!(warned, expected.iter().map(|kind| format!("argument {kind} was passed")).collect::<Vec<_>>(), "{output:?}");
+}
+
+/// A number given to a base method's string parameter is read in the method's inline call (lua/raw.rs param_text), so it costs
+/// the work clock what its text does (convert::cast_number_text calls nothing in the VM): the cast adds no call of its own.
+#[test]
+fn a_number_given_to_a_string_parameter_costs_what_its_text_does() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Holder = Instance.new("Folder")
+        for Index = 1, 5 do
+            local Child = Instance.new("Folder")
+            Child.Name = tostring(Index)
+            Child.Parent = Holder
+        end
+        local function Cost(Value)
+            Holder:FindFirstChild(Value)
+            Holder:IsA(Value)
+            Holder:HasTag(Value)
+            local Start = os.clock()
+            for _ = 1, 100 do
+                Holder:FindFirstChild(Value)
+                Holder:IsA(Value)
+                Holder:HasTag(Value)
+            end
+            return os.clock() - Start
+        end
+        -- (each once first: the first loop of a frame pays what it is the first to touch)
+        Cost("5")
+        Cost(5)
+        local Text, Number = Cost("5"), Cost(5)
+        print("prices", math.abs(Text - Number) < 1e-9, Text > 1e-7, Holder:FindFirstChild(5) == Holder:FindFirstChild("5"))
+        "#,
+    );
+    assert!(output.contains(&"print: prices true true true".to_string()), "{output:?}");
+}
+
 /// A table past ree's guard on a copy by its slots alone raises the guard's error before its slots are walked: the slots are
 /// read at once (profiler::vm::table_slots) and every one counts against the guard, so the walk could only reach the same
 /// error. The old code walked and priced every slot first (5,000,000 empty slots charged 1 ms, at 0.2 ns a slot).
@@ -11363,6 +11530,8 @@ fn collision_groups_register_collide_rename_and_unregister_on_a_server() {
             "print: Collision group not found.",
             "print: The Collision group Id must be between 0 and 32",
             "print: GroupC Renamed  2",
+            // (RegisterCollisionGroup(true): a group name is a string parameter, which a server warns about before it casts it)
+            "warn: argument #1 expects a string, but boolean was passed",
             "print: true true false true",
             "print: 32 Cannot register more than 32 collision groups in this world. Cannot register more than 32 collision groups in this world.",
             "print: 6 6 Made -1 Cannot register more than 32 collision groups.",

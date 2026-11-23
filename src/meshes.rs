@@ -42,7 +42,7 @@ use crate::{
     Engine, InstanceId, NameId, ScriptError, State, files,
     instance as core,
     lua::{Args, Flow, Ret, convert, instance_value, none, values},
-    services::{Behaviors, method},
+    services::{Behaviors, FIRST, method, strings},
     value::{ContentValue, Str, Value},
 };
 
@@ -2132,11 +2132,12 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         })
     }));
 
-    add("GetBoneByName", method(|_, engine, id, args| {
+    // (the name read as a client reads a string parameter: services::strings)
+    add("GetBoneByName", strings(FIRST, method(|_, engine, id, args| {
         let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
         let found = with_mesh(engine, id, false, |m| Ok(m.bones.live().find(|(_, b)| b.name == name).map(|(i, _)| m.bones.id(BONE, i))))?;
         Ok(values([LuaValue::Number(found.unwrap_or(0.0))]))
-    }));
+    })));
     add("RemoveBone", method(|lua, engine, id, args| {
         let b = int64_arg(lua, engine, args, 1)?;
         refuse_fixed(engine, id)?;

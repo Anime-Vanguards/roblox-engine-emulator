@@ -263,6 +263,45 @@ pub unsafe fn script_position_on(state: *mut mlua::ffi::lua_State) -> Option<Str
     None
 }
 
+/// The running thread's stack as `debug.traceback()` writes it in the script that called the engine (`<chunk>:<line>[ function
+/// <name>]` a Luau frame, C frames left out), read in Rust so that it calls nothing in the VM: the stack an engine warning about
+/// the script's call carries (convert::string_param; lib.rs client_error_text keeps the script's own frames).
+pub fn script_traceback(lua: &Lua) -> String {
+    // SAFETY: the running thread's state, valid while the callback runs
+    unsafe { script_traceback_on(lua.current_thread().state()) }
+}
+
+/// [`script_traceback`] on the thread `state` (a C metamethod's own: lua/raw.rs).
+///
+/// # Safety
+/// `state` must be a live thread of the running VM.
+pub unsafe fn script_traceback_on(state: *mut mlua::ffi::lua_State) -> String {
+    use mlua::ffi;
+    let mut trace = String::new();
+    unsafe {
+        let mut debug: ffi::lua_Debug = std::mem::zeroed();
+        let mut level = 0;
+        while level < 128 && ffi::lua_getinfo(state, level, c"sln".as_ptr(), &mut debug) != 0 {
+            level += 1;
+            if debug.what.is_null() || std::ffi::CStr::from_ptr(debug.what).to_bytes() == b"C" {
+                continue;
+            }
+            if !debug.source.is_null() && !debug.short_src.is_null() {
+                trace.push_str(&std::ffi::CStr::from_ptr(debug.short_src).to_string_lossy());
+            }
+            if debug.currentline > 0 {
+                trace.push_str(&format!(":{}", debug.currentline));
+            }
+            if !debug.name.is_null() {
+                trace.push_str(" function ");
+                trace.push_str(&std::ffi::CStr::from_ptr(debug.name).to_string_lossy());
+            }
+            trace.push('\n');
+        }
+    }
+    trace
+}
+
 /// The innermost script `Instance` on `state`'s call stack (read from each non-engine Luau frame's `fenv.script`),
 /// for `ScriptContext.Error`'s third argument.
 ///

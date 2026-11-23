@@ -238,10 +238,21 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // SharedTableRegistry's name for a buffer: its contents, charged as a string the script built (shared_table.rs `buffer_name`)
     let e = engine.clone();
     r.set("BufferRegistryName", lua.create_function(move |lua, held: LuaValue| super::shared_table::buffer_name(lua, &e, &held))?)?;
-    // A value as a method's string parameter casts it (convert.rs `cast_text`): SharedTableRegistry's names and LogService's
-    // messages write a number and a Vector3 through it
+    // A value given to a method's string parameter as a client reads it (convert.rs `string_param`: warned about with the script's
+    // stack and cast to text), and the warning alone (`warn_string_param`): the string parameters of the service stubs
     let e = engine.clone();
-    r.set("CastText", lua.create_function(move |lua, value: LuaValue| lua.create_string(super::convert::cast_text(lua, &e, &value)?))?)?;
+    r.set(
+        "StringParam",
+        lua.create_function(move |lua, (value, argument): (LuaValue, usize)| lua.create_string(super::convert::string_param(lua, &e, &value, argument, true)?))?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "WarnStringParam",
+        lua.create_function(move |lua, (value, argument): (LuaValue, usize)| {
+            super::convert::warn_string_param(lua, &e, &value, argument);
+            Ok(())
+        })?,
+    )?;
     // Model:PivotTo / ScaleTo: many part moves as one step (world::joints batches)
     let e = engine.clone();
     r.set(
@@ -302,15 +313,6 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             };
             let context = context.map(|table| crate::value::Value::Lua(Box::new(LuaValue::Table(table))));
             e.output_with_context(kind, message.to_string_lossy(), None, context);
-            Ok(())
-        })?,
-    )?;
-    // an engine warning about the calling script's arguments, with its stack (a client's MessageOut text carries the stack lines)
-    let e = engine.clone();
-    r.set(
-        "LogWarn",
-        lua.create_function(move |_, (message, trace): (LuaString, Option<LuaString>)| {
-            e.output("warn", message.to_string_lossy(), trace.map(|trace| trace.to_string_lossy()));
             Ok(())
         })?,
     )?;

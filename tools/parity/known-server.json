@@ -271,6 +271,12 @@
 			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
 		}
 	],
+	"string_parameter_methods": [
+		{
+			"line": "CS.HasTag none ok",
+			"why": "CollectionService:HasTag given an instance and no tag at all: a client warns as if the instance were the tag and answered true here, false in the probe's two later such calls (tagged or not); ree answers false"
+		}
+	],
 	"table_breadth": [
 		{
 			"line": "json fan 10000x1000: ok 20020001",

@@ -16,7 +16,7 @@ use crate::{
     instance::{self as core, Member},
     project,
     scheduler::{self, JobTarget, TimerKind},
-    services::{Behaviors, GetterFn, MethodFn, SetterFn},
+    services::{Behaviors, GetterFn, MethodFn, SetterFn, StringParam, strings},
     signal::{Handler, SignalId},
     value::{Str, Value},
 };
@@ -1104,6 +1104,13 @@ fn method(f: impl Fn(&Lua, &Rc<Engine>, InstanceId, &Args) -> Ret + 'static) -> 
     Rc::new(f)
 }
 
+/// The base methods' one string parameter, the first, read as a client reads it (services::strings; measured in a playing client
+/// and a server, Studio 0.747: tools/parity/probes/string_parameter_methods.luau): nil raises "Argument 1 missing or nil", a number
+/// is its `%.20g` text, anything else its text after the warning, and the method then answers as for that string.
+const NAME: &[StringParam] = &[StringParam::at(1)];
+/// [`NAME`] of WaitForChild, which yields: a client casts its name without the warning.
+const QUIET_NAME: &[StringParam] = &[StringParam::quiet(1)];
+
 fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     let base = reflection.class_id("Instance").expect("Instance class");
 
@@ -1237,34 +1244,31 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         }
         instance_list(lua, engine, &descendants)
     }));
-    let find_first_child_method = method(|lua, engine, id, args| {
-        // A missing name raises (measured in a playing client, Studio 0.744, tools/parity/probes/instances.luau; no
-        // position): FindFirstChild(nil) is a script's bug in Roblox, not a miss
-        if args.get(1).is_nil() {
-            return raise("Argument 1 missing or nil");
-        }
+    // A missing name raises (measured in a playing client, Studio 0.744, tools/parity/probes/instances.luau; no position):
+    // FindFirstChild(nil) is a script's bug in Roblox, not a miss
+    let find_first_child_method = strings(NAME, method(|lua, engine, id, args| {
         let name = name_arg(args.get(1));
         let (recursive, mut looked) = (args.boolean(2), 0);
         let found = find_first_child_counting(engine, id, name.as_ref().map(|s| s.as_bytes()).as_deref(), recursive, &mut looked);
         charge_find(engine, looked, recursive);
         optional_instance(lua, engine, found)
-    });
+    }));
     behaviors.add_method(base, K::FindFirstChild as NameId, find_first_child_method.clone());
     behaviors.add_method(base, K::findFirstChild as NameId, find_first_child_method);
-    behaviors.add_method(base, K::FindFirstChildOfClass as NameId, method(|lua, engine, id, args| {
+    behaviors.add_method(base, K::FindFirstChildOfClass as NameId, strings(NAME, method(|lua, engine, id, args| {
         materialize(engine, id);
         let wanted = args.string(1).map(|s| s.to_string_lossy());
         let found = find_child_where(engine, id, |state, child| wanted.as_deref() == Some(&*engine.reflection.class(state.dom.at(child).class).name));
         optional_instance(lua, engine, found)
-    }));
-    behaviors.add_method(base, K::FindFirstChildWhichIsA as NameId, method(|lua, engine, id, args| {
+    })));
+    behaviors.add_method(base, K::FindFirstChildWhichIsA as NameId, strings(NAME, method(|lua, engine, id, args| {
         let name = name_arg(args.get(1));
         let found = find_first_child_which_is_a(engine, id, name.as_ref().map(|s| s.as_bytes()).as_deref(), args.boolean(2));
         optional_instance(lua, engine, found)
-    }));
-    // (not enabled in Roblox: measured likewise, `FindFirstDescendant is not enabled`)
-    behaviors.add_method(base, K::FindFirstDescendant as NameId, method(|_, _, _, _| raise("FindFirstDescendant is not enabled")));
-    behaviors.add_method(base, K::FindFirstAncestor as NameId, method(|lua, engine, id, args| {
+    })));
+    // (not enabled in Roblox: measured likewise, `FindFirstDescendant is not enabled`, once its name is read)
+    behaviors.add_method(base, K::FindFirstDescendant as NameId, strings(NAME, method(|_, _, _, _| raise("FindFirstDescendant is not enabled"))));
+    behaviors.add_method(base, K::FindFirstAncestor as NameId, strings(NAME, method(|lua, engine, id, args| {
         let found = {
             let state = engine.state.borrow();
             let mut current = state.dom.at(id).parent;
@@ -1279,8 +1283,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             current
         };
         optional_instance(lua, engine, found)
-    }));
-    behaviors.add_method(base, K::FindFirstAncestorOfClass as NameId, method(|lua, engine, id, args| {
+    })));
+    behaviors.add_method(base, K::FindFirstAncestorOfClass as NameId, strings(NAME, method(|lua, engine, id, args| {
         let found = {
             let state = engine.state.borrow();
             let wanted = args.string(1).map(|s| s.to_string_lossy());
@@ -1294,8 +1298,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             current
         };
         optional_instance(lua, engine, found)
-    }));
-    behaviors.add_method(base, K::FindFirstAncestorWhichIsA as NameId, method(|lua, engine, id, args| {
+    })));
+    behaviors.add_method(base, K::FindFirstAncestorWhichIsA as NameId, strings(NAME, method(|lua, engine, id, args| {
         let found = {
             let state = engine.state.borrow();
             let mut current = state.dom.at(id).parent;
@@ -1310,13 +1314,13 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             current
         };
         optional_instance(lua, engine, found)
-    }));
-    let is_a = method(|_, engine, id, args| {
+    })));
+    let is_a = strings(NAME, method(|_, engine, id, args| {
         let class = engine.state.borrow().dom.at(id).class;
         let wanted = name_arg(args.get(1));
         let wanted = wanted.as_ref().map(|s| s.as_bytes());
         Ok(values([LuaValue::Boolean(class_is_a(engine, class, wanted.as_deref()))]))
-    });
+    }));
     behaviors.add_method(base, K::IsA as NameId, is_a.clone());
     behaviors.add_method(base, K::isA as NameId, is_a.clone());
     // Roblox's Object, Instance's superclass and EditableImage's and EditableMesh's, has ClassName
@@ -1387,8 +1391,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         }
         Ok(none())
     }));
-    behaviors.add_method(base, K::WaitForChild as NameId, method(wait_for_child));
-    behaviors.add_method(base, K::GetPropertyChangedSignal as NameId, method(|lua, engine, id, args| {
+    behaviors.add_method(base, K::WaitForChild as NameId, strings(QUIET_NAME, method(wait_for_child)));
+    behaviors.add_method(base, K::GetPropertyChangedSignal as NameId, strings(NAME, method(|lua, engine, id, args| {
         let class = engine.state.borrow().dom.at(id).class;
         let name = args.string(1).and_then(|s| engine.reflection.name_id_bytes(&s.as_bytes()));
         let member = name.map_or(Member::None, |name| engine.resolve_member(class, name));
@@ -1397,21 +1401,17 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         };
         let signal = core::property_signal(&mut engine.state.borrow_mut(), &engine.reflection, id, name);
         Ok(values([signal_value(lua, engine, signal)?]))
-    }));
-    behaviors.add_method(base, K::GetAttribute as NameId, method(|lua, engine, id, args| {
-        // (a number names the attribute of its text, as SetAttribute takes it: measured likewise, GetAttribute(5) reads
-        // what SetAttribute(5, 1) set)
-        let name = match args.get(1) {
-            LuaValue::Number(_) | LuaValue::Integer(_) => lua.coerce_string(args.get(1).clone())?.map(|s| Str::new(&s.as_bytes())),
-            _ => string_arg(args, 1),
-        };
-        let Some(name) = name else { return Ok(values([LuaValue::Nil])) };
+    })));
+    // (a number names the attribute of its text, as SetAttribute takes it: measured likewise, GetAttribute(5) reads what
+    // SetAttribute(5, 1) set)
+    behaviors.add_method(base, K::GetAttribute as NameId, strings(NAME, method(|lua, engine, id, args| {
+        let Some(name) = string_arg(args, 1) else { return Ok(values([LuaValue::Nil])) };
         let value = engine.state.borrow().dom.at(id).attribute(name.as_bytes()).cloned();
         Ok(values([match value {
             Some(value) => attribute_to_lua(lua, engine, &value)?,
             None => LuaValue::Nil,
         }]))
-    }));
+    })));
     behaviors.add_method(base, K::GetAttributes as NameId, method(|lua, engine, id, _| {
         let attributes = engine.state.borrow().dom.at(id).attributes.as_slice().to_vec();
         let listed = attributes.len() as f64 * crate::cost::ATTRIBUTE_LISTED;
@@ -1423,7 +1423,9 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         }
         Ok(values([LuaValue::Table(table)]))
     }));
-    behaviors.add_method(base, K::SetAttribute as NameId, method(|lua, engine, id, args| {
+    // (the name is read before the value is checked: a boolean's warning comes before "Function is not a supported attribute
+    // type", as a client casts its arguments before the method runs)
+    behaviors.add_method(base, K::SetAttribute as NameId, strings(NAME, method(|_, engine, id, args| {
         let value = args.get(2);
         // (an Instance, or the InstanceHandle a read gave, is kept by reference: Studio 0.744 takes both)
         let handle = super::types::instance_handle_of(value);
@@ -1443,10 +1445,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
                 return raise(format!("{kind} is not a supported attribute type"));
             }
         }
-        let name = match args.get(1) {
-            LuaValue::String(s) => Str::new(&s.as_bytes()),
-            other => Str::from(lua.coerce_string(other.clone())?.map(|s| s.to_string_lossy()).unwrap_or_default()),
-        };
+        let name = string_arg(args, 1).unwrap_or_default();
         if let Some(message) = attribute_name_error(name.as_bytes()) {
             return raise(message);
         }
@@ -1456,28 +1455,28 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         };
         set_attribute(engine, id, name, converted);
         Ok(none())
-    }));
-    behaviors.add_method(base, K::GetAttributeChangedSignal as NameId, method(|lua, engine, id, args| {
+    })));
+    behaviors.add_method(base, K::GetAttributeChangedSignal as NameId, strings(NAME, method(|lua, engine, id, args| {
         let name = string_arg(args, 1).unwrap_or_default();
         let signal = core::attribute_signal(&mut engine.state.borrow_mut(), id, &name);
         Ok(values([signal_value(lua, engine, signal)?]))
-    }));
-    behaviors.add_method(base, K::AddTag as NameId, method(|_, engine, id, args| {
+    })));
+    behaviors.add_method(base, K::AddTag as NameId, strings(NAME, method(|_, engine, id, args| {
         if let Some(tag) = string_arg(args, 1) {
             core::add_tag(&mut engine.state.borrow_mut(), id, tag);
         }
         Ok(none())
-    }));
-    behaviors.add_method(base, K::RemoveTag as NameId, method(|_, engine, id, args| {
+    })));
+    behaviors.add_method(base, K::RemoveTag as NameId, strings(NAME, method(|_, engine, id, args| {
         if let Some(tag) = string_arg(args, 1) {
             core::remove_tag(&mut engine.state.borrow_mut(), id, &tag);
         }
         Ok(none())
-    }));
-    behaviors.add_method(base, K::HasTag as NameId, method(|_, engine, id, args| {
+    })));
+    behaviors.add_method(base, K::HasTag as NameId, strings(NAME, method(|_, engine, id, args| {
         let has = string_arg(args, 1).is_some_and(|tag| engine.state.borrow().dom.at(id).tags.contains(&tag));
         Ok(values([LuaValue::Boolean(has)]))
-    }));
+    })));
     behaviors.add_method(base, K::GetTags as NameId, method(|lua, engine, id, _| {
         let tags = engine.state.borrow().dom.at(id).tags.clone();
         let table = lua.create_table()?;
@@ -1490,12 +1489,12 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         let actor = super::actors::actor_of(engine, id);
         optional_instance(lua, engine, actor)
     }));
-    behaviors.add_method(base, K::IsPropertyModified as NameId, method(|_, engine, id, args| {
+    behaviors.add_method(base, K::IsPropertyModified as NameId, strings(NAME, method(|_, engine, id, args| {
         let name = args.string(1).and_then(|s| engine.reflection.name_id_bytes(&s.as_bytes()));
         let modified = name.is_some_and(|name| engine.state.borrow().dom.at(id).stored(name).is_some());
         Ok(values([LuaValue::Boolean(modified)]))
-    }));
-    behaviors.add_method(base, K::ResetPropertyToDefault as NameId, method(|_, engine, id, args| {
+    })));
+    behaviors.add_method(base, K::ResetPropertyToDefault as NameId, strings(NAME, method(|_, engine, id, args| {
         let Some(name) = args.string(1).and_then(|s| engine.reflection.name_id_bytes(&s.as_bytes())) else {
             return Ok(none());
         };
@@ -1509,19 +1508,19 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             core::notify_changed(&mut state, &engine.reflection, &hooks, id, name, None);
         }
         Ok(none())
-    }));
+    })));
     behaviors.add_method(base, K::GetDebugId as NameId, method(|lua, engine, id, _| {
         let serial = engine.state.borrow().dom.at(id).serial;
         Ok(values([LuaValue::String(lua.create_string(format!("RUR_{serial}"))?)]))
     }));
-    behaviors.add_method(base, K::GetStyled as NameId, method(|lua, engine, id, args| {
+    behaviors.add_method(base, K::GetStyled as NameId, strings(NAME, method(|lua, engine, id, args| {
         let name = args.string(1).and_then(|s| engine.reflection.name_id_bytes(&s.as_bytes()));
         let value = name.and_then(|name| engine.state.borrow().dom.raw_get(id, name).cloned());
         Ok(values([match value {
             Some(value) => convert::to_lua(lua, engine, &value)?,
             None => LuaValue::Nil,
         }]))
-    }));
+    })));
 }
 
 /// A deferred resumption of `thread` with `args` (task.defer, module waiters).

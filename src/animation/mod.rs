@@ -46,7 +46,7 @@ use crate::{
     ClassId, Engine, InstanceId, NameId, Reflection, ScriptError, State,
     instance as core,
     lua::{Args, Flow, instance_value, none, signal_value, values},
-    services::{Behaviors, method},
+    services::{Behaviors, FIRST, method, strings},
     signal::SignalId,
     value::{Str, Value},
 };
@@ -671,7 +671,8 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         Ok(none())
     }));
     let s = shared.clone();
-    add(behaviors, "AnimationTrack", "GetMarkerReachedSignal", method(move |lua, engine, _, args| {
+    // (a marker's and a keyframe's name read as a client reads a string parameter: services::strings)
+    add(behaviors, "AnimationTrack", "GetMarkerReachedSignal", strings(FIRST, method(move |lua, engine, _, args| {
         let id = track_of(args)?;
         let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
         let existing = s.borrow().tracks.get(&id).and_then(|track| track.markers.iter().find(|(n, _)| *n == name).map(|(_, signal)| *signal));
@@ -686,9 +687,9 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             }
         };
         Ok(values([signal_value(lua, engine, signal)?]))
-    }));
+    })));
     let s = shared.clone();
-    add(behaviors, "AnimationTrack", "GetTimeOfKeyframe", method(move |_, _, _, args| {
+    add(behaviors, "AnimationTrack", "GetTimeOfKeyframe", strings(FIRST, method(move |_, _, _, args| {
         let id = track_of(args)?;
         let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
         let clip = s.borrow().tracks.get(&id).and_then(|track| track.clip.clone());
@@ -705,7 +706,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             Some(time) => Ok(values([LuaValue::Number(time as f64)])),
             None => Err(Flow::Error(ScriptError::plain("Could not find a keyframe by that name!"))),
         }
-    }));
+    })));
 
     // Registering a clip of this run: a temporary id for it (GetKeyframeSequenceAsync and GetAnimationClipAsync yield: Luau
     // stubs, lua/services.luau, over source::sequence and source::animation_clip). Measured in Studio 0.747:

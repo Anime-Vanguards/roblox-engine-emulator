@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use mlua::prelude::*;
 
-use super::{Behaviors, method, values};
+use super::{Behaviors, StringParam, method, strings, values};
 use crate::{
     ClassId, Engine,
     lua::{Args, Flow, raise, typeof_value},
@@ -173,19 +173,16 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         }));
     }
     if let Some(n) = reflection.name_id("GetClass") {
-        behaviors.add_method(service, n, method(|lua, engine, _, args| {
-            // (measured: nil "Argument 2 missing or nil"; a number is looked up as its text; another value finds no class)
-            let name = match args.get(1) {
-                LuaValue::Nil => return raise("Argument 2 missing or nil"),
-                LuaValue::String(name) => Some(name.to_string_lossy()),
-                LuaValue::Number(_) | LuaValue::Integer(_) => lua.coerce_string(args.get(1).clone())?.map(|text| text.to_string_lossy()),
-                _ => None,
-            };
+        // (measured: nil "Argument 2 missing or nil"; any other value is looked up as its text, as a client reads a string parameter:
+        // a number's `%.20g`, an Instance "Instance", an EnumItem its name; services::strings)
+        const CLASS_NAME: &[StringParam] = &[StringParam { missing: None, ..StringParam::at(1) }];
+        behaviors.add_method(service, n, strings(CLASS_NAME, method(|lua, engine, _, args| {
+            let Some(name) = args.string(1).map(|name| name.to_string_lossy()) else { return raise("Argument 2 missing or nil") };
             let filter = filter(lua, engine, args, 2)?;
-            let class = name.and_then(|name| engine.reflection.class_id(&name)).filter(|&class| matches(engine, class, &filter));
+            let class = engine.reflection.class_id(&name).filter(|&class| matches(engine, class, &filter));
             let Some(class) = class else { return Ok(values([LuaValue::Nil])) };
             charge(engine, 1, 0, filter.display);
             Ok(values([LuaValue::Table(entry(lua, engine, class, filter.display)?)]))
-        }));
+        })));
     }
 }

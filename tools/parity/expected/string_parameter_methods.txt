@@ -1,0 +1,651 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+flushes true
+FindFirstChild int ok Folder '5' 
+FindFirstChild tenth ok Folder '0.10000000000000000555' 
+FindFirstChild negzero ok Folder '-0' 
+FindFirstChild subnormal ok Folder '9.9999999999999694493e-311' 
+FindFirstChild nan ok Folder 'NAN' 
+FindFirstChild inf ok Folder 'INF' 
+FindFirstChild neginf ok Folder '-INF' 
+FindFirstChild 2^63 ok Folder '9223372036854775808' 
+FindFirstChild 1e20 ok Folder '1e+20' 
+FindFirstChild true ok Folder 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild false ok Folder 'false' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild nil error Argument 1 missing or nil 
+FindFirstChild none error Argument 1 missing or nil 
+FindFirstChild table ok Folder '{}' [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild instance ok Folder 'Instance' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild vector ok Folder '0.100000001, 0.333333343, 2' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild vector-nan ok Folder 'NAN, INF, -INF' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild enumitem ok Folder 'Camera' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild enum ok Folder 'nil' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild enums ok Folder 'nil' [argument #1 expects a string, but Enums was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild cfunction ok Folder 'function' [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild function ok Folder 'function' [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild thread ok Folder 'nil' [argument #1 expects a string, but thread was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild newproxy ok Folder 'nil' [argument #1 expects a string, but userdata was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild signal ok Folder 'EventInstance' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild buffer ok Folder 'buffer { Size = 2 }' [argument #1 expects a string, but buffer was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild cframe ok Folder '1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1' [argument #1 expects a string, but CFrame was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild color3 ok Folder '0.1, 0.2, 0.3' [argument #1 expects a string, but Color3 was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild udim2 ok Folder '{1, 2}, {3, 4}' [argument #1 expects a string, but UDim2 was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild vector2 ok Folder '0.100000001, 2' [argument #1 expects a string, but Vector2 was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+FindFirstChild brickcolor ok Folder 'Bright red' [argument #1 expects a string, but BrickColor was passed / Stack Begin / Script '<probe>', Line @201 / Script '<probe>', Line @136 / Stack End]
+findFirstChild int ok Folder '5' 
+findFirstChild tenth ok Folder '0.10000000000000000555' 
+findFirstChild true ok Folder 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @204 / Script '<probe>', Line @136 / Stack End]
+findFirstChild nil error Argument 1 missing or nil 
+findFirstChild none error Argument 1 missing or nil 
+findFirstChild table ok Folder '{}' [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @204 / Script '<probe>', Line @136 / Stack End]
+findFirstChild instance ok Folder 'Instance' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @204 / Script '<probe>', Line @136 / Stack End]
+findFirstChild vector ok Folder '0.100000001, 0.333333343, 2' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @204 / Script '<probe>', Line @136 / Stack End]
+findFirstChild enumitem ok Folder 'Camera' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @204 / Script '<probe>', Line @136 / Stack End]
+findFirstChild enum ok Folder 'nil' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @204 / Script '<probe>', Line @136 / Stack End]
+findFirstChild signal ok Folder 'EventInstance' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @204 / Script '<probe>', Line @136 / Stack End]
+WaitForChild int ok Folder '5' 
+WaitForChild tenth ok Folder '0.10000000000000000555' 
+WaitForChild true ok Folder 'true' 
+WaitForChild nil error Argument 1 missing or nil 
+WaitForChild none error Argument 1 missing or nil 
+WaitForChild table ok Folder '{}' 
+WaitForChild instance ok Folder 'Instance' 
+WaitForChild vector ok Folder '0.100000001, 0.333333343, 2' 
+WaitForChild enumitem ok Folder 'Camera' 
+WaitForChild enum ok Folder 'nil' 
+WaitForChild signal ok Folder 'EventInstance' 
+FindFirstAncestor int ok Folder '5' 
+FindFirstAncestor tenth ok Folder '0.10000000000000000555' 
+FindFirstAncestor true ok Folder 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @213 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestor nil error Argument 1 missing or nil 
+FindFirstAncestor none error Argument 1 missing or nil 
+FindFirstAncestor table ok Folder '{}' [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @213 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestor instance ok Folder 'Instance' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @213 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestor vector ok Folder '0.100000001, 0.333333343, 2' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @213 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestor enumitem ok Folder 'Camera' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @213 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestor enum ok Folder 'nil' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @213 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestor signal ok Folder 'EventInstance' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @213 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorOfClass int ok nil 
+FindFirstAncestorOfClass tenth ok nil 
+FindFirstAncestorOfClass true ok nil [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @216 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorOfClass nil error Argument 1 missing or nil 
+FindFirstAncestorOfClass none error Argument 1 missing or nil 
+FindFirstAncestorOfClass table ok nil [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @216 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorOfClass instance ok nil [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @216 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorOfClass vector ok nil [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @216 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorOfClass enumitem ok Camera 'Root' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @216 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorOfClass enum ok nil [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @216 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorOfClass signal ok nil [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @216 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorWhichIsA int ok nil 
+FindFirstAncestorWhichIsA tenth ok nil 
+FindFirstAncestorWhichIsA true ok nil [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @219 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorWhichIsA nil error Argument 1 missing or nil 
+FindFirstAncestorWhichIsA none error Argument 1 missing or nil 
+FindFirstAncestorWhichIsA table ok nil [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @219 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorWhichIsA instance ok Folder 'Bright red' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @219 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorWhichIsA vector ok nil [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @219 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorWhichIsA enumitem ok Camera 'Root' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @219 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorWhichIsA enum ok nil [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @219 / Script '<probe>', Line @136 / Stack End]
+FindFirstAncestorWhichIsA signal ok nil [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @219 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildOfClass int ok nil 
+FindFirstChildOfClass tenth ok nil 
+FindFirstChildOfClass true ok nil [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @222 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildOfClass nil error Argument 1 missing or nil 
+FindFirstChildOfClass none error Argument 1 missing or nil 
+FindFirstChildOfClass table ok nil [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @222 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildOfClass instance ok nil [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @222 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildOfClass vector ok nil [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @222 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildOfClass enumitem ok Camera 'Root' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @222 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildOfClass enum ok nil [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @222 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildOfClass signal ok nil [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @222 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildWhichIsA int ok nil 
+FindFirstChildWhichIsA tenth ok nil 
+FindFirstChildWhichIsA true ok nil [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @225 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildWhichIsA nil error Argument 1 missing or nil 
+FindFirstChildWhichIsA none error Argument 1 missing or nil 
+FindFirstChildWhichIsA table ok nil [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @225 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildWhichIsA instance ok Camera 'Root' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @225 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildWhichIsA vector ok nil [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @225 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildWhichIsA enumitem ok Camera 'Root' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @225 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildWhichIsA enum ok nil [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @225 / Script '<probe>', Line @136 / Stack End]
+FindFirstChildWhichIsA signal ok nil [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @225 / Script '<probe>', Line @136 / Stack End]
+IsA int ok false 
+IsA tenth ok false 
+IsA true ok false [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @228 / Script '<probe>', Line @136 / Stack End]
+IsA nil error Argument 1 missing or nil 
+IsA none error Argument 1 missing or nil 
+IsA table ok false [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @228 / Script '<probe>', Line @136 / Stack End]
+IsA instance ok true [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @228 / Script '<probe>', Line @136 / Stack End]
+IsA vector ok false [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @228 / Script '<probe>', Line @136 / Stack End]
+IsA enumitem ok true [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @228 / Script '<probe>', Line @136 / Stack End]
+IsA enum ok false [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @228 / Script '<probe>', Line @136 / Stack End]
+IsA signal ok false [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @228 / Script '<probe>', Line @136 / Stack End]
+isA int ok false 
+isA tenth ok false 
+isA true ok false [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @231 / Script '<probe>', Line @136 / Stack End]
+isA nil error Argument 1 missing or nil 
+isA none error Argument 1 missing or nil 
+isA table ok false [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @231 / Script '<probe>', Line @136 / Stack End]
+isA instance ok true [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @231 / Script '<probe>', Line @136 / Stack End]
+isA vector ok false [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @231 / Script '<probe>', Line @136 / Stack End]
+isA enumitem ok true [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @231 / Script '<probe>', Line @136 / Stack End]
+isA enum ok false [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @231 / Script '<probe>', Line @136 / Stack End]
+isA signal ok false [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @231 / Script '<probe>', Line @136 / Stack End]
+FindFirstDescendant int error FindFirstDescendant is not enabled 
+FindFirstDescendant tenth error FindFirstDescendant is not enabled 
+FindFirstDescendant true error FindFirstDescendant is not enabled [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @234 / Script '<probe>', Line @136 / Stack End]
+FindFirstDescendant nil error Argument 1 missing or nil 
+FindFirstDescendant none error Argument 1 missing or nil 
+FindFirstDescendant table error FindFirstDescendant is not enabled [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @234 / Script '<probe>', Line @136 / Stack End]
+FindFirstDescendant instance error FindFirstDescendant is not enabled [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @234 / Script '<probe>', Line @136 / Stack End]
+FindFirstDescendant vector error FindFirstDescendant is not enabled [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @234 / Script '<probe>', Line @136 / Stack End]
+FindFirstDescendant enumitem error FindFirstDescendant is not enabled [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @234 / Script '<probe>', Line @136 / Stack End]
+FindFirstDescendant enum error FindFirstDescendant is not enabled [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @234 / Script '<probe>', Line @136 / Stack End]
+FindFirstDescendant signal error FindFirstDescendant is not enabled [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @234 / Script '<probe>', Line @136 / Stack End]
+GetAttribute int ok '5' 
+GetAttribute tenth ok '0.10000000000000000555' 
+GetAttribute negzero ok '-0' 
+GetAttribute subnormal ok '9.9999999999999694493e-311' 
+GetAttribute nan ok 'NAN' 
+GetAttribute inf ok 'INF' 
+GetAttribute neginf ok '-INF' 
+GetAttribute 2^63 ok '9223372036854775808' 
+GetAttribute 1e20 ok nil 
+GetAttribute true ok 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute false ok 'false' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute nil error Argument 1 missing or nil 
+GetAttribute none error Argument 1 missing or nil 
+GetAttribute table ok nil [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute instance ok 'Instance' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute vector ok nil [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute vector-nan ok nil [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute enumitem ok 'Camera' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute enum ok 'nil' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute enums ok 'nil' [argument #1 expects a string, but Enums was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute cfunction ok 'function' [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute function ok 'function' [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute thread ok 'nil' [argument #1 expects a string, but thread was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute newproxy ok 'nil' [argument #1 expects a string, but userdata was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute signal ok 'EventInstance' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute buffer ok nil [argument #1 expects a string, but buffer was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute cframe ok nil [argument #1 expects a string, but CFrame was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute color3 ok nil [argument #1 expects a string, but Color3 was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute udim2 ok nil [argument #1 expects a string, but UDim2 was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute vector2 ok nil [argument #1 expects a string, but Vector2 was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+GetAttribute brickcolor ok nil [argument #1 expects a string, but BrickColor was passed / Stack Begin / Script '<probe>', Line @237 / Script '<probe>', Line @136 / Stack End]
+SetAttribute int ok  | attributes '5' 
+SetAttribute tenth ok  | attributes '0.10000000000000000555' 
+SetAttribute true ok  | attributes 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @240 / Script '<probe>', Line @136 / Stack End]
+SetAttribute nil error Argument 1 missing or nil | attributes  
+SetAttribute none error Argument 1 missing or nil | attributes  
+SetAttribute table error Attribute name contains illegal character '{' ("{}") | attributes  [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @240 / Script '<probe>', Line @136 / Stack End]
+SetAttribute instance ok  | attributes 'Instance' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @240 / Script '<probe>', Line @136 / Stack End]
+SetAttribute vector error Attribute name contains illegal character ',' ("0.100000001, 0.333333343, 2") | attributes  [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @240 / Script '<probe>', Line @136 / Stack End]
+SetAttribute enumitem ok  | attributes 'Camera' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @240 / Script '<probe>', Line @136 / Stack End]
+SetAttribute enum ok  | attributes 'nil' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @240 / Script '<probe>', Line @136 / Stack End]
+SetAttribute signal ok  | attributes 'EventInstance' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @240 / Script '<probe>', Line @136 / Stack End]
+GetAttributeChangedSignal int ok RBXScriptSignal 
+GetAttributeChangedSignal tenth ok RBXScriptSignal 
+GetAttributeChangedSignal true ok RBXScriptSignal [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @243 / Script '<probe>', Line @136 / Stack End]
+GetAttributeChangedSignal nil error Argument 1 missing or nil 
+GetAttributeChangedSignal none error Argument 1 missing or nil 
+GetAttributeChangedSignal table ok RBXScriptSignal [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @243 / Script '<probe>', Line @136 / Stack End]
+GetAttributeChangedSignal instance ok RBXScriptSignal [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @243 / Script '<probe>', Line @136 / Stack End]
+GetAttributeChangedSignal vector ok RBXScriptSignal [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @243 / Script '<probe>', Line @136 / Stack End]
+GetAttributeChangedSignal enumitem ok RBXScriptSignal [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @243 / Script '<probe>', Line @136 / Stack End]
+GetAttributeChangedSignal enum ok RBXScriptSignal [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @243 / Script '<probe>', Line @136 / Stack End]
+GetAttributeChangedSignal signal ok RBXScriptSignal [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @243 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal int error 5 is not a valid property name. 
+GetPropertyChangedSignal tenth error 0.10000000000000000555 is not a valid property name. 
+GetPropertyChangedSignal negzero error -0 is not a valid property name. 
+GetPropertyChangedSignal subnormal error 9.9999999999999694493e-311 is not a valid property name. 
+GetPropertyChangedSignal nan error NAN is not a valid property name. 
+GetPropertyChangedSignal inf error INF is not a valid property name. 
+GetPropertyChangedSignal neginf error -INF is not a valid property name. 
+GetPropertyChangedSignal 2^63 error 9223372036854775808 is not a valid property name. 
+GetPropertyChangedSignal 1e20 error 1e+20 is not a valid property name. 
+GetPropertyChangedSignal true error true is not a valid property name. [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal false error false is not a valid property name. [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal nil error Argument 1 missing or nil 
+GetPropertyChangedSignal none error Argument 1 missing or nil 
+GetPropertyChangedSignal table error {} is not a valid property name. [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal instance error Instance is not a valid property name. [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal vector error 0.100000001, 0.333333343, 2 is not a valid property name. [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal vector-nan error NAN, INF, -INF is not a valid property name. [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal enumitem error Camera is not a valid property name. [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal enum error nil is not a valid property name. [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal enums error nil is not a valid property name. [argument #1 expects a string, but Enums was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal cfunction error function is not a valid property name. [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal function error function is not a valid property name. [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal thread error nil is not a valid property name. [argument #1 expects a string, but thread was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal newproxy error nil is not a valid property name. [argument #1 expects a string, but userdata was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal signal error EventInstance is not a valid property name. [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal buffer error buffer { Size = 2 } is not a valid property name. [argument #1 expects a string, but buffer was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal cframe error 1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1 is not a valid property name. [argument #1 expects a string, but CFrame was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal color3 error 0.1, 0.2, 0.3 is not a valid property name. [argument #1 expects a string, but Color3 was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal udim2 error {1, 2}, {3, 4} is not a valid property name. [argument #1 expects a string, but UDim2 was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal vector2 error 0.100000001, 2 is not a valid property name. [argument #1 expects a string, but Vector2 was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+GetPropertyChangedSignal brickcolor error Bright red is not a valid property name. [argument #1 expects a string, but BrickColor was passed / Stack Begin / Script '<probe>', Line @246 / Script '<probe>', Line @136 / Stack End]
+AddTag int ok  | tags '5' 
+AddTag tenth ok  | tags '0.10000000000000000555' 
+AddTag negzero ok  | tags '-0' 
+AddTag subnormal ok  | tags '9.9999999999999694493e-311' 
+AddTag nan ok  | tags 'NAN' 
+AddTag inf ok  | tags 'INF' 
+AddTag neginf ok  | tags '-INF' 
+AddTag 2^63 ok  | tags '9223372036854775808' 
+AddTag 1e20 ok  | tags '1e+20' 
+AddTag true ok  | tags 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag false ok  | tags 'false' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag nil error Argument 1 missing or nil | tags  
+AddTag none error Argument 1 missing or nil | tags  
+AddTag table ok  | tags '{}' [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag instance ok  | tags 'Instance' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag vector ok  | tags '0.100000001, 0.333333343, 2' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag vector-nan ok  | tags 'NAN, INF, -INF' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag enumitem ok  | tags 'Camera' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag enum ok  | tags 'nil' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag enums ok  | tags 'nil' [argument #1 expects a string, but Enums was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag cfunction ok  | tags 'function' [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag function ok  | tags 'function' [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag thread ok  | tags 'nil' [argument #1 expects a string, but thread was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag newproxy ok  | tags 'nil' [argument #1 expects a string, but userdata was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag signal ok  | tags 'EventInstance' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag buffer ok  | tags 'buffer { Size = 2 }' [argument #1 expects a string, but buffer was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag cframe ok  | tags '1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1' [argument #1 expects a string, but CFrame was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag color3 ok  | tags '0.1, 0.2, 0.3' [argument #1 expects a string, but Color3 was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag udim2 ok  | tags '{1, 2}, {3, 4}' [argument #1 expects a string, but UDim2 was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag vector2 ok  | tags '0.100000001, 2' [argument #1 expects a string, but Vector2 was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+AddTag brickcolor ok  | tags 'Bright red' [argument #1 expects a string, but BrickColor was passed / Stack Begin / Script '<probe>', Line @249 / Script '<probe>', Line @136 / Stack End]
+HasTag int ok true 
+HasTag tenth ok true 
+HasTag true ok true [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @252 / Script '<probe>', Line @136 / Stack End]
+HasTag nil error Argument 1 missing or nil 
+HasTag none error Argument 1 missing or nil 
+HasTag table ok true [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @252 / Script '<probe>', Line @136 / Stack End]
+HasTag instance ok true [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @252 / Script '<probe>', Line @136 / Stack End]
+HasTag vector ok true [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @252 / Script '<probe>', Line @136 / Stack End]
+HasTag enumitem ok true [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @252 / Script '<probe>', Line @136 / Stack End]
+HasTag enum ok true [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @252 / Script '<probe>', Line @136 / Stack End]
+HasTag signal ok true [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @252 / Script '<probe>', Line @136 / Stack End]
+RemoveTag int ok  | tags 'Instance','true' 
+RemoveTag tenth ok  | tags '5','Instance','true' 
+RemoveTag true ok  | tags '5','Instance' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @255 / Script '<probe>', Line @136 / Stack End]
+RemoveTag nil error Argument 1 missing or nil | tags '5','Instance','true' 
+RemoveTag none error Argument 1 missing or nil | tags '5','Instance','true' 
+RemoveTag table ok  | tags '5','Instance','true' [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @255 / Script '<probe>', Line @136 / Stack End]
+RemoveTag instance ok  | tags '5','true' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @255 / Script '<probe>', Line @136 / Stack End]
+RemoveTag vector ok  | tags '5','Instance','true' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @255 / Script '<probe>', Line @136 / Stack End]
+RemoveTag enumitem ok  | tags '5','Instance','true' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @255 / Script '<probe>', Line @136 / Stack End]
+RemoveTag enum ok  | tags '5','Instance','true' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @255 / Script '<probe>', Line @136 / Stack End]
+RemoveTag signal ok  | tags '5','Instance','true' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @255 / Script '<probe>', Line @136 / Stack End]
+IsPropertyModified int - 
+IsPropertyModified tenth - 
+IsPropertyModified true - [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @258 / Script '<probe>', Line @136 / Stack End]
+IsPropertyModified nil error Argument 1 missing or nil 
+IsPropertyModified none error Argument 1 missing or nil 
+IsPropertyModified table - [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @258 / Script '<probe>', Line @136 / Stack End]
+IsPropertyModified instance - [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @258 / Script '<probe>', Line @136 / Stack End]
+IsPropertyModified vector - [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @258 / Script '<probe>', Line @136 / Stack End]
+IsPropertyModified enumitem - [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @258 / Script '<probe>', Line @136 / Stack End]
+IsPropertyModified enum - [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @258 / Script '<probe>', Line @136 / Stack End]
+IsPropertyModified signal - [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @258 / Script '<probe>', Line @136 / Stack End]
+ResetPropertyToDefault int - 
+ResetPropertyToDefault tenth - 
+ResetPropertyToDefault true - [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @261 / Script '<probe>', Line @136 / Stack End]
+ResetPropertyToDefault nil error Argument 1 missing or nil 
+ResetPropertyToDefault none error Argument 1 missing or nil 
+ResetPropertyToDefault table - [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @261 / Script '<probe>', Line @136 / Stack End]
+ResetPropertyToDefault instance - [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @261 / Script '<probe>', Line @136 / Stack End]
+ResetPropertyToDefault vector - [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @261 / Script '<probe>', Line @136 / Stack End]
+ResetPropertyToDefault enumitem - [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @261 / Script '<probe>', Line @136 / Stack End]
+ResetPropertyToDefault enum - [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @261 / Script '<probe>', Line @136 / Stack End]
+ResetPropertyToDefault signal - [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @261 / Script '<probe>', Line @136 / Stack End]
+GetStyled int - 
+GetStyled tenth - 
+GetStyled true - [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @264 / Script '<probe>', Line @136 / Stack End]
+GetStyled nil error Argument 1 missing or nil 
+GetStyled none error Argument 1 missing or nil 
+GetStyled table - [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @264 / Script '<probe>', Line @136 / Stack End]
+GetStyled instance - [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @264 / Script '<probe>', Line @136 / Stack End]
+GetStyled vector - [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @264 / Script '<probe>', Line @136 / Stack End]
+GetStyled enumitem - [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @264 / Script '<probe>', Line @136 / Stack End]
+GetStyled enum - [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @264 / Script '<probe>', Line @136 / Stack End]
+GetStyled signal - [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @264 / Script '<probe>', Line @136 / Stack End]
+stack-direct true ok true Folder 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @270 / Script '<probe>', Line @136 / Stack End]
+stack-nested true ok Folder 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @273 - function Named / Script '<probe>', Line @276 - function Outer / Script '<probe>', Line @136 / Stack End]
+stack-dot true ok Folder 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @280 / Script '<probe>', Line @136 / Stack End]
+CollisionGroupsAreCollidable true ok true [argument #2 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @283 / Script '<probe>', Line @136 / Stack End] [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @283 / Script '<probe>', Line @136 / Stack End]
+GetService int error '5' is not a valid Service name 
+GetService tenth error '0.10000000000000000555' is not a valid Service name 
+GetService negzero error '-0' is not a valid Service name 
+GetService subnormal error '9.9999999999999694493e-311' is not a valid Service name 
+GetService nan error 'NAN' is not a valid Service name 
+GetService inf error 'INF' is not a valid Service name 
+GetService neginf error '-INF' is not a valid Service name 
+GetService 2^63 error '9223372036854775808' is not a valid Service name 
+GetService 1e20 error '1e+20' is not a valid Service name 
+GetService true error 'true' is not a valid Service name [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService false error 'false' is not a valid Service name [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService nil error Argument 1 missing or nil 
+GetService none error Argument 1 missing or nil 
+GetService table error '{}' is not a valid Service name [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService instance ok nil [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService vector error '0.100000001, 0.333333343, 2' is not a valid Service name [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService vector-nan error 'NAN, INF, -INF' is not a valid Service name [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService enumitem ok nil [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService enum ok nil [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService enums ok nil [argument #1 expects a string, but Enums was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService cfunction ok nil [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService function ok nil [argument #1 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService thread ok nil [argument #1 expects a string, but thread was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService newproxy ok nil [argument #1 expects a string, but userdata was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService signal ok nil [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService buffer error 'buffer { Size = 2 }' is not a valid Service name [argument #1 expects a string, but buffer was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService cframe error '1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1' is not a valid Service name [argument #1 expects a string, but CFrame was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService color3 error '0.1, 0.2, 0.3' is not a valid Service name [argument #1 expects a string, but Color3 was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService udim2 error '{1, 2}, {3, 4}' is not a valid Service name [argument #1 expects a string, but UDim2 was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService vector2 error '0.100000001, 2' is not a valid Service name [argument #1 expects a string, but Vector2 was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+GetService brickcolor error 'Bright red' is not a valid Service name [argument #1 expects a string, but BrickColor was passed / Stack Begin / Script '<probe>', Line @288 / Script '<probe>', Line @136 / Stack End]
+service int error '5' is not a valid Service name 
+service tenth error '0.10000000000000000555' is not a valid Service name 
+service true error 'true' is not a valid Service name [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @291 / Script '<probe>', Line @136 / Stack End]
+service nil error Argument 1 missing or nil 
+service none error Argument 1 missing or nil 
+service table error '{}' is not a valid Service name [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @291 / Script '<probe>', Line @136 / Stack End]
+service instance ok nil [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @291 / Script '<probe>', Line @136 / Stack End]
+service vector error '0.100000001, 0.333333343, 2' is not a valid Service name [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @291 / Script '<probe>', Line @136 / Stack End]
+service enumitem ok nil [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @291 / Script '<probe>', Line @136 / Stack End]
+service enum ok nil [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @291 / Script '<probe>', Line @136 / Stack End]
+service signal ok nil [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @291 / Script '<probe>', Line @136 / Stack End]
+FindService int error '5' is not a valid Service name 
+FindService tenth error '0.10000000000000000555' is not a valid Service name 
+FindService true error 'true' is not a valid Service name [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @294 / Script '<probe>', Line @136 / Stack End]
+FindService nil error Argument 1 missing or nil 
+FindService none error Argument 1 missing or nil 
+FindService table error '{}' is not a valid Service name [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @294 / Script '<probe>', Line @136 / Stack End]
+FindService instance ok nil [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @294 / Script '<probe>', Line @136 / Stack End]
+FindService vector error '0.100000001, 0.333333343, 2' is not a valid Service name [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @294 / Script '<probe>', Line @136 / Stack End]
+FindService enumitem ok nil [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @294 / Script '<probe>', Line @136 / Stack End]
+FindService enum ok nil [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @294 / Script '<probe>', Line @136 / Stack End]
+FindService signal ok nil [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @294 / Script '<probe>', Line @136 / Stack End]
+GetService chat-enumitem ok Chat 'Chat' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @297 / Script '<probe>', Line @136 / Stack End]
+GetService material-enumitem ok nil [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @297 / Script '<probe>', Line @136 / Stack End]
+FindService chat-enumitem ok Chat 'Chat' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @300 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag int ok  | tags '5' 
+CS.AddTag tenth ok  | tags '0.10000000000000000555' 
+CS.AddTag negzero ok  | tags '-0' 
+CS.AddTag subnormal ok  | tags '9.9999999999999694493e-311' 
+CS.AddTag nan ok  | tags 'NAN' 
+CS.AddTag inf ok  | tags 'INF' 
+CS.AddTag neginf ok  | tags '-INF' 
+CS.AddTag 2^63 ok  | tags '9223372036854775808' 
+CS.AddTag 1e20 ok  | tags '1e+20' 
+CS.AddTag true ok  | tags 'true' [argument #2 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag false ok  | tags 'false' [argument #2 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag nil error Argument 3 missing or nil | tags  
+CS.AddTag none ok  | tags  [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @134 / Stack End]
+CS.AddTag table ok  | tags '{}' [argument #2 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag instance ok  | tags 'Instance' [argument #2 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag vector ok  | tags '0.100000001, 0.333333343, 2' [argument #2 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag vector-nan ok  | tags 'NAN, INF, -INF' [argument #2 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag enumitem ok  | tags 'Camera' [argument #2 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag enum ok  | tags 'nil' [argument #2 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag enums ok  | tags 'nil' [argument #2 expects a string, but Enums was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag cfunction ok  | tags 'function' [argument #2 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag function ok  | tags 'function' [argument #2 expects a string, but function was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag thread ok  | tags 'nil' [argument #2 expects a string, but thread was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag newproxy ok  | tags 'nil' [argument #2 expects a string, but userdata was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag signal ok  | tags 'EventInstance' [argument #2 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag buffer ok  | tags 'buffer { Size = 2 }' [argument #2 expects a string, but buffer was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag cframe ok  | tags '1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1' [argument #2 expects a string, but CFrame was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag color3 ok  | tags '0.1, 0.2, 0.3' [argument #2 expects a string, but Color3 was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag udim2 ok  | tags '{1, 2}, {3, 4}' [argument #2 expects a string, but UDim2 was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag vector2 ok  | tags '0.100000001, 2' [argument #2 expects a string, but Vector2 was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag brickcolor ok  | tags 'Bright red' [argument #2 expects a string, but BrickColor was passed / Stack Begin / Script '<probe>', Line @303 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag int ok true 
+CS.HasTag tenth ok true 
+CS.HasTag true ok true [argument #2 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @306 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag nil error Argument 3 missing or nil 
+CS.HasTag none ok true [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @306 / Script '<probe>', Line @134 / Stack End]
+CS.HasTag table ok true [argument #2 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @306 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag instance ok true [argument #2 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @306 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag vector ok true [argument #2 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @306 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag enumitem ok true [argument #2 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @306 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag enum ok true [argument #2 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @306 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag signal ok true [argument #2 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @306 / Script '<probe>', Line @136 / Stack End]
+CS.RemoveTag int ok  | tags 'Instance','true' 
+CS.RemoveTag tenth ok  | tags '5','Instance','true' 
+CS.RemoveTag true ok  | tags '5','Instance' [argument #2 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @309 / Script '<probe>', Line @136 / Stack End]
+CS.RemoveTag nil error Argument 3 missing or nil | tags '5','Instance','true' 
+CS.RemoveTag none ok  | tags '5','Instance','true' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @309 / Script '<probe>', Line @134 / Stack End]
+CS.RemoveTag table ok  | tags '5','Instance','true' [argument #2 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @309 / Script '<probe>', Line @136 / Stack End]
+CS.RemoveTag instance ok  | tags '5','true' [argument #2 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @309 / Script '<probe>', Line @136 / Stack End]
+CS.RemoveTag vector ok  | tags '5','Instance','true' [argument #2 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @309 / Script '<probe>', Line @136 / Stack End]
+CS.RemoveTag enumitem ok  | tags '5','Instance','true' [argument #2 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @309 / Script '<probe>', Line @136 / Stack End]
+CS.RemoveTag enum ok  | tags '5','Instance','true' [argument #2 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @309 / Script '<probe>', Line @136 / Stack End]
+CS.RemoveTag signal ok  | tags '5','Instance','true' [argument #2 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @309 / Script '<probe>', Line @136 / Stack End]
+CS.GetTagged int ok 1 
+CS.GetTagged tenth ok 1 
+CS.GetTagged true ok 1 [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @312 / Script '<probe>', Line @136 / Stack End]
+CS.GetTagged nil error Argument 1 missing or nil 
+CS.GetTagged none error Argument 1 missing or nil 
+CS.GetTagged table ok 1 [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @312 / Script '<probe>', Line @136 / Stack End]
+CS.GetTagged instance ok 1 [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @312 / Script '<probe>', Line @136 / Stack End]
+CS.GetTagged vector ok 1 [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @312 / Script '<probe>', Line @136 / Stack End]
+CS.GetTagged enumitem ok 1 [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @312 / Script '<probe>', Line @136 / Stack End]
+CS.GetTagged enum ok 1 [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @312 / Script '<probe>', Line @136 / Stack End]
+CS.GetTagged signal ok 1 [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @312 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceAddedSignal int ok RBXScriptSignal 
+CS.GetInstanceAddedSignal tenth ok RBXScriptSignal 
+CS.GetInstanceAddedSignal true ok RBXScriptSignal [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @315 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceAddedSignal nil error Argument 1 missing or nil 
+CS.GetInstanceAddedSignal none error Argument 1 missing or nil 
+CS.GetInstanceAddedSignal table ok RBXScriptSignal [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @315 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceAddedSignal instance ok RBXScriptSignal [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @315 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceAddedSignal vector ok RBXScriptSignal [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @315 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceAddedSignal enumitem ok RBXScriptSignal [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @315 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceAddedSignal enum ok RBXScriptSignal [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @315 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceAddedSignal signal ok RBXScriptSignal [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @315 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceRemovedSignal int ok RBXScriptSignal 
+CS.GetInstanceRemovedSignal tenth ok RBXScriptSignal 
+CS.GetInstanceRemovedSignal true ok RBXScriptSignal [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @318 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceRemovedSignal nil error Argument 1 missing or nil 
+CS.GetInstanceRemovedSignal none error Argument 1 missing or nil 
+CS.GetInstanceRemovedSignal table ok RBXScriptSignal [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @318 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceRemovedSignal instance ok RBXScriptSignal [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @318 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceRemovedSignal vector ok RBXScriptSignal [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @318 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceRemovedSignal enumitem ok RBXScriptSignal [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @318 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceRemovedSignal enum ok RBXScriptSignal [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @318 / Script '<probe>', Line @136 / Stack End]
+CS.GetInstanceRemovedSignal signal ok RBXScriptSignal [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @318 / Script '<probe>', Line @136 / Stack End]
+HttpService.JSONDecode int ok 5 
+HttpService.JSONDecode tenth ok 0.10000000000000001 
+HttpService.JSONDecode true ok true [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @321 / Script '<probe>', Line @136 / Stack End]
+HttpService.JSONDecode nil error Argument 1 missing or nil 
+HttpService.JSONDecode none error Argument 1 missing or nil 
+HttpService.JSONDecode table ok table [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @321 / Script '<probe>', Line @136 / Stack End]
+HttpService.JSONDecode instance error Can't parse JSON [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @321 / Script '<probe>', Line @136 / Stack End]
+HttpService.JSONDecode vector error Can't parse JSON [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @321 / Script '<probe>', Line @136 / Stack End]
+HttpService.JSONDecode enumitem error Can't parse JSON [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @321 / Script '<probe>', Line @136 / Stack End]
+HttpService.JSONDecode enum error Can't parse JSON [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @321 / Script '<probe>', Line @136 / Stack End]
+HttpService.JSONDecode signal error Can't parse JSON [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @321 / Script '<probe>', Line @136 / Stack End]
+HttpService.UrlEncode int ok '5' 
+HttpService.UrlEncode true ok 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @324 / Script '<probe>', Line @136 / Stack End]
+HttpService.UrlEncode nil error Argument 1 missing or nil 
+HttpService.UrlEncode none error Argument 1 missing or nil 
+HttpService.UrlEncode table ok '%7B%7D' [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @324 / Script '<probe>', Line @136 / Stack End]
+HttpService.UrlEncode instance ok 'Instance' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @324 / Script '<probe>', Line @136 / Stack End]
+HttpService.UrlEncode enumitem ok 'Camera' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @324 / Script '<probe>', Line @136 / Stack End]
+HttpService.UrlEncode enum ok 'nil' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @324 / Script '<probe>', Line @136 / Stack End]
+HttpService.UrlEncode signal ok 'EventInstance' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @324 / Script '<probe>', Line @136 / Stack End]
+ReflectionService.GetClass int ok nil 
+ReflectionService.GetClass tenth ok nil 
+ReflectionService.GetClass true ok nil [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @327 / Script '<probe>', Line @136 / Stack End]
+ReflectionService.GetClass nil error Argument 2 missing or nil 
+ReflectionService.GetClass none error Argument 2 missing or nil 
+ReflectionService.GetClass table ok nil [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @327 / Script '<probe>', Line @136 / Stack End]
+ReflectionService.GetClass instance ok 'Instance' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @327 / Script '<probe>', Line @136 / Stack End]
+ReflectionService.GetClass vector ok nil [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @327 / Script '<probe>', Line @136 / Stack End]
+ReflectionService.GetClass enumitem ok 'Camera' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @327 / Script '<probe>', Line @136 / Stack End]
+ReflectionService.GetClass enum ok nil [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @327 / Script '<probe>', Line @136 / Stack End]
+ReflectionService.GetClass signal ok nil [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @327 / Script '<probe>', Line @136 / Stack End]
+SharedTableRegistry.GetSharedTable int ok SharedTable 
+SharedTableRegistry.GetSharedTable tenth ok SharedTable 
+SharedTableRegistry.GetSharedTable true ok SharedTable [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @331 / Script '<probe>', Line @136 / Stack End]
+SharedTableRegistry.GetSharedTable nil error Argument 1 missing or nil 
+SharedTableRegistry.GetSharedTable none error Argument 1 missing or nil 
+SharedTableRegistry.GetSharedTable table ok SharedTable [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @331 / Script '<probe>', Line @136 / Stack End]
+SharedTableRegistry.GetSharedTable instance ok SharedTable [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @331 / Script '<probe>', Line @136 / Stack End]
+SharedTableRegistry.GetSharedTable vector ok SharedTable [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @331 / Script '<probe>', Line @136 / Stack End]
+SharedTableRegistry.GetSharedTable enumitem ok SharedTable [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @331 / Script '<probe>', Line @136 / Stack End]
+SharedTableRegistry.GetSharedTable enum ok SharedTable [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @331 / Script '<probe>', Line @136 / Stack End]
+SharedTableRegistry.GetSharedTable signal ok SharedTable [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @331 / Script '<probe>', Line @136 / Stack End]
+PhysicsService.IsCollisionGroupRegistered int ok false 
+PhysicsService.IsCollisionGroupRegistered tenth ok false 
+PhysicsService.IsCollisionGroupRegistered true ok false [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @334 / Script '<probe>', Line @136 / Stack End]
+PhysicsService.IsCollisionGroupRegistered nil error Argument 1 missing or nil 
+PhysicsService.IsCollisionGroupRegistered none error Argument 1 missing or nil 
+PhysicsService.IsCollisionGroupRegistered table ok false [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @334 / Script '<probe>', Line @136 / Stack End]
+PhysicsService.IsCollisionGroupRegistered instance ok false [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @334 / Script '<probe>', Line @136 / Stack End]
+PhysicsService.IsCollisionGroupRegistered vector ok false [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @334 / Script '<probe>', Line @136 / Stack End]
+PhysicsService.IsCollisionGroupRegistered enumitem ok false [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @334 / Script '<probe>', Line @136 / Stack End]
+PhysicsService.IsCollisionGroupRegistered enum ok false [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @334 / Script '<probe>', Line @136 / Stack End]
+PhysicsService.IsCollisionGroupRegistered signal ok false [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @334 / Script '<probe>', Line @136 / Stack End]
+RunService.BindToRenderStep int ok 'bound' 
+RunService.BindToRenderStep tenth ok 'bound' 
+RunService.BindToRenderStep true ok 'bound' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @337 / Script '<probe>', Line @136 / Stack End] [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @338 / Script '<probe>', Line @136 / Stack End]
+RunService.BindToRenderStep nil error Argument 1 missing or nil 
+RunService.BindToRenderStep none error Argument 1 missing or nil 
+RunService.BindToRenderStep table ok 'bound' [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @337 / Script '<probe>', Line @136 / Stack End] [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @338 / Script '<probe>', Line @136 / Stack End]
+RunService.BindToRenderStep instance ok 'bound' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @337 / Script '<probe>', Line @136 / Stack End] [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @338 / Script '<probe>', Line @136 / Stack End]
+RunService.BindToRenderStep vector ok 'bound' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @337 / Script '<probe>', Line @136 / Stack End] [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @338 / Script '<probe>', Line @136 / Stack End]
+RunService.BindToRenderStep enumitem ok 'bound' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @337 / Script '<probe>', Line @136 / Stack End] [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @338 / Script '<probe>', Line @136 / Stack End]
+RunService.BindToRenderStep enum ok 'bound' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @337 / Script '<probe>', Line @136 / Stack End] [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @338 / Script '<probe>', Line @136 / Stack End]
+RunService.BindToRenderStep signal ok 'bound' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @337 / Script '<probe>', Line @136 / Stack End] [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @338 / Script '<probe>', Line @136 / Stack End]
+RunService.UnbindFromRenderStep int ok  
+RunService.UnbindFromRenderStep tenth ok  
+RunService.UnbindFromRenderStep true ok  [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @342 / Script '<probe>', Line @136 / Stack End]
+RunService.UnbindFromRenderStep nil error Argument 1 missing or nil 
+RunService.UnbindFromRenderStep none error Argument 1 missing or nil 
+RunService.UnbindFromRenderStep table ok  [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @342 / Script '<probe>', Line @136 / Stack End]
+RunService.UnbindFromRenderStep instance ok  [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @342 / Script '<probe>', Line @136 / Stack End]
+RunService.UnbindFromRenderStep vector ok  [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @342 / Script '<probe>', Line @136 / Stack End]
+RunService.UnbindFromRenderStep enumitem ok  [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @342 / Script '<probe>', Line @136 / Stack End]
+RunService.UnbindFromRenderStep enum ok  [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @342 / Script '<probe>', Line @136 / Stack End]
+RunService.UnbindFromRenderStep signal ok  [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @342 / Script '<probe>', Line @136 / Stack End]
+GuiService.RemoveSelectionGroup int ok  
+GuiService.RemoveSelectionGroup tenth ok  
+GuiService.RemoveSelectionGroup true ok  [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @345 / Script '<probe>', Line @136 / Stack End]
+GuiService.RemoveSelectionGroup nil error Argument 1 missing or nil 
+GuiService.RemoveSelectionGroup none error Argument 1 missing or nil 
+GuiService.RemoveSelectionGroup table ok  [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @345 / Script '<probe>', Line @136 / Stack End]
+GuiService.RemoveSelectionGroup instance ok  [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @345 / Script '<probe>', Line @136 / Stack End]
+GuiService.RemoveSelectionGroup vector ok  [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @345 / Script '<probe>', Line @136 / Stack End]
+GuiService.RemoveSelectionGroup enumitem ok  [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @345 / Script '<probe>', Line @136 / Stack End]
+GuiService.RemoveSelectionGroup enum ok  [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @345 / Script '<probe>', Line @136 / Stack End]
+GuiService.RemoveSelectionGroup signal ok  [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @345 / Script '<probe>', Line @136 / Stack End]
+CAS.UnbindAction int ok  
+CAS.UnbindAction tenth ok  
+CAS.UnbindAction true ok  [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @349 / Script '<probe>', Line @136 / Stack End]
+CAS.UnbindAction nil error Argument 1 missing or nil 
+CAS.UnbindAction none error Argument 1 missing or nil 
+CAS.UnbindAction table ok  [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @349 / Script '<probe>', Line @136 / Stack End]
+CAS.UnbindAction instance ok  [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @349 / Script '<probe>', Line @136 / Stack End]
+CAS.UnbindAction vector ok  [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @349 / Script '<probe>', Line @136 / Stack End]
+CAS.UnbindAction enumitem ok  [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @349 / Script '<probe>', Line @136 / Stack End]
+CAS.UnbindAction enum ok  [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @349 / Script '<probe>', Line @136 / Stack End]
+CAS.UnbindAction signal ok  [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @349 / Script '<probe>', Line @136 / Stack End]
+CAS.GetBoundActionInfo int ok true 
+CAS.GetBoundActionInfo tenth ok true 
+CAS.GetBoundActionInfo true ok true [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @352 / Script '<probe>', Line @136 / Stack End]
+CAS.GetBoundActionInfo nil error Argument 1 missing or nil 
+CAS.GetBoundActionInfo none error Argument 1 missing or nil 
+CAS.GetBoundActionInfo table ok true [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @352 / Script '<probe>', Line @136 / Stack End]
+CAS.GetBoundActionInfo instance ok true [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @352 / Script '<probe>', Line @136 / Stack End]
+CAS.GetBoundActionInfo vector ok true [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @352 / Script '<probe>', Line @136 / Stack End]
+CAS.GetBoundActionInfo enumitem ok true [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @352 / Script '<probe>', Line @136 / Stack End]
+CAS.GetBoundActionInfo enum ok true [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @352 / Script '<probe>', Line @136 / Stack End]
+CAS.GetBoundActionInfo signal ok true [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @352 / Script '<probe>', Line @136 / Stack End]
+CAS.BindAction int - 
+CAS.BindAction tenth - 
+CAS.BindAction true - [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @356 / Script '<probe>', Line @136 / Stack End]
+CAS.BindAction nil error Argument 1 missing or nil 
+CAS.BindAction none error Argument 1 missing or nil 
+CAS.BindAction table - [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @356 / Script '<probe>', Line @136 / Stack End]
+CAS.BindAction instance - [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @356 / Script '<probe>', Line @136 / Stack End]
+CAS.BindAction vector - [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @356 / Script '<probe>', Line @136 / Stack End]
+CAS.BindAction enumitem - [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @356 / Script '<probe>', Line @136 / Stack End]
+CAS.BindAction enum - [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @356 / Script '<probe>', Line @136 / Stack End]
+CAS.BindAction signal - [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @356 / Script '<probe>', Line @136 / Stack End]
+StarterGui.SetCore int - 
+StarterGui.SetCore tenth - 
+StarterGui.SetCore true - [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @359 / Script '<probe>', Line @136 / Stack End]
+StarterGui.SetCore nil error Argument 1 missing or nil 
+StarterGui.SetCore none error Argument 1 missing or nil 
+StarterGui.SetCore table - [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @359 / Script '<probe>', Line @136 / Stack End]
+StarterGui.SetCore instance - [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @359 / Script '<probe>', Line @136 / Stack End]
+StarterGui.SetCore vector - [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @359 / Script '<probe>', Line @136 / Stack End]
+StarterGui.SetCore enumitem - [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @359 / Script '<probe>', Line @136 / Stack End]
+StarterGui.SetCore enum - [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @359 / Script '<probe>', Line @136 / Stack End]
+StarterGui.SetCore signal - [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @359 / Script '<probe>', Line @136 / Stack End]
+StarterGui.GetCore int - 
+StarterGui.GetCore tenth - 
+StarterGui.GetCore true - 
+StarterGui.GetCore nil error Argument 1 missing or nil 
+StarterGui.GetCore none error Argument 1 missing or nil 
+StarterGui.GetCore table - 
+StarterGui.GetCore instance - 
+StarterGui.GetCore vector - 
+StarterGui.GetCore enumitem - 
+StarterGui.GetCore enum - 
+StarterGui.GetCore signal - 
+TeleportService.GetTeleportSetting int - 
+TeleportService.GetTeleportSetting tenth - 
+TeleportService.GetTeleportSetting true - [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @368 / Script '<probe>', Line @136 / Stack End]
+TeleportService.GetTeleportSetting nil error Argument 1 missing or nil 
+TeleportService.GetTeleportSetting none error Argument 1 missing or nil 
+TeleportService.GetTeleportSetting table - [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @368 / Script '<probe>', Line @136 / Stack End]
+TeleportService.GetTeleportSetting instance - [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @368 / Script '<probe>', Line @136 / Stack End]
+TeleportService.GetTeleportSetting vector - [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @368 / Script '<probe>', Line @136 / Stack End]
+TeleportService.GetTeleportSetting enumitem - [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @368 / Script '<probe>', Line @136 / Stack End]
+TeleportService.GetTeleportSetting enum - [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @368 / Script '<probe>', Line @136 / Stack End]
+TeleportService.GetTeleportSetting signal - [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @368 / Script '<probe>', Line @136 / Stack End]
+TextService.GetTextSize int ok 'Vector2' 
+TextService.GetTextSize tenth ok 'Vector2' 
+TextService.GetTextSize true ok 'Vector2' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @371 / Script '<probe>', Line @136 / Stack End]
+TextService.GetTextSize nil error Argument 1 missing or nil 
+TextService.GetTextSize none error Argument 1 missing or nil 
+TextService.GetTextSize table ok 'Vector2' [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @371 / Script '<probe>', Line @136 / Stack End]
+TextService.GetTextSize instance ok 'Vector2' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @371 / Script '<probe>', Line @136 / Stack End]
+TextService.GetTextSize vector ok 'Vector2' [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @371 / Script '<probe>', Line @136 / Stack End]
+TextService.GetTextSize enumitem ok 'Vector2' [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @371 / Script '<probe>', Line @136 / Stack End]
+TextService.GetTextSize enum ok 'Vector2' [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @371 / Script '<probe>', Line @136 / Stack End]
+TextService.GetTextSize signal ok 'Vector2' [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @371 / Script '<probe>', Line @136 / Stack End]
+MarkerCurve.InsertMarkerAtTime int - 
+MarkerCurve.InsertMarkerAtTime tenth - 
+MarkerCurve.InsertMarkerAtTime true - [argument #2 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @375 / Script '<probe>', Line @136 / Stack End]
+MarkerCurve.InsertMarkerAtTime nil error Argument 2 missing or nil 
+MarkerCurve.InsertMarkerAtTime none error Argument 2 missing or nil 
+MarkerCurve.InsertMarkerAtTime table - [argument #2 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @375 / Script '<probe>', Line @136 / Stack End]
+MarkerCurve.InsertMarkerAtTime instance - [argument #2 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @375 / Script '<probe>', Line @136 / Stack End]
+MarkerCurve.InsertMarkerAtTime vector - [argument #2 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @375 / Script '<probe>', Line @136 / Stack End]
+MarkerCurve.InsertMarkerAtTime enumitem - [argument #2 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @375 / Script '<probe>', Line @136 / Stack End]
+MarkerCurve.InsertMarkerAtTime enum - [argument #2 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @375 / Script '<probe>', Line @136 / Stack End]
+MarkerCurve.InsertMarkerAtTime signal - [argument #2 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @375 / Script '<probe>', Line @136 / Stack End]
+track true
+AnimationTrack.GetMarkerReachedSignal int ok RBXScriptSignal 
+AnimationTrack.GetMarkerReachedSignal tenth ok RBXScriptSignal 
+AnimationTrack.GetMarkerReachedSignal true ok RBXScriptSignal [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @395 / Script '<probe>', Line @136 / Stack End]
+AnimationTrack.GetMarkerReachedSignal nil error Argument 1 missing or nil 
+AnimationTrack.GetMarkerReachedSignal none error Argument 1 missing or nil 
+AnimationTrack.GetMarkerReachedSignal table ok RBXScriptSignal [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @395 / Script '<probe>', Line @136 / Stack End]
+AnimationTrack.GetMarkerReachedSignal instance ok RBXScriptSignal [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @395 / Script '<probe>', Line @136 / Stack End]
+AnimationTrack.GetMarkerReachedSignal vector ok RBXScriptSignal [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @395 / Script '<probe>', Line @136 / Stack End]
+AnimationTrack.GetMarkerReachedSignal enumitem ok RBXScriptSignal [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @395 / Script '<probe>', Line @136 / Stack End]
+AnimationTrack.GetMarkerReachedSignal enum ok RBXScriptSignal [argument #1 expects a string, but Enum was passed / Stack Begin / Script '<probe>', Line @395 / Script '<probe>', Line @136 / Stack End]
+AnimationTrack.GetMarkerReachedSignal signal ok RBXScriptSignal [argument #1 expects a string, but RBXScriptSignal was passed / Stack Begin / Script '<probe>', Line @395 / Script '<probe>', Line @136 / Stack End]
+CS.AddTag-instance-only fresh ok  | tags  [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @401 / Script '<probe>', Line @136 / Stack End]
+CS.RemoveTag-instance-only tagged ok  | tags '5','Instance','true' [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @404 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag-instance-only untagged ok false [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @407 / Script '<probe>', Line @136 / Stack End]
+CS.HasTag-instance-only tagged ok false [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @407 / Script '<probe>', Line @136 / Stack End]
+infinite-yield [Infinite yield possible on 'Workspace.Holder:WaitForChild("0.5, 0.25, 4")'] [Infinite yield possible on 'Workspace.Holder:WaitForChild("1.5")']
