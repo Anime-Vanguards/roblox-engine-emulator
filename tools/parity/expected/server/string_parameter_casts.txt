@@ -1,0 +1,39 @@
+# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session of one server and one client (script identity 2; Workspace.SignalBehavior Deferred; run through rodeo)
+# captured: 2026-11-23
+flushes true
+registry vector-fraction 0.100000001, 0.333333343, 2
+registry vector-large-negzero 1.00000002e+20, 123456.789, -0
+registry vector-nan-inf NAN, INF, -INF
+registry number-tenth 0.10000000000000000555
+registry number-subnormal 9.9999999999999694493e-311
+registry number-nan NAN
+registry number-inf INF
+registry number-negative-inf -INF
+registry number-2^63 9223372036854775808
+marker vector-fraction 0.100000001, 0.333333343, 2
+marker vector-large-negzero 1.00000002e+20, 123456.789, -0
+marker vector-nan-inf NAN, INF, -INF
+marker number-tenth 0.10000000000000000555
+marker number-subnormal 9.9999999999999694493e-311
+marker number-nan NAN
+marker number-inf INF
+marker number-negative-inf -INF
+marker number-2^63 9223372036854775808
+log vector-fraction 0.100000001, 0.333333343, 2
+log vector-large-negzero 1.00000002e+20, 123456.789, -0
+log vector-nan-inf NAN, INF, -INF
+log number-tenth 0.10000000000000000555
+log number-subnormal 9.9999999999999694493e-311
+log number-nan NAN
+log number-inf INF
+log number-negative-inf -INF
+log number-2^63 9223372036854775808
+group vector-fraction 0.100000001, 0.333333343, 2
+group vector-large-negzero 1.00000002e+20, 123456.789, -0
+group vector-nan-inf NAN, INF, -INF
+group number-tenth 0.10000000000000000555
+group number-subnormal 9.9999999999999694493e-311
+group number-nan NAN
+group number-inf INF
+group number-negative-inf -INF
+group number-2^63 9223372036854775808

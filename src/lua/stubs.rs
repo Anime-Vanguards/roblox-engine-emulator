@@ -238,6 +238,10 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // SharedTableRegistry's name for a buffer: its contents, charged as a string the script built (shared_table.rs `buffer_name`)
     let e = engine.clone();
     r.set("BufferRegistryName", lua.create_function(move |lua, held: LuaValue| super::shared_table::buffer_name(lua, &e, &held))?)?;
+    // A value as a method's string parameter casts it (convert.rs `cast_text`): SharedTableRegistry's names and LogService's
+    // messages write a number and a Vector3 through it
+    let e = engine.clone();
+    r.set("CastText", lua.create_function(move |lua, value: LuaValue| lua.create_string(super::convert::cast_text(lua, &e, &value)?))?)?;
     // Model:PivotTo / ScaleTo: many part moves as one step (world::joints batches)
     let e = engine.clone();
     r.set(

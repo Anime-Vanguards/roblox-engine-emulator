@@ -1096,31 +1096,26 @@ end)
 -- handle of the name's table, == to the others but not rawequal (Studio 0.748, a playing client).
 --
 -- A name is cast to a string as a client casts it (Studio 0.748, a playing client): a string as it is (a NUL and 70,000
--- bytes kept), a number as `%.20g` writes it (0.1 is "0.10000000000000000555", 2^63 "9223372036854775808", -0 "-0"),
--- NaN "NAN" and the infinities "INF" and "-INF". Anything else warns with the script's stack ("argument #1 expects a
--- string, but boolean was passed") and is then named as the engine writes that type: a table "{}", an Instance
--- "Instance", a function "function", a thread, an Enum or a newproxy "nil", an EnumItem its Name, the rest as tostring
--- writes it (a boolean, a Vector3, a CFrame, a Color3, a UDim2; not matched: a client writes a Vector3's fractional
--- components with nine digits, 0.100000001 where tostring gives 0.10000000149011612). A buffer is named by its contents and every SharedTable
--- by one name, neither of which any text tried reached ("abc", "", "{}", tostring, ...): here keys no string can be. nil
--- raises "Argument 1 missing or nil", and SetSharedTable checks its value first (SetSharedTable(nil, 5) raises the cast).
--- Not matched: a subnormal number's name (a client writes its digits; ree's formatting flushes it to "0").
+-- bytes kept), a number as `%.20g` writes it (0.1 is "0.10000000000000000555", 2^63 "9223372036854775808", -0 "-0",
+-- 1e-310 "9.9999999999999694493e-311"), NaN "NAN" and the infinities "INF" and "-INF". Anything else warns with the
+-- script's stack ("argument #1 expects a string, but boolean was passed") and is then named as the engine writes that type:
+-- a table "{}", an Instance "Instance", a function "function", a thread, an Enum or a newproxy "nil", an EnumItem its Name, a
+-- Vector3 with nine digits a component ("0.100000001, 0.333333343, 2" where tostring gives "0.10000000149011612, ...";
+-- "NAN, INF, -INF"), the rest as tostring writes it (a boolean, a CFrame, a Color3, a UDim2 and every other datatype tried).
+-- The number and the Vector3 are written in Rust (lua/convert.rs cast_text), where a subnormal keeps its digits in the
+-- scripts' float mode. A buffer is named by its contents and every SharedTable by one name, neither of which any text tried
+-- reached ("abc", "", "{}", tostring, JSONEncode's, base64, hex, ...): here keys no string can be. nil raises "Argument 1
+-- missing or nil", and SetSharedTable checks its value first (SetSharedTable(nil, 5) raises the cast).
 local SharedTableName = newproxy()
 local BufferNames = setmetatable({}, { __mode = "v" }) -- (a content's name lives while SharedTables holds it)
 local BufferRegistryName = R.BufferRegistryName -- (the contents as a string, charged as one the script built: shared_table.rs)
+local CastText = R.CastText
 local function RegistryName(Name)
 	local Kind = type(Name)
 	if Kind == "string" then
 		return Name
 	elseif Kind == "number" then
-		if Name ~= Name then
-			return "NAN"
-		elseif Name == math.huge then
-			return "INF"
-		elseif Name == -math.huge then
-			return "-INF"
-		end
-		return string.format("%.20g", Name)
+		return CastText(Name)
 	elseif Name == nil then
 		error("Argument 1 missing or nil", 0)
 	end
@@ -1136,6 +1131,8 @@ local function RegistryName(Name)
 		return "nil"
 	elseif Type == "EnumItem" then
 		return Name.Name
+	elseif Type == "Vector3" then
+		return CastText(Name)
 	elseif Type == "SharedTable" then
 		return SharedTableName
 	elseif Type == "buffer" then
@@ -1457,15 +1454,17 @@ local function LogContext(Given)
 	return Out
 end
 
--- The message as text (measured): a string as it is and a number as tostring writes it; anything else warns with the script's
--- stack ("argument #1 expects a string, but boolean was passed") and is then written as the engine writes that type: a table
--- "{}", an Instance "Instance", a function "function", an Enum "nil", the rest as tostring does (a boolean, a Vector3).
+-- The message as text (measured): a string as it is and a number as `%.20g` writes it (Studio 0.748, a playing client: 0.1
+-- is "0.10000000000000000555", 1e-310 "9.9999999999999694493e-311"; lua/convert.rs cast_text); anything else warns with the
+-- script's stack ("argument #1 expects a string, but boolean was passed") and is then written as the engine writes that type:
+-- a table "{}", an Instance "Instance", a function "function", an Enum "nil", a Vector3 with nine digits a component
+-- ("0.100000001, 0.333333343, 2"; "NAN, INF, -INF"), the rest as tostring does (a boolean).
 local function LogMessage(Message, Argument)
 	local Kind = type(Message)
 	if Kind == "string" then
 		return Message
 	elseif Kind == "number" then
-		return tostring(Message)
+		return CastText(Message)
 	end
 	local Type = typeof(Message)
 	R.LogWarn(`argument #{Argument} expects a string, but {Type} was passed`, debug.traceback())
@@ -1477,6 +1476,8 @@ local function LogMessage(Message, Argument)
 		return "function"
 	elseif Type == "Enum" then
 		return "nil"
+	elseif Type == "Vector3" then
+		return CastText(Message)
 	end
 	return tostring(Message)
 end
