@@ -250,17 +250,10 @@ pub fn install(engine: &Rc<Engine>) {
     }
 }
 
-/// Whether an instance is in the Workspace's own world (not a WorldModel's).
+/// Whether an instance is in the Workspace's own world (not a WorldModel's): its nearest WorldRoot, from the homes the dom
+/// keeps (world/mod.rs world_root_of), is a Workspace. No walk up the tree, so each step asks it of every loose part.
 fn in_workspace(state: &State, reflection: &Reflection, setup: &Setup, id: InstanceId) -> bool {
-    let mut current = state.dom.parent_of(id);
-    while let Some(node) = current {
-        let class = reflection.class(state.dom.at(node).class);
-        if class.is_a(setup.world_root) {
-            return class.is_a(setup.workspace);
-        }
-        current = state.dom.parent_of(node);
-    }
-    false
+    super::world_root_of(state, reflection, setup.world_root, id).is_some_and(|world| reflection.class(state.dom.at(world).class).is_a(setup.workspace))
 }
 
 /// Lists an unanchored part for the step.
@@ -274,13 +267,15 @@ fn note(state: &mut State, reflection: &Reflection, setup: &Setup, id: InstanceI
 }
 
 /// Whether anything but gravity acts on a part: it can collide, sits beside a Humanoid, or holds a
-/// constraint or body mover (on itself or an attachment of it).
-fn held(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId) -> bool {
+/// constraint or body mover (on itself or an attachment of it). `beside_humanoid` keeps, for one step, whether
+/// each parent asked about holds a Humanoid, so a step looks through a parent's children once however many loose
+/// parts it holds.
+fn held(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId, beside_humanoid: &mut FxHashMap<InstanceId, bool>) -> bool {
     if state.dom.boolean(part, setup.can_collide) != Some(false) {
         return true;
     }
     if let (Some(humanoid), Some(parent)) = (setup.humanoid, state.dom.parent_of(part)) {
-        if state.dom.find_child_of_class(parent, humanoid).is_some() {
+        if *beside_humanoid.entry(parent).or_insert_with(|| state.dom.find_child_of_class(parent, humanoid).is_some()) {
             return true;
         }
     }
@@ -417,6 +412,7 @@ pub fn step(engine: &Engine, delta: f64) {
     let dt = delta as f32;
     let candidates = state.gravity.loose.clone();
     let mut visited: FxHashSet<InstanceId> = FxHashSet::default();
+    let mut beside_humanoid: FxHashMap<InstanceId, bool> = FxHashMap::default();
     let mut gone = Vec::new();
     for part in candidates {
         if visited.contains(&part) {
@@ -428,7 +424,7 @@ pub fn step(engine: &Engine, delta: f64) {
         }
         let component = joints::linked_parts(&mut state, reflection, part);
         visited.extend(component.iter().copied());
-        if component.iter().any(|&other| state.dom.boolean(other, setup.anchored) != Some(false) || held(&state, reflection, &setup, other)) {
+        if component.iter().any(|&other| state.dom.boolean(other, setup.anchored) != Some(false) || held(&state, reflection, &setup, other, &mut beside_humanoid)) {
             continue;
         }
         if let Some((foci, radius)) = &reach {

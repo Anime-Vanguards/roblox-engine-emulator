@@ -596,9 +596,34 @@ pub fn install(engine: &Rc<Engine>) {
     query::install(engine);
     camera::install(engine);
     mouse::install(engine);
+    keep_homes(engine);
     joints::install(engine);
     gravity::install(engine);
     engine.clear_member_cache();
+}
+
+/// The dom keeps each instance's home from here on (dom.rs Dom::home): its nearest WorldRoot or JointsService ancestor, where
+/// [`world_root_of`] and joints.rs read which world a part or a joint is in without walking up to it.
+fn keep_homes(engine: &Engine) {
+    let reflection = &engine.reflection;
+    let (Some(world_root), joints_service) = (reflection.class_id("WorldRoot"), reflection.class_id("JointsService")) else {
+        return;
+    };
+    let homes = reflection.classes.iter().enumerate().map(|(class, info)| info.is_a(world_root) || joints_service.is_some_and(|service| service as usize == class)).collect();
+    engine.state.borrow_mut().dom.keep_homes(homes);
+}
+
+/// The WorldRoot `id` is in (its nearest WorldRoot ancestor: the Workspace or a WorldModel), from the homes the dom keeps
+/// ([`keep_homes`]): one lookup, or two past JointsService, however deep `id` is.
+pub(crate) fn world_root_of(state: &State, reflection: &super::Reflection, world_root: super::ClassId, id: InstanceId) -> Option<InstanceId> {
+    let mut home = state.dom.home(id);
+    while let Some(node) = home {
+        if reflection.class(state.dom.at(node).class).is_a(world_root) {
+            return Some(node);
+        }
+        home = state.dom.home(node);
+    }
+    None
 }
 
 /// The Workspace's Terrain (Studio's Workspace always holds one; scripts adorn and parent to it, and

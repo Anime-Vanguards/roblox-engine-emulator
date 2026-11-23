@@ -39,6 +39,14 @@
 //! - A part a resolution finds where its joints already put it (within float noise) keeps its
 //!   stored CFrame, so loading a consistent model changes nothing.
 //!
+//! Which world a part or a joint is in is read from the homes the dom keeps (dom.rs `Dom::home`: each
+//! instance's nearest WorldRoot or JointsService ancestor, kept as the tree changes), never by walking up
+//! the tree: a lookup costs a few lookups for each joint it meets, however deep its parts and joints are.
+//! A playing client's assembly reads cost the same at any depth and joint count (Studio 0.747, a
+//! headless client: an AssemblyRootPart read 0.04 us, AssemblyMass 0.03 and AssemblyCenterOfMass 0.03,
+//! with 1 to 1,000 joints to parts 0 to 1,000 folders deep), and the work clock charges them its flat
+//! read price.
+//!
 //! Not modelled: Motor.CurrentAngle / DesiredAngle (the legacy motors' rotation), AnimationConstraint,
 //! RigidConstraint and the other constraints (solver-driven, nothing is simulated), and the members
 //! that report assemblies other than AssemblyRootPart (GetRootPart, GetConnectedParts,
@@ -317,34 +325,26 @@ fn ensure_scanned(state: &mut State, setup: &Setup) {
     }
 }
 
-/// The WorldRoot an instance is in (its nearest WorldRoot ancestor).
+/// The WorldRoot an instance is in (its nearest WorldRoot ancestor), from the homes the dom keeps: no walk up the tree, however
+/// deep the instance is (world/mod.rs world_root_of).
 fn world_of(state: &State, reflection: &Reflection, setup: &Setup, id: InstanceId) -> Option<InstanceId> {
-    let mut current = state.dom.parent_of(id);
-    while let Some(node) = current {
-        if reflection.class(state.dom.at(node).class).is_a(setup.world_root) {
-            return Some(node);
-        }
-        current = state.dom.parent_of(node);
-    }
-    None
+    super::world_root_of(state, reflection, setup.world_root, id)
 }
 
-/// Where a joint works from: its WorldRoot, or JointsService.
-fn joint_home(state: &State, reflection: &Reflection, setup: &Setup, id: InstanceId) -> Option<InstanceId> {
-    let mut current = state.dom.parent_of(id);
-    while let Some(node) = current {
-        let class = state.dom.at(node).class;
-        if reflection.class(class).is_a(setup.world_root) || Some(class) == setup.joints_service {
-            return Some(node);
-        }
-        current = state.dom.parent_of(node);
-    }
-    None
+/// Where a joint works from: its WorldRoot, or JointsService (its nearest ancestor of either: the home the dom keeps, dom.rs
+/// Dom::home).
+fn joint_home(state: &State, id: InstanceId) -> Option<InstanceId> {
+    state.dom.home(id)
 }
 
-/// The joints that link `part` to another part now, with that part.
+/// The joints that link `part` to another part now, with that part. Each candidate joint costs a few lookups (its parts, the
+/// other part's world, the joint's home), whatever the depth of the parts and joints in the tree.
 fn edges(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId) -> Vec<(InstanceId, InstanceId)> {
     let Some(candidates) = state.joints.by_part.get(&part) else {
+        return Vec::new();
+    };
+    // (a part outside every WorldRoot links to nothing)
+    let Some(world) = world_of(state, reflection, setup, part) else {
         return Vec::new();
     };
     let mut found = Vec::new();
@@ -364,11 +364,10 @@ fn edges(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId
         if other == part || !reflection.class(state.dom.at(other).class).is_a(setup.base_part) {
             continue;
         }
-        let Some(world) = world_of(state, reflection, setup, part) else { continue };
         if world_of(state, reflection, setup, other) != Some(world) {
             continue;
         }
-        match joint_home(state, reflection, setup, joint) {
+        match joint_home(state, joint) {
             Some(home) if home == world || Some(state.dom.at(home).class) == setup.joints_service => {}
             _ => continue,
         }
@@ -713,7 +712,7 @@ pub fn reparented(state: &mut State, reflection: &Reflection, hooks: &Hooks, id:
         if reflection.class(class).is_a(setup.world_root) || Some(class) == setup.joints_service {
             Some(node)
         } else {
-            joint_home(state, reflection, &setup, node)
+            joint_home(state, node)
         }
     };
     let Some(world) = home(state, new_parent) else { return };

@@ -1326,6 +1326,237 @@ fn assembly_root_part_is_the_root_a_playing_client_picks() {
     );
 }
 
+/// Parts link only within one world as they move between worlds: a weld joins two parts in the Workspace, then neither when
+/// one is in a WorldModel, both again once the WorldModel holds both (wherever the WorldModel goes), the same from
+/// JointsService, nothing outside every world, and the same with the parts and the WorldModel at the bottom of chains of
+/// folders 3,000 deep moved in and out whole.
+#[test]
+fn assemblies_link_within_one_world_as_their_parts_move_between_worlds() {
+    check(
+        r#"
+        local function Part(Name, Size)
+            local P = Instance.new("Part")
+            P.Name, P.Size, P.CanCollide = Name, Size, false
+            return P
+        end
+        local function Root(P)
+            local R = P.AssemblyRootPart
+            return R and R.Name or "nil"
+        end
+        local function Is(Case, A, B, Want)
+            local Got = Root(A) .. " " .. Root(B)
+            assert(Got == Want, `{Case}: {Got} where {Want}`)
+        end
+        -- (a chain of folders `Depth` deep holding `Inner`, made from the bottom up)
+        local function Wrap(Inner, Depth)
+            local Outer = Inner
+            for _ = 1, Depth do
+                local Folder = Instance.new("Folder")
+                Outer.Parent = Folder
+                Outer = Folder
+            end
+            return Outer
+        end
+        for _, Depth in { 0, 3000 } do
+            local A, B = Part("A", Vector3.new(2, 2, 2)), Part("B", Vector3.new(4, 4, 4))
+            local Weld = Instance.new("Weld")
+            Weld.Part0, Weld.Part1 = A, B
+            Weld.Parent = A
+            local BoxA, BoxB = Instance.new("Folder"), Instance.new("Folder")
+            A.Parent, B.Parent = BoxA, BoxB
+            local TopA, TopB = Wrap(BoxA, Depth), Wrap(BoxB, Depth)
+            TopA.Parent, TopB.Parent = workspace, workspace
+            Is(`{Depth}: both in the Workspace`, A, B, "B B")
+            local World = Instance.new("WorldModel")
+            local TopWorld = Wrap(World, Depth)
+            TopWorld.Parent = workspace
+            B.Parent = World
+            Is(`{Depth}: B in a WorldModel`, A, B, "A B")
+            A.Parent = World
+            Is(`{Depth}: both in the WorldModel`, A, B, "B B")
+            Weld.Parent = game:GetService("JointsService")
+            Is(`{Depth}: the weld in JointsService`, A, B, "B B")
+            -- (a WorldModel is a world wherever it is)
+            TopWorld.Parent = game:GetService("ReplicatedStorage")
+            Is(`{Depth}: the WorldModel out of the Workspace`, A, B, "B B")
+            TopWorld.Parent = nil
+            Is(`{Depth}: the WorldModel out of the game`, A, B, "B B")
+            local Loose = Instance.new("Folder")
+            Wrap(Loose, Depth)
+            A.Parent, B.Parent = Loose, Loose
+            Is(`{Depth}: outside every world`, A, B, "nil nil")
+            Weld.Parent = A
+            A.Parent, B.Parent = BoxA, BoxB
+            Is(`{Depth}: back in their boxes`, A, B, "B B")
+            TopB.Parent = nil
+            Is(`{Depth}: B's chain out`, A, B, "A nil")
+            TopB.Parent = TopA
+            Is(`{Depth}: B's chain under A's`, A, B, "B B")
+            TopA.Parent = game:GetService("ReplicatedStorage")
+            Is(`{Depth}: both chains out`, A, B, "nil nil")
+            TopA.Parent = workspace
+            Is(`{Depth}: both chains back`, A, B, "B B")
+        end
+        "#,
+    );
+}
+
+/// An assembly's lookups (AssemblyRootPart, AssemblyMass, AssemblyCenterOfMass, a velocity write, a Position write, a CFrame
+/// write moving the assembly) read which world each part and joint is in from the homes the dom keeps (dom.rs Dom::home),
+/// never by walking up the tree: a part welded to 20 parts at the bottom of a chain of 10,000 folders, or each 4,000 deep in a
+/// chain of its own, costs about as much host work as the same assembly in the Workspace, and the work clock charges each the
+/// same, as a playing client's reads cost the same at any depth (Studio 0.747: 0.04 us an AssemblyRootPart read with 1 to 1,000
+/// joints, its parts 0 to 1,000 folders deep). Each lookup used to walk up from every part and joint it met: 800,000 steps a
+/// lookup in the first scene.
+#[test]
+fn assembly_lookups_cost_the_same_however_deep_their_parts_are() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        -- (a chain of folders `Depth` deep holding `Inner`, made from the bottom up so that making it walks nothing)
+        local function Wrap(Inner, Depth)
+            local Outer = Inner
+            for _ = 1, Depth do
+                local Folder = Instance.new("Folder")
+                Outer.Parent = Folder
+                Outer = Folder
+            end
+            return Outer
+        end
+        local function Scene(X, Depth, Apart)
+            local Top = Instance.new("Folder")
+            local Hub = Instance.new("Part")
+            Hub.Name, Hub.Size, Hub.CanCollide, Hub.CFrame = "Hub", Vector3.new(4, 4, 4), false, CFrame.new(X, 500, 0)
+            Hub.Parent = Top
+            local Bottom = Instance.new("Folder")
+            local Leaves = {}
+            for I = 1, 20 do
+                local Leaf = Instance.new("Part")
+                Leaf.Size, Leaf.CanCollide, Leaf.CFrame = Vector3.one, false, CFrame.new(X, 503, 0)
+                local Weld = Instance.new("Weld")
+                Weld.Part0, Weld.Part1, Weld.C0 = Hub, Leaf, CFrame.new(0, 3, 0)
+                Weld.Parent = Leaf
+                if Apart then
+                    local Box = Instance.new("Folder")
+                    Leaf.Parent = Box
+                    Wrap(Box, Depth).Parent = Top
+                else
+                    Leaf.Parent = Bottom
+                end
+                Leaves[I] = Leaf
+            end
+            if not Apart then
+                Wrap(Bottom, Depth).Parent = Top
+            end
+            Top.Parent = workspace
+            return { Hub = Hub, Leaf = Leaves[20] }
+        end
+        shared.Scenes = { Shallow = Scene(0, 0, false), Deep = Scene(100, 10000, false), Apart = Scene(200, 4000, true) }
+        shared.Work = {}
+        local function Pass(S)
+            local Hub, Leaf = S.Hub, S.Leaf
+            for I = 1, 200 do
+                assert(Leaf.AssemblyRootPart == Hub and Hub.AssemblyRootPart == Hub, "the hub is the root")
+                assert(math.abs(Leaf.AssemblyMass - 0.7 * 84) < 1e-3, "the assembly's mass")
+                local _ = Leaf.AssemblyCenterOfMass
+                Leaf.AssemblyLinearVelocity = Vector3.new(0, I % 2, 0)
+            end
+            for I = 1, 20 do
+                Hub.CFrame = Hub.CFrame + Vector3.new(0, 0, 1)
+                Leaf.Position = Leaf.Position + Vector3.new(0, 0, 0.01)
+            end
+        end
+        -- each scene twice, the second pass timed (the first warms the members and instances the frame touches)
+        function shared.Use(Name)
+            Pass(shared.Scenes[Name])
+            local Start = os.clock()
+            Pass(shared.Scenes[Name])
+            shared.Work[Name] = os.clock() - Start
+        end
+        "#,
+    );
+    let mut host = Vec::new();
+    for name in ["Shallow", "Deep", "Apart"] {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.Use(\"{name}\")"));
+        host.push(start.elapsed().as_secs_f64());
+    }
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Work = shared.Work
+        assert(Work.Shallow > 0, "the passes cost work")
+        assert(math.abs(Work.Deep - Work.Shallow) < 1e-12, `the deep scene's pass cost {Work.Deep} s of work where the shallow one's {Work.Shallow}`)
+        assert(math.abs(Work.Apart - Work.Shallow) < 1e-12, `the scene apart cost {Work.Apart} s of work where the shallow one's {Work.Shallow}`)
+        "#,
+    );
+    let (shallow, deep, apart) = (host[0], host[1], host[2]);
+    assert!(deep < 0.15 && apart < 0.15, "two passes of 1,040 lookups took {deep:.3} s 10,000 deep and {apart:.3} s 4,000 deep apart, {shallow:.3} s in the Workspace");
+}
+
+/// The physics step asks which world each loose part is in from the homes the dom keeps, and whether a parent holds a Humanoid
+/// once a step for each parent: 200 loose parts at the bottom of a chain of 20,000 folders fly for 60 frames, and 5,000 loose
+/// parts in one folder for 30, on little host work. The step used to walk up from every loose part to the Workspace each frame
+/// (4 million steps a frame in the first case), the first step from every instance in the Workspace (200 million), and look
+/// through every sibling of every loose part for a Humanoid each frame (25 million in the second).
+#[test]
+fn free_flight_steps_cost_the_same_however_deep_or_wide_the_parts_are() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Outer = Instance.new("Folder")
+        for I = 1, 200 do
+            local Part = Instance.new("Part")
+            Part.Size, Part.CanCollide, Part.CFrame = Vector3.one, false, CFrame.new(I * 3, 1000, 0)
+            Part.Parent = Outer
+        end
+        shared.First = Outer:GetChildren()[1]
+        for _ = 1, 20000 do
+            local Folder = Instance.new("Folder")
+            Outer.Parent = Folder
+            Outer = Folder
+        end
+        Outer.Parent = workspace
+        "#,
+    );
+    let start = std::time::Instant::now();
+    for _ in 0..60 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let host = start.elapsed().as_secs_f64();
+    run(&lua, &engine, r#"assert(shared.First.Position.Y < 950, `the part fell to {shared.First.Position.Y}`)"#);
+    assert!(host < 0.25, "60 frames of 200 parts flying 20,000 deep took {host:.3} s of host time");
+
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        for I = 1, 5000 do
+            local Part = Instance.new("Part")
+            Part.Size, Part.CanCollide, Part.CFrame = Vector3.one, false, CFrame.new(I * 3, 1000, 0)
+            Part.Parent = Folder
+        end
+        shared.First = Folder:GetChildren()[1]
+        Folder.Parent = workspace
+        "#,
+    );
+    let start = std::time::Instant::now();
+    for _ in 0..30 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let host = start.elapsed().as_secs_f64();
+    run(&lua, &engine, r#"assert(shared.First.Position.Y < 990, `the part fell to {shared.First.Position.Y}`)"#);
+    assert!(host < 0.2, "30 frames of 5,000 parts flying in one folder took {host:.3} s of host time");
+}
+
 /// WorldRoot:BulkMoveTo checks its lists as a Studio 0.746 playing client does, with its messages, before any part moves; a
 /// nil in the part list keeps the lists paired by index; destroyed, parentless and stored parts move.
 #[test]

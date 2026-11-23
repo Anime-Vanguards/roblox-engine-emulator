@@ -652,11 +652,9 @@ fn reparent(
         if was_inside && !now_inside {
             super::services::subtree_moved(state, id, false);
         }
-        state.dom.detach(id);
     }
-    if let Some(parent) = new_parent {
-        state.dom.attach(id, parent);
-    }
+    // (out of the old parent and under the new one, its home in the tree worked out once: dom.rs reparent)
+    state.dom.reparent(id, new_parent);
     notify_changed_hooks(state, reflection, hooks, id, K::Parent as NameId, None);
     if let Some(old) = old_parent {
         fire_event_measured(state, old, K::ChildRemoved as NameId, vec![Value::Instance(id)], SignalKind::ChildRemoved);

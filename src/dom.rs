@@ -643,6 +643,14 @@ pub struct Dom {
     next_attached: u64,
     /// What changed under the subtree the spatial index keeps, while it keeps one (world/broadphase.rs)
     pub watch: Option<Watch>,
+    /// Each instance's home, by slot, once [`Dom::keep_homes`] named the home classes: its nearest ancestor of one of them (the
+    /// WorldRoots and JointsService, where world/joints.rs and world/gravity.rs ask which world a part or a joint is in), kept
+    /// as the tree changes so that question costs one lookup however deep the instance is
+    homes: Vec<Option<InstanceId>>,
+    /// Whether each class (by id) is a home class; empty while homes are not kept
+    home_classes: Vec<bool>,
+    /// A stack reused to walk a subtree whose home changed
+    home_walk: Vec<InstanceId>,
 }
 
 /// What changed under `root` (the Workspace) since the spatial index last took the log (world/broadphase.rs): the instances
@@ -727,10 +735,16 @@ impl Dom {
             if let Some(set) = self.tracked.get_mut(&class) {
                 set.insert(index);
             }
+            if let Some(home) = self.homes.get_mut(index as usize) {
+                *home = None;
+            }
             return InstanceId { index, generation: slot.generation };
         }
         let index = self.slots.len() as u32;
         self.slots.push(Slot { generation: 0, instance: Some(instance) });
+        if !self.home_classes.is_empty() {
+            self.homes.push(None);
+        }
         if let Some(set) = self.tracked.get_mut(&class) {
             set.insert(index);
         }
@@ -760,6 +774,7 @@ impl Dom {
             return;
         }
         self.defaults.ensure(reflection, class);
+        let was_home = self.is_home(id);
         if let Some(set) = self.tracked.get_mut(&old) {
             set.remove(&id.index);
         }
@@ -785,6 +800,73 @@ impl Dom {
         if self.watched(id) {
             self.log_moved(id);
         }
+        // (one that becomes or stops being a WorldRoot moves its descendants' world)
+        if self.is_home(id) != was_home {
+            let home = if was_home { self.home(id) } else { Some(id) };
+            self.spread_home(id, home);
+        }
+    }
+
+    /// Keeps each instance's home from now on ([`Dom::home`]): its nearest ancestor of a class `is_home` (by class id) marks.
+    /// Those of the instances that exist are worked out now, once.
+    pub fn keep_homes(&mut self, is_home: Vec<bool>) {
+        self.home_classes = is_home;
+        self.homes.clear();
+        self.homes.resize(self.slots.len(), None);
+        let mut walk: Vec<(InstanceId, Option<InstanceId>)> =
+            (0..self.slots.len() as u32).filter_map(|slot| self.id_at_slot(slot)).filter(|&id| self.at(id).parent.is_none()).map(|root| (root, None)).collect();
+        while let Some((node, home)) = walk.pop() {
+            self.homes[node.index as usize] = home;
+            let below = if self.is_home(node) { Some(node) } else { home };
+            walk.extend(self.at(node).children.iter().map(|&child| (child, below)));
+        }
+    }
+
+    /// The nearest ancestor of the live instance `id` of a home class ([`Dom::keep_homes`]: the WorldRoots and JointsService),
+    /// found without walking its ancestors; None when it has none, and for every instance while homes are not kept.
+    #[inline]
+    pub fn home(&self, id: InstanceId) -> Option<InstanceId> {
+        self.homes.get(id.index as usize).copied().flatten()
+    }
+
+    fn is_home(&self, id: InstanceId) -> bool {
+        !self.home_classes.is_empty() && self.home_classes.get(self.at(id).class as usize).copied().unwrap_or(false)
+    }
+
+    /// The home of a child of `parent`: `parent` itself when it is of a home class, else `parent`'s home.
+    fn home_below(&self, parent: InstanceId) -> Option<InstanceId> {
+        if self.is_home(parent) { Some(parent) } else { self.home(parent) }
+    }
+
+    /// `child`'s home now that its parent changed: when it is another than it was, `child` and the descendants that take theirs
+    /// from it get the new one (a walk of the subtree down to the homes in it). A subtree moved within its world walks nothing.
+    fn rehome(&mut self, child: InstanceId) {
+        if self.home_classes.is_empty() {
+            return;
+        }
+        let home = self.at(child).parent.and_then(|parent| self.home_below(parent));
+        let slot = child.index as usize;
+        if self.homes[slot] == home {
+            return;
+        }
+        self.homes[slot] = home;
+        if !self.is_home(child) {
+            self.spread_home(child, home);
+        }
+    }
+
+    /// Gives `home` to the descendants of `id` down to and including the instances of a home class (below which the homes stay).
+    fn spread_home(&mut self, id: InstanceId, home: Option<InstanceId>) {
+        let mut walk = std::mem::take(&mut self.home_walk);
+        walk.clear();
+        walk.extend_from_slice(&self.at(id).children);
+        while let Some(node) = walk.pop() {
+            self.homes[node.index as usize] = home;
+            if !self.is_home(node) {
+                walk.extend_from_slice(&self.at(node).children);
+            }
+        }
+        self.home_walk = walk;
     }
 
     fn track_class(&mut self, class: ClassId) {
@@ -1020,6 +1102,27 @@ impl Dom {
 
     /// Appends `child` to `parent`'s children and sets its parent (no events: RawParent).
     pub fn attach(&mut self, child: InstanceId, parent: InstanceId) {
+        self.link(child, parent);
+        self.rehome(child);
+    }
+
+    /// Removes `child` from its parent's children and clears its parent (no events).
+    pub fn detach(&mut self, child: InstanceId) {
+        self.unlink(child);
+        self.rehome(child);
+    }
+
+    /// [`Dom::detach`], then [`Dom::attach`] to `parent` when there is one, with `child`'s home worked out once: a subtree moved
+    /// within its world walks nothing for its homes.
+    pub fn reparent(&mut self, child: InstanceId, parent: Option<InstanceId>) {
+        self.unlink(child);
+        if let Some(parent) = parent {
+            self.link(child, parent);
+        }
+        self.rehome(child);
+    }
+
+    fn link(&mut self, child: InstanceId, parent: InstanceId) {
         self.touch_rigs(parent);
         self.at_mut(child).parent = Some(parent);
         let parent_instance = self.at_mut(parent);
@@ -1032,8 +1135,7 @@ impl Dom {
         }
     }
 
-    /// Removes `child` from its parent's children and clears its parent (no events).
-    pub fn detach(&mut self, child: InstanceId) {
+    fn unlink(&mut self, child: InstanceId) {
         let Some(parent) = self.at(child).parent else {
             return;
         };
@@ -1067,6 +1169,15 @@ impl Dom {
         if self.watched(parent) {
             self.log_leaving(old);
             self.log_moved(new);
+        }
+        self.rehome(old);
+        // (the new child holds what was handed to it, the old one's children when a project mount replaces a folder by a script:
+        // their homes are worked out again, whatever the new child's own was)
+        if !self.home_classes.is_empty() {
+            let home = self.home_below(parent);
+            self.homes[new.index as usize] = home;
+            let below = if self.is_home(new) { Some(new) } else { home };
+            self.spread_home(new, below);
         }
     }
 
@@ -1372,6 +1483,143 @@ mod tests {
         // BindableFunction's recorded Name default differs from its class name
         let function = dom.create(&reflection, reflection.class_id("BindableFunction").unwrap());
         assert_eq!(dom.at(function).name.as_bytes(), b"Function");
+    }
+
+    /// The homes the dom keeps (the nearest WorldRoot or JointsService ancestor) are each instance's as a walk up the tree finds
+    /// it, after every kind of change the tree takes: instances made under others, moved (`reparent`, as set_parent moves them,
+    /// and `attach` / `detach`), moved into and out of WorldModels and JointsService and between chains 2,000 deep, put in
+    /// another's place (`replace_child` after the children were handed over, as a project mount does), freed and made again in
+    /// the same slot, and given a WorldRoot's class or a Folder's where they stand (`set_class`, a placeholder revealed); homes
+    /// kept from a tree that already existed too.
+    #[test]
+    fn homes_are_what_a_walk_up_the_tree_finds() {
+        let reflection = Reflection::shared().unwrap();
+        let class = |name: &str| reflection.class_id(name).unwrap();
+        let (world_root, joints_service) = (class("WorldRoot"), class("JointsService"));
+        let homes: Vec<bool> = reflection.classes.iter().enumerate().map(|(id, info)| info.is_a(world_root) || id == joints_service as usize).collect();
+        let is_home = |dom: &Dom, id: InstanceId| homes[dom.at(id).class as usize];
+        let walked = |dom: &Dom, id: InstanceId| {
+            let mut current = dom.at(id).parent;
+            while let Some(node) = current {
+                if is_home(dom, node) {
+                    return Some(node);
+                }
+                current = dom.at(node).parent;
+            }
+            None
+        };
+        let mut dom = Dom::new();
+        let game = dom.create(&reflection, class("DataModel"));
+        let workspace = dom.create(&reflection, class("Workspace"));
+        dom.attach(workspace, game);
+        let service = dom.create(&reflection, class("JointsService"));
+        dom.attach(service, game);
+        let storage = dom.create(&reflection, class("ReplicatedStorage"));
+        dom.attach(storage, game);
+        let mut live = vec![game, workspace, service, storage];
+        // a tree made before the homes were kept
+        let early = dom.create(&reflection, class("Part"));
+        dom.attach(early, workspace);
+        live.push(early);
+        dom.keep_homes(homes.clone());
+        let check = |dom: &Dom, live: &[InstanceId], step: &str| {
+            for &id in live {
+                assert_eq!(dom.home(id), walked(dom, id), "{step}: the home of {}", dom.full_name(&reflection, id));
+            }
+        };
+        check(&dom, &live, "kept from the start");
+        // two chains 2,000 deep, one in the Workspace, one in storage
+        let deep = |dom: &mut Dom, live: &mut Vec<InstanceId>, top: InstanceId| {
+            let mut at = top;
+            for _ in 0..2000 {
+                let folder = dom.create(&reflection, class("Folder"));
+                dom.attach(folder, at);
+                live.push(folder);
+                at = folder;
+            }
+            at
+        };
+        let deep_in_world = deep(&mut dom, &mut live, workspace);
+        let deep_in_storage = deep(&mut dom, &mut live, storage);
+        check(&dom, &live, "the chains");
+        let kinds = ["Folder", "Part", "Model", "WorldModel", "Weld", "Folder", "Part"];
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for round in 0..3000 {
+            let pick = |next: &mut dyn FnMut(usize) -> usize, live: &[InstanceId]| live[next(live.len())];
+            match next(8) {
+                // made under a live instance (the chains' bottoms often)
+                0 | 1 => {
+                    let made = dom.create(&reflection, class(kinds[next(kinds.len())]));
+                    let parent = match next(3) {
+                        0 => deep_in_world,
+                        1 => deep_in_storage,
+                        _ => pick(&mut next, &live),
+                    };
+                    dom.attach(made, parent);
+                    live.push(made);
+                }
+                // moved under another (never into itself), or out of the tree
+                2..=4 => {
+                    let moved = pick(&mut next, &live[4..]);
+                    let target = if next(10) == 0 { None } else { Some(pick(&mut next, &live)) };
+                    if target.is_some_and(|target| target == moved || dom.is_descendant_of(target, moved)) {
+                        continue;
+                    }
+                    if next(2) == 0 {
+                        dom.reparent(moved, target);
+                    } else {
+                        dom.detach(moved);
+                        if let Some(target) = target {
+                            dom.attach(moved, target);
+                        }
+                    }
+                }
+                // put in another's place, its children handed over first
+                5 => {
+                    let old = pick(&mut next, &live[4..]);
+                    let Some(parent) = dom.at(old).parent.filter(|_| old != deep_in_world && old != deep_in_storage) else { continue };
+                    let new = dom.create(&reflection, class(kinds[next(kinds.len())]));
+                    let children = std::mem::take(&mut dom.at_mut(old).children);
+                    for &child in &children {
+                        dom.at_mut(child).parent = Some(new);
+                    }
+                    dom.at_mut(new).children = children;
+                    dom.replace_child(parent, old, new);
+                    live.push(new);
+                }
+                // a leaf taken out and freed (its slot is made again)
+                6 => {
+                    let index = 5 + next(live.len() - 5);
+                    let leaf = live[index];
+                    if !dom.at(leaf).children.is_empty() || leaf == deep_in_world || leaf == deep_in_storage {
+                        continue;
+                    }
+                    dom.detach(leaf);
+                    dom.free(leaf);
+                    live.swap_remove(index);
+                }
+                // given another class where it stands
+                _ => {
+                    let id = pick(&mut next, &live[5..]);
+                    let to = if is_home(&dom, id) { "Folder" } else { "WorldModel" };
+                    dom.set_class(&reflection, id, class(to));
+                }
+            }
+            if round % 100 == 0 {
+                check(&dom, &live, &format!("round {round}"));
+            }
+        }
+        check(&dom, &live, "the end");
+        // a JointsService between: its own home is none, those below it have it
+        let weld = dom.create(&reflection, class("Weld"));
+        dom.attach(weld, service);
+        assert_eq!((dom.home(weld), dom.home(service)), (Some(service), None));
     }
 
     /// A class change that renames an instance (its name was the old class's default) moves the names' version, which a child
