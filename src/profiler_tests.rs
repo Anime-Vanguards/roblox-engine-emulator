@@ -1287,6 +1287,34 @@ fn booked_cycles(name: &str, source: &str, frames: usize) -> (std::collections::
     (own, json["counters"]["attribution"].clone(), summary)
 }
 
+/// One run of [`booked_cycles`]: each function's own cycles by name, and the attribution
+type BookedRun = (std::collections::HashMap<String, f64>, serde_json::Value);
+
+/// [`booked_cycles`] three times, for checks that compare the own cycles of functions that each run for some 50 ms: each run's
+/// own cycles by name and attribution, and the summaries. The mock counts the run thread's real cycles, which take in whatever
+/// lands on the thread while a function runs (interrupts; on a virtual machine, the stretches its host runs something else,
+/// which the thread's cycle count goes on counting), so one stretch of a few milliseconds moves a ratio of two functions by
+/// 15 % or more (measured on an idle desktop: 3 runs in 24 of the coroutine test read one function 14 % high, by 28 million
+/// cycles, the others within 1 %). A booking error is in every run and such a stretch in one, so the checks take the median of
+/// each ratio over the runs.
+fn booked_cycles_three_times(name: &str, source: &str, frames: usize) -> (Vec<BookedRun>, String) {
+    let mut runs = Vec::new();
+    let mut summaries = Vec::new();
+    for _ in 0..3 {
+        let (own, attribution, summary) = booked_cycles(name, source, frames);
+        runs.push((own, attribution));
+        summaries.push(summary);
+    }
+    (runs, summaries.join("\n"))
+}
+
+/// The median of each run's `ratio` of its own cycles by name ([`booked_cycles_three_times`])
+fn median_ratio(runs: &[BookedRun], ratio: impl Fn(&dyn Fn(&str) -> f64) -> f64) -> f64 {
+    let mut ratios: Vec<f64> = runs.iter().map(|(own, _)| ratio(&|name: &str| own.get(name).copied().unwrap_or(0.0))).collect();
+    ratios.sort_by(f64::total_cmp);
+    ratios[ratios.len() / 2]
+}
+
 /// A function calling itself four deep, its calls sampled one in several: each call is drawn on its own, so the
 /// function's own cycles are its calls' (the caller's loop keeps next to nothing), not the bias one draw for each run of
 /// calls gave (the nested call and its caller never sampled together)
@@ -1325,10 +1353,11 @@ result = main()
 }
 
 /// A coroutine's body runs between the readings where it resumes and yields: its loop is its own, as the same loop in
-/// a function called beside it is that function's, and the code resuming it keeps next to nothing
+/// a function called beside it is that function's, and the code resuming it keeps next to nothing (each ratio the median of
+/// three runs: [`booked_cycles_three_times`])
 #[test]
 fn hardware_counters_book_a_coroutine_its_own() {
-    let (own, attribution, summary) = booked_cycles(
+    let (runs, summary) = booked_cycles_three_times(
         "co",
         "local work = {}
 function work.compute(n)
@@ -1360,17 +1389,22 @@ result = main()
 ",
         0,
     );
-    let (generator, compute, main) = (own.get("generator").copied().unwrap_or(0.0), own.get("compute").copied().unwrap_or(0.0), own.get("main").copied().unwrap_or(0.0));
-    assert!(attribution["switch_readings"].as_u64().unwrap() >= 1000, "a reading where the coroutine resumes and yields: {attribution}");
-    assert!(compute > 0.0 && (generator / compute - 1.0).abs() < 0.25, "the coroutine's loop {generator}, the same loop called {compute}\n{summary}");
-    assert!(main.abs() < 0.15 * compute, "the code resuming it {main}\n{summary}");
+    for (own, attribution) in &runs {
+        assert!(attribution["switch_readings"].as_u64().unwrap() >= 1000, "a reading where the coroutine resumes and yields: {attribution}");
+        assert!(own.get("compute").is_some_and(|&compute| compute > 0.0), "the called loop's own cycles\n{summary}");
+    }
+    let looped = median_ratio(&runs, |own| own("generator") / own("compute"));
+    let resuming = median_ratio(&runs, |own| own("main").abs() / own("compute"));
+    assert!((looped - 1.0).abs() < 0.25, "the coroutine's loop against the same loop called: {looped}\n{summary}");
+    assert!(resuming < 0.15, "the code resuming it against the called loop: {resuming}\n{summary}");
 }
 
 /// Two threads the engine resumes each frame, one running its loop inline, one calling a function with the same loop:
-/// each thread's stretch is its own, whichever thread's reading closed it
+/// each thread's stretch is its own, whichever thread's reading closed it (each ratio the median of three runs:
+/// [`booked_cycles_three_times`])
 #[test]
 fn hardware_counters_book_each_thread_its_own() {
-    let (own, attribution, summary) = booked_cycles(
+    let (runs, summary) = booked_cycles_three_times(
         "task",
         "local work = {}
 function work.compute(n)
@@ -1400,10 +1434,14 @@ task.spawn(callingLoop)
 ",
         60,
     );
-    let (inline, calling, compute) = (own.get("inlineLoop").copied().unwrap_or(0.0), own.get("callingLoop").copied().unwrap_or(0.0), own.get("compute").copied().unwrap_or(0.0));
-    assert!(attribution["switch_readings"].as_u64().unwrap() >= 200, "{attribution}");
-    assert!(compute > 0.0 && (inline / compute - 1.0).abs() < 0.25, "the inline loop {inline}, the called one {compute}\n{summary}");
-    assert!(calling.abs() < 0.15 * compute, "the calling thread's own {calling}\n{summary}");
+    for (own, attribution) in &runs {
+        assert!(attribution["switch_readings"].as_u64().unwrap() >= 200, "{attribution}");
+        assert!(own.get("compute").is_some_and(|&compute| compute > 0.0), "the called loop's own cycles\n{summary}");
+    }
+    let inline = median_ratio(&runs, |own| own("inlineLoop") / own("compute"));
+    let calling = median_ratio(&runs, |own| own("callingLoop").abs() / own("compute"));
+    assert!((inline - 1.0).abs() < 0.25, "the inline loop against the called one: {inline}\n{summary}");
+    assert!(calling < 0.15, "the calling thread's own against the called loop: {calling}\n{summary}");
 }
 
 /// A function whose first call is short and the rest long is sampled from its first calls on (one short call decides

@@ -736,12 +736,47 @@ pub fn clone_instance(state: &mut State, reflection: &Reflection, root: Instance
     Some(result)
 }
 
+/// Copies `original`'s subtree, its Archivable instances, each before its children, each copy attached to its parent's copy
+/// once the copy's own subtree is made. A stack of steps in place of recursion: a script can build a chain deeper than any
+/// thread's stack holds frames for.
 fn copy_tree(
     state: &mut State,
     reflection: &Reflection,
     original: InstanceId,
     map: &mut Vec<(InstanceId, InstanceId)>,
 ) -> Option<InstanceId> {
+    enum Step {
+        /// Copy the instance, then its subtree under the copy of the second (none for the root)
+        Copy(InstanceId, Option<InstanceId>),
+        /// Attach the copy to its parent's copy, its subtree made
+        Attach(InstanceId, InstanceId),
+    }
+    let mut root = None;
+    let mut steps = vec![Step::Copy(original, None)];
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Attach(copy, parent) => state.dom.attach(copy, parent),
+            Step::Copy(original, parent) => {
+                let Some((copy, children)) = copy_one(state, reflection, original, map) else { continue };
+                match parent {
+                    Some(parent) => steps.push(Step::Attach(copy, parent)),
+                    None => root = Some(copy),
+                }
+                steps.extend(children.into_iter().rev().map(|child| Step::Copy(child, Some(copy))));
+            }
+        }
+    }
+    root
+}
+
+/// [`copy_tree`]'s copy of one instance, unparented, with the children of `original` to copy below it; None when it is not
+/// Archivable.
+fn copy_one(
+    state: &mut State,
+    reflection: &Reflection,
+    original: InstanceId,
+    map: &mut Vec<(InstanceId, InstanceId)>,
+) -> Option<(InstanceId, Vec<InstanceId>)> {
     if !archivable(state, original) {
         return None;
     }
@@ -772,12 +807,7 @@ fn copy_tree(
     }
     state.dom.refresh_name(reflection, copy);
     map.push((original, copy));
-    for child in children {
-        if let Some(child_copy) = copy_tree(state, reflection, child, map) {
-            state.dom.attach(child_copy, copy);
-        }
-    }
-    Some(copy)
+    Some((copy, children))
 }
 
 /// An instance tree kept as data: what [`clone_instance`] would copy of it now, without making an instance (a clip

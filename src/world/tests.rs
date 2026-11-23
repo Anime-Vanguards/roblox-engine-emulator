@@ -1638,6 +1638,145 @@ fn free_flight_steps_cost_the_same_however_deep_or_wide_the_parts_are() {
     assert!(host < 0.2, "30 frames of 5,000 parts flying in one folder took {host:.3} s of host time");
 }
 
+/// A script cannot overflow the engine's stack with a deep tree: the engine's walks of the tree keep stacks of their own. On a
+/// thread with libtest's 2 MiB stack (a recursion over these chains overflows it at 20 bytes a level, 200 for the one destroyed):
+/// a chain of 100,000 Folders with a Part at the bottom holding 50,000 nested Attachments and 50,000 nested Bones below them, a
+/// CurveAnimation of 100,000 nested Folders, and a chain of 10,000 Folders, each moved into ReplicatedStorage, and a model of
+/// 100,000 nested Folders imported there lazily (its instances made as a script reaches them), with a Studio place's hierarchy
+/// loaded. The script first lists the bottom part's children (its Studio node worked out up the whole chain), then searches the chain
+/// (FindFirstChild and FindFirstChildWhichIsA recursive, QueryDescendants) and the import's plan, clones the chain, reads the bottom bone's and
+/// attachment's world frames and moves the chain into the Workspace (AncestryChanged's order, the move's price), where it is stepped
+/// (the physics step's first walk) and queried (the spatial index), then out; it reads the clip's length and the KeyframeSequence
+/// made of it, and destroys the last chain (a destroy unparents each child in turn, so it takes as long as the chain's depth
+/// squared). Nothing lists the deep chains: wrapping an instance for a script walks up to its root.
+#[test]
+fn a_tree_deeper_than_a_stack_holds_frames_for_runs() {
+    const DEPTH: usize = 100_000;
+    const HALF: usize = DEPTH / 2;
+    const DESTROYED: usize = 10_000;
+    let body = || {
+        let (lua, engine) = start_play();
+        {
+            // (built here, a level at a time: a script's Parent write under the bottom of a chain walks up it)
+            let reflection = engine.reflection.clone();
+            let class = |name: &str| reflection.class_id(name).unwrap();
+            let storage = crate::services::get_service(&engine, engine.world().game, "ReplicatedStorage").expect("ReplicatedStorage");
+            let chain = |top: crate::InstanceId, class_name: &str, depth: usize, last: &str| {
+                let mut state = engine.state.borrow_mut();
+                let mut at = top;
+                for level in 1..=depth {
+                    let made = crate::instance::create_named(&mut state, &reflection, class(class_name), if level == depth { last } else { class_name });
+                    state.dom.attach(made, at);
+                    at = made;
+                }
+                at
+            };
+            let root = |class_name: &str, name: &str| crate::instance::create_named(&mut engine.state.borrow_mut(), &reflection, class(class_name), name);
+            let tree = root("Folder", "DeepTree");
+            let bottom = chain(chain(tree, "Folder", DEPTH, "Folder"), "Part", 1, "Bottom");
+            chain(chain(bottom, "Attachment", HALF, "LastAttachment"), "Bone", HALF, "LastBone");
+            let clip = root("CurveAnimation", "DeepClip");
+            chain(clip, "Folder", DEPTH, "BottomFolder");
+            let doomed = root("Folder", "DeepDestroy");
+            chain(doomed, "Folder", DESTROYED, "Folder");
+            for top in [tree, clip, doomed] {
+                engine_lua::instance::set_parent(&engine, top, Some(storage)).expect("moved into ReplicatedStorage");
+            }
+            let mut model = rbx_dom_weak::WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
+            let import = model.insert(model.root_ref(), rbx_dom_weak::InstanceBuilder::new("Folder").with_name("DeepImport"));
+            let mut at = import;
+            for _ in 0..DEPTH {
+                at = model.insert(at, rbx_dom_weak::InstanceBuilder::new("Folder"));
+            }
+            model.insert(at, rbx_dom_weak::InstanceBuilder::new("Part").with_name("ImportBottom"));
+            let plan = std::sync::Arc::new(crate::project::ModelPlan::new(&reflection, &model, &[import]));
+            plan.instantiate_lazy(&mut engine.state.borrow_mut(), &reflection, storage);
+            // a place's Studio hierarchy (the game and its ReplicatedStorage), and an ObjectValue that hands the script the bottom part
+            // before anything above it was looked at
+            let place = std::env::temp_dir().join(format!("ree-deep-tree-{}", std::process::id()));
+            std::fs::create_dir_all(place.join("place")).unwrap();
+            std::fs::create_dir_all(place.join(crate::project::SNAPSHOTS_DIR)).unwrap();
+            std::fs::write(place.join(crate::project::PLACES_FILE), r#"{"environments":[{"name":"Deep","projectFile":"place/default.project.json"}]}"#).unwrap();
+            std::fs::write(
+                place.join(crate::project::SNAPSHOTS_DIR).join("Deep.json"),
+                r#"{"nodes":[{"name":"game","className":"DataModel","parent":-1},{"name":"ReplicatedStorage","className":"ReplicatedStorage","parent":0}]}"#,
+            )
+            .unwrap();
+            let roots = [place.join("place").to_string_lossy().replace('\\', "/")];
+            assert!(crate::project::use_studio_hierarchy(&engine, &roots).is_some(), "the place's hierarchy is loaded");
+            let _ = std::fs::remove_dir_all(&place);
+            let pointer = root("ObjectValue", "BottomRef");
+            crate::instance::raw_set_silent(&mut engine.state.borrow_mut(), &reflection, pointer, reflection.name_id("Value").unwrap(), crate::value::Value::Instance(bottom));
+            engine_lua::instance::set_parent(&engine, pointer, Some(storage)).expect("moved into ReplicatedStorage");
+        }
+        run(
+            &lua,
+            &engine,
+            r#"
+            local Storage = game:GetService("ReplicatedStorage")
+            local Tree, Clip, Doomed, Import = Storage.DeepTree, Storage.DeepClip, Storage.DeepDestroy, Storage.DeepImport
+            assert(#Storage.BottomRef.Value:GetChildren() == 1, "the bottom part holds the first attachment")
+            -- (the import's plan searched before any of its instances is made)
+            assert(Import:FindFirstChild("Missing", true) == nil, "nothing in the import is named Missing")
+            local Imported = Import:FindFirstChildWhichIsA("BasePart", true)
+            assert(Imported and Imported.Name == "ImportBottom" and Imported:IsDescendantOf(Import), "the import's part is found and made")
+            assert(Tree:FindFirstChild("Missing", true) == nil, "nothing is named Missing")
+            local Bottom = Tree:FindFirstChild("Bottom", true)
+            assert(Bottom and Bottom:IsA("Part"), "the part at the bottom is found by name")
+            local Bone = Tree:FindFirstChildWhichIsA("Bone", true)
+            assert(Bone and Bone.Parent.Name == "LastAttachment", "the first bone is found by class")
+            local Parts = Tree:QueryDescendants("Part")
+            assert(#Parts == 1 and Parts[1] == Bottom, "the query finds the part")
+            local Copy = Tree:Clone()
+            local Copied = Copy:FindFirstChild("LastBone", true)
+            assert(Copied and Copied ~= Bottom:FindFirstChild("LastBone", true), "the clone holds the whole chain")
+            local LastBone, LastAttachment = Bottom:FindFirstChild("LastBone", true), Bottom:FindFirstChild("LastAttachment", true)
+            assert((LastBone.TransformedWorldCFrame.Position - Bottom.Position).Magnitude < 1e-3, "the bottom bone hangs where the part is")
+            assert((LastAttachment.WorldPosition - Bottom.Position).Magnitude < 1e-3, "the bottom attachment hangs where the part is")
+            -- (a part that can collide is held where it is: world/gravity.rs)
+            Bottom.CanCollide = false
+            shared.Start, shared.Bottom = Bottom.Position.Y, Bottom
+            Tree.Parent = workspace
+            -- the clip: one key at its start, so its KeyframeSequence is one keyframe of 100,000 nested Poses
+            local Position = Instance.new("Vector3Curve")
+            Position.Name = "Position"
+            Position.Parent = Clip:FindFirstChild("BottomFolder", true)
+            local X = Instance.new("FloatCurve")
+            X.Name = "X"
+            X:SetKeys({ FloatCurveKey.new(0, 2, Enum.KeyInterpolationMode.Linear) })
+            X.Parent = Position
+            assert(Clip.Length == 0, `the clip's length {Clip.Length}`)
+            local Id = game:GetService("AnimationClipProvider"):RegisterAnimationClip(Clip)
+            task.spawn(function()
+                shared.Made = game:GetService("KeyframeSequenceProvider"):GetKeyframeSequenceAsync(Id)
+            end)
+            Doomed:Destroy()
+            assert(Doomed.Parent == nil and #Doomed:GetChildren() == 0, "the chain is destroyed")
+            "#,
+        );
+        for _ in 0..10 {
+            crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        }
+        run(
+            &lua,
+            &engine,
+            r#"
+            local Bottom, Made = shared.Bottom, shared.Made
+            assert(Bottom.Position.Y < shared.Start, `the part fell to {Bottom.Position.Y}`)
+            local Near = workspace:GetPartBoundsInRadius(Bottom.Position, 5)
+            assert(table.find(Near, Bottom), "the spatial index holds the part")
+            workspace.DeepTree.Parent = nil
+            assert(not Bottom:IsDescendantOf(workspace) and Bottom:FindFirstChild("LastBone", true), "the chain left the Workspace whole")
+            assert(Made and #Made:GetChildren() == 1, "the KeyframeSequence has one keyframe")
+            local Pose = Made:FindFirstChild("BottomFolder", true)
+            assert(Pose and Pose.CFrame.X == 2 and Pose.Weight == 1, "the bottom Folder's Pose is posed, at the bottom of the keyframe's")
+            "#,
+        );
+    };
+    let thread = std::thread::Builder::new().name("a deep tree on a 2 MiB stack".into()).stack_size(2 << 20).spawn(body).expect("thread");
+    thread.join().expect("the deep tree ran");
+}
+
 /// WorldRoot:BulkMoveTo checks its lists as a Studio 0.746 playing client does, with its messages, before any part moves; a
 /// nil in the part list keeps the lists paired by index; destroyed, parentless and stored parts move.
 #[test]

@@ -207,33 +207,47 @@ fn find_child(state: &State, parent: InstanceId, name: &str) -> Option<InstanceI
 
 // Studio-only instances
 
+/// The node of the Studio place's index that `id` stands for, by its name under its parent's node: the place's game is node 1,
+/// a script's instance and one with no parent none. Kept on each instance worked out. Walked up to the nearest instance whose
+/// node is known or settled, then back down, not recursed: a script can nest clones of a place's instances deeper than any
+/// thread's stack holds frames for.
 fn studio_node_of(state: &mut State, id: InstanceId) -> Option<u32> {
-    match state.dom.at(id).studio_node {
-        StudioNode::Node(node) => return Some(node),
-        StudioNode::None => return None,
-        StudioNode::Unknown => {}
-    }
-    let studio_game = state.project.studio.as_ref()?.game;
-    let result = if id == studio_game {
-        Some(1)
-    } else if !state.dom.at(id).has(flags::SCRIPT_CREATED) {
-        match state.dom.at(id).parent {
-            Some(parent) => {
-                let parent_node = studio_node_of(state, parent);
-                let name = state.dom.at(id).name.clone();
-                let studio = &state.project.studio.as_ref()?.index;
-                parent_node.and_then(|node| studio.children.get(&node)?.iter().copied().find(|&child| studio.name(child) == name.as_bytes()))
-            }
-            None => None,
+    let settle = |state: &mut State, id: InstanceId, node: Option<u32>| {
+        state.dom.at_mut(id).studio_node = match node {
+            Some(node) => StudioNode::Node(node),
+            None => StudioNode::None,
+        };
+    };
+    // (the instances whose node comes from their parent's, the nearest to `id` first)
+    let mut below: Vec<InstanceId> = Vec::new();
+    let mut at = id;
+    let mut node = loop {
+        match state.dom.at(at).studio_node {
+            StudioNode::Node(node) => break Some(node),
+            StudioNode::None => break None,
+            StudioNode::Unknown => {}
         }
-    } else {
-        None
+        let studio_game = state.project.studio.as_ref()?.game;
+        let instance = state.dom.at(at);
+        let found = if at == studio_game {
+            Some(1)
+        } else if let Some(parent) = instance.parent.filter(|_| !instance.has(flags::SCRIPT_CREATED)) {
+            below.push(at);
+            at = parent;
+            continue;
+        } else {
+            None
+        };
+        settle(state, at, found);
+        break found;
     };
-    state.dom.at_mut(id).studio_node = match result {
-        Some(node) => StudioNode::Node(node),
-        None => StudioNode::None,
-    };
-    result
+    while let Some(child) = below.pop() {
+        let name = state.dom.at(child).name.clone();
+        let studio = &state.project.studio.as_ref()?.index;
+        node = node.and_then(|node| studio.children.get(&node)?.iter().copied().find(|&found| studio.name(found) == name.as_bytes()));
+        settle(state, child, node);
+    }
+    node
 }
 
 /// Hooks.Materialize: adds the Studio-only children of `id` once (and makes a lazily imported

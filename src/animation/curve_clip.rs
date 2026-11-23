@@ -130,70 +130,83 @@ fn channels<T: Tree>(tree: &T, node: T::Node, length: &mut f32) -> [Vec<FloatKey
     found.map(Option::unwrap_or_default)
 }
 
-fn visit<T: Tree>(tree: &T, node: T::Node, folder: Option<usize>, read: &mut Read) {
-    for child in tree.children(node) {
-        let class = tree.class(child);
-        if class == "Folder" {
-            read.folders.push(Folder { name: tree.name(child), parent: folder, position: None, rotation: None, face: Vec::new() });
-            visit(tree, child, Some(read.folders.len() - 1), read);
-            continue;
-        }
-        if class == "MarkerCurve" {
-            let name = tree.name(child);
-            let curve = read.marker_curves;
-            read.marker_curves += 1;
-            for marker in tree.bytes(child, "ValuesAndTimes").map_or_else(Vec::new, |bytes| curve::decode_markers(&bytes)) {
-                let time = curve::time_of(marker.tick);
-                if folder.is_some() {
-                    read.length = read.length.max(time);
-                }
-                read.markers.push(Marker { time, name: name.clone(), value: marker.value, curve });
-            }
-            continue;
-        }
-        // (curves straight under the clip are not the clip's)
-        let Some(folder) = folder else { continue };
-        let name = tree.name(child);
-        match class {
-            "FloatCurve" => {
-                let keys = float_keys(tree, child);
-                if let Some(last) = keys.last() {
-                    read.length = read.length.max(curve::time_of(last.tick));
-                }
-                let holder = &mut read.folders[folder];
-                if holder.name == "FaceControls" && !keys.is_empty() && !holder.face.iter().any(|(kept, _)| *kept == name) {
-                    holder.face.push((name, keys));
-                }
-            }
-            "RotationCurve" => {
-                let keys = tree.bytes(child, "ValuesAndTimes").map_or_else(Vec::new, |bytes| curve::decode_rotations(&bytes));
-                if let Some(last) = keys.last() {
-                    read.length = read.length.max(curve::time_of(last.tick));
-                }
-                if name == "Rotation" {
-                    read.folders[folder].rotation = Some(Rotation::Quaternion(keys));
-                }
-            }
-            "Vector3Curve" => {
-                let found = channels(tree, child, &mut read.length);
-                if name == "Position" {
-                    read.folders[folder].position = Some(found);
-                }
-            }
-            "EulerRotationCurve" => {
-                let found = channels(tree, child, &mut read.length);
-                if name == "Rotation" {
-                    read.folders[folder].rotation = Some(Rotation::Euler(found, tree.enumeration(child, "RotationOrder").unwrap_or(0)));
-                }
-            }
-            _ => {}
-        }
+/// Reads `child`, a child of the clip (`folder` None) or of a Folder of it; true when it is a Folder, whose contents are read next.
+fn visit<T: Tree>(tree: &T, child: T::Node, folder: Option<usize>, read: &mut Read) -> bool {
+    let class = tree.class(child);
+    if class == "Folder" {
+        read.folders.push(Folder { name: tree.name(child), parent: folder, position: None, rotation: None, face: Vec::new() });
+        return true;
     }
+    if class == "MarkerCurve" {
+        let name = tree.name(child);
+        let curve = read.marker_curves;
+        read.marker_curves += 1;
+        for marker in tree.bytes(child, "ValuesAndTimes").map_or_else(Vec::new, |bytes| curve::decode_markers(&bytes)) {
+            let time = curve::time_of(marker.tick);
+            if folder.is_some() {
+                read.length = read.length.max(time);
+            }
+            read.markers.push(Marker { time, name: name.clone(), value: marker.value, curve });
+        }
+        return false;
+    }
+    // (curves straight under the clip are not the clip's)
+    let Some(folder) = folder else { return false };
+    let name = tree.name(child);
+    match class {
+        "FloatCurve" => {
+            let keys = float_keys(tree, child);
+            if let Some(last) = keys.last() {
+                read.length = read.length.max(curve::time_of(last.tick));
+            }
+            let holder = &mut read.folders[folder];
+            if holder.name == "FaceControls" && !keys.is_empty() && !holder.face.iter().any(|(kept, _)| *kept == name) {
+                holder.face.push((name, keys));
+            }
+        }
+        "RotationCurve" => {
+            let keys = tree.bytes(child, "ValuesAndTimes").map_or_else(Vec::new, |bytes| curve::decode_rotations(&bytes));
+            if let Some(last) = keys.last() {
+                read.length = read.length.max(curve::time_of(last.tick));
+            }
+            if name == "Rotation" {
+                read.folders[folder].rotation = Some(Rotation::Quaternion(keys));
+            }
+        }
+        "Vector3Curve" => {
+            let found = channels(tree, child, &mut read.length);
+            if name == "Position" {
+                read.folders[folder].position = Some(found);
+            }
+        }
+        "EulerRotationCurve" => {
+            let found = channels(tree, child, &mut read.length);
+            if name == "Rotation" {
+                read.folders[folder].rotation = Some(Rotation::Euler(found, tree.enumeration(child, "RotationOrder").unwrap_or(0)));
+            }
+        }
+        _ => {}
+    }
+    false
 }
 
 fn read<T: Tree>(tree: &T, clip: T::Node) -> Read {
     let mut read = Read::default();
-    visit(tree, clip, None, &mut read);
+    // (the clip's children in order, a Folder's contents read where it stands among its siblings: a stack of the Folders being read,
+    // each with its children and the next one to read, in place of recursion, since a script can nest Folders deeper than any
+    // thread's stack holds frames for)
+    let mut stack: Vec<(Vec<T::Node>, usize, Option<usize>)> = vec![(tree.children(clip), 0, None)];
+    while let Some((children, next, folder)) = stack.last_mut() {
+        let Some(&child) = children.get(*next) else {
+            stack.pop();
+            continue;
+        };
+        *next += 1;
+        let folder = *folder;
+        if visit(tree, child, folder, &mut read) {
+            stack.push((tree.children(child), 0, Some(read.folders.len() - 1)));
+        }
+    }
     read.markers.sort_by(|a, b| a.time.total_cmp(&b.time));
     read
 }
@@ -293,26 +306,44 @@ pub fn sequence<T: Tree>(tree: &T, node: T::Node) -> (WeakDom, Ref) {
     let length = read.length;
     let mut times: Vec<f32> = (0..MAX_SAMPLES).map(|step| step as f32 / SAMPLE_RATE).take_while(|&time| time < length - 1e-5).collect();
     times.push(length);
-    fn pose(folders: &[Folder], index: usize, time: f32) -> InstanceBuilder {
-        let folder = &folders[index];
-        // (measured: a Folder named FaceControls becomes a Folder of that name holding a NumberPose for each curve)
-        if folder.name == "FaceControls" {
-            return InstanceBuilder::new("Folder").with_name("FaceControls").with_children(folder.face.iter().map(|(name, keys)| {
-                InstanceBuilder::new("NumberPose")
-                    .with_name(name.as_str())
-                    .with_property("Value", Variant::Float64(curve::float_at(keys, time).unwrap_or(0.0) as f64))
-            }));
+    // Each Folder's Pose holds its child Folders' Poses, in order; a FaceControls Folder's holds none, so the Folders below one make
+    // no Pose. The Folders come in tree order, each after the one it is in, so the Poses are made from the last Folder back, each
+    // one's children made before it: no recursion, since a script can nest Folders deeper than any thread's stack holds frames for.
+    let folders = &read.folders;
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); folders.len()];
+    let mut has_pose = vec![false; folders.len()];
+    for (index, folder) in folders.iter().enumerate() {
+        has_pose[index] = folder.parent.is_none_or(|parent| has_pose[parent] && folders[parent].name != "FaceControls");
+        if let Some(parent) = folder.parent {
+            children[parent].push(index);
         }
-        let (rotation, translation) = folder.pose(time);
-        let cframe = crate::world::frame::from_affine(&Affine3A::from_rotation_translation(rotation, translation.into()));
-        InstanceBuilder::new("Pose")
-            .with_name(folder.name.as_str())
-            .with_property("Weight", Variant::Float32(if folder.posed() { 1.0 } else { 0.0 }))
-            .with_property("CFrame", Variant::CFrame(cframe))
-            .with_property("EasingStyle", Variant::Enum(Enum::from_u32(0)))
-            .with_property("EasingDirection", Variant::Enum(Enum::from_u32(0)))
-            .with_children((0..folders.len()).filter(|&child| folders[child].parent == Some(index)).map(|child| pose(folders, child, time)))
     }
+    // (the Poses at `time` of the Folders straight under the clip, in order)
+    let poses = |time: f32| -> Vec<InstanceBuilder> {
+        let mut made: Vec<Option<InstanceBuilder>> = (0..folders.len()).map(|_| None).collect();
+        for index in (0..folders.len()).rev().filter(|&index| has_pose[index]) {
+            let folder = &folders[index];
+            // (measured: a Folder named FaceControls becomes a Folder of that name holding a NumberPose for each curve)
+            made[index] = Some(if folder.name == "FaceControls" {
+                InstanceBuilder::new("Folder").with_name("FaceControls").with_children(folder.face.iter().map(|(name, keys)| {
+                    InstanceBuilder::new("NumberPose")
+                        .with_name(name.as_str())
+                        .with_property("Value", Variant::Float64(curve::float_at(keys, time).unwrap_or(0.0) as f64))
+                }))
+            } else {
+                let (rotation, translation) = folder.pose(time);
+                let cframe = crate::world::frame::from_affine(&Affine3A::from_rotation_translation(rotation, translation.into()));
+                InstanceBuilder::new("Pose")
+                    .with_name(folder.name.as_str())
+                    .with_property("Weight", Variant::Float32(if folder.posed() { 1.0 } else { 0.0 }))
+                    .with_property("CFrame", Variant::CFrame(cframe))
+                    .with_property("EasingStyle", Variant::Enum(Enum::from_u32(0)))
+                    .with_property("EasingDirection", Variant::Enum(Enum::from_u32(0)))
+                    .with_children(children[index].iter().map(|&child| made[child].take().expect("a child's Pose is made before its parent's")))
+            });
+        }
+        (0..folders.len()).filter(|&index| folders[index].parent.is_none()).map(|index| made[index].take().expect("every top Folder has a Pose")).collect()
+    };
     let keyframe = |time: f32| InstanceBuilder::new("Keyframe").with_name("Keyframe").with_property("Time", Variant::Float32(time));
     let marker = |marker: &Marker| {
         InstanceBuilder::new("KeyframeMarker")
@@ -322,8 +353,7 @@ pub fn sequence<T: Tree>(tree: &T, node: T::Node) -> (WeakDom, Ref) {
     let mut keyframes: Vec<(f32, InstanceBuilder)> = times
         .iter()
         .map(|&time| {
-            let top = (0..read.folders.len()).filter(|&index| read.folders[index].parent.is_none());
-            let mut made = keyframe(time).with_children(top.map(|index| pose(&read.folders, index, time)));
+            let mut made = keyframe(time).with_children(poses(time));
             for found in read.markers.iter().filter(|marker| marker.time == time) {
                 made = made.with_child(marker(found));
             }

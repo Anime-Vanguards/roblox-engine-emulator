@@ -257,23 +257,71 @@ pub fn world_cframe(state: &State, engine: &Engine, id: InstanceId) -> Affine3A 
 /// is its pivot (one without parts or a stored pivot: the identity), a WorldModel's or the
 /// Workspace's the identity, and none at all leaves its own CFrame as its world one. An effect kept its beams' attachments in a Folder
 /// under a ball part: ree hung them from the origin, 2,900 studs off Studio's.
+///
+/// An attachment hangs from in turn what its own holder hangs from, times its own frame: a bone where its animation puts it
+/// (CFrame * Transform, so a chain carries its parents' animation), any other attachment its CFrame. Measured in Studio: a child
+/// bone's WorldCFrame carries its parent bone's Transform (not its own), and an Attachment under a bone follows the bone's
+/// TransformedWorldCFrame (an animated creature rig: the attachments on its animated bones were 74 studs off Studio's, at their
+/// rest pose). The chain is walked up with each attachment's frame kept and multiplied from the top down, not recursed through:
+/// a script can nest attachments deeper than any thread's stack holds frames for.
 fn hung_from(state: &State, engine: &Engine, id: InstanceId) -> Affine3A {
+    // (the frames of the attachments above, nearest first: the first few in place, so a short chain allocates nothing)
+    const INLINE: usize = 8;
+    let mut inline = [Affine3A::IDENTITY; INLINE];
+    let mut spill: Vec<Affine3A> = Vec::new();
+    let mut count = 0;
+    let mut from = id;
+    let top = loop {
+        match holder(state, engine, from) {
+            Holder::Attachment(attachment) => {
+                let own = if engine.reflection.is_a(state.dom.at(attachment).class, "Bone") {
+                    transformed_cframe(state, engine, attachment)
+                } else {
+                    frame::affine_of(state.dom.raw_get(attachment, cframe_name(engine)))
+                };
+                if count < INLINE {
+                    inline[count] = own;
+                } else {
+                    spill.push(own);
+                }
+                count += 1;
+                from = attachment;
+            }
+            Holder::Top(frame) => break frame,
+        }
+    };
+    (0..count).rev().fold(top, |frame, index| frame * if index < INLINE { inline[index] } else { spill[index - INLINE] })
+}
+
+/// What an attachment hangs from ([`hung_from`])
+enum Holder {
+    /// An attachment (a bone too), which hangs from its own holder
+    Attachment(InstanceId),
+    /// A frame that hangs from nothing: a part's CFrame, a model's pivot, or the identity
+    Top(Affine3A),
+}
+
+/// The holder of `id`: its nearest ancestor that is an attachment, a part or a model, past the rest
+fn holder(state: &State, engine: &Engine, id: InstanceId) -> Holder {
     let reflection = &engine.reflection;
     let mut at = state.dom.parent_of(id);
     while let Some(ancestor) = at {
         let class = state.dom.at(ancestor).class;
-        if is_part_or_attachment(state, engine, ancestor) {
-            return parent_frame(state, engine, ancestor);
+        if reflection.is_a(class, "Attachment") {
+            return Holder::Attachment(ancestor);
+        }
+        if reflection.is_a(class, "BasePart") {
+            return Holder::Top(frame::affine_of(state.dom.raw_get(ancestor, cframe_name(engine))));
         }
         if reflection.is_a(class, "Model") && !reflection.is_a(class, "WorldRoot") {
-            return model_pivot(state, engine, ancestor);
+            return Holder::Top(model_pivot(state, engine, ancestor));
         }
         if reflection.is_a(class, "PVInstance") {
-            return Affine3A::IDENTITY;
+            return Holder::Top(Affine3A::IDENTITY);
         }
         at = state.dom.parent_of(ancestor);
     }
-    Affine3A::IDENTITY
+    Holder::Top(Affine3A::IDENTITY)
 }
 
 /// Model:GetPivot as lua/services.luau has it: the PrimaryPart's pivot, else the stored
@@ -310,28 +358,12 @@ fn model_pivot(state: &State, engine: &Engine, model: InstanceId) -> Affine3A {
     bounds.map_or(Affine3A::IDENTITY, |(low, high)| Affine3A::from_translation((low + high) / 2.0))
 }
 
-/// The frame an attachment or bone hangs from: a parent bone where its animation puts it
-/// (TransformedWorldCFrame), any other part or attachment its world CFrame. Measured in Studio: a
-/// child bone's WorldCFrame carries its parent bone's Transform (not its own), and an Attachment
-/// under a bone follows the bone's TransformedWorldCFrame (an animated creature rig: the
-/// attachments on its animated bones were 74 studs off Studio's, at their rest pose).
-fn parent_frame(state: &State, engine: &Engine, parent: InstanceId) -> Affine3A {
-    if engine.reflection.is_a(state.dom.at(parent).class, "Bone") {
-        transformed_world_cframe(state, engine, parent)
-    } else {
-        world_cframe(state, engine, parent)
-    }
-}
-
 /// A Bone's world CFrame with the animation applied (Bone.TransformedWorldCFrame): its parent's
-/// (a parent bone's own TransformedWorldCFrame, so a chain carries its parents' animation) times
+/// (a parent bone's own TransformedWorldCFrame, so a chain carries its parents' animation: [`hung_from`]) times
 /// CFrame * Transform. WorldCFrame stays the un-transformed reference (Bone's documentation).
 pub fn transformed_world_cframe(state: &State, engine: &Engine, id: InstanceId) -> Affine3A {
     let local = transformed_cframe(state, engine, id);
-    match state.dom.parent_of(id) {
-        Some(parent) if engine.reflection.is_a(state.dom.at(parent).class, "Bone") => transformed_world_cframe(state, engine, parent) * local,
-        _ => hung_from(state, engine, id) * local,
-    }
+    hung_from(state, engine, id) * local
 }
 
 /// Bone.TransformedCFrame: CFrame * Transform, relative to its parent.
@@ -349,11 +381,6 @@ fn bone_member(engine: &Rc<Engine>, member: &str, of: fn(&State, &Engine, Instan
         Ok(convert::to_lua(lua, engine, &value)?)
     });
     engine.behaviors.borrow_mut().add_getter(class, name, getter);
-}
-
-fn is_part_or_attachment(state: &State, engine: &Engine, id: InstanceId) -> bool {
-    let class = state.dom.at(id).class;
-    engine.reflection.is_a(class, "BasePart") || engine.reflection.is_a(class, "Attachment")
 }
 
 /// Sets a CFrame property through RawSet (its change events and observers run).

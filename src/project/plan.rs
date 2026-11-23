@@ -1671,11 +1671,18 @@ pub fn materialize_lazy(state: &mut State, reflection: &Reflection, id: Instance
 pub fn find_unmade(state: &mut State, reflection: &Reflection, id: InstanceId, matches: impl Fn(&[u8], ClassId) -> bool) -> Option<Option<InstanceId>> {
     let &(import, index) = state.project.lazy.get(&id)?;
     let plan = state.project.imports[import as usize].plan.clone();
-    fn search(plan: &ModelPlan, node: u32, matches: &impl Fn(&[u8], ClassId) -> bool) -> Option<u32> {
-        let found = plan.children(node).find(|&child| matches(plan.bytes(plan.nodes[child as usize].name), plan.nodes[child as usize].class));
-        found.or_else(|| plan.children(node).find_map(|child| search(plan, child, matches)))
-    }
-    let Some(found) = search(&plan, index, &matches) else { return Some(None) };
+    // (the nodes whose children are still to be searched, the next on top: a stack in place of recursion, since a model can nest
+    // instances deeper than any thread's stack holds frames for)
+    let mut stack = vec![index];
+    let found = loop {
+        let Some(node) = stack.pop() else { return Some(None) };
+        if let Some(child) = plan.children(node).find(|&child| matches(plan.bytes(plan.nodes[child as usize].name), plan.nodes[child as usize].class)) {
+            break child;
+        }
+        let first = stack.len();
+        stack.extend(plan.children(node));
+        stack[first..].reverse();
+    };
     ensure_made(state, reflection, import, found);
     Some(Some(state.project.imports[import as usize].ids[found as usize]))
 }

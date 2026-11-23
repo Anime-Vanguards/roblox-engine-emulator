@@ -1298,18 +1298,10 @@ impl Dom {
         false
     }
 
-    /// Descendants in preorder (GetDescendants' order).
+    /// Descendants in preorder (GetDescendants' order). The walks of the tree keep their own stack and never recurse: a script
+    /// can build a chain of instances deeper than any thread's stack holds frames for.
     pub fn descendants(&self, id: InstanceId) -> Vec<InstanceId> {
-        let mut result = Vec::new();
-        self.collect_descendants(id, &mut result);
-        result
-    }
-
-    fn collect_descendants(&self, id: InstanceId, result: &mut Vec<InstanceId>) {
-        for &child in &self.at(id).children {
-            result.push(child);
-            self.collect_descendants(child, result);
-        }
+        self.descendants_where(id, |_| true)
     }
 
     /// The descendants of `id` for which `keep` holds, in [`Dom::descendants`]' order, without
@@ -1341,14 +1333,9 @@ impl Dom {
 
     /// The subtree with every instance after its children (children in order): FireAncestryChanged's order.
     pub fn subtree_post_order(&self, root: InstanceId) -> Vec<InstanceId> {
-        fn visit(dom: &Dom, node: InstanceId, result: &mut Vec<InstanceId>) {
-            for &child in &dom.at(node).children {
-                visit(dom, child, result);
-            }
-            result.push(node);
-        }
-        let mut result = Vec::new();
-        visit(self, root, &mut result);
+        // (the stack order, each instance before its children and the last child first, read backwards)
+        let mut result = self.subtree_stack_order(root);
+        result.reverse();
         result
     }
 
@@ -1496,6 +1483,7 @@ mod tests {
         assert_eq!(dom.descendants(root), vec![a, c, b]);
         assert_eq!(dom.subtree_breadth_first(root), vec![root, a, b, c]);
         assert_eq!(dom.subtree_stack_order(root), vec![root, b, a, c]);
+        assert_eq!(dom.subtree_post_order(root), vec![c, a, b, root]);
         assert!(dom.is_descendant_of(c, root) && !dom.is_descendant_of(root, c));
         assert_eq!(dom.full_name(&reflection, c), "Folder.Frame.Frame");
         dom.detach(a);

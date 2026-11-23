@@ -681,7 +681,7 @@ pub fn fire_immediate_costing(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, 
 }
 
 /// InstanceModule.Destroy.
-pub fn destroy(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
+pub fn destroy(_lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
     // (the frame's first destroy, and of each class, runs the engine's code for it cold; an instance in the Workspace since an
     // earlier frame has render, physics and particle state to undo: cost.rs Path::Destroy, first_destroyed, destroy_live. Priced
     // for the whole subtree before it leaves.)
@@ -700,47 +700,64 @@ pub fn destroy(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flo
         state.sched.charge(cold);
         crate::boundary::add_cost(cold);
     }
-    destroy_subtree(lua, engine, id)
+    destroy_subtree(engine, id)
 }
 
-fn destroy_subtree(lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
-    let destroying = {
-        let state = engine.state.borrow();
-        let instance = state.dom.at(id);
-        if instance.has(flags::DESTROYED) {
-            return Ok(());
-        }
-        instance.signals.as_ref().and_then(|s| s.event(K::Destroying as NameId))
-    };
-    // (a GUI object or a part in the DataModel pays more to destroy than its leaving: cost.rs DESTROYED_GUI, DESTROYED_PART)
-    let extra = {
-        let state = engine.state.borrow();
-        let class = state.dom.at(id).class;
-        let placed = state.dom.at(id).parent.is_some_and(|parent| crate::services::in_data_model(&state, parent));
-        match placed {
-            true if engine.reflection.is_a(class, "GuiObject") => crate::cost::DESTROYED_GUI,
-            true if engine.reflection.is_a(class, "BasePart") => crate::cost::DESTROYED_PART,
-            _ => 0.0,
-        }
-    };
-    if let Some(signal) = destroying {
-        // Deferred like every other event (measured in a playing client, Studio 0.744, SignalBehavior Deferred:
-        // tools/parity/probes/hierarchy.luau): the handlers run after Destroy returned and see the instance
-        // unparented; each instance's are queued just before its own removal events, a child's after its parent's.
-        core::fire(&mut engine.state.borrow_mut(), signal, Vec::new());
+/// Destroys `id`, then each of its children's subtrees in turn, then finishes `id`: a stack of steps in place of recursion, since a
+/// script can build a chain deeper than any thread's stack holds frames for. An error ends the whole destroy where it stands, the
+/// instances above it unfinished.
+fn destroy_subtree(engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
+    enum Step {
+        Destroy(InstanceId),
+        /// Its subtree destroyed: the instance's own price (with its extra) and its deferred cleanup
+        Finish(InstanceId, f64),
     }
-    let children = {
-        let hooks = engine.hooks.borrow();
-        let mut state = engine.state.borrow_mut();
-        core::begin_destroy(&mut state, &engine.reflection, &hooks, id)?
-    };
-    for child in children {
-        destroy_subtree(lua, engine, child)?;
+    let mut steps = vec![Step::Destroy(id)];
+    while let Some(step) = steps.pop() {
+        let id = match step {
+            Step::Destroy(id) => id,
+            Step::Finish(id, extra) => {
+                let mut state = engine.state.borrow_mut();
+                state.sched.charge(crate::cost::DESTROYED + extra);
+                crate::boundary::add_cost(crate::cost::DESTROYED + extra);
+                core::finish_destroy(&mut state, id);
+                continue;
+            }
+        };
+        let destroying = {
+            let state = engine.state.borrow();
+            let instance = state.dom.at(id);
+            if instance.has(flags::DESTROYED) {
+                continue;
+            }
+            instance.signals.as_ref().and_then(|s| s.event(K::Destroying as NameId))
+        };
+        // (a GUI object or a part in the DataModel pays more to destroy than its leaving: cost.rs DESTROYED_GUI, DESTROYED_PART)
+        let extra = {
+            let state = engine.state.borrow();
+            let class = state.dom.at(id).class;
+            let placed = state.dom.at(id).parent.is_some_and(|parent| crate::services::in_data_model(&state, parent));
+            match placed {
+                true if engine.reflection.is_a(class, "GuiObject") => crate::cost::DESTROYED_GUI,
+                true if engine.reflection.is_a(class, "BasePart") => crate::cost::DESTROYED_PART,
+                _ => 0.0,
+            }
+        };
+        if let Some(signal) = destroying {
+            // Deferred like every other event (measured in a playing client, Studio 0.744, SignalBehavior Deferred:
+            // tools/parity/probes/hierarchy.luau): the handlers run after Destroy returned and see the instance
+            // unparented; each instance's are queued just before its own removal events, a child's after its parent's.
+            core::fire(&mut engine.state.borrow_mut(), signal, Vec::new());
+        }
+        let children = {
+            let hooks = engine.hooks.borrow();
+            let mut state = engine.state.borrow_mut();
+            core::begin_destroy(&mut state, &engine.reflection, &hooks, id)?
+        };
+        // (the first child on top: each child's subtree is destroyed in turn, then the instance finishes)
+        steps.push(Step::Finish(id, extra));
+        steps.extend(children.into_iter().rev().map(Step::Destroy));
     }
-    let mut state = engine.state.borrow_mut();
-    state.sched.charge(crate::cost::DESTROYED + extra);
-    crate::boundary::add_cost(crate::cost::DESTROYED + extra);
-    core::finish_destroy(&mut state, id);
     Ok(())
 }
 
@@ -829,33 +846,36 @@ pub fn find_first_child(engine: &Engine, id: InstanceId, name: Option<&[u8]>, re
 
 /// [`find_first_child`], adding to `looked` the instances whose names it compared (a script's find pays for them: [`charge_find`])
 pub fn find_first_child_counting(engine: &Engine, id: InstanceId, name: Option<&[u8]>, recursive: bool, looked: &mut usize) -> Option<InstanceId> {
-    if recursive {
-        // (a lazily imported instance whose children are not made: searched in its plan)
-        let unmade = project::find_unmade(&mut engine.state.borrow_mut(), &engine.reflection, id, |child, _| Some(child) == name);
-        if let Some(found) = unmade {
-            return found.map(|child| reached(engine, child));
-        }
-    }
-    materialize(engine, id);
-    let found = {
-        let state = engine.state.borrow();
-        let children = &state.dom.at(id).children;
-        let index = children.iter().position(|&child| name_equals(&state, child, name));
-        *looked += index.map_or(children.len(), |index| index + 1);
-        index.map(|index| children[index])
-    };
-    if let Some(child) = found {
-        return Some(reached(engine, child));
-    }
-    if !recursive && let Some(name) = name && let Some(made) = made_on_request(engine, id, name) {
-        return Some(made);
-    }
-    if recursive {
-        let children = engine.state.borrow().dom.at(id).children.clone();
-        for child in children {
-            if let Some(found) = find_first_child_counting(engine, child, name, true, looked) {
-                return Some(found);
+    // (the instances whose children are still to be searched, the next on top: a stack in place of recursion, since a script can
+    // build a chain deeper than any thread's stack holds frames for)
+    let mut stack = vec![id];
+    while let Some(id) = stack.pop() {
+        if recursive {
+            // (a lazily imported instance whose children are not made: searched in its plan)
+            let unmade = project::find_unmade(&mut engine.state.borrow_mut(), &engine.reflection, id, |child, _| Some(child) == name);
+            if let Some(found) = unmade {
+                match found {
+                    Some(child) => return Some(reached(engine, child)),
+                    None => continue,
+                }
             }
+        }
+        materialize(engine, id);
+        let found = {
+            let state = engine.state.borrow();
+            let children = &state.dom.at(id).children;
+            let index = children.iter().position(|&child| name_equals(&state, child, name));
+            *looked += index.map_or(children.len(), |index| index + 1);
+            index.map(|index| children[index])
+        };
+        if let Some(child) = found {
+            return Some(reached(engine, child));
+        }
+        if !recursive && let Some(name) = name && let Some(made) = made_on_request(engine, id, name) {
+            return Some(made);
+        }
+        if recursive {
+            stack.extend(engine.state.borrow().dom.at(id).children.iter().rev());
         }
     }
     None
@@ -878,24 +898,26 @@ fn class_is_a(engine: &Engine, class: ClassId, name: Option<&[u8]>) -> bool {
     }
 }
 
+/// FindFirstChildWhichIsA (recursive: each child's subtree in turn, after the direct children, as [`find_first_child`] searches)
 pub fn find_first_child_which_is_a(engine: &Engine, id: InstanceId, name: Option<&[u8]>, recursive: bool) -> Option<InstanceId> {
-    if recursive {
-        let unmade = project::find_unmade(&mut engine.state.borrow_mut(), &engine.reflection, id, |_, class| class_is_a(engine, class, name));
-        if let Some(found) = unmade {
+    let mut stack = vec![id];
+    while let Some(id) = stack.pop() {
+        if recursive {
+            let unmade = project::find_unmade(&mut engine.state.borrow_mut(), &engine.reflection, id, |_, class| class_is_a(engine, class, name));
+            if let Some(found) = unmade {
+                if found.is_some() {
+                    return found;
+                }
+                continue;
+            }
+        }
+        materialize(engine, id);
+        let found = find_child_where(engine, id, |state, child| class_is_a(engine, state.dom.at(child).class, name));
+        if found.is_some() {
             return found;
         }
-    }
-    materialize(engine, id);
-    let found = find_child_where(engine, id, |state, child| class_is_a(engine, state.dom.at(child).class, name));
-    if found.is_some() {
-        return found;
-    }
-    if recursive {
-        let children = engine.state.borrow().dom.at(id).children.clone();
-        for child in children {
-            if let Some(found) = find_first_child_which_is_a(engine, child, name, true) {
-                return Some(found);
-            }
+        if recursive {
+            stack.extend(engine.state.borrow().dom.at(id).children.iter().rev());
         }
     }
     None

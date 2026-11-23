@@ -358,33 +358,35 @@ impl Matcher<'_> {
         Ok(false)
     }
 
+    /// Whether a descendant of `id` matches `list` within it (in tree order, the first match ending the walk)
     fn has_match(&self, id: InstanceId, list: &[Selector]) -> LuaResult<bool> {
-        let children = self.engine.state.borrow().dom.at(id).children.clone();
-        for child in children {
-            if self.matches_list(child, list, Some(id))? || self.has_match_under(child, list, id)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let mut found = false;
+        self.walk(id, |child| {
+            found = self.matches_list(child, list, Some(id))?;
+            Ok(!found)
+        })?;
+        Ok(found)
     }
 
-    fn has_match_under(&self, node: InstanceId, list: &[Selector], scope: InstanceId) -> LuaResult<bool> {
-        let children = self.engine.state.borrow().dom.at(node).children.clone();
-        for child in children {
-            if self.matches_list(child, list, Some(scope))? || self.has_match_under(child, list, scope)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
+    /// The descendants of `node` that match `list` within `scope`, in tree order, added to `result`
     fn collect(&self, node: InstanceId, list: &[Selector], scope: InstanceId, result: &mut Vec<InstanceId>) -> LuaResult<()> {
-        let children = self.engine.state.borrow().dom.at(node).children.clone();
-        for child in children {
+        self.walk(node, |child| {
             if self.matches_list(child, list, Some(scope))? {
                 result.push(child);
             }
-            self.collect(child, list, scope, result)?;
+            Ok(true)
+        })
+    }
+
+    /// Calls `visit` on each descendant of `node` in tree order (GetDescendants'), until it returns false or fails. A stack in
+    /// place of recursion: a script can build a chain deeper than any thread's stack holds frames for.
+    fn walk(&self, node: InstanceId, mut visit: impl FnMut(InstanceId) -> LuaResult<bool>) -> LuaResult<()> {
+        let mut stack: Vec<InstanceId> = self.engine.state.borrow().dom.at(node).children.iter().rev().copied().collect();
+        while let Some(child) = stack.pop() {
+            if !visit(child)? {
+                break;
+            }
+            stack.extend(self.engine.state.borrow().dom.at(child).children.iter().rev());
         }
         Ok(())
     }
