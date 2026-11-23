@@ -148,29 +148,28 @@ pub fn loadmodule(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue) -> Ret {
     if let Some(path) = &path {
         modules::note_required(engine, path);
     }
-    // A JSON module (Rojo `.json`, which Studio holds as a ModuleScript returning the table): each call decodes the file
-    // again, as running that module's source would build the table again
+    // A JSON module (Rojo `.json`, which Studio holds as a ModuleScript returning the table): each call returns a fresh
+    // Luau table built from the parsed JSON value, as running that module's source would build the table again
     if let (true, Some(path)) = (json, &path) {
         let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
-        if let Err(message) = modules::decode_json(lua, engine, path) {
-            return Ok(values([LuaValue::Nil, LuaValue::String(lua.create_string(format!("{name}: invalid JSON module ({message})"))?)]));
-        }
-        let (e, path) = (engine.clone(), path.clone());
-        let decode = lua.create_function(move |lua, ()| modules::decode_json(lua, &e, &path).map_err(LuaError::runtime))?;
+        let parsed = match modules::parse_json(engine, path) {
+            Ok(value) => value,
+            Err(message) => {
+                return Ok(values([LuaValue::Nil, LuaValue::String(lua.create_string(format!("{name}: invalid JSON module ({message})"))?)]));
+            }
+        };
+        let decode = lua.create_function(move |lua, ()| modules::json_to_lua(lua, &parsed).map_err(LuaError::runtime))?;
         let env = modules::environment(lua, engine, module)?;
         let chunk = lua
-            .load("local Decode = ...
-return function()
-	return Decode()
-end")
-            .set_compiler(modules::compiler())
+            .load(modules::json_wrapper_bytecode())
+            .set_mode(mlua::chunk::ChunkMode::Binary)
             .set_name(format!("={name}"))
             .set_environment(env);
         let function: LuaFunction = modules::load(lua, engine, chunk)?.call(decode)?;
         let cleanup = lua.create_function(|_, _: LuaMultiValue| Ok(()))?;
         return Ok(values([LuaValue::Function(function), LuaValue::Nil, LuaValue::Function(cleanup)]));
     }
-    let source = match modules::source_of(engine, module) {
+    let source = match modules::source_rc(engine, module) {
         Some(source) => source,
         // (a module the project has no source for: an empty function would pass for its code)
         None if studio_only => {
@@ -178,9 +177,9 @@ end")
             let message = format!("Module {name} exists only in Studio (its source is not in the project)");
             return Ok(values([LuaValue::Nil, LuaValue::String(lua.create_string(message)?)]));
         }
-        None => Vec::new(),
+        None => Rc::from(&[][..]),
     };
-    match modules::compile(lua, engine, module, &source) {
+    match modules::compile_for_loadmodule(lua, engine, module, &source) {
         Ok(function) => {
             let cleanup = lua.create_function(|_, _: LuaMultiValue| Ok(()))?;
             Ok(values([LuaValue::Function(function), LuaValue::Nil, LuaValue::Function(cleanup)]))

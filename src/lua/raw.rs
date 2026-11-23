@@ -680,12 +680,17 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     };
     *api.create.borrow_mut() = Some(create);
     engine.lua.borrow_mut().raw = Some(api);
-    // (the collector steps by the scripts' work, not by the host's speed: at the same points in every run)
-    let counters = engine.state.borrow().sched.vm_counters;
-    if let Some(counters) = counters {
-        crate::cost::install_gc_clock(lua, counters)?;
+    // (the collector steps by the scripts' work, not by the host's speed: at the same points in every run;
+    // `--native` turns work counters off and lets the collector keep the wall clock)
+    if engine.options.native {
+        crate::cost::set_work_counting(lua, false);
+    } else {
+        let counters = engine.state.borrow().sched.vm_counters;
+        if let Some(counters) = counters {
+            crate::cost::install_gc_clock(lua, counters)?;
+        }
+        crate::scheduler::start_cold_tracking(lua, engine);
     }
-    crate::scheduler::start_cold_tracking(lua, engine);
     // (the engine's own C functions, mlua's callback among them: the objects they make for a script are priced with their operation)
     crate::cost::mark_host_functions(
         lua,

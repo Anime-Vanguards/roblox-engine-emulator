@@ -6,11 +6,14 @@
 #include "lapi.h"
 #include "ldo.h"
 #include "lgc.h"
+#include "ltable.h"
+#include "ltm.h"
 #include "ludata.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void writestring(const char* s, size_t l)
 {
@@ -164,6 +167,66 @@ static int luaB_getfenv(lua_State* L)
     return 1;
 }
 
+static bool isSandboxMutableKey(const TString* ts)
+{
+    const char* s = getstr(ts);
+    switch (ts->len)
+    {
+    case 2:
+        return (s[0] == 'o' && s[1] == 's') || (s[0] == '_' && s[1] == 'G');
+    case 4:
+        return memcmp(s, "task", 4) == 0 || memcmp(s, "tick", 4) == 0 || memcmp(s, "time", 4) == 0 || memcmp(s, "warn", 4) == 0 || memcmp(s, "math", 4) == 0;
+    case 5:
+        return memcmp(s, "delay", 5) == 0 || memcmp(s, "print", 5) == 0;
+    case 6:
+        return memcmp(s, "script", 6) == 0 || memcmp(s, "shared", 6) == 0;
+    case 7:
+        return memcmp(s, "require", 7) == 0;
+    case 8:
+        return memcmp(s, "DateTime", 8) == 0;
+    default:
+        return false;
+    }
+}
+
+static bool isSafeSandboxEnv(lua_State* L, LuaTable* env, LuaTable* safebase)
+{
+    LuaTable* t = env;
+    for (int depth = 0; depth < 4 && t != NULL; ++depth)
+    {
+        if (t == safebase)
+            return true;
+        if (depth > 0 && !t->readonly)
+            return false;
+        for (int i = 0; i < t->sizearray; ++i)
+            if (!ttisnil(&t->array[i]))
+                return false;
+        if (t->node != &luaH_dummynode)
+        {
+            int size = sizenode(t);
+            for (int i = 0; i < size; ++i)
+            {
+                LuaNode* n = gnode(t, i);
+                if (!ttisnil(gkey(n)))
+                {
+                    if (!ttisstring(gkey(n)) || !isSandboxMutableKey(tsvalue(gkey(n))))
+                        return false;
+                }
+            }
+        }
+        LuaTable* mt = t->metatable;
+        if (mt == NULL || !mt->readonly)
+            return false;
+        if (fasttm(L, mt, TM_NEWINDEX) != NULL)
+            return false;
+        const TValue* idx = fasttm(L, mt, TM_INDEX);
+        if (idx == NULL || !ttistable(idx))
+            return false;
+        t = hvalue(idx);
+    }
+    return false;
+}
+
 static int luaB_setfenv(lua_State* L)
 {
     luaL_checktype(L, 2, LUA_TTABLE);
@@ -180,6 +243,16 @@ static int luaB_setfenv(lua_State* L)
     }
     else if (lua_iscfunction(L, -2) || lua_setfenv(L, -2) == 0)
         luaL_error(L, "'setfenv' cannot change environment of given object");
+    if (L->global->safebase != NULL)
+    {
+        const TValue* fn = L->top - 1;
+        if (isLfunction(fn))
+        {
+            Closure* cl = clvalue(fn);
+            if ((cl->l.p->flags & LUAU_PROTO_SAFE_SANDBOX) != 0 && isSafeSandboxEnv(L, cl->env, L->global->safebase))
+                cl->env->safeenv = 2;
+        }
+    }
     return 1;
 }
 

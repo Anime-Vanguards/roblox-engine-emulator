@@ -75,6 +75,7 @@ A harness is a `ModuleScript` mounted at `ReplicatedStorage.RURFixtures.<name>` 
 | `--run-context edit` | Studio edit DataModel (with `--mode edit`): both `IsClient()` and `IsServer()` return `true`, `EncodingService` enabled, `Players.LocalPlayer == nil` unless `--player` is passed. |
 | `--load-module` | Enables `debug.loadmodule` (`FFlagEnableLoadModule`; off raises `debug.loadmodule is not enabled.`). Pair with `--mode edit --run-context edit` to run Jest-Lua 3 suites offline. |
 | `--load-string` | Enables `loadstring` on server scripts regardless of `ServerScriptService.LoadStringEnabled`. |
+| `--native` | Runs scripts with Luau native code generation, safe environments, and VM work counters off (fast test execution without work-clock instruction pricing). |
 | `--studio false` | Sets `RunService:IsStudio() == false` (default `true`) so live-server/client branches execute. Part of prepared-run cache key. |
 | `--device desktop\|touch\|gamepad\|phone` | Sets emulated `UserInputService` device (also `REE_DEVICE`, default `desktop`). `phone` emulates touch input and scales work-clock prices by **2.77x** (sim-to-phone script-time calibration). |
 

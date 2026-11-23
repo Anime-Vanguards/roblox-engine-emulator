@@ -410,7 +410,8 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
     setobj2s(L, L->top + 1, l);
     setobj2s(L, L->top + 2, r);
     L->top += 3; // safe because of LUA_MINSTACK guarantee
-    L->global->work.sortcalls++;
+    if (!L->global->workoff)
+        L->global->work.sortcalls++;
     luaD_call(L, L->top - 3, 1);
     L->top -= 1; // maintain stack depth
 
@@ -436,7 +437,8 @@ inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred
     int n = t->sizearray;
     LUAU_ASSERT(unsigned(i) < unsigned(n) && unsigned(j) < unsigned(n)); // contract maintained in sort_less after predicate call
 
-    L->global->work.sortcompares++;
+    if (!L->global->workoff)
+        L->global->work.sortcompares++;
     int res = pred(L, &arr[i], &arr[j]);
 
     // predicate call may resize the table, which is invalid
@@ -575,14 +577,21 @@ static int tsort(lua_State* L)
 
     if (n > 0)
     {
-        // (sort_less and sort_func count as they go: a sort no script asked for gives its counts back)
-        uint64_t compares = L->global->work.sortcompares, calls = L->global->work.sortcalls;
-        bool counted = luaE_scriptwork(L);
-        sort_rec(L, t, 0, n - 1, n, pred);
-        if (!counted)
+        if (L->global->workoff)
         {
-            L->global->work.sortcompares = compares;
-            L->global->work.sortcalls = calls;
+            sort_rec(L, t, 0, n - 1, n, pred);
+        }
+        else
+        {
+            // (sort_less and sort_func count as they go: a sort no script asked for gives its counts back)
+            uint64_t compares = L->global->work.sortcompares, calls = L->global->work.sortcalls;
+            bool counted = luaE_scriptwork(L);
+            sort_rec(L, t, 0, n - 1, n, pred);
+            if (!counted)
+            {
+                L->global->work.sortcompares = compares;
+                L->global->work.sortcalls = calls;
+            }
         }
     }
     return 0;

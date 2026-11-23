@@ -429,8 +429,9 @@ pub(crate) fn finished(emulator: &Emulator, history: &History) {
 /// `listings`, the mount keeps the directory listings it made (record/prepare.rs checks them again).
 pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(Emulator, History), String> {
     let prepared = crate::timing::time("prepare", || launch::prepare(&args.engine, &host.repo))?;
-    // (a loopback run's two sides require the same modules: each file is compiled once, its bytecode loaded by both)
-    if prepared.options.run_context == crate::RunContext::Loopback {
+    // (a loopback run's two sides require the same modules, and a native run may reload modules through debug.loadmodule:
+    // each file is compiled once, its bytecode reused)
+    if prepared.options.run_context == crate::RunContext::Loopback || prepared.options.native {
         modules::share_compiled_modules();
     }
     let history = History::new(host, args, &prepared.place_roots());
@@ -460,7 +461,9 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
     if let Some(prefetch) = prefetch {
         modules::use_prefetch(&engine, prefetch);
     }
-    modules::interpret_modules(&engine);
+    if !engine.options.native {
+        modules::interpret_modules(&engine);
+    }
     // AnimationTracks play their keyframes: the directories given, the download cache, the asset worker
     crate::animation::enable(&engine, crate::animation::Loading { directories: args.animations.clone(), download: true });
     if listings {

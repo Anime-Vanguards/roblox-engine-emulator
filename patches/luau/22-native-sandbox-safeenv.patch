@@ -1,0 +1,234 @@
+# Topic: safe-sandbox setfenv preservation for native codegen
+#
+# What it does: marks chunks compiled with sandbox-mutable globals (LUAU_PROTO_SAFE_SANDBOX via
+# lua_setsafesandbox) and lets luaB_setfenv mark a verified sandbox environment with safeenv = 2
+# when its __index chain and metatables are readonly, its existing keys are whitelisted sandbox
+# keys, and it inherits from the VM's readonly safe global base (lua_setsafeglobalbase). Any new
+# key insertion (luaH_newkey/luaH_setstr), metatable swap (lua_setmetatable), or getfenv clears
+# safeenv = 2 back to 0 without affecting stock safeenv = 1 environments.
+#
+# Why upstream lacks it: test harnesses that run modules through debug.loadmodule and setfenv
+# would otherwise lose safeenv, disabling VM fastcalls and native codegen for every tested module.
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index 0a320a8..2f54f66 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -400,6 +400,10 @@ LUA_API void lua_workhostnanos(lua_State* L, int nanos);
+ LUA_API void lua_workmute(lua_State* L, int on);
+ // turns the VM's work counters on or off (default on); off, scripts run without per-instruction or per-allocation counting
+ LUA_API void lua_setworkcounting(lua_State* L, int on);
++// marks a Luau function and its nested protos as compiled for safe-sandbox setfenv preservation (mutable sandbox globals)
++LUA_API void lua_setsafesandbox(lua_State* L, int idx);
++// sets the immutable shared global base table for safe-sandbox setfenv preservation (nil disables)
++LUA_API void lua_setsafeglobalbase(lua_State* L, int idx);
+ // the clock the garbage collector paces itself by, in seconds (it measures the allocation rate and the mark phase's length with it to
+ // set the next cycle's trigger): the wall clock (lua_clock) by default, so where it steps depends on how fast the host ran; a host
+ // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
+diff --git a/luau/VM/src/lapi.cpp b/luau/VM/src/lapi.cpp
+index fefea22..792d836 100644
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -1052,6 +1052,8 @@ int lua_setmetatable(lua_State* L, int objindex)
+     {
+         if (hvalue(obj)->readonly)
+             luaG_readonlyerror(L);
++        if (LUAU_UNLIKELY(hvalue(obj)->safeenv == 2))
++            hvalue(obj)->safeenv = 0;
+         hvalue(obj)->metatable = mt;
+         if (mt)
+             luaC_objbarrier(L, hvalue(obj), mt);
+@@ -1586,6 +1588,32 @@ void lua_setworkcounting(lua_State* L, int on)
+     L->global->workoff = on ? 0 : 1;
+ }
+ 
++static void setsafesandbox(Proto* p)
++{
++    p->flags |= LUAU_PROTO_SAFE_SANDBOX;
++    for (int i = 0; i < p->sizep; ++i)
++        setsafesandbox(p->p[i]);
++}
++
++void lua_setsafesandbox(lua_State* L, int idx)
++{
++    const TValue* o = index2addr(L, idx);
++    api_check(L, isLfunction(o));
++    setsafesandbox(clvalue(o)->l.p);
++}
++
++void lua_setsafeglobalbase(lua_State* L, int idx)
++{
++    const TValue* o = index2addr(L, idx);
++    if (ttisnil(o))
++    {
++        L->global->safebase = NULL;
++        return;
++    }
++    api_check(L, ttistable(o));
++    L->global->safebase = hvalue(o);
++}
++
+ void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud)
+ {
+     L->global->gcclock = clock;
+diff --git a/luau/VM/src/lbaselib.cpp b/luau/VM/src/lbaselib.cpp
+index 9b2904f..9034104 100644
+--- a/luau/VM/src/lbaselib.cpp
++++ b/luau/VM/src/lbaselib.cpp
+@@ -6,11 +6,14 @@
+ #include "lapi.h"
+ #include "ldo.h"
+ #include "lgc.h"
++#include "ltable.h"
++#include "ltm.h"
+ #include "ludata.h"
+ 
+ #include <ctype.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ 
+ static void writestring(const char* s, size_t l)
+ {
+@@ -164,6 +167,66 @@ static int luaB_getfenv(lua_State* L)
+     return 1;
+ }
+ 
++static bool isSandboxMutableKey(const TString* ts)
++{
++    const char* s = getstr(ts);
++    switch (ts->len)
++    {
++    case 2:
++        return (s[0] == 'o' && s[1] == 's') || (s[0] == '_' && s[1] == 'G');
++    case 4:
++        return memcmp(s, "task", 4) == 0 || memcmp(s, "tick", 4) == 0 || memcmp(s, "time", 4) == 0 || memcmp(s, "warn", 4) == 0 || memcmp(s, "math", 4) == 0;
++    case 5:
++        return memcmp(s, "delay", 5) == 0 || memcmp(s, "print", 5) == 0;
++    case 6:
++        return memcmp(s, "script", 6) == 0 || memcmp(s, "shared", 6) == 0;
++    case 7:
++        return memcmp(s, "require", 7) == 0;
++    case 8:
++        return memcmp(s, "DateTime", 8) == 0;
++    default:
++        return false;
++    }
++}
++
++static bool isSafeSandboxEnv(lua_State* L, LuaTable* env, LuaTable* safebase)
++{
++    LuaTable* t = env;
++    for (int depth = 0; depth < 4 && t != NULL; ++depth)
++    {
++        if (t == safebase)
++            return true;
++        if (depth > 0 && !t->readonly)
++            return false;
++        for (int i = 0; i < t->sizearray; ++i)
++            if (!ttisnil(&t->array[i]))
++                return false;
++        if (t->node != &luaH_dummynode)
++        {
++            int size = sizenode(t);
++            for (int i = 0; i < size; ++i)
++            {
++                LuaNode* n = gnode(t, i);
++                if (!ttisnil(gkey(n)))
++                {
++                    if (!ttisstring(gkey(n)) || !isSandboxMutableKey(tsvalue(gkey(n))))
++                        return false;
++                }
++            }
++        }
++        LuaTable* mt = t->metatable;
++        if (mt == NULL || !mt->readonly)
++            return false;
++        if (fasttm(L, mt, TM_NEWINDEX) != NULL)
++            return false;
++        const TValue* idx = fasttm(L, mt, TM_INDEX);
++        if (idx == NULL || !ttistable(idx))
++            return false;
++        t = hvalue(idx);
++    }
++    return false;
++}
++
+ static int luaB_setfenv(lua_State* L)
+ {
+     luaL_checktype(L, 2, LUA_TTABLE);
+@@ -180,6 +243,16 @@ static int luaB_setfenv(lua_State* L)
+     }
+     else if (lua_iscfunction(L, -2) || lua_setfenv(L, -2) == 0)
+         luaL_error(L, "'setfenv' cannot change environment of given object");
++    if (L->global->safebase != NULL)
++    {
++        const TValue* fn = L->top - 1;
++        if (isLfunction(fn))
++        {
++            Closure* cl = clvalue(fn);
++            if ((cl->l.p->flags & LUAU_PROTO_SAFE_SANDBOX) != 0 && isSafeSandboxEnv(L, cl->env, L->global->safebase))
++                cl->env->safeenv = 2;
++        }
++    }
+     return 1;
+ }
+ 
+diff --git a/luau/VM/src/lobject.h b/luau/VM/src/lobject.h
+index 7c8cb13..8e995d0 100644
+--- a/luau/VM/src/lobject.h
++++ b/luau/VM/src/lobject.h
+@@ -377,6 +377,8 @@ enum ProtoExecFlag
+ // Proto flags bit of a function a code generator would compile natively (luau_load: a --!native module's but its cold ones, an
+ // @native one): its instructions count in nativeops (lua_WorkCounters)
+ #define LUAU_PROTO_WORK_NATIVE (1 << 6)
++// Proto flags bit of a chunk compiled with mutable sandbox globals so setfenv can preserve safeenv on verified sandbox envs
++#define LUAU_PROTO_SAFE_SANDBOX (1 << 5)
+ 
+ // clang-format off
+ typedef struct Proto
+diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
+index 1afc264..77eed9b 100644
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -246,6 +246,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
+     g->gcclockud = NULL;
+     g->typeofnames = NULL;
+     g->vectortypename = NULL;
++    g->safebase = NULL;
+     g->floatmode = LUA_FLOATMODE_THREAD;
+     g->floatchanged = false;
+     g->floatsaved = 0;
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index 69dffc3..5764ef1 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -312,6 +312,7 @@ typedef struct global_State
+ 
+     struct LuaTable* typeofnames; // a host's names for its values, for the builtin typeof (lua_settypeofnames; NULL: none)
+     TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
++    struct LuaTable* safebase; // immutable shared global base for safe-sandbox setfenv preservation (NULL: disabled)
+ 
+     uint8_t floatmode; // the float mode the interpreter runs in and native code compiles in (lua_setfloatmode)
+     bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
+diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
+index 9de58ff..828e0b9 100644
+--- a/luau/VM/src/ltable.cpp
++++ b/luau/VM/src/ltable.cpp
+@@ -1208,6 +1208,8 @@ TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key)
+ 
+ TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key)
+ {
++    if (LUAU_UNLIKELY(t->safeenv == 2))
++        t->safeenv = 0;
+     switch (ttype(key))
+     {
+     case LUA_TNIL:
+@@ -1270,6 +1272,8 @@ TValue* luaH_setstr(lua_State* L, LuaTable* t, TString* key)
+         return cast_to(TValue*, p);
+     else
+     {
++        if (LUAU_UNLIKELY(t->safeenv == 2))
++            t->safeenv = 0;
+         TValue k;
+         setsvalue(L, &k, key);
+         return newkeytagged<LUA_TSTRING, false>(L, t, &k, key, -1);

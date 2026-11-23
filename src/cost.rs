@@ -1882,6 +1882,9 @@ unsafe extern "C-unwind" {
     pub fn lua_workcounters(state: *mut mlua::ffi::lua_State) -> *const VmCounters;
     fn lua_setworkexempt(state: *mut mlua::ffi::lua_State, index: std::ffi::c_int);
     fn lua_workmute(state: *mut mlua::ffi::lua_State, on: std::ffi::c_int);
+    fn lua_setworkcounting(state: *mut mlua::ffi::lua_State, on: std::ffi::c_int);
+    fn lua_setsafesandbox(state: *mut mlua::ffi::lua_State, index: std::ffi::c_int);
+    fn lua_setsafeglobalbase(state: *mut mlua::ffi::lua_State, index: std::ffi::c_int);
     fn lua_setgcclock(state: *mut mlua::ffi::lua_State, clock: Option<unsafe extern "C" fn(*mut std::ffi::c_void) -> f64>, ud: *mut std::ffi::c_void);
     fn lua_coldtracking(state: *mut mlua::ffi::lua_State, on: std::ffi::c_int);
     fn lua_coldframe(state: *mut mlua::ffi::lua_State);
@@ -1976,6 +1979,36 @@ pub fn install_gc_clock(lua: &mlua::Lua, counters: *const VmCounters) -> mlua::R
 /// Mutes (or unmutes) the native datatype charges of the VM while the engine's Luau prices a call as a whole (`R.Mute`).
 pub fn mute_host_nanos(lua: &mlua::Lua, on: bool) {
     unsafe { lua_workmute(lua.current_thread().state(), on as std::ffi::c_int) }
+}
+
+/// Turns the VM's work counters on or off (patches/luau/21-work-counting-toggle.patch).
+/// Off, scripts run without per-instruction or per-allocation counting and the collector paces itself by the wall clock.
+pub fn set_work_counting(lua: &mlua::Lua, on: bool) {
+    unsafe {
+        let _ = lua.exec_raw::<()>((), |state| {
+            lua_setworkcounting(state, on as std::ffi::c_int);
+            if !on {
+                lua_setgcclock(state, None, std::ptr::null_mut());
+            }
+        });
+    }
+}
+
+/// Marks a Luau chunk (compiled with mutable sandbox globals) so `setfenv` can preserve `safeenv`
+/// when the target sandbox environment only overrides those globals over the immutable shared base.
+pub fn set_safe_sandbox(lua: &mlua::Lua, function: &mlua::Function) -> mlua::Result<()> {
+    unsafe { lua.exec_raw::<()>(function, |state| lua_setsafesandbox(state, -1)) }
+}
+
+/// Registers the immutable shared global base table for safe-sandbox `setfenv` preservation.
+pub fn set_safe_global_base(lua: &mlua::Lua, table: &mlua::Table) -> mlua::Result<()> {
+    unsafe {
+        lua.exec_raw::<()>(table, |state| {
+            mlua::ffi::lua_setreadonly(state, -1, 1);
+            mlua::ffi::lua_setsafeenv(state, -1, 1);
+            lua_setsafeglobalbase(state, -1);
+        })
+    }
 }
 
 /// Marks the engine's own Luau (the prelude, services, vector3.luau, record wrappers): Studio runs

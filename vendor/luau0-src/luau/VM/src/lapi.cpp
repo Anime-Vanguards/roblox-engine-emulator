@@ -1052,6 +1052,8 @@ int lua_setmetatable(lua_State* L, int objindex)
     {
         if (hvalue(obj)->readonly)
             luaG_readonlyerror(L);
+        if (LUAU_UNLIKELY(hvalue(obj)->safeenv == 2))
+            hvalue(obj)->safeenv = 0;
         hvalue(obj)->metatable = mt;
         if (mt)
             luaC_objbarrier(L, hvalue(obj), mt);
@@ -1579,6 +1581,37 @@ void lua_workmute(lua_State* L, int on)
         ++muted;
     else if (muted > 0)
         --muted;
+}
+
+void lua_setworkcounting(lua_State* L, int on)
+{
+    L->global->workoff = on ? 0 : 1;
+}
+
+static void setsafesandbox(Proto* p)
+{
+    p->flags |= LUAU_PROTO_SAFE_SANDBOX;
+    for (int i = 0; i < p->sizep; ++i)
+        setsafesandbox(p->p[i]);
+}
+
+void lua_setsafesandbox(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    api_check(L, isLfunction(o));
+    setsafesandbox(clvalue(o)->l.p);
+}
+
+void lua_setsafeglobalbase(lua_State* L, int idx)
+{
+    const TValue* o = index2addr(L, idx);
+    if (ttisnil(o))
+    {
+        L->global->safebase = NULL;
+        return;
+    }
+    api_check(L, ttistable(o));
+    L->global->safebase = hvalue(o);
 }
 
 void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud)

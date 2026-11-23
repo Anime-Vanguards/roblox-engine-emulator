@@ -712,8 +712,11 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
 
     let shared = build_shared(lua, engine)?;
     shared.raw_set(crate::world::mouse::RECORD, mouse)?;
-    engine.lua.borrow_mut().shared = Some(shared);
+    engine.lua.borrow_mut().shared = Some(shared.clone());
     super::stubs::load(lua, engine)?;
+    if engine.options.native {
+        crate::cost::set_safe_global_base(lua, &shared)?;
+    }
 
     // Scheduler.Configure: math.random starts from the run's seed
     randomseed(engine)?;

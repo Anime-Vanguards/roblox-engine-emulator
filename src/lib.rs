@@ -126,6 +126,9 @@ pub struct Options {
     pub load_module: bool,
     /// ServerScriptService.LoadStringEnabled is on, whatever the place holds (`--load-string`): a server's scripts have `loadstring`
     pub load_string: bool,
+    /// Native script execution (`--native`): scripts compile to native code with safe environments and the VM's work counters
+    /// off (for fast test runs that do not need the work clock's per-instruction pricing)
+    pub native: bool,
     pub topbar_inset: f64,
     pub device: String,
     pub place_id: f64,
@@ -172,6 +175,7 @@ impl Default for Options {
             studio: true,
             load_module: false,
             load_string: false,
+            native: false,
             topbar_inset: 0.0,
             device: "desktop".into(),
             place_id: 0.0,

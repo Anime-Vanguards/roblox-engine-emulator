@@ -220,6 +220,7 @@ typedef struct global_State
     uint8_t gcdisabled;
     uint8_t coldon; // cold touches are tracked (lua_coldtracking; in the padding before gray: the state keeps its size)
     uint8_t profilecalls; // a profile's call hook is set (lua_setprofilecalls; in the same padding)
+    uint8_t workoff; // work counters disabled (lua_setworkcounting; in the same padding)
 
     GCObject* gray;      // list of gray objects
     GCObject* grayagain; // list of objects to be traversed atomically
@@ -311,6 +312,7 @@ typedef struct global_State
 
     struct LuaTable* typeofnames; // a host's names for its values, for the builtin typeof (lua_settypeofnames; NULL: none)
     TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
+    struct LuaTable* safebase; // immutable shared global base for safe-sandbox setfenv preservation (NULL: disabled)
 
     uint8_t floatmode; // the float mode the interpreter runs in and native code compiles in (lua_setfloatmode)
     bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
@@ -406,7 +408,7 @@ union GCObject
 // exempt and a script's frame is below it (the host's work for a script), else 0
 inline int luaE_workframe(lua_State* L, CallInfo* ci)
 {
-    if (!L->stack) // the thread's stack is still being made (its frames are not set up)
+    if (L->global->workoff || !L->stack) // counters off, or the thread's stack is still being made (its frames are not set up)
         return 0;
     int found = 1;
     for (; ci >= L->base_ci; --ci)
@@ -420,7 +422,7 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
 }
 
 // whether a script function's own instruction is running (the innermost frame is a script's Luau frame, not a C function's)
-#define luaE_scriptinsn(L) ((L)->stack && isLua((L)->ci) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+#define luaE_scriptinsn(L) (!(L)->global->workoff && (L)->stack && isLua((L)->ci) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
 
 // the same, for an interpreted function only: a vector's members and methods are instructions of their own in native code (nativeops)
 #define luaE_interpretedinsn(L) (luaE_scriptinsn(L) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_NATIVE))

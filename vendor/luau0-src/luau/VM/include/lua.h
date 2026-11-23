@@ -398,6 +398,12 @@ LUA_API void lua_workhostcalls(lua_State* L, int calls);
 LUA_API void lua_workhostnanos(lua_State* L, int nanos);
 // on: one more level of muting; off: one less (the engine's Luau prices a whole call itself, as Scheduler.muted does for the host's charges)
 LUA_API void lua_workmute(lua_State* L, int on);
+// turns the VM's work counters on or off (default on); off, scripts run without per-instruction or per-allocation counting
+LUA_API void lua_setworkcounting(lua_State* L, int on);
+// marks a Luau function and its nested protos as compiled for safe-sandbox setfenv preservation (mutable sandbox globals)
+LUA_API void lua_setsafesandbox(lua_State* L, int idx);
+// sets the immutable shared global base table for safe-sandbox setfenv preservation (nil disables)
+LUA_API void lua_setsafeglobalbase(lua_State* L, int idx);
 // the clock the garbage collector paces itself by, in seconds (it measures the allocation rate and the mark phase's length with it to
 // set the next cycle's trigger): the wall clock (lua_clock) by default, so where it steps depends on how fast the host ran; a host
 // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.

@@ -1,0 +1,456 @@
+# Topic: toggleable VM work counters
+#
+# What it does: lua_setworkcounting(L, on) disables per-instruction, per-allocation and per-call
+# work counting (global_State::workoff, stored in existing padding before gray so global_State keeps
+# its size) and dispatches the interpreter to an uncounted luau_execute specialization when off.
+# Defaults to on so existing callers see identical counts and GC pacing.
+#
+# Why upstream lacks it: work counters are an emulator patch (02-work-counters.patch); test runs
+# that do not use the work clock can run natively without paying the counter overhead.
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index d4c1c25..0a320a8 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -398,6 +398,8 @@ LUA_API void lua_workhostcalls(lua_State* L, int calls);
+ LUA_API void lua_workhostnanos(lua_State* L, int nanos);
+ // on: one more level of muting; off: one less (the engine's Luau prices a whole call itself, as Scheduler.muted does for the host's charges)
+ LUA_API void lua_workmute(lua_State* L, int on);
++// turns the VM's work counters on or off (default on); off, scripts run without per-instruction or per-allocation counting
++LUA_API void lua_setworkcounting(lua_State* L, int on);
+ // the clock the garbage collector paces itself by, in seconds (it measures the allocation rate and the mark phase's length with it to
+ // set the next cycle's trigger): the wall clock (lua_clock) by default, so where it steps depends on how fast the host ran; a host
+ // that must collect at the same points in every run gives it a clock of the work done instead. NULL restores the wall clock.
+diff --git a/luau/VM/src/lapi.cpp b/luau/VM/src/lapi.cpp
+index ecb7d04..fefea22 100644
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -1581,6 +1581,11 @@ void lua_workmute(lua_State* L, int on)
+         --muted;
+ }
+ 
++void lua_setworkcounting(lua_State* L, int on)
++{
++    L->global->workoff = on ? 0 : 1;
++}
++
+ void lua_setgcclock(lua_State* L, double (*clock)(void* ud), void* ud)
+ {
+     L->global->gcclock = clock;
+diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
+index b0389b2..1afc264 100644
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -252,6 +252,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
+     g->floatdepth = 0;
+     g->coldon = 0;
+     g->profilecalls = 0;
++    g->workoff = 0;
+     g->coldslot = 0;
+ 
+     g->lastprotoid = 1;
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index 4a4baa5..69dffc3 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -220,6 +220,7 @@ typedef struct global_State
+     uint8_t gcdisabled;
+     uint8_t coldon; // cold touches are tracked (lua_coldtracking; in the padding before gray: the state keeps its size)
+     uint8_t profilecalls; // a profile's call hook is set (lua_setprofilecalls; in the same padding)
++    uint8_t workoff; // work counters disabled (lua_setworkcounting; in the same padding)
+ 
+     GCObject* gray;      // list of gray objects
+     GCObject* grayagain; // list of objects to be traversed atomically
+@@ -406,7 +407,7 @@ union GCObject
+ // exempt and a script's frame is below it (the host's work for a script), else 0
+ inline int luaE_workframe(lua_State* L, CallInfo* ci)
+ {
+-    if (!L->stack) // the thread's stack is still being made (its frames are not set up)
++    if (L->global->workoff || !L->stack) // counters off, or the thread's stack is still being made (its frames are not set up)
+         return 0;
+     int found = 1;
+     for (; ci >= L->base_ci; --ci)
+@@ -420,7 +421,7 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
+ }
+ 
+ // whether a script function's own instruction is running (the innermost frame is a script's Luau frame, not a C function's)
+-#define luaE_scriptinsn(L) ((L)->stack && isLua((L)->ci) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++#define luaE_scriptinsn(L) (!(L)->global->workoff && (L)->stack && isLua((L)->ci) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+ 
+ // the same, for an interpreted function only: a vector's members and methods are instructions of their own in native code (nativeops)
+ #define luaE_interpretedinsn(L) (luaE_scriptinsn(L) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_NATIVE))
+diff --git a/luau/VM/src/ltablib.cpp b/luau/VM/src/ltablib.cpp
+index 4de0736..aca10c3 100644
+--- a/luau/VM/src/ltablib.cpp
++++ b/luau/VM/src/ltablib.cpp
+@@ -410,7 +410,8 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
+     setobj2s(L, L->top + 1, l);
+     setobj2s(L, L->top + 2, r);
+     L->top += 3; // safe because of LUA_MINSTACK guarantee
+-    L->global->work.sortcalls++;
++    if (!L->global->workoff)
++        L->global->work.sortcalls++;
+     luaD_call(L, L->top - 3, 1);
+     L->top -= 1; // maintain stack depth
+ 
+@@ -436,7 +437,8 @@ inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred
+     int n = t->sizearray;
+     LUAU_ASSERT(unsigned(i) < unsigned(n) && unsigned(j) < unsigned(n)); // contract maintained in sort_less after predicate call
+ 
+-    L->global->work.sortcompares++;
++    if (!L->global->workoff)
++        L->global->work.sortcompares++;
+     int res = pred(L, &arr[i], &arr[j]);
+ 
+     // predicate call may resize the table, which is invalid
+@@ -575,14 +577,21 @@ static int tsort(lua_State* L)
+ 
+     if (n > 0)
+     {
+-        // (sort_less and sort_func count as they go: a sort no script asked for gives its counts back)
+-        uint64_t compares = L->global->work.sortcompares, calls = L->global->work.sortcalls;
+-        bool counted = luaE_scriptwork(L);
+-        sort_rec(L, t, 0, n - 1, n, pred);
+-        if (!counted)
++        if (L->global->workoff)
+         {
+-            L->global->work.sortcompares = compares;
+-            L->global->work.sortcalls = calls;
++            sort_rec(L, t, 0, n - 1, n, pred);
++        }
++        else
++        {
++            // (sort_less and sort_func count as they go: a sort no script asked for gives its counts back)
++            uint64_t compares = L->global->work.sortcompares, calls = L->global->work.sortcalls;
++            bool counted = luaE_scriptwork(L);
++            sort_rec(L, t, 0, n - 1, n, pred);
++            if (!counted)
++            {
++                L->global->work.sortcompares = compares;
++                L->global->work.sortcalls = calls;
++            }
+         }
+     }
+     return 0;
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index 3c2000b..a5af7bc 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -149,7 +149,8 @@ LUAU_FASTFLAG(LuauRuntimeFeedback)
+  */
+ // Counts each instruction the interpreter dispatches (lua_workcounters)
+ static_assert(LOP__COUNT + LUAU_INSN_COLD <= LUA_WORK_FIRSTSLOT, "cold opcode aliases must not overlap scalar work slots");
+-#define VM_COUNT_OP(op) (workops[uint8_t(op)]++)
++#define VM_COUNT_OP(op) (CountWork ? (void)(workops[uint8_t(op)]++) : (void)0)
++#define VM_COLD_TOUCH(L, o) do { if (CountWork) luaC_touch(L, o); } while (0)
+ 
+ #if VM_USE_CGOTO
+ #define VM_CASE(op) CASE_##op:
+@@ -265,7 +266,7 @@ static void luau_addexeccount(Proto* p, double count)
+ // (ProfileCalls: a host's profile samples calls, lprofile.cpp; without it the CALL paths do not ask)
+ // A cold dispatch returns true after disarming its PC. The outer loop retries it
+ // with fresh interpreter registers, without growing the C stack.
+-template<bool SingleStep, bool ProfileCalls>
++template<bool SingleStep, bool ProfileCalls, bool CountWork>
+ static bool luau_execute(lua_State* L)
+ {
+ #if VM_USE_CGOTO
+@@ -283,7 +284,7 @@ static bool luau_execute(lua_State* L)
+     StkId base;
+     TValue* k;
+     const Instruction* pc;
+-    uint64_t* workops; // where cl's instructions are counted (luaE_workops)
++    uint64_t* workops = nullptr; // where cl's instructions are counted (luaE_workops)
+ 
+     // In debug builds, compilers will often layout each variable in its own stack slot
+     // This can considerably increase the stack frame of the interpreter loop and cause C stack overflows under the LUAI_MAXCCALLS limit
+@@ -312,7 +313,7 @@ static bool luau_execute(lua_State* L)
+     // (a frame that starts here: luau_execute also continues a frame once a call it made returns, as the yieldable pcall and
+     // the fast pcall continue their caller, which is not a call; the host's Luau an engine function runs for a script's call of
+     // it is part of that call, lua_setenginecfunction)
+-    if ((clvalue(L->ci->func)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && L->ci->savedpc == L->ci->p->code && luaE_scriptframe(L, L->ci - 1) &&
++    if (CountWork && (clvalue(L->ci->func)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && L->ci->savedpc == L->ci->p->code && luaE_scriptframe(L, L->ci - 1) &&
+         !luaE_enginecallframe(L, L->ci - 1))
+     {
+         L->global->work.hostcalls++;
+@@ -340,9 +341,12 @@ reentry:
+ 
+     pc = L->ci->savedpc;
+     cl = clvalue(L->ci->func);
+-    workops = luaE_workops(L, cl);
+-    luaC_touch(L, cl);
+-    luaC_touch(L, cl->l.p);
++    if (CountWork)
++    {
++        workops = luaE_workops(L, cl);
++        luaC_touch(L, cl);
++        luaC_touch(L, cl->l.p);
++    }
+     base = L->base;
+     k = L->ci->p->k;
+ 
+@@ -556,7 +560,7 @@ reentry:
+                     uint32_t aux = *pc++;
+ 
+                     // (a host's work counters: the lookup a resolved import saves)
+-                    if (!(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                    if (CountWork && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+                         L->global->work.slowimports++;
+                     VM_PROTECT(luaV_getimport(L, cl->env, k, ra, aux, /* propagatenil= */ false));
+                     VM_NEXT();
+@@ -576,7 +580,7 @@ reentry:
+                 if (LUAU_LIKELY(ttistable(rb)))
+                 {
+                     LuaTable* h = hvalue(rb);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+ 
+                     int slot = LUAU_INSN_C(insn) & h->nodemask8;
+                     LuaNode* n = &h->node[slot];
+@@ -754,7 +758,7 @@ reentry:
+                 if (LUAU_LIKELY(ttistable(rb)))
+                 {
+                     LuaTable* h = hvalue(rb);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+ 
+                     int slot = LUAU_INSN_C(insn) & h->nodemask8;
+                     LuaNode* n = &h->node[slot];
+@@ -829,7 +833,7 @@ reentry:
+                 if (ttistable(rb) && ttisnumber(rc))
+                 {
+                     LuaTable* h = hvalue(rb);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+ 
+                     double indexd = nvalue(rc);
+                     int index = int(indexd);
+@@ -860,7 +864,7 @@ reentry:
+                 if (ttistable(rb) && ttisnumber(rc))
+                 {
+                     LuaTable* h = hvalue(rb);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+ 
+                     double indexd = nvalue(rc);
+                     int index = int(indexd);
+@@ -892,7 +896,7 @@ reentry:
+                 if (ttistable(rb))
+                 {
+                     LuaTable* h = hvalue(rb);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+ 
+                     if (LUAU_LIKELY(unsigned(c) < unsigned(h->sizearray) && !h->metatable))
+                     {
+@@ -921,7 +925,7 @@ reentry:
+                 if (ttistable(rb))
+                 {
+                     LuaTable* h = hvalue(rb);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+ 
+                     if (LUAU_LIKELY(unsigned(c) < unsigned(h->sizearray) && !h->metatable && !h->readonly))
+                     {
+@@ -995,7 +999,7 @@ reentry:
+                 if (LUAU_LIKELY(ttistable(rb)))
+                 {
+                     LuaTable* h = hvalue(rb);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+                     // note: we can't use nodemask8 here because we need to query the main position of the table, and 8-bit nodemask8 only works
+                     // for predictive lookups
+                     LuaNode* n = &h->node[tsvalue(kv)->hash & (sizenode(h) - 1)];
+@@ -1180,15 +1184,18 @@ reentry:
+                     // this will result in execution continuing in native code, and is equivalent to if (p->execdata) but has no additional overhead
+                     // note that p->codeentry may point *outside* of p->code..p->code+p->sizecode, but that pointer never gets saved to savedpc.
+                     pc = (SingleStep && !luaP_native(L)) ? p->code : p->codeentry;
+-                    if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                    if (CountWork)
+                     {
+-                        L->global->work.hostcalls++;
+-                        luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
++                        if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                        {
++                            L->global->work.hostcalls++;
++                            luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
++                        }
++                        workops = luaE_workops(L, ccl);
++                        luaC_touch(L, ccl);
++                        luaC_touch(L, p);
+                     }
+                     cl = ccl;
+-                    workops = luaE_workops(L, cl);
+-                    luaC_touch(L, cl);
+-                    luaC_touch(L, p);
+                     base = L->base;
+                     k = p->k;
+                     VM_NEXT();
+@@ -1196,7 +1203,7 @@ reentry:
+                 else
+                 {
+                     lua_CFunction func = ccl->c.f;
+-                    if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
++                    if (CountWork && (cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                     {
+                         if (luaE_hostcall(L))
+                             ci->flags |= LUA_CALLINFO_WORK_CCALL;
+@@ -1313,15 +1320,18 @@ reentry:
+                     // this will result in execution continuing in native code, and is equivalent to if (p->execdata) but has no additional overhead
+                     // note that p->codeentry may point *outside* of p->code..p->code+p->sizecode, but that pointer never gets saved to savedpc.
+                     pc = (SingleStep && !luaP_native(L)) ? p->code : p->codeentry;
+-                    if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                    if (CountWork)
+                     {
+-                        L->global->work.hostcalls++;
+-                        luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
++                        if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                        {
++                            L->global->work.hostcalls++;
++                            luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
++                        }
++                        workops = luaE_workops(L, ccl);
++                        luaC_touch(L, ccl);
++                        luaC_touch(L, p);
+                     }
+                     cl = ccl;
+-                    workops = luaE_workops(L, cl);
+-                    luaC_touch(L, cl);
+-                    luaC_touch(L, p);
+                     base = L->base;
+                     k = p->k;
+                     VM_NEXT();
+@@ -1332,7 +1342,7 @@ reentry:
+                         VM_PATCH_AUX(pc - 1, LUAU_INSN_FBSLOT_SEALED);
+ 
+                     lua_CFunction func = ccl->c.f;
+-                    if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
++                    if (CountWork && (cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                     {
+                         if (luaE_hostcall(L))
+                             ci->flags |= LUA_CALLINFO_WORK_CCALL;
+@@ -1436,7 +1446,8 @@ reentry:
+                 // reentry
+                 pc = cip->savedpc;
+                 cl = nextcl;
+-                workops = luaE_workops(L, cl);
++                if (CountWork)
++                    workops = luaE_workops(L, cl);
+                 base = L->base;
+                 k = nextproto->k;
+                 VM_NEXT();
+@@ -2532,7 +2543,7 @@ reentry:
+                 if (LUAU_LIKELY(ttistable(rb)))
+                 {
+                     LuaTable* h = hvalue(rb);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+ 
+                     if (fastnotm(h->metatable, TM_LEN))
+                     {
+@@ -2830,7 +2841,7 @@ reentry:
+                 if (ttisnil(ra) && ttistable(ra + 1))
+                 {
+                     LuaTable* h = hvalue(ra + 1);
+-                    luaC_touch(L, h);
++                    VM_COLD_TOUCH(L, h);
+                     int index = int(reinterpret_cast<uintptr_t>(pvalue(ra + 2)));
+ 
+                     int sizearray = h->sizearray;
+@@ -3873,7 +3884,7 @@ reentry:
+ 
+                 // (the call of pcall / xpcall the skipped fallback makes, counted as the C call it is: a client's fast protected
+                 // call costs what that call did, 18 ns a pcall in a 0.747 client against 17.9 in a 0.744 one that made the call)
+-                if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
++                if (CountWork && (cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                     L->global->work.ccalls++;
+ 
+                 L->ci->savedpc = pc + skip + 1; // return skips the fallback path
+@@ -3898,15 +3909,18 @@ reentry:
+ 
+                     // reentry into the call (see LOP_CALL for description of how native calls are handled with 'codeentry')
+                     pc = (SingleStep && !luaP_native(L)) ? p->code : p->codeentry;
+-                    if ((fcl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                    if (CountWork)
+                     {
+-                        L->global->work.hostcalls++;
+-                        luaC_coldcall(L, fcl, 1, NULL, cl->l.p);
++                        if ((fcl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                        {
++                            L->global->work.hostcalls++;
++                            luaC_coldcall(L, fcl, 1, NULL, cl->l.p);
++                        }
++                        workops = luaE_workops(L, fcl);
++                        luaC_touch(L, fcl);
++                        luaC_touch(L, p);
+                     }
+                     cl = fcl;
+-                    workops = luaE_workops(L, cl);
+-                    luaC_touch(L, cl);
+-                    luaC_touch(L, p);
+                     base = L->base;
+                     k = p->k;
+                     VM_NEXT();
+@@ -4109,7 +4123,8 @@ reentry:
+             // Only armed instructions take this path. Warm code uses the usual dispatch table.
+             uint8_t op = uint8_t(*pc);
+             LUAU_ASSERT((op & LUAU_INSN_COLD) && LUAU_INSN_OP(*pc) < LOP__COUNT);
+-            workops[op]--;
++            if (CountWork)
++                workops[op]--;
+             if (!SingleStep)
+             {
+                 luaC_coldinstruction(L, cl, pc);
+@@ -4118,7 +4133,8 @@ reentry:
+                 // needs spilling across this helper. The caller retries this PC.
+                 return true;
+             }
+-            workops[op & ~LUAU_INSN_COLD]++;
++            if (CountWork)
++                workops[op & ~LUAU_INSN_COLD]++;
+             luaC_coldinstruction(L, cl, pc);
+             VM_CONTINUE(uint8_t(*pc));
+         }
+@@ -4133,7 +4149,7 @@ exit:;
+ #ifdef LUAU_EXECUTE_PROFILED_UNIT
+ void luaP_executeprofiled(lua_State* L)
+ {
+-    while (luau_execute<false, true>(L))
++    while (luau_execute<false, true, true>(L))
+     {
+     }
+ }
+@@ -4148,25 +4164,29 @@ void luau_execute(lua_State* L)
+     {
+         luaP_Execute profiled(L);
+         if (L->singlestep || luaP_stepping(L))
+-            while (luau_execute<true, true>(L))
++            while (luau_execute<true, true, true>(L))
+             {
+             }
+         else if (L->global->profilecalls)
+             luaP_executeprofiled(L);
+         else
+-            while (luau_execute<false, false>(L))
++            while (luau_execute<false, false, true>(L))
+             {
+             }
+         return;
+     }
+ 
+-    // (no profile: the plain copy, or the single-stepping one)
++    // (no profile: the plain copy, the uncounted copy when work counters are off, or the single-stepping one)
+     if (L->singlestep)
+-        while (luau_execute<true, true>(L))
++        while (luau_execute<true, true, true>(L))
++        {
++        }
++    else if (L->global->workoff)
++        while (luau_execute<false, false, false>(L))
+         {
+         }
+     else
+-        while (luau_execute<false, false>(L))
++        while (luau_execute<false, false, true>(L))
+         {
+         }
+ }

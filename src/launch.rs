@@ -8,7 +8,7 @@
 //!   [--snapshot <file.rbxm>]... [--snapshot-dir <dir>] [--no-snapshots] [--viewport WxH]
 //!   [--scale S] [--camera WxH] [--rotation-clipping enabled|disabled] [--mode edit|play]
 //!   [--run-context client|server|loopback] [--player Name] [--place-id N] [--streaming R] [--offline]
-//!   [--verbose] [--repo <dir>]
+//!   [--native] [--verbose] [--repo <dir>]
 //!
 //! The project's Rojo roots are `--roots`; without them there is no project (a run of the
 //! harness and its mounts alone), and `--project` only names the project's folder.
@@ -154,6 +154,7 @@ pub struct Args {
     pub studio: Option<bool>,
     pub load_module: bool,
     pub load_string: bool,
+    pub native: bool,
     pub player: Option<String>,
     pub device: Option<String>,
     pub place_id: Option<f64>,
@@ -190,6 +191,7 @@ impl Args {
             "--no-snapshots" => self.no_snapshots = true,
             "--load-module" => self.load_module = true,
             "--load-string" => self.load_string = true,
+            "--native" => self.native = true,
             "--roots" => self.roots = need()?.split(';').filter(|r| !r.is_empty()).map(str::to_string).collect(),
             "--project" => self.project = Some(need()?),
             "--place" => self.place = Some(need()?),
@@ -219,7 +221,7 @@ impl Args {
             "--rojo-at" => self.rojo_at = Some(need()?),
             _ => return Ok(None),
         }
-        Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots" | "--load-module" | "--load-string") { 1 } else { 2 }))
+        Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots" | "--load-module" | "--load-string" | "--native") { 1 } else { 2 }))
     }
 }
 
@@ -363,6 +365,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         studio: args.studio.unwrap_or(true),
         load_module: args.load_module,
         load_string: args.load_string,
+        native: args.native,
         verbose: args.verbose || std::env::var("RUR_VERBOSE").as_deref() == Ok("1"),
         local_player_name,
         local_player_user_id: std::env::var("RUR_PLAYER_ID").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),

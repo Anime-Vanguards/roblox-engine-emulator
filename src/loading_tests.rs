@@ -351,3 +351,113 @@ fn an_edit_run_context_is_both_sides() {
     check(&run(Options { run_context: RunContext::Edit, local_player_name: None, ..Options::default() }, source), &["true true false nil 0"]);
     check(&run(Options::default(), source), &["true false false Player 1"]);
 }
+
+#[test]
+fn native_loadmodule_preserves_sandbox_overrides_and_falls_back_for_other_globals() {
+    let source = format!(
+        "{MODULES}{}",
+        r##"
+        local Worker = Make("Worker", [[
+            local Total = 0
+            for I = 1, 20 do
+                Total += math.abs(-I)
+            end
+            return {
+                Total = Total,
+                ScriptName = script.Name,
+                Clock = os.clock(),
+                Rand = math.random(),
+                PrintType = type(print),
+                TypeOfNum = type(Total),
+            }
+        ]])
+        local Fn = debug.loadmodule(Worker)
+        local Default = getfenv(Fn)
+        local Base = getmetatable(Default).__index
+        local Sandbox = table.freeze(setmetatable({
+            script = { Name = "MockedScript" },
+            os = setmetatable({ clock = function() return 42.5 end }, { __index = Base.os }),
+        }, table.freeze({ __index = Base })))
+        local Mocked = setmetatable({
+            print = function() end,
+            math = setmetatable({ random = function() return 0.75 end }, { __index = Sandbox.math }),
+        }, table.freeze({ __index = Sandbox }))
+        setfenv(Fn, Mocked)
+        local Out = Fn()
+        print("sandbox", Out.Total, Out.ScriptName, Out.Clock, Out.Rand, Out.PrintType, Out.TypeOfNum)
+
+        -- Inserting a non-whitelisted key into the writable sandbox clears safeenv immediately.
+        Mocked.type = function() return "mutated" end
+        local OutMutated = Fn()
+        print("mutated", OutMutated.TypeOfNum)
+
+        -- Shadowing a non-whitelisted builtin (type) before setfenv clears safeenv too.
+        local Shadow = setmetatable({
+            type = function() return "shadowed" end,
+        }, table.freeze({ __index = Sandbox }))
+        setfenv(Fn, Shadow)
+        local OutShadow = Fn()
+        print("shadow", OutShadow.Total, OutShadow.TypeOfNum)
+
+        -- Replacing the metatable of a safe sandbox clears safeenv.
+        local Rebound = setmetatable({}, table.freeze({ __index = Sandbox }))
+        setfenv(Fn, Rebound)
+        setmetatable(Rebound, { __index = setmetatable({ type = function() return "rebound" end }, { __index = Sandbox }) })
+        print("rebound", Fn().TypeOfNum)
+
+        -- An unfrozen metatable is rejected so later __index swaps are observed.
+        local MutableMt = { __index = Sandbox }
+        local Swapped = setmetatable({}, MutableMt)
+        setfenv(Fn, Swapped)
+        MutableMt.__index = setmetatable({ type = function() return "swapped" end }, { __index = Sandbox })
+        print("swapped", Fn().TypeOfNum)
+
+        -- Modules that declare globals still run cleanly in the writable sandbox.
+        local GlobalWriter = debug.loadmodule(Make("GlobalWriter", "function helper(x) return x + 1 end return helper(4)"))
+        local WriterEnv = setmetatable({}, table.freeze({ __index = Sandbox }))
+        setfenv(GlobalWriter, WriterEnv)
+        print("globalwriter", GlobalWriter(), type(WriterEnv.helper))
+
+        -- Repeated loadmodule on the same source reuses bytecode and returns independent environments.
+        local Again = debug.loadmodule(Worker)
+        print("reuse", Again ~= Fn, getfenv(Again) ~= Default, Again().ScriptName)
+        "##
+    );
+    let lines = run(Options { load_module: true, native: true, ..Options::default() }, &source);
+    check(
+        &lines,
+        &[
+            "sandbox 210 MockedScript 42.5 0.75 function number",
+            "mutated mutated",
+            "shadow 210 shadowed",
+            "rebound rebound",
+            "swapped swapped",
+            "globalwriter 5 function",
+            "reuse true true Worker",
+        ],
+    );
+}
+
+#[test]
+fn native_mode_disables_work_counting_and_reuses_json_cache() {
+    let folder = std::env::temp_dir().join(format!("ree-native-json-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("Data.json"), r##"{"List": [10, 20, 30]}"##).unwrap();
+    let engine = Engine::new(Options { load_module: true, native: true, ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    super::project::mount_at(&engine, &super::project::Mount::parse(&format!("ReplicatedStorage/Mounted={}", folder.to_string_lossy()), false).unwrap()).unwrap();
+    let lines = script(
+        &lua,
+        &engine,
+        r##"
+        local Module = game:GetService("ReplicatedStorage"):FindFirstChild("Data", true)
+        local A = debug.loadmodule(Module)()
+        A.List[1] = 999
+        local B = debug.loadmodule(Module)()
+        print("fresh", A.List[1], B.List[1], #B.List)
+        "##,
+    );
+    let _ = std::fs::remove_dir_all(&folder);
+    check(&lines, &["fresh 999 10 3"]);
+}

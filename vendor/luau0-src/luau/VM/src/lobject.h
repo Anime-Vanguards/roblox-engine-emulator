@@ -377,6 +377,8 @@ enum ProtoExecFlag
 // Proto flags bit of a function a code generator would compile natively (luau_load: a --!native module's but its cold ones, an
 // @native one): its instructions count in nativeops (lua_WorkCounters)
 #define LUAU_PROTO_WORK_NATIVE (1 << 6)
+// Proto flags bit of a chunk compiled with mutable sandbox globals so setfenv can preserve safeenv on verified sandbox envs
+#define LUAU_PROTO_SAFE_SANDBOX (1 << 5)
 
 // clang-format off
 typedef struct Proto

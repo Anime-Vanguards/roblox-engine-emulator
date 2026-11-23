@@ -1208,6 +1208,8 @@ TValue* luaH_set(lua_State* L, LuaTable* t, const TValue* key)
 
 TValue* luaH_newkey(lua_State* L, LuaTable* t, const TValue* key)
 {
+    if (LUAU_UNLIKELY(t->safeenv == 2))
+        t->safeenv = 0;
     switch (ttype(key))
     {
     case LUA_TNIL:
@@ -1270,6 +1272,8 @@ TValue* luaH_setstr(lua_State* L, LuaTable* t, TString* key)
         return cast_to(TValue*, p);
     else
     {
+        if (LUAU_UNLIKELY(t->safeenv == 2))
+            t->safeenv = 0;
         TValue k;
         setsvalue(L, &k, key);
         return newkeytagged<LUA_TSTRING, false>(L, t, &k, key, -1);

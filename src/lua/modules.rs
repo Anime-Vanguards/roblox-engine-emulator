@@ -47,8 +47,13 @@ pub struct ModuleRecords {
     read: rustc_hash::FxHashSet<String>,
     /// Sources (and bytecode) read ahead on other threads ([`Prefetch`])
     prefetch: Option<std::sync::Arc<Prefetch>>,
-    /// Bytecode of a module's prefetched source, until its chunk is loaded
-    bytecode: FxHashMap<InstanceId, Vec<u8>>,
+    /// Compiled bytecode cached per script (keyed against the exact compiled source bytes) so repeated
+    /// `debug.loadmodule` loads skip re-compiling unchanged source
+    bytecode: FxHashMap<InstanceId, (Rc<[u8]>, Rc<[u8]>)>,
+    /// Compiled bytecode cached per script for `--native` `debug.loadmodule` (compiled with mutable sandbox globals)
+    loadmodule_bytecode: FxHashMap<InstanceId, (Rc<[u8]>, Rc<[u8]>)>,
+    /// Parsed JSON module values cached per engine so repeated `debug.loadmodule` loads skip re-reading and re-parsing
+    json_cache: FxHashMap<String, Rc<serde_json::Value>>,
     /// Deferred native compilation ([`defer_codegen`]): module chunks loaded as bytecode only,
     /// compiled to native code later by [`compile_deferred`]
     deferred: Option<std::collections::VecDeque<LuaFunction>>,
@@ -75,6 +80,7 @@ impl ModuleRecords {
     /// A script got another source: the prefetched bytecode of the old one is stale.
     pub fn forget_bytecode(&mut self, script: InstanceId) {
         self.bytecode.remove(&script);
+        self.loadmodule_bytecode.remove(&script);
     }
 }
 
@@ -378,6 +384,26 @@ pub fn compiler() -> Compiler {
     Compiler::new().set_optimization_level(2).set_vector_ctor("Vector3.new").set_vector_type("Vector3").add_mutable_global(super::float_mode::COMPILE_FLUSH)
 }
 
+/// Compiler for `--native` `debug.loadmodule`: leaves sandbox-overridden globals mutable so `setfenv`
+/// sandboxes can keep `safeenv` (fastcalls, inline `pairs`/`ipairs`, native codegen without deopts)
+/// while still reading live overrides for `require`, `script`, timers, `_G`, and `shared`.
+pub fn loadmodule_compiler() -> Compiler {
+    compiler()
+        .add_mutable_global("require")
+        .add_mutable_global("script")
+        .add_mutable_global("delay")
+        .add_mutable_global("tick")
+        .add_mutable_global("time")
+        .add_mutable_global("DateTime")
+        .add_mutable_global("os")
+        .add_mutable_global("task")
+        .add_mutable_global("_G")
+        .add_mutable_global("shared")
+        .add_mutable_global("print")
+        .add_mutable_global("warn")
+        .add_mutable_global("math")
+}
+
 /// The engine's own Luau (the prelude, services, vector3.luau), whose `Vector3` is Lune's.
 pub fn engine_compiler() -> Compiler {
     Compiler::new().set_optimization_level(2).set_disabled_builtins(["typeof"]).add_mutable_global(super::float_mode::COMPILE_FLUSH)
@@ -480,8 +506,9 @@ pub fn environment_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, vm: Vm
     // An interpreted script's environment is safe, as Roblox makes every script's: builtins take the VM's
     // fast calls and ipairs / pairs loops run inline (getfenv / setfenv end it, as there). Native code would
     // inline them with its own arithmetic (vector.magnitude in doubles), which Studio's interpreted scripts
-    // do not, so a VM that compiles modules natively keeps the environment unsafe.
-    if engine.modules.borrow().interpreted || cfg!(not(feature = "jit")) {
+    // do not, so a VM that compiles modules natively keeps the environment unsafe unless `--native` asks for
+    // Roblox's native execution.
+    if engine.options.native || engine.modules.borrow().interpreted || cfg!(not(feature = "jit")) {
         unsafe { lua.exec_raw::<()>(&env, |state| mlua::ffi::lua_setsafeenv(state, -1, 1))? };
     }
     Ok(env)
@@ -490,6 +517,48 @@ pub fn environment_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, vm: Vm
 /// Modules.Compile: the chunk of a script's source in its own environment, named by its full name.
 pub fn compile(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[u8]) -> LuaResult<LuaFunction> {
     compile_in(lua, engine, script, source, None)
+}
+
+/// Compiles a ModuleScript for `debug.loadmodule`: under `--native`, compiles with mutable sandbox
+/// globals and marks the chunk for safe-sandbox `setfenv` preservation.
+pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[u8]) -> LuaResult<LuaFunction> {
+    if !engine.options.native {
+        return compile_in(lua, engine, script, source, None);
+    }
+    let env = environment_in(lua, engine, script, None)?;
+    let name = engine.state.borrow().dom.full_name(&engine.reflection, script);
+    if crate::profiler::active() {
+        let path = engine.state.borrow().dom.at(script).source_path().map(|path| path.to_string());
+        crate::profiler::source_loaded(&name, path.as_deref(), &std::rc::Rc::from(source));
+    }
+    let source = deterministic_source(&name, source);
+    let cached = engine
+        .modules
+        .borrow()
+        .loadmodule_bytecode
+        .get(&script)
+        .and_then(|(cached_src, cached_bc)| (cached_src.as_ref() == &*source).then(|| cached_bc.clone()));
+    let bytecode = match cached {
+        Some(bc) => Some(bc),
+        None => {
+            engine.modules.borrow_mut().text_compiles += 1;
+            match loadmodule_compiler().compile(&*source) {
+                Ok(bc) => {
+                    let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
+                    engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
+                    Some(rc_bc)
+                }
+                Err(_) => None,
+            }
+        }
+    };
+    let chunk = match &bytecode {
+        Some(bytecode) => lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
+        None => lua.load(&*source).set_compiler(loadmodule_compiler()),
+    };
+    let function = load(lua, engine, chunk.set_name(format!("={name}")).set_environment(env))?;
+    crate::cost::set_safe_sandbox(lua, &function)?;
+    Ok(function)
 }
 
 /// [`compile`] for a script of the VM `vm`.
@@ -502,15 +571,38 @@ pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[
         crate::profiler::source_loaded(&name, path.as_deref(), &std::rc::Rc::from(source));
     }
     let source = deterministic_source(&name, source);
-    let bytecode = engine.modules.borrow_mut().bytecode.remove(&script);
-    let bytecode = bytecode.or_else(|| kept_bytecode(engine, script, &source));
-    let chunk = match (bytecode, &source) {
-        // (the prefetcher's compile of this very source: loads as the text would)
-        (Some(bytecode), std::borrow::Cow::Borrowed(_)) => lua.load(bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
-        _ => {
-            engine.modules.borrow_mut().text_compiles += 1;
-            lua.load(&*source).set_compiler(compiler())
+    let cached = engine
+        .modules
+        .borrow()
+        .bytecode
+        .get(&script)
+        .and_then(|(cached_src, cached_bc)| (cached_src.as_ref() == &*source).then(|| cached_bc.clone()));
+    let bytecode = match cached {
+        Some(bc) => Some(bc),
+        None => {
+            let from_kept = matches!(&source, std::borrow::Cow::Borrowed(_))
+                .then(|| kept_bytecode(engine, script, &source))
+                .flatten();
+            if let Some(bc) = from_kept {
+                let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
+                engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
+                Some(rc_bc)
+            } else {
+                engine.modules.borrow_mut().text_compiles += 1;
+                match compiler().compile(&*source) {
+                    Ok(bc) => {
+                        let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
+                        engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
+                        Some(rc_bc)
+                    }
+                    Err(_) => None,
+                }
+            }
         }
+    };
+    let chunk = match &bytecode {
+        Some(bytecode) => lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
+        None => lua.load(&*source).set_compiler(compiler()),
     };
     // A script's chunk is its full name as Roblox names it: error positions, tracebacks and debug.info(f, "s") read
     // `ReplicatedStorage.Module:3:`, not Luau's `[string "ReplicatedStorage.Module"]:3:` for an unmarked name
@@ -552,7 +644,7 @@ pub fn replace_source(engine: &Engine, module: InstanceId, source: &[u8]) -> Res
     if engine.modules.borrow().records.keys().any(|&(_, required)| required == module) {
         return Err(format!("{} was already required", engine.state.borrow().dom.full_name(&engine.reflection, module)));
     }
-    engine.modules.borrow_mut().bytecode.remove(&module);
+    engine.modules.borrow_mut().forget_bytecode(module);
     let mut state = engine.state.borrow_mut();
     let instance = state.dom.at_mut(module);
     instance.set_source(Some(Rc::from(source)));
@@ -560,30 +652,36 @@ pub fn replace_source(engine: &Engine, module: InstanceId, source: &[u8]) -> Res
     Ok(())
 }
 
-/// A script's source text: its file under the mounted roots (read once), else its Source property.
-pub fn source_of(engine: &Engine, module: InstanceId) -> Option<Vec<u8>> {
+/// A script's source text as a shared slice: its file under the mounted roots (read once), else its Source property.
+pub fn source_rc(engine: &Engine, module: InstanceId) -> Option<Rc<[u8]>> {
     let (source, path) = {
         let state = engine.state.borrow();
         let instance = state.dom.at(module);
         (instance.source().cloned(), instance.source_path().cloned())
     };
     if let Some(source) = source {
-        return Some(source.to_vec());
+        return Some(source);
     }
     if let Some(path) = path {
         note_read(engine, &path);
         if let Ok((bytes, bytecode)) = crate::timing::time("modules: read sources", || read_file(engine, &path)) {
-            engine.state.borrow_mut().dom.at_mut(module).set_source(Some(Rc::from(bytes.as_slice())));
+            let source: Rc<[u8]> = Rc::from(bytes.as_slice());
+            engine.state.borrow_mut().dom.at_mut(module).set_source(Some(source.clone()));
             if let Some(bytecode) = bytecode {
-                engine.modules.borrow_mut().bytecode.insert(module, bytecode);
+                engine.modules.borrow_mut().bytecode.insert(module, (source.clone(), Rc::from(bytecode.as_slice())));
             }
-            return Some(bytes);
+            return Some(source);
         }
     }
     match engine.state.borrow().dom.raw_get(module, K::Source as NameId) {
-        Some(Value::String(source)) => Some(source.as_bytes().to_vec()),
+        Some(Value::String(source)) => Some(Rc::from(source.as_bytes())),
         _ => None,
     }
+}
+
+/// A script's source text: its file under the mounted roots (read once), else its Source property.
+pub fn source_of(engine: &Engine, module: InstanceId) -> Option<Vec<u8>> {
+    source_rc(engine, module).map(|source| source.to_vec())
 }
 
 /// Lists `path` among the files this run's modules came from ([`required_files`]).
@@ -591,23 +689,49 @@ pub fn note_required(engine: &Engine, path: &str) {
     engine.modules.borrow_mut().files.insert(path.to_string());
 }
 
-/// A JSON module's value (Rojo `.json`): the file decoded, a new value each time.
-pub fn decode_json(lua: &Lua, engine: &Engine, path: &str) -> Result<LuaValue, String> {
+/// Parses a JSON module's file once per engine (cached in `json_cache`).
+pub fn parse_json(engine: &Engine, path: &str) -> Result<Rc<serde_json::Value>, String> {
+    if let Some(cached) = engine.modules.borrow().json_cache.get(path).cloned() {
+        return Ok(cached);
+    }
     note_read(engine, path);
-    read_file(engine, path)
+    let value = read_file(engine, path)
         .map(|(bytes, _)| bytes)
         .map_err(|error| error.to_string())
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| error.to_string()))
-        .and_then(|value| {
-            lua.to_value_with(
-                &value,
-                LuaSerializeOptions::new()
-                    .set_array_metatable(false)
-                    .serialize_none_to_null(false)
-                    .serialize_unit_to_null(false),
-            )
-            .map_err(|error| error.to_string())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| error.to_string()))?;
+    let cached = Rc::new(value);
+    engine.modules.borrow_mut().json_cache.insert(path.to_string(), cached.clone());
+    Ok(cached)
+}
+
+/// Converts a parsed JSON value into a fresh Luau value (no shared mutable tables between calls).
+pub fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> Result<LuaValue, String> {
+    lua.to_value_with(
+        value,
+        LuaSerializeOptions::new()
+            .set_array_metatable(false)
+            .serialize_none_to_null(false)
+            .serialize_unit_to_null(false),
+    )
+    .map_err(|error| error.to_string())
+}
+
+/// Compiled bytecode for the tiny wrapper chunk `debug.loadmodule` returns for JSON modules (compiled once per process).
+pub fn json_wrapper_bytecode() -> &'static [u8] {
+    static WRAPPER: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    WRAPPER.get_or_init(|| {
+        crate::alloc::long_lived(|| {
+            compiler()
+                .compile("local Decode = ...\nreturn function()\n\treturn Decode()\nend")
+                .expect("json wrapper bytecode")
         })
+    })
+}
+
+/// A JSON module's value (Rojo `.json`): the file decoded, a new value each time.
+pub fn decode_json(lua: &Lua, engine: &Engine, path: &str) -> Result<LuaValue, String> {
+    let parsed = parse_json(engine, path)?;
+    json_to_lua(lua, &parsed)
 }
 
 fn error_result(lua: &Lua, message: String, level: i64) -> LuaResult<LuaMultiValue> {
@@ -775,7 +899,7 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         };
     }
 
-    let Some(source) = source_of(engine, module) else {
+    let Some(source) = source_rc(engine, module) else {
         let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
         let message = if studio_only {
             format!("Module {name} exists only in Studio (its source is not in the project)")
