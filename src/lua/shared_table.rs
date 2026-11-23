@@ -45,12 +45,10 @@
 //!   that changed nothing (nil written to a key the table does not hold, a clear of an empty table), not a call that raised, a
 //!   read, a clone or a write to another table ([`Shared::version`]); it runs one C call deep, where it cannot yield, so
 //!   updates nest up to the VM's limit of 200 C calls, less those the thread holds (199 deep in a client's script), before
-//!   "C stack overflow", and an error it raises reaches the caller with its value as raised. Not
-//!   matched: ree's update and increment are engine Luau (the `ree.sharedtable` chunk) over a Rust function, so a callback's
-//!   `error` at level 3 or more, `debug.info` and a traceback see one frame more than a client's C call, and an error escaping
-//!   the callback is raised again by that Luau, so an `xpcall` handler's traceback and levels and the Output's stack of an
-//!   uncaught one start at `update` without the callback's own line, where a client's handler runs at the raise and lists the
-//!   callback's line first (measured, update-boundaries probes upd4, upd3 and upd2)). Called with no argument at all, each
+//!   "C stack overflow", and an error it raises passes through update as raised). update and increment are one C function
+//!   each, as a client's are ([`update_c`], [`increment_c`]: `debug.info` gives `[C]` and their names, a callback's level 2 is
+//!   update itself, and a callback's error reaches an `xpcall` handler and the Output's stack at the raise, the callback's line
+//!   first; measured, Studio 0.748, a playing client). Called with no argument at all, each
 //!   but `new` (which makes an empty table) raises "missing argument #1 to '<name>' (SharedTable expected)" at the script's
 //!   line. Their messages are below, as measured.
 //!
@@ -87,8 +85,8 @@
 //! integer key a read finds, the empty slots a conversion walks and the entries `clear` frees. A read of a 16-byte string now
 //! costs what a client's does ([`cost::SHARED_MADE_STRING`]). Not matched yet: a read by a 16-byte key took a client 0.059 to
 //! 0.080 us (ree charges 0.03); a loop's step over 16-byte string values 0.025 to 0.029 more than over numbers (ree 0.003); an
-//! update with a trivial callback 0.70 in one probe and 0.38 to 0.43 in another (ree 0.33); increment 0.07 to 0.21 in three
-//! probes against an older probe's 0.37 to 0.43 ([`cost::SHARED_INCREMENT`]; ree charges 0.40); one key added and taken out
+//! update with a trivial callback 0.70 in one probe and 0.38 to 0.43 in another (ree 0.32); increment 0.07 to 0.21 in three
+//! probes against an older probe's 0.37 to 0.43 ([`cost::SHARED_INCREMENT`]; ree charges 0.39); one key added and taken out
 //! again and again 0.22 to 0.31 us a pair (ree 0.62, an add and a removal); reads of one list of colliding
 //! keys again and again about a third of ree's price (a client's cache: 2.0 to 2.4 us for the oldest of 1,024, ree 7.6; read
 //! once in each of 200 tables 8.4 to 8.7, matched); SharedTableRegistry's GetSharedTable 0.17 to 0.19 us and SetSharedTable
@@ -96,10 +94,11 @@
 //! ([`cost::SHARED_KEY_BYTE`]).
 
 use std::cell::{Cell, RefCell};
-use std::ffi::c_void;
+use std::ffi::{CStr, c_int, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
-use mlua::prelude::*;
+use mlua::{ffi, prelude::*};
 use rustc_hash::FxHashMap;
 
 use super::bindable::{self, STACK_FULL, STACK_LIMIT};
@@ -122,7 +121,7 @@ struct Shared {
     /// its callback again after each of those, also nil or a dropped value written to a key the table does not hold, a clear of
     /// an empty table and a nested update storing nothing there, but not after one that raised (measured, Studio 0.748, a
     /// playing client: two calls each; a failed increment, a write of a function, a nested update with an unstorable result,
-    /// one call). [`update`] calls its callback again when it moved while the callback ran
+    /// one call). Update calls its callback again when it moved while the callback ran ([`update_commit`])
     version: Cell<u64>,
     entries: RefCell<Entries>,
 }
@@ -1028,7 +1027,7 @@ fn key_of(value: &LuaValue) -> Result<Probe, Flow> {
 
 /// An increment message about `key`: the key as Roblox quotes it, cut at its first NUL (measured: "a\0b" is quoted "a"), and
 /// the whole message cut at [`MESSAGE_LIMIT`] bytes. The key's bytes are kept as they are, UTF-8 or not (measured: "a\255b"
-/// quoted in 3 bytes), so the message is raised as bytes ([`INCREMENT_WRAPPER`]), not as a script error's text.
+/// quoted in 3 bytes), so the message is raised as bytes ([`increment_c`]), not as a script error's text.
 fn increment_message(key: &Probe, reason: &str) -> Vec<u8> {
     let mut message = b"Unable to increment the value for key \"".to_vec();
     match key {
@@ -1476,35 +1475,107 @@ fn write(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: &Probe
     Ok(())
 }
 
-/// Calls `callback` with `value` in protected mode, from the C function running (update's), one C call deep: its first result,
-/// or the value it raised, as it raised it. Roblox's update calls its callback one C call deep too (measured: updates nested in
-/// their callbacks reach depth 199 in a client's script, then raise "C stack overflow", the VM's message at its limit of 200 C
-/// calls; here they stop at the same limit, at a depth that depends on the C calls the thread already holds). It
-/// runs where it cannot yield, as on a client (its count of C calls is above the thread's base).
-fn call_protected(lua: &Lua, callback: &LuaFunction, value: LuaValue) -> LuaResult<Result<LuaValue, LuaValue>> {
-    lua.exec_raw_lua(|raw| {
-        // SAFETY: the running thread's stack, its top put back before returning; the callback and its argument are pushed as
-        // values mlua holds, and its one result (or its error) is popped
-        unsafe {
-            let state = raw.state();
-            let top = mlua::ffi::lua_gettop(state);
-            if mlua::ffi::lua_checkstack(state, 2) == 0 {
-                return Err(LuaError::StackError);
-            }
-            if let Err(error) = raw.push_value(&LuaValue::Function(callback.clone())).and_then(|()| raw.push_value(&value)) {
-                mlua::ffi::lua_settop(state, top);
-                return Err(error);
-            }
-            let status = mlua::ffi::lua_pcall(state, 1, 1, 0);
-            let result = raw.pop_value();
-            mlua::ffi::lua_settop(state, top);
-            Ok(if status == mlua::ffi::LUA_OK { Ok(result) } else { Err(result) })
-        }
-    })
+/// What update's and increment's C functions reach their Rust through (their first upvalue): the engine, the SharedTables'
+/// store and a table values cross in (their second upvalue, as lua/raw.rs bridges values). The Rust runs in the C function's
+/// own frame, as raw.rs's does, not as a function the C function calls, so what it does for the script (the objects it makes
+/// through mlua) is part of the one C call a script's call to update or increment is (cost.rs LUAU_CCALL), as to a client's.
+struct Library {
+    lua: mlua::WeakLua,
+    engine: Rc<Engine>,
+    store: Rc<Store>,
+    bridge: LuaTable,
 }
 
-/// SharedTable.update's checks and its callback's calls, as (failed, problem, level): the wrapper in [`register`] raises
-/// `problem` at the script's line (level 1) or as it is (level 0: the callback's own error, its value kept).
+/// What a step of update's or increment's Rust leaves its C function: `n` values in the bridge (1..=n), or an error to raise
+/// at the script's line (level 1) or as it is (level 0).
+enum Step {
+    Values(usize),
+    Raise(Vec<u8>, c_int),
+}
+
+impl Library {
+    /// Bridge slot `slot`, taken out (the bridge holds nothing between calls).
+    fn take(&self, slot: usize) -> LuaResult<LuaValue> {
+        let value = self.bridge.raw_get(slot)?;
+        self.bridge.raw_set(slot, LuaValue::Nil)?;
+        Ok(value)
+    }
+
+    /// The call's `count` arguments, which the C function put in the bridge, taken out.
+    fn args(&self, count: c_int) -> LuaResult<Args> {
+        let values = (1..=count as usize).map(|slot| self.take(slot)).collect::<LuaResult<Vec<_>>>()?;
+        Ok(Args::new(LuaMultiValue::from_vec(values)))
+    }
+
+    /// Runs a step of the Rust under a C function: the values it gives are put in the bridge, its error (or a panic's message, as
+    /// raw.rs's `guard` gives one) is left to raise. No Rust value of the step outlives it.
+    fn step(&self, body: impl FnOnce(&Lua) -> Result<Vec<LuaValue>, Flow>) -> Step {
+        let run = || -> Step {
+            let Some(lua) = self.lua.try_upgrade() else { return Step::Raise(b"the engine has ended".to_vec(), 0) };
+            let values = match body(&lua) {
+                Ok(values) => values,
+                Err(Flow::Error(error)) => return Step::Raise(error.message.into_bytes(), error.level.into()),
+                Err(Flow::Yield) => return Step::Raise(b"SharedTable functions cannot yield".to_vec(), 0),
+                Err(Flow::Fail(error)) => return Step::Raise(error.to_string().into_bytes(), 0),
+            };
+            let count = values.len();
+            for (slot, value) in values.into_iter().enumerate() {
+                if let Err(error) = self.bridge.raw_set(slot + 1, value) {
+                    return Step::Raise(error.to_string().into_bytes(), 0);
+                }
+            }
+            Step::Values(count)
+        };
+        match catch_unwind(AssertUnwindSafe(run)) {
+            Ok(step) => step,
+            Err(panic) if super::refs::is_exhaustion(&*panic) => Step::Raise(super::refs::message().into_bytes(), 0),
+            Err(panic) => {
+                let message = panic.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| panic.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                Step::Raise(format!("engine error: {message}").into_bytes(), 0)
+            }
+        }
+    }
+}
+
+/// Puts the values at `from..=to` on the stack in the bridge of the running C function, at 1, 2, ...
+unsafe fn bridge_in(state: *mut ffi::lua_State, from: c_int, to: c_int) {
+    unsafe {
+        for (slot, index) in (from..=to).enumerate() {
+            ffi::lua_pushvalue(state, index);
+            ffi::lua_rawseti_(state, ffi::lua_upvalueindex(2), slot as c_int + 1);
+        }
+    }
+}
+
+/// Pushes bridge slot `slot` of the running C function, and empties it.
+unsafe fn bridge_take(state: *mut ffi::lua_State, slot: c_int) {
+    unsafe {
+        ffi::lua_rawgeti_(state, ffi::lua_upvalueindex(2), slot);
+        ffi::lua_pushnil(state);
+        ffi::lua_rawseti_(state, ffi::lua_upvalueindex(2), slot);
+    }
+}
+
+/// Raises `message` at the script's line (level 1) or as it is (level 0), the message dropped first.
+unsafe fn raise_bytes(state: *mut ffi::lua_State, message: Vec<u8>, level: c_int) -> ! {
+    unsafe {
+        ffi::lua_pushlstring_(state, message.as_ptr().cast(), message.len());
+        drop(message);
+        raw::raise_top(state, level)
+    }
+}
+
+/// The library of the running C function (its first upvalue).
+unsafe fn library<'a>(state: *mut ffi::lua_State) -> &'a Library {
+    unsafe { &*(ffi::lua_touserdata(state, ffi::lua_upvalueindex(1)) as *const Library) }
+}
+
+/// An update in progress (SharedTable.update: [`update_c`]): its table, its key (looked at and hashed once, in
+/// [`update_begin`], its string borrowed as a call's key is), the values on the stack below its callback's result (update's
+/// arguments and the result: [`Conversion::new`]), and the table's version when update took its copy of the entries and the
+/// copy itself, which update holds while its callback runs. A local of update's C function, which holds no other Rust value
+/// while Luau runs: it is dropped as update returns, and as an error the callback raises passes through update (see the
+/// comment at the callback's call in [`update_c`]), so update lets go of its copy as it leaves, as a client's does.
 ///
 /// Roblox calls the callback again, with the value then current, whenever a write, increment, clear or update of the table
 /// completed while it ran, and stores the result only of a call during which none did (measured in a playing client, Studio
@@ -1520,48 +1591,174 @@ fn call_protected(lua: &Lua, callback: &LuaFunction, value: LuaValue) -> LuaResu
 /// entries, as Roblox's does, so its write copies the key's path and moves a key that shares its hash first (measured: 0.58,
 /// 0.78 and 1.2 us at 10, 1,000 and 100,000 entries, about a first write after a clone, and a key of a list moved first on its
 /// own list).
-fn update(lua: &Lua, engine: &Engine, store: &Store, args: &Args) -> Result<LuaMultiValue, Flow> {
-    let shared = shared_arg(engine, args, 0, "update")?;
+struct Updating {
+    shared: Rc<Shared>,
+    key: Probe,
+    height: usize,
+    version: u64,
+    snapshot: Option<Entries>,
+}
+
+impl Updating {
+    /// The copy for a call of the callback, and the value that call gets.
+    fn copy(&mut self, lua: &Lua, engine: &Engine, store: &Store) -> LuaResult<LuaValue> {
+        self.version = self.shared.version.get();
+        let snapshot = self.shared.entries.borrow().clone();
+        let old = read(lua, engine, store, &snapshot, &self.key)?;
+        self.snapshot = Some(snapshot);
+        Ok(old)
+    }
+}
+
+/// SharedTable.update's checks, in a client's order, and the copy for its callback's first call (`updating`): the value the
+/// callback gets. `count` is the call's count of arguments, of which only the first three are in the bridge ([`update_c`]):
+/// they are all update looks at, and give the same answers to its checks (an argument missing or nil).
+fn update_begin(lua: &Lua, library: &Library, count: c_int, updating: &mut Option<Updating>) -> Result<Vec<LuaValue>, Flow> {
+    let (engine, store) = (&*library.engine, &*library.store);
+    let args = library.args(count.min(3))?;
+    let shared = shared_arg(engine, &args, 0, "update")?;
     let key = key_of(args.get(1))?;
     charge(engine, key.price());
-    let LuaValue::Function(callback) = args.get(2) else { return raise("Third argument to SharedTable::Update should be a function.") };
+    let LuaValue::Function(_) = args.get(2) else { return raise("Third argument to SharedTable::Update should be a function.") };
     if shared.is_frozen() {
         return raise(FROZEN);
     }
     // (an update whose checks passed marks its table before the first call: [`Shared::mark`])
     shared.mark();
-    let mut again = false;
-    loop {
-        if again {
-            charge(engine, key.price());
+    let updating = updating.insert(Updating { shared, key, height: count as usize + 1, version: 0, snapshot: None });
+    Ok(vec![updating.copy(lua, engine, store)?])
+}
+
+/// The callback's result for the update in progress (bridge slot 1): stored when no write, increment, clear or update of the
+/// table completed during the call (no value), else the value then current for another call.
+fn update_commit(lua: &Lua, library: &Library, updating: &mut Option<Updating>) -> Result<Vec<LuaValue>, Flow> {
+    let (engine, store) = (&*library.engine, &*library.store);
+    let result = library.take(1)?;
+    let Some(updating) = updating else { return raise("SharedTable.update has no update in progress") };
+    // (the result converted first, above update's arguments, the copy still held: it raises before the change check)
+    let value = convert_value(lua, engine, store, &result, updating.height, 0.0);
+    let snapshot = updating.snapshot.take();
+    let (value, Some(mut entries)) = (value?, snapshot) else { return raise("SharedTable.update holds no copy") };
+    if updating.shared.version.get() != updating.version {
+        drop((value, entries));
+        charge(engine, updating.key.price());
+        return Ok(vec![updating.copy(lua, engine, store)?]);
+    }
+    // (stored in update's copy, which then becomes the table's entries: the table has not changed since the copy was taken,
+    // as every change counts but a failed increment's key with no value, which the table, marked, no longer gets)
+    let replaced = put(engine, &mut entries, &updating.key, value);
+    let before = updating.shared.entries.replace(entries);
+    updating.shared.changed();
+    drop((replaced, before));
+    Ok(Vec::new())
+}
+
+/// SharedTable.update: one C function, as a client's is (measured, Studio 0.748, a playing client, two runs: `debug.info` gives
+/// `[C]` and `update`; in the callback, `debug.info(2, "f")` is update itself and level 3 its caller; an error the callback
+/// raises passes through update as raised, a table too, so an `xpcall` handler runs at the raise, the callback's line first in
+/// its traceback, and so does the Output's stack of an uncaught one). Its Rust ([`update_begin`], [`update_commit`]) runs in
+/// this frame ([`Library`]); the callback is called unprotected, one C call deep as a client's is (measured: updates nested in
+/// their callbacks reach depth 199 in a client's script, then raise "C stack overflow", the VM's message at its limit of 200 C
+/// calls; here they stop at the same limit, at a depth that depends on the C calls the thread already holds), where it cannot
+/// yield (its count of C calls is above the thread's base).
+pub(crate) unsafe extern "C-unwind" fn update_c(state: *mut ffi::lua_State) -> c_int {
+    unsafe {
+        let library = library(state);
+        let count = ffi::lua_gettop(state);
+        ffi::luaL_checkstack(state, 4, c"update".as_ptr());
+        // (update looks at its first three arguments only: the bridge takes no more, however many a script passes)
+        bridge_in(state, 1, count.min(3));
+        let mut updating = None;
+        if let Step::Raise(message, level) = library.step(|lua| update_begin(lua, library, count, &mut updating)) {
+            drop(updating);
+            raise_bytes(state, message, level)
         }
-        again = true;
-        let version = shared.version.get();
-        let snapshot = shared.entries.borrow().clone();
-        let old = read(lua, engine, store, &snapshot, &key)?;
-        let result = match call_protected(lua, callback, old)? {
-            Ok(result) => result,
-            Err(raised) => return Ok(values([LuaValue::Boolean(true), raised, LuaValue::Integer(0)])),
-        };
-        // (the result converted first, above update's arguments, the snapshot still held: it raises before the change check)
-        let value = convert_value(lua, engine, store, &result, args.len() + 1, 0.0)?;
-        if shared.version.get() != version {
-            continue;
+        // (the value the callback gets, above the arguments)
+        let value = count + 1;
+        bridge_take(state, 1);
+        loop {
+            // (the callback, update's third argument, which update_begin checked)
+            ffi::lua_pushvalue(state, 3);
+            ffi::lua_pushvalue(state, value);
+            // (`updating` is alive across this call, unlike raw.rs's rule for raw C functions that no Rust value be alive at a
+            // raise: an error the callback raises unwinds through this frame and drops it, letting go of update's copy and of
+            // the key's string. That is sound only because this build's Luau raises C++ exceptions (luau0-src's `use_longjmp`
+            // is false) and Rust runs its drops for them on their way through `C-unwind` frames; a longjmp would skip them,
+            // which is undefined behaviour. `an_update_whose_callback_raised_lets_go_of_its_copy` in src/tests.rs guards it.
+            // update's own raises below drop `updating` first, as raw.rs's rule says.)
+            ffi::lua_call(state, 1, 1);
+            // (its result, for update_commit)
+            bridge_in(state, value + 1, value + 1);
+            ffi::lua_settop(state, value);
+            match library.step(|lua| update_commit(lua, library, &mut updating)) {
+                Step::Values(0) => {
+                    drop(updating);
+                    return 0;
+                }
+                Step::Values(_) => {
+                    bridge_take(state, 1);
+                    ffi::lua_replace(state, value);
+                }
+                Step::Raise(message, level) => {
+                    drop(updating);
+                    raise_bytes(state, message, level)
+                }
+            }
         }
-        // (stored in update's copy, which then becomes the table's entries: the table has not changed since the copy was taken,
-        // as every change counts but a failed increment's key with no value, which the table, marked, no longer gets)
-        let mut entries = snapshot;
-        let replaced = put(engine, &mut entries, &key, value);
-        let before = shared.entries.replace(entries);
-        shared.changed();
-        drop((replaced, before));
-        return Ok(values([LuaValue::Boolean(false)]));
+    }
+}
+
+/// SharedTable.increment: one C function, as a client's is (measured, Studio 0.748, a playing client: `debug.info` gives `[C]`
+/// and `increment`, and an `xpcall` handler's traceback of its error has no frame of its own), over [`increment`], which runs in
+/// this frame ([`Library`]): the old value, or its error raised from here at the script's line (level 1) or as it is (level 0:
+/// a message made of the key's own bytes).
+pub(crate) unsafe extern "C-unwind" fn increment_c(state: *mut ffi::lua_State) -> c_int {
+    unsafe {
+        let library = library(state);
+        let count = ffi::lua_gettop(state);
+        ffi::luaL_checkstack(state, 4, c"increment".as_ptr());
+        // (increment looks at its first three arguments only, and they give the same answers to its checks: a delta left out)
+        bridge_in(state, 1, count.min(3));
+        let step = library.step(|lua| {
+            let args = library.args(count.min(3))?;
+            Ok(increment(lua, &library.engine, &args)?.into_vec())
+        });
+        if let Step::Raise(message, level) = step {
+            raise_bytes(state, message, level)
+        }
+        // (false and the old value, or true, the problem and its level)
+        for slot in 1..=3 {
+            bridge_take(state, slot);
+        }
+        if ffi::lua_toboolean(state, -3) == 0 {
+            ffi::lua_pop(state, 1);
+            return 1;
+        }
+        let level = ffi::lua_tointeger(state, -1) as c_int;
+        ffi::lua_pop(state, 1);
+        raw::raise_top(state, level)
+    }
+}
+
+/// A C closure of `function`, named `name` for `debug.info` and errors, over a [`Library`] (its first upvalue) and the library's
+/// bridge (its second).
+fn library_closure(lua: &Lua, engine: &Rc<Engine>, store: &Rc<Store>, function: ffi::lua_CFunction, name: &'static CStr) -> LuaResult<LuaFunction> {
+    let bridge = lua.create_table()?;
+    let library = Library { lua: lua.weak(), engine: engine.clone(), store: store.clone(), bridge: bridge.clone() };
+    // SAFETY: the bridge is pushed as the argument and the library's userdata made beside it, both taken by the closure, which is
+    // left as the one result
+    unsafe {
+        lua.exec_raw(bridge, move |state| {
+            ffi::lua_newuserdata_t(state, library);
+            ffi::lua_insert(state, -2);
+            ffi::lua_pushcclosurek(state, function, name.as_ptr(), 2, None);
+        })
     }
 }
 
 /// SharedTable.increment: adds `delta` to the number at `key` and returns the old one, as (false, old); a missing or
-/// non-number entry gives (true, message, 0), the message made of the key's own bytes for [`INCREMENT_WRAPPER`] to raise as
-/// it is. Its checks, in a client's order (measured, Studio 0.748, a playing client): the key, a delta left out (not passed at
+/// non-number entry gives (true, message, 0), the message made of the key's own bytes for [`increment_c`] to raise as it
+/// is. Its checks, in a client's order (measured, Studio 0.748, a playing client): the key, a delta left out (not passed at
 /// all, as against nil), the frozen flag, the delta's type, then the entry.
 fn increment(lua: &Lua, engine: &Engine, args: &Args) -> Result<LuaMultiValue, Flow> {
     let shared = shared_arg(engine, args, 0, "increment")?;
@@ -1609,29 +1806,6 @@ fn increment(lua: &Lua, engine: &Engine, args: &Args) -> Result<LuaMultiValue, F
     charge(engine, cost::SHARED_INCREMENT + work.price(key.is_string()));
     Ok(values([LuaValue::Boolean(false), LuaValue::Number(old)]))
 }
-
-/// increment's script function over (failed, result or problem, level): the old value, or the problem raised at the script's
-/// line (level 1) or as it is (level 0: a message of the key's own bytes). The engine's Luau, as the prelude's wrapper is.
-const INCREMENT_WRAPPER: &str = r#"
-local Increment = ...
-return function(...)
-	local Failed, Result, Level = Increment(...)
-	if Failed then
-		error(Result, if Level == 1 then 2 else 0)
-	end
-	return Result
-end
-"#;
-
-const UPDATE_WRAPPER: &str = r#"
-local Update = ...
-return function(...)
-	local Failed, Problem, Level = Update(...)
-	if Failed then
-		error(Problem, if Level == 1 then 2 else 0)
-	end
-end
-"#;
 
 /// Registers the SharedTable type and its library (types.rs).
 pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
@@ -1776,31 +1950,10 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "size",
         wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Number(shared_arg(&e, &Args::new(args), 0, "size")?.entries.borrow().len() as f64)])))?,
     )?;
-    let e = engine.clone();
-    let increment_checked = lua.create_function(move |lua, args: LuaMultiValue| match increment(lua, &e, &Args::new(args)) {
-        Ok(results) => Ok(results),
-        Err(Flow::Error(error)) => {
-            Ok(values([LuaValue::Boolean(true), LuaValue::String(lua.create_string(&error.message)?), LuaValue::Integer(error.level.into())]))
-        }
-        Err(Flow::Yield) => Err(LuaError::runtime("SharedTable.increment cannot yield")),
-        Err(Flow::Fail(error)) => Err(error),
-    })?;
-    let increment_wrapper = crate::cost::engine_luau(lua, lua.load(INCREMENT_WRAPPER).set_name("=ree.sharedtable").into_function()?)?;
-    library.set("increment", increment_wrapper.call::<LuaFunction>(increment_checked)?)?;
-    let (e, s) = (engine.clone(), store.clone());
-    let checked = lua.create_function(move |lua, args: LuaMultiValue| match update(lua, &e, &s, &Args::new(args)) {
-        Ok(results) => Ok(results),
-        Err(Flow::Error(error)) => {
-            Ok(values([LuaValue::Boolean(true), LuaValue::String(lua.create_string(&error.message)?), LuaValue::Integer(error.level.into())]))
-        }
-        Err(Flow::Yield) => Err(LuaError::runtime("SharedTable.update cannot yield")),
-        Err(Flow::Fail(error)) => Err(error),
-    })?;
-    // (engine Luau, as increment's wrapper and the prelude's are: its instructions are not the script's, Studio's update being one
-    // C call)
-    let update_wrapper = crate::cost::engine_luau(lua, lua.load(UPDATE_WRAPPER).set_name("=ree.sharedtable").into_function()?)?;
-    let update_fn: LuaFunction = update_wrapper.call(checked)?;
-    library.set("update", update_fn)?;
+    // (increment and update are C functions, as a client's are: lua/raw.rs marks them as the engine's own, so a script's call to
+    // one is one C call)
+    library.set("increment", library_closure(lua, engine, &store, increment_c, c"increment")?)?;
+    library.set("update", library_closure(lua, engine, &store, update_c, c"update")?)?;
     library.set_readonly(true);
     engine.lua.borrow_mut().libraries.insert("SharedTable", library);
     Ok(())

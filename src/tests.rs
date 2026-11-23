@@ -7417,34 +7417,116 @@ fn shared_table_registry_pays_for_a_buffer_name_and_runs_no_len() {
     );
 }
 
-/// SharedTable.update's Luau wrapper is the engine's own, as increment's is (Studio's update is one C call): a script's call to
-/// it is priced as a call into an engine function (cost.rs LUAU_HOSTCALL) and the wrapper's instructions are not the script's,
-/// so update costs its inner C function's price plus about the difference between the two kinds of call (9 ns: 8.98 here,
-/// 9.23 in a harness run, where nothing else is interpreted). The old code ran the wrapper as script Luau: update cost 0.88 ns less than its own C function.
+/// SharedTable.update and increment are one C function each in a script's frames, as a client's are (measured, Studio 0.748, a
+/// playing client, two runs): `debug.info` gives `[C]`, line -1 and their names; in update's callback level 2 is update itself
+/// and level 3 its caller, so through pcall `error(m, 2)` and `error(m, 3)` add no position and `error(m, 4)` the script's line;
+/// a callback's error reaches an `xpcall` handler at the raise, the callback's line first in its traceback, a table error as it
+/// was raised; increment's error has no frame of its own in a handler's traceback. The old code ran them as engine Luau over
+/// a Rust function (the `ree.sharedtable` chunk): one Luau frame more (level 3 gave its position, a traceback listed it), and a
+/// callback's error was raised again from it, so a handler's traceback had no line of the callback's.
 #[test]
-fn shared_table_update_is_an_engine_call() {
-    let expected = crate::cost::LUAU_HOSTCALL - crate::cost::LUAU_CCALL;
-    assert_shared_prices(&format!(
+fn shared_table_update_and_increment_are_c_frames() {
+    assert_script(
         r#"
-        local S = SharedTable.new({{ n = 0 }})
-        local function Same(V) return V end
-        local Update = SharedTable.update
-        local Checked
-        Update(S, "n", function(V)
-            Checked = debug.info(2, "f")
+        local S = SharedTable.new({ n = 1 })
+        for _, Name in { "update", "increment" } do
+            local Source, Line, Named = debug.info(SharedTable[Name], "sln")
+            assert(Source == "[C]" and Line == -1 and Named == Name, `{Name}: {Source} {Line} {Named}`)
+        end
+        local Caller = debug.info(1, "s")
+        SharedTable.update(S, "n", function(V)
+            assert(debug.info(2, "f") == SharedTable.update and debug.info(2, "s") == "[C]", "level 2 is update")
+            assert(debug.info(3, "s") == Caller, `level 3 is {debug.info(3, "s")}`)
             return V
         end)
-        local function Per(F)
-            local Start = os.clock()
-            for _ = 1, 10000 do
-                F(S, "n", Same)
-            end
-            return (os.clock() - Start) / 10000 * 1e9
+        local Raised, CallbackLine, CallLine = {}, nil, nil
+        for Level = 1, 4 do
+            CallLine = debug.info(1, "l") + 1
+            local _, E = pcall(SharedTable.update, S, "n", function() CallbackLine = debug.info(1, "l") error("boom", Level) end)
+            table.insert(Raised, E)
         end
-        local Difference = Per(Update) - Per(Checked)
-        assert(math.abs(Difference - {expected}) < 2, `update cost {{Difference}} ns more than its C function`)
-        "#
-    ));
+        assert(Raised[1] == `{Caller}:{CallbackLine}: boom` and Raised[2] == "boom" and Raised[3] == "boom", table.concat(Raised, " | "))
+        assert(Raised[4] == `{Caller}:{CallLine}: boom`, `{Raised[4]} against line {CallLine}`)
+        local function Handler(Message)
+            return { Message = Message, Trace = debug.traceback() }
+        end
+        local Line
+        local _, Got = xpcall(function()
+            SharedTable.update(S, "n", function()
+                Line = debug.info(1, "l") error({ tag = "table error" })
+            end)
+        end, Handler)
+        assert(type(Got.Message) == "table" and Got.Message.tag == "table error", "the table raised")
+        assert(string.find(Got.Trace, `{Caller}:{Line}`, 1, true) and not string.find(Got.Trace, "sharedtable", 1, true), Got.Trace)
+        local _, Failed = xpcall(function()
+            SharedTable.increment(S, "missing", 1)
+        end, Handler)
+        assert(Failed.Message == 'Unable to increment the value for key "missing" because it does not exist in the SharedTable.', Failed.Message)
+        assert(not string.find(Failed.Trace, "sharedtable", 1, true), Failed.Trace)
+        "#,
+    );
+}
+
+/// A script's call to SharedTable.update or increment is one C call (cost.rs LUAU_CCALL), as to the library's other functions:
+/// their Rust is called from their C functions, which the engine marks as its own, so it is not counted again, and update's
+/// callback's instructions are the script's. The old code ran them as engine Luau over a Rust function, a call into the
+/// engine's Luau each (LUAU_HOSTCALL, 9.23 ns more).
+#[test]
+fn shared_table_update_and_increment_are_one_c_call() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+            local Module = Instance.new("ModuleScript")
+            __setSource(Module, {source:?})
+            _G.Calls = require(Module)
+            "#,
+            source = "local S = SharedTable.new({ n = 0 })
+local function Same(V) return V end
+return function(N) for _ = 1, N do SharedTable.update(S, \"n\", Same) SharedTable.increment(S, \"n\", 1) end return SharedTable.size(S) end
+"
+        ),
+    );
+    let before = vm_counts(&engine);
+    let output = run(&lua, &engine, "print(_G.Calls(1000))");
+    let after = vm_counts(&engine);
+    assert!(output.contains(&"print: 1".to_string()), "{output:?}");
+    let (ccalls, hostcalls) = (after.ccalls - before.ccalls, after.hostcalls - before.hostcalls);
+    assert!((2000..2010).contains(&ccalls) && hostcalls < 5, "{ccalls} C calls and {hostcalls} engine Luau calls for 1,000 updates and increments");
+}
+
+/// An update whose callback raised lets go of its copy of the entries as the error leaves it, as one that stored its result
+/// does, so the table's next write copies no node it would share with that copy: it costs what a write right after a stored
+/// update costs. (update's copy is a local of its C function, dropped as the error unwinds through it; one held on would make
+/// the write pay for its key's path, 0.78 us at 1,000 entries, as a write right after a clone does.)
+#[test]
+fn an_update_whose_callback_raised_lets_go_of_its_copy() {
+    assert_shared_prices(
+        r#"
+        local T = SharedTable.new()
+        for I = 1, 1000 do
+            T["k" .. I] = I
+        end
+        local function Once(Body)
+            local Start = os.clock()
+            Body()
+            return (os.clock() - Start) * 1e6
+        end
+        T.k2 = -1
+        SharedTable.update(T, "k1", function(V) return V end)
+        local Stored = Once(function() T.k2 = 0 end)
+        assert(not pcall(SharedTable.update, T, "k1", function() error("raised") end))
+        local Raised = Once(function() T.k2 = 1 end)
+        local Cloned = SharedTable.clone(T)
+        local Shared = Once(function() T.k2 = 2 end)
+        Within("a write after a raised update beyond one after a stored update", Raised - Stored, -0.01, 0.01)
+        Within("a write after a clone beyond one after a stored update", Shared - Stored, 0.1, 5)
+        "#,
+    );
 }
 
 /// A value a SharedTable pools (one the engine has no value of its own for) reads back as a new object each time, `==` to the
@@ -8657,7 +8739,9 @@ fn shared_table_loop_steps_and_update_values_cost_their_object_once() {
             T.v = Value
             return Per(2000, function(N) for _ = 1, N do SharedTable.update(T, "v", Same) end end)
         end
-        -- (a read's prices: a TweenInfo or a Path2DControlPoint 0.03 us, a CFrame or a Ray 0.017)
+        -- (a read's prices: a TweenInfo or a Path2DControlPoint 0.03 us, a CFrame or a Ray 0.017; a first round takes the first
+        -- calls' cold costs out of the comparison)
+        Updated(1)
         local Frame = Updated(CFrame.new(1, 2, 3))
         Within("an update's old TweenInfo beyond a CFrame", Updated(TweenInfo.new(1)) - Frame, 0.012, 0.014)
         Within("an update's old Path2DControlPoint beyond a CFrame", Updated(Path2DControlPoint.new()) - Frame, 0.012, 0.014)
