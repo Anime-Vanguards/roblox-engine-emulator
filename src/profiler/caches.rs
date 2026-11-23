@@ -36,7 +36,8 @@ pub enum Cache {
     /// A module file's source and bytecode kept in the process (a service's, or read ahead): kept (hit) or read and
     /// compiled (miss); evictions: dropped as stale
     Bytecode,
-    /// Spatial queries: the solids of a filter kept while the world is unchanged (hit) or gathered again (miss)
+    /// Spatial queries: the Workspace's parts in the broadphase, current (hit) or brought up to the dom's changes or made from
+    /// the Workspace (miss); evictions: parts taken out
     Queries,
     /// A manifest bundle's converted plan: read from its plan file (hit) or converted from the bundle (miss)
     BundlePlans,
@@ -54,7 +55,7 @@ impl Cache {
             Cache::Wrappers => "instance userdata",
             Cache::Requires => "require results",
             Cache::Bytecode => "module bytecode",
-            Cache::Queries => "query solids",
+            Cache::Queries => "query broadphase",
             Cache::BundlePlans => "bundle plans",
         }
     }
@@ -68,7 +69,7 @@ impl Cache {
             Cache::Wrappers => "an instance's Luau userdata (miss: a new one made; eviction: one collected)",
             Cache::Requires => "a ModuleScript's result (miss: the module ran)",
             Cache::Bytecode => "a module file's source and bytecode kept by the process (miss: read and compiled)",
-            Cache::Queries => "a raycast or overlap filter's solids, kept while the world is unchanged",
+            Cache::Queries => "the Workspace's parts in the spatial queries' tree (miss: the dom's changes taken in, or the Workspace walked)",
             Cache::BundlePlans => "a manifest bundle's converted plan (miss: converted from the bundle file)",
         }
     }

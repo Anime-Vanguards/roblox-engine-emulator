@@ -26,6 +26,7 @@ use lune_roblox::datatypes::types as lune;
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
 
+use super::broadphase::{self, Entry, Index};
 use super::{cframe_arg, cframe_name, frame, vector_arg};
 use crate::{
     Engine, InstanceId, K, NameId, State,
@@ -139,15 +140,10 @@ impl Filter {
         listed == self.include && decided.unwrap_or(!self.include_instances.given)
     }
 
-    /// Whether this filter admits the parts `other` admits (all but MaxParts): one list of solids
-    /// serves both.
-    fn sees_as(&self, other: &Filter) -> bool {
-        self.include == other.include
-            && self.respect_can_collide == other.respect_can_collide
-            && self.unqueryable == other.unqueryable
-            && self.instances == other.instances
-            && self.exclude_instances == other.exclude_instances
-            && self.include_instances == other.include_instances
+    /// Whether a query with this filter sees the indexed part `part` (world/broadphase.rs): CanQuery off left out (unless the
+    /// view takes such parts), CanCollide off left out with RespectCanCollide, and what [`Filter::admits`] says.
+    pub(crate) fn sees(&self, state: &State, part: InstanceId, entry: &Entry) -> bool {
+        (self.unqueryable || entry.can_query) && (!self.respect_can_collide || entry.can_collide) && self.admits(state, part)
     }
 
     /// RaycastParams / OverlapParams (a prelude proxy, or a table passed in its place) read into this
@@ -216,59 +212,17 @@ fn shape_of(state: &State, engine: &Engine, part: InstanceId, size: Vec3) -> Sha
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    /// How many times [`solids`] has walked the Workspace on this thread (tests)
-    pub(crate) static WORKSPACE_WALKS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-/// The parts of the Workspace `filter` admits, as query solids (Terrain, CanQuery off and, with
-/// RespectCanCollide, CanCollide off are left out).
-pub fn solids(engine: &Engine, filter: &Filter) -> Vec<Solid> {
-    #[cfg(test)]
-    WORKSPACE_WALKS.with(|walks| walks.set(walks.get() + 1));
-    let state = engine.state.borrow();
-    let reflection = &engine.reflection;
-    let (Some(base_part), Some(terrain)) = (reflection.class_id("BasePart"), reflection.class_id("Terrain")) else { return Vec::new() };
-    let can_query = reflection.name_id("CanQuery");
-    let can_collide = reflection.name_id("CanCollide");
-    let workspace = engine.world().workspace;
-    let mut result = Vec::new();
-    for id in state.dom.descendants(workspace) {
-        let class = state.dom.at(id).class;
-        let info = reflection.class(class);
-        if !info.is_a(base_part) || info.is_a(terrain) {
-            continue;
-        }
-        if !filter.unqueryable && can_query.and_then(|n| state.dom.boolean(id, n)) == Some(false) {
-            continue;
-        }
-        if filter.respect_can_collide && can_collide.and_then(|n| state.dom.boolean(id, n)) == Some(false) {
-            continue;
-        }
-        if !filter.admits(&state, id) {
-            continue;
-        }
-        result.push(solid(&state, engine, id));
-    }
-    result
-}
-
-/// The solids each filter admitted, kept while the dom is unchanged (no parent changed, no
-/// property, attribute or tag written anywhere). A script casting many rays in one frame (a camera
-/// search, a placement sweep) walked and measured the whole Workspace for every one: 3.7 ms a ray on
-/// a mounted map of 28k instances.
+/// The spatial queries' state on an engine: the broadphase over the Workspace's parts (world/broadphase.rs) and what a query
+/// reuses. Each query walked and measured the whole Workspace whenever anything in the dom had changed (3.7 ms a ray on a
+/// mounted map of 28k instances), and then tested every part (2.8 ms of host time a Raycast beside 100,000 parts away from it,
+/// where a client spends 0.6 us); now it takes the dom's changes and tests the parts near it.
 #[derive(Default)]
 struct QueryCache {
-    entries: RefCell<Vec<CachedSolids>>,
+    index: RefCell<Index>,
     /// The last query's filter, whose lists the next query reads its params into ([`take_filter`])
     spare: RefCell<Filter>,
-}
-
-struct CachedSolids {
-    filter: Filter,
-    stamp: (u64, u64),
-    solids: Rc<[Solid]>,
+    /// The parts near the last query, whose storage the next one fills ([`with_near`])
+    near: RefCell<Vec<(InstanceId, Entry)>>,
 }
 
 impl crate::Extension for QueryCache {}
@@ -289,38 +243,85 @@ fn keep_filter(engine: &Engine, filter: Filter) {
     *query_cache(engine).spare.borrow_mut() = filter;
 }
 
-/// How many filters' solids the cache keeps at once (the most recent)
-const CACHED_FILTERS: usize = 8;
-
-/// [`solids`] through the engine's [`QueryCache`]. A spatial query takes into the index what entered the Workspace since
-/// the last one or the physics step (world/camera_moves.rs: GetLargestCutoffDistance, which does not, sees it from then).
-pub(crate) fn cached_solids(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
+/// What a spatial query does first: the spatial index takes in what entered the Workspace since the last query or the physics
+/// step (world/camera_moves.rs `index_parts`: GetLargestCutoffDistance and the PlayerMouse, which take nothing in, see it from
+/// then), and the broadphase takes the dom's changes ([`refresh`]).
+pub(crate) fn take_in(engine: &Engine) {
     super::camera_moves::index_parts(&mut engine.state.borrow_mut());
-    cached_solids_unindexed(engine, filter)
+    refresh(engine);
 }
 
-/// [`cached_solids`] that leaves the spatial index as it is: the PlayerMouse's reads take nothing into it (world/mouse.rs).
-pub(crate) fn cached_solids_unindexed(engine: &Engine, filter: &Filter) -> Rc<[Solid]> {
-    let stamp = {
-        let state = engine.state.borrow();
-        (state.dom.structure_version, state.dom.write_version)
-    };
+/// The broadphase brought up to the dom's changes (world/broadphase.rs), the spatial index's wait left as it is: the PlayerMouse's
+/// reads and GetLargestCutoffDistance take nothing in (world/mouse.rs, world/camera_moves.rs).
+pub(crate) fn refresh(engine: &Engine) {
+    query_cache(engine).index.borrow_mut().sync(engine);
+}
+
+/// `then` on the parts `gather` takes from the broadphase for a query (the Workspace's parts near it, or all of them, in no
+/// particular order: the caller tests each and orders what it keeps).
+pub(crate) fn with_near<R>(engine: &Engine, gather: impl FnOnce(&mut Index, &mut Vec<(InstanceId, Entry)>), then: impl FnOnce(&[(InstanceId, Entry)]) -> R) -> R {
     let cache = query_cache(engine);
-    if let Some(found) = cache.entries.borrow().iter().find(|entry| entry.stamp == stamp && entry.filter.sees_as(filter)) {
-        crate::profiler::caches::hit(crate::profiler::caches::Cache::Queries);
-        return found.solids.clone();
+    let mut near = cache.near.take();
+    near.clear();
+    gather(&mut cache.index.borrow_mut(), &mut near);
+    let result = then(&near);
+    near.clear();
+    *cache.near.borrow_mut() = near;
+    result
+}
+
+/// The index's tree height, whether its links and boxes hold, and how many parts it has (tests)
+#[cfg(test)]
+pub(crate) fn index_state(engine: &Engine) -> (i32, bool, usize) {
+    let index = query_cache(engine).index.borrow();
+    let (height, ok) = index.check_tree();
+    (height, ok, index.len())
+}
+
+/// Whether the index holds what a walk of the Workspace finds: the same parts (every BasePart but Terrain), each with the solid
+/// and flags the dom gives it now, to the bit (tests; its log taken first)
+#[cfg(test)]
+pub(crate) fn index_matches_a_walk(engine: &Engine) -> Result<(), String> {
+    refresh(engine);
+    let mut held = Vec::new();
+    query_cache(engine).index.borrow().all_parts(&mut held);
+    let state = engine.state.borrow();
+    let reflection = &engine.reflection;
+    let (base_part, terrain) = (reflection.class_id("BasePart").expect("BasePart"), reflection.class_id("Terrain").expect("Terrain"));
+    let not_false = |part: InstanceId, name: &str| reflection.name_id(name).and_then(|n| state.dom.boolean(part, n)) != Some(false);
+    let mut walked: Vec<String> = state
+        .dom
+        .descendants(engine.world().workspace)
+        .into_iter()
+        .filter(|&id| reflection.class(state.dom.at(id).class).is_a(base_part) && !reflection.class(state.dom.at(id).class).is_a(terrain))
+        .map(|id| format!("{id:?} {:?} {} {}", solid(&state, engine, id), not_false(id, "CanQuery"), not_false(id, "CanCollide")))
+        .collect();
+    let mut kept: Vec<String> = held.iter().map(|(id, entry)| format!("{id:?} {:?} {} {}", entry.solid, entry.can_query, entry.can_collide)).collect();
+    walked.sort();
+    kept.sort();
+    if walked == kept {
+        return Ok(());
     }
-    crate::profiler::caches::miss(crate::profiler::caches::Cache::Queries);
-    let made: Rc<[Solid]> = solids(engine, filter).into();
-    let mut entries = cache.entries.borrow_mut();
-    let before = entries.len();
-    entries.retain(|entry| entry.stamp == stamp);
-    if entries.len() >= CACHED_FILTERS {
-        entries.remove(0);
+    let missing: Vec<&String> = walked.iter().filter(|line| !kept.contains(line)).take(3).collect();
+    let extra: Vec<&String> = kept.iter().filter(|line| !walked.contains(line)).take(3).collect();
+    Err(format!("{} walked, {} held; missing {missing:?}; extra {extra:?}", walked.len(), kept.len()))
+}
+
+/// [`with_near`] for the parts a segment from `origin` along `direction`, with a sphere of radius `grow` swept along it, may meet.
+pub(crate) fn near_segment<R>(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32, then: impl FnOnce(&[(InstanceId, Entry)]) -> R) -> R {
+    with_near(engine, |index, out| index.near_segment(origin, direction, grow, out), then)
+}
+
+/// The world box around an oriented box (its frame's axes as given, `size` its size), or None when the frame is skewed and its
+/// box is no box (world/broadphase.rs skewed).
+fn box_extent(frame: &Affine3A, size: Vec3) -> Option<Vec3> {
+    let unit = unit_frame(frame);
+    if broadphase::skewed(&unit) {
+        return None;
     }
-    crate::profiler::caches::evicted(crate::profiler::caches::Cache::Queries, (before - entries.len()) as u64);
-    entries.push(CachedSolids { filter: filter.clone(), stamp, solids: made.clone() });
-    made
+    let half = (size * 0.5).abs();
+    let m = unit.matrix3;
+    Some(Vec3::from(m.x_axis).abs() * half.x + Vec3::from(m.y_axis).abs() * half.y + Vec3::from(m.z_axis).abs() * half.z)
 }
 
 /// Where a ray from `origin` along `direction` (its length the reach) first enters `solid`:
@@ -432,15 +433,19 @@ pub fn ray_cylinder(o: Vec3, d: Vec3, half_length: f32, radius: f32) -> Option<(
     best
 }
 
-/// The closest hit of a ray (or a sphere of radius `grow` swept along it) among `solids`, but
-/// `except`'s.
-pub fn cast_ray(solids: &[Solid], origin: Vec3, direction: Vec3, grow: f32, except: Option<InstanceId>) -> Option<Hit> {
+/// The closest hit of a ray (or a sphere of radius `grow` swept along it) among the parts of `near` that `sees` lets through, but
+/// `except`'s: the parts it enters, in the Workspace's order ([`broadphase::sort_by_order`] below `root`), the nearest kept,
+/// the first of equals.
+#[allow(clippy::too_many_arguments)]
+pub fn cast_ray(state: &State, root: InstanceId, near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) -> bool, origin: Vec3, direction: Vec3, grow: f32, except: Option<InstanceId>) -> Option<Hit> {
+    let mut entered: Vec<(&Solid, f32, Vec3)> = near
+        .iter()
+        .filter(|(part, _)| except != Some(*part))
+        .filter_map(|(part, entry)| ray_solid(&entry.solid, origin, direction, grow).filter(|_| sees(*part, entry)).map(|(t, normal)| (&entry.solid, t, normal)))
+        .collect();
+    broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
     let mut best: Option<Hit> = None;
-    for solid in solids {
-        if except == Some(solid.part) {
-            continue;
-        }
-        let Some((t, local_normal)) = ray_solid(solid, origin, direction, grow) else { continue };
+    for (solid, t, local_normal) in entered {
         let distance = direction.length() * t;
         if best.is_some_and(|hit| hit.distance <= distance) {
             continue;
@@ -526,16 +531,22 @@ fn sweep_boxes(a: &Oriented, direction: Vec3, b: &Oriented) -> Option<(f32, Vec3
     (enter > 0.0 && enter <= 1.0).then_some((enter, normal))
 }
 
-/// The closest part a box (`frame`, `size`) swept along `direction` touches, `except` aside.
-pub fn cast_box(solids: &[Solid], frame: &Affine3A, size: Vec3, direction: Vec3, except: Option<InstanceId>) -> Option<Hit> {
+/// The closest part of `near` that `sees` lets through a box (`frame`, `size`) swept along `direction` touches, `except` aside:
+/// the parts it touches, in the Workspace's order, the nearest kept, the first of equals.
+#[allow(clippy::too_many_arguments)]
+pub fn cast_box(state: &State, root: InstanceId, near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) -> bool, frame: &Affine3A, size: Vec3, direction: Vec3, except: Option<InstanceId>) -> Option<Hit> {
     let moving = Oriented::of(&unit_frame(frame), size * 0.5);
+    let mut touched: Vec<(&Solid, f32, Vec3)> = near
+        .iter()
+        .filter(|(part, _)| except != Some(*part))
+        .filter_map(|(part, entry)| {
+            let other = Oriented::of(&entry.solid.frame, entry.solid.half_extents());
+            sweep_boxes(&moving, direction, &other).filter(|_| sees(*part, entry)).map(|(t, normal)| (&entry.solid, t, normal))
+        })
+        .collect();
+    broadphase::sort_by_order(&state.dom, root, &mut touched, |(solid, ..)| solid.part);
     let mut best: Option<Hit> = None;
-    for solid in solids {
-        if except == Some(solid.part) {
-            continue;
-        }
-        let other = Oriented::of(&solid.frame, solid.half_extents());
-        let Some((t, normal)) = sweep_boxes(&moving, direction, &other) else { continue };
+    for (solid, t, normal) in touched {
         let distance = direction.length() * t;
         if best.is_some_and(|hit| hit.distance <= distance) {
             continue;
@@ -660,7 +671,12 @@ fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, ray: &LuaValue, list: &LuaVa
     let direction = Vec3::new(ray.direction.x, ray.direction.y, ray.direction.z);
     let mut filter = query_cache(engine).spare.take();
     filter.read_list(list, include);
-    let hit = cast_ray(&cached_solids(engine, &filter), origin, direction, 0.0, None);
+    take_in(engine);
+    let root = engine.world().workspace;
+    let hit = near_segment(engine, origin, direction, 0.0, |near| {
+        let state = engine.state.borrow();
+        cast_ray(&state, root, near, |part, entry| filter.sees(&state, part, entry), origin, direction, 0.0, None)
+    });
     keep_filter(engine, filter);
     let air = engine.reflection.enum_item("Material", "Air");
     Ok(match hit {
@@ -695,34 +711,60 @@ fn limited(max_parts: usize, parts: Vec<InstanceId>) -> Vec<InstanceId> {
 /// out or not; 10 studs apart nothing). The first part met pays RAY_MET; each other part the filter leaves out pays RAY_CROSSED,
 /// whatever the cast's shape (23 excluded walls before the hit 0.027 to 0.031 us each for a Raycast, a Spherecast, a Blockcast and
 /// a Shapecast alike); each other part it admits, one tied with the hit (a stack), pays `each`, the cast's own test (a Spherecast
-/// 0.09 us, a Blockcast 0.12, a Raycast 0.023 a coincident wall). A miss pays for every part its path crosses.
-fn charge_cast(engine: &Engine, filter: &Filter, hit: Option<f32>, origin: Vec3, direction: Vec3, grow: f32, each: f64, kinds: u8) {
-    let solids = cached_solids(engine, &Filter::default());
-    let length = direction.length();
-    let (mut met, mut admitted) = (0usize, 0usize);
-    {
-        let state = engine.state.borrow();
-        let can_collide = engine.reflection.name_id("CanCollide").filter(|_| filter.respect_can_collide);
-        for solid in solids.iter() {
-            let Some((t, _)) = ray_solid(solid, origin, direction, grow) else { continue };
-            // (the hit's own distance is reckoned the same way: the hit and the parts tied with it are met)
-            if hit.is_some_and(|distance| length * t > distance) {
-                continue;
-            }
-            met += 1;
-            // (the default filter's solids are the cast's and the parts its filter leaves out)
-            let collides = can_collide.is_none_or(|name| state.dom.boolean(solid.part, name) != Some(false));
-            if hit.is_some() && collides && filter.admits(&state, solid.part) {
-                admitted += 1;
-            }
-        }
-    }
+/// 0.09 us, a Blockcast 0.12, a Raycast 0.023 a coincident wall). A miss pays for every part its path crosses. `met` is
+/// [`cast_counts`]'.
+fn charge_cast(engine: &Engine, (met, admitted): (usize, usize), each: f64, kinds: u8) {
     if met > 0 {
         let tied = admitted.saturating_sub(1);
         let seconds = crate::cost::RAY_MET + tied as f64 * each + (met - 1 - tied) as f64 * crate::cost::RAY_CROSSED;
         charge_query(engine, seconds);
         engine.state.borrow().sched.touched.borrow().book_kinds(kinds, seconds);
     }
+}
+
+/// The parts among `near` with CanQuery on (whatever else the cast's filter says) that a cast's path from `origin` along
+/// `direction`, grown by `grow`, meets up to its hit (`hit`, the distance along `direction`), and how many of those its filter
+/// admits when it hit something: what [`charge_cast`] charges for.
+#[allow(clippy::too_many_arguments)]
+fn cast_counts(state: &State, near: &[(InstanceId, Entry)], filter: &Filter, hit: Option<f32>, origin: Vec3, direction: Vec3, grow: f32) -> (usize, usize) {
+    let length = direction.length();
+    let (mut met, mut admitted) = (0usize, 0usize);
+    for (part, entry) in near {
+        // (the parts a query with no filter sees: CanQuery off left out)
+        if !entry.can_query {
+            continue;
+        }
+        let Some((t, _)) = ray_solid(&entry.solid, origin, direction, grow) else { continue };
+        // (the hit's own distance is reckoned the same way: the hit and the parts tied with it are met)
+        if hit.is_some_and(|distance| length * t > distance) {
+            continue;
+        }
+        met += 1;
+        let collides = !filter.respect_can_collide || entry.can_collide;
+        if hit.is_some() && collides && filter.admits(state, *part) {
+            admitted += 1;
+        }
+    }
+    (met, admitted)
+}
+
+/// A cast's hit and what it is charged for: the parts near its path (a segment from `origin` along `direction`, grown by `grow`
+/// for the charge and at least as much for the cast itself, or every part with `all`), tested by `cast` for the hit and by
+/// [`cast_counts`] for what its path meets.
+#[allow(clippy::too_many_arguments)]
+fn cast_and_count(engine: &Engine, filter: &Filter, origin: Vec3, direction: Vec3, grow: f32, reach: f32, all: bool, cast: impl FnOnce(&State, InstanceId, &[(InstanceId, Entry)]) -> Option<Hit>) -> (Option<Hit>, (usize, usize)) {
+    take_in(engine);
+    let root = engine.world().workspace;
+    with_near(
+        engine,
+        |index, out| if all { index.all_parts(out) } else { index.near_segment(origin, direction, grow.max(reach), out) },
+        |near| {
+            let state = engine.state.borrow();
+            let hit = cast(&state, root, near);
+            let counts = cast_counts(&state, near, filter, hit.map(|hit| hit.distance), origin, direction, grow);
+            (hit, counts)
+        },
+    )
 }
 
 /// What a path that crossed `crossed` parts pays: [`crate::cost::RAY_MET`] when it met any, and `each` for every part after the
@@ -743,12 +785,28 @@ pub(crate) fn charge_query(engine: &Engine, seconds: f64) {
     }
 }
 
-/// The parts of `filter`'s solids `keep` holds for, at most MaxParts of them.
-fn overlapping(engine: &Engine, filter: Filter, keep: impl Fn(&Solid) -> bool) -> Vec<InstanceId> {
-    let parts = cached_solids(engine, &filter).iter().filter(|s| keep(s)).map(|s| s.part).collect();
+/// The parts `filter` sees that `keep` holds for, in the Workspace's order, at most MaxParts of them: those near the box
+/// `center` +- `extent` (every part for none) tested.
+fn overlapping(engine: &Engine, filter: Filter, center: Vec3, extent: Option<Vec3>, keep: impl Fn(&Solid) -> bool) -> Vec<InstanceId> {
+    take_in(engine);
+    let root = engine.world().workspace;
+    let mut parts = with_near(
+        engine,
+        |index, out| index.near_box(center, extent, out),
+        |near| {
+            let state = engine.state.borrow();
+            near.iter().filter(|(part, entry)| keep(&entry.solid) && filter.sees(&state, *part, entry)).map(|(part, _)| *part).collect::<Vec<_>>()
+        },
+    );
+    broadphase::sort_by_order(&engine.state.borrow().dom, root, &mut parts, |part| *part);
     let max_parts = filter.max_parts;
     keep_filter(engine, filter);
     limited(max_parts, parts)
+}
+
+/// A sphere's world box half size for [`overlapping`] (NaN for a NaN radius: every part)
+fn sphere_extent(radius: f32) -> Option<Vec3> {
+    Some(Vec3::splat(if radius.is_nan() { f32::NAN } else { radius.max(0.0) }))
 }
 
 pub fn install(engine: &Rc<Engine>) {
@@ -759,8 +817,8 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("Raycast: origin and direction must be Vector3s");
         };
         let filter = take_filter(engine, args.get(3));
-        let hit = cast_ray(&cached_solids(engine, &filter), origin, direction, 0.0, None);
-        charge_cast(engine, &filter, hit.map(|hit| hit.distance), origin, direction, 0.0, crate::cost::RAY_CROSSED, 0);
+        let (hit, counts) = cast_and_count(engine, &filter, origin, direction, 0.0, 0.0, false, |state, root, near| cast_ray(state, root, near, |part, entry| filter.sees(state, part, entry), origin, direction, 0.0, None));
+        charge_cast(engine, counts, crate::cost::RAY_CROSSED, 0);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
@@ -769,8 +827,9 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("Spherecast: position, radius and direction expected");
         };
         let filter = take_filter(engine, args.get(4));
-        let hit = cast_ray(&cached_solids(engine, &filter), center, direction, radius.max(0.0) as f32, None);
-        charge_cast(engine, &filter, hit.map(|hit| hit.distance), center, direction, radius.max(0.0) as f32, crate::cost::SPHERE_CROSSED, 0);
+        let grow = radius.max(0.0) as f32;
+        let (hit, counts) = cast_and_count(engine, &filter, center, direction, grow, grow, false, |state, root, near| cast_ray(state, root, near, |part, entry| filter.sees(state, part, entry), center, direction, grow, None));
+        charge_cast(engine, counts, crate::cost::SPHERE_CROSSED, 0);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
@@ -779,9 +838,11 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("Blockcast: cframe, size and direction expected");
         };
         let filter = take_filter(engine, args.get(4));
-        let hit = cast_box(&cached_solids(engine, &filter), &frame, size, direction, None);
-        // (a box's path counted as its centre's, grown by its half diagonal)
-        charge_cast(engine, &filter, hit.map(|hit| hit.distance), frame::translation(&frame), direction, size.length() * 0.5, crate::cost::BLOCK_CROSSED, 0);
+        // (a box's path counted as its centre's, grown by its half diagonal: its bounding sphere, so also what the cast can touch
+        // unless its frame is skewed)
+        let skewed = broadphase::skewed(&unit_frame(&frame));
+        let (hit, counts) = cast_and_count(engine, &filter, frame::translation(&frame), direction, size.length() * 0.5, 0.0, skewed, |state, root, near| cast_box(state, root, near, |part, entry| filter.sees(state, part, entry), &frame, size, direction, None));
+        charge_cast(engine, counts, crate::cost::BLOCK_CROSSED, 0);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
@@ -803,14 +864,16 @@ pub fn install(engine: &Rc<Engine>) {
             }
             cast
         };
-        let solids = cached_solids(engine, &filter);
         // the part being cast is never hit (documented); what it holds can be
-        let hit = match cast.shape {
-            Shape::Ball(radius) => cast_ray(&solids, frame::translation(&cast.frame), direction, radius, Some(part)),
-            _ => cast_box(&solids, &cast.frame, cast.half_extents() * 2.0, direction, Some(part)),
-        };
-        // (it stops at its hit as the other casts do: measured; the parts tied with the hit at a Blockcast's price, borrowed)
-        charge_cast(engine, &filter, hit.map(|hit| hit.distance), frame::translation(&cast.frame), direction, cast.half_extents().length(), crate::cost::BLOCK_CROSSED, crate::cost::kind::DEFAULTED);
+        let center = frame::translation(&cast.frame);
+        let skewed = !matches!(cast.shape, Shape::Ball(_)) && broadphase::skewed(&cast.frame);
+        // (it stops at its hit as the other casts do: measured; the parts tied with the hit at a Blockcast's price, borrowed; its
+        // path counted grown by its half diagonal, which holds what it can touch)
+        let (hit, counts) = cast_and_count(engine, &filter, center, direction, cast.half_extents().length(), 0.0, skewed, |state, root, near| match cast.shape {
+            Shape::Ball(radius) => cast_ray(state, root, near, |part, entry| filter.sees(state, part, entry), center, direction, radius, Some(part)),
+            _ => cast_box(state, root, near, |part, entry| filter.sees(state, part, entry), &cast.frame, cast.half_extents() * 2.0, direction, Some(part)),
+        });
+        charge_cast(engine, counts, crate::cost::BLOCK_CROSSED, crate::cost::kind::DEFAULTED);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
@@ -819,7 +882,7 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("GetPartBoundsInBox: cframe and size expected");
         };
         let filter = take_filter(engine, args.get(3));
-        let parts = overlapping(engine, filter, |s| overlaps_box(s, &frame, size));
+        let parts = overlapping(engine, filter, frame::translation(&frame), box_extent(&frame, size), |s| overlaps_box(s, &frame, size));
         charge_query(engine, parts.len() as f64 * crate::cost::QUERY_BOX_PART);
         parts_table(lua, engine, parts)
     })));
@@ -828,7 +891,7 @@ pub fn install(engine: &Rc<Engine>) {
             return raise("GetPartBoundsInRadius: position and radius expected");
         };
         let filter = take_filter(engine, args.get(3));
-        let parts = overlapping(engine, filter, |s| overlaps_sphere(s, center, radius as f32));
+        let parts = overlapping(engine, filter, center, sphere_extent(radius as f32), |s| overlaps_sphere(s, center, radius as f32));
         charge_query(engine, parts.len() as f64 * crate::cost::QUERY_RADIUS_PART);
         parts_table(lua, engine, parts)
     })));
@@ -836,7 +899,11 @@ pub fn install(engine: &Rc<Engine>) {
         let Some(part) = args.instance(1) else { return raise("GetPartsInPart: part expected") };
         let filter = take_filter(engine, args.get(2));
         let query = solid(&engine.state.borrow(), engine, part);
-        let parts = overlapping(engine, filter, |s| {
+        let (center, extent) = match query.shape {
+            Shape::Ball(radius) => (frame::translation(&query.frame), sphere_extent(radius)),
+            _ => (frame::translation(&query.frame), box_extent(&query.frame, query.half_extents() * 2.0)),
+        };
+        let parts = overlapping(engine, filter, center, extent, |s| {
             s.part != part
                 && match query.shape {
                     Shape::Ball(radius) => overlaps_sphere(s, frame::translation(&query.frame), radius),

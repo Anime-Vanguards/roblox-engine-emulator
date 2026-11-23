@@ -296,6 +296,10 @@ fn copy_values(server: &State, client: &mut State, reflection: &Reflection, filt
     if let Some(script) = script {
         target.script = Some(Box::new(script));
     }
+    // (a paired copy's values changed in place: the spatial queries' broadphase reads it again, world/broadphase.rs)
+    if !fresh {
+        client.dom.note_written(to);
+    }
     client.dom.refresh_name(reflection, to);
     for tag in tags.iter() {
         crate::services::tag_added(client, to, tag);

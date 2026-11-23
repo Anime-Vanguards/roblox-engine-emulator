@@ -17,6 +17,7 @@
 //! Rotation = CFrame:ToEulerAnglesXYZ() in degrees, an attachment's World* = its parent part's
 //! CFrame times its own); their change events fire after the CFrame's.
 
+pub mod broadphase;
 pub mod camera;
 mod camera_fov;
 pub(crate) mod camera_moves;

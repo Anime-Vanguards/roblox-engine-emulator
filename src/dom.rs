@@ -53,6 +53,10 @@ pub mod flags {
     pub const SENT: u16 = 1 << 12;
     /// It left the replicated containers after it was sent: what it holds is sent again when it comes back
     pub const STALE: u16 = 1 << 13;
+    /// The spatial index holds it (world/broadphase.rs): its writes go into [`super::Watch`]'s log
+    pub const INDEXED: u16 = 1 << 14;
+    /// In [`super::Watch::written`] until the index takes the log
+    pub const LOGGED: u16 = 1 << 15;
 }
 
 /// Signals created for an instance (events by name, property / attribute change signals).
@@ -634,6 +638,43 @@ pub struct Dom {
     /// Live slots of the classes someone asked to enumerate cheaply (`instances_of_class`), in
     /// slot order
     tracked: FxHashMap<ClassId, std::collections::BTreeSet<u32>>,
+    /// When each slot's instance was last attached ([`Dom::attached_order`]), by slot index
+    attached: Vec<u64>,
+    next_attached: u64,
+    /// What changed under the subtree the spatial index keeps, while it keeps one (world/broadphase.rs)
+    pub watch: Option<Watch>,
+}
+
+/// What changed under `root` (the Workspace) since the spatial index last took the log (world/broadphase.rs): the instances
+/// attached below it, detached from it (with the indexed instances below one, which may leave it later without passing through
+/// the root: Destroy takes a model out first), put in place of another there or given another class there, and the indexed
+/// instances freed (`moved`, every time), and the indexed instances written (`written`, once until taken: [`flags::LOGGED`]). Each entry
+/// is a few ids of work for the index, so a change costs it what the change touched, never a walk of the root. Past `limit`
+/// entries the log stops and says so (`overflowed`), and the index starts over from the root, so a run that stops querying
+/// keeps no more than that.
+pub struct Watch {
+    pub root: InstanceId,
+    pub moved: Vec<InstanceId>,
+    pub written: Vec<InstanceId>,
+    pub limit: usize,
+    pub overflowed: bool,
+    /// A leaving subtree's walk (Dom::log_leaving)
+    walk: Vec<InstanceId>,
+}
+
+impl Watch {
+    pub fn new(root: InstanceId, limit: usize) -> Self {
+        Watch { root, moved: Vec::new(), written: Vec::new(), limit, overflowed: false, walk: Vec::new() }
+    }
+
+    fn room(&mut self) -> bool {
+        if !self.overflowed && self.moved.len() + self.written.len() >= self.limit {
+            self.overflowed = true;
+            self.moved = Vec::new();
+            self.written = Vec::new();
+        }
+        !self.overflowed
+    }
 }
 
 impl Dom {
@@ -741,6 +782,9 @@ impl Dom {
         }
         self.structure_version += 1;
         self.write_version += 1;
+        if self.watched(id) {
+            self.log_moved(id);
+        }
     }
 
     fn track_class(&mut self, class: ClassId) {
@@ -763,6 +807,10 @@ impl Dom {
         slot.generation = slot.generation.wrapping_add(1);
         if let Some(set) = self.tracked.get_mut(&instance.class) {
             set.remove(&id.index);
+        }
+        // (the index drops what it held of it: the stale id says so)
+        if instance.flags & flags::INDEXED != 0 {
+            self.log_moved(id);
         }
         self.free_slots.push(id.index);
         self.pins.remove(&id);
@@ -974,10 +1022,14 @@ impl Dom {
     pub fn attach(&mut self, child: InstanceId, parent: InstanceId) {
         self.touch_rigs(parent);
         self.at_mut(child).parent = Some(parent);
-        let parent = self.at_mut(parent);
-        parent.children.push(child);
-        parent.child_version = parent.child_version.wrapping_add(1);
+        let parent_instance = self.at_mut(parent);
+        parent_instance.children.push(child);
+        parent_instance.child_version = parent_instance.child_version.wrapping_add(1);
         self.structure_version += 1;
+        self.set_attached(child.index, None);
+        if self.watched(parent) {
+            self.log_moved(child);
+        }
     }
 
     /// Removes `child` from its parent's children and clears its parent (no events).
@@ -985,6 +1037,9 @@ impl Dom {
         let Some(parent) = self.at(child).parent else {
             return;
         };
+        if self.watched(parent) {
+            self.log_leaving(child);
+        }
         self.touch_rigs(parent);
         let parent_instance = self.at_mut(parent);
         if let Some(index) = parent_instance.children.iter().position(|c| *c == child) {
@@ -1006,6 +1061,91 @@ impl Dom {
         self.at_mut(old).parent = None;
         self.at_mut(new).parent = Some(parent);
         self.structure_version += 1;
+        // (the new child takes the old one's place among its siblings)
+        let order = self.attached.get(old.index as usize).copied();
+        self.set_attached(new.index, order);
+        if self.watched(parent) {
+            self.log_leaving(old);
+            self.log_moved(new);
+        }
+    }
+
+    fn set_attached(&mut self, slot: u32, order: Option<u64>) {
+        let slot = slot as usize;
+        if self.attached.len() <= slot {
+            self.attached.resize(slot + 1, 0);
+        }
+        self.attached[slot] = order.unwrap_or_else(|| {
+            self.next_attached += 1;
+            self.next_attached
+        });
+    }
+
+    /// When `id` was last attached to its parent, a number that grows with each attach: a parent's children are in this order,
+    /// since an attach appends (and a replacement takes the replaced child's number), so it orders siblings as
+    /// [`Dom::descendants`] lists them without looking for their places in the child list.
+    pub fn attached_order(&self, id: InstanceId) -> u64 {
+        self.attached.get(id.index as usize).copied().unwrap_or(0)
+    }
+
+    /// Whether `node` is the watched root or below it.
+    fn watched(&self, node: InstanceId) -> bool {
+        let Some(watch) = &self.watch else { return false };
+        if watch.overflowed {
+            return false;
+        }
+        let root = watch.root;
+        let mut current = Some(node);
+        while let Some(id) = current {
+            if id == root {
+                return true;
+            }
+            current = self.get(id).and_then(|instance| instance.parent);
+        }
+        false
+    }
+
+    fn log_moved(&mut self, id: InstanceId) {
+        if let Some(watch) = &mut self.watch
+            && watch.room()
+        {
+            watch.moved.push(id);
+        }
+    }
+
+    /// Logs `id`, leaving the watched root's subtree, and every indexed instance below it.
+    fn log_leaving(&mut self, id: InstanceId) {
+        self.log_moved(id);
+        let Some(watch) = &mut self.watch else { return };
+        let mut walk = std::mem::take(&mut watch.walk);
+        walk.clear();
+        walk.extend_from_slice(&self.at(id).children);
+        while let Some(node) = walk.pop() {
+            let instance = self.at(node);
+            walk.extend_from_slice(&instance.children);
+            if instance.flags & flags::INDEXED != 0 {
+                self.log_moved(node);
+            }
+        }
+        if let Some(watch) = &mut self.watch {
+            watch.walk = walk;
+        }
+    }
+
+    /// Logs a write of an indexed instance for the spatial index, once until it takes the log ([`Dom::bump_version`] does this
+    /// for every write through it).
+    pub fn note_written(&mut self, id: InstanceId) {
+        let Some(slot) = self.slots.get_mut(id.index as usize) else { return };
+        let Some(instance) = slot.instance.as_mut().filter(|_| slot.generation == id.generation) else { return };
+        if instance.flags & (flags::INDEXED | flags::LOGGED) != flags::INDEXED {
+            return;
+        }
+        if let Some(watch) = &mut self.watch
+            && watch.room()
+        {
+            instance.flags |= flags::LOGGED;
+            watch.written.push(id);
+        }
     }
 
     /// Whether `ancestor` is a (strict) ancestor of `id`.
@@ -1183,7 +1323,11 @@ impl Dom {
     pub fn bump_version(&mut self, id: InstanceId) {
         let instance = self.at_mut(id);
         instance.version = instance.version.wrapping_add(1);
+        let indexed = instance.flags & flags::INDEXED != 0;
         self.write_version = self.write_version.wrapping_add(1);
+        if indexed {
+            self.note_written(id);
+        }
     }
 }
 

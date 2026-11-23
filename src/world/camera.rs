@@ -303,15 +303,17 @@ fn is_ignored(engine: &Engine, ignored: &[InstanceId], part: InstanceId) -> bool
 /// inside does not hit). The camera's orientation does not matter.
 ///
 /// The parts are the Workspace's every BasePart but Terrain, whatever its Transparency, CanCollide or CanQuery (measured), from
-/// the spatial queries' cache (world/query.rs); an ignored instance or descendant is left out as it is met. What a client spends
-/// on it is charged as the work goes (cost.rs OBSCURING_POINT): each point, its segment as a ray for the parts it crosses
-/// (ignored ones too: the broadphase meets them all), and each part returned.
+/// the spatial queries' broadphase (world/broadphase.rs: each segment tests only the parts near it); an ignored instance or
+/// descendant is left out as it is met. What a client spends on it is charged as the work goes (cost.rs OBSCURING_POINT): each
+/// point, its segment as a ray for the parts it crosses (ignored ones too: the broadphase meets them all), and each part
+/// returned.
 fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Args) -> Result<LuaMultiValue, Flow> {
     // (the ignore list is checked first: measured, ("x", "y") raises "Expected table argument, got string")
     let ignored = ignore_list(args)?;
     let points = super::array_arg(engine, args.get(1), 1)?;
     let origin = frame::translation(&frame::affine_of(engine.state.borrow().dom.raw_get(camera, cframe_name(engine))));
-    let solids = query::cached_solids(engine, &query::Filter { unqueryable: true, ..query::Filter::default() });
+    query::take_in(engine);
+    let root = engine.world().workspace;
     // (the parts listed so far, in order, and every part already decided: listed or ignored)
     let (mut found, mut decided): (Vec<InstanceId>, FxHashSet<InstanceId>) = (Vec::new(), FxHashSet::default());
     let mut targets = Vec::new();
@@ -322,23 +324,24 @@ fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Ar
         }
     }
     // (a segment lies in the box around the camera and every point, so only the parts whose bounding sphere meets that box can be
-    // crossed: found once a call, so each point is tested against those alone, as a broadphase would)
+    // crossed; each segment takes the parts near it from the broadphase and tests those of them)
     let (low, high) = targets.iter().fold((origin, origin), |(low, high), point| (low.min(*point), high.max(*point)));
-    let near: Vec<&query::Solid> = solids
-        .iter()
-        .filter(|solid| {
-            let center = frame::translation(&solid.frame);
-            let radius = solid.half_extents().length();
-            center.clamp(low, high).distance(center) <= radius * 1.0001 + 1e-4
-        })
-        .collect();
+    let near = |solid: &query::Solid| {
+        let center = frame::translation(&solid.frame);
+        let radius = solid.half_extents().length();
+        center.clamp(low, high).distance(center) <= radius * 1.0001 + 1e-4
+    };
     let mut hits: Vec<(f32, InstanceId)> = Vec::new();
     for point in targets {
         let direction = point - origin;
         hits.clear();
-        hits.extend(near.iter().filter_map(|solid| query::ray_solid(solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, solid.part))));
+        query::near_segment(engine, origin, direction, 0.0, |parts| {
+            hits.extend(parts.iter().filter(|(_, entry)| near(&entry.solid)).filter_map(|(part, entry)| query::ray_solid(&entry.solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, *part))));
+        });
         query::charge_query(engine, crate::cost::OBSCURING_POINT);
         query::charge_crossed(engine, hits.len(), crate::cost::RAY_CROSSED, 0);
+        // (in the Workspace's order, then nearest first: the stable sort keeps that order among equals)
+        super::broadphase::sort_by_order(&engine.state.borrow().dom, root, &mut hits, |(_, part)| *part);
         hits.sort_by(|a, b| a.0.total_cmp(&b.0));
         for &(_, part) in &hits {
             if decided.insert(part) && (ignored.is_empty() || !is_ignored(engine, &ignored, part)) {

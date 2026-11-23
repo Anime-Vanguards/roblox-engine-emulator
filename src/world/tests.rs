@@ -2821,8 +2821,8 @@ fn camera_largest_cutoff_distance_and_the_spatial_index() {
 
 /// GetLargestCutoffDistance costs the work clock what a playing client spent on it (roblox-sim, Studio 0.747, cost.rs CUTOFF_CALL):
 /// 1.12 us for five rays that miss, with 5,000 parts off them as with none, and 1.80 when each meets a wall (it read a flat 0.07). Its
-/// rays read the spatial queries' cached parts, so 100 calls in an unchanged Workspace walk it once (each call walked every part of
-/// it), and a part written in between is seen at once.
+/// rays read the spatial queries' broadphase, so 100 calls walk nothing of the Workspace (each call walked every part of it), and a
+/// part written in between is seen at once.
 #[test]
 fn camera_largest_cutoff_distance_costs_what_a_client_spent() {
     let (lua, engine) = start_play();
@@ -2878,9 +2878,9 @@ fn camera_largest_cutoff_distance_costs_what_a_client_spent() {
         shared.Cam, shared.Wall = Cam, Wall
         "##,
     );
-    super::query::WORKSPACE_WALKS.with(|walks| walks.set(0));
+    super::broadphase::WORKSPACE_WALKS.with(|walks| walks.set(0));
     run(&lua, &engine, r##"for _ = 1, 100 do assert(shared.Cam:GetLargestCutoffDistance({}) > 19) end"##);
-    assert_eq!(super::query::WORKSPACE_WALKS.with(|walks| walks.get()), 1, "100 calls in an unchanged Workspace walk it once");
+    assert_eq!(super::broadphase::WORKSPACE_WALKS.with(|walks| walks.get()), 0, "100 calls walk nothing (the setup's queries made the index)");
     run(&lua, &engine, r##"shared.Wall.CFrame = shared.Wall.CFrame + Vector3.new(0, 0, 10) assert(string.format("%.3f", shared.Cam:GetLargestCutoffDistance({})) == "10.000")"##);
 }
 
@@ -3201,4 +3201,489 @@ fn camera_parts_obscuring_a_target_cost_what_a_client_spent() {
         Folder:Destroy()
         "##,
     );
+}
+
+/// A world of random parts for the broadphase's checks (`__SEED__`, `__COUNT__` things made, `__QUERIES__` queries a phase): nested
+/// Folders and Models, parts under parts, Block, Ball and Cylinder parts, wedges, trusses and MeshParts, rotated or not, tiny, huge
+/// and infinite sizes, NaN, infinite and far positions, twins in the same place (ties), CanCollide and CanQuery off; then phases of
+/// random queries of every kind (casts, bounds queries, the legacy rays, GetPartsObscuringTarget, GetLargestCutoffDistance, the
+/// PlayerMouse), with random filters, NaN and infinite arguments among them, each printed with what the work clock charged it,
+/// between random changes (moves, resizes, flags, parts and models leaving, coming back, destroyed, added): `shared.Run(phase)`
+/// and `shared.Change()`. `shared.Out` holds the lines.
+const RANDOM_QUERIES: &str = r##"
+local Seed = __SEED__
+local function R()
+	Seed = Seed * 48271 % 2147483647
+	return Seed / 2147483647
+end
+local function Range(A, B) return A + (B - A) * R() end
+local function Pick(List) return List[1 + math.floor(R() * #List)] end
+local Store = game:GetService("ReplicatedStorage")
+local Root = Instance.new("Folder")
+Root.Name = "World"
+Root.Parent = workspace
+local Containers, Parts = { Root }, {}
+local function Size()
+	local K = R()
+	if K < 0.04 then return Vector3.new(math.huge, Range(1, 4), Range(1, 4)) end
+	if K < 0.08 then return Vector3.new(Range(300, 3000), Range(300, 3000), Range(0.2, 2)) end
+	if K < 0.14 then return Vector3.new(0.001, 0.001, 0.001) end
+	return Vector3.new(Range(0.5, 14), Range(0.5, 14), Range(0.5, 14))
+end
+local function Spot() return Vector3.new(Range(-60, 60), Range(-60, 60), Range(-60, 60)) end
+local function Frame()
+	local K, P = R(), Spot()
+	if K < 0.03 then return CFrame.new(0 / 0, P.Y, P.Z) end
+	if K < 0.05 then return CFrame.new(math.huge, P.Y, P.Z) end
+	if K < 0.07 then return CFrame.new(P.X, P.Y, 1e30) end
+	if K < 0.4 then return CFrame.new(P) end
+	if K < 0.5 then return CFrame.new(P) * CFrame.Angles(0, math.pi / 2 * math.floor(R() * 4), 0) end
+	return CFrame.new(P) * CFrame.Angles(Range(-3, 3), Range(-3, 3), Range(-3, 3))
+end
+local Count = 0
+local function NewPart(Parent)
+	Count += 1
+	local Class = Pick({ "Part", "Part", "Part", "Part", "WedgePart", "CornerWedgePart", "TrussPart", "MeshPart" })
+	local P = Instance.new(Class)
+	P.Name = "P" .. Count
+	if Class == "Part" then P.Shape = Pick({ Enum.PartType.Block, Enum.PartType.Ball, Enum.PartType.Cylinder }) end
+	P.Anchored = true
+	P.Size = Size()
+	P.CFrame = Frame()
+	if R() < 0.15 then P.CanCollide = false end
+	if R() < 0.1 then P.CanQuery = false end
+	P.Parent = Parent
+	table.insert(Parts, P)
+	if R() < 0.12 then
+		local Twin = P:Clone()
+		Count += 1
+		Twin.Name = "P" .. Count
+		Twin.Parent = if R() < 0.5 then Parent else Pick(Containers)
+		table.insert(Parts, Twin)
+	end
+end
+for _ = 1, __COUNT__ do
+	local K = R()
+	if K < 0.08 then
+		local C = Instance.new(if R() < 0.5 then "Folder" else "Model")
+		C.Name = "C" .. #Containers
+		C.Parent = Pick(Containers)
+		table.insert(Containers, C)
+	elseif K < 0.25 and #Parts > 0 then
+		NewPart(Pick(Parts))
+	else
+		NewPart(Pick(Containers))
+	end
+end
+
+local Out = {}
+local function Num(X) return string.format("%.9g", X) end
+local function Vec(V) return Num(V.X) .. "," .. Num(V.Y) .. "," .. Num(V.Z) end
+local function Named(X) return if X then X.Name else "nil" end
+local function Hit(Result)
+	if not Result then return "nil" end
+	return Result.Instance.Name .. " " .. Vec(Result.Position) .. " " .. Vec(Result.Normal) .. " " .. Num(Result.Distance) .. " " .. tostring(Result.Material)
+end
+local function Names(List)
+	local Seen = {}
+	for _, P in List do table.insert(Seen, P.Name) end
+	return "[" .. table.concat(Seen, ",") .. "]"
+end
+local function Point()
+	local K = R()
+	if K < 0.02 then return Vector3.new(0 / 0, 0, 0) end
+	if K < 0.04 then return Vector3.new(math.huge, 0, 0) end
+	return Vector3.new(Range(-90, 90), Range(-90, 90), Range(-90, 90))
+end
+local function Direction()
+	local K = R()
+	if K < 0.03 then return Vector3.new(0, 0 / 0, 0) end
+	if K < 0.05 then return Vector3.zero end
+	if K < 0.07 then return Vector3.new(0, 0, 1e30) end
+	if K < 0.2 then return Pick({ Vector3.xAxis, Vector3.yAxis, Vector3.zAxis, -Vector3.xAxis, -Vector3.yAxis, -Vector3.zAxis }) * Range(1, 200) end
+	return Vector3.new(Range(-1, 1), Range(-1, 1), Range(-1, 1)) * Range(1, 250)
+end
+local function Some(List, Most)
+	local Chosen = {}
+	for _ = 1, math.floor(R() * (Most + 1)) do table.insert(Chosen, Pick(List)) end
+	return Chosen
+end
+local function Params(Overlap)
+	local P = if Overlap then OverlapParams.new() else RaycastParams.new()
+	if R() < 0.35 then
+		P.FilterType = if R() < 0.5 then Enum.RaycastFilterType.Include else Enum.RaycastFilterType.Exclude
+		local L = Some(Containers, 2)
+		for _, X in Some(Parts, 3) do table.insert(L, X) end
+		P.FilterDescendantsInstances = L
+	end
+	if R() < 0.2 then P.RespectCanCollide = true end
+	if R() < 0.15 then P.ExcludeInstances = Some(Parts, 3) end
+	if R() < 0.1 then P.IncludeInstances = Some(Containers, 2) end
+	if Overlap and R() < 0.3 then P.MaxParts = 1 + math.floor(R() * 4) end
+	return P
+end
+local Cam = Instance.new("Camera")
+Cam.Parent = workspace
+local Mouse = game:GetService("Players").LocalPlayer:GetMouse()
+local Kinds = {
+	function() local O, D, P = Point(), Direction(), Params(false) return "Raycast " .. Hit(workspace:Raycast(O, D, P)) end,
+	function() local O, D, P = Point(), Direction(), Params(false) return "Raycast " .. Hit(workspace:Raycast(O, D, P)) end,
+	function() local O, Radius, D, P = Point(), Range(0, 6), Direction(), Params(false) return "Spherecast " .. Hit(workspace:Spherecast(O, Radius, D, P)) end,
+	function() local F, S, D, P = Frame(), Size(), Direction(), Params(false) return "Blockcast " .. Hit(workspace:Blockcast(F, S, D, P)) end,
+	function()
+		local Part, D, P = Pick(Parts), Direction(), Params(false)
+		local Override = if R() < 0.3 then Frame() else nil
+		local Resize = if R() < 0.3 then Size() else nil
+		return "Shapecast " .. Hit(workspace:Shapecast(Part, D, P, Override, Resize))
+	end,
+	function() local F, S, P = Frame(), Size(), Params(true) return "Box " .. Names(workspace:GetPartBoundsInBox(F, S, P)) end,
+	function() local O, Radius, P = Point(), Range(-2, 25), Params(true) return "Radius " .. Names(workspace:GetPartBoundsInRadius(O, Radius, P)) end,
+	function() local Part, P = Pick(Parts), Params(true) return "InPart " .. Names(workspace:GetPartsInPart(Part, P)) end,
+	function()
+		local O, D = Point(), Direction()
+		local A, B, C, E = workspace:FindPartOnRayWithIgnoreList(Ray.new(O, D), Some(Containers, 2))
+		return "Ignore " .. Named(A) .. " " .. Vec(B) .. " " .. Vec(C) .. " " .. tostring(E)
+	end,
+	function()
+		local O, D = Point(), Direction()
+		local A, B, C, E = workspace:FindPartOnRayWithWhitelist(Ray.new(O, D), Some(Containers, 3))
+		return "Whitelist " .. Named(A) .. " " .. Vec(B) .. " " .. Vec(C) .. " " .. tostring(E)
+	end,
+	function()
+		Cam.CFrame = CFrame.new(Point())
+		local Points = {}
+		for _ = 1, 1 + math.floor(R() * 5) do table.insert(Points, Point()) end
+		return "Obscuring " .. Names(Cam:GetPartsObscuringTarget(Points, Some(Containers, 2)))
+	end,
+	function()
+		Cam.CFrame = CFrame.lookAt(Spot(), Spot())
+		Cam.Focus = CFrame.new(Spot())
+		return "Cutoff " .. Num(Cam:GetLargestCutoffDistance(Some(Parts, 3)))
+	end,
+	function()
+		workspace.CurrentCamera.CFrame = CFrame.lookAt(Spot() * 1.5, Spot())
+		Mouse.TargetFilter = if R() < 0.4 then Pick(Containers) else nil
+		local At = Mouse.Hit
+		return "Mouse " .. Named(Mouse.Target) .. " " .. Vec(At.Position) .. " " .. tostring(Mouse.TargetSurface)
+	end,
+}
+local function Run(Phase)
+	for I = 1, __QUERIES__ do
+		local Kind = Pick(Kinds)
+		local T0 = os.clock()
+		local Ok, Line = pcall(Kind)
+		local Spent = os.clock() - T0
+		table.insert(Out, Phase .. "." .. I .. " " .. (if Ok then Line else "error " .. tostring(Line)) .. " | " .. Num(Spent * 1e9))
+	end
+end
+local function Try(F) pcall(F) end
+local function Change()
+	for _ = 1, 20 do local P = Pick(Parts) Try(function() P.CFrame = Frame() end) end
+	for _ = 1, 6 do local P = Pick(Parts) Try(function() P.Size = Size() end) end
+	for _ = 1, 4 do local P = Pick(Parts) Try(function() P.CanQuery = not P.CanQuery end) end
+	for _ = 1, 4 do local P = Pick(Parts) Try(function() P.CanCollide = not P.CanCollide end) end
+	for _ = 1, 3 do local C = Pick(Containers) Try(function() C.Parent = if R() < 0.4 then Store else Pick(Containers) end) end
+	for _ = 1, 4 do local P = Pick(Parts) Try(function() P.Parent = if R() < 0.4 then nil else Pick(Containers) end) end
+	for _ = 1, 2 do local P = Pick(Parts) Try(function() P:Destroy() end) end
+	for _ = 1, 6 do NewPart(Pick(Containers)) end
+	-- a model made outside the Workspace, moved in whole
+	local M = Instance.new("Model")
+	M.Name = "C" .. #Containers
+	table.insert(Containers, M)
+	for _ = 1, 4 do NewPart(M) end
+	M.Parent = Root
+end
+shared.Run = function(Phase)
+	Run(Phase)
+	shared.Out = table.concat(Out, "\n")
+end
+shared.Change = Change
+"##;
+
+/// The broadphase answers every spatial query as a test of every part in the Workspace's order does (`broadphase::SCAN`): the
+/// same hits, positions, normals and distances to the bit, the same choice among ties, the same lists in the same order (MaxParts
+/// included) and the same work-clock charge, on random worlds with NaN, infinite, huge, tiny, rotated and coincident parts, and
+/// after random changes taken from the dom's log; after each batch of changes the index holds what a walk of the Workspace finds.
+/// The tree stays balanced and its boxes hold their children.
+#[test]
+fn broadphase_answers_match_a_test_of_every_part() {
+    let outputs = |seed: u32, scan: bool| {
+        let (lua, engine) = start_play();
+        super::broadphase::SCAN.with(|on| on.set(scan));
+        let source = RANDOM_QUERIES.replace("__SEED__", &seed.to_string()).replace("__COUNT__", "400").replace("__QUERIES__", "160");
+        run(&lua, &engine, &source);
+        for (phase, changes) in [(1, 0), (2, 1), (3, 1), (4, 2)] {
+            for _ in 0..changes {
+                run(&lua, &engine, "shared.Change()");
+                super::query::index_matches_a_walk(&engine).unwrap_or_else(|error| panic!("seed {seed}, before phase {phase}: {error}"));
+            }
+            run(&lua, &engine, &format!("shared.Run({phase})"));
+            super::query::index_matches_a_walk(&engine).unwrap_or_else(|error| panic!("seed {seed}, after phase {phase}: {error}"));
+        }
+        super::broadphase::SCAN.with(|on| on.set(false));
+        let shared: LuaTable = engine.lua.borrow().shared.as_ref().expect("globals").raw_get("shared").expect("shared");
+        let out: String = shared.raw_get("Out").expect("the lines");
+        (out, super::query::index_state(&engine))
+    };
+    let mut hits = 0;
+    for seed in [7, 1234, 99991, 31337, 2024, 555] {
+        let ((tree, (height, sound, parts)), (scan, _)) = (outputs(seed, false), outputs(seed, true));
+        assert!(sound, "seed {seed}: the tree's links and boxes");
+        assert!(parts > 150 && height <= 2 * (parts as f64).log2().ceil() as i32, "seed {seed}: {parts} parts, height {height}");
+        assert_eq!(tree.lines().count(), scan.lines().count(), "seed {seed}");
+        for (a, b) in tree.lines().zip(scan.lines()) {
+            assert_eq!(a, b, "seed {seed}");
+        }
+        hits += tree.lines().filter(|line| !line.contains(" nil ") && !line.contains("[]") && !line.contains("Cutoff 0 ") && !line.contains("error")).count();
+    }
+    eprintln!("{hits} lines found parts");
+    assert!(hits > 1500, "the queries found parts ({hits} lines)");
+}
+
+/// The parts far from a query cost it no host work, as a client's (Studio 0.747: a Raycast, Spherecast, Blockcast, Shapecast or
+/// bounds query beside 0, 10,000 or 100,000 parts away costs the same): beside 50,000 parts 4,000 studs away every kind of query
+/// takes a handful of parts from the broadphase, where each tested all 50,000 (1,000 Raycasts and 1,000 GetPartBoundsInBox calls
+/// took about 3 s of host time), and moving, adding or removing parts takes them in without a walk of the Workspace.
+#[test]
+fn far_parts_cost_a_query_no_host_work() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Far = Instance.new("Folder")
+        for I = 0, 49999 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Size = Vector3.new(4, 4, 4)
+            Part.CFrame = CFrame.new(4000 + (I % 50) * 6, ((I // 50) % 40) * 6, 4000 + (I // 2000) * 6)
+            Part.Parent = Far
+        end
+        Far.Parent = workspace
+        local Wall = Instance.new("Part")
+        Wall.Anchored = true
+        Wall.Size = Vector3.new(10, 10, 1)
+        Wall.CFrame = CFrame.new(0, 50, 20)
+        Wall.Parent = workspace
+        local Ball = Instance.new("Part")
+        Ball.Anchored = true
+        Ball.Shape = Enum.PartType.Ball
+        Ball.Size = Vector3.new(2, 2, 2)
+        Ball.CFrame = CFrame.new(0, 80, 0)
+        Ball.Parent = workspace
+        shared.Far, shared.Ball = Far, Ball
+        assert(workspace:Raycast(Vector3.new(0, 50, 0), Vector3.new(0, 0, 40)).Instance == Wall)
+        "##,
+    );
+    super::broadphase::TAKEN.with(|taken| taken.set(0));
+    super::broadphase::WORKSPACE_WALKS.with(|walks| walks.set(0));
+    let start = std::time::Instant::now();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local O, Up, Ahead = Vector3.new(0, 50, 0), Vector3.new(0, 30, 0), Vector3.new(0, 0, 40)
+        for _ = 1, 1000 do
+            assert(workspace:Raycast(O, Ahead).Instance.Name == "Part")
+            assert(#workspace:GetPartBoundsInBox(CFrame.new(0, 50, 20), Vector3.new(4, 4, 4)) == 1)
+        end
+        "##,
+    );
+    let host = start.elapsed().as_secs_f64();
+    let taken = super::broadphase::TAKEN.with(|taken| taken.get());
+    assert!(taken <= 2 * 1000 * 2, "each query took the wall and little else ({taken} parts for 2,000 queries)");
+    assert!(host < 0.5, "2,000 queries beside 50,000 far parts took {host:.3} s of host time");
+    super::broadphase::TAKEN.with(|taken| taken.set(0));
+    run(
+        &lua,
+        &engine,
+        r##"
+        local O, Up = Vector3.new(0, 50, 0), Vector3.new(0, 20, 0)
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CFrame = CFrame.lookAt(Vector3.new(0, 50, 0), Vector3.new(0, 50, 20))
+        Cam.Focus = CFrame.new(0, 50, 10)
+        workspace.CurrentCamera.CFrame = CFrame.lookAt(Vector3.new(0, 50, -10), Vector3.new(0, 50, 20))
+        local Mouse = game:GetService("Players").LocalPlayer:GetMouse()
+        for _ = 1, 10 do
+            workspace:Spherecast(O, 1, Up)
+            workspace:Blockcast(CFrame.new(O), Vector3.new(2, 2, 2), Up)
+            workspace:Shapecast(shared.Ball, Up)
+            workspace:GetPartBoundsInRadius(O + Up, 2)
+            workspace:GetPartsInPart(shared.Ball)
+            workspace:FindPartOnRay(Ray.new(O, Up))
+            Cam:GetPartsObscuringTarget({ Vector3.new(0, 50, 30) }, {})
+            Cam:GetLargestCutoffDistance({})
+            local _ = Mouse.Target
+        end
+        -- a far part moved, one added, one removed: the next query takes those, not the Workspace
+        local Moved = shared.Far:GetChildren()[1]
+        Moved.CFrame = Moved.CFrame + Vector3.new(0, 1, 0)
+        local Added = Instance.new("Part")
+        Added.Anchored = true
+        Added.CFrame = CFrame.new(4000, 300, 4000)
+        Added.Parent = shared.Far
+        shared.Far:GetChildren()[2].Parent = nil
+        assert(workspace:Raycast(O, Up) == nil)
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(4000, 300, 4000), Vector3.one) == 1)
+        "##,
+    );
+    let taken = super::broadphase::TAKEN.with(|taken| taken.get());
+    assert!(taken <= 10 * 20 + 10, "each query took a few parts ({taken} for 92 queries)");
+    assert_eq!(super::broadphase::WORKSPACE_WALKS.with(|walks| walks.get()), 0, "changes taken from the log, no walk");
+    let (_, sound, parts) = super::query::index_state(&engine);
+    assert!(sound && parts == 50_002, "{parts} parts");
+}
+
+/// The broadphase orders what a query keeps as the Workspace's descendants are listed (`Dom::descendants`), from each instance's
+/// attach number: after instances are made, moved within and out of the Workspace and back, destroyed, and one replaced in its
+/// place (dom.rs replace_child, as a project mount does), every descendant sorted from a shuffled list comes back in that order.
+#[test]
+fn query_results_follow_the_order_the_workspace_lists_its_parts() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Seed = 4242
+        local function R()
+            Seed = Seed * 48271 % 2147483647
+            return Seed / 2147483647
+        end
+        local function Pick(List) return List[1 + math.floor(R() * #List)] end
+        local All = { workspace }
+        for I = 1, 600 do
+            local Made = Instance.new(if R() < 0.6 then "Part" elseif R() < 0.5 then "Folder" else "Model")
+            Made.Name = "N" .. I
+            pcall(function() Made.Parent = Pick(All) end)
+            table.insert(All, Made)
+            if R() < 0.2 then
+                local Moved = Pick(All)
+                pcall(function() Moved.Parent = if R() < 0.2 then game:GetService("ReplicatedStorage") else Pick(All) end)
+            end
+            if R() < 0.03 then
+                pcall(function() Pick(All):Destroy() end)
+            end
+        end
+        "##,
+    );
+    let workspace = engine.world().workspace;
+    let check = |label: &str| {
+        let state = engine.state.borrow();
+        let listed = state.dom.descendants(workspace);
+        assert!(listed.len() > 100, "{label}: {} listed", listed.len());
+        let mut shuffled: Vec<_> = listed.iter().rev().copied().collect();
+        let half = shuffled.len() / 2;
+        shuffled.rotate_left(half);
+        super::broadphase::sort_by_order(&state.dom, workspace, &mut shuffled, |id| *id);
+        assert!(shuffled == listed, "{label}: sorted as listed");
+    };
+    check("made and moved");
+    {
+        let mut state = engine.state.borrow_mut();
+        let state = &mut *state;
+        let parent = state.dom.descendants(workspace)[10];
+        let old = state.dom.at(parent).children.first().copied().or_else(|| state.dom.at(workspace).children.first().copied()).expect("a child");
+        let parent = state.dom.parent_of(old).expect("a parent");
+        let class = engine.reflection.class_id("Folder").expect("Folder");
+        let new = state.dom.create(&engine.reflection, class);
+        state.dom.replace_child(parent, old, new);
+    }
+    check("one replaced in its place");
+}
+
+/// The broadphase follows the dom without walking the Workspace: a part moved, resized and turned off (CanQuery), one moved out and
+/// back, a model moved in whole, a part destroyed and collected, an instance given a part's class where it stands (a bundle's root
+/// revealed: dom.rs set_class) are each seen by the next query; more changes before a query than the log keeps (dom.rs
+/// Watch::limit) make that query walk the Workspace once, and its answers stay right.
+#[test]
+fn the_broadphase_follows_the_dom_and_starts_over_past_its_log() {
+    let (lua, engine) = start_play();
+    let walks = || super::broadphase::WORKSPACE_WALKS.with(|walks| walks.get());
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Part = Instance.new("Part")
+        Part.Anchored = true
+        Part.Size = Vector3.new(4, 4, 4)
+        Part.CFrame = CFrame.new(0, 0, 0)
+        Part.Parent = workspace
+        local Down = Vector3.new(0, -20, 0)
+        assert(workspace:Raycast(Vector3.new(0, 10, 0), Down).Instance == Part)
+        Part.CFrame = CFrame.new(30, 0, 0)
+        assert(workspace:Raycast(Vector3.new(0, 10, 0), Down) == nil and workspace:Raycast(Vector3.new(30, 10, 0), Down).Instance == Part, "moved")
+        Part.Size = Vector3.new(4, 40, 4)
+        assert(workspace:Raycast(Vector3.new(30, 30, 0), Vector3.new(0, 20, 0)) == nil, "resized")
+        assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2).Distance == 30, "resized, hit at its new top")
+        Part.CanQuery = false
+        assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2) == nil, "CanQuery off")
+        Part.CanQuery = true
+        Part.Parent = nil
+        assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2) == nil, "out")
+        Part.Parent = workspace
+        assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2).Instance == Part, "back")
+        local Model = Instance.new("Model")
+        for I = 1, 5 do
+            local Piece = Instance.new("Part")
+            Piece.Anchored = true
+            Piece.CFrame = CFrame.new(-30, I * 3, 0)
+            Piece.Parent = Model
+        end
+        Model.Parent = workspace
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(-30, 8, 0), Vector3.new(2, 20, 2)) == 5, "a model moved in")
+        Part:Destroy()
+        "##,
+    );
+    assert_eq!(walks(), 1, "the first query made the index; the changes came from the log");
+    lua.gc_collect().unwrap();
+    lua.gc_collect().unwrap();
+    engine_lua::raw::collect(&lua, &engine).unwrap();
+    run(&lua, &engine, r##"assert(workspace:Raycast(Vector3.new(30, 50, 0), Vector3.new(0, -40, 0)) == nil, "destroyed")"##);
+    // a Folder in the Workspace becomes a Part where it stands
+    let folder = {
+        let mut state = engine.state.borrow_mut();
+        let class = engine.reflection.class_id("Folder").expect("Folder");
+        let folder = crate::instance::create_named(&mut state, &engine.reflection, class, "Revealed");
+        let workspace = engine.world().workspace;
+        state.dom.attach(folder, workspace);
+        folder
+    };
+    run(&lua, &engine, r##"assert(workspace:Raycast(Vector3.new(0, 10, 0), Vector3.new(0, -20, 0)) == nil)"##);
+    {
+        let mut state = engine.state.borrow_mut();
+        let part = engine.reflection.class_id("Part").expect("Part");
+        state.dom.set_class(&engine.reflection, folder, part);
+    }
+    run(&lua, &engine, r##"assert(workspace:Raycast(Vector3.new(0, 10, 0), Vector3.new(0, -20, 0)).Instance.Name == "Revealed", "revealed")"##);
+    assert_eq!(walks(), 1, "no walk for the reveal");
+    // past the log: 3,000 parts moved out of the Workspace and back twice (12,000 entries) before a query
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local Many = {}
+        for I = 1, 3000 do
+            local Piece = Instance.new("Part")
+            Piece.Anchored = true
+            Piece.CFrame = CFrame.new(100 + (I % 50) * 2, 0, (I // 50) * 2)
+            Piece.Parent = Folder
+            Many[I] = Piece
+        end
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(150, 0, 60), Vector3.new(200, 2, 200)) == 3000)
+        for _ = 1, 2 do
+            for _, Piece in Many do
+                Piece.Parent = nil
+                Piece.Parent = Folder
+            end
+        end
+        Many[1].Parent = nil
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(150, 0, 60), Vector3.new(200, 2, 200)) == 2999, "after the overflow")
+        "##,
+    );
+    assert_eq!(walks(), 2, "the overflowed log made one walk");
+    let (_, sound, parts) = super::query::index_state(&engine);
+    assert!(sound && parts == 1 + 5 + 2999, "{parts} parts");
 }

@@ -133,8 +133,8 @@ fn aimed(origin: Vec3, direction: Vec3) -> Affine3A {
 /// sees every BasePart in the Workspace but Terrain, TargetFilter and its descendants left out; CanQuery, CanCollide, CanTouch and
 /// Transparency do not matter (measured: a wall with each turned off, or fully transparent, is Target).
 ///
-/// The parts come from the spatial queries' cache (world/query.rs), TargetFilter's among them: the ray meets those too, and a
-/// client pays for them. The read is charged as the ray it is: [`crate::cost::MOUSE_RAY`] and the member's `price`, then the parts
+/// The parts come from the spatial queries' broadphase (world/broadphase.rs: the ray tests the parts near it), TargetFilter's
+/// among them: the ray meets those too, and a client pays for them. The read is charged as the ray it is: [`crate::cost::MOUSE_RAY`] and the member's `price`, then the parts
 /// it meets up to its hit (the hit and those under TargetFilter before it) and the hit's own. It sees the parts the spatial index
 /// has: one that entered the Workspace since a spatial query or the physics step last took parts in (`Cameras::unindexed`,
 /// world/camera_moves.rs) is neither met nor paid for, and the read takes nothing in (measured: a client's Target misses such a
@@ -145,26 +145,36 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
         Some(Value::Instance(skip)) => Some(skip),
         _ => None,
     };
-    let solids = query::cached_solids_unindexed(engine, &query::Filter { unqueryable: true, ..query::Filter::default() });
+    query::refresh(engine);
+    let root = engine.world().workspace;
     let reach = direction * REACH;
     let length = reach.length();
+    // (the parts the ray meets, in the Workspace's order)
+    let mut entered: Vec<(query::Solid, f32, Vec3)> = Vec::new();
+    query::near_segment(engine, origin, reach, 0.0, |parts| {
+        let state = engine.state.borrow();
+        for (part, entry) in parts {
+            let Some((t, local)) = query::ray_solid(&entry.solid, origin, reach, 0.0) else { continue };
+            // (looked up only for the parts the ray meets, in a set emptied at every physics step)
+            if state.cameras.unindexed.contains(part) {
+                continue;
+            }
+            entered.push((entry.solid, t, local));
+        }
+    });
     // (query::cast_ray's choice among the parts TargetFilter leaves, the first of equals; and how far along the ray each part
     // under TargetFilter is)
     let mut best: Option<(f32, &query::Solid, Vec3)> = None;
     let mut filtered = Vec::new();
     {
         let state = engine.state.borrow();
-        for solid in solids.iter() {
-            let Some((t, local)) = query::ray_solid(solid, origin, reach, 0.0) else { continue };
-            // (looked up only for the parts the ray meets, in a set emptied at every physics step)
-            if state.cameras.unindexed.contains(&solid.part) {
-                continue;
-            }
+        super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
+        for (solid, t, local) in &entered {
             let distance = length * t;
             if skip.is_some_and(|skip| solid.part == skip || state.dom.is_descendant_of(solid.part, skip)) {
                 filtered.push(distance);
             } else if best.is_none_or(|(nearest, ..)| distance < nearest) {
-                best = Some((distance, solid, local));
+                best = Some((distance, solid, *local));
             }
         }
     }
