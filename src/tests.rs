@@ -4620,8 +4620,9 @@ fn the_work_clock_charges_what_studio_spends() {
         "#,
     );
     // (the parity bench: a Folder 0.36 us to make, 0.52 to enter the workspace; a Part 0.83 and 1.47; and the frame's first entry
-    // into the workspace 13.5 more, its first part's 12.5: the engine's code for them running cold, cost.rs PATH_FIRST)
-    assert!(output.contains(&"print: folder 14.4 parts 252.5".to_string()), "{output:?}");
+    // into the workspace 13.5 more, its first part's 12.5: the engine's code for them running cold, cost.rs PATH_FIRST; each entry's
+    // chain apart, cost.rs reparent_chains: a Part joining the Folder's 3 ancestors 12.6 ns more than the bench's entries average)
+    assert!(output.contains(&"print: folder 14.4 parts 253.8".to_string()), "{output:?}");
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     assert!(lines(&engine).contains(&"print: next frame true".to_string()), "{:?}", lines(&engine));
 }
@@ -4676,6 +4677,95 @@ const MOVE_HELPERS: &str = r#"
         assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
     end
 "#;
+
+/// A Parent write pays for what it carries (cost.rs reparented, WORLD_WORKSPACE_PART, WORLD_MODEL_PART, PLACED_PART): a playing
+/// client's move of a Model between two Folders of ReplicatedStorage grows by 0.075 us a part, by 0.90 and 0.20 more for each part it
+/// takes into or out of the Workspace (its world, and what the client draws), by 0.70 for each it takes into or out of a WorldModel's
+/// world, and by 1.85 for each GUI object; a WorldModel keeps its parts' world, so moving one into the Workspace adds only what is
+/// drawn. Outside the DataModel a move pays 0.047 an instance. Each move paid a flat 0.51 us (0.15 outside) whatever it carried.
+#[test]
+fn a_move_pays_for_the_instances_it_carries_and_the_worlds_they_change() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"{MOVE_HELPERS}
+        local function Model(Class, Parts)
+            local M = Instance.new(Class)
+            for _ = 1, Parts do
+                local P = Instance.new("Part")
+                P.Anchored = true
+                P.Parent = M
+            end
+            return M
+        end
+        local A, B, Placed = Folder("A", RS), Folder("B", RS), Folder("A", workspace)
+        local World, PlacedWorld = Instance.new("WorldModel"), Instance.new("WorldModel")
+        World.Parent = RS
+        PlacedWorld.Parent = workspace
+        local Empty, Parts = Model("Model", 0), Model("Model", 1000)
+        Within("an empty Model between two Folders", Move(Empty, A, B), 0.3, 1.0)
+        Within("1,000 parts more", Move(Parts, A, B) - Move(Empty, A, B), 74.9, 75.1)
+        Within("into and out of the Workspace", Move(Parts, A, Placed) - Move(Empty, A, Placed), 1174.9, 1175.1)
+        Within("into and out of a WorldModel", Move(Parts, A, World) - Move(Empty, A, World), 774.9, 775.1)
+        Within("between the Workspace and a WorldModel in it", Move(Parts, Placed, PlacedWorld) - Move(Empty, Placed, PlacedWorld), 1674.9, 1675.1)
+        local Held, EmptyWorld = Model("WorldModel", 1000), Model("WorldModel", 0)
+        Within("a WorldModel of 1,000 parts into the Workspace", Move(Held, A, Placed) - Move(EmptyWorld, A, Placed), 274.9, 275.1)
+        local Gui, EmptyGui = Instance.new("ScreenGui"), Instance.new("ScreenGui")
+        for _ = 1, 100 do
+            Instance.new("Frame").Parent = Gui
+        end
+        Within("100 Frames more", Move(Gui, A, B) - Move(EmptyGui, A, B), 184.9, 185.1)
+        local LooseA, LooseB = Instance.new("Folder"), Instance.new("Folder")
+        Within("1,000 parts more outside the DataModel", Move(Parts, LooseA, LooseB) - Move(Empty, LooseA, LooseB), 46.9, 47.1)
+        "#
+        ),
+    );
+}
+
+/// A Parent write pays for the two ancestor chains it walks (cost.rs reparent_chains), and what it carries for its depth
+/// (REPARENTED_KEPT, REPARENTED_NESTED, REPARENTED_LOOSE_NESTED, MOVED_NESTED): a playing client's move of a Part between the bottoms
+/// of two chains 100 Folders deep in ReplicatedStorage costs 31 us more than between two Folders beside each other, and between two
+/// Folders at the bottom of one such chain 3.5 us more (each ancestor both keep 26.5 ns, each it leaves 5.2 and joins 23, each it
+/// leaves times the new chain's length 0.95 and each it joins times the old one's 1.85, and the Part 6.0 for each of the 99 more
+/// ancestors it keeps), a Folder of 100 Folders there 63 us more; a chain of 100 Folders costs 7.8 us more to move than a flat Folder of
+/// 99 (1.6 ns for each level an instance sits below the moved one past the first), 7.3 outside the DataModel (1.5) and 38 into and out
+/// of it (7.8). Each paid 0.51 us however deep, 0.15 outside the DataModel.
+#[test]
+fn a_move_pays_for_the_ancestor_chains_it_walks() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"{MOVE_HELPERS}
+        local Part = Instance.new("Part")
+        local _, Deep1 = Chain(100, RS)
+        local _, Deep2 = Chain(100, RS)
+        local _, Shallow1 = Chain(1, RS)
+        local _, Shallow2 = Chain(1, RS)
+        Within("between two chains 100 deep", Move(Part, Deep1, Deep2) - Move(Part, Shallow1, Shallow2), 31.30, 31.39)
+        local DeepA, DeepB, ShallowA, ShallowB = Folder("A", Deep1), Folder("B", Deep1), Folder("A", Shallow1), Folder("B", Shallow1)
+        Within("beside each other 100 deep", Move(Part, DeepA, DeepB) - Move(Part, ShallowA, ShallowB), 3.46, 3.53)
+        local Flat = Instance.new("Folder")
+        for _ = 1, 100 do
+            Instance.new("Folder").Parent = Flat
+        end
+        Within("a Folder of 100 Folders beside each other 100 deep", Move(Flat, DeepA, DeepB) - Move(Flat, ShallowA, ShallowB), 62.85, 62.93)
+        Flat:GetChildren()[1]:Destroy()
+        local Nested = Chain(100, nil)
+        local A, B = Folder("A", RS), Folder("B", RS)
+        Within("a chain of 100 Folders", Move(Nested, A, B) - Move(Flat, A, B), 7.72, 7.80)
+        local LooseA, LooseB = Instance.new("Folder"), Instance.new("Folder")
+        Within("a chain of 100 Folders outside the DataModel", Move(Nested, LooseA, LooseB) - Move(Flat, LooseA, LooseB), 7.24, 7.32)
+        Within("a chain of 100 Folders into and out of the DataModel", Move(Nested, A, nil) - Move(Flat, A, nil), 37.80, 37.88)
+        "#
+        ),
+    );
+}
 
 /// IsDescendantOf, IsAncestorOf and the FindFirstAncestor finds pay 1.2 ns for each ancestor they look at, and GetFullName 4.2 ns
 /// for each name it joins and 0.14 for each byte (cost.rs ANCESTOR_STEP, full_name), as a playing client's calls grow with the

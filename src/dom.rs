@@ -856,7 +856,8 @@ impl Dom {
         false
     }
 
-    fn is_home(&self, id: InstanceId) -> bool {
+    /// Whether `id` is of a home class ([`Dom::keep_homes`]: a WorldRoot or JointsService), so its descendants' homes stop at it.
+    pub fn is_home(&self, id: InstanceId) -> bool {
         !self.home_classes.is_empty() && self.home_classes.get(self.at(id).class as usize).copied().unwrap_or(false)
     }
 

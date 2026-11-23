@@ -420,6 +420,70 @@ fn fire_changed(state: &mut State, reflection: &Reflection, id: InstanceId, name
 
 // Hierarchy
 
+/// What a move inside the DataModel from `old_parent` to `new_parent`, keeping `kept` ancestors, costs for the instances it carries,
+/// `id`'s subtree, in one walk of it (cost.rs): each instance by its class and depth ([`crate::cost::reparented`]); each part whose
+/// world changes, by the worlds it leaves and joins ([`crate::cost::WORLD_WORKSPACE_PART`], [`crate::cost::WORLD_MODEL_PART`]: a
+/// part below a WorldRoot of the subtree keeps its world); and each instance again when the move takes the subtree into or out of
+/// the Workspace's (`placed`).
+fn carried(
+    state: &State,
+    reflection: &Reflection,
+    id: InstanceId,
+    old_parent: Option<InstanceId>,
+    new_parent: Option<InstanceId>,
+    kept: usize,
+    placed: bool,
+) -> f64 {
+    let touched = state.sched.touched.borrow();
+    // (a part's world: the parent, or its nearest WorldRoot ancestor, read from the homes the dom keeps)
+    let world = |parent: Option<InstanceId>| {
+        let (parent, world_root) = (parent?, touched.world_root?);
+        std::iter::successors(Some(parent), |&node| state.dom.home_step(node)).find(|&node| reflection.class(state.dom.at(node).class).is_a(world_root))
+    };
+    let price = |world: Option<InstanceId>| match world {
+        None => 0.0,
+        Some(world) if Some(world) == touched.workspace => crate::cost::WORLD_WORKSPACE_PART,
+        Some(_) => crate::cost::WORLD_MODEL_PART,
+    };
+    let (before, after) = (world(old_parent), world(new_parent));
+    let crossed = if before == after { 0.0 } else { price(before) + price(after) };
+    // (each instance, past the 2 kept ancestors its class's price was measured at, pays for the others: the same for every one)
+    let each = kept.saturating_sub(2) as f64 * crate::cost::REPARENTED_KEPT;
+    let (mut work, mut nested) = (0.0, [0, 0]);
+    // (each instance with its depth below the moved one, and whether a WorldRoot of the subtree holds it: the moved one never)
+    let mut walk = vec![(id, 0usize, false)];
+    while let Some((node, depth, held)) = walk.pop() {
+        let instance = state.dom.at(node);
+        let part = touched.kind(instance.class) == crate::cost::ColdKind::Part;
+        work += touched.reparented(instance.class) + each;
+        nested[usize::from(part)] += depth.saturating_sub(1);
+        if part && !held {
+            work += crossed;
+        }
+        if placed {
+            work += if part { crate::cost::PLACED_PART } else { crate::cost::PLACED_OTHER };
+        }
+        let below = held || state.dom.is_home(node);
+        walk.extend(instance.children.iter().map(|&child| (child, depth + 1, below)));
+    }
+    work + crate::cost::nested(crate::cost::REPARENTED_NESTED, nested)
+}
+
+/// How many instances `id`'s subtree holds, itself included, and the levels they sit below it past the first, summed for its other
+/// instances and its parts (cost.rs nested, REPARENTED_LOOSE_NESTED, MOVED_NESTED: a flat subtree has none).
+fn subtree_depths(state: &State, id: InstanceId) -> (usize, [usize; 2]) {
+    let touched = state.sched.touched.borrow();
+    let (mut count, mut nested) = (0, [0, 0]);
+    let mut walk = vec![(id, 0usize)];
+    while let Some((node, depth)) = walk.pop() {
+        let instance = state.dom.at(node);
+        count += 1;
+        nested[usize::from(touched.kind(instance.class) == crate::cost::ColdKind::Part)] += depth.saturating_sub(1);
+        walk.extend(instance.children.iter().map(|&child| (child, depth + 1)));
+    }
+    (count, nested)
+}
+
 /// `from` and its ancestors, nearest first.
 fn ancestry(state: &State, from: Option<InstanceId>) -> Vec<InstanceId> {
     let mut chain = Vec::new();
@@ -600,64 +664,63 @@ fn reparent(
     if let Some(parent) = new_parent.filter(|&parent| state.dom.at(parent).has(flags::LAZY_PENDING)) {
         super::project::materialize_lazy(state, reflection, parent);
     }
+    // The two ancestor chains, nearest first, each up to its root, and how many ancestors they share: chains of one tree meet and go
+    // on together to the root, so what they share is a common tail (an ancestor the subtree keeps is told nothing:
+    // Root.DescendantAdded / DescendantRemoving stay quiet when a model moves from Root.Units to Root.Other)
+    let old_chain = ancestry(state, old_parent);
+    let new_chain = ancestry(state, new_parent);
+    let kept = old_chain.iter().rev().zip(new_chain.iter().rev()).take_while(|(old, new)| old == new).count();
+    let in_data_model = |chain: &[InstanceId]| state.collection.game.is_some_and(|game| chain.last() == Some(&game));
+    let (inside_before, inside_after) = (in_data_model(&old_chain), in_data_model(&new_chain));
     // CollectionService: tagged instances entering or leaving the DataModel (services/mod.rs
     // CollectionState; Studio fires the removed signals with DescendantRemoving, before ChildRemoved
     // and AncestryChanged, and the added ones with DescendantAdded)
-    let (was_inside, now_inside) = if state.collection.tagged {
-        (
-            old_parent.is_some_and(|parent| super::services::in_data_model(state, parent)),
-            new_parent.is_some_and(|parent| super::services::in_data_model(state, parent)),
-        )
-    } else {
-        (false, false)
-    };
-    // the work clock (crate::cost): Studio's cost of a subtree entering or leaving the DataModel
-    let inside = |state: &State, parent: Option<InstanceId>| parent.is_some_and(|parent| super::services::in_data_model(state, parent));
-    if inside(state, old_parent) != inside(state, new_parent) {
-        let work: f64 = crate::cost::MOVE_BASE
-            + std::iter::once(id).chain(state.dom.descendants(id)).map(|node| crate::cost::moved(reflection, state.dom.at(node).class)).sum::<f64>();
-        state.sched.charge(work);
-        crate::boundary::add_cost(work);
-    } else {
-        let loose = if inside(state, new_parent) { crate::cost::REPARENTED } else { crate::cost::REPARENTED_LOOSE };
-        state.sched.charge(loose);
-        crate::boundary::add_cost(loose);
-    }
+    let (was_inside, now_inside) = if state.collection.tagged { (inside_before, inside_after) } else { (false, false) };
     // (entering the Workspace: the frame's first entry runs the engine's code for it cold, the first part's more (cost.rs Path::Enter,
     // EnterPart); each instance's entry is noted, so a destroy knows the engine took it into its frame work: destroy_live)
     let workspace = state.sched.touched.borrow().workspace;
-    if let Some(workspace) = workspace {
-        let placed = |state: &State, parent: Option<InstanceId>| parent.is_some_and(|parent| parent == workspace || state.dom.is_descendant_of_home(parent, workspace));
-        let (was_placed, now_placed) = (placed(state, old_parent), placed(state, new_parent));
-        if was_placed != now_placed {
-            let mut touched = state.sched.touched.borrow_mut();
-            let mut first = 0.0;
-            let mut part = false;
-            for node in std::iter::once(id).chain(state.dom.descendants(id)) {
-                touched.set_entered(node.index, now_placed);
-                touched.count(|ops| ops.entered += u64::from(now_placed));
-                part = part || touched.kind(state.dom.at(node).class) == crate::cost::ColdKind::Part;
-            }
-            if now_placed {
-                first += touched.first_path(crate::cost::Path::Enter);
-                if part {
-                    first += touched.first_path(crate::cost::Path::EnterPart);
-                }
-            }
-            drop(touched);
-            if first > 0.0 {
-                state.sched.charge(first);
-                crate::boundary::add_cost(first);
+    let placed = |state: &State, parent: Option<InstanceId>| {
+        workspace.is_some_and(|workspace| parent.is_some_and(|parent| parent == workspace || state.dom.is_descendant_of_home(parent, workspace)))
+    };
+    let (was_placed, now_placed) = (placed(state, old_parent), placed(state, new_parent));
+    // the work clock (crate::cost): the chains' walks, and Studio's cost of a subtree entering or leaving the DataModel, or of what a
+    // move inside it or outside it carries
+    let chains = crate::cost::reparent_chains(old_chain.len(), new_chain.len(), kept);
+    let work = if inside_before != inside_after {
+        crate::cost::MOVE_BASE
+            + std::iter::once(id).chain(state.dom.descendants(id)).map(|node| crate::cost::moved(reflection, state.dom.at(node).class)).sum::<f64>()
+            + crate::cost::nested(crate::cost::MOVED_NESTED, subtree_depths(state, id).1)
+    } else if inside_after {
+        crate::cost::REPARENTED + carried(state, reflection, id, old_parent, new_parent, kept, was_placed != now_placed)
+    } else {
+        let (count, nested) = subtree_depths(state, id);
+        crate::cost::REPARENTED_LOOSE + count as f64 * crate::cost::REPARENTED_LOOSE_INSTANCE + crate::cost::nested(crate::cost::REPARENTED_LOOSE_NESTED, nested)
+    } + chains;
+    state.sched.charge(work);
+    crate::boundary::add_cost(work);
+    if was_placed != now_placed {
+        let mut touched = state.sched.touched.borrow_mut();
+        let mut first = 0.0;
+        let mut part = false;
+        for node in std::iter::once(id).chain(state.dom.descendants(id)) {
+            touched.set_entered(node.index, now_placed);
+            touched.count(|ops| ops.entered += u64::from(now_placed));
+            part = part || touched.kind(state.dom.at(node).class) == crate::cost::ColdKind::Part;
+        }
+        if now_placed {
+            first += touched.first_path(crate::cost::Path::Enter);
+            if part {
+                first += touched.first_path(crate::cost::Path::EnterPart);
             }
         }
+        drop(touched);
+        if first > 0.0 {
+            state.sched.charge(first);
+            crate::boundary::add_cost(first);
+        }
     }
-    // (an ancestor the subtree keeps is told nothing: Root.DescendantAdded / DescendantRemoving stay quiet when a model moves
-    // from Root.Units to Root.Other)
-    let old_chain = ancestry(state, old_parent);
-    let new_chain = ancestry(state, new_parent);
     if old_parent.is_some() {
-        let leaving: Vec<InstanceId> = old_chain.iter().copied().filter(|node| !new_chain.contains(node)).collect();
-        fire_descendant_events(state, &leaving, id, K::DescendantRemoving as NameId);
+        fire_descendant_events(state, &old_chain[..old_chain.len() - kept], id, K::DescendantRemoving as NameId);
         if was_inside && !now_inside {
             super::services::subtree_moved(state, id, false);
         }
@@ -670,8 +733,7 @@ fn reparent(
     }
     if let Some(parent) = new_parent {
         // (Studio: every DescendantAdded of the subtree, then any before-child-added setup such as Players.PlayerAdded, then ChildAdded)
-        let arriving: Vec<InstanceId> = new_chain.iter().copied().filter(|node| !old_chain.contains(node)).collect();
-        fire_descendant_events(state, &arriving, id, K::DescendantAdded as NameId);
+        fire_descendant_events(state, &new_chain[..new_chain.len() - kept], id, K::DescendantAdded as NameId);
         for hook in &hooks.before_child_added {
             hook(state, hooks, id, old_parent, parent);
         }

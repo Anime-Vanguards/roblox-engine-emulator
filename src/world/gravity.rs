@@ -190,8 +190,20 @@ pub fn install(engine: &Rc<Engine>) {
     let mut hooks = engine.hooks.borrow_mut();
     let entered = setup.clone();
     let reflection_for_parent = engine.reflection.clone();
-    hooks.hierarchy_changed.push(Box::new(move |state, id, _, new| {
-        if new.is_some() && in_workspace(state, &reflection_for_parent, &entered, id) {
+    hooks.hierarchy_changed.push(Box::new(move |state, id, old, new| {
+        // (a tree that was in the Workspace's world already, once the first step listed what was there, holds nothing to list:
+        // its loose parts were listed as they came, or as they were let go there, and a step drops only what left or was anchored)
+        let stayed = state.gravity.scanned
+            && old.is_some_and(|old| {
+                let Some(instance) = state.dom.get(old) else { return false };
+                let world = if reflection_for_parent.class(instance.class).is_a(entered.world_root) {
+                    Some(old)
+                } else {
+                    super::world_root_of(state, &reflection_for_parent, entered.world_root, old)
+                };
+                world.is_some_and(|world| reflection_for_parent.class(state.dom.at(world).class).is_a(entered.workspace))
+            });
+        if new.is_some() && !stayed && in_workspace(state, &reflection_for_parent, &entered, id) {
             let mut nodes = vec![id];
             nodes.extend(state.dom.descendants(id));
             for node in nodes {

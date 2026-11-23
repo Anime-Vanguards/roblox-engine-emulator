@@ -499,6 +499,9 @@ pub struct Touched {
     /// By ClassId, whether it hangs on a part a move carries ([`Touched::moved_cold`]) and whether it is a particle emitter
     hangs: Vec<bool>,
     emitters: Vec<bool>,
+    /// By ClassId, what a move inside the DataModel costs an instance of it ([`reparented`]), and the WorldRoot class (a part's world)
+    reparented: Vec<f64>,
+    pub world_root: Option<ClassId>,
     /// PivotTo's name, priced by the method call itself ([`Touched::pivot_cold`])
     pub pivot_to: Option<crate::reflection::NameId>,
     /// What the run's scripts have asked the engine to do so far ([`EngineOps`], [`Touched::count`]), and the scheduler's mute:
@@ -532,6 +535,8 @@ impl Touched {
             workspace: None,
             hangs: Vec::new(),
             emitters: Vec::new(),
+            reparented: Vec::new(),
+            world_root: None,
             pivot_to: None,
             ops: EngineOps::default(),
             muted,
@@ -635,7 +640,9 @@ impl Touched {
             .collect();
         const HANGS: [&str; 8] = ["Attachment", "ParticleEmitter", "Beam", "Trail", "Light", "Decal", "Texture", "DataModelMesh"];
         self.hangs = classes.clone().map(|class| HANGS.iter().any(|kind| reflection.is_a(class, kind))).collect();
-        self.emitters = classes.map(|class| reflection.is_a(class, "ParticleEmitter")).collect();
+        self.emitters = classes.clone().map(|class| reflection.is_a(class, "ParticleEmitter")).collect();
+        self.reparented = classes.map(|class| reparented(reflection, class)).collect();
+        self.world_root = reflection.class_id("WorldRoot");
         self.pivot_to = reflection.name_id("PivotTo");
     }
 
@@ -767,6 +774,11 @@ impl Touched {
     #[inline]
     pub fn kind(&self, class: ClassId) -> ColdKind {
         self.kinds.get(class as usize).copied().unwrap_or(ColdKind::Other)
+    }
+
+    /// What a move inside the DataModel costs an instance of `class` ([`reparented`])
+    pub fn reparented(&self, class: ClassId) -> f64 {
+        self.reparented.get(class as usize).copied().unwrap_or(REPARENTED_INSTANCE)
     }
 
     /// Whether the most recent touch found its instance cold (a SetAttribute's namecall touches before its body runs); asking clears it,
@@ -1219,10 +1231,93 @@ pub const SCALE_ATTACHMENT: f64 = 0.35e-6;
 pub const SCALE_JOINT: f64 = 1.8e-6;
 /// Model:GetPivot / GetScale / GetBoundingBox (client: 31-60 ns, cached by the engine)
 pub const MODEL_QUERY: f64 = 0.015e-6;
-/// A Parent change that neither enters nor leaves the DataModel (the parity bench: a Part into
-/// another Folder of the workspace and back 0.51 us a move); one between two places outside it costs little
-pub const REPARENTED: f64 = 0.51e-6;
-pub const REPARENTED_LOOSE: f64 = 0.15e-6;
+/// A Parent change that neither enters nor leaves the DataModel, beyond its two ancestor chains ([`reparent_chains`]) and the instances
+/// it carries, the written one included ([`reparented`], [`WORLD_WORKSPACE_PART`], [`PLACED_PART`]): the parity bench's Part into
+/// another Folder of the workspace and back, 0.51 us a move, less what its chains (4 ancestors each, 3 of them shared) and the Part
+/// cost at those prices. One between two places outside the DataModel: the bench's 0.15 us (chains of one ancestor each, none
+/// shared), less the same, at [`REPARENTED_LOOSE_INSTANCE`] an instance.
+pub const REPARENTED: f64 = 0.51e-6 - reparent_chains(4, 4, 3) - REPARENTED_INSTANCE - REPARENTED_KEPT;
+pub const REPARENTED_LOOSE: f64 = 0.15e-6 - reparent_chains(1, 1, 0) - REPARENTED_LOOSE_INSTANCE;
+/// What every Parent change spends on the ancestor chains of the old parent and the new one (`old` and `new` ancestors each, the
+/// DataModel or a parentless root included, `kept` of them in both): a playing client (roblox-sim, Studio 0.747, a headless client;
+/// os.clock around single moves of a Part, the median of 15; docs/engine.md "Moves and ancestor reads") moved it between two
+/// Folders at the bottom of one chain of D Folders in ReplicatedStorage or the Workspace (D = 1 to 5,000: 0.6 us at 1, 3.0 at 100,
+/// 30.6 at 1,000, 170 at 5,000), between the bottoms of two such chains (0.45 us at 1, 20.7 at 100, 2,853 at 1,000, 92,900 at
+/// 5,000), and between a branch of Do Folders and a Folder beside it, below a chain of Ds (Ds and Do 1 to 2,000, both ways, and
+/// between two branches). Its walks grow with each shared ancestor, each it leaves and each it joins, and with each ancestor it
+/// leaves times the new chain's length and each it joins times the old chain's ([`REPARENT_LEFT_PAIR`], [`REPARENT_JOINED_PAIR`]:
+/// a move between two chains 1,000 deep costs a client 2.9 ms). Fitted for the least relative error over the 35 cases: within
+/// x0.62 to x1.54 of each, x0.97 at the median.
+pub const fn reparent_chains(old: usize, new: usize, kept: usize) -> f64 {
+    let (left, joined) = ((old - kept) as f64, (new - kept) as f64);
+    kept as f64 * REPARENT_KEPT_LEVEL
+        + left * REPARENT_LEFT_LEVEL
+        + joined * REPARENT_JOINED_LEVEL
+        + left * new as f64 * REPARENT_LEFT_PAIR
+        + joined * old as f64 * REPARENT_JOINED_PAIR
+}
+pub const REPARENT_KEPT_LEVEL: f64 = 26.5e-9;
+pub const REPARENT_LEFT_LEVEL: f64 = 5.2e-9;
+pub const REPARENT_JOINED_LEVEL: f64 = 23.0e-9;
+pub const REPARENT_LEFT_PAIR: f64 = 0.95e-9;
+pub const REPARENT_JOINED_PAIR: f64 = 1.85e-9;
+/// What each instance a Parent change carries costs it, the written one and its descendants, by class, while the move stays inside
+/// the DataModel ([`REPARENTED`]). A playing client (roblox-sim, Studio 0.747, headless and rendered; os.clock around single moves, the
+/// median of 15; docs/engine.md "Moves and ancestor reads") moved Models and Folders of 10 to 10,000 instances between two Folders of
+/// ReplicatedStorage, of the Workspace, and between ReplicatedStorage and Lighting: 0.066 to 0.093 us an instance (Parts, Models,
+/// Folders, values; a part's Attachment, Decal, Texture, ParticleEmitter or PointLight 0.072 to 0.087), a ScreenGui's Frames,
+/// ImageLabels and TextLabels 1.84 to 2.16, a part's SurfaceGui 0.48 and Sound 0.63. Moved between two parentless Folders, 0.047 an
+/// instance (Parts and Folders alike: [`REPARENTED_LOOSE_INSTANCE`]). These are a flat subtree's, 2 ancestors deep (a Folder of a
+/// service): an instance pays [`REPARENTED_KEPT`] more for each ancestor the move keeps past 2, and [`REPARENTED_NESTED`] (outside the
+/// DataModel [`REPARENTED_LOOSE_NESTED`], into or out of it [`MOVED_NESTED`]) for each level it sits below the moved one past the
+/// first.
+pub fn reparented(reflection: &Reflection, class: ClassId) -> f64 {
+    if reflection.is_a(class, "GuiObject") {
+        REPARENTED_GUI_OBJECT
+    } else if reflection.is_a(class, "LayerCollector") {
+        REPARENTED_LAYER_COLLECTOR
+    } else if reflection.is_a(class, "Sound") {
+        REPARENTED_SOUND
+    } else {
+        REPARENTED_INSTANCE
+    }
+}
+pub const REPARENTED_INSTANCE: f64 = 0.075e-6;
+pub const REPARENTED_GUI_OBJECT: f64 = 1.85e-6;
+pub const REPARENTED_LAYER_COLLECTOR: f64 = 0.48e-6;
+pub const REPARENTED_SOUND: f64 = 0.63e-6;
+pub const REPARENTED_LOOSE_INSTANCE: f64 = 0.047e-6;
+/// How a carried instance's price grows with its depth ([`reparented`]). The same client moved a Folder of 1,000 Folders between two
+/// Folders at the bottom of a chain D deep in ReplicatedStorage: 69 us at D = 1, 1,858 at 300, 6,001 at 1,000, so 6.0 ns an instance
+/// for each ancestor kept. A chain of N Folders (each in the one before) moved between two Folders of ReplicatedStorage: 22 us at
+/// N = 100, 99 at 300, 855 at 1,000 (a flat Folder of 1,000: 70), so 1.6 ns for each level an instance sits below the moved one;
+/// between two parentless Folders 17, 93 and 801 (1.5 ns); into and out of the DataModel 42 to 56, 364 to 408, 3,800 to 3,990
+/// (7.8 ns). A chain of Parts (each in the one before) costs more a level: 40, 272 and 3,052 us inside the DataModel (6.0 ns), 36, 271
+/// and 3,255 outside it (6.4), and into and out of it 65 to 86, 532 to 600, 6,171 to 6,485 (10.8 beyond the parts' own price; into the
+/// Workspace 11.1 ms at 1,000, which is not modelled). A 10-ary tree of 1,111 Folders, 3 levels, read 75.5 us against a flat Folder's
+/// 70.6. The client's Destroy of a chain grows with the cube of its depth (296 ms at 1,000, 7.8 s at 3,000), as each instance it takes
+/// out after the first carries the rest of the chain out of a parentless tree: ree's charges it the same way.
+pub const REPARENTED_KEPT: f64 = 6.0e-9;
+pub const REPARENTED_NESTED: [f64; 2] = [1.6e-9, 6.0e-9];
+pub const REPARENTED_LOOSE_NESTED: [f64; 2] = [1.5e-9, 6.4e-9];
+pub const MOVED_NESTED: [f64; 2] = [7.8e-9, 10.8e-9];
+/// What `levels` cost at `prices` ([`REPARENTED_NESTED`] and the others): those of instances other than parts, and those of parts.
+pub fn nested(prices: [f64; 2], levels: [usize; 2]) -> f64 {
+    levels[0] as f64 * prices[0] + levels[1] as f64 * prices[1]
+}
+/// A part whose world (its nearest WorldRoot ancestor) a Parent change inside the DataModel changes, for each world it leaves and each
+/// it joins, beyond [`reparented`]: the same client's Models of 100 to 10,000 parts (spread out or stacked, in Models of 10 or not)
+/// between ReplicatedStorage and the Workspace 0.96 to 1.12 us a part at 1,000 (to 1.3 headless, 2.2 to 2.6 rendered at 10,000),
+/// into a WorldModel in ReplicatedStorage 0.71 to 0.92, between two such WorldModels 1.39 to 1.42, between the Workspace and a
+/// WorldModel in it 1.54 to 1.66: the Workspace's world 0.90 us, a WorldModel's 0.70.
+pub const WORLD_WORKSPACE_PART: f64 = 0.90e-6;
+pub const WORLD_MODEL_PART: f64 = 0.70e-6;
+/// An instance a Parent change inside the DataModel takes into or out of the Workspace's subtree (what a client draws, a WorldModel
+/// in it included), beyond [`reparented`] and the worlds: a part 0.20 us (a rendered client's move into the Workspace 0.14 to 0.66
+/// dearer than out of it, a headless client's alike), another instance 0.10 (Folders, values, Models and a part's children 0.07 to
+/// 0.15 headless, 0.10 to 0.33 rendered).
+pub const PLACED_PART: f64 = 0.20e-6;
+pub const PLACED_OTHER: f64 = 0.10e-6;
 /// An ancestor IsDescendantOf, IsAncestorOf and the FindFirstAncestor finds look at, beyond [`method`]'s price for the call: the same
 /// client called them on a Part at the bottom of a chain of D Folders in the Workspace (os.clock around 5 to 20,000 calls, the median of
 /// 15, less an empty loop): 0.046 to 0.075 us a call at D = 1 and 10, 0.12 to 0.16 at 100, 1.13 to 1.34 at 1,000, 5.1 to 6.4 at 4,000,
@@ -1733,7 +1828,9 @@ pub fn cloned_kinds(reflection: &Reflection, class: ClassId) -> u8 {
 /// (a move in and a move out, averaged): a Folder 0.52 us, a Folder of 10 NumberValues 0.96 (so 0.044 an instance), a Part 1.47, a
 /// Model of 3 parts 4.12 (so 1.10 a part, the lone Part 1.0), a Frame into a ScreenGui 1.17, an Attachment into a part 0.58. A Studio
 /// capture read these 5-60x dearer (2.7-14.0 us an instance): its Explorer adds and removes a row for each. An unanchored part
-/// resting on others costs far more to take out (capture: 0.5-1.3 ms), which is not modelled.
+/// resting on others costs far more to take out (capture: 0.5-1.3 ms), which is not modelled. The move's ancestor chains are priced
+/// apart ([`reparent_chains`]), so [`MOVE_BASE`] is the bench's 0.47 us less what the bench's own chains cost (nil to a Folder 4
+/// ancestors deep in the workspace and back, averaged).
 pub fn moved(reflection: &Reflection, class: ClassId) -> f64 {
     1e-6 * if reflection.is_a(class, "BasePart") {
         1.10
@@ -1745,7 +1842,7 @@ pub fn moved(reflection: &Reflection, class: ClassId) -> f64 {
         0.044
     }
 }
-pub const MOVE_BASE: f64 = 0.47e-6;
+pub const MOVE_BASE: f64 = 0.47e-6 - (reparent_chains(0, 4, 0) + reparent_chains(4, 0, 0)) / 2.0;
 
 /// The client the prices were measured in, as the profile's headline names it: the parity bench's sessions (tools/cost-parity,
 /// reference/), a roblox-sim client (Studio 0.744's engine, and 0.747's since string.split's refit) rendering a game's match place on one
