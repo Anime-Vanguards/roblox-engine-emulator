@@ -1079,6 +1079,14 @@ pub const QUERY_RADIUS_PART: f64 = 0.09e-6;
 /// 1.3 to 1.5 and a box with a NaN or infinite side 1.5 to 2.3 ([`QUERY_SIDE_NOT_FINITE`]); neither tests a part.
 pub const QUERY_NOT_FINITE: f64 = 2.7e-6;
 pub const QUERY_SIDE_NOT_FINITE: f64 = 1.3e-6;
+/// A spatial query that raises, beyond its call (world/query.rs raising; the WorldRoot queries, GetPartsObscuringTarget and
+/// GetLargestCutoffDistance), in a playing client (roblox-sim, Studio 0.747, a headless client; os.clock around 40 calls in
+/// pcall, 15 samples less an empty loop, two rounds): a call that raises 3.1 to 4.4 us past an empty pcall, where one that goes
+/// on reads 0.26 to 0.59 (an argument missing, of a wrong type or not finite, a radius or side past its limit, alike: Raycast
+/// 3.4-3.8, a box 3.1-3.4, Spherecast with a NaN radius 4.0-4.4, GetPartsObscuringTarget 3.7-4.3), beyond the call's own price,
+/// which ree charges first: 2.9 to 4.1 us more. The error is the cost: FindFirstChild(nil) and GetAttribute(nil) read 3.5, and
+/// BulkMoveTo 3.9, which ree does not charge.
+pub const QUERY_RAISED: f64 = 3.4e-6;
 /// A part GetPartsInPart returns (the 23 others of a stack 17.3 us), and its own work by the query part's size: [`method`]'s price for
 /// a part of no size, and [`QUERY_PART_SIZE`] for each stud of the square root of its box's surface area (beyond the Luau around the
 /// call, touching nothing: a 2-stud cube 0.27 us, 12 studs 0.45, 20 studs 0.95, 40 studs 1.26, a 2 x 2 x 40 rod 0.46; held out: a 6-stud

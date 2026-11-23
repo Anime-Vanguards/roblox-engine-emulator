@@ -4497,6 +4497,61 @@ fn parts_waiting_for_the_spatial_index_are_not_handed_to_the_mouse_or_the_cutoff
     run(&lua, &engine, "shared.Reads(10, true, \"Seen\")");
 }
 
+/// A spatial query that raises costs the work clock what a client spends on the error (cost.rs QUERY_RAISED, Studio 0.747: 2.9 to
+/// 4.1 us past the call's price, whatever raised): a missing or wrong argument, a value that is not finite, a list entry that is
+/// no Instance, on the WorldRoot queries, GetPartsObscuringTarget and GetLargestCutoffDistance. Each of these was charged its
+/// call alone.
+#[test]
+fn queries_that_raise_cost_what_a_client_spends_on_the_error() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Cam = Instance.new("Camera")
+        Cam.CFrame = CFrame.new(0, 5000, 0)
+        Cam.Focus = CFrame.new(0, 5000, -10)
+        Cam.Parent = workspace
+        local Part = Instance.new("Part")
+        Part.Anchored, Part.Position = true, Vector3.new(200, 5000, 0)
+        Part.Parent = workspace
+        -- (the raising and the passing call alike but for the value that raises: an upvalue each)
+        local V, Down, Missing, NaN, One = Vector3.new(50, 5000, 50), Vector3.new(0, -10, 0), nil, 0 / 0, 1
+        local Frame, Size, Empty, Bad, Ray0 = CFrame.new(50, 5000, 50), Vector3.one, {}, { 5 }, Ray.new(Vector3.new(50, 5000, 50), Vector3.new(0, -10, 0))
+        local function Cost(Call)
+            pcall(Call)
+            local Start = os.clock()
+            pcall(Call)
+            return os.clock() - Start
+        end
+        local function Extra(Raises, Passes)
+            return Cost(Raises) - Cost(Passes)
+        end
+        shared.Raised = {
+            Raycast = Extra(function() workspace:Raycast(Missing, Down) end, function() workspace:Raycast(V, Down) end),
+            Spherecast = Extra(function() workspace:Spherecast(V, NaN, Down) end, function() workspace:Spherecast(V, One, Down) end),
+            Blockcast = Extra(function() workspace:Blockcast(Frame, Missing, Down) end, function() workspace:Blockcast(Frame, Size, Down) end),
+            Shapecast = Extra(function() workspace:Shapecast(Missing, Down) end, function() workspace:Shapecast(Part, Down) end),
+            Box = Extra(function() workspace:GetPartBoundsInBox(Missing, Size) end, function() workspace:GetPartBoundsInBox(Frame, Size) end),
+            Radius = Extra(function() workspace:GetPartBoundsInRadius(V, Missing) end, function() workspace:GetPartBoundsInRadius(V, One) end),
+            InPart = Extra(function() workspace:GetPartsInPart(Missing) end, function() workspace:GetPartsInPart(Part) end),
+            FindPartOnRay = Extra(function() workspace:FindPartOnRay(Missing) end, function() workspace:FindPartOnRay(Ray0) end),
+            Obscuring = Extra(function() Cam:GetPartsObscuringTarget(Empty, Missing) end, function() Cam:GetPartsObscuringTarget(Empty, Empty) end),
+            Cutoff = Extra(function() Cam:GetLargestCutoffDistance(Bad) end, function() Cam:GetLargestCutoffDistance(Empty) end),
+        }
+        "##,
+    );
+    // (a call that raises skips the work past its arguments, which the passing call pays: GetPartsInPart's by its 4 x 1 x 2 part's area, the camera
+    // calls' own prices)
+    let raised = crate::cost::QUERY_RAISED;
+    let in_part = 28.0f64.sqrt() * crate::cost::QUERY_PART_SIZE;
+    let checks = [("Raycast", raised), ("Spherecast", raised), ("Blockcast", raised), ("Shapecast", raised), ("Box", raised), ("Radius", raised), ("InPart", raised - in_part), ("FindPartOnRay", raised), ("Obscuring", raised - crate::cost::OBSCURING_CALL), ("Cutoff", raised - crate::cost::CUTOFF_CALL)];
+    for (name, price) in checks {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Raised.{name} - {price:e}) < 0.01e-6, `{name}: {{shared.Raised.{name}}} s more work when it raises, not {price:e}`)"));
+    }
+}
+
 /// A query whose geometry is not finite tests no part, as a client's spends nothing on the parts (Studio 0.747: a NaN or infinite
 /// ray 0.17 us beside 0 or 5,000 parts, a NaN box 3.1, a NaN radius 1.5): rays, shape casts with a NaN direction, boxes with a
 /// NaN frame, NaN radii and positions, GetPartsObscuringTarget's points and GetLargestCutoffDistance's Focus that are not finite

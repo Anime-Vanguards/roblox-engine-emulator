@@ -377,7 +377,7 @@ fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::Method
         }
         raise(format!("Unable to cast {} to CameraPanMode", cast_name(engine, value)))
     }));
-    add("GetPartsObscuringTarget", method(parts_obscuring));
+    add("GetPartsObscuringTarget", query::raising(parts_obscuring));
     let mut hooks = engine.hooks.borrow_mut();
     if let (Some(camera_type), Some(scriptable)) = (engine.reflection.name_id("CameraType"), engine.reflection.enum_item("CameraType", "Scriptable")) {
         hooks.property_changed.push(Box::new(move |state, id, name| {
