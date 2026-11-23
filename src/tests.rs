@@ -11725,6 +11725,53 @@ fn a_collision_group_change_costs_what_a_server_spends_on_the_workspaces_parts()
     );
 }
 
+/// A tree coming into the Workspace works out its parts' CollisionGroupId, at what a group change spends on them (cost.rs
+/// COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED): 1,000 parts of a registered group, whose ids change from Default's as they come
+/// in, read 380 us more than 1,000 of Default, whose ids stay. Taken out and brought back, they keep their ids and read alike. The
+/// ids used to change at no charge.
+#[test]
+fn parts_coming_into_the_workspace_pay_for_the_collision_group_ids_they_take() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        local RS = game:GetService("ReplicatedStorage")
+        PhysicsService:RegisterCollisionGroup("A")
+        local function Model(Group)
+            local M = Instance.new("Model")
+            for _ = 1, 1000 do
+                local Part = Instance.new("Part")
+                Part.Anchored = true
+                Part.CollisionGroup = Group
+                Part.Parent = M
+            end
+            M.Parent = RS
+            return M
+        end
+        local Grouped, Plain = Model("A"), Model("Default")
+        -- (the frame's first entry into the Workspace runs cold: cost.rs Path::Enter)
+        Instance.new("Part").Parent = workspace
+        local function Enter(M)
+            local Start = os.clock()
+            M.Parent = workspace
+            return (os.clock() - Start) * 1e6
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        Within("1,000 ids that change", Enter(Grouped) - Enter(Plain), 379.9, 380.1)
+        assert(Grouped:GetChildren()[1].CollisionGroupId == 1, "the group's id")
+        Grouped.Parent, Plain.Parent = RS, RS
+        Within("1,000 ids that stay", Enter(Grouped) - Enter(Plain), -0.1, 0.1)
+        "#,
+    );
+}
+
 /// On a loopback server a frame's collision-group changes reach the client as one snapshot of the registry as the frame left it,
 /// in the place of the first change (loopback/replicate.rs flush): 101 changes log one marker (each logged a snapshot of its own,
 /// so the client took every part's id in 101 times), the flush reads the registry then, and the next change logs a marker again.

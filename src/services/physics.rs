@@ -48,7 +48,8 @@
 //!   ree works it out once the run has touched collision groups (a group registered or created, or a script's write to
 //!   either property): until then a part keeps the id it was loaded with.
 //! - What a group change costs: a server spends 1.7 ns on each part in the Workspace and 0.38 us more on each whose id
-//!   changes (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED), charged as the parts are worked out.
+//!   changes (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED), charged as the parts are worked out. A tree coming into
+//!   the Workspace pays the same for the parts it brings, as they take their ids.
 
 use std::{
     cell::{Cell, RefCell},
@@ -279,9 +280,14 @@ struct Resolved {
 impl Resolved {
     /// What a server spends on them beyond the call (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED).
     fn charge(self, engine: &Engine) {
+        self.charge_in(&engine.state.borrow());
+    }
+
+    /// [`Resolved::charge`] where the state is borrowed already.
+    fn charge_in(self, state: &State) {
         let seconds = self.parts as f64 * crate::cost::COLLISION_GROUP_PART + self.changed as f64 * crate::cost::COLLISION_GROUP_CHANGED;
         if seconds > 0.0 {
-            engine.state.borrow().sched.charge(seconds);
+            state.sched.charge(seconds);
             crate::boundary::add_cost(seconds);
         }
     }
@@ -572,7 +578,8 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         }));
     }
 
-    // A part that comes into the Workspace (with the model it is in) takes its group's id
+    // A part that comes into the Workspace (with the model it is in) takes its group's id, at what a group change spends on the
+    // parts it works out ([`Resolved::charge`])
     let weak: Weak<Engine> = Rc::downgrade(engine);
     engine.hooks.borrow_mut().hierarchy_changed.push(Box::new(move |state, id, old, new| {
         if !groups.registry.borrow().active {
@@ -589,8 +596,10 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         parts.extend(state.dom.descendants_where(id, |instance| reflection.class(instance.class).is_a(groups.base_part)));
         let hooks = engine.hooks.borrow();
         let registry = groups.registry.borrow();
+        let mut resolved = Resolved { parts: parts.len(), changed: 0 };
         for part in parts {
-            groups.resolve(state, reflection, &hooks, &registry, part);
+            resolved.changed += usize::from(groups.resolve(state, reflection, &hooks, &registry, part));
         }
+        resolved.charge_in(state);
     }));
 }
