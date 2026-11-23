@@ -1826,7 +1826,7 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
             }
             Base::IsDescendantOf => {
                 let result = match arg_instance(state, 2) {
-                    Some(ancestor) => engine.state.borrow().dom.is_descendant_of(id, ancestor),
+                    Some(ancestor) => engine.state.borrow().dom.is_descendant_of_home(id, ancestor),
                     // (every instance is a descendant of nil, as in Roblox: lua/instance.rs)
                     None => ffi::lua_type(state, 2) <= ffi::LUA_TNIL,
                 };
@@ -1835,7 +1835,7 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
             }
             Base::IsAncestorOf => {
                 let result = match arg_instance(state, 2) {
-                    Some(descendant) => engine.state.borrow().dom.is_descendant_of(descendant, id),
+                    Some(descendant) => engine.state.borrow().dom.is_descendant_of_home(descendant, id),
                     None => false,
                 };
                 ffi::lua_pushboolean(state, result as c_int);

@@ -404,7 +404,7 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
                     setter(lua, engine, id, value.clone())?;
                     // (a behaviour's setter stores through the engine: priced as a write that changed)
                     let state = engine.state.borrow();
-                    let placed = engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of(id, engine.world().workspace);
+                    let placed = engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of_home(id, engine.world().workspace);
                     let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), true, placed) + write_touch(&state, id, name, engine.reflection.name(name), true);
                     state.sched.charge(price);
                     cross_set(engine, &state, id, name, price, true);
@@ -522,7 +522,7 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
     let changed = set_property(engine, id, name, value);
     let state = engine.state.borrow();
     let class = state.dom.at(id).class;
-    let placed = changed && engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of(id, engine.world().workspace);
+    let placed = changed && engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of_home(id, engine.world().workspace);
     let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), changed, placed)
         * crate::cost::place_write_scale(&engine.options.place_prices, engine.options.place_id, engine.reflection.name(name), placed);
     let mut paid = price + write_touch(&state, id, name, engine.reflection.name(name), changed);
@@ -750,7 +750,7 @@ pub fn pivot_cold(engine: &Engine, id: InstanceId) -> f64 {
     let state = engine.state.borrow();
     let mut touched = state.sched.touched.borrow_mut();
     let root_cold = touched.take_last_cold();
-    if !touched.workspace.is_some_and(|workspace| state.dom.is_descendant_of(id, workspace)) {
+    if !touched.workspace.is_some_and(|workspace| state.dom.is_descendant_of_home(id, workspace)) {
         return 0.0;
     }
     touched.count(|ops| ops.pivots += 1);
@@ -1307,7 +1307,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     }
     let is_descendant_of = method(|_, engine, id, args| {
         let result = match args.instance(1) {
-            Some(ancestor) => engine.state.borrow().dom.is_descendant_of(id, ancestor),
+            Some(ancestor) => engine.state.borrow().dom.is_descendant_of_home(id, ancestor),
             // every instance is a descendant of nil (measured likewise: IsDescendantOf(nil) is true)
             None => args.get(1).is_nil(),
         };
@@ -1317,7 +1317,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     behaviors.add_method(base, K::isDescendantOf as NameId, is_descendant_of);
     behaviors.add_method(base, K::IsAncestorOf as NameId, method(|_, engine, id, args| {
         let result = match args.instance(1) {
-            Some(descendant) => engine.state.borrow().dom.is_descendant_of(descendant, id),
+            Some(descendant) => engine.state.borrow().dom.is_descendant_of_home(descendant, id),
             None => false,
         };
         Ok(values([LuaValue::Boolean(result)]))

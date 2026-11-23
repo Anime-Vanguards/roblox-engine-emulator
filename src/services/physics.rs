@@ -262,7 +262,7 @@ impl Groups {
         if !core::raw_set(&mut state, reflection, &hooks, part, self.group, Value::String(Str::new(name))) {
             return;
         }
-        if engine.world.get().is_some_and(|world| state.dom.is_descendant_of(part, world.workspace)) {
+        if engine.world.get().is_some_and(|world| state.dom.is_descendant_of_home(part, world.workspace)) {
             self.resolve(&mut state, reflection, &hooks, &self.registry.borrow(), part);
         }
     }
@@ -578,7 +578,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         }
         let Some(engine) = weak.upgrade() else { return };
         let Some(world) = engine.world.get() else { return };
-        let inside = |parent: Option<InstanceId>| parent.is_some_and(|parent| parent == world.workspace || state.dom.is_descendant_of(parent, world.workspace));
+        let inside = |parent: Option<InstanceId>| parent.is_some_and(|parent| parent == world.workspace || state.dom.is_descendant_of_home(parent, world.workspace));
         if !inside(new) || inside(old) {
             return;
         }

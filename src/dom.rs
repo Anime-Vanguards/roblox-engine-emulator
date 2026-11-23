@@ -829,6 +829,33 @@ impl Dom {
         self.homes.get(id.index as usize).copied().flatten()
     }
 
+    /// The next ancestor of `id` to look at for one of a home class: its home while the dom keeps homes, else its parent.
+    /// Followed from an instance, it meets every ancestor of a home class, nearest first: one step per home above a kept
+    /// instance, however deep it is.
+    #[inline]
+    pub fn home_step(&self, id: InstanceId) -> Option<InstanceId> {
+        if self.home_classes.is_empty() { self.at(id).parent } else { self.home(id) }
+    }
+
+    /// Whether the live instance `id` is a descendant of `ancestor` ([`Dom::is_descendant_of`]'s answer), read from the homes
+    /// when `ancestor` is of a home class (the Workspace, a WorldModel) and the dom keeps them: one lookup per home above `id`,
+    /// however deep it is. Any other ancestor, a stale one included, is looked for up the tree (as is a stale `id`, which
+    /// panics there).
+    pub fn is_descendant_of_home(&self, id: InstanceId, ancestor: InstanceId) -> bool {
+        let home_class = |node: &Instance| self.home_classes.get(node.class as usize).copied().unwrap_or(false);
+        if !self.get(ancestor).is_some_and(home_class) || self.get(id).is_none() {
+            return self.is_descendant_of(id, ancestor);
+        }
+        let mut home = self.home(id);
+        while let Some(node) = home {
+            if node == ancestor {
+                return true;
+            }
+            home = self.home(node);
+        }
+        false
+    }
+
     fn is_home(&self, id: InstanceId) -> bool {
         !self.home_classes.is_empty() && self.home_classes.get(self.at(id).class as usize).copied().unwrap_or(false)
     }
@@ -1490,7 +1517,8 @@ mod tests {
     /// and `attach` / `detach`), moved into and out of WorldModels and JointsService and between chains 2,000 deep, put in
     /// another's place (`replace_child` after the children were handed over, as a project mount does), freed and made again in
     /// the same slot, and given a WorldRoot's class or a Folder's where they stand (`set_class`, a placeholder revealed); homes
-    /// kept from a tree that already existed too.
+    /// kept from a tree that already existed too. Whether an instance is below one of them, read from the homes, is what the walk
+    /// says too.
     #[test]
     fn homes_are_what_a_walk_up_the_tree_finds() {
         let reflection = Reflection::shared().unwrap();
@@ -1528,6 +1556,18 @@ mod tests {
             }
         };
         check(&dom, &live, "kept from the start");
+        // whether each is below the Workspace, JointsService or a WorldModel, read from the homes (is_descendant_of_home), is what
+        // the walk up the tree says; a stale ancestor is below nothing
+        let check_below = |dom: &Dom, live: &[InstanceId], stale: Option<InstanceId>, step: &str| {
+            let ancestors: Vec<InstanceId> =
+                std::iter::once(workspace).chain(live.iter().copied().filter(|&id| id != workspace && is_home(dom, id)).take(3)).chain(stale).collect();
+            for &id in live {
+                for &ancestor in &ancestors {
+                    assert_eq!(dom.is_descendant_of_home(id, ancestor), dom.is_descendant_of(id, ancestor), "{step}: whether {} is below {ancestor:?}", dom.full_name(&reflection, id));
+                }
+            }
+        };
+        check_below(&dom, &live, None, "kept from the start");
         // two chains 2,000 deep, one in the Workspace, one in storage
         let deep = |dom: &mut Dom, live: &mut Vec<InstanceId>, top: InstanceId| {
             let mut at = top;
@@ -1542,6 +1582,8 @@ mod tests {
         let deep_in_world = deep(&mut dom, &mut live, workspace);
         let deep_in_storage = deep(&mut dom, &mut live, storage);
         check(&dom, &live, "the chains");
+        check_below(&dom, &live, None, "the chains");
+        let mut stale = None;
         let kinds = ["Folder", "Part", "Model", "WorldModel", "Weld", "Folder", "Part"];
         let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = |bound: usize| {
@@ -1603,6 +1645,7 @@ mod tests {
                     dom.detach(leaf);
                     dom.free(leaf);
                     live.swap_remove(index);
+                    stale = Some(leaf);
                 }
                 // given another class where it stands
                 _ => {
@@ -1614,8 +1657,12 @@ mod tests {
             if round % 100 == 0 {
                 check(&dom, &live, &format!("round {round}"));
             }
+            if round % 500 == 0 {
+                check_below(&dom, &live, stale, &format!("round {round}"));
+            }
         }
         check(&dom, &live, "the end");
+        check_below(&dom, &live, stale, "the end");
         // a JointsService between: its own home is none, those below it have it
         let weld = dom.create(&reflection, class("Weld"));
         dom.attach(weld, service);

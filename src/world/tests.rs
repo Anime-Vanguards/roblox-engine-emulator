@@ -1498,6 +1498,87 @@ fn assembly_lookups_cost_the_same_however_deep_their_parts_are() {
     assert!(deep < 0.15 && apart < 0.15, "two passes of 1,040 lookups took {deep:.3} s 10,000 deep and {apart:.3} s 4,000 deep apart, {shallow:.3} s in the Workspace");
 }
 
+/// A write that changes a part's property is priced by whether the part is in the Workspace (cost.rs write), read from the
+/// homes the dom keeps (dom.rs Dom::is_descendant_of_home), so writes to a part 10,000 folders deep cost about as much host work
+/// as to one right in its parent, and the work clock charges the same: Transparency, Position (a view's setter), CFrame and
+/// PivotTo, to parts in the Workspace, in a WorldModel in it and out of it. Each write used to walk up from the part to the
+/// Workspace, or to the top of the tree when it was not in it: 20 us at that depth.
+#[test]
+fn part_writes_cost_the_same_however_deep_the_part_is() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        -- (a chain of folders `Depth` deep holding `Inner`, made from the bottom up so that making it walks nothing)
+        local function Wrap(Inner, Depth)
+            local Outer = Inner
+            for _ = 1, Depth do
+                local Folder = Instance.new("Folder")
+                Outer.Parent = Folder
+                Outer = Folder
+            end
+            return Outer
+        end
+        local function Scene(X, Depth, Where)
+            local Part = Instance.new("Part")
+            Part.Anchored, Part.CanCollide, Part.Size, Part.CFrame = true, false, Vector3.one, CFrame.new(X, 10, 0)
+            Wrap(Part, Depth).Parent = Where
+            return Part
+        end
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        local Storage = game:GetService("ReplicatedStorage")
+        shared.Parts = {
+            Shallow = Scene(0, 0, workspace), Deep = Scene(10, 10000, workspace),
+            WorldShallow = Scene(20, 0, World), World = Scene(30, 10000, World),
+            LooseShallow = Scene(40, 0, Storage), Loose = Scene(50, 10000, Storage),
+        }
+        shared.Work = {}
+        local function Pass(Part)
+            local X = Part.Position.X
+            for I = 1, 2000 do
+                Part.Transparency = I % 2 * 0.5
+                Part.Position = Vector3.new(X, 10 + I % 2, 0)
+                Part.CFrame = CFrame.new(X, 12 + I % 2, 0)
+                Part:PivotTo(CFrame.new(X, 14 + I % 2, 0))
+            end
+        end
+        -- each part twice, the second pass timed (the first warms the members and the part the frame touches)
+        function shared.Use(Name)
+            Pass(shared.Parts[Name])
+            local Start = os.clock()
+            Pass(shared.Parts[Name])
+            shared.Work[Name] = os.clock() - Start
+        end
+        "#,
+    );
+    let mut host = std::collections::HashMap::new();
+    for name in ["Shallow", "Deep", "WorldShallow", "World", "LooseShallow", "Loose"] {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.Use(\"{name}\")"));
+        host.insert(name, start.elapsed().as_secs_f64());
+    }
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Work = shared.Work
+        for _, Pair in { { "Deep", "Shallow" }, { "World", "WorldShallow" }, { "Loose", "LooseShallow" } } do
+            local Deep, Shallow = Work[Pair[1]], Work[Pair[2]]
+            assert(Shallow > 0 and math.abs(Deep - Shallow) < 1e-9, `{Pair[1]}'s pass cost {Deep} s of work where {Pair[2]}'s {Shallow}`)
+        end
+        assert(math.abs(Work.World - Work.Deep) < 1e-9, `a part in a WorldModel in the Workspace pays {Work.World} s where one in the Workspace {Work.Deep}`)
+        assert(Work.Loose < Work.Deep - 8000 * 0.1e-6, `a part out of the Workspace pays {Work.Loose} s, one in it {Work.Deep}`)
+        "#,
+    );
+    for (deep, shallow) in [("Deep", "Shallow"), ("World", "WorldShallow"), ("Loose", "LooseShallow")] {
+        let (deep_s, shallow_s) = (host[deep], host[shallow]);
+        assert!(deep_s < 2.0 * shallow_s + 0.05, "two passes of 8,000 writes took {deep_s:.3} s of host time to a part 10,000 folders deep ({deep}), {shallow_s:.3} s right in its parent");
+    }
+}
+
 /// The physics step asks which world each loose part is in from the homes the dom keeps, and whether a parent holds a Humanoid
 /// once a step for each parent: 200 loose parts at the bottom of a chain of 20,000 folders fly for 60 frames, and 5,000 loose
 /// parts in one folder for 30, on little host work. The step used to walk up from every loose part to the Workspace each frame

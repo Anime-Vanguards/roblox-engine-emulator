@@ -618,7 +618,7 @@ fn reparent(
     // EnterPart); each instance's entry is noted, so a destroy knows the engine took it into its frame work: destroy_live)
     let workspace = state.sched.touched.borrow().workspace;
     if let Some(workspace) = workspace {
-        let placed = |state: &State, parent: Option<InstanceId>| parent.is_some_and(|parent| parent == workspace || state.dom.is_descendant_of(parent, workspace));
+        let placed = |state: &State, parent: Option<InstanceId>| parent.is_some_and(|parent| parent == workspace || state.dom.is_descendant_of_home(parent, workspace));
         let (was_placed, now_placed) = (placed(state, old_parent), placed(state, new_parent));
         if was_placed != now_placed {
             let mut touched = state.sched.touched.borrow_mut();

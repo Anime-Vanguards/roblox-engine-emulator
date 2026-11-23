@@ -403,7 +403,7 @@ impl Index {
                 removed += u64::from(self.remove(&mut state.dom, id));
                 continue;
             }
-            let inside = state.dom.is_descendant_of(id, workspace);
+            let inside = state.dom.is_descendant_of_home(id, workspace);
             self.walk.clear();
             self.walk.push(id);
             while let Some(node) = self.walk.pop() {

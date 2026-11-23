@@ -196,14 +196,14 @@ pub fn index_parts(state: &mut State) {
     state.cameras.unindexed.clear();
 }
 
-/// Whether `node` is the Workspace or in it.
+/// Whether `node` is the Workspace or in it: a look at `node` and the homes above it (dom.rs Dom::home_step), however deep it is.
 fn in_workspace(state: &State, workspace: ClassId, node: InstanceId) -> bool {
     let mut current = Some(node);
     while let Some(id) = current {
         if state.dom.at(id).class == workspace {
             return true;
         }
-        current = state.dom.parent_of(id);
+        current = state.dom.home_step(id);
     }
     false
 }
