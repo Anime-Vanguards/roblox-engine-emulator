@@ -370,12 +370,12 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // BindableFunction:Invoke's copies of its callback's results and of its arguments (lua/bindable.rs), whose tables
     // start above the call's frame: the results alone, `self` below the arguments
     let e = engine.clone();
-    r.set("Copied", super::wrapped(lua, engine, move |lua, values| {
+    r.set("Copied", super::wrapped(lua, engine, "Copied", move |lua, values| {
         let height = values.len();
         super::bindable::copied(lua, &e, values, height)
     })?)?;
     let e = engine.clone();
-    r.set("CopiedArguments", super::wrapped(lua, engine, move |lua, values| {
+    r.set("CopiedArguments", super::wrapped(lua, engine, "CopiedArguments", move |lua, values| {
         let height = values.len() + 1;
         super::bindable::copied(lua, &e, values, height)
     })?)?;

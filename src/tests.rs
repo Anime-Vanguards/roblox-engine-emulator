@@ -849,7 +849,8 @@ fn an_attribute_holds_an_instance_as_a_handle() {
 }
 
 /// Texts and forms measured in a playing client (Studio 0.744; tools/parity/probes/hierarchy.luau, values.luau,
-/// coercion.luau, frame_phases.luau, lifetime.luau).
+/// coercion.luau, frame_phases.luau, lifetime.luau; `typeof()` from a function is at its line: Studio 0.747,
+/// engine_functions.luau).
 #[test]
 fn parents_enums_and_casts_answer_as_a_playing_client_does() {
     let (lua, engine) = start();
@@ -888,7 +889,7 @@ fn parents_enums_and_casts_answer_as_a_playing_client_does() {
             "print: ok Enum.Material.Wood",
             "print: Unable to assign property Material. Invalid value \"wood\" for enum Material Enum.Material.Wood",
             "print: Unable to assign property CFrame. CoordinateFrame expected, got Vector3",
-            "print: missing argument #1 string",
+            "print: Test:13: missing argument #1 string",
             "print: Unable to cast string to int",
             "print: Unable to cast value to Object ok Unable to cast string to double",
             "print: nil",
@@ -9135,12 +9136,12 @@ fn the_boundary_profiler_counts_crossings_per_call_site() {
     let host = "VM.host call (datatype op or engine function)";
     let datatype = row("datatype", host, 9);
     assert!(datatype["count"].as_u64().unwrap() >= 1 && datatype["cost_ms_per_s"].as_f64().unwrap() > 0.0, "{datatype}");
-    // (the prelude's task.spawn is a host call too, counted apart from the crossings; the line before CFrame.new has none, as the
+    // (task.spawn's call is counted apart from the crossings; the line before CFrame.new has none, as the
     // import is resolved when the script loads: it used to be looked up through the engine's globals at each run)
     assert_eq!(report["crossings"].as_u64(), Some(report["by_site_count"].as_array().unwrap().iter().filter(|row| row["kind"] != "datatype").map(|row| row["count"].as_u64().unwrap()).sum()));
-    // (the prelude's task.spawn and the datatype operations; an import's lookup through the engine's globals made one more before
-    // imports were resolved at load)
-    assert!(report["host_calls"].as_u64().unwrap() >= 2);
+    // (the datatype operations; task.spawn is a C function, a C call as a client's is, where the prelude's was a host call; an
+    // import's lookup through the engine's globals made one more before imports were resolved at load)
+    assert!(report["host_calls"].as_u64().unwrap() >= 1);
     // the Instance API's charges are accounted for, by member and by module, over one frame of 1/60 s
     assert!(report["attributed_share_of_instance_api_charges"].as_f64().unwrap() > 0.9, "{text}");
     assert!((report["emulated_seconds"].as_f64().unwrap() - 1.0 / 60.0).abs() < 1e-9);
@@ -11777,4 +11778,192 @@ fn parity_behaviors_move_to_color_quantization_errors_and_client_script_context(
     assert!(out.contains(&"print: ok".to_string()), "{out:?}");
     let all = lines(&engine);
     assert!(all.iter().any(|l| l.contains("Error occurred, no output from Luau.")), "{all:?}");
+}
+
+/// Every engine function a script reads is one C function named as a client names it, with Luau's arity of a C function
+/// (measured, Studio 0.747, a playing client and a server: tools/parity/probes/engine_functions.luau): a global, a library's
+/// function, a datatype's constructor and method, an enum's, an Instance's and a service's method read as values (one written
+/// in the engine's Luau too), a signal's. The old code served most of them as the prelude's Luau (`rur.prelude` with its lines,
+/// a wrapper of no name), the service stubs' Luau or unnamed mlua functions.
+#[test]
+fn engine_functions_are_named_c_functions() {
+    assert_script(
+        r#"
+        local Part = Instance.new("Part")
+        local Cases = {
+            { print, "print" }, { warn, "warn" }, { require, "require" }, { wait, "wait" }, { Wait, "Wait" }, { spawn, "spawn" },
+            { Spawn, "Spawn" }, { delay, "delay" }, { tick, "tick" }, { time, "time" }, { elapsedTime, "elapsedTime" },
+            { settings, "settings" }, { UserSettings, "UserSettings" }, { version, "version" }, { collectgarbage, "collectgarbage" },
+            { loadstring, "loadstring" }, { task.wait, "wait" }, { task.spawn, "spawn" }, { task.defer, "defer" },
+            { task.delay, "delay" }, { task.cancel, "cancel" }, { task.synchronize, "synchronize" }, { coroutine.create, "create" },
+            { coroutine.wrap, "wrap" }, { debug.profilebegin, "profilebegin" }, { utf8.graphemes, "graphemes" },
+            { utf8.nfcnormalize, "nfcnormalize" }, { os.clock, "clock" }, { os.time, "time" }, { os.date, "date" },
+            { Instance.fromExisting, "fromExisting" }, { Vector3.new, "new" }, { Vector3.fromNormalId, "fromNormalId" },
+            { CFrame.new, "new" }, { CFrame.Angles, "Angles" }, { Color3.fromRGB, "fromRGB" }, { UDim2.fromOffset, "fromOffset" },
+            { BrickColor.new, "new" }, { PhysicalProperties.new, "newPhysicalPropertiesWithClampedMsgClosure" },
+            { TweenInfo.new, "new" }, { Random.new, "new" }, { DateTime.now, "now" }, { Font.new, "new" }, { RaycastParams.new, "new" },
+            { Path2DControlPoint.new, "new" }, { SharedTable.new, "new" }, { SharedTable.size, "size" },
+            { CFrame.new().Lerp, "Lerp" }, { Color3.new().ToHex, "ToHex" }, { Vector3.one.FuzzyEq, "FuzzyEq" },
+            { Random.new(1).NextInteger, "NextInteger" }, { Enum.GetEnums, "GetEnums" }, { Enum.Material.GetEnumItems, "GetEnumItems" },
+            { game.GetService, "GetService" }, { workspace.Raycast, "Raycast" }, { Part.GetPivot, "GetPivot" },
+            { game:GetService("SharedTableRegistry").GetSharedTable, "GetSharedTable" },
+            { game:GetService("LogService").GetLogHistory, "GetLogHistory" }, { Part.Touched.Connect, "Connect" },
+        }
+        for Index, Case in Cases do
+            local Source, Line, Name = debug.info(Case[1], "sln")
+            local Arity, Vararg = debug.info(Case[1], "a")
+            assert(Source == "[C]" and Line == -1 and Name == Case[2] and Arity == 0 and Vararg, `{Index} {Case[2]}: {Source} {Line} {Name} {Arity} {Vararg}`)
+        end
+        "#,
+    );
+}
+
+/// An error raised inside an engine function has no frame of its own, as a client's has none (measured, Studio 0.747:
+/// engine_functions.luau): an xpcall handler's traceback goes from the handler straight to the script line that called it,
+/// whether the function's work is Rust (task.spawn, SharedTable.size, a method read as a value), the engine's Luau (a service
+/// method written in it, called with `.` or `:`, a datatype constructor, a vector method in both forms) or a C body (coroutine,
+/// typeof), and an argument error is at that line; one raised in a callback the engine function calls (print's `__tostring`)
+/// lists the callback's line first, raised from there, unprotected. The old code listed the prelude's Pass and wrapper, the
+/// service stubs' lines, and raised task.spawn's, typeof's and collectgarbage's argument errors without a position.
+#[test]
+fn an_error_inside_an_engine_function_has_no_frame_of_its_own() {
+    assert_script(
+        r#"
+        local Chunk = debug.info(1, "s")
+        local Registry = game:GetService("SharedTableRegistry")
+        local function Handler(Message)
+            return { Message = tostring(Message), Trace = debug.traceback() }
+        end
+        local Cases = {
+            { function() task.spawn(5) end, true },
+            { function() task.delay("x", print) end, true },
+            { function() SharedTable.size(5) end, true },
+            { function() game.GetService(game, "NotAService") end, false },
+            { function() Registry:GetSharedTable(nil) end, false },
+            { function() Registry.GetSharedTable(Registry, nil) end, false },
+            { function() CFrame.new("x") end, true },
+            { function() Path2DControlPoint.new(5) end, true },
+            { function() coroutine.create(5) end, true },
+            { function() typeof() end, true },
+            { function() collectgarbage("collect") end, true },
+            { function() Vector3.one.FuzzyEq(Vector3.one, 5) end, true },
+            { function() Vector3.one:FuzzyEq(5) end, true },
+        }
+        for Index, Case in Cases do
+            local Line = debug.info(Case[1], "l")
+            local _, Got = xpcall(Case[1], Handler)
+            local Frames = string.split(Got.Trace, "\n")
+            assert(string.find(Frames[1], "function Handler", 1, true) and Frames[2] == `{Chunk}:{Line}`, `{Index}: {Got.Trace}`)
+            local Positioned = string.sub(Got.Message, 1, #Chunk + #tostring(Line) + 3) == `{Chunk}:{Line}: `
+            assert(Positioned == Case[2], `{Index}: {Got.Message}`)
+        end
+        local Inner, Outer
+        local Thrower = setmetatable({}, { __tostring = function() Inner = debug.info(1, "l") error("from tostring") end })
+        local _, Got = xpcall(function() Outer = debug.info(1, "l") print(Thrower) end, Handler)
+        local Frames = string.split(Got.Trace, "\n")
+        assert(Frames[2] == `{Chunk}:{Inner} function __tostring` and Frames[3] == `{Chunk}:{Outer}`, Got.Trace)
+        assert(Got.Message == `{Chunk}:{Inner}: from tostring`, Got.Message)
+        "#,
+    );
+}
+
+/// A callback an engine function calls from its own frame finds it one level up, as a client's does (measured, Studio 0.747:
+/// in a `__tostring` print calls, level 2 is `[C] print`), and a thread waiting in an engine function shows only the line that
+/// called it. The old code's print was the prelude's Luau (Stringify, then Print, above the `__tostring`), and a waiting thread
+/// listed the prelude's wait.
+#[test]
+fn engine_functions_are_the_frames_their_callbacks_and_waiters_see() {
+    assert_script(
+        r#"
+        local Seen
+        pcall(print, setmetatable({}, { __tostring = function() Seen = table.pack(debug.info(2, "sln")) error("stop") end }))
+        assert(Seen[1] == "[C]" and Seen[2] == -1 and Seen[3] == "print", `{Seen[1]} {Seen[2]} {Seen[3]}`)
+        local Chunk = debug.info(1, "s")
+        local Event = Instance.new("BindableEvent")
+        local Folder = Instance.new("Folder")
+        local Waiters = {
+            { function() task.wait(1) end, debug.info(1, "l") },
+            { function() wait(1) end, debug.info(1, "l") },
+            { function() Event.Event:Wait() end, debug.info(1, "l") },
+            { function() Folder:WaitForChild("Missing", 1) end, debug.info(1, "l") },
+            { function() Folder.WaitForChild(Folder, "Missing", 1) end, debug.info(1, "l") },
+        }
+        for Index, Waiter in Waiters do
+            local Thread = task.spawn(Waiter[1])
+            local Trace = string.gsub(debug.traceback(Thread), "\n$", "")
+            assert(coroutine.status(Thread) == "suspended" and Trace == `{Chunk}:{Waiter[2]}`, `{Index}: {Trace}`)
+        end
+        "#,
+    );
+}
+
+/// The engine functions that wait yield from their C function and return what the thread is resumed with, as before: task.wait
+/// its elapsed time, wait two numbers, a signal's Wait the values fired, WaitForChild the child, and a require of a module that
+/// another thread is loading waits for it, while one whose chunk waits keeps its requirer waiting.
+#[test]
+fn engine_functions_that_wait_yield_from_their_c_function() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Event = Instance.new("BindableEvent")
+        local Folder = Instance.new("Folder")
+        local Elapsed = task.wait(0.05)
+        print("task.wait", type(Elapsed), Elapsed > 0)
+        local A, B = wait(0.05)
+        print("wait", type(A), type(B))
+        task.delay(0.02, function() Event:Fire("fired", 2) end)
+        print("signal", Event.Event:Wait())
+        task.delay(0.02, function() local Child = Instance.new("Folder") Child.Name = "Child" Child.Parent = Folder end)
+        print("child", Folder:WaitForChild("Child").Name, (Folder.WaitForChild(Folder, "Child").Name))
+        local Module = Instance.new("ModuleScript")
+        __setSource(Module, "task.wait(0.02) return 'late'")
+        local Other
+        task.spawn(function() Other = require(Module) end)
+        print("module", require(Module), Other)
+        "#,
+    );
+    for _ in 0..30 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    let output = lines(&engine);
+    for expected in ["print: task.wait number true", "print: wait number number", "print: signal fired 2", "print: child Child Child", "print: module late late"] {
+        assert!(output.contains(&expected.to_string()), "{expected}: {output:?}");
+    }
+}
+
+/// A script's call of an engine function is one call, whatever its work is: the Rust or engine Luau it runs for the call is part
+/// of it (patches/luau/20-engine-functions.patch). A library's function (SharedTable's, print) is a C function's call and first
+/// call in a frame (cost.rs LUAU_CCALL, LUAU_COLD_CFUNC), as a client's is, where the engine Luau that stood for print was a host
+/// call; what the engine serves (a datatype's constructor, a service method read as a value) keeps the price of the engine Luau
+/// that stood for it, a host call (LUAU_HOSTCALL, the measured price of a datatype's operation) and its first call (LUAU_COLD_HOSTFUNC).
+#[test]
+fn an_engine_function_is_one_call_priced_by_its_kind() {
+    use crate::cost::{COLD_CFUNCS_SLOT, COLD_HOSTFUNCS_SLOT};
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    // (each function made a frame before: one a frame makes reads warm in it)
+    run(&lua, &engine, "local _ = CFrame.new, SharedTable.new, SharedTable.size, game:GetService('SharedTableRegistry').GetSharedTable");
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let measure = |calls: &str| {
+        run(&lua, &engine, &format!("task.wait()\n{calls}"));
+        let before = vm_counts(&engine);
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let after = vm_counts(&engine);
+        (
+            after.ccalls - before.ccalls,
+            after.hostcalls - before.hostcalls,
+            after.hostops[COLD_CFUNCS_SLOT] - before.hostops[COLD_CFUNCS_SLOT],
+            after.hostops[COLD_HOSTFUNCS_SLOT] - before.hostops[COLD_HOSTFUNCS_SLOT],
+        )
+    };
+    // (C calls, host calls, first calls of C functions, first calls of served ones)
+    let constructor = measure("local C = CFrame.new(1, 2, 3) C = CFrame.new(3, 2, 1)");
+    assert_eq!(constructor, (0, 2, 0, 1), "CFrame.new twice");
+    let library = measure("local T = SharedTable.new() SharedTable.size(T) SharedTable.size(T) print(1) print(2)");
+    assert_eq!(library, (5, 0, 3, 0), "SharedTable.new, size twice, print twice");
+    let method = measure("local R = game:GetService('SharedTableRegistry') local Get = R.GetSharedTable Get(R, 'a') Get(R, 'b')");
+    assert_eq!((method.0, method.1, method.3), (1, 2, 1), "GetService, then GetSharedTable read as a value twice: {method:?}");
 }

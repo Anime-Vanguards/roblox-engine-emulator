@@ -142,7 +142,7 @@ local function MakeLerp(Dotted)
 end
 
 local function MakeFuzzyEq(Dotted)
-	local Level = if Dotted then 2 else 3
+	local Level = if Dotted then 3 else 4 -- (the line past the method's C function, lua/cfunction.rs, and a `:` call's __namecall)
 	return function(...)
 		local Count = select("#", ...)
 		local Self, Other, Epsilon = ...
@@ -158,7 +158,7 @@ local function MakeFuzzyEq(Dotted)
 end
 
 local function MakeAngle(Dotted)
-	local Level = if Dotted then 2 else 3
+	local Level = if Dotted then 3 else 4 -- (as FuzzyEq's)
 	return function(...)
 		local Count = select("#", ...)
 		local Self, Other, Axis = ...
@@ -196,13 +196,13 @@ local VectorMethods = {
 	Min = Native.Min,
 	Lerp = Native.Lerp,
 	lerp = Native.Lerp,
-	FuzzyEq = MakeFuzzyEq(true),
-	Angle = MakeAngle(true),
+	FuzzyEq = R.EngineFunction("FuzzyEq", true, true, MakeFuzzyEq(true)),
+	Angle = R.EngineFunction("Angle", true, true, MakeAngle(true)),
 }
 
 local ColonExtras = {
-	FuzzyEq = MakeFuzzyEq(false),
-	Angle = MakeAngle(false),
+	FuzzyEq = R.EngineFunction("FuzzyEq", true, true, MakeFuzzyEq(false)),
+	Angle = R.EngineFunction("Angle", true, true, MakeAngle(false)),
 }
 
 -- The VM answers a vector's own members: x / y / z in either case (a key the compiler could not fold, `v[axis]`,

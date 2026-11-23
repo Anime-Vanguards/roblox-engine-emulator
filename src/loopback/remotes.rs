@@ -170,7 +170,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
     }
     drop(behaviors);
     // RemoteFunction: the Luau wrappers raise a callback's error in the caller
-    let call = crate::lua::wrapped(lua, engine, {
+    let call = crate::lua::wrapped(lua, engine, "Invoke", {
         let engine = engine.clone();
         move |lua, args| invoke(lua, &engine, side, Args::new(args))
     })?;

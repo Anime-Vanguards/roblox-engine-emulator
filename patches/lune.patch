@@ -8082,3 +8082,45 @@ index f8adabf..485b514 100644
                  }
                  Ok(Vector2(result))
              });
+diff --git a/crates/lune-roblox/src/datatypes/script_error.rs b/crates/lune-roblox/src/datatypes/script_error.rs
+--- a/crates/lune-roblox/src/datatypes/script_error.rs
++++ b/crates/lune-roblox/src/datatypes/script_error.rs
+@@ -20,6 +20,17 @@ pub fn is_namecall() -> bool {
+     IN_NAMECALL.with(|depth| depth.get() > 0)
+ }
+ 
++/// Whether the function at a level of the running thread's stack is a host's engine function: a C function standing for the
++/// client's own C function a script called, which the host does its work under ([`set_engine_frame`]).
++pub type EngineFrame = unsafe fn(*mut ffi::lua_State, std::ffi::c_int) -> bool;
++
++static ENGINE_FRAME: std::sync::OnceLock<EngineFrame> = std::sync::OnceLock::new();
++
++/// Gives [`caller_position`] the host's test for its engine functions' frames, which it looks through (once a process).
++pub fn set_engine_frame(test: EngineFrame) {
++    let _ = ENGINE_FRAME.set(test);
++}
++
+ struct Pending {
+     message: String,
+     positioned: bool,
+@@ -86,7 +97,8 @@ fn internal_chunk(source: &[u8]) -> bool {
+ 
+ /// Where a client's Luau check says an error is (`luaL_where(L, 1)`): the calling function's `<chunk>:<line>: `, or
+ /// nothing when the caller is a C function (`pcall(Vector2.Abs, 5)`). Frames of [`internal_chunk`]s are looked past,
+-/// and so is a C function one of them called (the pcall of the host's library wrapper), as a client has neither.
++/// and so is a C function one of them called (the pcall of the host's library wrapper), as a client has neither, and a host's
++/// engine function ([`set_engine_frame`]): the client's C function itself, whose caller's position the error is.
+ ///
+ /// # Safety
+ /// `state` must be the running thread, inside a C function (level 0).
+@@ -105,6 +117,10 @@ pub unsafe fn caller_position(state: *mut ffi::lua_State) -> Option<String> {
+                 continue;
+             }
+             if frame.currentline < 0 {
++                if ENGINE_FRAME.get().is_some_and(|test| test(state, level)) {
++                    level += 1;
++                    continue;
++                }
+                 if skip_namecall {
+                     skip_namecall = false;
+                     level += 1;

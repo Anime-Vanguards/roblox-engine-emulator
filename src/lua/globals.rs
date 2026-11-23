@@ -7,7 +7,8 @@ use mlua::prelude::*;
 
 use super::{
     actors, Args, Flow, LuaRefs, Prelude, enum_item_value, instance, instance_value, lock_metatable, modules, none, raise_plain,
-    refs::{self, Hold}, types, values, wrapped,
+    library_function, named, refs::{self, Hold}, types, values,
+    cfunction::{self, Kind::Library},
 };
 use crate::{
     Engine, InstanceId, K, NameId, World,
@@ -57,10 +58,11 @@ fn vm_of(value: &LuaValue) -> modules::Vm {
 }
 
 /// The thread task.spawn / defer / delay (`call`) runs: a thread as it is, a function in a new thread. Roblox's errors
-/// (measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau; raised without a position):
-/// `invalid argument #1 to 'spawn' (function or thread expected)` (#2 for delay), and for a thread an earlier
-/// task.defer or task.delay queued that has not resumed yet, `Cannot call task.spawn on a thread that is already
-/// 'deferred' in the task library`.
+/// (measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau): `invalid argument #1 to 'spawn'
+/// (function or thread expected)` (#2 for delay), at the line that called it, as a C function's argument check places it (none
+/// from `pcall(task.spawn, 5)`; measured, Studio 0.747, engine_functions.luau), and for a thread an earlier task.defer or
+/// task.delay queued that has not resumed yet, `Cannot call task.spawn on a thread that is already 'deferred' in the task
+/// library` (measured through pcall only: raised without a position).
 fn to_thread(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, call: &str) -> Result<LuaThread, Flow> {
     match value {
         LuaValue::Thread(thread) => {
@@ -70,7 +72,7 @@ fn to_thread(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, call: &
             Ok(thread.clone())
         }
         LuaValue::Function(function) => Ok(lua.create_thread(function.clone())?),
-        _ => raise_plain(format!("invalid argument #{index} to '{call}' (function or thread expected)")),
+        _ => super::raise_at_caller(format!("invalid argument #{index} to '{call}' (function or thread expected)")),
     }
 }
 
@@ -84,8 +86,8 @@ fn legacy_thread(lua: &Lua, value: &LuaValue) -> Result<LuaThread, Flow> {
 }
 
 /// task.delay's and task.wait's seconds: nil is none; a number, or a string Luau reads as one, goes; anything else is
-/// `invalid argument #1 to 'delay' (number expected, got string)` (measured likewise; raised without a position: task.wait's
-/// names its caller's line, ScheduleWait).
+/// `invalid argument #1 to 'delay' (number expected, got string)` (measured likewise), at the line that called it (task.wait's,
+/// measured: engine_functions.luau, as the task library's other argument checks).
 fn task_seconds(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) -> Result<Option<f64>, Flow> {
     match value {
         LuaValue::Nil => Ok(None),
@@ -93,9 +95,9 @@ fn task_seconds(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) -> Res
         LuaValue::Integer(number) => Ok(Some(*number as f64)),
         LuaValue::String(_) => match lua.coerce_number(value.clone())? {
             Some(number) => Ok(Some(number)),
-            None => raise_plain(format!("invalid argument #1 to '{call}' (number expected, got string)")),
+            None => super::raise_at_caller(format!("invalid argument #1 to '{call}' (number expected, got string)")),
         },
-        other => raise_plain(format!("invalid argument #1 to '{call}' (number expected, got {})", super::typeof_value(engine, other))),
+        other => super::raise_at_caller(format!("invalid argument #1 to '{call}' (number expected, got {})", super::typeof_value(engine, other))),
     }
 }
 
@@ -212,6 +214,17 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         })?,
     )?;
     r.set("EditMode", engine.options.edit_mode())?;
+    // The prelude's engine functions as scripts see them (lua/cfunction.rs): `EngineFunction(name, served, luau, function)`, one
+    // C function named `name` over `function`, a Rust function answering the call protocol or (`luau`) the prelude's own Luau
+    r.set(
+        "EngineFunction",
+        lua.create_function(|lua, (name, served, luau, function): (LuaString, bool, bool, LuaFunction)| {
+            let kind = if served { cfunction::Kind::Served } else { cfunction::Kind::Library };
+            let name = name.to_string_lossy();
+            if luau { cfunction::over_luau(lua, &name, kind, function) } else { cfunction::over_rust(lua, &name, kind, function) }
+        })?,
+    )?;
+    r.set("Nothing", lua.create_function(|_, _: LuaMultiValue| Ok(()))?)?;
     // utf8.nfcnormalize and utf8.nfdnormalize (lua/normalize.rs)
     r.set("NfcNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, true)))?)?;
     r.set("NfdNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, false)))?)?;
@@ -283,8 +296,8 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             })())
         })?,
     )?;
-    // (the prelude's Pass raises a refusal and yields after: no values, the thread is registered. Where the thread cannot
-    // yield both raise `thread is not yieldable` first, before task.wait reads its argument, and register nothing: lua/mod.rs
+    // (task.wait and wait: the thread registered, a yield from the C function, lua/cfunction.rs. Where the thread cannot yield
+    // both raise `thread is not yieldable` first, before task.wait reads its argument, and register nothing: lua/mod.rs
     // NOT_YIELDABLE. task.wait's argument error names the line that called it, none from pcall(task.wait, "x"): measured in a
     // 0.747 playing client and server, tools/parity/probes/yield_refused.luau and task_order.luau)
     r.set(
@@ -300,7 +313,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 };
                 refs::admit(engine, Hold::Wait, "task.wait")?;
                 engine.state.borrow_mut().sched.schedule_call(TimerKind::Wait, delay, thread, Vec::new());
-                Ok(none())
+                Err(Flow::Yield)
             })())
         })?,
     )?;
@@ -314,7 +327,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let duration = args.number(0);
                 refs::admit(engine, Hold::Wait, "wait")?;
                 engine.state.borrow_mut().sched.schedule_legacy(TimerKind::LegacyWait, duration, thread);
-                Ok(none())
+                Err(Flow::Yield)
             })())
         })?,
     )?;
@@ -323,11 +336,16 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         primitive(lua, engine, |lua, engine, args| {
             super::encode(lua, (|| {
                 let args = Args::new(args);
-                // (the running thread and one that resumed it raise `cannot cancel thread` in the prelude's task.cancel)
+                // (the running thread and one that resumed it raise `cannot cancel thread`, without a position, before anything
+                // else; measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau; the argument's error is
+                // at the line that called it, none from pcall: Studio 0.747, engine_functions.luau)
                 let LuaValue::Thread(thread) = args.get(0) else {
                     let got = super::typeof_value(engine, args.get(0));
-                    return raise_plain(format!("invalid argument #1 to 'cancel' (thread expected, got {got})"));
+                    return super::raise_at_caller(format!("invalid argument #1 to 'cancel' (thread expected, got {got})"));
                 };
+                if matches!(thread.status(), LuaThreadStatus::Running | LuaThreadStatus::Normal) {
+                    return raise_plain("cannot cancel thread");
+                }
                 if thread.status() == LuaThreadStatus::Resumable {
                     let close = engine.lua.borrow().coroutine_close.clone();
                     if let Some(close) = close {
@@ -342,32 +360,33 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             })())
         })?,
     )?;
+    let require_begin = primitive(lua, engine, |lua, engine, args| {
+        let args = Args::new(args);
+        modules::require_begin(lua, engine, (args.get(0).clone(), args.get(1).clone(), vm_of(args.get(2))))
+    })?;
+    r.set("RequireBegin", require_begin.clone())?;
+    // task.synchronize / task.desynchronize of a parallel handler's thread: a yield from their C function when its thread parks
+    // (actors.rs; a thread that cannot yield raises), nothing when it is in the phase already
+    for (name, to_serial) in [("Synchronize", true), ("Desynchronize", false)] {
+        r.set(
+            name,
+            primitive(lua, engine, move |lua, engine, _| {
+                super::encode(lua, actors::park(lua, engine, to_serial).and_then(|park| if park { Err(Flow::Yield) } else { Ok(none()) }))
+            })?,
+        )?;
+    }
+    let require_finish = primitive(lua, engine, |lua, engine, args| {
+        let args = Args::new(args);
+        let LuaValue::Table(results) = args.get(1).clone() else {
+            return Err(LuaError::runtime("RequireFinish: results expected"));
+        };
+        modules::require_finish(lua, engine, (args.get(0).clone(), results, vm_of(args.get(2))))
+    })?;
+    r.set("RequireFinish", require_finish.clone())?;
+    // a script's require (prelude.luau Environment): `MakeRequire(Script, Vm)`, a C function of its own (lua/builtins.rs)
     r.set(
-        "RequireBegin",
-        primitive(lua, engine, |lua, engine, args| {
-            let args = Args::new(args);
-            modules::require_begin(lua, engine, (args.get(0).clone(), args.get(1).clone(), vm_of(args.get(2))))
-        })?,
-    )?;
-    // task.synchronize / task.desynchronize of a parallel handler's thread: whether to yield (actors.rs), through the prelude's
-    // Pass (a thread that cannot yield raises)
-    r.set(
-        "ParallelPark",
-        primitive(lua, engine, |lua, engine, args| {
-            let args = Args::new(args);
-            let to_serial = matches!(args.get(0), LuaValue::Boolean(true));
-            super::encode(lua, actors::park(lua, engine, to_serial).map(|park| values([LuaValue::Boolean(park)])))
-        })?,
-    )?;
-    r.set(
-        "RequireFinish",
-        primitive(lua, engine, |lua, engine, args| {
-            let args = Args::new(args);
-            let LuaValue::Table(results) = args.get(1).clone() else {
-                return Err(LuaError::runtime("RequireFinish: results expected"));
-            };
-            modules::require_finish(lua, engine, (args.get(0).clone(), results, vm_of(args.get(2))))
-        })?,
+        "MakeRequire",
+        lua.create_function(move |lua, (script, vm): (LuaValue, LuaValue)| super::builtins::require_function(lua, script, vm, require_begin.clone(), require_finish.clone()))?,
     )?;
 
     // Vector3 is the native vector type, as in Roblox (vector3.luau, loaded by the prelude): vectors
@@ -408,6 +427,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let roblox = lune_roblox::module(lua.clone())?;
     let prelude = modules::load_engine_luau(lua, PRELUDE, "=rur.prelude", None)?;
     let exports: LuaTable = crate::cost::engine_luau(lua, prelude)?.call((r, roblox))?;
+    name_datatype_methods(lua, &exports)?;
     let prelude = Prelude {
         wrap: exports.get("Wrap")?,
         // typeof as a C function over the same registry (lua/raw.rs)
@@ -425,6 +445,49 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     refs.prelude = Some(Rc::new(prelude));
     drop(refs);
     super::strip_callback_tracebacks(lua)
+}
+
+/// The methods of Lune's datatypes with methods (CFrame, Color3, UDim2, Vector2, Ray, Region3), read as values (`cf.Lerp`) or
+/// called with `:` alike: each a C function of its name (lua/cfunction.rs), as a client's are (measured, Studio 0.747:
+/// `debug.info(cf.Lerp, "sln")` gives `[C]`, -1 and `Lerp`, engine_functions.luau). The type's methods are the table its
+/// `__namecall` dispatches over (lune-roblox's MethodMembers, its first upvalue), which its `__index` reads too. They were C
+/// functions already, and stay priced as one ([`cfunction::Kind::Library`]).
+fn name_datatype_methods(lua: &Lua, exports: &LuaTable) -> LuaResult<()> {
+    let datatypes: LuaTable = exports.get("Datatypes")?;
+    let zero = || LuaValue::Vector(mlua::Vector::new(0.0, 0.0, 0.0));
+    for (name, args) in [("CFrame", vec![]), ("Color3", vec![]), ("UDim2", vec![]), ("Vector2", vec![]), ("Ray", vec![zero(), zero()]), ("Region3", vec![zero(), zero()])] {
+        let library: LuaTable = datatypes.get(name)?;
+        let new: LuaFunction = library.get("new")?;
+        let Ok(sample) = new.call::<LuaValue>(LuaMultiValue::from_vec(args)) else { continue };
+        // SAFETY: the sample is pushed as the argument; its metatable's __namecall's first upvalue (or nil) is left as the one result
+        let methods: LuaValue = unsafe {
+            lua.exec_raw(sample, |state| {
+                use mlua::ffi;
+                let found = ffi::lua_getmetatable(state, 1) != 0 && {
+                    ffi::lua_pushstring(state, c"__namecall".as_ptr());
+                    ffi::lua_rawget(state, -2);
+                    ffi::lua_iscfunction(state, -1) != 0 && !ffi::lua_getupvalue(state, -1, 1).is_null()
+                };
+                if found {
+                    ffi::lua_replace(state, 1);
+                } else {
+                    ffi::lua_pushnil(state);
+                    ffi::lua_replace(state, 1);
+                }
+                ffi::lua_settop(state, 1);
+            })?
+        };
+        let LuaValue::Table(methods) = methods else { continue };
+        let functions = methods.pairs::<LuaString, LuaValue>().filter_map(|pair| match pair {
+            Ok((key, LuaValue::Function(function))) => Some((key, function)),
+            _ => None,
+        });
+        for (key, function) in functions.collect::<Vec<_>>() {
+            let key_name = key.to_string_lossy();
+            methods.raw_set(key, cfunction::over_rust(lua, &key_name, Library, function)?)?;
+        }
+    }
+    Ok(())
 }
 
 /// Hooks.MissingChild (edit mode): the running client's PlayerGui a script waits for or indexes
@@ -731,19 +794,36 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     shared.raw_set("unpack", table.get::<LuaValue>("unpack")?)?;
     shared.raw_set("ypcall", globals.get::<LuaValue>("pcall")?)?;
     let gcinfo: LuaFunction = globals.get("gcinfo")?;
-    // Roblox accepts only collectgarbage("count") (Studio 0.747, tools/parity/probes/errors.luau)
+    // Roblox accepts only collectgarbage("count") (Studio 0.747, tools/parity/probes/errors.luau), and its errors name the line
+    // that called it (Studio 0.747, engine_functions.luau)
     shared.raw_set(
         "collectgarbage",
-        wrapped(lua, engine, move |_, args| {
+        library_function(lua, "collectgarbage", move |_, args| {
             let args = Args::new(args);
             match args.get(0) {
-                LuaValue::Nil => raise_plain("missing argument #1 to 'collectgarbage' (string expected)"),
+                LuaValue::Nil => super::raise_at_caller("missing argument #1 to 'collectgarbage' (string expected)"),
                 LuaValue::String(option) if &*option.as_bytes() == b"count" => Ok(values([gcinfo.call::<LuaValue>(())?])),
-                _ => raise_plain("collectgarbage must be called with 'count'; use gcinfo() instead"),
+                _ => super::raise_at_caller("collectgarbage must be called with 'count'; use gcinfo() instead"),
             }
         })?,
     )?;
-    shared.raw_set("coroutine", exports.get::<LuaValue>("Coroutine")?)?;
+    // coroutine.create and wrap: the VM's, after charging the script for the thread as task.spawn does (lua/builtins.rs)
+    let coroutine: LuaTable = exports.get("Coroutine")?;
+    let native_coroutine: LuaTable = globals.get("coroutine")?;
+    let e = engine.clone();
+    let charge = lua.create_function(move |_, seconds: f64| {
+        let state = e.state.borrow();
+        state.sched.charge(seconds);
+        if !state.sched.is_muted() {
+            crate::boundary::add_cost(seconds);
+        }
+        Ok(())
+    })?;
+    for name in ["create", "wrap"] {
+        let native: LuaFunction = native_coroutine.get(name)?;
+        coroutine.raw_set(name, super::builtins::coroutine_function(lua, name, native, charge.clone(), crate::cost::THREAD)?)?;
+    }
+    shared.raw_set("coroutine", coroutine)?;
     shared.raw_set("utf8", exports.get::<LuaValue>("Utf8")?)?;
     shared.raw_set("debug", exports.get::<LuaValue>("Debug")?)?;
 
@@ -755,7 +835,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let e = engine.clone();
     os.raw_set(
         "clock",
-        lua.create_function(move |lua, ()| {
+        named(lua, "clock", Library, lua.create_function(move |lua, ()| {
             let clock = e.state.borrow_mut().sched.clock();
             // (a profile counts the reads by line and the clock's advance between them: a loop that checks a budget reads it once an
             // iteration)
@@ -763,7 +843,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
                 crate::profiler::attribution::clock_read(lua, clock);
             }
             Ok(clock)
-        })?,
+        })?)?,
     )?;
     if std::env::var("RUR_REAL_CLOCK").as_deref() == Ok("1") {
         let start = std::time::Instant::now();
@@ -859,12 +939,13 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let e = engine.clone();
     os.raw_set(
         "time",
-        wrapped(lua, engine, move |_, args| {
+        library_function(lua, "time", move |_, args| {
             let args = Args::new(args);
             if !args.get(0).is_nil() {
+                // (its error at the line that called it, as Luau's os.time places it: Studio 0.747, engine_functions.luau)
                 return match native_time.call::<LuaValue>(args.get(0).clone()) {
                     Ok(time) => Ok(values([time])),
-                    Err(error) => raise_plain(scheduler::error_message(&error)),
+                    Err(error) => super::raise_at_caller(scheduler::error_message(&error)),
                 };
             }
             let millis = e.state.borrow_mut().sched.unix_millis();
@@ -875,7 +956,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let e = engine.clone();
     os.raw_set(
         "date",
-        wrapped(lua, engine, move |_, args| {
+        library_function(lua, "date", move |_, args| {
             let args = Args::new(args);
             let time = match args.get(1) {
                 LuaValue::Nil => LuaValue::Number((e.state.borrow_mut().sched.unix_millis() / 1000.0).floor()),
@@ -906,7 +987,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let e = engine.clone();
     instance_global.raw_set(
         "fromExisting",
-        wrapped(lua, engine, move |lua, args| {
+        library_function(lua, "fromExisting", move |lua, args| {
             let args = Args::new(args);
             let Some(existing) = args.instance(0) else { return raise_plain("Instance expected") };
             let Some(copy) = instance::clone(&e, existing) else { return Ok(values([LuaValue::Nil])) };
@@ -919,45 +1000,63 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     )?;
     shared.raw_set("Instance", instance_global)?;
     shared.raw_set("typeof", prelude.typeof_fn.clone())?;
-    shared.raw_set("print", exports.get::<LuaValue>("Print")?)?;
-    shared.raw_set("warn", exports.get::<LuaValue>("Warn")?)?;
+    // print and warn: C functions that write their arguments as tostring does, from their own frame (lua/builtins.rs)
+    for kind in ["print", "warn"] {
+        let e = engine.clone();
+        let output = lua.create_function(move |_, (kind, message): (LuaString, LuaString)| {
+            let kind = if &*kind.as_bytes() == b"warn" { "warn" } else { "print" };
+            e.output(kind, message.to_string_lossy(), None);
+            Ok(())
+        })?;
+        let mark = lua.create_function(|_, value: LuaValue| {
+            super::shared_table::mark_value(&value);
+            Ok(())
+        })?;
+        shared.raw_set(kind, super::builtins::output_function(lua, kind, output, mark)?)?;
+    }
 
+    // (the C functions below are named as a client names them, each alias a function of its own: `Wait` is named Wait; measured,
+    // Studio 0.747, engine_functions.luau)
     let e = engine.clone();
-    shared.raw_set("tick", lua.create_function(move |_, ()| Ok(e.state.borrow_mut().sched.tick()))?)?;
+    shared.raw_set("tick", named(lua, "tick", Library, lua.create_function(move |_, ()| Ok(e.state.borrow_mut().sched.tick()))?)?)?;
     let e = engine.clone();
     let edit = engine.options.edit_mode();
     shared.raw_set(
         "time",
-        lua.create_function(move |_, ()| Ok(if edit { 0.0 } else { e.state.borrow().sched.now }))?,
+        named(lua, "time", Library, lua.create_function(move |_, ()| Ok(if edit { 0.0 } else { e.state.borrow().sched.now }))?)?,
     )?;
     let e = engine.clone();
     let elapsed = lua.create_function(move |_, ()| Ok(e.state.borrow_mut().sched.elapsed_time()))?;
-    shared.raw_set("elapsedTime", elapsed.clone())?;
-    shared.raw_set("ElapsedTime", elapsed)?;
-    let legacy_wait: LuaValue = exports.get("LegacyWait")?;
-    shared.raw_set("wait", legacy_wait.clone())?;
-    shared.raw_set("Wait", legacy_wait)?;
-    let e = engine.clone();
-    let legacy_spawn = wrapped(lua, engine, move |lua, args| {
-        let args = Args::new(args);
-        let thread = legacy_thread(lua, args.get(0))?;
-        refs::admit(&e, Hold::Work, "spawn")?;
-        e.state.borrow_mut().sched.schedule_legacy(TimerKind::Delay, Some(0.0), thread);
-        Ok(none())
-    })?;
-    shared.raw_set("spawn", legacy_spawn.clone())?;
-    shared.raw_set("Spawn", legacy_spawn)?;
-    let e = engine.clone();
-    let legacy_delay = wrapped(lua, engine, move |lua, args| {
-        let args = Args::new(args);
-        let duration = args.number(0);
-        let thread = legacy_thread(lua, args.get(1))?;
-        refs::admit(&e, Hold::Work, "delay")?;
-        e.state.borrow_mut().sched.schedule_legacy(TimerKind::Delay, duration, thread);
-        Ok(none())
-    })?;
-    shared.raw_set("delay", legacy_delay.clone())?;
-    shared.raw_set("Delay", legacy_delay)?;
+    shared.raw_set("elapsedTime", named(lua, "elapsedTime", Library, elapsed.clone())?)?;
+    shared.raw_set("ElapsedTime", named(lua, "ElapsedTime", Library, elapsed)?)?;
+    // (wait: the thread registered, then a yield from the C function, lua/cfunction.rs)
+    let legacy_wait: LuaFunction = exports.get("LegacyWait")?;
+    shared.raw_set("wait", named(lua, "wait", Library, legacy_wait.clone())?)?;
+    shared.raw_set("Wait", named(lua, "Wait", Library, legacy_wait)?)?;
+    // (each alias is a C function of its own name, as a client's: `Spawn` is named Spawn; measured, engine_functions.luau)
+    for name in ["spawn", "Spawn"] {
+        let e = engine.clone();
+        let legacy_spawn = library_function(lua, name, move |lua, args| {
+            let args = Args::new(args);
+            let thread = legacy_thread(lua, args.get(0))?;
+            refs::admit(&e, Hold::Work, "spawn")?;
+            e.state.borrow_mut().sched.schedule_legacy(TimerKind::Delay, Some(0.0), thread);
+            Ok(none())
+        })?;
+        shared.raw_set(name, legacy_spawn)?;
+    }
+    for name in ["delay", "Delay"] {
+        let e = engine.clone();
+        let legacy_delay = library_function(lua, name, move |lua, args| {
+            let args = Args::new(args);
+            let duration = args.number(0);
+            let thread = legacy_thread(lua, args.get(1))?;
+            refs::admit(&e, Hold::Work, "delay")?;
+            e.state.borrow_mut().sched.schedule_legacy(TimerKind::Delay, duration, thread);
+            Ok(none())
+        })?;
+        shared.raw_set(name, legacy_delay)?;
+    }
     shared.raw_set("task", exports.get::<LuaValue>("Task")?)?;
 
     let make_stub: LuaFunction = exports.get("MakeStubTree")?;
@@ -969,7 +1068,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let global_settings: std::cell::RefCell<Option<LuaValue>> = std::cell::RefCell::new(None);
     let e = engine.clone();
     let edit = engine.options.edit_mode();
-    let settings = wrapped(lua, engine, move |lua, _| {
+    let settings = library_function(lua, "settings", move |lua, _| {
         if !edit {
             return raise_plain("The current thread cannot call 'settings' (lacking capability Plugin)");
         }
@@ -992,7 +1091,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let e = engine.clone();
     shared.raw_set(
         "UserSettings",
-        lua.create_function(move |lua, ()| {
+        named(lua, "UserSettings", Library, lua.create_function(move |lua, ()| {
             if let Some(existing) = user_settings.borrow().as_ref() {
                 return Ok(existing.clone());
             }
@@ -1002,35 +1101,35 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
             };
             *user_settings.borrow_mut() = Some(made.clone());
             Ok(made)
-        })?,
+        })?)?,
     )?;
     let version = engine.reflection.version.clone();
     let version = if version.is_empty() { "0.0.0.0".to_string() } else { version };
     let version_fn = lua.create_function(move |_, ()| Ok(version.clone()))?;
-    shared.raw_set("version", version_fn.clone())?;
-    shared.raw_set("Version", version_fn)?;
+    shared.raw_set("version", named(lua, "version", Library, version_fn.clone())?)?;
+    shared.raw_set("Version", named(lua, "Version", Library, version_fn)?)?;
     let e = engine.clone();
     let stats = lua.create_function(move |lua, ()| {
         let game = e.world().game;
         let stats = services::get_service(&e, game, "Stats").map_err(flow_error)?;
         instance_value(lua, &e, stats)
     })?;
-    shared.raw_set("stats", stats.clone())?;
-    shared.raw_set("Stats", stats)?;
+    shared.raw_set("stats", named(lua, "stats", Library, stats.clone())?)?;
+    shared.raw_set("Stats", named(lua, "Stats", Library, stats)?)?;
     shared.raw_set("shared", lua.create_table()?)?;
-    shared.raw_set("PluginManager", lua.create_function(|_, ()| Ok(LuaValue::Nil))?)?;
+    shared.raw_set("PluginManager", named(lua, "PluginManager", Library, lua.create_function(|_, ()| Ok(LuaValue::Nil))?)?)?;
     let print: LuaFunction = exports.get("Print")?;
     shared.raw_set(
         "printidentity",
-        lua.create_function(move |_, prefix: Option<String>| {
+        named(lua, "printidentity", Library, lua.create_function(move |_, prefix: Option<String>| {
             print.call::<()>(format!("{} 2", prefix.unwrap_or_else(|| "Current identity is".into())))
-        })?,
+        })?)?,
     )?;
     let e = engine.clone();
-    shared.raw_set("loadstring", wrapped(lua, engine, move |lua, args| super::loading::loadstring(lua, &e, args))?)?;
+    shared.raw_set("loadstring", library_function(lua, "loadstring", move |lua, args| super::loading::loadstring(lua, &e, args))?)?;
     let e = engine.clone();
     let debug: LuaTable = exports.get("Debug")?;
-    debug.raw_set("loadmodule", wrapped(lua, engine, move |lua, args| super::loading::loadmodule(lua, &e, args))?)?;
+    debug.raw_set("loadmodule", library_function(lua, "loadmodule", move |lua, args| super::loading::loadmodule(lua, &e, args))?)?;
     let inert: LuaFunction = exports.get("InertLibrary")?;
     for name in ["PluginDrag", "CellId"] {
         shared.raw_set(name, inert.call::<LuaValue>(name)?)?;

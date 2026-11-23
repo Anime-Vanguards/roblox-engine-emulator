@@ -1968,10 +1968,13 @@ void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, cons
         if (ttisfunction(tm) && clvalue(tm) == cl)
             return;
     }
-    g->work.hostops[host ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS]++;
+    // (an engine function the host serves, a datatype's constructor or an object's method, is priced as the host's own Luau that
+    // stood for it, and booked as the C function it is: lua_setenginecfunction)
+    bool served = !host && cl->isC && luaE_cfunctionkind(cl) == LUAE_SERVEDCFUNCTION;
+    int slot = host || served ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS;
+    g->work.hostops[slot]++;
     if (luaP_state)
-        luaP_cold(L, obj2gco(cl), host ? LUA_COLD_HOSTFUNCTION : LUA_COLD_CFUNCTION,
-            int(offsetof(lua_WorkCounters, hostops) / sizeof(uint64_t)) + (host ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS));
+        luaP_cold(L, obj2gco(cl), host ? LUA_COLD_HOSTFUNCTION : LUA_COLD_CFUNCTION, int(offsetof(lua_WorkCounters, hostops) / sizeof(uint64_t)) + slot);
 }
 
 void luaC_coldmade(lua_State* L, GCObject* o)

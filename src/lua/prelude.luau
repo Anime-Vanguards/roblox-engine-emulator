@@ -12,7 +12,7 @@
 -- 4. Pieces of the shared global environment that are plain Luau (runtime/engine/globals.luau).
 
 local R, Roblox = ...
-local SIGNAL = R.SIGNAL
+local SIGNAL, EngineFunction = R.SIGNAL, R.EngineFunction -- (EngineFunction: a script's engine function, lua/cfunction.rs)
 
 local error = error
 local select = select
@@ -297,7 +297,7 @@ local LibraryExtras = {
 LibraryExtras.Vector3.fromNormalId = LibraryExtras.Vector3.FromNormalId
 LibraryExtras.Vector3.fromAxis = LibraryExtras.Vector3.FromAxis; for Key, Value in VectorLibrary do ConstructorOverrides.Vector3[Key] = Value end -- (native zero, one, axes, min, max)
 
-local ScriptLibraries = {}
+local ScriptLibraries, EngineNames = {}, { PhysicalProperties = { new = "newPhysicalPropertiesWithClampedMsgClosure" } } -- (a client's name: engine_functions.luau)
 
 local function ScriptLibrary(Name)
 	local Existing = ScriptLibraries[Name]
@@ -311,7 +311,7 @@ local function ScriptLibrary(Name)
 	local function Resolve(_, Key)
 		local Value = Overrides[Key]
 		if Value ~= nil then
-			return Value
+			return if type(Value) == "function" then EngineFunction(EngineNames[Name] and EngineNames[Name][Key] or Key, true, true, Value) else Value
 		end
 		Value = Extras[Key]
 		if Value == nil then
@@ -325,7 +325,7 @@ local function ScriptLibrary(Name)
 			Cached = if Converts then function(...) return Out(PassResults(Key, pcall(Value, In(...)))) end else function(...)
 				return PassResults(Key, pcall(Value, ...))
 			end
-			Wrapped[Key] = Cached
+			Cached = EngineFunction(Key, true, true, Cached); Wrapped[Key] = Cached
 		end
 		return Cached
 	end
@@ -568,52 +568,52 @@ end
 -- canonical decompositions in place, unordered, a U+0000 after a singleton's; measured in a 0.747 client and server,
 -- tools/parity/probes/utf8_normalize.luau. As many lines as the identity stubs had: the lines below keep their
 -- numbers, which tracebacks through the prelude record)
-Utf8Table.nfcnormalize = Wrap(R.NfcNormalize)
-Utf8Table.nfdnormalize = Wrap(R.NfdNormalize)
+Utf8Table.nfcnormalize = EngineFunction("nfcnormalize", false, false, R.NfcNormalize); Utf8Table.graphemes = EngineFunction("graphemes", false, true, Utf8Table.graphemes)
+Utf8Table.nfdnormalize = EngineFunction("nfdnormalize", false, false, R.NfdNormalize)
 
 local DebugTable = table.clone(debug)
-DebugTable.profilebegin = function() end
-DebugTable.profileend = function() end
-DebugTable.setmemorycategory = function() end
-DebugTable.resetmemorycategory = function() end
-DebugTable.dumpcodesize = function() end
-DebugTable.getmemorycategory = function()
+DebugTable.profilebegin = EngineFunction("profilebegin", false, false, R.Nothing)
+DebugTable.profileend = EngineFunction("profileend", false, false, R.Nothing)
+DebugTable.setmemorycategory = EngineFunction("setmemorycategory", false, false, R.Nothing)
+DebugTable.resetmemorycategory = EngineFunction("resetmemorycategory", false, false, R.Nothing)
+DebugTable.dumpcodesize = EngineFunction("dumpcodesize", false, false, R.Nothing)
+DebugTable.getmemorycategory = EngineFunction("getmemorycategory", false, true, function()
 	return "default"
-end
+end)
 
--- task.wait / wait / Signal:Wait / WaitForChild yield in Luau after the Rust side registered the
--- thread (or refused to: Pass raises it, lua/refs.rs); everything else is a Rust function wrapped for string errors.
+-- task.wait / wait / task.synchronize / task.desynchronize register the thread with the scheduler (or refuse to: lua/refs.rs)
+-- and yield from their C function, the values the thread is resumed with being their results (lua/cfunction.rs); each task
+-- function is a Rust function as one C function named as a client names it.
 local ScheduleWait = R.ScheduleWait
 local ScheduleLegacyWait = R.ScheduleLegacyWait
 
 local Task = {
-	spawn = Wrap(R.TaskSpawn),
-	defer = Wrap(R.TaskDefer),
-	delay = Wrap(R.TaskDelay),
-	wait = function(Duration)
-		Pass(ScheduleWait(Duration))
-		return yield()
-	end,
+	spawn = EngineFunction("spawn", false, false, R.TaskSpawn),
+	defer = EngineFunction("defer", false, false, R.TaskDefer),
+	delay = EngineFunction("delay", false, false, R.TaskDelay),
+	wait = EngineFunction("wait", false, false, ScheduleWait),
 	-- (the running thread, and one waiting on a coroutine it resumed, cannot be cancelled: Roblox raises this without a
-	-- position; measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau)
-	cancel = function(...)
-		local Thread = ...
-		if type(Thread) == "thread" then
-			local Status = coroutine.status(Thread)
-			if Status == "running" or Status == "normal" then
-				error("cannot cancel thread", 0)
-			end
-		end
-		return Pass(R.TaskCancel(...))
-	end,
-	synchronize = function() if Pass(R.ParallelPark(true)) then yield() end end, -- (a parallel handler's thread leaves the phase: actors.rs)
-	desynchronize = function() if Pass(R.ParallelPark(false)) then yield() end end,
+	-- position; measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau: R.TaskCancel)
+	cancel = EngineFunction("cancel", false, false, R.TaskCancel),
+	-- (a parallel handler's thread leaves the phase: actors.rs)
+	synchronize = EngineFunction("synchronize", false, false, R.Synchronize),
+	desynchronize = EngineFunction("desynchronize", false, false, R.Desynchronize),
+	--
+	--
+	--
+	--
+	--
+	--
+	--
+	--
+	--
+	--
 }
 
-local function LegacyWait(Duration)
-	Pass(ScheduleLegacyWait(Duration))
-	return yield()
-end
+-- (wait and Wait: lua/globals.rs, over ScheduleLegacyWait)
+local LegacyWait = ScheduleLegacyWait
+--
+--
 
 local function Traceback(Thread)
 	return debug.traceback(Thread)
@@ -692,9 +692,9 @@ local VmGlobals = {} -- an Actor's _G, by its key (modules.rs vm_key): its VM's 
 local function Environment(Shared, Script, Vm)
 	local Env = {
 		script = Script,
-		require = function(Target)
-			return Require(Target, Script, Vm)
-		end,
+		-- (a C function of the script's own: lua/builtins.rs require_function, over RequireBegin and RequireFinish as Require is)
+		require = R.MakeRequire(Script, Vm),
+		--
 	}
 	if Vm ~= nil then
 		local Globals = VmGlobals[Vm]
@@ -782,20 +782,20 @@ local function FilterParamsType(TypeName, Fields, Meta)
 	}
 end
 
--- coroutine.create / wrap make a thread, which Studio charges the script for as task.spawn does (cost.rs THREAD)
+-- coroutine.create / wrap make a thread, which Studio charges the script for as task.spawn does (cost.rs THREAD): C functions
+-- of the engine's own over the VM's (lua/builtins.rs coroutine_function, set by lua/globals.rs)
 local Coroutine = table.clone(coroutine)
-do
-	local Charge, Thread = R.Charge, R.ThreadCost
-	local Create, NativeWrap = coroutine.create, coroutine.wrap
-	Coroutine.create = function(Function)
-		Charge(Thread)
-		return Create(Function)
-	end
-	Coroutine.wrap = function(Function)
-		Charge(Thread)
-		return NativeWrap(Function)
-	end
-end
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
 
 -- tostring of the parameter objects as a playing client prints them (Studio 0.744): Roblox's fields in its order, an
 -- instance list as {Name} for one instance and {N instances...} for more, an empty enum list as nothing, numbers with 9
@@ -926,16 +926,16 @@ function Path2DControlPoint.new(...)
 	if Count > 0 then
 		local Position, LeftTangent, RightTangent = ...
 		if Typeof(Position) ~= "UDim2" then
-			error(`invalid argument #1 to 'new' (UDim2 expected, got {Typeof(Position)})`, 2)
+			error(`invalid argument #1 to 'new' (UDim2 expected, got {Typeof(Position)})`, 3)
 		elseif Count ~= 1 and Count ~= 3 then
 			error("Trying to create a Path2DControlPoint with wrong number of arguments", 0)
 		end
 		Fields.Position = Position
 		if Count == 3 then
 			if Typeof(LeftTangent) ~= "UDim2" then
-				error(`invalid argument #2 to 'new' (UDim2 expected, got {Typeof(LeftTangent)})`, 2)
+				error(`invalid argument #2 to 'new' (UDim2 expected, got {Typeof(LeftTangent)})`, 3)
 			elseif Typeof(RightTangent) ~= "UDim2" then
-				error(`invalid argument #3 to 'new' (UDim2 expected, got {Typeof(RightTangent)})`, 2)
+				error(`invalid argument #3 to 'new' (UDim2 expected, got {Typeof(RightTangent)})`, 3)
 			end
 			Fields.LeftTangent, Fields.RightTangent = LeftTangent, RightTangent
 		end
@@ -1390,6 +1390,18 @@ local function CopyProxy(Value)
 	return if Copy then Copy(Value) else Value
 end
 
+-- A library as scripts see it: a copy whose functions are engine functions named by their keys (lua/cfunction.rs), frozen when
+-- the library is
+local function EngineLibrary(Library)
+	local Copy = table.clone(Library)
+	for Key, Value in Library do
+		if type(Value) == "function" then
+			Copy[Key] = EngineFunction(Key, true, true, Value)
+		end
+	end
+	return if table.isfrozen(Library) then table.freeze(Copy) else Copy
+end
+
 return {
 	CopyProxy = CopyProxy,
 	Wrap = Wrap,
@@ -1404,19 +1416,19 @@ return {
 	Datatypes = Datatypes,
 	Faces = Faces,
 	Axes = Axes,
-	Path2DControlPoint = Path2DControlPoint,
+	Path2DControlPoint = EngineLibrary(Path2DControlPoint),
 	Path2DPoints = Path2DPoints,
-	RaycastParams = FilterParamsType("RaycastParams", { FilterDescendantsInstances = {}, IgnoreWater = false, RespectCanCollide = false, CollisionGroup = "Default",
-		BruteForceAllSlow = false, Margin = 0, SizeGradient = 0 }, RaycastParamsText),
-	OverlapParams = FilterParamsType("OverlapParams", { FilterDescendantsInstances = {}, MaxParts = 0, RespectCanCollide = false, CollisionGroup = "Default",
-		BruteForceAllSlow = false, Tolerance = 0 }, OverlapParamsText),
+	RaycastParams = EngineLibrary(FilterParamsType("RaycastParams", { FilterDescendantsInstances = {}, IgnoreWater = false, RespectCanCollide = false, CollisionGroup = "Default",
+		BruteForceAllSlow = false, Margin = 0, SizeGradient = 0 }, RaycastParamsText)),
+	OverlapParams = EngineLibrary(FilterParamsType("OverlapParams", { FilterDescendantsInstances = {}, MaxParts = 0, RespectCanCollide = false, CollisionGroup = "Default",
+		BruteForceAllSlow = false, Tolerance = 0 }, OverlapParamsText)),
 	ParamsData = ParamsData,
 	RaycastResult = RaycastResult,
-	CatalogSearchParams = CatalogSearchParamsLibrary,
-	PathWaypoint = PathWaypointLibrary,
-	DockWidgetPluginGuiInfo = DockWidgetPluginGuiInfoLibrary,
-	SecurityCapabilities = SecurityCapabilitiesLibrary,
-	ValueCurveKey = ValueCurveKeyLibrary,
+	CatalogSearchParams = EngineLibrary(CatalogSearchParamsLibrary),
+	PathWaypoint = EngineLibrary(PathWaypointLibrary),
+	DockWidgetPluginGuiInfo = EngineLibrary(DockWidgetPluginGuiInfoLibrary),
+	SecurityCapabilities = EngineLibrary(SecurityCapabilitiesLibrary),
+	ValueCurveKey = EngineLibrary(ValueCurveKeyLibrary),
 	InertLibrary = InertLibrary,
 	MakeStubTree = MakeStubTree,
 	Utf8 = Utf8Table,

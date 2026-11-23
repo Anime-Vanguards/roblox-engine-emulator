@@ -80,7 +80,7 @@ pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameI
         };
     };
     let method = match method {
-        crate::services::Method::Lua(function) => return Ok(Some(function)),
+        crate::services::Method::Lua(function) => return lua_method(lua, engine, owner, name, function).map(Some),
         crate::services::Method::Rust(method) => method,
     };
     if let Some(existing) = engine.lua.borrow().call_methods.get(&(owner, name)) {
@@ -109,7 +109,7 @@ fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name
         return unimplemented_function(lua, engine, class, name);
     };
     let method = match method {
-        crate::services::Method::Lua(function) => return Ok(LuaValue::Function(function)),
+        crate::services::Method::Lua(function) => return lua_method(lua, engine, owner, name, function).map(LuaValue::Function),
         crate::services::Method::Rust(method) => method,
     };
     if let Some(existing) = engine.lua.borrow().methods.get(&(owner, name)) {
@@ -122,7 +122,8 @@ fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name
     // ...) raise as a missing self does, before the arguments are looked at, while Part.GetMass(aMeshPart),
     // Model.GetPivot(aPart), workspace.Raycast(aWorldModel, ...) and game.FindFirstChild(workspace, "x") run)
     let declaring = engine.reflection.declaring_class(owner, name);
-    let function = wrapped(lua, engine, move |lua, args| {
+    let label = method_name.clone();
+    let function = wrapped(lua, engine, &label, move |lua, args| {
         let args = Args::new(args);
         let Some(id) = args.instance(0) else {
             return raise(format!("Expected ':' not '.' calling member function {method_name}"));
@@ -138,6 +139,35 @@ fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name
     Ok(LuaValue::Function(function))
 }
 
+/// A behaviour method in the engine's Luau (services.luau, server.luau, a layer's) as scripts call it, read as a value or with
+/// `:` alike: one C function named as the method over it (lua/cfunction.rs over_luau), as a client's method is one C function
+/// (measured, Studio 0.747: `debug.info` gives `[C]` and the method's name, and an error raised inside has no frame of its own:
+/// tools/parity/probes/engine_functions.luau). The Luau computes an error's level past that C function (services.luau
+/// ScriptLevel). A function that is one of the engine's C functions already is used as it is.
+fn lua_method(lua: &Lua, engine: &Rc<Engine>, owner: ClassId, name: NameId, function: LuaFunction) -> LuaResult<LuaFunction> {
+    let body = function.to_pointer() as usize;
+    if let Some((existing, wrapped)) = engine.lua.borrow().lua_methods.get(&(owner, name))
+        && *existing == body
+    {
+        return Ok(wrapped.clone());
+    }
+    // SAFETY: the function is pushed as the argument and replaced by the one result
+    let is_engine = unsafe {
+        lua.exec_raw::<bool>(&function, |state| {
+            let engine = super::cfunction::is_engine_function(state, -1);
+            mlua::ffi::lua_settop(state, 0);
+            mlua::ffi::lua_pushboolean(state, engine as std::ffi::c_int);
+        })?
+    };
+    let wrapped = if is_engine {
+        function
+    } else {
+        super::cfunction::over_luau(lua, engine.reflection.name(name), super::cfunction::Kind::Served, function)?
+    };
+    engine.lua.borrow_mut().lua_methods.insert((owner, name), (body, wrapped.clone()));
+    Ok(wrapped)
+}
+
 /// A reflected method no behaviour implements: records the call and returns nil.
 fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<LuaValue> {
     if let Some(existing) = engine.lua.borrow().unimplemented.get(&(class, name)) {
@@ -146,10 +176,11 @@ fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: 
     let e = engine.clone();
     let class_label = engine.reflection.class(class).name.to_string();
     let member = engine.reflection.name(name).to_string();
-    let function = lua.create_function(move |lua, _: LuaMultiValue| {
+    let label = member.clone();
+    let function = super::named(lua, &label, super::cfunction::Kind::Library, lua.create_function(move |lua, _: LuaMultiValue| {
         e.missing(Some(lua), &class_label, &member);
         Ok(())
-    })?;
+    })?)?;
     engine.lua.borrow_mut().unimplemented.insert((class, name), function.clone());
     Ok(LuaValue::Function(function))
 }
@@ -1032,7 +1063,7 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
 /// Registers the Instance userdata type (raw tagged userdata with C metamethods, lua/raw.rs) and
 /// the base Instance behaviours.
 pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
-    let iter = wrapped(lua, engine, |_, _| raise_at_caller("attempt to iterate over a Instance value"))?;
+    let iter = wrapped(lua, engine, "__iter", |_, _| raise_at_caller("attempt to iterate over a Instance value"))?;
     let metatable = lua.create_table()?;
     metatable.raw_set("__type", "Instance")?;
     metatable.raw_set("__metatable", "The metatable is locked")?;

@@ -1,0 +1,8 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (loadstring in the server's bridge, script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+module-level2 nil nil nil
+module-trace ReplicatedStorage.ParityRequire.Trace:1
+module-error false Requested module experienced an error while loading | @43 / @37 function Req
+require-error Attempted to call require with invalid argument(s). | @49 / @37 function Req
+waiting first suspended | @37 function Req
+waiting second suspended | @37 function Req

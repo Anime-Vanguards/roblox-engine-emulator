@@ -815,7 +815,18 @@ LUAU_NOINLINE void luaV_callTM(lua_State* L, int nparams, int res)
 
     lua_CFunction func = clvalue(fun)->c.f;
     if (luaE_scriptwork(L))
+    {
         L->global->work.tmcalls++;
+        // (an engine function that is a metamethod is priced as the call it stands for, the host's own Luau that served it before
+        // included: lua_setenginecfunction)
+        Closure* ccl = clvalue(fun);
+        if (luaE_cfunctionkind(ccl) >= LUAE_ENGINECFUNCTION)
+        {
+            ci->flags |= LUA_CALLINFO_WORK_CCALL;
+            luaE_workccall(L, ccl);
+            luaC_coldcall(L, ccl, 0, NULL, isLua(ci - 1) ? clvalue((ci - 1)->func)->l.p : NULL);
+        }
+    }
     int n = func(L);
     LUAU_ASSERT(n >= 0); // yields should have been blocked by nCcalls
 

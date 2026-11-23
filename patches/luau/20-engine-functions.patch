@@ -1,0 +1,229 @@
+# Topic: engine functions: one call each, priced as the function they stand for
+#
+# What it does: lua_setenginecfunction marks a host's C function (process-wide, a host function too) as an engine function: a
+# C function each closure of which stands for one function of the engine a script calls, doing that function's work from inside
+# (a host's callback, or its own Luau). A script's call of one is one call: a C call (work.ccalls) for a library's function, and
+# for one marked `served`, which stands for an operation the host serves (a datatype's constructor, an object's method), the host
+# call (work.hostcalls) the host's own Luau that stood for it was. Its first call in a frame is a C function's
+# (LUA_WORK_COLDCFUNCS), or for a served one the host Luau's (LUA_WORK_COLDHOSTFUNCS); one that is a metamethod (luaV_callTM, which
+# prices no C function) is priced so too. What it runs for the call is part of it: the
+# host's own Luau, with no host call and no first call of its own when the engine function was charged as the script's call
+# (LUA_CALLINFO_WORK_CCALL), and a C function it calls, however the engine function was called. A C closure's kind is kept in its
+# preload byte (1 a library function, 2 a host function, 3 an engine function, 4 a served one), where the host functions'
+# classification already was.
+#
+# Why upstream lacks it: upstream has no work counters. A host that serves engine functions through its own Luau (so they may
+# yield and raise at the script's level) shows a script frames a real engine has not: a real engine's engine functions are C
+# functions, `[C]` with their names in debug.info and no frame of their own in a traceback. A host closure in C over that work
+# shows what a real engine does, and this keeps the closure's call priced as the one call it stands for.
+
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index 3f89a6c..d4c1c25 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -457,6 +457,14 @@ LUA_API void lua_coldframe(lua_State* L);
+ LUA_API void lua_sethostcfunction(lua_CFunction f);
+ // marks `count` functions at once, and `trampoline` (the one C function a host's closures made from Rust share), taking the lock once
+ LUA_API void lua_sethostcfunctions(const lua_CFunction* functions, int count, lua_CFunction trampoline);
++// marks `f` as a host's engine function (process-wide, a host function too): a C function each closure of which stands for one
++// function of the engine a script calls, doing its work from inside (a host's callback, its own Luau). A script's call of one is
++// one C call: the host's own Luau it runs for that call is part of it (no host call of its own, and no first call in a frame of its
++// own), and so is a C function it calls, however it was called. `served` marks one standing for an operation the host serves rather
++// than a library function (a datatype's constructor, an object's method): a script's call of it is counted as the host call
++// (work.hostcalls) and its first call in a frame as the host Luau's first call (LUA_WORK_COLDHOSTFUNCS) the host's own Luau that
++// stood for it was. A host has a few: at most 8.
++LUA_API void lua_setenginecfunction(lua_CFunction f, int served);
+ 
+ // the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
+ // `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names
+diff --git a/luau/VM/src/lapi.cpp b/luau/VM/src/lapi.cpp
+index 553d611..ecb7d04 100644
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -1490,6 +1490,45 @@ void lua_sethostcfunctions(const lua_CFunction* functions, int count, lua_CFunct
+     hostcfunctioncount.store(registered, std::memory_order_release);
+ }
+ 
++// The host's engine functions (lua_setenginecfunction), with their kinds: a fixed list, published as the host functions are
++static const int kEngineFunctions = 8;
++static lua_CFunction enginecfunctions[kEngineFunctions] = {};
++static uint8_t enginecfunctionkinds[kEngineFunctions] = {};
++static std::atomic<int> enginecfunctioncount{0};
++
++void lua_setenginecfunction(lua_CFunction f, int served)
++{
++    {
++        std::lock_guard<std::mutex> guard(hostcfunctionlock);
++        int count = enginecfunctioncount.load(std::memory_order_relaxed);
++        for (int i = 0; i < count; ++i)
++            if (enginecfunctions[i] == f)
++                return;
++        LUAU_ASSERT(count < kEngineFunctions);
++        if (count == kEngineFunctions)
++            return;
++        enginecfunctions[count] = f;
++        enginecfunctionkinds[count] = served ? LUAE_SERVEDCFUNCTION : LUAE_ENGINECFUNCTION;
++        enginecfunctioncount.store(count + 1, std::memory_order_release);
++    }
++    lua_sethostcfunction(f);
++}
++
++int luaE_cfunctionkind(Closure* cl)
++{
++    // (the answer is kept in the C closure's preload byte, which only Luau closures use and luaF_newCclosure zeroes; a host marks
++    // its functions before its scripts run, as the closures it checks are its scripts')
++    if (cl->preload)
++        return cl->preload;
++    int engines = enginecfunctioncount.load(std::memory_order_acquire);
++    for (int i = 0; i < engines; ++i)
++        if (enginecfunctions[i] == cl->c.f)
++            return cl->preload = enginecfunctionkinds[i];
++    size_t count = hostcfunctioncount.load(std::memory_order_acquire);
++    cl->preload = hostfunctionregistered(cl->c.f, count) ? LUAE_HOSTCFUNCTION : LUAE_LIBRARYCFUNCTION;
++    return cl->preload;
++}
++
+ bool luaE_hostcall(lua_State* L)
+ {
+     if (!L->stack || L->ci <= L->base_ci || !ttisfunction(L->ci->func))
+@@ -1497,14 +1536,7 @@ bool luaE_hostcall(lua_State* L)
+     Closure* cl = clvalue(L->ci->func);
+     if (!cl->isC)
+         return false;
+-    // (the answer is kept in the C closure's preload byte, which only Luau closures use and luaF_newCclosure zeroes: 1 a library
+-    // function, 2 a host's; a host marks its functions before its scripts run, as the closures it checks are its scripts')
+-    if (cl->preload)
+-        return cl->preload == 2;
+-    size_t count = hostcfunctioncount.load(std::memory_order_acquire);
+-    bool host = hostfunctionregistered(cl->c.f, count);
+-    cl->preload = host ? 2 : 1;
+-    return host;
++    return luaE_cfunctionkind(cl) >= LUAE_HOSTCFUNCTION;
+ }
+ 
+ const lua_WorkCounters* lua_workcounters(lua_State* L)
+diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
+index d7058b0..b9fe003 100644
+--- a/luau/VM/src/lgc.cpp
++++ b/luau/VM/src/lgc.cpp
+@@ -1968,10 +1968,13 @@ void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, cons
+         if (ttisfunction(tm) && clvalue(tm) == cl)
+             return;
+     }
+-    g->work.hostops[host ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS]++;
++    // (an engine function the host serves, a datatype's constructor or an object's method, is priced as the host's own Luau that
++    // stood for it, and booked as the C function it is: lua_setenginecfunction)
++    bool served = !host && cl->isC && luaE_cfunctionkind(cl) == LUAE_SERVEDCFUNCTION;
++    int slot = host || served ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS;
++    g->work.hostops[slot]++;
+     if (luaP_state)
+-        luaP_cold(L, obj2gco(cl), host ? LUA_COLD_HOSTFUNCTION : LUA_COLD_CFUNCTION,
+-            int(offsetof(lua_WorkCounters, hostops) / sizeof(uint64_t)) + (host ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS));
++        luaP_cold(L, obj2gco(cl), host ? LUA_COLD_HOSTFUNCTION : LUA_COLD_CFUNCTION, int(offsetof(lua_WorkCounters, hostops) / sizeof(uint64_t)) + slot);
+ }
+ 
+ void luaC_coldmade(lua_State* L, GCObject* o)
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index 89a9938..4a4baa5 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -431,6 +431,22 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
+ // whether the innermost frame of L is one of the host's own C functions (lua_sethostcfunction)
+ LUAI_FUNC bool luaE_hostcall(lua_State* L);
+ 
++// what a C closure is (kept in its preload byte): LUAE_LIBRARYCFUNCTION, LUAE_HOSTCFUNCTION, or one of a host's engine functions
++// (lua_setenginecfunction), served or not
++#define LUAE_LIBRARYCFUNCTION 1
++#define LUAE_HOSTCFUNCTION 2
++#define LUAE_ENGINECFUNCTION 3
++#define LUAE_SERVEDCFUNCTION 4
++LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
++
++// whether frame `ci` is an engine function's (lua_setenginecfunction): a C function it calls is part of its work
++#define luaE_engineframe(L, ci)     ((ci) > (L)->base_ci && ttisfunction((ci)->func) && clvalue((ci)->func)->isC && luaE_cfunctionkind(clvalue((ci)->func)) >= LUAE_ENGINECFUNCTION)
++// whether frame `ci` is an engine function's that was charged as a script's C call: the host's own Luau it runs is part of that call
++#define luaE_enginecallframe(L, ci) (((ci)->flags & LUA_CALLINFO_WORK_CCALL) && luaE_engineframe(L, ci))
++// a script's call of the C closure `ccl` (classified by luaE_hostcall first): a C call (work.ccalls), or for an engine function the
++// host serves the host call the host's own Luau that stood for it was (work.hostcalls)
++#define luaE_workccall(L, ccl)     do     {         if ((ccl)->preload == LUAE_SERVEDCFUNCTION)             (L)->global->work.hostcalls++;         else             (L)->global->work.ccalls++;     } while (0)
++
+ // counts `n` units of a library or engine function's work in the work counters' hostops slot `slot` (lua.h LUA_WORK_SCANNED and the
+ // rest) when a script's work asked for it
+ #define luaE_worklib(L, slot, n) \
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index aebf536..3c2000b 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -310,8 +310,10 @@ static bool luau_execute(lua_State* L)
+     LUAU_ASSERT(!isblack(obj2gco(L))); // we don't use luaC_threadbarrier because active threads never turn black
+ 
+     // (a frame that starts here: luau_execute also continues a frame once a call it made returns, as the yieldable pcall and
+-    // the fast pcall continue their caller, which is not a call)
+-    if ((clvalue(L->ci->func)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && L->ci->savedpc == L->ci->p->code && luaE_scriptframe(L, L->ci - 1))
++    // the fast pcall continue their caller, which is not a call; the host's Luau an engine function runs for a script's call of
++    // it is part of that call, lua_setenginecfunction)
++    if ((clvalue(L->ci->func)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && L->ci->savedpc == L->ci->p->code && luaE_scriptframe(L, L->ci - 1) &&
++        !luaE_enginecallframe(L, L->ci - 1))
+     {
+         L->global->work.hostcalls++;
+         luaC_coldcall(L, clvalue(L->ci->func), 1, NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
+@@ -1196,9 +1198,9 @@ reentry:
+                     lua_CFunction func = ccl->c.f;
+                     if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                     {
+-                        L->global->work.ccalls++;
+                         if (luaE_hostcall(L))
+                             ci->flags |= LUA_CALLINFO_WORK_CCALL;
++                        luaE_workccall(L, ccl);
+                         luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
+                     }
+                     int n = func(L);
+@@ -1332,9 +1334,9 @@ reentry:
+                     lua_CFunction func = ccl->c.f;
+                     if ((cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                     {
+-                        L->global->work.ccalls++;
+                         if (luaE_hostcall(L))
+                             ci->flags |= LUA_CALLINFO_WORK_CCALL;
++                        luaE_workccall(L, ccl);
+                         luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
+                     }
+                     int n = func(L);
+@@ -4256,11 +4258,12 @@ int luau_precall(lua_State* L, StkId func, int nresults)
+     else
+     {
+         lua_CFunction func = ccl->c.f;
+-        if (luaE_scriptwork(L) && !((L->ci - 1)->flags & LUA_CALLINFO_WORK_CCALL))
++        // (a C function an engine function calls is part of its work, whoever called the engine function: lua_setenginecfunction)
++        if (luaE_scriptwork(L) && !((L->ci - 1)->flags & LUA_CALLINFO_WORK_CCALL) && !luaE_engineframe(L, L->ci - 1))
+         {
+-            L->global->work.ccalls++;
+             if (luaE_hostcall(L))
+                 ci->flags |= LUA_CALLINFO_WORK_CCALL;
++            luaE_workccall(L, ccl);
+             luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
+         }
+         int n = func(L);
+diff --git a/luau/VM/src/lvmutils.cpp b/luau/VM/src/lvmutils.cpp
+index 6b1948b..290927d 100644
+--- a/luau/VM/src/lvmutils.cpp
++++ b/luau/VM/src/lvmutils.cpp
+@@ -815,7 +815,18 @@ LUAU_NOINLINE void luaV_callTM(lua_State* L, int nparams, int res)
+ 
+     lua_CFunction func = clvalue(fun)->c.f;
+     if (luaE_scriptwork(L))
++    {
+         L->global->work.tmcalls++;
++        // (an engine function that is a metamethod is priced as the call it stands for, the host's own Luau that served it before
++        // included: lua_setenginecfunction)
++        Closure* ccl = clvalue(fun);
++        if (luaE_cfunctionkind(ccl) >= LUAE_ENGINECFUNCTION)
++        {
++            ci->flags |= LUA_CALLINFO_WORK_CCALL;
++            luaE_workccall(L, ccl);
++            luaC_coldcall(L, ccl, 0, NULL, isLua(ci - 1) ? clvalue((ci - 1)->func)->l.p : NULL);
++        }
++    }
+     int n = func(L);
+     LUAU_ASSERT(n >= 0); // yields should have been blocked by nCcalls
+ 

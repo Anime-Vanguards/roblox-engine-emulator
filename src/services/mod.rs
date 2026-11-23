@@ -408,7 +408,7 @@ pub fn install_capability_calls(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()>
         }
         let (Some(owner), Some(name)) = (class(&engine.reflection, class_name), engine.reflection.name_id(member)) else { continue };
         let message = format!("The current thread cannot call '{member}' (lacking capability {capability})");
-        let function = super::lua::wrapped(lua, engine, move |_, _| raise(message.clone()))?;
+        let function = super::lua::wrapped(lua, engine, member, move |_, _| raise(message.clone()))?;
         engine.behaviors.borrow_mut().add_lua_method(owner, name, function);
     }
     Ok(())

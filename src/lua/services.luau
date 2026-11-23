@@ -46,15 +46,15 @@ local function Extra(Instance_)
 	return Found
 end
 
--- The error level of the script line that called a stub method: `x:Method()` reaches the stub
--- through the Instance __namecall (a C function, lua/raw.rs), one level further up than
--- `x.Method(x)`. `Level` is relative to the stub.
+-- The error level of the script line that called a stub method: a stub runs under its method's C function
+-- (lua/instance.rs lua_method), which `x:Method()` reaches through the Instance __namecall (lua/raw.rs), one
+-- level further up than `x.Method(x)`. `Level` is relative to the stub, as if it were the method itself.
 local function ScriptLevel(Level)
-	local Source, Name = debug.info(Level + 1, "sn")
+	local Source, Name = debug.info(Level + 2, "sn")
 	if Source == "[C]" and Name == "__namecall" then
-		return Level + 1
+		return Level + 2
 	end
-	return Level
+	return Level + 1
 end
 
 local function EmptyPages()

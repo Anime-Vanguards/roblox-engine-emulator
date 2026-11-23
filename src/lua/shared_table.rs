@@ -1820,7 +1820,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     });
 
     let (e, s) = (engine.clone(), store.clone());
-    let index = wrapped(lua, engine, move |lua, args| {
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let shared = this(&args)?;
         let key = key_of(args.get(1))?;
@@ -1828,7 +1828,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         Ok(values([read(lua, &e, &s, &shared.entries.borrow(), &key)?]))
     })?;
     let (e, s) = (engine.clone(), store.clone());
-    let newindex = wrapped(lua, engine, move |lua, args| {
+    let newindex = wrapped(lua, engine, "__newindex", move |lua, args| {
         let args = Args::new(args);
         let shared = this(&args)?;
         let key = key_of(args.get(1))?;
@@ -1880,7 +1880,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let (e, s) = (engine.clone(), store.clone());
     library.set(
         "new",
-        wrapped(lua, engine, move |lua, args| {
+        super::library_function(lua, "new", move |lua, args| {
             let args = Args::new(args);
             let shared = match args.get(0) {
                 _ if args.is_empty() => s.table(Entries::default(), false),
@@ -1904,7 +1904,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let (e, s) = (engine.clone(), store.clone());
         library.set(
             name,
-            wrapped(lua, engine, move |lua, args| {
+            super::library_function(lua, name, move |lua, args| {
                 let args = Args::new(args);
                 let deep = deep_arg(&e, &args, name)?;
                 let shared = shared_arg(&e, &args, 0, name)?;
@@ -1925,13 +1925,13 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         )?;
     }
     let e = engine.clone();
-    library.set("isFrozen", wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Boolean(shared_arg(&e, &Args::new(args), 0, "isFrozen")?.is_frozen())])))?)?;
+    library.set("isFrozen", super::library_function(lua, "isFrozen", move |_, args| Ok(values([LuaValue::Boolean(shared_arg(&e, &Args::new(args), 0, "isFrozen")?.is_frozen())])))?)?;
     // (clear set before size: a plain table's node order, so the library loops as a client's does (measured: cloneAndFreeze,
     // clear, clone, isFrozen, size, increment, update, new))
     let e = engine.clone();
     library.set(
         "clear",
-        wrapped(lua, engine, move |_, args| {
+        super::library_function(lua, "clear", move |_, args| {
             let shared = shared_arg(&e, &Args::new(args), 0, "clear")?;
             if shared.is_frozen() {
                 return raise(FROZEN);
@@ -1948,7 +1948,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     library.set(
         "size",
-        wrapped(lua, engine, move |_, args| Ok(values([LuaValue::Number(shared_arg(&e, &Args::new(args), 0, "size")?.entries.borrow().len() as f64)])))?,
+        super::library_function(lua, "size", move |_, args| Ok(values([LuaValue::Number(shared_arg(&e, &Args::new(args), 0, "size")?.entries.borrow().len() as f64)])))?,
     )?;
     // (increment and update are C functions, as a client's are: lua/raw.rs marks them as the engine's own, so a script's call to
     // one is one C call)

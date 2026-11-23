@@ -1490,6 +1490,45 @@ void lua_sethostcfunctions(const lua_CFunction* functions, int count, lua_CFunct
     hostcfunctioncount.store(registered, std::memory_order_release);
 }
 
+// The host's engine functions (lua_setenginecfunction), with their kinds: a fixed list, published as the host functions are
+static const int kEngineFunctions = 8;
+static lua_CFunction enginecfunctions[kEngineFunctions] = {};
+static uint8_t enginecfunctionkinds[kEngineFunctions] = {};
+static std::atomic<int> enginecfunctioncount{0};
+
+void lua_setenginecfunction(lua_CFunction f, int served)
+{
+    {
+        std::lock_guard<std::mutex> guard(hostcfunctionlock);
+        int count = enginecfunctioncount.load(std::memory_order_relaxed);
+        for (int i = 0; i < count; ++i)
+            if (enginecfunctions[i] == f)
+                return;
+        LUAU_ASSERT(count < kEngineFunctions);
+        if (count == kEngineFunctions)
+            return;
+        enginecfunctions[count] = f;
+        enginecfunctionkinds[count] = served ? LUAE_SERVEDCFUNCTION : LUAE_ENGINECFUNCTION;
+        enginecfunctioncount.store(count + 1, std::memory_order_release);
+    }
+    lua_sethostcfunction(f);
+}
+
+int luaE_cfunctionkind(Closure* cl)
+{
+    // (the answer is kept in the C closure's preload byte, which only Luau closures use and luaF_newCclosure zeroes; a host marks
+    // its functions before its scripts run, as the closures it checks are its scripts')
+    if (cl->preload)
+        return cl->preload;
+    int engines = enginecfunctioncount.load(std::memory_order_acquire);
+    for (int i = 0; i < engines; ++i)
+        if (enginecfunctions[i] == cl->c.f)
+            return cl->preload = enginecfunctionkinds[i];
+    size_t count = hostcfunctioncount.load(std::memory_order_acquire);
+    cl->preload = hostfunctionregistered(cl->c.f, count) ? LUAE_HOSTCFUNCTION : LUAE_LIBRARYCFUNCTION;
+    return cl->preload;
+}
+
 bool luaE_hostcall(lua_State* L)
 {
     if (!L->stack || L->ci <= L->base_ci || !ttisfunction(L->ci->func))
@@ -1497,14 +1536,7 @@ bool luaE_hostcall(lua_State* L)
     Closure* cl = clvalue(L->ci->func);
     if (!cl->isC)
         return false;
-    // (the answer is kept in the C closure's preload byte, which only Luau closures use and luaF_newCclosure zeroes: 1 a library
-    // function, 2 a host's; a host marks its functions before its scripts run, as the closures it checks are its scripts')
-    if (cl->preload)
-        return cl->preload == 2;
-    size_t count = hostcfunctioncount.load(std::memory_order_acquire);
-    bool host = hostfunctionregistered(cl->c.f, count);
-    cl->preload = host ? 2 : 1;
-    return host;
+    return luaE_cfunctionkind(cl) >= LUAE_HOSTCFUNCTION;
 }
 
 const lua_WorkCounters* lua_workcounters(lua_State* L)

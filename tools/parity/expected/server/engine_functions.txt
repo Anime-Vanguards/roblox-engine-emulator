@@ -1,0 +1,380 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+info print [C] -1 print a 0 true
+info error [C] -1 error a 0 true
+info require [C] -1 require a 0 true
+info wait [C] -1 wait a 0 true
+info Wait [C] -1 Wait a 0 true
+info delay [C] -1 delay a 0 true
+info Delay [C] -1 Delay a 0 true
+info spawn [C] -1 spawn a 0 true
+info Spawn [C] -1 Spawn a 0 true
+info tick [C] -1 tick a 0 true
+info time [C] -1 time a 0 true
+info elapsedTime [C] -1 elapsedTime a 0 true
+info ElapsedTime [C] -1 ElapsedTime a 0 true
+info typeof [C] -1 typeof a 0 true
+info settings [C] -1 settings a 0 true
+info UserSettings [C] -1 UserSettings a 0 true
+info version [C] -1 version a 0 true
+info Version [C] -1 Version a 0 true
+info stats [C] -1 stats a 0 true
+info Stats [C] -1 Stats a 0 true
+info printidentity [C] -1 printidentity a 0 true
+info PluginManager [C] -1 PluginManager a 0 true
+info loadstring [C] -1 loadstring a 0 true
+info collectgarbage [C] -1 collectgarbage a 0 true
+info gcinfo [C] -1 gcinfo a 0 true
+info ypcall [C] -1 pcall a 0 true
+info pcall [C] -1 pcall a 0 true
+info xpcall [C] -1 xpcall a 0 true
+info unpack [C] -1 unpack a 0 true
+info getfenv [C] -1 getfenv a 0 true
+info setfenv [C] -1 setfenv a 0 true
+info newproxy [C] -1 newproxy a 0 true
+info tostring [C] -1 tostring a 0 true
+info task.wait [C] -1 wait a 0 true
+info task.spawn [C] -1 spawn a 0 true
+info task.defer [C] -1 defer a 0 true
+info task.delay [C] -1 delay a 0 true
+info task.cancel [C] -1 cancel a 0 true
+info task.synchronize [C] -1 synchronize a 0 true
+info task.desynchronize [C] -1 desynchronize a 0 true
+info coroutine.create [C] -1 create a 0 true
+info coroutine.resume [C] -1 resume a 0 true
+info coroutine.yield [C] -1 yield a 0 true
+info coroutine.wrap [C] -1 wrap a 0 true
+info coroutine.status [C] -1 status a 0 true
+info coroutine.running [C] -1 running a 0 true
+info coroutine.isyieldable [C] -1 isyieldable a 0 true
+info coroutine.close [C] -1 close a 0 true
+info debug.traceback [C] -1 traceback a 0 true
+info debug.info [C] -1 info a 0 true
+info debug.profilebegin [C] -1 profilebegin a 0 true
+info debug.profileend [C] -1 profileend a 0 true
+info debug.setmemorycategory [C] -1 setmemorycategory a 0 true
+info debug.resetmemorycategory [C] -1 resetmemorycategory a 0 true
+info utf8.char [C] -1 char a 0 true
+info utf8.len [C] -1 len a 0 true
+info utf8.codes [C] -1 codes a 0 true
+info utf8.graphemes [C] -1 graphemes a 0 true
+info utf8.nfcnormalize [C] -1 nfcnormalize a 0 true
+info utf8.nfdnormalize [C] -1 nfdnormalize a 0 true
+info os.clock [C] -1 clock a 0 true
+info os.time [C] -1 time a 0 true
+info os.date [C] -1 date a 0 true
+info os.difftime [C] -1 difftime a 0 true
+info math.random [C] -1 random a 0 true
+info math.randomseed [C] -1 randomseed a 0 true
+info math.noise [C] -1 noise a 0 true
+info math.clamp [C] -1 clamp a 0 true
+info string.format [C] -1 format a 0 true
+info table.sort [C] -1 sort a 0 true
+info Instance.new [C] -1 new a 0 true
+info Instance.fromExisting [C] -1 fromExisting a 0 true
+info Vector3.new [C] -1 new a 0 true
+info Vector3.fromNormalId [C] -1 fromNormalId a 0 true
+info Vector3.fromAxis [C] -1 fromAxis a 0 true
+info Vector2.new [C] -1 new a 0 true
+info Vector3int16.new [C] -1 new a 0 true
+info Vector2int16.new [C] -1 new a 0 true
+info CFrame.new [C] -1 new a 0 true
+info CFrame.Angles [C] -1 Angles a 0 true
+info CFrame.fromEulerAnglesXYZ [C] -1 fromEulerAnglesXYZ a 0 true
+info CFrame.fromOrientation [C] -1 fromOrientation a 0 true
+info CFrame.lookAt [C] -1 lookAt a 0 true
+info CFrame.fromMatrix [C] -1 fromMatrix a 0 true
+info CFrame.fromAxisAngle [C] -1 fromAxisAngle a 0 true
+info Color3.new [C] -1 new a 0 true
+info Color3.fromRGB [C] -1 fromRGB a 0 true
+info Color3.fromHSV [C] -1 fromHSV a 0 true
+info Color3.fromHex [C] -1 fromHex a 0 true
+info Color3.toHSV [C] -1 toHSV a 0 true
+info UDim.new [C] -1 new a 0 true
+info UDim2.new [C] -1 new a 0 true
+info UDim2.fromScale [C] -1 fromScale a 0 true
+info UDim2.fromOffset [C] -1 fromOffset a 0 true
+info BrickColor.new [C] -1 new a 0 true
+info BrickColor.random [C] -1 random a 0 true
+info BrickColor.palette [C] -1 palette a 0 true
+info BrickColor.Red [C] -1 Red a 0 true
+info Ray.new [C] -1 new a 0 true
+info Rect.new [C] -1 new a 0 true
+info Region3.new [C] -1 new a 0 true
+info Region3int16.new [C] -1 new a 0 true
+info NumberRange.new [C] -1 new a 0 true
+info NumberSequence.new [C] -1 new a 0 true
+info NumberSequenceKeypoint.new [C] -1 new a 0 true
+info ColorSequence.new [C] -1 new a 0 true
+info ColorSequenceKeypoint.new [C] -1 new a 0 true
+info PhysicalProperties.new [C] -1 newPhysicalPropertiesWithClampedMsgClosure a 0 true
+info Faces.new [C] -1 new a 0 true
+info Axes.new [C] -1 new a 0 true
+info TweenInfo.new [C] -1 new a 0 true
+info Random.new [C] -1 new a 0 true
+info DateTime.now [C] -1 now a 0 true
+info DateTime.fromUnixTimestamp [C] -1 fromUnixTimestamp a 0 true
+info DateTime.fromIsoDate [C] -1 fromIsoDate a 0 true
+info Font.new [C] -1 new a 0 true
+info Font.fromEnum [C] -1 fromEnum a 0 true
+info Font.fromName [C] -1 fromName a 0 true
+info Content.fromUri [C] -1 fromUri a 0 true
+info OverlapParams.new [C] -1 new a 0 true
+info RaycastParams.new [C] -1 new a 0 true
+info PathWaypoint.new [C] -1 new a 0 true
+info Path2DControlPoint.new [C] -1 new a 0 true
+info CatalogSearchParams.new [C] -1 new a 0 true
+info SecurityCapabilities.new [C] -1 new a 0 true
+info FloatCurveKey.new [C] -1 new a 0 true
+info RotationCurveKey.new [C] -1 new a 0 true
+info SharedTable.new [C] -1 new a 0 true
+info SharedTable.size [C] -1 size a 0 true
+info SharedTable.clone [C] -1 clone a 0 true
+info SharedTable.clear [C] -1 clear a 0 true
+info SharedTable.isFrozen [C] -1 isFrozen a 0 true
+info SharedTable.update [C] -1 update a 0 true
+info SharedTable.increment [C] -1 increment a 0 true
+info v3.Lerp [C] -1 Lerp a 0 true
+info v3.Dot [C] -1 Dot a 0 true
+info v3.Cross [C] -1 Cross a 0 true
+info v3.FuzzyEq [C] -1 FuzzyEq a 0 true
+info v3.Max [C] -1 Max a 0 true
+info v2.Lerp [C] -1 Lerp a 0 true
+info cf.Inverse [C] -1 Inverse a 0 true
+info cf.Lerp [C] -1 Lerp a 0 true
+info cf.ToWorldSpace [C] -1 ToWorldSpace a 0 true
+info cf.PointToObjectSpace [C] -1 PointToObjectSpace a 0 true
+info cf.GetComponents [C] -1 GetComponents a 0 true
+info cf.ToEulerAnglesXYZ [C] -1 ToEulerAnglesXYZ a 0 true
+info c3.Lerp [C] -1 Lerp a 0 true
+info c3.ToHex [C] -1 ToHex a 0 true
+info c3.ToHSV [C] -1 ToHSV a 0 true
+info u2.Lerp [C] -1 Lerp a 0 true
+info rng.NextInteger [C] -1 NextInteger a 0 true
+info rng.NextNumber [C] -1 NextNumber a 0 true
+info rng.Clone [C] -1 Clone a 0 true
+info dt.ToIsoDate [C] -1 ToIsoDate a 0 true
+info dt.FormatUniversalTime [C] -1 FormatUniversalTime a 0 true
+info Enum.GetEnums [C] -1 GetEnums a 0 true
+info Enum.Material.GetEnumItems [C] -1 GetEnumItems a 0 true
+info EnumItem.IsA [C] -1 IsA a 0 true
+info game.GetService [C] -1 GetService a 0 true
+info game.FindService [C] -1 FindService a 0 true
+info game.IsLoaded [C] -1 IsLoaded a 0 true
+info game.getService [C] -1 getService a 0 true
+info workspace.FindFirstChild [C] -1 FindFirstChild a 0 true
+info workspace.WaitForChild [C] -1 WaitForChild a 0 true
+info workspace.GetChildren [C] -1 GetChildren a 0 true
+info workspace.GetDescendants [C] -1 GetDescendants a 0 true
+info workspace.IsA [C] -1 IsA a 0 true
+info workspace.Raycast [C] -1 Raycast a 0 true
+info workspace.GetPartBoundsInBox [C] -1 GetPartBoundsInBox a 0 true
+info workspace.GetServerTimeNow [C] -1 GetServerTimeNow a 0 true
+info part.Destroy [C] -1 Destroy a 0 true
+info part.Clone [C] -1 Clone a 0 true
+info part.ClearAllChildren [C] -1 ClearAllChildren a 0 true
+info part.GetAttribute [C] -1 GetAttribute a 0 true
+info part.SetAttribute [C] -1 SetAttribute a 0 true
+info part.GetAttributes [C] -1 GetAttributes a 0 true
+info part.GetPropertyChangedSignal [C] -1 GetPropertyChangedSignal a 0 true
+info part.GetAttributeChangedSignal [C] -1 GetAttributeChangedSignal a 0 true
+info part.IsDescendantOf [C] -1 IsDescendantOf a 0 true
+info part.FindFirstAncestor [C] -1 FindFirstAncestor a 0 true
+info part.GetFullName [C] -1 GetFullName a 0 true
+info part.AddTag [C] -1 AddTag a 0 true
+info part.HasTag [C] -1 HasTag a 0 true
+info part.GetTags [C] -1 GetTags a 0 true
+info part.GetPivot [C] -1 GetPivot a 0 true
+info part.PivotTo [C] -1 PivotTo a 0 true
+info part.GetMass [C] -1 GetMass a 0 true
+info part.ApplyImpulse [C] -1 ApplyImpulse a 0 true
+info model.GetBoundingBox [C] -1 GetBoundingBox a 0 true
+info model.ScaleTo [C] -1 ScaleTo a 0 true
+info event.Fire [C] -1 Fire a 0 true
+info function.Invoke [C] -1 Invoke a 0 true
+info HttpService.JSONEncode [C] -1 JSONEncode a 0 true
+info HttpService.JSONDecode [C] -1 JSONDecode a 0 true
+info HttpService.GenerateGUID [C] -1 GenerateGUID a 0 true
+info HttpService.UrlEncode [C] -1 UrlEncode a 0 true
+info RunService.IsClient [C] -1 IsClient a 0 true
+info RunService.IsServer [C] -1 IsServer a 0 true
+info RunService.IsStudio [C] -1 IsStudio a 0 true
+info RunService.IsRunning [C] -1 IsRunning a 0 true
+info RunService.BindToRenderStep [C] -1 BindToRenderStep a 0 true
+info TweenService.Create [C] -1 Create a 0 true
+info TweenService.GetValue [C] -1 GetValue a 0 true
+info Players.GetPlayers [C] -1 GetPlayers a 0 true
+info Players.GetPlayerFromCharacter [C] -1 GetPlayerFromCharacter a 0 true
+info CollectionService.GetTagged [C] -1 GetTagged a 0 true
+info CollectionService.AddTag [C] -1 AddTag a 0 true
+info CollectionService.GetInstanceAddedSignal [C] -1 GetInstanceAddedSignal a 0 true
+info Debris.AddItem [C] -1 AddItem a 0 true
+info LogService.GetLogHistory [C] -1 GetLogHistory a 0 true
+info SharedTableRegistry.GetSharedTable [C] -1 GetSharedTable a 0 true
+info SharedTableRegistry.SetSharedTable [C] -1 SetSharedTable a 0 true
+info PhysicsService.RegisterCollisionGroup [C] -1 RegisterCollisionGroup a 0 true
+info PhysicsService.GetRegisteredCollisionGroups [C] -1 GetRegisteredCollisionGroups a 0 true
+info Lighting.GetMinutesAfterMidnight [C] -1 GetMinutesAfterMidnight a 0 true
+info Teams.GetTeams [C] -1 GetTeams a 0 true
+info PathfindingService.CreatePath [C] -1 CreatePath a 0 true
+info TextService.GetTextSize [C] -1 GetTextSize a 0 true
+info signal.Connect [C] -1 Connect a 0 true
+info signal.Once [C] -1 Once a 0 true
+info signal.Wait [C] -1 Wait a 0 true
+info signal.ConnectParallel [C] -1 ConnectParallel a 0 true
+info connection.Disconnect [C] -1 Disconnect a 0 true
+same game.GetService true
+same FindFirstChild workspace/part true
+same Destroy part/model true
+same signal.Connect false
+same v3.Lerp false
+same task.wait true
+trace SharedTable.size direct invalid argument #1 to 'size' (SharedTable expected, got number) | @307 / @306 function Trace
+pcall SharedTable.size direct error invalid argument #1 to 'size' (SharedTable expected, got number)
+trace SharedTable.size @317: invalid argument #1 to 'size' (SharedTable expected, got number) | @307 / @317 / @306 function Trace
+pcall SharedTable.size error @317: invalid argument #1 to 'size' (SharedTable expected, got number)
+trace SharedTable.clone @318: invalid argument #1 to 'clone' (SharedTable expected, got number) | @307 / @318 / @306 function Trace
+pcall SharedTable.clone error @318: invalid argument #1 to 'clone' (SharedTable expected, got number)
+trace SharedTable.update @319: from update | @307 / @319 / @319 / @306 function Trace
+pcall SharedTable.update error @319: from update
+trace SharedTableRegistry:GetSharedTable Argument 1 missing or nil | @307 / @320 / @306 function Trace
+pcall SharedTableRegistry:GetSharedTable error Argument 1 missing or nil
+trace SharedTableRegistry.GetSharedTable Argument 1 missing or nil | @307 / @321 / @306 function Trace
+pcall SharedTableRegistry.GetSharedTable error Argument 1 missing or nil
+trace task.spawn @322: invalid argument #1 to 'spawn' (function or thread expected) | @307 / @322 / @306 function Trace
+pcall task.spawn error @322: invalid argument #1 to 'spawn' (function or thread expected)
+trace task.defer @323: invalid argument #1 to 'defer' (function or thread expected) | @307 / @323 / @306 function Trace
+pcall task.defer error @323: invalid argument #1 to 'defer' (function or thread expected)
+trace task.delay @324: invalid argument #2 to 'delay' (function or thread expected) | @307 / @324 / @306 function Trace
+pcall task.delay error @324: invalid argument #2 to 'delay' (function or thread expected)
+trace task.cancel @325: invalid argument #1 to 'cancel' (thread expected, got number) | @307 / @325 / @306 function Trace
+pcall task.cancel error @325: invalid argument #1 to 'cancel' (thread expected, got number)
+trace task.wait @326: invalid argument #1 to 'wait' (number expected, got string) | @307 / @326 / @306 function Trace
+pcall task.wait error @326: invalid argument #1 to 'wait' (number expected, got string)
+trace spawn ok
+pcall spawn ok 
+trace delay ok
+pcall delay ok 
+trace Random.new @329: invalid argument #1 to 'new' (number expected, got string) | @307 / @329 / @306 function Trace
+pcall Random.new error @329: invalid argument #1 to 'new' (number expected, got string)
+trace rng:NextInteger @330: invalid argument #2 (number expected, got string) | @307 / @330 / @306 function Trace
+pcall rng:NextInteger error @330: invalid argument #2 (number expected, got string)
+trace rng.NextInteger @331: invalid argument #2 to 'NextInteger' (number expected, got string) | @307 / @331 / @306 function Trace
+pcall rng.NextInteger error @331: invalid argument #2 to 'NextInteger' (number expected, got string)
+trace TweenInfo.new TweenInfo.new first argument expects a number for time. | @307 / @332 / @306 function Trace
+pcall TweenInfo.new error TweenInfo.new first argument expects a number for time.
+trace Vector3.new ok
+pcall Vector3.new ok 0, 0, 0
+trace Vector2.new ok
+pcall Vector2.new ok 0, 0
+trace CFrame.new @335: invalid argument #1 to 'new' (Vector3 expected, got string) | @307 / @335 / @306 function Trace
+pcall CFrame.new error @335: invalid argument #1 to 'new' (Vector3 expected, got string)
+trace CFrame.Angles Argument 3 missing or nil | @307 / @336 / @306 function Trace
+pcall CFrame.Angles error Argument 3 missing or nil
+trace Color3.fromRGB ok
+pcall Color3.fromRGB ok 0, 0, 0
+trace Color3.new ok
+pcall Color3.new ok 0, 0, 0
+trace UDim2.new ok
+pcall UDim2.new ok {0, 0}, {0, 0}
+trace UDim2.fromScale ok
+pcall UDim2.fromScale ok {0, 0}, {0, 0}
+trace BrickColor.new @341: invalid argument #1 to 'new' (Color3 expected, got table) | @307 / @341 / @306 function Trace
+pcall BrickColor.new error @341: invalid argument #1 to 'new' (Color3 expected, got table)
+trace v3:Lerp @342: invalid argument #2 (Vector3 expected, got string) | @307 / @342 / @306 function Trace
+pcall v3:Lerp error @342: invalid argument #2 (Vector3 expected, got string)
+trace cf:Lerp Argument 3 missing or nil | @307 / @343 / @306 function Trace
+pcall cf:Lerp error Argument 3 missing or nil
+trace game:GetService 'NotAService' is not a valid Service name | @307 / @344 / @306 function Trace
+pcall game:GetService error 'NotAService' is not a valid Service name
+trace game.GetService 'NotAService' is not a valid Service name | @307 / @345 / @306 function Trace
+pcall game.GetService error 'NotAService' is not a valid Service name
+trace game.GetService direct 'NotAService' is not a valid Service name | @307 / @306 function Trace
+pcall game.GetService direct error 'NotAService' is not a valid Service name
+trace workspace:FindFirstChild Argument 1 missing or nil | @307 / @347 / @306 function Trace
+pcall workspace:FindFirstChild error Argument 1 missing or nil
+trace workspace.FindFirstChild Argument 1 missing or nil | @307 / @348 / @306 function Trace
+pcall workspace.FindFirstChild error Argument 1 missing or nil
+trace workspace:Raycast Argument 2 missing or nil | @307 / @349 / @306 function Trace
+pcall workspace:Raycast error Argument 2 missing or nil
+trace workspace.Raycast Argument 2 missing or nil | @307 / @350 / @306 function Trace
+pcall workspace.Raycast error Argument 2 missing or nil
+trace part:SetAttribute Array is not a supported attribute type | @307 / @351 / @306 function Trace
+pcall part:SetAttribute error Array is not a supported attribute type
+trace part.SetAttribute Array is not a supported attribute type | @307 / @352 / @306 function Trace
+pcall part.SetAttribute error Array is not a supported attribute type
+trace HttpService:JSONDecode Can't parse JSON | @307 / @353 / @306 function Trace
+pcall HttpService:JSONDecode error Can't parse JSON
+trace HttpService.JSONDecode Can't parse JSON | @307 / @354 / @306 function Trace
+pcall HttpService.JSONDecode error Can't parse JSON
+trace HttpService:JSONEncode ok
+pcall HttpService:JSONEncode ok [null]
+trace TweenService:Create ok
+pcall TweenService:Create ok Tween
+trace TweenService.Create ok
+pcall TweenService.Create ok Tween
+trace Debris:AddItem Unable to cast value to Object | @307 / @358 / @306 function Trace
+pcall Debris:AddItem error Unable to cast value to Object
+trace CollectionService:AddTag ok
+pcall CollectionService:AddTag ok 
+trace event:Fire Expected ':' not '.' calling member function Fire | @307 / @360 / @306 function Trace
+pcall event:Fire error Expected ':' not '.' calling member function Fire
+trace signal:Connect ok
+pcall signal:Connect ok Connection
+trace signal.Connect ok
+pcall signal.Connect ok Connection
+trace require Attempted to call require with invalid argument(s). | @307 / @363 / @306 function Trace
+pcall require error Attempted to call require with invalid argument(s).
+trace print @314: from __tostring | @307 / @314 function __tostring / @364 / @306 function Trace
+pcall print error @314: from __tostring
+trace tostring @314: from __tostring | @307 / @314 function __tostring / @365 / @306 function Trace
+pcall tostring error @314: from __tostring
+trace collectgarbage @366: collectgarbage must be called with 'count'; use gcinfo() instead | @307 / @366 / @306 function Trace
+pcall collectgarbage error @366: collectgarbage must be called with 'count'; use gcinfo() instead
+trace os.time @367: invalid argument #1 to 'time' (table expected, got number) | @307 / @367 / @306 function Trace
+pcall os.time error @367: invalid argument #1 to 'time' (table expected, got number)
+trace utf8.nfcnormalize ok
+pcall utf8.nfcnormalize ok 5
+trace Instance.new Unable to create an Instance of type "NotAClass" | @307 / @369 / @306 function Trace
+pcall Instance.new error Unable to create an Instance of type "NotAClass"
+trace typeof @370: missing argument #1 | @307 / @370 / @306 function Trace
+pcall typeof error @370: missing argument #1
+trace DateTime.fromIsoDate ok
+pcall DateTime.fromIsoDate ok nil
+levels print @ 390 __tostring / [C] -1 print
+levels update @ 396  / [C] -1 update
+levels invoke @ 401 
+levels task.spawn @ 407  | @407
+levels spawn @ 412 
+uncaught SharedTable.size @444: invalid argument #1 to 'size' (SharedTable expected, got number) /     Stack Begin /     Script '<probe>', Line @444 /     Stack End
+uncaught task.spawn @447: invalid argument #1 to 'spawn' (function or thread expected) /     Stack Begin /     Script '<probe>', Line @447 /     Stack End
+uncaught game:GetService 'NotAService' is not a valid Service name /     Stack Begin /     Script '<probe>', Line @450 /     Stack End
+uncaught game.GetService 'NotAService' is not a valid Service name /     Stack Begin /     Script '<probe>', Line @453 /     Stack End
+uncaught SharedTableRegistry:GetSharedTable Argument 1 missing or nil /     Stack Begin /     Script '<probe>', Line @456 /     Stack End
+uncaught Vector3.new 
+uncaught print @314: from __tostring /     Stack Begin /     Script '<probe>', Line @314 - function __tostring /     Script '<probe>', Line @462 /     Stack End
+uncaught Random.new @465: invalid argument #1 to 'new' (number expected, got string) /     Stack Begin /     Script '<probe>', Line @465 /     Stack End
+uncaught SharedTable.update @469: parity uncaught update /     Stack Begin /     Script '<probe>', Line @469 /     Script '<probe>', Line @468 /     Stack End
+trace task.delay seconds @477: invalid argument #1 to 'delay' (number expected, got string) | @307 / @477 / @306 function Trace
+pcall task.delay seconds error @477: invalid argument #1 to 'delay' (number expected, got string)
+trace coroutine.create @478: invalid argument #1 to 'create' (function expected, got number) | @307 / @478 / @306 function Trace
+pcall coroutine.create error @478: invalid argument #1 to 'create' (function expected, got number)
+trace coroutine.create none @479: missing argument #1 to 'create' (function expected) | @307 / @479 / @306 function Trace
+pcall coroutine.create none error @479: missing argument #1 to 'create' (function expected)
+trace coroutine.wrap @480: invalid argument #1 to 'wrap' (function expected, got number) | @307 / @480 / @306 function Trace
+pcall coroutine.wrap error @480: invalid argument #1 to 'wrap' (function expected, got number)
+trace v3.FuzzyEq @481: invalid argument #2 to 'FuzzyEq' (Vector3 expected, got number) | @307 / @481 / @306 function Trace
+pcall v3.FuzzyEq error @481: invalid argument #2 to 'FuzzyEq' (Vector3 expected, got number)
+trace v3:FuzzyEq @482: invalid argument #2 (Vector3 expected, got number) | @307 / @482 / @306 function Trace
+pcall v3:FuzzyEq error @482: invalid argument #2 (Vector3 expected, got number)
+trace Path2DControlPoint.new @483: invalid argument #1 to 'new' (UDim2 expected, got number) | @307 / @483 / @306 function Trace
+pcall Path2DControlPoint.new error @483: invalid argument #1 to 'new' (UDim2 expected, got number)
+trace GetSharedTable wrong self Expected ':' not '.' calling member function GetSharedTable | @307 / @484 / @306 function Trace
+pcall GetSharedTable wrong self error Expected ':' not '.' calling member function GetSharedTable
+waiting task.wait suspended | @492
+waiting wait suspended | @495
+waiting signal:Wait suspended | @498
+waiting signal.Wait suspended | @501
+waiting WaitForChild suspended | @504
+waiting WaitForChild value suspended | @507
+resumed task.wait @512

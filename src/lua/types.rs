@@ -12,7 +12,8 @@ use mlua::prelude::*;
 
 use super::{
     Args, Flow, Ret, enum_item_value, enum_value, lock_metatable, none, raise, raise_at_caller, raise_plain,
-    refs::{self, Hold}, signal_value, typeof_value, values, wrapped,
+    named, refs::{self, Hold}, signal_value, typeof_value, values, wrapped,
+    cfunction::Kind::Library,
 };
 use crate::{
     Engine, InstanceId, ScriptError,
@@ -252,11 +253,11 @@ fn assign_member<T>(engine: &Engine, key: &LuaValue, type_name: &str, properties
 /// The `__newindex` of a read-only datatype of the engine's own ([`assign_member`]).
 fn read_only_members(lua: &Lua, engine: &Rc<Engine>, type_name: &'static str, properties: &'static [&'static str]) -> LuaResult<LuaFunction> {
     let e = engine.clone();
-    wrapped(lua, engine, move |_, args| assign_member(&e, Args::new(args).get(1), type_name, properties))
+    wrapped(lua, engine, "__newindex", move |_, args| assign_member(&e, Args::new(args).get(1), type_name, properties))
 }
 
 fn read_only(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaFunction> {
-    wrapped(lua, engine, |_, args| {
+    wrapped(lua, engine, "__newindex", |_, args| {
         let args = Args::new(args);
         raise(format!("{} cannot be assigned to", key_text(args.get(1))))
     })
@@ -321,14 +322,14 @@ pub fn instance_handle_of(value: &LuaValue) -> Option<crate::InstanceId> {
 
 fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // (an assignment raises the same text: not measured)
-    let no_member = |lua: &Lua, engine: &Rc<Engine>| {
-        wrapped(lua, engine, |_, args| {
+    let no_member = |lua: &Lua, engine: &Rc<Engine>, name: &str| {
+        wrapped(lua, engine, name, |_, args| {
             let args = Args::new(args);
             raise(format!("{} is not a valid member of InstanceHandle", key_text(args.get(1))))
         })
     };
-    let index = no_member(lua, engine)?;
-    let newindex = no_member(lua, engine)?;
+    let index = no_member(lua, engine, "__index")?;
+    let newindex = no_member(lua, engine, "__newindex")?;
     let e = engine.clone();
     let tostring = lua.create_function(move |_, this: LuaValue| {
         let state = e.state.borrow();
@@ -360,17 +361,17 @@ fn enum_item_of(value: &LuaValue) -> Option<EnumItemId> {
 
 fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // EnumItem
-    let is_a = lua.create_function(|lua, (item, name): (LuaValue, LuaValue)| {
+    let is_a = named(lua, "IsA", Library, lua.create_function(|lua, (item, name): (LuaValue, LuaValue)| {
         let engine = engine_of(lua);
         let Some(item) = enum_item_of(&item) else { return Ok(false) };
         Ok(match name {
             LuaValue::String(name) => engine.reflection.enum_item_type_name(item).as_bytes() == &*name.as_bytes(),
             _ => false,
         })
-    })?;
+    })?)?;
     engine.lua.borrow_mut().enum_item_is_a = Some(is_a.clone());
     let e = engine.clone();
-    let item_index = wrapped(lua, engine, move |lua, args| {
+    let item_index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let Some(item) = enum_item_of(args.get(0)) else { return raise("invalid EnumItem") };
         let info = e.reflection.enum_item_info(item);
@@ -395,7 +396,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         Ok(engine.reflection.enum_item_path(item.borrow::<LEnumItem>()?.0))
     })?;
     let newindex = read_only(lua, engine)?;
-    let item_newindex = wrapped(lua, engine, |_, args| {
+    let item_newindex = wrapped(lua, engine, "__newindex", |_, args| {
         let args = Args::new(args);
         raise(format!("{} is not a valid member of EnumItem", key_text(args.get(1))))
     })?;
@@ -410,7 +411,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let members = lua.create_table()?;
     members.set(
         "GetEnumItems",
-        lua.create_function(|lua, this: LuaValue| {
+        named(lua, "GetEnumItems", Library, lua.create_function(|lua, this: LuaValue| {
             let engine = engine_of(lua);
             let LuaValue::UserData(ud) = this else { return Err(LuaError::runtime("Expected ':' not '.' calling member function GetEnumItems")) };
             let id = ud.borrow::<LEnum>()?.0;
@@ -420,11 +421,11 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 table.raw_push(enum_item_value(lua, &engine, item)?)?;
             }
             Ok(table)
-        })?,
+        })?)?,
     )?;
     members.set(
         "FromName",
-        lua.create_function(|lua, (this, name): (LuaAnyUserData, LuaValue)| {
+        named(lua, "FromName", Library, lua.create_function(|lua, (this, name): (LuaAnyUserData, LuaValue)| {
             let engine = engine_of(lua);
             let id = this.borrow::<LEnum>()?.0;
             let LuaValue::String(name) = name else { return Ok(LuaValue::Nil) };
@@ -432,11 +433,11 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 Some(&item) => enum_item_value(lua, &engine, item),
                 None => Ok(LuaValue::Nil),
             }
-        })?,
+        })?)?,
     )?;
     members.set(
         "FromValue",
-        lua.create_function(|lua, (this, value): (LuaAnyUserData, LuaValue)| {
+        named(lua, "FromValue", Library, lua.create_function(|lua, (this, value): (LuaAnyUserData, LuaValue)| {
             let engine = engine_of(lua);
             let id = this.borrow::<LEnum>()?.0;
             let number = number_of(&value);
@@ -447,11 +448,11 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 Some(&item) => enum_item_value(lua, &engine, item),
                 None => Ok(LuaValue::Nil),
             }
-        })?,
+        })?)?,
     )?;
     engine.lua.borrow_mut().enum_members = Some(members.clone());
     let e = engine.clone();
-    let enum_index = wrapped(lua, engine, move |lua, args| {
+    let enum_index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid Enum") };
         let id = ud.borrow::<LEnum>()?.0;
@@ -479,16 +480,16 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
 
     // The Enum global
-    let get_enums = lua.create_function(|lua, ()| {
+    let get_enums = named(lua, "GetEnums", Library, lua.create_function(|lua, ()| {
         let engine = engine_of(lua);
         let table = lua.create_table()?;
         for id in 0..engine.reflection.enums.len() {
             table.raw_push(enum_value(lua, &engine, id as EnumId)?)?;
         }
         Ok(table)
-    })?;
+    })?)?;
     let e = engine.clone();
-    let global_index = wrapped(lua, engine, move |lua, args| {
+    let global_index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         if let LuaValue::String(key) = args.get(1) {
             if &*key.as_bytes() == b"GetEnums" {
@@ -620,11 +621,11 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
 fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let members = lua.create_table()?;
     let e = engine.clone();
-    let connect_fn = wrapped(lua, engine, move |lua, args| connect(lua, &e, args, false))?;
+    let connect_fn = wrapped(lua, engine, "Connect", move |lua, args| connect(lua, &e, args, false))?;
     let e = engine.clone();
-    let once_fn = wrapped(lua, engine, move |lua, args| connect(lua, &e, args, true))?;
+    let once_fn = wrapped(lua, engine, "Once", move |lua, args| connect(lua, &e, args, true))?;
     let e = engine.clone();
-    let wait_fn = wrapped(lua, engine, move |lua, args| {
+    let wait_fn = wrapped(lua, engine, "Wait", move |lua, args| {
         let args = Args::new(args);
         let Some(signal) = signal_of(&e, args.get(0)) else {
             return wait_misuse(&e, args.get(0));
@@ -640,7 +641,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
     members.set("Connect", connect_fn.clone())?;
     let e = engine.clone();
-    let connect_parallel_fn = wrapped(lua, engine, move |lua, args| connect_as(lua, &e, args, false, true))?;
+    let connect_parallel_fn = wrapped(lua, engine, "ConnectParallel", move |lua, args| connect_as(lua, &e, args, false, true))?;
     members.set("ConnectParallel", connect_parallel_fn.clone())?;
     members.set("Once", once_fn)?;
     members.set("Wait", wait_fn.clone())?;
@@ -650,7 +651,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     members.set("wait", wait_fn)?;
     members.set("connectParallel", connect_parallel_fn)?;
     engine.lua.borrow_mut().signal_members = Some(members.clone());
-    let index = wrapped(lua, engine, move |_, args| {
+    let index = wrapped(lua, engine, "__index", move |_, args| {
         let args = Args::new(args);
         let member: LuaValue = match args.get(1) {
             LuaValue::String(key) => members.raw_get(key.clone())?,
@@ -679,7 +680,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
 
     let connection_members = lua.create_table()?;
-    let disconnect = lua.create_function(|lua, this: LuaValue| {
+    let disconnect = named(lua, "Disconnect", Library, lua.create_function(|lua, this: LuaValue| {
         let engine = engine_of(lua);
         if let LuaValue::UserData(ud) = this {
             if let Ok(connection) = ud.borrow::<LConnection>() {
@@ -693,12 +694,12 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             }
         }
         Ok(())
-    })?;
+    })?)?;
     connection_members.set("Disconnect", disconnect.clone())?;
     connection_members.set("disconnect", disconnect)?;
     engine.lua.borrow_mut().connection_members = Some(connection_members.clone());
     let e = engine.clone();
-    let connection_index = wrapped(lua, engine, move |_, args| {
+    let connection_index = wrapped(lua, engine, "__index", move |_, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid connection") };
         let connection = ud.borrow::<LConnection>()?.0;
@@ -808,7 +809,7 @@ fn make_font(lua: &Lua, font: FontValue) -> LuaResult<LuaValue> {
 
 fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
-    let index = wrapped(lua, engine, move |lua, args| {
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let Some(font) = font_of(args.get(0)) else { return raise("invalid Font") };
         if let LuaValue::String(key) = args.get(1) {
@@ -825,7 +826,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         unknown_member(&e, args.get(1), "Font", true)
     })?;
     let e = engine.clone();
-    let newindex = wrapped(lua, engine, move |lua, args| {
+    let newindex = wrapped(lua, engine, "__newindex", move |lua, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid Font") };
         let font = ud.borrow::<LFont>()?;
@@ -911,7 +912,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     library.set(
         "new",
-        wrapped(lua, engine, move |lua, args| {
+        wrapped(lua, engine, "new", move |lua, args| {
             let args = Args::new(args);
             let family = family_arg(lua, &e, &args, "new")?;
             let font = FontValue {
@@ -925,7 +926,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     library.set(
         "fromEnum",
-        wrapped(lua, engine, move |lua, args| {
+        wrapped(lua, engine, "fromEnum", move |lua, args| {
             let args = Args::new(args);
             let Some(item) = coerce_named_enum(lua, &e, "Font", args.get(0)) else {
                 return raise_plain("invalid argument #1 to 'fromEnum' (Enum.Font expected)");
@@ -941,7 +942,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     library.set(
         "fromName",
-        wrapped(lua, engine, move |lua, args| {
+        wrapped(lua, engine, "fromName", move |lua, args| {
             let args = Args::new(args);
             let name = family_arg(lua, &e, &args, "fromName")?;
             let font = FontValue {
@@ -955,7 +956,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     library.set(
         "fromId",
-        wrapped(lua, engine, move |lua, args| {
+        wrapped(lua, engine, "fromId", move |lua, args| {
             let args = Args::new(args);
             let id = match args.get(0) {
                 _ if args.is_empty() => return raise_at_caller("missing argument #1 to 'fromId' (number expected)"),
@@ -1027,7 +1028,7 @@ fn content_of(value: &LuaValue) -> Option<ContentValue> {
 
 fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
-    let index = wrapped(lua, engine, move |lua, args| {
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let Some(content) = content_of(args.get(0)) else { return raise("invalid Content") };
         if let LuaValue::String(key) = args.get(1) {
@@ -1087,10 +1088,10 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let library = lua.create_table()?;
     library.set(
         "fromUri",
-        lua.create_function(|lua, uri: LuaValue| {
+        named(lua, "fromUri", Library, lua.create_function(|lua, uri: LuaValue| {
             let text = string_of(lua, &uri)?;
             lua.create_any_userdata(LContent::new(lua, ContentValue::Uri(Str::from(text))))
-        })?,
+        })?)?,
     )?;
     let none_value = lua.create_any_userdata(LContent::new(lua, ContentValue::None))?;
     lock_metatable(lua, &none_value)?;
@@ -1099,7 +1100,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let none = none_value.clone();
     library.set(
         "fromAssetId",
-        wrapped(lua, engine, move |lua, args| {
+        wrapped(lua, engine, "fromAssetId", move |lua, args| {
             let args = Args::new(args);
             let id = args.get(0);
             if let LuaValue::Number(number) = id {
@@ -1118,7 +1119,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     library.set(
         "fromObject",
-        wrapped(lua, engine, |lua, args| {
+        wrapped(lua, engine, "fromObject", |lua, args| {
             let args = Args::new(args);
             let content = match args.get(0) {
                 LuaValue::Nil => return raise_plain("invalid argument #1 to 'fromObject' (Object expected, got nil)"),
@@ -1140,7 +1141,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
 
 fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
-    let index = wrapped(lua, engine, move |lua, args| {
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid TweenInfo") };
         let info = ud.borrow::<LTweenInfo>()?;
@@ -1205,7 +1206,7 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // once the style is known, before the direction is looked at. A seventh argument is ignored.
     library.set(
         "new",
-        wrapped(lua, engine, move |lua, args| {
+        wrapped(lua, engine, "new", move |lua, args| {
             let args = Args::new(args);
             let count = args.len();
             let number = |index: usize| match args.get(index) {
@@ -1448,7 +1449,7 @@ fn random_method(
     method: impl Fn(&Lua, &Engine, &Args, RandomCall) -> Ret + Clone + 'static,
 ) -> LuaResult<()> {
     let (by_dot, owner) = (method.clone(), engine.clone());
-    dotted.raw_set(name, wrapped(lua, engine, move |lua, args| by_dot(lua, &owner, &Args::new(args), RandomCall { name, dotted: true }))?)?;
+    dotted.raw_set(name, wrapped(lua, engine, name, move |lua, args| by_dot(lua, &owner, &Args::new(args), RandomCall { name, dotted: true }))?)?;
     let owner = engine.clone();
     let raw = lua.create_function(move |lua, args: LuaMultiValue| super::encode(lua, method(lua, &owner, &Args::new(args), RandomCall { name, dotted: false })))?;
     called.raw_set(name, raw)
@@ -1525,7 +1526,7 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         Ok(values([LuaValue::UserData(copy)]))
     })?;
     let e = engine.clone();
-    let index = wrapped(lua, engine, move |_, args| {
+    let index = wrapped(lua, engine, "__index", move |_, args| {
         let args = Args::new(args);
         let member: LuaValue = match args.get(1) {
             LuaValue::String(key) => methods.raw_get(key.clone())?,
@@ -1567,7 +1568,7 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let library = lua.create_table()?;
     library.set(
         "new",
-        wrapped(lua, engine, move |lua, args| {
+        wrapped(lua, engine, "new", move |lua, args| {
             let args = Args::new(args);
             let seed = match args.get(0) {
                 LuaValue::Nil => {
@@ -2168,7 +2169,7 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let add_cast = |name: &'static str, f: fn(&Lua, f64) -> Ret| -> LuaResult<()> {
         methods.set(
             name,
-            wrapped(lua, engine, move |lua, args| f(lua, this_millis(&Args::new(args))?))?,
+            wrapped(lua, engine, name, move |lua, args| f(lua, this_millis(&Args::new(args))?))?,
         )?;
         calls.raw_set(
             name,
@@ -2203,12 +2204,12 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
     };
     for (name, parts) in [("FormatUniversalTime", universal_parts as fn(f64) -> Parts), ("FormatLocalTime", local_parts as fn(f64) -> Parts)] {
-        methods.set(name, wrapped(lua, engine, format(Some(name), parts, engine.clone()))?)?;
+        methods.set(name, wrapped(lua, engine, name, format(Some(name), parts, engine.clone()))?)?;
         let call = format(None, parts, engine.clone());
         calls.raw_set(name, lua.create_function(move |lua, args: LuaMultiValue| super::encode(lua, call(lua, args)))?)?;
     }
     let e = engine.clone();
-    let index = wrapped(lua, engine, move |_, args| {
+    let index = wrapped(lua, engine, "__index", move |_, args| {
         let args = Args::new(args);
         let millis = date_time_of(args.get(0)).unwrap_or(0.0);
         if let LuaValue::String(key) = args.get(1) {
@@ -2257,10 +2258,10 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     library.set(
         "now",
-        lua.create_function(move |lua, ()| {
+        named(lua, "now", Library, lua.create_function(move |lua, ()| {
             let millis = e.state.borrow_mut().sched.unix_millis();
             make_date_time(lua, millis)
-        })?,
+        })?)?,
     )?;
     // fromUnixTimestamp truncates its seconds toward zero before scaling (0.5 and -0.5 are 0, 1.999 is 1000 ms, -1.5
     // -1000 ms) and raises TIMESTAMP_OUT_OF_RANGE for a second outside the range, NaN and the infinities included;
@@ -2278,8 +2279,8 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(values([make_date_time(lua, millis)?]))
         }
     };
-    library.set("fromUnixTimestamp", wrapped(lua, engine, timestamp("fromUnixTimestamp", 1000.0, engine.clone()))?)?;
-    library.set("fromUnixTimestampMillis", wrapped(lua, engine, timestamp("fromUnixTimestampMillis", 1.0, engine.clone()))?)?;
+    library.set("fromUnixTimestamp", wrapped(lua, engine, "fromUnixTimestamp", timestamp("fromUnixTimestamp", 1000.0, engine.clone()))?)?;
+    library.set("fromUnixTimestampMillis", wrapped(lua, engine, "fromUnixTimestampMillis", timestamp("fromUnixTimestampMillis", 1.0, engine.clone()))?)?;
     // (the units are checked from the last one passed to the first, as a client does: fromUniversalTime(Vector3.one, "x")
     // raises for argument #2; Studio 0.747, datatype_errors.luau)
     let from_units = |name: &'static str, offset_millis: f64, engine: Rc<Engine>| {
@@ -2295,13 +2296,13 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             }
         }
     };
-    library.set("fromUniversalTime", wrapped(lua, engine, from_units("fromUniversalTime", 0.0, engine.clone()))?)?;
-    library.set("fromLocalTime", wrapped(lua, engine, from_units("fromLocalTime", standard_offset_millis, engine.clone()))?)?;
+    library.set("fromUniversalTime", wrapped(lua, engine, "fromUniversalTime", from_units("fromUniversalTime", 0.0, engine.clone()))?)?;
+    library.set("fromLocalTime", wrapped(lua, engine, "fromLocalTime", from_units("fromLocalTime", standard_offset_millis, engine.clone()))?)?;
     // (no argument at all answers nil, as text that is no date does; nil passed raises: Studio 0.747, datatype_errors.luau)
     let e = engine.clone();
     library.set(
         "fromIsoDate",
-        wrapped(lua, engine, move |lua, args| {
+        wrapped(lua, engine, "fromIsoDate", move |lua, args| {
             let args = Args::new(args);
             if args.is_empty() {
                 return Ok(values([LuaValue::Nil]));

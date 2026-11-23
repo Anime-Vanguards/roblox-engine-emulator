@@ -93,6 +93,98 @@
 			"why": "a server has no NetworkClient; ree's probe line is the service it made"
 		}
 	],
+	"engine_functions": [
+		{
+			"line": "same signal.Connect false",
+			"why": "a signal's method read as a value is a new function at every read in a client (not rawequal to another read); ree's is one function a method, read after read"
+		},
+		{
+			"line": "same v3.Lerp false",
+			"why": "a vector's method read as a value is a new function at every read in a client; ree's is one function a method"
+		},
+		{
+			"line": "trace spawn ok",
+			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
+		},
+		{
+			"line": "pcall spawn ok ",
+			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
+		},
+		{
+			"line": "trace delay ok",
+			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
+		},
+		{
+			"line": "pcall delay ok ",
+			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
+		},
+		{
+			"line": "trace workspace:Raycast Argument 2 missing or nil | @307 / @349 / @306 function Trace",
+			"why": "Raycast with a string origin raises the reflection's `Argument 2 missing or nil` in a client (its direction left out); ree checks the origin and direction itself and raises its own message"
+		},
+		{
+			"line": "pcall workspace:Raycast error Argument 2 missing or nil",
+			"why": "Raycast with a string origin raises the reflection's `Argument 2 missing or nil` in a client (its direction left out); ree checks the origin and direction itself and raises its own message"
+		},
+		{
+			"line": "trace workspace.Raycast Argument 2 missing or nil | @307 / @350 / @306 function Trace",
+			"why": "Raycast with a string origin raises the reflection's `Argument 2 missing or nil` in a client (its direction left out); ree checks the origin and direction itself and raises its own message"
+		},
+		{
+			"line": "pcall workspace.Raycast error Argument 2 missing or nil",
+			"why": "Raycast with a string origin raises the reflection's `Argument 2 missing or nil` in a client (its direction left out); ree checks the origin and direction itself and raises its own message"
+		},
+		{
+			"line": "trace TweenService:Create ok",
+			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
+		},
+		{
+			"line": "pcall TweenService:Create ok Tween",
+			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
+		},
+		{
+			"line": "trace TweenService.Create ok",
+			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
+		},
+		{
+			"line": "pcall TweenService.Create ok Tween",
+			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
+		},
+		{
+			"line": "trace CollectionService:AddTag ok",
+			"why": "CollectionService:AddTag of a value that is no Instance does nothing in a client; ree raises `Argument 1 missing or nil`"
+		},
+		{
+			"line": "pcall CollectionService:AddTag ok ",
+			"why": "CollectionService:AddTag of a value that is no Instance does nothing in a client; ree raises `Argument 1 missing or nil`"
+		},
+		{
+			"line": "levels invoke @ 401 ",
+			"why": "a client runs a BindableFunction's OnInvoke on a thread of its own (no level above the handler); ree calls it from Invoke's engine Luau on the invoking thread"
+		},
+		{
+			"line": "trace GetSharedTable wrong self Expected ':' not '.' calling member function GetSharedTable | @307 / @484 / @306 function Trace",
+			"why": "a service method written in the engine's Luau does not check its self, so a wrong one called with `.` runs (a client raises `Expected ':' not '.'`); the methods in Rust check it"
+		},
+		{
+			"line": "pcall GetSharedTable wrong self error Expected ':' not '.' calling member function GetSharedTable",
+			"why": "a service method written in the engine's Luau does not check its self, so a wrong one called with `.` runs (a client raises `Expected ':' not '.'`); the methods in Rust check it"
+		}
+	],
+	"engine_functions_require": [
+		{
+			"line": "module-level2 nil nil nil",
+			"why": "a client runs a module's chunk on a thread of its own, so debug.info(2) in the chunk is nil and a traceback in it lists the module alone; ree runs it on the requiring thread, under [C] require"
+		},
+		{
+			"line": "module-trace ReplicatedStorage.ParityRequire.Trace:1",
+			"why": "a client runs a module's chunk on a thread of its own, so debug.info(2) in the chunk is nil and a traceback in it lists the module alone; ree runs it on the requiring thread, under [C] require"
+		},
+		{
+			"line": "waiting first suspended | @37 function Req",
+			"why": "a client runs a module's chunk on a thread of its own, so the thread that began loading a module that waits shows only its require line; ree runs the chunk on the requiring thread"
+		}
+	],
 	"errors": [
 		{
 			"line": "error require-number | Downloading asset failed for asset id 5.  Is the asset id correct and is the asset type \"Model\"?",

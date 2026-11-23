@@ -2002,10 +2002,10 @@ const UTAG_PROXY: c_int = ffi::LUA_UTAG_LIMIT + 1;
 /// "Instance".
 unsafe extern "C-unwind" fn typeof_c(state: *mut ffi::lua_State) -> c_int {
     unsafe {
-        // `typeof()` raises "missing argument #1", as type() does, without a position (measured in a playing client, Studio
-        // 0.744: tools/parity/probes/values.luau)
+        // `typeof()` raises "missing argument #1", as type() does, at the line that called it, none from pcall(typeof) (measured
+        // in a playing client, Studio 0.744: tools/parity/probes/values.luau, and 0.747: engine_functions.luau)
         if ffi::lua_gettop(state) == 0 {
-            raise(state, "missing argument #1".into(), 0);
+            raise(state, "missing argument #1".into(), 1);
         }
         ffi::lua_settop(state, 1);
         let kind = ffi::lua_type(state, 1);

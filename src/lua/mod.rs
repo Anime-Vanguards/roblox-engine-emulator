@@ -2,13 +2,15 @@
 //! environments and require (ports of `runtime/engine/globals.luau`, `modules.luau`, the
 //! metatable half of `instance.luau` and `init.luau`'s Engine.Start).
 //!
-//! Engine functions reach scripts through the prelude's call protocol (`prelude.luau`): a Rust
-//! function returns its values, or a marker that makes the Luau wrapper raise a string error at
-//! the right level or yield the calling coroutine. Scripts therefore see Roblox's string errors
-//! (never mlua's userdata errors), and yields never cross a Rust frame.
+//! Engine functions answer a call protocol: a Rust function returns its values, or a marker that makes the C function a script
+//! called (lua/cfunction.rs, one named C function per engine function, as a client's are) raise a string error at the right
+//! level or yield the calling thread. Scripts therefore see Roblox's string errors (never mlua's userdata errors), and yields
+//! never cross a Rust frame.
 
 pub mod actors;
 pub mod bindable;
+pub mod builtins;
+pub mod cfunction;
 pub mod convert;
 pub mod curve_keys;
 pub mod float_mode;
@@ -166,6 +168,9 @@ pub struct LuaRefs {
     pub call_methods: FxHashMap<(ClassId, NameId), LuaFunction>,
     /// Stand-ins for reflected methods without a behaviour (report + return nil)
     pub unimplemented: FxHashMap<(ClassId, NameId), LuaFunction>,
+    /// Behaviour methods in the engine's Luau as scripts call them, one C function each (instance.rs `lua_method`), by the
+    /// (class, name) that defines them, with the Luau function each stands for
+    pub lua_methods: FxHashMap<(ClassId, NameId), (usize, LuaFunction)>,
     pub prelude: Option<Rc<Prelude>>,
     /// The shared global table every script environment inherits
     pub shared: Option<LuaTable>,
@@ -190,13 +195,30 @@ impl Engine {
     }
 }
 
-/// Wraps a Rust engine function (protocol results) into a script-callable function.
-pub fn wrapped<F>(lua: &Lua, engine: &Rc<Engine>, function: F) -> LuaResult<LuaFunction>
+/// A Rust engine function (protocol results) as scripts call it: one C function named `name` (lua/cfunction.rs), for what the
+/// engine serves (a datatype's constructors, functions and metamethods, an object's members: [`cfunction::Kind::Served`], priced
+/// as the engine Luau that stood for it was).
+pub fn wrapped<F>(lua: &Lua, engine: &Rc<Engine>, name: &str, function: F) -> LuaResult<LuaFunction>
+where
+    F: Fn(&Lua, LuaMultiValue) -> Ret + 'static,
+{
+    let _ = engine;
+    let raw = lua.create_function(move |lua, args: LuaMultiValue| encode(lua, function(lua, args)))?;
+    cfunction::over_rust(lua, name, cfunction::Kind::Served, raw)
+}
+
+/// [`wrapped`] for a global or a library's function ([`cfunction::Kind::Library`]).
+pub fn library_function<F>(lua: &Lua, name: &str, function: F) -> LuaResult<LuaFunction>
 where
     F: Fn(&Lua, LuaMultiValue) -> Ret + 'static,
 {
     let raw = lua.create_function(move |lua, args: LuaMultiValue| encode(lua, function(lua, args)))?;
-    engine.prelude().wrap.call::<LuaFunction>(raw)
+    cfunction::over_rust(lua, name, cfunction::Kind::Library, raw)
+}
+
+/// `function` (an mlua function, which may answer the call protocol) as one C function named `name` (lua/cfunction.rs).
+pub fn named(lua: &Lua, name: &str, kind: cfunction::Kind, function: LuaFunction) -> LuaResult<LuaFunction> {
+    cfunction::over_rust(lua, name, kind, function)
 }
 
 /// `debug.traceback(thread)` (diagnostics only).

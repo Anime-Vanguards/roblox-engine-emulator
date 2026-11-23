@@ -207,7 +207,7 @@ fn write_shared(
 
 fn library(lua: &Lua, engine: &Rc<Engine>, name: &'static str, new: impl Fn(&Lua, LuaMultiValue) -> Ret + 'static) -> LuaResult<()> {
     let library = lua.create_table()?;
-    library.set("new", wrapped(lua, engine, new)?)?;
+    library.set("new", wrapped(lua, engine, "new", new)?)?;
     library.set_readonly(true);
     engine.lua.borrow_mut().libraries.insert(name, library);
     Ok(())
@@ -215,7 +215,7 @@ fn library(lua: &Lua, engine: &Rc<Engine>, name: &'static str, new: impl Fn(&Lua
 
 fn register_float(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
-    let index = wrapped(lua, engine, move |lua, args| {
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid FloatCurveKey") };
         let key = *ud.borrow::<LFloatCurveKey>()?;
@@ -232,7 +232,7 @@ fn register_float(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         raise(format!("'{}' is not a valid member of FloatCurveKey", member(args.get(1))))
     })?;
     let e = engine.clone();
-    let newindex = wrapped(lua, engine, move |lua, args| {
+    let newindex = wrapped(lua, engine, "__newindex", move |lua, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid FloatCurveKey") };
         let mut key = ud.borrow_mut::<LFloatCurveKey>()?;
@@ -288,7 +288,7 @@ fn register_float(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
 
 fn register_rotation(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
-    let index = wrapped(lua, engine, move |lua, args| {
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid RotationCurveKey") };
         let key = *ud.borrow::<LRotationCurveKey>()?;
@@ -305,7 +305,7 @@ fn register_rotation(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         raise(format!("'{}' is not a valid member of RotationCurveKey", member(args.get(1))))
     })?;
     let e = engine.clone();
-    let newindex = wrapped(lua, engine, move |lua, args| {
+    let newindex = wrapped(lua, engine, "__newindex", move |lua, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid RotationCurveKey") };
         let mut key = ud.borrow_mut::<LRotationCurveKey>()?;

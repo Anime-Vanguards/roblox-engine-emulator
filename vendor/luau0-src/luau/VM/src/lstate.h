@@ -431,6 +431,22 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
 // whether the innermost frame of L is one of the host's own C functions (lua_sethostcfunction)
 LUAI_FUNC bool luaE_hostcall(lua_State* L);
 
+// what a C closure is (kept in its preload byte): LUAE_LIBRARYCFUNCTION, LUAE_HOSTCFUNCTION, or one of a host's engine functions
+// (lua_setenginecfunction), served or not
+#define LUAE_LIBRARYCFUNCTION 1
+#define LUAE_HOSTCFUNCTION 2
+#define LUAE_ENGINECFUNCTION 3
+#define LUAE_SERVEDCFUNCTION 4
+LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
+
+// whether frame `ci` is an engine function's (lua_setenginecfunction): a C function it calls is part of its work
+#define luaE_engineframe(L, ci)     ((ci) > (L)->base_ci && ttisfunction((ci)->func) && clvalue((ci)->func)->isC && luaE_cfunctionkind(clvalue((ci)->func)) >= LUAE_ENGINECFUNCTION)
+// whether frame `ci` is an engine function's that was charged as a script's C call: the host's own Luau it runs is part of that call
+#define luaE_enginecallframe(L, ci) (((ci)->flags & LUA_CALLINFO_WORK_CCALL) && luaE_engineframe(L, ci))
+// a script's call of the C closure `ccl` (classified by luaE_hostcall first): a C call (work.ccalls), or for an engine function the
+// host serves the host call the host's own Luau that stood for it was (work.hostcalls)
+#define luaE_workccall(L, ccl)     do     {         if ((ccl)->preload == LUAE_SERVEDCFUNCTION)             (L)->global->work.hostcalls++;         else             (L)->global->work.ccalls++;     } while (0)
+
 // counts `n` units of a library or engine function's work in the work counters' hostops slot `slot` (lua.h LUA_WORK_SCANNED and the
 // rest) when a script's work asked for it
 #define luaE_worklib(L, slot, n) \

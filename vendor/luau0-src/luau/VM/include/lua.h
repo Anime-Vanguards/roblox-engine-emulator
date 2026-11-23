@@ -457,6 +457,14 @@ LUA_API void lua_coldframe(lua_State* L);
 LUA_API void lua_sethostcfunction(lua_CFunction f);
 // marks `count` functions at once, and `trampoline` (the one C function a host's closures made from Rust share), taking the lock once
 LUA_API void lua_sethostcfunctions(const lua_CFunction* functions, int count, lua_CFunction trampoline);
+// marks `f` as a host's engine function (process-wide, a host function too): a C function each closure of which stands for one
+// function of the engine a script calls, doing its work from inside (a host's callback, its own Luau). A script's call of one is
+// one C call: the host's own Luau it runs for that call is part of it (no host call of its own, and no first call in a frame of its
+// own), and so is a C function it calls, however it was called. `served` marks one standing for an operation the host serves rather
+// than a library function (a datatype's constructor, an object's method): a script's call of it is counted as the host call
+// (work.hostcalls) and its first call in a frame as the host Luau's first call (LUA_WORK_COLDHOSTFUNCS) the host's own Luau that
+// stood for it was. A host has a few: at most 8.
+LUA_API void lua_setenginecfunction(lua_CFunction f, int served);
 
 // the names a host's typeof gives its own values, for the builtin typeof (a script's fast call) to give them too: the table at
 // `idx` maps a table or a userdata to its name, looked up before the value's own type name, and `vectorname` (NULL: none) names
