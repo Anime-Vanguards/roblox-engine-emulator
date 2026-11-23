@@ -1,5 +1,6 @@
-# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session (server context, run through rodeo)
+# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session of one server and one client (script identity 2; Workspace.SignalBehavior Deferred; run through rodeo)
 # captured: 2026-11-23
+flushes true
 registry vector-fraction 0.100000001, 0.333333343, 2
 registry vector-large-negzero 1.00000002e+20, 123456.789, -0
 registry vector-nan-inf NAN, INF, -INF
