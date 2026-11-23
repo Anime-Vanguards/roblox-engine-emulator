@@ -1819,17 +1819,20 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                     Err(out) => return out,
                 };
                 let wanted = Some(&*wanted);
-                let found = {
+                let (found, steps) = {
                     let dom_state = engine.state.borrow();
                     let mut current = dom_state.dom.at(id).parent;
+                    let mut steps = 0;
                     while let Some(node) = current {
+                        steps += 1;
                         if wanted == Some(dom_state.dom.at(node).name.as_bytes()) {
                             break;
                         }
                         current = dom_state.dom.at(node).parent;
                     }
-                    current
+                    (current, steps)
                 };
+                linstance::charge_ancestors(engine, steps);
                 push_optional_instance(state, api, engine, found)
             }
             Base::FindFirstAncestorOfClass => {
@@ -1838,17 +1841,20 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                     Err(out) => return out,
                 };
                 let wanted = Some(&*wanted);
-                let found = {
+                let (found, steps) = {
                     let dom_state = engine.state.borrow();
                     let mut current = dom_state.dom.at(id).parent;
+                    let mut steps = 0;
                     while let Some(node) = current {
+                        steps += 1;
                         if class_name_is(engine, dom_state.dom.at(node).class, wanted) {
                             break;
                         }
                         current = dom_state.dom.at(node).parent;
                     }
-                    current
+                    (current, steps)
                 };
+                linstance::charge_ancestors(engine, steps);
                 push_optional_instance(state, api, engine, found)
             }
             Base::FindFirstAncestorWhichIsA => {
@@ -1857,22 +1863,25 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                     Err(out) => return out,
                 };
                 let wanted = Some(&*wanted);
-                let found = {
+                let (found, steps) = {
                     let dom_state = engine.state.borrow();
                     let mut current = dom_state.dom.at(id).parent;
+                    let mut steps = 0;
                     while let Some(node) = current {
+                        steps += 1;
                         if is_a_bytes(engine, dom_state.dom.at(node).class, wanted) {
                             break;
                         }
                         current = dom_state.dom.at(node).parent;
                     }
-                    current
+                    (current, steps)
                 };
+                linstance::charge_ancestors(engine, steps);
                 push_optional_instance(state, api, engine, found)
             }
             Base::IsDescendantOf => {
                 let result = match arg_instance(state, 2) {
-                    Some(ancestor) => engine.state.borrow().dom.is_descendant_of_home(id, ancestor),
+                    Some(ancestor) => linstance::descendant_of(engine, id, ancestor),
                     // (every instance is a descendant of nil, as in Roblox: lua/instance.rs)
                     None => ffi::lua_type(state, 2) <= ffi::LUA_TNIL,
                 };
@@ -1881,7 +1890,7 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
             }
             Base::IsAncestorOf => {
                 let result = match arg_instance(state, 2) {
-                    Some(descendant) => engine.state.borrow().dom.is_descendant_of_home(descendant, id),
+                    Some(descendant) => linstance::descendant_of(engine, descendant, id),
                     None => false,
                 };
                 ffi::lua_pushboolean(state, result as c_int);
@@ -1955,7 +1964,7 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 Out::Ret(0)
             }
             Base::GetFullName => {
-                let name = engine.state.borrow().dom.full_name(&engine.reflection, id);
+                let name = linstance::full_name(engine, id);
                 push_bytes(state, name.as_bytes());
                 Out::Ret(1)
             }

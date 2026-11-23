@@ -1223,6 +1223,21 @@ pub const MODEL_QUERY: f64 = 0.015e-6;
 /// another Folder of the workspace and back 0.51 us a move); one between two places outside it costs little
 pub const REPARENTED: f64 = 0.51e-6;
 pub const REPARENTED_LOOSE: f64 = 0.15e-6;
+/// An ancestor IsDescendantOf, IsAncestorOf and the FindFirstAncestor finds look at, beyond [`method`]'s price for the call: the same
+/// client called them on a Part at the bottom of a chain of D Folders in the Workspace (os.clock around 5 to 20,000 calls, the median of
+/// 15, less an empty loop): 0.046 to 0.075 us a call at D = 1 and 10, 0.12 to 0.16 at 100, 1.13 to 1.34 at 1,000, 5.1 to 6.4 at 4,000,
+/// whether the call finds its ancestor at the top or walks to the DataModel, the Workspace included (a script's call walks the parents
+/// as a client's does, where the engine's own checks, its own Luau's calls among them, read the homes the dom keeps).
+pub const ANCESTOR_STEP: f64 = 1.2e-9;
+/// GetFullName (and an error that names an instance by it) beyond the call: each name it joins and each byte of its text. The same
+/// chains, named with 1, 6 or 60 bytes each: 4.46 us at 1,000 deep with 1-byte names, 5.34 with 6 bytes, 13.07 with 60; 18.96,
+/// 22.50 and 52.24 at 4,000.
+pub const FULL_NAME_NAME: f64 = 4.2e-9;
+pub const FULL_NAME_BYTE: f64 = 0.14e-9;
+/// What GetFullName's names and bytes cost ([`FULL_NAME_NAME`], [`FULL_NAME_BYTE`])
+pub fn full_name(names: usize, bytes: usize) -> f64 {
+    names as f64 * FULL_NAME_NAME + bytes as f64 * FULL_NAME_BYTE
+}
 /// The parallel bridge's machinery (an empty test place's client, an actor_cost probe, one session, 2026-10-23): BindableFunction:Invoke into an
 /// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5), SharedTable.increment 370-429 (counts 31.5); a read (29 ns) is not priced beyond
 /// the engine call ree's SharedTable makes of it but by its key's bytes, an integer key it finds and the value it makes ([`SHARED_KEY_BYTE`],
@@ -1613,7 +1628,8 @@ pub fn method(name: &str) -> f64 {
         // third: a Studio client's 0.015)
         "IsA" => 0.025,
         "IsDescendantOf" | "IsAncestorOf" => 0.015,
-        "GetFullName" => 0.102,
+        // (the bench's row, Workspace.ParityScene.Tree100.N1_1.N2_1, less its 5 names and 39 bytes: [`full_name`])
+        "GetFullName" => 0.102 - (5.0 * FULL_NAME_NAME + 39.0 * FULL_NAME_BYTE) * 1e6,
         "GetPlayers" => 0.069,
         "HasTag" => 0.042,
         "GetTags" => 0.073,

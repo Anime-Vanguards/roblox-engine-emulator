@@ -4626,6 +4626,106 @@ fn the_work_clock_charges_what_studio_spends() {
     assert!(lines(&engine).contains(&"print: next frame true".to_string()), "{:?}", lines(&engine));
 }
 
+/// Luau helpers for the move and ancestor-read prices below: `Folder`, `Chain` (a chain of Folders, its top and bottom), `Move` (a
+/// Parent write's price in us, over round trips after a first one, which takes the frame's cold first entry), `Each` (a call's price
+/// in us, less its loop) and `Within`.
+const MOVE_HELPERS: &str = r#"
+    local RS = game:GetService("ReplicatedStorage")
+    local function Folder(Name, Parent)
+        local F = Instance.new("Folder")
+        F.Name = Name
+        F.Parent = Parent
+        return F
+    end
+    local function Chain(Depth, Parent, Name)
+        local Top = Folder(Name or "C", Parent)
+        local Node = Top
+        for _ = 2, Depth do
+            Node = Folder(Name or "C", Node)
+        end
+        return Top, Node
+    end
+    local function Move(Object, A, B)
+        Object.Parent = A
+        Object.Parent = B
+        Object.Parent = A
+        local N = 10
+        local Start = os.clock()
+        for _ = 1, N do
+            Object.Parent = B
+            Object.Parent = A
+        end
+        local Middle = os.clock()
+        for _ = 1, N do
+        end
+        return ((Middle - Start) - (os.clock() - Middle)) / (2 * N) * 1e6
+    end
+    local function Each(Call)
+        local N = 100
+        Call()
+        local Start = os.clock()
+        for _ = 1, N do
+            Call()
+        end
+        local Middle = os.clock()
+        for _ = 1, N do
+        end
+        return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+    end
+    local function Within(Label, Value, Low, High)
+        assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+    end
+"#;
+
+/// IsDescendantOf, IsAncestorOf and the FindFirstAncestor finds pay 1.2 ns for each ancestor they look at, and GetFullName 4.2 ns
+/// for each name it joins and 0.14 for each byte (cost.rs ANCESTOR_STEP, full_name), as a playing client's calls grow with the
+/// depth: on a Part 1,000 Folders deep, 1.2 us and 5.7 us more than on one Folder deep (names of 10 bytes), through the method's C
+/// fast path and a dot call alike, and an error that names the Part by its full name as much; IsDescendantOf(workspace) too, as a
+/// client walks to the Workspace (the engine's own checks read the homes the dom keeps). Each paid its call's flat price.
+#[test]
+fn ancestor_reads_pay_for_each_ancestor_and_full_names_for_each_name() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"{MOVE_HELPERS}
+        local Top, Bottom = Chain(1000, workspace, "FolderName")
+        local ShallowTop = Folder("FolderName", workspace)
+        local function Leaf(Parent)
+            local P = Instance.new("Part")
+            P.Name = "PartNameXY"
+            P.Parent = Parent
+            return P
+        end
+        local Deep, Shallow = Leaf(Bottom), Leaf(ShallowTop)
+        local Steps = 999 * 0.0012
+        local function Deeper(Label, Call, Expected)
+            Within(Label, Each(function() Call(Deep, Top) end) - Each(function() Call(Shallow, ShallowTop) end), Expected - 0.002, Expected + 0.002)
+        end
+        Deeper("IsDescendantOf its top", function(Leaf, Top) Leaf:IsDescendantOf(Top) end, Steps)
+        Deeper("IsDescendantOf ReplicatedStorage", function(Leaf) Leaf:IsDescendantOf(RS) end, Steps)
+        Deeper("IsDescendantOf, a dot call", function(Leaf, Top) Leaf.IsDescendantOf(Leaf, Top) end, Steps)
+        Deeper("IsAncestorOf", function(Leaf, Top) Top:IsAncestorOf(Leaf) end, Steps)
+        Deeper("IsAncestorOf, a dot call", function(Leaf, Top) Top.IsAncestorOf(Top, Leaf) end, Steps)
+        Deeper("IsDescendantOf(workspace)", function(Leaf) Leaf:IsDescendantOf(workspace) end, Steps)
+        Deeper("FindFirstAncestor", function(Leaf) Leaf:FindFirstAncestor("Nope") end, Steps)
+        Deeper("FindFirstAncestor, a dot call", function(Leaf) Leaf.FindFirstAncestor(Leaf, "Nope") end, Steps)
+        Deeper("FindFirstAncestorOfClass", function(Leaf) Leaf:FindFirstAncestorOfClass("Model") end, Steps)
+        Deeper("FindFirstAncestorOfClass, a dot call", function(Leaf) Leaf.FindFirstAncestorOfClass(Leaf, "Model") end, Steps)
+        Deeper("FindFirstAncestorWhichIsA", function(Leaf) Leaf:FindFirstAncestorWhichIsA("Model") end, Steps)
+        Deeper("FindFirstAncestorWhichIsA, a dot call", function(Leaf) Leaf.FindFirstAncestorWhichIsA(Leaf, "Model") end, Steps)
+        -- 1,002 names and 11,020 bytes against 3 and 31
+        local Named = 999 * 0.0042 + 10989 * 0.00014
+        Deeper("GetFullName", function(Leaf) Leaf:GetFullName() end, Named)
+        Deeper("GetFullName, a dot call", function(Leaf) Leaf.GetFullName(Leaf) end, Named)
+        Deeper("an error naming it", function(Leaf) pcall(function() return Leaf.Nope end) end, Named)
+        "#
+        ),
+    );
+}
+
 /// Two runs of one scene make the same writes. A table keyed by Instances, tables, functions or threads is visited in the
 /// order of the keys' hashes, which used to be their addresses: the handlers of a Heartbeat loop ran in another order each run, and
 /// with the work clock each one's os.clock() read, and the value it wrote, moved with it. The runs here are live at the same time on

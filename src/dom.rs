@@ -1288,14 +1288,21 @@ impl Dom {
 
     /// Whether `ancestor` is a (strict) ancestor of `id`.
     pub fn is_descendant_of(&self, id: InstanceId, ancestor: InstanceId) -> bool {
+        self.is_descendant_of_steps(id, ancestor).0
+    }
+
+    /// [`Dom::is_descendant_of`], and how many ancestors it looked at.
+    pub fn is_descendant_of_steps(&self, id: InstanceId, ancestor: InstanceId) -> (bool, usize) {
+        let mut steps = 0;
         let mut current = self.at(id).parent;
         while let Some(node) = current {
+            steps += 1;
             if node == ancestor {
-                return true;
+                return (true, steps);
             }
             current = self.at(node).parent;
         }
-        false
+        (false, steps)
     }
 
     /// Descendants in preorder (GetDescendants' order). The walks of the tree keep their own stack and never recurse: a script
@@ -1353,6 +1360,11 @@ impl Dom {
     /// GetFullName: names from below the service provider at the root (the DataModel, UserSettings) down to `id`, dot
     /// separated; a parentless tree of other objects keeps its root's name.
     pub fn full_name(&self, reflection: &Reflection, id: InstanceId) -> String {
+        self.full_name_counted(reflection, id).0
+    }
+
+    /// [`Dom::full_name`], and how many names it joined (what a client's GetFullName walks: cost.rs full_name).
+    pub fn full_name_counted(&self, reflection: &Reflection, id: InstanceId) -> (String, usize) {
         let provider = reflection.class_id("ServiceProvider");
         let is_provider = |node: InstanceId| provider.is_some_and(|class| reflection.class(self.at(node).class).is_a(class));
         // a service provider's own full name is its Name (`game:GetFullName() == game.Name` in a playing client, Studio
@@ -1360,7 +1372,7 @@ impl Dom {
         // UserSettings():GetService("UserGameSettings") is "GameSettings", settings().Rendering is "Rendering", while a
         // parentless Folder's Part is "Folder.Part")
         if is_provider(id) {
-            return self.at(id).name.to_str_lossy().into_owned();
+            return (self.at(id).name.to_str_lossy().into_owned(), 1);
         }
         let mut parts: Vec<&Str> = Vec::new();
         let mut current = Some(id);
@@ -1379,7 +1391,7 @@ impl Dom {
             }
             result.push_str(&part.to_str_lossy());
         }
-        result
+        (result, parts.len())
     }
 
     /// First child named `name`.

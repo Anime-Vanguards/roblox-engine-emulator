@@ -43,8 +43,38 @@ pub fn class_name(engine: &Engine, id: InstanceId) -> String {
     engine.reflection.class(class).name.to_string()
 }
 
-fn full_name(engine: &Engine, id: InstanceId) -> String {
-    engine.state.borrow().dom.full_name(&engine.reflection, id)
+/// The instance's full name, at what a client spends building it (cost.rs full_name): GetFullName's, and an error's that names it.
+pub fn full_name(engine: &Engine, id: InstanceId) -> String {
+    let (name, names) = engine.state.borrow().dom.full_name_counted(&engine.reflection, id);
+    charge_work(engine, crate::cost::full_name(names, name.len()));
+    name
+}
+
+/// IsDescendantOf's answer (IsAncestorOf's the other way round): a script's call walks the parents and pays for each, as a client's
+/// does (cost.rs ANCESTOR_STEP); the engine's own Luau, in a call it prices whole (the clock muted: services.luau's PivotTo asks
+/// whether a part is in the Workspace), reads the homes the dom keeps, at any depth.
+pub fn descendant_of(engine: &Engine, id: InstanceId, ancestor: InstanceId) -> bool {
+    let state = engine.state.borrow();
+    if state.sched.muted.get() > 0 {
+        return state.dom.is_descendant_of_home(id, ancestor);
+    }
+    let (result, steps) = state.dom.is_descendant_of_steps(id, ancestor);
+    drop(state);
+    charge_ancestors(engine, steps);
+    result
+}
+
+/// What a call's walk of `steps` ancestors costs beyond its price (cost.rs ANCESTOR_STEP): IsDescendantOf, IsAncestorOf and the
+/// FindFirstAncestor finds.
+pub fn charge_ancestors(engine: &Engine, steps: usize) {
+    charge_work(engine, steps as f64 * crate::cost::ANCESTOR_STEP);
+}
+
+fn charge_work(engine: &Engine, seconds: f64) {
+    if seconds > 0.0 {
+        engine.state.borrow().sched.charge(seconds);
+        crate::boundary::add_cost(seconds);
+    }
 }
 
 fn not_a_member(engine: &Engine, id: InstanceId, key: &LuaValue) -> Flow {
@@ -1269,50 +1299,59 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     // (not enabled in Roblox: measured likewise, `FindFirstDescendant is not enabled`, once its name is read)
     behaviors.add_method(base, K::FindFirstDescendant as NameId, strings(NAME, method(|_, _, _, _| raise("FindFirstDescendant is not enabled"))));
     behaviors.add_method(base, K::FindFirstAncestor as NameId, strings(NAME, method(|lua, engine, id, args| {
-        let found = {
+        let (found, steps) = {
             let state = engine.state.borrow();
             let mut current = state.dom.at(id).parent;
             let wanted = name_arg(args.get(1));
             let wanted = wanted.as_ref().map(|s| s.as_bytes());
+            let mut steps = 0;
             while let Some(node) = current {
+                steps += 1;
                 if name_equals(&state, node, wanted.as_deref()) {
                     break;
                 }
                 current = state.dom.at(node).parent;
             }
-            current
+            (current, steps)
         };
+        charge_ancestors(engine, steps);
         optional_instance(lua, engine, found)
     })));
     behaviors.add_method(base, K::FindFirstAncestorOfClass as NameId, strings(NAME, method(|lua, engine, id, args| {
-        let found = {
+        let (found, steps) = {
             let state = engine.state.borrow();
             let wanted = args.string(1).map(|s| s.to_string_lossy());
             let mut current = state.dom.at(id).parent;
+            let mut steps = 0;
             while let Some(node) = current {
+                steps += 1;
                 if wanted.as_deref() == Some(&*engine.reflection.class(state.dom.at(node).class).name) {
                     break;
                 }
                 current = state.dom.at(node).parent;
             }
-            current
+            (current, steps)
         };
+        charge_ancestors(engine, steps);
         optional_instance(lua, engine, found)
     })));
     behaviors.add_method(base, K::FindFirstAncestorWhichIsA as NameId, strings(NAME, method(|lua, engine, id, args| {
-        let found = {
+        let (found, steps) = {
             let state = engine.state.borrow();
             let mut current = state.dom.at(id).parent;
             let wanted = name_arg(args.get(1));
             let wanted = wanted.as_ref().map(|s| s.as_bytes());
+            let mut steps = 0;
             while let Some(node) = current {
+                steps += 1;
                 if class_is_a(engine, state.dom.at(node).class, wanted.as_deref()) {
                     break;
                 }
                 current = state.dom.at(node).parent;
             }
-            current
+            (current, steps)
         };
+        charge_ancestors(engine, steps);
         optional_instance(lua, engine, found)
     })));
     let is_a = strings(NAME, method(|_, engine, id, args| {
@@ -1333,7 +1372,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     }
     let is_descendant_of = method(|_, engine, id, args| {
         let result = match args.instance(1) {
-            Some(ancestor) => engine.state.borrow().dom.is_descendant_of_home(id, ancestor),
+            Some(ancestor) => descendant_of(engine, id, ancestor),
             // every instance is a descendant of nil (measured likewise: IsDescendantOf(nil) is true)
             None => args.get(1).is_nil(),
         };
@@ -1343,7 +1382,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     behaviors.add_method(base, K::isDescendantOf as NameId, is_descendant_of);
     behaviors.add_method(base, K::IsAncestorOf as NameId, method(|_, engine, id, args| {
         let result = match args.instance(1) {
-            Some(descendant) => engine.state.borrow().dom.is_descendant_of_home(descendant, id),
+            Some(descendant) => descendant_of(engine, descendant, id),
             None => false,
         };
         Ok(values([LuaValue::Boolean(result)]))

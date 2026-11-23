@@ -478,6 +478,15 @@ enum Lock {
     SettingsRoot,
 }
 
+/// An instance's full name for an error that names it, at what a client spends building it (cost.rs full_name).
+fn named(state: &State, reflection: &Reflection, id: InstanceId) -> String {
+    let (name, names) = state.dom.full_name_counted(reflection, id);
+    let work = crate::cost::full_name(names, name.len());
+    state.sched.charge(work);
+    crate::boundary::add_cost(work);
+    name
+}
+
 fn parent_lock(state: &State, reflection: &Reflection, id: InstanceId) -> Option<Lock> {
     let instance = state.dom.at(id);
     let class = reflection.class(instance.class);
@@ -529,7 +538,7 @@ pub fn set_parent(
     let name_of = |parent: Option<InstanceId>| parent.map_or_else(|| "NULL".to_string(), |parent| state.dom.at(parent).name.to_string());
     match lock {
         Some(Lock::SettingsRoot) if new_parent == Some(id) => {
-            return Err(ScriptError::plain(format!("Attempt to set {} as its own parent", state.dom.full_name(reflection, id))));
+            return Err(ScriptError::plain(format!("Attempt to set {} as its own parent", named(state, reflection, id))));
         }
         Some(Lock::SettingsRoot) => {
             let label = super::services::settings::parent_label(reflection, state.dom.at(id).class);
@@ -572,13 +581,13 @@ fn reparent(
             return Err(ScriptError::plain("Not allowed to add that under settings"));
         }
         if parent == id {
-            return Err(ScriptError::plain(format!("Attempt to set {} as its own parent", state.dom.full_name(reflection, id))));
+            return Err(ScriptError::plain(format!("Attempt to set {} as its own parent", named(state, reflection, id))));
         }
         if state.dom.is_descendant_of(parent, id) {
             return Err(ScriptError::plain(format!(
                 "Attempt to set parent of {} to {} would result in circular reference",
-                state.dom.full_name(reflection, id),
-                state.dom.full_name(reflection, parent)
+                named(state, reflection, id),
+                named(state, reflection, parent)
             )));
         }
     }
@@ -1000,7 +1009,7 @@ pub fn begin_destroy(
         match &*reflection.class(state.dom.at(id).class).name {
             "Terrain" => return Err(ScriptError::plain("Cannot Destroy() Terrain")),
             "StarterPlayerScripts" | "StarterCharacterScripts" => {
-                return Err(ScriptError::plain(format!("The Parent property of {} is locked", state.dom.full_name(reflection, id))));
+                return Err(ScriptError::plain(format!("The Parent property of {} is locked", named(state, reflection, id))));
             }
             _ => {}
         }
