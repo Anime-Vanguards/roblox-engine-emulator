@@ -35,7 +35,11 @@
 //!   "Instance" for an instance, "{}" for a table, "function", "nil" for an Enum, a thread or a
 //!   plain userdata, "buffer { Size = 2 }", a Vector3 with nine significant digits a component
 //!   (`0.100000001, 0.333333343, 2`, `NAN, INF, -INF`: Studio 0.748, a playing client), and another
-//!   datatype as `tostring` writes it.
+//!   datatype as `tostring` writes it. Not matched: a client first warns `argument #2 expects a
+//!   string, but <type> was passed` for a value that is neither a string nor a number, which ree
+//!   does not (measured, Studio 0.748, a playing client: for a boolean, a Vector3, Vector2, CFrame,
+//!   Color3, UDim2, BrickColor, table, Instance, function, EnumItem, Enum, buffer, thread and
+//!   newproxy alike; a number and a string give none).
 //!
 //! Not emulated: a curve that came whole (a clone, a model file) takes its channels by name when one
 //! of these members first looks at it or a child comes or goes, where Studio took them when it was
