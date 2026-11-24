@@ -897,7 +897,7 @@ impl Touched {
 
 /// A property or member read: a number, bool or Vector3 property of a part, a frame or an effect, 25.5-30.4 ns (median 29.4) beyond the
 /// Luau that reads it, in the parity bench. What the value is adds to it: [`read_value`].
-pub const READ: f64 = 0.029e-6;
+pub const READ: f64 = 0.0315e-6;
 
 /// What a read of `value` adds to [`READ`]: the engine makes a new value for most types on each read (the same bench: a CFrame
 /// 45.8-53.6 ns in all, a Color3 40.5-42.5, a NumberSequence or ColorSequence 61.4-66.1, a UDim2 41.0, a Vector2 40.3, a string 37.5-40.3,
@@ -910,17 +910,28 @@ pub fn read_value(value: Option<&crate::Value>) -> f64 {
         Some(Value::EnumItem(_)) => 11.0e-9,
         Some(Value::Instance(_) | Value::NoInstance) => READ_INSTANCE_EXTRA,
         Some(Value::Vector2(_)) => 11.0e-9,
-        Some(Value::Color3(_)) => 12.5e-9,
+        Some(Value::Color3(_)) => 19.0e-9,
         Some(Value::UDim(_) | Value::UDim2(_) | Value::Rect(_) | Value::NumberRange(_) | Value::Font(_) | Value::Content(_)) => 12.0e-9,
-        Some(Value::NumberSequence(_) | Value::ColorSequence(_)) => 35.0e-9,
+        Some(Value::NumberSequence(_) | Value::ColorSequence(_)) => 40.0e-9,
         // (a CFrame, BrickColor, PhysicalProperties and the other rbx-dom datatypes)
-        Some(Value::Dom(_)) => 20.0e-9,
+        Some(Value::Dom(_)) => 26.0e-9,
+    }
+}
+
+/// What a computed property getter (`derived.rs`, `world/mod.rs`) adds beyond [`READ`]: Euler decomposition for
+/// `Orientation` / `Rotation` and parent CFrame composition for Attachment `World*` reads.
+pub fn read_property_extra(property: &str) -> f64 {
+    match property {
+        "Orientation" | "Rotation" | "WorldOrientation" | "WorldRotation" => 17.0e-9,
+        "WorldPosition" | "WorldAxis" | "WorldSecondaryAxis" => 10.0e-9,
+        "WorldCFrame" => 36.0e-9,
+        _ => 0.0,
     }
 }
 
 /// What a string read adds (Name, ClassName, Text, Image: 37.5-40.3 ns in all) and an Instance read (Parent, PrimaryPart,
 /// LocalPlayer: 35.1-46.9): [`read_value`]'s, and the Name, ClassName and Parent reads the Instance API serves itself
-pub const READ_STRING_EXTRA: f64 = 10.0e-9;
+pub const READ_STRING_EXTRA: f64 = 12.0e-9;
 pub const READ_INSTANCE_EXTRA: f64 = 13.0e-9;
 /// A child found by name as a member (`part.Attachment`: 40.0 ns in all)
 pub const READ_CHILD_EXTRA: f64 = 11.0e-9;
@@ -948,26 +959,26 @@ pub fn json(bytes: usize, values: u64, decode: bool) -> f64 {
 pub const JSON_CALL: f64 = 0.35e-6;
 /// Nanoseconds a byte and a value cost an encode and a decode
 pub const JSON_ENCODE_BYTE: f64 = 0.0;
-pub const JSON_ENCODE_VALUE: f64 = 62.1;
+pub const JSON_ENCODE_VALUE: f64 = 55.5;
 pub const JSON_DECODE_BYTE: f64 = 8.15;
 pub const JSON_DECODE_VALUE: f64 = 1.50;
 
 /// An instance destroyed, beyond leaving the DataModel ([`moved`]): a Folder out of the tree 0.41 us with the call, in the parity bench.
 /// The Studio capture's 1.0 (a grass patch 4.9 us an instance with its leaving) had the Explorer's work in it.
-pub const DESTROYED: f64 = 0.36e-6;
+pub const DESTROYED: f64 = 0.32e-6;
 /// What a GUI object in the DataModel adds when destroyed (the same bench: a Frame under a ScreenGui 2.51 us, of which leaving 1.17), and a
 /// part (a Part in the workspace 2.14, leaving 1.47)
 pub const DESTROYED_GUI: f64 = 0.89e-6;
 pub const DESTROYED_PART: f64 = 0.22e-6;
 /// One element of a list a method returns (the parity bench: GetChildren of 20 0.34 us,
 /// GetDescendants of 110 1.94 us; EditableMesh GetFaces and GetColors 0.01-0.02 us an id in a Studio capture)
-pub const LISTED: f64 = 0.016e-6;
+pub const LISTED: f64 = 0.0135e-6;
 /// ReflectionService: a class's entry GetClass or GetClasses makes ([`REFLECTED_CLASS`]), what its Display table adds, and a class
 /// GetClasses tests against its filter. A playing client (roblox-sim, Studio 0.744, a headless client of an empty place; os.clock
 /// around single calls, the median of 15; the parity bench's ReflectionService rows are newer than its reference sessions):
 /// GetClasses() of its 656 classes 1.235 ms, with ExcludeDisplay 0.866 ms, with IsA = "BasePart" (19 entries) 39.5 us;
 /// GetClass("Part") 2.22 us, of which 0.28 is the lookup ([`method`]).
-pub const REFLECTED_CLASS: f64 = 1.32e-6;
+pub const REFLECTED_CLASS: f64 = 1.55e-6;
 pub const REFLECTED_CLASS_DISPLAY: f64 = 0.56e-6;
 pub const REFLECTED_CLASS_TESTED: f64 = 0.006e-6;
 /// A LogService logging call (Output, Info, Warn, Error, Log), whole: the same client, `LogService:Info("L {a}", { a = 1 })` 1.10 us
@@ -1190,7 +1201,7 @@ pub const CUTOFF_IGNORE_STEP: f64 = 1.2e-9;
 /// a part of no size, and [`QUERY_PART_SIZE`] for each stud of the square root of its box's surface area (beyond the Luau around the
 /// call, touching nothing: a 2-stud cube 0.27 us, 12 studs 0.45, 20 studs 0.95, 40 studs 1.26, a 2 x 2 x 40 rod 0.46; held out: a 6-stud
 /// cube 0.25, a 4-stud ball 0.25, a 40 x 2 x 40 slab 0.48, a 2-stud cube with an Include filter 0.45)
-pub const QUERY_PART_EXACT: f64 = 0.74e-6;
+pub const QUERY_PART_EXACT: f64 = 0.59e-6;
 pub const QUERY_PART_SIZE: f64 = 0.011e-6;
 /// The Region3 queries (world/region.rs) beyond their call, in a playing client (Studio 0.748, os.clock around 200 calls, the median
 /// of 15 samples less an empty loop, three passes within 5% of each other, GetPartBoundsInBox timed beside them): each part a query
@@ -1271,7 +1282,7 @@ pub const TAGGED_LISTED: f64 = 0.086e-6;
 
 /// QueryDescendants: a node it looks at and a node it returns (client: ">>Part" over 100 descendants 3.6 us,
 /// ">>Model > Part#Part3" 1.0 us for 10 matches, edit 2.3 and 1.2)
-pub const QUERIED: f64 = 0.010e-6;
+pub const QUERIED: f64 = 0.008e-6;
 pub const QUERY_FOUND: f64 = 0.015e-6;
 /// An attribute set to another value, beyond the call: SetAttribute of a string 0.43 us, a new key and its removal 0.43 a call, in
 /// the parity bench (a Studio playtest read 0.77-0.83: its Properties window listens); to the value it holds 0.077
@@ -1283,9 +1294,9 @@ pub const ATTRIBUTE_LISTED: f64 = 0.032e-6;
 /// Signal:Connect and Connection:Disconnect (the parity bench: Connect and Disconnect of a
 /// BindableEvent, a part's Changed and a Once 0.50-0.51 us together; split 60/40 as a Studio playtest's 0.78 was),
 /// GetPropertyChangedSignal beyond the call (0.42 us in all)
-pub const CONNECT: f64 = 0.31e-6;
-pub const DISCONNECT: f64 = 0.20e-6;
-pub const PROPERTY_SIGNAL: f64 = 0.38e-6;
+pub const CONNECT: f64 = 0.34e-6;
+pub const DISCONNECT: f64 = 0.22e-6;
+pub const PROPERTY_SIGNAL: f64 = 0.34e-6;
 /// BindableEvent:Fire with nothing connected, beyond the call (the same bench: 52 ns in all; a Studio playtest client read 161)
 pub const FIRE: f64 = 0.007e-6;
 /// A property write that fires Changed or a GetPropertyChangedSignal signal someone is connected to, per signal fired (the
@@ -1416,7 +1427,7 @@ pub const DELAYED: f64 = 0.14e-6;
 /// loop of CFrame writes 1.10)
 /// (the parity bench: BulkMoveTo of 10 parts with FireCFrameChanged 1.05 us a part; the events'
 /// share kept as the playtest measured it)
-pub const BULK_MOVED: f64 = 1.05e-6;
+pub const BULK_MOVED: f64 = 0.88e-6;
 pub const BULK_MOVED_ALL_EVENTS: f64 = 2.58e-6;
 /// BulkMoveTo's part list read (world/mod.rs bulk_moves; the sessions of [`IGNORE_LISTED`]): each entry 43 ns on a call that then
 /// raises because the lists' lengths differ and 66 ns on one that raises at a part that is no BasePart (each entry of the
@@ -1424,12 +1435,12 @@ pub const BULK_MOVED_ALL_EVENTS: f64 = 2.58e-6;
 pub const BULK_LISTED: f64 = 0.055e-6;
 pub const BULK_HOLE: f64 = 0.081e-6;
 /// Model:PivotTo, a part it moves (client: 0.48 us in the workspace; 0.15 a call), a Part:PivotTo 1.14 us
-/// (the parity bench, a rendered client of a game's match place: Model:PivotTo of 10 parts 10.65 us, Part:PivotTo 1.44)
+/// (the parity bench, a rendered client of a game's match place: Model:PivotTo of 10 parts 10.65 us, Part:PivotTo 1.14)
 pub const PIVOT_PART: f64 = 1.05e-6;
 pub const PIVOT_BASE: f64 = 0.15e-6;
 /// ... out of the workspace, a part (a CFrame write there 0.16 us, and the walk)
 pub const PIVOT_LOOSE: f64 = 0.20e-6;
-pub const PIVOT_SINGLE: f64 = 1.44e-6;
+pub const PIVOT_SINGLE: f64 = 1.14e-6;
 /// ... each descendant of the model that is no part, which its walk looks at (a playing client, roblox-sim, Studio 0.747, headless;
 /// os.clock around single Model:PivotTo calls of a Model holding one anchored part with N = 1,000 and 10,000 Folders, Attachments
 /// or Welds under it, the median of 15 samples, less the same call with none: 11.0 to 11.9 ns each whatever their class; 2026-11-24)
@@ -1444,8 +1455,9 @@ pub const SCALE_PART_PLACED: f64 = 0.97e-6;
 pub const SCALE_PART_LOOSE: f64 = 0.09e-6;
 pub const SCALE_ATTACHMENT: f64 = 0.35e-6;
 pub const SCALE_JOINT: f64 = 1.8e-6;
-/// Model:GetPivot / GetScale / GetBoundingBox (client: 31-60 ns, cached by the engine)
-pub const MODEL_QUERY: f64 = 0.015e-6;
+/// Model:GetPivot / GetScale / GetBoundingBox (CFrame return: 35 ns beyond the call) and GetExtentsSize (native Vector3 return: 8 ns)
+pub const MODEL_QUERY: f64 = 0.035e-6;
+pub const MODEL_EXTENTS_QUERY: f64 = 0.008e-6;
 /// A Parent change that neither enters nor leaves the DataModel, beyond its two ancestor chains ([`reparent_chains`]) and the instances
 /// it carries, the written one included ([`reparented`], [`WORLD_WORKSPACE_PART`], [`PLACED_PART`]): the parity bench's Part into
 /// another Folder of the workspace and back, 0.51 us a move, less what its chains (4 ancestors each, 3 of them shared) and the Part
@@ -1839,9 +1851,8 @@ pub const SHARED_EMPTY_SLOT: f64 = 0.2e-9;
 /// 0.72x of an earlier session's 554-596 us at 10,000 and 7,676-8,397 at 100,000, most likely a colder state (10 entries took 0.25
 /// and 0.27 us, 1.6x under it).
 pub const SHARED_CLEARED_ENTRY: f64 = 40e-9;
-/// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 11.8 us; a
-/// Studio client and edit DataModel 6.7-6.9 for FredokaOne)
-pub const TEXT_MEASURED: f64 = 11.7e-6;
+/// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 7.3 us on the fastest client sessions)
+pub const TEXT_MEASURED: f64 = 7.3e-6;
 
 /// A Text write on a TextLabel, TextButton or TextBox (a lobby client: 0.72-0.80 us with AutoLocalize off or digits only, 0.07
 /// when the text is the one it has). With AutoLocalize on and letters in the text it also looks the text up for translation in a
@@ -2021,23 +2032,23 @@ pub fn write(reflection: &Reflection, class: ClassId, property: &str, changed: b
 pub fn created(reflection: &Reflection, class: ClassId) -> f64 {
     1e-6 * match &*reflection.class(class).name {
         "Humanoid" => 4.3,
-        "TextLabel" | "TextButton" | "TextBox" => 1.44,
-        "MeshPart" => 1.89,
-        "ScreenGui" => 1.54,
+        "TextLabel" | "TextButton" | "TextBox" => 1.60,
+        "MeshPart" => 1.65,
+        "ScreenGui" => 1.38,
         "BillboardGui" | "SurfaceGui" => 1.18,
         "Animator" => 1.6,
         "UIListLayout" | "UIGridLayout" | "UITableLayout" | "UIPageLayout" => 1.41,
-        "ImageButton" => 1.07,
+        "ImageButton" => 0.84,
         "ImageLabel" => 0.65,
         "UIGradient" => 0.92,
         "Motor6D" => 0.91,
-        "Model" => 0.58,
+        "Model" => 0.52,
         "Weld" => 0.52,
         "SurfaceAppearance" => 1.2,
         _ if reflection.is_a(class, "BasePart") => 0.83,
         _ if reflection.is_a(class, "GuiObject") => 1.07,
         _ if reflection.is_a(class, "UIComponent") => 0.75,
-        _ => 0.36,
+        _ => 0.37,
     }
 }
 
@@ -2082,21 +2093,23 @@ pub fn method(name: &str) -> f64 {
         // third: a Studio client's 0.015)
         "IsA" => 0.025,
         "IsDescendantOf" | "IsAncestorOf" => 0.015,
+        "GetChildren" | "GetDescendants" => 0.039,
+        "FindFirstChild" | "FindFirstChildOfClass" | "FindFirstChildWhichIsA" | "FindFirstAncestor" | "FindFirstAncestorOfClass" | "FindFirstAncestorWhichIsA" => 0.048,
         // (the bench's row, Workspace.ParityScene.Tree100.N1_1.N2_1, less its 5 names and 39 bytes: [`full_name`])
         "GetFullName" => 0.102 - (5.0 * FULL_NAME_NAME + 39.0 * FULL_NAME_BYTE) * 1e6,
         "GetPlayers" => 0.069,
         "HasTag" => 0.042,
         "GetTags" => 0.073,
-        "AddTag" => 0.39,
-        "Emit" => 0.383,
+        "AddTag" | "RemoveTag" => 0.39,
+        "Emit" => 0.29,
         "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" => 0.20,
-        "GetAttribute" => 0.039,
+        "GetAttribute" => 0.047,
         "Create" => 1.31,
         // (a miss with no filter: the bench's held-out 0.17 us, a headless 0.747 client 0.19 to 0.23; its miss with an Include
         // filter of one part, 0.27 here before, is this and the list's read, PARAMS_LIST: 0.31 to 0.33 on the same client)
         "Raycast" => 0.19,
-        // (the bench's misses: a ray's; what they cross: SPHERE_CROSSED, BLOCK_CROSSED)
-        "Blockcast" | "Spherecast" | "Shapecast" => 0.27,
+        // (the bench's misses: a ray's, since PARAMS_LIST is priced separately; what they cross: SPHERE_CROSSED, BLOCK_CROSSED)
+        "Blockcast" | "Spherecast" | "Shapecast" => 0.19,
         "GetPartBoundsInBox" | "GetPartBoundsInRadius" => 0.15,
         "GetPartsInPart" => 0.243,
         // (the Region3 queries and ArePartsTouchingOthers: an empty call in a playing client, less the 0.09 us its GetPartBoundsInBox took
@@ -2136,12 +2149,14 @@ pub fn method(name: &str) -> f64 {
 /// 0.748 playing client (world/region.rs: [`REGION_FOUND`], [`TOUCHING_LIST`]); the rest in the parity bench's client sessions.
 pub fn method_kinds(name: &str) -> u8 {
     match name {
-        "IsA" | "GetFullName" | "GetPlayers" | "HasTag" | "GetTags" | "AddTag" | "Emit" | "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay"
-        | "ScreenPointToRay" | "GetAttribute" | "Create" | "Raycast" | "Blockcast" | "Spherecast" | "GetPartBoundsInBox" | "GetPartBoundsInRadius"
-        | "GetPartsInPart" | "JSONEncode" | "JSONDecode" | "GetValue" | "GetClass" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox"
-        | "GetExtentsSize" | "PivotTo" | "ScaleTo" | "FindPartsInRegion3" | "FindPartsInRegion3WithIgnoreList" | "FindPartsInRegion3WithWhiteList"
+        "IsA" | "GetChildren" | "GetDescendants" | "FindFirstChild" | "FindFirstChildOfClass" | "FindFirstChildWhichIsA" | "FindFirstAncestor"
+        | "FindFirstAncestorOfClass" | "FindFirstAncestorWhichIsA" | "GetFullName" | "GetPlayers" | "HasTag" | "GetTags" | "AddTag" | "Emit"
+        | "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" | "GetAttribute" | "Create" | "Raycast"
+        | "Blockcast" | "Spherecast" | "GetPartBoundsInBox" | "GetPartBoundsInRadius" | "GetPartsInPart" | "JSONEncode" | "JSONDecode"
+        | "GetValue" | "GetClass" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo"
+        | "FindPartsInRegion3" | "FindPartsInRegion3WithIgnoreList" | "FindPartsInRegion3WithWhiteList"
         | "findPartsInRegion3" | "IsRegion3Empty" | "IsRegion3EmptyWithIgnoreList" | "ArePartsTouchingOthers" => 0,
-        "Shapecast" => kind::DEFAULTED,
+        "Shapecast" | "RemoveTag" => kind::DEFAULTED,
         "IsDescendantOf" | "IsAncestorOf" | "GetVertexBoneWeights" | "GetVertexBones" | "GetFaceVertices" | "GetFaceColors" | "GetFaceNormals"
         | "GetFaceUVs" | "GetPosition" | "GetNormal" | "GetUV" | "GetBoneName" | "GetColor" | "GetColorAlpha" | "SetColorAlpha" | "SetColor"
         | "SetFaceColors" | "SetFaceNormals" | "SetFaceUVs" | "SetPosition" | "SetNormal" | "SetUV" | "RemoveFace" => kind::STUDIO,
@@ -2202,16 +2217,16 @@ pub fn cloned_kinds(reflection: &Reflection, class: ClassId) -> u8 {
 /// ancestors deep in the workspace and back, averaged).
 pub fn moved(reflection: &Reflection, class: ClassId) -> f64 {
     1e-6 * if reflection.is_a(class, "BasePart") {
-        1.10
+        1.20
     } else if reflection.is_a(class, "GuiObject") {
-        0.70
+        0.78
     } else if reflection.is_a(class, "Attachment") {
-        0.10
+        0.12
     } else {
-        0.044
+        0.055
     }
 }
-pub const MOVE_BASE: f64 = 0.47e-6 - (reparent_chains(0, 4, 0) + reparent_chains(4, 0, 0)) / 2.0;
+pub const MOVE_BASE: f64 = 0.50e-6 - (reparent_chains(0, 4, 0) + reparent_chains(4, 0, 0)) / 2.0;
 
 /// The client the prices were measured in, as the profile's headline names it: the parity bench's sessions (tools/cost-parity,
 /// reference/), a roblox-sim client (Studio 0.744's engine, and 0.747's since string.split's refit) rendering a game's match place on one
@@ -2242,21 +2257,18 @@ pub struct BenchBand {
 /// read against the 0.744 and the 0.747 sessions since string.split's refit (bands.py --priced; against the 0.744 sessions alone they
 /// were 0.52-1.38 on 69 rows, 0.58-1.27, 0.83-1.66 and 0.61-1.04: the 0.747 sessions, faster on many rows, moved them, not the price).
 pub const BENCH_BANDS: &[BenchBand] = &[
-    BenchBand { component: "luau", rows: 71, low: 0.54, high: 1.41 },
-    BenchBand { component: "engine", rows: 94, low: 0.61, high: 1.32 },
-    BenchBand { component: "collector", rows: 4, low: 0.72, high: 1.04 },
+    BenchBand { component: "luau", rows: 78, low: 0.51, high: 1.42 },
+    BenchBand { component: "engine", rows: 94, low: 0.67, high: 1.29 },
+    BenchBand { component: "collector", rows: 4, low: 0.70, high: 0.96 },
     BenchBand { component: "cold", rows: 13, low: 0.53, high: 1.06 },
-    BenchBand { component: "dispatch", rows: 6, low: 0.83, high: 1.89 },
+    BenchBand { component: "dispatch", rows: 6, low: 0.88, high: 1.92 },
     BenchBand { component: "studio", rows: 35, low: 0.45, high: 2.1 },
     BenchBand { component: "defaulted", rows: 55, low: 0.01, high: 1.42 },
 ];
-/// ree / client over every held-out row of the parity bench the clock prices (175 rows against the fastest of the 0.744 and 0.747
-/// sessions, 10th to 90th percentile; the median 16.5 % off, 17.6 % and 0.60-1.39x with string.split's price before its refit). The
-/// seven held-out large buffer rows it leaves out count bytes it prices at nothing and read down to 0.08x (a 4 MB fill:
-/// [`LUAU_BUFFER_FRESH_BYTE`]); with them, the 182 rows read 0.53-1.36x and 17.6 % off. Against the 0.744 sessions alone, as fitted:
-/// 173 rows 0.55-1.34x and 15.2 % off, where the clock before the size fit read 25.2 % off and its 10th percentile 0.06 (with the
-/// buffer rows 180 rows, 0.52-1.34x and 16.5 %, against 27.8 %)
-pub const FIDELITY_BAND: (f64, f64) = (0.60, 1.38);
+/// ree / client over all 182 held-out rows of the parity bench (against the fastest of the 0.744 and 0.747 sessions, 10th to 90th
+/// percentile; median |err| 16.5 %, median |ln(ree/client)| 15.8 %, p90/p10 2.14x, including all 7 held-out large buffer rows now priced
+/// across cache tiers; previously 0.53-1.36x and 17.6 % with large buffers unpriced, or 0.60-1.38x on the 175 non-buffer rows).
+pub const FIDELITY_BAND: (f64, f64) = (0.63, 1.35);
 /// The phone factor's measured spread ([`PHONE_SCRIPTS`]): 2.13-4.16 over the phones and scenes compared
 pub const PHONE_SCRIPTS_BAND: (f64, f64) = (2.13, 4.16);
 
@@ -2298,7 +2310,7 @@ pub const ANIMATION_FETCH: f64 = 0.45;
 /// What the work clock is beside a client's own time where no profile weighs it by its own work (`ree profile try`'s comparison): the
 /// held-out bands above, and what is not modelled. A profile's summary gives its own band (profiler/report.rs fidelity_json), so nobody
 /// reads the clock as a client's where it is not one.
-pub const FIDELITY: &str = "fidelity: the work clock reads 0.55-1.34x a client's time on the parity bench's held-out rows it prices (10th to 90th percentile; Luau 0.52-1.38x, engine calls 0.58-1.27x, the collector 0.61-1.04x, dispatch 0.83-1.66x; large buffer operations, priced in part, read down to 0.08x, and a profile prints their unpriced bytes), and a game's held-out per-frame code and attack casts 0.53-1.06x with their cold charges (measured before the size fit); a profile weighs these by its own work (profile.json fidelity). Not modelled: code and data a client finds cold after frames unused (a held-out cast's own Luau reads 0.3-1.0x a client), where data lies in memory (made together in one loop it reads dear), what a layout leaves warm, and the cold of each node a large walk visits (priced once a call). Size a cut in a client";
+pub const FIDELITY: &str = "fidelity: the work clock reads 0.63-1.35x a client's time on all 182 held-out rows of the parity bench (10th to 90th percentile; Luau 0.51-1.42x including cache-tiered large buffers, engine calls 0.67-1.29x, the collector 0.70-0.96x, dispatch 0.88-1.92x), and a game's held-out per-frame code and attack casts 0.53-1.06x with their cold charges (measured before the size fit); a profile weighs these by its own work (profile.json fidelity). Not modelled: code and data a client finds cold after frames unused (a held-out cast's own Luau reads 0.3-1.0x a client), where data lies in memory (made together in one loop it reads dear), what a layout leaves warm, and the cold of each node a large walk visits (priced once a call). Size a cut in a client";
 
 /// What the Luau VM did since it started (vendor/luau0-src, patches/luau/02-work-counters.patch: lua_workcounters)
 #[repr(C)]
@@ -2556,7 +2568,9 @@ pub fn luau(c: &VmCounters) -> f64 {
         + c.hostops[HASHREHASHED_SLOT] as f64 * LUAU_HASH_REHASHED
         + c.hostops[LARGEBLOCKS_SLOT] as f64 * LUAU_LARGE_BLOCK
         + c.hostops[BUFFRESH_SLOT] as f64 * LUAU_BUFFER_FRESH_BYTE
-        + c.hostops[BUFBIGCOPY_SLOT] as f64 * LUAU_BUFFER_BIG_COPY_BYTE)
+        + c.hostops[BUFBIGCOPY_SLOT] as f64 * LUAU_BUFFER_BIG_COPY_BYTE
+        + c.hostops[LARGEBUFFER_SLOT] as f64 * LUAU_LARGE_BUFFER
+        + c.hostops[BUFDRAMCOPY_SLOT] as f64 * LUAU_BUFFER_DRAM_COPY_BYTE)
 }
 
 /// The collector's charge so far on the work clock (seconds at desktop prices): the objects the scripts' work allocated at
@@ -2578,9 +2592,8 @@ pub fn cold_seconds(c: &VmCounters) -> f64 {
 }
 
 /// The kinds of each 8-byte slot of [`VmCounters`] for a profile's bookings ([`kind`] bits; profiler/vm.rs `split`): the cold and
-/// first-use counts, the collector's bytes, and the counts whose prices come from a Studio-era measurement (a call into the engine's
-/// Luau, a vector's Magnitude and Unit, a native datatype operation's own charge). Every other count is priced from the parity bench's
-/// client sessions.
+/// first-use counts and the collector's objects. Every other VM count (including `hostcalls`, `vectormagnitudes`, and `vectorunits`)
+/// is priced from the parity bench's client sessions.
 pub fn slot_kinds() -> Vec<i8> {
     use std::mem::offset_of;
     let slots = std::mem::size_of::<VmCounters>() / 8;
@@ -2594,10 +2607,6 @@ pub fn slot_kinds() -> Vec<i8> {
         kinds[hostops + special] = kind::COLD as i8;
     }
     kinds[hostops + GCOBJECTS_SLOT] = kind::COLLECTOR as i8;
-    // (a datatype operation's own price, hostnanos, is the parity bench's client rows': lune-roblox's datatype_price)
-    for offset in [offset_of!(VmCounters, hostcalls), offset_of!(VmCounters, vectormagnitudes), offset_of!(VmCounters, vectorunits)] {
-        kinds[slot(offset)] = kind::STUDIO as i8;
-    }
     kinds
 }
 
@@ -2636,13 +2645,15 @@ pub const MATCHCLASSES_SLOT: usize = 237;
 /// too large for Luau's own pages (over 1,024 bytes), each a block of the host's allocator
 pub const HASHREHASHED_SLOT: usize = 236;
 pub const LARGEBLOCKS_SLOT: usize = 235;
-/// ... and of the bytes buffer functions handled, a new buffer's past Luau's own pages (over 1 KB) and a copy's, a fill's or a written
-/// string's in a call that moved over 64 KB (lua.h LUA_WORK_BUFFRESH, LUA_WORK_BUFBIGCOPY): priced at nothing
-/// ([`LUAU_BUFFER_FRESH_BYTE`]), so a profile prints them as work it does not price (work.unpriced)
+/// ... and of the bytes buffer functions handled, a new buffer's past Luau's own pages (over 1 KB), each large buffer (>= 64 KB),
+/// and a copy's, a fill's or a written string's in a call over 64 KB (L2/L3 tier) and over 1 MB (DRAM tier)
+/// (lua.h LUA_WORK_BUFFRESH, LUA_WORK_BUFBIGCOPY, LUA_WORK_LARGEBUFFER, LUA_WORK_BUFDRAMCOPY)
 pub const BUFFRESH_SLOT: usize = 234;
 pub const BUFBIGCOPY_SLOT: usize = 233;
+pub const LARGEBUFFER_SLOT: usize = 232;
+pub const BUFDRAMCOPY_SLOT: usize = 231;
 /// The first of hostops' slots that count something other than an opcode (lua.h LUA_WORK_FIRSTSLOT)
-pub const FIRST_SPECIAL_SLOT: usize = 233;
+pub const FIRST_SPECIAL_SLOT: usize = 231;
 
 /// The engine instructions hostops counted: its opcodes' slots, without the slots that count other work
 pub fn host_instructions(c: &VmCounters) -> u64 {
@@ -2750,7 +2761,7 @@ pub const INTERPRETED_OPS: [f64; 256] = priced([0.48, 5.46, 2.45, 2.20, 0.0, 4.8
 /// key's lookup and `%` / `//` / `^` stay calls into the VM (0.65-0.75), an allocation (a table, closure, concatenation) 1.7 more than
 /// its object, a call or return 3.3 and a generalized loop's step 1.9; imports are resolved at load (0.27) and a builtin's fast call is
 /// inlined (0.19).
-pub const NATIVE_OPS: [f64; 256] = priced([0.43, 0.65, 0.42, 0.75, 1.74, 3.25, 1.93, 0.19, 0.27, 3.25]);
+pub const NATIVE_OPS: [f64; 256] = priced([0.43, 0.65, 0.42, 0.75, 1.74, 3.25, 1.93, 0.90, 0.27, 3.25]);
 
 /// A GETIMPORT that looks its global up (vm counter `slowimports`): a safe environment's imports are resolved when the script loads,
 /// as Roblox resolves them, and read as a constant ([`INTERPRETED_OPS`]' global class); one getfenv or setfenv made unsafe looks every
@@ -2772,11 +2783,11 @@ pub const LUAU_SLOW_IMPORT: f64 = 7.9;
 /// match place, reference/client-747-full-*; 75 ns, 1.85 us and 142 us a call), where 25.4 read them 1.5-2.2x a client's; the held-out
 /// rows at 10 and 1,000 parts read 1.04x and 1.13x (1.92x and 2.29x before).
 pub const LUAU_NUMBER_STRING: f64 = 18.0;
-pub const LUAU_NEW_STRING: f64 = 171.0;
-pub const LUAU_SORT_COMPARE: f64 = 1.06;
+pub const LUAU_NEW_STRING: f64 = 150.0;
+pub const LUAU_SORT_COMPARE: f64 = 0.90;
 pub const LUAU_SORT_CALL: f64 = 9.7;
-pub const LUAU_CREATE_ITEM: f64 = 1.95;
-pub const LUAU_CLONE_ITEM: f64 = 4.3;
+pub const LUAU_CREATE_ITEM: f64 = 2.30;
+pub const LUAU_CLONE_ITEM: f64 = 2.4;
 pub const LUAU_CONCAT_ITEM: f64 = 5.0;
 pub const LUAU_SPLIT_PART: f64 = 11.7;
 pub const LUAU_FORMAT: f64 = 102.0;
@@ -2788,13 +2799,13 @@ pub const LUAU_FORMAT: f64 = 102.0;
 /// A table element table.find compared, and one table.insert / table.remove at a position moved, table.move copied, table.unpack /
 /// pack / string.byte pushed or table.clear cleared
 pub const LUAU_SCANNED: f64 = 0.357;
-pub const LUAU_MOVED: f64 = 0.226;
+pub const LUAU_MOVED: f64 = 0.21;
 /// A byte of a string a script's work made or looked up (built, hashed and compared; copied when new), a byte a plain search or a utf8
 /// function read without making a string, a step of the pattern matcher (an item tried at a position), a byte a buffer function
 /// zeroed, filled, copied or wrote
 pub const LUAU_STRING_BYTE: f64 = 0.169;
 pub const LUAU_STRING_SCANNED: f64 = 0.024;
-pub const LUAU_MATCH_STEP: f64 = 0.796;
+pub const LUAU_MATCH_STEP: f64 = 0.70;
 pub const LUAU_BUFFER_BYTE: f64 = 0.004;
 /// A byte of an object or table part a script's work allocated (its instructions' and its library and engine calls'), beyond the
 /// object's price ([`LUAU_OBJECT`], [`LUAU_LIBRARY_OBJECT`]): what touching fresh memory costs
@@ -2827,16 +2838,17 @@ pub const LUAU_HASH_REHASHED: f64 = 15.43;
 /// An allocation too large for Luau's own pages (over 1,024 bytes: a string or buffer of 1 KB, a table part of 64 slots or more),
 /// beyond its bytes: a block of the host's allocator, made and freed apart (fitted with the rest)
 pub const LUAU_LARGE_BLOCK: f64 = 79.8;
-/// A byte of a new buffer past Luau's own pages, beyond [`LUAU_BUFFER_BYTE`] (fresh memory its zeroing touches first), and a byte of a
-/// buffer.copy, buffer.fill or buffer.writestring call that moved over 64 KB (past a core's nearest caches): counted, and priced at
-/// nothing, as no price a byte fits a client; a profile prints them as unpriced when a run has any (work.unpriced), and the Luau band
-/// ([`BENCH_BANDS`]) leaves out the bench rows that count them. The parity bench's buffers at 64 KB to 4 MB (tools/cost-parity/reference/client-buffers-1.json and the
-/// kept sessions): a copy costs a client 0.009 ns a byte at 64 KB, 0.020 at 256 KB to 1 MB and 0.045 at 4 MB, a create 0.34 down to
-/// 0.095 from 64 KB to 4 MB, two sessions of one row up to 50 % apart; the prices a byte its fit rows give (0.074 and 0.024) moved the
-/// held-out rows from 18.0 to 20.4 % off at the median (a 256 KB writestring 0.83x to 4.2x, a 1 MB copy 0.27x to 1.45x). A price by
-/// cache tier would need rows between the tiers.
-pub const LUAU_BUFFER_FRESH_BYTE: f64 = 0.0;
-pub const LUAU_BUFFER_BIG_COPY_BYTE: f64 = 0.0;
+/// Cache-tiered pricing for large buffer operations (patches/luau/25-buffer-cache-tiers.patch), fitted on the parity bench's
+/// non-held-out buffer rows (64 KB to 4 MB against the fastest kept client sessions):
+/// - A new buffer past Luau's small pages (> 1 KB) pays `LUAU_BUFFER_FRESH_BYTE` on top of `LUAU_ALLOCATED_BYTE` + `LUAU_BUFFER_BYTE`
+///   (~0.091 ns/byte total for fresh memory zeroing), plus `LUAU_LARGE_BUFFER` once when >= 64 KB (allocator/OS large-segment setup).
+/// - A buffer.copy, buffer.fill or buffer.writestring call pays `LUAU_BUFFER_BYTE` (0.004 ns/byte) within L1/L2 (<= 64 KB), plus
+///   `LUAU_BUFFER_BIG_COPY_BYTE` (0.002 ns/byte -> 0.006 total) in L2/L3 (64 KB..1 MB), plus `LUAU_BUFFER_DRAM_COPY_BYTE`
+///   (0.030 ns/byte -> 0.036 total) above 1 MB (DRAM bandwidth).
+pub const LUAU_BUFFER_FRESH_BYTE: f64 = 0.026;
+pub const LUAU_BUFFER_BIG_COPY_BYTE: f64 = 0.002;
+pub const LUAU_LARGE_BUFFER: f64 = 18_000.0;
+pub const LUAU_BUFFER_DRAM_COPY_BYTE: f64 = 0.030;
 
 /// An object a script's instruction makes, beyond its bytes and its collector's share ([`LUAU_ALLOCATED_BYTE`],
 /// [`LUAU_COLLECTOR_OBJECT`]: 14.6 ns an object in all), and a byte of table storage beyond its allocated byte (array and hash parts):
@@ -2848,16 +2860,12 @@ pub const LUAU_STORED: f64 = 0.079;
 /// API's own costs come on top: READ, CALL, ...): fitted with the size prices, the library's calls with them
 pub const LUAU_REHASHED: f64 = 0.0;
 pub const LUAU_CCALL: f64 = 5.77;
-/// a datatype's operation the engine's Luau serves (CFrame * CFrame 62, CFrame.new 64, Color3.new 61,
-/// cf * v 18, cf.Position + cf.LookVector 15, v.Magnitude / Unit / Dot 62 for three)
-pub const LUAU_HOSTCALL: f64 = 15.0;
-/// `.Magnitude` and `.Unit` on a Vector3, which the VM answers itself (patches/luau/05-vector-members.patch, luaV_vectormember):
-/// Studio's client reads `local _ = a.Magnitude` at 10.4 ns and `a.Unit` at 12.3 (the op_cost probe's rows, minus the
-/// 3.2 ns of instructions the loop line counts). The rig frame, where a script reads it from a vector it just took from an
-/// instance, is dearer (a match place's client, six runs of six readings: median 15.4 ns whole, 14.2 in the first three, range
-/// 0-62 with the cold read of the vector's source), so it is priced 12.5, which reads about 14 here: 1.1x the rig frame, 1.2x the loop.
-pub const VECTOR_MAGNITUDE: f64 = 12.5;
-pub const VECTOR_UNIT: f64 = 9.1;
+/// A datatype's operation the engine's Luau serves, client-calibrated on the parity bench's non-held-out datatype rows.
+pub const LUAU_HOSTCALL: f64 = 12.0;
+/// `.Magnitude` and `.Unit` on a Vector3, which the VM answers itself (patches/luau/05-vector-members.patch, luaV_vectormember),
+/// client-calibrated on the parity bench's non-held-out vector rows.
+pub const VECTOR_MAGNITUDE: f64 = 9.0;
+pub const VECTOR_UNIT: f64 = 10.0;
 /// A method call on a Vector3 (`a:Dot(b)`) beyond what its instructions and C call count: nothing. Its NAMECALL and CALL at
 /// [`INTERPRETED_OPS`]' call price and the C call read `Dot` at about 11 ns, as Studio's client (`Dot`, `Cross` and `Max` 9.4-12.2 ns
 /// whole) and the parity bench (Dot 11.7, Cross 12.0: held-out rows) do; the older call price (8.5 ns more a call) needed -9 here.

@@ -202,6 +202,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         ("ActorInvoke", crate::cost::ACTOR_INVOKE),
         ("SharedIncrement", crate::cost::SHARED_INCREMENT),
         ("ModelQuery", crate::cost::MODEL_QUERY),
+        ("ModelExtentsQuery", crate::cost::MODEL_EXTENTS_QUERY),
         ("LogCall", crate::cost::LOG_CALL),
         ("Thread", crate::cost::THREAD),
         ("PivotSingle", crate::cost::PIVOT_SINGLE),

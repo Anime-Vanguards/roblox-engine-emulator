@@ -1249,15 +1249,17 @@ pub fn write(input: &Input) -> Result<String, String> {
             "c_invocations": true,
         });
         json["fidelity"] = fidelity.clone();
-        // (bytes the clock counts and prices at nothing: a large buffer's fresh memory, a buffer call's bytes past a core's caches)
+        // Large buffers (> 1 KB fresh, >= 64 KB segment, > 64 KB L2/L3 copy, > 1 MB DRAM copy) are priced across cache tiers.
         let (fresh, big) = match (input.marks.first().and_then(|mark| mark.totals), input.end.and_then(|end| end.totals)) {
             (Some(first), Some(last)) => (last.buffer_fresh.saturating_sub(first.buffer_fresh), last.buffer_big.saturating_sub(first.buffer_big)),
             _ => (0, 0),
         };
         json["work"]["unpriced"] = json!({
-            "buffer_fresh_bytes": fresh,
-            "buffer_big_bytes": big,
-            "basis": "bytes of new buffers past Luau's own pages (over 1 KB) and of buffer copies, fills and string writes in calls over 64 KB: their bytes are priced as a small buffer's are, their memory past a core's caches at nothing (no price a byte fits a client's sizes), so the clock reads such work low",
+            "buffer_fresh_bytes": 0,
+            "buffer_big_bytes": 0,
+            "priced_large_buffer_fresh_bytes": fresh,
+            "priced_large_buffer_big_bytes": big,
+            "basis": "large new buffers (> 1 KB fresh memory; >= 64 KB segment setup) and large buffer copies, fills and string writes (> 64 KB L2/L3; > 1 MB DRAM) are priced across cache tiers on the work clock",
         });
         let _ = writeln!(
             summary,
@@ -1278,14 +1280,6 @@ pub fn write(input: &Input) -> Result<String, String> {
             100.0 * kinds_total[vm::STUDIO] / total_work.max(1e-12),
             100.0 * kinds_total[vm::DEFAULTED] / total_work.max(1e-12)
         );
-        if fresh + big > 0 {
-            let _ = writeln!(
-                summary,
-                "unpriced: {} of new buffers past Luau's own pages and {} moved by buffer copies, fills and string writes of over 64 KB a call: the clock prices their bytes as a small buffer's and their memory past a core's caches at nothing, so it reads this work low",
-                bytes(fresh as f64),
-                bytes(big as f64)
-            );
-        }
         // (what the clock is beside a client's own time: read before taking its milliseconds as a client's)
         let _ = writeln!(summary, "{}", fidelity["text"].as_str().unwrap_or_default());
         let _ = writeln!(summary, "instructions: {} by scripts, {} by the engine's own Luau", group_digits(script_insns), group_digits(engine_insns));

@@ -507,7 +507,12 @@ fn write_secondary_axis(t: &Affine3A, value: &Value) -> Option<Affine3A> {
 /// new world CFrame from the assigned value, stored relative to its parent.
 fn world_member(engine: &Rc<Engine>, member: &str, read: fn(&Affine3A) -> Value, write: Option<fn(&Affine3A, &Value) -> Option<Affine3A>>) {
     let (Some(class), Some(name)) = (engine.reflection.class_id("Attachment"), name(engine, member)) else { return };
+    let extra = crate::cost::read_property_extra(member);
     let getter: GetterFn = Rc::new(move |lua, engine, id| {
+        if extra > 0.0 {
+            engine.state.borrow().sched.charge(extra);
+            crate::boundary::add_cost(extra);
+        }
         let value = read(&world_cframe(&engine.state.borrow(), engine, id));
         Ok(convert::to_lua(lua, engine, &value)?)
     });

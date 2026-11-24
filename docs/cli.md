@@ -188,7 +188,7 @@ When running via `--service`, the client enforces wall-clock and parent watches;
 ### Sub-frame timing sensitivity (`--timing-check`)
 
 Pass `--timing-check` (or `REE_TIMING_CHECK=1`) to test whether your script's visual or audio output depends on intra-frame `os.clock()` speed. `ree` re-records across scaled in-frame work clocks covering real client variance:
-- Desktop calibration spans `0.60–1.38x` client time → probes `0.72x` (fast desktop), `1.67x` (slow desktop), and `6.93x` (slow phone, since phones run `2.13–4.16x` slower than desktop).
+- Desktop calibration spans `0.63–1.35x` client time → probes `0.74x` (fast desktop), `1.59x` (slow desktop), and `6.6x` (slow phone, since phones run `2.13–4.16x` slower than desktop).
 - `--device phone` (already `2.77x`) probes `0.56x` and `2.50x`.
 - Override probe factors with `REE_TIMING_PROBES=a,b`.
 
@@ -255,7 +255,7 @@ Writes to `--profile-out` (default `<out>/profile` for `record`, `<state dir>/re
 - `--profile-top <n>`: row limit in text tables.
 - `--profile-phase <a,b|all>`: phase filter for summary tables and boundary reports (defaults to `steady` if marked via `Context.ProfilePhase`, else all phases).
 - **Game vs. harness split:** Harness code (`ReplicatedStorage.RURFixtures` + `rur.record`) is isolated from game code in summaries and `profile.json` (`harness`, `harness_self_work_ms`, `harness_cold_work_ms`, `scope`); `ree`'s own wrapper chunks carry `tool = true`.
-- **Work breakdown & fidelity:** Each function splits `self.cold_work_ms`, `collector_ms`, `dispatch_ms`, `by_provenance_ms`, and `saving_ms` (hot work + exclusive cold charges). `profile.json` also records `cold` objects, `handlers`, `resumptions`, `clock_reads` (detecting `budget_loop` patterns reading `os.clock` repeatedly per frame), `unmeasured_fires`, `work.prices`, `work.unpriced` (`buffer_fresh_bytes`, `buffer_big_bytes`), `scope.engine` operation counts (`cloned`, `created`, `destroyed`, `entered`, `writes`, `changed`, `geometry`, `toggles`, `pivots`, `bulk_moved`, `emits`, `queries`), per-mark cumulative counters (`marks` / `end`), and weighted calibration error bands (`fidelity`, folding phone scaling spread into `band`).
+- **Work breakdown & fidelity:** Each function splits `self.cold_work_ms`, `collector_ms`, `dispatch_ms`, `by_provenance_ms`, and `saving_ms` (hot work + exclusive cold charges). `profile.json` also records `cold` objects, `handlers`, `resumptions`, `clock_reads` (detecting `budget_loop` patterns reading `os.clock` repeatedly per frame), `unmeasured_fires`, `work.prices`, `work.unpriced` (now `0` for cache-tiered large buffers, with `priced_large_buffer_fresh_bytes` and `priced_large_buffer_big_bytes`), `scope.engine` operation counts (`cloned`, `created`, `destroyed`, `entered`, `writes`, `changed`, `geometry`, `toggles`, `pivots`, `bulk_moved`, `emits`, `queries`), per-mark cumulative counters (`marks` / `end`), and weighted calibration error bands (`fidelity`, folding phone scaling spread into `band`).
 
 ### Comparing and regenerating profiles
 

@@ -56,26 +56,26 @@ CLASSES = {
 INTERPRETED = {"c_simple": 0.48, "c_mod": 5.46, "c_tablek": 2.45, "c_tabledyn": 2.20, "c_alloc": 0.0, "c_call": 4.89, "c_iter": 2.54,
                "c_fastcall": 3.75, "c_global": 1.36, "c_namecall": 0.0}
 NATIVE = {"c_simple": 0.43, "c_mod": 0.65, "c_tablek": 0.42, "c_tabledyn": 0.75, "c_alloc": 1.74, "c_call": 3.25, "c_iter": 1.93,
-          "c_fastcall": 0.19, "c_global": 0.27, "c_namecall": 3.25}
-LIBRARY = {"numtostr": 18.0, "newstring": 171.0, "sortcompare": 1.06, "sortcall": 9.7, "createitem": 1.95, "cloneitem": 4.3,
+          "c_fastcall": 0.90, "c_global": 0.27, "c_namecall": 3.25}
+LIBRARY = {"numtostr": 18.0, "newstring": 150.0, "sortcompare": 0.90, "sortcall": 9.7, "createitem": 2.30, "cloneitem": 2.4,
            "concatitem": 5.0, "splitpart": 11.7, "format": 102.0, "formatspec": 0.0}
 # work by the size of a call's input (src/cost.rs LUAU_SCANNED and below, and json's prices)
 SIZES = {
     # table elements compared and moved, bytes of string and of pattern text scanned, pattern steps, buffer bytes
-    "scanned": 0.357, "moved": 0.226, "strbyte": 0.169, "strscanned": 0.024, "matchstep": 0.796, "bufbyte": 0.004,
+    "scanned": 0.357, "moved": 0.21, "strbyte": 0.169, "strscanned": 0.024, "matchstep": 0.70, "bufbyte": 0.004,
     # allocated bytes, objects the collector sweeps and objects library calls make
     "allocbyte": 0.061, "collectorobject": 8.6, "libobject": 5.99,
     # case conversion, utf8 and character work, buffers made, character classes tested
     "casebyte": 1.485, "utf8byte": 0.979, "utf8char": 6.71, "strchar": 2.16, "bytevalue": 1.46, "buffer": 1774.0, "matchclass": 6.33,
-    # keys put back in a hash part, blocks over 1 KB, bytes counted and priced at nothing
-    "hashrehash": 15.43, "largeblock": 79.8, "buffresh": 0.0, "bufbigcopy": 0.0,
+    # keys put back in a hash part, blocks over 1 KB, cache-tiered large buffers and copies
+    "hashrehash": 15.43, "largeblock": 79.8, "buffresh": 0.026, "bufbigcopy": 0.002, "largebuffer": 18000.0, "bufdramcopy": 0.030,
     # JSON text and values, for an encode and for a decode
-    "jsonencodebyte": 0.0, "jsonencodevalue": 62.1, "jsondecodebyte": 8.15, "jsondecodevalue": 1.50,
+    "jsonencodebyte": 0.0, "jsonencodevalue": 55.5, "jsondecodebyte": 8.15, "jsondecodevalue": 1.50,
 }
 # a frame's cold first touches (src/cost.rs LUAU_COLD_TABLE and below): every round of a row runs in a frame of its own
 COLD = {"coldtable": 200.0, "coldclosure": 30.0, "coldproto": 5.0, "coldcode": 0.85, "coldcfunc": 2500.0, "coldhostfunc": 900.0,
         "rareproto": 700.0}
-LUAU = {"object": 5.99, "stored": 0.079, "rehash": 0.0, "ccall": 5.77, "hostcall": 15.0, "magnitude": 12.5, "unit": 9.1,
+LUAU = {"object": 5.99, "stored": 0.079, "rehash": 0.0, "ccall": 5.77, "hostcall": 12.0, "magnitude": 9.0, "unit": 10.0,
         "vectormethod": 0.0, "slowimport": 7.9, **LIBRARY, **SIZES, **COLD}
 
 
@@ -133,6 +133,8 @@ def features(work, n):
         "largeblock": work.get("largeblocks", 0) / n,
         "buffresh": work.get("buffreshbytes", 0) / n,
         "bufbigcopy": work.get("bufbigcopybytes", 0) / n,
+        "largebuffer": work.get("largebuffers", 0) / n,
+        "bufdramcopy": work.get("bufdramcopybytes", 0) / n,
         # (an encode and a decode of the same text: the row's name says which)
         "jsonencodebyte": 0.0,
         "jsonencodevalue": 0.0,

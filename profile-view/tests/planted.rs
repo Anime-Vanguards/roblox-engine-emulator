@@ -50,8 +50,8 @@ return M"#;
     // run starts, and anything the engine adds to a VM's heap moves the count (56 and 59 of 60 have been recorded).
     // The figures are therefore those of a run with no such call, and what each one adds: 2497.05 ns, the difference
     // measured between runs of 56 and 59 (the cold first call's 2500 ns and the C call, less the fast call's own).
-    let saving_without_debt_ms = 0.411801670630;
-    let upper_without_debt_ms = 0.468371027296;
+    let saving_without_debt_ms = 0.411801320630;
+    let upper_without_debt_ms = 0.468370677296;
     let debt_decline_ms = 2497.05e-6 / 60.0;
 
     let temp = Temp::new("planted-numeric-argument");
@@ -145,9 +145,9 @@ function M.Step()
 end
 return M"#;
     let fixed_source = source.replace("table.sort(M.Build())", "");
-    // The refit changes the sort's C-call price and Build's allocation/growth charges.
-    let expected_subtotal_ms = 0.208115030000;
-    let expected_saving_ms = 0.271653744668;
+    // The refit changes the sort's comparison price and Build's table.create/growth charges.
+    let expected_subtotal_ms = 0.177079670000;
+    let expected_saving_ms = 0.244118384668;
 
     let temp = Temp::new("planted-sort-arguments");
     let handler = harness("Probe", "sink=M.Step()");
@@ -160,14 +160,14 @@ return M"#;
     let upper_bound_ms = sort.upper_ms.unwrap();
     let all_code_ms = code_per_frame(&before);
     let saved_ms = all_code_ms - code_per_frame(&after);
-    assert!((subtotal_ms - expected_subtotal_ms).abs() < SAME_MS);
-    assert!((saved_ms - expected_saving_ms).abs() < SAME_MS);
+    println!("sort argument: subtotal {subtotal_ms:.12}, upper {upper_bound_ms:.12}, A/B {saved_ms:.12} ms/frame");
+    assert_same_ms(subtotal_ms, expected_subtotal_ms, "sort subtotal");
+    assert_same_ms(saved_ms, expected_saving_ms, "sort saving");
     // The edit saves more than the sort's subtree and no more than the bound, which is all the code's work
     assert!(saved_ms <= upper_bound_ms + SAME_MS, "saving {saved_ms} exceeds bound {upper_bound_ms}");
     assert!((upper_bound_ms - all_code_ms).abs() < SAME_MS);
     assert!(sort.cost_text().contains("evaluation of its arguments"));
     assert_accounted(&before, &found);
-    println!("sort argument: subtotal {subtotal_ms:.12}, upper {upper_bound_ms:.12}, A/B {saved_ms:.12} ms/frame");
 }
 
 #[test]

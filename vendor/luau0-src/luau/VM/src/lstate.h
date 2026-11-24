@@ -468,6 +468,8 @@ LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
         luaE_worklib(L, LUA_WORK_BUFBYTES, workbytes); \
         if (workbytes > 1024) \
             luaE_worklib(L, LUA_WORK_BUFFRESH, workbytes); \
+        if (workbytes >= 65536) \
+            luaE_worklib(L, LUA_WORK_LARGEBUFFER, 1); \
     } while (0)
 // bytes a buffer copy, fill or string write moved (lua.h LUA_WORK_BUFBYTES), and those of a call over 64 KB again (LUA_WORK_BUFBIGCOPY)
 #define luaE_workbufmove(L, n) \
@@ -477,6 +479,8 @@ LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
         luaE_worklib(L, LUA_WORK_BUFBYTES, workbytes); \
         if (workbytes > 65536) \
             luaE_worklib(L, LUA_WORK_BUFBIGCOPY, workbytes); \
+        if (workbytes > 1048576) \
+            luaE_worklib(L, LUA_WORK_BUFDRAMCOPY, workbytes); \
     } while (0)
 
 LUAI_FUNC lua_State* luaE_newthread(lua_State* L);

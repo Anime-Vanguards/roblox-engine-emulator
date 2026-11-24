@@ -780,14 +780,19 @@ pub fn destroy(_lua: &Lua, engine: &Rc<Engine>, id: InstanceId) -> Result<(), Fl
 /// instances above it unfinished.
 fn destroy_subtree(engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
     enum Step {
-        Destroy(InstanceId),
+        Destroy(InstanceId, bool),
         /// Its subtree destroyed: the instance's own price (with its extra) and its deferred cleanup
         Finish(InstanceId, f64),
     }
-    let mut steps = vec![Step::Destroy(id)];
+    // Capture DataModel placement before begin_destroy detaches the root so descendants keep their placed status.
+    let root_placed = {
+        let state = engine.state.borrow();
+        state.dom.at(id).parent.is_some_and(|parent| crate::services::in_data_model(&state, parent))
+    };
+    let mut steps = vec![Step::Destroy(id, root_placed)];
     while let Some(step) = steps.pop() {
-        let id = match step {
-            Step::Destroy(id) => id,
+        let (id, placed) = match step {
+            Step::Destroy(id, placed) => (id, placed),
             Step::Finish(id, extra) => {
                 let mut state = engine.state.borrow_mut();
                 state.sched.charge(crate::cost::DESTROYED + extra);
@@ -808,7 +813,6 @@ fn destroy_subtree(engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
         let extra = {
             let state = engine.state.borrow();
             let class = state.dom.at(id).class;
-            let placed = state.dom.at(id).parent.is_some_and(|parent| crate::services::in_data_model(&state, parent));
             match placed {
                 true if engine.reflection.is_a(class, "GuiObject") => crate::cost::DESTROYED_GUI,
                 true if engine.reflection.is_a(class, "BasePart") => crate::cost::DESTROYED_PART,
@@ -828,7 +832,7 @@ fn destroy_subtree(engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
         };
         // (the first child on top: each child's subtree is destroyed in turn, then the instance finishes)
         steps.push(Step::Finish(id, extra));
-        steps.extend(children.into_iter().rev().map(Step::Destroy));
+        steps.extend(children.into_iter().rev().map(|child| Step::Destroy(child, placed)));
     }
     Ok(())
 }

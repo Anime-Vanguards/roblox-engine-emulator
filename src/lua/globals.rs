@@ -971,6 +971,8 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
                     ("largeblocks", counters.hostops[crate::cost::LARGEBLOCKS_SLOT]),
                     ("buffreshbytes", counters.hostops[crate::cost::BUFFRESH_SLOT]),
                     ("bufbigcopybytes", counters.hostops[crate::cost::BUFBIGCOPY_SLOT]),
+                    ("largebuffers", counters.hostops[crate::cost::LARGEBUFFER_SLOT]),
+                    ("bufdramcopybytes", counters.hostops[crate::cost::BUFDRAMCOPY_SLOT]),
                     ("coldcfuncs", counters.hostops[crate::cost::COLD_CFUNCS_SLOT]),
                     ("coldhostfuncs", counters.hostops[crate::cost::COLD_HOSTFUNCS_SLOT]),
                     ("rareprotos", counters.hostops[crate::cost::RARE_PROTOS_SLOT]),

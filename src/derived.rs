@@ -172,11 +172,12 @@ pub fn install(engine: &Rc<Engine>) {
     let mut getters: Vec<(ClassId, NameId, GetterFn)> = Vec::new();
     let mut setters: Vec<(ClassId, NameId, SetterFn)> = Vec::new();
 
-    let mut derive = |views: &mut DerivedViews, class_name: &str, name: &str, source: &str, events: ViewEvents, read: ReadFn, write: WriteFn| {
-        let (Some(class), Some(name), Some(source)) = (reflection.class_id(class_name), reflection.name_id(name), reflection.name_id(source)) else {
+    let mut derive = |views: &mut DerivedViews, class_name: &str, name_str: &str, source: &str, events: ViewEvents, read: ReadFn, write: WriteFn| {
+        let (Some(class), Some(name), Some(source)) = (reflection.class_id(class_name), reflection.name_id(name_str), reflection.name_id(source)) else {
             return;
         };
-        let (getter, setter) = view_behaviours(name, source, read.clone(), write.clone());
+        let extra = crate::cost::read_property_extra(name_str);
+        let (getter, setter) = view_behaviours(name, source, extra, read.clone(), write.clone());
         getters.push((class, name, getter));
         setters.push((class, name, setter));
         views.add(class, DerivedView { name, source, events, read, write });
@@ -383,8 +384,12 @@ pub fn install(engine: &Rc<Engine>) {
 
 /// A view's getter (reads its source and converts) and setter (coerces to the view's type, then
 /// writes the source through `write`).
-fn view_behaviours(name: NameId, source: NameId, read: ReadFn, write: WriteFn) -> (GetterFn, SetterFn) {
+fn view_behaviours(name: NameId, source: NameId, extra: f64, read: ReadFn, write: WriteFn) -> (GetterFn, SetterFn) {
     let getter: GetterFn = Rc::new(move |lua, engine, id| {
+        if extra > 0.0 {
+            engine.state.borrow().sched.charge(extra);
+            crate::boundary::add_cost(extra);
+        }
         let value = (read)(engine.state.borrow().dom.raw_get(id, source));
         Ok(convert::to_lua(lua, engine, &value)?)
     });
@@ -409,12 +414,13 @@ fn view_behaviours(name: NameId, source: NameId, read: ReadFn, write: WriteFn) -
 /// Registers a view after Derived.Install (engine::world's views of a part's or attachment's
 /// CFrame): its getter / setter behaviours and its change events. False when the class or a name
 /// is unknown.
-pub fn add_view(engine: &Rc<Engine>, class_name: &str, name: &str, source: &str, events: ViewEvents, read: ReadFn, write: WriteFn) -> bool {
+pub fn add_view(engine: &Rc<Engine>, class_name: &str, name_str: &str, source: &str, events: ViewEvents, read: ReadFn, write: WriteFn) -> bool {
     let reflection = &engine.reflection;
-    let (Some(class), Some(name), Some(source)) = (reflection.class_id(class_name), reflection.name_id(name), reflection.name_id(source)) else {
+    let (Some(class), Some(name), Some(source)) = (reflection.class_id(class_name), reflection.name_id(name_str), reflection.name_id(source)) else {
         return false;
     };
-    let (getter, setter) = view_behaviours(name, source, read.clone(), write.clone());
+    let extra = crate::cost::read_property_extra(name_str);
+    let (getter, setter) = view_behaviours(name, source, extra, read.clone(), write.clone());
     {
         let mut behaviors = engine.behaviors.borrow_mut();
         behaviors.add_getter(class, name, getter);

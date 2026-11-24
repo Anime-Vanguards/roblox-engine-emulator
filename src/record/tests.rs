@@ -757,12 +757,12 @@ fn a_timing_check_probes_faster_and_slower_clients() {
     let faster = threshold("faster", 0.9);
     let _ = std::fs::remove_dir_all(&root);
     let probes = |done: &super::run::Done| -> Vec<(f64, bool)> { done.summary["timing"]["probes"].as_array().unwrap().iter().map(|probe| (probe["factor"].as_f64().unwrap(), probe["hinges"] == true)).collect() };
-    // Current calibration: inverse fidelity endpoints (1/1.38, 1/0.60), then the slowest phone (4.16/0.60).
-    assert_eq!(probes(&slower).iter().map(|probe| probe.0).collect::<Vec<_>>(), vec![0.725, 1.667, 6.933]);
+    // Current calibration: inverse fidelity endpoints (1/1.35, 1/0.63), then the slowest phone (4.16/0.63).
+    assert_eq!(probes(&slower).iter().map(|probe| probe.0).collect::<Vec<_>>(), vec![0.741, 1.587, 6.603]);
     assert_eq!(probes(&slower).iter().map(|probe| probe.1).collect::<Vec<_>>(), vec![false, true, true], "{}", slower.summary["timing"]);
     assert_eq!(probes(&faster).iter().map(|probe| probe.1).collect::<Vec<_>>(), vec![true, false, false], "{}", faster.summary["timing"]);
-    assert!(faster.line.contains("hinges on sub-frame timing under 0.72x (the fastest desktop client)") && faster.line.contains("no change at 1.67x, 6.93x"), "{}", faster.line);
-    assert_eq!(slower.summary["timing"]["range"]["factors"], serde_json::json!([0.725, 6.933]));
+    assert!(faster.line.contains("hinges on sub-frame timing under 0.74x (the fastest desktop client)") && faster.line.contains("no change at 1.59x, 6.6x"), "{}", faster.line);
+    assert_eq!(slower.summary["timing"]["range"]["factors"], serde_json::json!([0.741, 6.603]));
     assert_eq!(faster.summary["timing"]["first"]["list"], "actions");
 }
 
@@ -817,7 +817,7 @@ fn a_timing_check_says_whether_a_recording_hinges_on_sub_frame_timing() {
     };
     let steady = check(&steady, "steady");
     assert_eq!(steady.summary["timing"]["hinges"], Json::Bool(false), "{}", steady.summary["timing"]);
-    assert!(steady.line.contains("sub-frame timing: no change (tested 0.72x to 6.93x the modelled clock"), "{}", steady.line);
+    assert!(steady.line.contains("sub-frame timing: no change (tested 0.74x to 6.6x the modelled clock"), "{}", steady.line);
     let budgeted = check(&budgeted, "budgeted");
     let _ = std::fs::remove_dir_all(&root);
     assert_eq!(budgeted.summary["timing"]["hinges"], Json::Bool(true), "{}", budgeted.summary["timing"]);

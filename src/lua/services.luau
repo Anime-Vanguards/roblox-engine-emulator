@@ -209,8 +209,7 @@ local function PartBounds(Root, Basis)
 	return Basis * CFrame.new((Min + Max) / 2), Max - Min
 end
 
-Method("PVInstance", "GetPivot", Priced(function(Self)
-	Charge(Cost.ModelQuery)
+local function GetPivotInner(Self)
 	if Self:IsA("BasePart") then
 		return RawGet(Self, "CFrame") * RawGet(Self, "PivotOffset")
 	end
@@ -218,7 +217,7 @@ Method("PVInstance", "GetPivot", Priced(function(Self)
 	-- clones, PivotTo and WorldPivot writes set it), else the centre of its parts while it is unset.
 	local Primary = if Self:IsA("Model") then RawGet(Self, "PrimaryPart") else nil
 	if Primary then
-		return Primary:GetPivot()
+		return GetPivotInner(Primary)
 	end
 	local Stored = if Self:IsA("Model") then RawGet(Self, "WorldPivotData", true) else Extra(Self).Pivot
 	if Stored then
@@ -226,6 +225,16 @@ Method("PVInstance", "GetPivot", Priced(function(Self)
 	end
 	local Center = PartBounds(Self)
 	return Center or CFrame.new()
+end
+local function GetBoundingBoxInner(Self)
+	local Pivot = GetPivotInner(Self)
+	local Center, Size = PartBounds(Self, Pivot.Rotation)
+	return Center or Pivot, Size
+end
+
+Method("PVInstance", "GetPivot", Priced(function(Self)
+	Charge(Cost.ModelQuery)
+	return GetPivotInner(Self)
 end))
 -- A non-part PVInstance's stored pivot: a model's WorldPivotData, any other's the emulator's own.
 local function StorePivot(Self, Pivot)
@@ -273,7 +282,7 @@ Method("PVInstance", "PivotTo", Priced(function(Self, Target)
 	if Self:IsA("BasePart") then
 		-- Measured (Studio 2026-10-16): a part's PivotTo carries every part under it, through Folders, Attachments and
 		-- Models, as one rigid move (an effect that moves its FX parts so: ree left a nested Slash 1,915 studs behind)
-		local Delta = Target * Self:GetPivot():Inverse()
+		local Delta = Target * GetPivotInner(Self):Inverse()
 		local Below = 0
 		Together(function()
 			Self.CFrame = Target * RawGet(Self, "PivotOffset"):Inverse()
@@ -281,7 +290,7 @@ Method("PVInstance", "PivotTo", Priced(function(Self, Target)
 		end)
 		Charge(Cost.PivotSingle + Below * if Self:IsDescendantOf(workspace) then Cost.PivotPart else Cost.PivotLoose)
 	else
-		local Delta = Target * Self:GetPivot():Inverse()
+		local Delta = Target * GetPivotInner(Self):Inverse()
 		local Stored = StoredPivot(Self)
 		local Moved, Others = 0, 0
 		Together(function()
@@ -298,12 +307,11 @@ Method("PVInstance", "PivotTo", Priced(function(Self, Target)
 end))
 Method("Model", "GetBoundingBox", Priced(function(Self)
 	Charge(Cost.ModelQuery)
-	local Center, Size = PartBounds(Self, Self:GetPivot().Rotation)
-	return Center or Self:GetPivot(), Size
+	return GetBoundingBoxInner(Self)
 end))
 Method("Model", "GetExtentsSize", Priced(function(Self)
-	Charge(Cost.ModelQuery)
-	local _, Size = Self:GetBoundingBox()
+	Charge(Cost.ModelExtentsQuery)
+	local _, Size = GetBoundingBoxInner(Self)
 	return Size
 end))
 -- The scale is a property, as in Roblox: files store it (serialized as ScaleFactor, read by rbx-dom as

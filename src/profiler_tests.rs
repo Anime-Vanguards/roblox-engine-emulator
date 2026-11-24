@@ -2554,23 +2554,25 @@ fn a_function_that_errors_pays_for_the_code_it_ran() {
     }
 }
 
-/// Large buffer work the clock prices at nothing is printed as unpriced with its bytes (the review: a 4 MB copy read as a small one,
-/// with nothing to say so): copies and fills of over 64 KB a call and new buffers past Luau's pages; small buffers print nothing
+/// Large buffer work (> 1 KB fresh, >= 64 KB segment, > 64 KB L2/L3 copy, > 1 MB DRAM copy) is priced across cache tiers
+/// on the work clock rather than left unpriced, while marks still report the raw large-buffer byte counters.
 #[test]
-fn large_buffer_work_is_printed_as_unpriced() {
+fn large_buffer_work_is_priced_across_cache_tiers() {
     let _lock = lock();
     let frames = 3u32;
     let source = |size: u64| format!("local A, B = buffer.create({size}), buffer.create({size})\ngame:GetService(\"RunService\").Heartbeat:Connect(function()\n\tbuffer.copy(A, 0, B)\n\tbuffer.fill(A, 0, 7)\n\tlocal _ = buffer.create({size})\nend)\n");
     let size = 256 * 1024u64;
     let (summary, json) = stepped_profile("buffers-large", &source(size), frames, Options::default(), false);
     let unpriced = &json["work"]["unpriced"];
-    assert_eq!(unpriced["buffer_big_bytes"].as_u64(), Some(2 * size * u64::from(frames)), "{unpriced}");
-    let fresh = unpriced["buffer_fresh_bytes"].as_u64().unwrap();
+    assert_eq!(unpriced["buffer_big_bytes"].as_u64(), Some(0), "{unpriced}");
+    assert_eq!(unpriced["buffer_fresh_bytes"].as_u64(), Some(0), "{unpriced}");
+    assert_eq!(unpriced["priced_large_buffer_big_bytes"].as_u64(), Some(2 * size * u64::from(frames)), "{unpriced}");
+    let fresh = unpriced["priced_large_buffer_fresh_bytes"].as_u64().unwrap();
     assert!(fresh >= size * u64::from(frames) && fresh <= size * u64::from(frames + 2), "{unpriced}");
-    let line = summary.lines().find(|line| line.starts_with("unpriced: ")).unwrap_or_else(|| panic!("{summary}"));
-    assert!(line.contains("1.50 MB moved by buffer copies, fills and string writes"), "{line}");
-    let (small, json) = stepped_profile("buffers-small", &source(1024), frames, Options::default(), false);
-    assert_eq!((json["work"]["unpriced"]["buffer_big_bytes"].as_u64(), json["work"]["unpriced"]["buffer_fresh_bytes"].as_u64()), (Some(0), Some(0)));
+    assert!(!summary.contains("unpriced: "), "{summary}");
+    let (small, small_json) = stepped_profile("buffers-small", &source(1024), frames, Options::default(), false);
+    assert_eq!((small_json["work"]["unpriced"]["priced_large_buffer_big_bytes"].as_u64(), small_json["work"]["unpriced"]["priced_large_buffer_fresh_bytes"].as_u64()), (Some(0), Some(0)));
+    assert!(json["work"]["total_ms"].as_f64().unwrap() > small_json["work"]["total_ms"].as_f64().unwrap() + 0.1, "large buffer work should include tiered buffer charges");
     assert!(!small.contains("unpriced: "), "{small}");
 }
 

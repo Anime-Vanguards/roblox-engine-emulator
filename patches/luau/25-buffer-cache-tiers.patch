@@ -1,0 +1,52 @@
+# Topic: cache-tiered counters for large buffer allocations and DRAM-sized copies
+#
+# What it does: adds two scalar work-counter slots in hostops (lua.h LUA_WORK_LARGEBUFFER at 232 and LUA_WORK_BUFDRAMCOPY at 231,
+# shifting LUA_WORK_FIRSTSLOT from 233 to 231). luaE_workbufnew counts each large buffer allocation of at least 64 KB (the OS
+# virtual-allocation granularity where fresh buffer creation incurs a fixed allocator/page-commit cost beyond per-byte zeroing).
+# luaE_workbufmove counts bytes moved by a single buffer.copy, buffer.fill or buffer.writestring exceeding 1 MB (where working sets
+# spill from L2/L3 cache into DRAM bandwidth).
+#
+# Why upstream lacks it: an emulator's work clock prices large buffer operations across CPU cache tiers (src/cost.rs), while a
+# live Luau VM runs on the real clock and needs no counters.
+
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index d078099..a1b2c3d 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -456,8 +456,10 @@ LUA_API void lua_coldframe(lua_State* L);
+ #define LUA_WORK_LARGEBLOCKS 235 // allocations of a script's work too large for Luau's own pages (over 1,024 bytes: lmem.cpp kMaxSmallSizeUsed), each one the host's allocator makes
+ #define LUA_WORK_BUFFRESH 234 // bytes of a new buffer too large for Luau's own pages (over 1,024 bytes): fresh memory its zeroing touches first
+ #define LUA_WORK_BUFBIGCOPY 233 // bytes one buffer.copy, buffer.fill or buffer.writestring moved, of a call that moved over 64 KB (past a core's nearest caches)
++#define LUA_WORK_LARGEBUFFER 232 // new buffers of at least 64 KB: OS/allocator segment commit overhead beyond per-byte zeroing
++#define LUA_WORK_BUFDRAMCOPY 231 // bytes one buffer.copy, buffer.fill or buffer.writestring moved, of a call that moved over 1 MB (DRAM bandwidth tier)
+ // the first of these slots: a profile books each slot from here up at every step, as it books the scalar counters
+-#define LUA_WORK_FIRSTSLOT 233
++#define LUA_WORK_FIRSTSLOT 231
+ // marks `f` as one of the host's own C functions (process-wide): an object a host function makes for a script is part of the
+ // operation the host prices itself, so the library counts above (LUA_WORK_LIBOBJECTS, ALLOCBYTES, GCOBJECTS) leave it out
+ LUA_API void lua_sethostcfunction(lua_CFunction f);
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index b3cc72f..e4f5a6b 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -467,16 +467,20 @@ LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
+         size_t workbytes = size_t(n); \
+         luaE_worklib(L, LUA_WORK_BUFBYTES, workbytes); \
+         if (workbytes > 1024) \
+             luaE_worklib(L, LUA_WORK_BUFFRESH, workbytes); \
++        if (workbytes >= 65536) \
++            luaE_worklib(L, LUA_WORK_LARGEBUFFER, 1); \
+     } while (0)
+ // bytes a buffer copy, fill or string write moved (lua.h LUA_WORK_BUFBYTES), and those of a call over 64 KB again (LUA_WORK_BUFBIGCOPY)
+ #define luaE_workbufmove(L, n) \
+     do \
+     { \
+         size_t workbytes = size_t(n); \
+         luaE_worklib(L, LUA_WORK_BUFBYTES, workbytes); \
+         if (workbytes > 65536) \
+             luaE_worklib(L, LUA_WORK_BUFBIGCOPY, workbytes); \
++        if (workbytes > 1048576) \
++            luaE_worklib(L, LUA_WORK_BUFDRAMCOPY, workbytes); \
+     } while (0)
+ 
+ LUAI_FUNC lua_State* luaE_newthread(lua_State* L);

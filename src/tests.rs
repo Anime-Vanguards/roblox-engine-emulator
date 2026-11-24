@@ -4993,10 +4993,10 @@ fn the_work_clock_charges_what_studio_spends() {
         end)
         "#,
     );
-    // (the parity bench: a Folder 0.36 us to make, 0.52 to enter the workspace; a Part 0.83 and 1.47; and the frame's first entry
+    // (the parity bench: a Folder 0.37 us to make, 0.50 to enter the workspace; a Part 0.83 and 1.47; and the frame's first entry
     // into the workspace 13.5 more, its first part's 12.5: the engine's code for them running cold, cost.rs PATH_FIRST; each entry's
-    // chain apart, cost.rs reparent_chains: a Part joining the Folder's 3 ancestors 12.6 ns more than the bench's entries average)
-    assert!(output.contains(&"print: folder 14.4 parts 253.8".to_string()), "{output:?}");
+    // chain apart, cost.rs reparent_chains: a Part joining the Folder's 3 ancestors)
+    assert!(output.contains(&"print: folder 14.4 parts 266.8".to_string()), "{output:?}");
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     assert!(lines(&engine).contains(&"print: next frame true".to_string()), "{:?}", lines(&engine));
 }
@@ -6021,13 +6021,14 @@ fn the_work_clock_charges_a_scripts_luau() {
         "#,
     );
     // (the cframes loop was 58.5 with every datatype operation a flat 15 ns; CFrame.new, `*` and Vector3.new were priced from the
-    // lobby client's op_cost loop (101.5: `*` 60 ns), and `*` from a rig frame since (21 ns, 39 us less over the 1,000 products):
-    // lune-roblox cframe.rs `price`. The instructions are priced by kind since (cost.rs INTERPRETED_OPS: an ADD or FORNLOOP 0.48 ns,
+    // lobby client's op_cost loop (101.5: `*` 60 ns), `*` from a rig frame since (21 ns, 39 us less over the 1,000 products:
+    // lune-roblox cframe.rs `price`), and LUAU_HOSTCALL calibrated to 12 ns on the client parity bench (-3.0 us over 1,000 calls).
+    // The instructions are priced by kind since (cost.rs INTERPRETED_OPS: an ADD or FORNLOOP 0.48 ns,
     // where every instruction cost 1.6: the loop 32.0 then). The tables loop read 65.5 until the allocation prices were fitted on the
     // parity bench's allocation, churn and growth rows at several sizes (an object 14.6 ns in all where it was 22, 8.6 of it the
     // collector's; an allocated byte 0.061 and a byte of table storage 0.079 more, where storage was 0.4; an array slot growth moves
     // nothing, where it was 12))
-    assert!(output.contains(&"print: loop 9.6 tables 32.1 cframes 47.9".to_string()), "{output:?}");
+    assert!(output.contains(&"print: loop 9.6 tables 32.1 cframes 44.9".to_string()), "{output:?}");
 }
 
 /// What a library or engine call does by the size of its input is work the clock charges (patches/luau/15-input-size-work.patch,
@@ -7199,9 +7200,9 @@ fn vector3_members_and_methods_cost_what_studio_spent() {
             assert(Value >= Low and Value <= High, string.format("%s: %.1f ns, Studio %d-%d", Name, Value, Low, High))
         end
         local V, W = Vector3.new(1, 2, 3), Vector3.new(4, 5, 6)
-        -- Magnitude is priced from the rig frame (15.4 ns in a match place's client, 1.1x here), 10.4 in the op_cost loop
-        Within("Magnitude", Per(function(N) for _ = 1, N do local _ = V.Magnitude end end), 12, 20)
-        Within("magnitude", Per(function(N) for _ = 1, N do local _ = V.magnitude end end), 12, 20)
+        -- Magnitude is calibrated on the client parity bench (9.0 ns + loop overhead; 10.4 in the op_cost loop)
+        Within("Magnitude", Per(function(N) for _ = 1, N do local _ = V.Magnitude end end), 9, 17)
+        Within("magnitude", Per(function(N) for _ = 1, N do local _ = V.magnitude end end), 9, 17)
         Within("Unit", Per(function(N) for _ = 1, N do local _ = V.Unit end end), 8, 16)
         Within("X", Per(function(N) for _ = 1, N do local _ = V.X end end), 0, 5)
         Within("Dot", Per(function(N) for _ = 1, N do local _ = V:Dot(W) end end), 7, 13)
@@ -11185,7 +11186,7 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
     assert!((3200.0..3900.0).contains(&numbers[4]), "a box of 24 parts: {line}");
     assert!((270.0..360.0).contains(&numbers[5]), "a 2-stud part touching nothing: {line}");
     assert!((1200.0..1500.0).contains(&numbers[6]), "a 40-stud part touching nothing: {line}");
-    assert!((16000.0..18600.0).contains(&numbers[7]), "a part among 23 others: {line}");
+    assert!((12500.0..15500.0).contains(&numbers[7]), "a part among 23 others: {line}");
 }
 
 /// A cast stops at its first hit, as a playing client's does (roblox-sim, Studio 0.747, a headless client: 24 walls 2 studs apart
@@ -11313,6 +11314,63 @@ fn a_phone_run_pays_the_calibrated_factor_on_its_script_work() {
     let (phone, phone_touch) = per("phone");
     assert!((phone / desktop - crate::cost::PHONE_SCRIPTS).abs() < 0.02, "a phone {phone} ns a Folder, a desktop {desktop}");
     assert_eq!((desktop_touch.as_str(), phone_touch.as_str()), ("false", "true"));
+}
+
+/// Destroying a placed subtree charges DESTROYED_GUI / DESTROYED_PART for its descendants too (not only the root before detach),
+/// and Model:GetExtentsSize charges MODEL_EXTENTS_QUERY once rather than multi-charging MODEL_QUERY through GetBoundingBox/GetPivot.
+#[test]
+fn destroy_subtree_keeps_placed_and_model_extents_charges_once() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Gui = Instance.new("ScreenGui")
+        Gui.Parent = game:GetService("StarterGui")
+        local function MakeCard(Parent)
+            local Root = Instance.new("Frame")
+            for _ = 1, 5 do
+                local Child = Instance.new("Frame")
+                Child.Parent = Root
+            end
+            Root.Parent = Parent
+            return Root
+        end
+        -- Warm the frame's first-destroy cold path once
+        MakeCard(Gui):Destroy()
+        MakeCard(nil):Destroy()
+        local Placed = MakeCard(Gui)
+        local t0 = os.clock()
+        Placed:Destroy()
+        local PlacedUs = (os.clock() - t0) * 1e6
+        local Loose = MakeCard(nil)
+        local t1 = os.clock()
+        Loose:Destroy()
+        local LooseUs = (os.clock() - t1) * 1e6
+
+        local Model = Instance.new("Model")
+        local Part = Instance.new("Part")
+        Part.Anchored = true
+        Part.Parent = Model
+        Model.PrimaryPart = Part
+        Model.Parent = workspace
+        local _ = Model:GetExtentsSize()
+        local t2 = os.clock()
+        for _ = 1, 1000 do
+            local _ = Model:GetExtentsSize()
+        end
+        local ExtentsNs = (os.clock() - t2) / 1000 * 1e9
+        print(string.format("%.2f %.2f %.1f", PlacedUs, LooseUs, ExtentsNs))
+        "#,
+    );
+    let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("{output:?}"));
+    let vals: Vec<f64> = line.split(' ').map(|n| n.parse().unwrap()).collect();
+    // 6 placed GuiObjects vs 6 loose: must pay at least 6 * DESTROYED_GUI (~5.34 us) more beyond leaving the DataModel.
+    assert!(vals[0] - vals[1] > 5.0 * crate::cost::DESTROYED_GUI * 1e6, "placed vs loose destroy: {line}");
+    // Single MODEL_EXTENTS_QUERY (8 ns) + call overhead (~15 ns), well below the old 4x MODEL_QUERY (~75+ ns).
+    assert!(vals[2] < 45.0, "GetExtentsSize took {line} ns");
 }
 
 /// A link to directory `target` at `link`: a junction on Windows, which needs no privilege (a directory
