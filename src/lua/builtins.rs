@@ -165,9 +165,11 @@ unsafe fn require_resume(state: *mut ffi::lua_State, status: c_int) -> c_int {
     }
 }
 
-/// Raises the message on top of the stack, after the requiring line's position when `positioned`.
+/// Raises the message on top of the stack, after the requiring line's position when `positioned`, charged what a client spends
+/// on it (cfunction.rs charge_raised).
 unsafe fn raise(state: *mut ffi::lua_State, positioned: bool) -> ! {
     unsafe {
+        cfunction::charge_raised(state, positioned);
         if positioned {
             ffi::luaL_where(state, 1);
             ffi::lua_insert(state, -2);

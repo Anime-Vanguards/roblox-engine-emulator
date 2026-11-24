@@ -862,10 +862,11 @@ fn guard(body: impl FnOnce() -> Out) -> Out {
     }
 }
 
-/// Raises a string error. Every Rust value of the caller must be dropped already (the message is
-/// dropped here before `lua_error` unwinds).
+/// Raises a string error, charged what a client spends on it (lua/cfunction.rs charge_raised). Every Rust value of the caller
+/// must be dropped already (the message is dropped here before `lua_error` unwinds).
 unsafe fn raise(state: *mut ffi::lua_State, message: String, level: u8) -> ! {
     unsafe {
+        super::cfunction::charge_raised(state, level > 0);
         if level > 0 {
             ffi::luaL_where(state, 1);
         }
@@ -878,9 +879,11 @@ unsafe fn raise(state: *mut ffi::lua_State, message: String, level: u8) -> ! {
     }
 }
 
-/// Raises the message on top of the stack (with the calling line's position unless level is 0).
+/// Raises the message on top of the stack (with the calling line's position unless level is 0), charged what a client spends
+/// on it (lua/cfunction.rs charge_raised).
 pub(crate) unsafe fn raise_top(state: *mut ffi::lua_State, level: c_int) -> ! {
     unsafe {
+        super::cfunction::charge_raised(state, level != 0);
         if level != 0 {
             ffi::luaL_where(state, 1);
             ffi::lua_insert(state, -2);

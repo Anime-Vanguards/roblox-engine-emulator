@@ -223,10 +223,81 @@ unsafe fn finish(state: *mut ffi::lua_State) -> c_int {
     }
 }
 
+/// Charges the work clock what a client spends on an error an engine function raises, from where ree raises one: an engine
+/// function's error ([`raise_at`], and an engine Luau body's raised again by [`luau_continue`]), an Instance metamethod's
+/// (lua/raw.rs raise, raise_top) and require's (lua/builtins.rs). The error is the cost, whatever raised it (a playing client and
+/// a server, Studio 0.747): cost.rs RAISED for a plain error, the engine's own ("Argument 1 missing or nil", a member that is not,
+/// a service name, a spatial query's), RAISED_AT_CALLER for one at the calling line, an argument check in Luau's words (`positioned`).
+/// Nothing when the error goes back to the engine's own Luau (the frame it returns to is a chunk of the engine's, or a C function
+/// one called: its pcall), which handles it or raises it again from its engine function, charged then; nothing while the engine's
+/// Luau prices a whole call (the clock muted).
+///
+/// # Safety
+/// `state` must be the running thread, inside the C function that raises the error.
+pub(crate) unsafe fn charge_raised(state: *mut ffi::lua_State, positioned: bool) {
+    unsafe {
+        if raised_into_engine(state) {
+            return;
+        }
+        let lua = Lua::get_or_init_from_ptr(state);
+        let Ok(Some(engine)) = lua.try_app_data_ref::<std::rc::Rc<crate::Engine>>() else { return };
+        let Ok(engine_state) = engine.state.try_borrow() else { return };
+        let seconds = if positioned { crate::cost::RAISED_AT_CALLER } else { crate::cost::RAISED };
+        engine_state.sched.charge(seconds);
+        if !engine_state.sched.is_muted() {
+            crate::boundary::add_cost(seconds);
+        }
+    }
+}
+
+/// Whether an error the running C function raises now goes back to the engine's own Luau: its caller is a chunk of the engine's
+/// (`rur.*`, `ree.*`, mlua's own), or a C function such a chunk called.
+unsafe fn raised_into_engine(state: *mut ffi::lua_State) -> bool {
+    fn engine_chunk(frame: &ffi::lua_Debug) -> bool {
+        if frame.source.is_null() {
+            return false;
+        }
+        let source = unsafe { CStr::from_ptr(frame.source) }.to_bytes();
+        let name = source.strip_prefix(b"=").or_else(|| source.strip_prefix(b"@")).unwrap_or(source);
+        name.starts_with(b"rur.") || name.starts_with(b"ree.") || name.starts_with(b"__mlua")
+    }
+    unsafe {
+        let mut frame: ffi::lua_Debug = std::mem::zeroed();
+        if ffi::lua_getinfo(state, 1, c"s".as_ptr(), &mut frame) == 0 {
+            return false;
+        }
+        if engine_chunk(&frame) {
+            return true;
+        }
+        let c_function = !frame.what.is_null() && CStr::from_ptr(frame.what).to_bytes() == b"C";
+        c_function && ffi::lua_getinfo(state, 2, c"s".as_ptr(), &mut frame) != 0 && engine_chunk(&frame)
+    }
+}
+
+/// Whether the error on top of the stack is a string positioned at the calling line (`luaL_where(L, 1)`'s text begins it).
+unsafe fn at_caller(state: *mut ffi::lua_State) -> bool {
+    unsafe {
+        if ffi::lua_type(state, -1) != ffi::LUA_TSTRING {
+            return false;
+        }
+        ffi::lua_rawcheckstack(state, 1);
+        ffi::luaL_where(state, 1);
+        let (mut where_length, mut length) = (0, 0);
+        let position = ffi::lua_tolstring(state, -1, &mut where_length);
+        let message = ffi::lua_tolstring(state, -2, &mut length);
+        let positioned = where_length > 0
+            && length >= where_length
+            && std::slice::from_raw_parts(message.cast::<u8>(), where_length) == std::slice::from_raw_parts(position.cast::<u8>(), where_length);
+        ffi::lua_pop(state, 1);
+        positioned
+    }
+}
+
 /// Raises the message on top of the stack, after the position of the function `level` frames up (1: this C function's caller,
 /// the script line that called the engine function), or alone for level 0.
 unsafe fn raise_at(state: *mut ffi::lua_State, level: c_int) -> ! {
     unsafe {
+        charge_raised(state, level > 0);
         if level > 0 {
             ffi::luaL_where(state, level);
             ffi::lua_insert(state, -2);
@@ -272,6 +343,7 @@ unsafe extern "C-unwind" fn luau_continue(state: *mut ffi::lua_State, status: c_
     unsafe {
         ffi::lua_rawcheckstack(state, 1);
         if status != ffi::LUA_OK {
+            charge_raised(state, at_caller(state));
             ffi::lua_error(state)
         }
         ffi::lua_gettop(state)

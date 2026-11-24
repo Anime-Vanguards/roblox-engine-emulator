@@ -8992,11 +8992,13 @@ fn a_failed_increment_leaves_its_key_with_no_value() {
 }
 
 /// A failed increment that leaves its key in a list of colliding keys searches the list once, as a write adding the key does
-/// (cost.rs SHARED_LIST_SCANNED; ree searched it again to add the key, 7.5 us more at 1,023 keys).
+/// (cost.rs SHARED_LIST_SCANNED; ree searched it again to add the key, 7.5 us more at 1,023 keys), past its error's own price
+/// (cost.rs RAISED).
 #[test]
 fn a_failed_increment_searches_a_colliding_list_once() {
     assert_shared_prices(&format!(
-        "{COLLIDING_KEYS}\n{}",
+        "{COLLIDING_KEYS}\nlocal Raised = {:e}\n{}",
+        crate::cost::RAISED * 1e6,
         r#"
         local Keys = {}
         for I = 0, 1023 do Keys[I] = Key(I, 10) end
@@ -9006,7 +9008,7 @@ fn a_failed_increment_searches_a_colliding_list_once() {
         T[Keys[1023]] = nil
         local Failed = Per(1, function() pcall(SharedTable.increment, T, Keys[1023], 1) end)
         assert(SharedTable.size(T) == 1024)
-        Within("a failed increment's key added to 1,023 beyond a write's", Failed - Added, -1, 1)
+        Within("a failed increment's key added to 1,023 beyond a write's and its error's", Failed - Added - Raised, -1, 1)
         "#
     ));
 }

@@ -764,21 +764,9 @@ pub fn overlaps_sphere(solid: &Solid, center: Vec3, radius: f32) -> bool {
 
 // Script bindings
 
+// (a query that raises costs what a client spends on the error where ree raises it: lua/cfunction.rs charge_raised)
 fn method(f: impl Fn(&Lua, &Rc<Engine>, InstanceId, &Args) -> Result<LuaMultiValue, Flow> + 'static) -> MethodFn {
-    raising(f)
-}
-
-/// A spatial query's method that costs the work clock what a client spends when it raises (cost.rs QUERY_RAISED: the error's
-/// own cost, past the call's price, whatever raised), as the WorldRoot queries, GetPartsObscuringTarget and
-/// GetLargestCutoffDistance do.
-pub(crate) fn raising(f: impl Fn(&Lua, &Rc<Engine>, InstanceId, &Args) -> Result<LuaMultiValue, Flow> + 'static) -> MethodFn {
-    Rc::new(move |lua, engine, id, args| {
-        let result = f(lua, engine, id, args);
-        if matches!(result, Err(Flow::Error(_))) {
-            charge_query(engine, crate::cost::QUERY_RAISED);
-        }
-        result
-    })
+    Rc::new(f)
 }
 
 /// The fields of a RaycastParams / OverlapParams: what a prelude proxy stores (the prelude's

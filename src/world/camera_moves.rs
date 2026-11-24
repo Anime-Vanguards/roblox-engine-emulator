@@ -447,7 +447,7 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
         zoom_to_extents(engine, &names(engine), id, &center, size);
         Ok(LuaMultiValue::new())
     }));
-    add_method("GetLargestCutoffDistance", query::raising(|_, engine, id, args| {
+    add_method("GetLargestCutoffDistance", Rc::new(|_, engine, id, args| {
         let ignore = super::ignore_list(engine, args, 1)?;
         Ok(values([LuaValue::Number(f64::from(largest_cutoff(engine, &names(engine), id, ignore)))]))
     }));

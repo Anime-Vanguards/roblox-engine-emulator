@@ -5214,7 +5214,7 @@ fn params_lists_cost_what_a_client_spends_copying_them() {
     }
 }
 
-/// A spatial query that raises costs the work clock what a client spends on the error (cost.rs QUERY_RAISED, Studio 0.747: 2.9 to
+/// A spatial query that raises costs the work clock what a client spends on the error (cost.rs RAISED, Studio 0.747: 2.9 to
 /// 4.1 us past the call's price, whatever raised): a missing or wrong argument, a value that is not finite, a list entry that is
 /// no Instance, on the WorldRoot queries, GetPartsObscuringTarget and GetLargestCutoffDistance. Each of these was charged its
 /// call alone.
@@ -5261,11 +5261,78 @@ fn queries_that_raise_cost_what_a_client_spends_on_the_error() {
     );
     // (a call that raises skips the work past its arguments, which the passing call pays: GetPartsInPart's by its 4 x 1 x 2 part's area, the camera
     // calls' own prices)
-    let raised = crate::cost::QUERY_RAISED;
+    let raised = crate::cost::RAISED;
     let in_part = 28.0f64.sqrt() * crate::cost::QUERY_PART_SIZE;
     let checks = [("Raycast", raised), ("Spherecast", raised), ("Blockcast", raised), ("Shapecast", raised), ("Box", raised), ("Radius", raised), ("InPart", raised - in_part), ("FindPartOnRay", raised), ("Obscuring", raised - crate::cost::OBSCURING_CALL), ("Cutoff", raised - crate::cost::CUTOFF_CALL)];
     for (name, price) in checks {
         run(&lua, &engine, &format!("assert(math.abs(shared.Raised.{name} - {price:e}) < 0.01e-6, `{name}: {{shared.Raised.{name}}} s more work when it raises, not {price:e}`)"));
+    }
+}
+
+/// An engine function that raises costs the work clock what a client spends on the error, past the same call going on (cost.rs
+/// RAISED, RAISED_AT_CALLER; Studio 0.747, a playing client and a server: a plain error 3.1 to 3.7 us, one at the calling line 2.0
+/// to 3.0): plain, a method's, a method called with `.` and no instance, a member read and one written that are not, a circular
+/// Parent, GetService of no service, and a service method in the engine's Luau (LogService:Info, which prices its own call: its
+/// LOG_CALL is not charged when it raises, and the error once); at the calling line, task.cancel's, a Parent written a number,
+/// typeof()'s and Path2DControlPoint.new's (the engine's Luau, its error raised again from its engine function, at the script's
+/// line). Each was charged its call alone.
+#[test]
+fn engine_errors_cost_what_a_client_spends_on_the_error() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local Part = Instance.new("Part")
+        Part.Parent = Folder
+        local LogService = game:GetService("LogService")
+        local Thread = task.spawn(function() end)
+        -- (the raising and the passing call alike but for the value that raises: an upvalue each)
+        local Missing, Name, Unknown, Known, NoService, Service, Five, Text, Position = nil, "x", "NotAMember", "Anchored", "NotAService", "Workspace", 5, "x", UDim2.new()
+        local function Cost(Call)
+            pcall(Call)
+            local Start = os.clock()
+            pcall(Call)
+            return os.clock() - Start
+        end
+        local function Extra(Raises, Passes)
+            return Cost(Raises) - Cost(Passes)
+        end
+        shared.Errors = {
+            Method = Extra(function() Part:FindFirstChild(Missing) end, function() Part:FindFirstChild(Name) end),
+            Dot = Extra(function() Part.GetChildren(Missing) end, function() Part.GetChildren(Part) end),
+            Read = Extra(function() local _ = Part[Unknown] end, function() local _ = Part[Known] end),
+            Write = Extra(function() Part[Unknown] = true end, function() Part[Known] = true end),
+            Parent = Extra(function() Part.Parent = Part end, function() Part.Parent = Folder end),
+            Service = Extra(function() game:GetService(NoService) end, function() game:GetService(Service) end),
+            Log = Extra(function() LogService:Info(Missing) end, function() LogService:Info(Text) end),
+            Cancel = Extra(function() task.cancel(Five) end, function() task.cancel(Thread) end),
+            ParentNumber = Extra(function() Part.Parent = Five end, function() Part.Parent = Folder end),
+            Typeof = Extra(function() typeof() end, function() typeof(Part) end),
+            EngineLuau = Extra(function() Path2DControlPoint.new(Five) end, function() Path2DControlPoint.new(Position) end),
+        }
+        "##,
+    );
+    let (plain, at_caller) = (crate::cost::RAISED, crate::cost::RAISED_AT_CALLER);
+    let checks = [
+        ("Method", plain),
+        ("Dot", plain),
+        ("Read", plain),
+        ("Write", plain),
+        ("Parent", plain),
+        ("Service", plain),
+        ("Log", plain - crate::cost::LOG_CALL),
+        ("Cancel", at_caller),
+        ("ParentNumber", at_caller),
+        ("Typeof", at_caller),
+        ("EngineLuau", at_caller),
+    ];
+    // (within what the passing call does past its arguments, which the raising one skips: 0.06 us at most)
+    for (name, price) in checks {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Errors.{name} - {price:e}) < 0.06e-6, `{name}: {{shared.Errors.{name}}} s more work when it raises, not {price:e}`)"));
     }
 }
 

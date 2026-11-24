@@ -1094,14 +1094,26 @@ pub const QUERY_RADIUS_PART: f64 = 0.09e-6;
 /// 1.3 to 1.5 and a box with a NaN or infinite side 1.5 to 2.3 ([`QUERY_SIDE_NOT_FINITE`]); neither tests a part.
 pub const QUERY_NOT_FINITE: f64 = 2.7e-6;
 pub const QUERY_SIDE_NOT_FINITE: f64 = 1.3e-6;
-/// A spatial query that raises, beyond its call (world/query.rs raising; the WorldRoot queries, GetPartsObscuringTarget and
-/// GetLargestCutoffDistance), in a playing client (roblox-sim, Studio 0.747, a headless client; os.clock around 40 calls in
-/// pcall, 15 samples less an empty loop, two rounds): a call that raises 3.1 to 4.4 us past an empty pcall, where one that goes
-/// on reads 0.26 to 0.59 (an argument missing, of a wrong type or not finite, a radius or side past its limit, alike: Raycast
-/// 3.4-3.8, a box 3.1-3.4, Spherecast with a NaN radius 4.0-4.4, GetPartsObscuringTarget 3.7-4.3), beyond the call's own price,
-/// which ree charges first: 2.9 to 4.1 us more. The error is the cost: FindFirstChild(nil) and GetAttribute(nil) read 3.5, and
-/// BulkMoveTo 3.9, which ree does not charge.
-pub const QUERY_RAISED: f64 = 3.4e-6;
+/// An error an engine function raises, beyond its call: an Instance's method, a property read or write, a service's method, a
+/// library's function, a datatype's, a spatial query's (lua/cfunction.rs charge_raised, where ree raises one). The error is the
+/// cost, whatever raised it: in a playing client and a server alike (roblox-sim, Studio 0.747, headless; os.clock around 10 to
+/// 20,000 calls in pcall, 15 samples less an empty pcall, three sessions), past the same call going on, a plain error (the
+/// engine's own words, no position) 3.1 to 3.7 us ([`RAISED`]): FindFirstChild(nil) 3.4-3.6, GetAttribute(nil) 3.5, IsA(nil)
+/// 3.4, WaitForChild(nil) 3.4, a method called with `.` and no instance 3.2-3.3, an unknown method 3.2, an unknown member read
+/// 3.3-3.4 or written 3.2 (50 folders deep 3.8-3.9, its longer name), GetService of no service 3.5-3.6, GetPropertyChangedSignal
+/// of no property 3.1, JSONDecode of bad JSON 2.7, BulkMoveTo of mismatched lists 4.0, require(5) 3.4-5.3, an enum's unknown item 3.2,
+/// the spatial queries 3.1 to 4.4 (Raycast 3.4, a box 3.1-3.4, Spherecast with a NaN radius 4.0-4.4, GetPartsObscuringTarget
+/// 3.7-4.3); one at the calling line (Luau's words for an argument check, positioned) 2.0 to 3.0 ([`RAISED_AT_CALLER`]):
+/// task.cancel, task.delay, task.wait and task.spawn 2.4-2.7, typeof() 2.2, a Parent written a number 2.8-2.9, Instance.new(nil)
+/// 2.7-2.8, SharedTable.new and size 2.3-2.4, Random.new and NextNumber 2.4-2.5, DateTime 2.5, utf8.nfcnormalize 2.7,
+/// collectgarbage 2.4, Signal.Wait 2.9, iterating an Instance 2.1, CFrame.new 2.3-2.4. ree charged the call
+/// alone (0.004 to 0.45 us) but for the spatial queries (3.4 since 2026-11-23, now this). Not charged here: a refused property
+/// write costs a client more, 4.5 to 4.8 us (read only, an enum's unknown item, a locked or circular Parent) and 7.4 to 7.7 (a
+/// value of the wrong type for a datatype or string property), where this charges RAISED; a script's own error (error(),
+/// assert, arithmetic, a builtin's argument) 1.8 to 2.4, and an error raised by a datatype's method or operator or a proxy
+/// value's member 2.2 to 2.9, which ree raises in the VM, mlua or the engine's Luau and does not charge.
+pub const RAISED: f64 = 3.4e-6;
+pub const RAISED_AT_CALLER: f64 = 2.5e-6;
 /// A RaycastParams' or OverlapParams' instance list a query reads (world/query.rs list_reads: FilterDescendantsInstances,
 /// ExcludeInstances, IncludeInstances), in a playing client (roblox-sim, Studio 0.747, a headless client; os.clock around calls,
 /// 15 samples less an empty loop, two rounds; lists of 0, 10, 100, 1,000 and 10,000 parts away from the query, which it finds
