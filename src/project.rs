@@ -109,9 +109,8 @@ fn same_listing(old: &ScanNode, new: &ScanNode, read: &FxHashSet<String>) -> boo
             // a link left out still leads where it did (a link has no stamp of its own)
             (None, None) if old.loops.iter().any(|(name, _)| name == entry) => {}
             (None, None) => {
-                let (before, now) = (old.stamps[index], new.stamps[index]);
-                let lower = entry.to_ascii_lowercase();
-                let source = lower.ends_with(".luau") || lower.ends_with(".lua");
+                let (before, now) = (old.stamps.get(index).copied().flatten(), new.stamps.get(index).copied().flatten());
+                let source = ends_with_ignore_ascii_case(entry, ".luau") || ends_with_ignore_ascii_case(entry, ".lua");
                 if (!source || read.contains(&path)) && (before.is_none() || before != now) {
                     return false;
                 }
@@ -120,6 +119,16 @@ fn same_listing(old: &ScanNode, new: &ScanNode, read: &FxHashSet<String>) -> boo
         }
     }
     true
+}
+
+#[inline]
+fn ends_with_ignore_ascii_case(text: &str, suffix: &str) -> bool {
+    text.len() >= suffix.len() && text.as_bytes()[text.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+}
+
+#[inline]
+fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
+    text.len() >= prefix.len() && text.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
 }
 
 /// Keeps `node` when the mount keeps its listings ([`ProjectState::listings`]).
@@ -134,40 +143,376 @@ struct Studio {
     index: std::sync::Arc<StudioIndex>,
 }
 
-/// A place's Studio hierarchy as the mount reads it, made once per snapshot per process and shared by
-/// its engines (a recording built it anew: 68,477 nodes of a game's place).
+const STUDIO_INDEX_MAGIC: &[u8; 8] = b"REESTUD1";
+const STUDIO_INDEX_TRAILER: &[u8; 8] = b"ENDSTUD1";
+const STUDIO_INDEX_VERSION: u32 = 1;
+const STUDIO_INDEX_HEADER_BYTES: usize = 40;
+
+enum StudioBytes {
+    Mapped(std::sync::Arc<plan::Mapping>),
+    /// 4-byte-aligned owned backing for non-mmap platforms or fallback.
+    Owned { words: Box<[u32]>, byte_len: usize },
+}
+
+impl StudioBytes {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            StudioBytes::Mapped(mapping) => mapping.bytes(),
+            StudioBytes::Owned { words, byte_len } => unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), *byte_len) },
+        }
+    }
+
+    /// Reads `count` little-endian `u32`s starting at 4-byte-aligned byte `offset`.
+    #[inline]
+    fn u32_slice(&self, offset: usize, count: usize) -> &[u32] {
+        let bytes = self.as_bytes();
+        debug_assert!(offset % 4 == 0 && offset + count * 4 <= bytes.len());
+        #[cfg(target_endian = "little")]
+        unsafe {
+            std::slice::from_raw_parts(bytes.as_ptr().add(offset).cast::<u32>(), count)
+        }
+        #[cfg(not(target_endian = "little"))]
+        compile_error!("StudioIndex binary layout assumes little-endian")
+    }
+}
+
+/// A place's Studio hierarchy as the mount reads it: compact 4-byte-aligned CSR + interned class
+/// table, mmapped read-only from `<state_dir>/studio/v1-<hash>.studio` so processes share pages
+/// without parsing JSON or allocating tens of thousands of per-node Strings/HashMaps.
 pub struct StudioIndex {
-    /// The nodes' names, one after another (`name_ends[i]` ends node i + 1's)
-    names: Box<[u8]>,
-    name_ends: Box<[u32]>,
-    classes: Box<[String]>,
-    /// Children (1-based node indices) of each 1-based node
-    children: FxHashMap<u32, Vec<u32>>,
+    bytes: StudioBytes,
+    node_count: u32,
+    class_count: u32,
+    name_bytes_off: usize,
+    name_bytes_len: usize,
+    name_ends_off: usize,
+    class_bytes_off: usize,
+    class_bytes_len: usize,
+    class_ends_off: usize,
+    node_classes_off: usize,
+    parents_off: usize,
+    child_offsets_off: usize,
+    child_nodes_off: usize,
+    child_nodes_len: usize,
+    stand_ins_off: usize,
+    stand_in_count: usize,
 }
 
 impl StudioIndex {
-    fn new(snapshot: &HierarchySnapshot) -> StudioIndex {
-        let nodes = &snapshot.nodes;
-        let mut names = Vec::new();
-        let mut name_ends = Vec::with_capacity(nodes.len());
-        let mut classes = Vec::with_capacity(nodes.len());
-        let mut children: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
-        for (index, node) in nodes.iter().enumerate() {
-            names.extend_from_slice(node.name.as_bytes());
-            name_ends.push(names.len() as u32);
-            classes.push(node.class_name.clone());
-            if let Some(parent) = node.parent.filter(|p| *p >= 0) {
-                children.entry(parent as u32 + 1).or_default().push(index as u32 + 1);
-            }
-        }
-        StudioIndex { names: names.into(), name_ends: name_ends.into(), classes: classes.into(), children }
+    fn align4(value: usize) -> usize {
+        (value + 3) & !3
     }
 
-    /// Node `node`'s name (1-based)
+    fn encode(snapshot: &HierarchySnapshot) -> Vec<u8> {
+        let nodes = &snapshot.nodes;
+        let node_count = nodes.len();
+        let mut name_bytes = Vec::with_capacity(node_count * 12);
+        let mut name_ends: Vec<u32> = Vec::with_capacity(node_count);
+        let mut class_map: FxHashMap<&str, u32> = FxHashMap::default();
+        let mut class_bytes = Vec::new();
+        let mut class_ends: Vec<u32> = Vec::new();
+        let mut node_classes: Vec<u32> = Vec::with_capacity(node_count);
+        let mut parents: Vec<u32> = Vec::with_capacity(node_count);
+        let mut child_counts: Vec<u32> = vec![0; node_count];
+        let mut stand_ins: Vec<u32> = Vec::new();
+
+        for (index, node) in nodes.iter().enumerate() {
+            name_bytes.extend_from_slice(node.name.as_bytes());
+            name_ends.push(name_bytes.len() as u32);
+            let class_idx = match class_map.get(node.class_name.as_str()) {
+                Some(&id) => id,
+                None => {
+                    let id = class_ends.len() as u32;
+                    class_bytes.extend_from_slice(node.class_name.as_bytes());
+                    class_ends.push(class_bytes.len() as u32);
+                    class_map.insert(node.class_name.as_str(), id);
+                    id
+                }
+            };
+            node_classes.push(class_idx);
+            let parent_1based = match node.parent {
+                Some(p) if p >= 0 && (p as usize) < node_count => {
+                    child_counts[p as usize] += 1;
+                    p as u32 + 1
+                }
+                _ => 0,
+            };
+            parents.push(parent_1based);
+            if node.class_name == "ModuleScript" && stand_in_file(&node.name).is_some() {
+                stand_ins.push(index as u32 + 1);
+            }
+        }
+
+        let mut child_offsets: Vec<u32> = Vec::with_capacity(node_count + 1);
+        let mut cursor = 0u32;
+        for &count in &child_counts {
+            child_offsets.push(cursor);
+            cursor += count;
+        }
+        child_offsets.push(cursor);
+        let mut write_pos = child_offsets[..node_count].to_vec();
+        let mut child_nodes: Vec<u32> = vec![0; cursor as usize];
+        for (index, &parent_1based) in parents.iter().enumerate() {
+            if parent_1based != 0 {
+                let slot = &mut write_pos[parent_1based as usize - 1];
+                child_nodes[*slot as usize] = index as u32 + 1;
+                *slot += 1;
+            }
+        }
+
+        let name_padded = Self::align4(name_bytes.len());
+        let class_padded = Self::align4(class_bytes.len());
+        let total = STUDIO_INDEX_HEADER_BYTES
+            + name_padded
+            + node_count * 4
+            + class_padded
+            + class_ends.len() * 4
+            + node_count * 4
+            + node_count * 4
+            + (node_count + 1) * 4
+            + child_nodes.len() * 4
+            + stand_ins.len() * 4
+            + STUDIO_INDEX_TRAILER.len();
+
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(STUDIO_INDEX_MAGIC);
+        out.extend_from_slice(&STUDIO_INDEX_VERSION.to_le_bytes());
+        out.extend_from_slice(&(node_count as u32).to_le_bytes());
+        out.extend_from_slice(&(class_ends.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(class_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(child_nodes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(stand_ins.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+
+        out.extend_from_slice(&name_bytes);
+        out.resize(out.len() + (name_padded - name_bytes.len()), 0);
+        for &v in &name_ends {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&class_bytes);
+        out.resize(out.len() + (class_padded - class_bytes.len()), 0);
+        for &v in &class_ends {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for &v in &node_classes {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for &v in &parents {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for &v in &child_offsets {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for &v in &child_nodes {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for &v in &stand_ins {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(STUDIO_INDEX_TRAILER);
+        debug_assert_eq!(out.len(), total);
+        out
+    }
+
+    fn from_bytes(bytes: StudioBytes) -> Option<StudioIndex> {
+        let raw = bytes.as_bytes();
+        if raw.len() < STUDIO_INDEX_HEADER_BYTES + STUDIO_INDEX_TRAILER.len() || raw.len() % 4 != 0 {
+            return None;
+        }
+        if &raw[..8] != STUDIO_INDEX_MAGIC || &raw[raw.len() - 8..] != STUDIO_INDEX_TRAILER {
+            return None;
+        }
+        let u32_at = |off: usize| -> u32 { u32::from_le_bytes(raw[off..off + 4].try_into().unwrap()) };
+        let version = u32_at(8);
+        if version != STUDIO_INDEX_VERSION {
+            return None;
+        }
+        let node_count = u32_at(12);
+        let class_count = u32_at(16);
+        let name_bytes_len = u32_at(20) as usize;
+        let class_bytes_len = u32_at(24) as usize;
+        let child_nodes_len = u32_at(28) as usize;
+        let stand_in_count = u32_at(32) as usize;
+        let reserved = u32_at(36);
+        if reserved != 0 {
+            return None;
+        }
+
+        let n = node_count as usize;
+        let c = class_count as usize;
+        let mut off = STUDIO_INDEX_HEADER_BYTES;
+        let name_bytes_off = off;
+        off = off.checked_add(Self::align4(name_bytes_len))?;
+        let name_ends_off = off;
+        off = off.checked_add(n.checked_mul(4)?)?;
+        let class_bytes_off = off;
+        off = off.checked_add(Self::align4(class_bytes_len))?;
+        let class_ends_off = off;
+        off = off.checked_add(c.checked_mul(4)?)?;
+        let node_classes_off = off;
+        off = off.checked_add(n.checked_mul(4)?)?;
+        let parents_off = off;
+        off = off.checked_add(n.checked_mul(4)?)?;
+        let child_offsets_off = off;
+        off = off.checked_add(n.checked_add(1)?.checked_mul(4)?)?;
+        let child_nodes_off = off;
+        off = off.checked_add(child_nodes_len.checked_mul(4)?)?;
+        let stand_ins_off = off;
+        off = off.checked_add(stand_in_count.checked_mul(4)?)?;
+        let expected_len = off.checked_add(STUDIO_INDEX_TRAILER.len())?;
+        if raw.len() != expected_len {
+            return None;
+        }
+
+        // Validate table invariants once on open so every lookup is bounds- and UTF-8-safe.
+        let class_text = std::str::from_utf8(&raw[class_bytes_off..class_bytes_off + class_bytes_len]).ok()?;
+        let class_ends = bytes.u32_slice(class_ends_off, c);
+        let mut prev = 0u32;
+        for &end in class_ends {
+            if end < prev || (end as usize) > class_bytes_len || !class_text.is_char_boundary(end as usize) {
+                return None;
+            }
+            prev = end;
+        }
+
+        let name_ends = bytes.u32_slice(name_ends_off, n);
+        let mut prev = 0u32;
+        for &end in name_ends {
+            if end < prev || (end as usize) > name_bytes_len {
+                return None;
+            }
+            prev = end;
+        }
+
+        if n > 0 {
+            if c == 0 {
+                return None;
+            }
+            for &cls in bytes.u32_slice(node_classes_off, n) {
+                if cls >= class_count {
+                    return None;
+                }
+            }
+        }
+        for &parent in bytes.u32_slice(parents_off, n) {
+            if parent > node_count {
+                return None;
+            }
+        }
+        let child_offsets = bytes.u32_slice(child_offsets_off, n + 1);
+        if child_offsets[0] != 0 || child_offsets[n] as usize != child_nodes_len {
+            return None;
+        }
+        let mut prev = 0u32;
+        for &co in child_offsets {
+            if co < prev {
+                return None;
+            }
+            prev = co;
+        }
+        for &child in bytes.u32_slice(child_nodes_off, child_nodes_len) {
+            if child == 0 || child > node_count {
+                return None;
+            }
+        }
+        for &si in bytes.u32_slice(stand_ins_off, stand_in_count) {
+            if si == 0 || si > node_count {
+                return None;
+            }
+        }
+
+        Some(StudioIndex {
+            bytes,
+            node_count,
+            class_count,
+            name_bytes_off,
+            name_bytes_len,
+            name_ends_off,
+            class_bytes_off,
+            class_bytes_len,
+            class_ends_off,
+            node_classes_off,
+            parents_off,
+            child_offsets_off,
+            child_nodes_off,
+            child_nodes_len,
+            stand_ins_off,
+            stand_in_count,
+        })
+    }
+
+    fn from_owned(encoded: Vec<u8>) -> Option<StudioIndex> {
+        if encoded.len() % 4 != 0 {
+            return None;
+        }
+        let word_count = encoded.len() / 4;
+        let mut words: Vec<u32> = Vec::with_capacity(word_count);
+        unsafe {
+            std::ptr::copy_nonoverlapping(encoded.as_ptr(), words.as_mut_ptr().cast::<u8>(), encoded.len());
+            words.set_len(word_count);
+        }
+        Self::from_bytes(StudioBytes::Owned { words: words.into_boxed_slice(), byte_len: encoded.len() })
+    }
+
+    fn open_mapped(path: &Path) -> Option<StudioIndex> {
+        if let Some(mapping) = plan::Mapping::open(path) {
+            return Self::from_bytes(StudioBytes::Mapped(mapping));
+        }
+        // Fallback when mmap is unavailable (e.g., non-Windows)
+        let encoded = std::fs::read(path).ok()?;
+        Self::from_owned(encoded)
+    }
+
+    #[inline]
+    fn node_count(&self) -> usize {
+        self.node_count as usize
+    }
+
+    /// Node `node`'s name (1-based).
+    #[inline]
     fn name(&self, node: u32) -> &[u8] {
-        let end = self.name_ends[node as usize - 1] as usize;
-        let start = if node > 1 { self.name_ends[node as usize - 2] as usize } else { 0 };
-        &self.names[start..end]
+        let idx = node as usize - 1;
+        let ends = self.bytes.u32_slice(self.name_ends_off, self.node_count as usize);
+        let end = ends[idx] as usize;
+        let start = if idx > 0 { ends[idx - 1] as usize } else { 0 };
+        &self.bytes.as_bytes()[self.name_bytes_off..self.name_bytes_off + self.name_bytes_len][start..end]
+    }
+
+    /// Node `node`'s class name (1-based).
+    #[inline]
+    fn class_name(&self, node: u32) -> &str {
+        let cls = self.bytes.u32_slice(self.node_classes_off, self.node_count as usize)[node as usize - 1] as usize;
+        let ends = self.bytes.u32_slice(self.class_ends_off, self.class_count as usize);
+        let end = ends[cls] as usize;
+        let start = if cls > 0 { ends[cls - 1] as usize } else { 0 };
+        let slice = &self.bytes.as_bytes()[self.class_bytes_off..self.class_bytes_off + self.class_bytes_len][start..end];
+        // SAFETY: validated UTF-8 and char boundaries in `from_bytes`.
+        unsafe { std::str::from_utf8_unchecked(slice) }
+    }
+
+    /// Node `node`'s 1-based parent (`0` if root / no parent).
+    #[inline]
+    fn parent(&self, node: u32) -> u32 {
+        self.bytes.u32_slice(self.parents_off, self.node_count as usize)[node as usize - 1]
+    }
+
+    /// Children (1-based node indices) of 1-based `node`.
+    #[inline]
+    fn children(&self, node: u32) -> &[u32] {
+        if node == 0 || node > self.node_count {
+            return &[];
+        }
+        let offsets = self.bytes.u32_slice(self.child_offsets_off, self.node_count as usize + 1);
+        let start = offsets[node as usize - 1] as usize;
+        let end = offsets[node as usize] as usize;
+        &self.bytes.u32_slice(self.child_nodes_off, self.child_nodes_len)[start..end]
+    }
+
+    /// Pre-indexed 1-based node ids of stand-in ModuleScript packages.
+    #[inline]
+    fn stand_ins(&self) -> &[u32] {
+        self.bytes.u32_slice(self.stand_ins_off, self.stand_in_count)
     }
 }
 
@@ -246,7 +591,7 @@ fn studio_node_of(state: &mut State, id: InstanceId) -> Option<u32> {
     while let Some(child) = below.pop() {
         let name = state.dom.at(child).name.clone();
         let studio = &state.project.studio.as_ref()?.index;
-        node = node.and_then(|node| studio.children.get(&node)?.iter().copied().find(|&found| studio.name(found) == name.as_bytes()));
+        node = node.and_then(|node| studio.children(node).iter().copied().find(|&found| studio.name(found) == name.as_bytes()));
         settle(state, child, node);
     }
     node
@@ -262,32 +607,31 @@ pub fn materialize(state: &mut State, reflection: &Reflection, id: InstanceId) {
         return;
     }
     state.dom.at_mut(id).set_flag(flags::MATERIALIZED, true);
-    let Some(game) = state.project.studio.as_ref().map(|s| s.game) else { return };
+    let Some((game, index)) = state.project.studio.as_ref().map(|s| (s.game, s.index.clone())) else { return };
     if id == game {
         return;
     }
     let Some(node) = studio_node_of(state, id) else { return };
-    let Some(children) = state.project.studio.as_ref().and_then(|s| s.index.children.get(&node).cloned()) else {
+    let children = index.children(node);
+    if children.is_empty() {
         return;
-    };
+    }
     // The k-th Studio child named N corresponds to the k-th existing child named N
     let mut existing: FxHashMap<Str, u32> = FxHashMap::default();
     for &child in &state.dom.at(id).children {
         *existing.entry(state.dom.at(child).name.clone()).or_default() += 1;
     }
     let mut seen: FxHashMap<Str, u32> = FxHashMap::default();
-    for child_node in children {
-        let (name, class_name) = {
-            let studio = &state.project.studio.as_ref().unwrap().index;
-            (Str::new(studio.name(child_node)), studio.classes[child_node as usize - 1].clone())
-        };
+    for &child_node in children {
+        let name = Str::new(index.name(child_node));
+        let class_name = index.class_name(child_node);
         let count = seen.entry(name.clone()).or_default();
         *count += 1;
         if *count <= existing.get(&name).copied().unwrap_or(0) {
             continue;
         }
         // Scripts that only exist in Studio stay absent, except packages with stand-ins
-        let class = reflection.class_id(&class_name);
+        let class = reflection.class_id(class_name);
         let is_script = class.is_some_and(|c| is_a(reflection, c, "LuaSourceContainer"));
         let stand_in = stand_in_file(&name.to_str_lossy()).filter(|_| class_name == "ModuleScript");
         if is_script && stand_in.is_none() {
@@ -405,9 +749,6 @@ pub const STUDIO_NAME_MAP: &str = "studio-name-map.json";
 #[derive(serde::Deserialize)]
 pub struct HierarchySnapshot {
     pub nodes: Vec<HierarchyNode>,
-    /// The mount's index of it, made on first use ([`StudioIndex`])
-    #[serde(skip)]
-    index: std::sync::OnceLock<std::sync::Arc<StudioIndex>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -441,6 +782,177 @@ pub fn load_hierarchy(path: &str) -> Option<std::sync::Arc<HierarchySnapshot>> {
         crate::alloc::long_lived(|| entries.push((path.to_string(), modified, snapshot.clone())));
     }
     Some(snapshot)
+}
+
+/// Fast streaming 128-bit content hash over 8-byte words (used for content-addressed StudioIndex files).
+#[derive(Clone, Copy)]
+struct Hash128 {
+    a: u64,
+    b: u64,
+    len: u64,
+}
+
+impl Hash128 {
+    fn new() -> Self {
+        let mut h = Hash128 { a: 0x9e37_79b9_7f4a_7c15, b: 0xc2b2_ae3d_27d4_eb4f, len: 0 };
+        // Bind the stand-in package list into the content key so changing it invalidates old files.
+        for &(name, file) in PACKAGE_STAND_INS {
+            h.update(name.as_bytes());
+            h.update(&[0]);
+            h.update(file.as_bytes());
+            h.update(&[0xff]);
+        }
+        h.len = 0;
+        h
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        self.len = self.len.wrapping_add(bytes.len() as u64);
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            let word = u64::from_le_bytes(chunk.try_into().unwrap());
+            self.a = (self.a ^ word).wrapping_mul(0x9e37_79b1_85eb_ca87).rotate_left(27);
+            self.b = (self.b.wrapping_add(word)).wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(31);
+        }
+        let rem = chunks.remainder();
+        if !rem.is_empty() {
+            let mut tail = [0u8; 8];
+            tail[..rem.len()].copy_from_slice(rem);
+            let word = u64::from_le_bytes(tail);
+            self.a = (self.a ^ word).wrapping_mul(0x9e37_79b1_85eb_ca87).rotate_left(27);
+            self.b = (self.b.wrapping_add(word ^ (rem.len() as u64))).wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(31);
+        }
+    }
+
+    fn finish(self) -> (u64, u64) {
+        let mut a = self.a ^ self.len;
+        let mut b = self.b.wrapping_add(self.len.rotate_left(17));
+        a ^= a >> 33;
+        a = a.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        a ^= a >> 33;
+        a = a.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        a ^= a >> 33;
+        b ^= b >> 30;
+        b = b.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        b ^= b >> 27;
+        b = b.wrapping_mul(0x94d0_49bb_1331_11eb);
+        b ^= b >> 31;
+        (a ^ b.rotate_left(13), b ^ a.rotate_right(19))
+    }
+}
+
+fn hash_bytes_128(bytes: &[u8]) -> (u64, u64) {
+    let mut h = Hash128::new();
+    h.update(bytes);
+    h.finish()
+}
+
+fn hash_file_128(path: &Path) -> Option<(u64, u64)> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut h = Hash128::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Some(h.finish())
+}
+
+/// Whether `stamp`'s mtime is recent enough that a same-length rewrite could share the same tick.
+fn stamp_is_recent(stamp: crate::files::Stamp) -> bool {
+    let Ok(since_epoch) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return true;
+    };
+    #[cfg(windows)]
+    let (now, window) = ((since_epoch.as_nanos() / 100) as u64 + 116_444_736_000_000_000, 20_000_000u64);
+    #[cfg(not(windows))]
+    let (now, window) = (since_epoch.as_nanos() as u64, 2_000_000_000u64);
+    stamp.modified.abs_diff(now) < window
+}
+
+fn studio_cache_dir(engine: &Engine) -> Option<PathBuf> {
+    let has_override = std::env::var_os("RUR_STATE_DIR").is_some() || std::env::var_os("RUR_CACHE_DIR").is_some();
+    if !has_override && engine.options.repo.as_os_str().is_empty() && !crate::is_standalone_binary() {
+        return None;
+    }
+    Some(crate::try_state_dir(&engine.options.repo).ok()?.join("studio"))
+}
+
+fn studio_cache_file(dir: &Path, hash: (u64, u64)) -> PathBuf {
+    dir.join(format!("v{STUDIO_INDEX_VERSION}-{:016x}{:016x}.studio", hash.0, hash.1))
+}
+
+/// Loads `path`'s binary [`StudioIndex`], reusing an in-process entry when unchanged, else mapping
+/// an immutable content-addressed `.studio` file from `cache_dir` (building and atomically renaming
+/// it on miss, corrupt file, or older version). Never retains [`HierarchySnapshot`] in memory.
+fn load_studio_index_in(path: &str, cache_dir: Option<&Path>) -> Option<std::sync::Arc<StudioIndex>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Entry = (String, Option<crate::files::Stamp>, (u64, u64), Arc<StudioIndex>);
+    static CACHE: OnceLock<Mutex<Vec<Entry>>> = OnceLock::new();
+
+    let source_path = Path::new(path);
+    crate::files::note(source_path);
+    let stamp = crate::files::stamp(source_path);
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(st) = stamp.filter(|st| !stamp_is_recent(*st)) {
+        if let Ok(entries) = cache.lock() {
+            if let Some((_, _, _, found)) = entries.iter().find(|(p, s, _, _)| p == path && *s == Some(st)) {
+                return Some(found.clone());
+            }
+        }
+    }
+
+    let hash = hash_file_128(source_path)?;
+    if let Ok(entries) = cache.lock() {
+        if let Some((_, _, _, found)) = entries.iter().find(|(p, _, h, _)| p == path && *h == hash) {
+            return Some(found.clone());
+        }
+    }
+
+    if let Some(dir) = cache_dir {
+        let target = studio_cache_file(dir, hash);
+        if let Some(index) = StudioIndex::open_mapped(&target) {
+            let index = crate::alloc::long_lived(|| Arc::new(index));
+            if let Ok(mut entries) = cache.lock() {
+                entries.retain(|(p, _, _, _)| p != path);
+                crate::alloc::long_lived(|| entries.push((path.to_string(), stamp, hash, index.clone())));
+            }
+            return Some(index);
+        }
+    }
+
+    // Cold build (or cache miss / invalid file on disk): parse JSON, encode binary, drop JSON immediately.
+    let raw_bytes = std::fs::read(source_path).ok()?;
+    let actual_hash = hash_bytes_128(&raw_bytes);
+    let snapshot: HierarchySnapshot = serde_json::from_slice(&raw_bytes).ok()?;
+    let encoded = StudioIndex::encode(&snapshot);
+    drop(snapshot);
+    drop(raw_bytes);
+
+    let index = if let Some(dir) = cache_dir {
+        let target = studio_cache_file(dir, actual_hash);
+        let _ = std::fs::create_dir_all(dir);
+        let _ = crate::files::write_atomic(&target, &encoded);
+        StudioIndex::open_mapped(&target).or_else(|| StudioIndex::from_owned(encoded))?
+    } else {
+        StudioIndex::from_owned(encoded)?
+    };
+    let index = crate::alloc::long_lived(|| Arc::new(index));
+    let actual_stamp = crate::files::stamp(source_path);
+    if let Ok(mut entries) = cache.lock() {
+        entries.retain(|(p, _, _, _)| p != path);
+        crate::alloc::long_lived(|| entries.push((path.to_string(), actual_stamp, actual_hash, index.clone())));
+    }
+    Some(index)
+}
+
+fn load_studio_index(engine: &Engine, path: &str) -> Option<std::sync::Arc<StudioIndex>> {
+    let dir = studio_cache_dir(engine);
+    load_studio_index_in(path, dir.as_deref())
 }
 
 /// The Studio hierarchy snapshot of the place the roots belong to (`<project>/<PLACES_FILE>`).
@@ -564,8 +1076,7 @@ impl<'a> Above<'a> {
 /// and mounted as any other, as Rojo builds it (a package manager's folder, pesde's `Packages/.pesde`, which its link
 /// modules require through), but for [`GIT_DIRECTORY`]'s contents.
 fn may_be_directory(entry: &str) -> bool {
-    let lower = entry.to_ascii_lowercase();
-    !lower.ends_with(".luau") && !lower.ends_with(".lua")
+    !ends_with_ignore_ascii_case(entry, ".luau") && !ends_with_ignore_ascii_case(entry, ".lua")
 }
 
 /// Lists a directory tree (directories checked and scanned in parallel; listing order kept).
@@ -590,7 +1101,9 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             match entry.file_name().into_string() {
                 Ok(name) => {
                     kinds.push(entry.file_type().ok());
-                    stamps.push(if stamped { crate::files::entry_stamp(&entry) } else { None });
+                    if stamped {
+                        stamps.push(crate::files::entry_stamp(&entry));
+                    }
                     entries.push(name);
                 }
                 Err(_) => {
@@ -602,38 +1115,56 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
         if !valid {
             entries.clear();
             kinds.clear();
+            stamps.clear();
         }
     }
+    // Pre-filter candidate subdirectories without rayon overhead on leaf directories (the common case).
+    let mut candidates: Vec<usize> = Vec::new();
+    for (index, (entry, kind)) in entries.iter().zip(kinds.iter()).enumerate() {
+        if !may_be_directory(entry) {
+            continue;
+        }
+        let plain = kind.is_some_and(|k| !k.is_symlink()) && !entry.ends_with(['.', ' ']);
+        if plain && !kind.unwrap().is_dir() {
+            continue;
+        }
+        candidates.push(index);
+    }
+    if candidates.is_empty() {
+        return ScanNode { path, entries, stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: false };
+    }
     let here = Above::new(&path, up);
-    let found: Vec<(String, Result<ScanNode, String>)> = entries
-        .par_iter()
-        .zip(kinds.par_iter())
-        .filter(|(entry, _)| may_be_directory(entry))
-        .filter_map(|(entry, kind)| {
-            let child = format!("{path}/{entry}");
-            // Lune's isDir on the joined path (follows links; Windows drops a trailing dot, so a
-            // directory named "X." is not a directory to the Luau scan either). The listing's own
-            // type says the same for any other entry, without a query per entry.
-            let plain = kind.is_some_and(|kind| !kind.is_symlink()) && !entry.ends_with(['.', ' ']);
-            let is_dir = match kind {
-                Some(kind) if plain => kind.is_dir(),
-                _ => std::fs::metadata(&child).is_ok_and(|m| m.is_dir()),
-            };
-            if !is_dir {
-                return None;
-            }
-            if entry == GIT_DIRECTORY {
-                return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true })));
-            }
-            let via_link = !kind.is_some_and(|kind| !kind.is_symlink());
-            if let Some(above) = via_link.then(|| here.looped_by(Path::new(&child))).flatten() {
-                return Some((entry.clone(), Err(above.to_string())));
-            }
-            let mut node = scan_below(child, Some(&here));
-            node.linked |= via_link;
-            Some((entry.clone(), Ok(node)))
-        })
-        .collect();
+    let visit = |index: usize| -> Option<(String, Result<ScanNode, String>)> {
+        let entry = &entries[index];
+        let kind = kinds[index];
+        let child = format!("{path}/{entry}");
+        // Lune's isDir on the joined path (follows links; Windows drops a trailing dot, so a
+        // directory named "X." is not a directory to the Luau scan either). The listing's own
+        // type says the same for any other entry, without a query per entry.
+        let plain = kind.is_some_and(|kind| !kind.is_symlink()) && !entry.ends_with(['.', ' ']);
+        let is_dir = match kind {
+            Some(kind) if plain => kind.is_dir(),
+            _ => std::fs::metadata(&child).is_ok_and(|m| m.is_dir()),
+        };
+        if !is_dir {
+            return None;
+        }
+        if entry == GIT_DIRECTORY {
+            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true })));
+        }
+        let via_link = !kind.is_some_and(|kind| !kind.is_symlink());
+        if let Some(above) = via_link.then(|| here.looped_by(Path::new(&child))).flatten() {
+            return Some((entry.clone(), Err(above.to_string())));
+        }
+        let mut node = scan_below(child, Some(&here));
+        node.linked |= via_link;
+        Some((entry.clone(), Ok(node)))
+    };
+    let found: Vec<(String, Result<ScanNode, String>)> = if candidates.len() == 1 {
+        visit(candidates[0]).into_iter().collect()
+    } else {
+        candidates.into_par_iter().filter_map(visit).collect()
+    };
     let mut dirs = FxHashMap::default();
     let mut loops = Vec::new();
     for (entry, found) in found {
@@ -841,9 +1372,8 @@ mod kept_listing {
 /// A script file's instance name and class. Rojo strips a `.server` / `.client` suffix whole, so `.server.luau` is a Script
 /// named "", and names a module by its file stem, so `.luau` is a ModuleScript named ".luau" (`rojo build` 7.6.1 and 7.7.0-rc.1).
 fn script_info(file_name: &str) -> Option<(&str, &'static str)> {
-    let lower = file_name.to_ascii_lowercase();
     for (suffix, class) in SCRIPT_SUFFIXES {
-        if lower.ends_with(suffix) {
+        if ends_with_ignore_ascii_case(file_name, suffix) {
             let stem = &file_name[..file_name.len() - suffix.len()];
             return Some((if stem.is_empty() && *class == "ModuleScript" { file_name } else { stem }, class));
         }
@@ -885,33 +1415,38 @@ fn ensure_child(state: &mut State, reflection: &Reflection, parent: InstanceId, 
 }
 
 fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount: &mut MountCounts, relative: &str) {
+    let has_loops = !node.loops.is_empty();
+    let has_dirs = !node.dirs.is_empty();
     for (index, entry) in node.entries.iter().enumerate() {
-        let full_path = format!("{}/{entry}", node.path);
-        if let Some((_, above)) = node.loops.iter().find(|(name, _)| name == entry) {
-            engine.warn(format!("{full_path}: a link back to {above}, which would hold itself; not mounted"));
-            continue;
-        }
-        if let Some(child_node) = node.dirs.get(entry) {
-            let child_relative = if relative.is_empty() { entry.clone() } else { format!("{relative}/{entry}") };
-            match nested_project(engine, child_node) {
-                // Named by the project's `name`, else by its directory (Rojo's src/project.rs, Project::set_file_name)
-                Some(project) => {
-                    let name = project.get("name").and_then(serde_json::Value::as_str).unwrap_or(entry);
-                    mount_nested_project(engine, child_node, &project, instance, name, mount, &child_relative);
-                }
-                None => {
-                    mount_plain_directory_as(engine, child_node, instance, entry, mount, &child_relative);
-                }
-            }
-        } else {
-            let lower = entry.to_ascii_lowercase();
-            if lower.starts_with("init.") || lower.ends_with(".meta.json") {
+        if has_loops {
+            if let Some((_, above)) = node.loops.iter().find(|(name, _)| name == entry) {
+                engine.warn(format!("{}/{entry}: a link back to {above}, which would hold itself; not mounted", node.path));
                 continue;
             }
-            mount_file(engine, &full_path, entry, None, instance, mount);
-            if let Some(stamp) = node.stamps.get(index).copied().flatten() {
-                engine.state.borrow_mut().project.stamps.insert(full_path, stamp);
+        }
+        if has_dirs {
+            if let Some(child_node) = node.dirs.get(entry) {
+                let child_relative = if relative.is_empty() { entry.clone() } else { format!("{relative}/{entry}") };
+                match nested_project(engine, child_node) {
+                    // Named by the project's `name`, else by its directory (Rojo's src/project.rs, Project::set_file_name)
+                    Some(project) => {
+                        let name = project.get("name").and_then(serde_json::Value::as_str).unwrap_or(entry);
+                        mount_nested_project(engine, child_node, &project, instance, name, mount, &child_relative);
+                    }
+                    None => {
+                        mount_plain_directory_as(engine, child_node, instance, entry, mount, &child_relative);
+                    }
+                }
+                continue;
             }
+        }
+        if starts_with_ignore_ascii_case(entry, "init.") || ends_with_ignore_ascii_case(entry, ".meta.json") {
+            continue;
+        }
+        let full_path = format!("{}/{entry}", node.path);
+        mount_file(engine, &full_path, entry, None, instance, mount);
+        if let Some(stamp) = node.stamps.get(index).copied().flatten() {
+            engine.state.borrow_mut().project.stamps.insert(full_path, stamp);
         }
     }
 }
@@ -1036,35 +1571,48 @@ fn mount_plain_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId
     if node.unlisted {
         engine.warn(format!("{full_path}: a Git repository's own directory; mounted as an empty Folder (Rojo builds what is in it)"));
     }
-    let present: FxHashMap<String, &String> = node.entries.iter().map(|name| (name.to_ascii_lowercase(), name)).collect();
-    let meta = present.get("init.meta.json").and_then(|name| read_json(&format!("{full_path}/{name}")));
-    let meta_class = meta.as_ref().and_then(|m| m.get("className")).and_then(|c| c.as_str()).map(str::to_string);
-    let mut init = None;
-    for (suffix, class) in SCRIPT_SUFFIXES {
-        if let Some(found) = present.get(&format!("init{suffix}")) {
-            init = Some((format!("{full_path}/{found}"), *class));
-            let listed = node.entries.iter().position(|entry| entry == *found).and_then(|index| node.stamps.get(index).copied().flatten());
-            if let Some(stamp) = listed {
-                engine.state.borrow_mut().project.stamps.insert(format!("{full_path}/{found}"), stamp);
+    let mut meta_entry: Option<&str> = None;
+    // (priority in SCRIPT_SUFFIXES, entry index, class)
+    let mut best_init: Option<(usize, usize, &'static str)> = None;
+    for (index, entry) in node.entries.iter().enumerate() {
+        if !starts_with_ignore_ascii_case(entry, "init.") {
+            continue;
+        }
+        if entry.eq_ignore_ascii_case("init.meta.json") {
+            meta_entry = Some(entry.as_str());
+            continue;
+        }
+        let rest = &entry[4..];
+        for (priority, &(suffix, class)) in SCRIPT_SUFFIXES.iter().enumerate() {
+            if rest.eq_ignore_ascii_case(suffix) {
+                if best_init.is_none_or(|(best_p, _, _)| priority <= best_p) {
+                    best_init = Some((priority, index, class));
+                }
+                break;
             }
-            break;
         }
     }
+    let meta = meta_entry.and_then(|file| read_json(&format!("{full_path}/{file}")));
+    let meta_class = meta.as_ref().and_then(|m| m.get("className")).and_then(|c| c.as_str());
+    let init = best_init.map(|(_, index, class)| {
+        let found = &node.entries[index];
+        let path = format!("{full_path}/{found}");
+        if let Some(stamp) = node.stamps.get(index).copied().flatten() {
+            engine.state.borrow_mut().project.stamps.insert(path.clone(), stamp);
+        }
+        (path, class)
+    });
     let known = match relative {
         "StarterPlayer/StarterPlayerScripts" => Some("StarterPlayerScripts"),
         "StarterPlayer/StarterCharacterScripts" => Some("StarterCharacterScripts"),
         _ => None,
     };
-    let class_name = init
-        .as_ref()
-        .map(|(_, c)| c.to_string())
-        .or(meta_class)
-        .or(known.map(str::to_string));
-    let implicit = class_name.is_none();
-    let class_name = class_name.unwrap_or_else(|| "Folder".into());
+    let explicit_class = init.as_ref().map(|&(_, c)| c).or(meta_class).or(known);
+    let implicit = explicit_class.is_none();
+    let class_name = explicit_class.unwrap_or("Folder");
     let child = {
         let mut state = engine.state.borrow_mut();
-        let child = ensure_child(&mut state, reflection, parent, name, &class_name, mount);
+        let child = ensure_child(&mut state, reflection, parent, name, class_name, mount);
         if let Some((path, _)) = &init {
             let instance = state.dom.at_mut(child);
             instance.set_source_path(Some(Rc::from(path.as_str())));
@@ -1085,7 +1633,6 @@ fn mount_plain_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId
 /// instance name): scripts by suffix, JSON models, JSON modules, models. Other files are ignored.
 fn mount_file(engine: &Engine, full_path: &str, file_name: &str, name: Option<&str>, instance: InstanceId, mount: &mut MountCounts) {
     let reflection = &engine.reflection;
-    let lower = file_name.to_ascii_lowercase();
     if let Some((script_name, class_name)) = script_info(file_name) {
         let mut state = engine.state.borrow_mut();
         let child = ensure_child(&mut state, reflection, instance, name.unwrap_or(script_name), class_name, mount);
@@ -1096,13 +1643,13 @@ fn mount_file(engine: &Engine, full_path: &str, file_name: &str, name: Option<&s
             instance.set_source(None);
             mount.scripts += 1;
         }
-    } else if lower.ends_with(".model.json") {
+    } else if ends_with_ignore_ascii_case(file_name, ".model.json") {
         // Rojo's JSON model (project/json_model.rs): one instance, named after the file
         match mounted_plan(engine, full_path) {
             Some(plan) => instantiate_model(engine, &plan, name, instance),
             None => mount.skipped += 1,
         }
-    } else if lower.ends_with(".json") {
+    } else if ends_with_ignore_ascii_case(file_name, ".json") {
         // JSON modules (Rojo / JSON-backed data) return the decoded value; read on require
         let module_name = name.unwrap_or(&file_name[..file_name.len() - 5]);
         let mut state = engine.state.borrow_mut();
@@ -1111,7 +1658,7 @@ fn mount_file(engine: &Engine, full_path: &str, file_name: &str, name: Option<&s
         instance.set_source_path(Some(Rc::from(full_path)));
         instance.set_source(None);
         instance.set_flag(flags::JSON_MODULE, true);
-    } else if lower.ends_with(".rbxm") || lower.ends_with(".rbxmx") {
+    } else if ends_with_ignore_ascii_case(file_name, ".rbxm") || ends_with_ignore_ascii_case(file_name, ".rbxmx") {
         if let Some(plan) = mounted_plan(engine, full_path) {
             instantiate_model(engine, &plan, name, instance);
         }
@@ -1535,22 +2082,24 @@ pub fn mount_stand_in_packages(engine: &Engine, roots: &[String]) -> u32 {
     let mut mounted = 0;
     let game = engine.world().game;
     if let Some(snapshot) = find_hierarchy_snapshot(roots) {
-        let Some(hierarchy) = load_hierarchy(&snapshot) else { return 0 };
-        let nodes = &hierarchy.nodes;
-        for node in nodes {
-            let class_name = node.class_name.as_str();
-            let name = node.name.as_str();
-            let Some(file) = stand_in_file(name).filter(|_| class_name == "ModuleScript") else { continue };
-            let mut names = Vec::new();
-            let mut current = node;
-            while let Some(parent) = current.parent.filter(|p| *p >= 0) {
-                names.insert(0, current.name.clone());
-                current = &nodes[parent as usize];
+        let Some(index) = load_studio_index(engine, &snapshot) else { return 0 };
+        let limit = index.node_count();
+        let mut ancestors = Vec::new();
+        for &node in index.stand_ins() {
+            let Ok(name) = std::str::from_utf8(index.name(node)) else { continue };
+            let Some(file) = stand_in_file(name) else { continue };
+            ancestors.clear();
+            let mut cur = index.parent(node);
+            let mut steps = 0usize;
+            while cur != 0 && index.parent(cur) != 0 && steps < limit {
+                ancestors.push(cur);
+                cur = index.parent(cur);
+                steps += 1;
             }
             let mut target = Some(game);
-            for segment in &names[..names.len().saturating_sub(1)] {
+            for &ancestor in ancestors.iter().rev() {
                 let state = engine.state.borrow();
-                target = target.and_then(|t| find_child(&state, t, segment));
+                target = target.and_then(|t| state.dom.find_child(t, index.name(ancestor)));
             }
             if let Some(target) = target {
                 let exists = find_child(&engine.state.borrow(), target, name).is_some();
@@ -1586,9 +2135,7 @@ pub fn mount_stand_in_packages(engine: &Engine, roots: &[String]) -> u32 {
 /// from it (Hooks.Materialize). Returns the snapshot path used.
 pub fn use_studio_hierarchy(engine: &Engine, roots: &[String]) -> Option<String> {
     let path = find_hierarchy_snapshot(roots)?;
-    let hierarchy = load_hierarchy(&path)?;
-    // (made once per snapshot per process, in the long-lived heap: crate::alloc)
-    let index = hierarchy.index.get_or_init(|| crate::alloc::long_lived(|| std::sync::Arc::new(StudioIndex::new(&hierarchy)))).clone();
+    let index = load_studio_index(engine, &path)?;
     let mut sources = FxHashMap::default();
     for (_, file) in PACKAGE_STAND_INS {
         if let Some(source) = stand_in_source(file) {
@@ -1611,7 +2158,7 @@ pub fn use_studio_hierarchy(engine: &Engine, roots: &[String]) -> Option<String>
             continue;
         }
         let Some(node) = studio_node_of(&mut state, id) else { continue };
-        let Some(class) = reflection.class_id(&index.classes[node as usize - 1]) else { continue };
+        let Some(class) = reflection.class_id(index.class_name(node)) else { continue };
         if Some(class) == folder || reflection.class(class).service || is_a(reflection, class, "LuaSourceContainer") {
             continue;
         }
@@ -1910,4 +2457,174 @@ pub fn find_module_by_path(engine: &Engine, path: &str) -> Option<InstanceId> {
 
 pub fn repo_path(engine: &Engine, relative: &str) -> PathBuf {
     engine.options.repo.join(relative)
+}
+
+#[cfg(test)]
+mod studio_index_tests {
+    use super::*;
+    use crate::{Emulator, Options, mount::ProjectSpec};
+
+    fn unique_dir(tag: &str) -> PathBuf {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("ree-studio-{tag}-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sample_json(extra_child: &str) -> String {
+        format!(
+            r#"{{"nodes":[
+                {{"name":"Place","className":"DataModel","parent":-1}},
+                {{"name":"ReplicatedStorage","className":"ReplicatedStorage","parent":0}},
+                {{"name":"Packages","className":"Folder","parent":1}},
+                {{"name":"ui-labs","className":"ModuleScript","parent":2}},
+                {{"name":"Workspace","className":"Workspace","parent":0}},
+                {{"name":"{extra_child}","className":"Part","parent":4}},
+                {{"name":"HiddenScript","className":"Script","parent":4}}
+            ]}}"#
+        )
+    }
+
+    #[test]
+    fn studio_index_store_rejects_truncated_and_older_version_files() {
+        let dir = unique_dir("corrupt");
+        let cache = dir.join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let snap = dir.join("Place.json");
+        let json = sample_json("ArenaA");
+        std::fs::write(&snap, &json).unwrap();
+        let snap_str = snap.to_string_lossy().replace('\\', "/");
+        let hash = hash_bytes_128(json.as_bytes());
+        let cached = studio_cache_file(&cache, hash);
+
+        // 1) Truncated file (writer died halfway)
+        std::fs::write(&cached, b"REESTUD1\x01\x00\x00\x00truncated").unwrap();
+        assert!(StudioIndex::open_mapped(&cached).is_none());
+        let rebuilt = load_studio_index_in(&snap_str, Some(&cache)).expect("rebuilds over truncated file");
+        assert_eq!(rebuilt.node_count(), 7);
+        assert_eq!(rebuilt.stand_ins(), &[4]);
+        assert_eq!(rebuilt.class_name(6), "Part");
+        assert_eq!(rebuilt.name(6), b"ArenaA");
+        // Disk file is now valid and directly mappable.
+        let remapped = StudioIndex::open_mapped(&cached).expect("rebuilt cache maps cleanly");
+        assert_eq!(remapped.name(6), b"ArenaA");
+
+        // 2) Older layout version in header (same filename, version=0 / old magic)
+        let mut old_ver = std::fs::read(&cached).unwrap();
+        old_ver[8..12].copy_from_slice(&0u32.to_le_bytes());
+        let older_file = dir.join("old-ver.studio");
+        std::fs::write(&older_file, &old_ver).unwrap();
+        assert!(StudioIndex::open_mapped(&older_file).is_none(), "version 0 must be rejected");
+        let mut old_magic = std::fs::read(&cached).unwrap();
+        old_magic[..8].copy_from_slice(b"REESTUD0");
+        let older_magic_file = dir.join("old-magic.studio");
+        std::fs::write(&older_magic_file, &old_magic).unwrap();
+        assert!(StudioIndex::open_mapped(&older_magic_file).is_none(), "old magic must be rejected");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn studio_index_store_is_safe_under_concurrent_writers() {
+        let dir = unique_dir("concurrent");
+        let cache = dir.join("cache");
+        let snap = dir.join("Place.json");
+        std::fs::write(&snap, sample_json("ArenaC")).unwrap();
+        let snap_str = snap.to_string_lossy().replace('\\', "/");
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let b = barrier.clone();
+            let s = snap_str.clone();
+            let c = cache.clone();
+            handles.push(std::thread::spawn(move || {
+                b.wait();
+                let idx = load_studio_index_in(&s, Some(&c)).expect("concurrent load succeeds");
+                assert_eq!(idx.node_count(), 7);
+                assert_eq!(idx.name(6), b"ArenaC");
+                assert_eq!(idx.class_name(6), "Part");
+                assert_eq!(idx.stand_ins(), &[4]);
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // Verify no leftover temporary files remain beside the immutable store file.
+        let leftover_tmp: Vec<_> = std::fs::read_dir(&cache)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftover_tmp.is_empty(), "leftover tmp files: {leftover_tmp:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn studio_index_store_invalidates_immediate_same_length_edit() {
+        let dir = unique_dir("same-len");
+        let cache = dir.join("cache");
+        let snap = dir.join("Place.json");
+        let first = sample_json("Arena1");
+        let second = sample_json("Arena2");
+        assert_eq!(first.len(), second.len());
+
+        std::fs::write(&snap, &first).unwrap();
+        let snap_str = snap.to_string_lossy().replace('\\', "/");
+        let idx1 = load_studio_index_in(&snap_str, Some(&cache)).unwrap();
+        assert_eq!(idx1.name(6), b"Arena1");
+
+        // Overwrite immediately with identical byte length (same timestamp tick possible).
+        std::fs::write(&snap, &second).unwrap();
+        let idx2 = load_studio_index_in(&snap_str, Some(&cache)).unwrap();
+        assert_eq!(idx2.name(6), b"Arena2", "immediate same-length edit must not return stale data");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn studio_index_cold_and_warm_mount_stand_ins_and_materialize_identically() {
+        let dir = unique_dir("parity");
+        let cache = dir.join("cache");
+        let place_root = dir.join("place_src");
+        std::fs::create_dir_all(place_root.join("ReplicatedStorage/Packages")).unwrap();
+        std::fs::create_dir_all(place_root.join("Workspace/ArenaX")).unwrap();
+        std::fs::write(place_root.join("Workspace/ArenaX/Child.luau"), "return 1").unwrap();
+        std::fs::create_dir_all(dir.join(SNAPSHOTS_DIR)).unwrap();
+        std::fs::write(dir.join(SNAPSHOTS_DIR).join("Place.json"), sample_json("ArenaX")).unwrap();
+        std::fs::write(
+            dir.join(PLACES_FILE),
+            r#"{"environments":[{"name":"Place","projectFile":"place_src/default.project.json"}]}"#,
+        )
+        .unwrap();
+
+        let root_str = place_root.to_string_lossy().replace('\\', "/");
+        let mut results = Vec::new();
+        for _pass in 0..2 {
+            // Pass 0 builds `.studio` cold; pass 1 hits the mmapped `.studio` file warm.
+            let mut opts = Options::default();
+            opts.repo = cache.clone();
+            let spec = ProjectSpec { roots: vec![root_str.clone()], ..ProjectSpec::default() };
+            let emu = Emulator::start(Engine::new(opts).unwrap(), &spec).unwrap();
+            emu.run(
+                "Check",
+                r#"
+                local pkgs = game:GetService("ReplicatedStorage"):FindFirstChild("Packages")
+                assert(pkgs and pkgs:FindFirstChild("ui-labs"), "stand-in ui-labs missing")
+                local arena = workspace:FindFirstChild("ArenaX")
+                assert(arena and arena.ClassName == "Part", "implicit dir should take Part class from hierarchy")
+                assert(workspace:FindFirstChild("HiddenScript") == nil, "Studio-only non-standin script must stay absent")
+                print("ok", arena.ClassName, pkgs["ui-labs"].ClassName)
+                "#,
+            )
+            .unwrap();
+            let out: Vec<String> = emu.output().into_iter().map(|l| format!("{}:{}", l.kind, l.message)).collect();
+            results.push(out);
+        }
+        assert_eq!(results[0], results[1], "cold vs warm mmap mount must match");
+        assert!(results[0].iter().any(|l| l == "print:ok Part ModuleScript"), "unexpected output: {:?}", results[0]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
