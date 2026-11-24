@@ -6205,6 +6205,58 @@ fn a_chain_of_parts_that_moves_costs_the_broadphase_its_length() {
     }
 }
 
+/// A part whose bounds are not finite (a NaN or infinite position) is in the list every query takes (broadphase.rs Index::loose)
+/// and leaves it in a step, by the place the list keeps for it: the queries after 60,000 such parts were each written (twice),
+/// moved out of the Workspace and back, and destroyed cost about what they cost after the same changes to 60,000 parts in the
+/// tree, where each part came out by a search of the list (the query after 100,000 such parts were written took 0.98 s of host
+/// time, after they were destroyed about 1 s), and the index and the list stay sound.
+#[test]
+fn parts_whose_bounds_are_not_finite_leave_the_index_in_a_step() {
+    let timed = |frame: &str| {
+        let (lua, engine) = start_play();
+        run(
+            &lua,
+            &engine,
+            &r##"
+            local NaN, Inf = 0 / 0, math.huge
+            local Folder = Instance.new("Folder")
+            Folder.Parent = workspace
+            local Parts = table.create(60000)
+            for I = 1, 60000 do
+                local Part = Instance.new("Part")
+                Part.Anchored = true
+                Part.CFrame = __FRAME__
+                Part.Parent = Folder
+                Parts[I] = Part
+            end
+            function shared.Query()
+                return #workspace:GetPartBoundsInBox(CFrame.new(0, -500, 0), Vector3.one)
+            end
+            assert(shared.Query() == 0)
+            shared.Parts, shared.Folder = Parts, Folder
+            "##
+            .replace("__FRAME__", frame),
+        );
+        // (the host time of each query that takes a change: the change's own work in the dom apart)
+        let mut host = 0.0;
+        for change in ["for _, Part in shared.Parts do Part.Transparency = 0.25 end", "for _, Part in shared.Parts do Part.Transparency = 0.5 end", "shared.Folder.Parent = nil", "shared.Folder.Parent = workspace", "shared.Folder:Destroy()"] {
+            run(&lua, &engine, change);
+            let start = std::time::Instant::now();
+            run(&lua, &engine, "assert(shared.Query() == 0)");
+            host += start.elapsed().as_secs_f64();
+            let (_, sound, parts) = super::query::index_state(&engine);
+            let held = if change.contains("Destroy") || change.contains("nil") { 0 } else { 60_000 };
+            assert!(sound && parts == held, "{frame}, {change}: {parts} parts held, sound {sound}");
+        }
+        super::query::index_matches_a_walk(&engine).unwrap();
+        host
+    };
+    let tree = timed("CFrame.new((I % 200) * 3, (I // 200) * 3, 0)");
+    let loose = timed("if I % 2 == 0 then CFrame.new(NaN, 0, 0) else CFrame.new(Inf, 0, 0)");
+    eprintln!("the queries took {loose:.3} s of host time for the parts whose bounds are not finite, {tree:.3} s in the tree");
+    assert!(loose < 3.0 * tree + 0.1, "the queries after 60,000 parts whose bounds are not finite were written twice, moved out and back and destroyed took {loose:.3} s of host time, after as many in the tree {tree:.3} s");
+}
+
 /// The broadphase holds what a walk of the Workspace finds after random rounds of parts moved below one another (chains and
 /// trees of parts), out of the Workspace and back, destroyed, written and made, several changes to the same instances in a round,
 /// before each round's query: its walks of what moved, each instance looked at once, take what each part's own walk took.

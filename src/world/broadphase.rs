@@ -18,7 +18,8 @@
 //! move the narrow tests. The caller then tests each part as before and puts what it keeps in the order the Workspace's
 //! descendants are listed ([`sort_by_order`]), so answers, the choice among ties and the counts a query is charged by are
 //! those of a test of every part in that order. A part whose bounds are not finite (a NaN or infinite position or size) is
-//! taken by every query, and a query whose own geometry is not finite takes every part.
+//! taken by every query (from a list of its own, which it leaves in a step when it is read again, moved out or destroyed),
+//! and a query whose own geometry is not finite takes every part.
 //!
 //! A part that waits for the spatial index (camera.rs `Cameras::unindexed`: it entered the Workspace since a query or the
 //! physics step last took parts in) is kept out of the tree, and so out of what the PlayerMouse's ray and
@@ -361,8 +362,11 @@ pub struct Index {
     live_at: Vec<u32>,
     /// A dom slot's entry, plus one (0: none)
     by_slot: Vec<u32>,
-    /// The entries whose bounds are not finite
+    /// The entries whose bounds are not finite, and each one's place in that list (by entry), so one comes out in a step: the
+    /// last takes its place, as a search for it and a swap_remove left the list. A part read again that stays loose goes to
+    /// the end (taken out, then pushed), the order the queries take these parts in
     loose: Vec<u32>,
+    loose_at: Vec<u32>,
     /// The entries whose parts wait for the spatial index (camera.rs `Cameras::unindexed`), in no tree or list a query near
     /// something reads, until it takes parts in
     waiting: FxHashSet<u32>,
@@ -521,6 +525,7 @@ impl Index {
         self.live_at.clear();
         self.by_slot.clear();
         self.loose.clear();
+        self.loose_at.clear();
         self.waiting.clear();
         self.taken_in = state.cameras.taken_in;
         self.tree.clear();
@@ -638,19 +643,28 @@ impl Index {
         }
         match bounds {
             Some((lo, hi)) => self.entries[entry as usize].leaf = self.tree.insert(entry, lo, hi),
-            None => self.loose.push(entry),
+            None => {
+                if self.loose_at.len() <= entry as usize {
+                    self.loose_at.resize(entry as usize + 1, 0);
+                }
+                self.loose_at[entry as usize] = self.loose.len() as u32;
+                self.loose.push(entry);
+            }
         }
     }
 
-    /// Takes `entry` out of the tree, the loose list or the waiting entries.
+    /// Takes `entry` out of the tree, the loose list (in a step, by its place there) or the waiting entries.
     fn unplace(&mut self, entry: u32) {
         let leaf = self.entries[entry as usize].leaf;
         if leaf == WAITS {
             self.waiting.remove(&entry);
         } else if leaf != NONE {
             self.tree.remove(leaf);
-        } else if let Some(at) = self.loose.iter().position(|&e| e == entry) {
+        } else if let Some(at) = self.loose_at.get(entry as usize).map(|&at| at as usize).filter(|&at| self.loose.get(at) == Some(&entry)) {
             self.loose.swap_remove(at);
+            if let Some(&moved) = self.loose.get(at) {
+                self.loose_at[moved as usize] = at as u32;
+            }
         }
         self.entries[entry as usize].leaf = NONE;
     }
@@ -730,13 +744,16 @@ impl Index {
     }
 
     #[cfg(test)]
-    /// The tree's height and whether every node's box holds its children's and every parent link is right (tests)
+    /// The tree's height and whether every node's box holds its children's and every parent link is right, and the loose list
+    /// holds each entry outside the tree and the waiting entries once, at the place it keeps for it (tests)
     pub(crate) fn check_tree(&self) -> (i32, bool) {
+        let mut loose_ok = self.loose.iter().enumerate().all(|(at, &entry)| self.loose_at[entry as usize] as usize == at && self.entries[entry as usize].leaf == NONE);
+        loose_ok &= self.live.iter().filter(|&&entry| self.entries[entry as usize].leaf == NONE).count() == self.loose.len();
         let tree = &self.tree;
         if tree.root == NONE {
-            return (0, true);
+            return (0, loose_ok);
         }
-        let mut ok = tree.node(tree.root).parent == NONE;
+        let mut ok = loose_ok && tree.node(tree.root).parent == NONE;
         let mut stack = vec![tree.root];
         while let Some(index) = stack.pop() {
             let node = tree.node(index);
