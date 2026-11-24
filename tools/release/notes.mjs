@@ -7,8 +7,9 @@
 //
 // It needs a full-history checkout that has the tags. Subjects are read through git's argument array and written
 // to a file, never put into a shell command. Only vMAJOR.MINOR.PATCH tags count as releases, so canary never does.
+// A commit listed in notes-corrections.json is printed with its corrected subject instead of the one it went out with.
 import fs from "node:fs";
-import { PLATFORMS, REPOSITORY, args, command, isMain, main, sourceText, version } from "./common.mjs";
+import { PLATFORMS, REPOSITORY, args, command, commitSubjects, corrections, isMain, main, sourceText, version } from "./common.mjs";
 
 const FENCE = "```";
 const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
@@ -33,14 +34,15 @@ export function canaryAssets() {
 }
 
 // The canary's notes: the commit, when the run that built its zips started (`built`, an ISO time), the commits since
-// the latest release, newest first, the download links and where the source is
-export function canaryNotes(commit, built, run = command) {
+// the latest release, newest first (a corrected subject from `corrected` in place of its own), the download links and
+// where the source is
+export function canaryNotes(commit, built, run = command, corrected = corrections()) {
 	if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("canary commit must be a full SHA");
 	const time = new Date(built);
 	if (!built || Number.isNaN(time.getTime())) throw new Error(`not a build time: ${built}`);
 	const site = `https://github.com/${REPOSITORY}`;
 	const latest = latestRelease(commit, run);
-	const subjects = run("git", ["log", "--format=%s", latest ? `${latest}..${commit}` : commit]).trim().split(/\r?\n/).filter(Boolean);
+	const subjects = commitSubjects([latest ? `${latest}..${commit}` : commit], run, corrected);
 	const count = `${subjects.length} commit${subjects.length === 1 ? "" : "s"}`;
 	const since = latest ? `${count} since ${latest} ([compare](${site}/compare/${latest}...${commit}))` : `${count}, no release yet`;
 	const listed = subjects.slice(0, CANARY_LIST).map((subject) => `- ${subject}`);
@@ -70,17 +72,17 @@ export function canaryNotes(commit, built, run = command) {
 	].join("\n");
 }
 
-// One "- <subject>" line per commit, oldest first; all commits up to the tag for the first release
-function changeList(tag, previous, run) {
+// One "- <subject>" line per commit, oldest first, a corrected subject from `corrected` in place of its own; all commits
+// up to the tag for the first release
+function changeList(tag, previous, run, corrected) {
 	const range = previous ? `${previous}..${tag}` : tag;
-	const subjects = run("git", ["log", "--reverse", "--format=%s", range]);
-	return subjects.trim().split(/\r?\n/).filter(Boolean).map((subject) => `- ${subject}`).join("\n");
+	return commitSubjects(["--reverse", range], run, corrected).map((subject) => `- ${subject}`).join("\n");
 }
 
-export function notes(releaseVersion, run = command) {
+export function notes(releaseVersion, run = command, corrected = corrections()) {
 	const tag = `v${releaseVersion}`;
 	const commit = run("git", ["rev-parse", `${tag}^{commit}`]).trim();
-	const changes = changeList(tag, previousRelease(tag, run), run);
+	const changes = changeList(tag, previousRelease(tag, run), run, corrected);
 	return [
 		`# ree ${tag}`,
 		"",

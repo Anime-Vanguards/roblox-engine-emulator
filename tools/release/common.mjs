@@ -1,5 +1,5 @@
 // What the release scripts share: the repository's facts (binary, platforms, version), the command line, running a
-// program, and the text of SOURCE.md. Node.js only, no npm packages.
+// program, the notes' commit subjects with their corrections, and the text of SOURCE.md. Node.js only, no npm packages.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -75,6 +75,53 @@ export function command(program, argv, options = {}) {
 	if (result.error) throw new Error(`${name}: ${result.error.message}`);
 	if (result.status !== 0) throw new Error(`${name}: exit ${result.status}: ${result.stderr || result.stdout}`);
 	return result.stdout;
+}
+
+// Subjects the notes print instead of a public commit's own, by the commit's full SHA: a subject that went out wrong
+// stays in the public history, which is never rewritten. The file is JSON, read as data and never run.
+export const CORRECTIONS = "tools/release/notes-corrections.json";
+
+// The corrections of the checkout at `root`, a Map from full commit SHA to subject; empty when it has no file
+export function corrections(root = ROOT) {
+	let text;
+	try {
+		text = fs.readFileSync(path.join(root, CORRECTIONS), "utf8");
+	} catch (error) {
+		if (error.code === "ENOENT") return new Map();
+		throw error;
+	}
+	let data;
+	try {
+		// a byte order mark, which some Windows editors write, is not part of the JSON
+		data = JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+	} catch (error) {
+		throw new Error(`${CORRECTIONS} is not valid JSON: ${error.message}`);
+	}
+	if (data === null || typeof data !== "object" || Array.isArray(data)) {
+		throw new Error(`${CORRECTIONS} is not an object of full commit SHAs to subjects`);
+	}
+	const subjects = new Map();
+	for (const [sha, subject] of Object.entries(data)) {
+		if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`${CORRECTIONS}: ${sha} is not a full commit SHA`);
+		if (typeof subject !== "string" || !subject.trim() || /[\u0000-\u001f\u007f]/.test(subject)) {
+			throw new Error(`${CORRECTIONS}: the subject for ${sha} is not one line of text`);
+		}
+		subjects.set(sha, subject);
+	}
+	return subjects;
+}
+
+// The subjects of the commits `git log <logArgs>` lists, in its order, each replaced by its correction in `corrected`
+// (a Map from full SHA to subject, as `corrections` reads it) if it has one
+export function commitSubjects(logArgs, run = command, corrected = corrections()) {
+	return run("git", ["log", "--format=%H%x09%s", ...logArgs])
+		.split(/\r?\n/)
+		.filter(Boolean)
+		.map((line) => {
+			const tab = line.indexOf("\t");
+			return corrected.get(line.slice(0, tab)) ?? line.slice(tab + 1);
+		})
+		.filter(Boolean);
 }
 
 // `name`, `version` and `repository` of a manifest's [package] table. Cargo.lock's [[package]] tables read the same.

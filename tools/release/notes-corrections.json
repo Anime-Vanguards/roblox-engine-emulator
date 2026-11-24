@@ -1,0 +1,3 @@
+{
+	"e6be7da1699b181ff738784e466e97abdbe5d42d": "Under --native, debug.loadmodule clones each module's cached template and compiles no native code for data modules, JSON module values and script environments are built on faster paths in every mode, and ree run --batch runs many jobs in one process"
+}

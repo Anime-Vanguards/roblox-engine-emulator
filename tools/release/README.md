@@ -29,8 +29,9 @@ node tools/release/nightly.mjs --repository <owner/name> --sha <main's head> --a
 ## What each script does
 
 - `test.mjs` tests version agreement and tag rejection, which dependencies are walked, the ZIP bytes, CRCs, order and
-  modes, the notes of a first and a later release and of the canary, the choice of a passing run, the nightly
-  decision and which paths ship, and the workflow's publication boundaries.
+  modes, the notes of a first and a later release and of the canary, corrected subjects and the corrections file read
+  as data, the choice of a passing run, the nightly decision and which paths ship, and the workflow's publication
+  boundaries.
 - `version.mjs` prints the version. The engine and profile-view manifests and their workspace lockfile must agree on
   it. The hardware-counter service has its own version and is not shipped. With `--tag` it fails unless the tag is
   exactly `v<version>`.
@@ -66,6 +67,10 @@ node tools/release/nightly.mjs --repository <owner/name> --sha <main's head> --a
   count as releases, so the previous release is never `canary`. With `--canary <commit> --built <time>` it writes the
   canary's notes: the line that it is a build of main and not a release, the commit, when its zips were built, the
   commits since the latest release with a compare link (the newest 50 listed), the fixed download links and the source.
+  A subject that went out wrong stays in the public history, which is never rewritten: `notes-corrections.json` maps
+  the full SHA of such a commit to the subject both notes print instead, `{ "<sha>": "<subject>" }`. It is read as
+  JSON data, never run; an entry that is not a full SHA and one line of text fails the notes, and a SHA outside the
+  listed range is ignored.
 - `dry-run.mjs` finds the passing run whose zips a tag publishes: a run of the release workflow on main at that commit,
   started by a push, by hand or by the nightly schedule, whose jobs all passed and whose zips are all still kept. It
   prints `run-id=` and `run-date=` for `$GITHUB_OUTPUT`, both empty when there is none, and the run then builds. With

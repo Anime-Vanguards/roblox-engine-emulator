@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { ROOT, MANIFESTS, PLATFORMS, REPOSITORY, args, command, isMain, realPath, sourceText, version } from "./common.mjs";
+import { CORRECTIONS, ROOT, MANIFESTS, PLATFORMS, REPOSITORY, args, command, corrections, isMain, realPath, sourceText, version } from "./common.mjs";
 import { licenses, normalPackages } from "./licenses.mjs";
 import { DOCUMENTS, DOCUMENT_MODE, EXECUTABLE_MODE, checkArchive, crc32, readZip, zip } from "./package.mjs";
 import { canaryAssets, canaryNotes, notes } from "./notes.mjs";
@@ -377,14 +377,13 @@ test("notes use the previous reachable release, never canary, and keep shell-loo
 			if (argv[0] === "rev-parse") return sha;
 			// canary is a tag on main as well, and never a release
 			if (argv[0] === "tag") return ["canary", "v0.1.0", previous].filter(Boolean).join("\n");
-			return subject + "\n";
+			return `${"c".repeat(40)}\t${subject}\n`;
 		};
-		const output = notes("0.1.0", fakeGit);
+		const output = notes("0.1.0", fakeGit, new Map());
 		assert(output.includes(`- ${subject}\n`));
 
-		// the log covers the commits since the previous release, or all of them for the first
-		const logRange = gitCalls[2].at(-1);
-		assert.equal(logRange, previous ? "v0.0.9..v0.1.0" : "v0.1.0");
+		// the log covers the commits since the previous release, or all of them for the first, oldest first
+		assert.deepEqual(gitCalls[2], ["log", "--format=%H%x09%s", "--reverse", previous ? "v0.0.9..v0.1.0" : "v0.1.0"]);
 		for (const text of ["Installing", "Verifying", "SHA256SUMS", "gh attestation verify", "Corresponding Source", sha, "Rust 1.90.0"]) {
 			assert(output.includes(text), text);
 		}
@@ -412,11 +411,11 @@ test("canary notes link the commit and list the commits since the latest release
 			assert.equal(program, "git");
 			gitCalls.push(argv);
 			if (argv[0] === "tag") return (latest ? ["canary", latest, "v0.3.0"] : ["canary"]).join("\n");
-			return subjects.map((subject) => `${subject}\n`).join("");
+			return subjects.map((subject, i) => `${i.toString(16).padStart(40, "0")}\t${subject}\n`).join("");
 		};
-		const output = canaryNotes(sha, "2026-11-16T01:42:09Z", fakeGit);
+		const output = canaryNotes(sha, "2026-11-16T01:42:09Z", fakeGit, new Map());
 		assert.deepEqual(gitCalls[0], ["tag", "--merged", sha, "--sort=-version:refname"]);
-		assert.deepEqual(gitCalls[1], ["log", "--format=%s", latest ? `${latest}..${sha}` : sha]);
+		assert.deepEqual(gitCalls[1], ["log", "--format=%H%x09%s", latest ? `${latest}..${sha}` : sha]);
 		assert(output.startsWith(`A build of main, not a release: it may break. Releases are at ${site}/releases.\n`));
 		assert(output.includes(`- Commit: [${sha.slice(0, 10)}](${site}/commit/${sha})\n`));
 		assert(output.includes("- Built: 2026-11-16 01:42 UTC\n"));
@@ -433,6 +432,85 @@ test("canary notes link the commit and list the commits since the latest release
 	assert.throws(() => canaryNotes("short", "2026-11-16T01:42:09Z", () => ""), /full SHA/);
 	assert.throws(() => canaryNotes(sha, "", () => ""), /build time/);
 	assert.throws(() => canaryNotes(sha, "yesterday", () => ""), /build time/);
+});
+
+test("release and canary notes print a commit's corrected subject by its full SHA and leave the others as they are", (t) => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ree-release-corrections-"));
+	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+	const run = (program, argv) => command(program, argv, { cwd: root });
+	const git = (...argv) => run("git", argv).trim();
+	git("init", "--quiet");
+	git("config", "user.name", "Release tests");
+	git("config", "user.email", "release-test");
+	git("commit", "--quiet", "--allow-empty", "-m", "First change");
+	git("tag", "v0.0.1");
+	git("commit", "--quiet", "--allow-empty", "-m", "Add a cut-off subject and \\");
+	const cutOff = git("rev-parse", "HEAD");
+	git("commit", "--quiet", "--allow-empty", "-m", "Second change");
+	git("tag", "v0.1.0");
+	git("commit", "--quiet", "--allow-empty", "-m", "yes");
+	const placeholder = git("rev-parse", "HEAD");
+	git("commit", "--quiet", "--allow-empty", "-m", "Third change");
+	const head = git("rev-parse", "HEAD");
+	const built = "2026-11-16T01:42:09Z";
+
+	// without the file, every subject is printed as it went out
+	assert.equal(corrections(root).size, 0);
+	assert(notes("0.1.0", run, corrections(root)).includes("- Add a cut-off subject and \\\n- Second change\n"));
+	assert(canaryNotes(head, built, run, corrections(root)).includes("- Third change\n- yes\n"));
+
+	// with it, a corrected commit's line is its correction, kept as text, and a SHA outside the range is ignored
+	fs.mkdirSync(path.join(root, "tools/release"), { recursive: true });
+	const listed = { [cutOff]: "What it changed $(echo data) `literal`", [placeholder]: "What the placeholder changed", ["f".repeat(40)]: "Not a commit here" };
+	fs.writeFileSync(path.join(root, CORRECTIONS), JSON.stringify(listed));
+	const release = notes("0.1.0", run, corrections(root));
+	assert(release.includes("- What it changed $(echo data) `literal`\n- Second change\n"));
+	assert.doesNotMatch(release, /cut-off|placeholder|Not a commit here|First change|Third change/);
+	const canary = canaryNotes(head, built, run, corrections(root));
+	assert(canary.includes("- 2 commits since v0.1.0"));
+	assert(canary.includes("- Third change\n- What the placeholder changed\n"));
+	assert.doesNotMatch(canary, /- yes\n|What it changed|Not a commit here/);
+});
+
+test("the corrections file is JSON data of full SHAs to one-line subjects, and the committed one corrects e6be7da", (t) => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "ree-release-corrections-"));
+	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+	fs.mkdirSync(path.join(root, "tools/release"), { recursive: true });
+	const file = path.join(root, CORRECTIONS);
+	const read = (text) => {
+		fs.writeFileSync(file, text);
+		return corrections(root);
+	};
+	const sha = "a".repeat(40);
+	assert.deepEqual([...read(`${String.fromCharCode(0xfeff)}{ "${sha}": "A subject" }`)], [[sha, "A subject"]]);
+	// code is never run: a module or an expression is not JSON
+	const ran = path.join(root, "ran");
+	assert.throws(() => read(`export default (require("fs").writeFileSync(${JSON.stringify(ran)}, ""), {})`), /not valid JSON/);
+	assert.throws(() => read(`({ "${sha}": "A subject" })`), /not valid JSON/);
+	assert(!fs.existsSync(ran));
+	assert.throws(() => read(`["${sha}"]`), /not an object/);
+	assert.throws(() => read("null"), /not an object/);
+	assert.throws(() => read(`{ "${sha.slice(0, 10)}": "A subject" }`), /not a full commit SHA/);
+	assert.throws(() => read(`{ "${sha.toUpperCase()}": "A subject" }`), /not a full commit SHA/);
+	assert.throws(() => read(`{ "${sha}": "Two\\nlines" }`), /not one line/);
+	assert.throws(() => read(`{ "${sha}": " " }`), /not one line/);
+	assert.throws(() => read(`{ "${sha}": 1 }`), /not one line/);
+	fs.rmSync(file);
+	assert.equal(corrections(root).size, 0);
+
+	// the public commit whose `Public:` trailer was cut off at a backslash, corrected in both notes by default
+	const cutOff = "e6be7da1699b181ff738784e466e97abdbe5d42d";
+	const corrected = corrections().get(cutOff);
+	assert.match(corrected, /^Under --native, debug\.loadmodule clones each module's cached template/);
+	const fakeGit = (program, argv) => {
+		if (argv[0] === "rev-parse") return sha;
+		if (argv[0] === "tag") return "v0.11.0\nv0.10.0";
+		return `${cutOff}\tAdd debug.loadmodule template cloning, fast JSON/env paths, and \\\n`;
+	};
+	for (const output of [notes("0.11.0", fakeGit), canaryNotes("b".repeat(40), "2026-11-16T01:42:09Z", fakeGit)]) {
+		assert(output.includes(`- ${corrected}\n`));
+		assert.doesNotMatch(output, /fast JSON\/env paths/);
+	}
 });
 
 test("release workflow retains its publication boundary and pins", () => {
