@@ -1533,13 +1533,18 @@ pub fn joints_reanchored(changed: usize, links: usize) -> f64 {
     changed as f64 * JOINT_REANCHORED + links as f64 * JOINT_ANCHOR_LINK
 }
 /// What a link change costs (world/joints.rs charge_link), beyond the write: an Enabled write that links or unlinks a joint's two
-/// parts, or an Anchored write of a part that links others. A playing client (roblox-sim, Studio 0.747, headless; os.clock around
+/// parts, a Part0 or Part1 write that re-points a joint that links, a Parent write or Destroy that takes a linking joint or part
+/// out of its world, or an Anchored write of a part that links others. A playing client (roblox-sim, Studio 0.747, headless; os.clock around
 /// single writes at a frame's start and in turn after it, the median of 9 to 11 samples, an anchored or unanchored part welded to N
 /// = 1 to 10,000 parts and chains of them; docs/engine.md "Rigid assemblies", 2026-11-24) spends 31 to 66 us on a frame's first
 /// link change ([`LINK_FRAME`] beyond the rest), 6 to 20 us on the first change of another assembly in that frame
 /// ([`LINK_ASSEMBLY`] beyond a change's own), each time 0.085 us a part of the assembly ([`LINK_PART`]: 871 to 921 us at 10,000
 /// welded to a hub, 69 to 131 at 1,000, a leaf's weld disabled or enabled or the leaf anchored or not), and 2.3 to 5.5 us on each
-/// later change of an assembly changed in the frame, whatever its size ([`LINK_CHANGED`] beyond the write's own price).
+/// later change of an assembly changed in the frame, whatever its size ([`LINK_CHANGED`] beyond the write's own price). The other
+/// kinds cost it alike (2026-11-24, a leaf of an anchored hub welded to 10,000 parts, at a frame's start: its weld's Part1
+/// re-pointed 874 us, set to nil 885, its Part0 re-pointed 926, the weld's Parent set to nil 864, the weld destroyed 883, the
+/// leaf's Parent set to nil 982, the leaf destroyed 929, beyond what such a write or destroy costs alone; 10 to 43 us later in the
+/// frame).
 pub const LINK_CHANGED: f64 = 1.7e-6;
 pub const LINK_FRAME: f64 = 34e-6;
 pub const LINK_ASSEMBLY: f64 = 5e-6;
