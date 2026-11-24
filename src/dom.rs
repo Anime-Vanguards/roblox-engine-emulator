@@ -108,10 +108,8 @@ pub struct Instance {
     pub name: Str,
     pub parent: Option<InstanceId>,
     pub children: Children,
-    /// Its place in its parent's [`Children`] (holes included), and in the order a client keeps them in when the dom keeps that
-    /// ([`ClientOrder`])
+    /// Its place in its parent's [`Children`]
     place: u32,
-    client_place: u32,
     /// Explicitly stored properties, sorted by name; `Value::Nil` is a stored nil
     pub props: Props,
     /// Attributes in insertion order (AttributeOrder)
@@ -136,28 +134,27 @@ pub struct Instance {
     pub child_version: u32,
 }
 
-/// An instance's children in their order, the order GetChildren lists them in. Taking out a child leaves a hole at its place (each
-/// child keeps its place: [`Dom::unlink`]), and taking out the last drops it and the holes just before it, so taking out a child
-/// costs the same host time wherever it is and however many children there are; the holes close up, in order, once they outnumber
-/// the children. (The dom used to look through the list for the child and close the gap: moving a million folders out of one, one
-/// by one, took 118 s, and with a million children under one parent a round of one move and one query took 146 us.) Read through
-/// [`Children::iter`], which skips the holes.
+/// An instance's children in their order, the order GetChildren lists them in, which is the order a playing client keeps them in
+/// (Studio 0.747, a client and a server alike, every container: tools/parity/probes/child_order.luau). A client appends a child
+/// it is given and takes one out as [`Children::take`] does: a last child is dropped, a list of [`CLIENT_KEEPS_ORDER`] or fewer
+/// closes the gap, and a longer one moves its last child into the taken one's place. So once a child goes from the middle of a
+/// long list its last child lists in its place (GetChildren, GetDescendants, FindFirstChild among children of one name,
+/// ClearAllChildren's and Destroy's order, a Clone's), and taking out a child costs the same host time wherever it is and
+/// however many children there are, as each child knows its place ([`Instance::place`]). (The dom once looked through the list
+/// for the child and closed the gap: moving a million folders out of one, one by one, took 118 s.)
 #[derive(Debug, Default)]
 pub struct Children {
-    /// The children and the holes, in order; the last is never a hole
     slots: Vec<InstanceId>,
-    holes: u32,
-    /// Whether the dom keeps the order a client keeps this list in ([`ClientOrder`]), which differs from this one
-    client_order: bool,
 }
 
-/// What a child taken out leaves at its place (no instance has this index)
-const HOLE: InstanceId = InstanceId { index: u32::MAX, generation: u32::MAX };
+/// The longest child list a client closes the gap in when it takes a child out: of 20 the order stays, of 21 the last child takes
+/// the place ([`Children`])
+const CLIENT_KEEPS_ORDER: usize = 20;
 
 impl Children {
     #[inline]
     pub fn len(&self) -> usize {
-        self.slots.len() - self.holes as usize
+        self.slots.len()
     }
 
     #[inline]
@@ -167,13 +164,13 @@ impl Children {
 
     /// The children in order.
     #[inline]
-    pub fn iter(&self) -> ChildIter<'_> {
-        ChildIter(self.slots.iter())
+    pub fn iter(&self) -> std::slice::Iter<'_, InstanceId> {
+        self.slots.iter()
     }
 
     #[inline]
     pub fn first(&self) -> Option<&InstanceId> {
-        self.iter().next()
+        self.slots.first()
     }
 
     #[inline]
@@ -182,95 +179,52 @@ impl Children {
     }
 
     pub fn to_vec(&self) -> Vec<InstanceId> {
-        if self.holes == 0 { self.slots.clone() } else { self.iter().copied().collect() }
+        self.slots.clone()
     }
 
-    /// The children as a slice: the list itself while it has no holes, else a copy without them.
+    /// The children in order, as a slice.
     #[inline]
-    pub fn slice(&self) -> std::borrow::Cow<'_, [InstanceId]> {
-        if self.holes == 0 { std::borrow::Cow::Borrowed(&self.slots) } else { std::borrow::Cow::Owned(self.to_vec()) }
+    pub fn slice(&self) -> &[InstanceId] {
+        &self.slots
     }
 
     /// Appends the children to `out` (a walk's stack), in order.
     #[inline]
     pub fn copy_to(&self, out: &mut Vec<InstanceId>) {
-        if self.holes == 0 {
-            out.extend_from_slice(&self.slots);
-        } else {
-            out.extend(self.iter());
-        }
+        out.extend_from_slice(&self.slots);
     }
 
     pub fn capacity(&self) -> usize {
         self.slots.capacity()
     }
 
-    /// Takes out the child at `place`: a hole, or for the last the place and the holes before it. Whether the holes now outnumber
-    /// the children.
-    fn take(&mut self, place: usize) -> bool {
-        if place + 1 == self.slots.len() {
+    /// Takes out the child at `place` as a client does: the last dropped, a gap closed in a list of [`CLIENT_KEEPS_ORDER`] or fewer,
+    /// else the last child moved into the place. The children whose places changed are those from `place` on: all of them for a
+    /// closed gap, the one moved in otherwise.
+    fn take(&mut self, place: usize) -> std::ops::Range<usize> {
+        let len = self.slots.len();
+        if place + 1 == len {
             self.slots.pop();
-            while self.slots.last() == Some(&HOLE) {
-                self.slots.pop();
-                self.holes -= 1;
-            }
+            place..place
+        } else if len <= CLIENT_KEEPS_ORDER {
+            self.slots.remove(place);
+            place..len - 1
         } else {
-            self.slots[place] = HOLE;
-            self.holes += 1;
+            self.slots.swap_remove(place);
+            place..place + 1
         }
-        self.holes as usize > self.len()
-    }
-}
-
-/// [`Children::iter`]: the children, skipping the holes.
-#[derive(Clone)]
-pub struct ChildIter<'a>(std::slice::Iter<'a, InstanceId>);
-
-impl<'a> Iterator for ChildIter<'a> {
-    type Item = &'a InstanceId;
-
-    #[inline]
-    fn next(&mut self) -> Option<&'a InstanceId> {
-        self.0.find(|child| child.index != HOLE.index)
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(self.0.len()))
-    }
-}
-
-impl DoubleEndedIterator for ChildIter<'_> {
-    #[inline]
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.0.rfind(|child| child.index != HOLE.index)
     }
 }
 
 impl<'a> IntoIterator for &'a Children {
     type Item = &'a InstanceId;
-    type IntoIter = ChildIter<'a>;
+    type IntoIter = std::slice::Iter<'a, InstanceId>;
 
     #[inline]
-    fn into_iter(self) -> ChildIter<'a> {
-        self.iter()
+    fn into_iter(self) -> std::slice::Iter<'a, InstanceId> {
+        self.slots.iter()
     }
 }
-
-/// The order a playing client keeps an instance's children in, once it is not their order ([`Children`]). A client takes a child out
-/// of a list of more than [`CLIENT_KEEPS_ORDER`] by moving its last child into the place, and out of a shorter one by closing the gap;
-/// it drops a last child (Studio 0.747, a headless client: after the 50,000th of 100,000 folders was parented to nil, GetChildren
-/// listed the 100,000th 50,000th; of 20 the order stayed, of 21 the last took the place). ree keeps listing children in their order
-/// (GetChildren, FindFirstChild, ClearAllChildren and Destroy go by it) and keeps the client's order only to price taking a child
-/// out as the client does: it looks for the child from the start of its list ([`Dom::reparent`], cost.rs CHILD_SEARCHED).
-#[derive(Debug, Default)]
-struct ClientOrder {
-    /// The children in the client's order (each child's place in it: [`Instance::client_place`])
-    order: Vec<InstanceId>,
-}
-
-/// The longest child list a client closes the gap in when it takes a child out ([`ClientOrder`])
-const CLIENT_KEEPS_ORDER: usize = 20;
 
 /// A script's source, the file it is read from and the stand-in package it comes from ([`Instance::script`]).
 #[derive(Clone, Debug, Default)]
@@ -778,9 +732,6 @@ pub struct Dom {
     /// Live slots of the classes someone asked to enumerate cheaply (`instances_of_class`), in
     /// slot order
     tracked: FxHashMap<ClassId, std::collections::BTreeSet<u32>>,
-    /// When each slot's instance was last attached ([`Dom::attached_order`]), by slot index
-    attached: Vec<u64>,
-    next_attached: u64,
     /// What changed under the subtree the spatial index keeps, while it keeps one (world/broadphase.rs)
     pub watch: Option<Watch>,
     /// Each instance's home, by slot, once [`Dom::keep_homes`] named the home classes: its nearest ancestor of one of them (the
@@ -802,8 +753,6 @@ pub struct Dom {
     home_logged: Vec<bool>,
     home_log: Vec<InstanceId>,
     home_log_full: bool,
-    /// By parent, the order a client keeps its children in where it is not their order ([`ClientOrder`])
-    client_orders: FxHashMap<InstanceId, ClientOrder>,
 }
 
 /// What is above an instance's home ([`Dom::homes_above`]): the outermost home its homes lead to (the last of them, which is in
@@ -909,7 +858,6 @@ impl Dom {
             parent: None,
             children: Children::default(),
             place: 0,
-            client_place: 0,
             props: Props::default(),
             attributes: Attributes::default(),
             tags: ThinVec::default(),
@@ -1230,9 +1178,6 @@ impl Dom {
         self.free_slots.push(id.index);
         self.pins.remove(&id);
         self.rig_watch.remove(&id);
-        if instance.children.client_order {
-            self.client_orders.remove(&id);
-        }
         Some(instance)
     }
 
@@ -1409,8 +1354,8 @@ impl Dom {
         &self.at(id).children
     }
 
-    /// Where `id` is among its siblings: a number that grows along its parent's children (their places, holes included), so it
-    /// orders siblings as GetChildren lists them without counting the children before it.
+    /// Where `id` is among its siblings: its place in its parent's children, so it orders siblings as GetChildren lists them
+    /// without looking for it in the list.
     #[inline]
     pub fn sibling_place(&self, id: InstanceId) -> u32 {
         self.at(id).place
@@ -1459,9 +1404,9 @@ impl Dom {
 
     /// [`Dom::detach`], then [`Dom::attach`] to `parent` when there is one, with `child`'s home worked out once: a subtree moved
     /// within its world walks nothing for its homes. Returns how many places a playing client's search for `child` passes to take
-    /// it out of its old parent's list, in the order the client keeps them in ([`ClientOrder`]): those before it, none for the last
-    /// (a client looks there first) or for a child with no parent. A Parent write prices them (cost.rs CHILD_SEARCHED); the dom
-    /// itself takes the child out from its place.
+    /// it out of its old parent's list ([`Children`]): those before it, none for the last (a client looks there first) or for a
+    /// child with no parent. A Parent write prices them (cost.rs CHILD_SEARCHED); the dom itself takes the child out from its
+    /// place.
     pub fn reparent(&mut self, child: InstanceId, parent: Option<InstanceId>) -> usize {
         let searched = self.unlink(child);
         if let Some(parent) = parent {
@@ -1476,25 +1421,18 @@ impl Dom {
         let parent_instance = self.at_mut(parent);
         let place = parent_instance.children.slots.len() as u32;
         parent_instance.children.slots.push(child);
-        let client_order = parent_instance.children.client_order;
         parent_instance.child_version = parent_instance.child_version.wrapping_add(1);
-        let mut client_place = 0;
-        if client_order && let Some(list) = self.client_orders.get_mut(&parent) {
-            client_place = list.order.len() as u32;
-            list.order.push(child);
-        }
         let instance = self.at_mut(child);
         instance.parent = Some(parent);
         instance.place = place;
-        instance.client_place = client_place;
         self.structure_version += 1;
-        self.set_attached(child.index, None);
         if self.watched(parent) {
             self.log_moved(child);
         }
     }
 
-    /// Takes `child` out of its parent's children, from its place: [`Dom::reparent`]'s count of what a client's search passes.
+    /// Takes `child` out of its parent's children, from its place, as a client does ([`Children::take`]): [`Dom::reparent`]'s
+    /// count of what a client's search passes, its place (none for the last).
     fn unlink(&mut self, child: InstanceId) -> usize {
         let Some(parent) = self.at(child).parent else {
             return 0;
@@ -1503,12 +1441,15 @@ impl Dom {
             self.log_leaving(child);
         }
         self.touch_rigs(parent);
-        let place = self.place_in(parent, child);
         let mut searched = 0;
-        if let Some(place) = place {
-            searched = self.client_take(parent, child, place);
-            if self.at_mut(parent).children.take(place) {
-                self.close_holes(parent);
+        if let Some(place) = self.place_in(parent, child) {
+            let moved = self.at_mut(parent).children.take(place);
+            if !moved.is_empty() {
+                searched = place;
+            }
+            for at in moved {
+                let id = self.at(parent).children.slots[at];
+                self.at_mut(id).place = at as u32;
             }
         }
         let parent_instance = self.at_mut(parent);
@@ -1525,69 +1466,6 @@ impl Dom {
         if slots.get(place) == Some(&child) { Some(place) } else { slots.iter().position(|&slot| slot == child) }
     }
 
-    /// Closes the holes in `parent`'s children, keeping their order, and gives each child its new place.
-    fn close_holes(&mut self, parent: InstanceId) {
-        let mut children = std::mem::take(&mut self.at_mut(parent).children);
-        children.slots.retain(|&slot| slot != HOLE);
-        children.holes = 0;
-        for (place, &child) in children.slots.iter().enumerate() {
-            self.at_mut(child).place = place as u32;
-        }
-        self.at_mut(parent).children = children;
-    }
-
-    /// Takes `child` (at `place` in `parent`'s children) out of the order a client keeps them in ([`ClientOrder`]), as the client
-    /// does: how many places its search for the child passes from the start of its list (none for its last child).
-    fn client_take(&mut self, parent: InstanceId, child: InstanceId, place: usize) -> usize {
-        let children = &self.at(parent).children;
-        if !children.client_order {
-            // (the client's order is theirs: so far it dropped last children, closed gaps in short lists and appended)
-            if place + 1 == children.slots.len() {
-                return 0;
-            }
-            let index = place - children.slots[..place].iter().filter(|&&slot| slot == HOLE).count();
-            if children.len() <= CLIENT_KEEPS_ORDER {
-                return index;
-            }
-            // (out of a longer list the client moves its last child into the place, and keeps an order of its own from now on)
-            let mut order = children.to_vec();
-            let last = order.pop().expect("a child after it");
-            order[index] = last;
-            for (slot, &id) in order.iter().enumerate() {
-                self.at_mut(id).client_place = slot as u32;
-            }
-            self.client_orders.insert(parent, ClientOrder { order });
-            self.at_mut(parent).children.client_order = true;
-            return index;
-        }
-        let Some(mut list) = self.client_orders.remove(&parent) else { return 0 };
-        let slot = self.at(child).client_place as usize;
-        let searched = if list.order.get(slot) != Some(&child) {
-            0
-        } else if slot + 1 == list.order.len() {
-            list.order.pop();
-            0
-        } else if list.order.len() <= CLIENT_KEEPS_ORDER {
-            list.order.remove(slot);
-            for (at, &id) in list.order.iter().enumerate().skip(slot) {
-                self.at_mut(id).client_place = at as u32;
-            }
-            slot
-        } else {
-            let last = list.order.pop().expect("a child after it");
-            list.order[slot] = last;
-            self.at_mut(last).client_place = slot as u32;
-            slot
-        };
-        // (none left: the client's order and theirs are the same again)
-        if list.order.is_empty() {
-            self.at_mut(parent).children.client_order = false;
-        } else {
-            self.client_orders.insert(parent, list);
-        }
-        searched
-    }
-
     /// Hands `from`'s children to `to`, which has none, in their order and at their places (a project mount putting a script in a
     /// folder's place, before [`Dom::replace_child`]: project.rs ensure_child). Moves nothing's version, as the mount's own edit did.
     pub fn hand_children(&mut self, from: InstanceId, to: InstanceId) {
@@ -1595,26 +1473,15 @@ impl Dom {
         for &child in &children {
             self.at_mut(child).parent = Some(to);
         }
-        if children.client_order
-            && let Some(list) = self.client_orders.remove(&from)
-        {
-            self.client_orders.insert(to, list);
-        }
         self.at_mut(to).children = children;
     }
 
     /// Puts `parent`'s children in `order`, a permutation of them (rur replays a place's Studio order: its engine/order.rs), each at
-    /// its new place; the order a client keeps them in is that order from now on. Moves nothing's version: the caller bumps
-    /// `child_version` and `structure_version` when anything moved.
+    /// its new place. Moves nothing's version: the caller bumps `child_version` and `structure_version` when anything moved.
     pub fn reorder_children(&mut self, parent: InstanceId, order: &[InstanceId]) {
         let mut children = std::mem::take(&mut self.at_mut(parent).children);
         children.slots.clear();
         children.slots.extend_from_slice(order);
-        children.holes = 0;
-        if children.client_order {
-            self.client_orders.remove(&parent);
-            children.client_order = false;
-        }
         for (place, &child) in children.slots.iter().enumerate() {
             self.at_mut(child).place = place as u32;
         }
@@ -1629,7 +1496,6 @@ impl Dom {
         if let Some(place) = place {
             parent_instance.children.slots[place] = new;
         }
-        let client_order = parent_instance.children.client_order;
         parent_instance.child_version = parent_instance.child_version.wrapping_add(1);
         self.at_mut(old).parent = None;
         let instance = self.at_mut(new);
@@ -1637,18 +1503,7 @@ impl Dom {
         if let Some(place) = place {
             instance.place = place as u32;
         }
-        let slot = self.at(old).client_place;
-        if client_order
-            && let Some(list) = self.client_orders.get_mut(&parent)
-            && list.order.get(slot as usize) == Some(&old)
-        {
-            list.order[slot as usize] = new;
-            self.at_mut(new).client_place = slot;
-        }
         self.structure_version += 1;
-        // (the new child takes the old one's place among its siblings)
-        let order = self.attached.get(old.index as usize).copied();
-        self.set_attached(new.index, order);
         if self.watched(parent) {
             self.log_leaving(old);
             self.log_moved(new);
@@ -1662,24 +1517,6 @@ impl Dom {
             let below = if self.is_home(new) { Some(new) } else { home };
             self.spread_home(new, below);
         }
-    }
-
-    fn set_attached(&mut self, slot: u32, order: Option<u64>) {
-        let slot = slot as usize;
-        if self.attached.len() <= slot {
-            self.attached.resize(slot + 1, 0);
-        }
-        self.attached[slot] = order.unwrap_or_else(|| {
-            self.next_attached += 1;
-            self.next_attached
-        });
-    }
-
-    /// When `id` was last attached to its parent, a number that grows with each attach: a parent's children are in this order,
-    /// since an attach appends (and a replacement takes the replaced child's number), so it orders siblings as
-    /// [`Dom::descendants`] lists them without looking for their places in the child list.
-    pub fn attached_order(&self, id: InstanceId) -> u64 {
-        self.attached.get(id.index as usize).copied().unwrap_or(0)
     }
 
     /// Whether `node` is the watched root or below it.
@@ -1945,11 +1782,11 @@ mod tests {
     use super::*;
 
     /// Every instance holds the rarely set parts (a script's source, tags, callbacks) as one pointer
-    /// each, and its properties and attributes in 24 bytes: 184 bytes an instance (it was 248; 168 before each child kept its
-    /// places in its parent's lists and each list its count of holes: Children).
+    /// each, and its properties and attributes in 24 bytes: 176 bytes an instance (it was 248; 168 before each child kept its
+    /// place in its parent's list: Children).
     #[test]
-    fn an_instance_is_184_bytes() {
-        assert_eq!(std::mem::size_of::<Instance>(), 184);
+    fn an_instance_is_176_bytes() {
+        assert_eq!(std::mem::size_of::<Instance>(), 176);
     }
 
     #[test]
@@ -2192,30 +2029,27 @@ mod tests {
         assert_eq!((dom.home(weld), dom.home(service)), (Some(service), None));
     }
 
-    /// Each instance's children are in their order (GetChildren's) and each child at its place in its parent's list, after 20,000
-    /// random makes under four parents, removals from the start, the end and anywhere (`detach`, and `reparent` to one of the
-    /// four), replacements in place (`hand_children`, then `replace_child`), frees, re-attaches, lists put in another order
-    /// (`reorder_children`), and a parent put in another's place with its whole list; each list counts its holes, its last place
-    /// holds a child, and its holes never outnumber its children.
-    /// The order a client keeps each list in is what a client's own rules make of the same changes (Studio 0.747: out of a list of
-    /// more than 20 its last child takes the removed one's place, out of a shorter one the gap closes, a last child is dropped), and
-    /// each removal's count of the places a client's search passes is where the child was in that order (none for the last).
+    /// Each instance's children are in the order a client keeps them in (GetChildren's) and each child at its place in its parent's
+    /// list, after 20,000 random makes under four parents, removals from the start, the end and anywhere (`detach`, and `reparent`
+    /// to one of the four), replacements in place (`hand_children`, then `replace_child`), frees, re-attaches, lists put in another
+    /// order (`reorder_children`), and a parent put in another's place with its whole list. A model list changed by a client's own
+    /// rules (Studio 0.747: out of a list of more than 20 its last child takes the removed one's place, out of a shorter one the gap
+    /// closes, a last child is dropped) holds the same children in the same order, and each removal's count of the places a
+    /// client's search passes is where the child was (none for the last).
     #[test]
-    fn children_keep_their_order_places_and_a_clients_order_as_they_come_and_go() {
+    fn children_keep_a_clients_order_and_their_places_as_they_come_and_go() {
         let reflection = Reflection::shared().unwrap();
         let folder = reflection.class_id("Folder").unwrap();
         let mut dom = Dom::new();
         let root = dom.create(&reflection, folder);
-        // (by parent: the order GetChildren lists them in, and the order a client keeps them in)
+        // (by parent: the order a client keeps them in)
         let mut parents = Vec::new();
         let mut order: FxHashMap<InstanceId, Vec<InstanceId>> = FxHashMap::default();
-        let mut client: FxHashMap<InstanceId, Vec<InstanceId>> = FxHashMap::default();
         for _ in 0..4 {
             let parent = dom.create(&reflection, folder);
             dom.attach(parent, root);
             parents.push(parent);
             order.insert(parent, Vec::new());
-            client.insert(parent, Vec::new());
         }
         // a client's removal: where the child was in its order (none for the last), its order changed as the client changes it
         let client_take = |list: &mut Vec<InstanceId>, child: InstanceId| {
@@ -2231,28 +2065,18 @@ mod tests {
                 at
             }
         };
-        let check = |dom: &Dom, order: &FxHashMap<InstanceId, Vec<InstanceId>>, client: &FxHashMap<InstanceId, Vec<InstanceId>>, parents: &[InstanceId], step: &str| {
+        let check = |dom: &Dom, order: &FxHashMap<InstanceId, Vec<InstanceId>>, parents: &[InstanceId], step: &str| {
             for &parent in parents {
                 let children = &dom.at(parent).children;
                 let listed = &order[&parent];
-                assert_eq!(&children.to_vec(), listed, "{step}: the children in their order");
+                assert_eq!(&children.to_vec(), listed, "{step}: the children in a client's order");
                 assert!(children.iter().rev().eq(listed.iter().rev()), "{step}: and backwards");
+                assert_eq!(children.slice(), &listed[..], "{step}: as a slice");
                 assert_eq!((children.len(), children.is_empty(), children.first(), children.last()), (listed.len(), listed.is_empty(), listed.first(), listed.last()), "{step}: the count and ends");
-                assert_eq!(children.holes as usize, children.slots.iter().filter(|&&slot| slot == HOLE).count(), "{step}: the holes counted");
-                assert!(children.slots.last() != Some(&HOLE), "{step}: the last place holds a child");
-                assert!(children.holes as usize <= children.len(), "{step}: no more holes than children");
-                for (place, &slot) in children.slots.iter().enumerate().filter(|&(_, &slot)| slot != HOLE) {
-                    assert_eq!((dom.at(slot).place as usize, dom.at(slot).parent), (place, Some(parent)), "{step}: a child at its place");
-                }
-                let kept = if children.client_order { dom.client_orders[&parent].order.clone() } else { children.to_vec() };
-                assert_eq!(kept, client[&parent], "{step}: the client's order");
-                if children.client_order {
-                    for (slot, &id) in kept.iter().enumerate() {
-                        assert_eq!(dom.at(id).client_place as usize, slot, "{step}: a child at its place in the client's order");
-                    }
+                for (place, &child) in children.iter().enumerate() {
+                    assert_eq!((dom.sibling_place(child) as usize, dom.at(child).parent), (place, Some(parent)), "{step}: a child at its place");
                 }
             }
-            assert_eq!(dom.client_orders.len(), parents.iter().filter(|&&parent| dom.at(parent).children.client_order).count(), "{step}: the client orders kept");
         };
         let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
         let mut next = |bound: usize| {
@@ -2275,7 +2099,6 @@ mod tests {
                     let made = dom.create(&reflection, folder);
                     dom.attach(made, parent);
                     order.get_mut(&parent).unwrap().push(made);
-                    client.get_mut(&parent).unwrap().push(made);
                 }
                 // one taken out: the first, the last or any; out of the tree, or to one of the four (itself included: to its end)
                 4..=6 if len > 0 => {
@@ -2287,8 +2110,7 @@ mod tests {
                     let child = order[&parent][at];
                     let to = if next(2) == 0 { None } else { Some(parents[next(parents.len())]) };
                     let searched = if to.is_none() && next(2) == 0 { dom.detach(child) } else { dom.reparent(child, to) };
-                    order.get_mut(&parent).unwrap().remove(at);
-                    let list = client.get_mut(&parent).unwrap();
+                    let list = order.get_mut(&parent).unwrap();
                     let (before, last) = (list.len(), list.last() == Some(&child));
                     assert_eq!(searched, client_take(list, child), "round {round}: the places a client's search passes");
                     match () {
@@ -2297,10 +2119,7 @@ mod tests {
                         _ => swapped += 1,
                     }
                     match to {
-                        Some(to) => {
-                            order.get_mut(&to).unwrap().push(child);
-                            client.get_mut(&to).unwrap().push(child);
-                        }
+                        Some(to) => order.get_mut(&to).unwrap().push(child),
                         None => loose.push(child),
                     }
                 }
@@ -2312,9 +2131,6 @@ mod tests {
                     dom.hand_children(old, new);
                     dom.replace_child(parent, old, new);
                     order.get_mut(&parent).unwrap()[at] = new;
-                    let list = client.get_mut(&parent).unwrap();
-                    let slot = list.iter().position(|&id| id == old).unwrap();
-                    list[slot] = new;
                     loose.push(old);
                 }
                 // one out of the tree freed (its slot is made again), or attached again
@@ -2325,10 +2141,9 @@ mod tests {
                     } else {
                         dom.attach(id, parent);
                         order.get_mut(&parent).unwrap().push(id);
-                        client.get_mut(&parent).unwrap().push(id);
                     }
                 }
-                // a list put in another order, a permutation of it (a client's order is that one from then on)
+                // a list put in another order, a permutation of it
                 9 if round % 25 == 5 && len > 1 => {
                     let mut shuffled = order[&parent].clone();
                     for at in (1..shuffled.len()).rev() {
@@ -2336,10 +2151,9 @@ mod tests {
                     }
                     dom.reorder_children(parent, &shuffled);
                     reordered += 1;
-                    client.insert(parent, shuffled.clone());
                     order.insert(parent, shuffled);
                 }
-                // a parent put in another's place with its whole list (the client's order goes with it), the old one freed
+                // a parent put in another's place with its whole list, the old one freed
                 9 if round % 25 == 0 => {
                     let index = next(parents.len());
                     let old = parents[index];
@@ -2350,16 +2164,14 @@ mod tests {
                     parents[index] = new;
                     let listed = order.remove(&old).unwrap();
                     order.insert(new, listed);
-                    let kept = client.remove(&old).unwrap();
-                    client.insert(new, kept);
                 }
                 _ => {}
             }
             if round % 50 == 0 {
-                check(&dom, &order, &client, &parents, &format!("round {round}"));
+                check(&dom, &order, &parents, &format!("round {round}"));
             }
         }
-        check(&dom, &order, &client, &parents, "the end");
+        check(&dom, &order, &parents, "the end");
         assert!(swapped > 1000 && closed > 300 && lasts > 1000, "each of the client's ways was taken: {swapped} {closed} {lasts}");
         assert!(reordered > 20, "lists put in another order: {reordered}");
         assert!(order[&parents[0]].len() > 1000, "a long list: {}", order[&parents[0]].len());
@@ -2368,7 +2180,7 @@ mod tests {
     /// Taking out a child costs the same host time wherever it is in its parent's list and however long the list is: 30,000 taken
     /// out of a Folder of 1,000,000 Folders (10,000 from the start, each the first then, 10,000 from the middle, 10,000 from the
     /// end, each the last then) take well under 0.2 s (looking for each in the list and closing the gap took 7.1 s), and the rest are
-    /// in their order.
+    /// in a client's order (each taken one's place given to the last child).
     #[test]
     fn taking_out_a_child_costs_the_same_host_time_wherever_it_is() {
         let reflection = Reflection::shared().unwrap();
@@ -2383,18 +2195,40 @@ mod tests {
                 id
             })
             .collect();
-        let mut taken: Vec<usize> = (0..10_000).collect();
-        taken.extend((0..10_000).map(|k| if k % 2 == 0 { count / 2 + k / 2 } else { count / 2 - 1 - k / 2 }));
-        taken.extend((count - 10_000..count).rev());
+        // (the first then: whatever holds the first place when it is taken)
+        let mut model: Vec<usize> = (0..count).collect();
+        let mut at: Vec<usize> = (0..count).collect();
+        let mut taken: Vec<usize> = Vec::with_capacity(30_000);
+        let mut take = |model: &mut Vec<usize>, index: usize| {
+            let place = at[index];
+            model.swap_remove(place);
+            if let Some(&moved) = model.get(place) {
+                at[moved] = place;
+            }
+        };
+        for _ in 0..10_000 {
+            let first = model[0];
+            taken.push(first);
+            take(&mut model, first);
+        }
+        for k in 0..10_000 {
+            let index = if k % 2 == 0 { count / 2 + k / 2 } else { count / 2 - 1 - k / 2 };
+            taken.push(index);
+            take(&mut model, index);
+        }
+        for _ in 0..10_000 {
+            let last = *model.last().unwrap();
+            taken.push(last);
+            take(&mut model, last);
+        }
         let started = std::time::Instant::now();
         for &index in &taken {
             dom.detach(made[index]);
         }
         let took = started.elapsed().as_secs_f64();
         assert!(took < 0.2, "30,000 children taken out of 1,000,000 in {took:.3} s");
-        let gone: FxHashSet<usize> = taken.iter().copied().collect();
-        let rest: Vec<InstanceId> = made.iter().enumerate().filter(|(index, _)| !gone.contains(index)).map(|(_, &id)| id).collect();
-        assert!(dom.children_of(holder).to_vec() == rest, "the rest in their order");
+        let rest: Vec<InstanceId> = model.iter().map(|&index| made[index]).collect();
+        assert!(dom.children_of(holder).to_vec() == rest, "the rest in a client's order");
     }
 
     /// A class change that renames an instance (its name was the old class's default) moves the names' version, which a child

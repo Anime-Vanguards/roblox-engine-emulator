@@ -29,6 +29,24 @@
 			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
 		}
 	],
+	"child_order": [
+		{
+			"line": "query 20 box: ",
+			"why": "a client's spatial queries list parts in the order they came into the Workspace (a tree that comes in in its walk's order; one moved within it keeps its place; one that leaves gives its place to the list's last part, in a list of any length: of 20 parts, the 3rd then the 1st taken out leaves 19 2 20 4 ..., where GetChildren closes the gaps), and a ray takes the first of equal hits in that order; ree lists them as the Workspace lists its descendants (broadphase.rs sort_by_order), which is that order only for parts that came in one by one into one list of more than 20"
+		},
+		{
+			"line": "query 20 radius: ",
+			"why": "a client's spatial queries list parts in the order they came into the Workspace (a tree that comes in in its walk's order; one moved within it keeps its place; one that leaves gives its place to the list's last part, in a list of any length: of 20 parts, the 3rd then the 1st taken out leaves 19 2 20 4 ..., where GetChildren closes the gaps), and a ray takes the first of equal hits in that order; ree lists them as the Workspace lists its descendants (broadphase.rs sort_by_order), which is that order only for parts that came in one by one into one list of more than 20"
+		},
+		{
+			"line": "query 20 part: ",
+			"why": "a client's spatial queries list parts in the order they came into the Workspace (a tree that comes in in its walk's order; one moved within it keeps its place; one that leaves gives its place to the list's last part, in a list of any length: of 20 parts, the 3rd then the 1st taken out leaves 19 2 20 4 ..., where GetChildren closes the gaps), and a ray takes the first of equal hits in that order; ree lists them as the Workspace lists its descendants (broadphase.rs sort_by_order), which is that order only for parts that came in one by one into one list of more than 20"
+		},
+		{
+			"line": "query 20 ray: ",
+			"why": "a client's spatial queries list parts in the order they came into the Workspace (a tree that comes in in its walk's order; one moved within it keeps its place; one that leaves gives its place to the list's last part, in a list of any length: of 20 parts, the 3rd then the 1st taken out leaves 19 2 20 4 ..., where GetChildren closes the gaps), and a ray takes the first of equal hits in that order; ree lists them as the Workspace lists its descendants (broadphase.rs sort_by_order), which is that order only for parts that came in one by one into one list of more than 20"
+		}
+	],
 	"chunknames": [
 		{
 			"line": "odd-names info ReplicatedStorage.ParityProbes.Chunk",

@@ -65,7 +65,7 @@ fn peak_during(work: impl FnOnce()) -> i64 {
 
 /// GetPartBoundsInBox, GetPartsObscuringTarget and a Raycast over 2,000 parts in a folder at the bottom of a 10,000-deep chain
 /// hold about what they hold over the same parts in a folder of the Workspace (a few hundred kilobytes: the result tables and
-/// the walks' nodes), and list them in the folder's order. Each part's whole list of attach numbers, 10,001 of them, took the
+/// the walks' nodes), and list them in the folder's order. Each part's whole list of places, 10,001 of them, took the
 /// heap 262 MB higher here (2 GB for 10,000 parts).
 #[test]
 fn a_query_holds_memory_for_its_parts_not_for_how_deep_they_are() {

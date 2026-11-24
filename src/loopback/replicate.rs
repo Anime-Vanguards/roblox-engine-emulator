@@ -13,6 +13,9 @@
 //!   place among them (an instance made, parented and passed to FireClient arrives before the event).
 //! - Hierarchy: an instance the server unparents or moves out of the containers keeps its copy on the client with Parent
 //!   nil (it comes back as the same instance); a destroyed one is destroyed there.
+//! - Order: each side keeps its lists as a client does (dom.rs Children: out of a list of more than 20 the last child takes a
+//!   taken one's place), so the server's changes leave the client's lists in the server's order; but the join's copy lists
+//!   each list in the order its children came into the containers ([`Ranks`]: tools/parity/probes/loopback/child_order.luau).
 //!
 //! The client applies them at its receive point through the engine's setters, so its events fire, deferred, as for a
 //! script's change; a physics move arrives without Changed. Nothing the client does reaches the server.
@@ -57,6 +60,108 @@ pub const CONTAINERS: [&str; 19] = [
 /// out from its TeamColor, Neutral and that side's teams (services/teams.rs; loopback/team_links.luau: the client's events
 /// are those of the TeamColor and Neutral it receives).
 const NOT_REPLICATED: [(Option<&str>, &str); 3] = [(None, "LocalTransparencyModifier"), (Some("Workspace"), "CurrentCamera"), (Some("Player"), "Team")];
+
+/// When each server instance came into the replicated containers, from the link to the join's copy: the order a joining client
+/// is sent each list in (Studio 0.747, client and server: tools/parity/probes/loopback/child_order.luau). The server keeps its
+/// lists as a client does (dom.rs Children), but the copy lists a list's children in the order they came into the containers:
+/// one taken out closes its gap there, one that leaves the containers and comes back goes last, one moved to another list in
+/// them and back keeps its place, and a tree that comes in is ranked in its walk's order then (a list it brings keeps the order
+/// it had). The instances there at the link are ranked in the server's order then; each that comes in later is ranked after
+/// every other ([`install_ranks`]); the copy lists each list by rank, a child with none (made there without a Parent change:
+/// a lazily made one) right after the child before it ([`push_joined`]).
+#[derive(Default)]
+pub struct Ranks {
+    /// By dom slot, the instance's rank (0: none)
+    by_slot: Vec<u64>,
+    next: u64,
+    /// Ranking (from the link to the join's copy)
+    on: bool,
+}
+
+impl Ranks {
+    #[inline]
+    fn of(&self, id: InstanceId) -> u64 {
+        self.by_slot.get(id.index as usize).copied().unwrap_or(0)
+    }
+
+    /// Ranks `root` and what is below it after every instance ranked so far, in GetDescendants' order
+    fn rank_tree(&mut self, state: &State, root: InstanceId) {
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            self.next += 1;
+            let slot = node.index as usize;
+            if self.by_slot.len() <= slot {
+                self.by_slot.resize(slot + 1, 0);
+            }
+            self.by_slot[slot] = self.next;
+            stack.extend(state.dom.at(node).children.iter().rev());
+        }
+    }
+}
+
+/// Whether `at` is one of the replicated containers or inside one (`classes`: theirs)
+fn in_containers(state: &State, game: InstanceId, classes: &[ClassId], mut at: Option<InstanceId>) -> bool {
+    while let Some(node) = at {
+        let Some(instance) = state.dom.get(node) else { return false };
+        if instance.parent == Some(game) {
+            return classes.contains(&instance.class);
+        }
+        at = instance.parent;
+    }
+    false
+}
+
+/// Starts the server's [`Ranks`] (a loopback pair's link): what the containers hold now is ranked in the server's order, and a
+/// hook ranks each instance that comes into them until the join's copy.
+pub fn install_ranks(server: &Rc<Engine>, bridge: &Rc<Bridge>) {
+    let game = server.world().game;
+    let classes: Vec<ClassId> = CONTAINERS.iter().filter_map(|&name| server.reflection.class_id(name)).collect();
+    let excluded = excluded(server);
+    {
+        let state = server.state.borrow();
+        let mut ranks = bridge.ranks.borrow_mut();
+        ranks.on = true;
+        for (_, service) in containers(server) {
+            for &child in state.dom.at(service).children.iter().filter(|child| !excluded.contains(child)) {
+                ranks.rank_tree(&state, child);
+            }
+        }
+    }
+    let mut hooks = server.hooks.borrow_mut();
+    let ranks = bridge.clone();
+    hooks.hierarchy_changed.push(Box::new(move |state, id, old, new| {
+        let mut ranks = ranks.ranks.borrow_mut();
+        if ranks.on && new.is_some() && in_containers(state, game, &classes, new) && !in_containers(state, game, &classes, old) {
+            ranks.rank_tree(state, id);
+        }
+    }));
+    let ranks = bridge.clone();
+    hooks.instance_freed.push(Box::new(move |_, id| {
+        if let Some(rank) = ranks.ranks.borrow_mut().by_slot.get_mut(id.index as usize) {
+            *rank = 0;
+        }
+    }));
+}
+
+/// Pushes `node`'s children onto the join's copy `stack` (each with `copy`, its client copy), so they pop in the order the copy
+/// lists them in: by rank ([`Ranks`]), a child with none right after the child before it in the server's list. `keyed` is
+/// scratch.
+fn push_joined(state: &State, ranks: &Ranks, node: InstanceId, copy: InstanceId, keyed: &mut Vec<(u64, InstanceId)>, stack: &mut Vec<(InstanceId, InstanceId)>) {
+    keyed.clear();
+    let (mut key, mut sorted) = (0, true);
+    for &child in &state.dom.at(node).children {
+        let rank = ranks.of(child);
+        if rank != 0 {
+            sorted &= rank > key;
+            key = rank;
+        }
+        keyed.push((key, child));
+    }
+    if !sorted {
+        keyed.sort_by_key(|&(key, _)| key);
+    }
+    stack.extend(keyed.iter().rev().map(|&(_, child)| (child, copy)));
+}
 
 /// What the server did this frame that the client may have to hear of, in the order first done (sealed at the frame's
 /// end by [`flush`]: values are read then).
@@ -184,11 +289,15 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
     let mut ids = bridge.ids.borrow_mut();
     let mut refs: Vec<(InstanceId, NameId, InstanceId)> = Vec::new();
     let mut created = 0u64;
+    // (each list in the order its children came into the containers: Ranks, which stop here)
+    let ranks = std::mem::take(&mut *bridge.ranks.borrow_mut());
+    let mut keyed: Vec<(u64, InstanceId)> = Vec::new();
+    let mut stack: Vec<(InstanceId, InstanceId)> = Vec::new();
     for &(name, service, copy) in &pairs {
         ids.pair(service, copy);
         copy_values(&server_state, &mut client_state, reflection, &filter, service, copy, false, &mut refs);
         server_state.dom.at_mut(service).flags |= flags::SENT;
-        let mut stack: Vec<(InstanceId, InstanceId)> = server_state.dom.at(service).children.iter().rev().map(|&child| (child, copy)).collect();
+        push_joined(&server_state, &ranks, service, copy, &mut keyed, &mut stack);
         while let Some((node, parent)) = stack.pop() {
             if excluded.contains(&node) {
                 continue;
@@ -215,7 +324,7 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
             ids.pair(node, made);
             copy_values(&server_state, &mut client_state, reflection, &filter, node, made, paired.is_none(), &mut refs);
             server_state.dom.at_mut(node).flags |= flags::SENT;
-            stack.extend(server_state.dom.at(node).children.iter().rev().map(|&child| (child, made)));
+            push_joined(&server_state, &ranks, node, made, &mut keyed, &mut stack);
         }
         let _ = name;
     }

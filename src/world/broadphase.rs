@@ -781,7 +781,7 @@ fn is_part(engine: &Engine, names: Names, class: ClassId) -> bool {
 /// read by `part_of`, and says how many steps up the tree its walks took (from an instance to its parent, `root` aside: what
 /// [`order_cost`] prices). Nothing to do for one item or none.
 ///
-/// The order is that of each part's attach numbers (dom.rs `attached_order`) from below `root` down to the part, compared as
+/// The order is that of each part's places among its siblings (dom.rs `sibling_place`) from below `root` down to the part, compared as
 /// lists: an ancestor's is a prefix of its descendants', so it comes first, and items with equal lists keep their own order (the
 /// order of a stable sort of those lists). The lists are not made: they are the paths of a tree of their own ([`Trie`]), which
 /// walks up from every part at once build, a walk ending where it meets another's, at `root` or at the top, and all of them
@@ -887,7 +887,7 @@ impl Trie {
             let node = match marked(marks, part) {
                 Some(node) => node,
                 None => {
-                    let node = trie.add(u32::MAX, dom.attached_order(part));
+                    let node = trie.add(u32::MAX, u64::from(dom.sibling_place(part)));
                     mark(marks, part, node);
                     walks.push((part, node));
                     node
@@ -913,7 +913,7 @@ impl Trie {
                 match marked(marks, up) {
                     Some(known) => trie.parent[node as usize] = known,
                     None => {
-                        let above = trie.add(u32::MAX, dom.attached_order(up));
+                        let above = trie.add(u32::MAX, u64::from(dom.sibling_place(up)));
                         mark(marks, up, above);
                         trie.parent[node as usize] = above;
                         next.push((up, above));
@@ -951,7 +951,7 @@ impl Trie {
                 steps += usize::from(node.is_some_and(|up| up != root));
             }
             for &id in chain.iter().rev() {
-                let key = (at, dom.attached_order(id));
+                let key = (at, u64::from(dom.sibling_place(id)));
                 at = match by_key.get(&key) {
                     Some(&node) => node,
                     None => {
@@ -1033,7 +1033,7 @@ pub(crate) fn sort_by_order_lists<T>(dom: &Dom, root: InstanceId, items: &mut Ve
             if id == root {
                 break;
             }
-            keys.push(dom.attached_order(id));
+            keys.push(u64::from(dom.sibling_place(id)));
             node = dom.get(id).and_then(|instance| instance.parent);
         }
         keys[start..].reverse();

@@ -4880,12 +4880,13 @@ fn a_move_pays_for_the_ancestor_chains_it_walks() {
 }
 
 /// Taking a child out of its parent's list (a Parent write, a move, Destroy) pays 0.2 ns for each place a playing client's search
-/// for it passes (cost.rs CHILD_SEARCHED), in the order the client keeps the list in (dom.rs ClientOrder): the client looks at its
+/// for it passes (cost.rs CHILD_SEARCHED), in the order the client keeps the list in (dom.rs Children): the client looks at its
 /// last child first, then from the start, and takes a child out of a list of more than 20 by moving its last child into the place.
 /// Out of 1,000 Folders the 500th pays 499 places; the client has then moved the 1,000th there, so the 1,000th, the last child
 /// GetChildren lists, pays 499 places too, and so does the 999th after it (destroyed); the first pays nothing (moved), and so does
 /// the 996th, the client's last by then. Out of 20 the client closes the gap: the 5th pays 4 places and the last nothing after it;
-/// out of 21 the 3rd pays 2 and the client moves the 21st there, which pays 2 as well. GetChildren lists the rest in their order.
+/// out of 21 the 3rd pays 2 and the client moves the 21st there, which pays 2 as well. GetChildren lists the rest in the client's
+/// order: of the 1,000, the 997th first, the 995th where the 300th was and the 994th where the 500th was.
 #[test]
 fn taking_out_a_child_pays_for_the_places_a_clients_search_passes() {
     let (lua, engine) = start();
@@ -4950,13 +4951,11 @@ fn taking_out_a_child_pays_for_the_places_a_clients_search_passes() {
         Extra("the 996th, the client's last", Made[996], "nil", 0)
         Extra("the 300th, moved", Made[300], "move", 299)
         Extra("the 998th, last, where the 999th was", Made[998], "nil", 499)
-        local Expected = {{}}
-        for I = 2, 997 do
-            if I ~= 300 and I ~= 500 and I ~= 996 then
-                table.insert(Expected, tostring(I))
-            end
+        local Expected = {{ "997" }}
+        for I = 2, 993 do
+            table.insert(Expected, tostring(if I == 300 then 995 elseif I == 500 then 994 else I))
         end
-        assert(Names(Holder) == table.concat(Expected, ","), "the rest in their order")
+        assert(Names(Holder) == table.concat(Expected, ","), "the rest in the client's order")
         local Short, Twenty = List(20)
         Extra("the 5th of 20", Twenty[5], "nil", 4)
         Extra("the last of 19", Twenty[20], "nil", 0)

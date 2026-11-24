@@ -172,6 +172,8 @@ pub fn link(server: Emulator, client_lua: &Lua, client: &Rc<Engine>, spec: Spec)
         remotes::install(lua, engine, side).map_err(|error| error.to_string())?;
     }
     server.engine.state.borrow_mut().output.forward = Some(crate::output::Forward(Rc::downgrade(client)));
+    // (the order the join's copy lists each list in is the order its children came into the containers from now on)
+    replicate::install_ranks(&server.engine, &bridge);
     // the server's player: made now (a harness's Context.SetJoinData may give it its join data), joined at the join
     let client_player = client.world().local_player.ok_or("the client has no local player")?;
     let server_player = {

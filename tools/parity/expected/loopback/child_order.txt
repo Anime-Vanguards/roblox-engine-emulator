@@ -1,0 +1,49 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-24
+# repeated: 3 captures, the same lines
+server: ready Long: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+server: ready Short: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+server: ready Early: 24 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+server: ready Before: 24 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+server: ready Reverse: 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1
+server: ready Back: 25 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 1
+server: ready BackShort: 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 1
+server: ready Out: 25 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 1
+server: ready Within: 25 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 1
+server: ready Moved: 1 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+server: ready Holder.Inside: 1 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+server: changed Long: 1 99 3 4 25 6 7 8 24 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+server: changed Short: 1 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+server: changed Early: 24 2 23 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22
+server: changed Before: 24 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+server: changed Reverse: 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1
+server: changed Back: 25 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 1
+server: changed BackShort: 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 1
+server: changed Out: 25 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 1
+server: changed Within: 25 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 1
+server: changed Moved: 1 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+server: changed Holder.Inside: 1 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+server: changed Live: 24 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+client: ready Long: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+client: ready Short: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+client: ready Early: 2 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+client: ready Before: 24 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+client: ready Reverse: 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1
+client: ready Back: 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 1
+client: ready BackShort: 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 1
+client: ready Out: 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 1
+client: ready Within: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+client: ready Moved: 1 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+client: ready Holder.Inside: 1 2 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+client: changed Long: 1 99 3 4 25 6 7 8 24 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+client: changed Short: 1 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+client: changed Early: 2 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+client: changed Before: 24 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+client: changed Reverse: 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1
+client: changed Back: 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 1
+client: changed BackShort: 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 1
+client: changed Out: 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 1
+client: changed Within: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+client: changed Moved: 1 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24
+client: changed Holder.Inside: 1 2 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25
+client: changed Live: 24 2 25 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23

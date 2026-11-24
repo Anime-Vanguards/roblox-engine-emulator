@@ -203,6 +203,8 @@ pub struct Bridge {
     pub stats: RefCell<Stats>,
     /// Which properties replicate (made at the join)
     pub filter: RefCell<Option<std::rc::Rc<super::replicate::Filter>>>,
+    /// When each server instance came into the replicated containers, until the join's copy (the order it lists them in)
+    pub ranks: RefCell<super::replicate::Ranks>,
 }
 
 impl Bridge {
@@ -222,6 +224,7 @@ impl Bridge {
             record_server: Cell::new(false),
             stats: Default::default(),
             filter: Default::default(),
+            ranks: Default::default(),
         }
     }
 

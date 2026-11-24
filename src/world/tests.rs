@@ -5611,7 +5611,7 @@ fn far_parts_cost_a_query_no_host_work() {
 }
 
 /// The broadphase orders what a query keeps as the Workspace's descendants are listed (`Dom::descendants`), from each instance's
-/// attach number: after instances are made, moved within and out of the Workspace and back, destroyed, and one replaced in its
+/// place among its siblings: after instances are made, moved within and out of the Workspace and back, destroyed, and one replaced in its
 /// place (dom.rs replace_child, as a project mount does), every descendant sorted from a shuffled list comes back in that order.
 #[test]
 fn query_results_follow_the_order_the_workspace_lists_its_parts() {
@@ -5668,10 +5668,10 @@ fn query_results_follow_the_order_the_workspace_lists_its_parts() {
 }
 
 /// broadphase::sort_by_order, which reads the order from a trie that walks up from every part at once build only as far as the
-/// parts' paths meet, puts any list of instances in exactly the order its first form did (each one's whole list of attach numbers
+/// parts' paths meet, puts any list of instances in exactly the order its first form did (each one's whole list of places
 /// from below the root, compared as lists in a stable sort: broadphase::sort_by_order_lists): random trees with folder chains up
 /// to 3,000 deep, parts under parts, models and folders moved, destroyed and parented out of the Workspace, and a folder
-/// replaced in its place (dom.rs replace_child), whose detached old self keeps the attach number its replacement takes, so a list
+/// replaced in its place (dom.rs replace_child), whose detached old self keeps the place its replacement takes, so a list
 /// holding parts of both has two tops with one number and the trie with one node for each list (Trie::keyed) orders it; random
 /// lists of 2 to 400 instances with repeats, the Workspace itself and instances outside it among them, against the Workspace
 /// and the DataModel as the root. Its walks take a step onto each instance on the paths at most, and one more for each part where
@@ -5745,7 +5745,7 @@ fn query_order_is_the_order_of_whole_attach_number_lists() {
             }
         }
         state.dom.replace_child(workspace, old, new);
-        assert_eq!(state.dom.attached_order(old), state.dom.attached_order(new), "the replacement takes the old folder's number");
+        assert_eq!(state.dom.sibling_place(old), state.dom.sibling_place(new), "the replacement takes the old folder's place");
         old
     };
     let state = engine.state.borrow();
@@ -5782,7 +5782,7 @@ fn query_order_is_the_order_of_whole_attach_number_lists() {
         if round % 10 == 0 {
             // (parts of both folders, the replaced one and its replacement)
             items.extend(state.dom.at(replaced).children.iter().copied());
-            items.extend(state.dom.at(state.dom.at(workspace).children.iter().copied().find(|&child| state.dom.attached_order(child) == state.dom.attached_order(replaced)).expect("the replacement")).children.iter().copied());
+            items.extend(state.dom.at(state.dom.at(workspace).children.iter().copied().find(|&child| state.dom.sibling_place(child) == state.dom.sibling_place(replaced)).expect("the replacement")).children.iter().copied());
             let at = next(items.len());
             items.rotate_left(at);
         }
@@ -5808,7 +5808,7 @@ fn query_order_is_the_order_of_whole_attach_number_lists() {
 /// the same order, and the work clock charges the box and the Raycast the same, as a playing client's cost the same at any depth
 /// (Studio 0.747: 100 parts 12.1 us in the Workspace, 12.2 1,000 deep, 12.5 3,000 deep); GetPartsObscuringTarget costs more by
 /// the walks a client's casts take up its parts (camera.rs parts_obscuring: its ancestors' answers kept for the call, so the
-/// host walks them once). Making each part's whole list of attach numbers and comparing them took 0.2 s of host time a query here
+/// host walks them once). Making each part's whole list of places and comparing them took 0.2 s of host time a query here
 /// and 262 MB of heap. Parts whose paths meet only far up (50 parts, each at the bottom of a 1,000-deep chain of its own) still walk
 /// every instance between, and pay cost.rs QUERY_ORDER_STEP for each step past QUERY_ORDER_FREE a part.
 #[test]
