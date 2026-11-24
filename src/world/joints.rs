@@ -71,15 +71,22 @@
 //! between the moved assembly and another (BulkMoveTo not), a Position / Orientation / Rotation write
 //! each joint it rewrites and, for each inside the part's assembly, each part of it, an Anchored write
 //! each other part whose root or the root's anchoring it changes and each joint linking the part, a
-//! velocity write each other part of the assembly. A change of the links (a weld enabled, a part
-//! anchored) in a large assembly still walks it again (a client's costs it 1.7 us at any size).
+//! velocity write each other part of the assembly. A change of the links (a joint enabled, disabled or
+//! freed) splits or joins the kept components instead of walking them again, and in a settled component
+//! places only what it moves ([`link_changed`]); it pays what a client spends ([`charge_link`]: each
+//! assembly's first change in a frame by its parts, as a client's). A move works the centres of mass read
+//! since the last one out again, so a read after it walks nothing ([`refresh_centres`]).
 //!
 //! Not modelled: Motor.CurrentAngle / DesiredAngle (the legacy motors' rotation), AnimationConstraint,
 //! RigidConstraint and the other constraints (solver-driven, nothing is simulated), and the members
 //! that report assemblies other than AssemblyRootPart (GetRootPart, GetConnectedParts,
 //! JointInstance.Active).
 
-use std::{collections::VecDeque, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    rc::Rc,
+};
 
 use glam::Affine3A;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -149,8 +156,21 @@ pub struct Joints {
     components: FxHashMap<InstanceId, Rc<Component>>,
     /// What a property written to a part means to its kept component ([`stored`]), by name id: [`Watch`]
     watch: Vec<u8>,
-    /// The component an Anchored write took out of the kept ones, with the part ([`stored`], [`reanchored`])
-    before_anchor: Option<(InstanceId, Option<Rc<Assemblies>>)>,
+    /// The assemblies an Anchored write took out of its part's kept component, with the part and whether the component was
+    /// settled ([`stored`], [`reanchored`])
+    before_anchor: Option<(InstanceId, Option<Rc<Assemblies>>, bool)>,
+    /// While positive, the parts' CFrame writes are the assembly code's own placing ([`settle`]), which leaves a component settled
+    placing: u32,
+    /// The part whose CFrame write last unsettled its component, which was settled until then ([`stored`]; [`part_moved`] settles
+    /// the moved assembly again)
+    unsettled: Option<InstanceId>,
+    /// The frame of the last priced link change ([`charge_link`]), and the parts of the components whose first link change of that
+    /// frame was charged: each component's parts are marked together
+    link_frame: Option<u64>,
+    marked: FxHashSet<InstanceId>,
+    /// The parts of that frame's link changes whose assemblies no read has paid for working their bodies out again since
+    /// ([`pay_body`])
+    owed: Vec<InstanceId>,
     /// While positive, the parts' CFrame writes are BulkMoveTo's, which pay nothing for the joints between assemblies ([`bulk_moves`])
     bulk: u32,
     /// Motor6Ds whose Transform changed since the last simulation step
@@ -352,18 +372,72 @@ struct Node {
 }
 
 /// The parts linked to each other now, as a walk from one of them found them ([`component`]), kept for each of its parts until
-/// something it depends on changes: a link among them (a joint's parts, enabling or home, a part's world or class, one freed:
-/// [`relink`]), a part's Anchored, Massless, RootPriority, Size or Name ([`stored`]). So reading an assembly, or moving it, walks
-/// no joint while nothing changed, as a playing client keeps its assemblies (a read costs it the same at any joint count).
+/// something it depends on changes: a link among them (a joint's parts, home, a part's world or class, one freed: [`relink`]),
+/// a part's Massless, RootPriority, Size or Name ([`stored`]). So reading an assembly, or moving it, walks no joint while nothing
+/// changed, as a playing client keeps its assemblies (a read costs it the same at any joint count). A joint enabled, disabled or
+/// freed, which links or unlinks two parts, splits or joins the kept components instead ([`link_changed`], [`Joints::unlink`],
+/// [`Joints::join`]), and an Anchored write changes its assemblies alone.
 struct Component {
-    /// Every part, in the order the walk found them
-    parts: Vec<InstanceId>,
-    /// Each part's joints that link it to another part, with that part, in the order its list holds them ([`edges`]' answer)
-    links: FxHashMap<InstanceId, Vec<(InstanceId, InstanceId)>>,
+    /// Each part (the keys: its parts, in no order that matters; a walk's order is worked out from the lists: [`order_from`]) and
+    /// its joints that link it to another part, with that part, in the order its list holds them ([`edges`]' answer)
+    links: RefCell<FxHashMap<InstanceId, Vec<(InstanceId, InstanceId)>>>,
+    /// Its anchored parts
+    anchored: RefCell<FxHashSet<InstanceId>>,
+    /// Its root when none of its parts is anchored, once known: the best ranked part (its tree's root: [`assemblies_of`]; kept as
+    /// links join or split it)
+    best: Cell<Option<InstanceId>>,
+    /// Every part is where its assemblies' joints put it from their roots (within float noise: [`settled`]), as the last settle
+    /// of all of them left it, and nothing has moved one since: a link change that leaves a part's path from its root as it was has
+    /// nothing to place there ([`link_changed`])
+    settled: Cell<bool>,
+    /// No WeldConstraint among its links waits to take its parts' relative CFrame (a walk that reads a root makes them take it:
+    /// [`assemblies_of`]), so a root read from [`Component::single_root`] skips nothing a tree's would do
+    derived: Cell<bool>,
     /// Its assemblies, once worked out ([`assemblies_of`])
-    tree: std::cell::RefCell<Option<Rc<Assemblies>>>,
+    tree: RefCell<Option<Rc<Assemblies>>>,
     /// What was worked out from its parts ([`Memo`])
-    memo: std::cell::RefCell<Memo>,
+    memo: RefCell<Memo>,
+}
+
+impl Component {
+    fn new(links: FxHashMap<InstanceId, Vec<(InstanceId, InstanceId)>>, anchored: FxHashSet<InstanceId>) -> Self {
+        Component {
+            links: RefCell::new(links),
+            anchored: RefCell::new(anchored),
+            best: Cell::new(None),
+            settled: Cell::new(false),
+            derived: Cell::new(false),
+            tree: RefCell::default(),
+            memo: RefCell::default(),
+        }
+    }
+
+    /// How many parts it holds
+    fn size(&self) -> usize {
+        self.links.borrow().len()
+    }
+
+    /// Its parts
+    fn parts(&self) -> Vec<InstanceId> {
+        self.links.borrow().keys().copied().collect()
+    }
+
+    /// The root of all its parts when it is one assembly whose root is known without its tree: its one anchored part, or the best
+    /// ranked when none is anchored
+    fn single_root(&self) -> Option<InstanceId> {
+        let anchored = self.anchored.borrow();
+        match anchored.len() {
+            0 => self.best.get(),
+            1 => anchored.iter().next().copied(),
+            _ => None,
+        }
+    }
+
+    /// Forgets what was worked out from its links: its assemblies and what its reads kept
+    fn relinked(&self) {
+        *self.tree.borrow_mut() = None;
+        *self.memo.borrow_mut() = Memo::default();
+    }
 }
 
 /// A component's assemblies (several when more than one part is anchored), the same from any of its parts.
@@ -391,13 +465,46 @@ impl Assemblies {
 }
 
 /// What the gravity step and the assembly reads work out from a component's parts, from each part asked: linked_parts' answer, and
-/// AssemblyMass and AssemblyCenterOfMass (world/gravity.rs body_of over it). The masses are forgotten when a part's Size, Massless,
-/// Material, CustomPhysicalProperties or Shape changes, the centres also when a part moves ([`stored`]).
+/// AssemblyMass and AssemblyCenterOfMass ([`mass_centre`] over it). The masses are forgotten when a part's Size, Massless,
+/// Material, CustomPhysicalProperties or Shape changes; a part placed makes the centres stale ([`stored`]), and a move works out
+/// again those read since the last one ([`refresh_centres`]).
 #[derive(Default)]
 struct Memo {
     linked: FxHashMap<InstanceId, Rc<[InstanceId]>>,
     mass: FxHashMap<InstanceId, f32>,
-    centre: FxHashMap<InstanceId, glam::Vec3>,
+    centre: FxHashMap<InstanceId, Centre>,
+    /// Each part's own mass, as the centres were worked out from them
+    masses: FxHashMap<InstanceId, f32>,
+    /// How many times one of its parts was placed: a centre worked out at another count is stale
+    placed: u64,
+}
+
+/// A part's AssemblyCenterOfMass as worked out at a count of placings ([`Memo::placed`]), and whether it was read since.
+#[derive(Clone, Copy)]
+struct Centre {
+    at: glam::Vec3,
+    placed: u64,
+    read: bool,
+}
+
+/// How many stale centres of mass a move of an assembly works out again ([`refresh_centres`]): those read since the last move, up to
+/// this many; the others are worked out when read.
+const REFRESHED_CENTRES: usize = 8;
+
+/// The mass of `points` (each part's position and mass, the asked part first, as [`linked_parts`] orders them) and its centre of
+/// mass: averaged about the first part, so far from the origin the float's step does not show (3e-5 studs at 400 up); the plain
+/// average when the parts weigh nothing. World/gravity.rs body_of works the same out, from the same points.
+pub(crate) fn mass_centre<I: Iterator<Item = (glam::Vec3, f32)> + Clone>(points: I) -> (f32, glam::Vec3) {
+    let mass: f32 = points.clone().map(|(_, mass)| mass).sum();
+    let origin = points.clone().next().map(|(at, _)| at).unwrap_or(glam::Vec3::ZERO);
+    let centre = origin
+        + if mass > 0.0 {
+            points.map(|(at, part_mass)| (at - origin) * part_mass).sum::<glam::Vec3>() / mass
+        } else {
+            let count = points.clone().count();
+            points.map(|(at, _)| at - origin).sum::<glam::Vec3>() / count.max(1) as f32
+        };
+    (mass, centre)
 }
 
 /// What a property written to a part means to its kept component ([`Joints::watch`])
@@ -545,9 +652,20 @@ impl Joints {
         }
     }
 
-    /// Takes `joint` out of the lists of the parts it was indexed under, from its places in them (the components of the parts it
-    /// linked go).
-    fn unindex(&mut self, joint: InstanceId, old: &Indexed) {
+    /// Takes `joint` out of the lists of the parts it was indexed under, from its places in them. The components of the parts it
+    /// linked go; `keep_up`: a joint that linked its two parts leaves their kept component instead, which splits when nothing else
+    /// links its two sides ([`Joints::unlink`]).
+    fn unindex(&mut self, joint: InstanceId, old: &Indexed, keep_up: bool) {
+        let linking = |side: usize| {
+            let part = old.parts[side]?;
+            let place = old.places[side] as usize;
+            self.by_part.get(&part).filter(|list| list.slots.get(place) == Some(&Some(joint)) && list.is_linking(place)).map(|_| part)
+        };
+        let kept_up = keep_up
+            && match (linking(0), linking(1)) {
+                (Some(a), Some(b)) if a != b => self.unlink(joint, [a, b], old.places).is_some(),
+                _ => false,
+            };
         for side in 0..2 {
             let Some(part) = old.parts[side] else { continue };
             if side == 1 && old.parts[0] == Some(part) {
@@ -567,7 +685,7 @@ impl Joints {
             } else if list.slots.len() > 2 * list.live {
                 list.close_holes(part, &mut self.indexed);
             }
-            if linked {
+            if linked && !kept_up {
                 self.drop_component(part);
             }
         }
@@ -576,20 +694,226 @@ impl Joints {
     /// Forgets the kept component of `part`, for each of its parts.
     fn drop_component(&mut self, part: InstanceId) {
         let Some(found) = self.components.remove(&part) else { return };
-        for other in &found.parts {
-            if self.components.get(other).is_some_and(|kept| Rc::ptr_eq(kept, &found)) {
-                self.components.remove(other);
+        self.unsettled = None;
+        for other in found.parts() {
+            if self.components.get(&other).is_some_and(|kept| Rc::ptr_eq(kept, &found)) {
+                self.components.remove(&other);
+            }
+        }
+    }
+
+    /// The place `joint` holds in `part`'s list (`known`: the place of the joint being taken out, which may no longer be indexed).
+    fn place_under(&self, joint: InstanceId, part: InstanceId, known: (InstanceId, u32)) -> u32 {
+        if joint == known.0 {
+            return known.1;
+        }
+        self.indexed_place(joint, part)
+    }
+
+    /// The place an indexed `joint` holds in `part`'s list.
+    fn indexed_place(&self, joint: InstanceId, part: InstanceId) -> u32 {
+        let entry = &self.indexed[&joint];
+        if entry.parts[0] == Some(part) { entry.places[0] } else { entry.places[1] }
+    }
+
+    /// Where `joint` (at `place` in `part`'s list) goes among `list`, a kept component's links of `part` in its list's order.
+    fn link_at(&self, list: &[(InstanceId, InstanceId)], part: InstanceId, joint: InstanceId, place: u32) -> usize {
+        list.partition_point(|&(other, _)| self.place_under(other, part, (joint, place)) < place)
+    }
+
+    /// The link of `joint` between `parts` (at `places` in their lists) stopped: their kept component (both are in the same one, or
+    /// None: nothing is changed) drops it from both parts' links and, when nothing else links its two sides, the side found first
+    /// to end leaves it as a component of its own (none for one part), each side then walked one link at a time in turn: it costs
+    /// the smaller side, not the whole component, as a client's link change does not walk its assembly. Its assemblies and what
+    /// its reads kept go; its anchored parts and best ranked part go with their sides.
+    fn unlink(&mut self, joint: InstanceId, parts: [InstanceId; 2], places: [u32; 2]) -> Option<()> {
+        let found = self.components.get(&parts[0])?.clone();
+        if !self.components.get(&parts[1]).is_some_and(|other| Rc::ptr_eq(other, &found)) {
+            return None;
+        }
+        let at = {
+            let links = found.links.borrow();
+            let mut at = [0; 2];
+            for side in 0..2 {
+                let list = links.get(&parts[side])?;
+                at[side] = self.link_at(list, parts[side], joint, places[side]);
+                if list.get(at[side]).map(|&(other, _)| other) != Some(joint) {
+                    return None;
+                }
+            }
+            at
+        };
+        let root = found.single_root();
+        let settled = found.settled.get();
+        self.unsettled = None;
+        let apart = {
+            let mut links = found.links.borrow_mut();
+            for side in 0..2 {
+                links.get_mut(&parts[side]).expect("listed").remove(at[side]);
+            }
+            sides(&links, parts)
+        };
+        found.relinked();
+        // (a side that keeps the root keeps its paths from it, and stays settled; the others, and both sides while something else
+        // links them, which may change the paths, are not known to be)
+        found.settled.set(false);
+        let Some(apart) = apart else {
+            return Some(());
+        };
+        // (the side that leaves: its links, anchored parts and best ranked part go with it)
+        let mut moved: FxHashMap<InstanceId, Vec<(InstanceId, InstanceId)>> = FxHashMap::default();
+        let mut moved_anchored: FxHashSet<InstanceId> = FxHashSet::default();
+        {
+            let mut links = found.links.borrow_mut();
+            let mut anchored = found.anchored.borrow_mut();
+            for part in &apart {
+                if let Some(list) = links.remove(part) {
+                    moved.insert(*part, list);
+                }
+                if anchored.remove(part) {
+                    moved_anchored.insert(*part);
+                }
+            }
+        }
+        let best = found.best.get();
+        if best.is_some_and(|best| moved.contains_key(&best)) {
+            found.best.set(None);
+        }
+        if apart.len() > 1 {
+            let piece = Rc::new(Component::new(moved, moved_anchored));
+            piece.best.set(best.filter(|best| apart.contains(best)));
+            piece.settled.set(settled && root.is_some_and(|root| apart.contains(&root)));
+            piece.derived.set(found.derived.get());
+            for part in &apart {
+                self.components.insert(*part, piece.clone());
+            }
+        } else {
+            self.components.remove(&apart[0]);
+        }
+        found.settled.set(settled && root.is_some_and(|root| found.links.borrow().contains_key(&root)));
+        // (a side of one part is no component)
+        if found.size() == 1 {
+            for part in found.parts() {
+                self.components.remove(&part);
+            }
+        }
+        Some(())
+    }
+
+    /// The link of `joint` between `parts` (at `places` in their lists; `anchored`: whether each is) started: their components join,
+    /// the smaller taken into the larger (a part in none, whose only link is this one, is a component of one), and the joint goes
+    /// into both parts' links at its place. None when a part's component is not kept (nothing is changed). The joined component's
+    /// assemblies and what its reads kept go.
+    fn join(&mut self, joint: InstanceId, parts: [InstanceId; 2], places: [u32; 2], anchored: [bool; 2]) -> Option<Rc<Component>> {
+        let kept = parts.map(|part| self.components.get(&part).cloned());
+        for side in 0..2 {
+            if kept[side].is_none() && self.by_part.get(&parts[side]).map_or(0, |list| list.linking) != 1 {
+                return None;
+            }
+        }
+        if !keeping() {
+            return None;
+        }
+        self.unsettled = None;
+        let found = match kept {
+            [Some(first), Some(second)] if Rc::ptr_eq(&first, &second) => first,
+            [first, second] => {
+                let size = |kept: &Option<Rc<Component>>| kept.as_ref().map_or(1, |found| found.size());
+                let (into, from, from_part) = if size(&first) >= size(&second) { (first, second, parts[1]) } else { (second, first, parts[0]) };
+                let into_part = if from_part == parts[0] { parts[1] } else { parts[0] };
+                let alone = |part: InstanceId| {
+                    let mut links = FxHashMap::default();
+                    links.insert(part, Vec::new());
+                    let mut set = FxHashSet::default();
+                    if anchored[usize::from(part == parts[1])] {
+                        set.insert(part);
+                    }
+                    let alone = Rc::new(Component::new(links, set));
+                    alone.derived.set(true);
+                    alone
+                };
+                let fresh = into.is_none();
+                let into = into.unwrap_or_else(|| alone(into_part));
+                let from = from.unwrap_or_else(|| alone(from_part));
+                let taken = from.parts();
+                {
+                    let mut links = into.links.borrow_mut();
+                    let mut anchored = into.anchored.borrow_mut();
+                    for (part, list) in from.links.borrow_mut().drain() {
+                        links.insert(part, list);
+                    }
+                    anchored.extend(from.anchored.borrow().iter().copied());
+                }
+                for part in taken.into_iter().chain(fresh.then_some(into_part)) {
+                    self.components.insert(part, into.clone());
+                }
+                into.derived.set(into.derived.get() && from.derived.get());
+                into.best.set(None);
+                into.settled.set(false);
+                into
+            }
+        };
+        {
+            let mut links = found.links.borrow_mut();
+            for side in 0..2 {
+                let list = links.get(&parts[side]).expect("joined");
+                let at = self.link_at(list, parts[side], joint, places[side]);
+                links.get_mut(&parts[side]).expect("joined").insert(at, (joint, parts[1 - side]));
+            }
+        }
+        found.relinked();
+        Some(found)
+    }
+}
+
+/// The two sides of a component after a link between `parts` ended: None while something else still links them, else the side
+/// whose walk ended first, in its walk's order from its end of the link. Each side is walked one link at a time in turn, so the
+/// answer costs about twice the smaller side, however large the other.
+fn sides(links: &FxHashMap<InstanceId, Vec<(InstanceId, InstanceId)>>, parts: [InstanceId; 2]) -> Option<Vec<InstanceId>> {
+    struct Side {
+        order: Vec<InstanceId>,
+        seen: FxHashSet<InstanceId>,
+        node: usize,
+        link: usize,
+    }
+    let start = |part: InstanceId| {
+        let mut seen = FxHashSet::default();
+        seen.insert(part);
+        Side { order: vec![part], seen, node: 0, link: 0 }
+    };
+    let mut sides = [start(parts[0]), start(parts[1])];
+    loop {
+        for turn in 0..2 {
+            let (first, second) = sides.split_at_mut(1);
+            let (side, other) = if turn == 0 { (&mut first[0], &second[0]) } else { (&mut second[0], &first[0]) };
+            loop {
+                let Some(&at) = side.order.get(side.node) else {
+                    return Some(std::mem::take(&mut side.order));
+                };
+                let list = links.get(&at).map(Vec::as_slice).unwrap_or_default();
+                if let Some(&(_, next)) = list.get(side.link) {
+                    side.link += 1;
+                    if other.seen.contains(&next) {
+                        return None;
+                    }
+                    if side.seen.insert(next) {
+                        side.order.push(next);
+                    }
+                    break;
+                }
+                side.node += 1;
+                side.link = 0;
             }
         }
     }
 }
 
-/// An instance was freed: a joint leaves its parts' lists, and a part's list goes, its joints' other parts to be worked out again
-/// ([`relink`]).
+/// An instance was freed: a joint leaves its parts' lists (and, when it linked them, their kept component, which splits when nothing
+/// else links its sides: [`Joints::unlink`]), and a part's list goes, its joints' other parts to be worked out again ([`relink`]).
 fn forget(state: &mut State, id: InstanceId) {
     let joints = &mut state.joints;
     if let Some(old) = joints.indexed.remove(&id) {
-        joints.unindex(id, &old);
+        joints.unindex(id, &old, true);
     }
     if let Some(list) = joints.by_part.remove(&id) {
         joints.relinks.extend(list.slots.iter().flatten());
@@ -634,7 +958,7 @@ fn index_joint(state: &mut State, reflection: &Reflection, setup: &Setup, joint:
         Some(old) if old.parts == parts => return,
         Some(old) => {
             let old = *old;
-            joints.unindex(joint, &old);
+            joints.unindex(joint, &old, false);
         }
         None => {}
     }
@@ -648,13 +972,18 @@ fn index_joint(state: &mut State, reflection: &Reflection, setup: &Setup, joint:
         places[side] = joints.by_part.entry(part).or_default().push(joint, homed);
     }
     joints.indexed.insert(joint, Indexed { parts, places, taken: 0 });
-    relink(state, reflection, setup, joint);
+    let flips = relink(state, reflection, setup, joint);
+    drop_flipped(&mut state.joints, &flips);
 }
 
-/// Works out again whether an indexed joint links each part it is listed under ([`link_in`]), marking its places; a part whose
-/// mark changes loses its kept component.
-fn relink(state: &mut State, reflection: &Reflection, setup: &Setup, joint: InstanceId) {
-    let Some(entry) = state.joints.indexed.get(&joint).copied() else { return };
+/// A part whose mark for a joint changed ([`relink`]), with whether the joint links it now.
+type Flip = Option<(InstanceId, bool)>;
+
+/// Works out again whether an indexed joint links each part it is listed under ([`link_in`]), marking its places; the parts whose
+/// mark changed (Part0's side first), whose kept components the caller drops ([`drop_flipped`]) or keeps up ([`link_changed`]).
+fn relink(state: &mut State, reflection: &Reflection, setup: &Setup, joint: InstanceId) -> [Flip; 2] {
+    let mut flips = [None, None];
+    let Some(entry) = state.joints.indexed.get(&joint).copied() else { return flips };
     for side in 0..2 {
         let Some(part) = entry.parts[side] else { continue };
         if side == 1 && entry.parts[0] == Some(part) {
@@ -665,10 +994,26 @@ fn relink(state: &mut State, reflection: &Reflection, setup: &Setup, joint: Inst
             continue;
         }
         let on = alive(state, part) && world_of(state, reflection, setup, part).is_some_and(|world| link_in(state, reflection, setup, joint, part, world).is_some());
-        let joints = &mut state.joints;
-        if joints.by_part.get_mut(&part).is_some_and(|list| list.link(place, on)) {
-            joints.drop_component(part);
+        if state.joints.by_part.get_mut(&part).is_some_and(|list| list.link(place, on)) {
+            flips[side] = Some((part, on));
         }
+    }
+    flips
+}
+
+/// The parts whose marks changed lose their kept components.
+fn drop_flipped(joints: &mut Joints, flips: &[Flip; 2]) {
+    for &(part, _) in flips.iter().flatten() {
+        joints.drop_component(part);
+    }
+}
+
+/// A joint's link between two parts that started or stopped (`flips` of both, alike): the parts, Part0's first, and whether it links
+/// them now.
+fn clean_flip(flips: &[Flip; 2]) -> Option<(InstanceId, InstanceId, bool)> {
+    match *flips {
+        [Some((first, on)), Some((second, also))] if on == also && first != second => Some((first, second, on)),
+        _ => None,
     }
 }
 
@@ -691,10 +1036,11 @@ fn take_homes(state: &mut State, reflection: &Reflection, setup: &Setup) {
             }
         }
     };
+    let mut parts: FxHashSet<InstanceId> = FxHashSet::default();
+    let overflowed = log.is_none();
     match log {
         Some(log) if !log.is_empty() => {
             joints.takes += 1;
-            let mut parts: FxHashSet<InstanceId> = FxHashSet::default();
             for id in log {
                 if let Some(entry) = joints.indexed.get_mut(&id).filter(|entry| entry.taken != joints.takes) {
                     entry.taken = joints.takes;
@@ -718,8 +1064,25 @@ fn take_homes(state: &mut State, reflection: &Reflection, setup: &Setup) {
         }
     }
     let relinks = std::mem::take(&mut state.joints.relinks);
+    let mut flipped: Vec<(InstanceId, [Flip; 2])> = Vec::new();
     for joint in relinks {
-        relink(state, reflection, setup, joint);
+        let flips = relink(state, reflection, setup, joint);
+        if flips.iter().any(Option::is_some) {
+            flipped.push((joint, flips));
+        }
+    }
+    // (one joint's link ended, its parts' worlds as they were: a joint taken out of its world, destroyed or moved to nil, leaves
+    // its parts' kept component, which splits when nothing else links its sides; else the components go)
+    if let [(joint, flips)] = flipped.as_slice()
+        && let (true, Some((first, second, false))) = (parts.is_empty() && !overflowed, clean_flip(flips))
+    {
+        let places = state.joints.indexed[joint].places;
+        if state.joints.unlink(*joint, [first, second], places).is_some() {
+            return;
+        }
+    }
+    for (_, flips) in &flipped {
+        drop_flipped(&mut state.joints, flips);
     }
 }
 
@@ -747,11 +1110,12 @@ pub(crate) fn check_index(state: &mut State, reflection: &Reflection) -> Result<
         }
     }
     let mut checked: Vec<*const Component> = Vec::new();
-    for (&part, found) in &state.joints.components {
-        if checked.contains(&Rc::as_ptr(found)) {
+    let components: Vec<(InstanceId, Rc<Component>)> = state.joints.components.iter().map(|(&part, found)| (part, found.clone())).collect();
+    for (part, found) in components {
+        if checked.contains(&Rc::as_ptr(&found)) {
             continue;
         }
-        checked.push(Rc::as_ptr(found));
+        checked.push(Rc::as_ptr(&found));
         let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
         let mut queue = vec![part];
         seen.insert(part);
@@ -762,9 +1126,52 @@ pub(crate) fn check_index(state: &mut State, reflection: &Reflection) -> Result<
                 }
             }
         }
-        let kept: FxHashSet<InstanceId> = found.parts.iter().copied().collect();
-        if seen != kept {
+        let kept: FxHashSet<InstanceId> = found.parts().into_iter().collect();
+        if seen != kept || kept.len() < 2 {
             return Err(format!("{part:?}'s kept component holds {} parts where {} are linked to it", kept.len(), seen.len()));
+        }
+        // (the links each part keeps are the ones a walk takes up, in order; each part is kept with it; its anchored parts)
+        for &at in &kept {
+            let walked = edges(state, reflection, &setup, at, &mut Walk::default());
+            if found.links.borrow().get(&at) != Some(&walked) {
+                return Err(format!("{at:?}'s kept links are {:?} where a walk takes up {walked:?}", found.links.borrow().get(&at)));
+            }
+            if !state.joints.components.get(&at).is_some_and(|other| Rc::ptr_eq(other, &found)) {
+                return Err(format!("{at:?} is in {part:?}'s kept component, which is not kept for it"));
+            }
+        }
+        let anchored_now: FxHashSet<InstanceId> = kept.iter().copied().filter(|&at| anchored(state, &setup, at)).collect();
+        if *found.anchored.borrow() != anchored_now {
+            return Err(format!("{part:?}'s kept component counts {} anchored parts where {} are", found.anchored.borrow().len(), anchored_now.len()));
+        }
+        // (its root, when kept without its tree, and whether every part is where its joints put it, against a fresh walk's tree)
+        let fresh = walk_component(state, reflection, &setup, part, &mut Walk::default()).expect("linked");
+        let tree = assemblies_of(state, reflection, &setup, &fresh, part, None, false);
+        if let Some(root) = found.single_root()
+            && (tree.list.len() != 1 || tree.list[0].nodes[0].part != root)
+        {
+            return Err(format!("{part:?}'s kept component has root {root:?} where a walk's tree has {:?}", tree.list.iter().map(|assembly| assembly.nodes[0].part).collect::<Vec<_>>()));
+        }
+        if found.settled.get() {
+            for assembly in &tree.list {
+                let relative = relatives(state, reflection, &setup, assembly);
+                let root = cframe_of(state, &setup, assembly.nodes[0].part);
+                for (index, node) in assembly.nodes.iter().enumerate().skip(1) {
+                    if !settled(&cframe_of(state, &setup, node.part), &(root * relative[index])) {
+                        let (current, target) = (cframe_of(state, &setup, node.part), root * relative[index]);
+                        return Err(format!(
+                            "{part:?}'s kept component is settled, but {:?} is not where its joints put it (node {index} of {}, root {:?} anchored {}, {} assemblies; at {:?} where {:?})",
+                            node.part,
+                            assembly.nodes.len(),
+                            assembly.nodes[0].part,
+                            anchored(state, &setup, assembly.nodes[0].part),
+                            tree.list.len(),
+                            current.translation,
+                            target.translation
+                        ));
+                    }
+                }
+            }
         }
     }
     let joints = &state.joints;
@@ -933,6 +1340,10 @@ pub fn root_part(state: &mut State, reflection: &Reflection, part: InstanceId) -
     let Some(found) = component(state, reflection, &setup, part) else {
         return Some(part);
     };
+    // (one assembly whose root is known: no tree to work out after a link change)
+    if let Some(root) = found.single_root().filter(|_| found.derived.get()) {
+        return Some(root);
+    }
     let tree = assemblies_of(state, reflection, &setup, &found, part, None, true);
     tree.of(part).map(|(assembly, ..)| assembly.nodes[0].part)
 }
@@ -959,7 +1370,8 @@ fn walk_component(state: &State, reflection: &Reflection, setup: &Setup, start: 
     if parts.len() == 1 {
         return None;
     }
-    Some(Component { parts, links, tree: Default::default(), memo: Default::default() })
+    let anchored_parts = parts.iter().copied().filter(|&part| anchored(state, setup, part)).collect();
+    Some(Component::new(links, anchored_parts))
 }
 
 /// The component of `part`, the index readied ([`ensure_scanned`]): the one kept for it, else found by a walk from it and kept
@@ -978,7 +1390,7 @@ fn keep(state: &mut State, found: &Rc<Component>) {
     if !keeping() {
         return;
     }
-    for &part in &found.parts {
+    for part in found.parts() {
         state.joints.components.insert(part, found.clone());
     }
 }
@@ -1009,15 +1421,13 @@ pub(crate) fn set_keeping(on: bool) {
 
 /// A component's parts in the order a walk from `start` (one of them) finds them: its links, in their order, from `start`.
 fn order_from(found: &Component, start: InstanceId) -> Vec<InstanceId> {
-    if found.parts[0] == start {
-        return found.parts.clone();
-    }
+    let links = found.links.borrow();
     let mut order = vec![start];
     let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
     seen.insert(start);
     let mut index = 0;
     while index < order.len() {
-        for &(_, other) in found.links.get(&order[index]).map(Vec::as_slice).unwrap_or_default() {
+        for &(_, other) in links.get(&order[index]).map(Vec::as_slice).unwrap_or_default() {
             if seen.insert(other) {
                 order.push(other);
             }
@@ -1041,11 +1451,15 @@ fn assemblies_of(state: &mut State, reflection: &Reflection, setup: &Setup, foun
     // A WeldConstraint that never took its parts' relative CFrame takes it now
     let welds: Vec<InstanceId> = found
         .links
+        .borrow()
         .values()
         .flatten()
         .map(|&(joint, _)| joint)
         .filter(|&joint| setup.kind(state.dom.at(joint).class) == Kind::WeldConstraint && !weld_valid(state, setup, joint))
         .collect();
+    if derive || welds.is_empty() {
+        found.derived.set(true);
+    }
     if derive {
         for weld in welds {
             derive_weld(state, reflection, setup, weld);
@@ -1057,18 +1471,20 @@ fn assemblies_of(state: &mut State, reflection: &Reflection, setup: &Setup, foun
     // Roots: the anchored parts, else the best ranked one
     let serial = |state: &State, part: InstanceId| state.dom.at(part).serial;
     let is_anchored = |state: &State, part: InstanceId| anchored(state, setup, part) != (flipped == Some(part));
-    let mut roots: Vec<InstanceId> = found.parts.iter().copied().filter(|&part| is_anchored(state, part)).collect();
+    let parts = found.parts();
+    let mut roots: Vec<InstanceId> = parts.iter().copied().filter(|&part| is_anchored(state, part)).collect();
     roots.sort_by_key(|&part| serial(state, part));
+    let mut ranked = None;
     if roots.is_empty() {
         // (of ranks that compare, the best is the same in any order; a NaN score is looked at in the walk's order from `start`)
-        let nan = found.parts.iter().any(|&part| root_rank(state, reflection, setup, part).2.is_nan());
+        let nan = parts.iter().any(|&part| root_rank(state, reflection, setup, part).2.is_nan());
         let order: Vec<InstanceId> = if nan {
             keep = false;
             order_from(found, start)
         } else {
             Vec::new()
         };
-        let candidates: &[InstanceId] = if nan { &order } else { &found.parts };
+        let candidates: &[InstanceId] = if nan { &order } else { &parts };
         let mut best = candidates[0];
         let mut best_rank = root_rank(state, reflection, setup, best);
         for &part in &candidates[1..] {
@@ -1081,12 +1497,14 @@ fn assemblies_of(state: &mut State, reflection: &Reflection, setup: &Setup, foun
             }
         }
         roots.push(best);
+        ranked = Some(best);
     }
 
     // Each root's tree, nearest root first
     let mut list: Vec<Assembly> = Vec::with_capacity(roots.len());
     let mut place: FxHashMap<InstanceId, (u32, u32)> = FxHashMap::default();
     let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
+    let links = found.links.borrow();
     for root in roots {
         place.insert(root, (list.len() as u32, 0));
         queue.push_back((list.len(), 0));
@@ -1094,7 +1512,7 @@ fn assemblies_of(state: &mut State, reflection: &Reflection, setup: &Setup, foun
     }
     while let Some((assembly, node)) = queue.pop_front() {
         let part = list[assembly].nodes[node].part;
-        for &(joint, other) in found.links.get(&part).map(Vec::as_slice).unwrap_or_default() {
+        for &(joint, other) in links.get(&part).map(Vec::as_slice).unwrap_or_default() {
             if let std::collections::hash_map::Entry::Vacant(entry) = place.entry(other) {
                 let index = list[assembly].nodes.len();
                 entry.insert((assembly as u32, index as u32));
@@ -1105,13 +1523,16 @@ fn assemblies_of(state: &mut State, reflection: &Reflection, setup: &Setup, foun
     }
     // (each joint between two assemblies, counted on both sides)
     let mut across = vec![0u32; list.len()];
-    for (part, links) in &found.links {
+    for (part, links) in links.iter() {
         let Some(&(assembly, _)) = place.get(part) else { continue };
         across[assembly as usize] += links.iter().filter(|(_, other)| place.get(other).map(|&(at, _)| at) != Some(assembly)).count() as u32;
     }
     let tree = Rc::new(Assemblies { list, place, across });
     if keep {
         *found.tree.borrow_mut() = Some(tree.clone());
+        if ranked.is_some() {
+            found.best.set(ranked);
+        }
     }
     tree
 }
@@ -1134,10 +1555,12 @@ pub fn linked_parts(state: &mut State, reflection: &Reflection, part: InstanceId
     order
 }
 
-/// AssemblyMass and AssemblyCenterOfMass of `part` (`body` over [`linked_parts`]' answer: world/gravity.rs body_of), kept with its
-/// component: the mass until a part's mass changes, the centre also until one moves ([`stored`]). `centre`: whether the centre is
-/// asked for (a mass alone is answered while only the parts moved).
-pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceId, centre: bool, body: impl FnOnce(&State, &[InstanceId]) -> (f32, glam::Vec3)) -> (f32, glam::Vec3) {
+/// AssemblyMass and AssemblyCenterOfMass of `part` ([`mass_centre`] over [`linked_parts`]' answer, `point` giving each part's
+/// position and mass: world/gravity.rs part_body), kept with its component: the mass until a part's mass changes, the centre while
+/// no part of it is placed; a move works out again the centres read since the last one ([`refresh_centres`]), as a client's centre
+/// read after a move costs the same at any size. `centre`: whether the centre is asked for (a mass alone is answered while only the
+/// parts moved). The first such read after a link change pays for working the body out again, as a client's does ([`pay_body`]).
+pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceId, centre: bool, point: impl Fn(&State, InstanceId) -> (glam::Vec3, f32)) -> (f32, glam::Vec3) {
     let found = match setup_of(state) {
         Some(setup) => {
             ensure_scanned(state, reflection, &setup);
@@ -1145,26 +1568,90 @@ pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceI
         }
         None => None,
     };
+    pay_body(state, part, found.as_deref(), centre);
     let Some(found) = found else {
-        return body(state, &[part]);
+        return mass_centre(std::iter::once(point(state, part)));
     };
     {
-        let memo = found.memo.borrow();
-        if let Some(&mass) = memo.mass.get(&part) {
+        let mut memo = found.memo.borrow_mut();
+        let Memo { mass, centre: centres, placed, .. } = &mut *memo;
+        if let Some(&mass) = mass.get(&part) {
             if !centre {
                 return (mass, glam::Vec3::ZERO);
             }
-            if let Some(&at) = memo.centre.get(&part) {
-                return (mass, at);
+            if let Some(entry) = centres.get_mut(&part).filter(|entry| entry.placed == *placed) {
+                entry.read = true;
+                return (mass, entry.at);
             }
         }
     }
     let order = linked_parts(state, reflection, part);
-    let (mass, at) = body(state, &order);
+    let points: Vec<(glam::Vec3, f32)> = order.iter().map(|&other| point(state, other)).collect();
+    let (mass, at) = mass_centre(points.iter().copied());
     let mut memo = found.memo.borrow_mut();
+    let placed = memo.placed;
     memo.mass.insert(part, mass);
-    memo.centre.insert(part, at);
+    memo.centre.insert(part, Centre { at, placed, read: centre });
+    for (&other, &(_, own)) in order.iter().zip(&points) {
+        memo.masses.insert(other, own);
+    }
     (mass, at)
+}
+
+/// Works out again the stale centres of mass of `found` read since its last move, up to [`REFRESHED_CENTRES`] of them, from the
+/// masses kept and where the parts are now: as [`assembly_body`] would at the next read, to the bit, so that read costs a lookup.
+/// The others are worked out when read.
+fn refresh_centres(state: &State, setup: &Setup, found: &Component) {
+    let mut memo = found.memo.borrow_mut();
+    let Memo { linked, mass, centre, masses, placed } = &mut *memo;
+    let mut left = REFRESHED_CENTRES;
+    for (part, entry) in centre.iter_mut() {
+        if !std::mem::replace(&mut entry.read, false) || entry.placed == *placed || left == 0 {
+            continue;
+        }
+        let (Some(order), Some(&total)) = (linked.get(part), mass.get(part)) else { continue };
+        let points: Option<Vec<(glam::Vec3, f32)>> =
+            order.iter().map(|other| masses.get(other).map(|&own| (glam::Vec3::from(cframe_of(state, setup, *other).translation), own))).collect();
+        let Some(points) = points else { continue };
+        let (again, at) = mass_centre(points.iter().copied());
+        debug_assert_eq!(again.to_bits(), total.to_bits(), "a refreshed mass is the kept one");
+        entry.at = at;
+        entry.placed = *placed;
+        left -= 1;
+    }
+}
+
+/// A move of `part` (world/gravity.rs: the physics step's) ended: its component's centres of mass read since the last move are
+/// worked out again ([`refresh_centres`]).
+pub fn moved(state: &mut State, part: InstanceId) {
+    let (Some(found), Some(setup)) = (state.joints.components.get(&part).cloned(), state.joints.setup.clone()) else { return };
+    refresh_centres(state, &setup, &found);
+}
+
+/// An assembly read of `part` (AssemblyMass with `centre` false, AssemblyCenterOfMass, ApplyImpulseAtPosition) after a link change
+/// of its assembly in this frame pays for working its body out again, as a client's first such read does, once a change (cost.rs
+/// BODY_REBUILT_PART, each part of `found`, its component, or the part alone): a client keeps an assembly's mass up as its links
+/// change when a part of it is anchored, and works the centre out at the read; when none is, either read works out both.
+fn pay_body(state: &mut State, part: InstanceId, found: Option<&Component>, centre: bool) {
+    let joints = &mut state.joints;
+    if joints.owed.is_empty() || joints.link_frame != Some(state.sched.frame) {
+        return;
+    }
+    let here = |other: InstanceId| other == part || found.is_some_and(|found| found.links.borrow().contains_key(&other));
+    if !joints.owed.iter().any(|&other| here(other)) {
+        return;
+    }
+    let anchored_here = match found {
+        Some(found) => !found.anchored.borrow().is_empty(),
+        None => joints.setup.as_ref().is_some_and(|setup| state.dom.boolean(part, setup.anchored) == Some(true)),
+    };
+    if !centre && anchored_here {
+        return;
+    }
+    joints.owed.retain(|&other| !here(other));
+    let work = found.map_or(1, Component::size) as f64 * crate::cost::BODY_REBUILT_PART;
+    state.sched.charge(work);
+    crate::boundary::add_cost(work);
 }
 
 /// How many parts the assembly of `part` holds (1 for one that links to no other), from its kept component.
@@ -1172,16 +1659,21 @@ pub fn assembly_size(state: &mut State, reflection: &Reflection, part: InstanceI
     let Some(setup) = setup_of(state) else { return 1 };
     ensure_scanned(state, reflection, &setup);
     let Some(found) = component(state, reflection, &setup, part) else { return 1 };
+    // (one assembly: all of it, with no tree to work out after a link change)
+    if found.single_root().is_some() {
+        return found.size();
+    }
     let tree = assemblies_of(state, reflection, &setup, &found, part, None, false);
     tree.of(part).map_or(1, |(assembly, ..)| assembly.nodes.len())
 }
 
 /// A property of `id` was stored (instance.rs store: every write, signalled or not): its kept component forgets what the value
-/// fed ([`watch`]): the centres of mass when a part moves, the masses with them when its mass changes, the assemblies when its
-/// Anchored changes (set aside for the write's price: [`reanchored`]), the whole component when its root rank does.
+/// fed ([`watch`]): a move makes the centres of mass stale and, but for the assembly code's own placing, leaves the component not
+/// known to be settled; a mass input forgets the masses with them; an Anchored write sets the assemblies aside for the write's price
+/// ([`reanchored`]) and counts the part as anchored or not; a root rank's input forgets the whole component.
 #[inline]
 pub fn stored(state: &mut State, id: InstanceId, name: NameId) {
-    let joints = &mut state.joints;
+    let State { joints, dom, .. } = state;
     if joints.components.is_empty() {
         return;
     }
@@ -1191,15 +1683,28 @@ pub fn stored(state: &mut State, id: InstanceId, name: NameId) {
     }
     let Some(found) = joints.components.get(&id).cloned() else { return };
     match what {
-        watch::PLACE => found.memo.borrow_mut().centre.clear(),
+        watch::PLACE => {
+            let mut memo = found.memo.borrow_mut();
+            memo.placed = memo.placed.wrapping_add(1);
+            if joints.placing == 0 {
+                joints.unsettled = found.settled.replace(false).then_some(id);
+            }
+        }
         watch::MASS => {
             let mut memo = found.memo.borrow_mut();
             memo.mass.clear();
             memo.centre.clear();
+            memo.masses.clear();
         }
         watch::ANCHORED => {
             let tree = found.tree.borrow_mut().take();
-            joints.before_anchor = Some((id, tree));
+            let settled = found.settled.replace(false);
+            if joints.setup.as_ref().is_some_and(|setup| dom.boolean(id, setup.anchored) == Some(true)) {
+                found.anchored.borrow_mut().insert(id);
+            } else {
+                found.anchored.borrow_mut().remove(&id);
+            }
+            joints.before_anchor = Some((id, tree, settled));
         }
         _ => joints.drop_component(id),
     }
@@ -1247,21 +1752,18 @@ fn across(state: &State, reflection: &Reflection, setup: &Setup, joint: Instance
     if reference(state, joint, setup.part0) == Some(from) { forward } else { inverse(&forward) }
 }
 
-/// Moves a part the assembly code computed: stored, the engine's hooks told, no Changed events.
+/// Moves a part the assembly code computed: stored, the engine's hooks told, no Changed events. Its component stays settled.
 fn place(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, part: InstanceId, cframe: &Affine3A) {
+    state.joints.placing += 1;
     core::raw_set_unsignalled(state, reflection, hooks, part, setup.cframe, frame::cframe_value(cframe));
+    state.joints.placing -= 1;
 }
 
 /// Settles an assembly: every part where its joints put it from the anchor. `tolerant`: a part
-/// already there within float noise keeps its value. How many parts it placed.
-fn settle(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, assembly: &Assembly, anchor: Anchor, tolerant: bool) -> usize {
-    let mut relative: Vec<Affine3A> = Vec::with_capacity(assembly.nodes.len());
-    for node in &assembly.nodes {
-        relative.push(match node.parent {
-            None => Affine3A::IDENTITY,
-            Some((parent, joint)) => relative[parent] * across(state, reflection, setup, joint, assembly.nodes[parent].part),
-        });
-    }
+/// already there within float noise keeps its value. How many parts it placed, and whether every part is now where the joints put
+/// it from the root within float noise (a moved part kept where it was written may not be).
+fn settle(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, assembly: &Assembly, anchor: Anchor, tolerant: bool) -> (usize, bool) {
+    let relative = relatives(state, reflection, setup, assembly);
     // The root is never placed through the joints: a Motor6D.Transform set since the parts were
     // last placed would swing it (an anchored root too) about the moved part. It is stored as a
     // client stores a part's CFrame: `before`'s transposed inverse squares any stretch the root
@@ -1286,7 +1788,20 @@ fn settle(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
         place(state, reflection, hooks, setup, node.part, &target);
         placed += 1;
     }
-    placed
+    let whole = fixed == 0 || settled(&cframe_of(state, setup, assembly.nodes[fixed].part), &(root * relative[fixed]));
+    (placed, whole)
+}
+
+/// Each node's CFrame relative to its assembly's root, through the joints from the root.
+fn relatives(state: &State, reflection: &Reflection, setup: &Setup, assembly: &Assembly) -> Vec<Affine3A> {
+    let mut relative: Vec<Affine3A> = Vec::with_capacity(assembly.nodes.len());
+    for node in &assembly.nodes {
+        relative.push(match node.parent {
+            None => Affine3A::IDENTITY,
+            Some((parent, joint)) => relative[parent] * across(state, reflection, setup, joint, assembly.nodes[parent].part),
+        });
+    }
+    relative
 }
 
 /// Settles the assemblies of `seeds` from their roots. `walk`: a move into a world, whose price is what its walks look at
@@ -1317,6 +1832,8 @@ fn settle_from_roots(state: &mut State, reflection: &Reflection, hooks: &Hooks, 
                 settle(state, reflection, hooks, setup, assembly, Anchor::Root, true);
             }
         }
+        // (settled from the roots, every part is where its joints put it)
+        found.settled.set(true);
     }
 }
 
@@ -1346,12 +1863,16 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
         ensure_scanned(state, reflection, &setup);
         index_joint(state, reflection, &setup, id);
         let links = name == setup.part0 || name == setup.part1 || name == setup.enabled && state.dom.boolean(id, setup.enabled) != Some(false);
-        if name != setup.c0 && name != setup.c1 {
-            relink(state, reflection, &setup, id);
-        }
+        let flips = if name != setup.c0 && name != setup.c1 { relink(state, reflection, &setup, id) } else { [None, None] };
         if kind == Kind::WeldConstraint && links {
             derive_weld(state, reflection, &setup, id);
         }
+        // (enabling or disabling a joint that links two parts: their kept components join or split)
+        if let (true, Some((first, second, on))) = (name == setup.enabled && state.joints.quiet == 0 && state.joints.batch == 0, clean_flip(&flips)) {
+            link_changed(state, reflection, hooks, &setup, id, [first, second], on);
+            return;
+        }
+        drop_flipped(&mut state.joints, &flips);
         if state.joints.quiet > 0 {
             return;
         }
@@ -1360,10 +1881,17 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
             state.joints.batch_seeds.extend(seeds);
             return;
         }
+        // (an Enabled write that links nothing new places nothing in settled components, whose parts are where their joints put them)
+        if name == setup.enabled && !seeds.is_empty() && seeds.iter().all(|seed| state.joints.components.get(seed).is_some_and(|found| found.settled.get() && found.derived.get())) {
+            return;
+        }
         settle_from_roots(state, reflection, hooks, &setup, &seeds, None);
     } else if name == setup.anchored {
-        // (the assemblies as they were, which the write set aside: stored)
-        let before = state.joints.before_anchor.take().filter(|&(part, _)| part == id).and_then(|(_, tree)| tree);
+        // (the assemblies as they were, which the write set aside, and whether the component was settled: stored)
+        let (before, settled) = match state.joints.before_anchor.take().filter(|&(part, ..)| part == id) {
+            Some((_, tree, settled)) => (tree, settled),
+            None => (None, false),
+        };
         // Anchoring splits or joins assemblies: a joint that links up again moves what hangs below it
         if state.joints.quiet > 0 || !reflection.class(state.dom.at(id).class).is_a(setup.base_part) || !state.joints.by_part.contains_key(&id) {
             return;
@@ -1373,23 +1901,246 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
             return;
         }
         ensure_scanned(state, reflection, &setup);
-        reanchored(state, reflection, hooks, &setup, id, before);
+        reanchored(state, reflection, hooks, &setup, id, before, settled);
     } else if name == setup.transform {
         let is_motor = setup.motor6d.is_some_and(|motor| reflection.class(state.dom.at(id).class).is_a(motor));
         if is_motor && !state.joints.pending.contains(&id) {
             state.joints.pending.push(id);
         }
+        // (its parts are no longer where it puts them until the simulation step)
+        if is_motor {
+            for part in parts_of(state, &setup, id).into_iter().flatten() {
+                if let Some(found) = state.joints.components.get(&part) {
+                    found.settled.set(false);
+                }
+            }
+        }
     }
+}
+
+/// An Enabled write linked (`on`) or unlinked the two parts `parts` (Part0's first) of `joint`: their kept components join or split
+/// ([`Joints::join`], [`Joints::unlink`]) instead of being walked again, and what the write moves is placed: the side a split leaves
+/// without its root, or the side a join hangs from the other's root, each part where the joints put it, as settling the whole
+/// assemblies from their roots would (the parts whose paths from their root did not change, in a settled component, have nothing to
+/// place). Components that are not kept, or whose roots the change moves, are walked and settled again as before. The work clock
+/// charges the link change ([`charge_link`]).
+fn link_changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, joint: InstanceId, parts: [InstanceId; 2], on: bool) {
+    let seeds: Vec<InstanceId> = parts_of(state, setup, joint).into_iter().flatten().collect();
+    let places = state.joints.indexed[&joint].places;
+    let flips = [Some((parts[0], on)), Some((parts[1], on))];
+    state.joints.unsettled = None;
+    if on {
+        let plan = attach_plan(state, reflection, setup, joint, parts);
+        let anchored_parts = parts.map(|part| anchored(state, setup, part));
+        match state.joints.join(joint, parts, places, anchored_parts) {
+            Some(found) => match plan {
+                Some(plan) => attach(state, reflection, hooks, setup, &found, plan),
+                None => settle_from_roots(state, reflection, hooks, setup, &seeds, None),
+            },
+            None => {
+                drop_flipped(&mut state.joints, &flips);
+                settle_from_roots(state, reflection, hooks, setup, &seeds, None);
+            }
+        }
+    } else {
+        if state.joints.unlink(joint, parts, places).is_none() {
+            drop_flipped(&mut state.joints, &flips);
+        }
+        // (a side that kept its root and its paths, settled, places nothing)
+        let unsettled: Vec<InstanceId> = seeds.iter().copied().filter(|seed| !state.joints.components.get(seed).is_some_and(|found| found.settled.get())).collect();
+        settle_from_roots(state, reflection, hooks, setup, &unsettled, None);
+    }
+    charge_link(state, reflection, setup, &parts);
+}
+
+/// How a join places the side that hangs from the other's root ([`attach`]).
+struct Attach {
+    /// The end of the joint on the side that keeps its root, and its CFrame relative to that root through the joints
+    from: InstanceId,
+    from_relative: Affine3A,
+    /// The end on the side that hangs from it
+    to: InstanceId,
+    joint: InstanceId,
+    root: InstanceId,
+}
+
+/// Before `joint` joins the components of `parts`: how the join places what it moves, when its component will be one assembly whose
+/// root is one side's root (that side's one anchored part, or, none anchored on either, the better ranked of the two sides' best),
+/// that side was settled, and the other side holds no anchored part: then no part of that side moves and the other hangs from it.
+/// None otherwise (the joined component is settled from its roots).
+fn attach_plan(state: &mut State, reflection: &Reflection, setup: &Setup, joint: InstanceId, parts: [InstanceId; 2]) -> Option<Attach> {
+    let kept = parts.map(|part| state.joints.components.get(&part).cloned());
+    if let [Some(first), Some(second)] = &kept
+        && Rc::ptr_eq(first, second)
+    {
+        return None;
+    }
+    let anchored_count = |side: usize| match &kept[side] {
+        Some(found) => found.anchored.borrow().len(),
+        None => usize::from(anchored(state, setup, parts[side])),
+    };
+    let root_side = match (anchored_count(0), anchored_count(1)) {
+        (1, 0) => 0,
+        (0, 1) => 1,
+        (0, 0) => {
+            let best = |side: usize| match &kept[side] {
+                Some(found) => found.best.get(),
+                None => Some(parts[side]),
+            };
+            let (first, second) = (best(0)?, best(1)?);
+            let (rank_first, rank_second) = (root_rank(state, reflection, setup, first), root_rank(state, reflection, setup, second));
+            if rank_first.2.is_nan() || rank_second.2.is_nan() {
+                return None;
+            }
+            let serial = |part: InstanceId| state.dom.at(part).serial;
+            let better = rank_second.0 != rank_first.0 && rank_second.0
+                || rank_second.0 == rank_first.0
+                    && (rank_second.1 > rank_first.1 || rank_second.1 == rank_first.1 && (rank_second.2 > rank_first.2 || rank_second.2 == rank_first.2 && serial(second) > serial(first)));
+            usize::from(better)
+        }
+        _ => return None,
+    };
+    let root = match &kept[root_side] {
+        Some(found) => {
+            if !found.settled.get() || !found.derived.get() {
+                return None;
+            }
+            found.single_root()?
+        }
+        None => parts[root_side],
+    };
+    let from = parts[root_side];
+    // (the joined side's end's CFrame relative to the root: through its tree, from the root down, as the settle computes it)
+    let from_relative = if from == root {
+        Affine3A::IDENTITY
+    } else {
+        let found = kept[root_side].clone()?;
+        let tree = assemblies_of(state, reflection, setup, &found, from, None, true);
+        let (assembly, _, node) = tree.of(from)?;
+        let mut path = Vec::new();
+        let mut at = node;
+        while let Some((parent, link)) = assembly.nodes[at].parent {
+            path.push((link, assembly.nodes[parent].part));
+            at = parent;
+        }
+        path.iter().rev().fold(Affine3A::IDENTITY, |relative, &(link, parent)| relative * across(state, reflection, setup, link, parent))
+    };
+    Some(Attach { from, from_relative, to: parts[1 - root_side], joint, root })
+}
+
+/// A join's other side hangs from `plan`'s root ([`attach_plan`]): a walk from its end of the joint, the order a walk from the root
+/// meets its parts in, works out each part's CFrame through the joints (its WeldConstraints that never took their parts' relative
+/// CFrame take it first) and places those not where they put it, as settling the joined assembly from its root would; the rest of
+/// the assembly keeps its paths and has nothing to place. The joined component is settled, its root known.
+fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, found: &Rc<Component>, plan: Attach) {
+    // (the hanging side's parts, each with its parent's index and the joint to it)
+    let mut order: Vec<(InstanceId, usize, InstanceId)> = vec![(plan.to, usize::MAX, plan.joint)];
+    {
+        let links = found.links.borrow();
+        let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
+        seen.insert(plan.from);
+        seen.insert(plan.to);
+        let mut index = 0;
+        while index < order.len() {
+            let part = order[index].0;
+            for &(link, other) in links.get(&part).map(Vec::as_slice).unwrap_or_default() {
+                if seen.insert(other) {
+                    order.push((other, index, link));
+                }
+            }
+            index += 1;
+        }
+    }
+    let welds: Vec<InstanceId> = {
+        let links = found.links.borrow();
+        order
+            .iter()
+            .flat_map(|&(part, ..)| links.get(&part).map(Vec::as_slice).unwrap_or_default().iter().map(|&(link, _)| link))
+            .filter(|&link| setup.kind(state.dom.at(link).class) == Kind::WeldConstraint && !weld_valid(state, setup, link))
+            .collect()
+    };
+    for weld in welds {
+        derive_weld(state, reflection, setup, weld);
+    }
+    let mut relative: Vec<Affine3A> = Vec::with_capacity(order.len());
+    for &(_, parent, link) in &order {
+        relative.push(if parent == usize::MAX {
+            plan.from_relative * across(state, reflection, setup, link, plan.from)
+        } else {
+            relative[parent] * across(state, reflection, setup, link, order[parent].0)
+        });
+    }
+    let root = cframe_of(state, setup, plan.root);
+    for (index, &(part, ..)) in order.iter().enumerate() {
+        let target = root * relative[index];
+        if !settled(&cframe_of(state, setup, part), &target) {
+            place(state, reflection, hooks, setup, part, &target);
+        }
+    }
+    if found.anchored.borrow().is_empty() {
+        found.best.set(Some(plan.root));
+    }
+    found.settled.set(true);
+    found.derived.set(true);
+}
+
+/// The work clock's price of a link change of `parts` (an Enabled write that linked or unlinked them, an Anchored write of a part
+/// that links others), as a client spends it (cost.rs LINK_CHANGED, LINK_FRAME, link_assembly): each change, the frame's first,
+/// and the first of each component in the frame, each part of it, the components counted as they are after the change. Each
+/// component's parts are marked together when it is charged, so a component the frame's changes split or joined is charged once.
+/// Its reads then owe the body's working out ([`pay_body`]).
+fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts: &[InstanceId]) {
+    let frame = state.sched.frame;
+    let mut work = crate::cost::LINK_CHANGED;
+    if state.joints.link_frame != Some(frame) {
+        state.joints.link_frame = Some(frame);
+        state.joints.marked.clear();
+        state.joints.owed.clear();
+        work += crate::cost::LINK_FRAME;
+    }
+    for (index, &part) in parts.iter().enumerate() {
+        state.joints.owed.push(part);
+        if parts[..index].contains(&part) || state.joints.marked.contains(&part) {
+            continue;
+        }
+        // (its component's parts: the kept one, else a walk's)
+        let members: Vec<InstanceId> = match state.joints.components.get(&part) {
+            Some(found) => found.parts(),
+            None => walk_component(state, reflection, setup, part, &mut Walk::default()).map_or_else(|| vec![part], |found| found.parts()),
+        };
+        work += crate::cost::link_assembly(members.len());
+        state.joints.marked.extend(members);
+    }
+    state.sched.charge(work);
+    crate::boundary::add_cost(work);
 }
 
 /// A part's Anchored changed: its assemblies settle from their roots, and the work clock charges each other part whose assembly
 /// root, or that root's anchoring, the write changed, and each joint linking the part (cost.rs joints_reanchored), beyond the
-/// write. `before`: the part's component's assemblies as they were, when they were kept; else they are worked out again with its
-/// Anchored read the other way.
-fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, part: InstanceId, before: Option<Rc<Assemblies>>) {
+/// write, and the link change ([`charge_link`]). `before`: the part's component's assemblies as they were, when they were kept;
+/// else they are worked out again with its Anchored read the other way. `settled`: whether its component was settled before the
+/// write. A part whose links all go to one anchored part (a leaf of an anchored part, as a client's leaf, costs it the same at any
+/// size) changes no other part's root: in a settled component it alone is placed, when unanchored, and no tree is worked out.
+fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, part: InstanceId, before: Option<Rc<Assemblies>>, settled: bool) {
     let found = component(state, reflection, setup, part);
+    if let Some(found) = &found
+        && settled
+        && leaf_reanchored(state, reflection, hooks, setup, found, part)
+    {
+        let links = state.joints.by_part.get(&part).map_or(0, |list| list.linking);
+        let work = crate::cost::joints_reanchored(0, links);
+        if work > 0.0 {
+            state.sched.charge(work);
+            crate::boundary::add_cost(work);
+        }
+        charge_link(state, reflection, setup, &[part]);
+        return;
+    }
     let before = before.or_else(|| found.as_ref().map(|found| assemblies_of(state, reflection, setup, found, part, Some(part), false)));
     settle_from_roots(state, reflection, hooks, setup, &[part], None);
+    if found.is_some() {
+        charge_link(state, reflection, setup, &[part]);
+    }
     let (Some(found), Some(before)) = (found, before) else { return };
     let after = assemblies_of(state, reflection, setup, &found, part, None, true);
     let mut looked: FxHashSet<InstanceId> = FxHashSet::default();
@@ -1408,6 +2159,33 @@ fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
         state.sched.charge(work);
         crate::boundary::add_cost(work);
     }
+}
+
+/// An Anchored write of `part` in the settled component `found` whose links all go to one anchored part: the write changes no other
+/// part's root (anchored, the part is an assembly of its own, nothing hanging from it; unanchored, it hangs from that part alone), so
+/// the part, unanchored, is placed where its first joint in that part's list puts it from that part, as settling the component
+/// would, and nothing else moves. False (nothing done) for any other part.
+fn leaf_reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, found: &Rc<Component>, part: InstanceId) -> bool {
+    let (joint, neighbour) = {
+        let links = found.links.borrow();
+        let Some(list) = links.get(&part) else { return false };
+        let Some(&(_, neighbour)) = list.first() else { return false };
+        if neighbour == part || list.iter().any(|&(_, other)| other != neighbour) || !anchored(state, setup, neighbour) || !found.derived.get() {
+            return false;
+        }
+        // (the joint a walk from that part takes to it: the first in its list)
+        let first = list.iter().map(|&(joint, _)| joint).min_by_key(|&joint| state.joints.indexed_place(joint, neighbour));
+        let Some(first) = first else { return false };
+        (first, neighbour)
+    };
+    if !anchored(state, setup, part) {
+        let target = cframe_of(state, setup, neighbour) * (Affine3A::IDENTITY * across(state, reflection, setup, joint, neighbour));
+        if !settled(&cframe_of(state, setup, part), &target) {
+            place(state, reflection, hooks, setup, part, &target);
+        }
+    }
+    found.settled.set(true);
+    true
 }
 
 fn note_batch_write(state: &mut State, id: InstanceId, before: Affine3A) {
@@ -1441,14 +2219,20 @@ fn part_moved(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
     if !state.joints.by_part.contains_key(&part) {
         return;
     }
+    let unsettled = state.joints.unsettled.take();
     let Some(found) = component(state, reflection, setup, part) else { return };
     let tree = assemblies_of(state, reflection, setup, &found, part, None, true);
     let Some((assembly, index, node)) = tree.of(part) else { return };
-    let carried = match node {
-        _ if assembly.nodes.len() < 2 => 0,
+    let (carried, whole) = match node {
+        _ if assembly.nodes.len() < 2 => (0, true),
         0 => settle(state, reflection, hooks, setup, assembly, Anchor::Root, false),
         node => settle(state, reflection, hooks, setup, assembly, Anchor::Moved(node, before), false),
     };
+    // (the moved assembly is where its joints put it now, when the part written is; the others are as they were before the write)
+    if whole && (tree.list.len() == 1 || unsettled == Some(part)) {
+        found.settled.set(true);
+    }
+    refresh_centres(state, setup, &found);
     let across = if state.joints.bulk > 0 { 0 } else { tree.across[index] as usize };
     let work = crate::cost::assembly_moved(carried, across);
     if work > 0.0 {
@@ -1597,6 +2381,7 @@ pub fn end_batch(state: &mut State, reflection: &Reflection, hooks: &Hooks) {
             continue;
         };
         let tree = assemblies_of(state, reflection, &setup, &found, seed, None, true);
+        let mut whole = true;
         for (index, assembly) in tree.list.iter().enumerate() {
             visited.extend(assembly.nodes.iter().map(|node| node.part));
             let first = assembly
@@ -1616,8 +2401,12 @@ pub fn end_batch(state: &mut State, reflection: &Reflection, hooks: &Hooks) {
                 Some((rank, index)) => Anchor::Moved(index, written[rank].1),
                 None => Anchor::Root,
             };
-            carried += settle(state, reflection, hooks, &setup, assembly, anchor, true);
+            let (placed, done) = settle(state, reflection, hooks, &setup, assembly, anchor, true);
+            carried += placed;
+            whole &= done;
         }
+        found.settled.set(whole);
+        refresh_centres(state, &setup, &found);
     }
     let work = crate::cost::assembly_moved(carried, between);
     if work > 0.0 {

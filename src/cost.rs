@@ -1524,6 +1524,28 @@ pub const JOINT_ANCHOR_LINK: f64 = 0.014e-6;
 pub fn joints_reanchored(changed: usize, links: usize) -> f64 {
     changed as f64 * JOINT_REANCHORED + links as f64 * JOINT_ANCHOR_LINK
 }
+/// What a link change costs (world/joints.rs charge_link), beyond the write: an Enabled write that links or unlinks a joint's two
+/// parts, or an Anchored write of a part that links others. A playing client (roblox-sim, Studio 0.747, headless; os.clock around
+/// single writes at a frame's start and in turn after it, the median of 9 to 11 samples, an anchored or unanchored part welded to N
+/// = 1 to 10,000 parts and chains of them; docs/engine.md "Rigid assemblies", 2026-11-24) spends 31 to 66 us on a frame's first
+/// link change ([`LINK_FRAME`] beyond the rest), 6 to 20 us on the first change of another assembly in that frame
+/// ([`LINK_ASSEMBLY`] beyond a change's own), each time 0.085 us a part of the assembly ([`LINK_PART`]: 871 to 921 us at 10,000
+/// welded to a hub, 69 to 131 at 1,000, a leaf's weld disabled or enabled or the leaf anchored or not), and 2.3 to 5.5 us on each
+/// later change of an assembly changed in the frame, whatever its size ([`LINK_CHANGED`] beyond the write's own price).
+pub const LINK_CHANGED: f64 = 1.7e-6;
+pub const LINK_FRAME: f64 = 34e-6;
+pub const LINK_ASSEMBLY: f64 = 5e-6;
+pub const LINK_PART: f64 = 0.085e-6;
+/// What the first link change of an assembly in a frame costs it ([`LINK_ASSEMBLY`]): `parts` parts.
+pub fn link_assembly(parts: usize) -> f64 {
+    LINK_ASSEMBLY + parts as f64 * LINK_PART
+}
+/// Each part of an assembly an AssemblyCenterOfMass read (an AssemblyMass read too, when none of its parts is anchored) works out
+/// after a link change in the same frame (world/joints.rs pay_body): the same client read the centre at 0.08 us a part of the hub's
+/// assembly after each link change (836 us at 10,000, 82 at 1,000, 12 at 100; a mass read of an anchored hub's stays flat, an
+/// unanchored hub's mass read works out both: 621 to 947 us at 10,000), and the same read again with no change between at 0.03 to
+/// 0.08 us, as before.
+pub const BODY_REBUILT_PART: f64 = 0.08e-6;
 /// Each part of the assembly an AssemblyLinearVelocity, AssemblyAngularVelocity, Velocity or RotVelocity write sets (world/gravity.rs
 /// assign), beyond the write: the same client, the anchored part welded to N unanchored parts, 1.17 us at N = 100, 4.97 at 1,000, 13.2
 /// at 3,000 and 45.9 at 10,000 (AssemblyAngularVelocity 4.84 and 43.9), beyond the 0.45 to 0.57 of a part with none; welded to N

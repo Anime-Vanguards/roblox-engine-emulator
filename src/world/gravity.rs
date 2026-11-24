@@ -567,15 +567,8 @@ fn body_of(state: &State, setup: &Setup, component: &[InstanceId]) -> Body {
             (frame::affine_of(state.dom.raw_get(part, setup.cframe)), mass, moments)
         })
         .collect();
-    let mass: f32 = parts.iter().map(|(_, mass, _)| mass).sum();
-    // (averaged about the first part, so far from the origin the float's step does not show: 3e-5 studs at 400 up)
-    let origin = parts.first().map(|(at, _, _)| Vec3::from(at.translation)).unwrap_or(Vec3::ZERO);
-    let centre = origin
-        + if mass > 0.0 {
-            parts.iter().map(|(at, part_mass, _)| (Vec3::from(at.translation) - origin) * *part_mass).sum::<Vec3>() / mass
-        } else {
-            parts.iter().map(|(at, _, _)| Vec3::from(at.translation) - origin).sum::<Vec3>() / parts.len().max(1) as f32
-        };
+    // (averaged about the first part, as the assembly reads work it out: joints::mass_centre)
+    let (mass, centre) = joints::mass_centre(parts.iter().map(|(at, part_mass, _)| (Vec3::from(at.translation), *part_mass)));
     let mut inertia = Mat3::ZERO;
     for (at, part_mass, moments) in &parts {
         let rotation = Mat3::from(at.matrix3);
@@ -704,6 +697,8 @@ fn fly(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup,
         }
     }
     state.gravity.stepping = false;
+    // (the centres of mass read since the last step, worked out again where the step left the parts)
+    joints::moved(state, part);
 }
 
 /// BasePart's mass and impulses: Mass, AssemblyMass, AssemblyCenterOfMass and GetMass() read the masses above; ApplyImpulse,
@@ -727,9 +722,8 @@ fn install_body(engine: &Rc<Engine>, setup: &Rc<Setup>) {
     // (the assembly's mass and centre, kept with its component while its parts stay where they are: joints::assembly_body)
     let assembly = |engine: &Rc<Engine>, setup: &Setup, id: InstanceId, centre: bool| {
         let mut state = engine.state.borrow_mut();
-        let (mass, centre) = joints::assembly_body(&mut state, &engine.reflection, id, centre, |state, component| {
-            let body = body_of(state, setup, component);
-            (body.mass, body.centre)
+        let (mass, centre) = joints::assembly_body(&mut state, &engine.reflection, id, centre, |state, part| {
+            (Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation), part_body(state, setup, part).0)
         });
         Body { mass, centre, inertia: Mat3::ZERO }
     };
