@@ -522,7 +522,16 @@ struct ScanNode {
     loops: Vec<(String, String)>,
     /// A directory below was listed through a link, whose target a watch on this tree does not see
     linked: bool,
+    /// A [`GIT_DIRECTORY`] below a listed one, left unlisted: it mounts as an empty Folder
+    unlisted: bool,
 }
+
+/// The directory Git keeps a repository's own data in. Rojo builds it as any folder (`rojo build` 7.6.1 and 7.7.0-rc.1: a
+/// Folder for each directory in it, and an instance for each file a sync rule takes, such as the JSON files tools leave
+/// there), which is thousands of Folders for a repository with worktrees and remote branches. A scan lists none of it: a
+/// `.git` below a mounted directory mounts as an empty Folder, reported ([`mount_plain_directory_as`]). A `.git` file (a
+/// submodule's or a worktree's link to its repository) is a file no sync rule takes, in Rojo or here.
+const GIT_DIRECTORY: &str = ".git";
 
 /// A directory on the way a walk took to the one it lists, for finding a link back to one of them.
 struct Above<'a> {
@@ -551,10 +560,10 @@ impl<'a> Above<'a> {
     }
 }
 
+/// Whether a scan checks entry `entry` for a directory: any but a Luau source's name. A name that starts with a dot is listed
+/// and mounted as any other, as Rojo builds it (a package manager's folder, pesde's `Packages/.pesde`, which its link
+/// modules require through), but for [`GIT_DIRECTORY`]'s contents.
 fn may_be_directory(entry: &str) -> bool {
-    if entry.starts_with('.') {
-        return false;
-    }
     let lower = entry.to_ascii_lowercase();
     !lower.ends_with(".luau") && !lower.ends_with(".lua")
 }
@@ -613,6 +622,9 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             if !is_dir {
                 return None;
             }
+            if entry == GIT_DIRECTORY {
+                return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true })));
+            }
             let via_link = !kind.is_some_and(|kind| !kind.is_symlink());
             if let Some(above) = via_link.then(|| here.looped_by(Path::new(&child))).flatten() {
                 return Some((entry.clone(), Err(above.to_string())));
@@ -633,7 +645,24 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
         }
     }
     let linked = dirs.values().any(|dir| dir.linked);
-    ScanNode { path, entries, stamps, dirs, loops, linked }
+    ScanNode { path, entries, stamps, dirs, loops, linked, unlisted: false }
+}
+
+#[test]
+fn a_scan_lists_dot_directories_but_not_what_a_git_directory_below_holds() {
+    let root = std::env::temp_dir().join(format!("ree-dot-scan-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    for file in [".hidden/value.luau", ".git/x.luau", ".git/objects/ab/cdef"] {
+        std::fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
+        std::fs::write(root.join(file), "return 1").unwrap();
+    }
+    let path = root.to_string_lossy().replace('\\', "/");
+    let node = scan(path.clone());
+    assert_eq!(node.dirs.get(".hidden").map(|dir| dir.entries.clone()), Some(vec!["value.luau".to_string()]));
+    assert_eq!(node.dirs.get(".git").map(|git| (git.entries.len(), git.dirs.len())), Some((0, 0)), "nothing below a .git is listed");
+    // (a .git mounted itself is listed: its mount names it)
+    assert!(scan(format!("{path}/.git")).dirs.contains_key("objects"));
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 /// [`scan`] of a mounted tree, kept between VMs in a process that keeps compiled modules ([`kept_listing`]).
@@ -768,11 +797,14 @@ mod kept_listing {
     }
 }
 
+/// A script file's instance name and class. Rojo strips a `.server` / `.client` suffix whole, so `.server.luau` is a Script
+/// named "", and names a module by its file stem, so `.luau` is a ModuleScript named ".luau" (`rojo build` 7.6.1 and 7.7.0-rc.1).
 fn script_info(file_name: &str) -> Option<(&str, &'static str)> {
     let lower = file_name.to_ascii_lowercase();
     for (suffix, class) in SCRIPT_SUFFIXES {
-        if lower.len() > suffix.len() && lower.ends_with(suffix) {
-            return Some((&file_name[..file_name.len() - suffix.len()], class));
+        if lower.ends_with(suffix) {
+            let stem = &file_name[..file_name.len() - suffix.len()];
+            return Some((if stem.is_empty() && *class == "ModuleScript" { file_name } else { stem }, class));
         }
     }
     None
@@ -814,9 +846,6 @@ fn ensure_child(state: &mut State, reflection: &Reflection, parent: InstanceId, 
 fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount: &mut MountCounts, relative: &str) {
     for (index, entry) in node.entries.iter().enumerate() {
         let full_path = format!("{}/{entry}", node.path);
-        if entry.starts_with('.') {
-            continue;
-        }
         if let Some((_, above)) = node.loops.iter().find(|(name, _)| name == entry) {
             engine.warn(format!("{full_path}: a link back to {above}, which would hold itself; not mounted"));
             continue;
@@ -963,6 +992,9 @@ fn mount_project_node(engine: &Engine, base: &ScanNode, tree: &serde_json::Map<S
 fn mount_plain_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> InstanceId {
     let reflection = &engine.reflection;
     let full_path = &node.path;
+    if node.unlisted {
+        engine.warn(format!("{full_path}: a Git repository's own directory; mounted as an empty Folder (Rojo builds what is in it)"));
+    }
     let present: FxHashMap<String, &String> = node.entries.iter().map(|name| (name.to_ascii_lowercase(), name)).collect();
     let meta = present.get("init.meta.json").and_then(|name| read_json(&format!("{full_path}/{name}")));
     let meta_class = meta.as_ref().and_then(|m| m.get("className")).and_then(|c| c.as_str()).map(str::to_string);

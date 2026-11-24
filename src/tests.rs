@@ -2174,6 +2174,80 @@ fn nested_default_projects_mount_as_their_tree() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Entries whose names start with a dot mount as `rojo build` builds this tree (7.6.1 and 7.7.0-rc.1, the same tree): folders,
+/// scripts, JSON modules and a nested project's folders, which a package manager's link modules require through (pesde's
+/// `Packages/.pesde`). A file named only by a suffix is named as Rojo names it (`.luau` a ModuleScript ".luau", `.server.luau` a
+/// Script ""), and files no sync rule takes (`.gitignore`, `.DS_Store`, `.env`, `.meta.json`, a submodule's `.git` file) make
+/// nothing. A `.git` directory, which Rojo builds as any folder, mounts as an empty Folder, reported.
+#[test]
+fn names_starting_with_a_dot_mount_as_rojo_builds_them() {
+    use super::project::{Mount, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-dot-names-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let write = |relative: &str, text: &str| {
+        let file = dir.join(relative);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    };
+    write("Packages/link.luau", r#"return require(script.Parent:FindFirstChild(".hidden"):FindFirstChild("value"))"#);
+    write("Packages/.hidden/value.luau", r#"return "loaded""#);
+    write("Packages/.dotfile.luau", r#"return "dotfile""#);
+    write("Packages/.dotserver.server.luau", r#"print("server")"#);
+    write("Packages/.dotclient.client.lua", r#"print("client")"#);
+    write("Packages/.luau", r#"return "luau""#);
+    write("Packages/.lua", r#"return "lua""#);
+    write("Packages/.server.luau", r#"print("bare")"#);
+    write("Packages/.config.json", r#"{ "a": 1 }"#);
+    write("Packages/.meta.json", r#"{ "className": "Configuration" }"#);
+    write("Packages/.gitignore", "node_modules");
+    write("Packages/.DS_Store", "x");
+    write("Packages/.env", "A=1");
+    write("Packages/.vscode/settings.json", r#"{ "tab": 4 }"#);
+    write("Packages/.pkg/init.luau", r#"return "pkg""#);
+    write("Packages/.pkg/inner.luau", r#"return "inner""#);
+    std::fs::create_dir_all(dir.join("Packages/.empty")).unwrap();
+    write("Packages/.git/HEAD", "ref: refs/heads/main");
+    write("Packages/.git/objects/ab/cdef", "blob");
+    write("Packages/.git/x.luau", r#"return "in git""#);
+    write("Packages/.git/hooks/y.json", r#"{ "b": 2 }"#);
+    write("Packages/sub/.git", "gitdir: ../.git/modules/sub");
+    write("Packages/sub/m.luau", r#"return "sub""#);
+    write("Packages/.pesde/scope+lib/1.0.0/lib/default.project.json", r#"{ "name": "lib", "tree": { "$path": ".src" } }"#);
+    write("Packages/.pesde/scope+lib/1.0.0/lib/.src/init.luau", r#"return "lib""#);
+    write("Packages/pesde.luau", r#"return require(script.Parent[".pesde"]["scope+lib"]["1.0.0"].lib)"#);
+    let root = dir.to_string_lossy().replace('\\', "/");
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Packages={root}/Packages"), false).unwrap()).unwrap();
+    let output = run(&lua, &engine, r#"
+        local Packages = game:GetService("ReplicatedStorage").Packages
+        local function list(instance, depth)
+            local children = instance:GetChildren()
+            table.sort(children, function(a, b) return a.Name < b.Name end)
+            for _, child in children do
+                print("tree", string.rep("  ", depth) .. child.ClassName .. " " .. string.format("%q", child.Name))
+                list(child, depth + 1)
+            end
+        end
+        list(Packages, 0)
+        print("loads", require(Packages.link), require(Packages.pesde), require(Packages[".pkg"]), require(Packages[".luau"]), require(Packages[".lua"]), require(Packages[".config"]).a)
+    "#);
+    // Rojo's tree, sorted by name, but for what its .git holds (Folder hooks > ModuleScript y, Folder objects > Folder ab, ModuleScript x)
+    let expected = [
+        r#"Script """#, r#"ModuleScript ".config""#, r#"LocalScript ".dotclient""#, r#"ModuleScript ".dotfile""#, r#"Script ".dotserver""#,
+        r#"Folder ".empty""#, r#"Folder ".git""#, r#"Folder ".hidden""#, r#"  ModuleScript "value""#, r#"ModuleScript ".lua""#,
+        r#"ModuleScript ".luau""#, r#"Folder ".pesde""#, r#"  Folder "scope+lib""#, r#"    Folder "1.0.0""#, r#"      ModuleScript "lib""#,
+        r#"ModuleScript ".pkg""#, r#"  ModuleScript "inner""#, r#"Folder ".vscode""#, r#"  ModuleScript "settings""#, r#"ModuleScript "link""#,
+        r#"ModuleScript "pesde""#, r#"Folder "sub""#, r#"  ModuleScript "m""#,
+    ];
+    let tree: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: tree ")).collect();
+    assert_eq!(tree, expected, "{output:?}");
+    assert!(output.contains(&"print: loads loaded lib pkg luau lua 1".to_string()), "{output:?}");
+    let reported: Vec<&String> = output.iter().filter(|line| line.starts_with("warn") || line.starts_with("error")).collect();
+    assert_eq!(reported, [&format!("warn: {root}/Packages/.git: a Git repository's own directory; mounted as an empty Folder (Rojo builds what is in it)")], "{output:?}");
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A `default.project.json` can come from a third-party package, so a `$path` stays inside the folder
 /// holding it. One that is absolute or has a `..` segment is reported and not followed, on a tree's root
 /// or a child node. A required `$path` that names nothing and a project file that can't be read are
