@@ -3002,7 +3002,7 @@ reentry:
                     {
                         VM_PROTECT(luaV_buildlazyproto(L, p));
 
-                        if (L->global->tiered_threshold > 0)
+                        if (L->global->tiered_on_load)
                             p->execcount = 1;
                         L->ci->savedpc = p->code;
                         pc = p->code;

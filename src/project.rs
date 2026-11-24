@@ -154,8 +154,9 @@ struct Studio {
 
 const STUDIO_INDEX_MAGIC: &[u8; 8] = b"REESTUD1";
 const STUDIO_INDEX_TRAILER: &[u8; 8] = b"ENDSTUD1";
-const STUDIO_INDEX_VERSION: u32 = 1;
-const STUDIO_INDEX_HEADER_BYTES: usize = 40;
+const STUDIO_INDEX_VERSION: u32 = 2;
+const STUDIO_INDEX_HEADER_BYTES: usize = 48;
+const STUDIO_INDEX_MAX_FILES: usize = 16;
 
 enum StudioBytes {
     Mapped(std::sync::Arc<plan::Mapping>),
@@ -293,6 +294,8 @@ impl StudioIndex {
         out.extend_from_slice(&(child_nodes.len() as u32).to_le_bytes());
         out.extend_from_slice(&(stand_ins.len() as u32).to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes());
+        let checksum_off = out.len();
+        out.extend_from_slice(&0u64.to_le_bytes());
 
         out.extend_from_slice(&name_bytes);
         out.resize(out.len() + (name_padded - name_bytes.len()), 0);
@@ -321,6 +324,8 @@ impl StudioIndex {
         }
         out.extend_from_slice(STUDIO_INDEX_TRAILER);
         debug_assert_eq!(out.len(), total);
+        let checksum = hash_payload_64(&out[STUDIO_INDEX_HEADER_BYTES..]);
+        out[checksum_off..checksum_off + 8].copy_from_slice(&checksum.to_le_bytes());
         out
     }
 
@@ -345,6 +350,10 @@ impl StudioIndex {
         let stand_in_count = u32_at(32) as usize;
         let reserved = u32_at(36);
         if reserved != 0 {
+            return None;
+        }
+        let stored_checksum = u64::from_le_bytes(raw[40..48].try_into().unwrap());
+        if stored_checksum != hash_payload_64(&raw[STUDIO_INDEX_HEADER_BYTES..]) {
             return None;
         }
 
@@ -794,16 +803,26 @@ pub fn load_hierarchy(path: &str) -> Option<std::sync::Arc<HierarchySnapshot>> {
 }
 
 /// Fast streaming 128-bit content hash over 8-byte words (used for content-addressed StudioIndex files).
+/// Partial trailing bytes are buffered across `update` calls so arbitrary read boundaries hash identically
+/// to a single-shot buffer.
 #[derive(Clone, Copy)]
 struct Hash128 {
     a: u64,
     b: u64,
     len: u64,
+    tail: [u8; 8],
+    tail_len: u8,
 }
 
 impl Hash128 {
     fn new() -> Self {
-        let mut h = Hash128 { a: 0x9e37_79b9_7f4a_7c15, b: 0xc2b2_ae3d_27d4_eb4f, len: 0 };
+        let mut h = Hash128 {
+            a: 0x9e37_79b9_7f4a_7c15,
+            b: 0xc2b2_ae3d_27d4_eb4f,
+            len: 0,
+            tail: [0u8; 8],
+            tail_len: 0,
+        };
         // Bind the stand-in package list into the content key so changing it invalidates old files.
         for &(name, file) in PACKAGE_STAND_INS {
             h.update(name.as_bytes());
@@ -811,29 +830,69 @@ impl Hash128 {
             h.update(file.as_bytes());
             h.update(&[0xff]);
         }
+        h.flush_tail();
         h.len = 0;
         h
     }
 
-    fn update(&mut self, bytes: &[u8]) {
-        self.len = self.len.wrapping_add(bytes.len() as u64);
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            let word = u64::from_le_bytes(chunk.try_into().unwrap());
-            self.a = (self.a ^ word).wrapping_mul(0x9e37_79b1_85eb_ca87).rotate_left(27);
-            self.b = (self.b.wrapping_add(word)).wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(31);
-        }
-        let rem = chunks.remainder();
-        if !rem.is_empty() {
-            let mut tail = [0u8; 8];
-            tail[..rem.len()].copy_from_slice(rem);
-            let word = u64::from_le_bytes(tail);
-            self.a = (self.a ^ word).wrapping_mul(0x9e37_79b1_85eb_ca87).rotate_left(27);
-            self.b = (self.b.wrapping_add(word ^ (rem.len() as u64))).wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(31);
+    fn new_raw() -> Self {
+        Hash128 {
+            a: 0x517c_c1b7_2722_0a95,
+            b: 0x94d0_49bb_1331_11eb,
+            len: 0,
+            tail: [0u8; 8],
+            tail_len: 0,
         }
     }
 
-    fn finish(self) -> (u64, u64) {
+    #[inline]
+    fn mix_word(&mut self, word: u64) {
+        self.a = (self.a ^ word).wrapping_mul(0x9e37_79b1_85eb_ca87).rotate_left(27);
+        self.b = (self.b.wrapping_add(word)).wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(31);
+    }
+
+    fn flush_tail(&mut self) {
+        let n = self.tail_len as usize;
+        if n > 0 {
+            for slot in &mut self.tail[n..] {
+                *slot = 0;
+            }
+            let word = u64::from_le_bytes(self.tail);
+            self.a = (self.a ^ word).wrapping_mul(0x9e37_79b1_85eb_ca87).rotate_left(27);
+            self.b = (self.b.wrapping_add(word ^ (n as u64))).wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(31);
+            self.tail = [0u8; 8];
+            self.tail_len = 0;
+        }
+    }
+
+    fn update(&mut self, mut bytes: &[u8]) {
+        self.len = self.len.wrapping_add(bytes.len() as u64);
+        if self.tail_len > 0 {
+            let need = 8 - self.tail_len as usize;
+            let take = need.min(bytes.len());
+            self.tail[self.tail_len as usize..self.tail_len as usize + take].copy_from_slice(&bytes[..take]);
+            self.tail_len += take as u8;
+            bytes = &bytes[take..];
+            if self.tail_len == 8 {
+                let word = u64::from_le_bytes(self.tail);
+                self.tail = [0u8; 8];
+                self.tail_len = 0;
+                self.mix_word(word);
+            }
+        }
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.mix_word(u64::from_le_bytes(chunk.try_into().unwrap()));
+        }
+        let rem = chunks.remainder();
+        if !rem.is_empty() {
+            self.tail[..rem.len()].copy_from_slice(rem);
+            self.tail_len = rem.len() as u8;
+        }
+    }
+
+    fn finish(mut self) -> (u64, u64) {
+        self.flush_tail();
         let mut a = self.a ^ self.len;
         let mut b = self.b.wrapping_add(self.len.rotate_left(17));
         a ^= a >> 33;
@@ -848,6 +907,13 @@ impl Hash128 {
         b ^= b >> 31;
         (a ^ b.rotate_left(13), b ^ a.rotate_right(19))
     }
+}
+
+pub(crate) fn hash_payload_64(bytes: &[u8]) -> u64 {
+    let mut h = Hash128::new_raw();
+    h.update(bytes);
+    let (a, b) = h.finish();
+    a ^ b.rotate_left(7)
 }
 
 fn hash_bytes_128(bytes: &[u8]) -> (u64, u64) {
@@ -883,12 +949,86 @@ fn stamp_is_recent(stamp: crate::files::Stamp) -> bool {
     stamp.modified.abs_diff(now) < window
 }
 
-fn studio_cache_dir(engine: &Engine) -> Option<PathBuf> {
-    let has_override = std::env::var_os("RUR_STATE_DIR").is_some() || std::env::var_os("RUR_CACHE_DIR").is_some();
-    if !has_override && engine.options.repo.as_os_str().is_empty() && !crate::is_standalone_binary() {
-        return None;
+/// Per-user cache root (`%LOCALAPPDATA%/ree`, `~/Library/Caches/ree`, `$XDG_CACHE_HOME/ree`, or
+/// `~/.cache/ree`), matching `lib.rs::per_user_cache_dir`. Returns `None` if unavailable.
+pub(crate) fn per_user_ree_cache_dir() -> Option<PathBuf> {
+    let env_path = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let cache = match std::env::consts::OS {
+        "windows" => env_path("LOCALAPPDATA"),
+        "macos" => env_path("HOME").map(|home| home.join("Library/Caches")),
+        _ => env_path("XDG_CACHE_HOME").filter(|dir| dir.is_absolute()).or_else(|| env_path("HOME").map(|home| home.join(".cache"))),
+    };
+    cache.filter(|dir| dir.is_absolute()).map(|dir| dir.join("ree"))
+}
+
+/// Read directories (searched in order, read-only) and optional write directory for an immutable
+/// content-addressed store (`kind`, e.g. `"studio"` or `"reflection"`).
+///
+/// - Without `RUR_STATE_DIR` / `RUR_CACHE_DIR`: reads and writes share `<per_user_cache>/ree/shared/<kind>`
+///   across every checkout, worktree, host, and standalone binary on the machine.
+/// - With `RUR_STATE_DIR` / `RUR_CACHE_DIR`: reads check `<state_dir>/<kind>` first and then probe
+///   `<per_user_cache>/ree/shared/<kind>` read-only (never creating dirs or writing outside the override);
+///   writes go strictly to `<state_dir>/<kind>`.
+/// - Setting `REE_SHARED_CACHE=0` disables the per-user shared directory.
+pub(crate) fn shared_store_dirs(repo: &Path, kind: &str) -> (Vec<PathBuf>, Option<PathBuf>) {
+    let has_override = std::env::var_os("RUR_STATE_DIR").is_some_and(|v| !v.is_empty())
+        || std::env::var_os("RUR_CACHE_DIR").is_some_and(|v| !v.is_empty());
+    let allow_shared = std::env::var_os("REE_SHARED_CACHE").as_deref() != Some(std::ffi::OsStr::new("0"));
+    let shared = allow_shared.then(|| per_user_ree_cache_dir().map(|d| d.join("shared").join(kind))).flatten();
+
+    if has_override {
+        let own = crate::try_state_dir(repo).ok().map(|d| d.join(kind));
+        let mut reads = Vec::new();
+        if let Some(dir) = &own {
+            reads.push(dir.clone());
+        }
+        if let Some(dir) = shared {
+            if !reads.iter().any(|existing| existing == &dir) {
+                reads.push(dir);
+            }
+        }
+        return (reads, own);
     }
-    Some(crate::try_state_dir(&engine.options.repo).ok()?.join("studio"))
+
+    if let Some(dir) = shared {
+        return (vec![dir.clone()], Some(dir));
+    }
+    if repo.as_os_str().is_empty() && !crate::is_standalone_binary() {
+        return (Vec::new(), None);
+    }
+    match crate::try_state_dir(repo).ok().map(|d| d.join(kind)) {
+        Some(dir) => (vec![dir.clone()], Some(dir)),
+        None => (Vec::new(), None),
+    }
+}
+
+/// Removes stale `.tmp` files (>5 min old) and keeps at most `max_files` newest files with `ext`
+/// inside `dir`. Removal errors (e.g. a file mapped by another process) are ignored.
+pub(crate) fn sweep_immutable_store_dir(dir: &Path, ext: &str, max_files: usize) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else { return };
+    let now = std::time::SystemTime::now();
+    let stale_tmp = std::time::Duration::from_secs(300);
+    let mut entries: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let modified = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+        if name.ends_with(".tmp") {
+            if now.duration_since(modified).unwrap_or_default() > stale_tmp {
+                let _ = std::fs::remove_file(&path);
+            }
+        } else if name.ends_with(ext) {
+            entries.push((modified, path));
+        }
+    }
+    if entries.len() <= max_files {
+        return;
+    }
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    for (_, old_path) in entries.into_iter().skip(max_files) {
+        let _ = std::fs::remove_file(old_path);
+    }
 }
 
 fn studio_cache_file(dir: &Path, hash: (u64, u64)) -> PathBuf {
@@ -896,9 +1036,11 @@ fn studio_cache_file(dir: &Path, hash: (u64, u64)) -> PathBuf {
 }
 
 /// Loads `path`'s binary [`StudioIndex`], reusing an in-process entry when unchanged, else mapping
-/// an immutable content-addressed `.studio` file from `cache_dir` (building and atomically renaming
-/// it on miss, corrupt file, or older version). Never retains [`HierarchySnapshot`] in memory.
-fn load_studio_index_in(path: &str, cache_dir: Option<&Path>) -> Option<std::sync::Arc<StudioIndex>> {
+/// an immutable content-addressed `.studio` file from `read_dirs` (building and atomically renaming
+/// into `write_dir` on miss, corrupt file, or older version). Never retains [`HierarchySnapshot`]
+/// in memory, and never caches a recent mtime stamp that could hide a same-tick edit after the
+/// recency window closes.
+fn load_studio_index_in(path: &str, read_dirs: &[PathBuf], write_dir: Option<&Path>) -> Option<std::sync::Arc<StudioIndex>> {
     use std::sync::{Arc, Mutex, OnceLock};
     type Entry = (String, Option<crate::files::Stamp>, (u64, u64), Arc<StudioIndex>);
     static CACHE: OnceLock<Mutex<Vec<Entry>>> = OnceLock::new();
@@ -906,8 +1048,9 @@ fn load_studio_index_in(path: &str, cache_dir: Option<&Path>) -> Option<std::syn
     let source_path = Path::new(path);
     crate::files::note(source_path);
     let stamp = crate::files::stamp(source_path);
+    let stable_stamp = stamp.filter(|st| !stamp_is_recent(*st));
     let cache = CACHE.get_or_init(Default::default);
-    if let Some(st) = stamp.filter(|st| !stamp_is_recent(*st)) {
+    if let Some(st) = stable_stamp {
         if let Ok(entries) = cache.lock() {
             if let Some((_, _, _, found)) = entries.iter().find(|(p, s, _, _)| p == path && *s == Some(st)) {
                 return Some(found.clone());
@@ -916,19 +1059,22 @@ fn load_studio_index_in(path: &str, cache_dir: Option<&Path>) -> Option<std::syn
     }
 
     let hash = hash_file_128(source_path)?;
-    if let Ok(entries) = cache.lock() {
-        if let Some((_, _, _, found)) = entries.iter().find(|(p, _, h, _)| p == path && *h == hash) {
+    if let Ok(mut entries) = cache.lock() {
+        if let Some((_, cached_stamp, _, found)) = entries.iter_mut().find(|(p, _, h, _)| p == path && *h == hash) {
+            if cached_stamp.is_none() && stable_stamp.is_some() {
+                *cached_stamp = stable_stamp;
+            }
             return Some(found.clone());
         }
     }
 
-    if let Some(dir) = cache_dir {
+    for dir in read_dirs {
         let target = studio_cache_file(dir, hash);
         if let Some(index) = StudioIndex::open_mapped(&target) {
             let index = crate::alloc::long_lived(|| Arc::new(index));
             if let Ok(mut entries) = cache.lock() {
                 entries.retain(|(p, _, _, _)| p != path);
-                crate::alloc::long_lived(|| entries.push((path.to_string(), stamp, hash, index.clone())));
+                crate::alloc::long_lived(|| entries.push((path.to_string(), stable_stamp, hash, index.clone())));
             }
             return Some(index);
         }
@@ -942,26 +1088,27 @@ fn load_studio_index_in(path: &str, cache_dir: Option<&Path>) -> Option<std::syn
     drop(snapshot);
     drop(raw_bytes);
 
-    let index = if let Some(dir) = cache_dir {
+    let index = if let Some(dir) = write_dir {
         let target = studio_cache_file(dir, actual_hash);
         let _ = std::fs::create_dir_all(dir);
         let _ = crate::files::write_atomic(&target, &encoded);
+        sweep_immutable_store_dir(dir, ".studio", STUDIO_INDEX_MAX_FILES);
         StudioIndex::open_mapped(&target).or_else(|| StudioIndex::from_owned(encoded))?
     } else {
         StudioIndex::from_owned(encoded)?
     };
     let index = crate::alloc::long_lived(|| Arc::new(index));
-    let actual_stamp = crate::files::stamp(source_path);
+    let actual_stable_stamp = crate::files::stamp(source_path).filter(|st| !stamp_is_recent(*st));
     if let Ok(mut entries) = cache.lock() {
         entries.retain(|(p, _, _, _)| p != path);
-        crate::alloc::long_lived(|| entries.push((path.to_string(), actual_stamp, actual_hash, index.clone())));
+        crate::alloc::long_lived(|| entries.push((path.to_string(), actual_stable_stamp, actual_hash, index.clone())));
     }
     Some(index)
 }
 
 fn load_studio_index(engine: &Engine, path: &str) -> Option<std::sync::Arc<StudioIndex>> {
-    let dir = studio_cache_dir(engine);
-    load_studio_index_in(path, dir.as_deref())
+    let (read_dirs, write_dir) = shared_store_dirs(&engine.options.repo, "studio");
+    load_studio_index_in(path, &read_dirs, write_dir.as_deref())
 }
 
 /// The Studio hierarchy snapshot of the place the roots belong to (`<project>/<PLACES_FILE>`).
@@ -2554,8 +2701,12 @@ mod studio_index_tests {
         )
     }
 
+    fn load_studio_index_test(path: &str, cache: &Path) -> Option<std::sync::Arc<StudioIndex>> {
+        load_studio_index_in(path, &[cache.to_path_buf()], Some(cache))
+    }
+
     #[test]
-    fn studio_index_store_rejects_truncated_and_older_version_files() {
+    fn studio_index_store_rejects_truncated_bitflip_and_older_version_files() {
         let dir = unique_dir("corrupt");
         let cache = dir.join("cache");
         std::fs::create_dir_all(&cache).unwrap();
@@ -2567,9 +2718,9 @@ mod studio_index_tests {
         let cached = studio_cache_file(&cache, hash);
 
         // 1) Truncated file (writer died halfway)
-        std::fs::write(&cached, b"REESTUD1\x01\x00\x00\x00truncated").unwrap();
+        std::fs::write(&cached, b"REESTUD1\x02\x00\x00\x00truncated").unwrap();
         assert!(StudioIndex::open_mapped(&cached).is_none());
-        let rebuilt = load_studio_index_in(&snap_str, Some(&cache)).expect("rebuilds over truncated file");
+        let rebuilt = load_studio_index_test(&snap_str, &cache).expect("rebuilds over truncated file");
         assert_eq!(rebuilt.node_count(), 7);
         assert_eq!(rebuilt.stand_ins(), &[4]);
         assert_eq!(rebuilt.class_name(6), "Part");
@@ -2578,12 +2729,22 @@ mod studio_index_tests {
         let remapped = StudioIndex::open_mapped(&cached).expect("rebuilt cache maps cleanly");
         assert_eq!(remapped.name(6), b"ArenaA");
 
-        // 2) Older layout version in header (same filename, version=0 / old magic)
-        let mut old_ver = std::fs::read(&cached).unwrap();
-        old_ver[8..12].copy_from_slice(&0u32.to_le_bytes());
-        let older_file = dir.join("old-ver.studio");
-        std::fs::write(&older_file, &old_ver).unwrap();
-        assert!(StudioIndex::open_mapped(&older_file).is_none(), "version 0 must be rejected");
+        // 2) Same-length bit flip inside payload (name bytes) must be caught by checksum
+        let mut flipped = std::fs::read(&cached).unwrap();
+        let pos = flipped.windows(6).position(|w| w == b"ArenaA").expect("ArenaA in payload");
+        flipped[pos] ^= 0x01;
+        let flipped_file = dir.join("bitflip.studio");
+        std::fs::write(&flipped_file, &flipped).unwrap();
+        assert!(StudioIndex::open_mapped(&flipped_file).is_none(), "same-length bit flip must fail checksum");
+
+        // 3) Older layout version in header (v1 / v0 / old magic)
+        for bad_ver in [0u32, 1u32] {
+            let mut old_ver = std::fs::read(&cached).unwrap();
+            old_ver[8..12].copy_from_slice(&bad_ver.to_le_bytes());
+            let older_file = dir.join(format!("old-ver-{bad_ver}.studio"));
+            std::fs::write(&older_file, &old_ver).unwrap();
+            assert!(StudioIndex::open_mapped(&older_file).is_none(), "version {bad_ver} must be rejected");
+        }
         let mut old_magic = std::fs::read(&cached).unwrap();
         old_magic[..8].copy_from_slice(b"REESTUD0");
         let older_magic_file = dir.join("old-magic.studio");
@@ -2609,7 +2770,7 @@ mod studio_index_tests {
             let c = cache.clone();
             handles.push(std::thread::spawn(move || {
                 b.wait();
-                let idx = load_studio_index_in(&s, Some(&c)).expect("concurrent load succeeds");
+                let idx = load_studio_index_test(&s, &c).expect("concurrent load succeeds");
                 assert_eq!(idx.node_count(), 7);
                 assert_eq!(idx.name(6), b"ArenaC");
                 assert_eq!(idx.class_name(6), "Part");
@@ -2630,23 +2791,109 @@ mod studio_index_tests {
     }
 
     #[test]
-    fn studio_index_store_invalidates_immediate_same_length_edit() {
-        let dir = unique_dir("same-len");
+    fn studio_index_store_invalidates_same_tick_edit_immediately_and_after_window() {
+        let dir = unique_dir("same-tick");
         let cache = dir.join("cache");
         let snap = dir.join("Place.json");
         let first = sample_json("Arena1");
         let second = sample_json("Arena2");
+        let third = sample_json("Arena3");
         assert_eq!(first.len(), second.len());
+        assert_eq!(first.len(), third.len());
 
         std::fs::write(&snap, &first).unwrap();
+        let orig_mtime = std::fs::metadata(&snap).unwrap().modified().unwrap();
         let snap_str = snap.to_string_lossy().replace('\\', "/");
-        let idx1 = load_studio_index_in(&snap_str, Some(&cache)).unwrap();
+        let idx1 = load_studio_index_test(&snap_str, &cache).unwrap();
         assert_eq!(idx1.name(6), b"Arena1");
 
-        // Overwrite immediately with identical byte length (same timestamp tick possible).
+        // Overwrite immediately with identical byte length AND identical mtime (exact same-tick edit).
         std::fs::write(&snap, &second).unwrap();
-        let idx2 = load_studio_index_in(&snap_str, Some(&cache)).unwrap();
-        assert_eq!(idx2.name(6), b"Arena2", "immediate same-length edit must not return stale data");
+        std::fs::File::options().write(true).open(&snap).unwrap().set_modified(orig_mtime).unwrap();
+        let idx2 = load_studio_index_test(&snap_str, &cache).unwrap();
+        assert_eq!(idx2.name(6), b"Arena2", "immediate same-tick edit must not return stale data");
+
+        // Rewrite again with identical length + original mtime, then wait past the 2 s recency window.
+        // Because the recent stamp was never cached, the lookup after the window must STILL see Arena3.
+        std::fs::write(&snap, &third).unwrap();
+        std::fs::File::options().write(true).open(&snap).unwrap().set_modified(orig_mtime).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2200));
+        let idx3 = load_studio_index_test(&snap_str, &cache).unwrap();
+        assert_eq!(idx3.name(6), b"Arena3", "same-tick edit observed after recency window must not return stale data");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn studio_index_store_sweeps_old_generations() {
+        let dir = unique_dir("sweep");
+        let cache = dir.join("cache");
+        let snap = dir.join("Place.json");
+        let snap_str = snap.to_string_lossy().replace('\\', "/");
+
+        for i in 0..20u32 {
+            std::fs::write(&snap, sample_json(&format!("Gen{i:03}"))).unwrap();
+            let idx = load_studio_index_test(&snap_str, &cache).unwrap();
+            assert_eq!(idx.name(6), format!("Gen{i:03}").as_bytes());
+        }
+        let studio_files: Vec<_> = std::fs::read_dir(&cache)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".studio"))
+            .collect();
+        assert!(
+            studio_files.len() <= STUDIO_INDEX_MAX_FILES,
+            "expected at most {STUDIO_INDEX_MAX_FILES} .studio files, found {}",
+            studio_files.len()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hash128_streaming_matches_single_shot() {
+        let sample: Vec<u8> = (0..1027).map(|i| ((i * 37 + 11) & 0xff) as u8).collect();
+        let expected = hash_bytes_128(&sample);
+        for chunk_size in [1usize, 3, 7, 8, 9, 13, 64, 500] {
+            let mut h = Hash128::new();
+            for chunk in sample.chunks(chunk_size) {
+                h.update(chunk);
+            }
+            assert_eq!(h.finish(), expected, "chunk_size={chunk_size}");
+        }
+    }
+
+    #[test]
+    fn studio_index_reads_shared_dir_without_writing_to_it() {
+        let dir = unique_dir("shared-ro");
+        let shared = dir.join("shared");
+        let isolated = dir.join("isolated");
+        let snap = dir.join("Place.json");
+        std::fs::write(&snap, sample_json("SharedHit")).unwrap();
+        let snap_str = snap.to_string_lossy().replace('\\', "/");
+
+        // Populate shared store once.
+        let idx1 = load_studio_index_test(&snap_str, &shared).unwrap();
+        assert_eq!(idx1.name(6), b"SharedHit");
+
+        // Now load using isolated write_dir + read-only shared_dir with a fresh file copy (different path key).
+        let snap2 = dir.join("PlaceCopy.json");
+        std::fs::write(&snap2, sample_json("SharedHit")).unwrap();
+        let snap2_str = snap2.to_string_lossy().replace('\\', "/");
+        let idx2 = load_studio_index_in(&snap2_str, &[isolated.clone(), shared.clone()], Some(&isolated)).unwrap();
+        assert_eq!(idx2.name(6), b"SharedHit");
+        // Isolated dir was NOT even created because the read-only shared dir hit!
+        assert!(!isolated.exists(), "shared hit should not need to write into isolated dir");
+
+        // Miss in shared dir writes ONLY to isolated dir, never to shared dir.
+        let snap3 = dir.join("PlaceMiss.json");
+        std::fs::write(&snap3, sample_json("IsolatedOnly")).unwrap();
+        let snap3_str = snap3.to_string_lossy().replace('\\', "/");
+        let shared_before: Vec<_> = std::fs::read_dir(&shared).unwrap().flatten().map(|e| e.file_name()).collect();
+        let idx3 = load_studio_index_in(&snap3_str, &[isolated.clone(), shared.clone()], Some(&isolated)).unwrap();
+        assert_eq!(idx3.name(6), b"IsolatedOnly");
+        let shared_after: Vec<_> = std::fs::read_dir(&shared).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(shared_before, shared_after, "override miss must never write to shared dir");
+        assert!(isolated.exists(), "override miss must write to isolated dir");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

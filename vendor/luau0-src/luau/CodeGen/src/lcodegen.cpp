@@ -30,3 +30,8 @@ void luau_codegen_set_tiered(lua_State* L, unsigned int threshold)
 {
     Luau::CodeGen::setTieredThreshold(L, threshold);
 }
+
+void luau_codegen_set_tiered_load(lua_State* L, int enabled)
+{
+    Luau::CodeGen::setTieredLoad(L, enabled != 0);
+}

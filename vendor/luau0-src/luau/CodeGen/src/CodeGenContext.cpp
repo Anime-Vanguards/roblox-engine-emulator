@@ -1462,13 +1462,20 @@ void setTieredThreshold(lua_State* L, unsigned int threshold)
     if (threshold > 0 && getCodeGenContext(L) != nullptr)
     {
         L->global->tiered_threshold = threshold;
+        L->global->tiered_on_load = true;
         L->global->tiered_compile = &compileSingleProto;
     }
     else
     {
         L->global->tiered_threshold = 0;
+        L->global->tiered_on_load = false;
         L->global->tiered_compile = nullptr;
     }
+}
+
+void setTieredLoad(lua_State* L, bool enabled)
+{
+    L->global->tiered_on_load = enabled && L->global->tiered_threshold > 0;
 }
 
 static uint8_t userdataRemapperWrap(lua_State* L, const char* str, size_t len)

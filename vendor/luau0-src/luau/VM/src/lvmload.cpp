@@ -589,7 +589,7 @@ static void loadProto(
     for (int j = 0; j < p->sizecode; ++j)
         p->code[j] = read<uint32_t>(data, size, offset);
 
-    p->codeentry = (L->global->tiered_threshold > 0 && (p->flags & LPF_NATIVE_COLD) == 0) ? &kLazyEntryInsn : p->code;
+    p->codeentry = (L->global->tiered_on_load && (p->flags & LPF_NATIVE_COLD) == 0) ? &kLazyEntryInsn : p->code;
 
     const int sizek = readVarInt(data, size, offset);
     luaP_allockind = LUA_ALLOC_PROTO;

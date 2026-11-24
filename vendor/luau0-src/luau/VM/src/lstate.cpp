@@ -256,6 +256,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
     g->workoff = 0;
     g->coldslot = 0;
     g->tiered_threshold = 0;
+    g->tiered_on_load = false;
     g->tiered_compile = NULL;
 
     g->lastprotoid = 1;

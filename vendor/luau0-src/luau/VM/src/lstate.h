@@ -320,6 +320,7 @@ typedef struct global_State
     int floatdepth; // interpreter entries in progress (luau_execute)
 
     uint32_t tiered_threshold; // calls before on-demand single-proto native compile (0: disabled)
+    bool tiered_on_load;       // whether newly loaded Protos arm for tiered compilation
     void (*tiered_compile)(lua_State* L, struct Proto* p); // compiles one hot Proto in place
 } global_State;
 // clang-format on

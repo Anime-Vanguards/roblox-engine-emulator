@@ -651,11 +651,25 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             mlua::ffi::lua_pop(state, 1);
         })?;
     }
-    // Engine boot chunks (vector3.luau, prelude.luau, services.luau, server.luau: ~187 KB of one-shot
-    // setup code) stay interpreted so every VM start does not pay 40-100 ms of x86-64 JIT codegen.
-    // Native / tiered JIT for script code is configured below once engine stubs have loaded.
+    // Engine boot chunks (vector3.luau, prelude.luau, services.luau, server.luau: ~187 KB) load
+    // without eager x86-64 codegen so VM startup skips 40-70 ms of compiling cold setup/stub code.
+    // Unless the VM interprets everything (interpret_all), arm on-demand tiered compilation before
+    // loading them so hot runtime helpers (Vector3:FuzzyEq/Angle, datatype wrappers, prelude/stub
+    // hot paths) compile natively in place after 16 calls in both default and --native modes.
     #[cfg(feature = "jit")]
-    lua.enable_jit(false);
+    {
+        lua.enable_jit(false);
+        if !modules::interprets_all(engine) && unsafe { mlua::ffi::luau_codegen_supported() } != 0 {
+            unsafe extern "C" {
+                fn luau_codegen_set_tiered(state: *mut mlua::ffi::lua_State, threshold: u32);
+            }
+            unsafe {
+                lua.exec_raw::<()>((), |state| {
+                    luau_codegen_set_tiered(state, 16);
+                })?;
+            }
+        }
+    }
     // Instances are raw tagged userdata with C metamethods (lua/raw.rs)
     super::raw::install(lua, engine)?;
     // Connection handlers live in one Luau table (signal.rs)
@@ -743,15 +757,7 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     if engine.options.native {
         crate::cost::set_safe_global_base(lua, &shared)?;
         #[cfg(feature = "jit")]
-        if unsafe { mlua::ffi::luau_codegen_supported() } != 0 {
-            unsafe extern "C" {
-                fn luau_codegen_set_tiered(state: *mut mlua::ffi::lua_State, threshold: u32);
-            }
-            unsafe {
-                lua.exec_raw::<()>((), |state| {
-                    luau_codegen_set_tiered(state, 16);
-                })?;
-            }
+        if !modules::interprets_all(engine) && unsafe { mlua::ffi::luau_codegen_supported() } != 0 {
             lua.enable_jit(false);
             modules::use_tiered_jit(engine);
         }
@@ -761,10 +767,23 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             })?;
         }
     } else {
-        // Restore Luau native code generation for callers that run script chunks with JIT enabled
-        // (unless the VM interprets everything via modules::interpret_all).
+        // Stop arming newly loaded chunks for tiered JIT so default-mode user scripts under
+        // interpret_modules remain interpreted for the work clock, while keeping already-armed
+        // engine Luau protos compiling natively once hot.
         #[cfg(feature = "jit")]
-        lua.enable_jit(!modules::interprets_all(engine));
+        {
+            if !modules::interprets_all(engine) && unsafe { mlua::ffi::luau_codegen_supported() } != 0 {
+                unsafe extern "C" {
+                    fn luau_codegen_set_tiered_load(state: *mut mlua::ffi::lua_State, enabled: std::ffi::c_int);
+                }
+                unsafe {
+                    lua.exec_raw::<()>((), |state| {
+                        luau_codegen_set_tiered_load(state, 0);
+                    })?;
+                }
+            }
+            lua.enable_jit(!modules::interprets_all(engine));
+        }
     }
 
     // Scheduler.Configure: math.random starts from the run's seed
@@ -1342,5 +1361,119 @@ mod tests {
                 "missing `{expected}` for server={server} native={native}: {output:?}"
             );
         }
+    }
+
+    #[cfg(feature = "jit")]
+    #[test]
+    fn engine_luau_tiers_up_natively_in_default_and_native_modes_without_jitting_interpreted_user_modules() {
+        if unsafe { mlua::ffi::luau_codegen_supported() } == 0 {
+            return;
+        }
+        let workload = r#"
+            local a = Vector3.new(1, 2, 3)
+            local b = Vector3.new(4, 5, 6)
+            local acc = 0
+            local function step(i)
+                local c = Color3.fromRGB(i % 255, 100, 200)
+                local u = UDim2.new(0.5, i, 0.25, -i)
+                local eq = a:FuzzyEq(b, 0.01)
+                local ang = a:Angle(b)
+                return ang + c.R + u.X.Offset + (if eq then 1 else 0)
+            end
+            for i = 1, 2000 do
+                acc += step(i)
+            end
+            print("done", math.floor(acc))
+        "#;
+        let run_case = |native: bool, interpret_modules: bool, interpret_all: bool, via_module: bool| -> (u64, u64) {
+            let options = Options {
+                mode: "play".into(),
+                run_context: RunContext::Client,
+                local_player_name: Some("Player".into()),
+                native,
+                ..Options::default()
+            };
+            let engine = Engine::new(options).unwrap();
+            if interpret_all {
+                crate::lua::modules::interpret_all_from_start(&engine);
+            } else if interpret_modules {
+                crate::lua::modules::interpret_modules(&engine);
+            }
+            let emulator = Emulator::start(engine, &ProjectSpec::default()).unwrap();
+            // Enable VM instruction counters even in --native mode so interpreted engine Luau is
+            // observable (otherwise --native turns work counting off and host_instructions is always 0).
+            crate::cost::set_work_counting(&emulator.lua, true);
+            let read_counts = || -> (u64, u64) {
+                unsafe {
+                    let mut out = (0u64, 0u64);
+                    emulator
+                        .lua
+                        .exec_raw::<()>((), |state| {
+                            let c = &*crate::cost::lua_workcounters(state);
+                            out = (crate::cost::host_instructions(c), c.ops.iter().sum::<u64>());
+                        })
+                        .unwrap();
+                    out
+                }
+            };
+            let before = read_counts();
+            if via_module {
+                let script = {
+                    let mut state = emulator.engine.state.borrow_mut();
+                    let class = emulator.engine.reflection.class_id("ModuleScript").unwrap();
+                    let id = crate::instance::create_named(&mut state, &emulator.engine.reflection, class, "LongMod");
+                    state.dom.at_mut(id).set_source(Some(std::rc::Rc::from(workload.as_bytes())));
+                    id
+                };
+                let func = crate::lua::modules::compile(&emulator.lua, &emulator.engine, script, workload.as_bytes()).unwrap();
+                crate::lua::globals::call(&emulator.lua, &emulator.engine, func, mlua::MultiValue::new()).unwrap();
+            } else {
+                emulator.run("LongEngineCheck", workload).unwrap();
+            }
+            emulator.run_until(0.05).unwrap();
+            let errors: Vec<_> = emulator.output().into_iter().filter(|l| l.kind == "error").collect();
+            assert!(errors.is_empty(), "errors for native={native} interp_mod={interpret_modules} interp_all={interpret_all}: {errors:?}");
+            let after = read_counts();
+            (after.0.saturating_sub(before.0), after.1.saturating_sub(before.1))
+        };
+
+        // 1) Default mode with interpret_modules (ree run / ree record): hot engine Luau compiles
+        //    after 16 calls (bounded host instructions), while a module loaded through modules::compile
+        //    stays interpreted for the work clock.
+        let (default_host, default_mod_user) = run_case(false, true, false, true);
+        assert!(
+            default_host < 20_000,
+            "default mode must tier-compile hot engine Luau (got {default_host} host instructions)"
+        );
+        assert!(
+            default_mod_user > 20_000,
+            "default mode with interpret_modules must keep module script interpreted (got {default_mod_user} user instructions)"
+        );
+
+        // 2) Default mode direct chunk load (Emulator::run without interpret_all): lua.enable_jit(true)
+        //    was restored after boot so direct chunks compile natively (fails if restore is removed).
+        let (direct_host, direct_user) = run_case(false, false, false, false);
+        assert!(
+            direct_host < 20_000,
+            "default mode direct run must tier-compile hot engine Luau (got {direct_host} host instructions)"
+        );
+        assert_eq!(
+            direct_user, 0,
+            "default mode direct chunk must compile natively when JIT is restored after boot (got {direct_user} interpreted user instructions)"
+        );
+
+        // 3) --native mode: hot engine Luau compiles after 16 calls (bounded host instructions).
+        let (native_host, _native_user) = run_case(true, false, false, true);
+        assert!(
+            native_host < 20_000,
+            "--native mode must tier-compile hot engine Luau (got {native_host} host instructions)"
+        );
+
+        // 4) interpret_all_from_start (rur / loopback client): engine Luau stays interpreted.
+        let (all_host, _all_user) = run_case(false, false, true, true);
+        assert!(
+            all_host > 100_000,
+            "interpret_all_from_start must keep engine Luau interpreted (got {all_host} host instructions)"
+        );
     }
 }
