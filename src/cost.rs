@@ -1659,7 +1659,10 @@ pub fn joints_reanchored(changed: usize, links: usize) -> f64 {
 /// kinds cost it alike (2026-11-24, a leaf of an anchored hub welded to 10,000 parts, at a frame's start: its weld's Part1
 /// re-pointed 874 us, set to nil 885, its Part0 re-pointed 926, the weld's Parent set to nil 864, the weld destroyed 883, the
 /// leaf's Parent set to nil 982, the leaf destroyed 929, beyond what such a write or destroy costs alone; 10 to 43 us later in the
-/// frame; its weld parented back under it 905 to 956, the leaf parented back 933, 17 to 30 later).
+/// frame; its weld parented back under it 905 to 956, the leaf parented back 933, 17 to 30 later). A link between two anchored
+/// parts, each an assembly of its own, changes no assembly and costs the change alone (the same client, 2026-11-24: an anchored
+/// part welded to an anchored one taken out at a frame's start 8 us beyond the same with its weld disabled, the weld taken out 4,
+/// where an unanchored one's 38 and 47).
 pub const LINK_CHANGED: f64 = 1.7e-6;
 /// Two later link changes in a frame cost more, whichever assemblies they change (the same client, two to four sessions, single
 /// writes in turn in a frame on stars of 100 to 10,000 parts and on two such stars interleaved; docs/engine.md "Rigid assemblies",
@@ -1674,6 +1677,27 @@ pub const LINK_PART: f64 = 0.085e-6;
 /// What the first link change of an assembly in a frame costs it ([`LINK_ASSEMBLY`]): `parts` parts.
 pub fn link_assembly(parts: usize) -> f64 {
     LINK_ASSEMBLY + parts as f64 * LINK_PART
+}
+/// A write that ends or starts several links at once (a Parent write or Destroy that takes a part, a joint or a Folder of them out
+/// of a world or into one; world/joints.rs charge_link), beyond its first link change's price: each further link that reaches a part
+/// in a world ([`LINK_MORE`]) and each further piece holding no anchored part that it splits off or joins ([`LINK_PIECE`]), whether
+/// or not the frame changed its assembly before (a piece split off that the frame did not pays [`link_assembly`] instead). A playing
+/// client (roblox-sim, Studio 0.747, headless; os.clock around single Parent writes at a frame's start, after another link change and
+/// right after the opposite write in the same frame, the median of 9 samples, 5 sessions; N = 1 to 10,000 links: an anchored part
+/// welded to N unanchored or anchored parts taken out and put back, the same welds in a Folder, N pairs' welds in a Folder, N welds
+/// among a star's leaves, N welds between two parts, less the same with the welds disabled; docs/engine.md "Rigid assemblies",
+/// 2026-11-24) pays for each link a write ends or starts and for each piece it splits off or joins, the same at a frame's start
+/// and later in it: an anchored part's leaves split off by one write 3.1 to 6.0 us a leaf (1,000 of them 5.4 ms at a frame's start
+/// and 5.4 ms right after they joined in the same frame, where these charged 5.1 ms and 2 us), joined 3.5 to 7.1, the same welds in
+/// a Folder 3.2 to 5.2 out and 1.9 to 6.0 in, N pairs 4.2 to 5.8 a pair; links that split nothing off (a Folder of welds among a
+/// star's leaves, or between two parts) 0.3 to 1.3 us a link out and 1.0 to 4.1 in, links between anchored parts 0.5 to 1.7 out
+/// (1,000 of them 1.4 ms at a frame's start, charged 5.1 ms) and 1.2 to 2.2 in. Fitted on 133 rows: x0.6 to x1.6 for most (rms
+/// of the log ratio 0.49); pieces of two parts x0.4 to x0.7.
+pub const LINK_MORE: f64 = 0.6e-6;
+pub const LINK_PIECE: f64 = 4e-6;
+/// What a write's further links cost ([`LINK_MORE`]): `links` links beyond its first, `pieces` pieces.
+pub fn links_more(links: usize, pieces: usize) -> f64 {
+    links as f64 * LINK_MORE + pieces as f64 * LINK_PIECE
 }
 /// Each part of an assembly an AssemblyCenterOfMass read (an AssemblyMass read too, when none of its parts is anchored) works out
 /// after a link change in the same frame (world/joints.rs pay_body): the same client read the centre at 0.08 us a part of the hub's
