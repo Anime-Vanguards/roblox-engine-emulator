@@ -1,0 +1,43 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-24
+cells along x: anchored, unanchored, anchored, unanchored: a1 u2 a3 u4
+one cell, made a1 u2 a3 u4: u2 u4 a1 a3
+nothing: a1 a2 a3 a4 a5
+a2 destroyed: a1 a5 a3 a4
+a2 destroyed, then a1: a4 a5 a3
+a2 moved within its cell: a1 a2 a3 a4 a5
+a2 moved out, a query, back: a1 a5 a3 a4 a2
+a2 moved out and back, no query between: a1 a5 a3 a4 a2
+a2 grown into the next cell too: a1 a2 a3 a4 a5
+a2 turned in place: a1 a2 a3 a4 a5
+a2 resized within its cells: a1 a2 a3 a4 a5
+a2 resized to level 1: a1 a5 a3 a4 a2
+a2 resized to level 1 and back: a1 a5 a3 a4 a2
+a2 unanchored: a2 a1 a5 a3 a4
+a2 unanchored and anchored again: a1 a5 a3 a4 a2
+a2 CanCollide off: a1 a2 a3 a4 a5
+a2 CanTouch off: a1 a2 a3 a4 a5
+a2 CanCollide and CanTouch off: a1 a5 a3 a4 a2
+a2 Transparency, Material, CollisionGroup, Massless, CustomPhysicalProperties, Shape, Locked: a1 a2 a3 a4 a5
+a2 the same CFrame, Size and Anchored written: a1 a2 a3 a4 a5
+a2 to a folder in the Workspace: a1 a2 a3 a4 a5
+a2 to nil and back, no query between: a1 a5 a3 a4 a2
+a2 welded to a4: a1 a2 a3 a4 a5
+an unanchored part welded to a2: a1 a5 a3 a4 a2
+X (two cells) then M: X M
+X grown into the cell below: X M
+subtree T(a, M(b, c(d, f)), e) came in: a b d f c e
+a1 u2 a3 u4 (welded to u2) u5: u4 u2 u5 a1 a3
+then u2 anchored: u5 a1 a3 u2 u4
+ties, A B C anchored: ray A sphere A block A shape A obscuring A,B,C box A B C
+ties, A anchored, B unanchored, C anchored: ray A sphere A block A shape A obscuring A,C,B box B A C
+ties, A B unanchored, C anchored: ray C sphere C block C shape C obscuring C,A,B box A B C
+ties, A B unanchored: ray A sphere A block A shape A obscuring A,B box A B
+ties, A destroyed after a query: ray C sphere C block C shape C obscuring C,B box C B
+ties, A level 1 (top level with B), B level 0: ray B sphere A block A shape A obscuring B,A box B A
+ties, A level 0, B level 1 (top level with A): ray A sphere B block B shape B obscuring A,B box A B
+WorldModel, 2 x 2 x 2 cells made from the far corner: 000 100 001 101 010 110 011 111
+WorldModel, the Workspace's query there finds: 
+WorldModel, levels, query 0.01: K1 K32 K128 K64 K256 K512 K1024 K2048
+WorldModel, levels, query 100: K512 K256 K128 K64 K32 K1 K1024 K2048
+WorldModel, a2 destroyed: a1 a5 a3 a4

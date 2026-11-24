@@ -227,6 +227,272 @@
 			"why": "require(assetId) on a server downloads the asset and names it when that fails (Downloading asset failed for asset id 5 ...); ree runs offline and refuses with its own message"
 		}
 	],
+	"grid_levels": [
+		{
+			"line": "markers:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: a tiny query lists one cell of each level in turn, finest first"
+		},
+		{
+			"line": "cubes:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: a part's level is the first whose cells hold its grown box, enlarged by 16 studs on each axis, in 100 cells"
+		},
+		{
+			"line": "rods and plates:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: a part's level is the first whose cells hold its grown box, enlarged by 16 studs on each axis, in 100 cells"
+		},
+		{
+			"line": "cube level steps:",
+			"why": "the bisection reads a part's grid level from the order the level markers list in; ree has no levels"
+		},
+		{
+			"line": "rod level steps:",
+			"why": "the bisection reads a part's grid level from the order the level markers list in; ree has no levels"
+		},
+		{
+			"line": "thin rod level steps:",
+			"why": "the bisection reads a part's grid level from the order the level markers list in; ree has no levels"
+		},
+		{
+			"line": "plate level steps:",
+			"why": "the bisection reads a part's grid level from the order the level markers list in; ree has no levels"
+		},
+		{
+			"line": "box level steps:",
+			"why": "the bisection reads a part's grid level from the order the level markers list in; ree has no levels"
+		},
+		{
+			"line": "turned parts, query",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: a turned part's level is read from its world box, so a turned 2048 cube is on the level above 2048 cubes"
+		},
+		{
+			"line": "margin L",
+			"why": "the bisection reads which grid cell a part is filed in from the order; ree has no cells (a client grows a part's box by 0.3 studs on each side, on every level)"
+		},
+		{
+			"line": "turned margin",
+			"why": "the bisection reads which grid cell a part is filed in from the order; ree has no cells (a client grows a turned part's box by 0.3 in its own axes before taking the world box)"
+		},
+		{
+			"line": "cells L",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: one run in made order is one cell"
+		},
+		{
+			"line": "query ",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client's query starts its walk on the level whose cells are as big as its world box's largest side, then the finer levels, then the coarser ones"
+		}
+	],
+	"grid_limits": [
+		{
+			"line": "far bound ",
+			"why": "ree finds parts at any distance; a client's grid finds a part only while its cell on its level is within 2^23 cells of the origin on each axis (2^26 studs for level 0), with float32 losses from 2^24 studs"
+		},
+		{
+			"line": "far by size ",
+			"why": "ree finds parts at any distance; a client's grid bound is 2^(26 + level) studs, the level read from the part's box as float32 holds it far out"
+		},
+		{
+			"line": "below the bound, ",
+			"why": "ree finds parts at any distance; a client loses parts at some float32 positions from 2^24 studs out (not explained)"
+		},
+		{
+			"line": "clamp, ",
+			"why": "ree's boxes and radii reach without limit; a client clamps a query's world box to 7,500 studs about its centre on each axis, for the walk and the overlap test alike"
+		},
+		{
+			"line": "ray cut",
+			"why": "ree's rays have no length limit; a client cuts every ray at 15,000 studs from its origin"
+		},
+		{
+			"line": "ray down/box at:",
+			"why": "ree finds parts at any distance; a client's ray straight down misses a 2-stud part at x = 1.6e7 (float32 in the ray test, not explained) and nothing is found past the grid's bound"
+		},
+		{
+			"line": "physics at x",
+			"why": "ree's physics differs here: a client's unanchored part lands and touches up to the grid's bound and falls through a floor past it"
+		}
+	],
+	"grid_order": [
+		{
+			"line": "one cell, made",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client's grid cell lists its unanchored parts before its anchored ones"
+		},
+		{
+			"line": "a2 destroyed",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a part leaving a client's grid cell gives its place to the cell's last part"
+		},
+		{
+			"line": "a2 moved out",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a part that leaves a client's grid cell is filed again at the end, even when it comes back before the next query"
+		},
+		{
+			"line": "a2 resized to level 1",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a part that changes grid level is filed again at the end of its new cells"
+		},
+		{
+			"line": "a2 unanchored",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a part whose Anchored changes is filed again at the end of the other list"
+		},
+		{
+			"line": "a2 CanCollide and CanTouch off",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files a part again when both CanCollide and CanTouch go off (either alone keeps its place)"
+		},
+		{
+			"line": "a2 to a folder in the Workspace",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client keeps a part's place in its grid cell when it moves to another parent in the Workspace"
+		},
+		{
+			"line": "a2 to nil and back",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a part that leaves the Workspace and comes back is filed again at the end"
+		},
+		{
+			"line": "an unanchored part welded to a2",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files a part again when its assembly gains an unanchored part"
+		},
+		{
+			"line": "subtree T",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client takes a subtree in part by part, each part after its descendants"
+		},
+		{
+			"line": "a1 u2 a3 u4 (welded",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; welded unanchored parts come into a client's grid cell in another order (not measured further)"
+		},
+		{
+			"line": "then u2 anchored",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; anchoring an assembly files its parts again at the end of the anchored list"
+		},
+		{
+			"line": "ties, ",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client's casts take the first of exact ties in their own walk: a cell's anchored parts before its unanchored ones, a ray from level 0 up, a shape cast from its swept box's level"
+		},
+		{
+			"line": "WorldModel, ",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client's WorldModel has a grid of its own under the same rules, which the Workspace's queries do not see"
+		}
+	],
+	"grid_random": [
+		{
+			"line": "scene 1 query 4:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 1 query 8:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 1:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 2:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 3:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 4:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 5:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 6:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 7:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 8:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 9:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 10:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 11:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 12:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 13:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 2 query 14:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 3 query 7:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 3 query 8:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 3 query 13:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		},
+		{
+			"line": "scene 3 query 14:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order, the levels' and blocks' rules together (the grid's rules reproduce every line)"
+		}
+	],
+	"grid_walk": [
+		{
+			"line": "block ",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: aligned blocks of the query's level in raster order (x outermost, z innermost), Morton order inside each block (x the lowest bit)"
+		},
+		{
+			"line": "spread ",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: aligned blocks of the query's level in raster order (x outermost, z innermost), Morton order inside each block (x the lowest bit)"
+		},
+		{
+			"line": "line ",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: along one axis the walk goes up the axis"
+		},
+		{
+			"line": "grid x ",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: the blocks are cells of the query's level, so the same parts list in another order for queries of another size"
+		},
+		{
+			"line": "coarse and fine",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: the walk goes down through each block's cells depth first (a cell's parts, then its eight children), and visits the levels above the query's last"
+		},
+		{
+			"line": "two clusters",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: the walk goes down through each block's cells depth first, so coarse and fine parts list place by place"
+		},
+		{
+			"line": "level-4 cells",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: the levels above the query's are walked after all its blocks, in raster order"
+		},
+		{
+			"line": "top, ",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: a query of level 6 or more walks blocks of level 5, or of the highest level holding a part when that is 6 or 7 (lowered a frame after its last part left)"
+		},
+		{
+			"line": "level 1, query from 2048:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: a query whose low edge lies on a cell edge also walks the cell below"
+		},
+		{
+			"line": "level 0, query from 2048:",
+			"why": "ree's Workspace index is a bounding-volume tree and its queries list parts in the Workspace's tree order; a client files each part in the cells of one level of a multi-level grid (cells of 8 x 2^level studs) and a box query lists them cell by cell in its walk's order: a query whose low edge lies on a cell edge also walks the cell below"
+		}
+	],
 	"instances": [
 		{
 			"line": "default Model PrimaryPart=nil(nil) LevelOfDetail=error:The current thread cannot read 'LevelOfDetail' (lacking capability PluginOrOpenCloud) ModelStreamingMode=EnumItem(Enum.ModelStreamingMode.Default) WorldPivot=CF(0 0 0 1 0 0 0 1 0 0 0 1) Name=string(Model)",
