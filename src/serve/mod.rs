@@ -526,6 +526,7 @@ fn handle(service: &Service, owned: Option<TcpStream>, stream: &TcpStream) -> Re
                     "used": service.prepared.used.load(Ordering::SeqCst),
                     "stale": service.prepared.stale.load(Ordering::SeqCst),
                     "skipped": service.prepared.skipped.load(Ordering::SeqCst),
+                    "preparing": service.preparing.load(Ordering::SeqCst),
                     "unmade": service.prepared.unmade.lock().ok().and_then(|why| why.clone()),
                     "held": service.slots.lock().map(|slots| slots.iter().filter(|slot| slot.key.is_some() && !slot.preparing).count()).unwrap_or(0),
                 },
@@ -623,11 +624,10 @@ fn work(service: &Service, index: usize) {
         });
         let failed = reply["code"].as_i64() != Some(0);
         // (from its reply on, a job like it waits for the run this worker prepares next, when that is
-        // expected soon enough: take)
+        // expected soon enough: take; only when no jobs are waiting in the queue and fewer than HOLDERS
+        // workers already hold or prepare this key)
         let replied = Instant::now();
-        if let (Some(ahead), Ok(mut slots)) = (&next, service.slots.lock()) {
-            slots[index] = Slot { key: Some(ahead.key()), running: false, preparing: true, ready_by: Some(replied + took.unwrap_or(FIRST_PREPARATION)) };
-        }
+        let prepare_here = next.as_ref().is_some_and(|ahead| claim_prepare(service, index, &ahead.key(), replied + took.unwrap_or(FIRST_PREPARATION)));
         let _ = http::write_response(&job.stream, 200, reply.to_string().as_bytes());
         drop(job.stream);
         drop(emulator);
@@ -635,6 +635,8 @@ fn work(service: &Service, index: usize) {
         // what the caches keep of files that changed since (a new bundle version, an edited module)
         #[cfg(feature = "bundles")]
         crate::project::model_assets::forget_stale_bundles();
+        #[cfg(feature = "meshes")]
+        crate::meshes::forget_stale_meshes();
         modules::forget_stale_modules();
         // (the heap gives the engine's pages back while the service waits)
         unsafe extern "C" {
@@ -646,7 +648,7 @@ fn work(service: &Service, index: usize) {
         if let Ok(mut time) = service.last_job.lock() {
             *time = Instant::now();
         }
-        if next.is_none() {
+        if !prepare_here {
             if let Ok(mut slots) = service.slots.lock() {
                 slots[index] = Slot::default();
             }
@@ -665,13 +667,33 @@ fn work(service: &Service, index: usize) {
         }
         // (others may take the jobs this worker held, or prepare the recording ahead too: take)
         service.queued.notify_all();
-        if let Some(ahead) = next {
+        if let (true, Some(ahead)) = (prepare_here, next) {
             parked = prepare_next(service, index, &ahead);
             if parked.is_some() {
                 took = Some(replied.elapsed());
             }
         }
     }
+}
+
+/// Claims worker `index`'s slot to prepare `key` right after its job, when no jobs wait in the
+/// queue, the service is not shutting down, and fewer than [`HOLDERS`] other workers hold or
+/// prepare a run.
+fn claim_prepare(service: &Service, index: usize, key: &prepare::Key, ready_by: Instant) -> bool {
+    if service.shutting_down.load(Ordering::SeqCst) {
+        return false;
+    }
+    let Ok(queue) = service.queue.lock() else { return false };
+    if !queue.is_empty() {
+        return false;
+    }
+    let Ok(mut slots) = service.slots.lock() else { return false };
+    let holders = slots.iter().enumerate().filter(|(other, slot)| *other != index && slot.key.is_some()).count();
+    if holders >= HOLDERS {
+        return false;
+    }
+    slots[index] = Slot { key: Some(key.clone()), running: false, preparing: true, ready_by: Some(ready_by) };
+    true
 }
 
 /// Whether a run prepared for `key` would likely be used: another job it serves started within
@@ -712,15 +734,17 @@ fn take(service: &Service, index: usize, took: Option<Duration>) -> Option<Work>
             }
             return Some(Work::Job(job));
         }
-        if let Some(work) = ahead(service, index, took) {
-            return Some(work);
+        if queue.is_empty() {
+            if let Some(work) = ahead(service, index, took) {
+                return Some(work);
+            }
         }
         queue = service.queued.wait(queue).ok()?;
     }
 }
 
 /// The most recent recording for worker `index` to prepare ahead (its slot then says so), when it is idle
-/// and holds nothing, fewer than [`HOLDERS`] workers hold or prepare that recording, the service is not
+/// and holds nothing, fewer than [`HOLDERS`] workers hold or prepare a recording, the service is not
 /// ending and memory is not short. Called with the queue locked.
 fn ahead(service: &Service, index: usize, took: Option<Duration>) -> Option<Work> {
     if service.shutting_down.load(Ordering::SeqCst) {
@@ -733,7 +757,7 @@ fn ahead(service: &Service, index: usize, took: Option<Duration>) -> Option<Work
     }
     let ahead = service.recent.lock().ok()?.clone()?;
     let key = ahead.key();
-    if slots.iter().filter(|slot| slot.key.as_ref() == Some(&key)).count() >= HOLDERS || memory().is_some_and(|(_, available)| available < JOB_MEMORY) {
+    if slots.iter().filter(|slot| slot.key.is_some()).count() >= HOLDERS || memory().is_some_and(|(_, available)| available < JOB_MEMORY) {
         return None;
     }
     slots[index] = Slot { key: Some(key), running: false, preparing: true, ready_by: Some(Instant::now() + took.unwrap_or(FIRST_PREPARATION)) };
@@ -762,6 +786,7 @@ fn prepare_next(service: &Service, index: usize, ahead: &Ahead) -> Option<prepar
     let made = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prepare::prepare(&ahead.args, &launch::Host::default(), ahead.record))) {
         Ok(Ok(prepared)) => Some(prepared),
         Ok(Err(why)) => {
+            eprintln!("ree serve: prepared run unmade ({why})");
             if let Ok(mut unmade) = service.prepared.unmade.lock() {
                 *unmade = Some(why);
             }
@@ -816,6 +841,7 @@ fn run_job(name: &str, args: &[String], parked: &mut Option<prepare::Prepared>, 
         }
         None => None,
     };
+    let mut stale_reason: Option<String> = None;
     let used = prepared.and_then(|prepared| match prepared.run(&args, &host, started) {
         Ok(result) => {
             crate::timing::tally("prepared: used", 1);
@@ -831,6 +857,7 @@ fn run_job(name: &str, args: &[String], parked: &mut Option<prepare::Prepared>, 
             }
             crate::timing::tally(format!("prepared: stale ({why})"), 1);
             counts.stale.fetch_add(1, Ordering::SeqCst);
+            stale_reason = Some(why);
             None
         }
     });
@@ -838,10 +865,12 @@ fn run_job(name: &str, args: &[String], parked: &mut Option<prepare::Prepared>, 
         Some(result) => result,
         None => command::parse(&args, record).and_then(|parsed| command::execute(&parsed, &host, record)),
     };
+    let mut skipped_reason: Option<String> = None;
     let next = match &result {
         // (a run that read what cannot be checked before its checkpoint would be prepared in vain)
         Ok((done, _)) if done.checkpoint && done.unpreparable.is_some() => {
             counts.skipped.fetch_add(1, Ordering::SeqCst);
+            skipped_reason = done.unpreparable.clone();
             if let Ok(mut unmade) = counts.unmade.lock() {
                 *unmade = done.unpreparable.clone();
             }
@@ -856,11 +885,23 @@ fn run_job(name: &str, args: &[String], parked: &mut Option<prepare::Prepared>, 
         Ok((done, emulator)) => {
             stderr.push_str(&done.line);
             stderr.push('\n');
+            if let Some(why) = stale_reason {
+                eprintln!("ree serve: prepared run stale ({why}); ran from start");
+                stderr.push_str(&format!("{}: prepared run stale ({why}); ran from start\n", host.name));
+            }
+            if let Some(why) = skipped_reason {
+                eprintln!("ree serve: prepared run skipped ({why})");
+                stderr.push_str(&format!("{}: prepared run skipped ({why})\n", host.name));
+            }
             stderr.push_str(&profile);
             let stdout = format!("{}\n", serde_json::to_string(&done.summary).unwrap_or_default());
             (json!({ "code": done.code, "stdout": stdout, "stderr": stderr }), Some(emulator), next)
         }
         Err(error) => {
+            if let Some(why) = stale_reason {
+                eprintln!("ree serve: prepared run stale ({why}); ran from start");
+                stderr.push_str(&format!("{}: prepared run stale ({why}); ran from start\n", host.name));
+            }
             stderr.push_str(&profile);
             stderr.push_str(&format!("{} {name}: {error}\n", host.name));
             (json!({ "code": 1, "stdout": "", "stderr": stderr }), None, None)
@@ -1585,8 +1626,9 @@ mod tests {
         assert!(repeats(&fresh, &key, own), "a job like it waits");
     }
 
-    /// A run that read what a prepared run cannot check (an image, a mesh) before its checkpoint is not
-    /// prepared after its job: the preparation would fail alike. Read after the checkpoint, it is.
+    /// A run that read what a prepared run cannot check (an image) before its checkpoint is not
+    /// prepared after its job, and says so on stderr: the preparation would fail alike. Read after
+    /// the checkpoint, it is prepared.
     #[test]
     fn a_run_that_read_an_image_before_its_checkpoint_is_not_prepared() {
         let root = std::env::temp_dir().join(format!("ree-serve-unchecked-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
@@ -1601,11 +1643,147 @@ mod tests {
             let counts = PreparedCounts::default();
             let (reply, _, next) = run_job("record", &args, &mut None, &counts);
             assert_eq!(reply["code"], 0, "{reply}");
-            (next.is_some(), counts.skipped.load(Ordering::SeqCst), counts.unmade.lock().unwrap().clone())
+            (next.is_some(), counts.skipped.load(Ordering::SeqCst), counts.unmade.lock().unwrap().clone(), reply["stderr"].as_str().unwrap_or_default().to_string())
         };
-        assert_eq!(next(true), (false, 1, Some("an image was read".to_string())));
-        assert_eq!(next(false), (true, 0, None));
+        let (has_next, skipped, unmade, stderr) = next(true);
+        assert_eq!((has_next, skipped, unmade), (false, 1, Some("an image was read".to_string())));
+        assert!(stderr.contains("ree: prepared run skipped (an image was read)"), "{stderr}");
+        let (has_next, skipped, unmade, stderr) = next(false);
+        assert_eq!((has_next, skipped, unmade), (true, 0, None));
+        assert!(!stderr.contains("prepared run skipped"), "{stderr}");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A harness that reads a mesh (synchronously via CreateMeshPartAsync, or asynchronously via
+    /// CreateEditableMeshAsync with FrameCheckpoint) or snapshots an EditableMesh before its checkpoint
+    /// IS prepared and reused for later jobs; editing the mesh file marks the prepared run stale, says
+    /// so on stderr, and re-runs from the start with the updated mesh.
+    #[cfg(feature = "meshes")]
+    #[test]
+    fn a_run_that_reads_a_mesh_before_its_checkpoint_is_prepared_and_invalidates_on_edit() {
+        modules::reuse_compiled_modules();
+        let root = std::env::temp_dir().join(format!("ree-serve-mesh-prep-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let mesh_path = root.join("shape.mesh");
+        std::fs::write(&mesh_path, crate::meshes::test_mesh_bytes(2.0, 1)).unwrap();
+        let mesh_uri = format!("file://{}", mesh_path.to_string_lossy().replace('\\', "/"));
+        let harness = root.join("MeshPrep.luau");
+        std::fs::write(
+            &harness,
+            format!(
+                r#"local AssetService = game:GetService("AssetService")
+                local Part
+                return {{
+                    Prepare = function(Context)
+                        Part = AssetService:CreateMeshPartAsync(Content.fromUri("{mesh_uri}"))
+                        Part.Parent = workspace
+                        local Editable = AssetService:CreateEditableMesh()
+                        local A = Editable:AddVertex(Vector3.new(0, 0, 0))
+                        local B = Editable:AddVertex(Vector3.new(1, 0, 0))
+                        local C = Editable:AddVertex(Vector3.new(0, 1, 0))
+                        Editable:AddTriangle(A, B, C)
+                        local Copy = AssetService:CreateMeshPartAsync(Content.fromObject(Editable))
+                        Copy.Parent = workspace
+                    end,
+                    Run = function(Context)
+                        print("mesh", Context.Tag, math.round(Part.MeshSize.X), math.round(Part.MeshSize.Y))
+                        print("@done")
+                    end,
+                }}"#
+            ),
+        )
+        .unwrap();
+        let roots = root.join("game").to_string_lossy().into_owned();
+        let arguments = |tag: &str| -> Vec<String> {
+            ["--harness", &harness.to_string_lossy(), "--roots", &roots, "--seconds", "1", "--context", &format!(r#"{{"Tag":"{tag}"}}"#)].iter().map(|s| s.to_string()).collect()
+        };
+        let counts = PreparedCounts::default();
+        let (reply, emulator, next) = run_job("run", &arguments("first"), &mut None, &counts);
+        drop(emulator);
+        assert_eq!(reply["code"], 0, "{reply}");
+        assert!(next.is_some(), "mesh read/snapshot in Prepare must not block prepared runs: {reply}");
+        assert_eq!(counts.unmade.lock().unwrap().clone(), None);
+        assert!(!reply["stderr"].as_str().unwrap_or_default().contains("prepared run skipped"), "{reply}");
+        let alone: serde_json::Value = serde_json::from_str(reply["stdout"].as_str().unwrap().trim()).unwrap();
+
+        let mut parked = Some(prepare::prepare(&arguments("prepared"), &launch::Host::default(), false).expect("prepared run succeeds"));
+        let (reply, emulator, _) = run_job("run", &arguments("first"), &mut parked, &counts);
+        drop(emulator);
+        assert_eq!(reply["code"], 0, "{reply}");
+        assert_eq!(counts.used.load(Ordering::SeqCst), 1, "prepared run must be used");
+        assert_eq!(counts.stale.load(Ordering::SeqCst), 0);
+        let reused: serde_json::Value = serde_json::from_str(reply["stdout"].as_str().unwrap().trim()).unwrap();
+        assert_eq!(reused, alone);
+
+        // Editing the mesh file must invalidate the prepared run, report why on stderr, and read the new size.
+        let mut parked = Some(prepare::prepare(&arguments("prepared"), &launch::Host::default(), false).expect("prepared run succeeds"));
+        std::fs::write(&mesh_path, crate::meshes::test_mesh_bytes(6.0, 2)).unwrap();
+        let (reply, emulator, _) = run_job("run", &arguments("after"), &mut parked, &counts);
+        drop(emulator);
+        assert_eq!(reply["code"], 0, "{reply}");
+        assert_eq!(counts.used.load(Ordering::SeqCst), 1);
+        assert_eq!(counts.stale.load(Ordering::SeqCst), 1, "edited mesh file must mark prepared run stale");
+        let stderr = reply["stderr"].as_str().unwrap_or_default();
+        assert!(stderr.contains("ree: prepared run stale (") && stderr.contains("ran from start"), "{stderr}");
+        let updated: serde_json::Value = serde_json::from_str(reply["stdout"].as_str().unwrap().trim()).unwrap();
+        let messages: Vec<&str> = updated["output"].as_array().unwrap().iter().map(|line| line["message"].as_str().unwrap()).collect();
+        assert_eq!(messages, ["mesh after 6 6", "@done"]);
+
+        // An async CreateEditableMeshAsync in a framed Prepare (Context.FrameCheckpoint) is also prepared and reused.
+        let framed_harness = root.join("MeshFramed.luau");
+        std::fs::write(
+            &framed_harness,
+            format!(
+                r#"local AssetService = game:GetService("AssetService")
+                local Count = 0
+                return {{
+                    Prepare = function(Context)
+                        local Editable = AssetService:CreateEditableMeshAsync(Content.fromUri("{mesh_uri}"))
+                        Count = #Editable:GetVertices()
+                        Context.FrameCheckpoint()
+                    end,
+                    Run = function(Context)
+                        print("async", Context.Tag, Count)
+                        print("@done")
+                    end,
+                }}"#
+            ),
+        )
+        .unwrap();
+        let framed_args = |tag: &str| -> Vec<String> {
+            ["--harness", &framed_harness.to_string_lossy(), "--roots", &roots, "--seconds", "1", "--context", &format!(r#"{{"Tag":"{tag}"}}"#)].iter().map(|s| s.to_string()).collect()
+        };
+        let mut parked = Some(prepare::prepare(&framed_args("prep"), &launch::Host::default(), false).expect("framed async mesh prepare succeeds"));
+        let (reply, emulator, _) = run_job("run", &framed_args("hit"), &mut parked, &counts);
+        drop(emulator);
+        assert_eq!(reply["code"], 0, "{reply}");
+        assert_eq!(counts.used.load(Ordering::SeqCst), 2, "framed async mesh prepared run must be used");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// After finishing a job, a worker does not prepare inline when other jobs wait in the queue or when
+    /// [`HOLDERS`] other workers already hold or prepare that key.
+    #[test]
+    fn claim_prepare_respects_queue_and_holders() {
+        let service = idle_service(4);
+        let args: Vec<String> = ["--harness", "h.luau", "--context", r#"{"Tag":"A"}"#].iter().map(|s| s.to_string()).collect();
+        let key = prepare::Key::of(&args, true, false);
+        let ready_by = Instant::now() + FIRST_PREPARATION;
+        assert!(claim_prepare(&service, 0, &key, ready_by));
+        assert!(service.slots.lock().unwrap()[0].preparing);
+        assert!(claim_prepare(&service, 1, &key, ready_by));
+        assert!(!claim_prepare(&service, 2, &key, ready_by), "two workers already hold or prepare a run");
+        let other_key = prepare::Key { split: false, framed: false, record: false, args: vec!["other".into()] };
+        assert!(!claim_prepare(&service, 2, &other_key, ready_by), "total prepared runs stay bounded by HOLDERS across mixed keys");
+        // With a job waiting in the queue, even an empty slot table skips inline preparation so the worker drains the queue.
+        for slot in service.slots.lock().unwrap().iter_mut() {
+            *slot = Slot::default();
+        }
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let _server = listener.accept().unwrap().0;
+        service.queue.lock().unwrap().push_back(Job { command: "run".into(), args: args.clone(), stream: client, key: Some(prepare::Keys::of(&args, false)) });
+        assert!(!claim_prepare(&service, 0, &key, ready_by), "queued jobs take priority over preparing ahead");
     }
 
     /// Workers run jobs side by side, sharing one store of converted bundles: each job records what it

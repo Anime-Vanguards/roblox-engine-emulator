@@ -31,7 +31,10 @@ use std::{
     hash::{Hash, Hasher},
     path::PathBuf,
     rc::Rc,
+    sync::Arc,
 };
+#[cfg(feature = "meshes")]
+use std::sync::{Mutex, OnceLock};
 
 use glam::Vec3;
 use mlua::prelude::*;
@@ -700,9 +703,9 @@ pub(crate) struct MeshExtension {
     bound: RefCell<FxHashMap<InstanceId, InstanceId>>,
     dirty: RefCell<FxHashSet<InstanceId>>,
     names: RefCell<Option<Rc<Names>>>,
-    /// Decoded asset meshes by what their content id names ([`asset_key`]; a warm service decodes each once per engine)
+    /// Decoded asset meshes by what their content id names ([`asset_key`]; cached per engine for session wait parity)
     #[cfg_attr(not(feature = "meshes"), allow(dead_code))]
-    assets: RefCell<FxHashMap<String, Rc<Mesh>>>,
+    assets: RefCell<FxHashMap<String, Arc<Mesh>>>,
 }
 
 impl crate::Extension for MeshExtension {
@@ -977,14 +980,27 @@ fn asset_key(engine: &Engine, uri: &str) -> String {
     }
 }
 
-/// The mesh asset `uri`, decoded (cached per engine).
+/// Decoded mesh files kept per process by path and stamp (so warm services and batch workers decode each once).
 #[cfg(feature = "meshes")]
-fn load_asset(engine: &Engine, uri: &str) -> Result<Rc<Mesh>, String> {
+static KEPT_ASSETS: OnceLock<Mutex<FxHashMap<PathBuf, (files::Stamp, Arc<Mesh>)>>> = OnceLock::new();
+
+/// Drops cached decoded mesh assets whose files changed or disappeared since they were decoded.
+#[cfg(feature = "meshes")]
+pub(crate) fn forget_stale_meshes() {
+    if let Some(cache) = KEPT_ASSETS.get() {
+        if let Ok(mut cache) = cache.lock() {
+            cache.retain(|path, (stamp, _)| files::stamp(path) == Some(*stamp));
+        }
+    }
+}
+
+/// The mesh asset `uri`, decoded (cached per engine and per process by file stamp).
+#[cfg(feature = "meshes")]
+fn load_asset(engine: &Engine, uri: &str) -> Result<Arc<Mesh>, String> {
     let key = asset_key(engine, uri);
     if let Some(mesh) = extension(engine).assets.borrow().get(&key) {
         return Ok(mesh.clone());
     }
-    files::note_unchecked("a mesh was read");
     // a local file (a relative one the project's), else an asset downloaded once: `<state dir>/meshes/<id>`, a pinned
     // version `<id>-v<version>`
     let path = match engine.options.local_file(uri) {
@@ -994,26 +1010,42 @@ fn load_asset(engine: &Engine, uri: &str) -> Result<Rc<Mesh>, String> {
             let cache = crate::state_dir(&engine.options.repo).join("meshes");
             let cached = cache.join(asset.file_stem());
             if !files::is_file(&cached) {
-                crate::animation::source::fetch(engine, uri, asset, &cache, &cached)?;
+                if let Err(error) = crate::animation::source::fetch(engine, uri, asset, &cache, &cached) {
+                    files::note_unchecked("a mesh failed to load");
+                    return Err(error);
+                }
             }
             cached
         }
     };
+    files::note(&path);
+    let stamp = files::stamp(&path);
+    if let Some(stamp) = stamp {
+        if let Some(mesh) = KEPT_ASSETS.get().and_then(|cache| cache.lock().ok()?.get(&path).filter(|(kept, _)| *kept == stamp).map(|(_, mesh)| mesh.clone())) {
+            extension(engine).assets.borrow_mut().insert(key, mesh.clone());
+            return Ok(mesh);
+        }
+    }
     let bytes = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     let file = ror_mesh::decode_mesh(&bytes).map_err(|error| format!("{uri}: {error}"))?;
-    let mesh = Rc::new(Mesh::from_file(&file));
+    let mesh = crate::alloc::long_lived(|| Arc::new(Mesh::from_file(&file)));
+    if let Some(stamp) = stamp {
+        let cache = KEPT_ASSETS.get_or_init(Default::default);
+        if let Ok(mut cache) = cache.lock() {
+            crate::alloc::long_lived(|| cache.insert(path, (stamp, mesh.clone())));
+        }
+    }
     extension(engine).assets.borrow_mut().insert(key, mesh.clone());
     Ok(mesh)
 }
 
 #[cfg(not(feature = "meshes"))]
-fn load_asset(_: &Engine, uri: &str) -> Result<Rc<Mesh>, String> {
+fn load_asset(_: &Engine, uri: &str) -> Result<Arc<Mesh>, String> {
     Err(format!("{uri}: this build decodes no mesh assets (feature `meshes`)"))
 }
 
 /// Writes `mesh`'s snapshot (named by its content) and returns its path.
 fn snapshot(engine: &Engine, mesh: &Mesh) -> Result<PathBuf, String> {
-    files::note_unchecked("a mesh was written");
     let bytes = encode(mesh);
     let mut hasher = FxHasher::default();
     bytes.hash(&mut hasher);
@@ -1021,8 +1053,13 @@ fn snapshot(engine: &Engine, mesh: &Mesh) -> Result<PathBuf, String> {
     let path = directory.join(format!("{:016x}-{}.mesh", hasher.finish(), bytes.len()));
     if !files::is_file(&path) {
         std::fs::create_dir_all(&directory).map_err(|error| format!("{}: {error}", directory.display()))?;
-        std::fs::write(&path, &bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+        if let Err(error) = files::write_atomic(&path, &bytes) {
+            if !files::is_file(&path) {
+                return Err(format!("{}: {error}", path.display()));
+            }
+        }
     }
+    files::note(&path);
     Ok(path)
 }
 
@@ -2200,6 +2237,21 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         Ok(none())
     }));
 
+}
+
+#[cfg(test)]
+pub(crate) fn test_mesh_bytes(extent: f32, faces: usize) -> Vec<u8> {
+    let mut mesh = Mesh::default();
+    let a = mesh.positions.add(Vec3::ZERO);
+    let b = mesh.positions.add(Vec3::new(extent, 0.0, 0.0));
+    let c = mesh.positions.add(Vec3::new(0.0, extent, extent));
+    let n = mesh.normals.add(Some(Vec3::Z));
+    let color = mesh.colors.add(([1.0, 1.0, 1.0], 1.0));
+    let uv = mesh.uvs.add([0.0, 0.0]);
+    for _ in 0..faces.max(1) {
+        mesh.faces.add(Face { vertices: [a, b, c], normals: [n, n, n], colors: [color, color, color], uvs: [uv, uv, uv], stamps: [1, 2, 3] });
+    }
+    encode(&mesh)
 }
 
 #[cfg(test)]

@@ -14,11 +14,12 @@
 //! reads the same now:
 //!
 //! - every file and listing it read, or found missing (crate::files::note: the project's settings,
-//!   the Studio hierarchy, mounted files, the asset manifest and the bundle files, animation files);
+//!   the Studio hierarchy, mounted files, the asset manifest and the bundle files, animation and mesh
+//!   files);
 //! - the project's directory listings (project::Listing): the same entries, and the same stamps for
 //!   every file but the Luau sources it did not read (those are read later, as they are then);
 //! - the wall clock's hour and zone (os.time, DateTime.now, tick read the hour the engine was made);
-//! - no image read or written, no bundle or animation that failed to load, no recorded clock (RUR_CLOCK).
+//! - no image read or written, no bundle, animation or mesh that failed to load, no recorded clock (RUR_CLOCK).
 //!
 //! Anything else is the same by construction: the arguments, the environment and the build are the
 //! service's and the job's own, and the run's clocks are virtual. The files and listings are checked
