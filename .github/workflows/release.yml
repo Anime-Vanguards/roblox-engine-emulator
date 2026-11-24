@@ -14,8 +14,13 @@
 # are still kept, it fails.
 #
 # Jobs: version (checks the tag), build and smoke (once per platform), notes, then publish (a version tag) or canary
-# (the canary tag), which alone may write. The scripts are in tools/release/ (README.md there). Release builds start
-# clean: no cache is restored.
+# (the canary tag), which alone may write. The scripts are in tools/release/ (README.md there).
+#
+# Build cache: dry runs on main that do not change Cargo.toml's package version reuse compiled dependencies and
+# sccache objects from earlier main runs (pruning ree's own crate before saving so ree always compiles from current
+# source). Only runs on main write caches, keyed by runner image and compilers; pull requests, version-bump release
+# commits ("Release vX.Y.Z"), and v* tag fallback builds start clean with no cache. vars.RELEASE_BUILD_CACHE=off or
+# workflow_dispatch clean-build=true also forces a clean build.
 name: Release
 
 on:
@@ -26,20 +31,29 @@ on:
     paths:
       - '.github/workflows/release.yml'
       - 'tools/release/**'
+      - 'tools/ci/compile-cache.mjs'
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - '**/build.rs'
       - '.cargo/config.toml'
       - 'tools/vendor.mjs'
       - 'patches/**'
+      - 'src/**'
+      - 'vendor/**'
+      - 'data/**'
       - 'LICENSE'
       - 'NOTICE'
       - 'THIRD_PARTY_NOTICES.md'
       - 'licenses/**'
-  # Nightly, at main's head (01:31 UTC)
+  # Scheduled sweep every 2 hours at main's head (skips in seconds when nothing shipped)
   schedule:
-    - cron: "31 1 * * *"
+    - cron: "31 */2 * * *"
   workflow_dispatch:
+    inputs:
+      clean-build:
+        description: Build every crate from nothing, without the build cache
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -68,6 +82,11 @@ jobs:
       dry-run-date: ${{ steps.dry-run.outputs.run-date }}
       # false when a nightly run has nothing to build; empty on every other run
       nightly-build: ${{ steps.nightly.outputs.build }}
+      # true when Cargo.toml's package version changed vs HEAD^ (a version-bump release commit); disables build caches
+      # so versioned v* releases always publish clean cacheless binaries
+      release-commit: ${{ steps.build-cache.outputs.release-commit }}
+      # What the dependencies are compiled from, without workspace crate versions (tools/release/build-cache.mjs)
+      build-cache: ${{ steps.build-cache.outputs.key }}
     steps:
       - name: Check out the full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,6 +111,15 @@ jobs:
             version=$(node tools/release/version.mjs)
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Key the build cache and detect release version bumps
+        id: build-cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          key=$(node tools/release/build-cache.mjs Cargo.toml profile-view/Cargo.toml tests/host/Cargo.toml Cargo.lock .cargo/config.toml)
+          release_commit=$(node tools/release/build-cache.mjs --is-release-commit)
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "release-commit=$release_commit" >> "$GITHUB_OUTPUT"
       # A tag publishes the zips the passing dry run of the same commit built and smoke-tested on every platform; build
       # and smoke below then have nothing to do. Without one they run for a version tag, while the canary tag fails here
       # (--required), so it never builds.
@@ -158,8 +186,46 @@ jobs:
         run: node tools/vendor.mjs --check
       - name: Release script tests
         run: node --test tools/release/test.mjs
-      - name: Build with public default features and no cache
+      # Main-only build cache for non-release dry runs (canaries). Never runs on PRs, version-bump release commits
+      # ("Release vX.Y.Z"), or v* tag fallback builds; vars.RELEASE_BUILD_CACHE=off or clean-build disables it too.
+      # Runner image and compiler versions enter the cache keys so no build mixes toolchains across images.
+      - name: Name the runner image for the build cache
+        id: image
+        if: ${{ github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build }}
         shell: bash
+        run: echo "name=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Install sccache 0.19.0 (SHA-256 verified)
+        id: sccache-setup
+        if: ${{ github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build }}
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ steps.image.outputs.name }}
+        run: node tools/ci/compile-cache.mjs start --tools "$RUNNER_TEMP/sccache" --cache "$RUNNER_TEMP/compile-cache" --prefix "ree-release-sccache-v1-$RELEASE_OS-$TARGET-$IMAGE_NAME" --workflow .github/workflows/release.yml
+      - name: Restore the build cache for vendored sources
+        id: sccache-restore
+        if: ${{ github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build && steps.sccache-setup.outcome == 'success' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.sccache-setup.outputs.key }}
+          restore-keys: ree-release-sccache-v1-${{ matrix.os }}-${{ matrix.target }}-${{ steps.image.outputs.name }}-
+          path: &sccache-cache-path ${{ runner.temp }}/compile-cache
+      - name: Restore the compiled dependencies of an earlier run on main
+        id: cache
+        if: ${{ github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build && steps.sccache-setup.outcome == 'success' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ree-release-v1-${{ matrix.os }}-${{ matrix.target }}-${{ steps.image.outputs.name }}-1.90.0-cgu8-${{ needs.version.outputs.build-cache }}
+          restore-keys: ree-release-v1-${{ matrix.os }}-${{ matrix.target }}-${{ steps.image.outputs.name }}-1.90.0-cgu8-
+          path: &dep-cache-paths |
+            ~/.cargo/git
+            target/release
+            target/${{ matrix.target }}/release
+      - name: Build with public default features
+        id: build
+        shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_INCREMENTAL: 'false'
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '8'
         run: cargo build --release --locked --bin ree --target "$TARGET"
       # A bad static-CRT or mimalloc setup builds fine and then crashes at startup. Run it here so that fails the build
       # job, not only the smoke job after the zip is uploaded.
@@ -179,6 +245,27 @@ jobs:
           name: ree-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*.zip
           if-no-files-found: error
+      - name: Compile cache statistics
+        if: ${{ !cancelled() && steps.sccache-setup.outcome == 'success' }}
+        shell: bash
+        run: node tools/ci/compile-cache.mjs stop
+      # Saved last, only after a passing build on main whose cache key was not already stored.
+      - name: Store the build cache for vendored sources
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build && steps.sccache-restore.outcome == 'success' && steps.sccache-restore.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.sccache-restore.outputs.cache-primary-key }}
+          path: *sccache-cache-path
+      - name: Leave ree's own files out of the build cache
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build && steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        shell: bash
+        run: node tools/release/build-cache.mjs --prune target/release "target/$TARGET/release" --names roblox-engine-emulator,ree
+      - name: Store the compiled dependencies for later runs on main
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build && steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+          path: *dep-cache-paths
 
   smoke:
     if: ${{ !github.event.repository.private && needs.version.outputs.dry-run == '' && needs.version.outputs.nightly-build != 'false' }}

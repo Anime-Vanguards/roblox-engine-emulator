@@ -1,8 +1,11 @@
 # Release scripts
 
 Scripts that build ree's release archive: Node.js 20 or later, no npm packages, run from the repository root. The
-release workflow (`.github/workflows/release.yml`) runs the same commands on Windows, Linux and macOS. It builds clean
-with Rust 1.90.0, the lockfile and the default features.
+release workflow (`.github/workflows/release.yml`) runs the same commands on Windows, Linux and macOS with Rust 1.90.0,
+the lockfile, the default features and `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8`. Non-release dry runs on `main`
+(canaries) reuse compiled dependencies and `sccache` objects from earlier `main` runs via `build-cache.mjs` and
+`tools/ci/compile-cache.mjs`; version-bump release commits (`--is-release-commit`), `v*` tag fallback builds,
+`vars.RELEASE_BUILD_CACHE=off`, and `workflow_dispatch` `clean-build=true` start clean with no build cache.
 
 Windows sets two environment variables for the build:
 

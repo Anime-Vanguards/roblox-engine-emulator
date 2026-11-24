@@ -13,6 +13,7 @@ import { canaryAssets, canaryNotes, notes } from "./notes.mjs";
 // The choice of the dry run a tag publishes from has tests of its own, run with these
 import "./dry-run.test.mjs";
 import "./nightly.test.mjs";
+import "./build-cache.test.mjs";
 import { checkAssetWorker, removeTestFolder, servedRun } from "./smoke.mjs";
 
 // A fake `ree` whose single service has pid 41 and has completed one job. Once the job has run, the service has
@@ -520,10 +521,25 @@ test("release workflow retains its publication boundary and pins", () => {
 	// the six jobs run on the public repository only
 	assert.equal(lines.filter((line) => /^    if: .*repository.private/.test(line)).length, 6);
 
-	// the publish job runs no repository code, and nothing is cached
+	// the publish job runs no repository code, and rust-cache / combined actions/cache@ are never used
 	const publish = workflow.split(/^  publish:/m)[1];
 	assert(!publish.includes("actions/checkout"));
 	assert(!workflow.includes("rust-cache"));
+	assert(!workflow.includes("uses: actions/cache@"));
+	assert.doesNotMatch(workflow, /SCCACHE_GHA|ACTIONS_RUNTIME_TOKEN|ACTIONS_CACHE_URL|ACTIONS_RESULTS_URL/);
+
+	// main-only release build caches never run on PRs, version-bump release commits, v* tag builds,
+	// RELEASE_BUILD_CACHE=off, or clean-build; keys include runner image; ree's own crate is pruned before save
+	const buildJob = workflow.replace(/\r\n/g, "\n").split(/^  build:\n/m)[1].split(/^  \S/m)[0];
+	const cacheGate = "github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build";
+	assert.match(workflow, /clean-build:\r?\n\s+description:[^\r\n]+\r?\n\s+type: boolean\r?\n\s+default: false/);
+	assert.match(workflow, /release-commit: \$\{\{ steps\.build-cache\.outputs\.release-commit \}\}/);
+	assert.match(buildJob, /- name: Install sccache /);
+	for (const step of buildJob.split(/^      - /m).filter((s) => /actions\/cache\/(restore|save)@|compile-cache\.mjs start|build-cache\.mjs --prune/.test(s))) {
+		assert(step.includes(cacheGate), `cache step missing main/release-commit/kill-switch gate:\n${step}`);
+	}
+	assert.equal(buildJob.match(/steps\.image\.outputs\.name/g)?.length >= 4, true, "runner image must enter cache keys");
+	assert(buildJob.indexOf("build-cache.mjs --prune") > 0 && buildJob.indexOf("build-cache.mjs --prune") < buildJob.indexOf("Store the compiled dependencies"));
 
 	// the mimalloc define is spelled -D, in the workflow and in the rebuild instructions: Git Bash turns a /D value
 	// in the environment into a path, and the define never reaches the compiler
@@ -563,9 +579,9 @@ test("the canary publishes a passing run's zips as a prerelease under fixed name
 	// a job's lines, up to the next job or the comment above it
 	const job = (name) => workflow.split(new RegExp(`^  ${name}:\\n`, "m"))[1].split(/^  \S/m)[0];
 
-	// the canary tag runs beside the version tags, and a nightly run builds main's head
+	// the canary tag runs beside the version tags, and a scheduled run sweeps main's head every 2 hours
 	assert.match(workflow, /^    tags: \['v\[0-9\]\+\.\[0-9\]\+\.\[0-9\]\+', 'canary'\]$/m);
-	assert.match(workflow, /^  schedule:\n    - cron: "31 1 \* \* \*"$/m);
+	assert.match(workflow, /^  schedule:\n    - cron: "31 \*\/2 \* \* \*"$/m);
 	// nightly runs and canary runs each share a group apart from the pushes' dry runs, and nothing is cancelled
 	const group = /^  group: (.*)$/m.exec(workflow)[1];
 	assert(group.startsWith("release-${{ github.event_name == 'schedule' && 'nightly' || github.event_name == 'push' && github.ref == 'refs/tags/canary' && 'canary' || "), group);

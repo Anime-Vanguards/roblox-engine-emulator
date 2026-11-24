@@ -6,7 +6,7 @@ How to install and verify prebuilt `ree` binaries, build from source, configure 
 
 [GitHub Releases](https://github.com/Anime-Vanguards/roblox-engine-emulator/releases) ship one flat zip per platform named `ree-<version>-<os>-<arch>.zip`. Extract `ree.exe` (Windows) or `ree` (Linux/macOS) onto your `PATH`.
 
-Between releases, the nightly [canary](https://github.com/Anime-Vanguards/roblox-engine-emulator/releases/tag/canary) prerelease publishes `ree-canary-<os>-<arch>.zip` with stable download URLs and `SHA256SUMS`. Canary builds are untested as releases and may break.
+Between releases, the rolling [canary](https://github.com/Anime-Vanguards/roblox-engine-emulator/releases/tag/canary) prerelease publishes `ree-canary-<os>-<arch>.zip` with stable download URLs and `SHA256SUMS`. Canary builds are untested as releases and may break.
 
 ### Platforms
 
@@ -40,13 +40,13 @@ Installed release binaries run strictly in standalone mode—never implicitly lo
 
 ### How releases are built
 
-`.github/workflows/release.yml` builds from public tags using Rust `1.90.0`, `node tools/vendor.mjs --check`, default features, and `cargo build --release --locked --bin ree --target <triple>` (no build cache).
+`.github/workflows/release.yml` builds using Rust `1.90.0`, `node tools/vendor.mjs --check`, default features, and `cargo build --release --locked --bin ree --target <triple>` (`CARGO_PROFILE_RELEASE_INCREMENTAL=false`, `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=8`). Non-release dry runs on `main` (canaries) reuse a main-only dependency and `sccache` build cache keyed by runner image and compilers (pruning `ree`'s own crate before saving); version-bump release commits, `v*` tag fallback builds, `vars.RELEASE_BUILD_CACHE=off`, and manual `clean-build=true` runs start clean with no build cache.
 
 Windows sets two build flags:
 - `RUSTFLAGS="-C target-feature=+crt-static"` — statically links the C/C++ runtime so no VC++ redistributable is required.
 - `CXXFLAGS_x86_64_pc_windows_msvc="-DMI_WIN_INIT_USE_FLS=1"` — makes `mimalloc` v2 initialize via FLS rather than an early TLS hook that runs before static CRT initialization (use `-D`, not `/D`, so Git Bash does not rewrite it as a path).
 
-Windows verifies `--version` immediately after compiling. Main-branch pushes and manual runs perform dry runs uploading artifacts; tag pushes publish the passing main-branch dry-run zips (or build and test from scratch if none exist). Nightly runs build `main` if no passing run exists for HEAD, and the `canary` tag publishes the latest passing nightly zips.
+Windows verifies `--version` immediately after compiling. Main-branch pushes touching shipping paths (`src/**`, `vendor/**`, `data/**`, manifests, patches, release scripts) and manual runs perform dry runs uploading artifacts; tag pushes publish the passing main-branch dry-run zips (or build and test from scratch if none exist). Scheduled runs sweep `main` every 2 hours (skipping in seconds when nothing that ships changed since the newest passing run), and the `canary` tag publishes the latest passing zips.
 
 ### Verifying a release
 

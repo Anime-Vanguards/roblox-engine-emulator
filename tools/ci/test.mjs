@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { command } from "../release/common.mjs";
-import { cacheKey, checked, download, parseEnvironment, stop } from "./compile-cache.mjs";
+import { cacheKey, checked, download, parseEnvironment, sccachePin, stop } from "./compile-cache.mjs";
 import { OWN_JOBS, RUN_MS, jobOf, parseTestList, partition, readWeights, run, shares } from "./test-runner.mjs";
 
 const WORKFLOW = fs.readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -283,6 +283,17 @@ test("the cache key follows a vendored file's bytes and name and the compilers' 
 	assert.notEqual(edited, first);
 	fs.renameSync(source, path.join(root, "vendor", "vm", "lgc.cpp"));
 	assert.notEqual(key(), edited);
+	assert.match(cacheKey(root, ["Cargo.lock"], ["rustc 1.90.0"], "ree-release-sccache"), /^ree-release-sccache-[0-9a-f]{32}$/);
+});
+
+test("sccache pins cover Windows x64, Linux x64 and macOS arm64 with SHA-256 digests", () => {
+	for (const [platform, arch, exe] of [["win32", "x64", "sccache.exe"], ["linux", "x64", "sccache"], ["darwin", "arm64", "sccache"]]) {
+		const pin = sccachePin(platform, arch);
+		assert.equal(pin.exe, exe);
+		assert.match(pin.sha256, /^[0-9a-f]{64}$/);
+		assert.match(pin.url, /^https:\/\/github\.com\/mozilla\/sccache\/releases\/download\/v0\.19\.0\//);
+	}
+	assert.throws(() => sccachePin("freebsd", "x64"), /no pinned sccache/);
 });
 
 test("stopping prints sccache's statistics, and a job in which no server is running is told so and passes", () => {
