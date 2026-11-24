@@ -149,20 +149,16 @@ pub fn loadmodule(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue) -> Ret {
         modules::note_required(engine, path);
     }
     // A JSON module (Rojo `.json`, which Studio holds as a ModuleScript returning the table): each call returns a fresh
-    // Luau table built from the parsed JSON value, as running that module's source would build the table again
+    // Luau table built from the cached compact binary JSON, as running that module's source would build the table again
     if let (true, Some(path)) = (json, &path) {
-        let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
-        let parsed = match modules::parse_json(engine, path) {
-            Ok(value) => value,
-            Err(message) => {
-                return Ok(values([LuaValue::Nil, LuaValue::String(lua.create_string(format!("{name}: invalid JSON module ({message})"))?)]));
+        match modules::load_json_loadmodule(lua, engine, module, path)? {
+            Ok((function, cleanup)) => {
+                return Ok(values([LuaValue::Function(function), LuaValue::Nil, LuaValue::Function(cleanup)]));
             }
-        };
-        let decode = lua.create_function(move |lua, ()| modules::json_to_lua(lua, &parsed).map_err(LuaError::runtime))?;
-        let env = modules::environment(lua, engine, module)?;
-        let function = modules::wrap_json_loadmodule(lua, engine, &name, decode, env)?;
-        let cleanup = modules::noop_cleanup(lua, engine)?;
-        return Ok(values([LuaValue::Function(function), LuaValue::Nil, LuaValue::Function(cleanup)]));
+            Err(message) => {
+                return Ok(values([LuaValue::Nil, LuaValue::String(lua.create_string(message)?)]));
+            }
+        }
     }
     let source = match modules::source_rc_opts(engine, module, !engine.options.native) {
         Some(source) => source,

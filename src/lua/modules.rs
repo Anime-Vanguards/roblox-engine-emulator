@@ -11,6 +11,11 @@ use rustc_hash::FxHashMap;
 use super::{instance::defer_thread, instance::materialize, instance_value, raw::instance_of_ud};
 use crate::{Engine, InstanceId, K, NameId, dom::flags, value::Value};
 
+#[path = "module_store.rs"]
+pub(crate) mod store;
+
+use store::StoredBytes;
+
 #[derive(PartialEq, Eq)]
 enum Status {
     Loading,
@@ -49,16 +54,21 @@ pub struct ModuleRecords {
     prefetch: Option<std::sync::Arc<Prefetch>>,
     /// Compiled bytecode cached per script (keyed against the exact compiled source bytes) so repeated
     /// `debug.loadmodule` loads skip re-compiling unchanged source
-    bytecode: FxHashMap<InstanceId, (Rc<[u8]>, Rc<[u8]>)>,
+    bytecode: FxHashMap<InstanceId, (Rc<[u8]>, StoredBytes)>,
     /// Compiled bytecode cached per script for `--native` `debug.loadmodule` (compiled with mutable sandbox globals)
-    loadmodule_bytecode: FxHashMap<InstanceId, (Rc<[u8]>, Rc<[u8]>)>,
+    loadmodule_bytecode: FxHashMap<InstanceId, (Rc<[u8]>, StoredBytes)>,
     /// Loaded `debug.loadmodule` chunk templates (keyed against exact source bytes and full name) so repeated
     /// `debug.loadmodule` calls clone the immutable `Proto` and its native machine code instead of re-loading/re-JITing
     loadmodule_templates: FxHashMap<InstanceId, (Rc<[u8]>, String, LuaFunction)>,
+    /// Loaded JSON `debug.loadmodule` inner closure templates keyed by `(path, full_name, bjson_ptr)` so repeated
+    /// JSON `debug.loadmodule` calls clone the closure into a fresh environment instead of reloading bytecode/closures
+    json_loadmodule_templates: FxHashMap<InstanceId, (Rc<str>, String, usize, LuaFunction)>,
     /// Single stateless no-op cleanup function returned by `debug.loadmodule`
     noop_cleanup: Option<LuaFunction>,
     /// Parsed JSON module values cached per engine so repeated `debug.loadmodule` loads skip re-reading and re-parsing
     json_cache: FxHashMap<String, std::sync::Arc<serde_json::Value>>,
+    /// Compact binary JSON payloads cached per engine (pointing into mmap store or heap)
+    bjson_cache: FxHashMap<String, StoredBytes>,
     /// Deferred native compilation ([`defer_codegen`]): module chunks loaded as bytecode only,
     /// compiled to native code later by [`compile_deferred`]
     deferred: Option<std::collections::VecDeque<LuaFunction>>,
@@ -89,6 +99,13 @@ impl ModuleRecords {
         self.bytecode.remove(&script);
         self.loadmodule_bytecode.remove(&script);
         self.loadmodule_templates.remove(&script);
+        self.json_loadmodule_templates.remove(&script);
+    }
+}
+
+impl Drop for ModuleRecords {
+    fn drop(&mut self) {
+        store::flush_all();
     }
 }
 
@@ -100,31 +117,67 @@ impl ModuleRecords {
 /// source it was compiled from and a successful compile, so a chunk loads exactly as if it had
 /// been compiled on the spot (compile errors take the ordinary path).
 pub struct Prefetch {
-    ready: std::sync::Mutex<std::collections::HashMap<String, (Vec<u8>, Option<Vec<u8>>)>>,
+    ready: std::sync::Mutex<std::collections::HashMap<String, (std::sync::Arc<[u8]>, Option<StoredBytes>)>>,
+}
+
+fn compile_std_cached(store: Option<&store::Store>, source: &[u8]) -> Option<StoredBytes> {
+    let key = store::key_for(store::KIND_STD_BYTECODE, source);
+    if let Some(found) = store.and_then(|s| s.get(&key)) {
+        crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
+        return Some(found);
+    }
+    let compiled = compiler().compile(source).ok()?;
+    let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(compiled.into_boxed_slice());
+    if let Some(store) = store {
+        store.put(key, arc.clone());
+    }
+    Some(StoredBytes::owned(arc))
+}
+
+fn parse_bjson_cached(store: Option<&store::Store>, source: &[u8]) -> Result<StoredBytes, String> {
+    let key = store::key_for(store::KIND_BINARY_JSON, source);
+    if let Some(found) = store.and_then(|s| s.get(&key)).filter(|b| store::validate_bjson(b)) {
+        return Ok(found);
+    }
+    let parsed = serde_json::from_slice::<serde_json::Value>(source).map_err(|error| error.to_string())?;
+    let encoded = store::encode_bjson(&parsed);
+    let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(encoded.into_boxed_slice());
+    if let Some(store) = store {
+        store.put(key, arc.clone());
+    }
+    Ok(StoredBytes::owned(arc))
 }
 
 impl Prefetch {
     pub fn start(paths: Vec<String>) -> std::sync::Arc<Prefetch> {
         let prefetch = std::sync::Arc::new(Prefetch { ready: std::sync::Mutex::new(std::collections::HashMap::new()) });
         let shared = prefetch.clone();
+        let disk = store::default_store();
         let _ = std::thread::Builder::new().name("rur-prefetch".into()).spawn(move || {
             use rayon::prelude::*;
             let Ok(pool) = rayon::ThreadPoolBuilder::new().num_threads(4).thread_name(|_| "rur-prefetch".into()).build() else { return };
             pool.install(|| {
                 paths.par_iter().for_each(|path| {
                     let Ok(source) = std::fs::read(path) else { return };
+                    if path.ends_with(".json") {
+                        let _ = parse_bjson_cached(disk.as_deref(), &source);
+                    }
                     let lua_source = path.ends_with(".lua") || path.ends_with(".luau");
-                    let bytecode = if lua_source { compiler().compile(&source).ok() } else { None };
+                    let bytecode = if lua_source { compile_std_cached(disk.as_deref(), &source) } else { None };
+                    let source_arc: std::sync::Arc<[u8]> = std::sync::Arc::from(source.into_boxed_slice());
                     if let Ok(mut ready) = shared.ready.lock() {
-                        ready.insert(path.clone(), (source, bytecode));
+                        ready.insert(path.clone(), (source_arc, bytecode));
                     }
                 });
             });
+            if let Some(disk) = disk {
+                disk.flush();
+            }
         });
         prefetch
     }
 
-    fn take(&self, path: &str) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
+    fn take(&self, path: &str) -> Option<(std::sync::Arc<[u8]>, Option<StoredBytes>)> {
         self.ready.lock().ok()?.remove(path)
     }
 }
@@ -138,19 +191,29 @@ pub fn use_prefetch(engine: &Engine, prefetch: std::sync::Arc<Prefetch>) {
 /// keeps them ([`reuse_compiled_modules`]), else read now. When `compile_bytecode` is false, a
 /// cache miss skips compiling standard `require` bytecode (used by JSON reads and `--native`
 /// `debug.loadmodule`, which compiles with its own mutable-sandbox compiler).
-fn read_file_opts(engine: &Engine, path: &str, compile_bytecode: bool) -> std::io::Result<(Vec<u8>, Option<Vec<u8>>)> {
+fn read_file_opts(engine: &Engine, path: &str, compile_bytecode: bool) -> std::io::Result<(std::sync::Arc<[u8]>, Option<StoredBytes>)> {
     let prefetch = engine.modules.borrow().prefetch.clone();
     if let Some(taken) = prefetch.and_then(|prefetch| prefetch.take(path)) {
         return Ok(taken);
     }
     if let Some(compiled) = COMPILED.get() {
-        return compiled.read(path, compile_bytecode);
+        let disk = store::for_engine(engine);
+        return compiled.read_with_store(path, compile_bytecode, disk.as_deref());
     }
-    std::fs::read(path).map(|bytes| (bytes, None))
+    let bytes = std::fs::read(path)?;
+    let source: std::sync::Arc<[u8]> = std::sync::Arc::from(bytes.into_boxed_slice());
+    let bytecode = if compile_bytecode && (path.ends_with(".lua") || path.ends_with(".luau")) {
+        let disk = store::for_engine(engine);
+        let key = store::key_for(store::KIND_STD_BYTECODE, &source);
+        disk.as_deref().and_then(|s| s.get(&key))
+    } else {
+        None
+    };
+    Ok((source, bytecode))
 }
 
 #[cfg(test)]
-fn read_file(engine: &Engine, path: &str) -> std::io::Result<(Vec<u8>, Option<Vec<u8>>)> {
+fn read_file(engine: &Engine, path: &str) -> std::io::Result<(std::sync::Arc<[u8]>, Option<StoredBytes>)> {
     read_file_opts(engine, path, true)
 }
 
@@ -162,7 +225,7 @@ struct CompiledSources {
 }
 
 /// (stamp, source and optional standard bytecode, whether a lasting thread made it)
-type CompiledSource = (crate::files::Stamp, std::sync::Arc<(Vec<u8>, Option<Vec<u8>>)>, bool);
+type CompiledSource = (crate::files::Stamp, std::sync::Arc<(std::sync::Arc<[u8]>, Option<StoredBytes>)>, bool);
 
 thread_local! {
     /// A thread that ends with its job ([`precompile`]'s): what it keeps sits in a heap that outlives
@@ -171,16 +234,18 @@ thread_local! {
 }
 
 /// A kept source and bytecode, copied to this thread's long-lived heap (crate::alloc).
-fn kept(source: &[u8], bytecode: Option<&[u8]>) -> std::sync::Arc<(Vec<u8>, Option<Vec<u8>>)> {
-    crate::alloc::long_lived(|| std::sync::Arc::new((source.to_vec(), bytecode.map(<[u8]>::to_vec))))
+fn kept(source: &[u8], bytecode: Option<StoredBytes>) -> std::sync::Arc<(std::sync::Arc<[u8]>, Option<StoredBytes>)> {
+    crate::alloc::long_lived(|| std::sync::Arc::new((std::sync::Arc::from(source), bytecode)))
 }
 
 static COMPILED: std::sync::OnceLock<CompiledSources> = std::sync::OnceLock::new();
 /// Process-wide cache of `--native` `debug.loadmodule` bytecode (compiled with mutable sandbox globals)
 /// so parallel `--batch` or `--service` workers compile each module from text once.
-static LOADMODULE_COMPILED: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, (crate::files::Stamp, std::sync::Arc<(Vec<u8>, Vec<u8>)>)>>> = std::sync::OnceLock::new();
+static LOADMODULE_COMPILED: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, (crate::files::Stamp, std::sync::Arc<(std::sync::Arc<[u8]>, StoredBytes)>)>>> = std::sync::OnceLock::new();
 /// Process-wide cache of parsed JSON modules shared across `--batch` or `--service` workers.
 static JSON_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, (crate::files::Stamp, std::sync::Arc<serde_json::Value>)>>> = std::sync::OnceLock::new();
+/// Process-wide cache of compact binary JSON payloads shared across `--batch` or `--service` workers.
+static BJSON_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, (crate::files::Stamp, StoredBytes)>>> = std::sync::OnceLock::new();
 /// Single-flight deduplication for cold bytecode compiles during `ree run --batch` so parallel
 /// workers starting together compile each shared module once instead of N times simultaneously.
 struct SingleFlight<V> {
@@ -225,8 +290,8 @@ impl<V: Clone> SingleFlight<V> {
     }
 }
 
-static COMPILED_FLIGHT: std::sync::OnceLock<SingleFlight<std::sync::Arc<(Vec<u8>, Option<Vec<u8>>)>>> = std::sync::OnceLock::new();
-static LOADMODULE_FLIGHT: std::sync::OnceLock<SingleFlight<std::sync::Arc<Vec<u8>>>> = std::sync::OnceLock::new();
+static COMPILED_FLIGHT: std::sync::OnceLock<SingleFlight<std::sync::Arc<(std::sync::Arc<[u8]>, Option<StoredBytes>)>>> = std::sync::OnceLock::new();
+static LOADMODULE_FLIGHT: std::sync::OnceLock<SingleFlight<StoredBytes>> = std::sync::OnceLock::new();
 /// True during `ree run --batch`: files on disk stay constant for the batch, skipping redundant `stat()`
 /// checks and duplicate precompile threads across parallel workers.
 static BATCH_FROZEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -241,13 +306,15 @@ pub fn is_batch_frozen() -> bool {
 
 impl CompiledSources {
     /// `path`'s source and optional standard bytecode, checked against the file now unless running
-    /// inside a frozen one-shot `--batch`.
-    fn read(&self, path: &str, compile_bytecode: bool) -> std::io::Result<(Vec<u8>, Option<Vec<u8>>)> {
-        let frozen = is_batch_frozen();
+    /// inside a frozen one-shot `--batch` or a one-shot `--native` process that does not outlive its run.
+    fn read_with_store(&self, path: &str, compile_bytecode: bool, disk: Option<&store::Store>) -> std::io::Result<(std::sync::Arc<[u8]>, Option<StoredBytes>)> {
+        let keeping = keeping_between_runs();
+        let one_shot = is_batch_frozen() || !keeping;
         let lasting = !TRANSIENT.with(std::cell::Cell::get);
-        if frozen {
+        let lua_source = path.ends_with(".lua") || path.ends_with(".luau");
+        if one_shot {
             if let Some((_, entry, _)) = self.entries.read().ok().and_then(|entries| entries.get(path).cloned()) {
-                if !compile_bytecode || entry.1.is_some() || !(path.ends_with(".lua") || path.ends_with(".luau")) {
+                if !compile_bytecode || entry.1.is_some() || !lua_source {
                     crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
                     return Ok((entry.0.clone(), entry.1.clone()));
                 }
@@ -257,17 +324,30 @@ impl CompiledSources {
             let entry = flight
                 .run(&flight_key, || {
                     if let Some((_, existing, _)) = self.entries.read().ok().and_then(|entries| entries.get(path).cloned()) {
-                        if !compile_bytecode || existing.1.is_some() || !(path.ends_with(".lua") || path.ends_with(".luau")) {
+                        if !compile_bytecode || existing.1.is_some() || !lua_source {
                             return Ok(existing);
                         }
+                        let bytecode = compile_std_cached(disk, &existing.0);
+                        let upgraded = std::sync::Arc::new((existing.0.clone(), bytecode));
+                        if let Ok(mut entries) = self.entries.write() {
+                            entries.insert(path.to_string(), (crate::files::Stamp { len: existing.0.len() as u64, modified: 0, directory: false }, upgraded.clone(), true));
+                        }
+                        return Ok(upgraded);
                     }
-                    let stamp = crate::files::stamp(std::path::Path::new(path)).ok_or_else(|| "not found".to_string())?;
                     let source = std::fs::read(path).map_err(|e| e.to_string())?;
-                    let lua_source = path.ends_with(".lua") || path.ends_with(".luau");
-                    let bytecode = if compile_bytecode && lua_source { compiler().compile(&source).ok() } else { None };
-                    let entry = kept(&source, bytecode.as_deref());
+                    let bytecode = if compile_bytecode && lua_source { compile_std_cached(disk, &source) } else { None };
+                    let entry = if keeping {
+                        kept(&source, bytecode)
+                    } else {
+                        std::sync::Arc::new((std::sync::Arc::from(source.into_boxed_slice()), bytecode))
+                    };
+                    let stamp = crate::files::Stamp { len: entry.0.len() as u64, modified: 0, directory: false };
                     if let Ok(mut entries) = self.entries.write() {
-                        crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, entry.clone(), lasting)));
+                        if keeping {
+                            crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, entry.clone(), lasting)));
+                        } else {
+                            entries.insert(path.to_string(), (stamp, entry.clone(), true));
+                        }
                     }
                     Ok(entry)
                 })
@@ -278,11 +358,10 @@ impl CompiledSources {
         let known = self.entries.read().ok().and_then(|entries| entries.get(path).cloned());
         if let Some((known_stamp, entry, home)) = known {
             if known_stamp == stamp {
-                let lua_source = path.ends_with(".lua") || path.ends_with(".luau");
                 if !compile_bytecode || entry.1.is_some() || !lua_source {
                     crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
                     if lasting && !home {
-                        let copy = kept(&entry.0, entry.1.as_deref());
+                        let copy = kept(&entry.0, entry.1.clone());
                         if let Ok(mut entries) = self.entries.write() {
                             crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, copy, true)));
                         }
@@ -290,8 +369,8 @@ impl CompiledSources {
                     return Ok((entry.0.clone(), entry.1.clone()));
                 }
                 // Upgrade cached raw source with compiled standard bytecode.
-                let bytecode = compiler().compile(&entry.0).ok();
-                let upgraded = kept(&entry.0, bytecode.as_deref());
+                let bytecode = compile_std_cached(disk, &entry.0);
+                let upgraded = kept(&entry.0, bytecode.clone());
                 if let Ok(mut entries) = self.entries.write() {
                     crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, upgraded, lasting)));
                 }
@@ -300,14 +379,18 @@ impl CompiledSources {
         }
         crate::profiler::caches::miss(crate::profiler::caches::Cache::Bytecode);
         let source = std::fs::read(path)?;
-        let lua_source = path.ends_with(".lua") || path.ends_with(".luau");
-        let bytecode = if compile_bytecode && lua_source { compiler().compile(&source).ok() } else { None };
+        let bytecode = if compile_bytecode && lua_source { compile_std_cached(disk, &source) } else { None };
         // (kept across runs: copied to the long-lived heap, away from the compiler's garbage)
-        let entry = kept(&source, bytecode.as_deref());
+        let entry = kept(&source, bytecode.clone());
         if let Ok(mut entries) = self.entries.write() {
             crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, entry.clone(), lasting)));
         }
-        Ok((source, bytecode))
+        Ok((entry.0.clone(), bytecode))
+    }
+
+    fn read(&self, path: &str, compile_bytecode: bool) -> std::io::Result<(std::sync::Arc<[u8]>, Option<StoredBytes>)> {
+        let disk = store::default_store();
+        self.read_with_store(path, compile_bytecode, disk.as_deref())
     }
 }
 
@@ -326,6 +409,7 @@ pub fn share_compiled_modules() {
     let _ = COMPILED.set(CompiledSources { entries: std::sync::RwLock::new(Default::default()) });
     let _ = LOADMODULE_COMPILED.set(std::sync::RwLock::new(Default::default()));
     let _ = JSON_CACHE.set(std::sync::RwLock::new(Default::default()));
+    let _ = BJSON_CACHE.set(std::sync::RwLock::new(Default::default()));
 }
 
 /// The process runs many VMs one after another and keeps what their mounts read ([`reuse_compiled_modules`])
@@ -347,11 +431,23 @@ pub fn precompile(paths: Vec<String>) {
     if missing.is_empty() {
         return;
     }
+    let disk = store::default_store();
     let _ = std::thread::Builder::new().name("ree-precompile".into()).spawn(move || {
         use rayon::prelude::*;
         let pool = rayon::ThreadPoolBuilder::new().num_threads(4).thread_name(|_| "ree-precompile".into()).start_handler(|_| TRANSIENT.with(|transient| transient.set(true)));
         let Ok(pool) = pool.build() else { return };
-        pool.install(|| missing.par_iter().for_each(|path| drop(compiled.read(path, true))));
+        pool.install(|| {
+            missing.par_iter().for_each(|path| {
+                if let Ok((bytes, _)) = compiled.read_with_store(path, true, disk.as_deref()) {
+                    if path.ends_with(".json") {
+                        let _ = parse_bjson_cached(disk.as_deref(), &bytes);
+                    }
+                }
+            });
+        });
+        if let Some(disk) = disk {
+            disk.flush();
+        }
     });
 }
 
@@ -364,7 +460,12 @@ pub fn precompile_now(paths: &[String]) -> usize {
         let Ok(entries) = compiled.entries.read() else { return 0 };
         paths.iter().filter(|path| !entries.contains_key(*path)).collect()
     };
-    missing.par_iter().filter(|path| compiled.read(path, true).is_ok()).count()
+    let disk = store::default_store();
+    let count = missing.par_iter().filter(|path| compiled.read_with_store(path, true, disk.as_deref()).is_ok()).count();
+    if let Some(disk) = disk {
+        disk.flush();
+    }
+    count
 }
 
 /// Drops the kept sources and bytecode of module files that changed or are gone (a changed file is
@@ -387,21 +488,27 @@ pub fn forget_stale_modules() {
             entries.retain(|path, (stamp, _)| crate::files::stamp(std::path::Path::new(path)) == Some(*stamp));
         }
     }
+    if let Some(bjson) = BJSON_CACHE.get() {
+        if let Ok(mut entries) = bjson.write() {
+            entries.retain(|path, (stamp, _)| crate::files::stamp(std::path::Path::new(path)) == Some(*stamp));
+        }
+    }
+    store::flush_all();
 }
 
-fn kept_loadmodule_bytecode(engine: &Engine, script: InstanceId, source: &[u8]) -> Option<Vec<u8>> {
+fn kept_loadmodule_bytecode(engine: &Engine, script: InstanceId, source: &[u8]) -> Option<StoredBytes> {
     let cache = LOADMODULE_COMPILED.get()?;
     let path = engine.state.borrow().dom.at(script).source_path().cloned()?;
     let entries = cache.read().ok()?;
     let (_, entry) = entries.get(&*path)?;
-    (entry.0 == source).then(|| entry.1.clone())
+    (&*entry.0 == source).then(|| entry.1.clone())
 }
 
-fn store_loadmodule_bytecode(engine: &Engine, script: InstanceId, source: &[u8], bytecode: &[u8]) {
+fn store_loadmodule_bytecode(engine: &Engine, script: InstanceId, source: &[u8], bytecode: StoredBytes) {
     let Some(cache) = LOADMODULE_COMPILED.get() else { return };
     let Some(path) = engine.state.borrow().dom.at(script).source_path().cloned() else { return };
     let Some(stamp) = crate::files::stamp(std::path::Path::new(&*path)) else { return };
-    let entry = crate::alloc::long_lived(|| std::sync::Arc::new((source.to_vec(), bytecode.to_vec())));
+    let entry = crate::alloc::long_lived(|| std::sync::Arc::new((std::sync::Arc::from(source), bytecode)));
     if let Ok(mut entries) = cache.write() {
         crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, entry)));
     }
@@ -409,19 +516,19 @@ fn store_loadmodule_bytecode(engine: &Engine, script: InstanceId, source: &[u8],
 
 /// The process's bytecode of `script`'s file when it was compiled from exactly `source` ([`reuse_compiled_modules`]): a
 /// loopback run's client copy of a module the server had read already carries its text, not a read of its own
-fn kept_bytecode(engine: &Engine, script: InstanceId, source: &[u8]) -> Option<Vec<u8>> {
+fn kept_bytecode(engine: &Engine, script: InstanceId, source: &[u8]) -> Option<StoredBytes> {
     let compiled = COMPILED.get()?;
     let path = engine.state.borrow().dom.at(script).source_path().cloned()?;
     let entries = compiled.entries.read().ok()?;
     let (_, entry, _) = entries.get(&*path)?;
-    (entry.0 == source).then(|| entry.1.clone()).flatten()
+    (&*entry.0 == source).then(|| entry.1.clone()).flatten()
 }
 
 /// A file's bytes, through the process's compiled sources when it keeps them ([`reuse_compiled_modules`]): a loopback
 /// run's harness, which both sides load, then compiles once ([`kept_bytecode`])
 pub fn read_kept(path: &str) -> std::io::Result<Vec<u8>> {
     match COMPILED.get() {
-        Some(compiled) => compiled.read(path, true).map(|(bytes, _)| bytes),
+        Some(compiled) => compiled.read(path, true).map(|(bytes, _)| bytes.to_vec()),
         None => std::fs::read(path),
     }
 }
@@ -517,8 +624,10 @@ fn note_read(engine: &Engine, path: &str) {
     engine.modules.borrow_mut().read.insert(path.to_string());
 }
 
-/// The source files of every module required so far, sorted
+/// The source files of every module required so far, sorted. Also flushes any newly compiled
+/// modules to the persistent cross-process store (one-shot CLI runs call this before exit).
 pub fn required_files(engine: &Engine) -> Vec<String> {
+    store::flush_all();
     engine.modules.borrow().files.iter().cloned().collect()
 }
 
@@ -668,7 +777,8 @@ fn clone_with_env(lua: &Lua, template: &LuaFunction, env: &LuaTable) -> LuaResul
 
 /// [`environment`] for a script of the VM `vm`: its `_G` and its `require` are that VM's.
 pub fn environment_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, vm: Vm) -> LuaResult<LuaTable> {
-    let env: LuaTable = if vm.is_none() {
+    let safe = engine.options.native || engine.modules.borrow().interpreted || cfg!(not(feature = "jit"));
+    if vm.is_none() {
         let (shared, req_begin, req_finish) = {
             let refs = engine.lua.borrow();
             (refs.shared.clone().expect("shared globals"), refs.require_begin.clone(), refs.require_finish.clone())
@@ -676,33 +786,49 @@ pub fn environment_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, vm: Vm
         if let (Some(req_begin), Some(req_finish)) = (req_begin, req_finish) {
             let script_val = instance_value(lua, engine, script)?;
             let require_fn = super::builtins::require_function(lua, script_val.clone(), LuaValue::Nil, req_begin, req_finish)?;
-            // prelude.luau Environment's shape: each environment has a metatable of its own that the script may change
-            // (one frozen metatable shared by every environment refused those writes, and each script held one table less)
-            let meta = lua.create_table_with_capacity(0, 1)?;
-            meta.raw_set("__index", shared)?;
-            let env = lua.create_table_with_capacity(0, 2)?;
-            env.raw_set("script", script_val)?;
-            env.raw_set("require", require_fn)?;
-            env.set_metatable(Some(meta))?;
-            env
-        } else {
-            let make: LuaFunction = engine.prelude().exports.get("Environment")?;
-            make.call((shared, instance_value(lua, engine, script)?, vm))?
+            // prelude.luau Environment's shape: each environment has its own fresh writable metatable
+            // `{ __index = shared }`, built alongside `env` and optional `lua_setsafeenv` in one C call.
+            return unsafe {
+                lua.exec_raw::<LuaTable>((shared, script_val, require_fn), move |state| {
+                    use mlua::ffi;
+                    ffi::lua_rawcheckstack(state, 4);
+                    // stack: -3 = shared, -2 = script_val, -1 = require_fn
+                    ffi::lua_createtable(state, 0, 2); // -1 = env
+                    ffi::lua_pushvalue(state, -3);
+                    ffi::lua_rawsetfield(state, -2, c"script".as_ptr());
+                    ffi::lua_pushvalue(state, -2);
+                    ffi::lua_rawsetfield(state, -2, c"require".as_ptr());
+                    ffi::lua_createtable(state, 0, 1); // -1 = meta, -2 = env, -5 = shared
+                    ffi::lua_pushvalue(state, -5);
+                    ffi::lua_rawsetfield(state, -2, c"__index".as_ptr());
+                    ffi::lua_setmetatable(state, -2);
+                    if safe {
+                        ffi::lua_setsafeenv(state, -1, 1);
+                    }
+                    ffi::lua_replace(state, -4);
+                    ffi::lua_pop(state, 2);
+                })
+            };
         }
-    } else {
-        let (shared, make) = {
-            let refs = engine.lua.borrow();
-            let prelude = refs.prelude.clone().expect("prelude");
-            (refs.shared.clone().expect("shared globals"), prelude.exports.get::<LuaFunction>("Environment")?)
-        };
-        make.call((shared, instance_value(lua, engine, script)?, vm))?
+        let make: LuaFunction = engine.prelude().exports.get("Environment")?;
+        let env: LuaTable = make.call((shared, instance_value(lua, engine, script)?, vm))?;
+        if safe {
+            unsafe { lua.exec_raw::<()>(&env, |state| mlua::ffi::lua_setsafeenv(state, -1, 1))? };
+        }
+        return Ok(env);
+    }
+    let (shared, make) = {
+        let refs = engine.lua.borrow();
+        let prelude = refs.prelude.clone().expect("prelude");
+        (refs.shared.clone().expect("shared globals"), prelude.exports.get::<LuaFunction>("Environment")?)
     };
+    let env: LuaTable = make.call((shared, instance_value(lua, engine, script)?, vm))?;
     // An interpreted script's environment is safe, as Roblox makes every script's: builtins take the VM's
     // fast calls and ipairs / pairs loops run inline (getfenv / setfenv end it, as there). Native code would
     // inline them with its own arithmetic (vector.magnitude in doubles), which Studio's interpreted scripts
     // do not, so a VM that compiles modules natively keeps the environment unsafe unless `--native` asks for
     // Roblox's native execution.
-    if engine.options.native || engine.modules.borrow().interpreted || cfg!(not(feature = "jit")) {
+    if safe {
         unsafe { lua.exec_raw::<()>(&env, |state| mlua::ffi::lua_setsafeenv(state, -1, 1))? };
     }
     Ok(env)
@@ -764,52 +890,70 @@ pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId
                 .then(|| kept_loadmodule_bytecode(engine, script, &source))
                 .flatten();
             if let Some(bc) = from_kept {
-                let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                Some(rc_bc)
-            } else if is_batch_frozen() && matches!(&source, std::borrow::Cow::Borrowed(_)) {
-                let key = engine
-                    .state
-                    .borrow()
-                    .dom
-                    .at(script)
-                    .source_path()
-                    .map(|p| p.to_string());
-                let compiled = if let Some(path_key) = key {
-                    let flight = LOADMODULE_FLIGHT.get_or_init(SingleFlight::new);
-                    flight
-                        .run(&path_key, || {
-                            if let Some(existing) = kept_loadmodule_bytecode(engine, script, &source) {
-                                return Ok(std::sync::Arc::new(existing));
-                            }
-                            let bc = loadmodule_compiler().compile(&*source).map_err(|e| e.to_string())?;
-                            store_loadmodule_bytecode(engine, script, &source, &bc);
-                            Ok(std::sync::Arc::new(bc))
-                        })
-                        .ok()
-                } else {
-                    loadmodule_compiler().compile(&*source).ok().map(std::sync::Arc::new)
-                };
-                match compiled {
-                    Some(bc) => {
-                        let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                        engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                        Some(rc_bc)
-                    }
-                    None => None,
-                }
+                engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), bc.clone()));
+                Some(bc)
             } else {
-                engine.modules.borrow_mut().text_compiles += 1;
-                match loadmodule_compiler().compile(&*source) {
-                    Ok(bc) => {
-                        if matches!(&source, std::borrow::Cow::Borrowed(_)) {
-                            store_loadmodule_bytecode(engine, script, &source, &bc);
-                        }
-                        let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                        engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                        Some(rc_bc)
+                let disk = store::for_engine(engine);
+                let disk_key = store::key_for(store::KIND_LOADMODULE_BYTECODE, &*source);
+                if let Some(bc) = disk.as_deref().and_then(|s| s.get(&disk_key)) {
+                    crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
+                    if matches!(&source, std::borrow::Cow::Borrowed(_)) {
+                        store_loadmodule_bytecode(engine, script, &source, bc.clone());
                     }
-                    Err(_) => None,
+                    engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), bc.clone()));
+                    Some(bc)
+                } else if is_batch_frozen() && matches!(&source, std::borrow::Cow::Borrowed(_)) {
+                    let key = engine
+                        .state
+                        .borrow()
+                        .dom
+                        .at(script)
+                        .source_path()
+                        .map(|p| p.to_string());
+                    let compiled = if let Some(path_key) = key {
+                        let flight = LOADMODULE_FLIGHT.get_or_init(SingleFlight::new);
+                        flight
+                            .run(&path_key, || {
+                                if let Some(existing) = kept_loadmodule_bytecode(engine, script, &source) {
+                                    return Ok(existing);
+                                }
+                                let bc = loadmodule_compiler().compile(&*source).map_err(|e| e.to_string())?;
+                                let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(bc.into_boxed_slice());
+                                if let Some(s) = disk.as_deref() {
+                                    s.put(disk_key, arc.clone());
+                                }
+                                let stored = StoredBytes::owned(arc);
+                                store_loadmodule_bytecode(engine, script, &source, stored.clone());
+                                Ok(stored)
+                            })
+                            .ok()
+                    } else {
+                        loadmodule_compiler().compile(&*source).ok().map(StoredBytes::from_vec)
+                    };
+                    match compiled {
+                        Some(bc) => {
+                            engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), bc.clone()));
+                            Some(bc)
+                        }
+                        None => None,
+                    }
+                } else {
+                    engine.modules.borrow_mut().text_compiles += 1;
+                    match loadmodule_compiler().compile(&*source) {
+                        Ok(bc) => {
+                            let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(bc.into_boxed_slice());
+                            if let Some(s) = disk.as_deref() {
+                                s.put(disk_key, arc.clone());
+                            }
+                            let stored = StoredBytes::owned(arc);
+                            if matches!(&source, std::borrow::Cow::Borrowed(_)) {
+                                store_loadmodule_bytecode(engine, script, &source, stored.clone());
+                            }
+                            engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), stored.clone()));
+                            Some(stored)
+                        }
+                        Err(_) => None,
+                    }
                 }
             }
         }
@@ -873,18 +1017,29 @@ pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[
                 .then(|| kept_bytecode(engine, script, &source))
                 .flatten();
             if let Some(bc) = from_kept {
-                let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                Some(rc_bc)
+                engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), bc.clone()));
+                Some(bc)
             } else {
-                engine.modules.borrow_mut().text_compiles += 1;
-                match compiler().compile(&*source) {
-                    Ok(bc) => {
-                        let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
-                        engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
-                        Some(rc_bc)
+                let disk = store::for_engine(engine);
+                let disk_key = store::key_for(store::KIND_STD_BYTECODE, &*source);
+                if let Some(bc) = disk.as_deref().and_then(|s| s.get(&disk_key)) {
+                    crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
+                    engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), bc.clone()));
+                    Some(bc)
+                } else {
+                    engine.modules.borrow_mut().text_compiles += 1;
+                    match compiler().compile(&*source) {
+                        Ok(bc) => {
+                            let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(bc.into_boxed_slice());
+                            if let Some(s) = disk.as_deref() {
+                                s.put(disk_key, arc.clone());
+                            }
+                            let stored = StoredBytes::owned(arc);
+                            engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), stored.clone()));
+                            Some(stored)
+                        }
+                        Err(_) => None,
                     }
-                    Err(_) => None,
                 }
             }
         }
@@ -955,10 +1110,10 @@ pub fn source_rc_opts(engine: &Engine, module: InstanceId, compile_bytecode: boo
     if let Some(path) = path {
         note_read(engine, &path);
         if let Ok((bytes, bytecode)) = crate::timing::time("modules: read sources", || read_file_opts(engine, &path, compile_bytecode)) {
-            let source: Rc<[u8]> = Rc::from(bytes.as_slice());
+            let source: Rc<[u8]> = Rc::from(&*bytes);
             engine.state.borrow_mut().dom.at_mut(module).set_source(Some(source.clone()));
             if let Some(bytecode) = bytecode {
-                engine.modules.borrow_mut().bytecode.insert(module, (source.clone(), Rc::from(bytecode.as_slice())));
+                engine.modules.borrow_mut().bytecode.insert(module, (source.clone(), bytecode));
             }
             return Some(source);
         }
@@ -1024,38 +1179,98 @@ pub fn parse_json(engine: &Engine, path: &str) -> Result<std::sync::Arc<serde_js
     Ok(cached)
 }
 
-/// Direct recursive converter from `serde_json::Value` into fresh Luau tables/primitives without
-/// `mlua::serde` visitor overhead, table rehashing, or metatable checks.
-fn json_value_to_lua(lua: &Lua, value: &serde_json::Value) -> LuaResult<LuaValue> {
-    match value {
-        serde_json::Value::Null => Ok(LuaValue::Nil),
-        serde_json::Value::Bool(flag) => Ok(LuaValue::Boolean(*flag)),
-        serde_json::Value::Number(num) => Ok(LuaValue::Number(num.as_f64().unwrap_or(0.0))),
-        serde_json::Value::String(text) => Ok(LuaValue::String(lua.create_string(text.as_bytes())?)),
-        serde_json::Value::Array(items) => {
-            let table = lua.create_table_with_capacity(items.len(), 0)?;
-            for (index, item) in items.iter().enumerate() {
-                if !item.is_null() {
-                    table.raw_set((index + 1) as i64, json_value_to_lua(lua, item)?)?;
-                }
+/// Parses a JSON module into compact binary JSON once per engine, process, and across processes
+/// via the content-addressed mmap store.
+pub(crate) fn parse_bjson(engine: &Engine, path: &str) -> Result<StoredBytes, String> {
+    if let Some(cached) = engine.modules.borrow().bjson_cache.get(path).cloned() {
+        return Ok(cached);
+    }
+    note_read(engine, path);
+    let disk = store::for_engine(engine);
+    if let Some(global_cache) = BJSON_CACHE.get() {
+        if is_batch_frozen() || !keeping_between_runs() {
+            if let Some(found) = global_cache.read().ok().and_then(|entries| entries.get(path).map(|(_, value)| value.clone())) {
+                engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), found.clone());
+                return Ok(found);
             }
-            Ok(LuaValue::Table(table))
+            let bytes = read_file_opts(engine, path, false).map(|(b, _)| b).map_err(|error| error.to_string())?;
+            let bjson = parse_bjson_cached(disk.as_deref(), &bytes)?;
+            let stamp = crate::files::Stamp { len: bytes.len() as u64, modified: 0, directory: false };
+            if let Ok(mut entries) = global_cache.write() {
+                entries.insert(path.to_string(), (stamp, bjson.clone()));
+            }
+            engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), bjson.clone());
+            return Ok(bjson);
         }
-        serde_json::Value::Object(entries) => {
-            let table = lua.create_table_with_capacity(0, entries.len())?;
-            for (key, item) in entries {
-                if !item.is_null() {
-                    table.raw_set(key.as_str(), json_value_to_lua(lua, item)?)?;
-                }
+        if let Some(stamp) = crate::files::stamp(std::path::Path::new(path)) {
+            if let Some(found) = global_cache.read().ok().and_then(|entries| {
+                entries.get(path).and_then(|(known, value)| (*known == stamp).then(|| value.clone()))
+            }) {
+                engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), found.clone());
+                return Ok(found);
             }
-            Ok(LuaValue::Table(table))
+            let bytes = read_file_opts(engine, path, false).map(|(b, _)| b).map_err(|error| error.to_string())?;
+            let bjson = parse_bjson_cached(disk.as_deref(), &bytes)?;
+            if let Ok(mut entries) = global_cache.write() {
+                crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, bjson.clone())));
+            }
+            engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), bjson.clone());
+            return Ok(bjson);
         }
     }
+    let bytes = read_file_opts(engine, path, false).map(|(b, _)| b).map_err(|error| error.to_string())?;
+    let bjson = parse_bjson_cached(disk.as_deref(), &bytes)?;
+    engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), bjson.clone());
+    Ok(bjson)
 }
 
 /// Converts a parsed JSON value into a fresh Luau value (no shared mutable tables between calls).
 pub fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> Result<LuaValue, String> {
-    json_value_to_lua(lua, value).map_err(|error| error.to_string())
+    store::serde_json_to_lua(lua, value)
+}
+
+/// Returns `(function, cleanup)` for `debug.loadmodule` on a JSON module, reusing one loaded
+/// template closure per `(module, path, full_name, payload)` and cloning it into a fresh per-load
+/// environment via `lua_clonefunction` + `lua_setfenv` instead of reloading bytecode and closures
+/// on every call.
+pub(crate) fn load_json_loadmodule(
+    lua: &Lua,
+    engine: &Rc<Engine>,
+    module: InstanceId,
+    path: &Rc<str>,
+) -> LuaResult<Result<(LuaFunction, LuaFunction), String>> {
+    let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
+    let bjson = match parse_bjson(engine, path) {
+        Ok(value) => value,
+        Err(message) => return Ok(Err(format!("{name}: invalid JSON module ({message})"))),
+    };
+    let bjson_ptr = bjson.ptr_id();
+    let cached_template = engine
+        .modules
+        .borrow()
+        .json_loadmodule_templates
+        .get(&module)
+        .and_then(|(cached_path, cached_name, cached_ptr, template)| {
+            (cached_path == path && cached_name == &name && *cached_ptr == bjson_ptr).then(|| template.clone())
+        });
+    let env = environment(lua, engine, module)?;
+    let function = match cached_template {
+        Some(template) => clone_with_env(lua, &template, &env)?,
+        None => {
+            let payload = bjson.clone();
+            let decode = lua.create_function(move |lua, ()| store::bjson_to_lua(lua, &payload).map_err(LuaError::runtime))?;
+            let template_env = engine.lua.borrow().shared.clone().expect("shared globals");
+            let template = wrap_json_loadmodule(lua, engine, &name, decode, template_env)?;
+            engine
+                .modules
+                .borrow_mut()
+                .json_loadmodule_templates
+                .insert(module, (path.clone(), name, bjson_ptr, template.clone()));
+            clone_with_env(lua, &template, &env)?
+        }
+    };
+    let cleanup = noop_cleanup(lua, engine)?;
+    Ok(Ok((function, cleanup)))
 }
 
 /// Loads the tiny precompiled JSON module wrapper with the module's `={name}` chunk name (`debug.info(fn, "s")`) and
@@ -1112,8 +1327,8 @@ pub fn json_wrapper_bytecode() -> &'static [u8] {
 
 /// A JSON module's value (Rojo `.json`): the file decoded, a new value each time.
 pub fn decode_json(lua: &Lua, engine: &Engine, path: &str) -> Result<LuaValue, String> {
-    let parsed = parse_json(engine, path)?;
-    json_to_lua(lua, &parsed)
+    let bjson = parse_bjson(engine, path)?;
+    store::bjson_to_lua(lua, &bjson)
 }
 
 fn error_result(lua: &Lua, message: String, level: i64) -> LuaResult<LuaMultiValue> {
@@ -1411,9 +1626,9 @@ mod tests {
         std::fs::remove_file(&file).unwrap();
         let deleted = read_file(&engine, &path);
         std::fs::remove_dir(&directory).unwrap();
-        assert_eq!(original.0, b"return 'before 1'");
-        assert_eq!(edited.0, b"return 'before two'");
-        assert_eq!(Lua::new().load(edited.1.unwrap()).eval::<String>().unwrap(), "before two");
+        assert_eq!(&*original.0, b"return 'before 1'");
+        assert_eq!(&*edited.0, b"return 'before two'");
+        assert_eq!(Lua::new().load(&*edited.1.unwrap()).eval::<String>().unwrap(), "before two");
         assert_eq!(deleted.unwrap_err().kind(), std::io::ErrorKind::NotFound);
     }
 }
