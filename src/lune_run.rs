@@ -501,6 +501,16 @@ struct OutputSink {
     buf: RefCell<String>,
 }
 
+fn ceil_char_boundary(s: &str, mut idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    while idx < s.len() && !s.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
+
 impl OutputSink {
     fn new(capture: bool) -> Self {
         Self {
@@ -533,7 +543,7 @@ impl OutputSink {
         buf.push_str(text);
         if buf.len() > MAX_CAPTURE {
             let cut = buf.len() - MAX_CAPTURE / 2;
-            let boundary = buf.ceil_char_boundary(cut);
+            let boundary = ceil_char_boundary(&buf, cut);
             buf.drain(..boundary);
         }
     }
@@ -2239,7 +2249,7 @@ fn sanitize_for_wrapper(source: &str) -> String {
                 line_start = false;
             }
             if i < bytes.len() {
-                let ch_end = out.ceil_char_boundary(i + 1);
+                let ch_end = ceil_char_boundary(&out, i + 1);
                 if bytes[i] == b'\n' {
                     line_start = true;
                 }
