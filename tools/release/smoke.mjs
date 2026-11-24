@@ -111,7 +111,7 @@ export async function waitForProcesses(pids) {
 	for (const pid of new Set(pids)) {
 		while (isRunning(pid)) {
 			assert(Date.now() < deadline, `process ${pid} did not stop`);
-			await sleep(50);
+			await sleep(10);
 		}
 	}
 }
@@ -134,7 +134,7 @@ export async function removeTestFolder(root) {
 				console.error(`cleanup could not remove ${error.path || root} (${error.code}); files kept at ${root}`);
 				return false;
 			}
-			await sleep(100);
+			await sleep(25);
 		}
 	}
 }
@@ -165,15 +165,15 @@ export function startManualService(executable, cwd, env, args = []) {
 // release its state folder, which a test or the temporary folder's removal needs.
 // `ree(args)` runs ree with these arguments and returns its output.
 export async function stopServices(ree) {
-	const status = ree(["serve", "--status"]).trim();
+	const status = (await ree(["serve", "--status"])).trim();
 	const pids = status ? status.split("\n").map((line) => JSON.parse(line).pid) : [];
-	ree(["serve", "--stop"]);
+	await ree(["serve", "--stop"]);
 	await waitForProcesses(pids);
 }
 
 // The running services, one `serve --status` line each; only the one with process id `pid` when it is given
-function runningServices(ree, pid) {
-	const services = ree(["serve", "--status"]).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+async function runningServices(ree, pid) {
+	const services = (await ree(["serve", "--status"])).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 	return pid === undefined ? services : services.filter((service) => service.pid === pid);
 }
 
@@ -187,9 +187,9 @@ function runningServices(ree, pid) {
 // A job whose run fails exits 1 and the service counts it under `failed`: `run` runs the job instead of `ree` (one that
 // accepts that exit) and `counted` names the count that must rise.
 export async function servedRun(ree, argv, expectedPid, { newService = false, run = ree, counted = "done" } = {}) {
-	const ignoredPids = newService ? new Set(runningServices(ree).map((service) => service.pid)) : new Set();
-	const expectedServices = () => runningServices(ree, expectedPid).filter((service) => !ignoredPids.has(service.pid));
-	let before = expectedServices();
+	const ignoredPids = newService ? new Set((await runningServices(ree)).map((service) => service.pid)) : new Set();
+	const expectedServices = async () => (await runningServices(ree, expectedPid)).filter((service) => !ignoredPids.has(service.pid));
+	let before = await expectedServices();
 	assert(before.length <= 1, "name the expected service when more than one is running");
 	expectedPid ??= before[0]?.pid;
 	if (expectedPid !== undefined) assert.equal(before[0]?.pid, expectedPid, "the expected service is running");
@@ -199,17 +199,17 @@ export async function servedRun(ree, argv, expectedPid, { newService = false, ru
 	const idleDeadline = Date.now() + 10_000;
 	while (isBusy(before[0])) {
 		assert(Date.now() < idleDeadline, "the expected service must finish its previous jobs");
-		await sleep(25);
-		before = expectedServices();
+		await sleep(10);
+		before = await expectedServices();
 		assert.equal(before.length, 1, "the expected service must stay running");
 	}
 	const doneBefore = before[0]?.health.jobs[counted] ?? 0;
 
-	const printed = run(argv);
+	const printed = await run(argv);
 
 	const deadline = Date.now() + 10_000;
 	for (;;) {
-		const after = expectedServices();
+		const after = await expectedServices();
 		assert.equal(after.length, 1, "the expected service must stay running after the job");
 		expectedPid ??= after[0].pid;
 		assert.equal(after[0].pid, expectedPid, "the expected service must answer the job");
@@ -218,7 +218,7 @@ export async function servedRun(ree, argv, expectedPid, { newService = false, ru
 			assert.equal(doneAfter, doneBefore + 1, "the expected service must complete the job without client fallback");
 			return printed;
 		}
-		await sleep(25);
+		await sleep(10);
 	}
 }
 

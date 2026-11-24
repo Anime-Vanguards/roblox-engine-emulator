@@ -8,11 +8,39 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { spawnSync } from "node:child_process";
-import { test } from "node:test";
+import { spawn } from "node:child_process";
+import { after, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { realPath } from "../tools/release/common.mjs";
 import { removeTestFolder, servedRun, startManualService, stopServices, waitForProcesses } from "../tools/release/smoke.mjs";
+
+const CONCURRENCY = Math.min(6, Math.max(2, os.availableParallelism()));
+
+function spawnAsync(executable, args, { cwd, env, timeout = 120_000 }) {
+	return new Promise((resolve) => {
+		const child = spawn(executable, args, { cwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		let stderr = "";
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill();
+		}, timeout);
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
+		child.stdout.on("data", (chunk) => { stdout += chunk; });
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		child.once("error", (error) => {
+			clearTimeout(timer);
+			resolve({ status: null, stdout, stderr, error });
+		});
+		child.once("close", (status) => {
+			clearTimeout(timer);
+			const error = timedOut ? new Error(`command timed out after ${timeout} ms: ${args.join(" ")}`) : null;
+			resolve({ status, stdout, stderr, error });
+		});
+	});
+}
 
 // Environment variables with these prefixes steer ree and its helpers, so a check starts without them
 const STEERING_VARIABLES = /^(REE_|RUR_|ROR_)/i;
@@ -99,14 +127,45 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 // The launcher passes its own path to node as argv[1], and the mock logs that as the worker: a log of the shared node
 // would not show which of the files on PATH the OS picked. The empty `-e` program stops node from treating "$0" as a
 // script to run, so stdin is left to the mock that --require loads.
+let stageDir = null;
+let stagedRee = null;
+let stagedNode = null;
+function ensureStageDir() {
+	if (!stageDir) stageDir = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-worker-stage-")));
+	return stageDir;
+}
+function installRee(dest) {
+	if (!stagedRee) {
+		stagedRee = path.join(ensureStageDir(), WINDOWS ? "ree.exe" : "ree");
+		fs.copyFileSync(process.env.REE_TEST_BINARY, stagedRee);
+		if (!WINDOWS) fs.chmodSync(stagedRee, 0o755);
+	}
+	try {
+		fs.linkSync(stagedRee, dest);
+	} catch (error) {
+		if (error.code !== "EXDEV" && error.code !== "EPERM" && error.code !== "EACCES") throw error;
+		fs.copyFileSync(process.env.REE_TEST_BINARY, dest);
+		if (!WINDOWS) fs.chmodSync(dest, 0o755);
+	}
+}
+
 function installWorker(file, mode = 0o755) {
 	if (WINDOWS) {
-		fs.copyFileSync(process.execPath, file);
+		if (!stagedNode) {
+			stagedNode = path.join(ensureStageDir(), "node.exe");
+			fs.copyFileSync(process.execPath, stagedNode);
+		}
+		try {
+			fs.linkSync(stagedNode, file);
+		} catch (error) {
+			if (error.code !== "EXDEV" && error.code !== "EPERM" && error.code !== "EACCES") throw error;
+			fs.copyFileSync(process.execPath, file);
+		}
 	} else {
 		const node = `'${process.execPath.replaceAll("'", "'\\''")}'`; // single-quoted for sh
 		fs.writeFileSync(file, `#!/bin/sh\nexec ${node} -e '' "$0" "$@"\n`);
+		fs.chmodSync(file, mode);
 	}
-	fs.chmodSync(file, mode);
 }
 
 // Runs `body` in a fresh folder with an installed ree. It gets:
@@ -120,8 +179,7 @@ function check(name, body) {
 		// the real path of the temp folder: ree reports paths with links resolved, and the checks compare against them
 		const root = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-worker-test-")));
 		const executable = path.join(root, WINDOWS ? "ree.exe" : "ree");
-		fs.copyFileSync(process.env.REE_TEST_BINARY, executable);
-		fs.chmodSync(executable, 0o755);
+		installRee(executable);
 
 		const mock = path.join(root, "mock.cjs");
 		fs.writeFileSync(mock, MOCK_WORKER);
@@ -134,15 +192,15 @@ function check(name, body) {
 			NODE_OPTIONS: `--require=${JSON.stringify(mock)}`,
 		});
 
-		const ree = (cwd, args) => {
-			const result = spawnSync(executable, args, { cwd, env, encoding: "utf8", timeout: 120_000, windowsHide: true });
+		const ree = async (cwd, args) => {
+			const result = await spawnAsync(executable, args, { cwd, env, timeout: 120_000 });
 			assert.ifError(result.error);
 			assert.equal(result.status, 0, result.stderr || result.stdout);
 			return result.stdout;
 		};
 		// a run whose status is "error" exits 1, with its summary printed as for any run
-		const failed = (cwd, args) => {
-			const result = spawnSync(executable, args, { cwd, env, encoding: "utf8", timeout: 120_000, windowsHide: true });
+		const failed = async (cwd, args) => {
+			const result = await spawnAsync(executable, args, { cwd, env, timeout: 120_000 });
 			assert.ifError(result.error);
 			assert.equal(result.status, 1, result.stderr || result.stdout);
 			return result.stdout;
@@ -194,7 +252,7 @@ async function waitForWorkers(rows) {
 			} catch (error) {
 				if (error.code !== "EBUSY" && error.code !== "EPERM") throw error;
 				assert(Date.now() < deadline, `worker ${pid} did not stop (${running} is still held)`);
-				await sleep(50);
+				await sleep(10);
 			}
 		}
 	}
@@ -233,36 +291,41 @@ function inDirectory(ree, directory) {
 // completed by it, which servedRun proves: `expectedPid` names that service, or the one running service is expected.
 async function fetchAnimation(ree, project, id, viaService = false, args = [], expectedPid) {
 	const job = animationJob(project, id, viaService, args);
-	const output = viaService ? await servedRun(inDirectory(ree, project), job, expectedPid) : ree(project, job);
+	const output = viaService ? await servedRun(inDirectory(ree, project), job, expectedPid) : await ree(project, job);
 	assertAnimation(output);
 }
 
 // With no service running, the first `--service` call runs the job in the client (and starts the service), so it can't
 // be held to servedRun the way the calls after it are.
-function fetchAnimationFallback(ree, project, id, args = []) {
-	assertAnimation(ree(project, animationJob(project, id, true, args)));
+async function fetchAnimationFallback(ree, project, id, args = []) {
+	assertAnimation(await ree(project, animationJob(project, id, true, args)));
 }
 
 // Warms a service, waits until it has finished that job and returns its PID. With no `expectedPid` the warm-up must
 // start a new service, as a changed environment or client folder does; with one, that service must do the job.
 async function warmService(ree, directory, args = [], expectedPid) {
-	const servicesBefore = serviceJobCounts(ree, directory);
+	const servicesBefore = await serviceJobCounts(ree, directory);
 	const warmUp = ["serve", "--warm", "--roots", "root", ...args];
 	const startsNewService = expectedPid === undefined;
 	const reply = await servedRun(inDirectory(ree, directory), warmUp, expectedPid, { newService: startsNewService });
 	assert.equal(JSON.parse(reply).warm, true);
 	if (!startsNewService) return expectedPid;
-	return [...serviceJobCounts(ree, directory).keys()].find((pid) => !servicesBefore.has(pid));
+	return [...(await serviceJobCounts(ree, directory)).keys()].find((pid) => !servicesBefore.has(pid));
 }
 
 // The completed-job count of each running service, by process id
-function serviceJobCounts(ree, directory) {
-	const rows = ree(directory, ["serve", "--status"]).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+async function serviceJobCounts(ree, directory) {
+	const rows = (await ree(directory, ["serve", "--status"])).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 	return new Map(rows.map((row) => [row.pid, row.health.jobs.done]));
 }
 
 // What the worker reports about its environment, which a direct and a served run must agree on
 const WORKER_VIEW_FIELDS = ["nodePath", "moduleValue", "customValue", "customRelative", "cwd"];
+
+describe("asset worker", { concurrency: CONCURRENCY }, () => {
+after(async () => {
+	if (stageDir) await removeTestFolder(stageDir);
+});
 
 // The worker is a Node script that reports its environment. A service is keyed by everything the worker receives, so
 // each environment below differs from the one before it (NODE_PATH, then WORKER_VALUE set, then removed) and must
@@ -306,7 +369,7 @@ for (const manual of [false, true]) check(`workers receive the full client envir
 			if (started) await started.listening;
 			const pid = await warmService(ree, directory, [], started?.service.pid);
 			assert(pid, "a changed worker environment must select a new service");
-			const jobCounts = serviceJobCounts(ree, directory);
+			const jobCounts = await serviceJobCounts(ree, directory);
 
 			// the served runs: the worker sees what the direct one saw
 			for (let job = 0; job < 2; job++) {
@@ -315,7 +378,7 @@ for (const manual of [false, true]) check(`workers receive the full client envir
 				const served = requests().at(-1);
 				for (const field of WORKER_VIEW_FIELDS) assert.equal(served[field], direct[field], field);
 			}
-			const jobCountsAfter = serviceJobCounts(ree, directory);
+			const jobCountsAfter = await serviceJobCounts(ree, directory);
 			assert.equal(jobCountsAfter.get(pid), jobCounts.get(pid) + 2, "the expected service answered both jobs");
 			assert.equal(jobCountsAfter.size, manual ? 1 : servicesAfter, "each environment gets its own service");
 		} finally {
@@ -360,7 +423,7 @@ check("a bare worker name uses PATH despite decoys in the project and copied ser
 
 	// a direct run, then an automatic service with a warm-up and a job through it
 	await fetchAnimation(ree, directory, 1001);
-	fetchAnimationFallback(ree, directory, 1002);
+	await fetchAnimationFallback(ree, directory, 1002);
 	const pid = await warmService(ree, directory);
 	await fetchAnimation(ree, directory, 1003, true, [], pid);
 
@@ -372,7 +435,7 @@ check("a bare worker name uses PATH despite decoys in the project and copied ser
 		await fetchAnimation(ree, directory, 1004, true, [], service.service.pid);
 		await warmService(ree, directory, [], service.service.pid);
 		await fetchAnimation(ree, directory, 1005, true, [], service.service.pid);
-		assert.equal(ree(directory, ["serve", "--status"]).trim().split("\n").length, 1, "clients reuse the manual service");
+		assert.equal((await ree(directory, ["serve", "--status"])).trim().split("\n").length, 1, "clients reuse the manual service");
 	} finally {
 		await stopServices((args) => ree(root, args));
 		await service.closed;
@@ -395,7 +458,7 @@ async function findsWorkerBesideBinary(name, { env, ree, project, requests, exec
 
 	// a direct run, a first-call fallback, then a warm-up and a served job
 	await fetchAnimation(ree, directory, 1401);
-	fetchAnimationFallback(ree, directory, 1402);
+	await fetchAnimationFallback(ree, directory, 1402);
 	await warmService(ree, directory);
 	await fetchAnimation(ree, directory, 1403, true);
 
@@ -406,7 +469,7 @@ async function findsWorkerBesideBinary(name, { env, ree, project, requests, exec
 		await service.listening;
 		await fetchAnimation(ree, directory, 1404, true, [], service.service.pid);
 		await warmService(ree, directory, [], service.service.pid);
-		assert.equal(ree(directory, ["serve", "--status"]).trim().split("\n").length, 1, "clients reuse the manual service");
+		assert.equal((await ree(directory, ["serve", "--status"])).trim().split("\n").length, 1, "clients reuse the manual service");
 	} finally {
 		await stopServices((args) => ree(directory, args));
 		await service.closed;
@@ -531,7 +594,7 @@ if (!WINDOWS) {
 			assert.equal(rows.length, 4);
 			assert(rows.slice(0, 2).every((row) => row.worker === path.join(first, WORKER_FILE)), JSON.stringify(rows));
 			assert(rows.slice(2).every((row) => row.worker === path.join(second, WORKER_FILE)), JSON.stringify(rows));
-			assert.equal(ree(first, ["serve", "--status"]).trim().split("\n").length, 2, "resolved PATH separates client services");
+			assert.equal((await ree(first, ["serve", "--status"])).trim().split("\n").length, 2, "resolved PATH separates client services");
 		});
 	}
 }
@@ -555,7 +618,7 @@ for (const mode of unrunnableModes()) {
 		env.PATH = [notExecutable, path.join(directory, "helpers"), env.PATH].join(path.delimiter);
 		// one direct run, an explicit first-call fallback, then a job the service must answer
 		await fetchAnimation(ree, directory, 1101);
-		fetchAnimationFallback(ree, directory, 1102);
+		await fetchAnimationFallback(ree, directory, 1102);
 		await fetchAnimation(ree, directory, 1103, true);
 		assert.equal(requests().length, 3);
 		assert(requests().every((row) => row.worker === path.join(directory, "helpers", WORKER_FILE)));
@@ -580,20 +643,20 @@ check("a missing host worker keeps its spawn error in a checkout", async ({ root
 game:GetService("KeyframeSequenceProvider"):GetKeyframeSequenceAsync("rbxassetid://5101")
 end`);
 	const args = ["run", "--project", directory, "--harness", "Harness.luau", "--seconds", "0.05"];
-	const direct = JSON.parse(failed(directory, args));
+	const direct = JSON.parse(await failed(directory, args));
 	assert.equal(direct.errors, 1, JSON.stringify(direct));
 	assert.match(direct.failure, /starting .*worker:/);
 	// No service runs yet, so the first --service call may run in the client; the next must forward the same failure
 	// through the service.
 	const serviceArgs = [...args, "--service"];
-	const firstServiceFallback = failed(directory, serviceArgs);
+	const firstServiceFallback = await failed(directory, serviceArgs);
 	const servedReply = await servedRun(inDirectory(ree, directory), serviceArgs, undefined, { run: inDirectory(failed, directory), counted: "failed" });
 	for (const output of [firstServiceFallback, servedReply]) {
 		const served = JSON.parse(output);
 		assert.equal(served.failure, direct.failure, JSON.stringify(served));
 		assert.equal(served.errors, direct.errors);
 	}
-	assert(ree(root, ["serve", "--status"]).trim(), "the service stays running after the failed job");
+	assert((await ree(root, ["serve", "--status"])).trim(), "the service stays running after the failed job");
 });
 
 check("an unresolved worker stays unresolved when a decoy exists in the service directory", async ({ root, env, ree, failed, project }) => {
@@ -607,12 +670,12 @@ check("an unresolved worker stays unresolved when a decoy exists in the service 
 game:GetService("KeyframeSequenceProvider"):GetKeyframeSequenceAsync("rbxassetid://5001")
 end`);
 	const args = ["run", "--harness", "Harness.luau", "--seconds", "0.05"];
-	const direct = JSON.parse(failed(directory, args));
+	const direct = JSON.parse(await failed(directory, args));
 	assert.match(direct.failure, WINDOWS ? /asset worker .*program not found/ : /starting .*worker:/);
 	// No service runs yet, so the first --service call may run in the client; the next must forward the client's lookup
 	// failure through the service.
 	const serviceArgs = [...args, "--service"];
-	const firstServiceFallback = failed(directory, serviceArgs);
+	const firstServiceFallback = await failed(directory, serviceArgs);
 	const servedReply = await servedRun(inDirectory(ree, directory), serviceArgs, undefined, { run: inDirectory(failed, directory), counted: "failed" });
 	for (const output of [firstServiceFallback, servedReply]) {
 		const served = JSON.parse(output);
@@ -620,7 +683,7 @@ end`);
 		assert.equal(served.errors, direct.errors);
 	}
 	assert(!fs.existsSync(env.REE_WORKER_LOG), "the decoy worker must never run");
-	assert(ree(root, ["serve", "--status"]).trim(), "the service stays running after the failed job");
+	assert((await ree(root, ["serve", "--status"])).trim(), "the service stays running after the failed job");
 });
 
 check("relative workers belong to their client, including the service environment key", async ({ env, ree, project, requests }) => {
@@ -629,14 +692,14 @@ check("relative workers belong to their client, including the service environmen
 	env.REE_ASSET_WORKER = `.${path.sep}helpers${path.sep}${WORKER_FILE}`;
 	// each client may fall back on its first call, then its own service must answer
 	await fetchAnimation(ree, first, 2001);
-	fetchAnimationFallback(ree, first, 2002);
+	await fetchAnimationFallback(ree, first, 2002);
 	await fetchAnimation(ree, first, 2003, true);
-	const firstPid = [...serviceJobCounts(ree, first).keys()][0];
+	const firstPid = [...(await serviceJobCounts(ree, first)).keys()][0];
 	// the second client names a different worker with the same text, so it must get its own service, not the first's
-	fetchAnimationFallback(ree, second, 2004);
+	await fetchAnimationFallback(ree, second, 2004);
 	const secondJob = animationJob(second, 2005, true);
 	assertAnimation(await servedRun(inDirectory(ree, second), secondJob, undefined, { newService: true }));
-	const pids = [...serviceJobCounts(ree, second).keys()];
+	const pids = [...(await serviceJobCounts(ree, second)).keys()];
 	assert.equal(pids.length, 2, "each relative worker gets its own service");
 	assert(pids.includes(firstPid));
 	const rows = requests();
@@ -651,7 +714,7 @@ check("relative state directories send absolute asset output paths", async ({ en
 	env.RUR_STATE_DIR = "cache";
 	try {
 		await fetchAnimation(ree, directory, 3001);
-		fetchAnimationFallback(ree, directory, 3002);
+		await fetchAnimationFallback(ree, directory, 3002);
 		await fetchAnimation(ree, directory, 3003, true);
 		assert(requests().every((row) => path.isAbsolute(row.out)));
 		// a relative path used from inside the state dir would land in cache/cache
@@ -705,7 +768,7 @@ for (const warm of [false, true]) check(`an input repo keeps the standalone work
 	assert(rows.every((row) => row.workerEnv === expected && realPath(row.worker) === realPath(expected)), JSON.stringify(rows));
 	assert(rows.every((row) => path.isAbsolute(row.out) && realPath(row.cwd) === realPath(env.RUR_STATE_DIR)));
 	assert(!fs.existsSync(path.join(inputs, ".cache")));
-	assert.equal(ree(root, ["serve", "--status"]).trim().split("\n").length, 1, "--repo and --warm find the same service");
+	assert.equal((await ree(root, ["serve", "--status"])).trim().split("\n").length, 1, "--repo and --warm find the same service");
 });
 
 // POSTs `data` as JSON to a service and resolves with its JSON reply; anything but a 200 rejects
@@ -768,7 +831,7 @@ for (const stateFlag of [false, true]) check(`a manual service is found by stand
 		assert(rows.every((row) => row.workerEnv === expected && realPath(row.worker) === realPath(expected)), JSON.stringify(rows));
 		assert(rows.filter((row) => row.command === "asset").every((row) => path.isAbsolute(row.out)));
 		assert(rows.every((row) => realPath(row.cwd) === realPath(env.RUR_STATE_DIR)));
-		const services = ree(caller, ["serve", "--status"]).trim().split("\n").map(JSON.parse);
+		const services = (await ree(caller, ["serve", "--status"])).trim().split("\n").map(JSON.parse);
 		assert.equal(services.length, 1, "--warm must reuse the manual service");
 		assert.equal(services[0].pid, service.pid, "run and warm discover the service started by hand");
 		assert(!fs.existsSync(path.join(inputs, ".cache")));
@@ -821,7 +884,7 @@ async function bundleRepliesLoad({ root, env, ree, project, requests }, { cached
 			fs.writeFileSync(manifest, `return {\n\t["Models/Props"] = { AssetId = ${4001 + attempt}, Version = 1 },\n}`);
 			const viaService = service ? ["--service"] : [];
 			const job = ["run", "--harness", "Harness.luau", "--roots", "root", "--assets-at", "ReplicatedStorage.Bundles", "--assets", "*", "--seconds", "0.05", ...viaService];
-			const output = service ? await servedRun(inDirectory(ree, directory), job, pid) : ree(directory, job);
+			const output = service ? await servedRun(inDirectory(ree, directory), job, pid) : await ree(directory, job);
 			assert.equal(JSON.parse(output).errors, 0, output);
 			assert.match(output, /worker bundle ok/);
 		}
@@ -848,3 +911,4 @@ for (const cached of [false, true]) {
 		}
 	}
 }
+});

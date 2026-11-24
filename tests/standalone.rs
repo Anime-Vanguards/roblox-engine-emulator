@@ -121,13 +121,21 @@ fn standalone_checks_accept_linked_and_canonical_temporary_folders() {
     if cfg!(feature = "bundles") {
         checks.push(("tests/asset_worker.mjs", &[]));
     }
+    let runs: Vec<(&str, &[&str], &Path)> = checks
+        .into_iter()
+        .flat_map(|(script, args)| [linked.as_path(), canonical.as_path()].into_iter().map(move |temp| (script, args, temp)))
+        .collect();
+    let results: Vec<(&str, &Path, Output)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = runs
+            .into_iter()
+            .map(|(script, args, temp)| scope.spawn(move || (script, temp, node(script, args, temp))))
+            .collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+    });
     let mut cleanup_deferred = false;
-    for (script, args) in checks {
-        for temp in [&linked, &canonical] {
-            let result = node(script, args, temp);
-            assert!(result.status.success(), "{script} with {}: {}", temp.display(), describe(&result));
-            cleanup_deferred |= report_deferred_cleanup(&result);
-        }
+    for (script, temp, result) in results {
+        assert!(result.status.success(), "{script} with {}: {}", temp.display(), describe(&result));
+        cleanup_deferred |= report_deferred_cleanup(&result);
     }
     if !cleanup_deferred {
         assert_eq!(std::fs::read_dir(&real).unwrap().count(), 0, "passing checks clean up through the link");

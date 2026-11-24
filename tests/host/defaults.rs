@@ -142,43 +142,55 @@ fn a_consumer_keeps_its_checkout_and_dot_fallback() {
     std::fs::write(host.join("Cargo.lock"), "").unwrap();
     assert_eq!(checkout_of(&binary), Some(host.clone()));
 
+    // A second copy without Cargo.lock lets the lockless host and standalone-binary checks run beside the locked-host check.
+    let host_without_lock = root.join("host-without-lock");
+    let binary_without_lock = host_without_lock.join(format!("target/release/host{}", std::env::consts::EXE_SUFFIX));
+    std::fs::create_dir_all(binary_without_lock.parent().unwrap()).unwrap();
+    if std::fs::hard_link(&binary, &binary_without_lock).is_err() {
+        std::fs::copy(&binary, &binary_without_lock).unwrap();
+    }
+    std::fs::write(host_without_lock.join("Cargo.toml"), "[package]\nname = \"ree-test-host\"\n").unwrap();
+    assert_eq!(checkout_of(&binary_without_lock), None);
+
     // the child runs from `root`, with no cache folder chosen by the environment
-    let child = |test: &str| {
-        let mut command = Command::new(&binary);
+    let child = |exe: &Path, test: &str| {
+        let mut command = Command::new(exe);
         command.args(["--exact", test, "--nocapture"]).env_remove("RUR_STATE_DIR").env_remove("RUR_CACHE_DIR").current_dir(&root);
         command
     };
-    let run_consumer_defaults = |expected_repo: &Path| {
-        let output = child("consumer_defaults").env("REE_TEST_HOST", expected_repo).output().unwrap();
+    let (locked_out, dot_out, binary_out, no_cache_out) = std::thread::scope(|scope| {
+        // with a lockfile above the executable the repo is that checkout
+        let h_locked = scope.spawn(|| child(&binary, "consumer_defaults").env("REE_TEST_HOST", &host).output().unwrap());
+        // without a lockfile it is `.`
+        let h_dot = scope.spawn(|| child(&binary_without_lock, "consumer_defaults").env("REE_TEST_HOST", Path::new(".")).output().unwrap());
+        // ree's own binary, with the per-user folders redirected into the made-up root
+        let h_binary = scope.spawn(|| {
+            child(&binary_without_lock, "binary_defaults")
+                .env("REE_TEST_BINARY_SOURCE", &binary_without_lock)
+                .env("LOCALAPPDATA", root.join("local"))
+                .env("HOME", root.join("home"))
+                .env("XDG_CACHE_HOME", root.join("xdg"))
+                .output()
+                .unwrap()
+        });
+        // the same binary where the environment names no per-user folder at all
+        let h_no_cache = scope.spawn(|| {
+            child(&binary_without_lock, "binary_without_cache")
+                .env("REE_TEST_BINARY_WITHOUT_CACHE", &binary_without_lock)
+                .env_remove("LOCALAPPDATA")
+                .env_remove("HOME")
+                .env_remove("XDG_CACHE_HOME")
+                .env_remove("USERPROFILE")
+                .output()
+                .unwrap()
+        });
+        (h_locked.join().unwrap(), h_dot.join().unwrap(), h_binary.join().unwrap(), h_no_cache.join().unwrap())
+    });
+    for output in [locked_out, dot_out, binary_out, no_cache_out] {
         assert!(output.status.success(), "{}", describe(&output));
-    };
-
-    // with a lockfile above the executable the repo is that checkout, without one it is `.`
-    run_consumer_defaults(&host);
+    }
     std::fs::remove_file(host.join("Cargo.lock")).unwrap();
     assert_eq!(checkout_of(&binary), None);
-    run_consumer_defaults(Path::new("."));
-
-    // ree's own binary, with the per-user folders redirected into the made-up root
-    let output = child("binary_defaults")
-        .env("REE_TEST_BINARY_SOURCE", &binary)
-        .env("LOCALAPPDATA", root.join("local"))
-        .env("HOME", root.join("home"))
-        .env("XDG_CACHE_HOME", root.join("xdg"))
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", describe(&output));
-
-    // the same binary where the environment names no per-user folder at all
-    let output = child("binary_without_cache")
-        .env("REE_TEST_BINARY_WITHOUT_CACHE", &binary)
-        .env_remove("LOCALAPPDATA")
-        .env_remove("HOME")
-        .env_remove("XDG_CACHE_HOME")
-        .env_remove("USERPROFILE")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", describe(&output));
     std::fs::remove_dir_all(root).unwrap();
 }
 

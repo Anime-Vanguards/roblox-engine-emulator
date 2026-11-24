@@ -3,11 +3,58 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { test } from "node:test";
+import { after, describe, test } from "node:test";
 import { realPath } from "../tools/release/common.mjs";
 import { pixelPng, removeTestFolder, servedRun, startManualService, stopServices } from "../tools/release/smoke.mjs";
+
+const WINDOWS = process.platform === "win32";
+const CONCURRENCY = Math.min(6, Math.max(2, os.availableParallelism()));
+
+let stageDir = null;
+let stagedBinary = null;
+function installBinary(dest) {
+	if (!stagedBinary) {
+		stageDir = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-service-cache-stage-")));
+		stagedBinary = path.join(stageDir, WINDOWS ? "ree.exe" : "ree");
+		fs.copyFileSync(process.env.REE_TEST_BINARY, stagedBinary);
+		if (!WINDOWS) fs.chmodSync(stagedBinary, 0o755);
+	}
+	try {
+		fs.linkSync(stagedBinary, dest);
+	} catch (error) {
+		if (error.code !== "EXDEV" && error.code !== "EPERM" && error.code !== "EACCES") throw error;
+		fs.copyFileSync(process.env.REE_TEST_BINARY, dest);
+		if (!WINDOWS) fs.chmodSync(dest, 0o755);
+	}
+}
+
+function spawnAsync(executable, args, { cwd, env, timeout = 120_000 }) {
+	return new Promise((resolve) => {
+		const child = spawn(executable, args, { cwd, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+		let stdout = "";
+		let stderr = "";
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill();
+		}, timeout);
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
+		child.stdout.on("data", (chunk) => { stdout += chunk; });
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		child.once("error", (error) => {
+			clearTimeout(timer);
+			resolve({ status: null, stdout, stderr, error });
+		});
+		child.once("close", (status) => {
+			clearTimeout(timer);
+			const error = timedOut ? new Error(`command timed out after ${timeout} ms: ${args.join(" ")}`) : null;
+			resolve({ status, stdout, stderr, error });
+		});
+	});
+}
 
 // Environment variables with these prefixes steer ree and its helpers, so the check starts without them
 const STEERING_VARIABLES = /^(REE_|RUR_|ROR_)/i;
@@ -22,14 +69,13 @@ assets:CreateSurfaceAppearanceAsync({ColorMap = Content.fromObject(image)})
 print("standalone project ok")
 end`;
 
-// Copies ree outside its checkout, redirects user folders, and removes all files after a passing check.
+// Installs ree outside its checkout, redirects user folders, and removes all files after a passing check.
 function check(name, body) {
 	test(name, async () => {
 		// the real path of the temp folder: ree reports paths with links resolved, and the checks compare against them
 		const root = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-service-cache-")));
-		const executable = path.join(root, process.platform === "win32" ? "ree.exe" : "ree");
-		fs.copyFileSync(process.env.REE_TEST_BINARY, executable);
-		fs.chmodSync(executable, 0o755);
+		const executable = path.join(root, WINDOWS ? "ree.exe" : "ree");
+		installBinary(executable);
 		const inputs = path.join(root, "inputs");
 		const project = path.join(root, "project");
 		for (const dir of [inputs, project, path.join(root, "temp")]) fs.mkdirSync(dir);
@@ -50,13 +96,13 @@ function check(name, body) {
 			TMP: path.join(root, "temp"), TEMP: path.join(root, "temp"), TMPDIR: path.join(root, "temp"),
 			REE_PARENT_WATCH: "0", REE_SERVE_WORKERS: "1",
 		});
-		const run = (args, cwd = project) => {
-			const result = spawnSync(executable, args, { cwd, env, encoding: "utf8", timeout: 120_000, windowsHide: true });
+		const run = async (args, cwd = project, customEnv = env) => {
+			const result = await spawnAsync(executable, args, { cwd, env: customEnv, timeout: 120_000 });
 			assert.ifError(result.error);
 			return result;
 		};
-		const ree = (args, cwd) => {
-			const result = run(args, cwd);
+		const ree = async (args, cwd) => {
+			const result = await run(args, cwd);
 			assert.equal(result.status, 0, result.stderr || result.stdout);
 			return result.stdout;
 		};
@@ -97,8 +143,8 @@ function contentsOf(root, writable = []) {
 }
 
 // The records of the running services, one per line of `serve --status` (no line when none runs)
-function runningServices(ree, cwd) {
-	return ree(["serve", "--status"], cwd).trim().split("\n").filter(Boolean).map(JSON.parse);
+async function runningServices(ree, cwd) {
+	return (await ree(["serve", "--status"], cwd)).trim().split("\n").filter(Boolean).map(JSON.parse);
 }
 
 const VARIANTS ='return { sizes = {1}, variants = {{name = "one", run = function(n) return n end}} }';
@@ -123,6 +169,11 @@ async function stopAllServices(ree, started) {
 	}
 }
 
+describe("service cache", { concurrency: CONCURRENCY }, () => {
+after(async () => {
+	if (stageDir) await removeTestFolder(stageDir);
+});
+
 // A relative XDG_CACHE_HOME is ignored, so the cache is HOME/.cache/ree on Linux. A service normalizes its environment
 // and changes its folder, so every job it runs must still use the cache the client's environment chose.
 for (const manual of [false, true]) check(`relative XDG_CACHE_HOME keeps the per-user fallback, manual=${manual}`, async ({ root, project, env, ree, executable }) => {
@@ -131,14 +182,14 @@ for (const manual of [false, true]) check(`relative XDG_CACHE_HOME keeps the per
 	fs.mkdirSync(path.dirname(state), { recursive: true });
 	const before = contentsOf(root, [state]);
 	const job = ["--harness", "Harness.luau", "--seconds", "0.05", "--offline"];
-	const direct = JSON.parse(ree(["run", ...job]));
+	const direct = JSON.parse(await ree(["run", ...job]));
 	assert.equal(direct.errors, 0);
 	// every job leaves an image in the state it used, so the count shows which state that was
 	const images = () => fs.readdirSync(path.join(state, "editable-images")).length;
 	assert.equal(images(), 1);
 	// A lone --service call runs in the client; the next call in its burst starts the service.
 	if (!manual) {
-		const firstServiceFallback = ree(["run", "--service", ...job]);
+		const firstServiceFallback = await ree(["run", "--service", ...job]);
 		assert.equal(JSON.parse(firstServiceFallback).errors, 0);
 	}
 	const imagesBeforeService = images();
@@ -151,13 +202,13 @@ for (const manual of [false, true]) check(`relative XDG_CACHE_HOME keeps the per
 			assert.equal(served.errors, 0);
 			assert.deepEqual(served.output, direct.output);
 			assert.equal(images(), imagesBeforeService + attempt + 1, "jobs keep the state chosen at service startup");
-			const services = runningServices(ree);
+			const services = await runningServices(ree);
 			assert.equal(services.length, 1);
 			servicePid ??= started?.service.pid ?? services[0].pid;
 			assert.equal(services[0].pid, servicePid);
 		}
 		assert.equal(JSON.parse(await servedRun(ree, ["serve", "--warm", ...job], servicePid)).warm, true);
-		assert.equal(runningServices(ree)[0].pid, servicePid, "warm-up finds the same service");
+		assert.equal((await runningServices(ree))[0].pid, servicePid, "warm-up finds the same service");
 		const warmServed = JSON.parse(await servedRun(ree, ["run", "--service", ...job], servicePid));
 		assert.equal(warmServed.errors, 0);
 		assert.deepEqual(warmServed.output, direct.output);
@@ -176,7 +227,7 @@ check("a failed job exits 1 through the service with its summary", async ({ proj
 	fs.writeFileSync(path.join(project, "Spins.luau"), 'return function() game:GetService("RunService").Heartbeat:Connect(function() while true do end end) end');
 	const failing = ["--harness", "Fails.luau", "--seconds", "0.5", "--offline"];
 	const spinning = ["--harness", "Spins.luau", "--seconds", "5", "--fps", "10", "--script-timeout", "0.02", "--max-script-timeouts", "2", "--offline"];
-	const direct = run(["run", ...failing]);
+	const direct = await run(["run", ...failing]);
 	assert.equal(direct.status, 1, direct.stderr);
 	const summary = JSON.parse(direct.stdout);
 	assert.equal(summary.status, "error");
@@ -185,8 +236,8 @@ check("a failed job exits 1 through the service with its summary", async ({ proj
 	try {
 		await started.listening;
 		for (const [job, code] of [[failing, 1], [spinning, 126]]) {
-			const exits = (args) => {
-				const result = run(args);
+			const exits = async (args) => {
+				const result = await run(args);
 				assert.equal(result.status, code, result.stderr || result.stdout);
 				return result.stdout;
 			};
@@ -201,13 +252,13 @@ check("a failed job exits 1 through the service with its summary", async ({ proj
 });
 
 for (const kind of ["work,cpu", "boundary", "environment"]) {
-	check(`unnamed ${kind} profiles stay in standalone state`, ({ root, inputs, env, run }) => {
+	check(`unnamed ${kind} profiles stay in standalone state`, async ({ root, inputs, env, run }) => {
 		env.RUR_STATE_DIR = path.join(root, "state");
 		const before = contentsOf(root, [env.RUR_STATE_DIR]);
 		const args = ["run", "--repo", inputs, "--harness", "Harness.luau", "--seconds", "0.05", "--offline"];
 		if (kind === "environment") env.REE_PROFILE = "work";
 		else args.push("--profile", kind);
-		const result = run(args);
+		const result = await run(args);
 		assert.equal(result.status, 0, result.stderr);
 		// the user never named this folder, so the run says where the profile went
 		const profile = kind === "boundary" ? "ree-boundary.json" : "ree-profile/profile.json";
@@ -218,7 +269,7 @@ for (const kind of ["work,cpu", "boundary", "environment"]) {
 	});
 }
 
-for (const fileInput of [false, true]) check(`profile diff and report keep unnamed outputs in state, fileInput=${fileInput}`, ({ root, project, env, run }) => {
+for (const fileInput of [false, true]) check(`profile diff and report keep unnamed outputs in state, fileInput=${fileInput}`, async ({ root, project, env, run }) => {
 	env.RUR_STATE_DIR = path.join(root, "state");
 	for (const name of ["before", "after"]) {
 		fs.mkdirSync(path.join(project, name));
@@ -232,7 +283,7 @@ for (const fileInput of [false, true]) check(`profile diff and report keep unnam
 
 	// a diff goes to the folder `--out` names, else to state, and the command says where
 	for (const out of [null, namedOut]) {
-		const diff = run(["profile", "diff", beforeInput, afterInput, ...(out ? ["--out", out] : [])]);
+		const diff = await run(["profile", "diff", beforeInput, afterInput, ...(out ? ["--out", out] : [])]);
 		assert.equal(diff.status, 0, diff.stderr);
 		const directory = out ?? stateOut;
 		for (const file of ["diff.txt", "diff.json", "diff.html"]) assert(fs.existsSync(path.join(directory, file)), diff.stdout);
@@ -240,7 +291,7 @@ for (const fileInput of [false, true]) check(`profile diff and report keep unnam
 	}
 
 	// a report goes to state too, not beside the profile it was made from
-	const report = run(["profile", "report", afterInput]);
+	const report = await run(["profile", "report", afterInput]);
 	assert.equal(report.status, 0, report.stderr);
 	const page = path.join(stateOut, "report.html");
 	assert(fs.existsSync(page), report.stdout);
@@ -250,7 +301,7 @@ for (const fileInput of [false, true]) check(`profile diff and report keep unnam
 	assert.deepEqual(contentsOf(root, [env.RUR_STATE_DIR, namedOut]), unchanged);
 });
 
-check("checkout profile diff and report keep their host defaults", ({ root, project, run }) => {
+check("checkout profile diff and report keep their host defaults", async ({ root, project, run }) => {
 	// a Cargo.lock and a Cargo.toml naming this package above the binary make it a binary in its own checkout
 	fs.writeFileSync(path.join(root, "Cargo.lock"), "");
 	fs.writeFileSync(path.join(root, "Cargo.toml"), '[package]\nname = "roblox-engine-emulator"\n');
@@ -260,9 +311,9 @@ check("checkout profile diff and report keep their host defaults", ({ root, proj
 	fs.writeFileSync(path.join(afterFolder, "profile.json"), '{"summary":"after"}');
 
 	// the diff lands in the after folder and the report beside its profile, as before
-	assert.equal(run(["profile", "diff", "before.json", "after"]).status, 0);
+	assert.equal((await run(["profile", "diff", "before.json", "after"])).status, 0);
 	for (const file of ["diff.txt", "diff.json", "diff.html"]) assert(fs.existsSync(path.join(afterFolder, file)));
-	const report = run(["profile", "report", "after"]);
+	const report = await run(["profile", "report", "after"]);
 	assert.equal(report.status, 0, report.stderr);
 	assert.equal(report.stdout, "after");
 	assert(fs.existsSync(path.join(afterFolder, "report.html")));
@@ -280,13 +331,13 @@ check("relative dump and clock paths keep their client meaning through a warm se
 	const args = ["--harness", "Harness.luau", "--seconds", "0.01", "--offline"];
 
 	// a direct run is the reference for what the service must do
-	const direct = JSON.parse(ree(["run", ...args]));
+	const direct = JSON.parse(await ree(["run", ...args]));
 	assert.equal(direct.errors, 0, JSON.stringify(direct));
 	const dump = fs.readFileSync(dumpFile, "utf8");
 	assert(dump.includes("DataModel"));
 
 	assert.equal(JSON.parse(await servedRun(ree, ["serve", "--warm", ...args])).warm, true);
-	const service = JSON.parse(ree(["serve", "--status"]));
+	const service = JSON.parse(await ree(["serve", "--status"]));
 	let jobsDone = service.health.jobs.done;
 	for (const absolute of [false, true]) {
 		if (absolute) {
@@ -299,7 +350,7 @@ check("relative dump and clock paths keep their client meaning through a warm se
 		assert.equal(served.errors, 0, JSON.stringify(served));
 		assert.deepEqual(served.output, direct.output);
 		assert.equal(fs.readFileSync(dumpFile, "utf8"), dump);
-		const services = runningServices(ree);
+		const services = await runningServices(ree);
 		assert.equal(services.length, 1, "relative and absolute paths find the same service");
 		assert.equal(services[0].pid, service.pid);
 		assert.equal(services[0].health.jobs.done, ++jobsDone, "the warm service answered the job");
@@ -323,31 +374,33 @@ check("relative environment outputs distinguish services by client folder", asyn
 		// each folder's relative names make its own service: the warm-up must start a new one, and the run must be
 		// completed by that one and not by the other folder's
 		const inFolder = (argv) => ree(argv, folder);
-		const pidsBefore = new Set(runningServices(ree).map((running) => running.pid));
+		const pidsBefore = new Set((await runningServices(ree)).map((running) => running.pid));
 		const warmReply = await servedRun(inFolder, ["serve", "--warm", ...args], undefined, { newService: true });
 		assert.equal(JSON.parse(warmReply).warm, true);
-		const service = runningServices(ree).find((running) => !pidsBefore.has(running.pid));
+		const service = (await runningServices(ree)).find((running) => !pidsBefore.has(running.pid));
 		const runReply = await servedRun(inFolder, ["run", "--service", ...args], service.pid);
 		assert.equal(JSON.parse(runReply).errors, 0);
 		assert(fs.existsSync(path.join(folder, "dump.txt")));
 	}
 
 	// each folder keyed its own service (the warm-up and the run share one, so each answered two jobs)
-	const services = runningServices(ree);
+	const services = await runningServices(ree);
 	assert.equal(services.length, 2, "the same relative names refer to different files in each client folder");
 	assert(services.every((info) => info.health.jobs.done === 2), JSON.stringify(services));
 	assert(!fs.existsSync(path.join(env.RUR_STATE_DIR, "dump.txt")));
 });
 
-check("profile try defaults to standalone state and honors an explicit output", ({ root, inputs, project, env, run }) => {
+check("profile try defaults to standalone state and honors an explicit output", async ({ root, inputs, project, env, run }) => {
 	env.RUR_STATE_DIR = path.join(root, "state");
 	fs.writeFileSync(path.join(project, "Variants.luau"), VARIANTS);
 	const explicit = path.join(project, "comparison");
 	const before = contentsOf(root, [env.RUR_STATE_DIR, explicit]);
-	for (const out of [null, explicit]) {
+	const results = await Promise.all([null, explicit].map((out) => {
 		const args = ["profile", "try", "Variants.luau", "--repo", inputs, "--frames", "1", "--no-time", "--no-hw", "--no-check", "--offline"];
 		if (out) args.push("--out", out);
-		const result = run(args);
+		return run(args).then((result) => ({ out, result }));
+	}));
+	for (const { out, result } of results) {
 		assert.equal(result.status, 0, result.stderr || result.stdout);
 		const comparison = out ?? path.join(env.RUR_STATE_DIR, "what-if/Variants");
 		assert(fs.existsSync(path.join(comparison, "compare.json")), result.stdout);
@@ -356,23 +409,28 @@ check("profile try defaults to standalone state and honors an explicit output", 
 	assert.deepEqual(contentsOf(root, [env.RUR_STATE_DIR, explicit]), before);
 });
 
-check("explicit profiles and recording output aliases keep their paths", ({ root, inputs, project, env, run }) => {
+check("explicit profiles and recording output aliases keep their paths", async ({ root, inputs, project, env, run }) => {
 	env.RUR_STATE_DIR = path.join(root, "state");
 	const named = path.join(project, "named");
 	fs.mkdirSync(named);
 	const before = contentsOf(root, [env.RUR_STATE_DIR, named]);
 	const args = ["--repo", inputs, "--harness", "Harness.luau", "--seconds", "0.05", "--offline"];
-	// --profile-out is a folder for the work profile and a file for the boundary report
-	for (const kind of ["work", "boundary"]) {
+	// --profile-out is a folder for the work profile and a file for the boundary report; a recording's profile goes in its
+	// own output folder, whichever flag names that folder
+	const profileJobs = ["work", "boundary"].map((kind) => {
 		const profileOut = path.join(named, kind === "boundary" ? "crossings.json" : "suite");
-		const result = run(["run", ...args, "--profile", kind, "--profile-out", profileOut]);
+		return run(["run", ...args, "--profile", kind, "--profile-out", profileOut]).then((result) => ({ kind, profileOut, result }));
+	});
+	const recordJobs = ["--out", "--dir", "--dump-scene"].map((flag) => {
+		const recording = path.join(named, flag.slice(2));
+		return run(["record", ...args, flag, recording, "--profile", "work"]).then((result) => ({ recording, result }));
+	});
+	const [profileResults, recordResults] = await Promise.all([Promise.all(profileJobs), Promise.all(recordJobs)]);
+	for (const { kind, profileOut, result } of profileResults) {
 		assert.equal(result.status, 0, result.stderr);
 		assert(fs.existsSync(kind === "boundary" ? profileOut : path.join(profileOut, "profile.json")));
 	}
-	// a recording's profile goes in its own output folder, whichever flag names that folder
-	for (const flag of ["--out", "--dir", "--dump-scene"]) {
-		const recording = path.join(named, flag.slice(2));
-		const result = run(["record", ...args, flag, recording, "--profile", "work"]);
+	for (const { recording, result } of recordResults) {
 		assert.equal(result.status, 0, result.stderr);
 		assert(fs.existsSync(path.join(recording, "scene.rbxm")));
 		assert(fs.existsSync(path.join(recording, "profile/profile.json")));
@@ -383,21 +441,22 @@ check("explicit profiles and recording output aliases keep their paths", ({ root
 check("a warm standalone service reads relative frame times from the client", async ({ inputs, project, ree }) => {
 	fs.writeFileSync(path.join(project, "frames.json"), "[0,0.01,0.02]");
 	const args = ["--repo", inputs, "--harness", "Harness.luau", "--frame-times=frames.json", "--seconds", "0.02", "--offline"];
-	const direct = JSON.parse(ree(["run", ...args]));
+	const direct = JSON.parse(await ree(["run", ...args]));
 	assert.equal(JSON.parse(await servedRun(ree, ["serve", "--warm", ...args])).warm, true);
-	const service = JSON.parse(ree(["serve", "--status"]));
+	const service = JSON.parse(await ree(["serve", "--status"]));
 	const served = JSON.parse(await servedRun(ree, ["run", "--service", ...args], service.pid));
 	assert.equal(served.errors, 0);
 	assert.deepEqual(served.output, direct.output);
 	assert.equal(served.frames, direct.frames);
-	assert.equal(JSON.parse(ree(["serve", "--status"])).pid, service.pid, "the same warm service handled the job");
+	assert.equal(JSON.parse(await ree(["serve", "--status"])).pid, service.pid, "the same warm service handled the job");
 });
 
 check("an input repo never substitutes for a missing per-user cache", async ({ root, inputs, project, env, ree, run }) => {
 	for (const name of Object.keys(env)) if (/^(LOCALAPPDATA|XDG_CACHE_HOME|HOME|USERPROFILE)$/i.test(name)) delete env[name];
-	assert.match(ree(["--version"]), /^ree \d+\.\d+\.\d+/);
-	assert.match(ree(["--help"]), /^usage: ree/);
-	assert.match(ree(["serve", "--help"]), /^usage: ree serve/);
+	const [ver, help, serveHelp] = await Promise.all([ree(["--version"]), ree(["--help"]), ree(["serve", "--help"])]);
+	assert.match(ver, /^ree \d+\.\d+\.\d+/);
+	assert.match(help, /^usage: ree/);
+	assert.match(serveHelp, /^usage: ree serve/);
 	// Reports and diffs also need state for their unnamed outputs.
 	fs.writeFileSync(path.join(project, "profile.json"), '{"summary":"report without state"}');
 	fs.writeFileSync(path.join(project, "Variants.luau"), VARIANTS);
@@ -425,47 +484,47 @@ check("an input repo never substitutes for a missing per-user cache", async ({ r
 		["serve", "--warm", ...args],
 	];
 	const before = contentsOf(root);
+	const failingRuns = [];
 	// A drive-relative per-user folder is not an absolute cache root, even though Windows can resolve it.
-	if (process.platform === "win32") {
+	if (WINDOWS) {
 		const drive = path.parse(project).root.slice(0, -1);
-		env.LOCALAPPDATA = drive;
-		const result = run(["run", ...args]);
-		assert.notEqual(result.status, 0);
-		assert(result.stderr.includes(MISSING_CACHE_ERROR), result.stderr);
-		assert.deepEqual(contentsOf(root), before);
-		delete env.LOCALAPPDATA;
+		failingRuns.push(run(["run", ...args], project, { ...env, LOCALAPPDATA: drive }).then((result) => {
+			assert.notEqual(result.status, 0);
+			assert(result.stderr.includes(MISSING_CACHE_ERROR), result.stderr);
+		}));
 	}
 	for (const command of commands) {
-		const result = run(command);
-		assert.notEqual(result.status, 0);
-		assert.match(result.stderr, new RegExp(`^ree(?: run| record| profile (?:try|diff|report)| serve| serve --warm)?: ${MISSING_CACHE_ERROR}\\r?\\n$`));
-		assert.deepEqual(contentsOf(root), before, `writes before the missing-cache error: ${command.join(" ")}`);
+		failingRuns.push(run(command).then((result) => {
+			assert.notEqual(result.status, 0, command.join(" "));
+			assert.match(result.stderr, new RegExp(`^ree(?: run| record| profile (?:try|diff|report)| serve| serve --warm)?: ${MISSING_CACHE_ERROR}\\r?\\n$`));
+		}));
 	}
 	// profiling that an environment variable switches on must not write before the error either
 	for (const variable of ["REE_PROFILE", "RUR_BOUNDARY_PROFILE", "RUR_LUAU_PROFILE", "RUR_LUAU_ALLOC_PROFILE"]) {
-		env[variable] = variable === "REE_PROFILE" ? "work" : "profile-from-env";
-		const result = run(["run", "--service", ...args]);
-		assert.match(result.stderr, new RegExp(`^ree(?: run)?: ${MISSING_CACHE_ERROR}\\r?\\n$`));
-		assert.notEqual(result.status, 0);
-		assert.deepEqual(contentsOf(root), before, `writes before the missing-cache error with ${variable}`);
-		delete env[variable];
+		const varEnv = { ...env, [variable]: variable === "REE_PROFILE" ? "work" : "profile-from-env" };
+		failingRuns.push(run(["run", "--service", ...args], project, varEnv).then((result) => {
+			assert.match(result.stderr, new RegExp(`^ree(?: run)?: ${MISSING_CACHE_ERROR}\\r?\\n$`));
+			assert.notEqual(result.status, 0);
+		}));
 	}
+	await Promise.all(failingRuns);
+	assert.deepEqual(contentsOf(root), before, "writes before the missing-cache error");
 	assert(!fs.existsSync(path.join(inputs, ".cache", "editable-images")));
 	// An explicit cache also works without any per-user folder, including service startup and warm-up.
 	env.RUR_STATE_DIR = path.join(project, "state");
-	assert.equal(JSON.parse(ree(["run", ...args])).errors, 0);
+	assert.equal(JSON.parse(await ree(["run", ...args])).errors, 0);
 	assert.equal(JSON.parse(await servedRun(ree, ["serve", "--warm", ...args])).warm, true);
 	assert.equal(JSON.parse(await servedRun(ree, ["run", "--service", ...args])).errors, 0);
 });
 
 for (const override of [null, "RUR_CACHE_DIR", "RUR_STATE_DIR"]) check(`--repo keeps standalone state, override=${override}`, async ({ root, inputs, project, env, ree }) => {
-	const userCache = process.platform === "win32" ? path.join(env.LOCALAPPDATA, "ree")
+	const userCache = WINDOWS ? path.join(env.LOCALAPPDATA, "ree")
 		: process.platform === "darwin" ? path.join(env.HOME, "Library/Caches/ree") : path.join(env.XDG_CACHE_HOME, "ree");
 	if (override) env[override] = path.join(root, "override");
 	const state = override ? env[override] : userCache;
 	const job = ["--repo", "", "--repo", inputs, "--harness", "Harness.luau", "--seconds", "0.05", "--offline"];
 	const images = () => fs.readdirSync(path.join(state, "editable-images")).length;
-	const direct = JSON.parse(ree(["run", ...job]));
+	const direct = JSON.parse(await ree(["run", ...job]));
 	assert.equal(direct.errors, 0, JSON.stringify(direct));
 	assert.equal(images(), 1);
 	// Each service call gives the output of the direct run and adds one image. The first call may run in the client and
@@ -476,18 +535,19 @@ for (const override of [null, "RUR_CACHE_DIR", "RUR_STATE_DIR"]) check(`--repo k
 		assert.deepEqual(served.output, direct.output);
 		assert.equal(images(), imageCount);
 	};
-	const firstServiceFallback = ree(["run", "--service", ...job]);
+	const firstServiceFallback = await ree(["run", "--service", ...job]);
 	assertServiceRun(firstServiceFallback, 2);
 	assertServiceRun(await servedRun(ree, ["run", "--service", ...job]), 3);
-	const before = ree(["serve", "--status"]).trim().split("\n").map(JSON.parse);
+	const before = (await ree(["serve", "--status"])).trim().split("\n").map(JSON.parse);
 	assert.equal(before.length, 1, "the burst started one service");
 	// Empty and repeated roots must retain the current-project default during warm-up too.
 	for (const roots of [[], ["--roots", ""], ["--roots", ";;"], ["--roots", "unused", "--roots", ""]]) {
 		assert.equal(JSON.parse(await servedRun(ree, ["serve", "--warm", ...job, ...roots], before[0].pid)).warm, true);
 	}
-	assert.deepEqual(ree(["serve", "--status"]).trim().split("\n").map(JSON.parse).map((info) => info.pid), before.map((info) => info.pid));
+	assert.deepEqual((await ree(["serve", "--status"])).trim().split("\n").map(JSON.parse).map((info) => info.pid), before.map((info) => info.pid));
 	assert(fs.readdirSync(path.join(state, "record")).length > 0, "run history uses standalone state too");
 	assert(!fs.existsSync(path.join(inputs, ".cache", "editable-images")));
 	assert(!fs.existsSync(path.join(inputs, ".cache", "record")));
 	assert(!fs.existsSync(path.join(project, ".cache")));
+});
 });

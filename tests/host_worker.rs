@@ -87,29 +87,44 @@ fn a_library_host_keeps_relative_worker_paths() {
 
     // Each case: the repo the host names (none: the dot fallback) and the variable that makes the state dir relative
     let cases = [(None, None), (Some("repo"), None), (Some("repo"), Some("RUR_STATE_DIR")), (Some("repo"), Some("RUR_CACHE_DIR"))];
-    for (index, (repo, state_variable)) in cases.into_iter().enumerate() {
-        let directory = root.join(index.to_string());
-        std::fs::create_dir_all(&directory).unwrap();
-        let mut command = Command::new(&binary);
-        for (name, _) in std::env::vars_os() {
-            if steers_ree(&name.to_string_lossy()) {
-                command.env_remove(name);
-            }
-        }
-        command.current_dir(&directory).args(["--exact", "a_library_host_keeps_relative_worker_paths", "--nocapture"])
-            .env(CHILD_MARKER, "1")
-            .env("NODE_OPTIONS", format!("--require={}", serde_json::to_string(&mock).unwrap()));
-        command.env("REE_ASSET_WORKER", &worker);
-        if let Some(repo) = repo { command.env(CHILD_REPO, repo); }
-        if let Some(variable) = state_variable { command.env(variable, "cache"); }
-        let result = command.output().unwrap();
-        assert!(result.status.success(), "case {index}: {}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = cases
+            .into_iter()
+            .enumerate()
+            .map(|(index, (repo, state_variable))| {
+                let root = &root;
+                let binary = &binary;
+                let mock = &mock;
+                let worker = &worker;
+                scope.spawn(move || {
+                    let directory = root.join(index.to_string());
+                    std::fs::create_dir_all(&directory).unwrap();
+                    let mut command = Command::new(binary);
+                    for (name, _) in std::env::vars_os() {
+                        if steers_ree(&name.to_string_lossy()) {
+                            command.env_remove(name);
+                        }
+                    }
+                    command.current_dir(&directory).args(["--exact", "a_library_host_keeps_relative_worker_paths", "--nocapture"])
+                        .env(CHILD_MARKER, "1")
+                        .env("NODE_OPTIONS", format!("--require={}", serde_json::to_string(mock).unwrap()));
+                    command.env("REE_ASSET_WORKER", worker);
+                    if let Some(repo) = repo { command.env(CHILD_REPO, repo); }
+                    if let Some(variable) = state_variable { command.env(variable, "cache"); }
+                    let result = command.output().unwrap();
+                    assert!(result.status.success(), "case {index}: {}\n{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
 
-        // The worker got the output path exactly as the library spells it, relative like the host's state dir
-        let requests = std::fs::read_to_string(directory.join("requests.jsonl")).unwrap();
-        let request: serde_json::Value = serde_json::from_str(requests.trim()).unwrap();
-        let state = state_variable.map(|_| PathBuf::from("cache")).unwrap_or_else(|| Path::new(repo.unwrap_or(".")).join(".cache"));
-        assert_eq!(Path::new(request["out"].as_str().unwrap()), state.join("animations/6001.rbxm"), "case {index}: the original relative output path");
-    }
+                    // The worker got the output path exactly as the library spells it, relative like the host's state dir
+                    let requests = std::fs::read_to_string(directory.join("requests.jsonl")).unwrap();
+                    let request: serde_json::Value = serde_json::from_str(requests.trim()).unwrap();
+                    let state = state_variable.map(|_| PathBuf::from("cache")).unwrap_or_else(|| Path::new(repo.unwrap_or(".")).join(".cache"));
+                    assert_eq!(Path::new(request["out"].as_str().unwrap()), state.join("animations/6001.rbxm"), "case {index}: the original relative output path");
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
     std::fs::remove_dir_all(root).unwrap();
 }

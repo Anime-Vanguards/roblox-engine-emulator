@@ -6,13 +6,17 @@
 use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde_json::Value as Json;
 
+static SCRATCH_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn scratch(name: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let root = std::env::temp_dir().join(format!("ree-what-if-{name}-{}-{nanos}", std::process::id()));
+    let seq = SCRATCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!("ree-what-if-{name}-{}-{nanos}-{seq}", std::process::id()));
     std::fs::create_dir_all(root.join("empty")).unwrap();
     root
 }
@@ -27,9 +31,7 @@ fn ree(root: &Path) -> Command {
     command
 }
 
-fn try_file(root: &Path, file: &str, source: &str, out: &str, extra: &[&str], hw: bool) -> (Output, Json) {
-    let path = root.join(file);
-    std::fs::write(&path, source).unwrap();
+fn try_existing(root: &Path, path: &Path, out: &str, extra: &[&str], hw: bool) -> (Output, Json) {
     let mut command = ree(root);
     command.args(["profile", "try", &path.to_string_lossy(), "--out", &root.join(out).to_string_lossy()]).args(extra);
     if hw {
@@ -38,6 +40,12 @@ fn try_file(root: &Path, file: &str, source: &str, out: &str, extra: &[&str], hw
     let done = command.output().unwrap();
     let compare = std::fs::read_to_string(root.join(out).join("compare.json")).map(|text| serde_json::from_str(&text).unwrap()).unwrap_or(Json::Null);
     (done, compare)
+}
+
+fn try_file(root: &Path, file: &str, source: &str, out: &str, extra: &[&str], hw: bool) -> (Output, Json) {
+    let path = root.join(file);
+    std::fs::write(&path, source).unwrap();
+    try_existing(root, &path, out, extra, hw)
 }
 
 fn text(output: &Output) -> String {
@@ -230,7 +238,15 @@ fn a_failed_check_and_a_variant_that_raises_are_reported() {
 	check = true,
 }
 ";
-    let (done, compare) = try_file(&root, "failures.luau", source, "out", &["--no-time", "--no-hw"], false);
+    let failures_path = root.join("failures.luau");
+    std::fs::write(&failures_path, source).unwrap();
+    let ((done, compare), (bad, _), (unknown, _), (option, _)) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| try_existing(&root, &failures_path, "out", &["--no-time", "--no-hw"], false));
+        let h2 = scope.spawn(|| try_file(&root, "bad.luau", "return 5\n", "bad", &["--no-time"], false));
+        let h3 = scope.spawn(|| try_existing(&root, &failures_path, "out2", &["--variants", "nope"], false));
+        let h4 = scope.spawn(|| try_existing(&root, &failures_path, "out3", &["--sizez", "4"], false));
+        (h1.join().unwrap(), h2.join().unwrap(), h3.join().unwrap(), h4.join().unwrap())
+    });
     let output = text(&done);
     assert_eq!(done.status.code(), Some(1), "{output}");
     let raises = run_of(&compare, "raises", 4.0);
@@ -246,13 +262,10 @@ fn a_failed_check_and_a_variant_that_raises_are_reported() {
     assert_eq!(compare["check"]["by"], "equality");
     assert!(compare["notes"].as_array().unwrap().iter().any(|note| note.as_str().unwrap().starts_with("raises at n = 4: error")), "{}", compare["notes"]);
     // a variant file that is not one says so
-    let (bad, _) = try_file(&root, "bad.luau", "return 5\n", "bad", &["--no-time"], false);
     assert_eq!(bad.status.code(), Some(1));
     assert!(text(&bad).contains("the variant file returns a table"), "{}", text(&bad));
-    let (unknown, _) = try_file(&root, "failures.luau", source, "out2", &["--variants", "nope"], false);
     assert_eq!(unknown.status.code(), Some(1));
     assert!(text(&unknown).contains("no variant \"nope\""), "{}", text(&unknown));
-    let (option, _) = try_file(&root, "failures.luau", source, "out3", &["--sizez", "4"], false);
     assert_eq!(option.status.code(), Some(2), "{}", text(&option));
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -273,7 +286,12 @@ fn results_compared_by_digest_block_a_winner_and_small_gaps_are_not_material() {
 	},
 }
 ";
-    let (done, compare) = try_file(&root, "digest.luau", source, "out", &["--no-time", "--no-hw"], false);
+    let busy = source.replace("sizes = { 100, 1000 },", "sizes = { 100, 1000 },\n\tper_frame = 1000,");
+    let ((done, compare), (_, busy_compare)) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| try_file(&root, "digest.luau", source, "out", &["--no-time", "--no-hw"], false));
+        let h2 = scope.spawn(|| try_file(&root, "digest-busy.luau", &busy, "busy", &["--no-time", "--no-hw"], false));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
     let output = text(&done);
     assert_eq!(done.status.code(), Some(1), "a differing result fails the comparison: {output}");
     assert_eq!((compare["check"]["ran"].as_bool(), compare["check"]["by"].as_str(), compare["check"]["ok"].as_bool()), (Some(true), Some("digest"), Some(false)));
@@ -296,12 +314,10 @@ fn results_compared_by_digest_block_a_winner_and_small_gaps_are_not_material() {
     assert!((compare["floor"]["ms"].as_f64().unwrap() - 1000.0 / 60.0 * 0.001).abs() < 1e-12, "{}", compare["floor"]);
     assert!(output.contains("material from: a ms figure's gap of 16.67 us a call"), "{output}");
     // per_frame raises the rate the game runs it at, and the gap becomes material
-    let busy = source.replace("sizes = { 100, 1000 },", "sizes = { 100, 1000 },\n\tper_frame = 1000,");
-    let (_, compare) = try_file(&root, "digest.luau", &busy, "busy", &["--no-time", "--no-hw"], false);
-    let work = compare["winners"].as_array().unwrap().iter().find(|winner| winner["metric"] == "work_ms" && winner["size"] == 100.0).unwrap();
+    let work = busy_compare["winners"].as_array().unwrap().iter().find(|winner| winner["metric"] == "work_ms" && winner["size"] == 100.0).unwrap();
     let twice = work["ranking"].as_array().unwrap().iter().find(|entry| entry["variant"] == "sum twice").unwrap();
     assert!(twice["material"] == true && twice["clear"] == true, "{twice}");
-    assert_eq!(compare["per_frame"], 1000.0);
+    assert_eq!(busy_compare["per_frame"], 1000.0);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -357,7 +373,11 @@ fn a_tie_at_the_top_leaves_the_other_verdicts() {
         let winners = output.split("winners at n = 1,000").nth(1).unwrap_or_else(|| panic!("no winners section: {output}"));
         winners.lines().find(|line| line.trim_start().starts_with("instructions ")).unwrap_or_else(|| panic!("{output}")).to_string()
     };
-    let (tied, compare) = try_file(&root, "tie.luau", &source(""), "tied", &["--no-time", "--no-hw"], false);
+    let ((tied, compare), (near, _)) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| try_file(&root, "tie.luau", &source(""), "tied", &["--no-time", "--no-hw"], false));
+        let h2 = scope.spawn(|| try_file(&root, "tie-near.luau", &source("s += 0 "), "near", &["--no-time", "--no-hw"], false));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
     let output = text(&tied);
     assert_eq!(tied.status.code(), Some(0), "{output}");
     let insns = compare["winners"].as_array().unwrap().iter().find(|winner| winner["metric"] == "insns" && winner["size"] == 1000.0).unwrap_or_else(|| panic!("a tie leaves the figure's verdicts: {}", compare["winners"]));
@@ -370,7 +390,6 @@ fn a_tie_at_the_top_leaves_the_other_verdicts() {
     let tied_line = line_of(&output);
     assert!(tied_line.contains("no clear winner among a, b; b 1.00x (about equal), c 1.6"), "{tied_line}");
     // (one more instruction a call in b: the same line)
-    let (near, _) = try_file(&root, "tie.luau", &source("s += 0 "), "near", &["--no-time", "--no-hw"], false);
     assert_eq!(line_of(&text(&near)), tied_line);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -380,8 +399,13 @@ fn a_tie_at_the_top_leaves_the_other_verdicts() {
 #[test]
 fn the_exact_figures_are_the_same_every_run() {
     let root = scratch("exact");
-    let (first, a) = try_file(&root, "nested.luau", NESTED, "a", &["--no-time", "--no-hw", "--no-check"], false);
-    let (second, b) = try_file(&root, "nested.luau", NESTED, "b", &["--no-time", "--no-hw", "--no-check"], false);
+    let nested_path = root.join("nested.luau");
+    std::fs::write(&nested_path, NESTED).unwrap();
+    let ((first, a), (second, b)) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| try_existing(&root, &nested_path, "a", &["--no-time", "--no-hw", "--no-check"], false));
+        let h2 = scope.spawn(|| try_existing(&root, &nested_path, "b", &["--no-time", "--no-hw", "--no-check"], false));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
     assert_eq!((first.status.code(), second.status.code()), (Some(0), Some(0)), "{}{}", text(&first), text(&second));
     let exact: Vec<String> = a["metrics"].as_array().unwrap().iter().filter(|metric| metric["exact"] == true).map(|metric| metric["key"].as_str().unwrap().to_string()).collect();
     assert!(exact.len() >= 10, "{exact:?}");
@@ -412,7 +436,13 @@ fn the_exact_figures_are_the_same_every_run() {
 #[test]
 fn hardware_counters_join_the_figures_when_they_count() {
     let root = scratch("hw");
-    let (done, compare) = try_file(&root, "nested.luau", NESTED, "out", &["--no-time", "--no-check", "--sizes", "8"], true);
+    let nested_path = root.join("nested.luau");
+    std::fs::write(&nested_path, NESTED).unwrap();
+    let ((done, compare), (plain, without)) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| try_existing(&root, &nested_path, "out", &["--no-time", "--no-check", "--sizes", "8"], true));
+        let h2 = scope.spawn(|| try_existing(&root, &nested_path, "plain", &["--no-time", "--no-check", "--sizes", "8"], false));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
     assert_eq!(done.status.code(), Some(0), "{}", text(&done));
     assert_eq!(compare["hw"]["read"], true, "{}", compare["hw"]);
     let summary = std::fs::read_to_string(root.join("out").join("compare.txt")).unwrap();
@@ -424,7 +454,6 @@ fn hardware_counters_join_the_figures_when_they_count() {
         assert!(run["run"]["hw_instructions"].as_f64().is_some(), "{run}");
     }
     // without them, the comparison says why
-    let (plain, without) = try_file(&root, "nested.luau", NESTED, "plain", &["--no-time", "--no-check", "--sizes", "8"], false);
     if plain.status.code() == Some(0) && without["hw"]["read"] == false {
         assert!(without["hw"]["why"].as_str().is_some_and(|why| !why.is_empty()), "{}", without["hw"]);
         assert!(without["runs"][0]["hw_profile"].is_null());
@@ -481,7 +510,25 @@ fn a_profile_of_every_kind_leaves_a_recording_as_it_was() {
         assert_eq!(done.status.code(), Some(0), "{}", text(&done));
         out
     };
-    let (plain, profiled) = (record("plain", false), record("profiled", true));
+    let run = |profile: bool| -> Json {
+        let mut command = ree(&root);
+        command.args(["run", "--harness", &harness.to_string_lossy(), "--roots", &root.join("empty").to_string_lossy(), "--seconds", "0.5"]);
+        pinned(&mut command);
+        if profile {
+            command.args(["--profile", "all", "--profile-out", &root.join("run-profile").to_string_lossy()]);
+        }
+        let done = command.output().unwrap();
+        assert_eq!(done.status.code(), Some(0), "{}", text(&done));
+        let summary: Json = serde_json::from_slice(&done.stdout).unwrap();
+        summary["output"].clone()
+    };
+    let (plain, profiled, quiet, watched) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| record("plain", false));
+        let h2 = scope.spawn(|| record("profiled", true));
+        let h3 = scope.spawn(|| run(false));
+        let h4 = scope.spawn(|| run(true));
+        (h1.join().unwrap(), h2.join().unwrap(), h3.join().unwrap(), h4.join().unwrap())
+    });
     let profile: Json = serde_json::from_str(&std::fs::read_to_string(root.join("profiled-profile").join("profile.json")).unwrap()).unwrap();
     assert!(profile["alloc"]["rehash"]["events"].as_u64().unwrap() > 0, "the tables grew under the profile");
     assert!(profile["heap"]["snapshots"].as_array().unwrap().iter().any(|snapshot| snapshot["tables"]["count"].as_u64().unwrap() > 400));
@@ -503,19 +550,6 @@ fn a_profile_of_every_kind_leaves_a_recording_as_it_was() {
         }
     }
     // what a run prints: the clock and the heap read the same
-    let run = |profile: bool| -> Json {
-        let mut command = ree(&root);
-        command.args(["run", "--harness", &harness.to_string_lossy(), "--roots", &root.join("empty").to_string_lossy(), "--seconds", "0.5"]);
-        pinned(&mut command);
-        if profile {
-            command.args(["--profile", "all", "--profile-out", &root.join("run-profile").to_string_lossy()]);
-        }
-        let done = command.output().unwrap();
-        assert_eq!(done.status.code(), Some(0), "{}", text(&done));
-        let summary: Json = serde_json::from_slice(&done.stdout).unwrap();
-        summary["output"].clone()
-    };
-    let (quiet, watched) = (run(false), run(true));
     assert!(quiet.as_array().unwrap().len() >= 20, "{quiet}");
     assert_eq!(quiet, watched);
     let _ = std::fs::remove_dir_all(&root);
