@@ -1,4 +1,5 @@
 /target/
 /.cache/
+/profile-view/.cache/
 /out/
 /tools/hw-counters/target/
