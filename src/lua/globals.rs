@@ -635,12 +635,27 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     super::float_mode::start(lua);
     lua.set_compiler(modules::compiler());
     // The string metatable is locked: getmetatable("") is a string in a playing client (measured, Studio 0.744:
-    // tools/parity/probes/values.luau; the text is the lock text Roblox's other metatables give, not measured here)
-    lua.load(r#"getmetatable("").__metatable = "The metatable is locked""#).set_name("=ree.strings").exec()?;
-    // Luau native code generation (feature `jit`; a WebAssembly build has none: an interpreting VM),
-    // unless the VM interprets everything (modules::interpret_all)
+    // tools/parity/probes/values.luau; the text is the lock text Roblox's other metatables give, not measured here).
+    // Set directly via the C API to avoid compiling and JITing a one-shot Luau chunk on every VM start.
+    unsafe {
+        lua.exec_raw::<()>((), |state| {
+            mlua::ffi::lua_pushlstring(state, c"".as_ptr(), 0);
+            if mlua::ffi::lua_getmetatable(state, -1) != 0 {
+                let key = b"__metatable";
+                let msg = b"The metatable is locked";
+                mlua::ffi::lua_pushlstring(state, key.as_ptr().cast(), key.len());
+                mlua::ffi::lua_pushlstring(state, msg.as_ptr().cast(), msg.len());
+                mlua::ffi::lua_rawset(state, -3);
+                mlua::ffi::lua_pop(state, 1);
+            }
+            mlua::ffi::lua_pop(state, 1);
+        })?;
+    }
+    // Engine boot chunks (vector3.luau, prelude.luau, services.luau, server.luau: ~187 KB of one-shot
+    // setup code) stay interpreted so every VM start does not pay 40-100 ms of x86-64 JIT codegen.
+    // Native / tiered JIT for script code is configured below once engine stubs have loaded.
     #[cfg(feature = "jit")]
-    lua.enable_jit(!modules::interprets_all(engine));
+    lua.enable_jit(false);
     // Instances are raw tagged userdata with C metamethods (lua/raw.rs)
     super::raw::install(lua, engine)?;
     // Connection handlers live in one Luau table (signal.rs)
@@ -745,6 +760,11 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 mlua::ffi::lua_gc(state, mlua::ffi::LUA_GCSETGOAL, 400);
             })?;
         }
+    } else {
+        // Restore Luau native code generation for callers that run script chunks with JIT enabled
+        // (unless the VM interprets everything via modules::interpret_all).
+        #[cfg(feature = "jit")]
+        lua.enable_jit(!modules::interprets_all(engine));
     }
 
     // Scheduler.Configure: math.random starts from the run's seed
@@ -1280,4 +1300,45 @@ fn _lock(lua: &Lua, ud: &LuaAnyUserData) -> LuaResult<()> {
 
 pub fn studio_only(engine: &Engine, id: InstanceId) -> bool {
     engine.state.borrow().dom.at(id).has(flags::STUDIO_ONLY)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Emulator, Engine, Options, RunContext, mount::ProjectSpec};
+
+    #[test]
+    fn engine_boot_locks_string_metatable_and_runs_client_server_and_native() {
+        let probe = r#"
+            assert(getmetatable("") == "The metatable is locked", "string metatable must be locked")
+            local ok = pcall(function() setmetatable("", {}) end)
+            assert(not ok, "setmetatable on string must fail")
+            local v = Vector3.new(3, 4, 12)
+            assert(v.Magnitude == 13 and typeof(v) == "Vector3")
+            local function hot(n) return n * 3 + 1 end
+            local sum = 0
+            for i = 1, 25 do sum += hot(i) end
+            assert(sum == 1000)
+            print("ok", game:GetService("RunService"):IsServer())
+        "#;
+        for (server, native) in [(false, false), (true, false), (false, true)] {
+            let options = Options {
+                mode: "play".into(),
+                run_context: if server { RunContext::Server } else { RunContext::Client },
+                local_player_name: if server { None } else { Some("Player".into()) },
+                native,
+                ..Options::default()
+            };
+            let emulator = Emulator::start(Engine::new(options).unwrap(), &ProjectSpec::default()).unwrap();
+            emulator.run("BootCheck", probe).unwrap();
+            emulator.run_until(0.05).unwrap();
+            let output = emulator.output();
+            let errors: Vec<_> = output.iter().filter(|line| line.kind == "error").map(|line| &line.message).collect();
+            assert!(errors.is_empty(), "errors for server={server} native={native}: {errors:?}");
+            let expected = if server { "ok true" } else { "ok false" };
+            assert!(
+                output.iter().any(|line| line.message == expected),
+                "missing `{expected}` for server={server} native={native}: {output:?}"
+            );
+        }
+    }
 }
