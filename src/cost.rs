@@ -1468,10 +1468,11 @@ pub const WORLD_MODEL_PART: f64 = 0.70e-6;
 /// 0.15 headless, 0.10 to 0.33 rendered).
 pub const PLACED_PART: f64 = 0.20e-6;
 pub const PLACED_OTHER: f64 = 0.10e-6;
-/// What a Parent change that takes parts or joints into a world spends on their joints (world/joints.rs reparented), beyond the
-/// instances it carries: each joint the walks of its assemblies look at in their parts' lists ([`JOINT_LOOKED_AT`]: a joint that
-/// links is looked at from both its parts), each joint it links ([`JOINT_LINKED`]) and each it brings into the world itself
-/// ([`JOINT_ENTERED`]). A playing client (roblox-sim, Studio 0.747, headless; os.clock around single moves of a Part named by N
+/// What a Parent change that takes parts or joints into a world spends on their joints (world/joints.rs entering_price), beyond the
+/// instances it carries: each joint in a world it looks at ([`JOINT_LOOKED_AT`]: those in the lists of the parts it carries, and
+/// each joint it carries or that links a part it carries, once at its part that stays), each link it makes ([`JOINT_LINKED`]) and
+/// each joint it brings into the world itself ([`JOINT_ENTERED`]); and, when a link it makes reaches a part that was in the world
+/// already, a link change's price ([`LINK_CHANGED`] and the rest). A playing client (roblox-sim, Studio 0.747, headless; os.clock around single moves of a Part named by N
 /// Welds into the Workspace and into a WorldModel in ReplicatedStorage, from nil and from ReplicatedStorage, the median of 11 at a
 /// frame's start, N = 1,000 and 10,000, less the same move of a Part with none; docs/engine.md "Rigid assemblies") spent 0.043 to
 /// 0.089 us a weld in a world that could not link (disabled, Part1 nil, its other part outside every world or in another world, in
@@ -1484,10 +1485,10 @@ pub const PLACED_OTHER: f64 = 0.10e-6;
 pub const JOINT_LOOKED_AT: f64 = 0.05e-6;
 pub const JOINT_LINKED: f64 = 0.6e-6;
 pub const JOINT_ENTERED: f64 = 0.3e-6;
-/// What a Parent change's joints cost ([`JOINT_LOOKED_AT`]): `looked` joints looked at, `made` links it made, each counted from both
-/// its parts, and `entered` joints it brought into the world.
+/// What a Parent change's joints cost ([`JOINT_LOOKED_AT`]): `looked` joints looked at, `made` links it made and `entered` joints it
+/// brought into the world.
 pub fn joints_entering(looked: usize, made: usize, entered: usize) -> f64 {
-    looked as f64 * JOINT_LOOKED_AT + made as f64 * 0.5 * JOINT_LINKED + entered as f64 * JOINT_ENTERED
+    looked as f64 * JOINT_LOOKED_AT + made as f64 * JOINT_LINKED + entered as f64 * JOINT_ENTERED
 }
 /// What moving an assembly spends on its other parts and joints (world/joints.rs part_moved, end_batch), beyond the write: each part a
 /// CFrame write (a script's, a tween's, BulkMoveTo's) or a PivotTo / ScaleTo carries with the part it wrote through their joints
@@ -1534,7 +1535,8 @@ pub fn joints_reanchored(changed: usize, links: usize) -> f64 {
 }
 /// What a link change costs (world/joints.rs charge_link), beyond the write: an Enabled write that links or unlinks a joint's two
 /// parts, a Part0 or Part1 write that re-points a joint that links, a Parent write or Destroy that takes a linking joint or part
-/// out of its world, or an Anchored write of a part that links others. A playing client (roblox-sim, Studio 0.747, headless; os.clock around
+/// out of its world, a Parent write that takes one into a world where it links a part that was there, or an Anchored write of a
+/// part that links others. A playing client (roblox-sim, Studio 0.747, headless; os.clock around
 /// single writes at a frame's start and in turn after it, the median of 9 to 11 samples, an anchored or unanchored part welded to N
 /// = 1 to 10,000 parts and chains of them; docs/engine.md "Rigid assemblies", 2026-11-24) spends 31 to 66 us on a frame's first
 /// link change ([`LINK_FRAME`] beyond the rest), 6 to 20 us on the first change of another assembly in that frame
@@ -1544,7 +1546,7 @@ pub fn joints_reanchored(changed: usize, links: usize) -> f64 {
 /// kinds cost it alike (2026-11-24, a leaf of an anchored hub welded to 10,000 parts, at a frame's start: its weld's Part1
 /// re-pointed 874 us, set to nil 885, its Part0 re-pointed 926, the weld's Parent set to nil 864, the weld destroyed 883, the
 /// leaf's Parent set to nil 982, the leaf destroyed 929, beyond what such a write or destroy costs alone; 10 to 43 us later in the
-/// frame).
+/// frame; its weld parented back under it 905 to 956, the leaf parented back 933, 17 to 30 later).
 pub const LINK_CHANGED: f64 = 1.7e-6;
 pub const LINK_FRAME: f64 = 34e-6;
 pub const LINK_ASSEMBLY: f64 = 5e-6;

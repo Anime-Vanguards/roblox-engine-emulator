@@ -1660,20 +1660,21 @@ fn a_parts_joints_keep_their_order_as_joints_come_and_go() {
 /// A part entering a world pays for its joints (world/joints.rs reparented, cost.rs joints_entering), as a playing client's move
 /// does (Studio 0.747): beyond the same part's move with none, 1,000 welds in the world that cannot link (disabled) cost the
 /// Parent write 0.05 us each (looked at), 1,000 that link it to anchored parts 0.7 us each (looked at from both their parts and
-/// linked), 1,000 outside every world nothing, and 1,000 carried in under it at least 0.4 us each (looked at from both parts and
+/// linked) and a link change's price (its assembly charged already in the frame), 1,000 outside every world nothing, and 1,000
+/// carried in under it at least 0.4 us each (looked at from both parts and
 /// brought into the world, besides what the write pays for carrying them), into the Workspace and into a WorldModel alike. The
 /// write used to cost the same with any number of joints.
 #[test]
 fn a_part_entering_a_world_pays_for_its_joints() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    let (looked, linked, entered) = (crate::cost::JOINT_LOOKED_AT, crate::cost::JOINT_LINKED, crate::cost::JOINT_ENTERED);
+    let (looked, linked, entered, changed) = (crate::cost::JOINT_LOOKED_AT, crate::cost::JOINT_LINKED, crate::cost::JOINT_ENTERED, crate::cost::LINK_CHANGED);
     run(
         &lua,
         &engine,
         &format!(
             r#"
-        local LOOKED, LINKED, ENTERED, N = {looked:e}, {linked:e}, {entered:e}, 1000
+        local LOOKED, LINKED, ENTERED, CHANGED, N = {looked:e}, {linked:e}, {entered:e}, {changed:e}, 1000
         local function Part(Name, Anchored)
             local P = Instance.new("Part")
             P.Name, P.Anchored, P.CanCollide, P.CFrame = Name, Anchored, false, CFrame.new(0, 50, 0)
@@ -1709,7 +1710,7 @@ fn a_part_entering_a_world_pays_for_its_joints() {
             end
             Is("outside", 0)
             Is("inactive", N * LOOKED)
-            Is("linked", N * (2 * LOOKED + LINKED))
+            Is("linked", N * (2 * LOOKED + LINKED) + CHANGED)
             local Carried = Work.carried - Work.none
             assert(Carried >= N * (2 * LOOKED + ENTERED), `{{Into.Name}}: welds carried in cost the move {{Carried * 1e6}} us beyond none`)
         end
@@ -2194,7 +2195,10 @@ fn link_changes_in_a_large_assembly_walk_none_of_it() {
 /// the same at either size. Only Enabled was priced as a link change before (a client spends 874 to 982 us on each of these at a
 /// frame's start with 10,000 parts, 10 to 43 us on a later one; 18 to 35 us on a weld taken out right after it was taken in). Two
 /// welds disabled the frame before and enabled in turn: the second, which joins its leaf alone to the assembly the first changed,
-/// costs the same at either size (it was charged the whole assembly again: 857 us at 10,000, where a client spends 15.6).
+/// costs the same at either size (it was charged the whole assembly again: 857 us at 10,000, where a client spends 15.6). Two welds,
+/// and two leaves with their welds, taken out the frame before and parented back in turn: the first costs LINK_PART more for each
+/// part beyond the small hub's, the second the same at either size (each was charged the joints a walk of the whole assembly looked
+/// at, 1.0 ms at 10,000 every time, where a client spends 920 us at a frame's start and 17 to 22 later).
 #[test]
 fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
     let (lua, engine) = start_play();
@@ -2228,6 +2232,9 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
             WeldIn = function(S) return function() S.W.Parent = S.L end, function() S.W.Parent = nil end, function() S.W.Parent = nil end end,
             -- (two welds disabled the frame before, enabled in turn: the second joins its leaf alone to the assembly the first changed)
             Enabled = function(S) return function() S.W.Enabled = true end, function() S.W2.Enabled = true end, function() S.W.Enabled, S.W2.Enabled = false, false end end,
+            -- (two welds, and two leaves with theirs, taken out the frame before and parented back in turn)
+            WeldBack = function(S) return function() S.W.Parent = S.L end, function() S.W2.Parent = S.L2 end, function() S.W.Parent, S.W2.Parent = nil, nil end end,
+            LeafBack = function(S) return function() S.L.Parent = S.Holder end, function() S.L2.Parent = S.Holder end, function() S.L.Parent, S.L2.Parent = nil, nil end end,
         }
         local function Changes(Count, Kind)
             local Hub, Welds = Part(true), {}
@@ -2241,7 +2248,7 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
             -- (the changed leaves in a folder of their own: taking one out of its parent costs a search of that parent's children)
             local Holder = Instance.new("Folder")
             Holder.Parent = workspace
-            S.L.Parent, S.L2.Parent = Holder, Holder
+            S.L.Parent, S.L2.Parent, S.Holder = Holder, Holder, Holder
             -- (the frame reads the changed instances and writes the members first, a weld that links nothing and a lone part: the
             -- first touch and use of the frame are not what is compared)
             local Spare, Lone = Instance.new("Weld"), Part(false)
@@ -2270,7 +2277,7 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
     let more = 990.0 * crate::cost::LINK_PART;
     // (a weld taken in pays for the joints its walks look at, a later change in the frame the same at either size)
     run(&lua, &engine, "local Extra = shared.Big.WeldIn.Later - shared.Small.WeldIn.Later assert(math.abs(Extra) < 1e-9, `WeldIn Later: {Extra} s more for 1,001 parts than 11`)");
-    for kind in ["Part1", "Nil", "Part0", "WeldOut", "WeldDestroyed", "LeafOut", "LeafDestroyed", "Enabled"] {
+    for kind in ["Part1", "Nil", "Part0", "WeldOut", "WeldDestroyed", "LeafOut", "LeafDestroyed", "Enabled", "WeldBack", "LeafBack"] {
         for (name, want) in [("First", more), ("Later", 0.0)] {
             run(&lua, &engine, &format!("local Extra = shared.Big.{kind}.{name} - shared.Small.{kind}.{name} assert(math.abs(Extra - {want:e}) < 1e-9, `{kind} {name}: {{Extra}} s more for 1,001 parts than 11, not {want:e}`)"));
         }
@@ -2354,6 +2361,82 @@ fn link_changes_of_every_kind_in_a_large_assembly_walk_none_of_it() {
     };
     let (large, small) = (time("Big"), time("Small"));
     assert!(large < 2.0 * small + 0.05, "300 rounds of link changes took {large:.3} s of host time on a hub with 5,000 parts, {small:.3} s on hubs with 4");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
+/// Joints and parts taken into a world join a large assembly without walking it: 300 rounds on an anchored hub welded to 5,000 parts
+/// of a leaf's weld taken out and parented back, another leaf (its weld under it) taken out and parented back, and a Folder holding
+/// a third leaf's two welds (to the hub and to a spare part, each taken out of the leaf before) parented into the Workspace and out,
+/// each followed by a fourth leaf's AssemblyRootPart read, take about the host time of the same rounds on hubs welded to four parts
+/// (a hub of its own each round), as a client's later link changes cost the same at any size. Each such write walked the whole
+/// assembly again (5.6 to 7.3 ms at 10,000).
+#[test]
+fn entering_a_large_assembly_walks_none_of_it() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function Part(Anchored)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.CFrame = Anchored, false, CFrame.new(0, 300, 0)
+            P.Parent = workspace
+            return P
+        end
+        local Spare = Part(false)
+        local function Star(Count)
+            local Hub, Welds = Part(true), {}
+            for Index = 1, Count do
+                local W = Instance.new("Weld")
+                W.Part0, W.Part1, W.C0 = Hub, Part(false), CFrame.new(Index % 7, 4, 0)
+                W.Parent = W.Part1
+                Welds[Index] = W
+            end
+            -- (the third leaf's welds, in a Folder of their own outside every world)
+            local Box, Third = Instance.new("Folder"), Welds[3].Part1
+            local Other = Instance.new("Weld")
+            Other.Part0, Other.Part1, Other.Parent = Third, Spare, Box
+            Welds[3].Parent = Box
+            return { Hub = Hub, Welds = Welds, Box = Box }
+        end
+        local Big, Small = Star(5000), {}
+        for Index = 1, 400 do
+            Small[Index] = Star(4)
+        end
+        local function Round(Index, Big)
+            local Star, At = if Big then Big else Small[Index], if Big then { Index + 3, Index + 1003, Index + 2003 } else { 1, 2, 4 }
+            local W, L, Read = Star.Welds[At[1]], Star.Welds[At[2]].Part1, Star.Welds[At[3]].Part1
+            local Leaf = W.Part1
+            W.Parent = nil
+            local _ = Read.AssemblyRootPart
+            W.Parent = Leaf
+            local _ = Read.AssemblyRootPart
+            L.Parent = nil
+            local _ = Read.AssemblyRootPart
+            L.Parent = workspace
+            local _ = Read.AssemblyRootPart
+            Star.Box.Parent = workspace
+            local _ = Read.AssemblyRootPart
+            Star.Box.Parent = nil
+            local _ = Read.AssemblyRootPart
+        end
+        function shared.Rounds(Which, From, To)
+            for Index = From, To do
+                Round(Index, if Which == "Big" then Big else nil)
+            end
+        end
+        "#,
+    );
+    let time = |which: &str| {
+        run(&lua, &engine, &format!("shared.Rounds('{which}', 1, 50)"));
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.Rounds('{which}', 51, 350)"));
+        start.elapsed().as_secs_f64()
+    };
+    let (large, small) = (time("Big"), time("Small"));
+    assert!(large < 2.0 * small + 0.05, "300 rounds of joints and parts taken in took {large:.3} s of host time on a hub with 5,000 parts, {small:.3} s on hubs with 4");
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
@@ -2535,7 +2618,8 @@ fn centre_reads_after_a_move_work_nothing_out() {
 /// Kept components answer as fresh walks do through link changes: 800 random changes to two anchored hubs and an unanchored one each
 /// welded to 12 parts (Welds and WeldConstraints; one hub's first part also welded to an anchored part), a chain of 10 parts hanging
 /// from an anchored one, a free chain of 8 and a chain of 10 anchored at both ends (joints
-/// enabled, disabled, destroyed and made again, moved to nil and back; parts anchored and unanchored, moved by CFrame, PivotTo
+/// enabled, disabled, destroyed and made again, moved to nil and back, a few at a time into a Folder that then enters the world; parts
+/// anchored and unanchored, moved by CFrame, PivotTo
 /// and the physics step, Motor6D.Transform written; a frame now and then), with every part's AssemblyRootPart, AssemblyMass (half
 /// of them before the centre), AssemblyCenterOfMass and CFrame and each change's work read after each change, read the same with the components kept (split
 /// and joined as links change) as with every walk made afresh, and the index and the kept components hold together.
@@ -2650,6 +2734,23 @@ fn link_changes_keep_components_as_fresh_walks_do() {
                 local P = Pick(Parts)
                 P.Parent = if P.Parent then nil elseif Dice:NextInteger(1, 4) == 1 then Model else workspace
                 return "part parent"
+            end,
+            function()
+                -- (one to three joints taken into a Folder outside every world, which then enters it: several links at once)
+                local Box, Picked = Instance.new("Folder"), {}
+                for _ = 1, Dice:NextInteger(1, 3) do
+                    local J = Pick(Joints)
+                    if not table.find(Picked, J) then
+                        J.Parent = Box
+                        table.insert(Picked, J)
+                    end
+                end
+                Box.Parent = if Dice:NextInteger(1, 3) == 1 then Model else workspace
+                for _, J in Picked do
+                    J.Parent = J.Part1
+                end
+                Box:Destroy()
+                return "box"
             end,
             function()
                 -- (a part destroyed, with the joints parented to it, and a new one made where it was)
