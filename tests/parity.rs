@@ -9,7 +9,50 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+static SCRATCH_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn scratch_dir(label: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let seq = SCRATCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("ree-parity-{label}-{}-{nanos}-{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Runs a batch of `ree run` jobs in one process so probes share compiled caches and run across worker threads.
+fn run_batch(scratch: &Path, jobs: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    if jobs.is_empty() {
+        return Vec::new();
+    }
+    let batch_file = scratch.join("batch.json");
+    let spec = serde_json::json!({ "jobs": jobs });
+    std::fs::write(&batch_file, serde_json::to_string(&spec).unwrap()).unwrap();
+    let done = Command::new(env!("CARGO_BIN_EXE_ree"))
+        .args(["run", "--batch"])
+        .arg(&batch_file)
+        .env("RUR_STATE_DIR", scratch.join("state"))
+        .env_remove("REE_FROZEN_CLOCK")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&done.stdout);
+    let report: serde_json::Value = serde_json::from_str(stdout.trim().lines().last().unwrap_or("{}"))
+        .unwrap_or_else(|_| panic!("batch produced no JSON report (exit {:?}): {}", done.status.code(), String::from_utf8_lossy(&done.stderr)));
+    report["results"].as_array().unwrap_or_else(|| panic!("batch missing results: {report}")).clone()
+}
+
+fn printed_lines(summary: &serde_json::Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    for entry in summary["output"].as_array().map(Vec::as_slice).unwrap_or_default() {
+        let message = entry["message"].as_str().unwrap_or_default();
+        if entry["kind"] == "print" && message != "@done" {
+            lines.extend(message.split('\n').map(str::to_owned));
+        }
+    }
+    lines
+}
 
 fn parity_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools").join("parity")
@@ -56,42 +99,29 @@ fn missing(expected: &[String], actual: &[String]) -> Vec<String> {
 const HARNESS_PRINT: &str = "local __ParityLines, __ParityRealPrint = {}, print\nlocal function print(...)\n\tlocal Parts = table.pack(...)\n\tfor Index = 1, Parts.n do\n\t\tParts[Index] = tostring(Parts[Index])\n\tend\n\ttable.insert(__ParityLines, table.concat(Parts, \" \", 1, Parts.n))\nend";
 const HARNESS_FLUSH: &str = "for _, Line in __ParityLines do\n\t__ParityRealPrint(Line)\nend\n__ParityRealPrint(\"@done\")";
 
-fn run_probe(scratch: &Path, name: &str, source: &str, server: bool) -> Vec<String> {
+fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: bool) -> serde_json::Value {
     let harness = scratch.join(format!("{name}.luau"));
     std::fs::write(&harness, format!("return function(Context)\n{HARNESS_PRINT}\n{source}\n{HARNESS_FLUSH}\nend\n")).unwrap();
-    let empty = scratch.join("empty");
-    std::fs::create_dir_all(&empty).unwrap();
     // (the server capture's place has ServerScriptService.LoadStringEnabled on; a probe's "flag=" names an engine flag it needs on;
     // "context=edit" runs it as a plugin's code, in the edit run context: run.mjs runInRee)
     let directive = |word: &str| source.lines().any(|line| line.starts_with("-- parity:") && line.split_whitespace().any(|part| part == word));
-    let mut context: Vec<&str> = if server {
-        vec!["--run-context", "server", "--load-string"]
+    let mut args: Vec<String> = vec![
+        "--harness".into(),
+        harness.to_string_lossy().into_owned(),
+        "--roots".into(),
+        empty.to_string_lossy().into_owned(),
+        "--seconds".into(),
+        "120".into(),
+    ];
+    if server {
+        args.extend(["--run-context", "server", "--load-string"].map(str::to_owned));
     } else if directive("context=edit") {
-        vec!["--mode", "edit", "--run-context", "edit"]
-    } else {
-        Vec::new()
-    };
+        args.extend(["--mode", "edit", "--run-context", "edit"].map(str::to_owned));
+    }
     if directive("flag=FFlagEnableLoadModule") {
-        context.push("--load-module");
+        args.push("--load-module".into());
     }
-    let done = Command::new(env!("CARGO_BIN_EXE_ree"))
-        .args(["run", "--harness", &harness.to_string_lossy(), "--roots", &empty.to_string_lossy(), "--seconds", "120"])
-        .args(context)
-        .env_remove("REE_FROZEN_CLOCK")
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&done.stdout);
-    let summary: serde_json::Value = serde_json::from_str(stdout.trim().lines().last().unwrap_or("{}"))
-        .unwrap_or_else(|_| panic!("{name}: no summary: {}", String::from_utf8_lossy(&done.stderr)));
-    assert_eq!(summary["done"], true, "{name}: the probe did not finish: {summary}");
-    let mut lines = Vec::new();
-    for entry in summary["output"].as_array().unwrap() {
-        let message = entry["message"].as_str().unwrap_or_default();
-        if entry["kind"] == "print" && message != "@done" {
-            lines.extend(message.split('\n').map(str::to_owned));
-        }
-    }
-    lines
+    serde_json::json!({ "id": name, "args": args })
 }
 
 /// Each side's print collects its lines (tools/parity/run.mjs LOOPBACK_COLLECT: the same text)
@@ -121,27 +151,19 @@ fn loopback_text(prelude: &str, helpers: &str, probe: &str, side: &str) -> Strin
     )
 }
 
-/// A paired probe through `ree run --run-context loopback`: the lines the client printed (both sides'), none when the run failed
-fn run_loopback_probe(scratch: &Path, name: &str, server: &str, client: &str) -> Vec<String> {
+/// A paired probe's batch job for `ree run --run-context loopback`
+fn loopback_probe_job(scratch: &Path, empty: &Path, name: &str, server: &str, client: &str) -> serde_json::Value {
     let harness = scratch.join(format!("{name}.luau"));
     std::fs::write(&harness, format!("return {{\n\tServer = function(Context)\n{server}\nend,\n\tClient = function(Context)\n{client}\n__LoopbackRealPrint(\"@done\")\nend,\n}}\n")).unwrap();
-    let empty = scratch.join("empty");
-    std::fs::create_dir_all(&empty).unwrap();
-    let done = Command::new(env!("CARGO_BIN_EXE_ree"))
-        .args(["run", "--harness", &harness.to_string_lossy(), "--roots", &empty.to_string_lossy(), "--seconds", "120", "--run-context", "loopback"])
-        .env_remove("REE_FROZEN_CLOCK")
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&done.stdout);
-    let Ok(summary) = serde_json::from_str::<serde_json::Value>(stdout.trim().lines().last().unwrap_or("{}")) else { return Vec::new() };
-    let mut lines = Vec::new();
-    for entry in summary["output"].as_array().map(Vec::as_slice).unwrap_or_default() {
-        let message = entry["message"].as_str().unwrap_or_default();
-        if entry["kind"] == "print" && message != "@done" {
-            lines.extend(message.split('\n').map(str::to_owned));
-        }
-    }
-    lines
+    serde_json::json!({
+        "id": name,
+        "args": [
+            "--harness", harness.to_string_lossy().into_owned(),
+            "--roots", empty.to_string_lossy().into_owned(),
+            "--seconds", "120",
+            "--run-context", "loopback",
+        ]
+    })
 }
 
 /// The paired probes (probes/loopback): a server and its client in one play session, as a real play session's two sides ran
@@ -152,15 +174,17 @@ fn paired_probes_print_what_a_real_server_and_client_printed() {
     let prelude = std::fs::read_to_string(dir.join("prelude.luau")).unwrap();
     let helpers = std::fs::read_to_string(dir.join("loopback.luau")).unwrap();
     let known: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("known-loopback.json")).unwrap()).unwrap();
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let scratch = std::env::temp_dir().join(format!("ree-parity-loopback-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = scratch_dir("loopback");
+    let empty = scratch.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
     let mut names: Vec<String> = std::fs::read_dir(dir.join("probes").join("loopback"))
         .unwrap()
         .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".luau").map(str::to_owned))
         .collect();
     names.sort();
     let mut failures = Vec::new();
+    let mut queued: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut jobs = Vec::new();
     for name in &names {
         let Ok(expected) = std::fs::read_to_string(dir.join("expected").join("loopback").join(format!("{name}.txt"))) else {
             failures.push(format!("{name}: no captured output (expected/loopback/{name}.txt: run.mjs --loopback --capture {name})"));
@@ -170,9 +194,16 @@ fn paired_probes_print_what_a_real_server_and_client_printed() {
         let probe = std::fs::read_to_string(dir.join("probes").join("loopback").join(format!("{name}.luau"))).unwrap();
         let server = loopback_text(&prelude, &helpers, &probe, "server");
         let client = loopback_text(&prelude, &helpers, &probe, "client");
-        let actual = run_loopback_probe(&scratch, name, &server, &client);
+        jobs.push(loopback_probe_job(&scratch, &empty, name, &server, &client));
+        queued.push((name.as_str(), expected));
+    }
+    let results = run_batch(&scratch, &jobs);
+    assert_eq!(results.len(), queued.len());
+    for ((name, expected), result) in queued.into_iter().zip(results.iter()) {
+        assert_eq!(result["id"].as_str(), Some(name));
+        let actual = printed_lines(&result["summary"]);
         let allowed: HashSet<&str> =
-            known[name.as_str()].as_array().map(|list| list.iter().filter_map(|entry| entry["line"].as_str()).collect()).unwrap_or_default();
+            known[name].as_array().map(|list| list.iter().filter_map(|entry| entry["line"].as_str()).collect()).unwrap_or_default();
         for line in missing(&expected, &actual) {
             if !allowed.iter().any(|prefix| line.starts_with(prefix)) {
                 failures.push(format!("{name}: the real engine printed `{line}`"));
@@ -233,30 +264,40 @@ fn check(server: bool) {
     let known_file = if server { "known-server.json" } else { "known.json" };
     let known: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(known_file)).unwrap()).unwrap();
     let expected_dir = if server { dir.join("expected").join("server") } else { dir.join("expected") };
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let side = if server { "server" } else { "client" };
-    let scratch = std::env::temp_dir().join(format!("ree-parity-{side}-{}-{nanos}", std::process::id()));
-    std::fs::create_dir_all(&scratch).unwrap();
+    let scratch = scratch_dir(side);
+    let empty = scratch.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
     let mut names: Vec<String> = std::fs::read_dir(dir.join("probes"))
         .unwrap()
         .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".luau").map(str::to_owned))
         .collect();
     names.sort();
-    let mut failures = Vec::new();
-    let mut checked = 0;
+    let mut queued: Vec<(&str, Vec<String>)> = Vec::new();
+    let mut jobs = Vec::new();
     for name in &names {
         let Ok(expected) = std::fs::read_to_string(expected_dir.join(format!("{name}.txt"))) else { continue };
         let expected = expected_lines(&expected);
         let probe = std::fs::read_to_string(dir.join("probes").join(format!("{name}.luau"))).unwrap();
-        let actual = run_probe(&scratch, name, &body(&prelude, &probe), server);
+        jobs.push(probe_job(&scratch, &empty, name, &body(&prelude, &probe), server));
+        queued.push((name.as_str(), expected));
+    }
+    let results = run_batch(&scratch, &jobs);
+    assert_eq!(results.len(), queued.len());
+    let mut failures = Vec::new();
+    let checked = queued.len();
+    for ((name, expected), result) in queued.into_iter().zip(results.iter()) {
+        assert_eq!(result["id"].as_str(), Some(name));
+        let summary = &result["summary"];
+        assert_eq!(summary["done"], true, "{name}: the probe did not finish: {result}");
+        let actual = printed_lines(summary);
         let allowed: HashSet<&str> =
-            known[name.as_str()].as_array().map(|list| list.iter().filter_map(|entry| entry["line"].as_str()).collect()).unwrap_or_default();
+            known[name].as_array().map(|list| list.iter().filter_map(|entry| entry["line"].as_str()).collect()).unwrap_or_default();
         for line in missing(&expected, &actual) {
             if !allowed.iter().any(|prefix| line.starts_with(prefix)) {
                 failures.push(format!("{name}: the real engine printed `{line}`"));
             }
         }
-        checked += 1;
     }
     let _ = std::fs::remove_dir_all(&scratch);
     assert!(checked > 0, "no probe has an expected output");
