@@ -1,9 +1,8 @@
 //! Every view and the key paths through them, drawn headless at a fixed size and compared with snapshots
 //! (tests/snapshots; REE_VIEW_BLESS=1 rewrites them), and the files `render` writes: text, SVG and PNG.
 
-mod common;
-
-use common::*;
+use crate::common::Temp;
+use crate::fixture::*;
 use ree_profile_view::{
     app::View,
     cli,

@@ -1,9 +1,8 @@
 //! The issue detectors on profiles whose numbers are known: each pattern found with its numbers and its link, none
 //! found where the profile shows none, and what a profile's kinds cannot show said as such.
 
-mod common;
-
-use common::*;
+use crate::common::Temp;
+use crate::fixture::{self as common, *};
 use ree_profile_view::{
     issues::{Issue, Severity, Target},
     model::{Kind, Profile},

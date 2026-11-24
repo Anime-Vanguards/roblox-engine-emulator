@@ -1,8 +1,7 @@
 //! The cost model's rules, each tried on small profiles built here: an issue's price is the full observed mean over the
 //! reported frames however its work is spread, overlapping fixes are counted once, and the listed prices plus the
 //! closing row add up to the measured work.
-mod common;
-use common::Temp;
+use crate::common::Temp;
 use ree_profile_view::{
     app::App,
     cli,

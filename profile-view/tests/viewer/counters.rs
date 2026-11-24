@@ -2,9 +2,8 @@
 //! with their names now (its counts, its folded files, its metric and a diff against a newer profile), the figures of
 //! what memory cost come from the counts, and a function that waits on memory is named from its measured numbers only.
 
-mod common;
-
-use common::*;
+use crate::common::Temp;
+use crate::fixture::*;
 use ree_profile_view::{issues::Target, metric::Metric, model::Profile};
 use serde_json::json;
 

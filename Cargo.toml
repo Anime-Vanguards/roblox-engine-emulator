@@ -23,6 +23,10 @@ name = "standalone"
 required-features = ["cli"]
 
 [[test]]
+name = "cli"
+required-features = ["cli"]
+
+[[test]]
 name = "host_worker"
 required-features = ["cli", "bundles"]
 
@@ -108,6 +112,19 @@ codegen-units = 256
 # instead of inheriting 256 from [profile.release]: avoids 256-CGU ThinLTO overhead while keeping large
 # dependencies (lune-roblox, rbx_reflection_database, draco-core) parallel across CPU cores.
 [profile.release.package."*"]
+codegen-units = 16
+
+# `cargo test --profile bench` / `cargo bench`: shares every external dependency, proc-macro and build script with
+# `[profile.release]` (same opt-level, ThinLTO and package."*" codegen-units), while dropping the workspace's codegen
+# units from 256 to 16 to avoid 256-CGU ThinLTO overhead on the `--lib` test harness. (`cargo test --release` uses
+# `[profile.release]` directly.)
+[profile.bench]
+opt-level = 3
+lto = false
+incremental = true
+codegen-units = 16
+
+[profile.bench.package."*"]
 codegen-units = 16
 
 [profile.dev.package."*"]
