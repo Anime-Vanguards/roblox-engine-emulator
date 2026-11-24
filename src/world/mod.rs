@@ -644,6 +644,8 @@ pub fn install(engine: &Rc<Engine>) {
             // (the frame's first BulkMoveTo runs the engine's code for it cold, and a part the frame had not touched is read cold with
             // the emitters it carries: cost.rs Path::BulkMove, BULK_COLD_PART, BULK_COLD_EMITTER)
             let mut cold = engine.state.borrow().sched.touched.borrow_mut().first_path(crate::cost::Path::BulkMove);
+            // (its moves carry their assemblies but pay nothing for the joints between assemblies: cost.rs JOINT_ACROSS)
+            joints::bulk_moves(&mut engine.state.borrow_mut(), true);
             for (id, target) in moves {
                 {
                     let state = engine.state.borrow();
@@ -665,6 +667,7 @@ pub fn install(engine: &Rc<Engine>) {
                 // (booked to the call, so a boundary profile shows what BulkMoveTo's parts cost)
                 crate::boundary::add_cost(each);
             }
+            joints::bulk_moves(&mut engine.state.borrow_mut(), false);
             if cold > 0.0 {
                 engine.state.borrow().sched.charge(cold);
                 crate::boundary::add_cost(cold);

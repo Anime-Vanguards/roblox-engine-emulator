@@ -595,7 +595,16 @@ fn assign(state: &mut State, reflection: &Reflection, setup: &Setup, id: Instanc
     let Some(value) = state.dom.raw_get(id, name).and_then(frame::vector_of) else { return };
     let names = if angular { [setup.assembly_angular, setup.rot_velocity] } else { [Some(setup.velocity), setup.assembly_linear] };
     let flying = state.gravity.velocity.contains_key(&id);
-    for part in joints::linked_parts(state, reflection, id) {
+    // (a script's write sets the assembly: each other part of it costs a client 4.5 ns, cost.rs ASSEMBLY_VELOCITY_PART)
+    if !state.quiet_write {
+        let others = joints::assembly_size(state, reflection, id) - 1;
+        if others > 0 {
+            let work = others as f64 * crate::cost::ASSEMBLY_VELOCITY_PART;
+            state.sched.charge(work);
+            crate::boundary::add_cost(work);
+        }
+    }
+    for &part in joints::linked_parts(state, reflection, id).iter() {
         for &target in names.iter().flatten() {
             if part != id || target != name {
                 state.dom.exchange(part, target, frame::vector_value(value));
@@ -715,19 +724,23 @@ fn install_body(engine: &Rc<Engine>, setup: &Rc<Setup>) {
             Ok(crate::lua::values([LuaValue::Number(part_body(&engine.state.borrow(), &setup, id).0 as f64)]))
         }));
     }
-    let assembly = |engine: &Rc<Engine>, setup: &Setup, id: InstanceId| {
+    // (the assembly's mass and centre, kept with its component while its parts stay where they are: joints::assembly_body)
+    let assembly = |engine: &Rc<Engine>, setup: &Setup, id: InstanceId, centre: bool| {
         let mut state = engine.state.borrow_mut();
-        let component = joints::linked_parts(&mut state, &engine.reflection, id);
-        body_of(&state, setup, &component)
+        let (mass, centre) = joints::assembly_body(&mut state, &engine.reflection, id, centre, |state, component| {
+            let body = body_of(state, setup, component);
+            (body.mass, body.centre)
+        });
+        Body { mass, centre, inertia: Mat3::ZERO }
     };
     if let Some(assembly_mass) = name("AssemblyMass") {
         let setup = setup.clone();
-        behaviors.add_getter(base_part, assembly_mass, crate::services::getter(move |_, engine, id| number(assembly(engine, &setup, id).mass)));
+        behaviors.add_getter(base_part, assembly_mass, crate::services::getter(move |_, engine, id| number(assembly(engine, &setup, id, false).mass)));
     }
     if let Some(centre_of_mass) = name("AssemblyCenterOfMass") {
         let setup = setup.clone();
         behaviors.add_getter(base_part, centre_of_mass, crate::services::getter(move |lua, engine, id| {
-            let centre = assembly(engine, &setup, id).centre;
+            let centre = assembly(engine, &setup, id, true).centre;
             Ok(crate::lua::convert::to_lua(lua, engine, &frame::vector_value(centre))?)
         }));
     }
@@ -743,7 +756,7 @@ fn install_body(engine: &Rc<Engine>, setup: &Rc<Setup>) {
             } else {
                 None
             };
-            let centre = at.map(|_| assembly(engine, &setup, id).centre);
+            let centre = at.map(|_| assembly(engine, &setup, id, true).centre);
             let mut state = engine.state.borrow_mut();
             if state.dom.boolean(id, setup.anchored) == Some(false) {
                 let entry = state.gravity.impulses.entry(id).or_default();

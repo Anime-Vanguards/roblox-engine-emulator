@@ -820,6 +820,13 @@ impl Dom {
         if self.watched(id) {
             self.log_moved(id);
         }
+        // (an instance that takes or leaves a logged class is logged as if its home changed: world/joints.rs works its joints out
+        // again)
+        if !self.home_logged.is_empty() {
+            let logged = |class: ClassId| self.home_logged.get(class as usize).copied().unwrap_or(false);
+            let class = if logged(class) { class } else { old };
+            self.log_home(id, class);
+        }
         // (one that becomes or stops being a WorldRoot moves its descendants' world)
         if self.is_home(id) != was_home {
             let home = if was_home { self.home(id) } else { Some(id) };
@@ -909,7 +916,13 @@ impl Dom {
             return;
         }
         self.homes[slot] = home;
-        if self.home_logged.get(self.at(id).class as usize).copied().unwrap_or(false) && !self.home_log_full {
+        self.log_home(id, self.at(id).class);
+    }
+
+    /// Logs `id` when `class` is logged ([`Dom::log_homes`]): its home changed, or it took or left that class.
+    #[inline]
+    fn log_home(&mut self, id: InstanceId, class: ClassId) {
+        if self.home_logged.get(class as usize).copied().unwrap_or(false) && !self.home_log_full {
             if self.home_log.len() < 2 * self.slots.len() + 4096 {
                 self.home_log.push(id);
             } else {

@@ -1353,6 +1353,10 @@ pub const PIVOT_BASE: f64 = 0.15e-6;
 /// ... out of the workspace, a part (a CFrame write there 0.16 us, and the walk)
 pub const PIVOT_LOOSE: f64 = 0.20e-6;
 pub const PIVOT_SINGLE: f64 = 1.44e-6;
+/// ... each descendant of the model that is no part, which its walk looks at (a playing client, roblox-sim, Studio 0.747, headless;
+/// os.clock around single Model:PivotTo calls of a Model holding one anchored part with N = 1,000 and 10,000 Folders, Attachments
+/// or Welds under it, the median of 15 samples, less the same call with none: 11.0 to 11.9 ns each whatever their class; 2026-11-24)
+pub const PIVOT_DESCENDANT: f64 = 11.3e-9;
 /// Model:ScaleTo, an instance it looks at, and what a real rescale adds for the ones it rewrites (client, 100
 /// Parts: to the scale they have 0.19 us each; a rescale in the workspace 1.16, out of the DataModel 0.28; a
 /// fallback rig's 225 ScaleTo(1) out of it: a rig of 1 MeshPart, 7 Bones and 19
@@ -1473,6 +1477,54 @@ pub const JOINT_ENTERED: f64 = 0.3e-6;
 pub fn joints_entering(looked: usize, made: usize, entered: usize) -> f64 {
     looked as f64 * JOINT_LOOKED_AT + made as f64 * 0.5 * JOINT_LINKED + entered as f64 * JOINT_ENTERED
 }
+/// What moving an assembly spends on its other parts and joints (world/joints.rs part_moved, end_batch), beyond the write: each part a
+/// CFrame write (a script's, a tween's, BulkMoveTo's) or a PivotTo / ScaleTo carries with the part it wrote through their joints
+/// ([`JOINT_CARRIED`]), and each joint between the moved assembly and another ([`JOINT_ACROSS`]; BulkMoveTo's moves do not pay it).
+/// A playing client (roblox-sim, Studio 0.747, headless; os.clock around single writes, the median of 15 samples of 10 to 20,000,
+/// less an empty loop; docs/engine.md "Rigid assemblies", 2026-11-24): an anchored part welded to N = 100 to 10,000 unanchored parts
+/// moved by a CFrame write, by PivotTo of a Model holding it, by BulkMoveTo (either mode), or one of those parts moved, 0.077 to 0.081
+/// us a part beyond the 1.0 to 1.3 of a part with none (one run read 0.09 to 0.21 at 10,000); an unanchored part welded to N anchored
+/// parts (it joins one of their assemblies), 1.8 ns a weld by a CFrame write or PivotTo, nothing by BulkMoveTo. Welds that cannot
+/// link (Part1 nil, disabled) cost nothing.
+pub const JOINT_CARRIED: f64 = 0.08e-6;
+pub const JOINT_ACROSS: f64 = 1.8e-9;
+/// What a move spends on its assembly ([`JOINT_CARRIED`]): `carried` parts placed through their joints, `across` joints to other
+/// assemblies.
+pub fn assembly_moved(carried: usize, across: usize) -> f64 {
+    carried as f64 * JOINT_CARRIED + across as f64 * JOINT_ACROSS
+}
+/// What a Position, Orientation or Rotation write spends rewriting the joints of the part it moves alone (world/joints.rs move_alone),
+/// beyond the write: each joint whose C0, C1 or offset it rewrites ([`JOINT_REWRITTEN`]), and for each of those inside the part's own
+/// assembly, each part of that assembly ([`JOINT_REWRITTEN_PART`]: the client settles the whole assembly again at each). The same
+/// client: an anchored part welded to N unanchored parts, a Position write 242 us at N = 100, 1,944 at 300, 20,523 at 1,000 and 192,244
+/// at 3,000 (0.0205 to 0.0242 us N squared; an Orientation write the same, 19,911 at 1,000); an unanchored part welded to N anchored
+/// parts 4.7, 40 and 147 us at 100, 1,000 and 3,000 (0.036 to 0.049 us a weld). Fitted: x0.98 to x1.11 of the first, x0.82 to x1.09
+/// of the second.
+pub const JOINT_REWRITTEN: f64 = 0.04e-6;
+pub const JOINT_REWRITTEN_PART: f64 = 0.021e-6;
+/// What a move of a part alone spends on its joints ([`JOINT_REWRITTEN`]): `rewritten` joints, `inside` of them inside its assembly of
+/// `parts`.
+pub fn joints_rewritten(rewritten: usize, inside: usize, parts: usize) -> f64 {
+    rewritten as f64 * JOINT_REWRITTEN + inside as f64 * parts as f64 * JOINT_REWRITTEN_PART
+}
+/// What an Anchored write that changes a part's assemblies spends (world/joints.rs reanchored), beyond the write: each part whose
+/// assembly root or the root's anchoring it changes ([`JOINT_REANCHORED`]) and each joint linking the part ([`JOINT_ANCHOR_LINK`]).
+/// The same client: an anchored part welded to N unanchored parts unanchored and anchored again, 77 us at N = 100, 130 at 300, 406 at
+/// 1,000, 1,544 at 3,000 and 10,741 at 10,000 (each of the N + 1 parts' assembly changes); an unanchored part welded to N anchored
+/// parts, 3.1, 15, 42 and 144 us at 100 to 10,000 (it alone changes: 0.014 us a weld); one of the hub's welded parts 1.7 to 1.8 us at
+/// any N, as a part with none; a part named by welds that cannot link 1.6. Fitted: x0.61 at 100, x0.86 to x1.10 from 300 to 3,000,
+/// x0.41 at 10,000 (the client's per-part cost doubles there), x0.98 to x1.08 of the second.
+pub const JOINT_REANCHORED: f64 = 0.43e-6;
+pub const JOINT_ANCHOR_LINK: f64 = 0.014e-6;
+/// What an Anchored write spends on assemblies ([`JOINT_REANCHORED`]): `changed` parts, `links` joints linking the part.
+pub fn joints_reanchored(changed: usize, links: usize) -> f64 {
+    changed as f64 * JOINT_REANCHORED + links as f64 * JOINT_ANCHOR_LINK
+}
+/// Each part of the assembly an AssemblyLinearVelocity, AssemblyAngularVelocity, Velocity or RotVelocity write sets (world/gravity.rs
+/// assign), beyond the write: the same client, the anchored part welded to N unanchored parts, 1.17 us at N = 100, 4.97 at 1,000, 13.2
+/// at 3,000 and 45.9 at 10,000 (AssemblyAngularVelocity 4.84 and 43.9), beyond the 0.45 to 0.57 of a part with none; welded to N
+/// anchored parts, the same as none.
+pub const ASSEMBLY_VELOCITY_PART: f64 = 4.5e-9;
 /// An ancestor IsDescendantOf, IsAncestorOf and the FindFirstAncestor finds look at, beyond [`method`]'s price for the call: the same
 /// client called them on a Part at the bottom of a chain of D Folders in the Workspace (os.clock around 5 to 20,000 calls, the median of
 /// 15, less an empty loop): 0.046 to 0.075 us a call at D = 1 and 10, 0.12 to 0.16 at 100, 1.13 to 1.34 at 1,000, 5.1 to 6.4 at 4,000,

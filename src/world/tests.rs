@@ -1625,7 +1625,7 @@ fn a_parts_joints_keep_their_order_as_joints_come_and_go() {
         run(&lua, &engine, "shared.Round()");
         run(&lua, &engine, &format!("shared.Check({round})"));
     }
-    super::joints::check_index(&mut engine.state.borrow_mut()).expect("the joint index");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
 /// A part entering a world pays for its joints (world/joints.rs reparented, cost.rs joints_entering), as a playing client's move
@@ -1824,7 +1824,7 @@ fn a_joints_mark_follows_its_home_however_it_moves() {
     );
     for round in 1..=20 {
         run(&lua, &engine, "shared.Round()");
-        if let Err(message) = super::joints::check_index(&mut engine.state.borrow_mut()) {
+        if let Err(message) = super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection) {
             panic!("round {round}: {message}");
         }
     }
@@ -1864,7 +1864,383 @@ fn a_joints_mark_follows_its_home_when_the_log_overflows() {
         state.dom.reparent(weld, Some(workspace));
     }
     run(&lua, &engine, r#"assert(shared.B.AssemblyRootPart == shared.A, "the weld moved back into the Workspace links its parts")"#);
-    super::joints::check_index(&mut engine.state.borrow_mut()).expect("the joint index");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
+/// A part's assembly reads walk no joint while nothing changed, and a part's joints that cannot link cost its writes and reads
+/// nothing: 2,000 AssemblyRootPart, AssemblyMass and AssemblyCenterOfMass reads of one of 2,000 parts welded to an anchored hub,
+/// and 2,000 CFrame and Anchored writes and AssemblyRootPart and AssemblyMass reads of an unanchored part named by 10,000 welds in
+/// the Workspace whose Part1 is nil, take about the host time they take for a lone part, as a playing client's cost the same at
+/// any joint count. Each read of the first used to walk the hub's welds (0.13 ms at 1,000), each of the second the part's (8 us
+/// at 1,000).
+#[test]
+fn assembly_reads_and_joints_that_cannot_link_walk_nothing() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function Part(Anchored)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.CFrame = Anchored, false, CFrame.new(0, 300, 0)
+            P.Parent = workspace
+            return P
+        end
+        local Hub, Leaf = Part(true), nil
+        for _ = 1, 2000 do
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1 = Hub, Part(false)
+            W.Parent = W.Part1
+            Leaf = Leaf or W.Part1
+        end
+        local Named = Part(false)
+        for _ = 1, 10000 do
+            local W = Instance.new("Weld")
+            W.Part0 = Named
+            W.Parent = Named
+        end
+        shared.Parts = { Leaf = Leaf, Lone = Part(false), Named = Named }
+        function shared.Reads(Name)
+            local P = shared.Parts[Name]
+            for _ = 1, 2000 do
+                local _ = P.AssemblyRootPart
+                local _ = P.AssemblyMass
+                local _ = P.AssemblyCenterOfMass
+            end
+        end
+        function shared.Writes(Name)
+            local P = shared.Parts[Name]
+            local At = P.CFrame
+            for Index = 1, 2000 do
+                P.CFrame = At + Vector3.new(0, Index % 2, 0)
+                P.Anchored = Index % 2 == 0
+                local _ = P.AssemblyRootPart
+                local _ = P.AssemblyMass
+            end
+            P.Anchored = false
+        end
+        "#,
+    );
+    let time = |source: &str| {
+        run(&lua, &engine, source);
+        let start = std::time::Instant::now();
+        run(&lua, &engine, source);
+        start.elapsed().as_secs_f64()
+    };
+    let (leaf, lone) = (time(r#"shared.Reads("Leaf")"#), time(r#"shared.Reads("Lone")"#));
+    assert!(leaf < 2.0 * lone + 0.05, "6,000 reads took {leaf:.3} s of host time for a part of an assembly of 2,001, {lone:.3} s for a lone part");
+    let (named, lone) = (time(r#"shared.Writes("Named")"#), time(r#"shared.Writes("Lone")"#));
+    assert!(named < 2.0 * lone + 0.05, "8,000 writes and reads took {named:.3} s of host time for a part named by 10,000 welds that cannot link, {lone:.3} s for a lone part");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
+/// What an assembly's writes cost beyond the same write to a lone part (measured in a playing client, cost.rs): a CFrame write
+/// each part it carries and each joint between its assembly and another (assembly_moved), BulkMoveTo the parts alone, a Position
+/// write each joint it rewrites and, for those inside the part's assembly, each part of it (joints_rewritten), an Anchored write
+/// each other part whose root or the root's anchoring changes and each joint linking the part (joints_reanchored), and an
+/// AssemblyLinearVelocity write each other part of the assembly (ASSEMBLY_VELOCITY_PART). An anchored hub welded to 100
+/// unanchored parts, and an unanchored part welded to 100 anchored ones (it joins the first one's assembly); each write paid what
+/// a lone part's did.
+#[test]
+fn assembly_writes_pay_for_the_parts_and_joints_they_change() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function Part(Anchored, Size)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.Size, P.CFrame = Anchored, false, Size or Vector3.one, CFrame.new(0, 300, 0)
+            P.Parent = workspace
+            return P
+        end
+        local Big = Vector3.new(4, 1, 4)
+        local Parts = { Hub = Part(true, Big), Free = Part(false, Big), Lone = Part(true, Big), LoneFree = Part(false, Big) }
+        for _ = 1, 100 do
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1 = Parts.Hub, Part(false)
+            W.Parent = workspace
+            local V = Instance.new("Weld")
+            V.Part0, V.Part1 = Parts.Free, Part(true)
+            V.Parent = workspace
+        end
+        -- (each write's third call: the first two warm its members)
+        local function Work(F)
+            F(true)
+            F(false)
+            local Start = os.clock()
+            F(true)
+            local Spent = os.clock() - Start
+            F(false)
+            return Spent
+        end
+        shared.Work = {}
+        for Name, P in Parts do
+            local At = P.CFrame
+            local Was = P.Anchored
+            shared.Work[Name] = {
+                CFrame = Work(function(On) P.CFrame = if On then At + Vector3.yAxis else At end),
+                Bulk = Work(function(On) workspace:BulkMoveTo({ P }, { if On then At + Vector3.yAxis else At }) end),
+                Position = Work(function(On) P.Position = At.Position + (if On then Vector3.yAxis else Vector3.zero) end),
+                Anchored = Work(function(On) P.Anchored = if On then not Was else Was end),
+                Velocity = Work(function(On) P.AssemblyLinearVelocity = if On then Vector3.xAxis else Vector3.zero end),
+            }
+        end
+        "#,
+    );
+    let cost = |what: &str| -> f64 {
+        match what {
+            "Hub.CFrame" => crate::cost::assembly_moved(100, 0),
+            "Free.CFrame" => crate::cost::assembly_moved(1, 99),
+            "Hub.Bulk" => crate::cost::assembly_moved(100, 0),
+            "Free.Bulk" => crate::cost::assembly_moved(1, 0),
+            "Hub.Position" => crate::cost::joints_rewritten(100, 100, 101),
+            "Free.Position" => crate::cost::joints_rewritten(100, 1, 2),
+            "Hub.Anchored" => crate::cost::joints_reanchored(100, 100),
+            "Free.Anchored" => crate::cost::joints_reanchored(0, 100),
+            "Hub.Velocity" => 100.0 * crate::cost::ASSEMBLY_VELOCITY_PART,
+            "Free.Velocity" => crate::cost::ASSEMBLY_VELOCITY_PART,
+            _ => unreachable!(),
+        }
+    };
+    for (part, lone) in [("Hub", "Lone"), ("Free", "LoneFree")] {
+        for write in ["CFrame", "Bulk", "Position", "Anchored", "Velocity"] {
+            let want = cost(&format!("{part}.{write}"));
+            assert!(want > 0.0);
+            run(&lua, &engine, &format!("local Extra = shared.Work.{part}.{write} - shared.Work.{lone}.{write} assert(math.abs(Extra - {want:e}) < 1e-9, `{part}'s {write} write cost {{Extra}} s more than a lone part's, not {want:e}`)"));
+        }
+    }
+}
+
+/// Model:PivotTo pays for each descendant it looks at that is no part (cost.rs PIVOT_DESCENDANT, a client's 11.3 ns), beyond what
+/// it pays for the parts it moves: a Model holding a part with 1,000 Welds, Folders and Attachments under it, against one holding
+/// a lone part.
+#[test]
+fn pivot_to_pays_for_the_descendants_it_looks_at() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Model(Children)
+            local M = Instance.new("Model")
+            local P = Instance.new("Part")
+            P.Anchored, P.Parent = true, M
+            for Index = 1, Children do
+                local Child = Instance.new(if Index % 3 == 0 then "Weld" elseif Index % 3 == 1 then "Folder" else "Attachment")
+                if Child:IsA("Weld") then
+                    Child.Part0 = P
+                end
+                Child.Parent = P
+            end
+            M.Parent = workspace
+            return M
+        end
+        local function Work(M)
+            local At = M:GetPivot()
+            M:PivotTo(At + Vector3.yAxis)
+            M:PivotTo(At)
+            local Start = os.clock()
+            M:PivotTo(At + Vector3.yAxis)
+            return os.clock() - Start
+        end
+        shared.Extra = Work(Model(1000)) - Work(Model(0))
+        "#,
+    );
+    let want = 1000.0 * crate::cost::PIVOT_DESCENDANT;
+    run(&lua, &engine, &format!("assert(math.abs(shared.Extra - {want:e}) < 1e-9, `PivotTo cost {{shared.Extra}} s more with 1,000 descendants, not {want:e}`)"));
+}
+
+/// Kept components answer as fresh walks do: 1,000 random changes to a scene of 30 parts and 45 rigid joints (moves between the
+/// Workspace, a Folder, a Model, a WorldModel in it and one in storage, storage, JointsService and nil; joints re-pointed, enabled,
+/// disabled, made and destroyed, parts cloned and destroyed; Anchored, Size, Massless, RootPriority, Name, Material and C0 writes;
+/// CFrame, Position, PivotTo, BulkMoveTo and velocity writes), with every part's AssemblyRootPart, AssemblyMass,
+/// AssemblyCenterOfMass, CFrame and velocity and each change's work read after each change, read the same with the components
+/// kept as with every walk made afresh (joints.rs keeping), and the index and the kept components hold together.
+#[test]
+fn kept_components_answer_as_fresh_walks_do() {
+    let script = r#"
+        local Storage, Service = game:GetService("ReplicatedStorage"), game:GetService("JointsService")
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        local Stored = Instance.new("WorldModel")
+        Stored.Parent = Storage
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local Model = Instance.new("Model")
+        Model.Parent = workspace
+        local Holders = { workspace, workspace, Folder, Model, Model, World, Stored, Storage, Service }
+        local Dice = Random.new(23)
+        local function Pick(List)
+            return List[Dice:NextInteger(1, #List)]
+        end
+        local Parts, Joints = {}, {}
+        local Names = { "Part", "HumanoidRootPart", "Torso", "Leg" }
+        for I = 1, 30 do
+            local P = Instance.new(if I % 10 == 0 then "Seat" elseif I % 7 == 0 then "WedgePart" else "Part")
+            P.Name = Pick(Names)
+            P.Anchored = Dice:NextInteger(1, 4) == 1
+            P.CanCollide = false
+            P.Size = Vector3.new(Dice:NextInteger(1, 4), Dice:NextInteger(1, 4), Dice:NextInteger(1, 4))
+            P.CFrame = CFrame.new(Dice:NextNumber(-50, 50), Dice:NextNumber(0, 50), Dice:NextNumber(-50, 50)) * CFrame.Angles(Dice:NextNumber(0, 3), Dice:NextNumber(0, 3), 0)
+            P.Parent = Pick(Holders)
+            table.insert(Parts, P)
+        end
+        local Kinds = { "Weld", "Weld", "WeldConstraint", "Motor6D", "Snap" }
+        local function Join()
+            local J = Instance.new(Pick(Kinds))
+            J.Part0, J.Part1 = Pick(Parts), Pick(Parts)
+            if J:IsA("JointInstance") then
+                J.C0 = CFrame.new(Dice:NextNumber(-3, 3), 1, 0)
+            end
+            J.Parent = if Dice:NextInteger(1, 5) == 1 then nil else Pick(Holders)
+            table.insert(Joints, J)
+        end
+        for _ = 1, 45 do
+            Join()
+        end
+        local function Numbers(...)
+            local Out = {}
+            for Index, Value in { ... } do
+                Out[Index] = string.format("%.9g", Value)
+            end
+            return table.concat(Out, ",")
+        end
+        local function Digest(Op, Work)
+            local Line = { Op, string.format("%.17g", Work) }
+            for Index, P in Parts do
+                local Root = P.AssemblyRootPart
+                local Centre, Velocity = P.AssemblyCenterOfMass, P.AssemblyLinearVelocity
+                table.insert(Line, string.format("%d:%d:%.9g:%s:%s:%s", Index, Root and table.find(Parts, Root) or 0, P.AssemblyMass,
+                    Numbers(Centre.X, Centre.Y, Centre.Z), Numbers(P.CFrame:GetComponents()), Numbers(Velocity.X, Velocity.Y, Velocity.Z)))
+            end
+            print(table.concat(Line, " "))
+        end
+        local Ops = {
+            function()
+                local Moved = Pick(if Dice:NextInteger(1, 2) == 1 then Parts else Joints)
+                local To = if Dice:NextInteger(1, 6) == 1 then nil else Pick(Holders)
+                Moved.Parent = To
+                return "parent"
+            end,
+            function()
+                local J = Pick(Joints)
+                if Dice:NextInteger(1, 2) == 1 then
+                    J.Part0 = Pick(Parts)
+                else
+                    J.Part1 = if Dice:NextInteger(1, 5) == 1 then nil else Pick(Parts)
+                end
+                return "repoint"
+            end,
+            function()
+                local J = Pick(Joints)
+                J.Enabled = not J.Enabled
+                return "enabled"
+            end,
+            function()
+                local P = Pick(Parts)
+                P.Anchored = not P.Anchored
+                return "anchored"
+            end,
+            function()
+                local P = Pick(Parts)
+                local Roll = Dice:NextInteger(1, 5)
+                if Roll == 1 then
+                    P.Size = Vector3.new(Dice:NextInteger(1, 5), 1, Dice:NextInteger(1, 5))
+                elseif Roll == 2 then
+                    P.Massless = not P.Massless
+                elseif Roll == 3 then
+                    P.RootPriority = Dice:NextInteger(-2, 2)
+                elseif Roll == 4 then
+                    P.Name = Pick(Names)
+                else
+                    P.Material = if P.Material == Enum.Material.Plastic then Enum.Material.Metal else Enum.Material.Plastic
+                end
+                return "property"
+            end,
+            function()
+                local P = Pick(Parts)
+                P.CFrame = P.CFrame * CFrame.new(Dice:NextNumber(-2, 2), Dice:NextNumber(-2, 2), 0) * CFrame.Angles(0, Dice:NextNumber(-1, 1), 0)
+                return "cframe"
+            end,
+            function()
+                local P = Pick(Parts)
+                P.Position += Vector3.new(Dice:NextNumber(-2, 2), 0, 1)
+                return "position"
+            end,
+            function()
+                Model:PivotTo(Model:GetPivot() * CFrame.new(1, 0, Dice:NextNumber(-1, 1)))
+                return "pivot"
+            end,
+            function()
+                local List, Frames = { Pick(Parts), Pick(Parts), Pick(Parts) }, {}
+                for Index, P in List do
+                    Frames[Index] = P.CFrame + Vector3.new(0, 1, 0)
+                end
+                workspace:BulkMoveTo(List, Frames)
+                return "bulk"
+            end,
+            function()
+                Pick(Parts).AssemblyLinearVelocity = Vector3.new(Dice:NextNumber(-1, 1), 0, 0)
+                return "velocity"
+            end,
+            function()
+                local J = Pick(Joints)
+                if J:IsA("JointInstance") then
+                    J.C0 = CFrame.new(Dice:NextNumber(-3, 3), 1, 0)
+                end
+                return "c0"
+            end,
+            function()
+                local Roll = Dice:NextInteger(1, 4)
+                if Roll == 1 then
+                    Join()
+                elseif Roll == 2 then
+                    Pick(Joints):Destroy()
+                elseif Roll == 3 then
+                    Pick(Parts):Destroy()
+                else
+                    local Copy = Pick(Parts):Clone()
+                    Copy.Parent = Pick(Holders)
+                    table.insert(Parts, Copy)
+                end
+                return "make"
+            end,
+        }
+        function shared.Round()
+            for _ = 1, 100 do
+                local Op = Pick(Ops)
+                local Start = os.clock()
+                local Ok, Name = pcall(Op)
+                local Work = os.clock() - Start
+                Digest(if Ok then Name else "raised", Work)
+            end
+        end
+    "#;
+    let mut logs: Vec<Vec<String>> = Vec::new();
+    for keeping in [true, false] {
+        super::joints::set_keeping(keeping);
+        let (lua, engine) = start_play();
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        run(&lua, &engine, script);
+        for round in 1..=10 {
+            run(&lua, &engine, "shared.Round()");
+            if let Err(message) = super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection) {
+                panic!("keeping {keeping}, round {round}: {message}");
+            }
+        }
+        logs.push(engine.state.borrow().output.entries.iter().map(|line| format!("{}: {}", line.kind, line.message)).collect());
+    }
+    super::joints::set_keeping(true);
+    assert_eq!(logs[0].len(), 1000, "a line a change: {:?}", logs[0].iter().find(|line| !line.starts_with("print")));
+    for (index, (kept, fresh)) in logs[0].iter().zip(&logs[1]).enumerate() {
+        assert_eq!(kept, fresh, "change {}: what the kept components answered, then what fresh walks did", index + 1);
+    }
 }
 
 /// A write that changes a part's property is priced by whether the part is in the Workspace (cost.rs write), read from the

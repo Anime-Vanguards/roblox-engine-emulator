@@ -280,6 +280,8 @@ fn store(state: &mut State, reflection: &Reflection, id: InstanceId, name: NameI
     }
     if changed {
         state.dom.touch_rigs_for_property(id, name);
+        // (what a kept assembly was worked out from: world/joints.rs stored)
+        super::world::joints::stored(state, id, name);
     }
     if changed {
         state.dom.bump_version_of(id, name);

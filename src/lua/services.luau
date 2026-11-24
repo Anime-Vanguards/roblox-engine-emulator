@@ -249,10 +249,10 @@ local function Together(Body)
 	end
 end
 -- Every part under Self moves by Delta, and every nested model's stored pivot with it (measured: a nested model's stored
--- pivot moves with its ancestor).
+-- pivot moves with its ancestor). The parts it moved, and how many other descendants it looked at.
 local function MoveDescendants(Self, Delta)
-	local Parts = 0
-	for _, Descendant in Self:GetDescendants() do
+	local Parts, Descendants = 0, Self:GetDescendants()
+	for _, Descendant in Descendants do
 		if Descendant:IsA("BasePart") then
 			Parts += 1
 			Descendant.CFrame = Delta * Descendant.CFrame
@@ -263,7 +263,7 @@ local function MoveDescendants(Self, Delta)
 			end
 		end
 	end
-	return Parts
+	return Parts, #Descendants - Parts
 end
 -- Measured (roblox-sim, Studio 0.746, 2026-11-07): after PivotTo the pivot is the target exactly, every call. Composing
 -- Delta = Target * Pivot:Inverse() onto the old one instead let its float error compound: the inverse is the transpose, so a
@@ -283,11 +283,11 @@ Method("PVInstance", "PivotTo", Priced(function(Self, Target)
 	else
 		local Delta = Target * Self:GetPivot():Inverse()
 		local Stored = StoredPivot(Self)
-		local Moved = 0
+		local Moved, Others = 0, 0
 		Together(function()
-			Moved = MoveDescendants(Self, Delta)
+			Moved, Others = MoveDescendants(Self, Delta)
 		end)
-		Charge(Cost.PivotBase + Moved * if Self:IsDescendantOf(workspace) then Cost.PivotPart else Cost.PivotLoose)
+		Charge(Cost.PivotBase + Moved * (if Self:IsDescendantOf(workspace) then Cost.PivotPart else Cost.PivotLoose) + Others * Cost.PivotDescendant) -- (each descendant that is no part: cost.rs PIVOT_DESCENDANT)
 		-- (a model whose pivot is its own stores the target; one whose PrimaryPart sets it carries its stored pivot along)
 		if not (Self:IsA("Model") and RawGet(Self, "PrimaryPart")) then
 			StorePivot(Self, Target)

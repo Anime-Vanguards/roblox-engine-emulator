@@ -208,6 +208,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         ("PivotPart", crate::cost::PIVOT_PART),
         ("PivotBase", crate::cost::PIVOT_BASE),
         ("PivotLoose", crate::cost::PIVOT_LOOSE),
+        ("PivotDescendant", crate::cost::PIVOT_DESCENDANT),
         ("ScaleScanned", crate::cost::SCALE_SCANNED),
         ("ScalePartPlaced", crate::cost::SCALE_PART_PLACED),
         ("ScalePartLoose", crate::cost::SCALE_PART_LOOSE),
