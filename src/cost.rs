@@ -1273,7 +1273,9 @@ pub const TOUCHING_FAR: f64 = 0.0107e-6;
 /// than made alone, one of 200,000 Folders under 1 ms more.
 pub const MODEL_INDEX_PART: f64 = 0.6e-6;
 /// FindFirstChild and the other finds: a child looked at past the first (the parity bench: the 20th of 20 children 73 ns, the first 44,
-/// so 1.55 ns a child), and a node a recursive find looks at (a miss over 1,110 nodes 4.2 us: 3.8 ns)
+/// so 1.55 ns a child), and a node a recursive find looks at (a miss over 1,110 nodes 4.2 us: 3.8 ns). A collision-group change's walk
+/// of a WorldModel's descendants for its parts pays [`FIND_NODE`] for each other instance it looks at (services/physics.rs, the price
+/// borrowed).
 pub const FIND_CHILD: f64 = 1.55e-9;
 pub const FIND_NODE: f64 = 3.8e-9;
 /// GetTagged: an instance it lists (the parity bench: 10 tagged parts 0.92 us beyond the Luau around the call; the first fit read 1.89,
@@ -1684,14 +1686,17 @@ pub fn world_levels(levels: u32, changes: u32) -> f64 {
 /// How many changes a client makes of a part when `property` changes, each paying the WorldModels above it once
 /// ([`world_levels`]): measured against Transparency below 300 and 1,000 WorldModels, CFrame, Position, Orientation (and so
 /// Rotation) and a part's PivotTo 5 (4.75 to 5.1), Size 4 (3.9 to 4.0), Anchored, Color and BrickColor 3 (2.85 to 3.08),
-/// CollisionGroup 3 in the Workspace and 2 out of it, Material, CanCollide, Reflectance, Name and Parent 1 (0.92 to 1.18), as
-/// is each part a Model's PivotTo moves (0.97 to 1.04 a part of 10). Another property counts 1.
-pub fn part_changes(property: &str, placed: bool) -> u32 {
+/// Material, CanCollide, Reflectance, Name and Parent 1 (0.92 to 1.18), as is each part a Model's PivotTo moves (0.97 to 1.04 a
+/// part of 10). Another property counts 1. CollisionGroup counts 2, and 3 when the write changed the part's CollisionGroupId
+/// (`id_changed`): a playing client (Studio 0.748, two runs, the median of 15) wrote a name of another id below 100 and 300
+/// WorldModels in the Workspace and in ReplicatedStorage at 2.66 to 3.46 changes, a name of the same id (two not registered) at
+/// 1.84 to 2.18, and either below WorldModels in no parent, where it works no id out, at 2.02 to 2.08.
+pub fn part_changes(property: &str, id_changed: bool) -> u32 {
     match property {
         "CFrame" | "Position" | "Orientation" | "Rotation" => 5,
         "Size" => 4,
         "Anchored" | "Color" | "BrickColor" => 3,
-        "CollisionGroup" => if placed { 3 } else { 2 },
+        "CollisionGroup" => if id_changed { 3 } else { 2 },
         _ => 1,
     }
 }

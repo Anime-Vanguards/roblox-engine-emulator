@@ -1,0 +1,32 @@
+# engine: Roblox Studio 0.748.0.7481526, a playing client of a Studio Play session (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+side client
+start ok 1
+in-loose-folder ok  Default=-1,A=-1
+under-loose-part ok 
+folder-moved-in error This API can only be used on the server! Default=-1,A=-1
+folder-moved-out ok  Default=-1,A=-1,B=-1
+destroyed ok  Default=-1,A=-1,B=-1,C=-1
+p-outside ok  | A=0 W=0 | 
+p-outside-toggle ok  | A=0 W=0 | 
+p-outside-toggle-back ok  | A=0 W=0 | 
+p-outside-unregister ok  | A=0 W=0 | 
+p-outside-register ok  | A=0 W=0 | 
+p-in ok  | A=1 W=-1 | A,W
+p-toggle-true ok  | A=-1 W=-1 | 
+p-true-name-write ok  | A=-1 W=-1 | 
+p-true-name-write-back ok  | A=-1 W=-1 | 
+p-true-part-enters ok  | A=-1 W=-1 E=-1 | E
+p-toggle-false ok  | A=1 W=-1 E=-1 | 
+p-toggle-false-again ok  | A=1 W=-1 E=-1 | 
+p-false-script-id ok  | A=7 W=-1 E=-1 | A
+p-false-toggle-over-script-id ok  | A=1 W=-1 E=-1 | 
+p-moved-within ok  | A=9 W=-1 E=-1 | A
+p-world-out ok  | A=9 W=-1 E=-1 | 
+p-out-toggle ok  | A=9 W=-1 E=-1 | 
+p-world-in-true ok  | A=-1 W=-1 E=-1 | A
+p-world-out-again ok  | A=-1 W=-1 E=-1 | 
+p-world-in-false ok  | A=1 W=-1 E=-1 | A
+p-inner-true-enters ok  | A=1 W=-1 E=-1 I=-1 | I
+p-inner-false ok  | A=1 W=-1 E=-1 I=1 | 
+end Default=-1

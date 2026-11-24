@@ -12609,8 +12609,9 @@ fn a_collision_group_change_looks_at_the_workspaces_parts_alone() {
 
 /// A group change fires its parts' CollisionGroupId changes in the order the Workspace's descendants are listed, as the walk of
 /// the Workspace it replaced did, whatever order the broadphase holds them in: parts put in folders attached before them, below
-/// a part, in a WorldModel, 50 folders deep, with bounds that are not finite, moved and destroyed once the broadphase was made,
-/// and the Terrain; a part that never came into the Workspace keeps the id it was made with.
+/// a part, 50 folders deep, with bounds that are not finite, moved and destroyed once the broadphase was made, and the Terrain;
+/// a part that never came into the Workspace keeps the id it was made with, and a part in a WorldModel keeps the id its
+/// WorldModel's own groups gave it, though the broadphase holds it.
 #[test]
 fn a_collision_group_change_fires_its_parts_changes_in_the_workspaces_order() {
     use super::RunContext;
@@ -12671,7 +12672,7 @@ fn a_collision_group_change_fires_its_parts_changes_in_the_workspaces_order() {
         local function Listed()
             local List = {}
             for _, Descendant in workspace:GetDescendants() do
-                if Label[Descendant] then
+                if Label[Descendant] and not Descendant:FindFirstAncestorWhichIsA("WorldModel") then
                     table.insert(List, Label[Descendant])
                 end
             end
@@ -12708,14 +12709,14 @@ fn a_collision_group_change_fires_its_parts_changes_in_the_workspaces_order() {
         end)
         "#,
     );
-    let order = "P5 P7 P10 P8 P1 P3 P6 P2 P4 P11 Terrain";
+    let order = "P7 P10 P8 P1 P3 P6 P2 P4 P11 Terrain";
     assert_eq!(
         output,
         [
             format!("print: unregistered {order}"),
             "print: ids -1 -1 -1 -1 -1 -1 -1 -1 0 -1 -1 -1".into(),
             format!("print: renamed {order}"),
-            "print: ids 2 2 2 2 2 2 2 2 0 2 2 2".into(),
+            "print: ids 2 2 2 2 -1 2 2 2 0 2 2 2".into(),
         ]
     );
 }
@@ -12824,6 +12825,839 @@ fn collision_group_writes_leave_the_spatial_index_log_alone() {
     assert_eq!(logged(&engine), Some(0), "a script's writes of both");
     run(&lua, &engine, "workspace.Grouped:GetChildren()[1].Transparency = 0.5");
     assert_eq!(logged(&engine), Some(1), "another property's write");
+}
+
+/// WorldRoot's collision-group methods on a playing client (Studio 0.748): the Workspace's read the DataModel's groups,
+/// PhysicsService's, and may not change them; a WorldModel has groups of its own, Default alone at first, which a client
+/// may change while the WorldModel is outside the DataModel (refused in it, before the name is checked), and a Clone of it
+/// gets a copy. They reported themselves as not emulated and answered nil.
+#[test]
+fn world_roots_collision_groups_are_the_workspaces_and_each_world_models_own() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        local function Groups(Root)
+            local Parts = {}
+            for _, Group in Root:GetRegisteredCollisionGroups() do
+                table.insert(Parts, Group.name .. "=" .. Group.mask)
+            end
+            return table.concat(Parts, " ")
+        end
+        local function Try(...)
+            local Ok, Problem = pcall(...)
+            return if Ok then "ok" else Problem
+        end
+        print(workspace:GetMaxCollisionGroups(), Groups(workspace), workspace:IsCollisionGroupRegistered("Default"), workspace:CollisionGroupsAreCollidable("Default", "Nope"))
+        print(Try(workspace.RegisterCollisionGroup, workspace, "WsA"), Try(workspace.CollisionGroupSetCollidable, workspace, "Default", "Default", false), Try(workspace.RenameCollisionGroup, workspace, "Default", "WsB"), Try(workspace.UnregisterCollisionGroup, workspace, "WsA"))
+        local World = Instance.new("WorldModel")
+        World:RegisterCollisionGroup("MdA")
+        World:CollisionGroupSetCollidable("MdA", "Default", false)
+        print(Groups(World), World:CollisionGroupsAreCollidable("Default", "MdA"), World:IsCollisionGroupRegistered("MdA"), workspace:IsCollisionGroupRegistered("MdA"), PhysicsService:IsCollisionGroupRegistered("MdA"), Groups(workspace))
+        World:RegisterCollisionGroup("MdB")
+        World:RenameCollisionGroup("MdB", "MdC")
+        local Copy = World:Clone()
+        Copy:UnregisterCollisionGroup("MdC")
+        print(Groups(World), Groups(Copy), Groups(Instance.new("WorldModel")), World:GetMaxCollisionGroups())
+        World:Destroy()
+        World:RegisterCollisionGroup("MdD")
+        print(Groups(World))
+        local Kept = Instance.new("WorldModel")
+        local Holder = Instance.new("Folder")
+        Kept.Parent = Holder
+        Kept:RegisterCollisionGroup("Loose")
+        Holder.Parent = game:GetService("ReplicatedStorage")
+        print(Try(Kept.RegisterCollisionGroup, Kept, ""), Try(Kept.UnregisterCollisionGroup, Kept, "Loose"), Try(Kept.CollisionGroupSetCollidable, Kept, "Default", "Default", false), Groups(Kept), Kept:IsCollisionGroupRegistered("Loose"))
+        Holder.Parent = nil
+        print(Try(Kept.RegisterCollisionGroup, Kept, "Out"), Groups(Kept))
+        "#,
+    );
+    let refused = "This API can only be used on the server!";
+    assert_eq!(
+        output,
+        [
+            "print: 32 Default=-1 true true".to_string(),
+            format!("print: {refused} {refused} {refused} {refused}"),
+            "print: Default=-3 MdA=-2 false true false false Default=-1".into(),
+            "print: Default=-3 MdA=-2 MdC=-1 Default=-3 MdA=-2 Default=-1 32".into(),
+            "print: Default=-3 MdA=-2 MdC=-1 MdD=-1".into(),
+            format!("print: {refused} {refused} {refused} Default=-1 Loose=-1 true"),
+            "print: ok Default=-1 Loose=-1 Out=-1".into(),
+        ]
+    );
+    let missing: Vec<String> = engine.state.borrow().output.missing.iter().map(|(name, _)| name.clone()).filter(|name| name.contains("CollisionGroup")).collect();
+    assert!(missing.is_empty(), "{missing:?}");
+}
+
+/// WorldRoot's collision groups on a server (Studio 0.748): the Workspace's and PhysicsService's are one registry; a name
+/// that is neither a string nor a number warns, the last argument first; a WorldModel with UseWorkspaceCollisionGroups
+/// true warns once, by its full name, at its first call past the casts; its parts' CollisionGroupId follows its own groups
+/// while it is in the DataModel (the Workspace's reach none of them), the Workspace's while UseWorkspaceCollisionGroups is
+/// true, a change of which fires no Changed, and a WorldModel that comes in with it true fires Changed only for what its
+/// own groups change.
+#[test]
+fn world_roots_collision_groups_on_a_server_share_the_registry_warn_and_follow_parts() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        local function Groups(Root)
+            local Parts = {}
+            for _, Group in Root:GetRegisteredCollisionGroups() do
+                table.insert(Parts, Group.name .. "=" .. Group.mask)
+            end
+            return table.concat(Parts, " ")
+        end
+        workspace:RegisterCollisionGroup("WsA")
+        PhysicsService:RegisterCollisionGroup("PsA")
+        workspace:CollisionGroupSetCollidable("WsA", "PsA", false)
+        print(PhysicsService:IsCollisionGroupRegistered("WsA"), PhysicsService:CollisionGroupsAreCollidable("PsA", "WsA"), Groups(workspace), Groups(PhysicsService))
+        workspace:UnregisterCollisionGroup("WsA")
+        PhysicsService:UnregisterCollisionGroup("PsA")
+        print("cast", workspace:CollisionGroupsAreCollidable(true, Vector3.one))
+        local Warned = Instance.new("WorldModel")
+        Warned.Name = "Warned"
+        Warned.UseWorkspaceCollisionGroups = true
+        Warned.Parent = workspace
+        print("first", pcall(Warned.RegisterCollisionGroup, Warned, nil))
+        print("then", Warned:GetMaxCollisionGroups(), Warned:GetMaxCollisionGroups())
+
+        local World = Instance.new("WorldModel")
+        World:RegisterCollisionGroup("Pa")
+        local Fired = {}
+        local function Part(Name, Group)
+            local Made = Instance.new("Part")
+            Made.Name = Name
+            Made.CollisionGroup = Group
+            Made.Changed:Connect(function(Property)
+                if Property == "CollisionGroupId" then
+                    table.insert(Fired, Name)
+                end
+            end)
+            Made.Parent = World
+            return Made
+        end
+        local A, W = Part("A", "Pa"), Part("W", "Pw")
+        PhysicsService:RegisterCollisionGroup("Pw")
+        local function Step(Label)
+            local Ids = A.CollisionGroupId .. " " .. W.CollisionGroupId
+            task.defer(function()
+                print(Label, Ids, table.concat(Fired, ","))
+                table.clear(Fired)
+            end)
+        end
+        Step("outside")
+        World.Parent = workspace
+        Step("entered")
+        World.UseWorkspaceCollisionGroups = true
+        Step("uses-workspace")
+        A.CollisionGroup = "Pw"
+        Step("named")
+        A.CollisionGroup = "Pa"
+        World:RegisterCollisionGroup("Pc")
+        workspace:UnregisterCollisionGroup("Pw")
+        Step("registries")
+        workspace:RegisterCollisionGroup("Pw")
+        World.UseWorkspaceCollisionGroups = false
+        Step("own-again")
+        World.Parent = nil
+        A.CollisionGroupId = 9
+        World.UseWorkspaceCollisionGroups = true
+        Step("away")
+        World.Parent = workspace
+        Step("came-back")
+        "#,
+    );
+    let output: Vec<&str> = output.iter().map(String::as_str).collect();
+    let warning = "UseWorkspaceCollisionGroups is true, so this WorldModel's own collision groups are not the ones used for its simulation. If you meant to access or change the simulated groups, set UseWorkspaceCollisionGroups to false or edit them on the Workspace.";
+    assert_eq!(
+        output,
+        [
+            "print: true false Default=-1 WsA=-5 PsA=-3 Default=-1 WsA=-5 PsA=-3",
+            "warn: argument #2 expects a string, but Vector3 was passed",
+            "warn: argument #1 expects a string, but boolean was passed",
+            "print: cast true",
+            "print: first false Argument 1 missing or nil",
+            &format!("warn: Workspace.Warned: {warning}"),
+            "print: then 32 32",
+            // (World's first call while UseWorkspaceCollisionGroups is true: RegisterCollisionGroup("Pc"))
+            &format!("warn: Workspace.WorldModel: {warning}"),
+            "print: outside 0 0 ",
+            "print: entered 1 -1 A,W",
+            "print: uses-workspace -1 1 ",
+            "print: named 1 1 A",
+            "print: registries -1 1 A",
+            "print: own-again 1 -1 ",
+            "print: away 9 -1 A",
+            "print: came-back -1 1 A",
+        ]
+    );
+}
+
+/// A WorldModel's own registry comes with its first change: a call that changes nothing (an unknown name unregistered or
+/// renamed, a refused CollisionGroupSetCollidable, a flag set as it was) makes none, so a loopback client is sent none and
+/// a Clone copies none, while one that is back to Default alone is still sent. A client sent Default alone, the
+/// DataModel's or a WorldModel's, does not start its parts' tracking: groups it was sent start it, one rule for both.
+#[test]
+fn a_world_models_registry_comes_with_its_first_change_and_default_alone_starts_no_tracking() {
+    use super::RunContext;
+    use crate::services::physics;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        World:UnregisterCollisionGroup("Nope")
+        World:RenameCollisionGroup("Nope", "Other")
+        World:CollisionGroupSetCollidable("Default", "Default", true)
+        print(pcall(World.CollisionGroupSetCollidable, World, "Default", "Nope", false))
+        print(World:IsCollisionGroupRegistered("Default"), #World:Clone():GetRegisteredCollisionGroups())
+        "#,
+    );
+    assert_eq!(output, ["print: false Both collision groups must be registered.", "print: true 1"]);
+    assert!(physics::model_snapshots(&engine).is_empty());
+    run(&lua, &engine, r#"workspace.WorldModel:RegisterCollisionGroup("Gone") workspace.WorldModel:UnregisterCollisionGroup("Gone")"#);
+    let sent = physics::model_snapshots(&engine);
+    assert_eq!(sent.len(), 1);
+    let default_alone = sent[0].1.clone();
+
+    let (client_lua, client) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(&client_lua, &client, r#"Instance.new("WorldModel").Parent = workspace"#);
+    let model = {
+        let state = client.state.borrow();
+        let world_model = client.reflection.class_id("WorldModel").unwrap();
+        let workspace = client.world.get().unwrap().workspace;
+        state.dom.children_of(workspace).iter().copied().find(|&id| state.dom.at(id).class == world_model).unwrap()
+    };
+    physics::apply_snapshot(&client, default_alone.clone());
+    physics::apply_model_snapshot(&client, model, default_alone);
+    assert!(!physics::tracking(&client));
+    run(&lua, &engine, r#"workspace.WorldModel:RegisterCollisionGroup("Kept")"#);
+    physics::apply_model_snapshot(&client, model, physics::model_snapshots(&engine)[0].1.clone());
+    assert!(physics::tracking(&client));
+    assert_eq!(run(&client_lua, &client, r#"print(workspace.WorldModel:IsCollisionGroupRegistered("Kept"))"#), ["print: true"]);
+}
+
+/// A WorldModel's own group change costs what the Workspace's does (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED)
+/// on the parts it works out again: its own, not the Workspace's nor those of a WorldModel inside it. The Workspace's change
+/// takes its parts from the spatial queries' broadphase, which holds its WorldModels' parts too: it looks at each, at a part's
+/// price, and works none of them out. A change of UseWorkspaceCollisionGroups costs the same on the WorldModel's parts.
+#[test]
+fn a_world_models_group_change_and_use_workspace_toggle_cost_what_a_change_does_on_its_parts() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        local function Each(Change)
+            local N = 10
+            local Start = os.clock()
+            for _ = 1, N do
+                Change()
+            end
+            local Middle = os.clock()
+            for _ = 1, N do
+            end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        local function Parts(Count, Parent)
+            local Folder = Instance.new("Folder")
+            for _ = 1, Count do
+                local Part = Instance.new("Part")
+                Part.Anchored = true
+                Part.Parent = Folder
+            end
+            Folder.Parent = Parent
+            return Folder
+        end
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        local Empty = Instance.new("WorldModel")
+        Empty.Parent = workspace
+        local function Toggle(Root, Name)
+            return function()
+                Root:RegisterCollisionGroup(Name)
+                Root:UnregisterCollisionGroup(Name)
+            end
+        end
+        local function Flip(Root)
+            return function()
+                Root.UseWorkspaceCollisionGroups = not Root.UseWorkspaceCollisionGroups
+            end
+        end
+        local Alone = Each(Toggle(World, "A"))
+        local SharedAlone = Each(Toggle(PhysicsService, "B"))
+        local FlipAlone = Each(Flip(Empty))
+        Within("a WorldModel's register and unregister with no parts", Alone, 0.1, 0.4)
+        local Own = Parts(5000, World)
+        Parts(5000, workspace)
+        local Inner = Instance.new("WorldModel")
+        Parts(5000, Inner)
+        Inner.Parent = World
+        Within("a WorldModel's change beside its 5,000 parts", (Each(Toggle(World, "A")) - Alone) / 2, 8.3, 8.7)
+        Within("the Workspace's change beside its own 5,000 and its WorldModels' 10,000", (Each(Toggle(PhysicsService, "B")) - SharedAlone) / 2, 25.3, 25.7)
+        for Index, Part in Own:GetChildren() do
+            if Index <= 1000 then
+                Part.CollisionGroup = "A"
+            end
+        end
+        Within("a change of 1,000 of their ids", (Each(Toggle(World, "A")) - Alone) / 2, 8.5 + 370, 8.5 + 390)
+        World:RegisterCollisionGroup("A")
+        Within("UseWorkspaceCollisionGroups changing 1,000 of their ids", Each(Flip(World)) - FlipAlone, 8.5 + 370, 8.5 + 390)
+        Within("a collidable pair", Each(function()
+            World:CollisionGroupSetCollidable("A", "Default", true)
+        end), 0.0, 0.3)
+        "#,
+    );
+}
+
+/// A tree that moves between the Workspace and a WorldModel, or comes into a WorldModel's world, works out its parts'
+/// CollisionGroupId at what a group change spends on them (cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED), as a tree
+/// coming into the Workspace does: 1,000 parts of a group whose id differs between the two worlds read 380 us more than 1,000
+/// of Default, whose ids stay, each way and from outside the worlds. Into a WorldModel that uses the Workspace's groups they
+/// read 760 us more (the WorldModel's own groups change each id, then the Workspace's change it back), and that second pass
+/// costs 1.7 ns a part. The ids used to change at no charge.
+#[test]
+fn parts_moving_into_a_world_model_pay_for_the_collision_group_ids_they_take() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        local RS = game:GetService("ReplicatedStorage")
+        -- (A is 2 in the Workspace's groups and 1 in each WorldModel's own)
+        PhysicsService:RegisterCollisionGroup("X")
+        PhysicsService:RegisterCollisionGroup("A")
+        local function World(UseWorkspace)
+            local W = Instance.new("WorldModel")
+            W:RegisterCollisionGroup("A")
+            W.UseWorkspaceCollisionGroups = UseWorkspace
+            W.Parent = workspace
+            return W
+        end
+        local Own, Shared = World(false), World(true)
+        local function Model(Group)
+            local M = Instance.new("Model")
+            for _ = 1, 1000 do
+                local Part = Instance.new("Part")
+                Part.Anchored = true
+                Part.CollisionGroup = Group
+                Part.Parent = M
+            end
+            M.Parent = workspace
+            return M
+        end
+        -- (the frame's first entry into the Workspace, which runs cold, is theirs: cost.rs Path::Enter)
+        local Grouped, Plain = Model("A"), Model("Default")
+        local function Move(M, To)
+            local Start = os.clock()
+            M.Parent = To
+            return (os.clock() - Start) * 1e6
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        local function Id()
+            return Grouped:GetChildren()[1].CollisionGroupId
+        end
+        assert(Id() == 2, "the Workspace's id")
+        local PlainIntoOwn = Move(Plain, Own)
+        Within("from the Workspace into a WorldModel, 1,000 ids that change", Move(Grouped, Own) - PlainIntoOwn, 379.9, 380.1)
+        assert(Id() == 1, "the WorldModel's own id")
+        Within("back into the Workspace", Move(Grouped, workspace) - Move(Plain, workspace), 379.9, 380.1)
+        assert(Id() == 2, "the Workspace's id again")
+        local PlainIntoShared = Move(Plain, Shared)
+        Within("into a WorldModel that uses the Workspace's groups, both passes", Move(Grouped, Shared) - PlainIntoShared, 759.9, 760.1)
+        assert(Id() == 2, "the Workspace's id, through the WorldModel's own")
+        Within("the second pass on 1,000 parts", PlainIntoShared - PlainIntoOwn, 1.69, 1.71)
+        Grouped.Parent, Plain.Parent = RS, RS
+        Within("from outside the worlds into a WorldModel", Move(Grouped, Own) - Move(Plain, Own), 379.9, 380.1)
+        assert(Id() == 1, "the WorldModel's own id again")
+        "#,
+    );
+}
+
+/// Whether a WorldModel outside the Workspace is in the DataModel is found by a walk up its ancestors, which a call, a part's
+/// CollisionGroup write and a change of UseWorkspaceCollisionGroups pay for as IsDescendantOf does (cost.rs ANCESTOR_STEP, 1.2 ns
+/// an ancestor): with the WorldModel at the bottom of 1,001 Folders in ReplicatedStorage rather than 1, a part's name write costs
+/// 1.2 us more, a Register and Unregister 2.4 (each works the parts out again), a change of UseWorkspaceCollisionGroups 1.2, and
+/// a client's refused Register 1.2. A client's Register and Unregister of a WorldModel at the bottom of a parentless chain of
+/// 1,001 Folders rather than 1, which it may change, cost 2.4 us more: one walk each, which finds it outside the DataModel, so
+/// no parts are looked for (two walks each cost 4.8). The warning a WorldModel with UseWorkspaceCollisionGroups true gives
+/// names it at what GetFullName spends (cost.rs full_name: 4.2 ns a name, 0.14 a byte). The walk used to be free, and the name
+/// too.
+#[test]
+fn a_world_models_walk_up_to_the_data_model_costs_what_its_ancestors_do() {
+    use super::RunContext;
+    const SETUP: &str = r#"
+        local RS = game:GetService("ReplicatedStorage")
+        -- (a WorldModel with a part, at the bottom of Depth Folders named F in ReplicatedStorage, or in no parent: Loose)
+        local function Chain(Depth, Loose)
+            local Top = Instance.new("Folder")
+            Top.Name = "F"
+            local At = Top
+            for _ = 2, Depth do
+                local Folder = Instance.new("Folder")
+                Folder.Name = "F"
+                Folder.Parent = At
+                At = Folder
+            end
+            local World = Instance.new("WorldModel")
+            World.Parent = At
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Parent = World
+            if not Loose then
+                Top.Parent = RS
+            end
+            return World, Part
+        end
+        local function Each(Change)
+            local N = 10
+            local Start = os.clock()
+            for _ = 1, N do
+                Change()
+            end
+            local Middle = os.clock()
+            for _ = 1, N do
+            end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{Label} (us): {Value}`)
+        end
+        -- (each run once first: the frame's first of a kind runs cold)
+        local function Deeper(Label, Shallow, Deep, Expected)
+            Each(Shallow)
+            Each(Deep)
+            Within(Label, Each(Deep) - Each(Shallow), Expected - 0.01, Expected + 0.01)
+        end
+    "#;
+    // (what 1,000 more ancestors cost a walk up, two walks, and the warning's 1,000 more names and 2,000 more bytes, in us)
+    let step = 1000.0 * crate::cost::ANCESTOR_STEP * 1e6;
+    let twice = 2.0 * step;
+    let named = crate::cost::full_name(1000, 2000) * 1e6;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"{SETUP}
+        local ShallowWorld, ShallowPart = Chain(1)
+        local DeepWorld, DeepPart = Chain(1001)
+        local function Write(Part)
+            local Flip = false
+            return function()
+                Flip = not Flip
+                Part.CollisionGroup = if Flip then "A" else "B"
+            end
+        end
+        Deeper("a part's CollisionGroup write", Write(ShallowPart), Write(DeepPart), {step:e})
+        local function Toggle(World)
+            return function()
+                World:RegisterCollisionGroup("A")
+                World:UnregisterCollisionGroup("A")
+            end
+        end
+        Deeper("a Register and an Unregister", Toggle(ShallowWorld), Toggle(DeepWorld), {twice:e})
+        local function Flip(World)
+            return function()
+                World.UseWorkspaceCollisionGroups = not World.UseWorkspaceCollisionGroups
+            end
+        end
+        Deeper("a change of UseWorkspaceCollisionGroups", Flip(ShallowWorld), Flip(DeepWorld), {step:e})
+        -- (the warning: each first call of two fresh WorldModels that use the Workspace's groups, one 1,000 Folders deeper; its
+        -- full name has 1,000 more names and 2,000 more bytes, "F." each)
+        local function First(World)
+            World.UseWorkspaceCollisionGroups = true
+            local Start = os.clock()
+            World:IsCollisionGroupRegistered("Default")
+            return (os.clock() - Start) * 1e6
+        end
+        First((Chain(1)))
+        local Shallow, Deep = First((Chain(1))), First((Chain(1001)))
+        Within("the warning's full name", Deep - Shallow, {named:e} - 0.01, {named:e} + 0.01)
+        "#
+        ),
+    );
+
+    let (client_lua, client) = start_with(Options { mode: "play".into(), ..Options::default() });
+    engine_lua::modules::interpret_all(&client_lua, &client);
+    crate::scheduler::step(&client_lua, &client, Some(1.0 / 60.0)).expect("step");
+    run(
+        &client_lua,
+        &client,
+        &format!(
+            r#"{SETUP}
+        local ShallowWorld = Chain(1)
+        local DeepWorld = Chain(1001)
+        local function Refused(World)
+            return function()
+                assert(not pcall(World.RegisterCollisionGroup, World, "A"), "refused in the DataModel")
+            end
+        end
+        Deeper("a client's refused Register", Refused(ShallowWorld), Refused(DeepWorld), {step:e})
+        local function Toggle(World)
+            return function()
+                World:RegisterCollisionGroup("A")
+                World:UnregisterCollisionGroup("A")
+            end
+        end
+        Deeper("a client's Register and Unregister outside the DataModel", Toggle((Chain(1, true))), Toggle((Chain(1001, true))), {twice:e})
+        "#
+        ),
+    );
+}
+
+/// A part's CollisionGroup write below WorldModels pays for the WorldModels above it what any part write pays, in
+/// lua/instance.rs `assign` (`changed_levels`; cost.rs `world_levels`, `part_changes`). The write's setter is
+/// services/physics.rs `write_name`, and `assign` charges the levels after it, for three changes when the setter changed the
+/// part's CollisionGroupId and two when it did not, as a playing client counts them (Studio 0.748, in the Workspace and in
+/// ReplicatedStorage alike). Below 30 nested WorldModels, against a part with none in the same place: a name with another id
+/// costs `world_levels(30, 3)` more (3.402 us), and a name with the same id (two not registered) `world_levels(30, 2)` more
+/// (2.268 us), in the Workspace and in ReplicatedStorage, where the walk up from the innermost WorldModel to the DataModel
+/// costs more too (31 ancestors at cost.rs `ANCESTOR_STEP`: 37.2 ns), which finds the world whose groups give the part its id.
+/// Below 30 in no parent a name with another id costs `world_levels(30, 2)` more, and the walk up its 29 ancestors: no world
+/// there works its id out. The prices are cost.rs's, passed in. The Workspace's write that kept its id used to pay three
+/// changes, and ReplicatedStorage's that changed it two.
+#[test]
+fn a_collision_group_write_below_nested_world_models_pays_for_them() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    // (what a write below 30 WorldModels pays more, in us: a write that changes the part's id and one that keeps it, and the
+    // walks up from the innermost WorldModel, to the DataModel and to the top of a chain in no parent)
+    let levels = |id_changed: bool| crate::cost::world_levels(30, crate::cost::part_changes("CollisionGroup", id_changed)) * 1e6;
+    let step = crate::cost::ANCESTOR_STEP * 1e6;
+    run(
+        &lua,
+        &engine,
+        &format!("shared.Changed, shared.Kept, shared.Walk, shared.LooseWalk = {:e}, {:e}, {:e}, {:e}", levels(true), levels(false), 31.0 * step, 29.0 * step),
+    );
+    run(
+        &lua,
+        &engine,
+        r#"
+        local RS = game:GetService("ReplicatedStorage")
+        local function Part(Parent)
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Parent = Parent
+            return Part
+        end
+        -- (a part at the bottom of Levels WorldModels, each in the one before, the outermost in Parent)
+        local function Nested(Levels, Parent)
+            local Top = Instance.new("WorldModel")
+            local At = Top
+            for _ = 2, Levels do
+                local World = Instance.new("WorldModel")
+                World.Parent = At
+                At = World
+            end
+            local Bottom = Part(At)
+            Top.Parent = Parent
+            return Bottom
+        end
+        -- (A and B are not registered: the part's id stays -1 between them; Default's is 0)
+        local function Write(Part, First, Second)
+            local Flip = false
+            return function()
+                Flip = not Flip
+                Part.CollisionGroup = if Flip then First else Second
+            end
+        end
+        local function Each(Change)
+            local N = 10
+            local Start = os.clock()
+            for _ = 1, N do
+                Change()
+            end
+            local Middle = os.clock()
+            for _ = 1, N do
+            end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        -- (each run once first: the frame's first of a kind runs cold)
+        local function Beside(Label, Plain, Below, Expected)
+            Each(Plain)
+            Each(Below)
+            local Value = Each(Below) - Each(Plain)
+            assert(Value >= Expected - 0.01 and Value <= Expected + 0.01, `{Label} (us): {Value}, not {Expected}`)
+        end
+        local function Both(Label, Parent, Changed, Kept)
+            local Plain, Below = Part(Parent), Nested(30, Parent)
+            Beside(`{Label}, a name with another id`, Write(Plain, "Default", "A"), Write(Below, "Default", "A"), Changed)
+            Beside(`{Label}, a name with the same id`, Write(Plain, "A", "B"), Write(Below, "A", "B"), Kept)
+        end
+        Both("below 30 WorldModels in the Workspace", workspace, shared.Changed, shared.Kept)
+        Both("below 30 WorldModels in ReplicatedStorage", RS, shared.Changed + shared.Walk, shared.Kept + shared.Walk)
+        Both("below 30 WorldModels in no parent", nil, shared.Kept + shared.LooseWalk, shared.Kept + shared.LooseWalk)
+        "#,
+    );
+}
+
+/// On a loopback server a WorldModel's group changes in a frame log one marker, at the first (loopback/replicate.rs
+/// Change::WorldGroups), and the flush sends its groups as the frame left them in that place (`physics::flushed_model`), saying
+/// whether one of the changes left them other than Default alone (`Snapshot::touched`), as the DataModel's do: a frame that
+/// registers and unregisters a group sends Default alone, touched, which starts a client's tracking, where Default alone
+/// untouched (a WorldModel sent whole with no change since) does not. The next change logs a marker again; a WorldModel sent
+/// whole in the same flush takes the frame's changes with its tree (`physics::sent_models`), so its marker sends nothing more.
+#[test]
+fn a_world_models_frame_of_group_changes_is_sent_once_and_says_whether_it_was_touched() {
+    use super::RunContext;
+    use crate::loopback::replicate::Change;
+    use crate::services::physics;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine.state.borrow_mut().loopback_log = Some(Vec::new());
+    run(
+        &lua,
+        &engine,
+        r#"
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        for _ = 1, 25 do
+            World:RegisterCollisionGroup("A")
+            World:RenameCollisionGroup("A", "B")
+            World:UnregisterCollisionGroup("B")
+        end
+        "#,
+    );
+    let markers = |engine: &Engine| -> Vec<crate::InstanceId> {
+        let state = engine.state.borrow();
+        state.loopback_log.as_ref().unwrap().iter().filter_map(|change| if let Change::WorldGroups(id) = change { Some(*id) } else { None }).collect()
+    };
+    let logged = markers(&engine);
+    assert_eq!(logged.len(), 1, "one marker for the frame's changes");
+    let model = logged[0];
+    let snapshot = physics::flushed_model(&engine, model).expect("its groups");
+    assert!(snapshot.touched && snapshot.names[1..].iter().all(Option::is_none) && snapshot.masks[0] == u32::MAX);
+    assert!(physics::flushed_model(&engine, model).is_none(), "nothing more to send");
+    physics::flush_done(&engine);
+    let whole = physics::sent_models(&engine, [model].into_iter());
+    assert!(whole.len() == 1 && whole[0].0 == 0 && !whole[0].1.touched, "sent whole, unchanged since: its snapshot decides alone");
+
+    engine.state.borrow_mut().loopback_log = Some(Vec::new());
+    run(&lua, &engine, r#"workspace.WorldModel:RegisterCollisionGroup("C")"#);
+    assert_eq!(markers(&engine), [model], "the next change logs a marker again");
+    let with_tree = physics::sent_models(&engine, [model].into_iter());
+    assert!(with_tree.len() == 1 && with_tree[0].1.touched && with_tree[0].1.names[1].as_deref() == Some(&b"C"[..]), "a tree takes the frame's changes");
+    assert!(physics::flushed_model(&engine, model).is_none(), "so its marker sends nothing more");
+
+    let client_with = |snapshot: crate::services::physics::Snapshot| {
+        let (client_lua, client) = start_with(Options { mode: "play".into(), ..Options::default() });
+        run(&client_lua, &client, r#"Instance.new("WorldModel").Parent = workspace"#);
+        let copy = {
+            let state = client.state.borrow();
+            let world_model = client.reflection.class_id("WorldModel").unwrap();
+            let workspace = client.world.get().unwrap().workspace;
+            state.dom.children_of(workspace).iter().copied().find(|&id| state.dom.at(id).class == world_model).unwrap()
+        };
+        physics::apply_model_snapshot(&client, copy, snapshot);
+        physics::tracking(&client)
+    };
+    assert!(client_with(snapshot), "a touched frame starts the client's tracking");
+    assert!(!client_with(whole[0].1.clone()), "Default alone, untouched, does not");
+}
+
+/// A loopback server's WorldModels with group changes to send (services/physics.rs Groups::unsent) keep no table a burst grew
+/// them to (dom.rs clear_map, as clear_set empties a set): after a frame changed the groups of 100,000 WorldModels the client
+/// has no copy of, each later flush that empties one such entry costs about what it cost before the burst, where it cleared
+/// a table of 131,072 slots (0.5 us of host time a flush, 0.02 before), and the table is no larger than a frame of one change
+/// needs. A frame that sends what it logged keeps its table, the size of what it logged, rather than dropping it and growing
+/// it again the next frame. Each round's flush is timed alone and the fastest nine tenths averaged, so a host that pauses the
+/// test does not decide it.
+#[test]
+fn a_burst_of_world_model_group_changes_leaves_the_loopback_flush_no_work_after_it() {
+    use super::RunContext;
+    use crate::loopback::replicate::Change;
+    use crate::services::physics;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine.state.borrow_mut().loopback_log = Some(Vec::new());
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Store = game:GetService("ServerStorage")
+        local function Worlds(Count)
+            local Made = table.create(Count)
+            for I = 1, Count do
+                local World = Instance.new("WorldModel")
+                World.Parent = Store
+                Made[I] = World
+            end
+            return Made
+        end
+        local Burst, Steady, One = Worlds(100000), Worlds(5000), Worlds(1)
+        local function Toggle(List)
+            for _, World in List do
+                if World:IsCollisionGroupRegistered("A") then
+                    World:UnregisterCollisionGroup("A")
+                else
+                    World:RegisterCollisionGroup("A")
+                end
+            end
+        end
+        function shared.Round()
+            Toggle(One)
+        end
+        function shared.Burst()
+            Toggle(Burst)
+        end
+        function shared.Steady()
+            Toggle(Steady)
+        end
+        "#,
+    );
+    // (a frame's changes and its flush: `send` stands for the client's copies, which take their groups and leave the table)
+    let frame = |source: &str, send: bool| -> f64 {
+        run(&lua, &engine, source);
+        let markers: Vec<crate::InstanceId> = {
+            let mut state = engine.state.borrow_mut();
+            let log = state.loopback_log.as_mut().unwrap();
+            let markers = log.iter().filter_map(|change| if let Change::WorldGroups(id) = change { Some(*id) } else { None }).collect();
+            log.clear();
+            markers
+        };
+        if send {
+            for id in markers {
+                assert!(physics::flushed_model(&engine, id).is_some());
+            }
+        }
+        let start = std::time::Instant::now();
+        physics::flush_done(&engine);
+        start.elapsed().as_secs_f64()
+    };
+    // (a flush's host time is a few ticks of the timer at most: many rounds, the slowest tenth left out)
+    let typical = |rounds: usize| -> f64 {
+        let mut times: Vec<f64> = (0..rounds).map(|_| frame("shared.Round()", false)).collect();
+        times.sort_by(f64::total_cmp);
+        let kept = rounds * 9 / 10;
+        times[..kept].iter().sum::<f64>() / kept as f64
+    };
+    let before = typical(4000);
+    frame("shared.Burst()", false);
+    let after = typical(4000);
+    eprintln!("a flush of one change took {:.3} us of host time before the burst, {:.3} us after it (the fastest 3,600 of 4,000)", before * 1e6, after * 1e6);
+    assert!(after < 3.0 * before + 0.15e-6, "a flush of one change took {:.3} us of host time after 100,000 WorldModels' groups changed, {:.3} us before", after * 1e6, before * 1e6);
+    let room = physics::unsent_room(&engine);
+    assert!(room < 4096, "after the burst, a frame of one change leaves the table room for {room}");
+
+    frame("shared.Steady()", true);
+    let kept = physics::unsent_room(&engine);
+    frame("shared.Steady()", true);
+    assert!(kept >= 5000 && physics::unsent_room(&engine) == kept, "a frame of 5,000 changes sent keeps its table: room for {kept}, then {}", physics::unsent_room(&engine));
+}
+
+/// No index holds a WorldModel's parts, so its group change walks its descendants for them and pays for each other instance
+/// the walk looks at what a recursive find pays for a node (cost.rs FIND_NODE, 3.8 ns): beside 10,000 Folders a WorldModel's
+/// Register and Unregister cost 76 us more and a change of its UseWorkspaceCollisionGroups 38, and a loopback client's copy that
+/// takes groups with a new name pays 38 us for its walk and nothing for the part, as the DataModel's pay nothing for theirs. The
+/// Workspace's change takes its parts from the spatial queries' broadphase: it looks at the WorldModels' two parts and at none
+/// of the Folders. The walk used to be free.
+#[test]
+fn a_world_models_walk_to_its_parts_pays_for_the_instances_it_looks_at() {
+    use super::RunContext;
+    use crate::services::physics;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    const WORLD: &str = r#"
+        local function World(Folders)
+            local W = Instance.new("WorldModel")
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Parent = W
+            for _ = 1, Folders do
+                Instance.new("Folder").Parent = W
+            end
+            W.Parent = workspace
+            return W
+        end
+    "#;
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"{WORLD}
+        local function Each(Change)
+            local N = 10
+            local Start = os.clock()
+            for _ = 1, N do
+                Change()
+            end
+            local Middle = os.clock()
+            for _ = 1, N do
+            end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e6
+        end
+        local function Within(Label, Value, Low, High)
+            assert(Value >= Low and Value <= High, `{{Label}} (us): {{Value}}`)
+        end
+        -- (each run once first: the frame's first of a kind runs cold)
+        local function Beside(Label, Bare, Full, Expected)
+            Each(Bare)
+            Each(Full)
+            Within(Label, Each(Full) - Each(Bare), Expected - 0.05, Expected + 0.05)
+        end
+        local Bare, Full = World(0), World(10000)
+        Bare.Name, Full.Name = "Bare", "Full"
+        local function Toggle(W)
+            return function()
+                W:RegisterCollisionGroup("A")
+                W:UnregisterCollisionGroup("A")
+            end
+        end
+        Beside("a Register and an Unregister beside 10,000 Folders", Toggle(Bare), Toggle(Full), 76)
+        local function Flip(W)
+            return function()
+                W.UseWorkspaceCollisionGroups = not W.UseWorkspaceCollisionGroups
+            end
+        end
+        Beside("a change of UseWorkspaceCollisionGroups beside them", Flip(Bare), Flip(Full), 38)
+        Full:RegisterCollisionGroup("Kept")
+        "#
+        ),
+    );
+    let looked = || physics::LOOKED_AT.with(|looked| looked.get());
+    let before = looked();
+    run(&lua, &engine, r#"game:GetService("PhysicsService"):RegisterCollisionGroup("W") game:GetService("PhysicsService"):UnregisterCollisionGroup("W")"#);
+    assert_eq!(looked() - before, 4, "the Workspace's two changes look at the WorldModels' two parts, and at no Folder");
+
+    let snapshot = physics::model_snapshots(&engine).into_iter().map(|(_, snapshot)| snapshot).find(|snapshot| snapshot.names[1].as_deref() == Some(&b"Kept"[..])).expect("Full's groups");
+    let (client_lua, client) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(&client_lua, &client, &format!("{WORLD}\nWorld(10000)"));
+    let copy = {
+        let state = client.state.borrow();
+        let world_model = client.reflection.class_id("WorldModel").unwrap();
+        let workspace = client.world.get().unwrap().workspace;
+        state.dom.children_of(workspace).iter().copied().find(|&id| state.dom.at(id).class == world_model).unwrap()
+    };
+    let work = || client.state.borrow().sched.work_total();
+    let before = work();
+    physics::apply_model_snapshot(&client, copy, snapshot);
+    let spent = work() - before;
+    assert!((spent - 10_000.0 * crate::cost::FIND_NODE).abs() < 1e-9, "the copy's walk: {spent}");
 }
 
 /// On a loopback server a frame's collision-group changes reach the client as one snapshot of the registry as the frame left it,

@@ -438,8 +438,10 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
                     let state = engine.state.borrow();
                     let property = engine.reflection.name(name);
                     let (placed, levels) = part_placement(engine, &state, class, id);
-                    // (a Parent setter's move pays its levels itself: set_parent)
-                    let levels = if name == K::Parent as NameId { 0.0 } else { changed_levels(&state, id, property, placed, levels) };
+                    // (a Parent setter's move pays its levels itself: set_parent; a CollisionGroup setter that changed the part's
+                    // CollisionGroupId made one more change: services/physics.rs wrote_id)
+                    let id_changed = crate::services::physics::wrote_id(engine, name);
+                    let levels = if name == K::Parent as NameId { 0.0 } else { changed_levels(&state, id, property, id_changed, levels) };
                     let price = crate::cost::write(&engine.reflection, class, property, true, placed) + levels + write_touch(&state, id, name, property, true);
                     state.sched.charge(price);
                     cross_set(engine, &state, id, name, price, true);
@@ -499,16 +501,17 @@ fn part_placement(engine: &Engine, state: &State, class: ClassId, id: InstanceId
     if engine.reflection.is_a(class, "BasePart") { crate::world::placement(&state.dom, &engine.reflection, engine.world().workspace, id) } else { (false, 0) }
 }
 
-/// What a change of `property` costs a part below `levels` WorldModels for them (cost.rs world_levels, part_changes). Inside a
-/// call the engine's Luau prices whole (the clock muted) the call's own price does not hold them, so they are charged on top of
-/// it: the part a PivotTo moves as a script's change would be, each other part it changes one change's worth.
-fn changed_levels(state: &State, id: InstanceId, property: &str, placed: bool, levels: u32) -> f64 {
+/// What a change of `property` costs a part below `levels` WorldModels for them (cost.rs world_levels, part_changes;
+/// `id_changed`: a CollisionGroup write changed the part's CollisionGroupId). Inside a call the engine's Luau prices whole (the
+/// clock muted) the call's own price does not hold them, so they are charged on top of it: the part a PivotTo moves as a
+/// script's change would be, each other part it changes one change's worth.
+fn changed_levels(state: &State, id: InstanceId, property: &str, id_changed: bool, levels: u32) -> f64 {
     if !state.sched.is_muted() {
-        return if levels == 0 { 0.0 } else { crate::cost::world_levels(levels, crate::cost::part_changes(property, placed)) };
+        return if levels == 0 { 0.0 } else { crate::cost::world_levels(levels, crate::cost::part_changes(property, id_changed)) };
     }
     let root = state.sched.touched.borrow_mut().pivot_root.take_if(|root| *root == id).is_some();
     if levels > 0 {
-        let changes = if root { crate::cost::part_changes(property, placed) } else { 1 };
+        let changes = if root { crate::cost::part_changes(property, id_changed) } else { 1 };
         state.sched.charge_priced(crate::cost::world_levels(levels, changes));
     }
     0.0
@@ -583,7 +586,7 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
         * crate::cost::place_write_scale(&engine.options.place_prices, engine.options.place_id, engine.reflection.name(name), placed);
     let mut paid = price + write_touch(&state, id, name, engine.reflection.name(name), changed);
     if changed {
-        paid += changed_levels(&state, id, engine.reflection.name(name), placed, levels);
+        paid += changed_levels(&state, id, engine.reflection.name(name), false, levels);
     } else if state.sched.is_muted() {
         state.sched.touched.borrow_mut().pivot_root.take_if(|root| *root == id);
     }
@@ -676,8 +679,8 @@ pub fn set_parent(engine: &Engine, id: InstanceId, parent: Option<InstanceId>) -
     let moved = state.dom.get(id).is_some_and(|instance| instance.parent != parent);
     core::set_parent(&mut state, &engine.reflection, &hooks, id, parent).map_err(Flow::Error)?;
     if moved && state.dom.get(id).is_some() {
-        let (placed, levels) = part_placement(engine, &state, state.dom.at(id).class, id);
-        let seconds = if levels > 0 { changed_levels(&state, id, "Parent", placed, levels) } else { 0.0 };
+        let (_, levels) = part_placement(engine, &state, state.dom.at(id).class, id);
+        let seconds = if levels > 0 { changed_levels(&state, id, "Parent", false, levels) } else { 0.0 };
         if seconds > 0.0 {
             state.sched.charge(seconds);
             crate::boundary::add_cost(seconds);
@@ -875,7 +878,7 @@ pub fn clone(engine: &Engine, id: InstanceId) -> Option<InstanceId> {
     let root_cold = engine.state.borrow().sched.touched.borrow_mut().take_last_cold();
     project::materialize_deep(engine, id);
     let mut state = engine.state.borrow_mut();
-    let copy = core::clone_instance(&mut state, &engine.reflection, id);
+    let (copy, pairs) = core::clone_instance_mapped(&mut state, &engine.reflection, id).unzip();
     if let Some(copy) = copy {
         let mut work: f64 = 0.0;
         for node in std::iter::once(copy).chain(state.dom.descendants(copy)) {
@@ -901,6 +904,12 @@ pub fn clone(engine: &Engine, id: InstanceId) -> Option<InstanceId> {
         }
         state.sched.charge(work);
         crate::boundary::add_cost(work);
+    }
+    drop(state);
+    // (state an instance keeps outside its properties, copied with no borrow of the engine's state held: a WorldModel's
+    // collision groups)
+    if let Some(pairs) = pairs {
+        crate::services::physics::cloned(engine, &pairs);
     }
     copy
 }

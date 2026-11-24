@@ -1,0 +1,60 @@
+# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session of one server and one client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+side server
+member CollisionGroupSetCollidable ok function true false
+member CollisionGroupsAreCollidable ok function true false
+member GetMaxCollisionGroups ok function true false
+member GetRegisteredCollisionGroups ok function true false
+member IsCollisionGroupRegistered ok function true false
+member RegisterCollisionGroup ok function true false
+member RenameCollisionGroup ok function true false
+member UnregisterCollisionGroup ok function true false
+max ok 32 number -
+max-args ok 32
+list Default=-1
+list-shape ok table 1 table mask+name number string false true false false
+registered-Default ok true
+registered-Nope ok false
+collidable-Default ok true
+collidable-unknown ok true
+register-W ok 
+seen-by-physics ok true
+register-P ok 
+seen-by-workspace ok true
+set-W ok 
+are-P ok false
+are-W ok false
+list-after Default=-1,WsA=-5,PsA=-3
+list-physics Default=-1,WsA=-5,PsA=-3
+rename-W ok 
+renamed-physics ok true
+unregister-W ok 
+unregister-W2 ok 
+list-end Default=-1
+model-use-workspace ok false
+model-list Default=-1
+model-max ok 32
+model-register ok 
+model-list-after Default=-1,MdA=-1
+model-seen-by-workspace ok false
+model-seen-by-physics ok false
+model-set ok 
+model-are ok false
+model-workspace-list Default=-1
+workspace-register-for-model ok 
+model-sees-workspace-group ok false
+model-use-true ok true
+model-list-use-true Default=-3,MdA=-2
+model-registered-WsOnly-use-true ok false
+model-register-use-true ok 
+model-list-use-true-after Default=-3,MdA=-2,MdB=-1
+workspace-list-use-true Default=-1,WsOnly=-1
+model-use-false ok false
+model-list-use-false Default=-3,MdA=-2,MdB=-1
+model-in-workspace ok Default=-3,MdA=-2,MdB=-1
+other-model-list Default=-1
+model-clone ok Default=-3,MdA=-2,MdB=-1
+model-destroyed-list Default=-3,MdA=-2,MdB=-1
+model-destroyed-register ok 
+model-destroyed-list-after Default=-3,MdA=-2,MdB=-1,MdC=-1
+end Default=-1

@@ -1,0 +1,88 @@
+# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session of one server and one client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+side server
+start ok 1
+place-nil register ok 
+place-nil register-bad error Collision group requires a valid name.
+place-nil set ok 
+place-nil rename ok 
+place-nil unregister ok 
+place-nil list Default=-2
+place-nil taken-out ok  Default=-2,C=-1
+place-ReplicatedStorage register ok 
+place-ReplicatedStorage register-bad error Collision group requires a valid name.
+place-ReplicatedStorage set ok 
+place-ReplicatedStorage rename ok 
+place-ReplicatedStorage unregister ok 
+place-ReplicatedStorage list Default=-2
+place-ReplicatedStorage taken-out ok  Default=-2,C=-1
+place-workspace register ok 
+place-workspace register-bad error Collision group requires a valid name.
+place-workspace set ok 
+place-workspace rename ok 
+place-workspace unregister ok 
+place-workspace list Default=-2
+place-workspace taken-out ok  Default=-2,C=-1
+place-workspace-folder register ok 
+place-workspace-folder register-bad error Collision group requires a valid name.
+place-workspace-folder set ok 
+place-workspace-folder rename ok 
+place-workspace-folder unregister ok 
+place-workspace-folder list Default=-2
+place-workspace-folder taken-out ok  Default=-2,C=-1
+place-workspace-model register ok 
+place-workspace-model register-bad error Collision group requires a valid name.
+place-workspace-model set ok 
+place-workspace-model rename ok 
+place-workspace-model unregister ok 
+place-workspace-model list Default=-2
+place-workspace-model taken-out ok  Default=-2,C=-1
+place-camera register ok 
+place-camera register-bad error Collision group requires a valid name.
+place-camera set ok 
+place-camera rename ok 
+place-camera unregister ok 
+place-camera list Default=-2
+place-camera taken-out ok  Default=-2,C=-1
+moved-in ok  Default=-1,Early=-1,Late=-1
+moved-in-unregister ok  Default=-1,Late=-1
+moved-in-read ok false true 32
+warn-first-nil-name error Argument 1 missing or nil | 
+warn-then-nil-name ok 32 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-first-empty-name error Collision group requires a valid name. | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-then-empty-name ok 32 | 
+warn-first-unknown-pair error Both collision groups must be registered. | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-then-unknown-pair ok 32 | 
+warn-first-bad-bool error Unable to cast string to bool | 
+warn-then-bad-bool ok 32 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-first-registered-nil error Argument 1 missing or nil | 
+warn-then-registered-nil ok 32 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-first-max-dot error Expected ':' not '.' calling member function GetMaxCollisionGroups | 
+warn-then-max-dot ok 32 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-first-list ok 1 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-then-list ok 32 | 
+warn-in-workspace ok  | MessageWarning:Workspace.WorldModel: UseWorkspaceCollis
+warn-read-write ok true | 
+warn-clone-only ok true | 
+parts-replicated-storage ok  | 1 2 -1 | Pa,Pb,Pw
+parts-workspace ok  | 1 2 -1 | 
+parts-model-register ok  | 1 2 -1 | 
+parts-model-unregister ok  | -1 2 -1 | Pa
+parts-model-register-again ok  | 1 2 -1 | Pa
+parts-model-rename ok  | 1 -1 -1 | Pb
+parts-model-rename-back ok  | 1 2 -1 | Pb
+parts-model-collidable ok  | 1 2 -1 | 
+parts-workspace-register ok true | 1 2 -1 | 
+parts-use-true ok  | -1 -1 1 | 
+parts-use-true-model-register ok  | -1 -1 1 | 
+parts-use-true-workspace-unregister ok  | -1 -1 1 | 
+parts-use-true-workspace-register ok  | -1 -1 1 | 
+parts-use-false ok  | 1 2 -1 | 
+parts-name-write ok  | 1 2 2 | Pb
+parts-name-write-back ok  | 1 2 -1 | Pw
+parts-nested ok 1 | 1 2 -1 | 
+parts-nested-outer-register ok 1 | 1 2 -1 | 
+parts-moved-to-workspace ok -1 | 1 -1 -1 | Pb
+parts-moved-back ok 2 | 1 2 -1 | Pb
+parts-model-out ok  | -1 2 -1 | Pa
+end Default=-1

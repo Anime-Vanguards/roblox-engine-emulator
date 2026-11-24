@@ -1250,3 +1250,223 @@ return {
     assert!(has(&lines, "client print: registered 1 1"), "{lines:?}");
     assert!(has(&lines, "client print: collidable 9"), "{lines:?}");
 }
+
+/// A server WorldModel's own collision groups reach the client's copy of it (Studio 0.748, a playing client and its server):
+/// at the join, when it comes into the Workspace, and when they change later; the client may not change them.
+#[test]
+fn loopback_replicates_a_world_models_own_collision_groups() {
+    let summary = run_pair(
+        "cg-world-model",
+        r##"
+local RunService = game:GetService("RunService")
+local function Groups(Root)
+	local Parts = {}
+	for _, Group in Root:GetRegisteredCollisionGroups() do
+		table.insert(Parts, Group.name .. "=" .. Group.mask)
+	end
+	return table.concat(Parts, " ")
+end
+return {
+	Server = function()
+		local Early = Instance.new("WorldModel")
+		Early.Name = "Early"
+		Early:RegisterCollisionGroup("EarlyA")
+		Early.Parent = workspace
+		task.wait(0.1)
+		local World = Instance.new("WorldModel")
+		World.Name = "World"
+		World:RegisterCollisionGroup("RepA")
+		World:RegisterCollisionGroup("RepB")
+		World:CollisionGroupSetCollidable("RepA", "RepB", false)
+		World.Parent = workspace
+		task.wait(0.2)
+		World:RegisterCollisionGroup("RepC")
+		World:UnregisterCollisionGroup("RepA")
+	end,
+	Client = function()
+		print("join", Groups(workspace:WaitForChild("Early")))
+		local World = workspace:WaitForChild("World")
+		print("came", Groups(World))
+		for _ = 1, 20 do
+			RunService.Heartbeat:Wait()
+		end
+		print("later", Groups(World), select(2, pcall(World.RegisterCollisionGroup, World, "X")))
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: join Default=-1 EarlyA=-1"), "{lines:?}");
+    assert!(has(&lines, "client print: came Default=-1 RepA=-5 RepB=-3"), "{lines:?}");
+    assert!(has(&lines, "client print: later Default=-1 RepB=-1 RepC=-1 This API can only be used on the server!"), "{lines:?}");
+}
+
+/// A client's copy of a server WorldModel takes its parts' ids again only when a group's name changed, as the DataModel's
+/// registry does: a client script's CollisionGroupId write on a part of the copy stays through the server's change of a
+/// collidable pair there, and the rename of another group, which leaves the part's id on the server (so nothing replicates
+/// it), works the id out again on the client: the server's 1 replaces the 9 the client wrote.
+#[test]
+fn a_world_models_collidable_pair_leaves_a_clients_ids_and_a_rename_does_not() {
+    let summary = run_pair(
+        "cg-world-pairs",
+        r##"
+local RunService = game:GetService("RunService")
+local function Frames(Count)
+	for _ = 1, Count do
+		RunService.Heartbeat:Wait()
+	end
+end
+return {
+	Server = function()
+		local World = Instance.new("WorldModel")
+		World.Name = "Pairs"
+		World:RegisterCollisionGroup("G")
+		World:RegisterCollisionGroup("K")
+		local Part = Instance.new("Part")
+		Part.Name = "P"
+		Part.Anchored = true
+		Part.CollisionGroup = "G"
+		Part.Parent = World
+		World.Parent = workspace
+		task.wait(0.3)
+		World:CollisionGroupSetCollidable("G", "Default", false)
+		task.wait(0.3)
+		World:RenameCollisionGroup("K", "L")
+	end,
+	Client = function()
+		local World = workspace:WaitForChild("Pairs")
+		local Part = World:WaitForChild("P")
+		Frames(3)
+		print("start", Part.CollisionGroupId)
+		Part.CollisionGroupId = 9
+		while World:CollisionGroupsAreCollidable("G", "Default") do
+			RunService.Heartbeat:Wait()
+		end
+		Frames(3)
+		print("collidable", Part.CollisionGroupId)
+		while not World:IsCollisionGroupRegistered("L") do
+			RunService.Heartbeat:Wait()
+		end
+		Frames(3)
+		print("renamed", Part.CollisionGroupId)
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: start 1"), "{lines:?}");
+    assert!(has(&lines, "client print: collidable 9"), "{lines:?}");
+    assert!(has(&lines, "client print: renamed 1"), "{lines:?}");
+}
+
+/// A WorldModel's own groups reach a loopback client in the place of their first change in a frame, as the DataModel's do,
+/// and a copy coming back into the replicated containers takes the groups it has now before it enters, so a client that
+/// follows groups fires a part's CollisionGroupId Changed as often as its server does. In one server frame a WorldModel in the
+/// Workspace registers X and a Workspace part of group X moves into it: the server fires Changed once, and the client did three
+/// times (the replicated id, the move worked out against the copy's old groups, then the groups sent at the batch's end). A
+/// WorldModel taken to ServerStorage registers W, which reaches its part there, and comes back: the client's copy has W (before,
+/// it never got W), and the 9 a client script wrote to the part's id while it was away changes once, to 1, as the copy takes
+/// W before it enters (with W after its Parent, the part took -1 from the old groups as it entered, then the replicated 1).
+#[test]
+fn a_world_models_groups_reach_a_client_in_their_place_and_its_parts_change_as_often_as_on_the_server() {
+    let summary = run_pair(
+        "cg-world-order",
+        r##"
+local RunService = game:GetService("RunService")
+local PhysicsService = game:GetService("PhysicsService")
+local function Frames(Count)
+	for _ = 1, Count do
+		RunService.Heartbeat:Wait()
+	end
+end
+local function Counted(Part)
+	local Count = 0
+	Part:GetPropertyChangedSignal("CollisionGroupId"):Connect(function()
+		Count += 1
+	end)
+	return function()
+		return Count
+	end
+end
+return {
+	Server = function()
+		-- (the client follows groups from the first snapshot that holds more than Default)
+		PhysicsService:RegisterCollisionGroup("Y")
+		local World = Instance.new("WorldModel")
+		World.Name = "Order"
+		World.Parent = workspace
+		local Part = Instance.new("Part")
+		Part.Name = "P"
+		Part.Anchored = true
+		Part.CollisionGroup = "X"
+		Part.Parent = workspace
+		local Away = Instance.new("WorldModel")
+		Away.Name = "Away"
+		local Kept = Instance.new("Part")
+		Kept.Name = "K"
+		Kept.Anchored = true
+		Kept.CollisionGroup = "W"
+		Kept.Parent = Away
+		Away.Parent = workspace
+		local Moved, KeptChanged = Counted(Part), Counted(Kept)
+		task.wait(0.5)
+		World:RegisterCollisionGroup("X")
+		Part.Parent = World
+		task.wait(0.3)
+		Away.Parent = game:GetService("ServerStorage")
+		task.wait(0.3)
+		Away:RegisterCollisionGroup("W")
+		task.wait(0.3)
+		Away.Parent = workspace
+		-- (before the client's run ends: it waits for this move)
+		print("moved", Moved(), Part.CollisionGroupId)
+		print("back", KeptChanged(), Kept.CollisionGroupId)
+	end,
+	Client = function()
+		local World = workspace:WaitForChild("Order")
+		local Part = workspace:WaitForChild("P")
+		local Away = workspace:WaitForChild("Away")
+		local Kept = Away:WaitForChild("K")
+		Frames(3)
+		local Moved, KeptChanged = Counted(Part), Counted(Kept)
+		print("before", Part.CollisionGroupId, Kept.CollisionGroupId)
+		while Part.Parent ~= World do
+			RunService.Heartbeat:Wait()
+		end
+		Frames(3)
+		print("moved", Moved(), Part.CollisionGroupId)
+		while Away.Parent ~= nil do
+			RunService.Heartbeat:Wait()
+		end
+		-- (a client script's write while the copy is away, counted from after its own Changed)
+		Kept.CollisionGroupId = 9
+		Frames(1)
+		local Away9 = KeptChanged()
+		while Away.Parent ~= workspace do
+			RunService.Heartbeat:Wait()
+		end
+		Frames(3)
+		print("back", KeptChanged() - Away9, Kept.CollisionGroupId, Away:IsCollisionGroupRegistered("W"))
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "server print: moved 1 1"), "{lines:?}");
+    assert!(has(&lines, "server print: back 1 1"), "{lines:?}");
+    assert!(has(&lines, "client print: before -1 -1"), "{lines:?}");
+    assert!(has(&lines, "client print: moved 1 1"), "{lines:?}");
+    assert!(has(&lines, "client print: back 1 1 true"), "{lines:?}");
+}
