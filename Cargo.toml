@@ -100,5 +100,11 @@ lto = false
 incremental = true
 codegen-units = 256
 
+# Dependencies, rebuilt only when Cargo.lock or vendor/ changes, use Cargo's standard 16 codegen units
+# instead of inheriting 256 from [profile.release]: avoids 256-CGU ThinLTO overhead while keeping large
+# dependencies (lune-roblox, rbx_reflection_database, draco-core) parallel across CPU cores.
+[profile.release.package."*"]
+codegen-units = 16
+
 [profile.dev.package."*"]
 opt-level = 2

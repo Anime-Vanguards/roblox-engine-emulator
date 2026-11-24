@@ -12,7 +12,8 @@
 # the crates.io crates compile to. The compile cache (sccache, set up by tools/ci/compile-cache.mjs) holds what that one
 # cannot: the Luau VM's C++ and the vendored crates, each under a hash of what its compile read, so a change in vendor/
 # always compiles. Every job reads both caches. Only runs on main store them, and the compile cache only from the test
-# job, so main never reads what a pull request built. Release builds (release.yml) use neither.
+# job, so main never reads what a pull request built. Release dry runs on main keep their own separate build cache;
+# version-bump release commits and tag fallback builds start clean (release.yml).
 name: CI
 
 on:
@@ -20,6 +21,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+env:
+  # Non-incremental CI builds use 8 codegen units instead of Cargo.toml's local incremental 256:
+  # avoids 256-CGU ThinLTO overhead and cuts both compile and host-heavy test runtime.
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '8'
 
 permissions:
   contents: read

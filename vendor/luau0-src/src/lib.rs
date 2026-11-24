@@ -173,134 +173,155 @@ impl Build {
 
         config.include(&common_include_dir);
 
-        // Build `Ast` library
         let ast_lib_name = "luauast";
         let ast_source_dir = luau_source_dir.join("Ast").join("src");
         let ast_include_dir = luau_source_dir.join("Ast").join("include");
-        config
-            .clone()
-            .include(&ast_include_dir)
-            .add_files_by_ext_sorted(&ast_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(ast_lib_name);
 
-        // Build `CodeGen` library
         let codegen_lib_name = "luaucodegen";
         let codegen_source_dir = luau_source_dir.join("CodeGen").join("src");
         let codegen_include_dir = luau_source_dir.join("CodeGen").join("include");
+
+        let common_lib_name = "luaucommon";
+        let common_source_dir = luau_source_dir.join("Common").join("src");
+
+        let bytecode_lib_name = "luaubytecode";
+        let bytecode_source_dir = luau_source_dir.join("Bytecode").join("src");
+        let bytecode_include_dir = luau_source_dir.join("Bytecode").join("include");
+
+        let inliner_lib_name = "luauinliner";
+        let inliner_source_dir = luau_source_dir.join("Inliner").join("src");
+        let inliner_include_dir = luau_source_dir.join("Inliner").join("include");
+
+        let compiler_lib_name = "luaucompiler";
+        let compiler_source_dir = luau_source_dir.join("Compiler").join("src");
+        let compiler_include_dir = luau_source_dir.join("Compiler").join("include");
+
+        let config_lib_name = "luauconfig";
+        let config_source_dir = luau_source_dir.join("Config").join("src");
+        let config_include_dir = luau_source_dir.join("Config").join("include");
+
+        let custom_lib_name = "luaucustom";
+        let custom_source_dir = luau_source_dir.join("Custom").join("src");
+
+        let require_lib_name = "luaurequire";
+        let require_source_dir = luau_source_dir.join("Require").join("src");
+        let require_include_dir = luau_source_dir.join("Require").join("include");
+
+        let vm_lib_name = "luauvm";
+
+        // Configure every Luau static library into its own output subfolder and compile them
+        // concurrently so heavy translation units across libraries overlap instead of hitting
+        // nine serial barriers. cc shares one process-wide Cargo jobserver across all threads.
+        let mut jobs: Vec<(&str, cc::Build)> = Vec::with_capacity(10);
+
         if self.enable_codegen {
             if target.ends_with("emscripten") {
                 panic!("codegen (jit) is not supported on emscripten");
             }
-
-            config
-                .clone()
-                .include(&codegen_include_dir)
+            let mut b = config.clone();
+            b.include(&codegen_include_dir)
                 .include(&vm_include_dir)
                 .include(&vm_source_dir)
                 .define("LUACODEGEN_API", "extern \"C\"")
-                .add_files_by_ext_sorted(&codegen_source_dir, "cpp")
-                .out_dir(&build_dir)
-                .compile(codegen_lib_name);
+                .add_files_by_ext_sorted(&codegen_source_dir, "cpp");
+            jobs.push((codegen_lib_name, b));
         }
 
-        // Build `Common` library
-        let common_lib_name = "luaucommon";
-        let common_source_dir = luau_source_dir.join("Common").join("src");
-        config
-            .clone()
-            .add_files_by_ext_sorted(&common_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(common_lib_name);
+        {
+            let mut b = config.clone();
+            b.include(&vm_include_dir)
+                .add_files_by_ext_sorted(&vm_source_dir, "cpp");
+            jobs.push((vm_lib_name, b));
+        }
+        {
+            let mut b = config.clone();
+            b.include(&compiler_include_dir)
+                .include(&bytecode_include_dir)
+                .include(&ast_include_dir)
+                .define("LUACODE_API", "extern \"C\"")
+                .add_files_by_ext_sorted(&compiler_source_dir, "cpp");
+            jobs.push((compiler_lib_name, b));
+        }
+        {
+            let mut b = config.clone();
+            b.include(&ast_include_dir)
+                .add_files_by_ext_sorted(&ast_source_dir, "cpp");
+            jobs.push((ast_lib_name, b));
+        }
+        {
+            let mut b = config.clone();
+            b.include(&inliner_include_dir)
+                .include(&bytecode_include_dir)
+                .include(&bytecode_source_dir)
+                .include(&vm_include_dir)
+                .include(&vm_source_dir)
+                .define("LUAJITINLINER_API", "extern \"C\"")
+                .add_files_by_ext_sorted(&inliner_source_dir, "cpp");
+            jobs.push((inliner_lib_name, b));
+        }
+        {
+            let mut b = config.clone();
+            b.include(&require_include_dir)
+                .include(&ast_include_dir)
+                .include(&config_include_dir)
+                .include(&vm_include_dir)
+                .add_files_by_ext_sorted(&require_source_dir, "cpp");
+            jobs.push((require_lib_name, b));
+        }
+        {
+            let mut b = config.clone();
+            b.add_files_by_ext_sorted(&common_source_dir, "cpp");
+            jobs.push((common_lib_name, b));
+        }
+        {
+            let mut b = config.clone();
+            b.include(&bytecode_include_dir)
+                .add_files_by_ext_sorted(&bytecode_source_dir, "cpp");
+            jobs.push((bytecode_lib_name, b));
+        }
+        {
+            let mut b = config.clone();
+            b.include(&config_include_dir)
+                .include(&ast_include_dir)
+                .include(&compiler_include_dir)
+                .include(&vm_include_dir)
+                .add_files_by_ext_sorted(&config_source_dir, "cpp");
+            jobs.push((config_lib_name, b));
+        }
+        {
+            let mut b = config.clone();
+            b.include(&vm_include_dir)
+                .include(&vm_source_dir)
+                .add_files_by_ext_sorted(&custom_source_dir, "cpp");
+            jobs.push((custom_lib_name, b));
+        }
 
-        // Build `Bytecode` library
-        let bytecode_lib_name = "luaubytecode";
-        let bytecode_source_dir = luau_source_dir.join("Bytecode").join("src");
-        let bytecode_include_dir = luau_source_dir.join("Bytecode").join("include");
-        config
-            .clone()
-            .include(&bytecode_include_dir)
-            .add_files_by_ext_sorted(&bytecode_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(bytecode_lib_name);
+        fs::create_dir_all(&build_dir).unwrap();
+        let compiled_names: Vec<&str> = jobs.iter().map(|(name, _)| *name).collect();
+        std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(jobs.len());
+            for (name, mut builder) in jobs {
+                let lib_dir = build_dir.join(name);
+                fs::create_dir_all(&lib_dir).unwrap();
+                builder.out_dir(&lib_dir);
+                handles.push(scope.spawn(move || {
+                    builder.compile(name);
+                }));
+            }
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
 
-        // Build `Inliner` library
-        let inliner_lib_name = "luauinliner";
-        let inliner_source_dir = luau_source_dir.join("Inliner").join("src");
-        let inliner_include_dir = luau_source_dir.join("Inliner").join("include");
-        config
-            .clone()
-            .include(&inliner_include_dir)
-            .include(&bytecode_include_dir)
-            .include(&bytecode_source_dir)
-            .include(&vm_include_dir)
-            .include(&vm_source_dir)
-            .define("LUAJITINLINER_API", "extern \"C\"")
-            .add_files_by_ext_sorted(&inliner_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(inliner_lib_name);
-
-        // Build `Compiler` library
-        let compiler_lib_name = "luaucompiler";
-        let compiler_source_dir = luau_source_dir.join("Compiler").join("src");
-        let compiler_include_dir = luau_source_dir.join("Compiler").join("include");
-        config
-            .clone()
-            .include(&compiler_include_dir)
-            .include(&bytecode_include_dir)
-            .include(&ast_include_dir)
-            .define("LUACODE_API", "extern \"C\"")
-            .add_files_by_ext_sorted(&compiler_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(compiler_lib_name);
-
-        // Build `Config` library
-        let config_lib_name = "luauconfig";
-        let config_source_dir = luau_source_dir.join("Config").join("src");
-        let config_include_dir = luau_source_dir.join("Config").join("include");
-        config
-            .clone()
-            .include(&config_include_dir)
-            .include(&ast_include_dir)
-            .include(&compiler_include_dir)
-            .include(&vm_include_dir)
-            .add_files_by_ext_sorted(&config_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(config_lib_name);
-
-        // Build customization library
-        let custom_lib_name = "luaucustom";
-        let custom_source_dir = luau_source_dir.join("Custom").join("src");
-        config
-            .clone()
-            .include(&vm_include_dir)
-            .include(&vm_source_dir)
-            .add_files_by_ext_sorted(&custom_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(custom_lib_name);
-
-        // Build `Require` library
-        let require_lib_name = "luaurequire";
-        let require_source_dir = luau_source_dir.join("Require").join("src");
-        let require_include_dir = luau_source_dir.join("Require").join("include");
-        config
-            .clone()
-            .include(&require_include_dir)
-            .include(&ast_include_dir)
-            .include(&config_include_dir)
-            .include(&vm_include_dir)
-            .add_files_by_ext_sorted(&require_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(require_lib_name);
-
-        // Build VM
-        let vm_lib_name = "luauvm";
-        config
-            .clone()
-            .include(&vm_include_dir)
-            .add_files_by_ext_sorted(&vm_source_dir, "cpp")
-            .out_dir(&build_dir)
-            .compile(vm_lib_name);
+        for name in compiled_names {
+            let lib_dir = build_dir.join(name);
+            for archive in [format!("lib{name}.a"), format!("{name}.lib")] {
+                let src = lib_dir.join(&archive);
+                if src.exists() {
+                    fs::rename(&src, build_dir.join(&archive)).unwrap();
+                }
+            }
+        }
 
         let mut artifacts = Artifacts {
             lib_dir: build_dir,
@@ -403,8 +424,13 @@ impl AddFilesByExt for cc::Build {
             .map(|e| e.path())
             .collect();
 
-        // Sort for determinism
-        sources.sort();
+        // Sort largest files first (tie-broken by path for determinism) so heavy translation
+        // units like lvmexecute.cpp, Compiler.cpp, and Parser.cpp start immediately instead of
+        // forming a serial tail at the end of a parallel build.
+        sources.sort_by(|a, b| {
+            let len = |p: &PathBuf| fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            len(b).cmp(&len(a)).then_with(|| a.cmp(b))
+        });
 
         for source in sources {
             self.file(source);
