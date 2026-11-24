@@ -1,0 +1,46 @@
+# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session of one server and one client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+side server
+start ok 1
+warn-set-true ok  | 0 | 
+warn-max ok 32 | 1 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups is true, so this WorldModel's own collision groups are not the ones used for its simulation. If you meant to access or change the simulated groups, set UseWorkspaceCollisionGroups to false or edit them on the Workspace.
+warn-list ok 1 | 0 | 
+warn-registered ok true | 0 | 
+warn-are ok true | 0 | 
+warn-register ok  | 0 | 
+warn-register-again ok  | 0 | 
+warn-register-bad error Collision group requires a valid name. | 0 | 
+warn-register-nil error Argument 1 missing or nil | 0 | 
+warn-set ok  | 0 | 
+warn-set-unknown error Both collision groups must be registered. | 0 | 
+warn-rename ok  | 0 | 
+warn-rename-unknown ok  | 0 | 
+warn-unregister ok  | 0 | 
+warn-unregister-unknown ok  | 0 | 
+warn-set-false ok  | 0 | 
+warn-register-false ok  | 0 | 
+warn-set-true-again ok  | 0 | 
+warn-register-true-again ok  | 0 | 
+warn-second-register ok  | 1 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups is true, so this WorldModel's own collision groups are not the ones used for its simulation. If you meant to access or change the simulated groups, set UseWorkspaceCollisionGroups to false or edit them on the Workspace.
+warn-second-register-again ok  | 0 | 
+warn-workspace-register ok  | 0 | 
+warn-clone ok true Default=-1,MdE=-1,MdB=-1,MdF=-1 | 1 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups is true, so this WorldModel's own collision groups are not the ones used for its simulation. If you meant to access or change the simulated groups, set UseWorkspaceCollisionGroups to false or edit them on the Workspace.
+model-list Default=-1,MdE=-1,MdB=-1,MdF=-1
+part-in-new-model ok MdA 0
+part-after-model-register ok MdA 0
+part-entered-model ok 0
+part-renamed-in-model ok 0
+model-in-workspace ok 2 1
+part-renamed-in-placed-model ok 2
+part-workspace-group-in-model ok -1
+part-use-workspace ok -1 1
+part-use-workspace-renamed ok -1
+model-unregister-placed ok 
+part-after-model-unregister ok 2 2
+workspace-part ok 1
+workspace-register-moves-ids ok 2 WsZ -1
+physics-sees ok 2
+workspace-unregister-moves-ids ok -1
+clone-holder ok Default=-1,Held=-1
+clone-twice ok Default=-1,Held=-1 Default=-1,Held=-1,CopyOnly=-1 Default=-1,Held=-1,CopyOnly=-1
+end Default=-1

@@ -780,6 +780,11 @@ fn archivable(state: &State, id: InstanceId) -> bool {
 /// Parent), attributes, tags, sources and markers; instance-valued properties pointing inside
 /// the copied tree are remapped to the copies. `None` when the root is not Archivable.
 pub fn clone_instance(state: &mut State, reflection: &Reflection, root: InstanceId) -> Option<InstanceId> {
+    clone_instance_mapped(state, reflection, root).map(|(copy, _)| copy)
+}
+
+/// [`clone_instance`], with each instance copied paired with its copy (original, copy), the root's first.
+pub fn clone_instance_mapped(state: &mut State, reflection: &Reflection, root: InstanceId) -> Option<(InstanceId, Vec<(InstanceId, InstanceId)>)> {
     if !archivable(state, root) {
         return None;
     }
@@ -812,7 +817,7 @@ pub fn clone_instance(state: &mut State, reflection: &Reflection, root: Instance
             super::services::tag_added(state, copy, &tag);
         }
     }
-    Some(result)
+    Some((result, map))
 }
 
 /// Copies `original`'s subtree, its Archivable instances, each before its children, each copy attached to its parent's copy

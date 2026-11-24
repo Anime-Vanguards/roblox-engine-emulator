@@ -1,0 +1,41 @@
+# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session of one server and one client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+side server
+start ok 1
+physics-register-true ok  | argument #1 expects a string, but boolean was passed
+physics-registered-table ok false | argument #1 expects a string, but table was passed
+physics-registered-number ok false | 
+physics-are-both ok true | argument #2 expects a string, but Vector3 was passed / argument #1 expects a string, but boolean was passed
+physics-are-second ok true | argument #2 expects a string, but Instance was passed
+physics-set-both error Both collision groups must be registered. | argument #2 expects a string, but table was passed / argument #1 expects a string, but boolean was passed
+physics-set-bad-bool error Unable to cast string to bool | 
+physics-rename-both ok  | argument #2 expects a string, but table was passed / argument #1 expects a string, but boolean was passed
+physics-unregister-function ok  | argument #1 expects a string, but function was passed
+physics-max-extra ok 32 | 
+workspace-register-true ok  | argument #1 expects a string, but boolean was passed
+workspace-registered-table ok false | argument #1 expects a string, but table was passed
+workspace-registered-number ok false | 
+workspace-are-both ok true | argument #2 expects a string, but Vector3 was passed / argument #1 expects a string, but boolean was passed
+workspace-are-second ok true | argument #2 expects a string, but Instance was passed
+workspace-set-both error Both collision groups must be registered. | argument #2 expects a string, but table was passed / argument #1 expects a string, but boolean was passed
+workspace-set-bad-bool error Unable to cast string to bool | 
+workspace-rename-both ok  | argument #2 expects a string, but table was passed / argument #1 expects a string, but boolean was passed
+workspace-unregister-function ok  | argument #1 expects a string, but function was passed
+workspace-max-extra ok 32 | 
+model-register-true ok  | argument #1 expects a string, but boolean was passed
+model-registered-table ok false | argument #1 expects a string, but table was passed
+model-registered-number ok false | 
+model-are-both ok true | argument #2 expects a string, but Vector3 was passed / argument #1 expects a string, but boolean was passed
+model-are-second ok true | argument #2 expects a string, but Instance was passed
+model-set-both error Both collision groups must be registered. | argument #2 expects a string, but table was passed / argument #1 expects a string, but boolean was passed
+model-set-bad-bool error Unable to cast string to bool | 
+model-rename-both ok  | argument #2 expects a string, but table was passed / argument #1 expects a string, but boolean was passed
+model-unregister-function ok  | argument #1 expects a string, but function was passed
+model-max-extra ok 32 | 
+physics-id-true error Collision group not found. | argument #1 expects a string, but boolean was passed
+physics-contains ok false | argument #1 expects a string, but boolean was passed
+physics-set-part ok  | argument #2 expects a string, but boolean was passed
+physics-create ok 1 | argument #1 expects a string, but boolean was passed
+physics-remove ok  | argument #1 expects a string, but boolean was passed
+part-property error Unable to assign property CollisionGroup. string expected, got boolean | 
+end 1

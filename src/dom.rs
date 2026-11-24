@@ -853,11 +853,27 @@ impl Watch {
 /// Only a set read for membership is emptied so: a new table lists what it holds in another order.
 pub(crate) fn clear_set<T>(set: &mut FxHashSet<T>) {
     let held = set.len();
-    if set.capacity() > 4 * held.max(1024) {
+    if outgrown(set.capacity(), held) {
         *set = FxHashSet::with_capacity_and_hasher(held, Default::default());
     } else {
         set.clear();
     }
+}
+
+/// Empties a map read by key alone that is filled again and emptied once a round, as [`clear_set`] empties a set, where the
+/// round may take entries out before it ends (services/physics.rs Groups::unsent, at each loopback flush): `held` is what the
+/// round put in it, the size its table is kept at.
+pub(crate) fn clear_map<K, V>(map: &mut FxHashMap<K, V>, held: usize) {
+    if outgrown(map.capacity(), held) {
+        *map = FxHashMap::with_capacity_and_hasher(held, Default::default());
+    } else {
+        map.clear();
+    }
+}
+
+/// Whether a table with room for `capacity` entries that held `held` in its round is replaced rather than cleared ([`clear_set`])
+fn outgrown(capacity: usize, held: usize) -> bool {
+    capacity > 4 * held.max(1024)
 }
 
 impl Dom {

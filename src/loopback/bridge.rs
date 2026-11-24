@@ -20,8 +20,10 @@ use super::{Side, wire::Wire};
 /// One message of a stream.
 pub enum Msg {
     /// Instances the server made, or that entered the replicated containers, as they are when the batch is sealed: a tree
-    /// the client makes and puts under `parent` at once (its first node the root, in GetDescendants' order)
-    Tree { parent: InstanceId, nodes: Vec<Node> },
+    /// the client makes and puts under `parent` at once (its first node the root, in GetDescendants' order). `groups`: the
+    /// own collision groups of the WorldModels in it that have any, by node index, which their copies take before the tree
+    /// enters (services/physics.rs sent_models)
+    Tree { parent: InstanceId, nodes: Vec<Node>, groups: Vec<(u32, crate::services::physics::Snapshot)> },
     /// An instance the client has moved: under `parent` (mapped at delivery), or out of the replicated containers (None)
     Parent { id: InstanceId, parent: Option<InstanceId> },
     /// A property's value when its batch was sealed (instance values mapped at delivery); `quiet`: a physics move, which
@@ -42,6 +44,9 @@ pub enum Msg {
     Return { call: u32, result: Result<Box<[Wire]>, String> },
     /// PhysicsService collision-group registry snapshot (names + collidable masks)
     CollisionGroups(crate::services::physics::Snapshot),
+    /// A WorldModel's own collision groups, as a snapshot: in the place of their first change in a frame, or in front of the
+    /// Parent message of a copy that comes back into the replicated containers (a new copy gets them in its Tree)
+    WorldGroups { id: InstanceId, snapshot: crate::services::physics::Snapshot },
 }
 
 /// One instance of a [`Msg::Tree`]: the server's id, its class, its parent's index in the tree (none: the root), its

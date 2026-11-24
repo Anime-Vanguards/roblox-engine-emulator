@@ -1,0 +1,220 @@
+# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session of one server and one client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+side server
+start ok 1
+model name-from-integer ok  | "5" | registered ok true
+model name-from-fraction ok  | "2.5" | registered ok true
+model name-from-tenth ok  | "0.10000000000000000555" | registered ok true
+model name-from-nan ok  | "NAN" | registered ok true
+model name-from-inf ok  | "INF" | registered ok true
+model name-from-true ok  | "true" | registered ok true
+model name-from-empty-table ok  | "{}" | registered ok true
+model name-from-dictionary ok  | "{}" | registered ok true
+model name-from-Vector3 ok  | "1, 2, 3" | registered ok true
+model name-from-Instance ok  | "Instance" | registered ok true
+model name-from-EnumItem ok  | "Plastic" | registered ok true
+model name-from-function ok  | "function" | registered ok true
+model name-from-buffer ok  | "buffer { Size = 2 }" | registered ok true
+model name-from-Enum ok  | "nil" | registered ok true
+model name-from-userdata ok  | "nil" | registered ok true
+model name-from-Color3 ok  | "1, 0, 0" | registered ok true
+model collidable-from-0 ok  | ok false
+model collidable-from-half ok  | ok true
+model collidable-from-nan ok  | ok true
+model collidable-from-true-string ok  | ok true
+model collidable-from-empty-string error Unable to cast string to bool | ok true
+model collidable-from-table error Unable to cast Array to bool | ok true
+model collidable-from-Instance error Unable to cast Instance to bool | ok true
+model collidable-from-Vector3 error Unable to cast Vector3 to bool | ok true
+model collidable-from-EnumItem error Unable to cast Material to bool | ok true
+model collidable-from-False-string ok  | ok false
+model collidable-from-one-string error Unable to cast string to bool | ok true
+model collidable-from-function error Unable to cast Function to bool | ok true
+model collidable-from-buffer error Unable to cast buffer to bool | ok true
+model collidable-from-false ok  | ok false
+model register-default-lower ok 
+model register-Default error Can not use/change the Default collision group.
+model register-empty error Collision group requires a valid name.
+model register-nil error Argument 1 missing or nil
+model register-100 ok 
+model register-101 error Collision group name length cannot exceed 100 chars
+model register-102-bytes error Collision group name length cannot exceed 100 chars
+model register-nul ok 
+model registered-nul-prefix ok false
+model registered-nil error Argument 1 missing or nil
+model registered-none error Argument 1 missing or nil
+model edge-names Default,ArgA,default,LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL,A\x00B
+model collidable-empty ok true
+model collidable-nil-nil error Argument 2 missing or nil
+model collidable-x-nil error Argument 2 missing or nil
+model set-Default-Default ok 
+model default-mask ok -2
+model collidable-Default-Default ok false
+model set-Default-Default-back ok 
+model set-empty-known error Both collision groups must be registered.
+model set-unknown-bad-bool error Unable to cast string to bool
+model set-nil-nil error Argument 3 missing or nil
+model set-known-nil-bool error Unable to cast string to bool
+model set-unknown-known error Both collision groups must be registered.
+model rename-unknown-empty error Collision group requires a valid name.
+model rename-empty-x error Collision group requires a valid name.
+model rename-long-x error Collision group name length cannot exceed 100 chars
+model rename-Default-x error Can not use/change the Default collision group.
+model rename-x-Default error Can not use/change the Default collision group.
+model rename-nil-nil error Argument 2 missing or nil
+model rename-empty-nil error Argument 2 missing or nil
+model rename-unknown ok 
+model rename-onto-registered error Can not use/change the Default collision group.
+model rename-onto-ArgB ok 
+model rename-same ok 
+model unregister-Default error Can not use/change the Default collision group.
+model unregister-empty error Collision group requires a valid name.
+model unregister-long error Collision group name length cannot exceed 100 chars
+model unregister-nil error Argument 1 missing or nil
+model unregister-unknown ok 
+model after-errors Default,ArgB
+model order ok Default=-1,ArgE=-9,ArgD=-1,ArgC=-3
+model full 32
+model full-existing error Cannot register more than 32 collision groups in this world.
+model full-Default error Can not use/change the Default collision group.
+model full-empty error Collision group requires a valid name.
+model full-new error Cannot register more than 32 collision groups in this world.
+model full-rename ok 
+model full-names ArgLimit29,ArgLimit30,ArgRenamed
+model end Default
+workspace name-from-integer ok  | "5" | registered ok true
+workspace name-from-fraction ok  | "2.5" | registered ok true
+workspace name-from-tenth ok  | "0.10000000000000000555" | registered ok true
+workspace name-from-nan ok  | "NAN" | registered ok true
+workspace name-from-inf ok  | "INF" | registered ok true
+workspace name-from-true ok  | "true" | registered ok true
+workspace name-from-empty-table ok  | "{}" | registered ok true
+workspace name-from-dictionary ok  | "{}" | registered ok true
+workspace name-from-Vector3 ok  | "1, 2, 3" | registered ok true
+workspace name-from-Instance ok  | "Instance" | registered ok true
+workspace name-from-EnumItem ok  | "Plastic" | registered ok true
+workspace name-from-function ok  | "function" | registered ok true
+workspace name-from-buffer ok  | "buffer { Size = 2 }" | registered ok true
+workspace name-from-Enum ok  | "nil" | registered ok true
+workspace name-from-userdata ok  | "nil" | registered ok true
+workspace name-from-Color3 ok  | "1, 0, 0" | registered ok true
+workspace collidable-from-0 ok  | ok false
+workspace collidable-from-half ok  | ok true
+workspace collidable-from-nan ok  | ok true
+workspace collidable-from-true-string ok  | ok true
+workspace collidable-from-empty-string error Unable to cast string to bool | ok true
+workspace collidable-from-table error Unable to cast Array to bool | ok true
+workspace collidable-from-Instance error Unable to cast Instance to bool | ok true
+workspace collidable-from-Vector3 error Unable to cast Vector3 to bool | ok true
+workspace collidable-from-EnumItem error Unable to cast Material to bool | ok true
+workspace collidable-from-False-string ok  | ok false
+workspace collidable-from-one-string error Unable to cast string to bool | ok true
+workspace collidable-from-function error Unable to cast Function to bool | ok true
+workspace collidable-from-buffer error Unable to cast buffer to bool | ok true
+workspace collidable-from-false ok  | ok false
+workspace register-default-lower ok 
+workspace register-Default error Can not use/change the Default collision group.
+workspace register-empty error Collision group requires a valid name.
+workspace register-nil error Argument 1 missing or nil
+workspace register-100 ok 
+workspace register-101 error Collision group name length cannot exceed 100 chars
+workspace register-102-bytes error Collision group name length cannot exceed 100 chars
+workspace register-nul ok 
+workspace registered-nul-prefix ok false
+workspace registered-nil error Argument 1 missing or nil
+workspace registered-none error Argument 1 missing or nil
+workspace edge-names Default,ArgA,default,LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL,A\x00B
+workspace collidable-empty ok true
+workspace collidable-nil-nil error Argument 2 missing or nil
+workspace collidable-x-nil error Argument 2 missing or nil
+workspace set-Default-Default ok 
+workspace default-mask ok -2
+workspace collidable-Default-Default ok false
+workspace set-Default-Default-back ok 
+workspace set-empty-known error Both collision groups must be registered.
+workspace set-unknown-bad-bool error Unable to cast string to bool
+workspace set-nil-nil error Argument 3 missing or nil
+workspace set-known-nil-bool error Unable to cast string to bool
+workspace set-unknown-known error Both collision groups must be registered.
+workspace rename-unknown-empty error Collision group requires a valid name.
+workspace rename-empty-x error Collision group requires a valid name.
+workspace rename-long-x error Collision group name length cannot exceed 100 chars
+workspace rename-Default-x error Can not use/change the Default collision group.
+workspace rename-x-Default error Can not use/change the Default collision group.
+workspace rename-nil-nil error Argument 2 missing or nil
+workspace rename-empty-nil error Argument 2 missing or nil
+workspace rename-unknown ok 
+workspace rename-onto-registered error Can not use/change the Default collision group.
+workspace rename-onto-ArgB ok 
+workspace rename-same ok 
+workspace unregister-Default error Can not use/change the Default collision group.
+workspace unregister-empty error Collision group requires a valid name.
+workspace unregister-long error Collision group name length cannot exceed 100 chars
+workspace unregister-nil error Argument 1 missing or nil
+workspace unregister-unknown ok 
+workspace after-errors Default,ArgB
+workspace order ok Default=-1,ArgE=-9,ArgD=-1,ArgC=-3
+workspace full 32
+workspace full-existing error Cannot register more than 32 collision groups in this world.
+workspace full-Default error Can not use/change the Default collision group.
+workspace full-empty error Collision group requires a valid name.
+workspace full-new error Cannot register more than 32 collision groups in this world.
+workspace full-rename ok 
+workspace full-names ArgLimit29,ArgLimit30,ArgRenamed
+workspace end Default
+self-nil CollisionGroupSetCollidable error Expected ':' not '.' calling member function CollisionGroupSetCollidable
+self-physics CollisionGroupSetCollidable error Expected ':' not '.' calling member function CollisionGroupSetCollidable
+self-part CollisionGroupSetCollidable error Expected ':' not '.' calling member function CollisionGroupSetCollidable
+self-model CollisionGroupSetCollidable ok 
+self-string CollisionGroupSetCollidable error Expected ':' not '.' calling member function CollisionGroupSetCollidable
+self-dot CollisionGroupSetCollidable error Expected ':' not '.' calling member function CollisionGroupSetCollidable
+self-nil CollisionGroupsAreCollidable error Expected ':' not '.' calling member function CollisionGroupsAreCollidable
+self-physics CollisionGroupsAreCollidable error Expected ':' not '.' calling member function CollisionGroupsAreCollidable
+self-part CollisionGroupsAreCollidable error Expected ':' not '.' calling member function CollisionGroupsAreCollidable
+self-model CollisionGroupsAreCollidable ok true
+self-string CollisionGroupsAreCollidable error Expected ':' not '.' calling member function CollisionGroupsAreCollidable
+self-dot CollisionGroupsAreCollidable error Expected ':' not '.' calling member function CollisionGroupsAreCollidable
+self-nil GetMaxCollisionGroups error Expected ':' not '.' calling member function GetMaxCollisionGroups
+self-physics GetMaxCollisionGroups error Expected ':' not '.' calling member function GetMaxCollisionGroups
+self-part GetMaxCollisionGroups error Expected ':' not '.' calling member function GetMaxCollisionGroups
+self-model GetMaxCollisionGroups ok 32
+self-string GetMaxCollisionGroups error Expected ':' not '.' calling member function GetMaxCollisionGroups
+self-dot GetMaxCollisionGroups error Expected ':' not '.' calling member function GetMaxCollisionGroups
+self-nil GetRegisteredCollisionGroups error Expected ':' not '.' calling member function GetRegisteredCollisionGroups
+self-physics GetRegisteredCollisionGroups error Expected ':' not '.' calling member function GetRegisteredCollisionGroups
+self-part GetRegisteredCollisionGroups error Expected ':' not '.' calling member function GetRegisteredCollisionGroups
+self-model GetRegisteredCollisionGroups ok table: ADDR
+self-string GetRegisteredCollisionGroups error Expected ':' not '.' calling member function GetRegisteredCollisionGroups
+self-dot GetRegisteredCollisionGroups error Expected ':' not '.' calling member function GetRegisteredCollisionGroups
+self-nil IsCollisionGroupRegistered error Expected ':' not '.' calling member function IsCollisionGroupRegistered
+self-physics IsCollisionGroupRegistered error Expected ':' not '.' calling member function IsCollisionGroupRegistered
+self-part IsCollisionGroupRegistered error Expected ':' not '.' calling member function IsCollisionGroupRegistered
+self-model IsCollisionGroupRegistered ok true
+self-string IsCollisionGroupRegistered error Expected ':' not '.' calling member function IsCollisionGroupRegistered
+self-dot IsCollisionGroupRegistered error Expected ':' not '.' calling member function IsCollisionGroupRegistered
+self-nil RegisterCollisionGroup error Expected ':' not '.' calling member function RegisterCollisionGroup
+self-physics RegisterCollisionGroup error Expected ':' not '.' calling member function RegisterCollisionGroup
+self-part RegisterCollisionGroup error Expected ':' not '.' calling member function RegisterCollisionGroup
+self-model RegisterCollisionGroup error Can not use/change the Default collision group.
+self-string RegisterCollisionGroup error Expected ':' not '.' calling member function RegisterCollisionGroup
+self-dot RegisterCollisionGroup error Expected ':' not '.' calling member function RegisterCollisionGroup
+self-nil RenameCollisionGroup error Expected ':' not '.' calling member function RenameCollisionGroup
+self-physics RenameCollisionGroup error Expected ':' not '.' calling member function RenameCollisionGroup
+self-part RenameCollisionGroup error Expected ':' not '.' calling member function RenameCollisionGroup
+self-model RenameCollisionGroup error Can not use/change the Default collision group.
+self-string RenameCollisionGroup error Expected ':' not '.' calling member function RenameCollisionGroup
+self-dot RenameCollisionGroup error Expected ':' not '.' calling member function RenameCollisionGroup
+self-nil UnregisterCollisionGroup error Expected ':' not '.' calling member function UnregisterCollisionGroup
+self-physics UnregisterCollisionGroup error Expected ':' not '.' calling member function UnregisterCollisionGroup
+self-part UnregisterCollisionGroup error Expected ':' not '.' calling member function UnregisterCollisionGroup
+self-model UnregisterCollisionGroup error Can not use/change the Default collision group.
+self-string UnregisterCollisionGroup error Expected ':' not '.' calling member function UnregisterCollisionGroup
+self-dot UnregisterCollisionGroup error Expected ':' not '.' calling member function UnregisterCollisionGroup
+physics-on-model CollisionGroupSetCollidable error Expected ':' not '.' calling member function CollisionGroupSetCollidable
+physics-on-model CollisionGroupsAreCollidable error Expected ':' not '.' calling member function CollisionGroupsAreCollidable
+physics-on-model GetMaxCollisionGroups error Expected ':' not '.' calling member function GetMaxCollisionGroups
+physics-on-model GetRegisteredCollisionGroups error Expected ':' not '.' calling member function GetRegisteredCollisionGroups
+physics-on-model IsCollisionGroupRegistered error Expected ':' not '.' calling member function IsCollisionGroupRegistered
+physics-on-model RegisterCollisionGroup error Expected ':' not '.' calling member function RegisterCollisionGroup
+physics-on-model RenameCollisionGroup error Expected ':' not '.' calling member function RenameCollisionGroup
+physics-on-model UnregisterCollisionGroup error Expected ':' not '.' calling member function UnregisterCollisionGroup

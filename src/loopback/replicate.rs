@@ -176,6 +176,9 @@ pub enum Change {
     /// The collision-group registry changed (services/physics.rs): logged at the first change since the last flush, which
     /// sends the registry as it then is in this place, once however often it changed
     CollisionGroups,
+    /// A WorldModel's own collision groups changed (services/physics.rs): logged at their first change since the last flush,
+    /// which sends them as they then are in this place, once however often they changed
+    WorldGroups(InstanceId),
 }
 
 /// Which properties replicate ([`NOT_REPLICATED`])
@@ -358,6 +361,13 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
     if let Some(snapshot) = crate::services::physics::snapshot(server) {
         crate::services::physics::apply_snapshot(client, snapshot);
     }
+    // and the own groups of the WorldModels the join copied
+    for (id, snapshot) in crate::services::physics::model_snapshots(server) {
+        let copy = bridge.ids.borrow().to_client.get(id);
+        if let Some(copy) = copy {
+            crate::services::physics::apply_model_snapshot(client, copy, snapshot);
+        }
+    }
     server.state.borrow_mut().loopback_log = Some(Vec::new());
     install(server, bridge, filter, excluded);
     install_client(client, bridge);
@@ -534,7 +544,10 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
     let Some(log) = state.loopback_log.as_mut().filter(|log| !log.is_empty()).map(std::mem::take) else { return };
     // (the collision groups as they are now, if they changed since the last flush: sent in the place of the first change)
     let mut groups = crate::services::physics::flushed(server);
-    let Some(filter) = bridge.filter.borrow().clone() else { return };
+    let Some(filter) = bridge.filter.borrow().clone() else {
+        crate::services::physics::flush_done(server);
+        return;
+    };
     let reflection = &server.reflection;
     let mut out: Vec<Msg> = Vec::with_capacity(log.len());
     let mut moved: FxHashSet<InstanceId> = FxHashSet::default();
@@ -553,9 +566,18 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
                     out.push(Msg::CollisionGroups(snapshot));
                 }
             }
+            // (a WorldModel's own groups as they are now, in the place of their first change, to the copy the client has; one
+            // sent whole in this flush took them with its tree)
+            Change::WorldGroups(id) => {
+                if sent_and_replicated(&state, id)
+                    && let Some(snapshot) = crate::services::physics::flushed_model(server, id)
+                {
+                    out.push(Msg::WorldGroups { id, snapshot });
+                }
+            }
             Change::Moved(id) => {
                 if moved.insert(id) {
-                    created += flush_move(&mut state, reflection, &filter, id, &mut out, &mut whole);
+                    created += flush_move(server, &mut state, reflection, &filter, id, &mut out, &mut whole);
                 }
             }
             Change::Prop(id, name, quiet) => {
@@ -591,6 +613,8 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
         stats.writes += writes;
         stats.created += created;
     }
+    // (the WorldModels whose groups changed but which the client has no copy of: they log a marker again at their next change)
+    crate::services::physics::flush_done(server);
     drop(state);
     bridge.outgoing(Side::Server).borrow_mut().open.extend(out);
 }
@@ -603,7 +627,7 @@ fn sent_and_replicated(state: &State, id: InstanceId) -> bool {
 
 /// What a moved instance comes to: a tree the client makes (a new instance entering), a move of the client's copy (in or
 /// out of the containers), a destroy, or nothing (never sent and not replicated). Returns how many instances it made.
-fn flush_move(state: &mut State, reflection: &Reflection, filter: &Filter, id: InstanceId, out: &mut Vec<Msg>, whole: &mut FxHashSet<InstanceId>) -> u64 {
+fn flush_move(server: &Engine, state: &mut State, reflection: &Reflection, filter: &Filter, id: InstanceId, out: &mut Vec<Msg>, whole: &mut FxHashSet<InstanceId>) -> u64 {
     let Some(instance) = state.dom.get(id) else { return 0 };
     let sent = instance.flags & flags::SENT != 0;
     if instance.flags & flags::DESTROYED != 0 {
@@ -619,10 +643,15 @@ fn flush_move(state: &mut State, reflection: &Reflection, filter: &Filter, id: I
             let Some(parent) = parent else { return 0 };
             let nodes = tree(state, reflection, filter, id, whole);
             let count = nodes.len() as u64;
-            out.push(Msg::Tree { parent, nodes });
+            let groups = crate::services::physics::sent_models(server, nodes.iter().map(|node| node.id));
+            out.push(Msg::Tree { parent, nodes, groups });
             count
         }
         (true, true) => {
+            // (the WorldModels coming back take their groups before they enter, as a new tree's do: those messages go in front
+            // of the move)
+            let at = out.len();
+            let mut groups: Vec<Msg> = Vec::new();
             out.push(Msg::Parent { id, parent });
             // back in the containers after time out of them: what changed meanwhile, and children made meanwhile
             let mut made = 0;
@@ -636,7 +665,8 @@ fn flush_move(state: &mut State, reflection: &Reflection, filter: &Filter, id: I
                     let Some(parent) = state.dom.at(node).parent else { continue };
                     let nodes = tree(state, reflection, filter, node, whole);
                     made += nodes.len() as u64;
-                    out.push(Msg::Tree { parent, nodes });
+                    let tree_groups = crate::services::physics::sent_models(server, nodes.iter().map(|node| node.id));
+                    out.push(Msg::Tree { parent, nodes, groups: tree_groups });
                     continue;
                 }
                 if flags_now & flags::STALE != 0 {
@@ -655,9 +685,11 @@ fn flush_move(state: &mut State, reflection: &Reflection, filter: &Filter, id: I
                             out.push(Msg::Attr { id: node, name: name.clone(), value });
                         }
                     }
+                    groups.extend(crate::services::physics::sent_models(server, std::iter::once(node)).into_iter().map(|(_, snapshot)| Msg::WorldGroups { id: node, snapshot }));
                 }
                 stack.extend(state.dom.at(node).children.iter().rev());
             }
+            out.splice(at..at, groups);
             made
         }
         (false, true) => {
@@ -729,7 +761,7 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
         }
     };
     match message {
-        Msg::Tree { parent, mut nodes } => {
+        Msg::Tree { parent, mut nodes, groups } => {
             let Some(parent) = live(parent) else { return Ok(()) };
             let reflection = &client.reflection;
             let mut made: Vec<InstanceId> = Vec::with_capacity(nodes.len());
@@ -791,6 +823,12 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
                 let target = map(target);
                 set_attribute_ref(&mut client.state.borrow_mut(), copy, &name, target);
             }
+            // the own collision groups of the WorldModels in it, before it enters: its parts take their ids from them then
+            for (index, snapshot) in groups {
+                if let Some(&copy) = made.get(index as usize) {
+                    crate::services::physics::apply_model_snapshot(client, copy, snapshot);
+                }
+            }
             // the tree enters at once: its DescendantAdded, ChildAdded, the tagged instances' added signals
             if let Some(&root) = made.first() {
                 let _ = crate::lua::instance::set_parent(client, root, Some(parent));
@@ -848,6 +886,10 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
         }
         Msg::CollisionGroups(snapshot) => {
             crate::services::physics::apply_snapshot(client, snapshot);
+        }
+        Msg::WorldGroups { id, snapshot } => {
+            let Some(copy) = live(id) else { return Ok(()) };
+            crate::services::physics::apply_model_snapshot(client, copy, snapshot);
         }
         Msg::Event { .. } | Msg::Invoke { .. } | Msg::Return { .. } => {}
     }

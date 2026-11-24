@@ -1,0 +1,95 @@
+# engine: Roblox Studio 0.748.0.7481526, a playing client of a Studio Play session (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+side client
+start ok 1
+place-nil register ok 
+place-nil register-bad error Collision group requires a valid name.
+place-nil set ok 
+place-nil rename ok 
+place-nil unregister ok 
+place-nil list Default=-2
+place-nil taken-out ok  Default=-2,C=-1
+place-ReplicatedStorage register error This API can only be used on the server!
+place-ReplicatedStorage register-bad error This API can only be used on the server!
+place-ReplicatedStorage set error This API can only be used on the server!
+place-ReplicatedStorage rename error This API can only be used on the server!
+place-ReplicatedStorage unregister error This API can only be used on the server!
+place-ReplicatedStorage list Default=-1
+place-ReplicatedStorage taken-out ok  Default=-1,C=-1
+place-workspace register error This API can only be used on the server!
+place-workspace register-bad error This API can only be used on the server!
+place-workspace set error This API can only be used on the server!
+place-workspace rename error This API can only be used on the server!
+place-workspace unregister error This API can only be used on the server!
+place-workspace list Default=-1
+place-workspace taken-out ok  Default=-1,C=-1
+place-workspace-folder register error This API can only be used on the server!
+place-workspace-folder register-bad error This API can only be used on the server!
+place-workspace-folder set error This API can only be used on the server!
+place-workspace-folder rename error This API can only be used on the server!
+place-workspace-folder unregister error This API can only be used on the server!
+place-workspace-folder list Default=-1
+place-workspace-folder taken-out ok  Default=-1,C=-1
+place-workspace-model register error This API can only be used on the server!
+place-workspace-model register-bad error This API can only be used on the server!
+place-workspace-model set error This API can only be used on the server!
+place-workspace-model rename error This API can only be used on the server!
+place-workspace-model unregister error This API can only be used on the server!
+place-workspace-model list Default=-1
+place-workspace-model taken-out ok  Default=-1,C=-1
+place-camera register error This API can only be used on the server!
+place-camera register-bad error This API can only be used on the server!
+place-camera set error This API can only be used on the server!
+place-camera rename error This API can only be used on the server!
+place-camera unregister error This API can only be used on the server!
+place-camera list Default=-1
+place-camera taken-out ok  Default=-1,C=-1
+place-viewport register error This API can only be used on the server!
+place-viewport register-bad error This API can only be used on the server!
+place-viewport set error This API can only be used on the server!
+place-viewport rename error This API can only be used on the server!
+place-viewport unregister error This API can only be used on the server!
+place-viewport list Default=-1
+place-viewport taken-out ok  Default=-1,C=-1
+moved-in error This API can only be used on the server! Default=-1,Early=-1
+moved-in-unregister error This API can only be used on the server! Default=-1,Early=-1
+moved-in-read ok true true 32
+warn-first-nil-name error Argument 1 missing or nil | 
+warn-then-nil-name ok 32 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-first-empty-name error Collision group requires a valid name. | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-then-empty-name ok 32 | 
+warn-first-unknown-pair error Both collision groups must be registered. | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-then-unknown-pair ok 32 | 
+warn-first-bad-bool error Unable to cast string to bool | 
+warn-then-bad-bool ok 32 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-first-registered-nil error Argument 1 missing or nil | 
+warn-then-registered-nil ok 32 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-first-max-dot error Expected ':' not '.' calling member function GetMaxCollisionGroups | 
+warn-then-max-dot ok 32 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-first-list ok 1 | MessageWarning:WorldModel: UseWorkspaceCollisionGroups 
+warn-then-list ok 32 | 
+warn-in-workspace error This API can only be used on the server! | MessageWarning:Workspace.WorldModel: UseWorkspaceCollis
+warn-read-write ok true | 
+warn-clone-only ok true | 
+parts-replicated-storage ok  | 1 2 -1 | Pa,Pb,Pw
+parts-workspace ok  | 1 2 -1 | 
+parts-model-register error This API can only be used on the server! | 1 2 -1 | 
+parts-model-unregister error This API can only be used on the server! | 1 2 -1 | 
+parts-model-register-again error This API can only be used on the server! | 1 2 -1 | 
+parts-model-rename error This API can only be used on the server! | 1 2 -1 | 
+parts-model-rename-back error This API can only be used on the server! | 1 2 -1 | 
+parts-model-collidable error This API can only be used on the server! | 1 2 -1 | 
+parts-workspace-register ok false | 1 2 -1 | 
+parts-use-true ok  | -1 -1 -1 | 
+parts-use-true-model-register error This API can only be used on the server! | -1 -1 -1 | 
+parts-use-true-workspace-unregister ok  | -1 -1 -1 | 
+parts-use-true-workspace-register ok  | -1 -1 -1 | 
+parts-use-false ok  | 1 2 -1 | 
+parts-name-write ok  | 1 2 2 | Pb
+parts-name-write-back ok  | 1 2 -1 | Pw
+parts-nested ok 1 | 1 2 -1 | 
+parts-nested-outer-register error This API can only be used on the server! | 1 2 -1 | 
+parts-moved-to-workspace ok -1 | 1 -1 -1 | Pb
+parts-moved-back ok 2 | 1 2 -1 | Pb
+parts-model-out error This API can only be used on the server! | 1 2 -1 | 
+end Default=-1
