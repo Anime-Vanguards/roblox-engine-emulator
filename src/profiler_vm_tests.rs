@@ -14,13 +14,11 @@ use crate::{
     scheduler,
 };
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    crate::luau_profile::TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn temp_dir(name: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("ree-vm-profile-{name}-{}-{stamp}", std::process::id()))
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("ree-vm-profile-{name}-{}-{stamp}-{seq}", std::process::id()))
 }
 
 /// Runs `source` as a script (chunk `=name`) on a scheduler thread
@@ -109,7 +107,6 @@ fn counts(pairs: &[(&str, u64)]) -> std::collections::BTreeMap<String, u64> {
 /// same outcomes, and the per-kind totals (the marks' and the summary's) hold both
 #[test]
 fn a_member_named_key_and_a_plain_key_give_the_same_opcode_and_totals() {
-    let _lock = lock();
     // (tables passed in: the compiler folds a read of a table a constructor built in the same function)
     let source = "local M = {}\nfunction M.readName(t)\n\tlocal s\n\tfor i = 1, 1000 do\n\t\ts = t.Name\n\tend\n\treturn s\nend\nfunction M.readFoo(t)\n\tlocal s\n\tfor i = 1, 1000 do\n\t\ts = t.foo\n\tend\n\treturn s\nend\nfunction M.writeName(t)\n\tfor i = 1, 1000 do\n\t\tt.Name = i\n\tend\nend\nfunction M.writeFoo(t)\n\tfor i = 1, 1000 do\n\t\tt.foo = i\n\tend\nend\nM.readName({Name = 1})\nM.readFoo({foo = 1})\nM.writeName({Name = 1})\nM.writeFoo({foo = 1})\nlocal part = Instance.new(\"Part\")\nlocal function attributes()\n\tfor i = 1, 1000 do\n\t\tpart:GetAttribute(\"x\")\n\tend\nend\nattributes()\n";
     let (summary, json) = profile("member-keys", Kinds::CACHES, 1, source);
@@ -150,7 +147,6 @@ fn a_member_named_key_and_a_plain_key_give_the_same_opcode_and_totals() {
 /// metatable's __index table walks it (depth 1, 2); a function __index is its own outcome
 #[test]
 fn table_key_outcomes_say_what_the_interpreter_did() {
-    let _lock = lock();
     let source = "local M = {}\nfunction M.absent(t)\n\tlocal s\n\tfor i = 1, 1000 do\n\t\ts = t.missing\n\tend\n\treturn s\nend\nfunction M.sized()\n\tfor i = 1, 1000 do\n\t\tlocal t = {}\n\t\tt.a = 1\n\t\tt.b = 2\n\tend\nend\nfunction M.fill(t)\n\tt.a = 1\n\tt.b = 2\n\tt.c = 3\nend\nfunction M.grow()\n\tfor i = 1, 100 do\n\t\tM.fill({})\n\tend\nend\nfunction M.inherited(t)\n\tlocal s\n\tfor i = 1, 100 do\n\t\ts = t.x\n\tend\n\treturn s\nend\nM.absent({foo = 1})\nM.sized()\nM.grow()\nlocal base = {x = 1}\nM.inherited(setmetatable({}, {__index = base}))\nM.inherited(setmetatable({}, {__index = setmetatable({}, {__index = base})}))\nM.inherited(setmetatable({}, {__index = function() return 1 end}))\n";
     let (summary, json) = profile("outcomes", Kinds::CACHES, 0, source);
     let (_, absent) = sites_at(&json, function(&json, "outcomes", "absent"), 5);
@@ -192,7 +188,6 @@ fn table_key_outcomes_say_what_the_interpreter_did() {
 /// field "slow": the key is found in the table itself, so it is a reprediction too
 #[test]
 fn a_reprediction_is_a_key_at_another_slot() {
-    let _lock = lock();
     let source = "local function build(order)\n\tlocal t = {}\n\tfor _, key in order do\n\t\tt[key] = 1\n\tend\n\treturn t\nend\nlocal function node(t)\n\tlocal index = 0\n\tfor key in next, t do\n\t\tindex += 1\n\t\tif key == \"x\" then\n\t\t\treturn index\n\t\tend\n\tend\n\treturn 0\nend\nlocal M = {}\nfunction M.alternate(a, b)\n\tlocal s\n\tfor i = 1, 1000 do\n\t\tlocal t = if i % 2 == 0 then a else b\n\t\ts = t.x\n\tend\n\treturn s\nend\nfunction M.same(a, b)\n\tlocal s\n\tfor i = 1, 1000 do\n\t\tlocal t = if i % 2 == 0 then a else b\n\t\ts = t.x\n\tend\n\treturn s\nend\nfunction M.wrapped(a, b)\n\tlocal s\n\tfor i = 1, 1000 do\n\t\tlocal t = if i % 2 == 0 then a else b\n\t\ts = t.x\n\tend\n\treturn s\nend\nlocal found = nil\nfor k = 1, 64 do\n\tlocal key = \"k\" .. k\n\tlocal first, second = build({\"x\", key}), build({key, \"x\"})\n\tif node(first) ~= node(second) then\n\t\tfound = {first, second, key}\n\t\tbreak\n\tend\nend\nassert(found, \"no key shares x's node\")\nM.alternate(found[1], found[2])\nM.same(found[1], build({\"x\", found[3]}))\nlocal meta = {__index = {}}\nM.wrapped(setmetatable(found[1], meta), setmetatable(found[2], meta))\n";
     let (summary, json) = profile("repredict", Kinds::CACHES, 0, source);
     let (ops, outcomes) = sites_at(&json, function(&json, "repredict", "alternate"), 23);
@@ -209,7 +204,6 @@ fn a_reprediction_is_a_key_at_another_slot() {
 /// fast path served counts as fast
 #[test]
 fn builtin_declines_say_why() {
-    let _lock = lock();
     let source = "local M = {}\nfunction M.bytes(s)\n\tfor i = 1, 1000 do\n\t\tlocal bytes = {string.byte(s, 1, 3)}\n\tend\n\tfor i = 1, 1000 do\n\t\tlocal a = string.byte(s, 1)\n\tend\nend\nfunction M.front()\n\tlocal list = {}\n\tfor i = 1, 500 do\n\t\ttable.insert(list, 1, i)\n\tend\nend\nfunction M.pieces(text)\n\tlocal count = 0\n\tfor i = 1, 2000 do\n\t\tlocal junk = table.create(512, i)\n\t\tlocal piece = string.sub(text, 2, 5)\n\t\tcount += #piece\n\tend\n\treturn count\nend\nM.bytes(\"hello world\")\nM.front()\nM.pieces(\"hello world\")\n";
     let (summary, json) = profile("builtins", Kinds::CACHES, 0, source);
     let builtins = json["builtins"].as_array().unwrap_or_else(|| panic!("{summary}"));
@@ -234,7 +228,6 @@ fn builtin_declines_say_why() {
 /// C function calls counts a call each time it is entered (a comparator: as many as table.sort's calls to it, the VM's count)
 #[test]
 fn c_functions_are_rows_at_their_call_sites_and_comparators_count_each_call() {
-    let _lock = lock();
     let source = "local RunService = game:GetService(\"RunService\")\nlocal values = {}\nlocal function frame()\n\tfor i = 1, 2000 do\n\t\tvalues[i] = (i * 7919) % 2003\n\tend\n\ttable.sort(values)\nend\nRunService.Heartbeat:Connect(frame)\nlocal items = {}\nfor i = 1, 500 do\n\titems[i] = (i * 31) % 499\nend\nlocal function less(a, b)\n\treturn a < b\nend\ntable.sort(items, less)\n";
     let frames = 5;
     let (summary, json) = profile("sorts", Kinds::WORK, frames, source);
@@ -281,7 +274,6 @@ fn c_functions_are_rows_at_their_call_sites_and_comparators_count_each_call() {
 /// are new values
 #[test]
 fn boundary_repeats_count_unchanged_values_by_where_a_cache_would_go() {
-    let _lock = lock();
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
@@ -461,7 +453,6 @@ fn host_function_profile(name: &str, source: &str) -> (String, Json) {
 /// reached last
 #[test]
 fn a_c_functions_work_after_an_error_inside_it_is_its_own() {
-    let _lock = lock();
     let source = "local M = {}\nfunction M.inner()\n\terror(\"no\")\nend\nfunction M.run()\n\tfor i = 1, 10 do\n\t\touter(M.inner)\n\tend\nend\nM.run()\n";
     let (summary, json) = host_function_profile("unwound", source);
     let own = |name: &str| c_function(&json, name)["self"]["work_ms"].as_f64().unwrap();
@@ -472,7 +463,6 @@ fn a_c_functions_work_after_an_error_inside_it_is_its_own() {
 /// C functions no global holds and with no debug name read apart, by the call site that reached them
 #[test]
 fn unnamed_c_functions_are_named_by_their_call_site() {
-    let _lock = lock();
     let source = "local first, second = pair()\nlocal M = {}\nfunction M.run()\n\tlocal t = 0\n\tfor i = 1, 10 do\n\t\tt += first()\n\t\tt += second()\n\tend\n\treturn t\nend\nM.run()\n";
     let (summary, json) = host_function_profile("unnamed", source);
     let names: Vec<&str> = json["functions"].as_array().unwrap().iter().filter(|f| f["kind"] == "C").filter_map(|f| f["name"].as_str()).collect();
@@ -548,7 +538,6 @@ fn frame_charge_profile_with(name: &str, source: &str, unsafe_env: bool, frames:
 /// and its nodes add up to it exactly.
 #[test]
 fn the_work_clocks_charges_and_the_uncharged_prices_never_overlap() {
-    let _lock = lock();
     const FRAMES: u32 = 4;
     // (setups: a pool of fresh tables for each frame's inserts, two tables that hold the same key at different slots)
     let pool = "local function pool(proto)\n\tlocal p = table.create(2000)\n\tfor i = 1, 2000 do\n\t\tp[i] = table.clone(proto)\n\tend\n\treturn p\nend\n";
@@ -662,10 +651,28 @@ fn the_work_clocks_charges_and_the_uncharged_prices_never_overlap() {
     let ns = |ms: f64, per: f64| ms * 1e6 / per;
     // (profile.json gives a site's figures to a tenth of a nanosecond: a few of them summed, within a nanosecond)
     let close = |a: f64, b: f64| (a - b).abs() < 1e-6 + 1e-9 * a.abs().max(b.abs());
-    for case in &cases {
-        let (source_with, source_without) = (source(case, case.outcome), source(case, case.hit));
-        let ((with, moved_with), (without, moved_without)) =
-            (frame_charge_profile("charges", &source_with, case.unsafe_env[0], FRAMES), frame_charge_profile("charges", &source_without, case.unsafe_env[1], FRAMES));
+    let pairs: Vec<_> = std::thread::scope(|s| {
+        let handles: Vec<_> = cases
+            .iter()
+            .map(|case| {
+                let (source_with, source_without) = (source(case, case.outcome), source(case, case.hit));
+                let unsafe_with = case.unsafe_env[0];
+                let unsafe_without = case.unsafe_env[1];
+                let a = s.spawn(move || {
+                    let res = frame_charge_profile("charges", &source_with, unsafe_with, FRAMES);
+                    (source_with, res)
+                });
+                let b = s.spawn(move || {
+                    let res = frame_charge_profile("charges", &source_without, unsafe_without, FRAMES);
+                    (source_without, res)
+                });
+                (case, a, b)
+            })
+            .collect();
+        handles.into_iter().map(|(case, a, b)| (case, a.join().unwrap(), b.join().unwrap())).collect()
+    });
+    for (case, (source_with, (with, moved_with)), (source_without, (without, moved_without))) in pairs {
+        let _ = &source_without;
         // (the steady frames the loop ran in)
         let runs = (FRAMES / case.every) as f64;
         let outcomes = case.n as f64 * runs;
@@ -746,17 +753,17 @@ fn the_work_clocks_charges_and_the_uncharged_prices_never_overlap() {
 /// charge and adds back to it exactly
 #[test]
 fn a_rehash_sites_presized_figure_is_what_presizing_saves() {
-    let _lock = lock();
     const FRAMES: u32 = 4;
     const N: f64 = 2000.0;
     // (a template's constant values fill the table: each constructor is one DUPTABLE, of 4 slots or of 8)
     let source = |constructor: &str| {
         format!("local clock = clock\nlocal M = {{}}\nfunction M.loop(n)\n\tlocal s\n\tfor i = 1, n do\n\t\tlocal t = {constructor}\n\t\tt.x = i\n\t\ts = t\n\tend\n\treturn s\nend\nlocal total = 0\ngame:GetService(\"RunService\").Heartbeat:Connect(function()\n\tlocal before = clock()\n\tlocal r = M.loop(2000)\n\tlocal after = clock()\n\tif measuring then\n\t\ttotal += after - before\n\t\tmoved = total\n\tend\n\tresult = r\nend)\n")
     };
-    let ((growing, growing_clock), (presized, presized_clock)) = (
-        frame_charge_profile("presized", &source("{a = 1, b = 1, c = 1, d = 1}"), false, FRAMES),
-        frame_charge_profile("presized", &source("{a = 1, b = 1, c = 1, d = 1, x = 0}"), false, FRAMES),
-    );
+    let ((growing, growing_clock), (presized, presized_clock)) = std::thread::scope(|s| {
+        let a = s.spawn(|| frame_charge_profile("presized", &source("{a = 1, b = 1, c = 1, d = 1}"), false, FRAMES));
+        let b = s.spawn(|| frame_charge_profile("presized", &source("{a = 1, b = 1, c = 1, d = 1, x = 0}"), false, FRAMES));
+        (a.join().unwrap(), b.join().unwrap())
+    });
     // the loop's `t.x = i` (line 7)
     let site = |json: &Json| -> Json {
         let id = function(json, "presized", "loop")["id"].clone();
@@ -802,7 +809,6 @@ fn a_rehash_sites_presized_figure_is_what_presizing_saves() {
 /// storage, are paid either way)
 #[test]
 fn a_declined_builtins_fast_equivalent_is_what_a_fix_still_pays() {
-    let _lock = lock();
     const FRAMES: u32 = 4;
     struct Case {
         name: &'static str,
@@ -829,9 +835,20 @@ fn a_declined_builtins_fast_equivalent_is_what_a_fix_still_pays() {
             case.setup[fixed], case.call[fixed], case.n, case.args[fixed]
         )
     };
-    for case in &cases {
-        let ((declining, clock_declining), (fixed, clock_fixed)) =
-            (frame_charge_profile("fastpath", &source(case, 0), false, FRAMES), frame_charge_profile("fastpath", &source(case, 1), false, FRAMES));
+    let pairs: Vec<_> = std::thread::scope(|s| {
+        let handles: Vec<_> = cases
+            .iter()
+            .map(|case| {
+                let s0 = source(case, 0);
+                let s1 = source(case, 1);
+                let a = s.spawn(move || frame_charge_profile("fastpath", &s0, false, FRAMES));
+                let b = s.spawn(move || frame_charge_profile("fastpath", &s1, false, FRAMES));
+                (case, a, b)
+            })
+            .collect();
+        handles.into_iter().map(|(case, a, b)| (case, a.join().unwrap(), b.join().unwrap())).collect()
+    });
+    for (case, (declining, clock_declining), (fixed, clock_fixed)) in pairs {
         // (the builtin's sites in the loop: their decline charge and fast-path equivalent, ms, and their declines; the per-node
         // records add up to them)
         let figures = |json: &Json| -> (f64, f64, u64) {
@@ -918,15 +935,17 @@ fixed: {}",
 /// the loop, against the same code on numbers, whose calls take the fast path. Inside frames
 #[test]
 fn a_comparators_declines_split_between_the_sort_and_the_loop() {
-    let _lock = lock();
     const FRAMES: u32 = 4;
     let source = |value: &str| {
         format!(
             "local clock = clock\nlocal M = {{}}\nfunction M.less(a, b)\n\treturn math.abs(a) < math.abs(b)\nend\nfunction M.loop(xs, n)\n\tlocal s = 0\n\tfor i = 1, n - 1 do\n\t\tif M.less(xs[i], xs[i + 1]) then\n\t\t\ts += 1\n\t\tend\n\tend\n\treturn s\nend\nlocal function values(n, seed)\n\tlocal out = table.create(n)\n\tfor i = 1, n do\n\t\tlocal v = (i * 7919 + seed) % 1000\n\t\tout[i] = {value}\n\tend\n\treturn out\nend\nlocal sorted, looped = 0, 0\ngame:GetService(\"RunService\").Heartbeat:Connect(function()\n\tif not measuring then\n\t\treturn\n\tend\n\tlocal items, xs = values(300, 1), values(600, 7)\n\tlocal t0 = clock()\n\ttable.sort(items, M.less)\n\tlocal t1 = clock()\n\tlocal r = M.loop(xs, 600)\n\tlocal t2 = clock()\n\tsorted += t1 - t0\n\tlooped += t2 - t1\n\tmoved = sorted\n\tmovedLoop = looped\n\tresult = r\nend)\n"
         )
     };
-    let ((strings, sort_strings, loop_strings), (numbers, sort_numbers, loop_numbers)) =
-        (frame_charge_profile_two("comparator", &source("tostring(v)"), FRAMES), frame_charge_profile_two("comparator", &source("v"), FRAMES));
+    let ((strings, sort_strings, loop_strings), (numbers, sort_numbers, loop_numbers)) = std::thread::scope(|s| {
+        let a = s.spawn(|| frame_charge_profile_two("comparator", &source("tostring(v)"), FRAMES));
+        let b = s.spawn(|| frame_charge_profile_two("comparator", &source("v"), FRAMES));
+        (a.join().unwrap(), b.join().unwrap())
+    });
     // the math.abs sites in M.less: per node, by the function of the node's parent, decline charged less the fast path's (ms)
     let per_node = |json: &Json| -> std::collections::BTreeMap<i64, f64> {
         let less = function(json, "comparator", "less")["id"].clone();
@@ -987,7 +1006,6 @@ fn function_if<'a>(json: &'a Json, module: &str, name: &str) -> Option<&'a Json>
 /// call to `stamps` is the safepoint after the Name write
 #[test]
 fn a_booking_at_an_api_call_leaves_the_safepoint_its_tick() {
-    let _lock = lock();
     let source = "local part = Instance.new(\"Part\")\ntick(1)\npart.Name = \"Moved\"\nseen = {stamps()}\n";
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -1034,7 +1052,6 @@ fn a_booking_at_an_api_call_leaves_the_safepoint_its_tick() {
 /// is exact
 #[test]
 fn host_time_between_frames_is_the_engines() {
-    let _lock = lock();
     let source = "local RunService = game:GetService(\"RunService\")\nlocal M = {}\nfunction M.fail()\n\terror(\"no\")\nend\nfunction M.handler()\n\tlocal x = 0\n\tfor i = 1, 200 do\n\t\tx += i % 7\n\tend\n\ttick(1)\n\tpcall(M.fail)\n\tfor i = 1, 200 do\n\t\tx += i % 7\n\tend\n\treturn x\nend\nRunService.Heartbeat:Connect(M.handler)\n";
     let (summary, json) = time_profile_with("between", 10, source, true, || {
         crate::luau_profile::engine_step("recorder", || crate::luau_profile::advance_ticks(6));
@@ -1055,7 +1072,6 @@ fn host_time_between_frames_is_the_engines() {
 /// as when another process preempts it) reads its wall time, not CPU time
 #[test]
 fn host_time_is_weighted_by_the_threads_cpu_time() {
-    let _lock = lock();
     let (summary, json) = time_profile("cpu-weight", 3, "local x = 0\n", || crate::luau_profile::engine_step("waiting", || std::thread::sleep(std::time::Duration::from_millis(25))));
     let waiting = named(&json, "(ree engine step: waiting)").unwrap_or_else(|| panic!("{summary}"));
     let (cpu, wall) = (waiting["total"]["time_ms"].as_f64().unwrap(), waiting["total"]["wall_ms"].as_f64().unwrap());
@@ -1069,7 +1085,6 @@ fn host_time_is_weighted_by_the_threads_cpu_time() {
 /// on the loop's edge that comes after them
 #[test]
 fn host_time_of_an_instance_call_is_its_lines() {
-    let _lock = lock();
     let source = "local RunService = game:GetService(\"RunService\")\nlocal part = Instance.new(\"Part\")\npart.Parent = workspace\nlocal M = {}\nfunction M.writes()\n\tfor i = 1, 3000 do\n\t\tpart.CFrame = CFrame.new(i, 0, 0)\n\tend\nend\nRunService.Heartbeat:Connect(M.writes)\n";
     let (summary, json) = time_profile("writes", 30, source, || {});
     let writes = function(&json, "writes", "writes")["id"].clone();
@@ -1086,7 +1101,6 @@ fn host_time_of_an_instance_call_is_its_lines() {
 /// On the test's clock, a tick every 7 safepoints: samples land on calls, returns and loop edges in turn, the same every run
 #[test]
 fn host_time_on_an_inlined_functions_lines_is_its() {
-    let _lock = lock();
     let source = "--!optimize 2\nlocal M = {}\nfunction M.other(x)\n\treturn x\nend\nlocal function leaf(x)\n\treturn x * 3 + 1\nend\nlocal function viaCall(x)\n\treturn M.other(x) * 2\nend\nlocal function late(x)\n\treturn x * 5 + 2\nend\nlocal function afterLua(x)\n\treturn x * 7 + 3\nend\nfunction M.run(n)\n\tlocal t = 0\n\tfor i = 1, n do\n\t\tt += leaf(i) + viaCall(i)\n\tend\n\treturn t\nend\nfunction M.afterCall(n)\n\tlocal t = 0\n\tfor i = 1, n do\n\t\tlocal s = string.rep(\"x\", 64)\n\t\tt += late(#s)\n\tend\n\treturn t\nend\nfunction M.afterLuaCall(n)\n\tlocal t = 0\n\tfor i = 1, n do\n\t\tlocal y = M.other(i)\n\t\tt += afterLua(y)\n\tend\n\treturn t\nend\nresult = M.run(3000) + M.afterCall(3000) + M.afterLuaCall(3000)\n";
     crate::luau_profile::ticks_every(Some(7));
     let (summary, json) = time_profile_with("inlined", 0, source, true, || {});
@@ -1115,7 +1129,6 @@ fn host_time_on_an_inlined_functions_lines_is_its() {
 /// its share as the same loop after a Luau call does. On the test's clock, a tick every 7 safepoints
 #[test]
 fn host_time_after_a_mixed_call_site_follows_each_call() {
-    let _lock = lock();
     let source = "--!optimize 2\nlocal RunService = game:GetService(\"RunService\")\nlocal M = {}\nfunction M.other(x)\n\treturn x\nend\nlocal function mixedLeaf(x)\n\treturn x * 7 + 3\nend\nlocal function cLeaf(x)\n\treturn x * 5 + 2\nend\nfunction M.mixed(n, f)\n\tlocal t = 0\n\tfor i = 1, n do\n\t\tlocal y = f(i)\n\t\tt += mixedLeaf(y)\n\tend\n\treturn t\nend\nfunction M.always(n, f)\n\tlocal t = 0\n\tfor i = 1, n do\n\t\tlocal y = f(i)\n\t\tt += cLeaf(y)\n\tend\n\treturn t\nend\nlocal function servedLeafC(x)\n\treturn x * 3 + 7\nend\nlocal function servedLeafLua(x)\n\treturn x * 3 + 7\nend\nfunction M.servedAfterC(n, f)\n\tf(1)\n\tlocal t = 0\n\tfor i = 1, n do\n\t\tlocal y = math.abs(i)\n\t\tt += servedLeafC(y)\n\tend\n\treturn t\nend\nfunction M.servedAfterLua(n, f)\n\tf(1)\n\tlocal t = 0\n\tfor i = 1, n do\n\t\tlocal y = math.abs(i)\n\t\tt += servedLeafLua(y)\n\tend\n\treturn t\nend\nlocal frame = 0\nRunService.Heartbeat:Connect(function()\n\tframe += 1\n\tif frame == 1 then\n\t\tresult = M.mixed(1, math.abs)\n\telse\n\t\tresult = M.mixed(3000, M.other)\n\tend\n\tresult = M.always(3000, math.abs)\n\tresult = M.servedAfterC(3000, math.abs) + M.servedAfterLua(3000, M.other)\nend)\n";
     crate::luau_profile::ticks_every(Some(7));
     let (summary, json) = time_profile_with("mixed", 5, source, true, || {});
@@ -1163,7 +1176,6 @@ fn gsub_loop_profile(name: &str, replacement: &str, extra: &str, extra_call: &st
 /// frames, on the test's clock)
 #[test]
 fn host_time_after_a_c_function_that_interrupts_from_inside_is_its() {
-    let _lock = lock();
     let (summary, json) = gsub_loop_profile("interrupting", "\"x\"", "", "");
     let leaf = function(&json, "interrupting", "gsubLeaf");
     assert!(leaf["inlined"]["into"].as_array().is_some_and(|into| !into.is_empty()), "inlined: {leaf}");
@@ -1181,7 +1193,6 @@ fn host_time_after_a_c_function_that_interrupts_from_inside_is_its() {
 /// inlined leaf its share as any loop does (inside frames, on the test's clock)
 #[test]
 fn host_time_after_a_c_function_that_calls_back_into_luau_is_its() {
-    let _lock = lock();
     let under_pcall = "local function pcallLeaf(x)\n\treturn x * 7 + 3\nend\nfunction M.underPcall(n, p)\n\tlocal t = 0\n\tp(function()\n\t\tfor i = 1, n do\n\t\t\tt += pcallLeaf(i)\n\t\tend\n\tend)\n\treturn t\nend\n";
     let (summary, json) = gsub_loop_profile("callingback", "replace", under_pcall, " + M.underPcall(3000, pcall)");
     let inlined = |name: &str| {
@@ -1205,7 +1216,6 @@ fn host_time_after_a_c_function_that_calls_back_into_luau_is_its() {
 /// and the threads made a frame are as many each frame (the collector frees finished ones when its cycle comes)
 #[test]
 fn timeline_instances_and_threads_follow_the_program() {
-    let _lock = lock();
     let source = "local RunService = game:GetService(\"RunService\")\nlocal kept = {}\nRunService.Heartbeat:Connect(function()\n\tlocal parts = table.create(200)\n\tfor i = 1, 200 do\n\t\tlocal part = Instance.new(\"Part\")\n\t\tpart.Parent = workspace\n\t\tparts[i] = part\n\tend\n\tfor _, part in parts do\n\t\tpart:Destroy()\n\tend\n\tfor i = 1, 3 do\n\t\ttask.spawn(function() end)\n\tend\n\tkept[#kept + 1] = Instance.new(\"Folder\")\nend)\n";
     let (summary, json) = profile("census", Kinds::TIMELINE.with(Kinds::HEAP), 12, source);
     let timeline = &json["timeline"];
@@ -1243,7 +1253,6 @@ fn short_names_are_qualified_where_two_modules_share_one() {
 /// engine's chunks that drive a harness are; a user's harness and the game's code are not
 #[test]
 fn a_tools_harness_is_rees_own_code() {
-    let _lock = lock();
     let engine = Engine::new(Options::default()).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
@@ -1258,9 +1267,9 @@ fn a_tools_harness_is_rees_own_code() {
     run(&lua, &engine, "rur.record", spin);
     profiler::collect(&lua);
     // (the variable the what-if runner sets on its runs, read when the profile is written)
-    unsafe { std::env::set_var(profiler::report::TOOL_HARNESS_ENV, "1") };
-    let written = session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() });
-    unsafe { std::env::remove_var(profiler::report::TOOL_HARNESS_ENV) };
+    let written = profiler::report::with_tool_harness_env(|| {
+        session.finish(profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() })
+    });
     let summary = written.unwrap();
     let json: Json = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
     let _ = std::fs::remove_dir_all(&config.out);
@@ -1282,7 +1291,6 @@ fn a_tools_harness_is_rees_own_code() {
 #[test]
 #[should_panic(expected = "checked after the wait")]
 fn a_test_script_is_checked_after_it_waits() {
-    let _guard = lock();
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");

@@ -307,45 +307,49 @@ fn stores_refuse_tables_nested_past_the_lua_stack() {
 /// error once the walk for a cycle stops at the guard. A value below the limits is stored whole, a table for each place.
 #[test]
 fn stores_stop_at_rees_guard_on_a_table_converted_for_each_place_it_appears() {
-    let lines = run(
-        RunContext::Server,
-        r#"
-        local Huge = table.create(100000, table.create(100000, true))
-        local Big = table.create(1000, table.create(1000, true))
-        local Ring = {}
-        Ring[1] = Ring
+    let prelude = r#"
         local function Try(Name, Call)
             print(Name, pcall(Call))
         end
         local Store = game:GetService("DataStoreService"):GetDataStore("Breadth")
         local Map = game:GetService("MemoryStoreService"):GetSortedMap("Breadth")
         local Messaging = game:GetService("MessagingService")
-        Try("set huge", function() Store:SetAsync("k", Huge) end)
-        Try("update huge", function() Store:UpdateAsync("k", function() return Huge end) end)
-        Try("sorted huge", function() Map:SetAsync("k", Huge, 30) end)
-        Try("publish huge", function() Messaging:PublishAsync("t", Huge) end)
-        Try("set big", function() Store:SetAsync("k", Big) end)
-        Try("set big then ring", function() Store:SetAsync("k", { Big, Ring }) end)
-        Try("set function then huge", function() Store:SetAsync("k", { print, Huge }) end)
-        Try("set fan", function() Store:SetAsync("k", table.create(100, table.create(1000, true))) end)
-        local Read = Store:GetAsync("k")
-        print("read", #Read, #Read[100], Read[1] ~= Read[2])
-        "#,
-        3.0,
-    );
-    for (label, message) in [
-        ("set huge", "105: Serialized value exceeds 4MB limit."),
-        ("update huge", "105: Serialized value exceeds 4MB limit."),
-        ("sorted huge", "Code: ItemValueSizeTooLarge, Error: Value size exceeds limit (32 KB)."),
-        ("publish huge", "PublishAsync: the message is larger than 1 kB"),
-        ("set big", "105: Serialized value exceeds 4MB limit."),
-        ("set big then ring", "tables cannot be cyclic"),
-        ("set function then huge", "104: Cannot store function in data store. Data stores can only accept valid UTF-8 characters."),
-    ] {
-        assert!(has_error(&lines, &format!("{label} false"), message), "{label}: {lines:?}");
-    }
-    assert!(has(&lines, "print: set fan true"), "{lines:?}");
-    assert!(has(&lines, "print: read 100 1000 true"), "{lines:?}");
+    "#;
+    let error_cases = [
+        ("set huge", "local Huge = table.create(100000, table.create(100000, true))\nTry(\"set huge\", function() Store:SetAsync(\"k\", Huge) end)", "105: Serialized value exceeds 4MB limit."),
+        ("update huge", "local Huge = table.create(100000, table.create(100000, true))\nTry(\"update huge\", function() Store:UpdateAsync(\"k\", function() return Huge end) end)", "105: Serialized value exceeds 4MB limit."),
+        ("sorted huge", "local Huge = table.create(100000, table.create(100000, true))\nTry(\"sorted huge\", function() Map:SetAsync(\"k\", Huge, 30) end)", "Code: ItemValueSizeTooLarge, Error: Value size exceeds limit (32 KB)."),
+        ("publish huge", "local Huge = table.create(100000, table.create(100000, true))\nTry(\"publish huge\", function() Messaging:PublishAsync(\"t\", Huge) end)", "PublishAsync: the message is larger than 1 kB"),
+        ("set big", "local Big = table.create(1000, table.create(1000, true))\nTry(\"set big\", function() Store:SetAsync(\"k\", Big) end)", "105: Serialized value exceeds 4MB limit."),
+        ("set big then ring", "local Big = table.create(1000, table.create(1000, true))\nlocal Ring = {}\nRing[1] = Ring\nTry(\"set big then ring\", function() Store:SetAsync(\"k\", { Big, Ring }) end)", "tables cannot be cyclic"),
+        ("set function then huge", "local Huge = table.create(100000, table.create(100000, true))\nTry(\"set function then huge\", function() Store:SetAsync(\"k\", { print, Huge }) end)", "104: Cannot store function in data store. Data stores can only accept valid UTF-8 characters."),
+    ];
+    std::thread::scope(|s| {
+        let handles: Vec<_> = error_cases
+            .into_iter()
+            .map(|(label, snippet, message)| {
+                s.spawn(move || {
+                    let lines = run(RunContext::Server, &format!("{prelude}\n{snippet}\n"), 3.0);
+                    assert!(has_error(&lines, &format!("{label} false"), message), "{label}: {lines:?}");
+                })
+            })
+            .collect();
+        let fan = s.spawn(|| {
+            let lines = run(
+                RunContext::Server,
+                &format!(
+                    "{prelude}\nTry(\"set fan\", function() Store:SetAsync(\"k\", table.create(100, table.create(1000, true))) end)\nlocal Read = Store:GetAsync(\"k\")\nprint(\"read\", #Read, #Read[100], Read[1] ~= Read[2])\n"
+                ),
+                3.0,
+            );
+            assert!(has(&lines, "print: set fan true"), "{lines:?}");
+            assert!(has(&lines, "print: read 100 1000 true"), "{lines:?}");
+        });
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        fan.join().unwrap();
+    });
 }
 
 #[test]

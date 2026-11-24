@@ -15,11 +15,6 @@ use crate::{
 
 mod cold;
 
-/// Profiles share process-wide switches with luau_profile's (the caches' switch, the ticker): one test at a time
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    crate::luau_profile::TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 fn start() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options::default()).expect("engine");
     let lua = Lua::new();
@@ -55,15 +50,16 @@ fn ops(lua: &Lua) -> (u64, u64) {
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    std::env::temp_dir().join(format!("ree-profile-{name}-{}-{stamp}", std::process::id()))
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!("ree-profile-{name}-{}-{stamp}-{seq}", std::process::id()))
 }
 
 /// A handler queued while no profile ran still knows, when a profile later delivers it, that its price is a Studio-era one: the job
 /// keeps its signal kind, not the kind bits of the moment it was queued.
 #[test]
 fn a_handler_queued_before_a_profile_keeps_its_price_provenance() {
-    let _lock = lock();
     let (lua, engine) = start();
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -103,7 +99,6 @@ fn a_handler_queued_before_a_profile_keeps_its_price_provenance() {
 /// a loop's lines carry its iterations, calls are counted per callee, and the call tree's totals hold the callees'.
 #[test]
 fn the_instruction_profile_counts_every_instruction_the_vm_counts() {
-    let _lock = lock();
     let lua = Lua::new();
     // (interpreted: a natively compiled chunk dispatches no instruction)
     lua.enable_jit(false);
@@ -145,7 +140,6 @@ fn the_instruction_profile_counts_every_instruction_the_vm_counts() {
 /// between instructions; and a profiled run's work clock is the unprofiled run's, to the bit.
 #[test]
 fn booked_work_adds_up_to_the_work_clock_and_leaves_it_unchanged() {
-    let _lock = lock();
     let script = "local parts = {}\nfor i = 1, 200 do\n\tlocal part = Instance.new(\"Part\")\n\tpart.Name = \"P\" .. i\n\tpart.Transparency = i / 200\n\tparts[i] = part\nend\nlocal total = 0\nfor _, part in parts do\n\ttotal += part.Transparency + part.CFrame.Position.X\nend\nprint(os.clock() > 0, total)\n";
     let measure = |profiled: bool| -> (f64, f64, Vec<String>) {
         let (lua, engine) = start();
@@ -186,7 +180,6 @@ fn booked_work_adds_up_to_the_work_clock_and_leaves_it_unchanged() {
 /// that a constructor built and nothing changes as constants.)
 #[test]
 fn inline_caches_tell_what_each_lookup_did() {
-    let _lock = lock();
     let lua = Lua::new();
     lua.enable_jit(false);
     let state = main_state(&lua);
@@ -283,7 +276,6 @@ fn opcode_names_and_type_tags_follow_the_vendored_headers() {
 /// names its class; table storage and strings are told apart.
 #[test]
 fn allocations_are_typed_and_found_by_their_stack() {
-    let _lock = lock();
     let (lua, engine) = start();
     let config = Config::new(Kinds::ALLOC, temp_dir("alloc"));
     let session = profiler::Session::begin(config.clone());
@@ -330,7 +322,6 @@ fn an_allocation_callback_is_told_its_own_threads_allocation() {
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     };
-    let _lock = lock();
     let stop = Arc::new(AtomicBool::new(false));
     let rounds = Arc::new(AtomicU64::new(0));
     let other = {
@@ -394,7 +385,6 @@ fn an_allocation_callback_is_told_its_own_threads_allocation() {
 /// them, the run's own objects by the stack that made them (a freed object leaves), and garbage not collected yet.
 #[test]
 fn a_heap_snapshot_finds_what_holds_memory() {
-    let _lock = lock();
     let (lua, engine) = start();
     let config = Config::new(Kinds::HEAP.with(Kinds::ALLOC), temp_dir("heap"));
     let session = profiler::Session::begin(config.clone());
@@ -447,8 +437,11 @@ fn heap_profile_with_garbage(churn: u32) -> serde_json::Value {
 /// the headline counted it: +42 % for a UI module whose reachable heap had not moved).
 #[test]
 fn the_heap_headline_is_the_reachable_heap_and_leaves_garbage_out() {
-    let _lock = lock();
-    let (before, after) = (heap_profile_with_garbage(0), heap_profile_with_garbage(20_000));
+    let (before, after) = std::thread::scope(|s| {
+        let a = s.spawn(|| heap_profile_with_garbage(0));
+        let b = s.spawn(|| heap_profile_with_garbage(20_000));
+        (a.join().unwrap(), b.join().unwrap())
+    });
     let (text, diff) = profiler::diff::compare(&before, &after, 10);
     let figures = diff["figures"].as_array().unwrap();
     let figure = |name: &str| figures.iter().find(|figure| figure["name"] == name).unwrap_or_else(|| panic!("no {name:?} in\n{text}"));
@@ -489,7 +482,6 @@ fn objects_by_type(snapshot: &memory::Snapshot) -> std::collections::BTreeMap<St
 /// types' metatables, the fixed names and the strings of a weak table; a weak table's other values are garbage.
 #[test]
 fn a_heap_snapshots_reachable_heap_is_what_a_full_collection_keeps() {
-    let _lock = lock();
     let (lua, engine) = start();
     let state = main_state(&lua);
     let config = Config::new(Kinds::HEAP.with(Kinds::ALLOC), temp_dir("collector"));
@@ -561,7 +553,6 @@ fn a_heap_snapshots_reachable_heap_is_what_a_full_collection_keeps() {
 /// each one it frees).
 #[test]
 fn a_heap_snapshot_during_a_sweep_counts_the_objects_it_has_yet_to_free() {
-    let _lock = lock();
     let (lua, engine) = start();
     let state = main_state(&lua);
     let config = Config::new(Kinds::HEAP.with(Kinds::ALLOC), temp_dir("sweep"));
@@ -599,7 +590,6 @@ fn a_heap_snapshot_during_a_sweep_counts_the_objects_it_has_yet_to_free() {
 /// The collector's steps, cycles and bytes freed come from the VM's interrupt at each step.
 #[test]
 fn the_collectors_work_is_counted() {
-    let _lock = lock();
     let (lua, engine) = start();
     let config = Config::new(Kinds::HEAP, temp_dir("gc"));
     let session = profiler::Session::begin(config.clone());
@@ -619,7 +609,6 @@ fn the_collectors_work_is_counted() {
 /// threads made.
 #[test]
 fn the_timeline_has_a_row_a_frame() {
-    let _lock = lock();
     // (a playing client: one Heartbeat a frame; edit mode beats at 240 Hz)
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -661,7 +650,7 @@ fn run_profiled_page(name: &str, source: &str, game: &str, kinds: &str, seconds:
     let mount = format!("ReplicatedStorage/Game={}", dir.join("game").to_string_lossy().replace('\\', "/"));
     let args: Vec<String> = ["--harness", harness.to_str().unwrap(), "--mount", &mount, "--seconds", seconds, "--profile", kinds, "--profile-out", out.to_str().unwrap()].iter().map(|arg| arg.to_string()).collect();
     // (on a thread with a service worker's stack, as the ree binary runs its commands)
-    let code = std::thread::Builder::new().stack_size(64 << 20).spawn(move || crate::record::run::cli(&args, &crate::launch::Host::default(), false)).unwrap().join().unwrap();
+    let code = std::thread::Builder::new().stack_size(64 << 20).spawn(move || crate::record::run::cli_in_process(&args, &crate::launch::Host::default(), false)).unwrap().join().unwrap();
     assert_eq!(code, 0, "ree run {name}");
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("profile.json")).unwrap()).unwrap();
     let page = std::fs::read_to_string(out.join("report.html")).unwrap();
@@ -675,7 +664,6 @@ fn run_profiled_page(name: &str, source: &str, game: &str, kinds: &str, seconds:
 /// row names its heaviest functions
 #[test]
 fn a_mark_inside_a_frame_splits_its_row_and_each_row_splits_its_work_by_side() {
-    let _lock = lock();
     let harness = "return function(Context)\n\tlocal RunService = game:GetService(\"RunService\")\n\tlocal Spin = require(game.ReplicatedStorage.Game.Spin)\n\tlocal frame = 0\n\tRunService.Heartbeat:Connect(function()\n\t\tframe += 1\n\t\tif frame == 3 then\n\t\t\tlocal x = 0\n\t\t\tfor i = 1, 20000 do\n\t\t\t\tx += i % 5\n\t\t\tend\n\t\t\tContext.ProfilePhase(\"steady\")\n\t\tend\n\t\tSpin.spin(if frame == 6 then 300000 else 300)\n\tend)\n\ttask.wait(Context.Seconds)\nend\n";
     let game = "local M = {}\nfunction M.spin(n)\n\tlocal x = 0\n\tfor i = 1, n do\n\t\tx += i % 7\n\tend\n\treturn x\nend\nreturn M\n";
     let (json, page) = run_profiled_page("split", harness, game, "work,timeline", "0.25");
@@ -726,7 +714,6 @@ fn a_mark_inside_a_frame_splits_its_row_and_each_row_splits_its_work_by_side() {
 /// Function activity unions callers and new closures, but cannot price a replacement's unobserved executed code.
 #[test]
 fn builtin_argument_setup_counts_frames_across_callers_and_new_closures() {
-    let _lock = lock();
     let harness = r#"return function(Context)
     local M = require(game.ReplicatedStorage.Game.Spin)
     local frame = 0
@@ -780,7 +767,6 @@ return M"#;
 /// add up to about the wall time the run took.
 #[test]
 fn host_time_is_booked_in_milliseconds_where_it_was_spent() {
-    let _lock = lock();
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::TIME, temp_dir("time")) };
     let started = std::time::Instant::now();
@@ -811,7 +797,6 @@ fn host_time_is_booked_in_milliseconds_where_it_was_spent() {
 /// each turn), a call that did make a frame stays a call, and the summary, the JSON and a diff show the inlined calls.
 #[test]
 fn inlined_functions_count_their_calls_where_their_copies_run() {
-    let _lock = lock();
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::WORK, temp_dir("inlined")) };
     let session = profiler::Session::begin(config.clone());
@@ -859,7 +844,6 @@ fn inlined_functions_count_their_calls_where_their_copies_run() {
 /// game itself is listed as its facts: the instances the scripts touched, the datatype property reads.
 #[test]
 fn ree_caches_count_hits_and_misses() {
-    let _lock = lock();
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::CACHES, temp_dir("caches")) };
     let session = profiler::Session::begin(config.clone());
@@ -960,7 +944,6 @@ fn boundary_profile(name: &str) -> (String, std::path::PathBuf) {
 /// profiler's own form (`--profile boundary --profile-out <file>`) makes its file's folder too.
 #[test]
 fn the_boundary_kind_writes_its_file_into_a_new_profile_folder() {
-    let _lock = lock();
     let (summary, dir) = boundary_profile("boundary-file");
     let written = std::fs::read_to_string(dir.join("boundary.json"));
     let _ = std::fs::remove_dir_all(dir.parent().unwrap());
@@ -982,7 +965,6 @@ fn the_boundary_kind_writes_its_file_into_a_new_profile_folder() {
 /// every other kind's is: it was only in profile.json.
 #[test]
 fn the_summary_holds_the_boundary_report() {
-    let _lock = lock();
     let (summary, dir) = boundary_profile("boundary-summary");
     let text = std::fs::read_to_string(dir.join("summary.txt")).unwrap();
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("profile.json")).unwrap()).unwrap();
@@ -998,7 +980,6 @@ fn the_summary_holds_the_boundary_report() {
 /// of a profile with itself finds nothing moved while one with more work finds the function that did it.
 #[test]
 fn a_profile_writes_its_files_and_diffs() {
-    let _lock = lock();
     let profile = |name: &str, rounds: u32| -> std::path::PathBuf {
         let (lua, engine) = start();
         let config = Config { print: false, ..Config::new(Kinds::ALL, temp_dir(name)) };
@@ -1081,7 +1062,6 @@ fn section<'a>(summary: &'a str, title: &str) -> &'a str {
 /// apart from the game's: its work moves with what it watches, not with the game
 #[test]
 fn the_summary_reports_the_steady_phase_with_the_harnesss_code_apart() {
-    let _lock = lock();
     let (summary, json) = harness_profile("harness", 30000, None);
     assert!(summary.contains("reported below: phase steady: the game's code"), "{summary}");
     let game = section(&summary, "top functions by self work: the game's code, phase steady");
@@ -1112,7 +1092,6 @@ fn the_summary_reports_the_steady_phase_with_the_harnesss_code_apart() {
 /// A diff of two runs leads with the game's code in the phase both report; the harness's moved work stays apart
 #[test]
 fn a_diff_leads_with_the_games_code_and_keeps_the_harnesss_apart() {
-    let _lock = lock();
     let ((_, before), (_, after)) = (harness_profile("diff-before", 20000, None), harness_profile("diff-after", 60000, None));
     let (text, json) = profiler::diff::compare(&before, &after, 10);
     let figure = |name: &str| json["figures"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap_or_else(|| panic!("no {name} in\n{text}")).clone();
@@ -1153,7 +1132,6 @@ fn stacks_and_types_intern_once() {
 /// up to the run exactly, every frame has its row, and the busy function holds most of it.
 #[test]
 fn hardware_counters_are_booked_to_the_run_its_phases_frames_and_stacks() {
-    let _lock = lock();
     profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
     // (a playing client: one Heartbeat a frame)
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
@@ -1229,7 +1207,6 @@ fn hardware_counters_are_booked_to_the_run_its_phases_frames_and_stacks() {
 /// readings for it, not one a call, and the tiny function's counts are all its caller's, those first calls' too
 #[test]
 fn hardware_counters_leave_short_calls_to_their_callers() {
-    let _lock = lock();
     profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::HW, temp_dir("hw-short")) };
@@ -1264,7 +1241,6 @@ result = total
 /// Runs `source` (a chunk named `name`) under the mock counters (each reading takes the thread's cycle count, so the
 /// booking splits real cycles), then `frames` frames: each function's own cycles by name, the attribution, the summary
 fn booked_cycles(name: &str, source: &str, frames: usize) -> (std::collections::HashMap<String, f64>, serde_json::Value, String) {
-    let _lock = lock();
     profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::HW, temp_dir(name)) };
@@ -1566,7 +1542,6 @@ result = work.main()
 /// Runs `script` under a profile of `kinds` whose hardware counters are the mock's, and returns the script's output with
 /// the `attribution` the profile's counters section reports
 fn run_with_mock_counters(kinds: Kinds, script: &str) -> (Vec<String>, serde_json::Value) {
-    let _lock = lock();
     profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(kinds, temp_dir("same")) };
@@ -1720,8 +1695,7 @@ for _, line in out do
 end
 ";
     let plain = {
-        let _lock = lock();
-        let (lua, engine) = start();
+            let (lua, engine) = start();
         run(&lua, &engine, "same", script)
     };
     assert!(plain.len() == 11 && plain.iter().any(|line| line == "coroutine 1,4,tick 3,16,25,tick 6,done"), "{plain:#?}");
@@ -1737,7 +1711,6 @@ end
 /// Without the counter service the profile says why and the run goes on: no counts, a warning naming what is missing
 #[test]
 fn hardware_counters_say_why_they_were_not_read() {
-    let _lock = lock();
     // (a service run in a console that is not running: deterministic on any machine)
     profiler::hw::TEST_MODE.with(|mode| mode.set(Some("console")));
     let (lua, engine) = start();
@@ -1810,7 +1783,6 @@ fn distribution(part: &serde_json::Value) -> (f64, f64, f64, f64, f64, Vec<(u64,
 /// that grew them, by the line that made them and the line that grew them
 #[test]
 fn table_shapes_are_counted_exactly_by_the_line_that_made_them() {
-    let _lock = lock();
     let source = [
         "local function records()",                                        // 1
         "\tlocal list = table.create(100)",                                // 2
@@ -1887,7 +1859,6 @@ fn table_shapes_are_counted_exactly_by_the_line_that_made_them() {
 /// the inline caches
 #[test]
 fn a_phase_is_the_difference_of_its_marks_counts() {
-    let _lock = lock();
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::ALL, temp_dir("marks")) };
     let session = profiler::Session::begin(config.clone());
@@ -1977,7 +1948,6 @@ copy:Destroy()
 /// clock, so the steady phase's counts are its own; the summary reports them under the reported phase, and a diff compares them
 #[test]
 fn a_phase_counts_what_its_scripts_asked_the_engine_to_do() {
-    let _lock = lock();
     let (summary, json) = engine_ops_profile("engine-ops", 1);
     let ops = &json["scope"]["engine"];
     let count = |name: &str| ops[name].as_u64().unwrap_or_else(|| panic!("no {name} in {ops}"));
@@ -2095,7 +2065,6 @@ fn steady(function: &serde_json::Value, figure: &str) -> f64 {
 /// would move them to the other, so both read the same saving whichever runs first, and so do their hot figures.
 #[test]
 fn the_cold_split_and_a_cuts_saving_do_not_depend_on_which_walker_runs_first() {
-    let _lock = lock();
     // Two walkers over the same 400 records; `$first` runs before `$second` in each frame
     let walkers_source = luau(r#"
         local Records = {}
@@ -2123,9 +2092,13 @@ fn the_cold_split_and_a_cuts_saving_do_not_depend_on_which_walker_runs_first() {
         end)
     "#);
     let walkers = |first: &str, second: &str| walkers_source.replace("$first", first).replace("$second", second);
+    let runs = std::thread::scope(|s| {
+        let ab = s.spawn(|| ("A", "B", stepped_profile("walkers", &walkers("A", "B"), 12, Options::default(), false)));
+        let ba = s.spawn(|| ("B", "A", stepped_profile("walkers", &walkers("B", "A"), 12, Options::default(), false)));
+        [ab.join().unwrap(), ba.join().unwrap()]
+    });
     let mut savings = Vec::new();
-    for (first, second) in [("A", "B"), ("B", "A")] {
-        let (summary, json) = stepped_profile("walkers", &walkers(first, second), 12, Options::default(), false);
+    for (first, second, (summary, json)) in runs {
         let (a, b) = (function_named(&json, first), function_named(&json, second));
         assert_eq!(steady(a, "calls"), steady(b, "calls"));
         // the first pays the records' cold charges (400 tables a frame), the second next to none
@@ -2147,7 +2120,6 @@ fn the_cold_split_and_a_cuts_saving_do_not_depend_on_which_walker_runs_first() {
 /// were 0.1257). A function alone in touching its parts owns every cold charge it pays: its saving is its self work.
 #[test]
 fn a_lone_writers_cold_charges_are_all_its_own() {
-    let _lock = lock();
     let source = luau(r#"
         local Parts = {}
         for I = 1, 50 do
@@ -2185,7 +2157,6 @@ fn a_lone_writers_cold_charges_are_all_its_own() {
 /// pays for them.
 #[test]
 fn a_callee_that_returns_early_pays_for_the_code_it_ran() {
-    let _lock = lock();
     // Big runs 6,000 increments unless Early; Caller calls it every frame
     let early_source = r#"
         local M = {}
@@ -2213,7 +2184,11 @@ fn a_callee_that_returns_early_pays_for_the_code_it_ran() {
         let cold_frames = f64::from(frames);
         (steady(big, "cold_work_ms") / cold_frames * 1e3, steady(caller, "cold_work_ms") / cold_frames * 1e3)
     };
-    let ((early_us, early_caller_us), (full_us, full_caller_us)) = (cold_a_frame(true), cold_a_frame(false));
+    let ((early_us, early_caller_us), (full_us, full_caller_us)) = std::thread::scope(|s| {
+        let a = s.spawn(|| cold_a_frame(true));
+        let b = s.spawn(|| cold_a_frame(false));
+        (a.join().unwrap(), b.join().unwrap())
+    });
     let code_us = 6000.0 * crate::cost::LUAU_COLD_CODE * 1e-3;
     assert!(full_us >= 0.95 * code_us, "run to its end it pays for its code: {full_us} us a frame against {code_us}");
     assert!(early_us < 0.02 * code_us, "returning early it pays for a few instructions: {early_us} us a frame");
@@ -2225,7 +2200,6 @@ fn a_callee_that_returns_early_pays_for_the_code_it_ran() {
 /// total of 16.24 ms and an edge of 14.94 on a run of 3.01)
 #[test]
 fn recursion_adds_a_lines_and_an_edges_work_once() {
-    let _lock = lock();
     let source = luau(r#"
         local M = {}
         function M.fib(N)
@@ -2254,7 +2228,6 @@ fn recursion_adds_a_lines_and_an_edges_work_once() {
 /// times each are 1,500 resumptions at 0.35 us (the audit: 30,000 resumptions charged nothing)
 #[test]
 fn resumptions_are_charged_to_the_line_that_waited() {
-    let _lock = lock();
     let source = luau(r#"
         for I = 1, 500 do
         	task.spawn(function()
@@ -2278,7 +2251,6 @@ fn resumptions_are_charged_to_the_line_that_waited() {
 /// property's changed signal (the audit: 67 % of the work outside any instruction, no connect site named)
 #[test]
 fn handlers_are_booked_to_the_site_that_connected_them() {
-    let _lock = lock();
     let source = luau(r#"
         local RunService = game:GetService("RunService")
         local Part = Instance.new("Part")
@@ -2310,7 +2282,6 @@ fn handlers_are_booked_to_the_site_that_connected_them() {
 /// gives the factor's band (the audit: 0.78 ms on a phone against 1.42 on a desktop, no device named)
 #[test]
 fn a_phone_profile_reads_in_its_clocks_units() {
-    let _lock = lock();
     let source = luau(r#"
         local Parts = {}
         for I = 1, 50 do
@@ -2322,8 +2293,11 @@ fn a_phone_profile_reads_in_its_clocks_units() {
         	end
         end)
     "#);
-    let (desktop_summary, desktop) = stepped_profile("desktop", source, 6, Options::default(), false);
-    let (phone_summary, phone) = stepped_profile("phone", source, 6, Options { device: "phone".into(), ..Options::default() }, false);
+    let ((desktop_summary, desktop), (phone_summary, phone)) = std::thread::scope(|s| {
+        let d = s.spawn(|| stepped_profile("desktop", source, 6, Options::default(), false));
+        let p = s.spawn(|| stepped_profile("phone", source, 6, Options { device: "phone".into(), ..Options::default() }, false));
+        (d.join().unwrap(), p.join().unwrap())
+    });
     let work = |json: &serde_json::Value| json["work"]["total_ms"].as_f64().unwrap();
     assert!((work(&phone) / work(&desktop) - crate::cost::PHONE_SCRIPTS).abs() < 1e-6, "{} against {}", work(&phone), work(&desktop));
     assert_eq!(phone["work"]["units"], serde_json::json!({"device": "phone", "scale": crate::cost::PHONE_SCRIPTS}));
@@ -2340,7 +2314,6 @@ fn a_phone_profile_reads_in_its_clocks_units() {
 
 #[test]
 fn cache_and_builtin_prices_use_the_same_device_units_as_the_clock() {
-    let _lock = lock();
     let source = luau(r#"
         getfenv()
         local M = {}
@@ -2355,8 +2328,11 @@ fn cache_and_builtin_prices_use_the_same_device_units_as_the_clock() {
         game:GetService("RunService").Heartbeat:Connect(M.Frame)
     "#);
     let kinds = Kinds::parse("work,caches").unwrap();
-    let (_, desktop) = stepped_profile_kinds("device-sites", source, 4, Options::default(), false, kinds);
-    let (_, phone) = stepped_profile_kinds("device-sites", source, 4, Options { device: "phone".into(), ..Options::default() }, false, kinds);
+    let ((_, desktop), (_, phone)) = std::thread::scope(|s| {
+        let d = s.spawn(|| stepped_profile_kinds("device-sites", source, 4, Options::default(), false, kinds));
+        let p = s.spawn(|| stepped_profile_kinds("device-sites", source, 4, Options { device: "phone".into(), ..Options::default() }, false, kinds));
+        (d.join().unwrap(), p.join().unwrap())
+    });
     assert_eq!(phone["luau_caches"]["prices"]["scale"], crate::cost::PHONE_SCRIPTS);
     for field in ["charged_work_us", "extra_work_us"] {
         let sum = |json: &serde_json::Value| json["luau_caches"]["sites"].as_array().unwrap().iter().map(|site| site[field].as_f64().unwrap()).sum::<f64>();
@@ -2376,7 +2352,6 @@ fn cache_and_builtin_prices_use_the_same_device_units_as_the_clock() {
 /// what the clock charges one of each (cost::luau of a counter set holding one), the collector's apart from the allocation's
 #[test]
 fn work_prices_give_each_counts_price() {
-    let _lock = lock();
     let (_, json) = stepped_profile("prices", "result = {}\n", 1, Options::default(), false);
     let prices = &json["work"]["prices"];
     let close = |key: &str, ns: f64| {
@@ -2404,7 +2379,6 @@ fn work_prices_give_each_counts_price() {
 /// is no budget loop (the review: a clock accessor, a rate limiter and a cache timestamp were listed)
 #[test]
 fn a_budget_loop_is_named_and_does_what_its_budget_buys() {
-    let _lock = lock();
     // (line 7 is the loop's check; Work is a callee the iteration's work includes; Stamp reads the clock once a call, three calls a
     // frame, at line 17; a thread that waits each iteration reads it once an iteration at line 21, and a generator resumed five times a
     // frame once a resumption at line 27: across a yield the clock's advance is everything else that ran, no iteration's work)
@@ -2446,8 +2420,11 @@ fn a_budget_loop_is_named_and_does_what_its_budget_buys() {
         end)
     "#);
     let frames = 6u32;
-    let (summary, normal) = stepped_profile("budget", source, frames, Options::default(), false);
-    let (_, frozen) = stepped_profile("budget-frozen", source, frames, Options::default(), true);
+    let ((summary, normal), (_, frozen)) = std::thread::scope(|s| {
+        let n = s.spawn(|| stepped_profile("budget", source, frames, Options::default(), false));
+        let f = s.spawn(|| stepped_profile("budget-frozen", source, frames, Options::default(), true));
+        (n.join().unwrap(), f.join().unwrap())
+    });
     let per_frame = |json: &serde_json::Value| json["work"]["total_ms"].as_f64().unwrap() / f64::from(frames);
     assert!(per_frame(&normal) >= 0.2 && per_frame(&normal) < 0.25, "the budget buys 0.2 ms a frame: {}", per_frame(&normal));
     assert!((per_frame(&frozen) / per_frame(&normal) - 1.0).abs() > 0.5, "frozen, the loop does other work: {} against {}", per_frame(&frozen), per_frame(&normal));
@@ -2481,16 +2458,19 @@ fn a_budget_loop_is_named_and_does_what_its_budget_buys() {
 /// event's Wait, and a wait in a helper the loop calls, which returns into the loop in a frame the loop never entered
 #[test]
 fn a_loop_that_yields_pays_for_its_body_every_frame() {
-    let _lock = lock();
     let frames = 30u32;
     let code_us = 300.0 * crate::cost::LUAU_COLD_CODE * 1e-3;
-    for (wait, helper) in [
+    let cases = [
         ("task.wait()", ""),
         ("game:GetService(\"RunService\").Heartbeat:Wait()", ""),
         ("Sleep()", "local function Sleep()\n\ttask.wait()\nend\n"),
-    ] {
-        let cold_a_frame = |lines: usize| {
-            let source = r#"
+    ];
+    std::thread::scope(|s| {
+        let handles: Vec<_> = cases
+            .into_iter()
+            .map(|(wait, helper)| {
+                let make = move |lines: usize| {
+                    let source = r#"
                 $helper
                 local function Loop()
                     local X = 0
@@ -2501,34 +2481,44 @@ fn a_loop_that_yields_pays_for_its_body_every_frame() {
                 end
                 task.spawn(Loop)
             "#
-            .replace("$helper", helper)
-            .replace("$body", &"X += 1\n".repeat(lines))
-            .replace("$wait", wait);
-            let (summary, json) = stepped_profile("yields", &source, frames, Options::default(), false);
-            // (the first frame runs the function the script made just before it: an object made in the frame is not cold)
-            (steady(function_named(&json, "Loop"), "cold_work_ms") / f64::from(frames - 1) * 1e3, summary)
-        };
-        // (the body's 300 instructions each frame, beyond what the loop's wait and its few other instructions are charged cold)
-        let ((with_us, summary), (without_us, _)) = (cold_a_frame(300), cold_a_frame(0));
-        let body_us = with_us - without_us;
-        assert!(body_us >= 0.95 * code_us && body_us <= 1.05 * code_us, "{wait}: {with_us} us a frame with the body, {without_us} without, against {code_us}\n{summary}");
-    }
+                    .replace("$helper", helper)
+                    .replace("$body", &"X += 1\n".repeat(lines))
+                    .replace("$wait", wait);
+                    let (summary, json) = stepped_profile("yields", &source, frames, Options::default(), false);
+                    // (the first frame runs the function the script made just before it: an object made in the frame is not cold)
+                    (steady(function_named(&json, "Loop"), "cold_work_ms") / f64::from(frames - 1) * 1e3, summary)
+                };
+                let with = s.spawn(move || make(300));
+                let without = s.spawn(move || make(0));
+                (wait, with, without)
+            })
+            .collect();
+        for (wait, with, without) in handles {
+            // (the body's 300 instructions each frame, beyond what the loop's wait and its few other instructions are charged cold)
+            let ((with_us, summary), (without_us, _)) = (with.join().unwrap(), without.join().unwrap());
+            let body_us = with_us - without_us;
+            assert!(body_us >= 0.95 * code_us && body_us <= 1.05 * code_us, "{wait}: {with_us} us a frame with the body, {without_us} without, against {code_us}\n{summary}");
+        }
+    });
 }
 
 /// A function that errors pays for the code it ran (the review: a pcall'd function that raised was never charged, its stretch never
 /// closed): raised by error() or by an instruction, caught by pcall, or ending the thread it ran on
 #[test]
 fn a_function_that_errors_pays_for_the_code_it_ran() {
-    let _lock = lock();
     let frames = 10u32;
     let code_us = 300.0 * crate::cost::LUAU_COLD_CODE * 1e-3;
-    for (raise, call) in [
+    let cases = [
         ("error(\"no\")", "pcall(M.Fails)"),
         ("local T = nil\n\tT.Field = X", "pcall(M.Fails)"),
         ("error(\"no\")", "task.spawn(M.Fails)"),
-    ] {
-        let cold_a_frame = |lines: usize| {
-            let source = r#"
+    ];
+    std::thread::scope(|s| {
+        let handles: Vec<_> = cases
+            .into_iter()
+            .map(|(raise, call)| {
+                let make = move |lines: usize| {
+                    let source = r#"
                 local M = {}
                 function M.Fails()
                     local X = 0
@@ -2539,30 +2529,40 @@ fn a_function_that_errors_pays_for_the_code_it_ran() {
                     $call
                 end)
             "#
-            .replace("$body", &"X += 1\n".repeat(lines))
-            .replace("$raise", raise)
-            .replace("$call", call);
-            let (summary, json) = stepped_profile("errors", &source, frames, Options::default(), false);
-            assert_eq!(steady(function_named(&json, "Fails"), "calls"), f64::from(frames), "{summary}");
-            // Code pays at dispatch in every frame, including code loaded during that frame.
-            (steady(function_named(&json, "Fails"), "cold_work_ms") / f64::from(frames) * 1e3, summary)
-        };
-        // (the 300 instructions it ran before the error, beyond what raising it is charged cold)
-        let ((with_us, summary), (without_us, _)) = (cold_a_frame(300), cold_a_frame(0));
-        let body_us = with_us - without_us;
-        assert!(body_us >= 0.95 * code_us && body_us <= 1.05 * code_us, "{raise} / {call}: {with_us} us a frame with the body, {without_us} without, against {code_us}\n{summary}");
-    }
+                    .replace("$body", &"X += 1\n".repeat(lines))
+                    .replace("$raise", raise)
+                    .replace("$call", call);
+                    let (summary, json) = stepped_profile("errors", &source, frames, Options::default(), false);
+                    assert_eq!(steady(function_named(&json, "Fails"), "calls"), f64::from(frames), "{summary}");
+                    // Code pays at dispatch in every frame, including code loaded during that frame.
+                    (steady(function_named(&json, "Fails"), "cold_work_ms") / f64::from(frames) * 1e3, summary)
+                };
+                let with = s.spawn(move || make(300));
+                let without = s.spawn(move || make(0));
+                (raise, call, with, without)
+            })
+            .collect();
+        for (raise, call, with, without) in handles {
+            // (the 300 instructions it ran before the error, beyond what raising it is charged cold)
+            let ((with_us, summary), (without_us, _)) = (with.join().unwrap(), without.join().unwrap());
+            let body_us = with_us - without_us;
+            assert!(body_us >= 0.95 * code_us && body_us <= 1.05 * code_us, "{raise} / {call}: {with_us} us a frame with the body, {without_us} without, against {code_us}\n{summary}");
+        }
+    });
 }
 
 /// Large buffer work (> 1 KB fresh, >= 64 KB segment, > 64 KB L2/L3 copy, > 1 MB DRAM copy) is priced across cache tiers
 /// on the work clock rather than left unpriced, while marks still report the raw large-buffer byte counters.
 #[test]
 fn large_buffer_work_is_priced_across_cache_tiers() {
-    let _lock = lock();
     let frames = 3u32;
     let source = |size: u64| format!("local A, B = buffer.create({size}), buffer.create({size})\ngame:GetService(\"RunService\").Heartbeat:Connect(function()\n\tbuffer.copy(A, 0, B)\n\tbuffer.fill(A, 0, 7)\n\tlocal _ = buffer.create({size})\nend)\n");
     let size = 256 * 1024u64;
-    let (summary, json) = stepped_profile("buffers-large", &source(size), frames, Options::default(), false);
+    let ((summary, json), (small, small_json)) = std::thread::scope(|s| {
+        let large = s.spawn(|| stepped_profile("buffers-large", &source(size), frames, Options::default(), false));
+        let tiny = s.spawn(|| stepped_profile("buffers-small", &source(1024), frames, Options::default(), false));
+        (large.join().unwrap(), tiny.join().unwrap())
+    });
     let unpriced = &json["work"]["unpriced"];
     assert_eq!(unpriced["buffer_big_bytes"].as_u64(), Some(0), "{unpriced}");
     assert_eq!(unpriced["buffer_fresh_bytes"].as_u64(), Some(0), "{unpriced}");
@@ -2570,7 +2570,6 @@ fn large_buffer_work_is_priced_across_cache_tiers() {
     let fresh = unpriced["priced_large_buffer_fresh_bytes"].as_u64().unwrap();
     assert!(fresh >= size * u64::from(frames) && fresh <= size * u64::from(frames + 2), "{unpriced}");
     assert!(!summary.contains("unpriced: "), "{summary}");
-    let (small, small_json) = stepped_profile("buffers-small", &source(1024), frames, Options::default(), false);
     assert_eq!((small_json["work"]["unpriced"]["priced_large_buffer_big_bytes"].as_u64(), small_json["work"]["unpriced"]["priced_large_buffer_fresh_bytes"].as_u64()), (Some(0), Some(0)));
     assert!(json["work"]["total_ms"].as_f64().unwrap() > small_json["work"]["total_ms"].as_f64().unwrap() + 0.1, "large buffer work should include tiered buffer charges");
     assert!(!small.contains("unpriced: "), "{small}");
@@ -2580,7 +2579,6 @@ fn large_buffer_work_is_priced_across_cache_tiers() {
 /// waiting on the event ahead of a lone handler made the handler pay as a second one)
 #[test]
 fn a_frame_events_first_handler_that_runs_pays_no_frame_handler() {
-    let _lock = lock();
     let source = luau(r#"
         local RunService = game:GetService("RunService")
         RunService.Heartbeat:Connect(function() end)
@@ -2600,7 +2598,6 @@ fn a_frame_events_first_handler_that_runs_pays_no_frame_handler() {
 /// instructions and C call add work; moving the allocation into C must not make it cheaper.
 #[test]
 fn declined_substrings_pay_the_same_for_their_result_strings() {
-    let _lock = lock();
     let measure = |decline: bool| {
         let lua = Lua::new();
         lua.enable_jit(false);
@@ -2632,7 +2629,6 @@ fn declined_substrings_pay_the_same_for_their_result_strings() {
 /// for `string.byte`'s index
 #[test]
 fn substring_argument_fixes_add_the_expected_warm_instructions_and_code_words() {
-    let _lock = lock();
     // The prototype of `Read`, which calls the builtin ten times, with the call as the source gives it
     let measure_read = |call: &str| {
         let lua = Lua::new();
@@ -2676,7 +2672,6 @@ fn substring_argument_fixes_add_the_expected_warm_instructions_and_code_words() 
 #[test]
 #[should_panic(expected = "checked after the wait")]
 fn a_test_script_is_checked_after_it_waits() {
-    let _guard = lock();
     let (lua, engine) = start();
     run(&lua, &engine, "Test", "task.wait() assert(false, 'checked after the wait')");
 }

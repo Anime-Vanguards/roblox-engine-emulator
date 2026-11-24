@@ -45,7 +45,6 @@ fn close(actual: f64, expected: f64, context: &str) {
 
 #[test]
 fn newly_loaded_code_pays_once_even_before_the_first_render() {
-    let _lock = lock();
     let (lua, _engine) = start();
     let leaf: LuaFunction = lua.load("return function(X) return X + 1 end").eval().unwrap();
     let cold = || cold_code(&lua);
@@ -69,7 +68,6 @@ fn newly_loaded_code_pays_once_even_before_the_first_render() {
 
 #[test]
 fn breakpoint_changes_preserve_whether_an_instruction_ran() {
-    let _lock = lock();
     let (lua, _engine) = start();
     let leaf: LuaFunction = lua.load("local M = {}\nfunction M.Leaf(X)\nreturn X + 1\nend\nreturn M.Leaf").eval().unwrap();
     let breakpoint = |enabled| unsafe {
@@ -95,7 +93,6 @@ fn breakpoint_changes_preserve_whether_an_instruction_ran() {
 
 #[test]
 fn tracking_can_restart_after_prototypes_are_collected() {
-    let _lock = lock();
     let (lua, _engine) = start();
     for _ in 0..3 {
         let leaf: LuaFunction = lua.load("return function(X) return X + 1 end").eval().unwrap();
@@ -119,7 +116,6 @@ fn tracking_can_restart_after_prototypes_are_collected() {
 
 #[test]
 fn marking_a_loaded_engine_chunk_revokes_its_cold_code() {
-    let _lock = lock();
     let (lua, _engine) = start();
     let function = lua.load("return function(X) local function Inner(Y) return Y + 1 end return Inner(X) end").eval().unwrap();
     let function = crate::cost::engine_luau(&lua, function).unwrap();
@@ -134,7 +130,6 @@ fn marking_a_loaded_engine_chunk_revokes_its_cold_code() {
 
 #[test]
 fn a_binding_helpers_code_belongs_to_its_executing_frame() {
-    let _lock = lock();
     let (lua, _engine) = start();
     let helper: LuaFunction = lua.load("local M = {} function M.Helper(X) return X + 1 end return M.Helper").set_name("=__mlua.cold-test").eval().unwrap();
     let caller: LuaFunction = lua.load("return function(Helper) return Helper(1) end").set_name("=cold-caller").eval().unwrap();
@@ -206,9 +201,14 @@ fn check_body(template: &str, executions: [u32; FRAMES as usize], lines: usize) 
     let template = template.replace("$body", "X += 1\n$body");
     let lines_before_body = template[..template.find("$body").unwrap()].bytes().filter(|&byte| byte == b'\n').count() as i64;
     let first = lines_before_body + 1;
-    let filled = frame_profile(&template.replace("$body", &"X += 1\n".repeat(lines)));
-    // Errors include their line number in the allocated message. Keep it identical too.
-    let empty = frame_profile(&template.replace("$body", &"\n".repeat(lines)));
+    let (filled, empty) = std::thread::scope(|s| {
+        let filled_src = template.replace("$body", &"X += 1\n".repeat(lines));
+        // Errors include their line number in the allocated message. Keep it identical too.
+        let empty_src = template.replace("$body", &"\n".repeat(lines));
+        let f = s.spawn(move || frame_profile(&filled_src));
+        let e = s.spawn(move || frame_profile(&empty_src));
+        (f.join().unwrap(), e.join().unwrap())
+    });
     let probe = function_named(&filled, "Probe");
     let empty_probe = function_named(&empty, "Probe");
     let id = probe["id"].as_i64().unwrap();
@@ -248,18 +248,28 @@ task.spawn(M.Probe)
 
 #[test]
 fn waits_and_non_inlined_helpers_charge_the_body_in_every_frame() {
-    let _lock = lock();
-    for (helper, wait) in [
+    let cases = [
         ("", "task.wait()"),
         ("", "game:GetService(\"RunService\").Heartbeat:Wait()"),
         ("local function Sleep() task.wait() end", "Sleep()"),
         ("local function Inner() task.wait() end local function Sleep() Inner() end", "Sleep()"),
         ("local function Sleep() task.wait() end", "pcall(Sleep)"),
         ("function M.Sleep() task.wait() end", "M.Sleep()"),
-    ] {
-        let source = WAITING_PROBE.replace("$helper", helper).replace("$wait", wait);
-        check(&source, [1; FRAMES as usize]);
-    }
+    ];
+    std::thread::scope(|s| {
+        let handles: Vec<_> = cases
+            .into_iter()
+            .map(|(helper, wait)| {
+                s.spawn(move || {
+                    let source = WAITING_PROBE.replace("$helper", helper).replace("$wait", wait);
+                    check(&source, [1; FRAMES as usize]);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
 }
 
 /// Probe runs its body, then fails; `$call` runs Probe from every Heartbeat
@@ -280,22 +290,31 @@ end)
 
 #[test]
 fn errors_charge_the_body_before_the_handler_runs() {
-    let _lock = lock();
-    for (raise, call) in [
+    let cases = [
         ("error(\"expected\")", "pcall(M.Probe)"),
         ("error(\"expected\")", "xpcall(M.Probe, M.Handler)"),
         ("local T = nil T.Field = X", "pcall(M.Probe)"),
         ("error(\"expected\")", "coroutine.resume(coroutine.create(M.Probe))"),
         ("error(\"expected\")", "task.spawn(M.Probe)"),
-    ] {
-        let source = FAILING_PROBE.replace("$raise", raise).replace("$call", call);
-        check(&source, [1; FRAMES as usize]);
-    }
+    ];
+    std::thread::scope(|s| {
+        let handles: Vec<_> = cases
+            .into_iter()
+            .map(|(raise, call)| {
+                s.spawn(move || {
+                    let source = FAILING_PROBE.replace("$raise", raise).replace("$call", call);
+                    check(&source, [1; FRAMES as usize]);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
 }
 
 #[test]
 fn a_yielding_coroutine_and_generic_iterator_keep_the_bodys_charge() {
-    let _lock = lock();
     let yielding_coroutine = r#"
 local M = {}
 function M.Probe()
@@ -310,7 +329,6 @@ game:GetService("RunService").Heartbeat:Connect(function()
 	coroutine.resume(Co)
 end)
 "#;
-    check(yielding_coroutine, [1; FRAMES as usize]);
     let generic_iterator = r#"
 local M = {}
 function M.Iter()
@@ -325,7 +343,12 @@ function M.Probe()
 end
 task.spawn(M.Probe)
 "#;
-    check(generic_iterator, [1; FRAMES as usize]);
+    std::thread::scope(|s| {
+        let a = s.spawn(|| check(yielding_coroutine, [1; FRAMES as usize]));
+        let b = s.spawn(|| check(generic_iterator, [1; FRAMES as usize]));
+        a.join().unwrap();
+        b.join().unwrap();
+    });
 }
 
 /// Two threads run Probe, and only the one started with mode 3 ever reaches the body, in a branch the others skip. `$wait` suspends a
@@ -354,7 +377,6 @@ $start
 
 #[test]
 fn suspended_threads_never_charge_the_branch_between_them() {
-    let _lock = lock();
     let resume_both = r#"
 local A, B = coroutine.create(M.Probe), coroutine.create(M.Probe)
 coroutine.resume(A, 1)
@@ -364,15 +386,24 @@ game:GetService("RunService").Heartbeat:Connect(function()
 	coroutine.resume(B)
 end)
 "#;
-    for (wait, start) in [("task.wait()", "task.spawn(M.Probe, 1)\ntask.spawn(M.Probe, 2)"), ("coroutine.yield()", resume_both)] {
-        let source = SUSPENDED_PROBES.replace("$wait", wait).replace("$start", start);
-        check(&source, [0; FRAMES as usize]);
-    }
+    std::thread::scope(|s| {
+        let handles: Vec<_> = [("task.wait()", "task.spawn(M.Probe, 1)\ntask.spawn(M.Probe, 2)"), ("coroutine.yield()", resume_both)]
+            .into_iter()
+            .map(|(wait, start)| {
+                s.spawn(move || {
+                    let source = SUSPENDED_PROBES.replace("$wait", wait).replace("$start", start);
+                    check(&source, [0; FRAMES as usize]);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
 }
 
 #[test]
 fn reentry_through_another_function_charges_both_frames_prefixes() {
-    let _lock = lock();
     let template = r#"
 local M = {}
 function M.Sleep()
@@ -398,12 +429,18 @@ game:GetService("RunService").Heartbeat:Connect(function()
 	$start
 end)
 "#;
-    for (wait, start) in [
-        ("task.wait()", "if Count == 2 then task.spawn(M.Probe, 0) end"),
-        ("coroutine.yield()", "if Count == 2 then coroutine.resume(Co, 0) elseif Count > 2 and coroutine.status(Co) ~= \"dead\" then coroutine.resume(Co) end"),
-    ] {
-        check(&template.replace("$wait", wait).replace("$start", start), [1, 1, 0, 0]);
-    }
+    std::thread::scope(|s| {
+        let handles: Vec<_> = [
+            ("task.wait()", "if Count == 2 then task.spawn(M.Probe, 0) end"),
+            ("coroutine.yield()", "if Count == 2 then coroutine.resume(Co, 0) elseif Count > 2 and coroutine.status(Co) ~= \"dead\" then coroutine.resume(Co) end"),
+        ]
+        .into_iter()
+        .map(|(wait, start)| s.spawn(move || check(&template.replace("$wait", wait).replace("$start", start), [1, 1, 0, 0])))
+        .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
 }
 
 /// Two coroutines run the same Probe, resumed from every Heartbeat
@@ -425,14 +462,12 @@ end)
 
 #[test]
 fn two_coroutines_share_the_same_executed_code_once_a_frame() {
-    let _lock = lock();
     // (each runs the body once a frame, and its instructions are dispatched twice)
     check(TWO_COROUTINES, [2; FRAMES as usize]);
 }
 
 #[test]
 fn large_bodies_keep_their_work_and_dead_branches_keep_none() {
-    let _lock = lock();
     const LARGE_BODY: usize = 30_000;
     let caught_error = r#"
 local M = {}
@@ -448,7 +483,6 @@ game:GetService("RunService").Heartbeat:Connect(function()
 	xpcall(M.Probe, M.Handler)
 end)
 "#;
-    check_body(caught_error, [1; FRAMES as usize], LARGE_BODY);
     let generic_iterator = r#"
 local M = {}
 function M.Iter()
@@ -463,7 +497,6 @@ function M.Probe()
 end
 task.spawn(M.Probe)
 "#;
-    check_body(generic_iterator, [1; FRAMES as usize], LARGE_BODY);
     let dead_branch = r#"
 local M = {}
 function M.Sleep()
@@ -491,7 +524,14 @@ game:GetService("RunService").Heartbeat:Connect(function()
 	coroutine.resume(B)
 end)
 "#;
-    check_body(dead_branch, [0; FRAMES as usize], LARGE_BODY);
+    std::thread::scope(|s| {
+        let a = s.spawn(|| check_body(caught_error, [1; FRAMES as usize], LARGE_BODY));
+        let b = s.spawn(|| check_body(generic_iterator, [1; FRAMES as usize], LARGE_BODY));
+        let c = s.spawn(|| check_body(dead_branch, [0; FRAMES as usize], LARGE_BODY));
+        a.join().unwrap();
+        b.join().unwrap();
+        c.join().unwrap();
+    });
 }
 
 fn frame_mark(json: &serde_json::Value, frame: u32) -> &serde_json::Value {
@@ -505,9 +545,12 @@ fn frame_mark(json: &serde_json::Value, frame: u32) -> &serde_json::Value {
 
 #[test]
 fn buffer_sizes_count_every_unpriced_byte_in_its_frame() {
-    let _lock = lock();
-    for size in [1024u64, 1025, 65_536, 65_537, 262_144] {
-        let source = r#"
+    std::thread::scope(|s| {
+        let handles: Vec<_> = [1024u64, 1025, 65_536, 65_537, 262_144]
+            .into_iter()
+            .map(|size| {
+                s.spawn(move || {
+                    let source = r#"
 local A, B = buffer.create($size), buffer.create($size)
 local S = string.rep("a", $size)
 game:GetService("RunService").Heartbeat:Connect(function()
@@ -517,49 +560,63 @@ game:GetService("RunService").Heartbeat:Connect(function()
 	local C = buffer.create($size)
 end)
 "#;
-        let json = frame_profile(&source.replace("$size", &size.to_string()));
-        for frame in 1..=FRAMES {
-            let before = &frame_mark(&json, frame)["vm"];
-            let after = &frame_mark(&json, frame + 1)["vm"];
-            for (counter, expected) in [
-                ("buffer_big_bytes", if size > 65_536 { 3 * size } else { 0 }),
-                ("buffer_fresh_bytes", if size > 1024 { size } else { 0 }),
-            ] {
-                let counted = after[counter].as_u64().unwrap() - before[counter].as_u64().unwrap();
-                assert_eq!(counted, expected, "{counter}, size {size}, frame {frame}");
-            }
+                    let json = frame_profile(&source.replace("$size", &size.to_string()));
+                    for frame in 1..=FRAMES {
+                        let before = &frame_mark(&json, frame)["vm"];
+                        let after = &frame_mark(&json, frame + 1)["vm"];
+                        for (counter, expected) in [
+                            ("buffer_big_bytes", if size > 65_536 { 3 * size } else { 0 }),
+                            ("buffer_fresh_bytes", if size > 1024 { size } else { 0 }),
+                        ] {
+                            let counted = after[counter].as_u64().unwrap() - before[counter].as_u64().unwrap();
+                            assert_eq!(counted, expected, "{counter}, size {size}, frame {frame}");
+                        }
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
         }
-    }
+    });
 }
 
 #[test]
 fn only_handlers_that_run_count_toward_each_frames_dispatch() {
-    let _lock = lock();
     let return_op = (0..=u8::MAX).find(|&op| vm::opcode_name(op) == "RETURN").unwrap();
-    for count in 1..=3 {
-        let mut source = "local RS = game:GetService(\"RunService\")\nlocal M = {}\n".to_owned();
-        for handler in 1..=count {
-            source.push_str(&format!("function M.Handler{handler}() end\nRS.Heartbeat:Connect(M.Handler{handler})\n"));
+    std::thread::scope(|s| {
+        let handles: Vec<_> = (1..=3)
+            .map(|count| {
+                s.spawn(move || {
+                    let mut source = "local RS = game:GetService(\"RunService\")\nlocal M = {}\n".to_owned();
+                    for handler in 1..=count {
+                        source.push_str(&format!("function M.Handler{handler}() end\nRS.Heartbeat:Connect(M.Handler{handler})\n"));
+                    }
+                    source.push_str("local Co = task.spawn(function() RS.Heartbeat:Wait() end)\ntask.cancel(Co)\n");
+                    let json = frame_profile(&source);
+                    let dispatch_ms = f64::from(count - 1) * crate::cost::FRAME_HANDLER * 1e3;
+                    let return_ms = f64::from(count) * crate::cost::INTERPRETED_OPS[return_op as usize] * 1e-6;
+                    for frame in 1..=FRAMES {
+                        let phase = format!("frame{frame}");
+                        let mut hot = 0.0;
+                        for handler in 1..=count {
+                            let function = function_named(&json, &format!("Handler{handler}"));
+                            let figures = &function["phases"][&phase];
+                            assert_eq!(figures["calls"].as_u64(), Some(1));
+                            assert_eq!(figures["insns"].as_u64(), Some(1));
+                            hot += figures["self_work_ms"].as_f64().unwrap() - figures["cold_work_ms"].as_f64().unwrap() - figures["collector_ms"].as_f64().unwrap();
+                        }
+                        close(hot, return_ms + dispatch_ms, &format!("{count} handlers, {phase}"));
+                    }
+                    let sites = json["handlers"].as_array().unwrap();
+                    assert_eq!(sites.len(), count as usize);
+                    let dispatch: f64 = sites.iter().map(|site| site["dispatch_ms"].as_f64().unwrap()).sum();
+                    close(dispatch, dispatch_ms * f64::from(FRAMES + 1), "setup and measured dispatches");
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
         }
-        source.push_str("local Co = task.spawn(function() RS.Heartbeat:Wait() end)\ntask.cancel(Co)\n");
-        let json = frame_profile(&source);
-        let dispatch_ms = f64::from(count - 1) * crate::cost::FRAME_HANDLER * 1e3;
-        let return_ms = f64::from(count) * crate::cost::INTERPRETED_OPS[return_op as usize] * 1e-6;
-        for frame in 1..=FRAMES {
-            let phase = format!("frame{frame}");
-            let mut hot = 0.0;
-            for handler in 1..=count {
-                let function = function_named(&json, &format!("Handler{handler}"));
-                let figures = &function["phases"][&phase];
-                assert_eq!(figures["calls"].as_u64(), Some(1));
-                assert_eq!(figures["insns"].as_u64(), Some(1));
-                hot += figures["self_work_ms"].as_f64().unwrap() - figures["cold_work_ms"].as_f64().unwrap() - figures["collector_ms"].as_f64().unwrap();
-            }
-            close(hot, return_ms + dispatch_ms, &format!("{count} handlers, {phase}"));
-        }
-        let sites = json["handlers"].as_array().unwrap();
-        assert_eq!(sites.len(), count as usize);
-        let dispatch: f64 = sites.iter().map(|site| site["dispatch_ms"].as_f64().unwrap()).sum();
-        close(dispatch, dispatch_ms * f64::from(FRAMES + 1), "setup and measured dispatches");
-    }
+    });
 }
