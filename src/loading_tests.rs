@@ -34,6 +34,10 @@ fn script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
     }
     let now = engine.state.borrow().sched.now;
     scheduler::run_until(lua, engine, now + 1.0).unwrap();
+    // (then to the script's end: what follows a wait past the second is checked too)
+    if let Err(message) = call.finish(lua, engine) {
+        panic!("test script failed: {message}");
+    }
     let entries = &engine.state.borrow().output.entries;
     let errors: Vec<String> = entries.iter().filter(|e| e.kind == "error").map(|e| e.message.to_string()).collect();
     assert!(errors.is_empty(), "{errors:?}");
@@ -532,4 +536,12 @@ fn loadmodule_without_native_loads_each_chunk_in_its_own_environment() {
     );
     let lines = script(&lua, &engine, &source);
     check(&lines, &["script reads cost as required true true true", "metatables shared false frozen false writable true"]);
+}
+
+/// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
+/// wait past the helper's second used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    run(Options::default(), "task.wait(2) assert(false, 'checked after the wait')");
 }

@@ -39,7 +39,7 @@ fn run_with(lua: &Lua, engine: &Rc<Engine>, name: &str, source: &str, prepare: i
     prepare(&env);
     let function = lua.load(source).set_name(format!("={name}")).set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(lua, engine, function, LuaMultiValue::new()).expect("call");
-    if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+    if let Err(message) = call.finish(lua, engine) {
         panic!("test script failed: {message}");
     }
 }
@@ -521,6 +521,10 @@ fn frame_charge_profile_with(name: &str, source: &str, unsafe_env: bool, frames:
     env.raw_set("measuring", true).unwrap();
     for _ in 0..frames {
         scheduler::step(&lua, &engine, Some(1.0 / 60.0)).unwrap();
+    }
+    // (a script that fails while the frames are profiled fails the test; one still running after them profiled its window)
+    if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+        panic!("test script failed: {message}");
     }
     profiler::collect(&lua);
     let all = frames as u64 + 1;
@@ -1271,4 +1275,16 @@ fn a_tools_harness_is_rees_own_code() {
     let imports = |rows: &Json| rows.as_array().unwrap().iter().find(|row| row["kind"] == "import").map_or(0, |row| row["lookups"].as_u64().unwrap());
     assert_eq!((imports(&json["luau_caches"]["by_kind"]), imports(&json["luau_caches"]["tool"]["by_kind"])), (1000, 2000), "{:#}", json["luau_caches"]["by_kind"]);
     assert!(summary.contains("ree's own code's builtin calls: 2,000 calls"), "{summary}");
+}
+
+/// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
+/// task.wait() used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    let _guard = lock();
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    run(&lua, &engine, "Test", "task.wait() assert(false, 'checked after the wait')");
 }

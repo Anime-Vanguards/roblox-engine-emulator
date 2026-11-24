@@ -8,7 +8,7 @@ use mlua::prelude::*;
 
 use crate::{
     Engine, Options,
-    lua::{self as engine_lua, globals::CallOutcome},
+    lua::{self as engine_lua},
     profiler::{self, Config, Kinds, memory, vm},
     scheduler,
 };
@@ -39,7 +39,7 @@ fn run(lua: &Lua, engine: &Rc<Engine>, name: &str, source: &str) -> Vec<String> 
     let env = engine_lua::modules::environment(lua, engine, script).expect("environment");
     let function = lua.load(source).set_name(format!("={name}")).set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(lua, engine, function, LuaMultiValue::new()).expect("call");
-    if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+    if let Err(message) = call.finish(lua, engine) {
         panic!("test script failed: {message}");
     }
     engine.state.borrow().output.entries.iter().map(|entry| entry.message.clone()).collect()
@@ -2667,4 +2667,14 @@ fn substring_argument_fixes_add_the_expected_warm_instructions_and_code_words() 
         let added_words = fixed.code.len() - declined.code.len();
         assert_eq!(added_words, code_words_per_site * compiled_sites, "{declined_call}: {} to {} words across {compiled_sites} compiled sites", declined.code.len(), fixed.code.len());
     }
+}
+
+/// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
+/// task.wait() used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    let _guard = lock();
+    let (lua, engine) = start();
+    run(&lua, &engine, "Test", "task.wait() assert(false, 'checked after the wait')");
 }

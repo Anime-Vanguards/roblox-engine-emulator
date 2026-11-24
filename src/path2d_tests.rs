@@ -34,6 +34,10 @@ fn run_in(lua: &Lua, engine: &Rc<Engine>, source: &str, until: f64) -> Vec<Strin
         panic!("test script failed: {message}");
     }
     scheduler::run_until(lua, engine, until).unwrap();
+    // (then to the script's end: what follows a wait past `until` is checked too)
+    if let Err(message) = call.finish(lua, engine) {
+        panic!("test script failed: {message}");
+    }
     engine.state.borrow().output.entries.iter().map(|entry| format!("{}: {}", entry.kind, entry.message)).collect()
 }
 
@@ -632,4 +636,12 @@ fn lengths_and_inner_bounds_end_in_roblox_digits() {
     let large = curve(&[[296, -241, 0, 0, 219, -81], [-262, -212, 144, 128, 0, 0]]);
     assert_eq!(large.length(), 669.68689);
     assert_eq!(large.bounds(), Some(([-262.0, -258.23114], [341.613342, -173.369263])));
+}
+
+/// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
+/// wait past the helper's clock used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    run("task.wait(1) assert(false, 'checked after the wait')");
 }

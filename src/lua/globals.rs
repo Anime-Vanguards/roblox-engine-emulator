@@ -1222,7 +1222,30 @@ impl Call {
         }
         Ok(CallOutcome::Pending)
     }
+
+    /// (Tests) Runs the call to its end: while it waits (task.wait, an event's Wait) the engine steps frames, one at a time, until
+    /// it finishes. Its error (with the trace) when it failed or was still waiting after [`FINISH_FRAMES`]: a test helper that
+    /// returned at a script's first yield never ran what follows a wait, its asserts passing unchecked.
+    #[cfg(test)]
+    pub(crate) fn finish(&self, lua: &Lua, engine: &Rc<Engine>) -> Result<(), String> {
+        let mut frames = 0;
+        loop {
+            match self.outcome().map_err(|error| error.to_string())? {
+                CallOutcome::Finished(_) => return Ok(()),
+                CallOutcome::Failed(message, trace) => return Err(format!("{message}\n{}", trace.unwrap_or_default())),
+                CallOutcome::Pending if frames < FINISH_FRAMES => {
+                    scheduler::step(lua, engine, None).map_err(|error| error.to_string())?;
+                    frames += 1;
+                }
+                CallOutcome::Pending => return Err(format!("still waiting after {frames} frames")),
+            }
+        }
+    }
 }
+
+/// (Tests) The frames [`Call::finish`] steps a waiting script through before it fails: a minute of 60 frames a second
+#[cfg(test)]
+pub(crate) const FINISH_FRAMES: u32 = 3600;
 
 impl LuaRefs {
     /// The shared environment table (after `start`).

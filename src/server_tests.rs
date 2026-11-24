@@ -53,6 +53,10 @@ fn run_with(lua: &Lua, engine: &Rc<Engine>, source: &str, until: f64, globals: &
     }
     let now = engine.state.borrow().sched.now;
     scheduler::run_until(lua, engine, now + until).unwrap();
+    // (then to the script's end: what follows a wait past `until` is checked too)
+    if let Err(message) = call.finish(lua, engine) {
+        panic!("test script failed: {message}");
+    }
     let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|e| format!("{}: {}", e.kind, e.message)).collect();
     let errors: Vec<&String> = lines.iter().filter(|line| line.starts_with("error")).collect();
     assert!(errors.is_empty(), "{errors:?}");
@@ -562,6 +566,7 @@ fn a_server_hears_its_output_through_log_service_and_script_context() {
         assert!(!matches!(call.outcome().unwrap(), CallOutcome::Failed(..)));
         let now = engine.state.borrow().sched.now;
         scheduler::run_until(&lua, &engine, now + 0.2).unwrap();
+        call.finish(&lua, &engine).expect("the script runs to its end");
         let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|e| format!("{}: {}", e.kind, e.message)).collect();
         let heard = "print: heard MessageOutput=one 2;MessageWarning=careful;MessageError=boom\n    Stack Begin\n    Script 'Test', Line 11\n    Stack End";
         assert!(has(&lines, heard), "{run_context:?}: {lines:?}");
@@ -613,6 +618,7 @@ fn a_servers_message_out_is_queued_with_a_context_argument() {
     assert!(!matches!(call.outcome().unwrap(), CallOutcome::Failed(..)));
     let now = engine.state.borrow().sched.now;
     scheduler::run_until(&lua, &engine, now + 0.1).unwrap();
+    call.finish(&lua, &engine).expect("the script runs to its end");
     let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|e| format!("{}: {}", e.kind, e.message)).collect();
     assert!(has(&lines, "print: marks after-info,after-error:table:e 2,|hb,i 1:MessageInfo:3:a=1,p:MessageOutput:3:,e 2:MessageError:3:a=2,outer:MessageInfo:3:"), "{lines:?}");
     // (the output keeps every line, the one no handler heard included)
@@ -702,4 +708,12 @@ fn a_live_server_is_not_studio_and_its_players_carry_join_data() {
     let (studio_lua, studio_engine) = start(RunContext::Server);
     let studio = run_in(&studio_lua, &studio_engine, r#"print("studio", game:GetService("RunService"):IsStudio())"#, 0.0);
     assert!(has(&studio, "print: studio true"), "{studio:?}");
+}
+
+/// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
+/// wait past the helper's clock used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    run(RunContext::Server, "task.wait(1) assert(false, 'checked after the wait')", 0.1);
 }

@@ -8,7 +8,7 @@ use serde_json::json;
 
 use super::{
     Engine, Options,
-    lua::{self as engine_lua, globals::CallOutcome},
+    lua::{self as engine_lua},
     scheduler,
 };
 
@@ -29,7 +29,7 @@ fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) {
     let env = engine_lua::modules::environment(lua, engine, script).expect("environment");
     let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(lua, engine, function, LuaMultiValue::new()).expect("call");
-    if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+    if let Err(message) = call.finish(lua, engine) {
         panic!("test script failed: {message}");
     }
 }
@@ -557,4 +557,13 @@ fn a_task_delay_counts_from_the_moment_of_its_call() {
     log.sort();
     // (the Heartbeat handler runs before the counter: newest connection first; render counts from its own frame's count)
     assert_eq!(log.join(" "), "render-wait=2 render=2 short-wait=2 short=2 whole-wait=3 whole=3");
+}
+
+/// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
+/// task.wait() used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    let (lua, engine) = start();
+    run(&lua, &engine, "task.wait() assert(false, 'checked after the wait')");
 }

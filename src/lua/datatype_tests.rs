@@ -27,7 +27,7 @@ fn assert_script(source: &str) -> Vec<String> {
     let env = engine_lua::modules::environment(&lua, &engine, script).expect("environment");
     let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
-    if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+    if let Err(message) = call.finish(&lua, &engine) {
         panic!("test script failed: {message}");
     }
     let lines: Vec<String> = engine.state.borrow().output.entries.iter().map(|e| format!("{}: {}", e.kind, e.message)).collect();
@@ -898,8 +898,11 @@ fn the_work_clock_profile_weighs_stacks_by_the_charge() {
     "#;
     let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
-    if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
-        panic!("test script failed: {message}");
+    match call.outcome().unwrap() {
+        CallOutcome::Failed(message, _) => panic!("test script failed: {message}"),
+        // (what it charged is read now: a script that waited would leave what follows its wait unmeasured)
+        CallOutcome::Pending => panic!("the measured script waits"),
+        CallOutcome::Finished(_) => {}
     }
     let charged = {
         let state = engine.state.borrow();
@@ -970,8 +973,10 @@ fn cframe_operations_run_natively_and_keep_their_work_clock_charge() {
         let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
         let before = counters();
         let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
-        if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
-            panic!("test script failed: {message}");
+        match call.outcome().unwrap() {
+            CallOutcome::Failed(message, _) => panic!("test script failed: {message}"),
+            CallOutcome::Pending => panic!("the measured script waits"),
+            CallOutcome::Finished(_) => {}
         }
         let after = counters();
         (after.0 - before.0, after.1 - before.1)
@@ -1637,4 +1642,12 @@ assert(DT:FormatUniversalTime("LLLL", "ja-jp") == "2023年11月14日 火曜日 2
 assert(DT:FormatUniversalTime("lll", "de-de") == "14. Nov. 2023 22:13")
 "#
     );
+}
+
+/// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
+/// task.wait() used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    assert_script("task.wait() assert(false, 'checked after the wait')");
 }

@@ -77,6 +77,11 @@ fn record_prepared(options: Options, source: &str, frames: u32, walk_always: boo
         scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("frame");
         recorder.sample(&engine, frame);
     }
+    // (a harness that fails while the frames are recorded fails the test; one still running after them records its window)
+    if let CallOutcome::Failed(message, trace) = call.outcome().unwrap() {
+        panic!("harness failed: {message}
+{}", trace.unwrap_or_default());
+    }
     let unique = TEST_DIRS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let out = std::env::temp_dir().join(format!("rur-record-test-{}-{}-{unique}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let summary = recorder.write(&engine, &out, Map::new()).expect("write");
@@ -325,6 +330,9 @@ fn terrain_cloud_writes_play_on_the_stages_clouds() {
         for frame in 1..=16 {
             scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("frame");
             recorder.sample(&engine, frame);
+        }
+        if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+            panic!("harness failed: {message}");
         }
         let out = std::env::temp_dir().join(format!("rur-record-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let summary = recorder.write(&engine, &out, Map::new()).expect("write");
@@ -2805,4 +2813,12 @@ fn a_motion_key_is_kept_by_distance_however_far_the_part_is_from_the_origin() {
         })
         .collect();
     assert_eq!(super::reduce(straight, "cframe", super::motion_allowance).len(), 2, "a straight line needs only its ends");
+}
+
+/// A harness that fails while its frames are recorded fails its test: the recording checks the harness after its frames (an
+/// error after a task.wait() used to go unnoticed, the harness checked at its first yield).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_harness_is_checked_after_it_waits() {
+    record("task.wait() error('checked after the wait')", 5);
 }

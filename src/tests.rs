@@ -33,9 +33,21 @@ fn start_with(options: Options) -> (Lua, Rc<Engine>) {
     (lua, engine)
 }
 
-/// Runs `source` on a scheduler thread with the shared globals; returns the output lines
-/// ("kind: message") after flushing deferred work.
+/// Runs `source` on a scheduler thread with the shared globals to its end (while it waits the engine steps frames, failing the
+/// test when it is still waiting after a minute of them: lua/globals.rs Call::finish); returns the output lines ("kind: message")
+/// after flushing deferred work.
 fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
+    let call = start_script(lua, engine, source);
+    if let Err(message) = call.finish(lua, engine) {
+        panic!("test script failed: {message}");
+    }
+    lines(engine)
+}
+
+/// Runs `source` on a scheduler thread with the shared globals until it first yields or ends, for a test that steps the frames
+/// after it itself (what follows a wait runs in those frames, and only the test's own checks look at it). Panics with the
+/// script's error.
+fn start_script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> engine_lua::globals::Call {
     // A script environment (script = a detached ModuleScript named Test, require)
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -48,7 +60,7 @@ fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
     if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
         panic!("test script failed: {message}");
     }
-    lines(engine)
+    call
 }
 
 fn lines(engine: &Engine) -> Vec<String> {
@@ -3567,7 +3579,7 @@ fn a_lazily_imported_rig_animates_as_an_eager_one() {
         let function = lua.load(check).set_name("=Test").set_environment(env).into_function().expect("compile");
         let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
         crate::scheduler::run_until(&lua, &engine, 1.0).expect("run");
-        if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+        if let Err(message) = call.finish(&lua, &engine) {
             panic!("test script failed: {message}");
         }
         outputs.push(lines(&engine));
@@ -12684,11 +12696,13 @@ fn an_engine_function_is_one_call_priced_by_its_kind() {
     // (each function made a frame before: one a frame makes reads warm in it)
     run(&lua, &engine, "local _ = CFrame.new, SharedTable.new, SharedTable.size, game:GetService('SharedTableRegistry').GetSharedTable");
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    // (each script waits for the next frame, which the test steps itself, counting what its calls take there)
     let measure = |calls: &str| {
-        run(&lua, &engine, &format!("task.wait()\n{calls}"));
+        let call = start_script(&lua, &engine, &format!("task.wait()\n{calls}"));
         let before = vm_counts(&engine);
         crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
         let after = vm_counts(&engine);
+        assert!(matches!(call.outcome().unwrap(), CallOutcome::Finished(_)), "the calls ran in the frame counted");
         (
             after.ccalls - before.ccalls,
             after.hostcalls - before.hostcalls,
@@ -12703,4 +12717,19 @@ fn an_engine_function_is_one_call_priced_by_its_kind() {
     assert_eq!(library, (5, 0, 3, 0), "SharedTable.new, size twice, print twice");
     let method = measure("local R = game:GetService('SharedTableRegistry') local Get = R.GetSharedTable Get(R, 'a') Get(R, 'b')");
     assert_eq!((method.0, method.1, method.3), (1, 2, 1), "GetService, then GetSharedTable read as a value twice: {method:?}");
+}
+
+/// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
+/// task.wait() used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    assert_script("task.wait() assert(false, 'checked after the wait')");
+}
+
+/// A test script still waiting after a minute of frames fails its test (lua/globals.rs Call::finish).
+#[test]
+#[should_panic(expected = "still waiting")]
+fn a_test_script_that_never_ends_fails_its_test() {
+    assert_script("while true do task.wait() end");
 }
