@@ -22,7 +22,7 @@
 //!   part entering the Workspace is not seen until the spatial index takes it in: at the next physics step or another spatial
 //!   query of the Workspace (Raycast, GetPartBoundsInBox, ...; a WorldModel's leaves it waiting; `Cameras::unindexed`, a set of
 //!   the waiting parts still in the Workspace), with the parts moved in with it; a moved, resized or removed part counts at
-//!   once. A WorldModel's parts in the Workspace are never met (world/broadphase.rs `Index::near_segment_own`: measured).
+//!   once. A WorldModel's parts in the Workspace are never met (the Workspace's grid holds none of them: measured).
 //! - Interpolate(endCFrame, endFocus, duration): the casts from the last argument to the first, then "Interpolation time
 //!   must be positive." (NaN passes; also on a camera that is not Scriptable), then "Attempted to use interpolation with a
 //!   camera mode other than scriptable.". A Focus write ends the tween (any camera's) at the next render step and InterpolationFinished
@@ -191,58 +191,29 @@ fn zoom_to_extents(engine: &Engine, names: &Names, camera: InstanceId, center: &
 
 // GetLargestCutoffDistance and the spatial index's lag
 
-/// The physics step: the spatial index takes in what came into every world (`Cameras::unindexed` and `unindexed_models`), as a
-/// client's step does.
-pub fn index_parts(state: &mut State) {
-    crate::dom::clear_set(&mut state.cameras.unindexed);
-    state.cameras.unindexed_models.clear();
-    state.cameras.taken_in += 1;
-    state.cameras.models_stepped += 1;
-}
-
-/// A spatial query takes in what came into its own world, the Workspace's (`model` None) or a WorldModel's, and only that: a
-/// client's query of the Workspace leaves a WorldModel's new parts waiting, and the other way round (measured: world/region.rs).
-/// How many parts it took in.
-pub fn take_in(state: &mut State, model: Option<InstanceId>) -> usize {
-    match model {
-        None => {
-            let waiting = state.cameras.unindexed.len();
-            crate::dom::clear_set(&mut state.cameras.unindexed);
-            // (the broadphase puts the Workspace's waiting parts in its tree when this moves on: world/broadphase.rs)
-            state.cameras.taken_in += 1;
-            waiting
-        }
-        Some(model) => {
-            let taken = state.cameras.unindexed_models.remove(&model).map_or(0, |waiting| waiting.len());
-            if taken > 0 {
-                *state.cameras.model_paid.entry(model).or_default() += taken;
-                // (its index puts the parts that waited in its tree when this moves on: world/broadphase.rs)
-                *state.cameras.models_waits.entry(model).or_default() += 1;
-            }
-            taken
-        }
-    }
-}
-
-/// Which wait a world's parts are in: the Workspace's or a WorldModel's (`Cameras::unindexed`, `unindexed_models`)
+/// Which wait a world's parts are in: the Workspace's or a WorldModel's (`Cameras::unindexed`, `unindexed_models`), by its
+/// WorldRoot
 #[derive(Clone, Copy, PartialEq)]
 enum Wait {
-    Workspace,
+    Workspace(InstanceId),
     Model(InstanceId),
 }
 
 impl Wait {
     fn insert(self, state: &mut State, part: InstanceId) {
         match self {
-            Wait::Workspace => state.cameras.unindexed.insert(part),
+            Wait::Workspace(_) => state.cameras.unindexed.insert(part),
             Wait::Model(model) => state.cameras.unindexed_models.entry(model).or_default().insert(part),
         };
+        super::broadphase::came_in(state, part);
     }
 
+    /// Out of the wait, and out of the world's index at once (world/broadphase.rs left)
     fn remove(self, state: &mut State, part: InstanceId) {
         match self {
-            Wait::Workspace => {
+            Wait::Workspace(root) => {
                 state.cameras.unindexed.remove(&part);
+                super::broadphase::left(state, root, part);
             }
             Wait::Model(model) => {
                 if let Some(waiting) = state.cameras.unindexed_models.get_mut(&model) {
@@ -251,14 +222,16 @@ impl Wait {
                         state.cameras.unindexed_models.remove(&model);
                     }
                 }
+                super::broadphase::left(state, model, part);
             }
         }
     }
 
+    /// Whether anything waits in it or its world's index holds a part
     fn holds_any(self, state: &State) -> bool {
         match self {
-            Wait::Workspace => !state.cameras.unindexed.is_empty(),
-            Wait::Model(model) => state.cameras.unindexed_models.contains_key(&model),
+            Wait::Workspace(root) => !state.cameras.unindexed.is_empty() || super::broadphase::holds_any(state, root),
+            Wait::Model(model) => state.cameras.unindexed_models.contains_key(&model) || super::broadphase::holds_any(state, model),
         }
     }
 }
@@ -293,8 +266,7 @@ fn blocks(state: &State, names: &Names, can_collide: Option<NameId>, ignore: &[I
 /// each ray the parts it meets up to its hit (all of them on a miss), the first [`crate::cost::CUTOFF_MET`] and each other a
 /// Raycast's [`crate::cost::RAY_CROSSED`]; the parts off the rays cost nothing (the broadphase).
 fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Vec<InstanceId>) -> f32 {
-    query::refresh(engine);
-    let root = engine.world().workspace;
+    let world = query::refresh(engine);
     let (transform, focus) = frames(engine, names, camera);
     let rows = rows_of(&transform);
     let (right, up) = (f32m::column(&rows, 0), f32m::column(&rows, 1));
@@ -332,24 +304,19 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
         if !(origin.is_finite() && direction.is_finite() && reach.is_finite()) {
             continue;
         }
-        query::near_segment_own(engine, origin, direction, 0.0, |parts| {
-            let state = engine.state.borrow();
-            for (part, entry) in parts {
+        let Some(world) = world else { continue };
+        // (in a ray walk's order: a part waiting for the spatial index is in no cell yet)
+        query::walk_ray(engine, world, origin, direction, |parts, _| {
+            for (part, entry, _) in parts {
                 if !near(&entry.solid) {
                     continue;
                 }
                 let Some((t, _)) = query::ray_solid(&entry.solid, origin, direction, 0.0) else { continue };
-                // (a waiting part comes here only with every part, in the broadphase's scan mode: it keeps them out of its tree)
-                if state.cameras.unindexed.contains(part) {
-                    continue;
-                }
                 // (query::cast_ray's distance; the nearest part that stops the ray is its hit)
                 entered.push((*part, reach * t));
             }
         });
         let state = engine.state.borrow();
-        let steps = super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(part, _)| *part);
-        query::charge_order(&state, steps, entered.len());
         let mut nearest: Option<f32> = None;
         // (each part's ignore check is asked of every part met up to the hit, as a client's ray asks it: its steps kept)
         walked.clear();
@@ -577,10 +544,11 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
             // WorldRoot is in the DataModel (the Workspace always is)
             let wait = |state: &State, root: Option<InstanceId>| match root {
                 Some(root) if is_a(state, root, world_model) => in_game(state, root).then_some(Wait::Model(root)),
-                Some(_) => Some(Wait::Workspace),
+                Some(root) => Some(Wait::Workspace(root)),
                 None => None,
             };
             let (from, to) = (wait(state, before), wait(state, after));
+            super::broadphase::fresh_write(state);
             let moves = from != to && (to.is_some() || from.is_some_and(|from| from.holds_any(state)));
             // the WorldModels in the subtree (it too, if it is one) come into the DataModel with it, or leave it: asked only of a
             // subtree that can hold one
@@ -600,7 +568,9 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
             // (each node with the nearest WorldModel above it within the subtree, if any: the subtree's own parts are below none; the
             // walk goes into a WorldModel only when WorldModels come in or leave)
             let mut stack = std::mem::take(&mut state.cameras.walk);
+            let mut parts = std::mem::take(&mut state.cameras.walked);
             stack.clear();
+            parts.clear();
             stack.push((id, None));
             while let Some((node, below)) = stack.pop() {
                 let model = is_a(state, node, world_root);
@@ -608,17 +578,19 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                 if below.is_none() || enters || leaves {
                     stack.extend(state.dom.children_of(node).iter().map(|&child| (child, below)));
                 }
-                // a WorldModel that leaves the DataModel takes its parts out of the wait, one that comes in has them come in anew,
-                // and its index looks at its wait again (world/broadphase.rs)
-                if model && (enters || leaves) {
-                    if leaves {
-                        state.cameras.unindexed_models.remove(&node);
-                    }
-                    *state.cameras.models_waits.entry(node).or_default() += 1;
+                // a WorldModel that leaves the DataModel takes its parts out of the wait and its index with it; one that comes in
+                // has them come in anew (world/broadphase.rs makes its index when it takes them in)
+                if model && leaves {
+                    state.cameras.unindexed_models.remove(&node);
+                    super::broadphase::world_gone(state, node);
                 }
-                if !is_a(state, node, base_part) {
-                    continue;
+                if is_a(state, node, base_part) {
+                    parts.push((node, below));
                 }
+            }
+            // (the parts in, or out, each after its own descendants: the reverse of the walk, which takes children last first; a
+            // client takes a subtree in so, measured: tools/parity/probes/grid_order.luau)
+            for &(node, below) in parts.iter().rev() {
                 match below {
                     None if moves => {
                         if let Some(from) = from {
@@ -634,14 +606,14 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                 }
             }
             state.cameras.walk = stack;
+            state.cameras.walked = parts;
         }));
     }
-    // A WorldModel freed takes its index and its wait with it (world/region.rs)
+    // A WorldModel freed takes its index and its wait with it, and a part freed leaves any index (world/region.rs)
     hooks.instance_freed.push(Box::new(|state, id| {
-        state.cameras.model_indexes.remove(&id);
+        super::broadphase::world_gone(state, id);
+        super::broadphase::freed(state, id);
         state.cameras.unindexed_models.remove(&id);
-        state.cameras.models_waits.remove(&id);
-        state.cameras.model_paid.remove(&id);
     }));
     drop(hooks);
     // InterpolationFinished, after the PreRender handlers (and what they deferred)

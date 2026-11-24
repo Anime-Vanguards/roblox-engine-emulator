@@ -753,7 +753,7 @@ pub struct Dom {
     /// A stack reused to walk a subtree that leaves a followed world ([`Dom::log_world_leaving`])
     world_walk: Vec<InstanceId>,
     /// What changed in each world a spatial index of its own follows, by its home ([`Dom::follow_world`]: a WorldModel's,
-    /// world/broadphase.rs `ModelIndex`)
+    /// world/broadphase.rs `WorldIndex`)
     world_logs: FxHashMap<InstanceId, WorldLog>,
     /// The instances of the classes [`Dom::log_homes`] names (by id; empty while none is) whose home changed since
     /// [`Dom::take_home_log`] last took them, logged by whatever changed it (world/joints.rs: which rigid joints are in a world),
@@ -772,7 +772,7 @@ pub struct Above {
     pub homes: u32,
 }
 
-/// What changed in a world a spatial index of its own follows since it last took the log (world/broadphase.rs `ModelIndex`: a
+/// What changed in a world a spatial index of its own follows since it last took the log (world/broadphase.rs `WorldIndex`: a
 /// WorldModel's), read off the homes ([`Dom::home`], one lookup a change however deep the instance is), as [`Watch`] logs the
 /// Workspace's: the instances attached in it, detached from it (with the parts below them, down to the homes in them, whose
 /// worlds are their own: [`Dom::keep_logged_classes`]), put in place of another there or given another class there (`moved`),

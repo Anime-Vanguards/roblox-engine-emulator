@@ -842,7 +842,7 @@ pub fn install(engine: &Rc<Engine>) {
             crate::luau_profile::engine_step("joints", || crate::world::joints::step_transforms(engine));
             // The physics step: free assemblies fall (world::gravity); the spatial index takes in what entered the Workspace
             crate::luau_profile::engine_step("physics", || crate::world::gravity::step(engine, delta));
-            crate::world::camera_moves::index_parts(&mut engine.state.borrow_mut());
+            crate::world::broadphase::index_parts(engine);
             fire_frame_event(lua, engine, K::PostSimulation as NameId, &[Value::Number(delta)])
         }));
         state.sched.add_hook(Phase::Heartbeat, Rc::new(|lua, engine, delta| {

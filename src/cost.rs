@@ -1021,10 +1021,10 @@ pub const RAY_CROSSED: f64 = 0.0424e-6;
 /// 100 and 1,000 12.7, 120 and 1,233 us in the Workspace, 12.2, 110 and 1,080 in a WorldModel under ReplicatedStorage).
 pub const QUERY_TAKE_IN: f64 = 0.5e-6;
 pub const QUERY_TAKEN_PART: f64 = 1.1e-6;
-/// A step up the tree of the walks that put what a spatial query keeps in the Workspace's order (world/broadphase.rs
-/// sort_by_order: up from the parts at once until their paths meet; a collision-group change's parts whose ids change too,
-/// services/physics.rs), past [`QUERY_ORDER_FREE`] steps for each part it orders: ree's
-/// own host work, as a playing client's queries cost the same however deep their parts are (roblox-sim, Studio 0.747, a headless
+/// A step up the tree of the walks that put a collision-group change's parts whose ids change in the Workspace's order
+/// (world/broadphase.rs sort_by_order: up from the parts at once until their paths meet; services/physics.rs; the spatial
+/// queries list theirs in their grid's order, world/grid.rs, and walk no tree), past [`QUERY_ORDER_FREE`] steps for each part
+/// it orders: ree's own host work, as a playing client's queries cost the same however deep their parts are (roblox-sim, Studio 0.747, a headless
 /// client; os.clock around 100 calls, the median of 15 less an empty loop: GetPartBoundsInBox finding 100 parts 12.1 to 12.2 us
 /// in a folder of the Workspace, 12.2 at the bottom of a 1,000-deep folder chain, 12.5 at 3,000, 17.3 with each part 300 deep in
 /// a chain of its own; 1,000 parts 17.7 to 25.0 in a folder, 22.9 1,000 deep, 18.0 each 30 deep; a Raycast through the first
@@ -1103,9 +1103,32 @@ pub const MOUSE_ORIGIN: f64 = 0.09e-6;
 pub const SPHERE_CROSSED: f64 = 0.405e-6;
 pub const BLOCK_CROSSED: f64 = 0.259e-6;
 /// A part GetPartBoundsInBox returns and one GetPartBoundsInRadius returns (the same geometry: an empty box 0.15 us whether it is 4
-/// studs or 40 across, a line of 10 parts in a box 1.54, a radius that touches 2 parts 0.33; held out: a box of 24 parts 3.80)
-pub const QUERY_BOX_PART: f64 = 0.14e-6;
+/// studs or 40 across, a line of 10 parts in a box 1.54, a radius that touches 2 parts 0.33; held out: a box of 24 parts 3.80).
+/// A box's part is the grid's measure (roblox-sim, Studio 0.747, a headless client; os.clock around call loops, calls doubled to 2
+/// ms a sample, the median of 9 less an empty loop, two sessions within 3 %): 1,000 parts in one cell listed 0.115 us each, one to
+/// a cell over 1,024 cells 0.14 each, the cell's own [`QUERY_CELL`] the difference. The radius's part is the parity bench's fit,
+/// its cells included (not refitted).
+pub const QUERY_BOX_PART: f64 = 0.115e-6;
 pub const QUERY_RADIUS_PART: f64 = 0.09e-6;
+/// What a box walk of the spatial grid costs a client beyond the parts it lists (world/query.rs walk_cost: GetPartBoundsInBox,
+/// GetPartBoundsInRadius as a box of 2r; GetPartsInPart borrows them), measured as [`QUERY_BOX_PART`]: each root cell in its range,
+/// empty or not ([`QUERY_ROOT_CELL`]: an empty region of 1 to 512 studs 0.135 to 0.16 us, 1,024 / 2,048 / 4,096 / 8,192 / 15,000
+/// studs 0.27 / 0.87 / 5.0-5.2 / 37-39 / 228-232, the clamp's 59^3 root cells on level 5; with a level-6 part in the world that frame
+/// 0.27 / 0.91 / 5.4 / 28.9, an eighth of the cells; beside 100,000 parts far away the same), each cell holding parts it visits
+/// ([`QUERY_CELL`]) and each part it tests and misses there ([`QUERY_MISSED_PART`]: a cell of parts the box does not meet 7.6 ns a
+/// part); and each part the box meets but CanQuery leaves out ([`QUERY_UNQUERYABLE`], 0.12 us).
+pub const QUERY_ROOT_CELL: f64 = 1.05e-9;
+pub const QUERY_CELL: f64 = 25e-9;
+pub const QUERY_MISSED_PART: f64 = 7.6e-9;
+pub const QUERY_UNQUERYABLE: f64 = 0.12e-6;
+/// What a Raycast's walk of the spatial grid costs a client on its way, beyond the parts it meets ([`RAY_MET`], [`RAY_CROSSED`];
+/// world/query.rs charge_ray_walk), measured as [`QUERY_BOX_PART`]: its length up to its hit, the whole cut path on a miss
+/// ([`RAY_LENGTH`] each 1,000 studs: an empty region's ray of 1 to 1,000 studs 0.21 us, 10,000 0.34, 15,000 or longer 0.41), each
+/// cell holding parts it passes and meets none in ([`RAY_CELL`]) and each part there it tests and misses ([`RAY_TESTED`]: a
+/// 1,000-stud ray past 100 and 1,000 parts beside it, none hit, 4.9 and 15.0 us).
+pub const RAY_LENGTH: f64 = 13e-9;
+pub const RAY_CELL: f64 = 45e-9;
+pub const RAY_TESTED: f64 = 9e-9;
 /// What an overlap query whose geometry is not finite costs beyond its call (world/query.rs), in a playing client (roblox-sim,
 /// Studio 0.747, a headless client; os.clock around calls in pcall, 15 samples less an empty loop, beside 0, 1,000, 5,000 and
 /// 10,000 parts, which change nothing): GetPartBoundsInBox with a frame that is not finite 2.9 to 3.1 us where one that finds
@@ -1264,13 +1287,15 @@ pub const TOUCHING_OFF_NEAR: f64 = 0.057e-6;
 /// to 4 away 2.65 to 3.0 us where nothing near cost 0.66 (0.0107 a part), 0.2 to 0.31 away (tested) 29.5 to 31.7; two-stud cubes
 /// stacked 0.5 to 2 away, 100 3.8 and 300 5.4, 4 away (in no cell of the listed part's) nothing.
 pub const TOUCHING_FAR: f64 = 0.0107e-6;
-/// Each part put in a WorldModel's own index when the index is made, at the WorldModel's first Region3 query or walked
-/// ArePartsTouchingOthers in the DataModel, or made again after its change log overflowed (world/broadphase.rs `ModelIndex`, with
-/// [`FIND_NODE`] for each instance the walk of its world looks at; world/region.rs), but a part a query of that WorldModel took in
-/// and paid for since the index last took its log. This is ree's own cost, not a client's: a client puts a world's parts in
-/// its index as they come in, at the price of taking them in ([`QUERY_TAKEN_PART`]), or in the physics step. Measured on
-/// ree's host (a release build, the fastest of six runs): a WorldModel of 200,000 parts made and queried once took 123 ms more
-/// than made alone, one of 200,000 Folders under 1 ms more.
+/// What a WorldModel's query pays for what its index reads of its world (world/broadphase.rs open, `WorldIndex`): each instance
+/// the index looks at in the change log the dom keeps for that world (what moved, and the walks below what moved within the
+/// world) or in a walk of its world when the index is made or made again after its log overflowed, [`FIND_NODE`] each; and
+/// each part such a walk files, `MODEL_INDEX_PART` (a part that waits for the spatial index is filed when a query takes it in,
+/// at [`QUERY_TAKEN_PART`]). Both are ree's own prices, not a client's: a client files a world's parts as they come in and at
+/// each write, at the price of taking them in, and spends about twice [`FIND_NODE`] on such changes (roblox-sim, Studio
+/// 0.748, a playing client: ArePartsTouchingOthers after a Folder of 1,000 parts entered its WorldModel and left, 7.8 us,
+/// ree 4.3). MODEL_INDEX_PART measured on ree's host (a release build, the fastest of six runs): a WorldModel of 200,000 parts
+/// made and queried once took 123 ms more than made alone, one of 200,000 Folders under 1 ms more.
 pub const MODEL_INDEX_PART: f64 = 0.6e-6;
 /// FindFirstChild and the other finds: a child looked at past the first (the parity bench: the 20th of 20 children 73 ns, the first 44,
 /// so 1.55 ns a child), and a node a recursive find looks at (a miss over 1,110 nodes 4.2 us: 3.8 ns). A collision-group change's walk

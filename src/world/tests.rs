@@ -5855,13 +5855,12 @@ fn broadphase_answers_match_a_test_of_every_part() {
         super::broadphase::SCAN.with(|on| on.set(false));
         let shared: LuaTable = engine.lua.borrow().shared.as_ref().expect("globals").raw_get("shared").expect("shared");
         let out: String = shared.raw_get("Out").expect("the lines");
-        (out, super::query::index_state(&engine))
+        (out, super::query::index_len(&engine))
     };
     let mut hits = 0;
     for seed in [7, 1234, 99991, 31337, 2024, 555] {
-        let ((tree, (height, sound, parts)), (scan, _)) = (outputs(seed, false), outputs(seed, true));
-        assert!(sound, "seed {seed}: the tree's links and boxes");
-        assert!(parts > 150 && height <= 2 * (parts as f64).log2().ceil() as i32, "seed {seed}: {parts} parts, height {height}");
+        let ((tree, parts), (scan, _)) = (outputs(seed, false), outputs(seed, true));
+        assert!(parts > 150, "seed {seed}: {parts} parts");
         assert_eq!(tree.lines().count(), scan.lines().count(), "seed {seed}");
         for (a, b) in tree.lines().zip(scan.lines()) {
             assert_eq!(a, b, "seed {seed}");
@@ -5870,6 +5869,140 @@ fn broadphase_answers_match_a_test_of_every_part() {
     }
     eprintln!("{hits} lines found parts");
     assert!(hits > 1500, "the queries found parts ({hits} lines)");
+}
+
+/// Spatial queries list and pick parts as a client's grid walk gives them (world/grid.rs; Studio 0.747, a playing client and a
+/// server alike, tools/parity/probes/grid_*.luau): a cell's unanchored parts before its anchored ones, each in the order they came
+/// in; a part leaving gives its place to the cell's last; a part moved out of its cell and back, or anchored and freed, before a
+/// query is last; a subtree comes in each part after its descendants; parts of the levels above the query's come last; a query's
+/// low edge on a cell edge walks the cell below; welded parts come in root first and a weld made later files them again; the casts
+/// take a cell's anchored parts first among exact ties; a box is clamped to 7,500 studs about its centre and a ray cut at 15,000;
+/// nothing is found past the far bound; and a WorldModel walks a grid of its own, which the Workspace's queries never meet.
+#[test]
+fn queries_list_parts_in_a_clients_grid_order() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        workspace.Gravity = 0
+        local Root = Instance.new("Folder")
+        Root.Parent = workspace
+        local Mine = {}
+        local V = Vector3.new
+        local function Part(Name, At, Size, Anchored, Parent)
+            local Made = Instance.new("Part")
+            Made.Name = Name
+            Made.Anchored = Anchored ~= false
+            Made.Size = Size or V(0.2, 0.2, 0.2)
+            Made.CFrame = CFrame.new(At)
+            Made.Parent = Parent or Root
+            Mine[Made] = true
+            return Made
+        end
+        local function Index() workspace:GetPartBoundsInBox(CFrame.new(0, -10000, 0), Vector3.one) end
+        local function Names(List)
+            local Out = {}
+            for _, Found in List do
+                if Mine[Found] then table.insert(Out, Found.Name) end
+            end
+            return table.concat(Out, " ")
+        end
+        local function Clear() Root:ClearAllChildren() table.clear(Mine) end
+        local C0 = V(2004, 1004, 2004)
+        local function Q(Size) return Names(workspace:GetPartBoundsInBox(CFrame.new(C0), Size or V(6, 1, 1))) end
+        local function Is(Label, Got, Want) assert(Got == Want, `{Label}: {Got}, a client lists {Want}`) end
+        -- one cell: unanchored first, each list in the order the parts came
+        Part("a1", C0) Part("u2", C0 + V(0.5, 0, 0), nil, false) Part("a3", C0 + V(1, 0, 0)) Part("u4", C0 + V(1.5, 0, 0), nil, false)
+        Index()
+        Is("one cell", Q(V(4, 1, 1)), "u2 u4 a1 a3")
+        Clear()
+        local function Five()
+            local A = {}
+            for I = 1, 5 do A[I] = Part("a" .. I, C0 + V(-2 + I * 0.6, 0, 0)) end
+            Index()
+            return A
+        end
+        local A = Five() A[2]:Destroy() Index() A[1]:Destroy()
+        Is("a2 destroyed, then a1", Q(), "a4 a5 a3") Clear()
+        A = Five() A[2].CFrame += V(20, 0, 0) A[2].CFrame -= V(20, 0, 0)
+        Is("a2 moved out and back, no query between", Q(), "a1 a5 a3 a4 a2") Clear()
+        A = Five() A[2].Anchored = false A[2].Anchored = true
+        Is("a2 unanchored and anchored again", Q(), "a1 a5 a3 a4 a2") Clear()
+        A = Five() A[2].CanCollide = false A[2].CanTouch = false
+        Is("a2 CanCollide and CanTouch off", Q(), "a1 a5 a3 a4 a2") Clear()
+        A = Five() A[2].CFrame += V(0, 0, 0.3) A[2].Transparency = 0.5 A[2].Parent = Instance.new("Folder", Root)
+        Is("a2 moved within its cell, written and moved in the tree", Q(), "a1 a2 a3 a4 a5") Clear()
+        -- a subtree comes in each part after its descendants
+        local T = Instance.new("Folder")
+        Part("a", C0 + V(-0.9, 0, 0), nil, true, T)
+        local M = Instance.new("Model", T)
+        Part("b", C0 + V(-0.5, 0, 0), nil, true, M)
+        local c = Part("c", C0 + V(-0.1, 0, 0), nil, true, M)
+        Part("d", C0 + V(0.3, 0, 0), nil, true, c) Part("f", C0 + V(0.7, 0, 0), nil, true, c) Part("e", C0 + V(0.9, 0, 0), nil, true, T)
+        T.Parent = Root
+        Index()
+        Is("subtree", Q(V(4, 1, 1)), "a b d f c e") Clear()
+        -- welded unanchored parts come in root first (of equal parts the later made); a weld made later files both again
+        Part("a1", C0) local U2 = Part("u2", C0 + V(0.5, 0, 0), nil, false) Part("a3", C0 + V(1, 0, 0)) local U4 = Part("u4", C0 + V(1.5, 0, 0), nil, false)
+        local W = Instance.new("WeldConstraint") W.Part0, W.Part1 = U2, U4 W.Parent = U2
+        Part("u5", C0 + V(-0.5, 0, 0), nil, false)
+        Index()
+        Is("welded", Q(V(4, 1, 1)), "u4 u2 u5 a1 a3")
+        U2.Anchored = true
+        Is("then u2 anchored", Q(V(4, 1, 1)), "u5 a1 a3 u2 u4") Clear()
+        Part("a1", C0) U2 = Part("u2", C0 + V(0.5, 0, 0), nil, false) U4 = Part("u4", C0 + V(1.5, 0, 0), nil, false) Part("u5", C0 + V(-0.5, 0, 0), nil, false)
+        Index()
+        W = Instance.new("WeldConstraint") W.Part0, W.Part1 = U2, U4 W.Parent = U2
+        Is("welded after the take-in", Q(V(4, 1, 1)), "u5 u4 u2 a1") Clear()
+        -- the casts take a cell's anchored parts first among exact ties, the box queries its unanchored ones
+        local Tied = { Part("A", C0, V(2, 2, 2)), Part("B", C0, V(2, 2, 2), false), Part("C", C0, V(2, 2, 2)) }
+        Index()
+        local From = C0 + V(0, 10, 0)
+        Is("tied ray", workspace:Raycast(From, V(0, -20, 0)).Instance.Name, "A")
+        Is("tied box", Names(workspace:GetPartBoundsInBox(CFrame.new(C0), V(0.5, 0.5, 0.5))), "B A C")
+        Tied[1]:Destroy()
+        Is("tied ray, A destroyed", workspace:Raycast(From, V(0, -20, 0)).Instance.Name, "C") Clear()
+        -- the levels: a 30-stud part (level 1) after the level-0 parts a small query meets first
+        Part("L1", C0 + V(0, -14, 0), V(30, 30, 30)) Part("L0", C0, V(2, 2, 2))
+        Index()
+        Is("levels, box", Names(workspace:GetPartBoundsInBox(CFrame.new(C0), V(0.5, 0.5, 0.5))), "L0 L1")
+        Is("levels, ray", workspace:Raycast(From, V(0, -20, 0)).Instance.Name, "L0")
+        Is("levels, sphere", workspace:Spherecast(From, 0.5, V(0, -20, 0)).Instance.Name, "L1") Clear()
+        -- a query's low edge on a cell edge also walks the cell below
+        Part("M", V(2052, 1004, 1004)) Part("P", V(2048, 1004, 1004))
+        Index()
+        Is("low edge", Names(workspace:GetPartBoundsInBox(CFrame.new(2051, 1004, 1004), V(6, 2, 2))), "P M")
+        Is("low edge past it", Names(workspace:GetPartBoundsInBox(CFrame.new(2051.0005, 1004, 1004), V(5.999, 2, 2))), "M P") Clear()
+        -- the clamp, the cut and the far bound
+        local Cl = V(100004, 1004, 4)
+        Part("7500", Cl + V(7500, 0, 0), V(0.01, 1, 1)) Part("7500.5", Cl + V(7500.5, 0, 0), V(0.01, 1, 1))
+        Index()
+        Is("clamp", Names(workspace:GetPartBoundsInBox(CFrame.new(Cl), V(20000, 4, 4))), "7500")
+        Is("radius clamp", Names(workspace:GetPartBoundsInRadius(Cl, 10000)), "7500") Clear()
+        local Near, Past = Part("near", Cl + V(14999.9 + 0.1, 0, 0), V(0.2, 4, 4)), nil
+        Index()
+        Is("ray before the cut", tostring(workspace:Raycast(Cl, V(1e6, 0, 0)) ~= nil), "true") Clear()
+        Past = Part("past", Cl + V(15000.1, 0, 0), V(0.2, 4, 4))
+        Index()
+        Is("ray past the cut", tostring(workspace:Raycast(Cl, V(1e6, 0, 0))), "nil") Clear()
+        local T26 = 2 ^ 26
+        Part("in", V(T26, 0, 300), V(2, 2, 2)) Part("out", V(T26 + 8, 0, 340), V(2, 2, 2))
+        Index()
+        Is("far bound", Names(workspace:GetPartBoundsInBox(CFrame.new(T26, 0, 300), Vector3.one)) .. "|" .. Names(workspace:GetPartBoundsInBox(CFrame.new(T26 + 8, 0, 340), Vector3.one)), "in|") Clear()
+        -- a WorldModel's own grid
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        for _, S in { 64, 32, 1 } do Part("K" .. S, C0, V(S, S, S), true, World) end
+        Is("WorldModel", Names(World:GetPartBoundsInBox(CFrame.new(C0), V(0.01, 0.01, 0.01))), "K1 K32 K64")
+        Is("the Workspace beside it", Names(workspace:GetPartBoundsInBox(CFrame.new(C0), V(0.01, 0.01, 0.01))), "")
+        Is("its ray", World:Raycast(C0 + V(0, 100, 0), V(0, -200, 0)).Instance.Name, "K64")
+        Is("the Workspace's ray", tostring(workspace:Raycast(C0 + V(0, 100, 0), V(0, -200, 0))), "nil")
+        World:Destroy()
+        "##,
+    );
+    super::query::index_matches_a_walk(&engine).unwrap();
 }
 
 /// The parts far from a query cost it no host work, as a client's (Studio 0.747: a Raycast, Spherecast, Blockcast, Shapecast or
@@ -5963,8 +6096,8 @@ fn far_parts_cost_a_query_no_host_work() {
     let taken = super::broadphase::TAKEN.with(|taken| taken.get());
     assert!(taken <= 10 * 20 + 10, "each query took a few parts ({taken} for 92 queries)");
     assert_eq!(super::broadphase::WORKSPACE_WALKS.with(|walks| walks.get()), 0, "changes taken from the log, no walk");
-    let (_, sound, parts) = super::query::index_state(&engine);
-    assert!(sound && parts == 50_002, "{parts} parts");
+    let parts = super::query::index_len(&engine);
+    assert!(parts == 50_002, "{parts} parts");
 }
 
 /// The broadphase orders what a query keeps as the Workspace's descendants are listed (`Dom::descendants`), from each instance's
@@ -6159,15 +6292,14 @@ fn query_order_is_the_order_of_whole_attach_number_lists() {
     assert_eq!(steps, 50, "one step for each of the 50 parts, 2,000 folders deep");
 }
 
-/// A spatial query puts what it keeps in the Workspace's order with walks up from the parts that stop where the parts' paths meet
-/// (world/broadphase.rs sort_by_order), so 2,000 parts in a folder at the bottom of a 10,000-deep chain cost GetPartBoundsInBox,
-/// GetPartsObscuringTarget and a Raycast through them about as much host work as the same parts in a folder of the Workspace, in
-/// the same order, and the work clock charges the box and the Raycast the same, as a playing client's cost the same at any depth
-/// (Studio 0.747: 100 parts 12.1 us in the Workspace, 12.2 1,000 deep, 12.5 3,000 deep); GetPartsObscuringTarget costs more by
-/// the walks a client's casts take up its parts (camera.rs parts_obscuring: its ancestors' answers kept for the call, so the
-/// host walks them once). Making each part's whole list of places and comparing them took 0.2 s of host time a query here
-/// and 262 MB of heap. Parts whose paths meet only far up (50 parts, each at the bottom of a 1,000-deep chain of its own) still walk
-/// every instance between, and pay cost.rs QUERY_ORDER_STEP for each step past QUERY_ORDER_FREE a part.
+/// A spatial query lists what it keeps in its grid walk's order (world/grid.rs), which knows nothing of the tree, so 2,000 parts in a
+/// folder at the bottom of a 10,000-deep chain cost GetPartBoundsInBox, GetPartsObscuringTarget and a Raycast through them about as
+/// much host work as the same parts in a folder of the Workspace, in the same order, and the work clock charges the box and the
+/// Raycast the same, as a playing client's cost the same at any depth (Studio 0.747: 100 parts 12.1 us in the Workspace, 12.2 1,000
+/// deep, 12.5 3,000 deep); GetPartsObscuringTarget costs more by the walks a client's casts take up its parts (camera.rs
+/// parts_obscuring: its ancestors' answers kept for the call, so the host walks them once). Parts whose paths meet only far up (50
+/// parts, each at the bottom of a 1,000-deep chain of its own) cost what the same parts in a folder cost: the walks up from them that
+/// put them in the Workspace's order before (cost.rs QUERY_ORDER_STEP) are gone with that order.
 #[test]
 fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
     let (lua, engine) = start_play();
@@ -6207,7 +6339,8 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
             end
             return { X = X, Parts = Parts }
         end
-        shared.Scenes = { Flat = Scene(0, 2000, 0), Deep = Scene(1000, 2000, 10000), Few = Scene(2000, 50, 0), Apart = Scene(3000, 50, 0, 1000) }
+        -- (at multiples of the top level's cells, so that each scene's walks meet the same cells: a client's walk costs by its cells)
+        shared.Scenes = { Flat = Scene(0, 2000, 0), Deep = Scene(1024, 2000, 10000), Few = Scene(2048, 50, 0), Apart = Scene(3072, 50, 0, 1000) }
         workspace:Raycast(Vector3.new(0, 5000, 0), Vector3.new(0, 1, 0))
         shared.Work = {}
         local Camera = workspace.CurrentCamera
@@ -6216,9 +6349,11 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
             for _ = 1, 5 do
                 local Found = workspace:GetPartBoundsInBox(CFrame.new(X, 50, -Count * 0.005), Vector3.new(0.5, 0.5, Count * 0.01 + 1))
                 assert(#Found == Count, `the box found {#Found} of {Count}`)
+                local Order = {}
                 for I, Part in Found do
-                    assert(Part == S.Parts[I], "the parts in the Workspace's order")
+                    Order[I] = table.find(S.Parts, Part)
                 end
+                S.Order = table.concat(Order, " ")
                 Camera.CFrame = CFrame.new(X, 50, 10)
                 local Before = os.clock()
                 local Obscuring = Camera:GetPartsObscuringTarget({ Vector3.new(X, 50, -Count * 0.01 - 5) }, {})
@@ -6249,21 +6384,16 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
         run(&lua, &engine, &format!("shared.Use(\"{name}\")"));
         host.push(start.elapsed().as_secs_f64());
     }
-    // (each of the 50 parts apart walks its 1,000 instances: 50,000 steps a query, 10 queries but GetPartsObscuringTarget's, whose
-    // work is apart)
-    let apart = 10.0 * super::broadphase::order_cost(50 * 1000, 50);
-    assert!(apart > 1e-3, "the walks apart are charged: {apart} s");
     run(
         &lua,
         &engine,
-        &format!(
-            r#"
-            local Work = shared.Work
-            assert(Work.Flat > 0, "the passes cost work")
-            assert(math.abs(Work.Deep - Work.Flat) < 1e-9, `the deep scene's pass cost {{Work.Deep}} s of work where the flat one's {{Work.Flat}}`)
-            assert(math.abs(Work.Apart - Work.Few - {apart}) < 1e-9, `the parts apart cost {{Work.Apart - Work.Few}} s more work than the few in a folder, not {apart}`)
-            "#
-        ),
+        r#"
+        local Work, Scenes = shared.Work, shared.Scenes
+        assert(Work.Flat > 0, "the passes cost work")
+        assert(math.abs(Work.Deep - Work.Flat) < 1e-9, `the deep scene's pass cost {Work.Deep} s of work where the flat one's {Work.Flat}`)
+        assert(math.abs(Work.Apart - Work.Few) < 1e-9, `the parts apart cost {Work.Apart - Work.Few} s more work than the few in a folder`)
+        assert(Scenes.Deep.Order == Scenes.Flat.Order and Scenes.Apart.Order == Scenes.Few.Order, "the same order however deep")
+        "#,
     );
     // GetPartsObscuringTarget's five calls: the wall at place i is checked 2,000 - i + 1 times, each walking up for the i walls listed
     // before it, 3 ancestors in the Workspace's folder and 10,003 at the bottom of the chain
@@ -6942,8 +7072,10 @@ fn queries_whose_geometry_is_not_finite_test_no_part() {
     // (the finite point's segment and the box along x take the parts near them: a few)
     assert!(took <= 20 * 4, "20 rounds of the queries took {took} parts from the broadphase beside 20,000");
     assert!(host < 0.25, "20 rounds took {host:.3} s of host time");
-    // what a client spends on such geometry beyond the call (cost.rs QUERY_NOT_FINITE, QUERY_SIDE_NOT_FINITE)
-    for (name, price) in [("Frame", crate::cost::QUERY_NOT_FINITE), ("Side", crate::cost::QUERY_SIDE_NOT_FINITE), ("Radius", crate::cost::QUERY_SIDE_NOT_FINITE), ("Position", crate::cost::QUERY_NOT_FINITE)] {
+    // what a client spends on such geometry beyond the call (cost.rs QUERY_NOT_FINITE, QUERY_SIDE_NOT_FINITE), less what the finite query's
+    // walk pays and the one that finds nothing does not (its 4 root cells: QUERY_ROOT_CELL); a NaN side is a box of no width, as many cells
+    let walk = 4.0 * crate::cost::QUERY_ROOT_CELL;
+    for (name, price) in [("Frame", crate::cost::QUERY_NOT_FINITE - walk), ("Side", crate::cost::QUERY_SIDE_NOT_FINITE), ("Radius", crate::cost::QUERY_SIDE_NOT_FINITE - walk), ("Position", crate::cost::QUERY_NOT_FINITE - walk)] {
         run(&lua, &engine, &format!("assert(math.abs(shared.Extra.{name} - {price:e}) < 1e-9, `{name}: {{shared.Extra.{name}}} s more work, not {price:e}`)"));
     }
 }
@@ -7042,8 +7174,9 @@ fn the_broadphase_follows_the_dom_and_starts_over_past_its_log() {
         "##,
     );
     assert_eq!(walks(), 2, "the overflowed log made one walk");
-    let (_, sound, parts) = super::query::index_state(&engine);
-    assert!(sound && parts == 1 + 5 + 2999, "{parts} parts");
+    super::query::index_matches_a_walk(&engine).unwrap();
+    let parts = super::query::index_len(&engine);
+    assert!(parts == 1 + 5 + 2999, "{parts} parts");
 }
 
 /// Changes to instances the log holds already add nothing to it (dom.rs Watch::logged, flags::LOGGED): a part moved back and forth
@@ -7271,9 +7404,9 @@ fn parts_whose_bounds_are_not_finite_leave_the_index_in_a_step() {
             let start = std::time::Instant::now();
             run(&lua, &engine, "assert(shared.Query() == 0)");
             host += start.elapsed().as_secs_f64();
-            let (_, sound, parts) = super::query::index_state(&engine);
+            let parts = super::query::index_len(&engine);
             let held = if change.contains("Destroy") || change.contains("nil") { 0 } else { 60_000 };
-            assert!(sound && parts == held, "{frame}, {change}: {parts} parts held, sound {sound}");
+            assert!(parts == held, "{frame}, {change}: {parts} parts held");
         }
         super::query::index_matches_a_walk(&engine).unwrap();
         host
@@ -7423,8 +7556,6 @@ fn the_broadphase_follows_parts_moved_below_one_another() {
             run(&lua, &engine, "shared.Round()");
             super::query::index_matches_a_walk(&engine).unwrap_or_else(|error| panic!("seed {seed}, round {round}: {error}"));
         }
-        let (_, sound, _) = super::query::index_state(&engine);
-        assert!(sound, "seed {seed}: the tree's links and boxes hold");
     }
 }
 

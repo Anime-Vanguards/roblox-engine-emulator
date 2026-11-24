@@ -31,7 +31,7 @@ use lune_roblox::datatypes::types as lune;
 use lune_roblox::datatypes::types::float32 as f32m;
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use super::{cframe_name, frame, method, query, vector_arg};
 use crate::{
@@ -43,8 +43,7 @@ use crate::{
 /// What cameras hold beyond their properties (`State::cameras`): the roll SetRoll gave a camera, float32. A CFrame write keeps
 /// it; CameraType leaving Scriptable drops it (measured: Fixed and back to Scriptable reads 0). Also the field of view a
 /// DiagonalFieldOfView or MaxAxisFieldOfView write left in radians, Interpolate's tweens, the parts the spatial index has
-/// not taken in yet, the Workspace's and each WorldModel's (camera_fov.rs, camera_moves.rs), each WorldModel's own index and
-/// what was paid for its parts (world/broadphase.rs `ModelIndex`, world/region.rs), and the stack and list the hierarchy hook
+/// not taken in yet, the Workspace's and each WorldModel's (camera_fov.rs, camera_moves.rs), and the stack the hierarchy hook
 /// keeps between its runs.
 #[derive(Default)]
 pub struct Cameras {
@@ -61,34 +60,18 @@ pub struct Cameras {
     /// An Interpolate step is writing CFrame and Focus (not a script's write)
     pub(super) stepping: bool,
     /// The parts that came into the Workspace's own world (not a WorldModel's in it: camera_moves.rs) since the spatial index last
-    /// took the Workspace's in (the physics step, a spatial query of the Workspace) and are still in it: GetLargestCutoffDistance,
-    /// the PlayerMouse's rays and the Workspace's Region3 queries do not see them yet (camera_moves.rs, mouse.rs, region.rs). A
-    /// set, each part once however often it came back in, and a part that leaves the world drops out, so it holds at most the
-    /// world's parts and a lookup costs the same whatever it holds
-    pub(super) unindexed: FxHashSet<InstanceId>,
-    /// How many times the spatial index has taken the Workspace's parts in (the physics step, a spatial query of the Workspace:
-    /// [`super::camera_moves::index_parts`], `take_in`): the broadphase keeps the waiting parts out of its tree until this moves
-    /// on (world/broadphase.rs)
-    pub(super) taken_in: u64,
+    /// took the Workspace's in (the physics step, a spatial query of the Workspace) and are still in it, in the order they came
+    /// (world/broadphase.rs files them in that order): GetLargestCutoffDistance, the PlayerMouse's rays and the Workspace's
+    /// Region3 queries do not see them yet (camera_moves.rs, mouse.rs, region.rs). Each part once however often it came back in,
+    /// and a part that leaves the world drops out, so it holds at most the world's parts
+    pub(crate) unindexed: super::broadphase::Waiting,
     /// The same for each WorldModel in the DataModel and its own world's parts, by WorldModel (none while none waits): a client
     /// keeps an index for each world, and a query takes in only its own world's new parts (measured: world/region.rs)
-    pub(super) unindexed_models: FxHashMap<InstanceId, FxHashSet<InstanceId>>,
-    /// Each WorldModel's own index (world/broadphase.rs `ModelIndex`: world/region.rs), by WorldModel: made at its first query
-    /// in the DataModel and kept while it exists (camera_moves.rs drops it, with its wait, when the WorldModel is freed)
-    pub(super) model_indexes: FxHashMap<InstanceId, Box<super::broadphase::ModelIndex>>,
-    /// How many times the physics step took every world's parts in, and by WorldModel how many times its wait changed other than
-    /// as its world's change log shows (its parts taken in by a query of it, coming in anew or leaving with it: camera_moves.rs):
-    /// a WorldModel's index keeps its waiting parts out of its tree and looks at its wait again only when one of its two moved on
-    /// (world/broadphase.rs), so another world's intake costs it nothing
-    pub(super) models_stepped: u64,
-    pub(super) models_waits: FxHashMap<InstanceId, u64>,
-    /// How many parts a query of each WorldModel took in and paid for since its index last took its log (world/region.rs takes
-    /// this at each call's first walk of the index, and a build of the index then does not charge those parts again). Those
-    /// that left the world since are counted too, so a build can charge fewer parts than it puts in: MODEL_INDEX_PART is ree's
-    /// own cost
-    pub(super) model_paid: FxHashMap<InstanceId, usize>,
+    pub(crate) unindexed_models: FxHashMap<InstanceId, super::broadphase::Waiting>,
     /// The stack the hierarchy hook walks a moved subtree with, kept between its runs (camera_moves.rs)
     pub(super) walk: Vec<(InstanceId, Option<InstanceId>)>,
+    /// The parts that walk met, each with the WorldModel above it within the subtree
+    pub(super) walked: Vec<(InstanceId, Option<InstanceId>)>,
 }
 
 struct View {
@@ -344,8 +327,7 @@ fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Ar
     let ignored = super::ordered_ignore_list(engine, args, 2)?;
     let points = super::array_arg(engine, args.get(1), 1)?;
     let origin = frame::translation(&frame::affine_of(engine.state.borrow().dom.raw_get(camera, cframe_name(engine))));
-    query::take_in(engine);
-    let root = engine.world().workspace;
+    let world = query::take_in(engine);
     // (the parts listed so far, in order, each with its place in the list)
     let (mut found, mut listed): (Vec<InstanceId>, FxHashMap<InstanceId, u32>) = (Vec::new(), FxHashMap::default());
     // (each instance's check against the script's ignore list, walked once a call: ignore_walk)
@@ -375,13 +357,14 @@ fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Ar
     for point in targets {
         let direction = point - origin;
         hits.clear();
-        query::near_segment(engine, origin, direction, 0.0, |parts| {
-            hits.extend(parts.iter().filter(|(_, entry)| near(&entry.solid)).filter_map(|(part, entry)| query::ray_solid(&entry.solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, *part))));
-        });
-        // (in the Workspace's order, then nearest first: the stable sort keeps that order among equals)
+        if let Some(world) = world {
+            query::walk_ray(engine, world, origin, direction, |parts, _| {
+                hits.extend(parts.iter().filter(|(_, entry, _)| near(&entry.solid)).filter_map(|(part, entry, _)| query::ray_solid(&entry.solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, *part))));
+            });
+        }
+        // (in a ray walk's order, then nearest first: the stable sort keeps that order among equals, as a client's casts take the
+        // first of exact ties: measured, grid_order "ties")
         let state = engine.state.borrow();
-        let order = super::broadphase::sort_by_order(&state.dom, root, &mut hits, |(_, part)| *part);
-        query::charge_order(&state, order, hits.len());
         hits.sort_by(|a, b| a.0.total_cmp(&b.0));
         // (the parts this point's casts list: those neither ignored nor listed by an earlier point)
         let mut fresh = 0usize;

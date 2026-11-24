@@ -24,6 +24,7 @@ mod camera_fov;
 pub(crate) mod camera_moves;
 pub mod frame;
 pub mod gravity;
+pub mod grid;
 pub mod joints;
 pub mod mouse;
 pub mod query;
@@ -683,6 +684,7 @@ pub fn install(engine: &Rc<Engine>) {
         }));
     }
     drop(behaviors);
+    broadphase::install(engine);
     query::install(engine);
     region::install(engine);
     camera::install(engine);

@@ -132,11 +132,12 @@ fn aimed(origin: Vec3, direction: Vec3) -> Affine3A {
 /// Where the ray first meets a part the mouse sees: the point, and the part with its face's normal in the part's frame. The
 /// mouse sees every BasePart of the Workspace's own world but Terrain, TargetFilter and its descendants left out: not a
 /// WorldModel's parts in it (measured: a wall in a WorldModel in the Workspace across the ray leaves Target nil, where the same
-/// wall in the Workspace is Target; query.rs near_segment_own); CanQuery, CanCollide, CanTouch and Transparency do not matter
-/// (measured: a wall with each turned off, or fully transparent, is Target).
+/// wall in the Workspace is Target; the Workspace's grid holds none of them); CanQuery, CanCollide, CanTouch and Transparency do
+/// not matter (measured: a wall with each turned off, or fully transparent, is Target).
 ///
-/// The parts come from the spatial queries' broadphase (world/broadphase.rs: the ray tests the parts near it), TargetFilter's
-/// among them: the ray meets those too, and a client pays for them. The read is charged as the ray it is: [`crate::cost::MOUSE_RAY`] and the member's `price`, then the parts
+/// The parts come from the Workspace's grid in a ray walk's order (world/grid.rs: inferred to follow Raycast, which a headless
+/// client cannot show; the first of equals in that order), TargetFilter's among them: the ray meets those too, and a client pays
+/// for them. The read is charged as the ray it is: [`crate::cost::MOUSE_RAY`] and the member's `price`, then the parts
 /// it meets up to its hit (the hit and those under TargetFilter before it) and the hit's own. It sees the parts the spatial index
 /// has: one that entered the Workspace since a spatial query of the Workspace or the physics step last took parts in
 /// (`Cameras::unindexed`, world/camera_moves.rs) is neither met nor paid for, and the read takes nothing in (measured: a
@@ -147,24 +148,23 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
         Some(Value::Instance(skip)) => Some(skip),
         _ => None,
     };
-    query::refresh(engine);
-    let root = engine.world().workspace;
+    let world = query::refresh(engine);
     let reach = direction * REACH;
     let length = reach.length();
     // (the parts the ray meets, in the Workspace's order)
     let mut entered: Vec<(query::Solid, f32, Vec3)> = Vec::new();
     // (a ray that is not finite, from a camera whose CFrame is not, meets nothing and tests no part, as a Raycast's)
-    if origin.is_finite() && reach.is_finite() && length.is_finite() {
-        query::near_segment_own(engine, origin, reach, 0.0, |parts| {
-            let state = engine.state.borrow();
-            for (part, entry) in parts {
-                let Some((t, local)) = query::ray_solid(&entry.solid, origin, reach, 0.0) else { continue };
-                // (looked up only for the parts the ray meets, in a set emptied at every physics step; a waiting part comes here
-                // only with every part, in the broadphase's scan mode: it keeps them out of its tree)
-                if state.cameras.unindexed.contains(part) {
-                    continue;
+    // (a part waiting for the spatial index is in no cell yet)
+    if let Some(world) = world
+        && origin.is_finite()
+        && reach.is_finite()
+        && length.is_finite()
+    {
+        query::walk_ray(engine, world, origin, reach, |parts, _| {
+            for (_, entry, _) in parts {
+                if let Some((t, local)) = query::ray_solid(&entry.solid, origin, reach, 0.0) {
+                    entered.push((entry.solid, t, local));
                 }
-                entered.push((entry.solid, t, local));
             }
         });
     }
@@ -175,8 +175,6 @@ fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, or
     let (mut filtered, mut walks) = (Vec::new(), Vec::new());
     {
         let state = engine.state.borrow();
-        let steps = super::broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
-        query::charge_order(&state, steps, entered.len());
         for (solid, t, local) in &entered {
             let distance = length * t;
             let under = skip.map(|skip| query::steps_up_to(&state, solid.part, skip));

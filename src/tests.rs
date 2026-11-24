@@ -11177,13 +11177,14 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
     let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("{output:?}"));
     let numbers: Vec<f64> = line.split(' ').map(|n| n.parse().unwrap()).collect();
     // a call 0.19 us and the Include filter's list 0.108 (cost.rs PARAMS_LIST, PARAMS_LISTED); a path through 24 parts 0.175 + 23 x
-    // 0.042 more, and the filter's list again; a box 0.15, and 0.14 a part it returns; GetPartsInPart 0.243 + 0.011 a stud of the
-    // root of its part's surface area, and 0.74 a part it returns
+    // 0.042 more, and the filter's list again; a box 0.15, and 0.115 a part it returns and 25 ns the one cell holding the 24 (the
+    // grid's prices, cost.rs QUERY_BOX_PART, QUERY_CELL: the stack cost a client 3.80 us, stacked parts dearer than spread ones,
+    // not modelled); GetPartsInPart 0.243 + 0.011 a stud of the root of its part's surface area, and 0.74 a part it returns
     let list = (crate::cost::PARAMS_LIST + crate::cost::PARAMS_LISTED) * 1e9;
     assert!((250.0..360.0).contains(&numbers[0]), "a miss: {line}");
     assert!((1300.0..1650.0).contains(&numbers[1]) && (numbers[2] - numbers[1] - list).abs() < 100.0, "through the stack, filtered or not: {line}");
     assert!((140.0..220.0).contains(&numbers[3]), "an empty box: {line}");
-    assert!((3200.0..3900.0).contains(&numbers[4]), "a box of 24 parts: {line}");
+    assert!((2800.0..3300.0).contains(&numbers[4]), "a box of 24 parts: {line}");
     assert!((270.0..360.0).contains(&numbers[5]), "a 2-stud part touching nothing: {line}");
     assert!((1200.0..1500.0).contains(&numbers[6]), "a 40-stud part touching nothing: {line}");
     assert!((12500.0..15500.0).contains(&numbers[7]), "a part among 23 others: {line}");
@@ -11191,7 +11192,8 @@ fn a_spatial_query_pays_for_the_parts_it_meets() {
 
 /// A cast stops at its first hit, as a playing client's does (roblox-sim, Studio 0.747, a headless client: 24 walls 2 studs apart
 /// behind a Raycast's hit 0.47 us against 0.42 for the wall alone, a Spherecast's 0.56 against 0.48, a Blockcast's 0.73 against 0.66,
-/// a Shapecast's alike): the parts behind it cost nothing, filtered out or not. The parts before it that its filter leaves out cost
+/// a Shapecast's alike): the parts behind it cost nothing, filtered out or not, but those a Raycast's walk tests in the grid cell
+/// of its hit (cost.rs RAY_TESTED). The parts before it that its filter leaves out cost
 /// what a ray's do whatever the cast's shape (23 excluded walls in front 0.027 to 0.031 us each for every kind), and the parts tied
 /// with the hit the cast's own price (cost.rs RAY_CROSSED, SPHERE_CROSSED, BLOCK_CROSSED; the stack of a_spatial_query_pays_for_the_parts_it_meets).
 #[test]
@@ -11277,8 +11279,11 @@ fn a_cast_pays_for_the_parts_up_to_its_hit() {
     let at = |cast: &str, kind: &str| *ns.get(&(cast.to_string(), kind.to_string())).unwrap_or_else(|| panic!("{cast} {kind}: {output:?}"));
     for (cast, each) in [("Raycast", crate::cost::RAY_CROSSED), ("Spherecast", crate::cost::SPHERE_CROSSED), ("Blockcast", crate::cost::BLOCK_CROSSED), ("Shapecast", crate::cost::BLOCK_CROSSED)] {
         let one = at(cast, "one");
-        assert!((at(cast, "behind") - one).abs() < 0.5, "{cast}: 23 walls behind the hit cost {} ns", at(cast, "behind") - one);
-        assert!((at(cast, "excluded_behind") - one).abs() < 0.5, "{cast}: 23 excluded walls behind the hit cost {} ns", at(cast, "excluded_behind") - one);
+        // (a Raycast's walk tests the 6 walls behind its hit in the hit's own grid cell, of 16 studs, as a client's does: cost.rs
+        // RAY_TESTED; the client's 23 walls behind cost it 0.05 us)
+        let behind = if cast == "Raycast" { 6.0 * crate::cost::RAY_TESTED * 1e9 } else { 0.0 };
+        assert!((at(cast, "behind") - one - behind).abs() < 0.5, "{cast}: 23 walls behind the hit cost {} ns", at(cast, "behind") - one);
+        assert!((at(cast, "excluded_behind") - one - behind).abs() < 0.5, "{cast}: 23 excluded walls behind the hit cost {} ns", at(cast, "excluded_behind") - one);
         let front = at(cast, "excluded_in_front") - one;
         // (each excluded wall's filter walk one step up to the excluded folder, at its depth's price: cost.rs filter_step)
         let excluded = 23.0 * (crate::cost::RAY_CROSSED + crate::cost::filter_step(4)) * 1e9;

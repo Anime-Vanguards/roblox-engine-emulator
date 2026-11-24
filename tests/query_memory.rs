@@ -1,7 +1,6 @@
-//! What the world's calls hold while they work: the walks that put what a spatial query keeps in the Workspace's order hold
-//! memory for the parts and the instances up to where their paths meet, not for how deep the parts are (src/world/broadphase.rs
-//! sort_by_order), and BulkMoveTo keeps room for the parts its list holds, not for its holes (src/world/mod.rs bulk_moves). This
-//! binary counts its own thread's heap, and its peak, with a global allocator of its own.
+//! What the world's calls hold while they work: a spatial query holds memory for the parts it walks, not for how deep they are
+//! (src/world/grid.rs: its order is the grid's, not the tree's), and BulkMoveTo keeps room for the parts its list holds, not for its
+//! holes (src/world/mod.rs bulk_moves). This binary counts its own thread's heap, and its peak, with a global allocator of its own.
 
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -65,8 +64,8 @@ fn peak_during(work: impl FnOnce()) -> i64 {
 
 /// GetPartBoundsInBox, GetPartsObscuringTarget and a Raycast over 2,000 parts in a folder at the bottom of a 10,000-deep chain
 /// hold about what they hold over the same parts in a folder of the Workspace (a few hundred kilobytes: the result tables and
-/// the walks' nodes), and list them in the folder's order. Each part's whole list of places, 10,001 of them, took the
-/// heap 262 MB higher here (2 GB for 10,000 parts).
+/// the walks' parts), and list them in the same order. Each part's whole list of places, 10,001 of them, took the heap 262 MB
+/// higher here (2 GB for 10,000 parts) when the queries put their parts in the Workspace's order.
 #[test]
 fn a_query_holds_memory_for_its_parts_not_for_how_deep_they_are() {
     let emulator = Emulator::start(Engine::new(Options { mode: "play".into(), ..Options::default() }).unwrap(), &ProjectSpec::default()).unwrap();
@@ -93,14 +92,19 @@ fn a_query_holds_memory_for_its_parts_not_for_how_deep_they_are() {
                 Top.Parent = workspace
                 return { X = X, Parts = Parts }
             end
-            shared.Scenes = { Flat = Scene(0, 0), Deep = Scene(1000, 10000) }
+            -- (at multiples of the top level's cells, so that both scenes' walks meet the same cells)
+            shared.Scenes = { Flat = Scene(0, 0), Deep = Scene(1024, 10000) }
             function shared.Query(Name)
                 local S = shared.Scenes[Name]
                 local Found = workspace:GetPartBoundsInBox(CFrame.new(S.X, 50, -10), Vector3.new(0.5, 0.5, 21))
                 assert(#Found == 2000, `the box found {#Found}`)
+                local Order = table.create(2000)
                 for I, Part in Found do
-                    assert(Part == S.Parts[I], "the parts in their folder's order")
+                    Order[I] = table.find(S.Parts, Part)
                 end
+                S.Order = table.concat(Order, " ")
+                local Other = shared.Scenes[if Name == "Flat" then "Deep" else "Flat"]
+                assert(Other.Order == nil or Other.Order == S.Order, "the parts in the same order however deep")
                 workspace.CurrentCamera.CFrame = CFrame.new(S.X, 50, 10)
                 assert(#workspace.CurrentCamera:GetPartsObscuringTarget({ Vector3.new(S.X, 50, -25) }, {}) == 2000, "every part obscures the point")
                 assert(workspace:Raycast(Vector3.new(S.X, 50, 10), Vector3.new(0, 0, -40)).Instance == S.Parts[1], "the ray hits the first part")

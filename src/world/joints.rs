@@ -150,7 +150,7 @@ impl Setup {
 pub struct Joints {
     setup: Option<Rc<Setup>>,
     /// Rigid joints made in this engine: none, and every entry point returns at once
-    created: u32,
+    pub(crate) created: u32,
     /// Whether the joints made before the index existed have been indexed
     scanned: bool,
     /// Rigid joints by the parts they named when last indexed (candidates: a joint's current Part0
@@ -1395,6 +1395,10 @@ fn relink(state: &mut State, reflection: &Reflection, setup: &Setup, joint: Inst
             flips[side] = Some((part, on));
         }
     }
+    // (a link that started files its two parts again in the spatial grid: world/broadphase.rs links_started)
+    if let Some((first, second, true)) = clean_flip(&flips) {
+        state.spatial.link_started(first, second);
+    }
     flips
 }
 
@@ -1740,6 +1744,38 @@ fn edges(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId
 
 fn anchored(state: &State, setup: &Setup, part: InstanceId) -> bool {
     state.dom.boolean(part, setup.anchored) == Some(true)
+}
+
+/// Whether `part`'s assembly holds an anchored part, read from its kept component alone (world/broadphase.rs: the spatial grid files a
+/// part in its assembly's list); None when it links no other part or its component is not kept now, which this never works out.
+pub(crate) fn grid_anchored(state: &State, part: InstanceId) -> Option<bool> {
+    let found = state.joints.components.get(&part)?;
+    Some(!found.anchored.borrow().is_empty())
+}
+
+/// The parts of `part`'s kept component, in no particular order (world/broadphase.rs: an Anchored write that anchors or frees the
+/// whole of it files them again); None when it is not kept.
+pub(crate) fn grid_component(state: &State, part: InstanceId) -> Option<Vec<InstanceId>> {
+    let found = state.joints.components.get(&part)?;
+    let mut parts: Vec<InstanceId> = found.links.borrow().keys().copied().collect();
+    parts.sort_unstable();
+    Some(parts)
+}
+
+/// Of two parts a joint links, whether `a` comes before `b` as their assembly's root would: an anchored part first, else the
+/// better ranked ([`root_rank`]), of equal parts the later made (world/broadphase.rs: a link that starts files its parts again in
+/// that order, measured).
+pub(crate) fn root_first(state: &State, reflection: &Reflection, a: InstanceId, b: InstanceId) -> bool {
+    let Some(setup) = state.joints.setup.clone() else { return true };
+    let (anchored_a, anchored_b) = (anchored(state, &setup, a), anchored(state, &setup, b));
+    if anchored_a != anchored_b {
+        return anchored_a;
+    }
+    match root_rank(state, reflection, &setup, a).partial_cmp(&root_rank(state, reflection, &setup, b)) {
+        Some(std::cmp::Ordering::Greater) => true,
+        Some(std::cmp::Ordering::Less) => false,
+        _ => state.dom.at(a).serial >= state.dom.at(b).serial,
+    }
 }
 
 /// The root a part would be among unanchored parts: (not Massless, RootPriority, size score). The score is the largest

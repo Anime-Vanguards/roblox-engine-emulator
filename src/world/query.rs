@@ -27,7 +27,8 @@ use lune_roblox::datatypes::types as lune;
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
 
-use super::broadphase::{self, Entry, Index, ModelIndex};
+use super::broadphase::{self, Entry};
+use super::grid::{self, Passed, Walked};
 use super::{cframe_arg, cframe_name, frame, vector_arg};
 use crate::{
     Engine, InstanceId, K, NameId, State,
@@ -301,18 +302,20 @@ fn shape_of(state: &State, engine: &Engine, part: InstanceId, size: Vec3) -> Sha
     }
 }
 
-/// The spatial queries' state on an engine: the broadphase over the Workspace's parts (world/broadphase.rs) and what a query
-/// reuses. Each query walked and measured the whole Workspace whenever anything in the dom had changed (3.7 ms a ray on a
-/// mounted map of 28k instances), and then tested every part (2.8 ms of host time a Raycast beside 100,000 parts away from it,
-/// where a client spends 0.6 us); now it takes the dom's changes and tests the parts near it.
+/// What a spatial query reuses on an engine: the last query's filter, and the storage of the parts the last walk gave
+/// (world/broadphase.rs holds each world's grid in the engine's state)
 #[derive(Default)]
 struct QueryCache {
-    index: RefCell<Index>,
     /// The last query's filter, whose lists the next query reads its params into ([`take_filter`])
     spare: RefCell<Filter>,
-    /// The parts near the last query, whose storage the next one fills ([`with_near`])
+    /// The parts the last box walk gave, whose storage the next one fills ([`walk_box`])
     near: RefCell<Vec<(InstanceId, Entry)>>,
+    /// The parts and cells the last ray walk gave ([`walk_ray`])
+    rays: RefCell<RayParts>,
 }
+
+/// A ray walk's parts, each with its entry and the index of the first cell holding it, and the cells it passed
+type RayParts = (Vec<(InstanceId, Entry, u32)>, Vec<Passed>);
 
 impl crate::Extension for QueryCache {}
 
@@ -332,149 +335,126 @@ fn keep_filter(engine: &Engine, filter: Filter) {
     *query_cache(engine).spare.borrow_mut() = filter;
 }
 
-/// What a spatial query does first: the spatial index takes in what entered the Workspace since the last query or the physics
-/// step (world/camera_moves.rs `take_in`: GetLargestCutoffDistance and the PlayerMouse, which take nothing in, see it from
-/// then), which the query pays for as a client's does (cost.rs QUERY_TAKE_IN and QUERY_TAKEN_PART for each part; moved and
-/// removed parts cost it nothing), and the broadphase takes the dom's changes ([`refresh`]).
-pub(crate) fn take_in(engine: &Engine) {
-    take_in_world(engine, None);
+/// What a spatial query of the Workspace does first ([`take_in_of`]); its world's index.
+pub(crate) fn take_in(engine: &Engine) -> Option<u32> {
+    take_in_of(engine, engine.world().workspace)
 }
 
-/// [`take_in`] for the world of the WorldRoot a query is called on (`world`): the Workspace's, or a WorldModel's own. A client keeps
-/// an index for each world, and a WorldModel's query takes in its own world's new parts and leaves the Workspace's waiting (and
-/// the other way round: measured, world/region.rs), at the same price.
-pub(crate) fn take_in_of(engine: &Engine, world: InstanceId) {
-    take_in_world(engine, (world != engine.world().workspace).then_some(world));
-}
-
-/// [`take_in`] for the world of the Workspace (`model` None) or of the WorldModel `model`, which takes in its own world's parts
-/// and no other's (camera_moves.rs take_in counts a WorldModel's as paid for, for its index: world/region.rs).
-pub(crate) fn take_in_world(engine: &Engine, model: Option<InstanceId>) {
-    let waiting = super::camera_moves::take_in(&mut engine.state.borrow_mut(), model);
+/// What a spatial query of the WorldRoot `world` does first: the index of its world (the Workspace's, or a WorldModel's own)
+/// takes in what came into it since a query of it or the physics step last took that world's in, in the order it came
+/// (world/broadphase.rs take_in: GetLargestCutoffDistance and the PlayerMouse, which take nothing in, see it from then), which
+/// the query pays for as a client's does (cost.rs QUERY_TAKE_IN and QUERY_TAKEN_PART for each part; moved and removed parts cost
+/// it nothing). A client keeps an index for each world, and a WorldModel's query takes in its own world's new parts and leaves
+/// the Workspace's waiting (and the other way round: measured, world/region.rs), at the same price. Its world's index, none for a
+/// WorldModel outside the DataModel.
+pub(crate) fn take_in_of(engine: &Engine, world: InstanceId) -> Option<u32> {
+    let (index, waiting, opened) = broadphase::take_in(engine, world);
     if waiting > 0 {
         charge_query(engine, crate::cost::QUERY_TAKE_IN + waiting as f64 * crate::cost::QUERY_TAKEN_PART);
     }
-    refresh(engine);
+    charge_query(engine, opened);
+    index
 }
 
-/// The broadphase brought up to the dom's changes (world/broadphase.rs), the spatial index's wait left as it is: the PlayerMouse's
-/// reads and GetLargestCutoffDistance take nothing in (world/mouse.rs, world/camera_moves.rs).
-pub(crate) fn refresh(engine: &Engine) {
-    query_cache(engine).index.borrow_mut().sync(engine);
+/// The Workspace's index brought up to the dom's changes (world/broadphase.rs open), the spatial index's wait left as it is: the
+/// PlayerMouse's reads and GetLargestCutoffDistance take nothing in (world/mouse.rs, world/camera_moves.rs).
+pub(crate) fn refresh(engine: &Engine) -> Option<u32> {
+    broadphase::open(engine, engine.world().workspace).0
 }
 
-/// The Workspace's parts but Terrain, from the broadphase brought up to the dom's changes as [`refresh`] brings it, into `out`
-/// in no particular order: what a collision-group change works out the ids of (services/physics.rs), without a walk of the
-/// Workspace's other instances.
+/// The Workspace's parts but Terrain, a WorldModel's in it included (world/broadphase.rs placed_parts), into `out` in no particular
+/// order: what a collision-group change works out the ids of (services/physics.rs).
 pub(crate) fn placed_parts(engine: &Engine, out: &mut Vec<InstanceId>) {
-    let mut index = query_cache(engine).index.borrow_mut();
-    index.sync(engine);
-    index.part_ids(out);
+    broadphase::placed_parts(engine, out);
 }
 
-/// `then` on the parts `gather` takes from the broadphase for a query (the Workspace's parts near it, or all of them, in no
-/// particular order: the caller tests each and orders what it keeps).
-pub(crate) fn with_near<R>(engine: &Engine, gather: impl FnOnce(&mut Index, &mut Vec<(InstanceId, Entry)>), then: impl FnOnce(&[(InstanceId, Entry)]) -> R) -> R {
+/// The parts of `world`'s box walk over `lo`..`hi` (the query's world box, clamped: [`clamped`]) in its order, a cell's `first`
+/// list first, to `then` with what the walk did.
+pub(crate) fn walk_box<R>(engine: &Engine, world: u32, lo: Vec3, hi: Vec3, first: u8, then: impl FnOnce(&[(InstanceId, Entry)], Walked) -> R) -> R {
     let cache = query_cache(engine);
     let mut near = cache.near.take();
     near.clear();
-    gather(&mut cache.index.borrow_mut(), &mut near);
+    let walked = broadphase::walk_box(&mut engine.state.borrow_mut(), world, lo, hi, first, &mut near);
+    let result = then(&near, walked);
+    near.clear();
+    *cache.near.borrow_mut() = near;
+    result
+}
+
+/// Every part of `world`'s index that is filed or loose, in no particular order, to `then` (a query whose geometry has no box)
+fn every_part<R>(engine: &Engine, world: u32, then: impl FnOnce(&[(InstanceId, Entry)]) -> R) -> R {
+    let cache = query_cache(engine);
+    let mut near = cache.near.take();
+    near.clear();
+    broadphase::all_parts(&engine.state.borrow(), world, &mut near);
     let result = then(&near);
     near.clear();
     *cache.near.borrow_mut() = near;
     result
 }
 
-/// The index's tree height, whether its links and boxes hold, and how many parts it has (tests)
-#[cfg(test)]
-pub(crate) fn index_state(engine: &Engine) -> (i32, bool, usize) {
-    let index = query_cache(engine).index.borrow();
-    let (height, ok) = index.check_tree();
-    (height, ok, index.len())
+/// The parts of `world`'s ray walk along the segment from `origin` along `direction` in its order (world/grid.rs walk_ray: level 0
+/// first, each level's cells in the order the segment enters them, a cell's anchored parts first), each with the index of the
+/// first cell of the walk's cells that holds it, to `then` with those cells.
+pub(crate) fn walk_ray<R>(engine: &Engine, world: u32, origin: Vec3, direction: Vec3, then: impl FnOnce(&[(InstanceId, Entry, u32)], &[Passed]) -> R) -> R {
+    let cache = query_cache(engine);
+    let (mut near, mut passed) = cache.rays.take();
+    near.clear();
+    passed.clear();
+    broadphase::walk_ray(&mut engine.state.borrow_mut(), world, origin, direction, &mut near, &mut passed);
+    let result = then(&near, &passed);
+    near.clear();
+    *cache.rays.borrow_mut() = (near, passed);
+    result
 }
 
-/// Whether the index holds what a walk of the Workspace finds: the same parts (every BasePart but Terrain), each with the solid
-/// and flags the dom gives it now, to the bit (tests; its log taken first)
+/// How far about its centre a box query reaches on each axis: a client clamps the query's world box to its centre +- 7,500
+/// studs, for its walk and its overlap test alike (measured, Studio 0.747, a playing client and a server: parts 7,500 studs out
+/// along a 20,000-stud box found, 7,500.5 not; a 40,000-stud box turned 45 degrees about y finds parts out to 10,606 along its
+/// own axis; a radius of 10,000 alike; tools/parity/probes/grid_limits.luau)
+pub(crate) const CLAMP: f32 = 7500.0;
+
+/// A Raycast's and FindPartOnRay's reach: a client cuts every ray 15,000 studs from its origin, whatever its length and
+/// direction and wherever it starts (measured, Studio 0.747: a face 14,999.9 along a 1,000,000-stud ray hit, one at 15,000 not;
+/// the same from 50,000 studs back; tools/parity/probes/grid_limits.luau)
+pub(crate) const RAY_CUT: f32 = 15000.0;
+
+/// A query's world box `center` +- `extent`, clamped to its centre +- [`CLAMP`] on each axis, and whether the clamp cut it
+pub(crate) fn clamped(center: Vec3, extent: Vec3) -> (Vec3, Vec3, bool) {
+    let reach = extent.min(Vec3::splat(CLAMP));
+    (center - reach, center + reach, reach != extent)
+}
+
+/// A ray's direction cut to [`RAY_CUT`] (a hair short of it, so a face at the cut is not hit: measured)
+fn cut(direction: Vec3) -> Vec3 {
+    let length = direction.length();
+    if length > RAY_CUT { direction * ((RAY_CUT - 0.002) / length) } else { direction }
+}
+
+/// Whether a solid's world box meets the box `lo`..`hi` (touching counts): a clamped query's second test
+fn meets(solid: &Solid, lo: Vec3, hi: Vec3) -> bool {
+    let (center, reach) = world_reach(solid);
+    (center - reach).cmple(hi).all() && (center + reach).cmpge(lo).all()
+}
+
+/// Whether the world's index holds what a walk of its world finds (tests; world/broadphase.rs check_world)
 #[cfg(test)]
 pub(crate) fn index_matches_a_walk(engine: &Engine) -> Result<(), String> {
-    refresh(engine);
-    let mut held = Vec::new();
-    query_cache(engine).index.borrow().all_parts(&mut held);
-    let state = engine.state.borrow();
-    let reflection = &engine.reflection;
-    let (base_part, terrain) = (reflection.class_id("BasePart").expect("BasePart"), reflection.class_id("Terrain").expect("Terrain"));
-    let not_false = |part: InstanceId, name: &str| reflection.name_id(name).and_then(|n| state.dom.boolean(part, n)) != Some(false);
-    let mut walked: Vec<String> = state
-        .dom
-        .descendants(engine.world().workspace)
-        .into_iter()
-        .filter(|&id| reflection.class(state.dom.at(id).class).is_a(base_part) && !reflection.class(state.dom.at(id).class).is_a(terrain))
-        .map(|id| format!("{id:?} {:?} {} {}", solid(&state, engine, id), not_false(id, "CanQuery"), not_false(id, "CanCollide")))
-        .collect();
-    let mut kept: Vec<String> = held.iter().map(|(id, entry)| format!("{id:?} {:?} {} {}", entry.solid, entry.can_query, entry.can_collide)).collect();
-    walked.sort();
-    kept.sort();
-    if walked == kept {
-        return Ok(());
-    }
-    let missing: Vec<&String> = walked.iter().filter(|line| !kept.contains(line)).take(3).collect();
-    let extra: Vec<&String> = kept.iter().filter(|line| !walked.contains(line)).take(3).collect();
-    Err(format!("{} walked, {} held; missing {missing:?}; extra {extra:?}", walked.len(), kept.len()))
+    broadphase::check_world(engine, engine.world().workspace)
 }
 
-/// Whether the WorldModel `model`'s index (its log taken first) holds what a walk of its world finds: the same parts (the
-/// BaseParts whose nearest WorldRoot it is, but Terrain), each with the solid and flags the dom gives it now, to the bit, and out
-/// of the tree exactly while it waits for the spatial index (camera.rs `Cameras::unindexed_models`), in a sound tree (tests)
+/// [`index_matches_a_walk`] for the WorldModel `model`'s own index (tests)
 #[cfg(test)]
 pub(crate) fn model_index_matches_a_walk(engine: &Engine, model: InstanceId) -> Result<(), String> {
-    let mut index = take_model_index(engine, model);
-    index.sync(engine, model);
-    let held = if index.check_tree() { Ok(index.all_parts()) } else { Err("a broken tree".to_string()) };
-    put_model_index(engine, model, index);
-    let held = held?;
-    let state = engine.state.borrow();
-    let reflection = &engine.reflection;
-    let (base_part, terrain) = (reflection.class_id("BasePart").expect("BasePart"), reflection.class_id("Terrain").expect("Terrain"));
-    let not_false = |part: InstanceId, name: &str| reflection.name_id(name).and_then(|n| state.dom.boolean(part, n)) != Some(false);
-    let mut walked: Vec<String> = state
-        .dom
-        .descendants(model)
-        .into_iter()
-        .filter(|&id| {
-            let class = reflection.class(state.dom.at(id).class);
-            class.is_a(base_part) && !class.is_a(terrain) && state.dom.home(id) == Some(model)
-        })
-        .map(|id| {
-            let waits = state.cameras.unindexed_models.get(&model).is_some_and(|waiting| waiting.contains(&id));
-            format!("{id:?} {:?} {} {} {waits}", solid(&state, engine, id), not_false(id, "CanQuery"), not_false(id, "CanCollide"))
-        })
-        .collect();
-    let mut kept: Vec<String> = held.iter().map(|(id, entry, waits)| format!("{id:?} {:?} {} {} {waits}", entry.solid, entry.can_query, entry.can_collide)).collect();
-    walked.sort();
-    kept.sort();
-    if walked == kept {
-        return Ok(());
-    }
-    let missing: Vec<&String> = walked.iter().filter(|line| !kept.contains(line)).take(3).collect();
-    let extra: Vec<&String> = kept.iter().filter(|line| !walked.contains(line)).take(3).collect();
-    Err(format!("{} walked, {} held; missing {missing:?}; extra {extra:?}", walked.len(), kept.len()))
+    broadphase::check_world(engine, model)
 }
 
-/// The Workspace's parts near the box `center` +- `extent` from the broadphase, one at a time until `visit` returns false
-/// (world/broadphase.rs `Index::visit_box`: world/region.rs); the broadphase as the last [`refresh`] left it.
-pub(crate) fn visit_near_box(engine: &Engine, center: Vec3, extent: Vec3, visit: impl FnMut(InstanceId, &Entry) -> bool) -> bool {
-    query_cache(engine).index.borrow_mut().visit_box(center, extent, visit)
-}
-
-/// [`near_segment`] for the Workspace's own world, a WorldModel's parts in it left out (world/broadphase.rs
-/// `Index::near_segment_own`): what the PlayerMouse's ray and GetLargestCutoffDistance meet, as a client's never meet them.
-pub(crate) fn near_segment_own<R>(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32, then: impl FnOnce(&[(InstanceId, Entry)]) -> R) -> R {
-    with_near(engine, |index, out| index.near_segment_own(origin, direction, grow, out), then)
-}
-
-/// [`with_near`] for the parts a segment from `origin` along `direction`, with a sphere of radius `grow` swept along it, may meet.
-pub(crate) fn near_segment<R>(engine: &Engine, origin: Vec3, direction: Vec3, grow: f32, then: impl FnOnce(&[(InstanceId, Entry)]) -> R) -> R {
-    with_near(engine, |index, out| index.near_segment(origin, direction, grow, out), then)
+/// How many parts the Workspace's index holds (tests)
+#[cfg(test)]
+pub(crate) fn index_len(engine: &Engine) -> usize {
+    let workspace = engine.world().workspace;
+    let world = engine.state.borrow().spatial.world(workspace);
+    world.map_or(0, |world| broadphase::held(&engine.state.borrow(), world))
 }
 
 /// Whether a ray or a shape cast's path from `origin` along `direction` can meet anything: both finite, and the direction's length
@@ -538,21 +518,14 @@ fn box_size(size: Vec3) -> Vec3 {
 /// component to 0 (infinity's product is NaN)
 const UNBOUNDED: f32 = 1e30;
 
-/// How far the broadphase looks along a box's infinite side ([`UNBOUNDED`]): ten million studs from its centre, so that its
-/// float32 slack (world/broadphase.rs, a share of the largest coordinate) stays some studs and it still prunes along the box's
-/// other axes; a part beyond that is not found
-const UNBOUNDED_REACH: f32 = 1e7;
-
-/// The world box around an oriented box (its frame's axes as given, `size` its size), or None when the frame is skewed and its
-/// box is no box (world/broadphase.rs skewed).
+/// The world box around an oriented box (its frame's axes as given, made unit, `size` its size): `|R| * size / 2`, which also
+/// bounds a skewed frame's box; None when it is not finite.
 fn box_extent(frame: &Affine3A, size: Vec3) -> Option<Vec3> {
     let unit = unit_frame(frame);
-    if broadphase::skewed(&unit) {
-        return None;
-    }
     let half = (size * 0.5).abs();
     let m = unit.matrix3;
-    Some(Vec3::from(m.x_axis).abs() * half.x + Vec3::from(m.y_axis).abs() * half.y + Vec3::from(m.z_axis).abs() * half.z)
+    let extent = Vec3::from(m.x_axis).abs() * half.x + Vec3::from(m.y_axis).abs() * half.y + Vec3::from(m.z_axis).abs() * half.z;
+    extent.is_finite().then_some(extent)
 }
 
 /// A solid's centre and the half size of its world-aligned box: its collision box turned into the world, `|R| * half` (float32).
@@ -565,21 +538,6 @@ pub(crate) fn world_reach(solid: &Solid) -> (Vec3, Vec3) {
         m.x_axis.z.abs() * half.x + m.y_axis.z.abs() * half.y + m.z_axis.z.abs() * half.z,
     );
     (frame::translation(&solid.frame), reach)
-}
-
-/// The index of the WorldModel `model`'s world (world/broadphase.rs `ModelIndex`: world/region.rs), taken out of the engine's
-/// keeping (camera.rs `Cameras::model_indexes`) for one call, an empty one the first time: [`put_model_index`] gives it back.
-pub(crate) fn take_model_index(engine: &Engine, model: InstanceId) -> Box<ModelIndex> {
-    engine.state.borrow_mut().cameras.model_indexes.remove(&model).unwrap_or_default()
-}
-
-/// Gives back the index [`take_model_index`] took, while its WorldModel exists, once it was made (one outside the DataModel
-/// keeps none).
-pub(crate) fn put_model_index(engine: &Engine, model: InstanceId, index: Box<ModelIndex>) {
-    let mut state = engine.state.borrow_mut();
-    if index.is_made() && state.dom.get(model).is_some() {
-        state.cameras.model_indexes.insert(model, index);
-    }
 }
 
 /// Where a ray from `origin` along `direction` (its length the reach) first enters `solid`:
@@ -692,27 +650,23 @@ pub fn ray_cylinder(o: Vec3, d: Vec3, half_length: f32, radius: f32) -> Option<(
 }
 
 /// The closest hit of a ray (or a sphere of radius `grow` swept along it) among the parts of `near` that `sees` lets through, but
-/// `except`'s: the parts it enters, in the Workspace's order ([`broadphase::sort_by_order`] below `root`), the nearest kept,
-/// the first of equals.
-#[allow(clippy::too_many_arguments)]
-pub fn cast_ray(state: &State, root: InstanceId, near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) -> bool, origin: Vec3, direction: Vec3, grow: f32, except: Option<InstanceId>) -> Option<Hit> {
-    let mut entered: Vec<(&Solid, f32, Vec3)> = near
-        .iter()
-        .filter(|(part, _)| except != Some(*part))
-        .filter_map(|(part, entry)| ray_solid(&entry.solid, origin, direction, grow).filter(|_| sees(*part, entry)).map(|(t, normal)| (&entry.solid, t, normal)))
-        .collect();
-    let steps = broadphase::sort_by_order(&state.dom, root, &mut entered, |(solid, ..)| solid.part);
-    charge_order(state, steps, entered.len());
+/// `except`'s: the parts it enters in the order its walk of the grid gave them, the nearest kept, the first of equals (a client's
+/// cast takes the first of exact ties in its walk: measured, tools/parity/probes/grid_order.luau "ties").
+pub fn cast_ray<'a>(near: impl IntoIterator<Item = (InstanceId, &'a Entry)>, sees: impl Fn(InstanceId, &Entry) -> bool, origin: Vec3, direction: Vec3, grow: f32, except: Option<InstanceId>) -> Option<Hit> {
     let mut best: Option<Hit> = None;
-    for (solid, t, local_normal) in entered {
-        let distance = direction.length() * t;
-        if best.is_some_and(|hit| hit.distance <= distance) {
+    for (part, entry) in near {
+        if except == Some(part) {
             continue;
         }
-        let normal = solid.frame.transform_vector3(local_normal).normalize_or(Vec3::Y);
+        let Some((t, local_normal)) = ray_solid(&entry.solid, origin, direction, grow) else { continue };
+        let distance = direction.length() * t;
+        if best.is_some_and(|hit| hit.distance <= distance) || !sees(part, entry) {
+            continue;
+        }
+        let normal = entry.solid.frame.transform_vector3(local_normal).normalize_or(Vec3::Y);
         // a swept sphere touches the surface one radius short of its centre
         let position = origin + direction * t - normal * grow;
-        best = Some(Hit { part: solid.part, position, normal, distance });
+        best = Some(Hit { part, position, normal, distance });
     }
     best
 }
@@ -791,29 +745,23 @@ fn sweep_boxes(a: &Oriented, direction: Vec3, b: &Oriented) -> Option<(f32, Vec3
 }
 
 /// The closest part of `near` that `sees` lets through a box (`frame`, `size`) swept along `direction` touches, `except` aside:
-/// the parts it touches, in the Workspace's order, the nearest kept, the first of equals.
-#[allow(clippy::too_many_arguments)]
-pub fn cast_box(state: &State, root: InstanceId, near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) -> bool, frame: &Affine3A, size: Vec3, direction: Vec3, except: Option<InstanceId>) -> Option<Hit> {
+/// the parts it touches in the order its walk of the grid gave them, the nearest kept, the first of equals.
+pub fn cast_box(near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) -> bool, frame: &Affine3A, size: Vec3, direction: Vec3, except: Option<InstanceId>) -> Option<Hit> {
     let moving = Oriented::of(&unit_frame(frame), size * 0.5);
-    let mut touched: Vec<(&Solid, f32, Vec3)> = near
-        .iter()
-        .filter(|(part, _)| except != Some(*part))
-        .filter_map(|(part, entry)| {
-            let other = Oriented::of(&entry.solid.frame, entry.solid.half_extents());
-            sweep_boxes(&moving, direction, &other).filter(|_| sees(*part, entry)).map(|(t, normal)| (&entry.solid, t, normal))
-        })
-        .collect();
-    let steps = broadphase::sort_by_order(&state.dom, root, &mut touched, |(solid, ..)| solid.part);
-    charge_order(state, steps, touched.len());
     let mut best: Option<Hit> = None;
-    for (solid, t, normal) in touched {
+    for (part, entry) in near {
+        if except == Some(*part) {
+            continue;
+        }
+        let other = Oriented::of(&entry.solid.frame, entry.solid.half_extents());
+        let Some((t, normal)) = sweep_boxes(&moving, direction, &other) else { continue };
         let distance = direction.length() * t;
-        if best.is_some_and(|hit| hit.distance <= distance) {
+        if best.is_some_and(|hit| hit.distance <= distance) || !sees(*part, entry) {
             continue;
         }
         let center = moving.center + direction * t;
         let position = center - normal * moving.radius(normal);
-        best = Some(Hit { part: solid.part, position, normal, distance });
+        best = Some(Hit { part: *part, position, normal, distance });
     }
     best
 }
@@ -942,7 +890,8 @@ pub(super) fn parts_table(lua: &Lua, engine: &Rc<Engine>, parts: impl IntoIterat
 }
 
 /// The legacy FindPartOnRay family: (part, position, normal, material); the ray's end, a zero
-/// normal and Air when nothing is hit.
+/// normal and Air when nothing is hit. The ray is cut at [`RAY_CUT`] as a Raycast's is (measured), and its end on a miss is the
+/// ray's own.
 fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, world: InstanceId, ray: &LuaValue, list: &LuaValue, include: bool) -> Result<LuaMultiValue, Flow> {
     let converted = match ray {
         LuaValue::UserData(ud) => ud.borrow::<lune::Ray>().ok().map(|ray| dom::Ray::from(*ray)),
@@ -961,16 +910,17 @@ fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, world: InstanceId, ray: &Lua
     }
     let mut filter = query_cache(engine).spare.take();
     filter.read_list(list, include);
-    take_in_of(engine, world);
-    let root = engine.world().workspace;
+    let index = take_in_of(engine, world);
     // (a ray that is not finite finds nothing and tests no part: its end is still origin + direction, an infinity kept)
-    let hit = if finite_path(origin, direction) {
-        near_segment(engine, origin, direction, 0.0, |near| {
-            let state = engine.state.borrow();
-            cast_ray(&state, root, near, |part, entry| filter.sees(&state, part, entry), origin, direction, 0.0, None)
-        })
-    } else {
-        None
+    let hit = match index {
+        Some(index) if finite_path(origin, direction) => {
+            let reach = cut(direction);
+            walk_ray(engine, index, origin, reach, |near, _| {
+                let state = engine.state.borrow();
+                cast_ray(near.iter().map(|(part, entry, _)| (*part, entry)), |part, entry| filter.sees(&state, part, entry), origin, reach, 0.0, None)
+            })
+        }
+        _ => None,
     };
     keep_filter(engine, filter);
     let air = engine.reflection.enum_item("Material", "Air");
@@ -1019,9 +969,9 @@ fn charge_cast(engine: &Engine, (met, admitted): (usize, usize), each: f64, kind
 
 /// The parts among `near` with CanQuery on (whatever else the cast's filter says) that a cast's path from `origin` along
 /// `direction`, grown by `grow`, meets up to its hit (`hit`, the distance along `direction`), and how many of those its filter
-/// admits when it hit something: what [`charge_cast`] charges for.
+/// admits when it hit something: what [`charge_cast`] charges for; and what its filter's checks of them cost.
 #[allow(clippy::too_many_arguments)]
-fn cast_counts(state: &State, near: &[(InstanceId, Entry)], filter: &Filter, hit: Option<f32>, origin: Vec3, direction: Vec3, grow: f32) -> (usize, usize, f64) {
+fn cast_counts<'a>(state: &State, near: impl IntoIterator<Item = (InstanceId, &'a Entry)>, filter: &Filter, hit: Option<f32>, origin: Vec3, direction: Vec3, grow: f32) -> (usize, usize, f64) {
     let length = direction.length();
     let (mut met, mut admitted, mut walks) = (0usize, 0usize, 0.0);
     for (part, entry) in near {
@@ -1037,7 +987,7 @@ fn cast_counts(state: &State, near: &[(InstanceId, Entry)], filter: &Filter, hit
         met += 1;
         let collides = !filter.respect_can_collide || entry.can_collide;
         // (a client's cast asks its filter of each part it meets, at what a client spends on it: Filter::check)
-        let (admits, walk) = if collides { filter.check(state, *part, true) } else { (false, 0.0) };
+        let (admits, walk) = if collides { filter.check(state, part, true) } else { (false, 0.0) };
         walks += walk;
         if hit.is_some() && admits {
             admitted += 1;
@@ -1046,24 +996,86 @@ fn cast_counts(state: &State, near: &[(InstanceId, Entry)], filter: &Filter, hit
     (met, admitted, walks)
 }
 
-/// A cast's hit and what it is charged for: the parts near its path (a segment from `origin` along `direction`, grown by `grow`
-/// for the charge and at least as much for the cast itself, or every part with `all`), tested by `cast` for the hit and by
-/// [`cast_counts`] for what its path meets. It takes in `world`'s parts ([`take_in_of`]).
+/// A shape cast's hit and what it is charged for (Spherecast, Blockcast, Shapecast): the parts of its world's box walk over its
+/// swept box `lo`..`hi` (every part of its world for none), a cell's anchored parts first (a client's shape casts take the first of
+/// exact ties so: measured, grid_order "ties", where a Spherecast takes a level-1 part before a level-0 one with the same top, as
+/// a box walk of its swept box starting on level 2 gives them; inferred, its walk not measured further), tested by `cast` for the
+/// hit and by [`cast_counts`] for what its path (a segment from `origin` along `direction`, grown by `grow`) meets. It takes in
+/// `world`'s parts ([`take_in_of`]); a WorldModel outside the DataModel has none.
 #[allow(clippy::too_many_arguments)]
-fn cast_and_count(engine: &Engine, world: InstanceId, filter: &Filter, origin: Vec3, direction: Vec3, grow: f32, reach: f32, all: bool, cast: impl FnOnce(&State, InstanceId, &[(InstanceId, Entry)]) -> Option<Hit>) -> (Option<Hit>, (usize, usize)) {
-    take_in_of(engine, world);
-    let root = engine.world().workspace;
-    with_near(
-        engine,
-        |index, out| if all { index.all_parts(out) } else { index.near_segment(origin, direction, grow.max(reach), out) },
-        |near| {
-            let state = engine.state.borrow();
-            let hit = cast(&state, root, near);
-            let (met, admitted, walks) = cast_counts(&state, near, filter, hit.map(|hit| hit.distance), origin, direction, grow);
-            charge_query(engine, walks);
-            (hit, (met, admitted))
-        },
-    )
+fn cast_and_count(engine: &Engine, world: InstanceId, filter: &Filter, origin: Vec3, direction: Vec3, grow: f32, swept: Option<(Vec3, Vec3)>, cast: impl FnOnce(&State, &[(InstanceId, Entry)]) -> Option<Hit>) -> (Option<Hit>, (usize, usize)) {
+    let Some(index) = take_in_of(engine, world) else { return (None, (0, 0)) };
+    let then = |near: &[(InstanceId, Entry)]| {
+        let state = engine.state.borrow();
+        let hit = cast(&state, near);
+        let (met, admitted, walks) = cast_counts(&state, near.iter().map(|(part, entry)| (*part, entry)), filter, hit.map(|hit| hit.distance), origin, direction, grow);
+        drop(state);
+        charge_query(engine, walks);
+        (hit, (met, admitted))
+    };
+    match swept {
+        Some((lo, hi)) => walk_box(engine, index, lo, hi, grid::ANCHORED, |near, _| then(near)),
+        None => every_part(engine, index, then),
+    }
+}
+
+/// A Raycast's hit and what it is charged for: its world's ray walk along its path cut at [`RAY_CUT`] ([`walk_ray`]), the first of
+/// exact ties in the walk's order (measured: a level-0 part before a level-1 one with the same top, a cell's anchored parts before
+/// its unanchored ones, each list in its order; the order across cells is inferred), and what its path meets up to its hit
+/// ([`cast_counts`], [`charge_cast`]) plus what a client's walk spends on the way ([`charge_ray_walk`]). It takes in `world`'s
+/// parts ([`take_in_of`]).
+fn raycast(engine: &Engine, world: InstanceId, filter: &Filter, origin: Vec3, direction: Vec3) -> Option<Hit> {
+    let index = take_in_of(engine, world)?;
+    let reach = cut(direction);
+    let (hit, counts, walk) = walk_ray(engine, index, origin, reach, |near, passed| {
+        let state = engine.state.borrow();
+        let parts = || near.iter().map(|(part, entry, _)| (*part, entry));
+        let hit = cast_ray(parts(), |part, entry| filter.sees(&state, part, entry), origin, reach, 0.0, None);
+        let (met, admitted, walks) = cast_counts(&state, parts(), filter, hit.map(|hit| hit.distance), origin, reach, 0.0);
+        (hit, (met, admitted, walks), ray_walk(near, passed, hit, origin, reach))
+    });
+    charge_query(engine, counts.2);
+    charge_cast(engine, (counts.0, counts.1), crate::cost::RAY_CROSSED, 0);
+    charge_ray_walk(engine, walk);
+    hit
+}
+
+/// What a client's ray walk passed up to the hit (all of its path on a miss): its length there, the cells it passed that first gave
+/// it a part it tested and did not meet and none it met, and those parts (a cell whose parts were all given by an earlier cell is
+/// not counted, nor is one of a part it met, whose price is the part's: cost.rs RAY_MET)
+#[derive(Clone, Copy, Default)]
+pub(crate) struct RayWalk {
+    pub length: f32,
+    pub cells: usize,
+    pub missed: usize,
+}
+
+/// [`RayWalk`] for a ray walk's parts and cells ([`walk_ray`]) and its hit: a part counts when the ray enters the cell that first
+/// holds it before the hit
+pub(crate) fn ray_walk(near: &[(InstanceId, Entry, u32)], passed: &[Passed], hit: Option<Hit>, origin: Vec3, direction: Vec3) -> RayWalk {
+    let length = direction.length();
+    let reach = hit.map_or(1.0, |hit| if length > 0.0 { f64::from(hit.distance / length) } else { 0.0 });
+    let before = |cell: u32| passed.get(cell as usize).is_some_and(|cell| cell.enter <= reach);
+    let (mut missed, mut met_cells, mut missed_cells) = (0usize, rustc_hash::FxHashSet::default(), rustc_hash::FxHashSet::default());
+    for (_, entry, cell) in near {
+        if !before(*cell) {
+            continue;
+        }
+        if ray_solid(&entry.solid, origin, direction, 0.0).is_some_and(|(t, _)| f64::from(t) <= reach) {
+            met_cells.insert(*cell);
+        } else {
+            missed += 1;
+            missed_cells.insert(*cell);
+        }
+    }
+    let cells = missed_cells.difference(&met_cells).count();
+    RayWalk { length: hit.map_or(length, |hit| hit.distance), cells, missed }
+}
+
+/// What a client's ray walk costs on its way (cost.rs RAY_LENGTH, RAY_CELL, RAY_TESTED; Studio 0.747, a headless client): its
+/// length up to its hit, the cells holding parts it passes with none it meets, and the parts there it tests and misses.
+pub(crate) fn charge_ray_walk(engine: &Engine, walk: RayWalk) {
+    charge_query(engine, f64::from(walk.length) / 1000.0 * crate::cost::RAY_LENGTH + walk.cells as f64 * crate::cost::RAY_CELL + walk.missed as f64 * crate::cost::RAY_TESTED);
 }
 
 /// What a path that crossed `crossed` parts pays: [`crate::cost::RAY_MET`] when it met any, and `each` for every part after the
@@ -1073,16 +1085,6 @@ pub(crate) fn charge_crossed(engine: &Engine, crossed: usize, each: f64, kinds: 
         let seconds = crate::cost::RAY_MET + (crossed - 1) as f64 * each;
         charge_query(engine, seconds);
         engine.state.borrow().sched.touched.borrow().book_kinds(kinds, seconds);
-    }
-}
-
-/// What the walk that put a query's `items` parts in the Workspace's order took `steps` for costs past what the parts' own prices
-/// cover (world/broadphase.rs order_cost, cost.rs QUERY_ORDER_STEP), charged as [`charge_query`] charges
-pub(crate) fn charge_order(state: &State, steps: usize, items: usize) {
-    let seconds = broadphase::order_cost(steps, items);
-    if seconds > 0.0 {
-        state.sched.charge(seconds);
-        crate::boundary::add_cost(seconds);
     }
 }
 
@@ -1109,39 +1111,60 @@ pub(crate) fn charge_query(engine: &Engine, seconds: f64) {
     }
 }
 
-/// The parts `filter` sees that `keep` holds for, in the Workspace's order, at most MaxParts of them: those near the box
-/// `center` +- `extent` (every part for none) tested. It takes in `world`'s parts ([`take_in_of`]).
-fn overlapping(engine: &Engine, world: InstanceId, filter: Filter, center: Vec3, extent: Option<Vec3>, keep: impl Fn(&Solid) -> bool) -> Vec<InstanceId> {
-    take_in_of(engine, world);
-    let root = engine.world().workspace;
-    let parts = with_near(
-        engine,
-        |index, out| index.near_box(center, extent, out),
-        |near| {
-            let state = engine.state.borrow();
-            let mut seconds = 0.0;
-            let parts = near
-                .iter()
-                .filter(|(part, entry)| {
-                    if !keep(&entry.solid) || !filter.flags_pass(entry) {
-                        return false;
-                    }
-                    let (admitted, walk) = filter.check(&state, *part, true);
-                    seconds += walk + if admitted { 0.0 } else { crate::cost::QUERY_FILTERED_PART };
-                    admitted
-                })
-                .map(|(part, _)| *part)
-                .collect::<Vec<_>>();
-            (parts, seconds)
-        },
-    );
-    let (mut parts, filtered) = parts;
-    charge_query(engine, filtered);
-    {
+/// What a box walk costs a client beyond the parts it lists (cost.rs QUERY_ROOT_CELL, QUERY_CELL, QUERY_MISSED_PART; Studio 0.747, a
+/// headless client): each root cell in its range, each cell holding parts it visits and each part it tests and misses.
+fn walk_cost(walked: Walked, missed: usize) -> f64 {
+    walked.root_cells as f64 * crate::cost::QUERY_ROOT_CELL + walked.cells as f64 * crate::cost::QUERY_CELL + missed as f64 * crate::cost::QUERY_MISSED_PART
+}
+
+/// The parts `filter` sees that `keep` holds for, in the order the walk of `world`'s grid gives them (a client's order: world/grid.rs
+/// walk_box), at most MaxParts of them: those of the walk over the box `center` +- `extent` (every part for none), the box clamped
+/// to its centre +- [`CLAMP`] for the walk and the test alike (a part kept must also meet the clamped box). What the walk cost a
+/// client is charged with `walked_price` ([`walk_cost`]: GetPartBoundsInBox, GetPartBoundsInRadius as a box of 2r), as is each part
+/// the box meets but CanQuery leaves out (cost.rs QUERY_UNQUERYABLE) and each the filter leaves out (QUERY_FILTERED_PART). It takes
+/// in `world`'s parts ([`take_in_of`]).
+fn overlapping(engine: &Engine, world: InstanceId, filter: Filter, center: Vec3, extent: Option<Vec3>, walked_price: bool, keep: impl Fn(&Solid) -> bool) -> Vec<InstanceId> {
+    let Some(index) = take_in_of(engine, world) else {
+        keep_filter(engine, filter);
+        return Vec::new();
+    };
+    let test = |near: &[(InstanceId, Entry)], clamp: Option<(Vec3, Vec3)>| {
         let state = engine.state.borrow();
-        let steps = broadphase::sort_by_order(&state.dom, root, &mut parts, |part| *part);
-        charge_order(&state, steps, parts.len());
-    }
+        let (mut seconds, mut missed) = (0.0, 0usize);
+        let mut parts = Vec::new();
+        for (part, entry) in near {
+            if !keep(&entry.solid) || clamp.is_some_and(|(lo, hi)| !meets(&entry.solid, lo, hi)) {
+                missed += 1;
+                continue;
+            }
+            if !filter.flags_pass(entry) {
+                if !(filter.unqueryable || entry.can_query) {
+                    seconds += crate::cost::QUERY_UNQUERYABLE;
+                }
+                continue;
+            }
+            let (admitted, walk) = filter.check(&state, *part, true);
+            seconds += walk + if admitted { 0.0 } else { crate::cost::QUERY_FILTERED_PART };
+            if admitted {
+                parts.push(*part);
+            }
+        }
+        (parts, seconds, missed)
+    };
+    let (parts, seconds) = match extent.filter(|extent| (center + *extent).is_finite() && (center - *extent).is_finite()) {
+        Some(extent) => {
+            let (lo, hi, cut) = clamped(center, extent);
+            walk_box(engine, index, lo, hi, grid::UNANCHORED, |near, walked| {
+                let (parts, seconds, missed) = test(near, cut.then_some((lo, hi)));
+                (parts, seconds + if walked_price { walk_cost(walked, missed) } else { 0.0 })
+            })
+        }
+        None => every_part(engine, index, |near| {
+            let (parts, seconds, _) = test(near, None);
+            (parts, seconds)
+        }),
+    };
+    charge_query(engine, seconds);
     let max_parts = filter.max_parts;
     keep_filter(engine, filter);
     limited(max_parts, parts)
@@ -1151,6 +1174,11 @@ fn overlapping(engine: &Engine, world: InstanceId, filter: Filter, center: Vec3,
 fn sphere_extent(radius: f32) -> Option<Vec3> {
     Some(Vec3::splat(if radius.is_nan() { f32::NAN } else { radius.max(0.0) }))
 }
+
+/// How much GetPartsInPart grows its part's world box for its walk: 0.01 studs a side (measured, Studio 0.747, a playing client
+/// and a server: bisected, a rod or cube part of side 7.97998 starts the walk on level 0 and one a float32 step longer on level 1,
+/// so 7.98 + 2 x 0.01 is the level's 8 studs; grid_levels "query GetPartsInPart": 7.5 on level 0, 8 on level 1)
+const PART_QUERY_GROWTH: f32 = 0.01;
 
 pub fn install(engine: &Rc<Engine>) {
     let Some(world_root) = engine.reflection.class_id("WorldRoot") else { return };
@@ -1163,8 +1191,7 @@ pub fn install(engine: &Rc<Engine>) {
         if !finite_path(origin, direction) {
             return missed(lua, engine, world, filter);
         }
-        let (hit, counts) = cast_and_count(engine, world, &filter, origin, direction, 0.0, 0.0, false, |state, root, near| cast_ray(state, root, near, |part, entry| filter.sees(state, part, entry), origin, direction, 0.0, None));
-        charge_cast(engine, counts, crate::cost::RAY_CROSSED, 0);
+        let hit = raycast(engine, world, &filter, origin, direction);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
@@ -1190,7 +1217,8 @@ pub fn install(engine: &Rc<Engine>) {
             return missed(lua, engine, world, filter);
         }
         let grow = radius;
-        let (hit, counts) = cast_and_count(engine, world, &filter, center, direction, grow, grow, false, |state, root, near| cast_ray(state, root, near, |part, entry| filter.sees(state, part, entry), center, direction, grow, None));
+        let swept = (center.min(center + direction) - Vec3::splat(grow), center.max(center + direction) + Vec3::splat(grow));
+        let (hit, counts) = cast_and_count(engine, world, &filter, center, direction, grow, Some(swept), |state, near| cast_ray(near.iter().map(|(part, entry)| (*part, entry)), |part, entry| filter.sees(state, part, entry), center, direction, grow, None));
         charge_cast(engine, counts, crate::cost::SPHERE_CROSSED, 0);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
@@ -1207,10 +1235,11 @@ pub fn install(engine: &Rc<Engine>) {
         if !finite_path(frame::translation(&frame), direction) {
             return missed(lua, engine, world, filter);
         }
-        // (a box's path counted as its centre's, grown by its half diagonal: its bounding sphere, so also what the cast can touch
-        // unless its frame is skewed)
-        let skewed = broadphase::skewed(&unit_frame(&frame));
-        let (hit, counts) = cast_and_count(engine, world, &filter, frame::translation(&frame), direction, size.length() * 0.5, 0.0, skewed, |state, root, near| cast_box(state, root, near, |part, entry| filter.sees(state, part, entry), &frame, size, direction, None));
+        // (a box's path counted as its centre's, grown by its half diagonal: its bounding sphere; the walk over its swept box, every
+        // part when that is not finite)
+        let center = frame::translation(&frame);
+        let swept = box_extent(&frame, size).map(|extent| (center.min(center + direction) - extent, center.max(center + direction) + extent));
+        let (hit, counts) = cast_and_count(engine, world, &filter, center, direction, size.length() * 0.5, swept, |state, near| cast_box(near, |part, entry| filter.sees(state, part, entry), &frame, size, direction, None));
         charge_cast(engine, counts, crate::cost::BLOCK_CROSSED, 0);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
@@ -1259,12 +1288,13 @@ pub fn install(engine: &Rc<Engine>) {
         };
         // the part being cast is never hit (documented); what it holds can be
         let center = frame::translation(&cast.frame);
-        let skewed = !matches!(cast.shape, Shape::Ball(_)) && broadphase::skewed(&cast.frame);
         // (it stops at its hit as the other casts do: measured; the parts tied with the hit at a Blockcast's price, borrowed; its
-        // path counted grown by its half diagonal, which holds what it can touch)
-        let (hit, counts) = cast_and_count(engine, world, &filter, center, direction, cast.half_extents().length(), 0.0, skewed, |state, root, near| match cast.shape {
-            Shape::Ball(radius) => cast_ray(state, root, near, |part, entry| filter.sees(state, part, entry), center, direction, radius, Some(part)),
-            _ => cast_box(state, root, near, |part, entry| filter.sees(state, part, entry), &cast.frame, cast.half_extents() * 2.0, direction, Some(part)),
+        // path counted grown by its half diagonal, which holds what it can touch; the walk over its swept box)
+        let (_, reach) = world_reach(&cast);
+        let swept = (center + reach).is_finite().then(|| (center.min(center + direction) - reach, center.max(center + direction) + reach));
+        let (hit, counts) = cast_and_count(engine, world, &filter, center, direction, cast.half_extents().length(), swept, |state, near| match cast.shape {
+            Shape::Ball(radius) => cast_ray(near.iter().map(|(part, entry)| (*part, entry)), |part, entry| filter.sees(state, part, entry), center, direction, radius, Some(part)),
+            _ => cast_box(near, |part, entry| filter.sees(state, part, entry), &cast.frame, cast.half_extents() * 2.0, direction, Some(part)),
         });
         charge_cast(engine, counts, crate::cost::BLOCK_CROSSED, crate::cost::kind::DEFAULTED);
         keep_filter(engine, filter);
@@ -1285,8 +1315,8 @@ pub fn install(engine: &Rc<Engine>) {
             charge_query(engine, crate::cost::QUERY_SIDE_NOT_FINITE);
         }
         let size = box_size(size);
-        let extent = box_extent(&frame, size).map(|extent| extent.min(Vec3::splat(UNBOUNDED_REACH)));
-        let parts = overlapping(engine, world, filter, frame::translation(&frame), extent, |s| overlaps_box(s, &frame, size));
+        let extent = box_extent(&frame, size);
+        let parts = overlapping(engine, world, filter, frame::translation(&frame), extent, true, |s| overlaps_box(s, &frame, size));
         charge_query(engine, parts.len() as f64 * crate::cost::QUERY_BOX_PART);
         parts_table(lua, engine, parts)
     })));
@@ -1301,7 +1331,7 @@ pub fn install(engine: &Rc<Engine>) {
             charge_query(engine, if center.is_finite() { crate::cost::QUERY_SIDE_NOT_FINITE } else { crate::cost::QUERY_NOT_FINITE });
             return found_nothing(lua, engine, world, filter);
         }
-        let parts = overlapping(engine, world, filter, center, sphere_extent(radius as f32), |s| overlaps_sphere(s, center, radius as f32));
+        let parts = overlapping(engine, world, filter, center, sphere_extent(radius as f32), true, |s| overlaps_sphere(s, center, radius as f32));
         charge_query(engine, parts.len() as f64 * crate::cost::QUERY_RADIUS_PART);
         parts_table(lua, engine, parts)
     })));
@@ -1309,11 +1339,14 @@ pub fn install(engine: &Rc<Engine>) {
         let Some(part) = args.instance(1) else { return raise("GetPartsInPart: part expected") };
         let filter = take_filter(engine, args.get(2));
         let query = solid(&engine.state.borrow(), engine, part);
+        // (its walk over the part's world box grown a little: PART_QUERY_GROWTH)
         let (center, extent) = match query.shape {
             Shape::Ball(radius) => (frame::translation(&query.frame), sphere_extent(radius)),
             _ => (frame::translation(&query.frame), box_extent(&query.frame, query.half_extents() * 2.0)),
         };
-        let parts = overlapping(engine, world, filter, center, extent, |s| {
+        let extent = extent.map(|extent| extent + Vec3::splat(PART_QUERY_GROWTH));
+        // (its own fitted prices cover its walk: QUERY_PART_EXACT, QUERY_PART_SIZE; not measured apart)
+        let parts = overlapping(engine, world, filter, center, extent, false, |s| {
             s.part != part
                 && match query.shape {
                     Shape::Ball(radius) => overlaps_sphere(s, frame::translation(&query.frame), radius),
