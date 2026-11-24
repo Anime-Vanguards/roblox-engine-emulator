@@ -13,7 +13,9 @@
 //! with it, and decays 5.2% a second (a 2-stud cube spun at 6 rad/s read 5.995, 5.990, 5.903 and 5.800 at its 2nd, 3rd, 20th
 //! and 40th frames). Mass is volume times density, CustomPhysicalProperties' or else the Material's (Plastic 0.7, Slate
 //! 2.691, Metal 7.85, a 0.1-stud cube 0.0007, no minimum), a Ball's volume a sphere's, a mesh-less MeshPart's its box; a
-//! Massless part's Mass reads 0 and adds nothing to its assembly's. An impulse is divided by the assembly's mass, an angular
+//! Massless part's Mass reads 0 and adds nothing to its assembly's, but as the assembly's root (alone, anchored, the best of an
+//! all-Massless assembly) or outside every world, where it weighs what it would (Studio 0.747, tools/parity/probes/
+//! assembly_mass.luau, as an anchored assembly's AssemblyMass reading inf). An impulse is divided by the assembly's mass, an angular
 //! one by its inertia (a cube's spin from ApplyAngularImpulse(m * (0, 4, 0)) read 6 rad/s less one frame's decay), and both
 //! add to a velocity a script set.
 //!
@@ -494,13 +496,29 @@ const DENSITIES: &[(&str, f32)] = &[
 /// 6 rad/s read 5.995, 5.990, 5.903 and 5.800 at its 2nd, 3rd, 20th and 40th frames).
 const SPIN_DECAY: f32 = 0.05222;
 
-/// A part's mass (0 when Massless) and its principal moments of inertia about its centre, in its own frame: a box's from
-/// its Size, a sphere's for a Ball, a cylinder's (along X) for a Cylinder, half a box's volume for a wedge and a third for a
-/// corner wedge (their moments a box's).
+/// Whether a part is Massless: it weighs nothing in its assembly unless it is the root (its own, alone), and outside every world it
+/// weighs what it would ([`own_mass`]).
+fn massless(state: &State, setup: &Setup, part: InstanceId) -> bool {
+    setup.massless.is_some_and(|name| state.dom.boolean(part, name) == Some(true))
+}
+
+/// What the assembly reads take from a part (joints::Point): its position, its mass and whether it is Massless.
+fn part_point(state: &State, setup: &Setup, part: InstanceId) -> joints::Point {
+    (Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation), part_body(state, setup, part).0, massless(state, setup, part))
+}
+
+/// A part's Mass and GetMass(): its mass ([`part_body`]), or 0 when it is Massless in an assembly another part roots (a Massless
+/// part alone, anchored, at the root of an all-Massless assembly or outside every world reads its mass: Studio 0.747, client and
+/// server, tools/parity/probes/assembly_mass.luau).
+fn own_mass(state: &mut State, reflection: &Reflection, setup: &Setup, part: InstanceId) -> f32 {
+    let mass = part_body(state, setup, part).0;
+    if massless(state, setup, part) && joints::root_part(state, reflection, part).is_some_and(|root| root != part) { 0.0 } else { mass }
+}
+
+/// A part's mass, Massless or not ([`massless`] says when it counts), and its principal moments of inertia about its centre, in
+/// its own frame: a box's from its Size, a sphere's for a Ball, a cylinder's (along X) for a Cylinder, half a box's volume for a
+/// wedge and a third for a corner wedge (their moments a box's).
 fn part_body(state: &State, setup: &Setup, part: InstanceId) -> (f32, Vec3) {
-    if setup.massless.is_some_and(|name| state.dom.boolean(part, name) == Some(true)) {
-        return (0.0, Vec3::ZERO);
-    }
     let size = match setup.size.and_then(|name| state.dom.raw_get(part, name)) {
         Some(Value::Vector3(v)) => Vec3::new(v.x, v.y, v.z),
         _ => Vec3::ONE,
@@ -559,16 +577,19 @@ struct Body {
     inertia: Mat3,
 }
 
-fn body_of(state: &State, setup: &Setup, component: &[InstanceId]) -> Body {
-    let parts: Vec<(Affine3A, f32, Vec3)> = component
+/// The body of an assembly's parts (`assembly`, its root first: joints::assembly_parts), each counted as the assembly reads count
+/// it (a Massless part but the root weighs nothing), its centre worked out about the root as they work it out (joints::mass_centre).
+fn body_of(state: &State, setup: &Setup, assembly: &[InstanceId]) -> Body {
+    let parts: Vec<(Affine3A, f32, Vec3)> = assembly
         .iter()
-        .map(|&part| {
-            let (mass, moments) = part_body(state, setup, part);
+        .enumerate()
+        .map(|(index, &part)| {
+            let (mass, moments) = if index > 0 && massless(state, setup, part) { (0.0, Vec3::ZERO) } else { part_body(state, setup, part) };
             (frame::affine_of(state.dom.raw_get(part, setup.cframe)), mass, moments)
         })
         .collect();
-    // (averaged about the first part, as the assembly reads work it out: joints::mass_centre)
-    let (mass, centre) = joints::mass_centre(parts.iter().map(|(at, part_mass, _)| (Vec3::from(at.translation), *part_mass)));
+    let (mass, offset) = joints::mass_centre(parts.iter().map(|(at, part_mass, _)| (Vec3::from(at.translation), *part_mass)));
+    let centre = parts.first().map_or(Vec3::ZERO, |(at, ..)| Vec3::from(at.translation)) + offset;
     let mut inertia = Mat3::ZERO;
     for (at, part_mass, moments) in &parts {
         let rotation = Mat3::from(at.matrix3);
@@ -579,14 +600,20 @@ fn body_of(state: &State, setup: &Setup, component: &[InstanceId]) -> Body {
     Body { mass, centre, inertia }
 }
 
-/// A script set a part's velocity or spin: its assembly takes it, read back under both names (AssemblyLinearVelocity and the
-/// legacy Velocity, AssemblyAngularVelocity and RotVelocity) on each of its parts, and a flying one flies on with it.
+/// A script set a part's velocity or spin: its assembly (not the parts welded to it beyond an anchored part: joints::assembly_parts)
+/// takes it, as a client keeps an assembly's motion, the velocity of its root's position and its spin (Studio 0.747, client and
+/// server, tools/parity/probes/assembly_mass.luau): AssemblyLinearVelocity is the velocity of its centre of mass (the root's plus
+/// the spin across the centre's offset from the root: joints::assembly_frame), the legacy Velocity each part's own position's, and
+/// AssemblyAngularVelocity and RotVelocity the spin, on each of its parts, anchored or not. AssemblyLinearVelocity sets the
+/// centre's velocity and keeps the spin; Velocity sets the root's, whichever part it is written to; AssemblyAngularVelocity sets
+/// the spin and keeps the centre's velocity; RotVelocity sets the spin and keeps the root's. Each is worked out in floats as the
+/// client works it (a velocity written and a spin after it read back 1.99999988 for 2), so the written name reads back what the
+/// client's does, not always what was written. A flying assembly flies on with it.
 fn assign(state: &mut State, reflection: &Reflection, setup: &Setup, id: InstanceId, name: NameId, angular: bool) {
     if state.dom.get(id).is_none() || !reflection.class(state.dom.at(id).class).is_a(setup.base_part) {
         return;
     }
     let Some(value) = state.dom.raw_get(id, name).and_then(frame::vector_of) else { return };
-    let names = if angular { [setup.assembly_angular, setup.rot_velocity] } else { [Some(setup.velocity), setup.assembly_linear] };
     let flying = state.gravity.velocity.contains_key(&id);
     // (a script's write sets the assembly: each other part of it costs a client 4.5 ns, cost.rs ASSEMBLY_VELOCITY_PART)
     if !state.quiet_write {
@@ -597,20 +624,39 @@ fn assign(state: &mut State, reflection: &Reflection, setup: &Setup, id: Instanc
             crate::boundary::add_cost(work);
         }
     }
-    for &part in joints::linked_parts(state, reflection, id).iter() {
-        for &target in names.iter().flatten() {
-            if part != id || target != name {
-                state.dom.exchange(part, target, frame::vector_value(value));
-                state.dom.bump_version(part);
+    let (parts, offset) = joints::assembly_frame(state, reflection, id, |state, part| part_point(state, setup, part));
+    let root = parts[0];
+    let vector = |state: &State, part: InstanceId, name: Option<NameId>| name.and_then(|name| state.dom.raw_get(part, name)).and_then(frame::vector_of).unwrap_or(Vec3::ZERO);
+    let position = |state: &State, part: InstanceId| Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation);
+    // (the motion before the write, from what it left: the root's Velocity is its position's, and of the two names of the spin the
+    // one not written still holds it)
+    let (at_root, spin) = if !angular {
+        let spin = vector(state, id, setup.assembly_angular);
+        (if name == setup.velocity { value } else { value - spin.cross(offset) }, spin)
+    } else if Some(name) == setup.rot_velocity {
+        (vector(state, root, Some(setup.velocity)), value)
+    } else {
+        // (the root's velocity moved by the change of spin across the centre's offset, which keeps the centre's: in that order, as a
+        // client rounds it, 24 of 24 spin pairs where the other orders read a float step apart)
+        let before = vector(state, id, setup.rot_velocity);
+        (vector(state, root, Some(setup.velocity)) + (before - value).cross(offset), value)
+    };
+    let linear = at_root + spin.cross(offset);
+    let root_at = position(state, root);
+    for &part in parts.iter() {
+        let own = at_root + spin.cross(position(state, part) - root_at);
+        for (target, written) in [(Some(setup.velocity), own), (setup.assembly_linear, linear), (setup.assembly_angular, spin), (setup.rot_velocity, spin)] {
+            if let Some(target) = target {
+                state.dom.exchange(part, target, frame::vector_value(written));
             }
         }
+        state.dom.bump_version(part);
         if flying {
-            if !angular {
-                state.gravity.velocity.insert(part, value);
-            } else if value == Vec3::ZERO {
+            state.gravity.velocity.insert(part, linear);
+            if spin == Vec3::ZERO {
                 state.gravity.spin.remove(&part);
             } else {
-                state.gravity.spin.insert(part, value);
+                state.gravity.spin.insert(part, spin);
             }
         }
     }
@@ -638,7 +684,10 @@ fn fly(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup,
         }
     }
     let wants_spin = spin != Vec3::ZERO || twist != Vec3::ZERO;
-    let body = (push != Vec3::ZERO || wants_spin).then(|| body_of(state, setup, component));
+    let body = (push != Vec3::ZERO || wants_spin).then(|| {
+        let assembly = joints::assembly_parts(state, reflection, part);
+        body_of(state, setup, &assembly)
+    });
     if let Some(body) = &body {
         if push != Vec3::ZERO && body.mass > 0.0 {
             linear += push / body.mass;
@@ -711,20 +760,18 @@ fn install_body(engine: &Rc<Engine>, setup: &Rc<Setup>) {
     let number = |value: f32| Ok(LuaValue::Number(value as f64));
     if let Some(mass) = name("Mass") {
         let setup = setup.clone();
-        behaviors.add_getter(base_part, mass, crate::services::getter(move |_, engine, id| number(part_body(&engine.state.borrow(), &setup, id).0)));
+        behaviors.add_getter(base_part, mass, crate::services::getter(move |_, engine, id| number(own_mass(&mut engine.state.borrow_mut(), &engine.reflection, &setup, id))));
     }
     if let Some(get_mass) = name("GetMass") {
         let setup = setup.clone();
         behaviors.add_method(base_part, get_mass, crate::services::method(move |_, engine, id, _| {
-            Ok(crate::lua::values([LuaValue::Number(part_body(&engine.state.borrow(), &setup, id).0 as f64)]))
+            Ok(crate::lua::values([LuaValue::Number(own_mass(&mut engine.state.borrow_mut(), &engine.reflection, &setup, id) as f64)]))
         }));
     }
     // (the assembly's mass and centre, kept with its component while its parts stay where they are: joints::assembly_body)
     let assembly = |engine: &Rc<Engine>, setup: &Setup, id: InstanceId, centre: bool| {
         let mut state = engine.state.borrow_mut();
-        let (mass, centre) = joints::assembly_body(&mut state, &engine.reflection, id, centre, |state, part| {
-            (Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation), part_body(state, setup, part).0)
-        });
+        let (mass, centre) = joints::assembly_body(&mut state, &engine.reflection, id, centre, |state, part| part_point(state, setup, part));
         Body { mass, centre, inertia: Mat3::ZERO }
     };
     if let Some(assembly_mass) = name("AssemblyMass") {

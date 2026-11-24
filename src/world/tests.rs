@@ -3781,6 +3781,70 @@ fn a_parts_mass_is_its_volume_times_its_density() {
     );
 }
 
+/// An assembly's mass and velocities read as a playing client's (Studio 0.747, client and server; tools/parity/probes/
+/// assembly_mass.luau): inf for an assembly holding an anchored part, from the write's own frame, its centre still its parts';
+/// each anchored part its own assembly; a Massless part weighing as its assembly's root or outside every world; and a velocity
+/// kept as the root's with the spin, so a velocity written and a spin after it reads back 1.99999988 for 2.
+#[test]
+fn an_assembly_reads_its_mass_and_velocity_as_a_client_does() {
+    check_running(
+        "play",
+        r#"
+        workspace.Gravity = 0
+        local function part(name, parent, at, size, anchored, massless)
+            local P = Instance.new("Part")
+            P.Name, P.Size, P.Anchored, P.Massless, P.CanCollide = name, size, anchored, massless == true, false
+            P.CFrame = at
+            P.Parent = parent
+            return P
+        end
+        local function weld(a, b)
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1, W.C0 = a, b, a.CFrame:ToObjectSpace(b.CFrame)
+            W.Parent = a
+        end
+        local At = CFrame.new(300, 60, 40)
+        local Torso = part("Torso", workspace, At, Vector3.new(2, 2, 1), true)
+        local Arm = part("Arm", workspace, At * CFrame.new(1.5, 0, 0), Vector3.new(1, 2, 1), false)
+        local Hand = part("Hand", workspace, At * CFrame.new(1.5, -1.5, 0), Vector3.new(1, 1, 1), false)
+        weld(Torso, Arm)
+        weld(Arm, Hand)
+        for _, P in { Torso, Arm, Hand } do
+            assert(P.AssemblyMass == math.huge and tostring(P.AssemblyMass) == "inf", `anchored {P.Name} {P.AssemblyMass}`)
+            assert(P.AssemblyCenterOfMass == Torso.AssemblyCenterOfMass, "one centre")
+        end
+        assert(string.format("%.9g", Torso.AssemblyCenterOfMass.X) == "300.642853", `centre {Torso.AssemblyCenterOfMass}`)
+        Torso.Anchored = false
+        assert(string.format("%.17g", Hand.AssemblyMass) == "4.8999996185302734", `unanchored {Hand.AssemblyMass}`)
+        Hand.Anchored = true
+        assert(Arm.AssemblyMass == math.huge and Arm.AssemblyRootPart == Hand, "anchored in the write's frame")
+        Hand.Anchored = false
+        task.wait()
+        Arm.AssemblyLinearVelocity = Vector3.new(0, 0, 2)
+        Hand.AssemblyAngularVelocity = Vector3.new(0, 1, 0)
+        assert(string.format("%.9g", Torso.AssemblyLinearVelocity.Z) == "1.99999988", `linear {Torso.AssemblyLinearVelocity}`)
+        Arm.Velocity = Vector3.new(0, 5, 0)
+        assert(Torso.Velocity == Vector3.new(0, 5, 0) and Hand.Velocity ~= Torso.Velocity, "Velocity is the root's, each part its own")
+        -- two anchored parts welded together are two assemblies
+        local A = part("A", workspace, CFrame.new(320, 60, 40), Vector3.new(2, 2, 2), true)
+        local B = part("B", workspace, CFrame.new(323, 60, 40), Vector3.new(4, 2, 2), true)
+        local C = part("C", workspace, CFrame.new(320, 62, 40), Vector3.new(1, 2, 1), false)
+        weld(A, B)
+        weld(A, C)
+        assert(C.AssemblyCenterOfMass == A.AssemblyCenterOfMass and B.AssemblyCenterOfMass == B.Position, "each anchored part's own")
+        -- Massless: a root's and an unworldly part's count
+        local Lone = part("Lone", workspace, CFrame.new(340, 60, 40), Vector3.new(2, 1, 2), false, true)
+        assert(math.abs(Lone.Mass - 2.8) < 1e-6 and Lone:GetMass() == Lone.Mass and Lone.AssemblyMass == Lone.Mass, "a lone Massless part")
+        local Big = part("Big", workspace, CFrame.new(342, 60, 40), Vector3.new(2, 1, 3), false, true)
+        weld(Lone, Big)
+        assert(Lone.Mass == 0 and Big.Mass > 0 and Lone.AssemblyMass == Big.Mass, "the all-Massless assembly's root weighs")
+        local Loose = part("Loose", nil, CFrame.new(360, 60, 40), Vector3.new(2, 1, 2), true, true)
+        assert(Loose.AssemblyRootPart == nil and math.abs(Loose.Mass - 2.8) < 1e-6 and Loose.AssemblyMass == Loose.Mass, "outside every world")
+        "#,
+        0.2,
+    );
+}
+
 #[test]
 fn cframe_and_vector3_properties_keep_their_floats() {
     // A playing client keeps a property's float32s (notes/macro bodyprobe.luau: CFrame.Angles(0.001, 0, 0) on an

@@ -1,4 +1,22 @@
 {
+	"assembly_mass": [
+		{
+			"line": "velocity-two-anchored a-unanchored A root=B mass=inf text=inf get=5.5999999046325684 own=5.5999999046325684 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 6 rotvelocity=0 2 0",
+			"why": "an Anchored write that joins two assemblies: a client reads the joined parts' velocities from the new root's motion (its Velocity and spin, across the joined centre), ree keeps what each part's last velocity write left; how a split shares the motion out is not measured"
+		},
+		{
+			"line": "velocity-two-anchored a-unanchored B root=B mass=inf text=inf get=11.199999809265137 own=11.199999809265137 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 0 rotvelocity=0 2 0",
+			"why": "an Anchored write that joins two assemblies: a client reads the joined parts' velocities from the new root's motion (its Velocity and spin, across the joined centre), ree keeps what each part's last velocity write left; how a split shares the motion out is not measured"
+		},
+		{
+			"line": "velocity-two-anchored a-unanchored C root=B mass=inf text=inf get=1.3999999761581421 own=1.3999999761581421 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 6 rotvelocity=0 2 0",
+			"why": "an Anchored write that joins two assemblies: a client reads the joined parts' velocities from the new root's motion (its Velocity and spin, across the joined centre), ree keeps what each part's last velocity write left; how a split shares the motion out is not measured"
+		},
+		{
+			"line": "velocity-two-anchored a-unanchored D root=B mass=inf text=inf get=2.0999999046325684 own=2.0999999046325684 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 0 rotvelocity=0 2 0",
+			"why": "an Anchored write that joins two assemblies: a client reads the joined parts' velocities from the new root's motion (its Velocity and spin, across the joined centre), ree keeps what each part's last velocity write left; how a split shares the motion out is not measured"
+		}
+	],
 	"bulk_move_args": [
 		{
 			"line": "bulk mode number 0.5",

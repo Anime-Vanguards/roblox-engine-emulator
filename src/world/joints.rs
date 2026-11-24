@@ -80,6 +80,14 @@
 //! assembly's first change in a frame by its parts, as a client's). A move works the centres of mass read
 //! since the last one out again, so a read after it walks nothing ([`refresh_centres`]).
 //!
+//! AssemblyMass and AssemblyCenterOfMass are the assembly's, not the component's ([`assembly_body`],
+//! Studio 0.747, client and server): inf for an assembly holding an anchored part (from the Anchored
+//! write's own frame), its centre still its parts' worked out about the root, so each anchored part
+//! welded to another reads its own assembly's; a Massless part weighs nothing but as its assembly's root
+//! or outside every world. A velocity write sets the assembly's motion as a client keeps it, the
+//! velocity of the root's position and the spin (world/gravity.rs assign), through the centre's offset
+//! from the root ([`assembly_frame`]).
+//!
 //! Not modelled: Motor.CurrentAngle / DesiredAngle (the legacy motors' rotation), AnimationConstraint,
 //! RigidConstraint and the other constraints (solver-driven, nothing is simulated), and the members
 //! that report assemblies other than AssemblyRootPart (GetRootPart, GetConnectedParts,
@@ -559,36 +567,45 @@ impl Assemblies {
     }
 }
 
-/// What the gravity step and the assembly reads work out from a component's parts, from each part asked: linked_parts' answer, and
-/// AssemblyMass and AssemblyCenterOfMass ([`mass_centre`] over it). The masses are forgotten when a part's Size, Massless,
-/// Material, CustomPhysicalProperties or Shape changes; a part placed makes the centres stale ([`stored`]), and a move works out
-/// again those read since the last one ([`refresh_centres`]).
+/// What the gravity step and the assembly reads work out from a component's parts, from each part asked: linked_parts' answer, the
+/// parts of its assembly ([`members`]), and AssemblyMass and AssemblyCenterOfMass ([`mass_centre`] over those), kept for each part
+/// of the assembly at once. The masses are forgotten when a part's Size, Massless, Material, CustomPhysicalProperties, Shape or
+/// Anchored changes (an Anchored write the assemblies with them); a part placed makes the centres stale ([`stored`]), and a move
+/// works out again those read since the last one ([`refresh_centres`]).
 #[derive(Default)]
 struct Memo {
     linked: FxHashMap<InstanceId, Rc<[InstanceId]>>,
+    /// Each part's assembly: its parts, the root first, each after its parent ([`members`])
+    members: FxHashMap<InstanceId, Rc<[InstanceId]>>,
     mass: FxHashMap<InstanceId, f32>,
     centre: FxHashMap<InstanceId, Centre>,
-    /// Each part's own mass, as the centres were worked out from them
+    /// Each part's mass as its assembly counts it (none for a Massless part but its root), as the centres were worked out from them
     masses: FxHashMap<InstanceId, f32>,
     /// How many times one of its parts was placed: a centre worked out at another count is stale
     placed: u64,
-    /// The walks AssemblyMass reads summed the masses over, by the part read ([`Body`]), up to [`KEPT_BODIES`]: kept through the
-    /// link changes whose walk is the same order with parts gone or after it ([`Joints::unlink`], [`Joints::join`])
+    /// The parts whose centre was read since the last move ([`Centre::read`]), which the next move works out again
+    /// ([`refresh_centres`]), so a move looks at those alone however many parts' centres are kept
+    reads: Vec<InstanceId>,
+    /// The walks free assemblies' AssemblyMass reads summed the masses over, by the root walked from ([`Body`]), up to
+    /// [`KEPT_BODIES`]: kept through the link changes whose walk is the same order with parts gone or after it ([`Joints::unlink`],
+    /// [`Joints::join`])
     bodies: FxHashMap<InstanceId, Body>,
 }
 
 /// How many parts' walks a component keeps for its AssemblyMass reads ([`Memo::bodies`])
 const KEPT_BODIES: usize = 8;
 
-/// What an AssemblyMass read of a part summed ([`assembly_body`]): the parts in the order a walk from it takes them up ([`walk_order`]),
-/// each with the part that took it up (its index in the order) and by which joint (none for the first), its own mass once worked out,
-/// and the sums of those masses in turn up to some part (the read's answer is the last, as [`mass_centre`] adds them). Kept through the
-/// link changes after which a walk from the part takes the same parts up in the same order but for some gone and some after them: a
+/// What a free assembly's AssemblyMass read summed ([`assembly_body`], kept by its root: an assembly with an anchored part reads inf and
+/// sums nothing): the parts in the order a walk from the root takes them up ([`walk_order`]), each with the part that took it up (its
+/// index in the order) and by which joint (none for the first), its mass as the assembly counts it once worked out, and the sums of
+/// those masses in turn up to some part (the read's answer is the last, as [`mass_centre`] adds them). Kept through the link changes
+/// after which a walk from the part takes the same parts up in the same order but for some gone and some after them: a
 /// side split off is marked gone where it was ([`Body::cut`]: a walk of the parts left takes them up in the order they had); a side
 /// joined by a joint the walk takes up after every part of the order follows it ([`Body::extend`]); a side split off comes back where
 /// it was when the joint it left by links it again at the same place and nothing followed the order since ([`Body::restore`]). The
 /// sums from the first part a change touched on are worked out again at the next read from the masses kept, a few ns a part, as a
-/// client's mass read after a link change of an anchored assembly stays flat (Studio 0.747: 0.3 to 1.1 us at 1,000 to 10,000 parts).
+/// client's mass read after a link change stays flat (Studio 0.747: 0.3 to 1.1 us at 1,000 to 10,000 parts, an anchored assembly's;
+/// a free chain's too but for a join in its middle).
 /// A body with more parts gone than kept is dropped, and worked out again at the next read.
 #[derive(Default)]
 struct Body {
@@ -731,10 +748,12 @@ fn walk_order(links: &FxHashMap<InstanceId, Vec<(InstanceId, InstanceId)>>, star
     order
 }
 
-/// A part's AssemblyCenterOfMass as worked out at a count of placings ([`Memo::placed`]), and whether it was read since.
+/// A part's AssemblyCenterOfMass as worked out at a count of placings ([`Memo::placed`]), its offset from the assembly's root (what
+/// a velocity write converts through: world/gravity.rs assign), and whether it was read since.
 #[derive(Clone, Copy)]
 struct Centre {
     at: glam::Vec3,
+    offset: glam::Vec3,
     placed: u64,
     read: bool,
 }
@@ -743,20 +762,22 @@ struct Centre {
 /// this many; the others are worked out when read.
 const REFRESHED_CENTRES: usize = 8;
 
-/// The mass of `points` (each part's position and mass, the asked part first, as [`linked_parts`] orders them) and its centre of
-/// mass: averaged about the first part, so far from the origin the float's step does not show (3e-5 studs at 400 up); the plain
-/// average when the parts weigh nothing. World/gravity.rs body_of works the same out, from the same points.
+/// The mass of `points` (each part's position and mass as its assembly counts it, the root first, as [`members`] orders them) and
+/// its centre of mass's offset from the first point: each part's offset from the root times its mass, summed, times the inverse of
+/// the mass, as a client works it out (Studio 0.747, tools/parity/probes/assembly_mass.luau: a velocity written and an angular one
+/// after it read back 1.99999988 for 2, which a quotient does not round to). About the root, so far from the origin the float's step
+/// does not show (3e-5 studs at 400 up) and every part of an assembly reads the same centre; the plain average when the parts weigh
+/// nothing. World/gravity.rs body_of works the same out, from the same points.
 pub(crate) fn mass_centre<I: Iterator<Item = (glam::Vec3, f32)> + Clone>(points: I) -> (f32, glam::Vec3) {
     let mass: f32 = points.clone().map(|(_, mass)| mass).sum();
     let origin = points.clone().next().map(|(at, _)| at).unwrap_or(glam::Vec3::ZERO);
-    let centre = origin
-        + if mass > 0.0 {
-            points.map(|(at, part_mass)| (at - origin) * part_mass).sum::<glam::Vec3>() / mass
-        } else {
-            let count = points.clone().count();
-            points.map(|(at, _)| at - origin).sum::<glam::Vec3>() / count.max(1) as f32
-        };
-    (mass, centre)
+    let offset = if mass > 0.0 {
+        points.map(|(at, part_mass)| (at - origin) * part_mass).sum::<glam::Vec3>() * (1.0 / mass)
+    } else {
+        let count = points.clone().count();
+        points.map(|(at, _)| at - origin).sum::<glam::Vec3>() / count.max(1) as f32
+    };
+    (mass, offset)
 }
 
 /// What a property written to a part means to its kept component ([`Joints::watch`])
@@ -1932,76 +1953,168 @@ pub fn linked_parts(state: &mut State, reflection: &Reflection, part: InstanceId
     order
 }
 
-/// AssemblyMass and AssemblyCenterOfMass of `part` ([`mass_centre`] over [`linked_parts`]' answer, `point` giving each part's
-/// position and mass: world/gravity.rs part_body), kept with its component: the mass until a part's mass changes, the centre while
-/// no part of it is placed; a move works out again the centres read since the last one ([`refresh_centres`]), as a client's centre
-/// read after a move costs the same at any size. `centre`: whether the centre is asked for (a mass alone is answered while only the
-/// parts moved). The first such read after a link change pays for working the body out again, as a client's does ([`pay_body`]).
-pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceId, centre: bool, point: impl Fn(&State, InstanceId) -> (glam::Vec3, f32)) -> (f32, glam::Vec3) {
+/// What the mass reads take from a part (world/gravity.rs part_point): where it is, its mass, and whether it is Massless (it then
+/// weighs nothing in its assembly unless it is the root).
+pub type Point = (glam::Vec3, f32, bool);
+
+/// AssemblyMass and AssemblyCenterOfMass of `part`, as a client reads them (Studio 0.747, client and server,
+/// tools/parity/probes/assembly_mass.luau): over the parts of its assembly ([`members`]; two anchored parts welded together are two
+/// assemblies), each counted at its mass but a Massless one other than the root, the centre worked out about the root
+/// ([`mass_centre`]), so every part of the assembly reads the same; the mass is inf when the assembly holds an anchored part, from the
+/// Anchored write on, and the centre still its parts'. A part linked to no other is an assembly of its own in a world (inf when
+/// anchored) and none outside every world, where it reads its own mass and position, anchored or not; it is its own root either
+/// way, so its Massless counts for nothing. `point` gives each part's position and mass (world/gravity.rs part_point). Kept with
+/// its component: the mass until a part's mass changes, the centre while no part of it is placed; a move works out again the
+/// centres read since the last one ([`refresh_centres`]), as a client's centre read after a move costs the same at any size.
+/// `centre`: whether the centre is asked for (a mass alone is answered while only the parts moved). The first such read after a
+/// link change pays for working the body out again, as a client's does ([`pay_body`]).
+pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceId, centre: bool, point: impl Fn(&State, InstanceId) -> Point) -> (f32, glam::Vec3) {
     let found = match setup_of(state) {
         Some(setup) => {
             ensure_scanned(state, reflection, &setup);
-            component(state, reflection, &setup, part)
+            component(state, reflection, &setup, part).map(|found| (setup, found))
         }
         None => None,
     };
-    pay_body(state, part, found.as_deref(), centre);
-    let Some(found) = found else {
-        return mass_centre(std::iter::once(point(state, part)));
+    pay_body(state, part, found.as_ref().map(|(_, found)| &**found), centre);
+    let Some((setup, found)) = found else {
+        let (at, mass, _) = point(state, part);
+        let fixed = state.joints.setup.as_ref().is_some_and(|setup| anchored(state, setup, part) && world_of(state, reflection, setup, part).is_some());
+        return (if fixed { f32::INFINITY } else { mass }, at);
     };
+    let (mass, at, _) = kept_body(state, reflection, &setup, &found, part, centre, centre, &point);
+    (mass, at)
+}
+
+/// The parts of the assembly `part` is in, in `found`: its root first, each after its parent, as [`assemblies_of`]' tree holds them,
+/// kept for each of them.
+fn members(state: &mut State, reflection: &Reflection, setup: &Setup, found: &Component, part: InstanceId) -> Rc<[InstanceId]> {
+    if let Some(list) = found.memo.borrow().members.get(&part) {
+        return list.clone();
+    }
+    let tree = assemblies_of(state, reflection, setup, found, part, None, false);
+    let list: Rc<[InstanceId]> = match tree.of(part) {
+        Some((assembly, ..)) => assembly.nodes.iter().map(|node| node.part).collect(),
+        None => Rc::from([part]),
+    };
+    let mut memo = found.memo.borrow_mut();
+    for &other in list.iter() {
+        memo.members.insert(other, list.clone());
+    }
+    list
+}
+
+/// The mass, centre of mass and the centre's offset from the root of the assembly `part` is in ([`assembly_body`]), from `found`'s
+/// memo, or worked out and kept for each part of the assembly. `centre`: whether the centre is wanted (a kept mass answers alone
+/// otherwise, the centre and offset zero); `read`: whether a script read it, so a move works it out again ([`refresh_centres`]).
+#[allow(clippy::too_many_arguments)]
+fn kept_body(
+    state: &mut State, reflection: &Reflection, setup: &Setup, found: &Component, part: InstanceId, centre: bool, read: bool,
+    point: &impl Fn(&State, InstanceId) -> Point,
+) -> (f32, glam::Vec3, glam::Vec3) {
+    let free = found.anchored.borrow().is_empty();
+    // (an assembly with an anchored part is immovable: a client keeps its mass inf through every link change, and so walks nothing)
+    if !centre && !free {
+        return (f32::INFINITY, glam::Vec3::ZERO, glam::Vec3::ZERO);
+    }
     {
         let mut memo = found.memo.borrow_mut();
-        let Memo { mass, centre: centres, placed, bodies, .. } = &mut *memo;
+        let Memo { mass, centre: centres, placed, bodies, reads, .. } = &mut *memo;
         if let Some(&mass) = mass.get(&part) {
             if !centre {
-                return (mass, glam::Vec3::ZERO);
+                return (mass, glam::Vec3::ZERO, glam::Vec3::ZERO);
             }
             if let Some(entry) = centres.get_mut(&part).filter(|entry| entry.placed == *placed) {
-                entry.read = true;
-                return (mass, entry.at);
+                if read && !std::mem::replace(&mut entry.read, true) {
+                    reads.push(part);
+                }
+                return (mass, entry.at, entry.offset);
             }
         }
-        // (a walk kept through the link changes since: the masses are added again from the first part they changed, nothing walked)
-        if !centre && let Some(body) = bodies.get_mut(&part) {
-            let sum = body.mass(|other| point(state, other).1);
+        // (the root's walk, kept through the link changes since: the masses are added again from the first part they changed, nothing
+        // walked)
+        if !centre
+            && let Some(root) = found.single_root().or_else(|| found.kept_root(part))
+            && let Some(body) = bodies.get_mut(&root)
+        {
+            let sum = body.mass(|other| counted(point(state, other), other == root));
             mass.insert(part, sum);
-            return (sum, glam::Vec3::ZERO);
+            return (sum, glam::Vec3::ZERO, glam::Vec3::ZERO);
         }
     }
-    // (the walk from the part: the one kept for its mass reads, else walked and kept)
-    let kept = found.memo.borrow().bodies.get(&part).map(|body| body.parts().collect::<Rc<[InstanceId]>>());
-    let (order, walk): (Rc<[InstanceId]>, _) = match kept {
-        Some(order) => (order, None),
-        None => {
-            let walk = walk_order(&found.links.borrow(), part, None);
-            (walk.iter().map(|&(other, ..)| other).collect(), Some(walk))
-        }
-    };
-    found.memo.borrow_mut().linked.entry(part).or_insert_with(|| order.clone());
-    let points: Vec<(glam::Vec3, f32)> = order.iter().map(|&other| point(state, other)).collect();
-    let (mass, at) = mass_centre(points.iter().copied());
+    let order = members(state, reflection, setup, found, part);
+    let root = order[0];
+    let points: Vec<(glam::Vec3, f32)> = order
+        .iter()
+        .map(|&other| {
+            let point = point(state, other);
+            (point.0, counted(point, other == root))
+        })
+        .collect();
+    let (total, offset) = mass_centre(points.iter().copied());
+    let at = points[0].0 + offset;
+    // (every assembly of a component that holds an anchored part hangs from one)
+    let mass = if free { total } else { f32::INFINITY };
     let mut memo = found.memo.borrow_mut();
     let placed = memo.placed;
-    memo.mass.insert(part, mass);
-    memo.centre.insert(part, Centre { at, placed, read: centre });
+    let mut listed = false;
     for (&other, &(_, own)) in order.iter().zip(&points) {
+        memo.mass.insert(other, mass);
+        let old = memo.centre.insert(other, Centre { at, offset, placed, read: read && other == part });
+        listed |= other == part && old.is_some_and(|old| old.read);
         memo.masses.insert(other, own);
     }
-    match walk {
-        Some(walk) if memo.bodies.len() < KEPT_BODIES => {
-            let own: Vec<f32> = points.iter().map(|&(_, own)| own).collect();
-            let body = Body::new(walk, &own);
-            debug_assert_eq!(body.sums.last().map(|sum| sum.to_bits()), Some(mass.to_bits()), "a kept walk sums the masses as the read does");
-            memo.bodies.insert(part, body);
-        }
-        Some(_) => {}
-        None => {
-            let body = memo.bodies.get_mut(&part).expect("kept");
-            let sum = body.mass(|other| point(state, other).1);
-            debug_assert_eq!(sum.to_bits(), mass.to_bits(), "a kept walk sums the masses as the read does");
+    if read && !listed {
+        memo.reads.push(part);
+    }
+    // (a free assembly's mass reads keep the walk from its root, the order its parts are summed in, for the link changes to come)
+    if free {
+        let kept = memo.bodies.len();
+        match memo.bodies.get_mut(&root) {
+            Some(body) => {
+                let sum = body.mass(|other| counted(point(state, other), other == root));
+                debug_assert!(body.parts().eq(order.iter().copied()), "a kept walk takes the assembly up in its order");
+                debug_assert_eq!(sum.to_bits(), total.to_bits(), "a kept walk sums the masses as the read does");
+            }
+            None if kept < KEPT_BODIES => {
+                let walk = walk_order(&found.links.borrow(), root, None);
+                debug_assert!(walk.iter().map(|&(other, ..)| other).eq(order.iter().copied()), "a walk from the root takes the assembly up in its order");
+                let own: Vec<f32> = points.iter().map(|&(_, own)| own).collect();
+                let body = Body::new(walk, &own);
+                debug_assert_eq!(body.sums.last().map(|sum| sum.to_bits()), Some(total.to_bits()), "a kept walk sums the masses as the read does");
+                memo.bodies.insert(root, body);
+            }
+            None => {}
         }
     }
-    (mass, at)
+    (mass, at, offset)
+}
+
+/// A part's mass as its assembly counts it: none for a Massless part but the root (`root`: whether it is).
+fn counted((_, mass, massless): Point, root: bool) -> f32 {
+    if massless && !root { 0.0 } else { mass }
+}
+
+/// The parts of the assembly `part` is in, its root first, each after its parent ([`members`]); the part alone when it links to no
+/// other.
+pub fn assembly_parts(state: &mut State, reflection: &Reflection, part: InstanceId) -> Rc<[InstanceId]> {
+    let Some(setup) = setup_of(state) else { return Rc::from([part]) };
+    ensure_scanned(state, reflection, &setup);
+    match component(state, reflection, &setup, part) {
+        Some(found) => members(state, reflection, &setup, &found, part),
+        None => Rc::from([part]),
+    }
+}
+
+/// The parts of the assembly `part` is in, its root first ([`assembly_parts`]), and its centre of mass's offset from the root
+/// ([`assembly_body`]'s, from the memo): what a velocity write converts the assembly's velocity through (world/gravity.rs assign).
+/// It pays for nothing, as the write's own price stands; a part linked to no other is its own, its offset zero.
+pub fn assembly_frame(state: &mut State, reflection: &Reflection, part: InstanceId, point: impl Fn(&State, InstanceId) -> Point) -> (Rc<[InstanceId]>, glam::Vec3) {
+    let Some(setup) = setup_of(state) else { return (Rc::from([part]), glam::Vec3::ZERO) };
+    ensure_scanned(state, reflection, &setup);
+    let Some(found) = component(state, reflection, &setup, part) else { return (Rc::from([part]), glam::Vec3::ZERO) };
+    let (_, _, offset) = kept_body(state, reflection, &setup, &found, part, true, false, &point);
+    (members(state, reflection, &setup, &found, part), offset)
 }
 
 /// Works out again the stale centres of mass of `found` read since its last move, up to [`REFRESHED_CENTRES`] of them, from the
@@ -2009,19 +2122,21 @@ pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceI
 /// The others are worked out when read.
 fn refresh_centres(state: &State, setup: &Setup, found: &Component) {
     let mut memo = found.memo.borrow_mut();
-    let Memo { linked, mass, centre, masses, placed, .. } = &mut *memo;
+    let Memo { members, mass, centre, masses, placed, reads, .. } = &mut *memo;
     let mut left = REFRESHED_CENTRES;
-    for (part, entry) in centre.iter_mut() {
+    for part in std::mem::take(reads) {
+        let Some(entry) = centre.get_mut(&part) else { continue };
         if !std::mem::replace(&mut entry.read, false) || entry.placed == *placed || left == 0 {
             continue;
         }
-        let (Some(order), Some(&total)) = (linked.get(part), mass.get(part)) else { continue };
+        let (Some(order), Some(&total)) = (members.get(&part), mass.get(&part)) else { continue };
         let points: Option<Vec<(glam::Vec3, f32)>> =
             order.iter().map(|other| masses.get(other).map(|&own| (glam::Vec3::from(cframe_of(state, setup, *other).translation), own))).collect();
         let Some(points) = points else { continue };
-        let (again, at) = mass_centre(points.iter().copied());
-        debug_assert_eq!(again.to_bits(), total.to_bits(), "a refreshed mass is the kept one");
-        entry.at = at;
+        let (again, offset) = mass_centre(points.iter().copied());
+        debug_assert!(total.is_infinite() || again.to_bits() == total.to_bits(), "a refreshed mass is the kept one");
+        entry.at = points[0].0 + offset;
+        entry.offset = offset;
         entry.placed = *placed;
         left -= 1;
     }
@@ -2080,8 +2195,9 @@ pub fn assembly_size(state: &mut State, reflection: &Reflection, part: InstanceI
 
 /// A property of `id` was stored (instance.rs store: every write, signalled or not): its kept component forgets what the value
 /// fed ([`watch`]): a move makes the centres of mass stale and, but for the assembly code's own placing, leaves the component not
-/// known to be settled; a mass input forgets the masses with them; an Anchored write sets the assemblies aside for the write's price
-/// ([`reanchored`]) and counts the part as anchored or not; a root rank's input forgets the whole component.
+/// known to be settled; a mass input forgets the masses with them; an Anchored write forgets the assemblies' parts and masses (a
+/// mass reads inf with an anchored part), sets the assemblies aside for the write's price ([`reanchored`]) and counts the part as
+/// anchored or not; a root rank's input forgets the whole component.
 #[inline]
 pub fn stored(state: &mut State, id: InstanceId, name: NameId) {
     let State { joints, dom, .. } = state;
@@ -2105,10 +2221,20 @@ pub fn stored(state: &mut State, id: InstanceId, name: NameId) {
             let mut memo = found.memo.borrow_mut();
             memo.mass.clear();
             memo.centre.clear();
+            memo.reads.clear();
             memo.masses.clear();
             memo.bodies.clear();
         }
         watch::ANCHORED => {
+            // (the assemblies change, and with them the masses: inf with an anchored part, a Massless part's as a root's)
+            {
+                let mut memo = found.memo.borrow_mut();
+                memo.members.clear();
+                memo.mass.clear();
+                memo.centre.clear();
+                memo.reads.clear();
+                memo.masses.clear();
+            }
             let tree = found.tree.borrow_mut().take();
             *found.roots.borrow_mut() = None;
             let settled = found.settled.replace(false);
