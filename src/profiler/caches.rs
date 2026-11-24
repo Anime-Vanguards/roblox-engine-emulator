@@ -8,15 +8,38 @@
 //! made for each, as a client makes one), the modules that ran, and the datatype property reads (a client makes a value for
 //! each read; ree hands back the one it made while the property is unchanged).
 
-use std::sync::{
-    Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    cell::RefCell,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
 };
 
-static ON: AtomicBool = AtomicBool::new(false);
+/// Active `--profile caches` sessions across all threads: off, a count site pays one relaxed load.
+static ACTIVE_SESSIONS: AtomicUsize = AtomicUsize::new(0);
+/// Set while more than one caches session overlaps in the process: each session then keeps only its own thread's counts
+/// so parallel sessions do not mix background-thread counts into one another.
+static CONCURRENT: AtomicBool = AtomicBool::new(false);
 
-/// The instances a userdata was made for, by (index, generation): the instances the scripts touched
-static TOUCHED: Mutex<Option<rustc_hash::FxHashSet<u64>>> = Mutex::new(None);
+/// Instances touched on background threads (outside any session thread) while a single caches session is active.
+static BG_TOUCHED: Mutex<Option<rustc_hash::FxHashSet<u64>>> = Mutex::new(None);
+
+struct LocalCaches {
+    active: bool,
+    counts: [[u64; 3]; SLOTS],
+    touched: rustc_hash::FxHashSet<u64>,
+}
+
+impl LocalCaches {
+    fn new() -> Self {
+        Self { active: false, counts: [[0; 3]; SLOTS], touched: rustc_hash::FxHashSet::default() }
+    }
+}
+
+thread_local! {
+    static LOCAL: RefCell<LocalCaches> = RefCell::new(LocalCaches::new());
+}
 
 /// A cache of the engine's
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,23 +113,34 @@ const SLOTS: usize = 32;
 const ZERO: AtomicU64 = AtomicU64::new(0);
 #[allow(clippy::declare_interior_mutable_const)]
 const ROW: [AtomicU64; 3] = [ZERO; 3];
-static COUNTS: [[AtomicU64; 3]; SLOTS] = [ROW; SLOTS];
+/// Counts recorded on worker threads that do not own a caches session (prefetch, bundle decode).
+static BG_COUNTS: [[AtomicU64; 3]; SLOTS] = [ROW; SLOTS];
 /// A host's own caches after the engine's: (name, what it is)
 static NAMED: Mutex<Vec<(&'static str, &'static str)>> = Mutex::new(Vec::new());
 
-/// Whether caches are counted
+/// Whether any caches profile is active in this process
 #[inline]
 pub fn on() -> bool {
-    ON.load(Ordering::Relaxed)
-}
-
-pub(crate) fn set_on(on: bool) {
-    ON.store(on, Ordering::Relaxed);
+    ACTIVE_SESSIONS.load(Ordering::Relaxed) != 0
 }
 
 fn add(index: usize, field: usize, count: u64) {
-    if let Some(slot) = COUNTS.get(index) {
-        slot[field].fetch_add(count, Ordering::Relaxed);
+    if index >= SLOTS {
+        return;
+    }
+    let recorded_locally = LOCAL
+        .try_with(|local| {
+            let mut local = local.borrow_mut();
+            if local.active {
+                local.counts[index][field] += count;
+                true
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false);
+    if !recorded_locally {
+        BG_COUNTS[index][field].fetch_add(count, Ordering::Relaxed);
     }
 }
 
@@ -166,26 +200,85 @@ pub fn named_evicted(id: usize, count: u64) {
     }
 }
 
-fn counts(index: usize) -> Counts {
-    COUNTS.get(index).map_or_else(Counts::default, |slot| Counts { hits: slot[0].load(Ordering::Relaxed), misses: slot[1].load(Ordering::Relaxed), evictions: slot[2].load(Ordering::Relaxed) })
+fn bg_counts(index: usize) -> Counts {
+    BG_COUNTS.get(index).map_or_else(Counts::default, |slot| Counts { hits: slot[0].load(Ordering::Relaxed), misses: slot[1].load(Ordering::Relaxed), evictions: slot[2].load(Ordering::Relaxed) })
+}
+
+fn build_snapshot(slots: &[[u64; 3]; SLOTS]) -> Vec<(&'static str, &'static str, Counts)> {
+    let at = |index: usize| Counts { hits: slots[index][0], misses: slots[index][1], evictions: slots[index][2] };
+    let mut rows: Vec<(&'static str, &'static str, Counts)> = Cache::ALL.iter().map(|cache| (cache.name(), cache.about(), at(*cache as usize))).collect();
+    let named = NAMED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    for (index, (name, about)) in named.into_iter().enumerate() {
+        rows.push((name, about, at((Cache::ALL.len() + index).min(SLOTS - 1))));
+    }
+    rows
+}
+
+fn build_facts(slots: &[[u64; 3]; SLOTS], touched: u64) -> Facts {
+    let at = |cache: Cache| {
+        let row = slots[cache as usize];
+        Counts { hits: row[0], misses: row[1], evictions: row[2] }
+    };
+    let (wrappers, requires, values) = (at(Cache::Wrappers), at(Cache::Requires), at(Cache::Values));
+    Facts {
+        instances_touched: touched,
+        userdata_made: wrappers.misses,
+        userdata_collected: wrappers.evictions,
+        modules_run: requires.misses,
+        requires_kept: requires.hits,
+        datatype_reads: values.hits + values.misses,
+        datatype_reads_reused: values.hits,
+    }
+}
+
+fn collect_current() -> ([[u64; 3]; SLOTS], u64) {
+    let include_bg = !CONCURRENT.load(Ordering::Acquire);
+    LOCAL.with(|local| {
+        let local = local.borrow();
+        let mut slots = local.counts;
+        let mut touched = local.touched.len() as u64;
+        if include_bg {
+            for (index, slot) in slots.iter_mut().enumerate() {
+                let bg = bg_counts(index);
+                slot[0] += bg.hits;
+                slot[1] += bg.misses;
+                slot[2] += bg.evictions;
+            }
+            let bg_touched = BG_TOUCHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(bg) = bg_touched.as_ref() {
+                touched += bg.iter().filter(|id| !local.touched.contains(id)).count() as u64;
+            }
+        }
+        (slots, touched)
+    })
 }
 
 /// Every cache's counts (name, what it is, counts), the engine's then the host's.
 pub fn snapshot() -> Vec<(&'static str, &'static str, Counts)> {
-    let mut rows: Vec<(&'static str, &'static str, Counts)> = Cache::ALL.iter().map(|cache| (cache.name(), cache.about(), counts(*cache as usize))).collect();
-    let named = NAMED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-    for (index, (name, about)) in named.into_iter().enumerate() {
-        rows.push((name, about, counts((Cache::ALL.len() + index).min(SLOTS - 1))));
-    }
-    rows
+    let (slots, _) = collect_current();
+    build_snapshot(&slots)
 }
 
 /// A userdata was made for the instance (index, generation): one the scripts touched
 #[inline]
 pub fn instance_touched(index: u32, generation: u32) {
     if on() {
-        let mut touched = TOUCHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        touched.get_or_insert_with(Default::default).insert(((generation as u64) << 32) | index as u64);
+        let id = ((generation as u64) << 32) | index as u64;
+        let recorded_locally = LOCAL
+            .try_with(|local| {
+                let mut local = local.borrow_mut();
+                if local.active {
+                    local.touched.insert(id);
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+        if !recorded_locally {
+            let mut touched = BG_TOUCHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            touched.get_or_insert_with(Default::default).insert(id);
+        }
     }
 }
 
@@ -208,25 +301,85 @@ pub struct Facts {
 
 /// The game's facts the caches counted (the counts since the profile began)
 pub fn facts() -> Facts {
-    let (wrappers, requires, values) = (counts(Cache::Wrappers as usize), counts(Cache::Requires as usize), counts(Cache::Values as usize));
-    let touched = TOUCHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map_or(0, |set| set.len() as u64);
-    Facts {
-        instances_touched: touched,
-        userdata_made: wrappers.misses,
-        userdata_collected: wrappers.evictions,
-        modules_run: requires.misses,
-        requires_kept: requires.hits,
-        datatype_reads: values.hits + values.misses,
-        datatype_reads_reused: values.hits,
-    }
+    let (slots, touched) = collect_current();
+    build_facts(&slots, touched)
 }
 
-/// Clears the counts (a profile's start).
-pub(crate) fn reset() {
-    for slot in &COUNTS {
+fn reset_bg() {
+    for slot in &BG_COUNTS {
         for field in slot {
             field.store(0, Ordering::Relaxed);
         }
     }
-    *TOUCHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *BG_TOUCHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Starts counting caches on this thread (a `--profile caches` session's start).
+pub(crate) fn begin() {
+    let was_active = LOCAL.with(|local| {
+        let mut local = local.borrow_mut();
+        let prev = local.active;
+        local.active = true;
+        local.counts = [[0; 3]; SLOTS];
+        local.touched.clear();
+        prev
+    });
+    if !was_active {
+        let prev = ACTIVE_SESSIONS.fetch_add(1, Ordering::AcqRel);
+        if prev == 0 {
+            reset_bg();
+            CONCURRENT.store(false, Ordering::Release);
+        } else {
+            CONCURRENT.store(true, Ordering::Release);
+        }
+    }
+}
+
+/// Stops counting caches on this thread and returns this session's snapshot and facts.
+pub(crate) fn finish() -> (Vec<(&'static str, &'static str, Counts)>, Facts) {
+    let include_bg = !CONCURRENT.load(Ordering::Acquire);
+    let (was_active, mut slots, local_touched) = LOCAL.with(|local| {
+        let mut local = local.borrow_mut();
+        let prev = local.active;
+        local.active = false;
+        let counts = local.counts;
+        local.counts = [[0; 3]; SLOTS];
+        let touched = std::mem::take(&mut local.touched);
+        (prev, counts, touched)
+    });
+    if !was_active {
+        return (Vec::new(), Facts::default());
+    }
+    let mut touched = local_touched.len() as u64;
+    if include_bg {
+        for (index, slot) in slots.iter_mut().enumerate() {
+            let bg = bg_counts(index);
+            slot[0] += bg.hits;
+            slot[1] += bg.misses;
+            slot[2] += bg.evictions;
+        }
+        let bg_touched = BG_TOUCHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(bg) = bg_touched.as_ref() {
+            touched += bg.iter().filter(|id| !local_touched.contains(id)).count() as u64;
+        }
+    }
+    ACTIVE_SESSIONS.fetch_sub(1, Ordering::AcqRel);
+    (build_snapshot(&slots), build_facts(&slots, touched))
+}
+
+/// Stops counting caches on this thread without building a report (session dropped early).
+pub(crate) fn cancel() {
+    let was_active = LOCAL
+        .try_with(|local| {
+            let mut local = local.borrow_mut();
+            let prev = local.active;
+            local.active = false;
+            local.counts = [[0; 3]; SLOTS];
+            local.touched.clear();
+            prev
+        })
+        .unwrap_or(false);
+    if was_active {
+        ACTIVE_SESSIONS.fetch_sub(1, Ordering::AcqRel);
+    }
 }

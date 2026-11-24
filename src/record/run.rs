@@ -219,6 +219,74 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
     }
 }
 
+/// Like [`cli`], for callers that stay alive after the run (integration tests): skips process-wide
+/// watchdogs and child `cpu_pass` spawns, and drops the emulator instead of leaking it.
+pub fn cli_in_process(args: &[String], host: &Host, record: bool) -> i32 {
+    let command = if record { "record" } else { "run" };
+    let args = launch::split_equals(args);
+    if let Err(error) = crate::require_standalone_state(&host.repo) {
+        eprintln!("{} {command}: {error}", host.name);
+        return 1;
+    }
+    let suite = match crate::profiler::Config::from_args(&args, || default_profile_dir(&args, record)) {
+        Ok(suite) => suite,
+        Err(error) => {
+            eprintln!("{} {command}: {error}", host.name);
+            return 2;
+        }
+    };
+    if suite.is_none() {
+        if crate::profiler::phases_requested(&args) {
+            crate::timing::begin(std::time::Instant::now());
+        }
+        if let Some(config) = crate::boundary::parse(&args) {
+            crate::boundary::begin(config);
+        }
+    }
+    let session = suite.map(crate::profiler::Session::begin);
+    let luau_profile = crate::luau_profile::begin();
+    let mut profiled_run = crate::profiler::Run { command: command.into(), ..Default::default() };
+    let result = parse(&args, record).and_then(|args| {
+        profiled_run.harness = Some(args.harness.clone());
+        profiled_run.seconds = args.seconds;
+        profiled_run.fps = args.fps;
+        let (done, emulator) = execute_with(&args, host, record, false)?;
+        #[cfg(feature = "bundles")]
+        project::model_assets::stop(&emulator.engine);
+        crate::animation::source::stop(&emulator.engine);
+        drop(emulator);
+        Ok(done)
+    });
+    drop(luau_profile);
+    if let Some(session) = session {
+        if let Ok(done) = &result {
+            profiled_run.status = done.summary["status"].as_str().unwrap_or("?").to_string();
+            profiled_run.frames = done.summary["frames"].as_u64().unwrap_or(0);
+            profiled_run.script_timeouts = done.summary["script_timeouts"].as_u64().unwrap_or(0);
+            profiled_run.host_backstop_timeouts = done.summary["host_backstop_timeouts"].as_u64().unwrap_or(0);
+            if let Some(frames) = done.summary["frames"].as_u64().filter(|_| profiled_run.fps > 0.0) {
+                profiled_run.seconds = profiled_run.seconds.min(frames.saturating_sub(1) as f64 / profiled_run.fps).max(0.0);
+            }
+        } else {
+            profiled_run.status = "failed".into();
+        }
+        if let Err(error) = session.finish(profiled_run) {
+            eprintln!("{} {command}: profile: {error}", host.name);
+            return 1;
+        }
+    } else {
+        let _ = crate::boundary::finish();
+    }
+    let _ = crate::timing::finish();
+    match result {
+        Ok(done) => done.code,
+        Err(error) => {
+            eprintln!("{} {command}: {error}", host.name);
+            1
+        }
+    }
+}
+
 /// `ree run --batch <jobs.json>`: runs multiple independent `run` jobs concurrently in one process
 /// while sharing compiled module bytecode, parsed JSON caches, reflection, and directory listings.
 pub fn batch_cli(args: &[String], host: &Host) -> i32 {

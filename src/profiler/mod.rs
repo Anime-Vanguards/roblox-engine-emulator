@@ -718,7 +718,7 @@ pub fn kinds() -> Kinds {
 /// A profile of the suite on this thread: [`Session::begin`] before the engine starts, [`install`] once its VM runs
 /// (luau_profile::install calls it), [`collect`] before the VM goes, [`Session::finish`] to write it.
 pub struct Session {
-    _private: (),
+    finished: bool,
 }
 
 impl Session {
@@ -732,8 +732,7 @@ impl Session {
             crate::boundary::begin(crate::boundary::Config { out: config.out.join("boundary.json"), top: config.top, phase: config.phases.clone() });
         }
         if config.kinds.has(Kinds::CACHES) {
-            caches::reset();
-            caches::set_on(true);
+            caches::begin();
         }
         let cpu = cpu::Counters::begin(config.kinds.has(Kinds::CPU));
         let mut warnings = Vec::new();
@@ -776,22 +775,25 @@ impl Session {
         };
         STATE.with(|cell| *cell.borrow_mut() = Some(Box::new(state)));
         ON.with(|on| on.set(true));
-        Session { _private: () }
+        Session { finished: false }
     }
 
     /// Writes the profile (collecting what [`collect`] did not: a host that never called it gets no VM profile, which
     /// the summary says) and ends it: the summary text.
-    pub fn finish(self, run: Run) -> Result<String, String> {
+    pub fn finish(mut self, run: Run) -> Result<String, String> {
+        self.finished = true;
         let boundary_text = crate::boundary::finish();
         let (phases_text, phase_tree) = crate::timing::finish_tree().unzip();
-        caches::set_on(false);
         ON.with(|on| on.set(false));
         let Some(mut state) = STATE.with(|cell| cell.borrow_mut().take()) else { return Err("no profile ran".into()) };
         if !state.collected && state.installed.is_some() {
             state.warnings.push("the VM's profile was not collected before the VM went (a host must call profiler::collect)".into());
         }
-        let caches = caches::snapshot();
-        let facts = caches::facts();
+        let (caches, facts) = if state.config.kinds.has(Kinds::CACHES) {
+            caches::finish()
+        } else {
+            (Vec::new(), caches::Facts::default())
+        };
         let cpu = state.cpu.finish();
         let _ = &state.cpu_frame_started;
         let hw = state.hw.take().map(|session| session.finish(state.phase));
@@ -827,6 +829,32 @@ impl Session {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let _ = ON.try_with(|on| on.set(false));
+        let state = STATE.try_with(|cell| cell.borrow_mut().take()).ok().flatten();
+        if let Some(state) = state {
+            if state.config.kinds.has(Kinds::CACHES) {
+                caches::cancel();
+            }
+            if state.config.kinds.has(Kinds::TIME) {
+                crate::luau_profile::stop_suite_ticker();
+            }
+            if state.config.kinds.has(Kinds::BOUNDARY) {
+                let _ = crate::boundary::finish();
+            }
+            if state.config.kinds.has(Kinds::PHASES) {
+                let _ = crate::timing::finish_tree();
+            }
+            let _ = attribution::finish(None);
+            let _ = RESUME_CALLBACKS.try_with(|cb| cb.set(None));
+        }
+    }
+}
+
 /// Hooks the VM of `lua` (its engine from the Lua's app data) for the running profile: the VM's stepping profile, the
 /// allocation profile, the interrupt's sampling and collector events, the thread counter and a first heap snapshot.
 /// Nothing when no profile runs.
@@ -857,7 +885,7 @@ pub fn install(lua: &Lua) {
         // (ree's tools' code is not the game's: the marks' cache totals leave it out, as the report's tables do)
         let mut tools = vec!["=rur.", "=ree."];
         let harness = format!("={}.", report::HARNESS_FOLDER);
-        if std::env::var_os(report::TOOL_HARNESS_ENV).is_some_and(|value| value == "1") {
+        if report::tool_harness_enabled() {
             tools.push(&harness);
         }
         unsafe { vm::tool_chunks(state, &tools) };

@@ -122,10 +122,44 @@ pub fn harness_module(module: &str) -> bool {
 /// user's): the harness's code is then ree's tool code too
 pub const TOOL_HARNESS_ENV: &str = "REE_PROFILE_TOOL_HARNESS";
 
+#[cfg(test)]
+static TOOL_HARNESS_ENV_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+#[cfg(test)]
+thread_local! {
+    static TOOL_HARNESS_WRITE_HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Reads [`TOOL_HARNESS_ENV`] without racing tests that temporarily set it.
+pub(crate) fn tool_harness_enabled() -> bool {
+    #[cfg(test)]
+    let _guard = (!TOOL_HARNESS_WRITE_HELD.with(std::cell::Cell::get)).then(|| TOOL_HARNESS_ENV_LOCK.read().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    std::env::var_os(TOOL_HARNESS_ENV).is_some_and(|value| value == "1")
+}
+
+/// Runs `body` with [`TOOL_HARNESS_ENV`] set to `"1"`, holding exclusive access over readers in tests.
+#[cfg(test)]
+pub(crate) fn with_tool_harness_env<R>(body: impl FnOnce() -> R) -> R {
+    struct Guard<'a> {
+        _lock: std::sync::RwLockWriteGuard<'a, ()>,
+    }
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            unsafe { std::env::remove_var(TOOL_HARNESS_ENV) };
+            TOOL_HARNESS_WRITE_HELD.with(|held| held.set(false));
+        }
+    }
+    let write = TOOL_HARNESS_ENV_LOCK.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    TOOL_HARNESS_WRITE_HELD.with(|held| held.set(true));
+    unsafe { std::env::set_var(TOOL_HARNESS_ENV, "1") };
+    let _guard = Guard { _lock: write };
+    body()
+}
+
 /// Whether a module is ree's own tool code, never the game's nor a user's harness: the engine's chunks that drive a harness
 /// (`rur.record`), and the harness itself when a tool of ree's ran it ([`TOOL_HARNESS_ENV`]: the what-if runner's)
 pub fn tool_module(module: &str) -> bool {
-    module.starts_with("rur.") || module.starts_with("ree.") || (std::env::var_os(TOOL_HARNESS_ENV).is_some_and(|value| value == "1") && harness_module(module))
+    module.starts_with("rur.") || module.starts_with("ree.") || (tool_harness_enabled() && harness_module(module))
 }
 
 /// Each module's short name (its last segment), qualified with the segments before it where two modules would share one (the
@@ -185,6 +219,8 @@ struct Names<'a> {
     outside: Vec<String>,
     /// Each module's short name, qualified where two would share one
     shorts: FxHashMap<String, String>,
+    /// Cached [`tool_harness_enabled`] value for this report write
+    tool_harness: bool,
 }
 
 impl Names<'_> {
@@ -250,7 +286,13 @@ impl Names<'_> {
 
     /// ree's own tool code ([`tool_module`])
     fn tool(&self, id: i32) -> bool {
-        self.function(id).is_some_and(|f| !f.exempt() && tool_module(module_name(&f.source)))
+        self.function(id).is_some_and(|f| {
+            if f.exempt() {
+                return false;
+            }
+            let module = module_name(&f.source);
+            module.starts_with("rur.") || module.starts_with("ree.") || (self.tool_harness && harness_module(module))
+        })
     }
 
     fn engine(&self, id: i32) -> bool {
@@ -885,7 +927,7 @@ pub fn write(input: &Input) -> Result<String, String> {
     let out = &input.config.out;
     std::fs::create_dir_all(out).map_err(|error| format!("--profile-out {}: {error}", out.display()))?;
     let shorts = short_names(input.vm.iter().flat_map(|vm| vm.functions.iter()).map(|f| module_name(&f.source)));
-    let names = Names { vm: input.vm, steps: ENGINE_STEPS.with(|steps| steps.borrow().clone()), outside: OUTSIDE.with(|outside| outside.borrow().clone()), shorts };
+    let names = Names { vm: input.vm, steps: ENGINE_STEPS.with(|steps| steps.borrow().clone()), outside: OUTSIDE.with(|outside| outside.borrow().clone()), shorts, tool_harness: tool_harness_enabled() };
     let scale = if input.price_scale > 0.0 { input.price_scale } else { 1.0 };
     SCALE.with(|cell| cell.set(scale));
     // (the engine's unshared cold charges, by tree node)
@@ -1025,6 +1067,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         }
     }
     let stepping = input.config.kinds.steps();
+    let source_lines = SourceLines::new(input.sources);
     let function_json = |id: i32, figures: &Figures| -> Json {
         let function = names.function(id);
         json!({
@@ -1036,7 +1079,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             "last_line": function.and_then(|f| f.lines.iter().copied().max()),
             // (what pairs a function across an edit that moved it: its code as compiled, and its text)
             "code_hash": function.and_then(code_hash),
-            "source_hash": function.and_then(|f| source_hash(input.sources, f)),
+            "source_hash": function.and_then(|f| source_lines.hash(f)),
             "kind": match function { Some(f) if f.exempt() => "engine Luau", Some(_) => "Luau", None if id <= ENGINE_STEP_BASE => "engine step", None => "C" },
             "native": function.is_some_and(vm::Function::native),
             // (the harness's own code, under HARNESS_FOLDER; tool: ree's own, never the game's nor a user's: the engine's chunks
@@ -3387,6 +3430,46 @@ fn function_key(names: &Names, id: i32) -> String {
     }
 }
 
+struct CodeHashTables {
+    rewrite: [u8; 256],
+    slotted: [bool; 256],
+    with_aux: [bool; 256],
+}
+
+fn code_hash_tables() -> &'static CodeHashTables {
+    static TABLES: std::sync::OnceLock<CodeHashTables> = std::sync::OnceLock::new();
+    TABLES.get_or_init(|| {
+        let op = |name: &str| vm::OPCODES.iter().position(|op| *op == name);
+        let mut rewrite = [0u8; 256];
+        for (index, slot) in rewrite.iter_mut().enumerate() {
+            *slot = index as u8;
+        }
+        for (from, to) in [("GETUDATAKS", "GETTABLEKS"), ("SETUDATAKS", "SETTABLEKS"), ("NAMECALLUDATA", "NAMECALL")] {
+            if let (Some(from), Some(to)) = (op(from), op(to)) {
+                rewrite[from] = to as u8;
+            }
+        }
+        let mut slotted = [false; 256];
+        for name in ["GETGLOBAL", "SETGLOBAL", "GETTABLEKS", "SETTABLEKS", "NAMECALL"] {
+            if let Some(index) = op(name) {
+                slotted[index] = true;
+            }
+        }
+        // (Luau's BytecodeUtils.h getOpLength: the instructions followed by an aux word)
+        let mut with_aux = [false; 256];
+        for name in [
+            "GETGLOBAL", "SETGLOBAL", "GETIMPORT", "GETTABLEKS", "SETTABLEKS", "NAMECALL", "JUMPIFEQ", "JUMPIFLE", "JUMPIFLT", "JUMPIFNOTEQ", "JUMPIFNOTLE", "JUMPIFNOTLT", "NEWTABLE", "SETLIST", "FORGLOOP", "LOADKX",
+            "FASTCALL2", "FASTCALL2K", "FASTCALL3", "JUMPXEQKNIL", "JUMPXEQKB", "JUMPXEQKN", "JUMPXEQKS", "GETUDATAKS", "SETUDATAKS", "NAMECALLUDATA", "NEWCLASSMEMBER", "CALLFB", "CMPPROTO", "NEWCLASS", "CONSTRUCT",
+            "GETPRIVATEFIELD", "SETPRIVATEFIELD",
+        ] {
+            if let Some(index) = op(name) {
+                with_aux[index] = true;
+            }
+        }
+        CodeHashTables { rewrite, slotted, with_aux }
+    })
+}
+
 /// A function's bytecode hashed as the compiler wrote it (profile.json `code_hash`): the same code hashes the same wherever
 /// it moves in its file, so `ree profile diff` pairs a function across an edit that moved it (an anonymous function's key
 /// carries its line). What a run changes in the code is taken out: the slot a table-key, global or method instruction
@@ -3397,30 +3480,19 @@ fn code_hash(function: &vm::Function) -> Option<String> {
     if function.code.is_empty() {
         return None;
     }
-    let op = |name: &str| vm::OPCODES.iter().position(|op| *op == name).map_or(u32::MAX, |index| index as u32);
-    let rewritten = [(op("GETUDATAKS"), op("GETTABLEKS")), (op("SETUDATAKS"), op("SETTABLEKS")), (op("NAMECALLUDATA"), op("NAMECALL"))];
-    let slotted = [op("GETGLOBAL"), op("SETGLOBAL"), op("GETTABLEKS"), op("SETTABLEKS"), op("NAMECALL")];
-    // (Luau's BytecodeUtils.h getOpLength: the instructions followed by an aux word)
-    let with_aux: Vec<u32> = [
-        "GETGLOBAL", "SETGLOBAL", "GETIMPORT", "GETTABLEKS", "SETTABLEKS", "NAMECALL", "JUMPIFEQ", "JUMPIFLE", "JUMPIFLT", "JUMPIFNOTEQ", "JUMPIFNOTLE", "JUMPIFNOTLT", "NEWTABLE", "SETLIST", "FORGLOOP", "LOADKX",
-        "FASTCALL2", "FASTCALL2K", "FASTCALL3", "JUMPXEQKNIL", "JUMPXEQKB", "JUMPXEQKN", "JUMPXEQKS", "GETUDATAKS", "SETUDATAKS", "NAMECALLUDATA", "NEWCLASSMEMBER", "CALLFB", "CMPPROTO", "NEWCLASS", "CONSTRUCT",
-        "GETPRIVATEFIELD", "SETPRIVATEFIELD",
-    ]
-    .iter()
-    .map(|name| op(name))
-    .collect();
+    let tables = code_hash_tables();
     let mut bytes: Vec<u8> = Vec::with_capacity(function.code.len() * 4);
     let mut pc = 0;
     while pc < function.code.len() {
         let insn = function.code[pc];
-        let loaded = insn & 0xff;
-        let opcode = rewritten.iter().find(|(from, _)| *from == loaded).map_or(loaded, |(_, to)| *to);
-        let mut word = (insn & !0xff) | opcode;
-        if slotted.contains(&opcode) {
+        let loaded = (insn & 0xff) as usize;
+        let opcode = tables.rewrite[loaded];
+        let mut word = (insn & !0xff) | u32::from(opcode);
+        if tables.slotted[opcode as usize] {
             word &= 0x00ff_ffff;
         }
         bytes.extend_from_slice(&word.to_le_bytes());
-        if with_aux.contains(&loaded) {
+        if tables.with_aux[loaded] {
             if let Some(aux) = function.code.get(pc + 1) {
                 bytes.extend_from_slice(&aux.to_le_bytes());
             }
@@ -3432,16 +3504,33 @@ fn code_hash(function: &vm::Function) -> Option<String> {
     Some(format!("{:016x}", fxhash(&bytes)))
 }
 
-/// A function's source text hashed (profile.json `source_hash`): its lines from where it starts to its last instruction's,
-/// each trimmed, so a function moved or re-indented hashes the same and one whose text changed does not. None when the
-/// profile did not keep its module's source
-fn source_hash(sources: &FxHashMap<String, Source>, function: &vm::Function) -> Option<String> {
-    let source = sources.get(module_name(&function.source))?;
-    let text = String::from_utf8_lossy(&source.text);
-    let first = function.line.max(1) as usize;
-    let last = function.lines.iter().copied().max().unwrap_or(function.line).max(function.line).max(1) as usize;
-    let span: Vec<&str> = text.lines().skip(first - 1).take(last + 1 - first).map(str::trim).collect();
-    (!span.is_empty()).then(|| format!("{:016x}", fxhash(span.join("\n").as_bytes())))
+/// Pre-split trimmed source lines per module, built once per report so hashing every function in a large module is linear.
+struct SourceLines<'a> {
+    modules: FxHashMap<&'a str, Vec<String>>,
+}
+
+impl<'a> SourceLines<'a> {
+    fn new(sources: &'a FxHashMap<String, Source>) -> Self {
+        let mut modules = FxHashMap::default();
+        modules.reserve(sources.len());
+        for (name, source) in sources {
+            let text = String::from_utf8_lossy(&source.text);
+            modules.insert(name.as_str(), text.lines().map(|line| line.trim().to_string()).collect());
+        }
+        Self { modules }
+    }
+
+    /// A function's source text hashed (profile.json `source_hash`): its lines from where it starts to its last instruction's,
+    /// each trimmed, so a function moved or re-indented hashes the same and one whose text changed does not. None when the
+    /// profile did not keep its module's source
+    fn hash(&self, function: &vm::Function) -> Option<String> {
+        let lines = self.modules.get(module_name(&function.source))?;
+        let first = function.line.max(1) as usize;
+        let last = function.lines.iter().copied().max().unwrap_or(function.line).max(function.line).max(1) as usize;
+        let start = first - 1;
+        let end = last.min(lines.len());
+        (start < end).then(|| format!("{:016x}", fxhash(lines[start..end].join("\n").as_bytes())))
+    }
 }
 
 fn fxhash(bytes: &[u8]) -> u64 {
@@ -3757,9 +3846,28 @@ fn price_builtin_fixes(vm_results: &vm::Results, rows: &[Row], scope: &[u32], fp
     }
 }
 
-/// What each issue contributed to each frame (ms), by the issue's key (`function:3`, `sort:3:12`, `builtin:math.abs:3:12`,
-/// `cache:3:5`): the keys the profile viewer's issues carry as `summary_key`
-type FrameContributions = BTreeMap<String, BTreeMap<u64, f64>>;
+/// Compact key for per-frame issue aggregation before formatting to the viewer's `summary_key` string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum IssueKey {
+    Function(i32),
+    Sort(i32, i64),
+    Cache(i32, usize),
+    Builtin(&'static str, i32, i32),
+}
+
+impl IssueKey {
+    fn format(self) -> String {
+        match self {
+            IssueKey::Function(function) => format!("function:{function}"),
+            IssueKey::Sort(caller, line) => format!("sort:{caller}:{line}"),
+            IssueKey::Cache(function, pc) => format!("cache:{function}:{pc}"),
+            IssueKey::Builtin(name, function, line) => format!("builtin:{name}:{function}:{line}"),
+        }
+    }
+}
+
+/// What each issue contributed to each frame (ms), stored as (frame, ms) entries per issue key
+type FrameContributions = FxHashMap<IssueKey, Vec<(u64, f64)>>;
 
 /// A frame's work (ms) on the game's side and on the harness's
 type FrameSides = (f64, f64);
@@ -3773,8 +3881,8 @@ fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64
         return;
     }
     let sort_keys = sort_keys_by_node(vm);
-    let mut contributions = FrameContributions::new();
-    let mut frame_work: BTreeMap<u64, FrameSides> = BTreeMap::new();
+    let mut contributions = FrameContributions::default();
+    let mut frame_work: FxHashMap<u64, FrameSides> = FxHashMap::default();
     for row in rows.iter().filter(|row| scope.contains(&row.phase)) {
         // (a row that does not split its work by side is all the game's)
         let (game, harness) = row_sides_ms(row).unwrap_or((row.work_ms * price_scale(), 0.0));
@@ -3788,21 +3896,24 @@ fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64
     let harness_apart = harness > 0.0 && game >= 0.01 * (game + harness);
     let budget = frame_budget_ms(fps);
 
-    let mut summaries = Vec::new();
-    for (key, frames) in &contributions {
-        if let Some(summary) = summarize_frames(key, frames, &frame_work, harness_apart, budget) {
+    let mut keyed: Vec<(String, Vec<(u64, f64)>)> = contributions.into_iter().map(|(key, frames)| (key.format(), frames)).collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut summaries = Vec::with_capacity(keyed.len());
+    for (key, mut frames) in keyed {
+        if let Some(summary) = summarize_frames(&key, &mut frames, &frame_work, harness_apart, budget) {
             summaries.push(summary);
         }
     }
     json["timeline"]["issue_stats"] = Json::Array(summaries);
 }
 
-/// For every call-tree node, the keys of the sorts it sits under, as `sort:<calling function>:<line>`. A node under a sort
+/// For every call-tree node, the `(calling function, line)` pairs of the sorts it sits under. A node under a sort
 /// is part of that sort's call site, however deep, and under every sort of a nested pair.
-fn sort_keys_by_node(vm: &vm::Results) -> Vec<BTreeSet<String>> {
-    let mut sort_keys: Vec<BTreeSet<String>> = Vec::new();
+fn sort_keys_by_node(vm: &vm::Results) -> Vec<Vec<(i32, i64)>> {
+    let mut sort_keys: Vec<Vec<(i32, i64)>> = Vec::with_capacity(vm.nodes.len());
     // Each node's nearest script function: a C function's work belongs to the script that called it
-    let mut owners: Vec<Option<i32>> = Vec::new();
+    let mut owners: Vec<Option<i32>> = Vec::with_capacity(vm.nodes.len());
     for (index, node) in vm.nodes.iter().enumerate() {
         let parent = usize::try_from(node.parent).ok().filter(|parent| *parent < index);
         let parent_owner = parent.and_then(|parent| owners[parent]);
@@ -3810,13 +3921,16 @@ fn sort_keys_by_node(vm: &vm::Results) -> Vec<BTreeSet<String>> {
 
         let mut keys = match parent {
             Some(parent) => sort_keys[parent].clone(),
-            None => BTreeSet::new(),
+            None => Vec::new(),
         };
         if node_is_table_sort(vm, node.function)
             && let Some(caller) = parent_owner
         {
             let line = call_line(vm, caller, node.callpc).unwrap_or(-1);
-            keys.insert(format!("sort:{caller}:{line}"));
+            let pair = (caller, line);
+            if !keys.contains(&pair) {
+                keys.push(pair);
+            }
         }
         sort_keys.push(keys);
     }
@@ -3841,47 +3955,70 @@ fn call_line(vm: &vm::Results, function: i32, callpc: i32) -> Option<i64> {
 
 /// Adds a row's work to the issues it counts toward: each script function, each sort its nodes sit under, and each charged
 /// builtin or cache site
-fn add_row_contributions(vm: &vm::Results, row: &Row, sort_keys: &[BTreeSet<String>], contributions: &mut FrameContributions) {
-    let mut add = |key: String, ms: f64| {
-        *contributions.entry(key).or_default().entry(row.frame).or_default() += ms;
+fn add_row_contributions(vm: &vm::Results, row: &Row, sort_keys: &[Vec<(i32, i64)>], contributions: &mut FrameContributions) {
+    let scale = price_scale();
+    let frame = row.frame;
+    let mut add = |key: IssueKey, ms: f64| {
+        let entries = contributions.entry(key).or_default();
+        if let Some(last) = entries.last_mut()
+            && last.0 == frame
+        {
+            last.1 += ms;
+        } else {
+            entries.push((frame, ms));
+        }
     };
     for &(function, ms, _) in &row.functions {
-        add(format!("function:{function}"), ms * price_scale());
+        add(IssueKey::Function(function), ms * scale);
     }
     for &(node, ms) in &row.nodes {
-        for key in sort_keys.get(node).into_iter().flatten() {
-            add(key.clone(), ms * price_scale());
+        for &(caller, line) in sort_keys.get(node).into_iter().flatten() {
+            add(IssueKey::Sort(caller, line), ms * scale);
         }
     }
     for site in &row.sites {
         if let Some(key) = site_issue_key(vm, site) {
-            add(key, site.saving_ms * price_scale());
+            add(key, site.saving_ms * scale);
         }
     }
 }
 
 /// The key of the issue a charged site belongs to: a builtin site's is its edit's (`builtin:<name>:<function>:<line>`, which
 /// all the compiled copies on that line share), a cache site's its own. None for a site the VM's results do not describe.
-fn site_issue_key(vm: &vm::Results, site: &super::SiteWork) -> Option<String> {
+fn site_issue_key(vm: &vm::Results, site: &super::SiteWork) -> Option<IssueKey> {
     if site.kind != "builtin" {
-        return Some(format!("cache:{}:{}", site.function, site.pc));
+        return Some(IssueKey::Cache(site.function, site.pc));
     }
     let prototype = vm.functions.get(site.function as usize)?;
     let code = prototype.code.get(site.pc)?;
     let builtin_id = ((code >> 8) & 255) as i32;
     let name = vm::builtin_name(builtin_id).unwrap_or("?");
     let line = prototype.lines.get(site.pc).copied().unwrap_or(-1);
-    Some(format!("builtin:{name}:{}:{line}", site.function))
+    Some(IssueKey::Builtin(name, site.function, line))
 }
 
 /// One issue's summary row, `[key, active frames, largest us, that frame, largest us in a frame over the budget]`. None
 /// when it was never active
-fn summarize_frames(key: &str, frames: &BTreeMap<u64, f64>, frame_work: &BTreeMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<Json> {
+fn summarize_frames(key: &str, frames: &mut Vec<(u64, f64)>, frame_work: &FxHashMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<Json> {
+    if frames.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+        frames.sort_by_key(|&(frame, _)| frame);
+        let mut write = 0usize;
+        for read in 0..frames.len() {
+            let (frame, ms) = frames[read];
+            if write > 0 && frames[write - 1].0 == frame {
+                frames[write - 1].1 += ms;
+            } else {
+                frames[write] = (frame, ms);
+                write += 1;
+            }
+        }
+        frames.truncate(write);
+    }
     let mut active_frames = 0;
     let mut largest_ms = 0.0;
     let mut largest_frame = 0;
     let mut largest_over_budget_ms: f64 = 0.0;
-    for (&frame, &ms) in frames {
+    for &(frame, ms) in frames.iter() {
         if ms <= 0.0 {
             continue;
         }
@@ -3922,7 +4059,7 @@ struct FunctionFrames {
 /// Returns the function summaries, the heavy frames' node work and their sites' savings, as the profile stores them.
 fn frame_evidence(rows: &[Row], scope: &[u32], fps: f64) -> (Json, Json, Json) {
     let whole = whole_frame_work(rows);
-    let mut by_function: BTreeMap<i32, FunctionFrames> = BTreeMap::new();
+    let mut by_function: FxHashMap<i32, FunctionFrames> = FxHashMap::default();
     for row in rows.iter().filter(|row| scope.contains(&row.phase)) {
         for &(function, ms, _) in row.functions.iter().filter(|(_, ms, _)| *ms > 0.0) {
             let stat = by_function.entry(function).or_default();
@@ -3959,7 +4096,9 @@ fn frame_evidence(rows: &[Row], scope: &[u32], fps: f64) -> (Json, Json, Json) {
             site_frames.push(json!([index, site.kind, site.function, site.pc, site.node, microseconds(site.saving_ms)]));
         }
     }
-    let stats = by_function
+    let mut ordered: Vec<(i32, FunctionFrames)> = by_function.into_iter().collect();
+    ordered.sort_by_key(|(id, _)| *id);
+    let stats = ordered
         .into_iter()
         .map(|(id, stat)| json!([id, microseconds(stat.total), stat.active, microseconds(stat.largest), stat.peak_frame]))
         .collect();
@@ -4062,7 +4201,7 @@ mod tests {
             price_scale: 1.0,
             device: "desktop",
         };
-        let names = Names { vm: None, steps: Vec::new(), outside: Vec::new(), shorts: FxHashMap::default() };
+        let names = Names { vm: None, steps: Vec::new(), outside: Vec::new(), shorts: FxHashMap::default(), tool_harness: false };
         let mut summary = String::new();
         let json = counters(&input, &hw, &names, &mut summary, &mut Vec::new());
         assert_eq!(json["cut_short"], json!(12.345));

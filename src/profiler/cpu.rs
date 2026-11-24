@@ -121,26 +121,30 @@ fn memory() -> Option<Memory> {
     None
 }
 
-/// The timestamp counter's ticks a millisecond (QueryThreadCycleTime counts them while the thread runs): measured against the
-/// wall clock over a few milliseconds by the counter itself (a thread preempted while it measured its own cycles would read a
-/// lower rate); 0 where the thread's cycles cannot be read
+/// The timestamp counter's ticks a millisecond (QueryThreadCycleTime counts them while the thread runs): measured once per
+/// process against the wall clock over a few milliseconds by the counter itself (the hardware invariant TSC runs at a
+/// constant rate, and a thread preempted while measuring its own cycles would read a lower rate); 0 where the thread's
+/// cycles cannot be read
 pub fn cycles_per_ms() -> f64 {
-    if thread_cycles() == 0 {
-        return 0.0;
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        let (start, counter) = (std::time::Instant::now(), unsafe { core::arch::x86_64::_rdtsc() });
-        while start.elapsed().as_secs_f64() < 0.005 {
-            std::hint::spin_loop();
+    static RATE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *RATE.get_or_init(|| {
+        if thread_cycles() == 0 {
+            return 0.0;
         }
-        let (elapsed, ticks) = (start.elapsed().as_secs_f64(), unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(counter));
-        if elapsed > 0.0 { ticks as f64 / (elapsed * 1e3) } else { 0.0 }
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        0.0
-    }
+        #[cfg(target_arch = "x86_64")]
+        {
+            let (start, counter) = (std::time::Instant::now(), unsafe { core::arch::x86_64::_rdtsc() });
+            while start.elapsed().as_secs_f64() < 0.005 {
+                std::hint::spin_loop();
+            }
+            let (elapsed, ticks) = (start.elapsed().as_secs_f64(), unsafe { core::arch::x86_64::_rdtsc() }.wrapping_sub(counter));
+            if elapsed > 0.0 { ticks as f64 / (elapsed * 1e3) } else { 0.0 }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            0.0
+        }
+    })
 }
 
 /// Why the hardware counters were not read

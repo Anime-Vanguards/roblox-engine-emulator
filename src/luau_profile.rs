@@ -34,8 +34,8 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -81,13 +81,32 @@ fn release() {
 fn release() {}
 
 static TICKS: AtomicU64 = AtomicU64::new(0);
-static ENABLED: AtomicBool = AtomicBool::new(false);
-static WORK_CLOCK: AtomicBool = AtomicBool::new(false);
-/// The profiling suite samples host time (profiler.rs `time`): the ticker runs for it, and the interrupt samples for it
-static SUITE_TIME: AtomicBool = AtomicBool::new(false);
-/// The tick the suite's safepoint work last ran at (the counters' reading and host time's booking at a safepoint): the interrupt
-/// returns after this compare, before any thread-local work, while the ticker has not moved past it
-static SUITE_SEEN: AtomicU64 = AtomicU64::new(0);
+static ENABLED: AtomicUsize = AtomicUsize::new(0);
+/// Count of threads whose profiling suite currently samples host time (profiler.rs `time`): off, one relaxed load.
+static SUITE_TIME_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+/// Shared monotonic 1 ms ticker for active suite host-time sessions: (refcount, stop flag).
+static SUITE_TICKER_SHARED: Mutex<(usize, Option<Arc<AtomicBool>>)> = Mutex::new((0, None));
+
+thread_local! {
+    static LOCAL_ENABLED: Cell<bool> = const { Cell::new(false) };
+    static LOCAL_WORK_CLOCK: Cell<bool> = const { Cell::new(false) };
+    static LOCAL_ALLOC_ENABLED: Cell<bool> = const { Cell::new(false) };
+    /// Whether this thread's profiling suite currently samples host time
+    static LOCAL_SUITE_TIME: Cell<bool> = const { Cell::new(false) };
+    /// Whether this thread holds a reference to [`SUITE_TICKER_SHARED`]
+    static LOCAL_SUITE_TICKER: Cell<bool> = const { Cell::new(false) };
+    /// The tick this thread's suite safepoint work last ran at
+    static SUITE_SEEN: Cell<u64> = const { Cell::new(0) };
+    /// The tick this thread's host time last booked at
+    static TIME_SEEN: Cell<u64> = const { Cell::new(0) };
+    /// Whether this thread's interpreter is running (the VM's enter and leave hook)
+    static IN_VM: Cell<bool> = const { Cell::new(false) };
+}
+
+#[inline]
+fn suite_time_active() -> bool {
+    SUITE_TIME_ACTIVE.load(Ordering::Relaxed) != 0 && LOCAL_SUITE_TIME.with(Cell::get)
+}
 /// The VM's count of the C calls scripts make (its work counters' `ccalls`, while the suite samples host time), read at safepoints:
 /// a sample whose count moved holds a C function's time, which no safepoint inside it samples. A level for each of the
 /// interpreter's entries open (a C function a script called, calling back into Luau, is one more): (the count when the level began,
@@ -157,13 +176,6 @@ fn c_calls_seen() {
     })
 }
 
-/// The tick host time last booked at (a safepoint, the VM's entry or exit, an engine step, an Instance API call): host time's own
-/// booking points compare with it, and a booking there leaves the tick's safepoint work, the counters' reading, to the next
-/// safepoint
-static TIME_SEEN: AtomicU64 = AtomicU64::new(0);
-/// The interpreter is running (the VM's enter and leave hook): engine time between handlers is told from Luau's
-static IN_VM: AtomicBool = AtomicBool::new(false);
-
 /// The ticker's count (a millisecond a tick since it started)
 #[inline]
 pub(crate) fn ticks() -> u64 {
@@ -206,28 +218,28 @@ pub(crate) fn advance_ticks(ticks: u64) {
 /// The tick host time last booked at ([`TIME_SEEN`])
 #[inline]
 pub(crate) fn seen() -> u64 {
-    TIME_SEEN.load(Ordering::Relaxed)
+    TIME_SEEN.with(Cell::get)
 }
 
 #[inline]
 pub(crate) fn set_seen(ticks: u64) {
-    TIME_SEEN.store(ticks, Ordering::Relaxed);
+    TIME_SEEN.with(|seen| seen.set(ticks));
 }
 
 /// The safepoint's work ran for `ticks` ([`SUITE_SEEN`])
 #[inline]
 pub(crate) fn set_suite_seen(ticks: u64) {
-    SUITE_SEEN.store(ticks, Ordering::Relaxed);
+    SUITE_SEEN.with(|seen| seen.set(ticks));
 }
 
 #[inline]
 pub(crate) fn in_vm() -> bool {
-    IN_VM.load(Ordering::Relaxed)
+    IN_VM.with(Cell::get)
 }
 
 #[inline]
 pub(crate) fn set_in_vm(running: bool) {
-    IN_VM.store(running, Ordering::Relaxed);
+    IN_VM.with(|in_vm| in_vm.set(running));
 }
 
 /// An Instance API call (its C metamethod's entry and return) while the suite samples host time: the time it took is booked to
@@ -239,7 +251,7 @@ impl ApiCall {
     /// `state` is a live thread of the VM the profile runs on, and stays one until the returned ApiCall is dropped.
     #[inline]
     pub unsafe fn new(state: *mut mlua::ffi::lua_State) -> ApiCall {
-        if !SUITE_TIME.load(Ordering::Relaxed) {
+        if !suite_time_active() {
             return ApiCall(std::ptr::null_mut());
         }
         let now = ticks();
@@ -263,39 +275,60 @@ impl Drop for ApiCall {
     }
 }
 
-thread_local! {
-    static SUITE_TICKER: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
-}
-
 /// Starts the ticker for the profiling suite's host time samples (profiler.rs): the ticks it starts from
 pub(crate) fn start_suite_ticker() -> u64 {
-    let stop = Arc::new(AtomicBool::new(false));
-    let ticker_stop = stop.clone();
-    let (base, started) = (ticks(), Instant::now());
-    let spawned = thread::Builder::new().name("ree-profile-ticker".into()).spawn(move || {
-        while !ticker_stop.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(1));
-            TICKS.fetch_max(base + started.elapsed().as_millis() as u64, Ordering::Relaxed);
-        }
-    });
-    if spawned.is_ok() {
-        SUITE_TICKER.with(|ticker| *ticker.borrow_mut() = Some(stop));
-        SUITE_SEEN.store(base, Ordering::Relaxed);
-        TIME_SEEN.store(base, Ordering::Relaxed);
-        IN_VM.store(false, Ordering::Relaxed);
-        SUITE_TIME.store(true, Ordering::Relaxed);
+    if LOCAL_SUITE_TIME.with(Cell::get) {
+        stop_suite_ticker();
     }
+    #[cfg(test)]
+    let manual = MANUAL_TICKS.with(Cell::get).is_some();
+    #[cfg(not(test))]
+    let manual = false;
+    let base = ticks();
+    if !manual {
+        let mut shared = SUITE_TICKER_SHARED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if shared.0 == 0 {
+            let stop = Arc::new(AtomicBool::new(false));
+            let ticker_stop = stop.clone();
+            let (start_ticks, started) = (TICKS.load(Ordering::Relaxed), Instant::now());
+            let spawned = thread::Builder::new().name("ree-profile-ticker".into()).spawn(move || {
+                while !ticker_stop.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_millis(1));
+                    TICKS.fetch_max(start_ticks + started.elapsed().as_millis() as u64, Ordering::Relaxed);
+                }
+            });
+            if spawned.is_err() {
+                return base;
+            }
+            shared.1 = Some(stop);
+        }
+        shared.0 += 1;
+        LOCAL_SUITE_TICKER.with(|held| held.set(true));
+    }
+    SUITE_SEEN.with(|seen| seen.set(base));
+    TIME_SEEN.with(|seen| seen.set(base));
+    IN_VM.with(|in_vm| in_vm.set(false));
+    LOCAL_SUITE_TIME.with(|active| active.set(true));
+    SUITE_TIME_ACTIVE.fetch_add(1, Ordering::Relaxed);
     base
 }
 
 pub(crate) fn stop_suite_ticker() {
-    SUITE_TIME.store(false, Ordering::Relaxed);
     watch_c_calls(std::ptr::null());
-    SUITE_TICKER.with(|ticker| {
-        if let Some(stop) = ticker.borrow_mut().take() {
+    let was_active = LOCAL_SUITE_TIME.try_with(|active| active.replace(false)).unwrap_or(false);
+    if was_active {
+        SUITE_TIME_ACTIVE.fetch_sub(1, Ordering::Relaxed);
+    }
+    let held_ticker = LOCAL_SUITE_TICKER.try_with(|held| held.replace(false)).unwrap_or(false);
+    if held_ticker {
+        let mut shared = SUITE_TICKER_SHARED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        shared.0 = shared.0.saturating_sub(1);
+        if shared.0 == 0
+            && let Some(stop) = shared.1.take()
+        {
             stop.store(true, Ordering::Relaxed);
         }
-    });
+    }
 }
 
 /// The work clock's cost for a sample: a stack is recorded once this much Studio time has been charged
@@ -323,7 +356,7 @@ struct WorkSource {
     counters: *const crate::cost::VmCounters,
 }
 
-static ALLOC_ENABLED: AtomicBool = AtomicBool::new(false);
+static ALLOC_ENABLED: AtomicUsize = AtomicUsize::new(0);
 
 struct Allocations {
     path: PathBuf,
@@ -392,14 +425,16 @@ pub(crate) fn begin_time_at(path: PathBuf, work_clock: bool, microseconds: bool)
             microseconds,
         })
     });
-    WORK_CLOCK.store(work_clock, Ordering::Relaxed);
-    ENABLED.store(true, Ordering::Relaxed);
+    LOCAL_WORK_CLOCK.with(|clock| clock.set(work_clock));
+    if !LOCAL_ENABLED.with(|enabled| enabled.replace(true)) {
+        ENABLED.fetch_add(1, Ordering::Relaxed);
+    }
     true
 }
 
 /// Tells the work-clock profile where the engine's work clock is (lua::raw::install).
 pub fn set_work_source(work: Rc<Cell<f64>>, drained: Rc<Cell<f64>>, counters: *const crate::cost::VmCounters) {
-    if WORK_CLOCK.load(Ordering::Relaxed) {
+    if LOCAL_WORK_CLOCK.with(Cell::get) {
         WORK_SOURCE.with(|source| *source.borrow_mut() = Some(WorkSource { work, drained, counters }));
     }
 }
@@ -426,7 +461,9 @@ pub(crate) fn begin_allocations(path: PathBuf, step: u64) {
             stacks: HashMap::new(),
         })
     });
-    ALLOC_ENABLED.store(true, Ordering::Relaxed);
+    if !LOCAL_ALLOC_ENABLED.with(|enabled| enabled.replace(true)) {
+        ALLOC_ENABLED.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Samples recorded after the first reply belong to the frame loop.
@@ -501,13 +538,13 @@ pub fn engine_step<R>(name: &str, step: impl FnOnce() -> R) -> R {
 
 /// [`engine_step`]'s host time: a frame of its own for the step in the samples
 fn timed_engine_step<R>(name: &str, step: impl FnOnce() -> R) -> R {
-    if SUITE_TIME.load(Ordering::Relaxed) {
+    if suite_time_active() {
         crate::profiler::time_step(Some(name));
         let result = step();
         crate::profiler::time_step(None);
         return result;
     }
-    if !ENABLED.load(Ordering::Relaxed) || WORK_CLOCK.load(Ordering::Relaxed) {
+    if ENABLED.load(Ordering::Relaxed) == 0 || !LOCAL_ENABLED.with(Cell::get) || LOCAL_WORK_CLOCK.with(Cell::get) {
         return step();
     }
     let start = TICKS.load(Ordering::Relaxed);
@@ -532,10 +569,10 @@ fn timed_engine_step<R>(name: &str, step: impl FnOnce() -> R) -> R {
 /// Called from the VM interrupt at non-GC safepoints.
 #[inline]
 pub fn sample(state: *mut mlua::ffi::lua_State) {
-    if !ENABLED.load(Ordering::Relaxed) {
+    if ENABLED.load(Ordering::Relaxed) == 0 || !LOCAL_ENABLED.with(Cell::get) {
         return;
     }
-    if WORK_CLOCK.load(Ordering::Relaxed) {
+    if LOCAL_WORK_CLOCK.with(Cell::get) {
         return sample_work(state);
     }
     let now = TICKS.load(Ordering::Relaxed);
@@ -631,10 +668,10 @@ unsafe extern "C-unwind" fn sampling_interrupt(state: *mut mlua::ffi::lua_State,
             }
         });
         // (the suite's host time and counters: a compare of the ticker with the tick last booked, and nothing more until it moves)
-        if SUITE_TIME.load(Ordering::Relaxed) {
+        if suite_time_active() {
             let in_c = c_calls_follow(state);
             let now = ticks();
-            if now != SUITE_SEEN.load(Ordering::Relaxed) {
+            if now != SUITE_SEEN.with(Cell::get) {
                 unsafe { crate::profiler::safepoint(state, now) };
             }
             // (the next sample's C calls count from here, unless a C function still runs: an interrupt from inside it)
@@ -657,8 +694,8 @@ unsafe extern "C-unwind" fn sampling_interrupt(state: *mut mlua::ffi::lua_State,
 /// is active (the engine CLI; the native app's worker samples from its cancellation interrupt
 /// instead). Nothing without a profile.
 pub fn install(lua: &mlua::Lua) {
-    let time = ENABLED.load(Ordering::Relaxed);
-    let allocations = ALLOC_ENABLED.load(Ordering::Relaxed);
+    let time = LOCAL_ENABLED.with(Cell::get);
+    let allocations = LOCAL_ALLOC_ENABLED.with(Cell::get);
     let boundary = crate::boundary::active();
     // the profiling suite (profiler.rs): its interrupt work (host time samples, the collector's steps) and its own
     // allocation callback, which takes the place of this one
@@ -716,9 +753,13 @@ fn write_folded<'a>(path: &std::path::Path, rows: impl IntoIterator<Item = (&'a 
 
 impl Drop for ProfileGuard {
     fn drop(&mut self) {
-        ENABLED.store(false, Ordering::Relaxed);
-        ALLOC_ENABLED.store(false, Ordering::Relaxed);
-        let work_clock = WORK_CLOCK.swap(false, Ordering::Relaxed);
+        if LOCAL_ENABLED.try_with(|enabled| enabled.replace(false)).unwrap_or(false) {
+            ENABLED.fetch_sub(1, Ordering::Relaxed);
+        }
+        if LOCAL_ALLOC_ENABLED.try_with(|enabled| enabled.replace(false)).unwrap_or(false) {
+            ALLOC_ENABLED.fetch_sub(1, Ordering::Relaxed);
+        }
+        let work_clock = LOCAL_WORK_CLOCK.try_with(|clock| clock.replace(false)).unwrap_or(false);
         WORK_SOURCE.with(|source| *source.borrow_mut() = None);
         SAMPLES.with(|samples| {
             if let Some(samples) = samples.borrow_mut().take() {
