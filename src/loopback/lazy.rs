@@ -43,7 +43,7 @@ pub fn materialized(engine: &Engine, id: InstanceId, before: usize) {
     if instance.children.len() <= before {
         return;
     }
-    let made: Vec<InstanceId> = instance.children[before..].to_vec();
+    let made: Vec<InstanceId> = instance.children.iter().skip(before).copied().collect();
     let parent_flags = instance.flags;
     let server = endpoint.side == Side::Server;
     if server && parent_flags & flags::REPLICATED == 0 {

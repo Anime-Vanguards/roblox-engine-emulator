@@ -727,8 +727,14 @@ fn reparent(
             super::services::subtree_moved(state, id, false);
         }
     }
-    // (out of the old parent and under the new one, its home in the tree worked out once: dom.rs reparent)
-    state.dom.reparent(id, new_parent);
+    // (out of the old parent and under the new one, its home in the tree worked out once: dom.rs reparent; a client looks for the
+    // child from the start of its old parent's list, in the order it keeps them in: cost.rs CHILD_SEARCHED)
+    let searched = state.dom.reparent(id, new_parent);
+    if searched > 0 {
+        let work = searched as f64 * crate::cost::CHILD_SEARCHED;
+        state.sched.charge(work);
+        crate::boundary::add_cost(work);
+    }
     notify_changed_hooks(state, reflection, hooks, id, K::Parent as NameId, None);
     if let Some(old) = old_parent {
         fire_event_measured(state, old, K::ChildRemoved as NameId, vec![Value::Instance(id)], SignalKind::ChildRemoved);
@@ -864,7 +870,7 @@ fn copy_one(
     let studio_node = source.studio_node;
     let callbacks = source.callbacks.clone();
     let unmodeled = source.unmodeled.clone();
-    let children = source.children.clone();
+    let children = source.children.to_vec();
 
     let copy = create(state, reflection, class);
     {
@@ -1091,7 +1097,7 @@ pub fn begin_destroy(
         raw_set(state, reflection, hooks, id, primary, Value::Nil);
     }
     state.dom.at_mut(id).set_flag(flags::PARENT_LOCKED, true);
-    Ok(state.dom.at(id).children.clone())
+    Ok(state.dom.at(id).children.to_vec())
 }
 
 /// The rest of Destroy: signals disconnect at the next resumption point. (The instance keeps its

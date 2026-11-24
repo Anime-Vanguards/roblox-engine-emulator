@@ -413,7 +413,7 @@ fn the_points_are_bytes_a_file_and_a_clone_carry() {
     let (lua, engine) = start();
     let loaded = super::project::load_model(&engine, &path).expect("model");
     let _ = std::fs::remove_file(&path);
-    let stored = engine.state.borrow().dom.at(loaded[0]).children[0];
+    let stored = *engine.state.borrow().dom.at(loaded[0]).children.first().expect("a child");
     {
         let state = engine.state.borrow();
         assert_eq!(path2d::control_points(&state, &engine.reflection, stored), points);

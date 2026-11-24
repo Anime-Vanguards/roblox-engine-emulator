@@ -4779,6 +4779,100 @@ fn a_move_pays_for_the_ancestor_chains_it_walks() {
     );
 }
 
+/// Taking a child out of its parent's list (a Parent write, a move, Destroy) pays 0.2 ns for each place a playing client's search
+/// for it passes (cost.rs CHILD_SEARCHED), in the order the client keeps the list in (dom.rs ClientOrder): the client looks at its
+/// last child first, then from the start, and takes a child out of a list of more than 20 by moving its last child into the place.
+/// Out of 1,000 Folders the 500th pays 499 places; the client has then moved the 1,000th there, so the 1,000th, the last child
+/// GetChildren lists, pays 499 places too, and so does the 999th after it (destroyed); the first pays nothing (moved), and so does
+/// the 996th, the client's last by then. Out of 20 the client closes the gap: the 5th pays 4 places and the last nothing after it;
+/// out of 21 the 3rd pays 2 and the client moves the 21st there, which pays 2 as well. GetChildren lists the rest in their order.
+#[test]
+fn taking_out_a_child_pays_for_the_places_a_clients_search_passes() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"{MOVE_HELPERS}
+        local function List(N)
+            local Holder = Instance.new("Folder")
+            local Made = {{}}
+            for I = 1, N do
+                local F = Instance.new("Folder")
+                F.Name = tostring(I)
+                F.Parent = Holder
+                Made[I] = F
+            end
+            return Holder, Made
+        end
+        local Other = Instance.new("Folder")
+        local function Took(Child, How)
+            local _ = Child.Name
+            local Start = os.clock()
+            if How == "destroy" then
+                Child:Destroy()
+            elseif How == "move" then
+                Child.Parent = Other
+            else
+                Child.Parent = nil
+            end
+            return (os.clock() - Start) * 1e6
+        end
+        local function Lone()
+            local Holder = Instance.new("Folder")
+            local Only = Instance.new("Folder")
+            Only.Parent = Holder
+            return Only
+        end
+        -- (the frame's first of each pays its cold price)
+        for _, How in {{ "nil", "move", "destroy" }} do
+            Took(Lone(), How)
+        end
+        -- what taking Child out costs beyond taking a lone child out the same way (os.clock's last bit is 1.8e-12 s)
+        local function Extra(Label, Child, How, Places)
+            local Base = Took(Lone(), How)
+            local Expected = Places * 0.0002
+            Within(Label, Took(Child, How) - Base, Expected - 1e-5, Expected + 1e-5)
+        end
+        local function Names(Holder)
+            local Out = {{}}
+            for _, Child in Holder:GetChildren() do
+                table.insert(Out, Child.Name)
+            end
+            return table.concat(Out, ",")
+        end
+        local Holder, Made = List(1000)
+        Extra("the 500th of 1,000", Made[500], "nil", 499)
+        Extra("the 1,000th, last, where the 500th was", Made[1000], "nil", 499)
+        Extra("the 999th, last, destroyed where the 1,000th was", Made[999], "destroy", 499)
+        Extra("the first, moved", Made[1], "move", 0)
+        Extra("the 996th, the client's last", Made[996], "nil", 0)
+        Extra("the 300th, moved", Made[300], "move", 299)
+        Extra("the 998th, last, where the 999th was", Made[998], "nil", 499)
+        local Expected = {{}}
+        for I = 2, 997 do
+            if I ~= 300 and I ~= 500 and I ~= 996 then
+                table.insert(Expected, tostring(I))
+            end
+        end
+        assert(Names(Holder) == table.concat(Expected, ","), "the rest in their order")
+        local Short, Twenty = List(20)
+        Extra("the 5th of 20", Twenty[5], "nil", 4)
+        Extra("the last of 19", Twenty[20], "nil", 0)
+        Extra("the 19th, last, destroyed", Twenty[19], "destroy", 0)
+        Extra("the first", Twenty[1], "move", 0)
+        Extra("the 10th", Twenty[10], "nil", 7)
+        assert(Names(Short) == "2,3,4,6,7,8,9,11,12,13,14,15,16,17,18", Names(Short))
+        local Edge, TwentyOne = List(21)
+        Extra("the 3rd of 21", TwentyOne[3], "nil", 2)
+        Extra("the 21st, last, where the 3rd was", TwentyOne[21], "nil", 2)
+        assert(Names(Edge) == "1,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20", Names(Edge))
+        "#
+        ),
+    );
+}
+
 /// IsDescendantOf, IsAncestorOf and the FindFirstAncestor finds pay 1.2 ns for each ancestor they look at, and GetFullName 4.2 ns
 /// for each name it joins and 0.14 for each byte (cost.rs ANCESTOR_STEP, full_name), as a playing client's calls grow with the
 /// depth: on a Part 1,000 Folders deep, 1.2 us and 5.7 us more than on one Folder deep (names of 10 bytes), through the method's C

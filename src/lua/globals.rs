@@ -1005,7 +1005,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
             let args = Args::new(args);
             let Some(existing) = args.instance(0) else { return raise_plain("Instance expected") };
             let Some(copy) = instance::clone(&e, existing) else { return Ok(values([LuaValue::Nil])) };
-            let children = e.state.borrow().dom.at(copy).children.clone();
+            let children = e.state.borrow().dom.at(copy).children.to_vec();
             for child in children {
                 instance::destroy(lua, &e, child)?;
             }

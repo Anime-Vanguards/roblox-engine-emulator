@@ -262,7 +262,7 @@ fn copy_player_scripts(engine: &Rc<Engine>) {
     let scripts = engine.reflection.class_id("PlayerScripts").and_then(|class| engine.state.borrow().dom.find_child_of_class(player, class));
     let (Some(templates), Some(scripts)) = (templates, scripts) else { return };
     crate::project::materialize_deep(engine, templates);
-    let children = engine.state.borrow().dom.at(templates).children.clone();
+    let children = engine.state.borrow().dom.at(templates).children.to_vec();
     for child in children {
         if let Some(copy) = crate::lua::instance::clone(engine, child) {
             let _ = crate::lua::instance::set_parent(engine, copy, Some(scripts));
@@ -285,7 +285,7 @@ fn eligible(engine: &Rc<Engine>, side: Side) -> Vec<InstanceId> {
     let (server_scripts, server_storage, first) = (service("ServerScriptService"), service("ServerStorage"), service("ReplicatedFirst"));
     let templates: Vec<InstanceId> = ["StarterGui", "StarterPack", "StarterPlayer"].iter().filter_map(|name| service(name)).collect();
     let containers: Vec<InstanceId> = match world.local_player {
-        Some(player) => engine.state.borrow().dom.at(player).children.clone(),
+        Some(player) => engine.state.borrow().dom.at(player).children.to_vec(),
         None => Vec::new(),
     };
     let state = engine.state.borrow();

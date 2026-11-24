@@ -1403,6 +1403,14 @@ pub const REPARENT_LEFT_LEVEL: f64 = 5.2e-9;
 pub const REPARENT_JOINED_LEVEL: f64 = 23.0e-9;
 pub const REPARENT_LEFT_PAIR: f64 = 0.95e-9;
 pub const REPARENT_JOINED_PAIR: f64 = 1.85e-9;
+/// A place a client's search for a child passes to take it out of its parent's list (a Parent write, a Remove or a Destroy), in the
+/// order the client keeps the list in: it looks at the last child first, then from the start (dom.rs ClientOrder, Dom::reparent).
+/// A playing client (roblox-sim, Studio 0.747, a headless client; os.clock around single removals of Folders from one parentless
+/// Folder of 1,000, 100,000 or 1,000,000, the median of 9 to 15) took one out at the start or the end in 0.2-0.4 us however long the
+/// list (Destroy 0.6-1.0), and one 50,000 places in 9.4 (1,000,000 lists: 499,999 places 96, 999,000 places 187), as much after a
+/// removal moved the last child 50,000 places in (9.6-10.1 each of 40 last children after it), and 100,000 taken out first to last
+/// in 323 ms (a Destroy of their Folder the same): 0.20 ns a place, within x0.69 to x1.41 of each of 44 such rows, x1.07 at the median.
+pub const CHILD_SEARCHED: f64 = 0.2e-9;
 /// What each instance a Parent change carries costs it, the written one and its descendants, by class, while the move stays inside
 /// the DataModel ([`REPARENTED`]). A playing client (roblox-sim, Studio 0.747, headless and rendered; os.clock around single moves, the
 /// median of 15; docs/engine.md "Moves and ancestor reads") moved Models and Folders of 10 to 10,000 instances between two Folders of

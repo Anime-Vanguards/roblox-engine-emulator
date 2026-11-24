@@ -168,7 +168,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             if e.state.borrow().dom.at(id).has(crate::dom::flags::LAZY_PENDING) {
                 crate::project::materialize_lazy(&mut e.state.borrow_mut(), &e.reflection, id);
             }
-            let children = e.state.borrow().dom.at(id).children.clone();
+            let children = e.state.borrow().dom.at(id).children.to_vec();
             let table = lua.create_table_with_capacity(children.len(), 0)?;
             for child in children {
                 table.raw_push(instance_value(lua, &e, child)?)?;

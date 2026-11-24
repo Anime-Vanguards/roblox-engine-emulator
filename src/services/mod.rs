@@ -160,12 +160,12 @@ pub fn tagged_below(state: &mut State, root: InstanceId, tag: &Str) -> Vec<Insta
         .iter()
         .filter(|&&id| seen.insert(id))
         .filter_map(|&id| {
-            // (the child index at each level from `root` down: preorder is their order)
+            // (the child's place at each level from `root` down, which grows along its parent's children: preorder is their order)
             let mut path = Vec::new();
             let mut node = id;
             while node != root {
                 let parent = dom.at(node).parent?;
-                path.push(dom.at(parent).children.iter().position(|&child| child == node)? as u32);
+                path.push(dom.sibling_place(node));
                 node = parent;
             }
             path.reverse();

@@ -937,10 +937,15 @@ pub fn find_first_child_counting(engine: &Engine, id: InstanceId, name: Option<&
         materialize(engine, id);
         let found = {
             let state = engine.state.borrow();
-            let children = &state.dom.at(id).children;
-            let index = children.iter().position(|&child| name_equals(&state, child, name));
-            *looked += index.map_or(children.len(), |index| index + 1);
-            index.map(|index| children[index])
+            let mut found = None;
+            for &child in &state.dom.at(id).children {
+                *looked += 1;
+                if name_equals(&state, child, name) {
+                    found = Some(child);
+                    break;
+                }
+            }
+            found
         };
         if let Some(child) = found {
             return Some(reached(engine, child));
@@ -1294,7 +1299,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     // Methods
     let get_children = method(|lua, engine, id, _| {
         materialize(engine, id);
-        let children = engine.state.borrow().dom.at(id).children.clone();
+        let children = engine.state.borrow().dom.at(id).children.to_vec();
         instance_list(lua, engine, &children)
     });
     behaviors.add_method(base, K::GetChildren as NameId, get_children.clone());
@@ -1468,7 +1473,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     behaviors.add_method(base, K::remove as NameId, remove);
     behaviors.add_method(base, K::ClearAllChildren as NameId, method(|lua, engine, id, _| {
         // Last child first (measured in a playing client, Studio 0.744: tools/parity/probes/hierarchy.luau)
-        let children = engine.state.borrow().dom.at(id).children.clone();
+        let children = engine.state.borrow().dom.at(id).children.to_vec();
         for child in children.into_iter().rev() {
             destroy(lua, engine, child)?;
         }

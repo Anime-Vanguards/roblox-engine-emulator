@@ -338,7 +338,7 @@ pub fn materialize_deep(engine: &Engine, id: InstanceId) {
     let mut stack = vec![id];
     while let Some(node) = stack.pop() {
         crate::lua::instance::materialize(engine, node);
-        stack.extend_from_slice(&engine.state.borrow().dom.at(node).children);
+        engine.state.borrow().dom.at(node).children.copy_to(&mut stack);
     }
 }
 
@@ -793,11 +793,7 @@ fn ensure_child(state: &mut State, reflection: &Reflection, parent: InstanceId, 
         if (existing_is_script && wants_script) || replaces_folder {
             let class = reflection.class_id(class_name).expect("script class");
             let replacement = core::create_named(state, reflection, class, name);
-            let children = std::mem::take(&mut state.dom.at_mut(existing).children);
-            for child in &children {
-                state.dom.at_mut(*child).parent = Some(replacement);
-            }
-            state.dom.at_mut(replacement).children = children;
+            state.dom.hand_children(existing, replacement);
             state.dom.replace_child(parent, existing, replacement);
             return replacement;
         }

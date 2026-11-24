@@ -127,7 +127,7 @@ fn make_lazy_regions(server: &Engine, root: InstanceId, excluded: &[InstanceId])
                 waiting.push(node);
                 continue;
             }
-            stack.extend_from_slice(&state.dom.at(node).children);
+            state.dom.at(node).children.copy_to(&mut stack);
         }
     }
     for node in waiting {
@@ -338,7 +338,7 @@ pub(super) fn mark(state: &mut State, root: InstanceId, on: bool, excluded: &[In
             }
             instance.flags &= !flags::REPLICATED;
         }
-        stack.extend_from_slice(&state.dom.at(node).children);
+        state.dom.at(node).children.copy_to(&mut stack);
     }
 }
 

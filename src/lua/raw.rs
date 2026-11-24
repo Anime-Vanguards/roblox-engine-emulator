@@ -1769,7 +1769,7 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                     lua_clonetable(state, -1);
                     return Out::Ret(1);
                 }
-                push_instance_list(state, api, &dom_state, &instance.children);
+                push_instance_list(state, api, &dom_state, &instance.children.slice());
                 // Children lists of instances in the DataModel are kept (their children are
                 // anchored anyway) and cloned while the list is unchanged
                 if !instance.children.is_empty() && rooted(&dom_state, id, dom_state.collection.game) {

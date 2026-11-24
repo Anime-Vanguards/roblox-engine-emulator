@@ -5476,7 +5476,7 @@ fn query_order_is_the_order_of_whole_attach_number_lists() {
     let bottom = *pool.iter().find(|&&id| state.dom.get(id).is_some_and(|instance| &*instance.name.to_str_lossy() == "Bottom")).expect("the bottom folder");
     let mut parts: Vec<_> = state.dom.at(bottom).children.iter().rev().copied().collect();
     let steps = super::broadphase::sort_by_order(&state.dom, workspace, &mut parts, |id| *id);
-    assert!(parts == state.dom.at(bottom).children, "the parts in their folder's order");
+    assert!(parts == state.dom.at(bottom).children.to_vec(), "the parts in their folder's order");
     assert_eq!(steps, 50, "one step for each of the 50 parts, 2,000 folders deep");
 }
 

@@ -468,7 +468,7 @@ impl Index {
                         let seen = &mut self.seen;
                         self.walk.extend(instance.children.iter().filter(|&&child| seen.insert(child)));
                     } else {
-                        self.walk.extend_from_slice(&instance.children);
+                        instance.children.copy_to(&mut self.walk);
                     }
                     (instance.class, instance.flags & flags::INDEXED != 0)
                 };
