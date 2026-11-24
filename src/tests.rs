@@ -11316,6 +11316,57 @@ fn a_phone_run_pays_the_calibrated_factor_on_its_script_work() {
     assert_eq!((desktop_touch.as_str(), phone_touch.as_str()), ("false", "true"));
 }
 
+/// `RemoveTag` is priced from its recorded client row (`method.CollectionService.RemoveTag` = 170.1 ns whole,
+/// 155 ns beyond the Luau call), not `AddTag`'s 390 ns: so `RemoveTag` reads ~170 ns and ranks strictly below `AddTag`
+/// and below `AddTag + RemoveTag` (fixing the 2.38x overprice and broken ranking).
+#[test]
+fn remove_tag_is_priced_from_its_recorded_row() {
+    let (lua, engine) = start();
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local CS = game:GetService("CollectionService")
+        local folders = table.create(400)
+        for i = 1, 400 do
+            folders[i] = Instance.new("Folder")
+        end
+        -- Warm first-use cold path for AddTag and RemoveTag once
+        CS:AddTag(folders[1], "Warm")
+        CS:RemoveTag(folders[1], "Warm")
+        local t0 = os.clock()
+        for i = 1, 400 do
+            CS:AddTag(folders[i], "BenchTag")
+        end
+        local add_ns = (os.clock() - t0) / 400 * 1e9
+        local t1 = os.clock()
+        for i = 1, 400 do
+            CS:RemoveTag(folders[i], "BenchTag")
+        end
+        local remove_ns = (os.clock() - t1) / 400 * 1e9
+        local p = Instance.new("Part")
+        p.Parent = workspace
+        p:AddTag("ToggleWarm")
+        p:RemoveTag("ToggleWarm")
+        local t2 = os.clock()
+        for _ = 1, 200 do
+            p:AddTag("Toggle")
+            p:RemoveTag("Toggle")
+        end
+        local pair_ns = (os.clock() - t2) / 400 * 1e9
+        print(string.format("%.2f %.2f %.2f", add_ns, remove_ns, pair_ns))
+        "#,
+    );
+    let line = output.iter().find_map(|line| line.strip_prefix("print: ")).unwrap_or_else(|| panic!("{output:?}"));
+    let vals: Vec<f64> = line.split(' ').map(|n| n.parse().unwrap()).collect();
+    let (add_ns, remove_ns, pair_ns) = (vals[0], vals[1], vals[2]);
+    assert!((remove_ns - 170.0).abs() < 10.0, "RemoveTag expected ~170 ns, got {remove_ns} ({line})");
+    assert!(((add_ns - remove_ns) - 235.0).abs() < 5.0, "AddTag - RemoveTag expected 235 ns, got {} ({line})", add_ns - remove_ns);
+    assert!(remove_ns < pair_ns * 0.70, "RemoveTag ({remove_ns}) must rank well below AddTag+RemoveTag average ({pair_ns})");
+}
+
 /// Destroying a placed subtree charges DESTROYED_GUI / DESTROYED_PART for its descendants too (not only the root before detach),
 /// and Model:GetExtentsSize charges MODEL_EXTENTS_QUERY once rather than multi-charging MODEL_QUERY through GetBoundingBox/GetPivot.
 #[test]

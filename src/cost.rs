@@ -2088,7 +2088,8 @@ pub fn method(name: &str) -> f64 {
         // services.luau Priced; a Part's PivotTo too)
         "Fire" => 0.045 + FIRE * 1e6,
         // (the parity bench, beyond the Luau around the call: IsA 25 ns, GetFullName 102, GetPlayers 69, HasTag 41-43, GetTags of a
-        // part with none 73, AddTag 393, Emit(1) 383, Camera:WorldToViewportPoint 200, GetAttribute 38-40, TweenService:Create 1.31 us;
+        // part with none 73, AddTag 393, RemoveTag 156 [single recorded row method.CollectionService.RemoveTag = 170.1 ns whole],
+        // Emit(1) 383, Camera:WorldToViewportPoint 200, GetAttribute 38-40, TweenService:Create 1.31 us;
         // a ray and a bounds query by what they meet, [`RAY_MET`] and [`QUERY_BOX_PART`]; IsDescendantOf has rows only in the held-out
         // third: a Studio client's 0.015)
         "IsA" => 0.025,
@@ -2100,7 +2101,8 @@ pub fn method(name: &str) -> f64 {
         "GetPlayers" => 0.069,
         "HasTag" => 0.042,
         "GetTags" => 0.073,
-        "AddTag" | "RemoveTag" => 0.39,
+        "AddTag" => 0.39,
+        "RemoveTag" => 0.155,
         "Emit" => 0.29,
         "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" => 0.20,
         "GetAttribute" => 0.047,
@@ -2150,13 +2152,13 @@ pub fn method(name: &str) -> f64 {
 pub fn method_kinds(name: &str) -> u8 {
     match name {
         "IsA" | "GetChildren" | "GetDescendants" | "FindFirstChild" | "FindFirstChildOfClass" | "FindFirstChildWhichIsA" | "FindFirstAncestor"
-        | "FindFirstAncestorOfClass" | "FindFirstAncestorWhichIsA" | "GetFullName" | "GetPlayers" | "HasTag" | "GetTags" | "AddTag" | "Emit"
+        | "FindFirstAncestorOfClass" | "FindFirstAncestorWhichIsA" | "GetFullName" | "GetPlayers" | "HasTag" | "GetTags" | "AddTag" | "RemoveTag" | "Emit"
         | "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" | "GetAttribute" | "Create" | "Raycast"
         | "Blockcast" | "Spherecast" | "GetPartBoundsInBox" | "GetPartBoundsInRadius" | "GetPartsInPart" | "JSONEncode" | "JSONDecode"
         | "GetValue" | "GetClass" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo"
         | "FindPartsInRegion3" | "FindPartsInRegion3WithIgnoreList" | "FindPartsInRegion3WithWhiteList"
         | "findPartsInRegion3" | "IsRegion3Empty" | "IsRegion3EmptyWithIgnoreList" | "ArePartsTouchingOthers" => 0,
-        "Shapecast" | "RemoveTag" => kind::DEFAULTED,
+        "Shapecast" => kind::DEFAULTED,
         "IsDescendantOf" | "IsAncestorOf" | "GetVertexBoneWeights" | "GetVertexBones" | "GetFaceVertices" | "GetFaceColors" | "GetFaceNormals"
         | "GetFaceUVs" | "GetPosition" | "GetNormal" | "GetUV" | "GetBoneName" | "GetColor" | "GetColorAlpha" | "SetColorAlpha" | "SetColor"
         | "SetFaceColors" | "SetFaceNormals" | "SetFaceUVs" | "SetPosition" | "SetNormal" | "SetUV" | "RemoveFace" => kind::STUDIO,
