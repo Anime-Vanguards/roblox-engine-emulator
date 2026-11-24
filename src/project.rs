@@ -70,6 +70,8 @@ pub struct ProjectState {
     pub lazy: FxHashMap<InstanceId, (u32, u32)>,
     /// Instances made of lazy imports so far
     pub lazy_made: u32,
+    /// While a lazy import makes everything below instances it made in a world (plan.rs make_level)
+    pub making_whole: bool,
     /// The directory listings the mount made, kept when a prepared run will check them again
     /// (record/prepare.rs: Some before the mount)
     pub listings: Option<Vec<Listing>>,

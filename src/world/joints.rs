@@ -57,6 +57,9 @@
 //! enters a world as fast as one named by none; each weld in a world that cannot link costs it 0.04
 //! to 0.09 us). A Parent write that takes parts or joints into a world pays for its joints (cost.rs
 //! joints_entering): each joint its walks look at, each link it makes and each joint it brings in.
+//! The joints made before the index was first needed are taken in by one look at the dom ([`ensure_scanned`]), the later ones
+//! by their Part0 / Part1 and Parent writes, and one made where it stands with no write (a lazy import's) as it is made
+//! ([`made_in_place`]), so a lazily made model's welds link as the same model's made with the place.
 //!
 //! Each list also marks which of its joints link the part now ([`relink`]: worked out again when a joint
 //! is made, re-pointed, enabled or disabled, when its home or a part's world or class changes and when a
@@ -1174,6 +1177,16 @@ pub(crate) fn check_index(state: &mut State, reflection: &Reflection) -> Result<
             }
         }
     }
+    // (once the index looked at the place, each rigid joint in a world or JointsService that names a live part is indexed: none
+    // made since without a Parent write is left out, made_in_place)
+    if state.joints.scanned {
+        for slot in 0..state.dom.slot_count() as u32 {
+            let Some(joint) = state.dom.id_at_slot(slot) else { continue };
+            if setup.kind(state.dom.at(joint).class) != Kind::Other && joint_home(state, joint).is_some() && parts_of(state, &setup, joint).iter().any(Option::is_some) && !state.joints.indexed.contains_key(&joint) {
+                return Err(format!("{joint:?} is in a world and names a part, but is not indexed"));
+            }
+        }
+    }
     let joints = &state.joints;
     for (&joint, entry) in &joints.indexed {
         for side in 0..2 {
@@ -1223,6 +1236,20 @@ fn ensure_scanned(state: &mut State, reflection: &Reflection, setup: &Setup) {
         }
     }
     take_homes(state, reflection, setup);
+}
+
+/// `id` was made where it stands, its values filled, with no Parent write taking it there (a lazy import's instance: project/plan.rs
+/// make_level, make_as; a manifest alias's copy: model_assets.rs install_alias): a rigid joint is indexed now when the index has
+/// looked at the place already ([`ensure_scanned`]; before that, that look indexes it with the rest), so it links its parts as the
+/// same joint made with the place does. Nothing is placed or charged: a client has it from the place's load.
+pub fn made_in_place(state: &mut State, reflection: &Reflection, id: InstanceId) {
+    if !state.joints.scanned {
+        return;
+    }
+    let Some(setup) = setup_of(state) else { return };
+    if setup.kind(state.dom.at(id).class) != Kind::Other {
+        index_joint(state, reflection, &setup, id);
+    }
 }
 
 /// The WorldRoot an instance is in (its nearest WorldRoot ancestor), from the homes the dom keeps: no walk up the tree, however

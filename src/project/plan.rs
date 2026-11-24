@@ -1163,8 +1163,8 @@ impl ModelPlan {
     /// Makes the plan's roots as children of `parent` and the rest of its instances as they are
     /// looked at ([`materialize_lazy`]: before a script lists or finds the children of one, moves it
     /// or calls one of its methods), with the serials, build work and joints that making them all
-    /// now would note. The instances a made instance references are made with it, and the tagged
-    /// ones at once. Returns the roots.
+    /// now would note. The instances a made instance references are made with it, the tagged
+    /// ones at once, and those below an instance made in a world with it (make_level). Returns the roots.
     pub fn instantiate_lazy(self: &Arc<Self>, state: &mut State, reflection: &Reflection, parent: InstanceId) -> Vec<InstanceId> {
         self.import_lazy(state, reflection, Placing::Roots(parent))
     }
@@ -1580,9 +1580,22 @@ fn make_level(state: &mut State, reflection: &Reflection, import: u32, parent: I
         let mut texts = std::mem::take(&mut state.project.imports[import as usize].texts);
         let table = state.project.imports[import as usize].props.clone();
         fill(state, reflection, &plan, index, id, &mut texts, Some(&table), |target| ids[target as usize]);
-        let import = &mut state.project.imports[import as usize];
-        import.ids = ids;
-        import.texts = texts;
+        let import_state = &mut state.project.imports[import as usize];
+        import_state.ids = ids;
+        import_state.texts = texts;
+        // (a joint made after the joint index first looked at the place is indexed now, as that look indexed the others)
+        crate::world::joints::made_in_place(state, reflection, id);
+    }
+    // made in a world (or JointsService): everything below them is made now, as the world's walks read it whole and make nothing
+    // they pass over (an assembly's joints and parts, the queries, the recorder), so a part a script reaches there moves and reads its
+    // assembly as the same model made with the place does
+    let made = |state: &State, index: u32| state.project.imports[import as usize].ids[index as usize];
+    if !state.project.making_whole && nodes.first().is_some_and(|&index| state.dom.home(made(state, index)).is_some()) {
+        state.project.making_whole = true;
+        for &index in nodes {
+            materialize_lazy_subtree(state, reflection, made(state, index));
+        }
+        state.project.making_whole = false;
     }
 }
 
@@ -1625,6 +1638,7 @@ fn make_as(state: &mut State, reflection: &Reflection, import: u32, index: u32, 
     let import_state = &mut state.project.imports[import as usize];
     import_state.ids = ids;
     import_state.texts = texts;
+    crate::world::joints::made_in_place(state, reflection, target);
     // its children now, as the import of a folder made its roots at once: a recursive search of it
     // then looks at its own children (a nested bundle's placeholder among them) and not only the plan
     materialize_lazy(state, reflection, target);

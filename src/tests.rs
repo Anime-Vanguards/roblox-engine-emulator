@@ -3309,6 +3309,106 @@ fn a_lazy_import_reads_as_an_eager_one() {
     engine.teardown();
 }
 
+/// A lazily imported model's welds hold its parts together as the same model made with the place does. Its rigid joints made after
+/// the joint index first looked at the place (a script's assembly read: world/joints.rs ensure_scanned) are indexed as they are
+/// made, and what a lazy import makes in a world comes with everything below it (plan.rs make_level): the welded parts of a unit
+/// imported into the Workspace after that read (a bundle mounted there imports when a script first looks at it), or reached in a
+/// WorldModel inside an import after it, read their assembly, move together and hold each other up, before the script has reached
+/// the last of them too.
+#[test]
+fn a_lazy_imports_welds_hold_its_parts_together() {
+    use rbx_dom_weak::{
+        InstanceBuilder, WeakDom,
+        types::{CFrame, Matrix3, Ref, Variant, Vector3},
+    };
+    // a unit: an anchored Torso, an Arm welded to it beside it, a Hand welded below the Arm (the welds a level apart); in the
+    // Workspace the plan's root, in the other a Folder's WorldModel's
+    let plan = |in_world_model: bool| {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let at = |x: f32, y: f32| CFrame::new(Vector3::new(x, y, 0.0), Matrix3::identity());
+        let mut parent: Ref = dom.root_ref();
+        if in_world_model {
+            let viewport = dom.insert(parent, InstanceBuilder::new("Folder").with_name("Viewport"));
+            parent = dom.insert(viewport, InstanceBuilder::new("WorldModel").with_name("World"));
+        }
+        let model = dom.insert(parent, InstanceBuilder::new("Model").with_name("Unit"));
+        let torso = dom.insert(model, InstanceBuilder::new("Part").with_name("Torso").with_property("Anchored", true).with_property("Size", Vector3::new(2.0, 2.0, 1.0)).with_property("CFrame", at(0.0, 10.0)));
+        let arm = dom.insert(model, InstanceBuilder::new("Part").with_name("Arm").with_property("Size", Vector3::new(1.0, 2.0, 1.0)).with_property("CFrame", at(1.5, 10.0)));
+        let hand = dom.insert(arm, InstanceBuilder::new("Part").with_name("Hand").with_property("Size", Vector3::new(1.0, 1.0, 1.0)).with_property("CFrame", at(1.5, 8.5)));
+        dom.insert(model, InstanceBuilder::new("Weld").with_name("Shoulder").with_property("Part0", Variant::Ref(torso)).with_property("Part1", Variant::Ref(arm)).with_property("C0", at(1.5, 0.0)));
+        dom.insert(arm, InstanceBuilder::new("Weld").with_name("Wrist").with_property("Part0", Variant::Ref(arm)).with_property("Part1", Variant::Ref(hand)).with_property("C0", at(0.0, -1.5)));
+        std::sync::Arc::new(super::project::ModelPlan::new(&super::Reflection::shared().unwrap(), &dom, dom.root().children()))
+    };
+    // (a weld of the script's own, then a read of its assembly: the joint index looks at the place now)
+    let scan = r#"
+        local A = Instance.new("Part")
+        A.Anchored = true
+        A.Parent = workspace
+        local B = Instance.new("Part")
+        B.Parent = workspace
+        local Weld = Instance.new("Weld")
+        Weld.Part0, Weld.Part1 = A, B
+        Weld.Parent = A
+        assert(B.AssemblyRootPart == A, "the script's weld links its parts")
+    "#;
+    // (the Arm's assembly read and the Torso moved before the script reaches the Hand)
+    let check = r#"
+        local Bundle = workspace:FindFirstChild("Bundle")
+        local Unit = if Bundle then Bundle.Unit else game:GetService("ReplicatedStorage").Bundle.Viewport.World.Unit
+        local Torso, Arm = Unit.Torso, Unit.Arm
+        print("first", Arm.AssemblyMass)
+        Torso.CFrame = Torso.CFrame + Vector3.new(0, 1, 0)
+        local Hand = Arm.Hand
+        print("hand", Hand.Position)
+        local function Name(Part) return Part and Part.Name end
+        print("roots", Name(Torso.AssemblyRootPart), Name(Arm.AssemblyRootPart), Name(Hand.AssemblyRootPart))
+        print("mass", Arm.AssemblyMass, Hand.AssemblyMass, Hand.AssemblyCenterOfMass)
+        Torso.CFrame = Torso.CFrame + Vector3.new(0, 5, 0)
+        print("moved", Arm.Position, Hand.Position)
+        task.wait(0.5)
+        print("held", Arm.Position, Hand.Position)
+    "#;
+    for in_world_model in [false, true] {
+        let plan = plan(in_world_model);
+        let mut outputs = Vec::new();
+        for lazy in [false, true] {
+            let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+            let root = {
+                let mut state = engine.state.borrow_mut();
+                let parent = if in_world_model { state.dom.find_child(engine.world().game, b"ReplicatedStorage").unwrap() } else { engine.world().workspace };
+                let root = super::instance::create_named(&mut state, &engine.reflection, engine.reflection.class_id("Folder").unwrap(), "Bundle");
+                state.dom.attach(root, parent);
+                root
+            };
+            // eagerly: made with the place, before any script runs; lazily: the WorldModel's import with the place (its Folder
+            // made), the Workspace's once the script's read looked at the place
+            if !lazy {
+                plan.instantiate(&engine, Some(root));
+            } else if in_world_model {
+                plan.instantiate_lazy(&mut engine.state.borrow_mut(), &engine.reflection, root);
+                assert_eq!(engine.state.borrow().project.lazy_made, 1, "the import's Folder alone");
+            }
+            run(&lua, &engine, scan);
+            if lazy && !in_world_model {
+                plan.instantiate_lazy(&mut engine.state.borrow_mut(), &engine.reflection, root);
+                assert_eq!(engine.state.borrow().project.lazy_made, plan.len() as u32, "made whole in the Workspace");
+            }
+            let output = run(&lua, &engine, check);
+            if lazy {
+                assert_eq!(engine.state.borrow().project.lazy_made, plan.len() as u32, "made whole once reached in its world");
+            }
+            super::world::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index holds together");
+            outputs.push(output);
+            drop(lua);
+            engine.teardown();
+        }
+        assert_eq!(outputs[0], outputs[1], "lazily made as made with the place (in a WorldModel: {in_world_model})");
+        for line in ["print: hand 1.5, 9.5, 0", "print: roots Torso Torso Torso", "print: moved 1.5, 16, 0 1.5, 14.5, 0", "print: held 1.5, 16, 0 1.5, 14.5, 0"] {
+            assert!(outputs[0].iter().any(|printed| printed == line), "{line} (in a WorldModel: {in_world_model}): {:?}", outputs[0]);
+        }
+    }
+}
+
 /// Tags a newer Studio writes as a SharedString (as uploaded assets can hold them; project::decode_model
 /// reads the property as one) are the instance's tags, as when they are written as Tags.
 #[test]

@@ -338,22 +338,17 @@ fn install(engine: &Engine, id: InstanceId, key: &str, plan: &Arc<ModelPlan>, sh
     for warning in plan.warnings() {
         engine.warn(warning.clone());
     }
-    // (the roots now, the rest as scripts look at it; all of it in the world, which the
-    // recorder and the world's queries read whole)
+    // (the roots now, the rest as scripts look at it; in a world all of it, which the world's walks, its queries and the
+    // recorder read whole: plan.rs make_level)
     crate::timing::time("bundles: instantiate", || {
         let mut state = engine.state.borrow_mut();
-        let made = match how {
-            Installing::Roots => plan.instantiate_lazy(&mut state, &engine.reflection, id),
-            Installing::As => {
-                plan.instantiate_lazy_as(&mut state, &engine.reflection, id);
-                vec![id]
+        match how {
+            Installing::Roots => {
+                plan.instantiate_lazy(&mut state, &engine.reflection, id);
             }
-            Installing::Members => plan.instantiate_lazy_members(&mut state, &engine.reflection, id),
-        };
-        let workspace = engine.world().workspace;
-        if id == workspace || state.dom.is_descendant_of(id, workspace) {
-            for instance in made {
-                super::materialize_lazy_subtree(&mut state, &engine.reflection, instance);
+            Installing::As => plan.instantiate_lazy_as(&mut state, &engine.reflection, id),
+            Installing::Members => {
+                plan.instantiate_lazy_members(&mut state, &engine.reflection, id);
             }
         }
     });
@@ -429,6 +424,10 @@ fn install_alias(engine: &Engine, key: &str, model: &str) {
         if let Some(copy) = copy {
             core::raw_set_silent(&mut state, &engine.reflection, copy, K::Name as NameId, Value::String(Str::from(*name)));
             state.dom.attach(copy, parent);
+            // (made in place as the bundles are: its joints are indexed as theirs are)
+            for node in std::iter::once(copy).chain(state.dom.descendants(copy)) {
+                crate::world::joints::made_in_place(&mut state, &engine.reflection, node);
+            }
         }
         copy
     };
