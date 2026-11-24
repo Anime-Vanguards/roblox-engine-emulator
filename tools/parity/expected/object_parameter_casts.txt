@@ -1,0 +1,114 @@
+# engine: Roblox Studio 0.748.0.7481526, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-24
+new nil ok nil
+new-direct nil ok Instance
+ancestor nil ok false
+descendant nil ok true
+ancestor-dot nil ok false
+descendant-dot nil ok true
+new number error @26: invalid argument #2 to 'new' (Instance expected, got number)
+new-direct number ok invalid argument #2 to 'new' (Instance expected, got number)
+ancestor number error Unable to cast value to Object
+descendant number error Unable to cast value to Object
+ancestor-dot number error Unable to cast value to Object
+descendant-dot number error Unable to cast value to Object
+new string error @26: invalid argument #2 to 'new' (Instance expected, got string)
+new-direct string ok invalid argument #2 to 'new' (Instance expected, got string)
+ancestor string error Unable to cast value to Object
+descendant string error Unable to cast value to Object
+ancestor-dot string error Unable to cast value to Object
+descendant-dot string error Unable to cast value to Object
+new table error @26: invalid argument #2 to 'new' (Instance expected, got table)
+new-direct table ok invalid argument #2 to 'new' (Instance expected, got table)
+ancestor table error Unable to cast value to Object
+descendant table error Unable to cast value to Object
+ancestor-dot table error Unable to cast value to Object
+descendant-dot table error Unable to cast value to Object
+new bool error @26: invalid argument #2 to 'new' (Instance expected, got boolean)
+new-direct bool ok invalid argument #2 to 'new' (Instance expected, got boolean)
+ancestor bool error Unable to cast value to Object
+descendant bool error Unable to cast value to Object
+ancestor-dot bool error Unable to cast value to Object
+descendant-dot bool error Unable to cast value to Object
+new Vector3 error @26: invalid argument #2 to 'new' (Instance expected, got Vector3)
+new-direct Vector3 ok invalid argument #2 to 'new' (Instance expected, got Vector3)
+ancestor Vector3 error Unable to cast value to Object
+descendant Vector3 error Unable to cast value to Object
+ancestor-dot Vector3 error Unable to cast value to Object
+descendant-dot Vector3 error Unable to cast value to Object
+new CFrame error @26: invalid argument #2 to 'new' (Instance expected, got CFrame)
+new-direct CFrame ok invalid argument #2 to 'new' (Instance expected, got CFrame)
+ancestor CFrame error Unable to cast value to Object
+descendant CFrame error Unable to cast value to Object
+ancestor-dot CFrame error Unable to cast value to Object
+descendant-dot CFrame error Unable to cast value to Object
+new EnumItem error @26: invalid argument #2 to 'new' (Instance expected, got EnumItem)
+new-direct EnumItem ok invalid argument #2 to 'new' (Instance expected, got EnumItem)
+ancestor EnumItem error Unable to cast value to Object
+descendant EnumItem error Unable to cast value to Object
+ancestor-dot EnumItem error Unable to cast value to Object
+descendant-dot EnumItem error Unable to cast value to Object
+new Enum error @26: invalid argument #2 to 'new' (Instance expected, got Enum)
+new-direct Enum ok invalid argument #2 to 'new' (Instance expected, got Enum)
+ancestor Enum ok false
+descendant Enum ok true
+ancestor-dot Enum ok false
+descendant-dot Enum ok true
+new function error @26: invalid argument #2 to 'new' (Instance expected, got function)
+new-direct function ok invalid argument #2 to 'new' (Instance expected, got function)
+ancestor function error Unable to cast value to Object
+descendant function error Unable to cast value to Object
+ancestor-dot function error Unable to cast value to Object
+descendant-dot function error Unable to cast value to Object
+new thread error @26: invalid argument #2 to 'new' (Instance expected, got thread)
+new-direct thread ok invalid argument #2 to 'new' (Instance expected, got thread)
+ancestor thread ok false
+descendant thread ok true
+ancestor-dot thread ok false
+descendant-dot thread ok true
+new buffer error @26: invalid argument #2 to 'new' (Instance expected, got buffer)
+new-direct buffer ok invalid argument #2 to 'new' (Instance expected, got buffer)
+ancestor buffer error Unable to cast value to Object
+descendant buffer error Unable to cast value to Object
+ancestor-dot buffer error Unable to cast value to Object
+descendant-dot buffer error Unable to cast value to Object
+new newproxy error @26: invalid argument #2 to 'new' (Instance expected, got userdata)
+new-direct newproxy ok invalid argument #2 to 'new' (Instance expected, got userdata)
+ancestor newproxy ok false
+descendant newproxy ok true
+ancestor-dot newproxy ok false
+descendant-dot newproxy ok true
+new handle error @26: invalid argument #2 to 'new' (Instance expected, got InstanceHandle)
+new-direct handle ok invalid argument #2 to 'new' (Instance expected, got InstanceHandle)
+ancestor handle error Unable to cast value to Object
+descendant handle error Unable to cast value to Object
+ancestor-dot handle error Unable to cast value to Object
+descendant-dot handle error Unable to cast value to Object
+new empty-handle error @26: invalid argument #2 to 'new' (Instance expected, got InstanceHandle)
+new-direct empty-handle ok invalid argument #2 to 'new' (Instance expected, got InstanceHandle)
+ancestor empty-handle error Unable to cast value to Object
+descendant empty-handle error Unable to cast value to Object
+ancestor-dot empty-handle error Unable to cast value to Object
+descendant-dot empty-handle error Unable to cast value to Object
+new signal error @26: invalid argument #2 to 'new' (Instance expected, got RBXScriptSignal)
+new-direct signal ok invalid argument #2 to 'new' (Instance expected, got RBXScriptSignal)
+ancestor signal error Unable to cast value to Object
+descendant signal error Unable to cast value to Object
+ancestor-dot signal error Unable to cast value to Object
+descendant-dot signal error Unable to cast value to Object
+new RaycastParams error @26: invalid argument #2 to 'new' (Instance expected, got RaycastParams)
+new-direct RaycastParams ok invalid argument #2 to 'new' (Instance expected, got RaycastParams)
+ancestor RaycastParams error Unable to cast value to Object
+descendant RaycastParams error Unable to cast value to Object
+ancestor-dot RaycastParams error Unable to cast value to Object
+descendant-dot RaycastParams error Unable to cast value to Object
+ancestor-none error Argument 1 missing or nil
+descendant-none error Argument 1 missing or nil
+descendant-lower error Unable to cast value to Object
+descendant-extra ok true
+ancestor-extra ok false
+new-bad-class error Unable to create an Instance of type "NoSuchClass"
+new-number-class error Unable to create an Instance of type "5"
+new-service-class error Unable to create an Instance of type "Workspace"
+new-extra ok nil
+new-parent-false error @69: invalid argument #2 to 'new' (Instance expected, got boolean)

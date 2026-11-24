@@ -1045,6 +1045,27 @@ pub fn attribute_name_error(name: &[u8]) -> Option<String> {
     None
 }
 
+/// A method's Object parameter (IsDescendantOf's, IsAncestorOf's) as a client casts it: an Instance, or none for nil and for
+/// the values a client casts to null (a thread, an Enum, Enums, a newproxy); no argument at all raises `Argument 1 missing or
+/// nil`, any other value (a number, a table, a datatype, an EnumItem, a function, a buffer, a signal, an InstanceHandle)
+/// `Unable to cast value to Object`, both without a position (measured, Studio 0.748, a client and a server alike:
+/// tools/parity/probes/object_parameter_casts.luau)
+fn object_arg(engine: &Engine, args: &Args, index: usize) -> Result<Option<InstanceId>, Flow> {
+    if index >= args.len() {
+        return raise(format!("Argument {index} missing or nil"));
+    }
+    if let Some(instance) = args.instance(index) {
+        return Ok(Some(instance));
+    }
+    match args.get(index) {
+        LuaValue::Nil | LuaValue::Thread(_) => Ok(None),
+        other => match typeof_value(engine, other).as_str() {
+            "Enum" | "Enums" | "userdata" => Ok(None),
+            _ => raise("Unable to cast value to Object"),
+        },
+    }
+}
+
 /// The attribute datatypes SetAttribute accepts (by typeof).
 const ATTRIBUTE_TYPES: &[&str] = &[
     "string", "boolean", "number", "UDim", "UDim2", "BrickColor", "Color3", "Vector2", "Vector3", "CFrame", "EnumItem",
@@ -1422,17 +1443,17 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         behaviors.add_method(object, K::isA as NameId, is_a);
     }
     let is_descendant_of = method(|_, engine, id, args| {
-        let result = match args.instance(1) {
+        let result = match object_arg(engine, args, 1)? {
             Some(ancestor) => descendant_of(engine, id, ancestor),
             // every instance is a descendant of nil (measured likewise: IsDescendantOf(nil) is true)
-            None => args.get(1).is_nil(),
+            None => true,
         };
         Ok(values([LuaValue::Boolean(result)]))
     });
     behaviors.add_method(base, K::IsDescendantOf as NameId, is_descendant_of.clone());
     behaviors.add_method(base, K::isDescendantOf as NameId, is_descendant_of);
     behaviors.add_method(base, K::IsAncestorOf as NameId, method(|_, engine, id, args| {
-        let result = match args.instance(1) {
+        let result = match object_arg(engine, args, 1)? {
             Some(descendant) => descendant_of(engine, descendant, id),
             None => false,
         };

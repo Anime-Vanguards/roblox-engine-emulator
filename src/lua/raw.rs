@@ -1004,11 +1004,16 @@ unsafe fn push_instance_with(state: *mut ffi::lua_State, api: &Api, dom_state: O
     }
 }
 
-/// `Instance.new(className, parent)` (InstanceModule.New) as a C function.
+/// `Instance.new(className, parent)` (InstanceModule.New) as a C function. A parent that is neither nil nor an Instance
+/// raises Luau's `invalid argument #2 to 'new' (Instance expected, got number)` at the calling line, typeof's name for any
+/// value (a thread, an Enum, a newproxy, an InstanceHandle alike), once the class name has passed (`Unable to create an
+/// Instance of type "X"` comes first; measured, Studio 0.748, a client and a server alike:
+/// tools/parity/probes/object_parameter_casts.luau).
 unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
     crate::boundary::enter(state);
     // (host time: the call's time is its line's)
     let _time = unsafe { crate::luau_profile::ApiCall::new(state) };
+    let bad_parent = std::cell::Cell::new(false);
     let out = guard(|| unsafe {
         let api = &*(ffi::lua_touserdata(state, ffi::lua_upvalueindex(1)) as *const Api);
         let engine = api.engine();
@@ -1029,6 +1034,10 @@ unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
             None => String::new(),
         };
         let parent = arg_instance(state, 2);
+        if parent.is_none() && ffi::lua_type(state, 2) > ffi::LUA_TNIL && engine.reflection.class_id(&class_name).is_some_and(|class| engine.reflection.class(class).creatable) {
+            bad_parent.set(true);
+            return Out::Ret(0);
+        }
         let created = {
             let hooks = engine.hooks.borrow();
             let mut dom_state = engine.state.borrow_mut();
@@ -1058,6 +1067,12 @@ unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
             Err(error) => Out::Raise(error.message, error.level),
         }
     });
+    if bad_parent.get() {
+        unsafe {
+            super::cfunction::charge_raised(state, true);
+            ffi::luaL_typeerror(state, 2, c"Instance".as_ptr())
+        }
+    }
     match out {
         Out::Ret(count) => count,
         Out::Raise(message, level) => unsafe { raise(state, message, level) },
@@ -1885,8 +1900,10 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
             Base::IsDescendantOf => {
                 let result = match arg_instance(state, 2) {
                     Some(ancestor) => linstance::descendant_of(engine, id, ancestor),
-                    // (every instance is a descendant of nil, as in Roblox: lua/instance.rs)
-                    None => ffi::lua_type(state, 2) <= ffi::LUA_TNIL,
+                    // (every instance is a descendant of nil, as in Roblox; no argument and other values: lua/instance.rs
+                    // object_arg)
+                    None if ffi::lua_type(state, 2) == ffi::LUA_TNIL => true,
+                    None => return Out::General,
                 };
                 ffi::lua_pushboolean(state, result as c_int);
                 Out::Ret(1)
@@ -1894,7 +1911,8 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
             Base::IsAncestorOf => {
                 let result = match arg_instance(state, 2) {
                     Some(descendant) => linstance::descendant_of(engine, descendant, id),
-                    None => false,
+                    None if ffi::lua_type(state, 2) == ffi::LUA_TNIL => false,
+                    None => return Out::General,
                 };
                 ffi::lua_pushboolean(state, result as c_int);
                 Out::Ret(1)

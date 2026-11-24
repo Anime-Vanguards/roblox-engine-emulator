@@ -928,6 +928,49 @@ fn an_instance_handle_holds_an_instance_or_none_as_a_client_does() {
     );
 }
 
+/// An Object parameter given a value that is not an Instance, as a playing client casts it (Studio 0.748, a client and a
+/// server alike: tools/parity/probes/object_parameter_casts.luau): Instance.new's parent raises Luau's argument error naming the
+/// value's typeof, at the calling line, after the class name's check; IsDescendantOf and IsAncestorOf take nil, a thread, an
+/// Enum and a newproxy as nil, raise `Unable to cast value to Object` for any other value and `Argument 1 missing or nil` for
+/// no argument, without a position. ree took any of those values as no parent, and answered false (true for IsDescendantOf
+/// with no argument).
+#[test]
+fn object_parameters_cast_a_value_as_a_client_does() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        print((select(2, pcall(function() return Instance.new("Folder", 5) end))))
+        print((select(2, pcall(Instance.new, "Folder", InstanceHandle.new(workspace)))))
+        print((select(2, pcall(Instance.new, "Folder", workspace.Changed))), (select(2, pcall(Instance.new, "Folder", coroutine.create(print)))))
+        print((select(2, pcall(Instance.new, "NoSuchClass", 5))), Instance.new("Folder", nil).Parent)
+        print(pcall(function() return workspace:IsAncestorOf(5) end))
+        print(pcall(function() return Folder:IsDescendantOf(InstanceHandle.new(workspace)) end))
+        print(pcall(workspace.IsAncestorOf, workspace, Vector3.one))
+        print(Folder:IsDescendantOf(nil), Folder:IsDescendantOf(Enum.Material), Folder:IsDescendantOf(coroutine.create(print)), Folder:IsDescendantOf(newproxy()), workspace:IsAncestorOf(Enum), workspace:IsAncestorOf(nil))
+        print(pcall(function() return Folder:IsDescendantOf() end))
+        print(pcall(function() return workspace:IsAncestorOf() end))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: Test:3: invalid argument #2 to 'new' (Instance expected, got number)",
+            "print: invalid argument #2 to 'new' (Instance expected, got InstanceHandle)",
+            "print: invalid argument #2 to 'new' (Instance expected, got RBXScriptSignal) invalid argument #2 to 'new' (Instance expected, got thread)",
+            "print: Unable to create an Instance of type \"NoSuchClass\" nil",
+            "print: false Unable to cast value to Object",
+            "print: false Unable to cast value to Object",
+            "print: false Unable to cast value to Object",
+            "print: true true true true false false",
+            "print: false Argument 1 missing or nil",
+            "print: false Argument 1 missing or nil",
+        ]
+    );
+}
+
 /// Texts and forms measured in a playing client (Studio 0.744; tools/parity/probes/hierarchy.luau, values.luau,
 /// coercion.luau, frame_phases.luau, lifetime.luau; `typeof()` from a function is at its line: Studio 0.747,
 /// engine_functions.luau).
