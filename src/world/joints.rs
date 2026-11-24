@@ -608,8 +608,9 @@ const KEPT_BODIES: usize = 8;
 /// after which a walk from the part takes the same parts up in the same order but for some gone and some after them: a
 /// side split off is marked gone where it was ([`Body::cut`]: a walk of the parts left takes them up in the order they had); a side
 /// joined by a joint the walk takes up after every part of the order follows it ([`Body::extend`]); a side split off comes back where
-/// it was when the joint it left by links it again at the same place and nothing followed the order since ([`Body::restore`]). The
-/// sums from the first part a change touched on are worked out again at the next read from the masses kept, a few ns a part, as a
+/// it was when the joint it left by links it again at the same place and nothing followed the order since ([`Body::restore`]); a side
+/// of one part joined anywhere else goes where the walk takes it up, the later parts' places moving up by one ([`Body::insert_one`]).
+/// The sums from the first part a change touched on are worked out again at the next read from the masses kept, a few ns a part, as a
 /// client's mass read after a link change stays flat (Studio 0.747: 0.3 to 1.1 us at 1,000 to 10,000 parts, an anchored assembly's;
 /// a free chain's too but for a join in its middle).
 /// A body with more parts gone than kept is dropped, and worked out again at the next read.
@@ -713,6 +714,44 @@ impl Body {
         self.live += indices.len();
         self.sums.truncate(indices.iter().min().map_or(0, |&at| at as usize));
         self.cuts.remove(cut);
+        true
+    }
+
+    /// A side of one part (`side`, as [`extend`](Body::extend) takes it) linked by `joint` at `place` under `end` (`places` giving
+    /// a joint's place under a part) joins where a walk of the joined parts takes it up: after the parts not gone that parts before
+    /// `end` took up, and those `end` took up by joints before this one; before the rest, whose indices move up by one. The masses are
+    /// added again from it on at the next read; the sides split off no longer come back where they were ([`restore`](Body::restore)).
+    /// Whether it joined (`end` in the order, not gone).
+    fn insert_one(&mut self, end: InstanceId, joint: InstanceId, place: u32, side: &[(InstanceId, u32, Option<InstanceId>)], places: impl Fn(InstanceId, InstanceId) -> u32) -> bool {
+        let &[(part, ..)] = side else { return false };
+        let Some(&from) = self.at.get(&end).filter(|&&from| !self.gone[from as usize]) else { return false };
+        // (the walk's order is by the index of the part that took each up, then by the joint's place under it)
+        let after = |index: usize| {
+            let (by, link) = self.by[index];
+            by > from || by == from && link.is_some_and(|link| places(link, end) > place)
+        };
+        let at = (from as usize + 1..self.order.len()).find(|&index| !self.gone[index] && after(index)).unwrap_or(self.order.len());
+        let Body { order, by, own, gone, at: index_of, sums, live, cuts } = self;
+        order.insert(at, part);
+        by.insert(at, (from, Some(joint)));
+        own.insert(at, None);
+        gone.insert(at, false);
+        for entry in &mut by[at + 1..] {
+            if entry.0 >= at as u32 {
+                entry.0 += 1;
+            }
+        }
+        for (index, other) in order.iter().enumerate().skip(at + 1) {
+            if let Some(kept) = index_of.get_mut(other)
+                && *kept == index as u32 - 1
+            {
+                *kept = index as u32;
+            }
+        }
+        index_of.insert(part, at as u32);
+        *live += 1;
+        sums.truncate(at);
+        cuts.clear();
         true
     }
 
@@ -1193,7 +1232,8 @@ impl Joints {
                         true
                     }
                     None => false,
-                };
+                }
+                || body.insert_one(end, joint, place, side, |link, under| self.indexed_place(link, under));
             if kept {
                 found.memo.borrow_mut().bodies.insert(part, body);
             }

@@ -2587,6 +2587,71 @@ fn link_changes_among_several_anchored_parts_walk_none_of_their_assembly() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
+/// An AssemblyMass read whose kept walk was made while a leaf's weld was disabled walks nothing after the weld is enabled again,
+/// though the leaf joins the middle of the walk's order: 300 rounds on a free hub welded to 10,000 parts (the hub the root), each the
+/// kept walks dropped (a weld closing a cycle enabled and disabled), another leaf's weld disabled, the hub's mass read (its walk made
+/// then), the weld enabled and the hub's mass read again, the last read timed alone, take about the host time the same reads take on
+/// hubs welded to four parts. The read after the enable walked the whole assembly again (about 0.6 ms at 10,000).
+#[test]
+fn a_mass_read_after_a_leaf_rejoins_its_walks_middle_walks_nothing() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function Part(Size)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.Size, P.CFrame = false, false, Size, CFrame.new(0, 300, 0)
+            P.Parent = workspace
+            return P
+        end
+        local function Star(Count)
+            local Hub, Welds = Part(Vector3.new(6, 6, 6)), {}
+            for Index = 1, Count do
+                local W = Instance.new("Weld")
+                W.Part0, W.Part1, W.C0 = Hub, Part(Vector3.new(1, 1 + Index % 3, 1)), CFrame.new(Index % 7, 4, 0)
+                W.Parent = W.Part1
+                Welds[Index] = W
+            end
+            local Cycle = Instance.new("Weld")
+            Cycle.Part0, Cycle.Part1, Cycle.Enabled, Cycle.Parent = Welds[1].Part1, Welds[2].Part1, false, workspace
+            return { Hub = Hub, Welds = Welds, Cycle = Cycle }
+        end
+        shared.Stars = { Big = Star(10000), Small = {} }
+        for Index = 1, 400 do
+            shared.Stars.Small[Index] = Star(4)
+        end
+        function shared.Prepare(Name, Round)
+            local Star = if Name == "Big" then shared.Stars.Big else shared.Stars.Small[Round]
+            local W = Star.Welds[if Name == "Big" then 2000 + Round * 7 else 3]
+            Star.Cycle.Enabled = true
+            Star.Cycle.Enabled = false
+            W.Enabled = false
+            local _ = Star.Hub.AssemblyMass
+            W.Enabled = true
+            shared.Hub = Star.Hub
+        end
+        "#,
+    );
+    let time = |name: &str| {
+        let mut total = 0.0;
+        for round in 1..=350 {
+            run(&lua, &engine, &format!("shared.Prepare('{name}', {round})"));
+            let start = std::time::Instant::now();
+            run(&lua, &engine, "local _ = shared.Hub.AssemblyMass");
+            if round > 50 {
+                total += start.elapsed().as_secs_f64();
+            }
+        }
+        total
+    };
+    let (large, small) = (time("Big"), time("Small"));
+    assert!(large < 2.0 * small + 0.05, "300 mass reads after a leaf joined the middle of their walks took {large:.3} s of host time with 10,001 parts, {small:.3} s with 5");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
 /// AssemblyMass reads after link changes add up nothing again: 500 rounds of a leaf's weld disabled and enabled (each a different
 /// leaf, all over the hub's list), each change followed by the hub's and another leaf's AssemblyMass, on an anchored hub welded to
 /// 5,000 parts take about the host time they take on a hub welded to 2, as a playing client's mass read after a link change of an
