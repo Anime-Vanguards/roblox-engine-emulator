@@ -744,9 +744,17 @@ pub struct Dom {
     above: Vec<Above>,
     /// Whether each class (by id) is a home class; empty while homes are not kept
     home_classes: Vec<bool>,
+    /// Whether each class (by id) is one a [`WorldLog`] logs below an instance leaving its world, and whose writes it logs (the
+    /// BaseParts but Terrain: [`Dom::keep_logged_classes`]); empty while none is named
+    logged_classes: Vec<bool>,
     /// A stack reused to walk a subtree whose home changed, or whose homes' outermost home did (each entry: whether it takes the
     /// new home, or keeps its own and only what is above it changed)
     home_walk: Vec<(InstanceId, bool)>,
+    /// A stack reused to walk a subtree that leaves a followed world ([`Dom::log_world_leaving`])
+    world_walk: Vec<InstanceId>,
+    /// What changed in each world a spatial index of its own follows, by its home ([`Dom::follow_world`]: a WorldModel's,
+    /// world/broadphase.rs `ModelIndex`)
+    world_logs: FxHashMap<InstanceId, WorldLog>,
     /// The instances of the classes [`Dom::log_homes`] names (by id; empty while none is) whose home changed since
     /// [`Dom::take_home_log`] last took them, logged by whatever changed it (world/joints.rs: which rigid joints are in a world),
     /// and whether more changed than the log keeps (twice the slots and 4,096 more), which it then stops logging
@@ -762,6 +770,33 @@ pub struct Dom {
 pub struct Above {
     pub top: Option<InstanceId>,
     pub homes: u32,
+}
+
+/// What changed in a world a spatial index of its own follows since it last took the log (world/broadphase.rs `ModelIndex`: a
+/// WorldModel's), read off the homes ([`Dom::home`], one lookup a change however deep the instance is), as [`Watch`] logs the
+/// Workspace's: the instances attached in it, detached from it (with the parts below them, down to the homes in them, whose
+/// worlds are their own: [`Dom::keep_logged_classes`]), put in place of another there or given another class there (`moved`),
+/// and the parts written there (`written`, the same classes), each instance once in each until the index takes the log, however
+/// often it changed. Past `limit` entries the log stops and says so (`overflowed`), and the index starts over from a walk of
+/// its world, so a run that stops querying it keeps no more than that.
+#[derive(Default)]
+pub struct WorldLog {
+    pub moved: Vec<InstanceId>,
+    pub written: Vec<InstanceId>,
+    pub limit: usize,
+    pub overflowed: bool,
+    /// The instances in `moved`, and those in `written`
+    logged: FxHashSet<InstanceId>,
+    written_logged: FxHashSet<InstanceId>,
+}
+
+impl WorldLog {
+    /// What the log holds, `moved` and `written`, taken by the index: the log starts again with nothing in it.
+    pub fn take(&mut self) -> (Vec<InstanceId>, Vec<InstanceId>) {
+        clear_set(&mut self.logged);
+        clear_set(&mut self.written_logged);
+        (std::mem::take(&mut self.moved), std::mem::take(&mut self.written))
+    }
 }
 
 /// What changed under `root` (the Workspace) since the spatial index last took the log (world/broadphase.rs): the instances
@@ -949,6 +984,15 @@ impl Dom {
             let logged = |class: ClassId| self.home_logged.get(class as usize).copied().unwrap_or(false);
             let class = if logged(class) { class } else { old };
             self.log_home(id, class);
+        }
+        if !self.world_logs.is_empty() {
+            // (and what is below it, whose world it takes or gives back when it becomes or stops being a home; one that stops
+            // being one drops its own log, so its index, if it becomes one again, starts over from a walk)
+            let home = self.home(id);
+            self.log_world_leaving(home, id, self.is_home(id) != was_home);
+            if was_home && !self.is_home(id) {
+                self.world_logs.remove(&id);
+            }
         }
         // (one that becomes or stops being a WorldRoot moves its descendants' world)
         if self.is_home(id) != was_home {
@@ -1178,6 +1222,7 @@ impl Dom {
         self.free_slots.push(id.index);
         self.pins.remove(&id);
         self.rig_watch.remove(&id);
+        self.world_logs.remove(&id);
         Some(instance)
     }
 
@@ -1429,6 +1474,10 @@ impl Dom {
         if self.watched(parent) {
             self.log_moved(child);
         }
+        if !self.world_logs.is_empty() {
+            let home = self.home_below(parent);
+            self.log_world(home, child, false);
+        }
     }
 
     /// Takes `child` out of its parent's children, from its place, as a client does ([`Children::take`]): [`Dom::reparent`]'s
@@ -1439,6 +1488,10 @@ impl Dom {
         };
         if self.watched(parent) {
             self.log_leaving(child);
+        }
+        if !self.world_logs.is_empty() {
+            let home = self.home_below(parent);
+            self.log_world_leaving(home, child, false);
         }
         self.touch_rigs(parent);
         let mut searched = 0;
@@ -1508,6 +1561,12 @@ impl Dom {
             self.log_leaving(old);
             self.log_moved(new);
         }
+        if !self.world_logs.is_empty() {
+            let home = self.home_below(parent);
+            // (and the parts below the new child, which leave this world when it is a WorldRoot holding them: handed over)
+            self.log_world_leaving(home, old, false);
+            self.log_world_leaving(home, new, true);
+        }
         self.rehome(old);
         // (the new child holds what was handed to it, the old one's children when a project mount replaces a folder by a script:
         // their homes are worked out again, whatever the new child's own was)
@@ -1564,6 +1623,73 @@ impl Dom {
         if let Some(watch) = &mut self.watch {
             watch.walk = walk;
         }
+    }
+
+    /// Names the classes (by id) a [`WorldLog`] logs below an instance that leaves its world, and whose writes it logs: the
+    /// parts a world's index holds, which may leave it later without passing through it (world/mod.rs: the BaseParts but
+    /// Terrain).
+    pub fn keep_logged_classes(&mut self, classes: Vec<bool>) {
+        self.logged_classes = classes;
+    }
+
+    /// Starts (or starts over) the change log of the world whose home is `home` ([`WorldLog`]), up to `limit` entries.
+    pub fn follow_world(&mut self, home: InstanceId, limit: usize) {
+        self.world_logs.insert(home, WorldLog { limit, ..WorldLog::default() });
+    }
+
+    /// The change log of `home`'s world, while it is followed.
+    pub fn world_log(&mut self, home: InstanceId) -> Option<&mut WorldLog> {
+        self.world_logs.get_mut(&home)
+    }
+
+    /// Logs a change of `id` in the world of `home`, if it is followed: a write, or an attach, a detach, a replacement or a class.
+    fn log_world(&mut self, home: Option<InstanceId>, id: InstanceId, written: bool) {
+        let Some(log) = home.and_then(|home| self.world_logs.get_mut(&home)) else { return };
+        if log.overflowed {
+            return;
+        }
+        // (each instance once in each list until the index takes the log)
+        if (written && log.written_logged.contains(&id)) || (!written && log.logged.contains(&id)) {
+            return;
+        }
+        if log.moved.len() + log.written.len() >= log.limit {
+            log.overflowed = true;
+            log.moved = Vec::new();
+            log.written = Vec::new();
+            log.logged = FxHashSet::default();
+            log.written_logged = FxHashSet::default();
+        } else if written {
+            log.written_logged.insert(id);
+            log.written.push(id);
+        } else {
+            log.logged.insert(id);
+            log.moved.push(id);
+        }
+    }
+
+    /// Logs `id` and the parts below it ([`Dom::keep_logged_classes`]), down to the homes in it, leaving or changing in the world
+    /// of `home` (if it is followed): what is below a home is in that home's world, so it is passed over unless `through` (`id`
+    /// itself becoming or stopping being one).
+    fn log_world_leaving(&mut self, home: Option<InstanceId>, id: InstanceId, through: bool) {
+        if !home.is_some_and(|home| self.world_logs.contains_key(&home)) {
+            return;
+        }
+        self.log_world(home, id, false);
+        let mut walk = std::mem::take(&mut self.world_walk);
+        walk.clear();
+        if through || !self.is_home(id) {
+            self.at(id).children.copy_to(&mut walk);
+        }
+        while let Some(node) = walk.pop() {
+            let (class, home_class) = (self.at(node).class, self.is_home(node));
+            if self.logged_classes.get(class as usize).copied().unwrap_or(false) {
+                self.log_world(home, node, false);
+            }
+            if !home_class {
+                self.at(node).children.copy_to(&mut walk);
+            }
+        }
+        self.world_walk = walk;
     }
 
     /// Logs a write of an indexed instance for the spatial index, once until it takes the log ([`Dom::bump_version`] does this
@@ -1756,10 +1882,16 @@ impl Dom {
     pub fn bump_version(&mut self, id: InstanceId) {
         let instance = self.at_mut(id);
         instance.version = instance.version.wrapping_add(1);
-        let indexed = instance.flags & flags::INDEXED != 0;
+        let (indexed, class) = (instance.flags & flags::INDEXED != 0, instance.class);
         self.write_version = self.write_version.wrapping_add(1);
         if indexed {
             self.note_written(id);
+        }
+        // (a followed world's log keeps its parts' writes alone, as the Workspace's keeps those of the parts it indexes: its
+        // index reads nothing else)
+        if !self.world_logs.is_empty() && self.logged_classes.get(class as usize).copied().unwrap_or(false) {
+            let home = self.home(id);
+            self.log_world(home, id, true);
         }
     }
 

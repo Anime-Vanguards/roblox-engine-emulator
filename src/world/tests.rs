@@ -11,7 +11,7 @@ use crate::{
     lua::{self as engine_lua, globals::CallOutcome},
 };
 
-fn start() -> (Lua, Rc<Engine>) {
+pub(super) fn start() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options::default()).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
@@ -24,7 +24,7 @@ const RUN_FRAMES: u32 = 3600;
 /// Runs `source` as a script to its end: while it waits (task.wait, an event's Wait) the engine steps frames, one at a time,
 /// until it finishes, and the test fails when it is still waiting after [`RUN_FRAMES`] (what follows a wait would otherwise
 /// never run, its asserts passing unchecked). Panics with the script's error.
-fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) {
+pub(super) fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) {
     let script = {
         let mut state = engine.state.borrow_mut();
         let class = engine.reflection.class_id("ModuleScript").unwrap();
@@ -4924,7 +4924,7 @@ fn camera_field_of_view_stays_within_its_limits() {
 }
 
 /// A playing client's engine (one Heartbeat a frame, a playing client's render step).
-fn start_play() -> (Lua, Rc<Engine>) {
+pub(super) fn start_play() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");

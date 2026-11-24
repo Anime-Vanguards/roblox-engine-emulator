@@ -18,10 +18,11 @@
 //!   off.
 //! - GetLargestCutoffDistance(ignore): five parallel rays, from Focus and from Focus moved by each near-plane corner's offset,
 //!   to the near plane's centre and corners; against parts that can collide and are at most 0.95 transparent, the ignore
-//!   list (nil holes in it skipped) and its descendants left out. The largest `length - distance to the first hit`, or 0. A part entering the
-//!   Workspace is not seen until the spatial index takes it in: at the next physics step or another spatial query
-//!   (Raycast, GetPartBoundsInBox, ...; `Cameras::unindexed`, a set of the waiting parts still in the Workspace), with the
-//!   parts moved in with it; a moved, resized or removed part counts at once.
+//!   list (nil holes in it skipped) and its descendants left out. The largest `length - distance to the first hit`, or 0. A
+//!   part entering the Workspace is not seen until the spatial index takes it in: at the next physics step or another spatial
+//!   query of the Workspace (Raycast, GetPartBoundsInBox, ...; a WorldModel's leaves it waiting; `Cameras::unindexed`, a set of
+//!   the waiting parts still in the Workspace), with the parts moved in with it; a moved, resized or removed part counts at
+//!   once. A WorldModel's parts in the Workspace are never met (world/broadphase.rs `Index::near_segment_own`: measured).
 //! - Interpolate(endCFrame, endFocus, duration): the casts from the last argument to the first, then "Interpolation time
 //!   must be positive." (NaN passes; also on a camera that is not Scriptable), then "Attempted to use interpolation with a
 //!   camera mode other than scriptable.". A Focus write ends the tween (any camera's) at the next render step and InterpolationFinished
@@ -109,7 +110,7 @@ fn write(engine: &Engine, camera: InstanceId, name: NameId, transform: &Affine3A
 // PanUnits / TiltUnits
 
 /// An int argument as a client casts it: rounded half away from zero, the int's least past its range.
-fn int_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<i32, Flow> {
+pub(super) fn int_argument(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<i32, Flow> {
     let value = args.get(at);
     let number = match value {
         LuaValue::Nil => return raise(format!("Argument {at} missing or nil")),
@@ -190,24 +191,76 @@ fn zoom_to_extents(engine: &Engine, names: &Names, camera: InstanceId, center: &
 
 // GetLargestCutoffDistance and the spatial index's lag
 
-/// The spatial index takes in what entered the Workspace (the physics step, a spatial query other than
-/// GetLargestCutoffDistance).
+/// The physics step: the spatial index takes in what came into every world (`Cameras::unindexed` and `unindexed_models`), as a
+/// client's step does.
 pub fn index_parts(state: &mut State) {
     crate::dom::clear_set(&mut state.cameras.unindexed);
+    state.cameras.unindexed_models.clear();
     state.cameras.taken_in += 1;
+    state.cameras.models_stepped += 1;
 }
 
-/// Whether `node` is the Workspace or in it: a look at `node` and at the outermost home above it (dom.rs Dom::homes_above), however
-/// deep it is and however many WorldModels are nested above it (the Workspace is in no home); up the tree while the dom keeps no homes.
-fn in_workspace(state: &State, workspace: ClassId, node: InstanceId) -> bool {
-    let is_workspace = |id: InstanceId| state.dom.at(id).class == workspace;
-    if is_workspace(node) {
-        return true;
+/// A spatial query takes in what came into its own world, the Workspace's (`model` None) or a WorldModel's, and only that: a
+/// client's query of the Workspace leaves a WorldModel's new parts waiting, and the other way round (measured: world/region.rs).
+/// How many parts it took in.
+pub fn take_in(state: &mut State, model: Option<InstanceId>) -> usize {
+    match model {
+        None => {
+            let waiting = state.cameras.unindexed.len();
+            crate::dom::clear_set(&mut state.cameras.unindexed);
+            // (the broadphase puts the Workspace's waiting parts in its tree when this moves on: world/broadphase.rs)
+            state.cameras.taken_in += 1;
+            waiting
+        }
+        Some(model) => {
+            let taken = state.cameras.unindexed_models.remove(&model).map_or(0, |waiting| waiting.len());
+            if taken > 0 {
+                *state.cameras.model_paid.entry(model).or_default() += taken;
+                // (its index puts the parts that waited in its tree when this moves on: world/broadphase.rs)
+                *state.cameras.models_waits.entry(model).or_default() += 1;
+            }
+            taken
+        }
     }
-    if state.dom.keeps_homes() {
-        return state.dom.homes_above(node).top.is_some_and(is_workspace);
+}
+
+/// Which wait a world's parts are in: the Workspace's or a WorldModel's (`Cameras::unindexed`, `unindexed_models`)
+#[derive(Clone, Copy, PartialEq)]
+enum Wait {
+    Workspace,
+    Model(InstanceId),
+}
+
+impl Wait {
+    fn insert(self, state: &mut State, part: InstanceId) {
+        match self {
+            Wait::Workspace => state.cameras.unindexed.insert(part),
+            Wait::Model(model) => state.cameras.unindexed_models.entry(model).or_default().insert(part),
+        };
     }
-    std::iter::successors(state.dom.at(node).parent, |&id| state.dom.at(id).parent).any(is_workspace)
+
+    fn remove(self, state: &mut State, part: InstanceId) {
+        match self {
+            Wait::Workspace => {
+                state.cameras.unindexed.remove(&part);
+            }
+            Wait::Model(model) => {
+                if let Some(waiting) = state.cameras.unindexed_models.get_mut(&model) {
+                    waiting.remove(&part);
+                    if waiting.is_empty() {
+                        state.cameras.unindexed_models.remove(&model);
+                    }
+                }
+            }
+        }
+    }
+
+    fn holds_any(self, state: &State) -> bool {
+        match self {
+            Wait::Workspace => !state.cameras.unindexed.is_empty(),
+            Wait::Model(model) => state.cameras.unindexed_models.contains_key(&model),
+        }
+    }
 }
 
 /// Whether a part GetLargestCutoffDistance's ray meets stops it: in the spatial index, CanCollide on (CanQuery does not matter:
@@ -279,7 +332,7 @@ fn largest_cutoff(engine: &Engine, names: &Names, camera: InstanceId, ignore: Ve
         if !(origin.is_finite() && direction.is_finite() && reach.is_finite()) {
             continue;
         }
-        query::near_segment(engine, origin, direction, 0.0, |parts| {
+        query::near_segment_own(engine, origin, direction, 0.0, |parts| {
             let state = engine.state.borrow();
             for (part, entry) in parts {
                 if !near(&entry.solid) {
@@ -471,7 +524,6 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
 
     let names = names(engine);
     let (cframe, focus, finished) = (names.cframe, names.focus, names.finished);
-    let workspace = engine.reflection.class_id("Workspace");
     let mut hooks = engine.hooks.borrow_mut();
     // A script's write mid-tween: a CFrame becomes the end, a Focus ends it at the next render step
     hooks.property_changed.push(Box::new(move |state, id, name| {
@@ -487,25 +539,110 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
             tween.to[2] = f32m::column(&rows_of(&written), 1);
         }
     }));
-    // The parts that enter the Workspace (with what they are moved in) wait for the spatial index; those that leave it before
-    // then drop out of the wait (whatever is not in the Workspace is not seen anyway)
-    if let (Some(workspace), Some(base_part)) = (workspace, engine.reflection.class_id("BasePart")) {
+    // The parts that come into a world (with what they are moved in) wait for the spatial index, each world's apart, and those
+    // that leave it before then drop out of its wait. A part's world is its nearest WorldRoot's (dom.rs Dom::home), the Workspace
+    // or a WorldModel in the DataModel. Measured on a client (world/region.rs): a part moved between the Workspace and a WorldModel
+    // in it, either way, waits; a WorldModel moved between ReplicatedStorage and the Workspace keeps its parts in; one that comes
+    // into the DataModel brings them in anew, and one that leaves it takes them out of the wait. A move reads its worlds from the
+    // homes above the old and new parents (walking up only from the outermost home above a WorldModel to the DataModel). It
+    // walks the moved subtree when the subtree's own parts change worlds, or when, being a WorldModel or holding anything while
+    // WorldModels exist, it came into the DataModel or left it (asked up the parents of a parent in no world), to find the
+    // WorldModels in it: a Parent write pays for each instance it carries (cost.rs reparented), so that walk is paid for.
+    if let (Some(world_root), Some(world_model), Some(base_part), Some(data_model)) =
+        (engine.reflection.class_id("WorldRoot"), engine.reflection.class_id("WorldModel"), engine.reflection.class_id("BasePart"), engine.reflection.class_id("DataModel"))
+    {
         let reflection = engine.reflection.clone();
         hooks.hierarchy_changed.push(Box::new(move |state, id, old, new| {
-            let (was, now) = (old.is_some_and(|parent| in_workspace(state, workspace, parent)), new.is_some_and(|parent| in_workspace(state, workspace, parent)));
-            if now && !was {
-                for node in std::iter::once(id).chain(state.dom.descendants(id)) {
-                    if reflection.class(state.dom.at(node).class).is_a(base_part) {
-                        state.cameras.unindexed.insert(node);
+            let models = state.dom.count_of_class(world_model) > 0;
+            let state = &mut *state;
+            let is_a = |state: &State, node: InstanceId, class: ClassId| reflection.class(state.dom.at(node).class).is_a(class);
+            // (whether an instance is in the DataModel: up the parents of the outermost home above it, dom.rs Dom::homes_above,
+            // one lookup however many WorldModels are nested above it; from the Workspace, one step)
+            let in_game = |state: &State, node: InstanceId| {
+                let mut current = Some(state.dom.homes_above(node).top.unwrap_or(node));
+                while let Some(node) = current {
+                    if state.dom.at(node).class == data_model {
+                        return true;
                     }
+                    current = state.dom.parent_of(node);
                 }
-            } else if was && !now && !state.cameras.unindexed.is_empty() {
-                for node in std::iter::once(id).chain(state.dom.descendants(id)) {
-                    state.cameras.unindexed.remove(&node);
+                false
+            };
+            // a parent's nearest WorldRoot (itself, or the nearest above it)
+            let nearest = |state: &State, parent: Option<InstanceId>| {
+                parent.and_then(|parent| if is_a(state, parent, world_root) { Some(parent) } else { super::world_root_of(state, &reflection, world_root, parent) })
+            };
+            let (before, after) = (nearest(state, old), nearest(state, new));
+            // the wait of the moved subtree's own parts (those below no WorldRoot in it), before and after: a world's while its
+            // WorldRoot is in the DataModel (the Workspace always is)
+            let wait = |state: &State, root: Option<InstanceId>| match root {
+                Some(root) if is_a(state, root, world_model) => in_game(state, root).then_some(Wait::Model(root)),
+                Some(_) => Some(Wait::Workspace),
+                None => None,
+            };
+            let (from, to) = (wait(state, before), wait(state, after));
+            let moves = from != to && (to.is_some() || from.is_some_and(|from| from.holds_any(state)));
+            // the WorldModels in the subtree (it too, if it is one) come into the DataModel with it, or leave it: asked only of a
+            // subtree that can hold one
+            let (mut enters, mut leaves) = (false, false);
+            if models && (is_a(state, id, world_model) || !state.dom.children_of(id).is_empty()) {
+                let in_data_model = |parent: Option<InstanceId>, root: Option<InstanceId>| match (parent, root) {
+                    (None, _) => false,
+                    (Some(_), Some(root)) => !is_a(state, root, world_model) || in_game(state, root),
+                    (Some(parent), None) => in_game(state, parent),
+                };
+                let (was_in, now_in) = (in_data_model(old, before), in_data_model(new, after));
+                (enters, leaves) = (now_in && !was_in, was_in && !now_in);
+            }
+            if !(moves || enters || leaves) {
+                return;
+            }
+            // (each node with the nearest WorldModel above it within the subtree, if any: the subtree's own parts are below none; the
+            // walk goes into a WorldModel only when WorldModels come in or leave)
+            let mut stack = std::mem::take(&mut state.cameras.walk);
+            stack.clear();
+            stack.push((id, None));
+            while let Some((node, below)) = stack.pop() {
+                let model = is_a(state, node, world_root);
+                let below = if model { Some(node) } else { below };
+                if below.is_none() || enters || leaves {
+                    stack.extend(state.dom.children_of(node).iter().map(|&child| (child, below)));
+                }
+                // a WorldModel that leaves the DataModel takes its parts out of the wait, one that comes in has them come in anew,
+                // and its index looks at its wait again (world/broadphase.rs)
+                if model && (enters || leaves) {
+                    if leaves {
+                        state.cameras.unindexed_models.remove(&node);
+                    }
+                    *state.cameras.models_waits.entry(node).or_default() += 1;
+                }
+                if !is_a(state, node, base_part) {
+                    continue;
+                }
+                match below {
+                    None if moves => {
+                        if let Some(from) = from {
+                            from.remove(state, node);
+                        }
+                        if let Some(to) = to {
+                            to.insert(state, node);
+                        }
+                    }
+                    // its world's parts come in anew
+                    Some(model) if enters => Wait::Model(model).insert(state, node),
+                    _ => {}
                 }
             }
+            state.cameras.walk = stack;
         }));
     }
+    // A WorldModel freed takes its index and its wait with it (world/region.rs)
+    hooks.instance_freed.push(Box::new(|state, id| {
+        state.cameras.model_indexes.remove(&id);
+        state.cameras.unindexed_models.remove(&id);
+        state.cameras.models_waits.remove(&id);
+        state.cameras.model_paid.remove(&id);
+    }));
     drop(hooks);
     // InterpolationFinished, after the PreRender handlers (and what they deferred)
     if let Some(finished) = finished {
