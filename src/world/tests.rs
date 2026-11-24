@@ -2418,6 +2418,62 @@ fn link_changes_among_several_anchored_parts_walk_none_of_their_assembly() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
+/// AssemblyMass reads after link changes add up nothing again: 500 rounds of a leaf's weld disabled and enabled (each a different
+/// leaf, all over the hub's list), each change followed by the hub's and another leaf's AssemblyMass, on an anchored hub welded to
+/// 5,000 parts take about the host time they take on a hub welded to 2, as a playing client's mass read after a link change of an
+/// anchored assembly costs the same at any size (0.3 to 1.1 us at 1,000 to 10,000 parts). Each read after a change worked the mass
+/// out from every part (0.6 ms at 10,000).
+#[test]
+fn mass_reads_after_link_changes_add_up_nothing_again() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function Part(Anchored, Size)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.Size, P.CFrame = Anchored, false, Size or Vector3.one, CFrame.new(0, 300, 0)
+            P.Parent = workspace
+            return P
+        end
+        local function Star(Count)
+            local Hub, Welds = Part(true, Vector3.new(6, 6, 6)), {}
+            for Index = 1, Count do
+                local W = Instance.new("Weld")
+                W.Part0, W.Part1, W.C0 = Hub, Part(false, Vector3.new(1, 1 + Index % 3, 1)), CFrame.new(Index % 7, 4, 0)
+                W.Parent = W.Part1
+                Welds[Index] = W
+            end
+            local _ = Hub.AssemblyMass, Welds[1].Part1.AssemblyMass
+            return { Hub = Hub, Welds = Welds }
+        end
+        shared.Stars = { Big = Star(5000), Small = Star(2) }
+        function shared.Changes(Name)
+            local Star = shared.Stars[Name]
+            local Other = Star.Welds[1].Part1
+            for Index = 1, 500 do
+                local W = Star.Welds[Index * 7 % (#Star.Welds - 1) + 2]
+                W.Enabled = false
+                local _ = Star.Hub.AssemblyMass, Other.AssemblyMass
+                W.Enabled = true
+                local _ = Star.Hub.AssemblyMass, Other.AssemblyMass
+            end
+        end
+        "#,
+    );
+    let time = |source: &str| {
+        run(&lua, &engine, source);
+        let start = std::time::Instant::now();
+        run(&lua, &engine, source);
+        start.elapsed().as_secs_f64()
+    };
+    let (large, small) = (time("shared.Changes('Big')"), time("shared.Changes('Small')"));
+    assert!(large < 2.0 * small + 0.05, "500 rounds of link changes and mass reads took {large:.3} s of host time with 5,001 parts, {small:.3} s with 3");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
 /// An AssemblyCenterOfMass read right after a move works nothing out: 500 moves of an anchored hub welded to 5,000 parts, each
 /// followed by a read of its centre, the reads taking about the host time a lone part's take (the medians), as a playing client's
 /// read after a move costs the same at any size (the move works the centres read since the last one out again, from the masses
@@ -2476,8 +2532,8 @@ fn centre_reads_after_a_move_work_nothing_out() {
 /// welded to 12 parts (Welds and WeldConstraints; one hub's first part also welded to an anchored part), a chain of 10 parts hanging
 /// from an anchored one, a free chain of 8 and a chain of 10 anchored at both ends (joints
 /// enabled, disabled, destroyed and made again, moved to nil and back; parts anchored and unanchored, moved by CFrame, PivotTo
-/// and the physics step, Motor6D.Transform written; a frame now and then), with every part's AssemblyRootPart, AssemblyMass,
-/// AssemblyCenterOfMass and CFrame and each change's work read after each change, read the same with the components kept (split
+/// and the physics step, Motor6D.Transform written; a frame now and then), with every part's AssemblyRootPart, AssemblyMass (half
+/// of them before the centre), AssemblyCenterOfMass and CFrame and each change's work read after each change, read the same with the components kept (split
 /// and joined as links change) as with every walk made afresh, and the index and the kept components hold together.
 #[test]
 fn link_changes_keep_components_as_fresh_walks_do() {
@@ -2540,8 +2596,11 @@ fn link_changes_keep_components_as_fresh_walks_do() {
             local Line = { Op, string.format("%.17g", Work) }
             for Index, P in Parts do
                 local Root = P.AssemblyRootPart
+                -- (half the parts' masses read before their centres: a mass read alone after a link change)
+                local Mass = if Index % 2 == 0 then P.AssemblyMass else nil
                 local Centre = P.AssemblyCenterOfMass
-                table.insert(Line, string.format("%d:%d:%.9g:%s:%s", Index, Root and table.find(Parts, Root) or 0, P.AssemblyMass, Numbers(Centre.X, Centre.Y, Centre.Z), Numbers(P.CFrame:GetComponents())))
+                Mass = Mass or P.AssemblyMass
+                table.insert(Line, string.format("%d:%d:%.9g:%s:%s", Index, Root and table.find(Parts, Root) or 0, Mass, Numbers(Centre.X, Centre.Y, Centre.Z), Numbers(P.CFrame:GetComponents())))
             end
             print(table.concat(Line, " "))
         end

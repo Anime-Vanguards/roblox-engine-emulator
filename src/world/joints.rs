@@ -572,6 +572,163 @@ struct Memo {
     masses: FxHashMap<InstanceId, f32>,
     /// How many times one of its parts was placed: a centre worked out at another count is stale
     placed: u64,
+    /// The walks AssemblyMass reads summed the masses over, by the part read ([`Body`]), up to [`KEPT_BODIES`]: kept through the
+    /// link changes whose walk is the same order with parts gone or after it ([`Joints::unlink`], [`Joints::join`])
+    bodies: FxHashMap<InstanceId, Body>,
+}
+
+/// How many parts' walks a component keeps for its AssemblyMass reads ([`Memo::bodies`])
+const KEPT_BODIES: usize = 8;
+
+/// What an AssemblyMass read of a part summed ([`assembly_body`]): the parts in the order a walk from it takes them up ([`walk_order`]),
+/// each with the part that took it up (its index in the order) and by which joint (none for the first), its own mass once worked out,
+/// and the sums of those masses in turn up to some part (the read's answer is the last, as [`mass_centre`] adds them). Kept through the
+/// link changes after which a walk from the part takes the same parts up in the same order but for some gone and some after them: a
+/// side split off is marked gone where it was ([`Body::cut`]: a walk of the parts left takes them up in the order they had); a side
+/// joined by a joint the walk takes up after every part of the order follows it ([`Body::extend`]); a side split off comes back where
+/// it was when the joint it left by links it again at the same place and nothing followed the order since ([`Body::restore`]). The
+/// sums from the first part a change touched on are worked out again at the next read from the masses kept, a few ns a part, as a
+/// client's mass read after a link change of an anchored assembly stays flat (Studio 0.747: 0.3 to 1.1 us at 1,000 to 10,000 parts).
+/// A body with more parts gone than kept is dropped, and worked out again at the next read.
+#[derive(Default)]
+struct Body {
+    order: Vec<InstanceId>,
+    by: Vec<(u32, Option<InstanceId>)>,
+    own: Vec<Option<f32>>,
+    gone: Vec<bool>,
+    /// Each part's index in `order` (the one where it is, for a part that left and came back after it)
+    at: FxHashMap<InstanceId, u32>,
+    /// The sums of the masses of the parts not gone, in turn, each at its part's index, up to the first part changed since
+    sums: Vec<f32>,
+    live: usize,
+    /// The sides split off that may come back where they were: the part at their end, the joint and its place under the part it
+    /// linked them to, and the order's length then
+    cuts: Vec<(InstanceId, InstanceId, u32, usize)>,
+}
+
+impl Body {
+    /// A walk's parts ([`walk_order`]) and their own masses, summed in turn
+    fn new(walk: Vec<(InstanceId, u32, Option<InstanceId>)>, own: &[f32]) -> Self {
+        let mut sum: f32 = std::iter::empty::<f32>().sum();
+        let sums = own
+            .iter()
+            .map(|&mass| {
+                sum += mass;
+                sum
+            })
+            .collect();
+        let at = walk.iter().enumerate().map(|(index, &(part, ..))| (part, index as u32)).collect();
+        let (order, by) = walk.into_iter().map(|(part, by, link)| (part, (by, link))).unzip();
+        Body { order, by, own: own.iter().map(|&mass| Some(mass)).collect(), gone: vec![false; own.len()], at, sums, live: own.len(), cuts: Vec::new() }
+    }
+
+    /// The parts of `gone` split off, the side whose end `end` was linked by `joint` at `place` under the other end: each is marked
+    /// gone where it is (false when one is not there, or when more are gone than kept: the body is no longer kept).
+    fn cut<T>(&mut self, gone: &FxHashMap<InstanceId, T>, end: InstanceId, joint: InstanceId, place: u32) -> bool {
+        let mut first = usize::MAX;
+        for part in gone.keys() {
+            let Some(&index) = self.at.get(part) else { return false };
+            let index = index as usize;
+            if self.gone[index] {
+                return false;
+            }
+            self.gone[index] = true;
+            first = first.min(index);
+        }
+        self.live -= gone.len();
+        self.sums.truncate(first);
+        self.cuts.push((end, joint, place, self.order.len()));
+        2 * self.live >= self.order.len()
+    }
+
+    /// Where the walk takes up `joint` at `end` (one of its parts, the joint's place in its list `place`, `places` giving another
+    /// joint's place under it): when after every part of the order not gone (`end` the last, or the part that took up the last, by a
+    /// joint before this one), the index of `end`, so the other side's parts follow the order's in a walk of the joined parts.
+    fn joins_after(&self, end: InstanceId, place: u32, places: impl Fn(InstanceId) -> u32) -> Option<u32> {
+        let last = (0..self.order.len()).rev().find(|&index| !self.gone[index])?;
+        if self.order[last] == end {
+            return Some(last as u32);
+        }
+        let (by, link) = self.by[last];
+        (self.order[by as usize] == end && link.is_some_and(|link| places(link) < place)).then_some(by)
+    }
+
+    /// The other side's parts, in the order a walk from its end of the joint takes them up (`side`, with the part that took up each
+    /// one there and by which joint), follow the order's, the first taken up by `end` at index `at`.
+    fn extend(&mut self, at: u32, joint: InstanceId, side: &[(InstanceId, u32, Option<InstanceId>)]) {
+        let base = self.order.len() as u32;
+        for (index, &(part, by, link)) in side.iter().enumerate() {
+            self.at.insert(part, self.order.len() as u32);
+            self.order.push(part);
+            self.by.push(if index == 0 { (at, Some(joint)) } else { (base + by, link) });
+            self.own.push(None);
+            self.gone.push(false);
+        }
+        self.live += side.len();
+    }
+
+    /// The side `side` (as [`extend`](Body::extend) takes it) linked by `joint` at `place` under `end` comes back where it was: when it
+    /// left by that joint at that place, nothing followed the order since, and each of its parts is gone and was taken up by the part
+    /// and joint that take it up now. Whether it came back.
+    fn restore(&mut self, end: InstanceId, joint: InstanceId, place: u32, side: &[(InstanceId, u32, Option<InstanceId>)]) -> bool {
+        let length = self.order.len();
+        let Some(cut) = self.cuts.iter().rposition(|&(at, link, under, then)| at == side[0].0 && link == joint && under == place && then == length) else {
+            return false;
+        };
+        let mut indices = Vec::with_capacity(side.len());
+        for (index, &(part, by, link)) in side.iter().enumerate() {
+            let Some(&at) = self.at.get(&part) else { return false };
+            let want = if index == 0 { self.at.get(&end).map(|&at| (at, Some(joint))) } else { Some((indices[by as usize], link)) };
+            if !self.gone[at as usize] || Some(self.by[at as usize]) != want {
+                return false;
+            }
+            indices.push(at);
+        }
+        for &at in &indices {
+            self.gone[at as usize] = false;
+        }
+        self.live += indices.len();
+        self.sums.truncate(indices.iter().min().map_or(0, |&at| at as usize));
+        self.cuts.remove(cut);
+        true
+    }
+
+    /// The sum of the own masses of the parts not gone, in turn (each worked out by `own_of` once), from the last sum kept on.
+    fn mass(&mut self, own_of: impl Fn(InstanceId) -> f32) -> f32 {
+        let mut sum = self.sums.last().copied().unwrap_or_else(|| std::iter::empty::<f32>().sum());
+        for index in self.sums.len()..self.order.len() {
+            if !self.gone[index] {
+                let part = self.order[index];
+                sum += *self.own[index].get_or_insert_with(|| own_of(part));
+            }
+            self.sums.push(sum);
+        }
+        sum
+    }
+
+    /// The parts not gone, in order
+    fn parts(&self) -> impl Iterator<Item = InstanceId> + '_ {
+        self.order.iter().zip(&self.gone).filter(|(_, gone)| !**gone).map(|(&part, _)| part)
+    }
+}
+
+/// A component's parts in the order a walk from `start` takes them up ([`order_from`]), each with the part that took it up (its index)
+/// and by which joint (none for `start`), not going past `stop` (a part already taken up elsewhere: none for a whole component).
+fn walk_order(links: &FxHashMap<InstanceId, Vec<(InstanceId, InstanceId)>>, start: InstanceId, stop: Option<InstanceId>) -> Vec<(InstanceId, u32, Option<InstanceId>)> {
+    let mut order = vec![(start, 0, None)];
+    let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
+    seen.insert(start);
+    seen.extend(stop);
+    let mut index = 0;
+    while index < order.len() {
+        for &(joint, other) in links.get(&order[index].0).map(Vec::as_slice).unwrap_or_default() {
+            if seen.insert(other) {
+                order.push((other, index as u32, Some(joint)));
+            }
+        }
+        index += 1;
+    }
+    order
 }
 
 /// A part's AssemblyCenterOfMass as worked out at a count of placings ([`Memo::placed`]), and whether it was read since.
@@ -841,6 +998,7 @@ impl Joints {
         let (anchored_before, best_before) = (found.anchored.borrow().len(), found.best.get());
         let settled = found.settled.get();
         let roots = found.take_roots();
+        let bodies = std::mem::take(&mut found.memo.borrow_mut().bodies);
         self.unsettled = None;
         let apart = {
             let mut links = found.links.borrow_mut();
@@ -875,6 +1033,14 @@ impl Joints {
         if best.is_some_and(|best| moved.contains_key(&best)) {
             found.best.set(None);
         }
+        // (the mass reads' walks of the staying side's parts, the side split off marked gone in them)
+        let side = usize::from(moved.contains_key(&parts[1]));
+        let bodies: FxHashMap<InstanceId, Body> = bodies
+            .into_iter()
+            .filter(|(part, _)| !moved.contains_key(part))
+            .filter_map(|(part, mut body)| body.cut(&moved, parts[side], joint, places[1 - side]).then_some((part, body)))
+            .collect();
+        found.memo.borrow_mut().bodies = bodies;
         // (which side holds every root: all the anchored parts, else the best ranked; the other side's parts were all in the
         // assembly of the root side's end of the link, below it)
         let (roots_apart, roots_kept) = if anchored_before > 0 {
@@ -927,6 +1093,7 @@ impl Joints {
             return None;
         }
         self.unsettled = None;
+        let mut joined = None;
         let found = match kept {
             [Some(first), Some(second)] if Rc::ptr_eq(&first, &second) => first,
             [first, second] => {
@@ -944,6 +1111,14 @@ impl Joints {
                     alone.derived.set(true);
                     alone
                 };
+                // (the mass reads' walks of both sides, each with its side's end of the joint and the other's)
+                let mut bodies: Vec<(InstanceId, InstanceId, InstanceId, Body)> = Vec::new();
+                for (side, end, other) in [(&into, into_part, from_part), (&from, from_part, into_part)] {
+                    if let Some(side) = side {
+                        bodies.extend(std::mem::take(&mut side.memo.borrow_mut().bodies).into_iter().map(|(part, body)| (part, end, other, body)));
+                    }
+                }
+                joined = Some(bodies);
                 let fresh = into.is_none();
                 let into = into.unwrap_or_else(|| alone(into_part));
                 let from = from.unwrap_or_else(|| alone(from_part));
@@ -974,6 +1149,23 @@ impl Joints {
             }
         }
         found.relinked();
+        // (a walk that takes the joint up after every part of its order goes on through the other side: its parts follow)
+        let mut sides: FxHashMap<InstanceId, Vec<(InstanceId, u32, Option<InstanceId>)>> = FxHashMap::default();
+        for (part, end, other, mut body) in joined.into_iter().flatten() {
+            let place = places[usize::from(end == parts[1])];
+            let side = sides.entry(other).or_insert_with(|| walk_order(&found.links.borrow(), other, Some(end)));
+            let kept = body.restore(end, joint, place, side)
+                || match body.joins_after(end, place, |link| self.indexed_place(link, end)) {
+                    Some(at) => {
+                        body.extend(at, joint, side);
+                        true
+                    }
+                    None => false,
+                };
+            if kept {
+                found.memo.borrow_mut().bodies.insert(part, body);
+            }
+        }
         Some(found)
     }
 }
@@ -1759,7 +1951,7 @@ pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceI
     };
     {
         let mut memo = found.memo.borrow_mut();
-        let Memo { mass, centre: centres, placed, .. } = &mut *memo;
+        let Memo { mass, centre: centres, placed, bodies, .. } = &mut *memo;
         if let Some(&mass) = mass.get(&part) {
             if !centre {
                 return (mass, glam::Vec3::ZERO);
@@ -1769,8 +1961,23 @@ pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceI
                 return (mass, entry.at);
             }
         }
+        // (a walk kept through the link changes since: the masses are added again from the first part they changed, nothing walked)
+        if !centre && let Some(body) = bodies.get_mut(&part) {
+            let sum = body.mass(|other| point(state, other).1);
+            mass.insert(part, sum);
+            return (sum, glam::Vec3::ZERO);
+        }
     }
-    let order = linked_parts(state, reflection, part);
+    // (the walk from the part: the one kept for its mass reads, else walked and kept)
+    let kept = found.memo.borrow().bodies.get(&part).map(|body| body.parts().collect::<Rc<[InstanceId]>>());
+    let (order, walk): (Rc<[InstanceId]>, _) = match kept {
+        Some(order) => (order, None),
+        None => {
+            let walk = walk_order(&found.links.borrow(), part, None);
+            (walk.iter().map(|&(other, ..)| other).collect(), Some(walk))
+        }
+    };
+    found.memo.borrow_mut().linked.entry(part).or_insert_with(|| order.clone());
     let points: Vec<(glam::Vec3, f32)> = order.iter().map(|&other| point(state, other)).collect();
     let (mass, at) = mass_centre(points.iter().copied());
     let mut memo = found.memo.borrow_mut();
@@ -1780,6 +1987,20 @@ pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceI
     for (&other, &(_, own)) in order.iter().zip(&points) {
         memo.masses.insert(other, own);
     }
+    match walk {
+        Some(walk) if memo.bodies.len() < KEPT_BODIES => {
+            let own: Vec<f32> = points.iter().map(|&(_, own)| own).collect();
+            let body = Body::new(walk, &own);
+            debug_assert_eq!(body.sums.last().map(|sum| sum.to_bits()), Some(mass.to_bits()), "a kept walk sums the masses as the read does");
+            memo.bodies.insert(part, body);
+        }
+        Some(_) => {}
+        None => {
+            let body = memo.bodies.get_mut(&part).expect("kept");
+            let sum = body.mass(|other| point(state, other).1);
+            debug_assert_eq!(sum.to_bits(), mass.to_bits(), "a kept walk sums the masses as the read does");
+        }
+    }
     (mass, at)
 }
 
@@ -1788,7 +2009,7 @@ pub fn assembly_body(state: &mut State, reflection: &Reflection, part: InstanceI
 /// The others are worked out when read.
 fn refresh_centres(state: &State, setup: &Setup, found: &Component) {
     let mut memo = found.memo.borrow_mut();
-    let Memo { linked, mass, centre, masses, placed } = &mut *memo;
+    let Memo { linked, mass, centre, masses, placed, .. } = &mut *memo;
     let mut left = REFRESHED_CENTRES;
     for (part, entry) in centre.iter_mut() {
         if !std::mem::replace(&mut entry.read, false) || entry.placed == *placed || left == 0 {
@@ -1885,6 +2106,7 @@ pub fn stored(state: &mut State, id: InstanceId, name: NameId) {
             memo.mass.clear();
             memo.centre.clear();
             memo.masses.clear();
+            memo.bodies.clear();
         }
         watch::ANCHORED => {
             let tree = found.tree.borrow_mut().take();
