@@ -14141,7 +14141,7 @@ fn an_error_inside_an_engine_function_has_no_frame_of_its_own() {
     );
 }
 
-/// A callback an engine function calls from its own frame finds it one level up, as a client's does (measured, Studio 0.747:
+/// A callback an engine function calls from its own frame finds it one frame up, as a client's does (measured, Studio 0.747:
 /// in a `__tostring` print calls, level 2 is `[C] print`), and a thread waiting in an engine function shows only the line that
 /// called it. The old code's print was the prelude's Luau (Stringify, then Print, above the `__tostring`), and a waiting thread
 /// listed the prelude's wait.
