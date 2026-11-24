@@ -6,7 +6,7 @@
 //!    AnimationClipProvider:RegisterAnimationClip keep the clip as it is then ([`register`]);
 //!    AnimationClipProvider:RegisterActiveAnimationClip's `active://N` is the instance itself, which the track
 //!    follows ([`active_clip`]);
-//! 2. `<id>.rbxm` / `<id>.rbxmx` in a mounted directory ([`Loading::directories`], `--animations`);
+//! 2. `<id>.rbxm` / `<id>.rbxmx` / `<id>.rbx` (a Roblox archive) in a mounted directory ([`Loading::directories`], `--animations`);
 //! 3. the download cache, `<state dir>/animations/<id>.rbxm`;
 //! 4. a download through the asset worker (its `asset` command, [`crate::project::model_assets::AssetWorker`],
 //!    which handles any authentication), written into that cache (features `bundles`; not `--offline`
@@ -43,7 +43,7 @@ use crate::{
 /// How an engine loads keyframes ([`enable`]).
 #[derive(Clone, Debug, Default)]
 pub struct Loading {
-    /// Directories of pre-fetched animations, `<id>.rbxm` / `<id>.rbxmx` (searched in order)
+    /// Directories of pre-fetched animations, `<id>.rbxm` / `<id>.rbxmx` / `<id>.rbx` (searched in order)
     pub directories: Vec<PathBuf>,
     /// Download what the directories and the cache lack (through the asset worker)
     pub download: bool,
@@ -90,8 +90,10 @@ pub fn enable(engine: &Engine, loading: Loading) {
 /// What was made of model files, per process, by file and stamp.
 type Kept<T> = Mutex<HashMap<PathBuf, (files::Stamp, Result<Arc<T>, String>)>>;
 
-/// `make`'s result for model file `path`, made once per process while the file is unchanged.
-fn kept<T>(cache: &Kept<T>, path: &Path, make: impl FnOnce(&WeakDom) -> Result<T, String>) -> Result<Arc<T>, String> {
+/// `make`'s result for model file `path`, made once per process while the file is unchanged. What reading it noted
+/// (an archive's content that reads as empty: project::decode_model) is warned about in `engine`, and such a file is
+/// read again next time, so every engine that loads it says so.
+fn kept<T>(engine: &Engine, cache: &Kept<T>, path: &Path, make: impl FnOnce(&WeakDom) -> Result<T, String>) -> Result<Arc<T>, String> {
     files::note(path);
     let stamp = files::stamp(path).ok_or_else(|| format!("{}: not found", path.display()))?;
     if let Some((kept, made)) = cache.lock().unwrap().get(path) {
@@ -99,19 +101,26 @@ fn kept<T>(cache: &Kept<T>, path: &Path, make: impl FnOnce(&WeakDom) -> Result<T
             return made.clone();
         }
     }
+    let mut notes = Vec::new();
     let made = std::fs::read(path)
         .map_err(|error| format!("{}: {error}", path.display()))
         .and_then(|bytes| crate::project::decode_model(&bytes))
-        .and_then(|dom| make(&dom))
+        .and_then(|(dom, noted)| {
+            notes = noted;
+            make(&dom)
+        })
         .map(Arc::new);
-    cache.lock().unwrap().insert(path.to_path_buf(), (stamp, made.clone()));
+    crate::project::warn_notes(engine, &path.to_string_lossy(), &notes);
+    if notes.is_empty() {
+        cache.lock().unwrap().insert(path.to_path_buf(), (stamp, made.clone()));
+    }
     made
 }
 
 /// The clip in model file `path` (decoded once per process while the file is unchanged).
-pub fn clip_from_file(path: &Path) -> Result<Arc<Clip>, String> {
+pub fn clip_from_file(engine: &Engine, path: &Path) -> Result<Arc<Clip>, String> {
     static CLIPS: std::sync::OnceLock<Kept<Clip>> = std::sync::OnceLock::new();
-    kept(CLIPS.get_or_init(Default::default), path, |dom| Clip::find(&FileTree(dom), dom.root_ref()))
+    kept(engine, CLIPS.get_or_init(Default::default), path, |dom| Clip::find(&FileTree(dom), dom.root_ref()))
 }
 
 /// The KeyframeSequence in model file `path` as a plan to make it of (converted once per process
@@ -119,7 +128,7 @@ pub fn clip_from_file(path: &Path) -> Result<Arc<Clip>, String> {
 /// ([`super::curve_clip::sequence`]).
 fn sequence_from_file(engine: &Engine, path: &Path) -> Result<Arc<ModelPlan>, String> {
     static SEQUENCES: std::sync::OnceLock<Kept<ModelPlan>> = std::sync::OnceLock::new();
-    kept(SEQUENCES.get_or_init(Default::default), path, |dom| {
+    kept(engine, SEQUENCES.get_or_init(Default::default), path, |dom| {
         let (node, curve) = clip::clip_node(&FileTree(dom), dom.root_ref())?;
         if curve {
             let (made, sequence) = super::curve_clip::sequence(&FileTree(dom), node);
@@ -132,7 +141,7 @@ fn sequence_from_file(engine: &Engine, path: &Path) -> Result<Arc<ModelPlan>, St
 /// The clip in model file `path`, a KeyframeSequence or a CurveAnimation, as a plan to make it of.
 fn animation_clip_from_file(engine: &Engine, path: &Path) -> Result<Arc<ModelPlan>, String> {
     static CLIPS: std::sync::OnceLock<Kept<ModelPlan>> = std::sync::OnceLock::new();
-    kept(CLIPS.get_or_init(Default::default), path, |dom| {
+    kept(engine, CLIPS.get_or_init(Default::default), path, |dom| {
         let (node, _) = clip::clip_node(&FileTree(dom), dom.root_ref())?;
         Ok(ModelPlan::new(&engine.reflection, dom, &[node]))
     })
@@ -179,7 +188,7 @@ fn locate_unnoted(engine: &Engine, uri: &str) -> Result<Found, String> {
     let Some(loading) = slot.borrow().loading.clone() else { return Ok(Found::Nothing) };
     let Some(id) = id else { return Err(format!("{uri}: names no asset")) };
     for directory in &loading.directories {
-        for extension in ["rbxm", "rbxmx"] {
+        for extension in ["rbxm", "rbxmx", "rbx"] {
             let file = directory.join(format!("{id}.{extension}"));
             files::note(&file);
             if files::is_file(&file) {
@@ -320,7 +329,7 @@ pub(crate) fn resolve(engine: &Engine, uri: &str) -> Result<Option<Arc<Clip>>, S
             let tree = EngineTree { state: &state, reflection: &engine.reflection };
             Ok(Some(Arc::new(Clip::of(&tree, registered, is_curve(engine, &state, registered)))))
         }
-        Found::File(file) => clip_from_file(&file).map(Some),
+        Found::File(file) => clip_from_file(engine, &file).map(Some),
     }
 }
 

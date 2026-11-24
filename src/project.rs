@@ -1823,12 +1823,24 @@ fn instantiate_model(engine: &Engine, plan: &ModelPlan, name: Option<&str>, pare
 }
 
 /// A model file's instances: a Studio model (.rbxm / .rbxmx), or Rojo's JSON model (.model.json),
-/// whose top instance is named after the file (one Rojo would reject is reported here). Their rotations
-/// are as a client receives them (received.rs). None when it does not decode or holds nothing.
-fn decode_model_file(engine: &Engine, path: &str, bytes: &[u8]) -> Option<WeakDom> {
+/// whose top instance is named after the file (one that does not decode, or one Rojo would reject, is reported here),
+/// and whether reading it noted anything (also reported here: [`decode_model`]). Their rotations are as a client
+/// receives them (received.rs). None when it does not decode or holds nothing.
+fn decode_model_file(engine: &Engine, path: &str, bytes: &[u8]) -> Option<(WeakDom, bool)> {
     let file_name = Path::new(path).file_name()?.to_string_lossy();
+    let mut noted = false;
     let mut dom = if !file_name.to_ascii_lowercase().ends_with(".model.json") {
-        decode_model(bytes).ok()?
+        match decode_model(bytes) {
+            Ok((dom, notes)) => {
+                noted = !notes.is_empty();
+                warn_notes(engine, path, &notes);
+                dom
+            }
+            Err(message) => {
+                engine.warn(format!("{path}: {message}; not mounted"));
+                return None;
+            }
+        }
     } else {
         match json_model::decode(bytes, &file_name[..file_name.len() - ".model.json".len()]) {
             Ok(dom) => dom?,
@@ -1839,12 +1851,20 @@ fn decode_model_file(engine: &Engine, path: &str, bytes: &[u8]) -> Option<WeakDo
         }
     };
     received::as_received(&mut dom);
-    Some(dom)
+    Some((dom, noted))
+}
+
+/// A model file's load notes ([`decode_model`]) as warnings that name the file.
+pub(crate) fn warn_notes(engine: &Engine, path: &str, notes: &[String]) {
+    for note in notes {
+        engine.warn(format!("{path}: {note}"));
+    }
 }
 
 /// A mounted model file converted: read, decoded and converted, or, in a process that keeps compiled
 /// modules (a service), the plan kept for the file while its size and modification time are unchanged
-/// (a sim mounts the same bundle file run after run). None when it does not read or decode.
+/// (a sim mounts the same bundle file run after run; one whose reading noted something is read again, so each run
+/// reports it). None when it does not read or decode.
 fn mounted_plan(engine: &Engine, path: &str) -> Option<std::sync::Arc<ModelPlan>> {
     type Kept = std::sync::Mutex<FxHashMap<String, (crate::files::Stamp, std::sync::Arc<ModelPlan>)>>;
     static KEPT: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
@@ -1860,9 +1880,9 @@ fn mounted_plan(engine: &Engine, path: &str) -> Option<std::sync::Arc<ModelPlan>
         }
     }
     let bytes = std::fs::read(path).ok()?;
-    let dom = decode_model_file(engine, path, &bytes)?;
+    let (dom, noted) = decode_model_file(engine, path, &bytes)?;
     let plan = std::sync::Arc::new(ModelPlan::new(&engine.reflection, &dom, dom.root().children()));
-    if let (true, Some(stamp)) = (keep, stamp) {
+    if let (true, Some(stamp), false) = (keep, stamp, noted) {
         let kept = KEPT.get_or_init(|| crate::alloc::long_lived(Kept::default));
         let plan = crate::alloc::long_lived(|| std::sync::Arc::new(ModelPlan::clone_compacted(&plan)));
         if let Ok(mut map) = kept.lock() {
@@ -1950,7 +1970,15 @@ pub fn mount_at(engine: &Engine, spec: &Mount) -> Result<MountCounts, String> {
                     return Err(format!("{service_name}={path}: a file cannot be mounted as a service"));
                 };
                 let file_name = Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                mount_file(engine, &path, &file_name, Some(last), parent, &mut mount);
+                if ends_with_ignore_ascii_case(&file_name, ".rbx") {
+                    // a Roblox archive mounted on its own, as a model file is (a Rojo tree holds none: Rojo does not
+                    // read them, so mount_file leaves them out of directories)
+                    if let Some(plan) = mounted_plan(engine, &path) {
+                        instantiate_model(engine, &plan, Some(last), parent);
+                    }
+                } else {
+                    mount_file(engine, &path, &file_name, Some(last), parent, &mut mount);
+                }
             }
         }
     }
@@ -2331,7 +2359,7 @@ fn place_content_files(dir: &Path, up: Option<&Above>, files: &mut Vec<PathBuf>,
                 Some(above) => loops.push((child.to_string_lossy().into_owned(), above.to_string())),
                 None => place_content_files(&child, Some(&here), files, loops),
             }
-        } else if name.ends_with(".rbxm") || name.ends_with(".rbxmx") {
+        } else if name.ends_with(".rbxm") || name.ends_with(".rbxmx") || name.ends_with(".rbx") {
             files.push(child);
         }
     }
@@ -2339,7 +2367,7 @@ fn place_content_files(dir: &Path, up: Option<&Above>, files: &mut Vec<PathBuf>,
 
 /// Place content: the instances a place stores that its hierarchy snapshot lists by name and class
 /// only (a Studio-only Model is a default one: scale 1, no pivot, no sizes). `<repo>/data/place-content/
-/// <Place>/<parent path>/*.rbxm` holds them as Studio serialized them: the directories below the place
+/// <Place>/<parent path>/*.rbxm` (or `.rbxmx`, `.rbx`) holds them as Studio serialized them: the directories below the place
 /// are the path of the parent (`ReplicatedStorage/Shared/Rigs`), each file's
 /// roots become its children and replace the snapshot's placeholders of the same names, and the
 /// snapshot adds nothing below them (it can be older than the place). Returns how many roots were
@@ -2450,7 +2478,38 @@ pub fn mount_place_content(engine: &Engine, hierarchy: &str) -> usize {
 
 // Models and snapshots (rbx-dom -> engine instances)
 
-pub fn decode_model(bytes: &[u8]) -> Result<WeakDom, String> {
+/// A model or place file's instances, and what reading it noted. A Roblox archive (.rbx) is read as the standalone
+/// .rbxl / .rbxm it holds, with the values it keeps in objects of their own written back first: rbx_binary reads the
+/// stored scene without them and without an error, so a script's Source would come back empty (the format and the
+/// reader: roblox-object-renderer's docs/archives.md). The notes are the archive reader's: content kept as objects
+/// with no documented layout, which reads as empty, and what it read past. An archive it refuses is an error.
+pub fn decode_model(bytes: &[u8]) -> Result<(WeakDom, Vec<String>), String> {
+    let scene = match ror_archive::unwrap(bytes) {
+        Ok(scene) => scene,
+        // neither a Roblox file nor a ZIP: decoded as before, so the error is the parser's
+        Err(ror_archive::Error::NotArchive) => return decode_scene(bytes).map(|dom| (dom, Vec::new())),
+        Err(error) => return Err(format!("Roblox archive: {error}")),
+    };
+    let notes = archive_notes(&scene.report);
+    decode_scene(&scene.bytes).map(|dom| (dom, notes))
+}
+
+/// What an archive's reader reported, as load warnings (the wording roblox-object-renderer gives them).
+pub(crate) fn archive_notes(report: &ror_archive::Report) -> Vec<String> {
+    let mut notes: Vec<String> = report
+        .embedded_content
+        .iter()
+        .map(|content| {
+            let plural = if content.values == 1 { "" } else { "s" };
+            format!("{}.{}: {} value{plural} kept in the archive as content objects ({} bytes) that have no documented layout; read as empty", content.class, content.property, content.values, content.bytes)
+        })
+        .collect();
+    notes.extend(report.warnings.iter().map(|warning| format!("Roblox archive: {warning}")));
+    notes
+}
+
+/// A standalone binary or XML model or place.
+fn decode_scene(bytes: &[u8]) -> Result<WeakDom, String> {
     if bytes.starts_with(b"<roblox!") {
         // Files from a newer Studio can store a property as a type our reflection database doesn't
         // expect (2026-09: Tags written as a SharedString); rbx_binary rejects the whole file. Retry
@@ -2552,7 +2611,8 @@ pub fn convert_model(engine: &Engine, dom: &WeakDom, parent: Option<InstanceId>)
 pub fn load_snapshot(engine: &Engine, path: &Path, parent: InstanceId) -> Result<Vec<InstanceId>, String> {
     crate::files::note(path);
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let mut dom = decode_model(&bytes)?;
+    let (mut dom, notes) = decode_model(&bytes)?;
+    warn_notes(engine, &path.to_string_lossy(), &notes);
     received::as_received(&mut dom);
     let mut result = Vec::new();
     for &root in dom.root().children() {
@@ -2577,7 +2637,8 @@ pub fn load_snapshot(engine: &Engine, path: &Path, parent: InstanceId) -> Result
 pub fn load_model(engine: &Engine, path: &Path) -> Result<Vec<InstanceId>, String> {
     crate::files::note(path);
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let mut dom = decode_model(&bytes)?;
+    let (mut dom, notes) = decode_model(&bytes)?;
+    warn_notes(engine, &path.to_string_lossy(), &notes);
     received::as_received(&mut dom);
     Ok(convert_model(engine, &dom, None))
 }

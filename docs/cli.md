@@ -21,7 +21,7 @@ Source checkout builds and library hosts keep their checkout-local `.cache` and 
 ```sh
 ree record --harness path/to/Harness.luau --out out/scene --roots "game/shared;game/src" \
     --seconds 3 --fps 60 --context '{"Scenario":"demo"}' --assets-at ReplicatedStorage.Bundles --assets Models \
-    [--animations <dir>]                             # Pre-fetched KeyframeSequences (<id>.rbxm)
+    [--animations <dir>]                             # Pre-fetched KeyframeSequences (<id>.rbxm, .rbxmx or .rbx)
     [--timing-check]                                 # Probe sub-frame os.clock sensitivity
 ror video out/scene/scene.rbxm --playback out/scene/playback.json --duration 3
 ree run --harness path/to/Probe.luau --seconds 1     # JSON status + timestamped output (no recording)
@@ -124,7 +124,8 @@ Options accept `--key value` or `--key=value` (required for negative numbers).
   ```
 - **Mounts & snapshots:**
   - `--mount Service/Name=<dir|file>` and `--instance Service/Name=<ClassName>` (repeatable).
-  - `--snapshot-dir <dir>` / `--snapshot <Service.rbxm>` (in checkouts, `data/place-content/<Place>/<parent>/*.rbxm` auto-replaces matching placeholders).
+  - `--snapshot-dir <dir>` / `--snapshot <Service.rbxm>` (`.rbxmx` and `.rbx` too; in checkouts, `data/place-content/<Place>/<parent>/*.rbxm`, `.rbxmx` or `.rbx` auto-replaces matching placeholders).
+  - **Roblox archives (`.rbx`):** read wherever a model file is (`--mount Service/Name=<file.rbx>`, `--snapshot`, `--snapshot-dir`, place content, `--animations`, `Context.Mount`, manifest bundles, and `roblox.deserializeModel` / `deserializePlace` in `ree lune`), as the `.rbxl` / `.rbxm` they hold with the values kept outside the scene (script sources) put back. A file is read by its bytes, so an archive saved under a model file's name reads too. Inside a `--roots` folder or a `--rojo` tree only the files Rojo reads mount, so a `.rbx` there (or a `$path` to one) makes nothing. An archive that does not read is a warning that names the file and the reason, and so is what the reader read past or could not restore (content kept as objects with no documented layout reads as empty). The format and the reader: roblox-object-renderer's `docs/archives.md`.
 - **World & client settings:** `--player <name>`, `--place-id <n>`, `--streaming <radius>` (sets `Workspace.StreamingEnabled` and `StreamingTargetRadius`), `--viewport WxH`, `--offline`, `--verbose`.
 - **Relative content paths:** Local paths (`file://<path>` or relative paths like `output/x.mesh` passed to `CreateMeshPartAsync`, `CreateEditableMeshAsync`, `CreateEditableImageAsync`) resolve against `--project`, else the `--rojo` file's folder, else the first root's parent, else the current directory.
 - **Asset bundles:** `--assets-at <Service.Path>` and `--assets <prefix>,...` (or `*` for all) configure manifest bundle mounting, overriding `rur.json`'s `modelAssets` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
@@ -198,7 +199,7 @@ Each probe diffs `playback.json`, `camera.json`, `events.json`, and per-frame `f
 
 `Animator:LoadAnimation` (also via `Humanoid` and `AnimationController`) plays both `KeyframeSequence` and `CurveAnimation` clips, writing blended transforms to `Motor6D` and `Bone` `Transform` properties every play-mode frame ([engine.md](engine.md)).
 
-- **Asset lookup:** `--animations <dir>` (`<id>.rbxm`/`.rbxmx`) → `<state dir>/animations` cache →
+- **Asset lookup:** `--animations <dir>` (`<id>.rbxm`/`.rbxmx`/`.rbx`) → `<state dir>/animations` cache →
   external asset worker (`asset` command).
   Missing IDs warn once and load with `Length = 0`.
 - **Async load latency:** First request for an animation asset resolves **0.45 s** later (matching Studio; `Length = 0` until loaded). Subsequent loads—or assets awaited via `ContentProvider:PreloadAsync`—load immediately.

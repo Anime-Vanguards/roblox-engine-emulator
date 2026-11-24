@@ -22,7 +22,7 @@ use super::{
 #[derive(Clone, Debug, Default)]
 pub struct ProjectSpec {
     pub roots: Vec<String>,
-    /// Studio exports (<Service>.rbxm) loaded into their services
+    /// Studio exports (<Service>.rbxm, .rbxmx or .rbx) loaded into their services
     pub snapshots: Vec<String>,
     pub snapshot_dir: Option<String>,
     /// Explicit mounts after the roots (`--mount` / `--instance`, Rojo project files)
@@ -127,7 +127,7 @@ pub fn begin_project(lua: &Lua, engine: &Rc<Engine>, spec: &ProjectSpec, started
     engine.state.borrow_mut().sched.set_main_thread(&lua.current_thread());
     mounting.phase(engine, "start");
 
-    // Snapshots (Studio exports: <dir>/<Service>.rbxm)
+    // Snapshots (Studio exports: <dir>/<Service>.rbxm, .rbxmx, or a Roblox archive .rbx)
     let game = engine.world().game;
     let service_of = |path: &str| -> Option<String> {
         let name = PathBuf::from(path).file_name()?.to_string_lossy().into_owned();
@@ -136,6 +136,8 @@ pub fn begin_project(lua: &Lua, engine: &Rc<Engine>, spec: &ProjectSpec, started
             &name[..name.len() - 6]
         } else if lower.ends_with(".rbxm") {
             &name[..name.len() - 5]
+        } else if lower.ends_with(".rbx") {
+            &name[..name.len() - 4]
         } else {
             return None;
         };

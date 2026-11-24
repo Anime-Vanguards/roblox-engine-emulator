@@ -836,6 +836,25 @@ fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
     Ok(())
 }
 
+/// The standalone place or model behind `bytes`: a Roblox archive (.rbx) flattened first, since the parser would read
+/// its stored scene without the values it keeps outside it (crate::project::decode_model). What the archive's reader
+/// noted goes to stderr, as `ree lune`'s other warnings do; an archive it refuses is the call's error.
+fn unwrap_archive(bytes: Vec<u8>, function: &str) -> LuaResult<Vec<u8>> {
+    let flattened = match ror_archive::unwrap(&bytes) {
+        Ok(scene) if scene.package.is_none() => None,
+        Ok(scene) => {
+            for note in crate::project::archive_notes(&scene.report) {
+                eprintln!("roblox.{function}: {note}");
+            }
+            Some(scene.bytes.into_owned())
+        }
+        // (not a Roblox file or an archive: the parser's error says so)
+        Err(ror_archive::Error::NotArchive) => None,
+        Err(error) => return Err(LuaError::runtime(format!("roblox.{function}: Roblox archive: {error}"))),
+    };
+    Ok(flattened.unwrap_or(bytes))
+}
+
 fn bytes_from_lua(val: &LuaValue) -> LuaResult<Vec<u8>> {
     match val {
         LuaValue::String(s) => Ok(s.as_bytes().to_vec()),
@@ -860,7 +879,7 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
     module.raw_set(
         "deserializeModel",
         lua.create_function(|lua, data: LuaValue| {
-            let bytes = bytes_from_lua(&data)?;
+            let bytes = unwrap_archive(bytes_from_lua(&data)?, "deserializeModel")?;
             let doc = Document::from_bytes(bytes, DocumentKind::Model).map_err(LuaError::external)?;
             let instances = doc.into_instance_array().map_err(LuaError::external)?;
             RbxInstance::vec_into_cached_lua(instances, lua)
@@ -869,7 +888,7 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
     module.raw_set(
         "deserializePlace",
         lua.create_function(|lua, data: LuaValue| {
-            let bytes = bytes_from_lua(&data)?;
+            let bytes = unwrap_archive(bytes_from_lua(&data)?, "deserializePlace")?;
             let doc = Document::from_bytes(bytes, DocumentKind::Place).map_err(LuaError::external)?;
             let dm = doc.into_data_model_instance().map_err(LuaError::external)?;
             dm.into_cached_lua(lua)
@@ -2780,6 +2799,51 @@ print("OK")
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(out.code, 0, "stderr/stdout: {}", out.output);
         assert_eq!(out.output.trim(), "OK");
+    }
+
+    /// roblox.deserializeModel and deserializePlace read a Roblox archive (.rbx) as the file it holds, with the values
+    /// kept outside its scene put back (a script's Source), and refuse a damaged one with the archive reader's error.
+    #[test]
+    fn lune_deserializes_archives_with_their_scripts_sources() {
+        use rbx_dom_weak::{InstanceBuilder, WeakDom};
+        let dir = std::env::temp_dir().join(format!("ree-lune-archive-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let source = format!("return \"{}\"
+", "abcdefghij".repeat(40));
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let module = dom.insert(dom.root_ref(), InstanceBuilder::new("ModuleScript").with_name("Module").with_property("Source", source.clone()));
+        let mut model = Vec::new();
+        rbx_binary::to_writer(&mut model, &dom, &[module]).unwrap();
+        let mut place = Vec::new();
+        let storage = dom.insert(dom.root_ref(), InstanceBuilder::new("ReplicatedStorage"));
+        dom.transfer_within(module, storage);
+        rbx_binary::to_writer(&mut place, &dom, &[storage]).unwrap();
+        let model = ror_archive::Builder::model(model).externalize(256).build().unwrap();
+        let mut damaged = model.clone();
+        let at = damaged.windows(10).position(|window| window == b"abcdefghij").unwrap();
+        damaged[at] ^= 1;
+        fs::write(dir.join("Model.rbx"), &model).unwrap();
+        fs::write(dir.join("Damaged.rbx"), &damaged).unwrap();
+        fs::write(dir.join("Place.rbx"), ror_archive::Builder::place(place).externalize(256).build().unwrap()).unwrap();
+        let script = dir.join("archive.luau");
+        fs::write(
+            &script,
+            r#"
+local fs = require("@lune/fs")
+local process = require("@lune/process")
+local roblox = require("@lune/roblox")
+local dir = process.args[1]
+local model = roblox.deserializeModel(fs.readFile(dir .. "/Model.rbx"))
+local place = roblox.deserializePlace(fs.readFile(dir .. "/Place.rbx"))
+local damaged, message = pcall(roblox.deserializeModel, fs.readFile(dir .. "/Damaged.rbx"))
+print(#model[1].Source, #place:GetService("ReplicatedStorage").Module.Source, damaged, string.find(tostring(message), "Roblox archive: invalid .rbx container", 1, true) ~= nil)
+"#,
+        )
+        .unwrap();
+        let out = run_one(&script.to_string_lossy(), vec![dir.to_string_lossy().into_owned()], true, false, None);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(out.code, 0, "stderr/stdout: {}", out.output);
+        assert_eq!(out.output.trim(), format!("{0}	{0}	false	true", source.len()));
     }
 
     #[test]

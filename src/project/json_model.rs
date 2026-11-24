@@ -235,5 +235,6 @@ pub fn decode(bytes: &[u8], name: &str) -> Result<Option<WeakDom>, String> {
     let top = dom.insert(dom.root_ref(), top);
     let mut file = Vec::new();
     rbx_binary::to_writer(&mut file, &dom, &[top]).map_err(|error| error.to_string())?;
-    super::decode_model(&file).map(Some)
+    // (bytes written just above: never an archive, so nothing to note)
+    super::decode_model(&file).map(|(dom, _)| Some(dom))
 }

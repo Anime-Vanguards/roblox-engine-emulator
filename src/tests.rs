@@ -2655,6 +2655,120 @@ fn models_keep_what_the_engines_reflection_has_and_rbx_dom_lacks() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A model file whose Folder `name` holds the ModuleScript `Module`, whose Source returns a long string (long enough
+/// for an archive writer to keep it outside the scene), and that string.
+fn archived_module(name: &str) -> (Vec<u8>, String) {
+    use rbx_dom_weak::{InstanceBuilder, WeakDom};
+    let text = "abcdefghij".repeat(40);
+    let module = InstanceBuilder::new("ModuleScript").with_name("Module").with_property("Source", format!("return \"{text}\"\n"));
+    let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+    let top = dom.insert(dom.root_ref(), InstanceBuilder::new("Folder").with_name(name).with_child(module));
+    let mut file = Vec::new();
+    rbx_binary::to_writer(&mut file, &dom, &[top]).unwrap();
+    (file, text)
+}
+
+/// `bytes` with the CRC-32 of the ZIP member `name` written again in its local header and its central directory entry
+/// (after a test changed the member's bytes without moving them).
+fn rezip_crc(mut bytes: Vec<u8>, name: &str) -> Vec<u8> {
+    let crc32 = |data: &[u8]| {
+        let mut crc = !0u32;
+        for &byte in data {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    };
+    let u16_at = |bytes: &[u8], at: usize| usize::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]));
+    let u32_at = |bytes: &[u8], at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let (mut local, mut central) = (None, None);
+    for at in 0..bytes.len().saturating_sub(46) {
+        if bytes[at..].starts_with(b"PK\x03\x04") && bytes[at + 30..].starts_with(name.as_bytes()) && u16_at(&bytes, at + 26) == name.len() {
+            local.get_or_insert(at);
+        }
+        if bytes[at..].starts_with(b"PK\x01\x02") && bytes[at + 46..].starts_with(name.as_bytes()) && u16_at(&bytes, at + 28) == name.len() {
+            central.get_or_insert(at);
+        }
+    }
+    let (local, central) = (local.expect("local header"), central.expect("central directory entry"));
+    let start = local + 30 + u16_at(&bytes, local + 26) + u16_at(&bytes, local + 28);
+    let crc = crc32(&bytes[start..start + u32_at(&bytes, local + 22)]).to_le_bytes();
+    bytes[local + 14..local + 18].copy_from_slice(&crc);
+    bytes[central + 16..central + 20].copy_from_slice(&crc);
+    bytes
+}
+
+/// A Roblox archive (.rbx) mounts as the model it holds, with the values its writer kept outside the scene put back: a
+/// script's Source, which rbx_binary reads as empty from the stored scene alone. It mounts by `--mount` and by
+/// project::load_model under its own extension, and as a model file in a mounted directory when it is named like one.
+#[test]
+fn archives_mount_with_their_scripts_sources() {
+    use super::project::{Mount, load_model, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-archive-mount-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    let (model, text) = archived_module("Lib");
+    let archive = ror_archive::Builder::model(model).externalize(256).build().unwrap();
+    // the stored scene alone: the source is kept outside it, and the parser drops the property without an error
+    let stored = rbx_binary::from_reader(ror_archive::Archive::open(&archive).unwrap().root().unwrap().bytes).unwrap();
+    let module = stored.descendants().find(|instance| instance.name == "Module").expect("Module");
+    assert!(!matches!(module.properties.get(&"Source".into()), Some(rbx_dom_weak::types::Variant::String(source)) if !source.is_empty()), "the stored scene holds the source");
+    std::fs::write(dir.join("Lib.rbx"), &archive).unwrap();
+    std::fs::write(dir.join("lib/Inner.rbxm"), &archive).unwrap();
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Archived={}", dir.join("Lib.rbx").to_string_lossy()), false).unwrap()).unwrap();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Dir={}", dir.join("lib").to_string_lossy()), false).unwrap()).unwrap();
+    let loaded = load_model(&engine, &dir.join("Lib.rbx")).unwrap();
+    assert_eq!(loaded.len(), 1);
+    let output = run(&lua, &engine, r#"
+        local Storage = game:GetService("ReplicatedStorage")
+        print(require(Storage.Archived.Module), require(Storage.Dir.Lib.Module))
+    "#);
+    assert_eq!(output, [format!("print: {text} {text}")]);
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An archive that does not read (here a member that fails its CRC-32) is a warning that names the file and says why,
+/// under its own extension and under a model file's, where a model file that does not decode was left out without a word;
+/// and what the archive's reader read past is a warning that names the file, the model mounting all the same.
+#[test]
+fn archives_that_do_not_read_or_note_something_say_so() {
+    use super::project::{Mount, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-archive-warn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    let (model, text) = archived_module("Lib");
+    let archive = ror_archive::Builder::model(model).externalize(256).build().unwrap();
+    let mut damaged = archive.clone();
+    let at = damaged.windows(text.len()).position(|window| window == text.as_bytes()).expect("the source's object");
+    damaged[at] ^= 1;
+    std::fs::write(dir.join("Broken.rbx"), &damaged).unwrap();
+    std::fs::write(dir.join("lib/Broken.rbxm"), &damaged).unwrap();
+    // a digest algorithm the reader does not know: its objects are used unchecked, and it says so
+    let unknown = archive.windows(10).position(|window| window == b"blake3-128").expect("the header");
+    let mut noted = archive.clone();
+    noted[unknown..unknown + 10].copy_from_slice(b"blake3-12x");
+    std::fs::write(dir.join("Noted.rbx"), rezip_crc(noted, "manifest.jsonl")).unwrap();
+    let (lua, engine) = start();
+    for (at, file) in [("Broken", dir.join("Broken.rbx")), ("Dir", dir.join("lib")), ("Noted", dir.join("Noted.rbx"))] {
+        mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/{at}={}", file.to_string_lossy()), false).unwrap()).unwrap();
+    }
+    let output = run(&lua, &engine, r#"
+        local Storage = game:GetService("ReplicatedStorage")
+        print(Storage:FindFirstChild("Broken"), #Storage.Dir:GetChildren(), require(Storage.Noted.Module) ~= nil)
+    "#);
+    let warned = |file: &str, says: &str| output.iter().any(|line| line.starts_with("warn: ") && line.contains(file) && line.contains(says));
+    assert!(warned("Broken.rbx", "Roblox archive: invalid .rbx container"), "{output:?}");
+    assert!(warned("Broken.rbxm", "Roblox archive: invalid .rbx container"), "{output:?}");
+    assert!(warned("Noted.rbx", "Roblox archive: ") && warned("Noted.rbx", "blake3-12x"), "{output:?}");
+    assert_eq!(output.last().map(String::as_str), Some("print: nil 0 true"), "{output:?}");
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Everything the engine holds per instance, signal and connection, and the Luau heap.
 #[derive(Debug, PartialEq, Clone, Copy)]
 struct Held {

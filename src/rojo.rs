@@ -410,6 +410,8 @@ impl Walk<'_> {
     /// The mounts of built node `node` at instance path `segments`, then its children's below it
     fn place(&mut self, node: Built, segments: &mut Vec<String>) {
         match node.source {
+            // (Rojo reads no Roblox archive: a $path to a .rbx file makes nothing, though `--mount` reads one)
+            Source::Found(source) if source.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("rbx")) && !source.is_dir() => {}
             Source::Found(source) => self.mounts.push(Mount { instance: false, path: segments.join("/"), value: source.to_string_lossy().into_owned() }),
             Source::Missing(source) => self.missing.push(Mount { instance: false, path: segments.join("/"), value: source.to_string_lossy().into_owned() }),
             Source::Skipped => {}
@@ -513,6 +515,20 @@ mod tests {
         // Every $path, also the missing ones (optional too), with whether it exists
         let mapped: Vec<(String, bool)> = mappings(&dir.join("default.project.json")).unwrap().into_iter().map(|(at, _, exists)| (at, exists)).collect();
         assert_eq!(mapped.iter().filter(|(_, exists)| !exists).map(|(at, _)| at.as_str()).collect::<Vec<_>>(), ["ServerStorage/Gone"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `$path` to a Roblox archive (.rbx) makes nothing, as in Rojo, which reads none; a model file's mounts
+    #[test]
+    fn a_path_to_an_archive_makes_nothing() {
+        let dir = temp_dir("archive");
+        write(&dir.join("Map.rbx"), "PK");
+        write(&dir.join("Map.rbxm"), "<roblox!");
+        write(&dir.join("default.project.json"), r#"{"name":"game","tree":{"$className":"DataModel","Workspace":{"Archive":{"$path":"Map.rbx"},"Model":{"$path":"Map.rbxm"}}}}"#);
+        let mut warnings = Vec::new();
+        let mounts = mounts(&dir.join("default.project.json"), None, &mut warnings).unwrap();
+        assert_eq!(mounts.iter().map(|mount| mount.path.as_str()).collect::<Vec<_>>(), ["Workspace/Model"]);
+        assert!(warnings.is_empty(), "{warnings:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

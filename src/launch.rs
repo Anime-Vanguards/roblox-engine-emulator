@@ -5,7 +5,7 @@
 //!   [--roots "<dir>;<dir>"] [--project <dir>] [--place <place name>]
 //!   [--mount Service/Name=<dir|file>]... [--instance Service/Name=<ClassName>]...
 //!   [--rojo <file.project.json> [--rojo-at Service/Name]]
-//!   [--snapshot <file.rbxm>]... [--snapshot-dir <dir>] [--no-snapshots] [--viewport WxH]
+//!   [--snapshot <Service.rbxm|.rbxmx|.rbx>]... [--snapshot-dir <dir>] [--no-snapshots] [--viewport WxH]
 //!   [--scale S] [--camera WxH] [--rotation-clipping enabled|disabled] [--mode edit|play]
 //!   [--run-context client|server|loopback] [--player Name] [--place-id N] [--streaming R] [--offline]
 //!   [--native] [--verbose] [--repo <dir>]

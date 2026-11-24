@@ -205,7 +205,11 @@ pub fn warm(repo: &Path, roots: &[String], chosen: &ModelAssetsOverride, reflect
     let read = files
         .par_iter()
         .filter(|path| {
-            let Ok(plan) = convert_file(reflection, path) else { return false };
+            // (one whose reading noted something is left for the import, which reports it)
+            let Ok((plan, notes)) = convert_file(reflection, path) else { return false };
+            if !notes.is_empty() {
+                return false;
+            }
             let Some(stamp) = file_stamp(path) else { return false };
             let plan = crate::alloc::long_lived(|| Arc::new(plan.compacted()));
             store.lock().is_ok_and(|mut kept| {
@@ -278,7 +282,7 @@ fn import(engine: &Engine, id: InstanceId, own_only: bool) {
         let ahead = crate::timing::time("bundles: decoded ahead", || decoding.as_ref().and_then(|decoding| decoding.take(&key)));
         let result = match ahead {
             // (a plan kept across runs is copied to this thread's long-lived heap: crate::alloc)
-            Some((path, converted)) => converted.map(|plan| (path.clone(), keep(&path, Arc::new(if kept_plans() { crate::alloc::long_lived(|| plan.compacted()) } else { plan })))),
+            Some((path, converted)) => converted.map(|(plan, notes)| (path.clone(), kept_unless_noted(engine, &path, plan, &notes))),
             None => crate::timing::time("bundles: fetch", || source.bundle(&project, &key)).and_then(|path| plan_for(engine, &path).map(|plan| (path, plan))),
         };
         match &result {
@@ -587,41 +591,54 @@ fn plan_for(engine: &Engine, path: &Path) -> Result<Arc<ModelPlan>, String> {
         crate::profiler::caches::hit(crate::profiler::caches::Cache::BundlePlans);
         return Ok(plan);
     }
-    let plan = crate::timing::time("bundles: convert", || convert_file(&engine.reflection, path))?;
-    let plan = if kept_plans() { crate::alloc::long_lived(|| plan.compacted()) } else { plan };
-    Ok(keep(path, Arc::new(plan)))
+    let (plan, notes) = crate::timing::time("bundles: convert", || convert_file(&engine.reflection, path))?;
+    Ok(kept_unless_noted(engine, path, plan, &notes))
+}
+
+/// A bundle file's plan just converted, kept when the thread keeps bundles, unless reading the file noted something
+/// (project::decode_model): that is warned about, and the file converted again next time, so each run reports it.
+fn kept_unless_noted(engine: &Engine, path: &Path, plan: ModelPlan, notes: &[String]) -> Arc<ModelPlan> {
+    // (a plan kept across runs is copied to this thread's long-lived heap: crate::alloc)
+    let plan = Arc::new(if kept_plans() { crate::alloc::long_lived(|| plan.compacted()) } else { plan });
+    if notes.is_empty() {
+        return keep(path, plan);
+    }
+    super::warn_notes(engine, &path.to_string_lossy(), notes);
+    plan
 }
 
 /// Bundle file `path` converted: read from the converted file beside it (`<file>.plan`) when this
 /// build wrote it for the file as it is, else read, decoded and converted now, and written there
 /// for the next run (a one-shot recording decoded and converted its ~100 bundles on 8 threads
-/// each time: 2 s of CPU in a quarter of a second, and the decoded files' memory).
-fn convert_file(reflection: &Reflection, path: &Path) -> Result<ModelPlan, String> {
+/// each time: 2 s of CPU in a quarter of a second, and the decoded files' memory). With what reading
+/// the file noted (project::decode_model); a file that noted something is not written there, so the
+/// next run reads it again and reports it too.
+fn convert_file(reflection: &Reflection, path: &Path) -> Converted {
     let cache = converted_path(path);
     let key = converted_key(path);
     if let Some(plan) = key.as_ref().and_then(|key| read_plan(&cache, key)) {
         crate::profiler::caches::hit(crate::profiler::caches::Cache::BundlePlans);
-        return Ok(plan);
+        return Ok((plan, Vec::new()));
     }
     crate::profiler::caches::miss(crate::profiler::caches::Cache::BundlePlans);
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    let mut dom = decode_model(&bytes)?;
+    let (mut dom, notes) = decode_model(&bytes)?;
     drop(bytes);
     // (the server loads a bundle and sends it: its rotations as a client receives them)
     super::received::as_received(&mut dom);
     let plan = ModelPlan::new(reflection, &dom, dom.root().children());
     drop(dom);
-    if let Some(key) = &key {
+    if let (Some(key), true) = (&key, notes.is_empty()) {
         if let Some(encoded) = plan.encode(key) {
             write_atomic(&cache, &encoded);
             drop(encoded);
             // (read back in place: the plan's pages become the file's)
             if let Some(mapped) = Mapping::open(&cache).and_then(|file| ModelPlan::decode_mapped(file, key)) {
-                return Ok(mapped);
+                return Ok((mapped, notes));
             }
         }
     }
-    Ok(plan)
+    Ok((plan, notes))
 }
 
 /// The plan in converted file `cache` when it was written for `key`: mapped and read in place where
@@ -661,10 +678,13 @@ struct DecodingState {
     slots: FxHashMap<String, Slot>,
 }
 
+/// A bundle file's plan and what reading the file noted ([`convert_file`])
+type Converted = Result<(ModelPlan, Vec<String>), String>;
+
 enum Slot {
     Queued(PathBuf),
     Running,
-    Ready(PathBuf, Result<ModelPlan, String>),
+    Ready(PathBuf, Converted),
 }
 
 impl Decoding {
@@ -711,7 +731,7 @@ impl Decoding {
 
     /// Bundle `key`'s file and its decoding: waits while it is being decoded; None when it was
     /// never queued or no thread took it yet (the caller decodes it then).
-    fn take(&self, key: &str) -> Option<(PathBuf, Result<ModelPlan, String>)> {
+    fn take(&self, key: &str) -> Option<(PathBuf, Converted)> {
         let mut state = self.state.lock().ok()?;
         loop {
             match state.slots.get(key)? {
@@ -1864,7 +1884,7 @@ mod tests {
         let decoding = Decoding::start(files.clone(), reflection.clone()).expect("decoding");
         for (index, (key, file)) in files.iter().enumerate().rev() {
             match decoding.take(key) {
-                Some((path, Ok(plan))) => {
+                Some((path, Ok((plan, _)))) => {
                     assert_eq!(&path, file);
                     let names: Vec<&[u8]> = plan.root_names().collect();
                     assert_eq!(names, [format!("Part{index}").as_bytes()]);

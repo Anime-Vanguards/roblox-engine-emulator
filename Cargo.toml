@@ -70,7 +70,11 @@ serde_json = { version = "=1.0.145", features = ["float_roundtrip"] }
 sha2 = { version = "=0.10.9", optional = true }
 mimalloc = { version = "=0.1.52", default-features = false, features = ["v2"], optional = true }
 dhat = { version = "=0.3.3", optional = true }
-ror-mesh = { git = "https://github.com/Anime-Vanguards/roblox-object-renderer", rev = "b01540fd6551f562e77128be3697f64cb60fba4d", optional = true }
+ror-mesh = { git = "https://github.com/Anime-Vanguards/roblox-object-renderer", rev = "5ba32b5432f7799f16f6ee5664497753c6cf7814", optional = true }
+# Roblox archives (.rbx) read as the .rbxl / .rbxm they hold, with the values they keep outside the scene put back
+# (project::decode_model): ror's reader, from the same commit as ror-mesh. Not optional: rbx_binary reads an archive's
+# stored scene with every value kept outside it dropped and no error, so a build without it would run scripts empty.
+ror-archive = { git = "https://github.com/Anime-Vanguards/roblox-object-renderer", rev = "5ba32b5432f7799f16f6ee5664497753c6cf7814" }
 # EncodingService (src/services/encoding.rs): the versions rbx_binary and its dependencies build already
 zstd = "=0.13.3"
 base64 = "=0.13.1"

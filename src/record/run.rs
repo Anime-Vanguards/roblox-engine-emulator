@@ -3,7 +3,7 @@
 //!
 //!   ree record --harness <file.luau> --out <dir> [--seconds 3] [--fps 60]
 //!       [--context <json|file>] [--assets-at <Service.Path>] [--assets <prefix>,...]
-//!       [--animations <dir>[;<dir>...]] (pre-fetched KeyframeSequences, `<id>.rbxm`)
+//!       [--animations <dir>[;<dir>...]] (pre-fetched KeyframeSequences, `<id>.rbxm`, `.rbxmx` or `.rbx`)
 //!       [--timing-check] (record again with the in-frame clock moved: does the recording hinge on sub-frame timing?)
 //!       [the engine options (launch.rs): --roots / --place (default game) / --project / --mode
 //!        (default play) / --mount / --snapshot-dir / --player / --offline / --verbose ...]
