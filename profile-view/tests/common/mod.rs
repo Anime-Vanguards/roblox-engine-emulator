@@ -18,9 +18,11 @@ pub struct Temp(pub PathBuf);
 
 impl Temp {
     pub fn new(name: &str) -> Temp {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         // (its name always the same length, so a screen that shows a path cuts it at the same place on any machine)
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let unique = ree_profile_view::model::fxhash(format!("{}-{stamp}", std::process::id()).as_bytes());
+        let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let unique = ree_profile_view::model::fxhash(format!("{}-{stamp}-{seq}", std::process::id()).as_bytes());
         let dir = std::env::temp_dir().join(format!("ree-profile-view-{name}-{unique:016x}"));
         std::fs::create_dir_all(&dir).unwrap();
         Temp(dir)

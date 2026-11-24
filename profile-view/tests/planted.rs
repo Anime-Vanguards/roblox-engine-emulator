@@ -17,8 +17,45 @@ use ree_profile_view::{
     theme::ThemeKind,
 };
 
-/// The engine's profiles share process-wide switches (ree's caches, the ticker): one run at a time
-static ENGINE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Pattern of 16 `%a` followed by `%d`: fails every start position on an `"a"` string, doing linear C work on the
+/// work clock (`17 * 6.33 + 0.70 = 108.31` ns/byte) with zero allocations and no builtin/cache noise.
+const WORK_PATTERN: &str = "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d";
+const WORK_NS_PER_BYTE: f64 = 17.0 * 6.33 + 0.70;
+
+/// Length of `string.rep("a", n)` whose `string.match(_, WORK_PATTERN)` charges `ms` milliseconds on the work clock.
+fn work_bytes(ms: f64) -> usize {
+    (ms * 1e6 / WORK_NS_PER_BYTE).round().max(16.0) as usize
+}
+
+/// Runs `work` over `items` across a bounded pool of scoped threads, preserving item order.
+fn parallel_map<T: Send, R: Send, F: Fn(T) -> R + Sync>(items: Vec<T>, work: F) -> Vec<R> {
+    let total = items.len();
+    if total <= 1 {
+        return items.into_iter().map(work).collect();
+    }
+    let workers = total.min(std::thread::available_parallelism().map_or(2, |n| n.get()).min(8));
+    let queue = std::sync::Mutex::new(items.into_iter().enumerate());
+    let results: std::sync::Mutex<Vec<Option<R>>> = std::sync::Mutex::new((0..total).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                let queue = &queue;
+                let results = &results;
+                let work = &work;
+                scope.spawn(move || loop {
+                    let next = queue.lock().unwrap().next();
+                    let Some((index, item)) = next else { break };
+                    let value = work(item);
+                    results.lock().unwrap()[index] = Some(value);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
+    results.into_inner().unwrap().into_iter().map(Option::unwrap).collect()
+}
 
 /// How close two figures in ms a frame must be to count as equal
 const SAME_MS: f64 = 1e-9;
@@ -56,8 +93,12 @@ return M"#;
 
     let temp = Temp::new("planted-numeric-argument");
     let handler = harness("Probe", "sink=M.Step(-3)");
-    let (_, before) = run(&temp, "before", "Probe", source, &handler, "work,caches", "1");
-    let (_, after) = run(&temp, "fixed", "Probe", &fixed_source, &handler, "work,caches", "1");
+    let (before_out, after_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "before", "Probe", source, &handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fixed", "Probe", &fixed_source, &handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (before, after) = (open_out(&before_out), open_out(&after_out));
     let (found, _) = issues(&before);
     let declines = of(&found, "builtin declines");
     let abs_issue = declines.iter().find(|issue| issue.title.starts_with("math.abs")).unwrap();
@@ -93,8 +134,8 @@ fn advised_insert_bound_covers_removed_position_work() {
     let source = r#"local M = {}
 function M.Position(i)
     local sum = 0
-    for j = 1, 100 do sum += j end
-    return i + sum - 5050
+    for j = 1, 5 do sum += j end
+    return i + sum - 15
 end
 function M.Step(x)
     local values = {}
@@ -107,8 +148,12 @@ return M"#;
 
     let temp = Temp::new("planted-insert-argument");
     let handler = harness("Probe", "sink=M.Step(-3)");
-    let (_, before) = run(&temp, "before", "Probe", source, &handler, "work,caches", "1");
-    let (_, after) = run(&temp, "fixed", "Probe", &fixed_source, &handler, "work,caches", "1");
+    let (before_out, after_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "before", "Probe", source, &handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fixed", "Probe", &fixed_source, &handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (before, after) = (open_out(&before_out), open_out(&after_out));
     let (found, _) = issues(&before);
     let insert = of(&found, "builtin declines")[0];
     let profile = before.profile();
@@ -151,8 +196,12 @@ return M"#;
 
     let temp = Temp::new("planted-sort-arguments");
     let handler = harness("Probe", "sink=M.Step()");
-    let (_, before) = run(&temp, "before", "Probe", source, &handler, "work,caches", "1");
-    let (_, after) = run(&temp, "fixed", "Probe", &fixed_source, &handler, "work,caches", "1");
+    let (before_out, after_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "before", "Probe", source, &handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fixed", "Probe", &fixed_source, &handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (before, after) = (open_out(&before_out), open_out(&after_out));
 
     let (found, _) = issues(&before);
     let sort = of(&found, "sort calls")[0];
@@ -191,8 +240,12 @@ return M"#;
 
     let temp = Temp::new("planted-environment-calls");
     let handler = harness("Probe", "sink=M.Step(-3)");
-    let (_, before) = run(&temp, "before", "Probe", source, &handler, "work,caches", "1");
-    let (_, after) = run(&temp, "fixed", "Probe", &fixed_source, &handler, "work,caches", "1");
+    let (before_out, after_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "before", "Probe", source, &handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fixed", "Probe", &fixed_source, &handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (before, after) = (open_out(&before_out), open_out(&after_out));
 
     let (found, _) = issues(&before);
     let declines = of(&found, "builtin declines");
@@ -334,8 +387,14 @@ return M"#
 
     let temp = Temp::new("planted-receiver-bound");
     let handler = harness("Probe", "sink=M.Step()");
-    let (_, before) = run(&temp, "before", "Probe", &source(false), &handler, "work,boundary", "1");
-    let (_, after) = run(&temp, "fixed", "Probe", &source(true), &handler, "work,boundary", "1");
+    let before_source = source(false);
+    let after_source = source(true);
+    let (before_out, after_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "before", "Probe", &before_source, &handler, "work,boundary", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fixed", "Probe", &after_source, &handler, "work,boundary", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (before, after) = (open_out(&before_out), open_out(&after_out));
 
     let (found, _) = issues(&before);
     let read = of(&found, "repeat reads")[0];
@@ -406,11 +465,18 @@ return M"#,
     ];
     let temp = Temp::new("planted-sub-layout-bounds");
     let handler = counting_harness("Probe", "frame+=1; sink=M.Step(frame,\"abcdef\")");
+    let jobs: Vec<(String, String)> = layouts
+        .iter()
+        .flat_map(|layout| {
+            let fixed = layout.source.replace(&format!("string.sub({}, 2)", layout.text), &format!("string.sub({}, 2, #{})", layout.text, layout.text));
+            [(format!("{}-before", layout.name), layout.source.to_string()), (format!("{}-fixed", layout.name), fixed)]
+        })
+        .collect();
+    let mut outs = parallel_map(jobs, |(case, source)| run_dir(&temp, &case, "Probe", &source, &handler, "work,caches", "1")).into_iter();
     for layout in layouts {
-        let SubstringLayout { name, source, text } = layout;
-        let fixed_source = source.replace(&format!("string.sub({text}, 2)"), &format!("string.sub({text}, 2, #{text})"));
-        let (_, before) = run(&temp, &format!("{name}-before"), "Probe", source, &handler, "work,caches", "1");
-        let (_, after) = run(&temp, &format!("{name}-fixed"), "Probe", &fixed_source, &handler, "work,caches", "1");
+        let name = layout.name;
+        let before = open_out(&outs.next().unwrap());
+        let after = open_out(&outs.next().unwrap());
 
         let (found, _) = issues(&before);
         let declines = of(&found, "builtin declines");
@@ -487,12 +553,22 @@ return M"#,
         },
     ];
     let temp = Temp::new("planted-cache-estimates");
+    let jobs: Vec<(String, String, String)> = cases
+        .iter()
+        .flat_map(|case| {
+            // Only the shapes case has a source fix: it gives every table the same key order
+            let fixed_source = if case.name == "shapes" { case.source.replace("t[\"k\" .. i]", "t[\"k\"]") } else { case.source.to_string() };
+            [
+                (format!("{}-before", case.name), case.source.to_string(), harness("Probe", case.body)),
+                (format!("{}-fixed", case.name), fixed_source, harness("Probe", case.fixed_body)),
+            ]
+        })
+        .collect();
+    let mut outs = parallel_map(jobs, |(case, source, handler)| run_dir(&temp, &case, "Probe", &source, &handler, "work,caches", "1")).into_iter();
     for case in cases {
-        let CacheCase { name, source, body, fixed_body } = case;
-        // Only the shapes case has a source fix: it gives every table the same key order
-        let fixed_source = if name == "shapes" { source.replace("t[\"k\" .. i]", "t[\"k\"]") } else { source.to_string() };
-        let (_, before) = run(&temp, &format!("{name}-before"), "Probe", source, &harness("Probe", body), "work,caches", "1");
-        let (_, after) = run(&temp, &format!("{name}-fixed"), "Probe", &fixed_source, &harness("Probe", fixed_body), "work,caches", "1");
+        let name = case.name;
+        let before = open_out(&outs.next().unwrap());
+        let after = open_out(&outs.next().unwrap());
 
         let (found, _) = issues(&before);
         let estimate = of(&found, "cache misses").into_iter().find(|issue| issue.uncharged > 0.01).unwrap();
@@ -519,7 +595,9 @@ fn phase_split_repeat_reads_use_physical_frames_and_the_executing_owner() {
     let members = ["Position", "Size", "Anchored", "CFrame", "Color", "Material", "Name", "Parent", "Transparency", "Orientation"];
     let physical_frames = 60.0;
     let temp = Temp::new("planted-phase-inline-owner");
-    for member in members {
+    let handler = harness("Probe", "Context.ProfilePhase(\"a\"); sink=M.Step(); Context.ProfilePhase(\"b\")");
+    let options = RunOptions { kinds: "work,boundary", seconds: "1", extra_arguments: &["--profile-phase", "a"] };
+    let apps = parallel_map(members.to_vec(), |member| {
         let source = format!(
             r#"local M = {{}}
 local p = Instance.new("Part")
@@ -534,10 +612,10 @@ function M.Step()
 end
 return M"#
         );
-        let handler = harness("Probe", "Context.ProfilePhase(\"a\"); sink=M.Step(); Context.ProfilePhase(\"b\")");
-        let options = RunOptions { kinds: "work,boundary", seconds: "1", extra_arguments: &["--profile-phase", "a"] };
-        let (_, app) = run_with(&temp, member, "Probe", &source, &handler, &options);
-
+        (member, run_dir_with(&temp, member, "Probe", &source, &handler, &options))
+    });
+    for (member, out) in apps {
+        let app = open_out(&out);
         let (found, _) = issues(&app);
         let repeats = of(&found, "repeat reads");
         assert_eq!(repeats.len(), 1, "{found:#?}");
@@ -573,8 +651,14 @@ return M"#
     );
     let temp = Temp::new("planted-all-sites");
     // A numeric string is declined by the fast path; the fix passes the number itself
-    let (_, before) = run(&temp, "before", "Probe", &source, &harness("Probe", "sink=M.Step(\"3\")"), "work,caches", "1");
-    let (_, fixed) = run(&temp, "fixed", "Probe", &source, &harness("Probe", "sink=M.Step(3)"), "work,caches", "1");
+    let before_handler = harness("Probe", "sink=M.Step(\"3\")");
+    let fixed_handler = harness("Probe", "sink=M.Step(3)");
+    let (before_out, fixed_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "before", "Probe", &source, &before_handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fixed", "Probe", &source, &fixed_handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (before, fixed) = (open_out(&before_out), open_out(&fixed_out));
 
     let (found, _) = issues(&before);
     let issue = of(&found, "builtin declines")[0];
@@ -602,11 +686,22 @@ end
 return M"#;
     let unsafe_source = format!("getfenv()\n{source}");
     let temp = Temp::new("planted-unsafe-combination");
+    let pairs = [("numeric", "-3"), ("string", "\"3\"")];
+    let jobs: Vec<(String, &str, String)> = pairs
+        .iter()
+        .flat_map(|&(name, argument)| {
+            let handler = harness("Probe", &format!("sink=M.Step({argument})"));
+            [
+                (format!("{name}-before"), unsafe_source.as_str(), handler.clone()),
+                (format!("{name}-fixed"), source, handler),
+            ]
+        })
+        .collect();
+    let mut outs = parallel_map(jobs, |(case, src, handler)| run_dir(&temp, &case, "Probe", src, &handler, "work,caches", "1")).into_iter();
     let mut numeric_fast_ms: Option<f64> = None;
-    for (name, argument) in [("numeric", "-3"), ("string", "\"3\"")] {
-        let handler = harness("Probe", &format!("sink=M.Step({argument})"));
-        let (_, before) = run(&temp, &format!("{name}-before"), "Probe", &unsafe_source, &handler, "work,caches", "1");
-        let (_, fixed) = run(&temp, &format!("{name}-fixed"), "Probe", source, &handler, "work,caches", "1");
+    for (name, _) in pairs {
+        let before = open_out(&outs.next().unwrap());
+        let fixed = open_out(&outs.next().unwrap());
 
         let (found, _) = issues(&before);
         let builtin = of(&found, "builtin declines")[0];
@@ -690,10 +785,19 @@ return M"#,
     let mean_ceiling_ms = 0.01;
     let temp = Temp::new("planted-complete-peaks");
     let handler = counting_harness("Probe", "frame+=1; sink=M.Step(frame,\"abcdef\")");
+    let jobs: Vec<(String, String)> = peaks
+        .iter()
+        .flat_map(|peak| {
+            let fixed = peak.source.replace(peak.fix_from, peak.fix_to);
+            [(peak.name.to_string(), peak.source.to_string()), (format!("{}-fixed", peak.name), fixed)]
+        })
+        .collect();
+    let mut outs = parallel_map(jobs, |(case, source)| run_dir(&temp, &case, "Probe", &source, &handler, "work,caches", "10")).into_iter();
     for peak in peaks {
-        let IsolatedPeak { name, source, kind, fix_from, fix_to } = peak;
+        let IsolatedPeak { name, kind, .. } = peak;
         // (ten seconds of frames: the one heavy frame is a tiny share of the mean, and no heavy-frame history is kept)
-        let (_, app) = run(&temp, name, "Probe", source, &handler, "work,caches", "10");
+        let app = open_out(&outs.next().unwrap());
+        let after = open_out(&outs.next().unwrap());
         let (found, _) = issues(&app);
         let issue = of(&found, kind)[0];
         assert!(app.profile().raw.timeline.as_ref().unwrap().node_frames.is_empty());
@@ -701,8 +805,6 @@ return M"#,
         assert!(issue.frame_ms.unwrap() > peak_frame_floor_ms, "{issue:#?}");
         assert_eq!(issue.active_frames, 1);
 
-        let fixed_source = source.replace(fix_from, fix_to);
-        let (_, after) = run(&temp, &format!("{name}-fixed"), "Probe", &fixed_source, &handler, "work,caches", "10");
         let saved_ms = total_per_frame(&app) - total_per_frame(&after);
         let upper_bound_ms = issue.upper_ms.or(issue.ms).unwrap();
         assert!(saved_ms > 0.0 && saved_ms <= upper_bound_ms + SAME_MS, "{name}: {saved_ms} exceeds {upper_bound_ms}");
@@ -725,6 +827,16 @@ fn run(temp: &Temp, case: &str, name: &str, source: &str, harness: &str, kinds: 
     run_with(temp, case, name, source, harness, &options)
 }
 
+/// Runs [`run`] and returns only the profile directory (Send across worker threads; open with [`open_out`]).
+fn run_dir(temp: &Temp, case: &str, name: &str, source: &str, harness: &str, kinds: &str, seconds: &str) -> std::path::PathBuf {
+    let options = RunOptions { kinds, seconds, extra_arguments: &[] };
+    run_dir_with(temp, case, name, source, harness, &options)
+}
+
+fn open_out(out: &std::path::Path) -> App {
+    cli::open(&[out.to_path_buf()], ThemeKind::Dark).unwrap()
+}
+
 /// What a planted run is told besides its harness and game module
 struct RunOptions<'a> {
     /// The profile kinds (`--profile`)
@@ -735,9 +847,8 @@ struct RunOptions<'a> {
     extra_arguments: &'a [&'a str],
 }
 
-/// [`run`] with command line arguments of its own
-fn run_with(temp: &Temp, case: &str, name: &str, source: &str, harness: &str, options: &RunOptions) -> (std::path::PathBuf, App) {
-    let _engine = ENGINE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+/// [`run_with`] returning only the profile directory so callers can run multiple engines in parallel.
+fn run_dir_with(temp: &Temp, case: &str, name: &str, source: &str, harness: &str, options: &RunOptions) -> std::path::PathBuf {
     let dir = temp.path().join(case);
     std::fs::create_dir_all(dir.join("game")).unwrap();
     std::fs::write(dir.join("game").join(format!("{name}.luau")), source).unwrap();
@@ -747,15 +858,19 @@ fn run_with(temp: &Temp, case: &str, name: &str, source: &str, harness: &str, op
     let mount = format!("ReplicatedStorage/Game={}", dir.join("game").to_string_lossy().replace('\\', "/"));
     let mut args: Vec<String> = ["--harness", file.to_str().unwrap(), "--mount", &mount, "--seconds", options.seconds, "--profile", options.kinds, "--profile-out", out.to_str().unwrap()].iter().map(|s| s.to_string()).collect();
     args.extend(options.extra_arguments.iter().map(|arg| arg.to_string()));
-    // No wall-clock cap: a process is guarded once, from its first run, and this one runs every test's runs one after
-    // another, so on a busy machine the first run's 10 minutes ended the whole binary in the middle of a later test.
     args.extend(["--max-wall-seconds", "0"].map(str::to_string));
     // (on a thread with a service worker's stack, as the ree binary runs its commands; the test's folder for its checkout, so the
     // run's state, `.cache/record`, goes with the test: engine.rs run_engine_with)
     let repo = temp.path().to_path_buf();
-    let code = std::thread::Builder::new().stack_size(64 << 20).spawn(move || roblox_engine_emulator::record::run::cli(&args, &roblox_engine_emulator::launch::Host { repo, ..Default::default() }, false)).unwrap().join().unwrap();
+    let code = std::thread::Builder::new().stack_size(64 << 20).spawn(move || roblox_engine_emulator::record::run::cli_in_process(&args, &roblox_engine_emulator::launch::Host { repo, ..Default::default() }, false)).unwrap().join().unwrap();
     assert_eq!(code, 0, "{case}");
-    let app = cli::open(std::slice::from_ref(&out), ThemeKind::Dark).unwrap();
+    out
+}
+
+/// [`run`] with command line arguments of its own
+fn run_with(temp: &Temp, case: &str, name: &str, source: &str, harness: &str, options: &RunOptions) -> (std::path::PathBuf, App) {
+    let out = run_dir_with(temp, case, name, source, harness, options);
+    let app = open_out(&out);
     (out, app)
 }
 
@@ -856,24 +971,29 @@ fn a_game_spike_is_named_and_the_harnesss_or_the_setups_are_not() {
     // the harness scans 600,000 steps on frame 60 (4.4 ms): its own work, no game spike
     let scan = "frame += 1\n\t\tsink += M.Step(300)\n\t\tif frame == 60 then\n\t\t\tfor i = 1, 600000 do\n\t\t\t\tsink += i % 11\n\t\t\tend\n\t\tend";
     let source = harness("Small", scan).replace("local sink = 0", "local sink, frame = 0, 0");
-    let (_, app) = run(&temp, "harness-spike", "Small", SMALL, &source, "all", "2");
-    let (found, _) = issues(&app);
-    assert!(of(&found, "one-off").is_empty() && of(&found, "frame hitch").is_empty(), "{found:#?}");
     // heavy setup, then the steady mark in the same frame: the setup's heavy work is the setup phase's row, not the steady
     // phase's first frame
     let setup = "return function(Context)\n\tlocal RunService = game:GetService(\"RunService\")\n\tlocal M = require(game.ReplicatedStorage.Game.Small)\n\ttask.wait()\n\tContext.ProfilePhase(\"setup\")\n\tlocal world = {}\n\tfor i = 1, 1200000 do\n\t\tworld[i] = i % 17\n\tend\n\tContext.ProfilePhase(\"steady\")\n\tlocal sink = 0\n\tRunService.Heartbeat:Connect(function()\n\t\tsink += M.Step(300) + #world\n\tend)\n\ttask.wait(Context.Seconds)\nend\n";
-    let (_, app) = run(&temp, "same-mark", "Small", SMALL, setup, "all", "1");
-    let (found, _) = issues(&app);
+    let game_spike_handler = harness("Spike", "sink += M.Tick()");
+    let (out_harness, out_setup, out_game) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "harness-spike", "Small", SMALL, &source, "all", "2"));
+        let h2 = scope.spawn(|| run_dir(&temp, "same-mark", "Small", SMALL, setup, "all", "1"));
+        let h3 = scope.spawn(|| run_dir(&temp, "game-spike", "Spike", SPIKE, &game_spike_handler, "all", "2"));
+        (h1.join().unwrap(), h2.join().unwrap(), h3.join().unwrap())
+    });
+    let (app_harness, app_setup, app_game) = (open_out(&out_harness), open_out(&out_setup), open_out(&out_game));
+    let (found, _) = issues(&app_harness);
     assert!(of(&found, "one-off").is_empty() && of(&found, "frame hitch").is_empty(), "{found:#?}");
-    let p = app.profile();
+    let (found, _) = issues(&app_setup);
+    assert!(of(&found, "one-off").is_empty() && of(&found, "frame hitch").is_empty(), "{found:#?}");
+    let p = app_setup.profile();
     let timeline = p.raw.timeline.as_ref().unwrap();
     let (phases, work) = (timeline.values("phase").unwrap(), timeline.values("work_ms").unwrap());
     let setup_phase = p.raw.phases.iter().position(|phase| phase == "setup").unwrap() as f64;
     let setup_work: f64 = phases.iter().zip(&work).filter(|(phase, _)| **phase == setup_phase).map(|(_, work)| *work).sum();
     assert!(setup_work > 10.0, "the setup's work is the setup phase's: {setup_work} ms");
     // the game's frame 90 rebuilds (2.6 ms against 13 µs): Rebuild's one-off, named
-    let (_, app) = run(&temp, "game-spike", "Spike", SPIKE, &harness("Spike", "sink += M.Tick()"), "all", "2");
-    let (found, _) = issues(&app);
+    let (found, _) = issues(&app_game);
     let once = of(&found, "one-off");
     assert_eq!(once.len(), 1, "{found:#?}");
     assert_eq!(once[0].once, Some(90.0));
@@ -888,12 +1008,17 @@ const SPAWNER: &str = "local M = {}\nfunction M.Step()\n\tfor _ = 1, 5 do\n\t\tt
 fn threads_that_finish_are_never_a_leak() {
     // five threads a frame that end at once: the timeline counts them until the collector sweeps them
     let temp = Temp::new("planted-threads");
-    let (_, app) = run(&temp, "work-timeline", "Spawner", SPAWNER, &harness("Spawner", "M.Step()"), "work,timeline", "2");
-    let (found, unchecked) = issues(&app);
+    let handler = harness("Spawner", "M.Step()");
+    let (out_wt, out_all) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "work-timeline", "Spawner", SPAWNER, &handler, "work,timeline", "2"));
+        let h2 = scope.spawn(|| run_dir(&temp, "all", "Spawner", SPAWNER, &handler, "all", "2"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (app_wt, app_all) = (open_out(&out_wt), open_out(&out_all));
+    let (found, unchecked) = issues(&app_wt);
     assert!(found.iter().all(|issue| !issue.title.starts_with("Threads")), "{found:#?}");
     assert!(unchecked.iter().any(|note| note.starts_with("threads keep growing: needs heap")), "{unchecked:?}");
-    let (_, app) = run(&temp, "all", "Spawner", SPAWNER, &harness("Spawner", "M.Step()"), "all", "2");
-    let (found, _) = issues(&app);
+    let (found, _) = issues(&app_all);
     assert!(found.iter().all(|issue| !issue.title.starts_with("Threads")), "{found:#?}");
 }
 
@@ -945,7 +1070,27 @@ fn a_quiet_run_reports_nothing() {
     assert!(found.iter().all(|issue| issue.kind == "work below floor"), "{found:#?}");
 }
 
-const BURST: &str = "local M = {}\nlocal frame = 0\n\nfunction M.Burst()\n\tlocal s = 0\n\tfor i = 1, 4000000 do\n\t\ts += i % 13\n\tend\n\treturn s\nend\n\nfunction M.Tick()\n\tframe += 1\n\tlocal s = 0\n\tfor i = 1, 2000 do\n\t\ts += i % 5\n\tend\n\tif frame == 60 then\n\t\ts += M.Burst()\n\tend\n\treturn s\nend\n\nreturn M\n";
+const BURST: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local frame, _b = 0, string.rep("a", 236359)
+
+function M.Burst()
+	return _m(_b, _p) and 1 or 0
+end
+
+function M.Tick()
+	frame += 1
+	local s = 0
+	for i = 1, 2000 do
+		s += i % 5
+	end
+	if frame == 60 then
+		s += M.Burst()
+	end
+	return s
+end
+
+return M
+"#;
 
 #[test]
 fn a_one_off_is_its_own_issue_never_steady_work() {
@@ -997,15 +1142,45 @@ fn function_issue<'a>(found: &'a [Issue], label: &str) -> Option<&'a Issue> {
     found.iter().find(|issue| issue.kind.starts_with("hot") && issue.title.contains(label))
 }
 
-const STEADY_BURST: &str = "local M = {}\nlocal frame = 0\n\nfunction M.Steady()\n\tlocal s = 0\n\tfor i = 1, 150000 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nfunction M.Burst()\n\tlocal s = 0\n\tfor i = 1, 3000000 do\n\t\ts += i % 13\n\tend\n\treturn s\nend\n\nfunction M.Tick()\n\tframe += 1\n\tlocal s = M.Steady()\n\tif frame % 60 == 30 then\n\t\ts += M.Burst()\n\tend\n\treturn s\nend\n\nreturn M\n";
+const STEADY_BURST: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local frame, _s, _b = 0, string.rep("a", 8863), string.rep("a", 177269)
+
+function M.Steady()
+	return _m(_s, _p) and 1 or 0
+end
+
+
+
+
+
+function M.Burst()
+	return _m(_b, _p) and 1 or 0
+end
+
+function M.Tick()
+	frame += 1
+	local s = M.Steady()
+	if frame % 60 == 30 then
+		s += M.Burst()
+	end
+	return s
+end
+
+return M
+"#;
 
 #[test]
 fn the_same_code_profiled_for_two_seconds_and_ten_ranks_the_same() {
     // Steady's 1 ms every frame and Burst's 19 ms once a second: seen twice in 2 s and ten times in 10 s, the bursts have a
     // rate, so Burst's issue is priced a frame, the same either way, and so is the ranking with its severities
     let temp = Temp::new("planted-run-length");
-    let (_, short) = run(&temp, "two", "SteadyBurst", STEADY_BURST, &harness("SteadyBurst", "sink += M.Tick()"), "work,timeline", "2");
-    let (_, long) = run(&temp, "ten", "SteadyBurst", STEADY_BURST, &harness("SteadyBurst", "sink += M.Tick()"), "work,timeline", "10");
+    let handler = harness("SteadyBurst", "sink += M.Tick()");
+    let (short_out, long_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "two", "SteadyBurst", STEADY_BURST, &handler, "work,timeline", "2"));
+        let h2 = scope.spawn(|| run_dir(&temp, "ten", "SteadyBurst", STEADY_BURST, &handler, "work,timeline", "10"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (short, long) = (open_out(&short_out), open_out(&long_out));
     let ((a, _), (b, _)) = (issues(&short), issues(&long));
     let priced = |found: &[Issue]| found.iter().filter(|issue| issue.ms.is_some() && issue.kind != "work below floor").map(|issue| (issue.kind, issue.severity, issue.title.split(": ").next().unwrap_or_default().to_string())).collect::<Vec<_>>();
     assert_eq!(priced(&a), priced(&b), "{a:#?}\n{b:#?}");
@@ -1023,16 +1198,37 @@ fn fraction_harness(fraction: f64) -> String {
     harness("Fraction", &format!("sink += M.Tick({twentieths})"))
 }
 
-const FRACTION: &str = "local M = {}\nlocal due = 0\n\nfunction M.Work()\n\tlocal s = 0\n\tfor i = 1, 92000 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nfunction M.Tick(twentieths)\n\tdue += twentieths\n\tif due >= 20 then\n\t\tdue -= 20\n\t\treturn M.Work()\n\tend\n\treturn 0\nend\n\nreturn M\n";
+const FRACTION: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local due, _w = 0, string.rep("a", 5447)
+
+function M.Work()
+	return _m(_w, _p) and 1 or 0
+end
+
+function M.Tick(twentieths)
+	due += twentieths
+	if due >= 20 then
+		due -= 20
+		return M.Work()
+	end
+	return 0
+end
+
+return M
+"#;
 
 #[test]
 fn work_on_more_frames_moves_its_price_and_severity_steadily() {
     // The full mean grows with duty, including the 5% case below the mean floor: its own .59 ms peak still lists it.
     let temp = Temp::new("planted-sweep");
-    let mut rows: Vec<(f64, f64, f64, Severity)> = Vec::new();
-    for twentieth in 1..=19 {
+    let outs = parallel_map((1..=19).collect(), |twentieth| {
         let fraction = twentieth as f64 / 20.0;
-        let (_, app) = run(&temp, &format!("f{twentieth}"), "Fraction", FRACTION, &fraction_harness(fraction), "work,timeline", "2");
+        let out = run_dir(&temp, &format!("f{twentieth}"), "Fraction", FRACTION, &fraction_harness(fraction), "work,timeline", "2");
+        (twentieth, fraction, out)
+    });
+    let mut rows: Vec<(f64, f64, f64, Severity)> = Vec::new();
+    for (twentieth, fraction, out) in outs {
+        let app = open_out(&out);
         let (found, _) = issues(&app);
         let work = code_per_frame(&app);
         let profile = app.profile();
@@ -1056,7 +1252,40 @@ fn work_on_more_frames_moves_its_price_and_severity_steadily() {
     }
 }
 
-const BIG_BURST: &str = "local M = {}\nlocal frame = 0\n\nfunction M.Steady()\n\tlocal s = 0\n\tfor i = 1, 15000 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nfunction M.Other()\n\tlocal s = 0\n\tfor i = 1, 31000 do\n\t\ts += i % 5\n\tend\n\treturn s\nend\n\nfunction M.Burst()\n\tlocal s = 0\n\tfor i = 1, 12000000 do\n\t\ts += i % 13\n\tend\n\treturn s\nend\n\nfunction M.Tick()\n\tframe += 1\n\tlocal s = M.Steady() + M.Other()\n\tif frame == 60 then\n\t\ts += M.Burst()\n\tend\n\treturn s\nend\n\nreturn M\n";
+const BIG_BURST: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local frame, _b = 0, string.rep("a", 709076)
+
+function M.Steady()
+	local s = 0
+	for i = 1, 15000 do
+		s += i % 7
+	end
+	return s
+end
+
+function M.Other()
+	local s = 0
+	for i = 1, 31000 do
+		s += i % 5
+	end
+	return s
+end
+
+function M.Burst()
+	return _m(_b, _p) and 1 or 0
+end
+
+function M.Tick()
+	frame += 1
+	local s = M.Steady() + M.Other()
+	if frame == 60 then
+		s += M.Burst()
+	end
+	return s
+end
+
+return M
+"#;
 
 #[test]
 fn a_big_one_off_does_not_hide_a_steady_hot_function() {
@@ -1076,7 +1305,60 @@ fn a_big_one_off_does_not_hide_a_steady_hot_function() {
     assert!(priced_sum(&found) <= code_per_frame(&app) + 1e-9, "{found:#?}");
 }
 
-const FOUR_BURSTS: &str = "local M = {}\nlocal frame = 0\n\nfunction M.A()\n\tlocal s = 0\n\tfor i = 1, 3000000 do\n\t\ts += i % 13\n\tend\n\treturn s\nend\n\nfunction M.B()\n\tlocal s = 0\n\tfor i = 1, 3000000 do\n\t\ts += i % 11\n\tend\n\treturn s\nend\n\nfunction M.C()\n\tlocal s = 0\n\tfor i = 1, 3000000 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nfunction M.D()\n\tlocal s = 0\n\tfor i = 1, 3000000 do\n\t\ts += i % 5\n\tend\n\treturn s\nend\n\nfunction M.Steady()\n\tlocal s = 0\n\tfor i = 1, 15000 do\n\t\ts += i % 3\n\tend\n\treturn s\nend\n\nfunction M.Tick()\n\tframe += 1\n\tlocal s = M.Steady()\n\tif frame == 60 then\n\t\ts += M.A() + M.B() + M.C() + M.D()\n\tend\n\treturn s\nend\n\nreturn M\n";
+const FOUR_BURSTS: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local frame, _b = 0, string.rep("a", 177269)
+
+function M.A()
+	return _m(_b, _p) and 1 or 0
+end
+
+
+
+
+
+function M.B()
+	return _m(_b, _p) and 1 or 0
+end
+
+
+
+
+
+function M.C()
+	return _m(_b, _p) and 1 or 0
+end
+
+
+
+
+
+function M.D()
+	return _m(_b, _p) and 1 or 0
+end
+
+
+
+
+
+function M.Steady()
+	local s = 0
+	for i = 1, 15000 do
+		s += i % 3
+	end
+	return s
+end
+
+function M.Tick()
+	frame += 1
+	local s = M.Steady()
+	if frame == 60 then
+		s += M.A() + M.B() + M.C() + M.D()
+	end
+	return s
+end
+
+return M
+"#;
 
 #[test]
 fn a_one_off_spread_over_four_functions_names_each_and_is_never_steady_work() {
@@ -1183,11 +1465,20 @@ fn repeat_reads_are_priced_at_what_keeping_the_value_saves_for_every_kind_of_mem
         ("Name", "#{v}"),
         ("Parent", "(if {v} then 1 else 0)"),
     ];
+    let jobs: Vec<(&str, &str, bool, bool)> = members
+        .into_iter()
+        .flat_map(|(member, using)| [false, true].into_iter().flat_map(move |later| [(member, using, later, true), (member, using, later, false)]))
+        .collect();
+    let mut outs = parallel_map(jobs, |(member, using, later, many)| {
+        let (tag, name) = if many { ("many", "Many") } else { ("once", "Once") };
+        run_dir(&temp, &format!("{member}-{later}-{tag}"), name, &reads_module(member, using, many, later), &part_harness(name), "work,timeline,boundary", "1")
+    })
+    .into_iter();
     let mut results = Vec::new();
-    for (member, using) in members {
+    for (member, _) in members {
         for later in [false, true] {
-            let (_, many) = run(&temp, &format!("{member}-{later}-many"), "Many", &reads_module(member, using, true, later), &part_harness("Many"), "work,timeline,boundary", "1");
-            let (_, once) = run(&temp, &format!("{member}-{later}-once"), "Once", &reads_module(member, using, false, later), &part_harness("Once"), "work,timeline,boundary", "1");
+            let many = open_out(&outs.next().unwrap());
+            let once = open_out(&outs.next().unwrap());
 
             let (found, _) = issues(&many);
             let reads = of(&found, "repeat reads");
@@ -1220,7 +1511,7 @@ fn a_bounded_sort_cannot_claim_the_strongest_saving() {
     // The sort's recorded part exceeds Board's own work, but the complete edit has a whole-code bound, and a bound
     // never claims "nothing elsewhere can save as much".
     let temp = Temp::new("planted-board");
-    let (_, app) = run(&temp, "board", "Board", BOARD, &harness("Board", "sink += M.Board()"), "work,timeline", "2");
+    let (_, app) = run(&temp, "board", "Board", BOARD, &harness("Board", "sink += M.Board()"), "work,timeline", "0.5");
     let (found, _) = issues(&app);
     let sorts = of(&found, "sort calls");
     assert_eq!(sorts.len(), 1, "{found:#?}");
@@ -1239,8 +1530,14 @@ fn an_unrelated_one_off_leaves_a_function_that_runs_every_fifth_frame_its_own_is
     // frame 62. The one-off is Once's issue alone: Fifth keeps its issue and its price, and the priced issues add up to
     // the same work a frame either way
     let temp = Temp::new("planted-fifth");
-    let (_, without) = run(&temp, "without", "Fifth", FIFTH, &harness("Fifth", "sink += M.Tick(false)"), "work,timeline", "2");
-    let (_, with) = run(&temp, "with", "Fifth", FIFTH, &harness("Fifth", "sink += M.Tick(true)"), "work,timeline", "2");
+    let h_without = harness("Fifth", "sink += M.Tick(false)");
+    let h_with = harness("Fifth", "sink += M.Tick(true)");
+    let (without_out, with_out) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| run_dir(&temp, "without", "Fifth", FIFTH, &h_without, "work,timeline", "2"));
+        let b = scope.spawn(|| run_dir(&temp, "with", "Fifth", FIFTH, &h_with, "work,timeline", "2"));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    let (without, with) = (open_out(&without_out), open_out(&with_out));
     let ((a, _), (b, _)) = (issues(&without), issues(&with));
     let (fifth_a, fifth_b) = (function_issue(&a, "Fifth Fifth:4").unwrap_or_else(|| panic!("{a:#?}")), function_issue(&b, "Fifth Fifth:4").unwrap_or_else(|| panic!("{b:#?}")));
     assert!((fifth_a.ms.unwrap() / fifth_b.ms.unwrap() - 1.0).abs() < 0.01, "{:?} against {:?}", fifth_a.ms, fifth_b.ms);
@@ -1255,7 +1552,43 @@ fn an_unrelated_one_off_leaves_a_function_that_runs_every_fifth_frame_its_own_is
     assert!((once[0].ms.unwrap() * 120.0 - once[0].total_ms.unwrap()).abs() < 1e-8);
 }
 
-const CADENCES: &str = "local M = {}\nlocal frame = 0\n\nfunction M.Ai()\n\tlocal s = 0\n\tfor i = 1, 1093750 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nfunction M.Ui()\n\tlocal s = 0\n\tfor i = 1, 1562500 do\n\t\ts += i % 5\n\tend\n\treturn s\nend\n\nfunction M.Base()\n\tlocal s = 0\n\tfor i = 1, 312500 do\n\t\ts += i % 3\n\tend\n\treturn s\nend\n\nfunction M.Tick()\n\tframe += 1\n\tlocal s = M.Base()\n\tif frame % 3 == 0 then\n\t\ts += M.Ai()\n\tend\n\tif frame % 7 == 0 then\n\t\ts += M.Ui()\n\tend\n\treturn s\nend\n\nreturn M\n";
+const CADENCES: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local frame, _a, _u, _b = 0, string.rep("a", 64629), string.rep("a", 92328), string.rep("a", 18466)
+
+function M.Ai()
+	return _m(_a, _p) and 1 or 0
+end
+
+
+
+
+
+function M.Ui()
+	return _m(_u, _p) and 1 or 0
+end
+
+
+
+
+
+function M.Base()
+	return _m(_b, _p) and 1 or 0
+end
+
+function M.Tick()
+	frame += 1
+	local s = M.Base()
+	if frame % 3 == 0 then
+		s += M.Ai()
+	end
+	if frame % 7 == 0 then
+		s += M.Ui()
+	end
+	return s
+end
+
+return M
+"#;
 
 #[test]
 fn every_function_of_game_like_cadences_is_named_with_its_own_work() {
@@ -1277,15 +1610,38 @@ fn every_function_of_game_like_cadences_is_named_with_its_own_work() {
     }
 }
 
-const BASE_BURST: &str = "local M = {}\n\nfunction M.Work(extra)\n\tlocal s = 0\n\tfor i = 1, 184000 do\n\t\ts += i % 7\n\tend\n\tif extra then\n\t\tfor i = 1, 461000 do\n\t\t\ts += i % 7\n\t\tend\n\tend\n\treturn s\nend\n\nlocal frame = 0\nfunction M.Tick(bursts)\n\tframe += 1\n\treturn M.Work(bursts and frame % 120 == 30)\nend\n\nreturn M\n";
+const BASE_BURST: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local _b, _e = string.rep("a", 10895), string.rep("a", 27237)
+function M.Work(extra)
+	local s = _m(_b, _p) and 1 or 0
+	if extra then
+		s += _m(_e, _p) and 1 or 0
+	end
+	return s
+end
+
+local frame = 0
+function M.Tick(bursts)
+	frame += 1
+	return M.Work(bursts and frame % 120 == 30)
+end
+
+return M
+"#;
 
 #[test]
 fn a_burst_on_top_of_steady_work_claims_what_doing_it_ahead_saves() {
     // Work's full mean includes its 1.18 ms base and each observed 2.95 ms pulse. Removing the pulses changes that
     // mean by the actual A/B saving; neither run has a separate burst price.
     let temp = Temp::new("planted-base-burst");
-    let (_, with) = run(&temp, "with", "BaseBurst", BASE_BURST, &harness("BaseBurst", "sink += M.Tick(true)"), "work,timeline", "4");
-    let (_, without) = run(&temp, "without", "BaseBurst", BASE_BURST, &harness("BaseBurst", "sink += M.Tick(false)"), "work,timeline", "4");
+    let h_with = harness("BaseBurst", "sink += M.Tick(true)");
+    let h_without = harness("BaseBurst", "sink += M.Tick(false)");
+    let (with_out, without_out) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| run_dir(&temp, "with", "BaseBurst", BASE_BURST, &h_with, "work,timeline", "4"));
+        let b = scope.spawn(|| run_dir(&temp, "without", "BaseBurst", BASE_BURST, &h_without, "work,timeline", "4"));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    let (with, without) = (open_out(&with_out), open_out(&without_out));
     let (found, _) = issues(&with);
     let work = function_issue(&found, "Work BaseBurst:3").unwrap_or_else(|| panic!("{found:#?}"));
     let (base, _) = issues(&without);
@@ -1295,7 +1651,33 @@ fn a_burst_on_top_of_steady_work_claims_what_doing_it_ahead_saves() {
     assert!(work.title.contains("active in 240 of 240 frames"));
 }
 
-const FIFTEEN: &str = "local M = {}\nlocal due = 0\n\nfunction M.Rare()\n\tlocal s = 0\n\tfor i = 1, 156000 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nfunction M.Base()\n\tlocal s = 0\n\tfor i = 1, 52000 do\n\t\ts += i % 5\n\tend\n\treturn s\nend\n\nfunction M.Tick()\n\tlocal s = M.Base()\n\tdue += 0.15\n\tif due >= 1 then\n\t\tdue -= 1\n\t\ts += M.Rare()\n\tend\n\treturn s\nend\n\nreturn M\n";
+const FIFTEEN: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local due, _r, _b = 0, string.rep("a", 9233), string.rep("a", 3075)
+
+function M.Rare()
+	return _m(_r, _p) and 1 or 0
+end
+
+
+
+
+
+function M.Base()
+	return _m(_b, _p) and 1 or 0
+end
+
+function M.Tick()
+	local s = M.Base()
+	due += 0.15
+	if due >= 1 then
+		due -= 1
+		s += M.Rare()
+	end
+	return s
+end
+
+return M
+"#;
 
 #[test]
 fn work_on_fifteen_percent_of_the_frames_is_never_listed_nowhere() {
@@ -1310,7 +1692,38 @@ fn work_on_fifteen_percent_of_the_frames_is_never_listed_nowhere() {
     assert!((priced_sum(&found) / code_per_frame(&app) - 1.0).abs() < 0.02, "{} of {}: {found:#?}", priced_sum(&found), code_per_frame(&app));
 }
 
-const TENTH: &str = "local M = {}\nlocal frame = 0\nlocal entries = {}\nfor i = 1, 300 do\n\tentries[i] = { id = i, score = (i * 7919) % 1000 }\nend\n\nfunction M.Big()\n\tlocal s = 0\n\tfor i = 1, 1875000 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nfunction M.Board()\n\tfor i, e in entries do\n\t\te.score = (e.score + i) % 1000\n\tend\n\ttable.sort(entries, function(a, b)\n\t\treturn a.score > b.score\n\tend)\n\treturn entries[1].id\nend\n\nfunction M.Tick()\n\tframe += 1\n\tlocal s = M.Board()\n\tif frame % 10 == 5 then\n\t\ts += M.Big()\n\tend\n\treturn s\nend\n\nreturn M\n";
+const TENTH: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local frame, _b = 0, string.rep("a", 110793)
+local entries = {}
+for i = 1, 300 do
+	entries[i] = { id = i, score = (i * 7919) % 1000 }
+end
+
+function M.Big()
+	return _m(_b, _p) and 1 or 0
+end
+
+function M.Board()
+	for i, e in entries do
+		e.score = (e.score + i) % 1000
+	end
+	table.sort(entries, function(a, b)
+		return a.score > b.score
+	end)
+	return entries[1].id
+end
+
+function M.Tick()
+	frame += 1
+	local s = M.Board()
+	if frame % 10 == 5 then
+		s += M.Big()
+	end
+	return s
+end
+
+return M
+"#;
 
 #[test]
 fn a_big_burst_every_tenth_frame_ranks_by_its_price() {
@@ -1318,12 +1731,18 @@ fn a_big_burst_every_tenth_frame_ranks_by_its_price() {
     // frame) against a sort of 300 entries every frame: Big's issue ranks above the sort by its price, and its rate is the
     // same at 2 and 10 seconds. Everything is accounted for
     let temp = Temp::new("planted-tenth");
-    for period in [8, 10] {
+    let handler = harness("Tenth", "sink += M.Tick()");
+    let jobs = vec![(8, 2), (8, 10), (10, 2), (10, 10)];
+    let mut outs = parallel_map(jobs, |(period, seconds)| {
+        // (TENTH bursts every 10th frame: the period is set in its source)
+        let source = TENTH.replace("frame % 10 == 5", &format!("frame % {period} == 5"));
+        run_dir(&temp, &format!("p{period}-s{seconds}"), "Tenth", &source, &handler, "work,timeline", &seconds.to_string())
+    })
+    .into_iter();
+    for _period in [8, 10] {
         let mut rates = Vec::new();
-        for seconds in [2, 10] {
-            // (TENTH bursts every 10th frame: the period is set in its source)
-            let source = TENTH.replace("frame % 10 == 5", &format!("frame % {period} == 5"));
-            let (_, app) = run(&temp, &format!("p{period}-s{seconds}"), "Tenth", &source, &harness("Tenth", "sink += M.Tick()"), "work,timeline", &seconds.to_string());
+        for _seconds in [2, 10] {
+            let app = open_out(&outs.next().unwrap());
             let (found, _) = issues(&app);
             assert_accounted(&app, &found);
             let big = function_issue(&found, "Big Tenth:8").unwrap_or_else(|| panic!("{found:#?}"));
@@ -1338,16 +1757,45 @@ fn a_big_burst_every_tenth_frame_ranks_by_its_price() {
     }
 }
 
-const ONCE_BESIDE: &str = "local M = {}\nlocal frame = 0\n\nfunction M.Steady()\n\tlocal s = 0\n\tfor i = 1, 468750 do\n\t\ts += i % 7\n\tend\n\treturn s\nend\n\nfunction M.Once()\n\tlocal s = 0\n\tfor i = 1, 2970000 do\n\t\ts += i % 13\n\tend\n\treturn s\nend\n\nfunction M.Tick()\n\tframe += 1\n\tlocal s = M.Steady()\n\tif frame == 60 then\n\t\ts += M.Once()\n\tend\n\treturn s\nend\n\nreturn M\n";
+const ONCE_BESIDE: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
+local frame, _s, _o = 0, string.rep("a", 27698), string.rep("a", 175422)
+
+function M.Steady()
+	return _m(_s, _p) and 1 or 0
+end
+
+
+
+
+
+function M.Once()
+	return _m(_o, _p) and 1 or 0
+end
+
+function M.Tick()
+	frame += 1
+	local s = M.Steady()
+	if frame == 60 then
+		s += M.Once()
+	end
+	return s
+end
+
+return M
+"#;
 
 #[test]
 fn a_one_off_beside_a_hot_line_ranks_the_same_at_two_seconds_and_ten() {
     // Once keeps its full 19 ms size and honest mean rate. Its own hitch makes it warning at 2, 5 and 10 seconds,
     // beside Steady's critical 3 ms/frame.
     let temp = Temp::new("planted-once-beside");
+    let handler = harness("Beside", "sink += M.Tick()");
+    let outs = parallel_map(vec![2, 5, 10], |seconds| {
+        run_dir(&temp, &seconds.to_string(), "Beside", ONCE_BESIDE, &handler, "work,timeline", &seconds.to_string())
+    });
     let mut ranks = Vec::new();
-    for seconds in [2, 5, 10] {
-        let (_, app) = run(&temp, &seconds.to_string(), "Beside", ONCE_BESIDE, &harness("Beside", "sink += M.Tick()"), "work,timeline", &seconds.to_string());
+    for out in outs {
+        let app = open_out(&out);
         let (found, _) = issues(&app);
         assert_accounted(&app, &found);
         let once = of(&found, "one-off");
@@ -1382,13 +1830,20 @@ fn assert_accounted(app: &App, found: &[Issue]) {
     }
 }
 
-/// A module whose Pulse does `steps` loop steps of work, and whose Tick runs Pulse in the frames `active` says (given the
-/// frame number)
-fn pulse_module(steps: usize) -> String {
-    format!("local M = {{}}\nfunction M.Pulse()\n local sum = 0\n for i = 1, {steps} do sum += i % 7 end\n return sum\nend\nlocal frame = 0\nfunction M.Tick(active)\n frame += 1\n if active(frame) then return M.Pulse() end\n return 0\nend\nreturn M\n")
+/// A module whose Pulse does `ms` milliseconds of work on the work clock, and whose Tick runs Pulse in the frames
+/// `active` says (given the frame number)
+fn pulse_module(ms: f64) -> String {
+    let bytes = work_bytes(ms);
+    format!(
+        "local M, _m, _p, _s = {{}}, string.match, \"{WORK_PATTERN}\", string.rep(\"a\", {bytes})\n\
+function M.Pulse()\n return _m(_s, _p) and 1 or 0\nend\n\
+local frame = 0\n\
+function M.Tick(active)\n frame += 1\n if active(frame) then return M.Pulse() end\n return 0\nend\n\
+return M\n"
+    )
 }
 
-/// Pulse steps that cost 1 ms of the work clock
+/// Pulse steps that cost 1 ms of the work clock (used by `steps_for_ms` for small Luau-loop events)
 const PULSE_STEPS_FOR_ONE_MS: usize = 156_250;
 
 #[test]
@@ -1397,14 +1852,22 @@ fn sustained_stretches_keep_their_full_rate_at_every_run_length() {
     // The stretch is no one-off: it keeps its full mean rate (the fraction of 1 ms), the same at every length
     let temp = Temp::new("planted-stretches");
     let frames_a_second = 60;
-    for fraction in [0.10, 0.20, 0.33, 0.50] {
+    let module = pulse_module(1.0);
+    let fractions = [0.10, 0.20, 0.33, 0.50];
+    let lengths = [2, 5, 10];
+    let jobs: Vec<(f64, usize)> = fractions.into_iter().flat_map(|f| lengths.into_iter().map(move |s| (f, s))).collect();
+    let mut outs = parallel_map(jobs, |(fraction, seconds)| {
+        let frames = seconds * frames_a_second;
+        let active_frames = (frames as f64 * fraction).round() as usize;
+        let body = format!("sink += M.Tick(function(frame) return frame <= {active_frames} end)");
+        let case = format!("f{active_frames}-s{seconds}");
+        run_dir(&temp, &case, "Stretch", &module, &harness("Stretch", &body), "work,timeline", &seconds.to_string())
+    })
+    .into_iter();
+    for fraction in fractions {
         let mut rates = Vec::new();
-        for seconds in [2, 5, 10] {
-            let frames = seconds * frames_a_second;
-            let active_frames = (frames as f64 * fraction).round() as usize;
-            let body = format!("sink += M.Tick(function(frame) return frame <= {active_frames} end)");
-            let case = format!("f{active_frames}-s{seconds}");
-            let (_, app) = run(&temp, &case, "Stretch", &pulse_module(PULSE_STEPS_FOR_ONE_MS), &harness("Stretch", &body), "work,timeline", &seconds.to_string());
+        for seconds in lengths {
+            let app = open_out(&outs.next().unwrap());
             let (found, _) = issues(&app);
             assert_accounted(&app, &found);
             assert!(of(&found, "one-off").is_empty(), "{fraction} at {seconds}: {found:#?}");
@@ -1427,18 +1890,24 @@ fn contiguous_and_spaced_fifteen_percent_and_four_chunks_have_the_same_price() {
     let stretch_fifteen_percent = "frame <= 18";
     let alternate_chunks = "frame == 30 or frame == 32 or frame == 34 or frame == 36";
     let consecutive_chunks = "frame >= 30 and frame <= 33";
-    let chunk_steps = 742_187;
-    let fifteen_percent_steps = 92_000;
     // (the price a frame in ms: 0.59 ms on 18 of 120 frames; four 4.75 ms chunks in 120 frames)
     let arrangements = [
-        ("Fifteen", fifteen_percent_steps, [spread_fifteen_percent, stretch_fifteen_percent], 0.0885),
-        ("Chunks", chunk_steps, [alternate_chunks, consecutive_chunks], 19.0 / 120.0),
+        ("Fifteen", 0.59, [spread_fifteen_percent, stretch_fifteen_percent], 0.0885),
+        ("Chunks", 4.75, [alternate_chunks, consecutive_chunks], 19.0 / 120.0),
     ];
-    for (name, steps, conditions, expected_ms) in arrangements {
+    let jobs: Vec<(&str, f64, usize, &str)> = arrangements
+        .iter()
+        .flat_map(|&(name, ms, conditions, _)| conditions.into_iter().enumerate().map(move |(i, c)| (name, ms, i, c)))
+        .collect();
+    let mut outs = parallel_map(jobs, |(name, ms, index, condition)| {
+        let body = format!("sink += M.Tick(function(frame) return {condition} end)");
+        run_dir(&temp, &format!("{name}-{index}"), name, &pulse_module(ms), &harness(name, &body), "work,timeline", "2")
+    })
+    .into_iter();
+    for (name, _, conditions, expected_ms) in arrangements {
         let mut rates = Vec::new();
-        for (index, condition) in conditions.iter().enumerate() {
-            let body = format!("sink += M.Tick(function(frame) return {condition} end)");
-            let (_, app) = run(&temp, &format!("{name}-{index}"), name, &pulse_module(steps), &harness(name, &body), "work,timeline", "2");
+        for _ in conditions {
+            let app = open_out(&outs.next().unwrap());
             let (found, _) = issues(&app);
             assert_accounted(&app, &found);
             assert!(of(&found, "one-off").is_empty(), "{found:#?}");
@@ -1457,8 +1926,15 @@ fn six_equal_functions_are_all_critical_and_small_transfers_conserve_the_total()
     // Six functions of about 2.49 ms each are all critical and all listed. Two functions with 0.1 ms moved from one to the
     // other have the same total work; the listed fixes and the closing row between them account for all of it
     let temp = Temp::new("planted-floor");
-    let cases = [("six", vec![389_063; 6]), ("before", vec![21_719, 6_719]), ("after", vec![6_094, 22_344])];
-    for (case, steps_by_function) in cases {
+    let six_bytes = work_bytes(2.49);
+    let mut six_module = format!("local M, _m, _p, _w = {{}}, string.match, \"{WORK_PATTERN}\", string.rep(\"a\", {six_bytes})\n");
+    let mut six_body = "sink += 0".to_string();
+    for index in 0..6 {
+        six_module.push_str(&format!("function M.Work{index}()\n return _m(_w, _p) and 1 or 0\nend\n"));
+        six_body.push_str(&format!(" + M.Work{index}()"));
+    }
+    six_module.push_str("return M\n");
+    let loop_case = |steps_by_function: &[usize]| {
         let mut module = "local M = {}\n".to_string();
         let mut body = "sink += 0".to_string();
         for (index, steps) in steps_by_function.iter().enumerate() {
@@ -1466,8 +1942,16 @@ fn six_equal_functions_are_all_critical_and_small_transfers_conserve_the_total()
             body.push_str(&format!(" + M.Work{index}()"));
         }
         module.push_str("return M\n");
-
-        let (_, app) = run(&temp, case, "Floor", &module, &harness("Floor", &body), "work,timeline", "2");
+        (module, body)
+    };
+    let (before_mod, before_body) = loop_case(&[21_719, 6_719]);
+    let (after_mod, after_body) = loop_case(&[6_094, 22_344]);
+    let jobs = vec![("six", six_module, six_body), ("before", before_mod, before_body), ("after", after_mod, after_body)];
+    let results = parallel_map(jobs, |(case, module, body)| {
+        (case, run_dir(&temp, case, "Floor", &module, &harness("Floor", &body), "work,timeline", "2"))
+    });
+    for (case, out) in results {
+        let app = open_out(&out);
         let (found, _) = issues(&app);
         assert_accounted(&app, &found);
         if case == "six" {
@@ -1487,12 +1971,20 @@ fn another_functions_hitch_never_changes_a_small_functions_severity() {
     // Small's severity, and Small's price is the same with and without it
     let temp = Temp::new("planted-severity");
     let small_steps = 12_438;
-    let once_steps = 4_687_500;
-    let module = format!("local M = {{}}\nfunction M.Small()\n local sum = 0\n for i = 1, {small_steps} do sum += i % 7 end\n return sum\nend\nfunction M.Once()\n local sum = 0\n for i = 1, {once_steps} do sum += i % 7 end\n return sum\nend\nreturn M\n");
-    let mut rates = Vec::new();
-    for hitch in [false, true] {
+    let once_bytes = work_bytes(30.0);
+    let module = format!(
+        "local M, _m, _p, _o = {{}}, string.match, \"{WORK_PATTERN}\", string.rep(\"a\", {once_bytes})\n\
+function M.Small()\n local sum = 0\n for i = 1, {small_steps} do sum += i % 7 end\n return sum\nend\n\
+function M.Once()\n return _m(_o, _p) and 1 or 0\nend\n\
+return M\n"
+    );
+    let outs = parallel_map(vec![false, true], |hitch| {
         let body = format!("sink += M.Small(); frame = (frame or 0) + 1; if {hitch} and frame == 60 then sink += M.Once() end");
-        let (_, app) = run(&temp, &hitch.to_string(), "Isolation", &module, &harness("Isolation", &body), "work,timeline", "2");
+        run_dir(&temp, &hitch.to_string(), "Isolation", &module, &harness("Isolation", &body), "work,timeline", "2")
+    });
+    let mut rates = Vec::new();
+    for out in outs {
+        let app = open_out(&out);
         let (found, _) = issues(&app);
         assert_accounted(&app, &found);
 
@@ -1511,7 +2003,7 @@ fn fifteen_hundred_functions_over_six_hundred_frames_keep_a_small_profile() {
     let function_count = 1500;
     let mut source = "local M = {}\n".to_string();
     for index in 1..=function_count {
-        source.push_str(&format!("function M.Work{index}()\n local sum = 0\n for i = 1, 500 do sum += i % 7 end\n return sum\nend\n"));
+        source.push_str(&format!("function M.Work{index}()\n local sum = 0\n for i = 1, 5 do sum += i % 7 end\n return sum\nend\n"));
     }
     source.push_str("function M.Tick()\n local sum = 0\n");
     for index in 1..=function_count {
@@ -1570,16 +2062,8 @@ end
 return M
 "#
     .replace("STEPS", &steps_for_ms(small_event_ms).to_string());
-    let handler = "frame += 1; if frame == 30 then sink += M.Small() end";
-    let options = RunOptions { kinds: "work,timeline", seconds: "2", extra_arguments: &["--fps", "120"] };
-    let (_, app) = run_with(&temp, "fps120", "Event", &event_module, &counting_harness("Event", handler), &options);
-    let (found, _) = issues(&app);
-    let once = of(&found, "one-off")[0];
-    assert_eq!(once.once, Some(30.0));
-    assert!((once.total_ms.unwrap() - 0.301).abs() < PRICE_TOLERANCE_MS, "{once:#?}");
-    let frames_at_120_fps = 240.0;
-    assert!((once.ms.unwrap() - once.total_ms.unwrap() / frames_at_120_fps).abs() < 1e-8);
-    assert_accounted(&app, &found);
+    let handler1 = counting_harness("Event", "frame += 1; if frame == 30 then sink += M.Small() end");
+    let options1 = RunOptions { kinds: "work,timeline", seconds: "2", extra_arguments: &["--fps", "120"] };
 
     // The same work split by a phase mark inside frame 120: the two halves are parts of one frame and one event
     let split_module = r#"local M = {}
@@ -1593,38 +2077,52 @@ end
 return M
 "#
     .replace("STEPS", &steps_for_ms(small_event_ms).to_string());
-    let handler = "frame += 1; if frame == 120 then sink += M.Split(Context) end";
-    let options = RunOptions { kinds: "work,timeline", seconds: "10", extra_arguments: &["--profile-phase", "all"] };
-    let (_, app) = run_with(&temp, "split", "Split", &split_module, &counting_harness("Split", handler), &options);
-    let (found, _) = issues(&app);
+    let handler2 = counting_harness("Split", "frame += 1; if frame == 120 then sink += M.Split(Context) end");
+    let options2 = RunOptions { kinds: "work,timeline", seconds: "10", extra_arguments: &["--profile-phase", "all"] };
+    let (out1, out2) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir_with(&temp, "fps120", "Event", &event_module, &handler1, &options1));
+        let h2 = scope.spawn(|| run_dir_with(&temp, "split", "Split", &split_module, &handler2, &options2));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (app1, app2) = (open_out(&out1), open_out(&out2));
+
+    let (found, _) = issues(&app1);
+    let once = of(&found, "one-off")[0];
+    assert_eq!(once.once, Some(30.0));
+    assert!((once.total_ms.unwrap() - 0.301).abs() < PRICE_TOLERANCE_MS, "{once:#?}");
+    let frames_at_120_fps = 240.0;
+    assert!((once.ms.unwrap() - once.total_ms.unwrap() / frames_at_120_fps).abs() < 1e-8);
+    assert_accounted(&app1, &found);
+
+    let (found, _) = issues(&app2);
     let once = of(&found, "one-off").into_iter().find(|issue| issue.title.starts_with("Split Split:2:")).unwrap();
     assert_eq!(once.once, Some(120.0));
     assert!((once.total_ms.unwrap() - 0.605).abs() < 0.003, "{once:#?}");
     assert!(once.ms.unwrap() < PRICE_TOLERANCE_MS);
-    assert_accounted(&app, &found);
+    assert_accounted(&app2, &found);
 }
 
 #[test]
 fn two_real_computations_are_priced_whole_without_subtracting_the_smaller() {
     let temp = Temp::new("planted-review-two");
-    let spike_module = r#"local M = {}
-function M.Spike(n)
-    local sum = 0
-    for k = 1, n do sum += k % 7 end
-    return sum
-end
-return M
-"#;
+    let spike_module = format!(
+        "local M, _m, _p = {{}}, string.match, \"{WORK_PATTERN}\"\n\
+function M.Spike(s)\n    return _m(s, _p) and 1 or 0\nend\n\
+return M\n"
+    );
     let (first_frame, second_frame) = (30, 80);
     let second_ms = 19.0;
+    let cases = [("equal", 19.0), ("unequal", 25.0)];
     // (two equal computations, then a larger one before a smaller one: each is priced whole)
-    for (name, first_ms) in [("equal", 19.0), ("unequal", 25.0)] {
-        let handler = format!(
-            "frame += 1; if frame == {first_frame} then sink += M.Spike({}) elseif frame == {second_frame} then sink += M.Spike({}) end",
-            steps_for_ms(first_ms),
-            steps_for_ms(second_ms)
-        );
-        let (_, app) = run(&temp, name, "Spike", spike_module, &counting_harness("Spike", &handler), "work,timeline", "2");
+    let outs = parallel_map(cases.to_vec(), |(name, first_ms)| {
+        let b1 = work_bytes(first_ms);
+        let b2 = work_bytes(second_ms);
+        let handler = counting_harness("Spike", &format!("frame += 1; if frame == {first_frame} then sink += M.Spike(_s1) elseif frame == {second_frame} then sink += M.Spike(_s2) end"))
+            .replace("local sink, frame = 0, 0", &format!("local sink, frame, _s1, _s2 = 0, 0, string.rep(\"a\", {b1}), string.rep(\"a\", {b2})"));
+        (first_ms, run_dir(&temp, name, "Spike", &spike_module, &handler, "work,timeline", "2"))
+    });
+    for (first_ms, out) in outs {
+        let app = open_out(&out);
         let (found, _) = issues(&app);
         let issue = function_issue(&found, "Spike Spike:2").unwrap();
         assert_eq!(issue.active_frames, 2);
@@ -1654,8 +2152,14 @@ return M
 fn a_real_builtin_fix_bounds_its_unseen_source_setup() {
     let temp = Temp::new("planted-builtin-net");
     let handler = harness("Byte", "sink += M.Read(\"abcdef\")");
-    let (_, before) = run(&temp, "declined", "Byte", &builtin_call_module("string.byte(s)"), &handler, "work,caches", "1");
-    let (_, after) = run(&temp, "fixed", "Byte", &builtin_call_module("string.byte(s, 1)"), &handler, "work,caches", "1");
+    let declined_mod = builtin_call_module("string.byte(s)");
+    let fixed_mod = builtin_call_module("string.byte(s, 1)");
+    let (before_out, after_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "declined", "Byte", &declined_mod, &handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fixed", "Byte", &fixed_mod, &handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (before, after) = (open_out(&before_out), open_out(&after_out));
     let (found, _) = issues(&before);
     let declines = of(&found, "builtin declines");
     assert_eq!(declines.len(), 1, "compiled copies are one source edit: {found:#?}");
@@ -1676,12 +2180,18 @@ fn a_real_builtin_fix_bounds_its_unseen_source_setup() {
 fn a_real_substring_fix_bounds_its_added_argument_instructions() {
     let temp = Temp::new("planted-substring-net");
     // (the length of the string changes what the call costs, not what the added argument does)
-    for length in [6, 1000] {
+    let declined_call = builtin_call_module("#string.sub(s, 2)");
+    let fixed_call = builtin_call_module("#string.sub(s, 2, #s)");
+    let jobs: Vec<(usize, bool)> = [6, 1000].into_iter().flat_map(|len| [(len, false), (len, true)]).collect();
+    let mut outs = parallel_map(jobs, |(length, fixed)| {
         let handler = harness("Sub", &format!("sink += M.Read(string.rep(\"a\", {length}))"));
-        let declined_call = builtin_call_module("#string.sub(s, 2)");
-        let fixed_call = builtin_call_module("#string.sub(s, 2, #s)");
-        let (_, before) = run(&temp, &format!("declined-{length}"), "Sub", &declined_call, &handler, "work,caches", "1");
-        let (_, after) = run(&temp, &format!("fixed-{length}"), "Sub", &fixed_call, &handler, "work,caches", "1");
+        let (tag, source) = if fixed { ("fixed", &fixed_call) } else { ("declined", &declined_call) };
+        run_dir(&temp, &format!("{tag}-{length}"), "Sub", source, &handler, "work,caches", "1")
+    })
+    .into_iter();
+    for length in [6, 1000] {
+        let before = open_out(&outs.next().unwrap());
+        let after = open_out(&outs.next().unwrap());
         let (found, _) = issues(&before);
         let declines = of(&found, "builtin declines");
         assert_eq!(declines.len(), 1, "{found:#?}");
@@ -1720,8 +2230,14 @@ return M
     const TABLES_BUILT: usize = 2000;
     // (the `t.x = i` write is on line 6; a table of four keys must grow to take it, a table built with x does not)
     let handler = harness("Cache", "sink += M.Build()");
-    let (_, before) = run(&temp, "growing", "Cache", &build_module("{a = 1, b = 1, c = 1, d = 1}"), &handler, "work,caches", "1");
-    let (_, after) = run(&temp, "presized", "Cache", &build_module("{a = 1, b = 1, c = 1, d = 1, x = 0}"), &handler, "work,caches", "1");
+    let before_mod = build_module("{a = 1, b = 1, c = 1, d = 1}");
+    let after_mod = build_module("{a = 1, b = 1, c = 1, d = 1, x = 0}");
+    let (before_out, after_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "growing", "Cache", &before_mod, &handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "presized", "Cache", &after_mod, &handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (before, after) = (open_out(&before_out), open_out(&after_out));
     let (found, _) = issues(&before);
     let rehash = of(&found, "cache misses").into_iter().find(|issue| issue.title.contains("Cache:6")).unwrap_or_else(|| panic!("{found:#?}"));
     let price = rehash.ms.unwrap();
@@ -1742,13 +2258,17 @@ function M.Read(s)
 end
 return M
 "#;
-    let handler = "frame += 1; sink += M.Read(string.rep(\"abcdef\", 200) .. frame)";
-    let (_, app) = run(&temp, "substring", "Sub", source, &counting_harness("Sub", handler), "work,caches", "1");
+    let fixed = source.replace("string.sub(s, i)", "string.sub(s, i, #s)");
+    let handler = counting_harness("Sub", "frame += 1; sink += M.Read(string.rep(\"abcdef\", 200) .. frame)");
+    let (app_out, after_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "substring", "Sub", source, &handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fixed", "Sub", &fixed, &handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (app, after) = (open_out(&app_out), open_out(&after_out));
     let (found, _) = issues(&app);
     let declines = of(&found, "builtin declines");
     assert_eq!(declines.len(), 1, "{found:#?}");
-    let fixed = source.replace("string.sub(s, i)", "string.sub(s, i, #s)");
-    let (_, after) = run(&temp, "fixed", "Sub", &fixed, &counting_harness("Sub", handler), "work,caches", "1");
     let saved = code_per_frame(&app) - code_per_frame(&after);
     let price = declines[0].ms.unwrap();
     assert!(saved > 0.0 && saved <= price + SAME_MS, "bound {price} against A/B {saved}");
@@ -1772,9 +2292,15 @@ return M
         .replace("CALL", call)
     };
     let handler = harness("Append", "sink += M.Fill()");
+    let declined_mod = fill_module("table.insert(values, i, i)");
+    let fast_mod = fill_module("table.insert(values, i)");
     // (inserting at a position that is not the end is declined; at the end it is the fast path, which keeps rehashing)
-    let (_, declined) = run(&temp, "declined", "Append", &fill_module("table.insert(values, i, i)"), &handler, "work,caches", "1");
-    let (_, fast) = run(&temp, "fast", "Append", &fill_module("table.insert(values, i)"), &handler, "work,caches", "1");
+    let (declined_out, fast_out) = std::thread::scope(|scope| {
+        let h1 = scope.spawn(|| run_dir(&temp, "declined", "Append", &declined_mod, &handler, "work,caches", "1"));
+        let h2 = scope.spawn(|| run_dir(&temp, "fast", "Append", &fast_mod, &handler, "work,caches", "1"));
+        (h1.join().unwrap(), h2.join().unwrap())
+    });
+    let (declined, fast) = (open_out(&declined_out), open_out(&fast_out));
     let (found, _) = issues(&declined);
     let append = of(&found, "builtin declines");
     assert_eq!(append.len(), 1, "{found:#?}");

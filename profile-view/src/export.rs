@@ -3,7 +3,7 @@
 //! box lines and braille are drawn as shapes so bars and plots join up exactly). The same buffer gives the same bytes on
 //! every machine.
 
-use std::{collections::HashMap, fmt::Write as _, path::Path};
+use std::{collections::HashMap, fmt::Write as _, path::Path, sync::OnceLock};
 
 use fontdue::{Font, FontSettings, Metrics};
 use ratatui::{
@@ -232,10 +232,41 @@ pub fn svg(buf: &Buffer, theme: &Theme, scale: u32) -> String {
 static REGULAR: &[u8] = include_bytes!("../fonts/JetBrainsMono-Regular.ttf");
 static BOLD: &[u8] = include_bytes!("../fonts/JetBrainsMono-Bold.ttf");
 
+enum FontFace {
+    Cached(&'static Font),
+    Owned(Font),
+}
+
+impl FontFace {
+    fn get(&self) -> &Font {
+        match self {
+            FontFace::Cached(font) => font,
+            FontFace::Owned(font) => font,
+        }
+    }
+}
+
+fn cached_fonts(scale: u32) -> (FontFace, FontFace) {
+    static SCALES: [OnceLock<(Font, Font)>; 4] = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
+    let build = || {
+        let settings = FontSettings { scale: (FONT_PX * scale) as f32, ..FontSettings::default() };
+        let regular = Font::from_bytes(REGULAR, settings).expect("the bundled font");
+        let bold = Font::from_bytes(BOLD, settings).expect("the bundled bold font");
+        (regular, bold)
+    };
+    if let Some(slot) = scale.checked_sub(1).and_then(|index| SCALES.get(index as usize)) {
+        let (regular, bold) = slot.get_or_init(build);
+        (FontFace::Cached(regular), FontFace::Cached(bold))
+    } else {
+        let (regular, bold) = build();
+        (FontFace::Owned(regular), FontFace::Owned(bold))
+    }
+}
+
 /// The font at one size, its glyphs rasterized once each
 pub struct CellFont {
-    regular: Font,
-    bold: Font,
+    regular: FontFace,
+    bold: FontFace,
     px: f32,
     pub cell_w: u32,
     pub cell_h: u32,
@@ -246,11 +277,9 @@ pub struct CellFont {
 impl CellFont {
     /// The font for a cell grid at `scale` (1: 9x20 pixel cells, 15 px text)
     pub fn new(scale: u32) -> CellFont {
-        let settings = FontSettings { scale: (FONT_PX * scale) as f32, ..FontSettings::default() };
-        let regular = Font::from_bytes(REGULAR, settings).expect("the bundled font");
-        let bold = Font::from_bytes(BOLD, settings).expect("the bundled bold font");
+        let (regular, bold) = cached_fonts(scale);
         let px = (FONT_PX * scale) as f32;
-        let line = regular.horizontal_line_metrics(px).expect("horizontal metrics");
+        let line = regular.get().horizontal_line_metrics(px).expect("horizontal metrics");
         // (the grid SVG uses too: JetBrains Mono's advance is 0.6 em, 9 px at 15 px)
         let cell_w = CELL_W * scale;
         let cell_h = CELL_H * scale;
@@ -262,11 +291,11 @@ impl CellFont {
 
     /// Whether the font has a glyph for the character (a shape drawn in its place counts)
     pub fn covers(&self, ch: char) -> bool {
-        ch == ' ' || block(ch).is_some() || shape(ch) || self.regular.lookup_glyph_index(ch) != 0
+        ch == ' ' || block(ch).is_some() || shape(ch) || self.regular.get().lookup_glyph_index(ch) != 0
     }
 
     fn glyph(&mut self, ch: char, bold: bool) -> &(Metrics, Vec<u8>) {
-        let (font, px) = (if bold { &self.bold } else { &self.regular }, self.px);
+        let (font, px) = (if bold { self.bold.get() } else { self.regular.get() }, self.px);
         self.glyphs.entry((ch, bold)).or_insert_with(|| font.rasterize(ch, px))
     }
 }
@@ -286,9 +315,14 @@ pub struct Image {
 
 impl Image {
     fn new(width: u32, height: u32, color: (u8, u8, u8)) -> Image {
-        let mut pixels = Vec::with_capacity((width * height * 3) as usize);
-        for _ in 0..width * height {
-            pixels.extend_from_slice(&[color.0, color.1, color.2]);
+        let row_bytes = (width as usize) * 3;
+        let mut row = Vec::with_capacity(row_bytes);
+        for _ in 0..width {
+            row.extend_from_slice(&[color.0, color.1, color.2]);
+        }
+        let mut pixels = Vec::with_capacity(row_bytes * (height as usize));
+        for _ in 0..height {
+            pixels.extend_from_slice(&row);
         }
         Image { width, height, pixels }
     }
@@ -308,6 +342,23 @@ impl Image {
 
     /// A rectangle with fractional edges, the edge pixels blended by how much of them it covers
     fn rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, color: (u8, u8, u8)) {
+        if x0.fract() == 0.0 && y0.fract() == 0.0 && x1.fract() == 0.0 && y1.fract() == 0.0 {
+            let lx = (x0 as i64).clamp(0, self.width as i64) as usize;
+            let rx = (x1 as i64).clamp(0, self.width as i64) as usize;
+            let ty = (y0 as i64).clamp(0, self.height as i64) as usize;
+            let by = (y1 as i64).clamp(0, self.height as i64) as usize;
+            if lx < rx && ty < by {
+                let stride = self.width as usize * 3;
+                let pixel = [color.0, color.1, color.2];
+                for py in ty..by {
+                    let row = &mut self.pixels[py * stride + lx * 3..py * stride + rx * 3];
+                    for chunk in row.chunks_exact_mut(3) {
+                        chunk.copy_from_slice(&pixel);
+                    }
+                }
+            }
+            return;
+        }
         for py in y0.floor() as i64..y1.ceil() as i64 {
             let cover_y = (y1.min(py as f32 + 1.0) - y0.max(py as f32)).clamp(0.0, 1.0);
             for px in x0.floor() as i64..x1.ceil() as i64 {
@@ -489,7 +540,15 @@ pub fn png_bytes(image: &Image) -> Result<Vec<u8>, String> {
 
 /// Writes a screen in a format; returns the bytes written
 pub fn write(buf: &Buffer, theme: &Theme, format: Format, scale: u32, path: &Path) -> Result<usize, String> {
-    let bytes = encode(buf, theme, format, scale)?;
+    write_with_font(buf, theme, format, scale, path, None)
+}
+
+/// Like [`write`], reusing an existing [`CellFont`] across multiple PNG renders
+pub(crate) fn write_with_font(buf: &Buffer, theme: &Theme, format: Format, scale: u32, path: &Path, font: Option<&mut CellFont>) -> Result<usize, String> {
+    let bytes = match (format, font) {
+        (Format::Png, Some(font)) => png_bytes(&raster(buf, theme, font, scale))?,
+        _ => encode(buf, theme, format, scale)?,
+    };
     if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     }

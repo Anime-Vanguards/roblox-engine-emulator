@@ -303,6 +303,7 @@ fn render_inner(args: &[String]) -> Result<Vec<String>, String> {
     if let Some(script) = &options.keys {
         play(&mut app, script, cols, rows)?;
     }
+    let mut font = (format == Format::Png && !to_stdout).then(|| export::CellFont::new(options.scale));
     for (index, view) in wanted.iter().enumerate() {
         if let (true, Some(view)) = (index > 0, view) {
             app.view = *view;
@@ -316,7 +317,7 @@ fn render_inner(args: &[String]) -> Result<Vec<String>, String> {
             continue;
         }
         let path = if single_file { out_path.clone() } else { out_path.join(format!("{}.{}", app.view.name(), format.extension())) };
-        export::write(&buf, &app.theme, format, options.scale, &path)?;
+        export::write_with_font(&buf, &app.theme, format, options.scale, &path, font.as_mut())?;
         let shown = absolute(&path);
         lines.push(if format == Format::Png { format!("{shown}  ![{}]({})", app.view.title(), markdown_target(&shown)) } else { shown });
     }

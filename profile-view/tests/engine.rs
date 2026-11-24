@@ -52,7 +52,7 @@ fn run_engine_with(harness: &std::path::Path, out: &std::path::Path, more: &[&st
     // (on a thread with a service worker's stack, as the ree binary runs its commands)
     std::thread::Builder::new()
         .stack_size(64 << 20)
-        .spawn(move || roblox_engine_emulator::record::run::cli(&args, &roblox_engine_emulator::launch::Host { repo, ..Default::default() }, false))
+        .spawn(move || roblox_engine_emulator::record::run::cli_in_process(&args, &roblox_engine_emulator::launch::Host { repo, ..Default::default() }, false))
         .unwrap()
         .join()
         .unwrap()
@@ -182,8 +182,11 @@ fn a_handler_that_clones_a_larger_model_is_not_priced_differently() {
         let text = std::fs::read_to_string(dir.join("profile.json")).unwrap();
         serde_json::from_str(&text).unwrap()
     };
-    let small_model_dir = run(10, "before");
-    let large_model_dir = run(200, "after");
+    let (small_model_dir, large_model_dir) = std::thread::scope(|s| {
+        let a = s.spawn(|| run(10, "before"));
+        let b = s.spawn(|| run(200, "after"));
+        (a.join().unwrap(), b.join().unwrap())
+    });
     let before_json = read_profile(&small_model_dir);
     let after_json = read_profile(&large_model_dir);
 
