@@ -504,6 +504,9 @@ pub struct Touched {
     pub world_root: Option<ClassId>,
     /// PivotTo's name, priced by the method call itself ([`Touched::pivot_cold`])
     pub pivot_to: Option<crate::reflection::NameId>,
+    /// The instance the PivotTo being priced moves (lua/instance.rs pivot_cold), until the engine's Luau writes it: that write
+    /// changes a part as a script's would ([`part_changes`]), where each part a PivotTo carries counts one change
+    pub pivot_root: Option<crate::InstanceId>,
     /// What the run's scripts have asked the engine to do so far ([`EngineOps`], [`Touched::count`]), and the scheduler's mute:
     /// above 0 while the engine's own Luau prices a whole call (Scheduler::muted), whose inner operations are not counted
     ops: EngineOps,
@@ -538,6 +541,7 @@ impl Touched {
             reparented: Vec::new(),
             world_root: None,
             pivot_to: None,
+            pivot_root: None,
             ops: EngineOps::default(),
             muted,
             work_kinds: None,
@@ -1531,6 +1535,36 @@ pub const ASSEMBLY_VELOCITY_PART: f64 = 4.5e-9;
 /// whether the call finds its ancestor at the top or walks to the DataModel, the Workspace included (a script's call walks the parents
 /// as a client's does, where the engine's own checks, its own Luau's calls among them, read the homes the dom keeps).
 pub const ANCESTOR_STEP: f64 = 1.2e-9;
+/// A change to a part below WorldModels, beyond its price, for each WorldModel above it and each pair of them: the same client
+/// (os.clock around 10 to 4,500 writes, the median of 15, less an empty loop) changed a Part at the bottom of L WorldModels
+/// nested one in another, the outermost in the Workspace or unparented, built from the top down, and spent this much more than
+/// on the same part with none (a Transparency write): 0.02 us at L = 1, 0.30 at 10, 1.07 at 30, 7.1 to 9.4 at 100, 64 to 114 at
+/// 300, 0.80 to 1.0 ms at 1,000, 7.8 to 8.2 ms at 3,000 (a 10,000-deep chain in the Workspace did not finish in 300 s); each
+/// WorldModel above looks again at those above it. Fitted on 142 cases of 1 to 3,000 levels and 14 write kinds, each case's
+/// extra over its changes ([`part_changes`]): x0.94 at the median, x0.65 to x1.53 from the 10th to the 90th percentile, x1.6
+/// to x2.3 out of the Workspace at 10 to 100 levels. A plain Model above a part costs it about as much (7.1 us at 100, 41 to
+/// 46 at 300: not modelled, the dom counts the WorldRoots), and a Folder 12 ns a level (not modelled either).
+pub const WORLD_LEVEL: f64 = 13e-9;
+pub const WORLD_LEVEL_PAIR: f64 = 1.6e-9;
+/// What `changes` changes of a part below `levels` WorldModels cost for them ([`WORLD_LEVEL`]): nothing below none.
+pub fn world_levels(levels: u32, changes: u32) -> f64 {
+    let levels = f64::from(levels);
+    f64::from(changes) * (levels * WORLD_LEVEL + levels * (levels + 1.0) / 2.0 * WORLD_LEVEL_PAIR)
+}
+/// How many changes a client makes of a part when `property` changes, each paying the WorldModels above it once
+/// ([`world_levels`]): measured against Transparency below 300 and 1,000 WorldModels, CFrame, Position, Orientation (and so
+/// Rotation) and a part's PivotTo 5 (4.75 to 5.1), Size 4 (3.9 to 4.0), Anchored, Color and BrickColor 3 (2.85 to 3.08),
+/// CollisionGroup 3 in the Workspace and 2 out of it, Material, CanCollide, Reflectance, Name and Parent 1 (0.92 to 1.18), as
+/// is each part a Model's PivotTo moves (0.97 to 1.04 a part of 10). Another property counts 1.
+pub fn part_changes(property: &str, placed: bool) -> u32 {
+    match property {
+        "CFrame" | "Position" | "Orientation" | "Rotation" => 5,
+        "Size" => 4,
+        "Anchored" | "Color" | "BrickColor" => 3,
+        "CollisionGroup" => if placed { 3 } else { 2 },
+        _ => 1,
+    }
+}
 /// GetFullName (and an error that names an instance by it) beyond the call: each name it joins and each byte of its text. The same
 /// chains, named with 1, 6 or 60 bytes each: 4.46 us at 1,000 deep with 1-byte names, 5.34 with 6 bytes, 13.07 with 60; 18.96,
 /// 22.50 and 52.24 at 4,000.

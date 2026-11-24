@@ -197,16 +197,17 @@ pub fn index_parts(state: &mut State) {
     state.cameras.taken_in += 1;
 }
 
-/// Whether `node` is the Workspace or in it: a look at `node` and the homes above it (dom.rs Dom::home_step), however deep it is.
+/// Whether `node` is the Workspace or in it: a look at `node` and at the outermost home above it (dom.rs Dom::homes_above), however
+/// deep it is and however many WorldModels are nested above it (the Workspace is in no home); up the tree while the dom keeps no homes.
 fn in_workspace(state: &State, workspace: ClassId, node: InstanceId) -> bool {
-    let mut current = Some(node);
-    while let Some(id) = current {
-        if state.dom.at(id).class == workspace {
-            return true;
-        }
-        current = state.dom.home_step(id);
+    let is_workspace = |id: InstanceId| state.dom.at(id).class == workspace;
+    if is_workspace(node) {
+        return true;
     }
-    false
+    if state.dom.keeps_homes() {
+        return state.dom.homes_above(node).top.is_some_and(is_workspace);
+    }
+    std::iter::successors(state.dom.at(node).parent, |&id| state.dom.at(id).parent).any(is_workspace)
 }
 
 /// Whether a part GetLargestCutoffDistance's ray meets stops it: in the spatial index, CanCollide on (CanQuery does not matter:

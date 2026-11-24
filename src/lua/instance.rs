@@ -52,7 +52,8 @@ pub fn full_name(engine: &Engine, id: InstanceId) -> String {
 
 /// IsDescendantOf's answer (IsAncestorOf's the other way round): a script's call walks the parents and pays for each, as a client's
 /// does (cost.rs ANCESTOR_STEP); the engine's own Luau, in a call it prices whole (the clock muted: services.luau's PivotTo asks
-/// whether a part is in the Workspace), reads the homes the dom keeps, at any depth.
+/// whether a part is in the Workspace), reads the homes the dom keeps: one lookup at any depth and below any number of
+/// WorldModels (dom.rs Dom::is_descendant_of_home).
 pub fn descendant_of(engine: &Engine, id: InstanceId, ancestor: InstanceId) -> bool {
     let state = engine.state.borrow();
     if state.sched.muted.get() > 0 {
@@ -432,10 +433,14 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
                 let setter = engine.behaviors.borrow().find_setter(&engine.reflection, class, name).cloned();
                 if let Some(setter) = setter {
                     setter(lua, engine, id, value.clone())?;
-                    // (a behaviour's setter stores through the engine: priced as a write that changed)
+                    // (a behaviour's setter stores through the engine: priced as a write that changed, a part's with the WorldModels
+                    // above it)
                     let state = engine.state.borrow();
-                    let placed = engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of_home(id, engine.world().workspace);
-                    let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), true, placed) + write_touch(&state, id, name, engine.reflection.name(name), true);
+                    let property = engine.reflection.name(name);
+                    let (placed, levels) = part_placement(engine, &state, class, id);
+                    // (a Parent setter's move pays its levels itself: set_parent)
+                    let levels = if name == K::Parent as NameId { 0.0 } else { changed_levels(&state, id, property, placed, levels) };
+                    let price = crate::cost::write(&engine.reflection, class, property, true, placed) + levels + write_touch(&state, id, name, property, true);
                     state.sched.charge(price);
                     cross_set(engine, &state, id, name, price, true);
                     return Ok(());
@@ -486,6 +491,27 @@ pub fn report_unemulated_write(engine: &Engine, id: InstanceId, name: NameId, at
     if health < 0.0 || health > max {
         engine.missing_where("Humanoid", "Health outside 0..MaxHealth", &at);
     }
+}
+
+/// Whether the instance (of `class`) is a part in the Workspace, and how many WorldModels are above it when it is a part (world/mod.rs
+/// placement: one lookup, whatever its depth); neither for any other instance.
+fn part_placement(engine: &Engine, state: &State, class: ClassId, id: InstanceId) -> (bool, u32) {
+    if engine.reflection.is_a(class, "BasePart") { crate::world::placement(&state.dom, &engine.reflection, engine.world().workspace, id) } else { (false, 0) }
+}
+
+/// What a change of `property` costs a part below `levels` WorldModels for them (cost.rs world_levels, part_changes). Inside a
+/// call the engine's Luau prices whole (the clock muted) the call's own price does not hold them, so they are charged on top of
+/// it: the part a PivotTo moves as a script's change would be, each other part it changes one change's worth.
+fn changed_levels(state: &State, id: InstanceId, property: &str, placed: bool, levels: u32) -> f64 {
+    if !state.sched.is_muted() {
+        return if levels == 0 { 0.0 } else { crate::cost::world_levels(levels, crate::cost::part_changes(property, placed)) };
+    }
+    let root = state.sched.touched.borrow_mut().pivot_root.take_if(|root| *root == id).is_some();
+    if levels > 0 {
+        let changes = if root { crate::cost::part_changes(property, placed) } else { 1 };
+        state.sched.charge_priced(crate::cost::world_levels(levels, changes));
+    }
+    0.0
 }
 
 /// RawSet with notifications (signals queue; hooks run) on an engine handle.
@@ -552,10 +578,15 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
     let changed = set_property(engine, id, name, value);
     let state = engine.state.borrow();
     let class = state.dom.at(id).class;
-    let placed = changed && engine.reflection.is_a(class, "BasePart") && state.dom.is_descendant_of_home(id, engine.world().workspace);
+    let (placed, levels) = if changed { part_placement(engine, &state, class, id) } else { (false, 0) };
     let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), changed, placed)
         * crate::cost::place_write_scale(&engine.options.place_prices, engine.options.place_id, engine.reflection.name(name), placed);
     let mut paid = price + write_touch(&state, id, name, engine.reflection.name(name), changed);
+    if changed {
+        paid += changed_levels(&state, id, engine.reflection.name(name), placed, levels);
+    } else if state.sched.is_muted() {
+        state.sched.touched.borrow_mut().pivot_root.take_if(|root| *root == id);
+    }
     {
         let mut touched = state.sched.touched.borrow_mut();
         // (where the write's price came from: cost.rs write_kinds)
@@ -637,11 +668,22 @@ pub fn set_attribute(engine: &Engine, id: InstanceId, name: Str, value: Value) {
     }
 }
 
-/// SetParent on an engine handle.
+/// SetParent on an engine handle: a part's move pays the WorldModels above it where it went, as its other changes do
+/// ([`changed_levels`]), beyond the reparenting's price.
 pub fn set_parent(engine: &Engine, id: InstanceId, parent: Option<InstanceId>) -> Result<(), Flow> {
     let hooks = engine.hooks.borrow();
     let mut state = engine.state.borrow_mut();
-    core::set_parent(&mut state, &engine.reflection, &hooks, id, parent).map_err(Flow::Error)
+    let moved = state.dom.get(id).is_some_and(|instance| instance.parent != parent);
+    core::set_parent(&mut state, &engine.reflection, &hooks, id, parent).map_err(Flow::Error)?;
+    if moved && state.dom.get(id).is_some() {
+        let (placed, levels) = part_placement(engine, &state, state.dom.at(id).class, id);
+        let seconds = if levels > 0 { changed_levels(&state, id, "Parent", placed, levels) } else { 0.0 };
+        if seconds > 0.0 {
+            state.sched.charge(seconds);
+            crate::boundary::add_cost(seconds);
+        }
+    }
+    Ok(())
 }
 
 /// Signal.FireImmediate: runs handlers now, each on a fresh thread (engine callbacks that do not
@@ -796,6 +838,8 @@ fn destroy_subtree(engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
 pub fn pivot_cold(engine: &Engine, id: InstanceId) -> f64 {
     let state = engine.state.borrow();
     let mut touched = state.sched.touched.borrow_mut();
+    // (the part it moves, whose write in the engine's Luau pays the WorldModels above it as a script's: changed_levels)
+    touched.pivot_root = Some(id);
     let root_cold = touched.take_last_cold();
     if !touched.workspace.is_some_and(|workspace| state.dom.is_descendant_of_home(id, workspace)) {
         return 0.0;

@@ -647,16 +647,30 @@ pub struct Dom {
     /// WorldRoots and JointsService, where world/joints.rs and world/gravity.rs ask which world a part or a joint is in), kept
     /// as the tree changes so that question costs one lookup however deep the instance is
     homes: Vec<Option<InstanceId>>,
+    /// What is above each instance's home, by slot, kept with `homes` ([`Dom::homes_above`]): the outermost home it leads to and
+    /// how many homes are above the instance, so whether it is in the Workspace, and how many WorldModels it is below, cost one
+    /// lookup however many WorldModels are nested above it
+    above: Vec<Above>,
     /// Whether each class (by id) is a home class; empty while homes are not kept
     home_classes: Vec<bool>,
-    /// A stack reused to walk a subtree whose home changed
-    home_walk: Vec<InstanceId>,
+    /// A stack reused to walk a subtree whose home changed, or whose homes' outermost home did (each entry: whether it takes the
+    /// new home, or keeps its own and only what is above it changed)
+    home_walk: Vec<(InstanceId, bool)>,
     /// The instances of the classes [`Dom::log_homes`] names (by id; empty while none is) whose home changed since
     /// [`Dom::take_home_log`] last took them, logged by whatever changed it (world/joints.rs: which rigid joints are in a world),
     /// and whether more changed than the log keeps (twice the slots and 4,096 more), which it then stops logging
     home_logged: Vec<bool>,
     home_log: Vec<InstanceId>,
     home_log_full: bool,
+}
+
+/// What is above an instance's home ([`Dom::homes_above`]): the outermost home its homes lead to (the last of them, which is in
+/// no home: the Workspace for an instance in it, a WorldModel out of every world, JointsService) and how many homes are above it,
+/// that one included. None and 0 for an instance in no home.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Above {
+    pub top: Option<InstanceId>,
+    pub homes: u32,
 }
 
 /// What changed under `root` (the Workspace) since the spatial index last took the log (world/broadphase.rs): the instances
@@ -757,6 +771,7 @@ impl Dom {
             }
             if let Some(home) = self.homes.get_mut(index as usize) {
                 *home = None;
+                self.above[index as usize] = Above::default();
             }
             return InstanceId { index, generation: slot.generation };
         }
@@ -764,6 +779,7 @@ impl Dom {
         self.slots.push(Slot { generation: 0, instance: Some(instance) });
         if !self.home_classes.is_empty() {
             self.homes.push(None);
+            self.above.push(Above::default());
         }
         if let Some(set) = self.tracked.get_mut(&class) {
             set.insert(index);
@@ -840,13 +856,37 @@ impl Dom {
         self.home_classes = is_home;
         self.homes.clear();
         self.homes.resize(self.slots.len(), None);
+        self.above.clear();
+        self.above.resize(self.slots.len(), Above::default());
         let mut walk: Vec<(InstanceId, Option<InstanceId>)> =
             (0..self.slots.len() as u32).filter_map(|slot| self.id_at_slot(slot)).filter(|&id| self.at(id).parent.is_none()).map(|root| (root, None)).collect();
         while let Some((node, home)) = walk.pop() {
+            // (a home is above each instance below it, so it was worked out before them)
             self.homes[node.index as usize] = home;
+            self.above[node.index as usize] = self.above_below(home);
             let below = if self.is_home(node) { Some(node) } else { home };
             walk.extend(self.at(node).children.iter().map(|&child| (child, below)));
         }
+    }
+
+    /// What is above an instance whose home is `home`: the outermost home `home` leads to (itself when it is in no home), and one
+    /// home more than is above `home`.
+    #[inline]
+    fn above_below(&self, home: Option<InstanceId>) -> Above {
+        match home {
+            None => Above::default(),
+            Some(home) => {
+                let up = self.above[home.index as usize];
+                Above { top: Some(up.top.unwrap_or(home)), homes: up.homes + 1 }
+            }
+        }
+    }
+
+    /// The outermost home above the live instance `id` and how many homes are above it ([`Above`]), found without walking its
+    /// ancestors or its homes: none and 0 while homes are not kept.
+    #[inline]
+    pub fn homes_above(&self, id: InstanceId) -> Above {
+        self.above.get(id.index as usize).copied().unwrap_or_default()
     }
 
     /// The nearest ancestor of the live instance `id` of a home class ([`Dom::keep_homes`]: the WorldRoots and JointsService),
@@ -856,22 +896,33 @@ impl Dom {
         self.homes.get(id.index as usize).copied().flatten()
     }
 
+    /// Whether the dom keeps homes ([`Dom::keep_homes`]): [`Dom::home`] and [`Dom::homes_above`] answer none until it does.
+    pub fn keeps_homes(&self) -> bool {
+        !self.home_classes.is_empty()
+    }
+
     /// The next ancestor of `id` to look at for one of a home class: its home while the dom keeps homes, else its parent.
     /// Followed from an instance, it meets every ancestor of a home class, nearest first: one step per home above a kept
-    /// instance, however deep it is.
+    /// instance, however deep it is (instance.rs's walk to a part's nearest WorldRoot takes one or two).
     #[inline]
     pub fn home_step(&self, id: InstanceId) -> Option<InstanceId> {
         if self.home_classes.is_empty() { self.at(id).parent } else { self.home(id) }
     }
 
     /// Whether the live instance `id` is a descendant of `ancestor` ([`Dom::is_descendant_of`]'s answer), read from the homes
-    /// when `ancestor` is of a home class (the Workspace, a WorldModel) and the dom keeps them: one lookup per home above `id`,
-    /// however deep it is. Any other ancestor, a stale one included, is looked for up the tree (as is a stale `id`, which
-    /// panics there).
+    /// when `ancestor` is of a home class (the Workspace, a WorldModel) and the dom keeps them: one lookup when `ancestor` is in
+    /// no home itself (the Workspace, JointsService, a WorldModel out of every world: whether it is the outermost home above
+    /// `id`), however deep `id` is and however many WorldModels are nested above it; one lookup per home between them for a home
+    /// inside another (no engine check asks one). Any other ancestor, a stale one included, is looked for up the tree (as is a
+    /// stale `id`, which panics there).
     pub fn is_descendant_of_home(&self, id: InstanceId, ancestor: InstanceId) -> bool {
         let home_class = |node: &Instance| self.home_classes.get(node.class as usize).copied().unwrap_or(false);
         if !self.get(ancestor).is_some_and(home_class) || self.get(id).is_none() {
             return self.is_descendant_of(id, ancestor);
+        }
+        let top = self.homes_above(id).top;
+        if self.home(ancestor).is_none() || top != self.homes_above(ancestor).top {
+            return top == Some(ancestor);
         }
         let mut home = self.home(id);
         while let Some(node) = home {
@@ -908,15 +959,16 @@ impl Dom {
         Some(std::mem::take(&mut self.home_log))
     }
 
-    /// Gives the live instance `id` the home `home`, logged when it is another and its class is ([`Dom::log_homes`]).
+    /// Gives the live instance `id` the home `home`, logged when it is another and its class is ([`Dom::log_homes`]), and what is
+    /// above it with it; whether what is above it changed.
     #[inline]
-    fn put_home(&mut self, id: InstanceId, home: Option<InstanceId>) {
+    fn put_home(&mut self, id: InstanceId, home: Option<InstanceId>) -> bool {
         let slot = id.index as usize;
-        if self.homes[slot] == home {
-            return;
+        if self.homes[slot] != home {
+            self.homes[slot] = home;
+            self.log_home(id, self.at(id).class);
         }
-        self.homes[slot] = home;
-        self.log_home(id, self.at(id).class);
+        self.put_above(id)
     }
 
     /// Logs `id` when `class` is logged ([`Dom::log_homes`]): its home changed, or it took or left that class.
@@ -932,8 +984,17 @@ impl Dom {
         }
     }
 
+    /// Works out again what is above the live instance `id` from its home's; whether it changed.
+    #[inline]
+    fn put_above(&mut self, id: InstanceId) -> bool {
+        let above = self.above_below(self.homes[id.index as usize]);
+        std::mem::replace(&mut self.above[id.index as usize], above) != above
+    }
+
     /// `child`'s home now that its parent changed: when it is another than it was, `child` and the descendants that take theirs
-    /// from it get the new one (a walk of the subtree down to the homes in it). A subtree moved within its world walks nothing.
+    /// from it get the new one (a walk of the subtree down to the homes in it), and when that moves `child` or a home below it
+    /// to another outermost home, or under more or fewer homes, everything below that home is told so too (the rest of the
+    /// subtree). A subtree moved within its world walks nothing.
     fn rehome(&mut self, child: InstanceId) {
         if self.home_classes.is_empty() {
             return;
@@ -942,24 +1003,44 @@ impl Dom {
         if self.homes[child.index as usize] == home {
             return;
         }
-        self.put_home(child, home);
+        let moved = self.put_home(child, home);
         if !self.is_home(child) {
             self.spread_home(child, home);
+        } else if moved {
+            self.spread_above(child);
         }
     }
 
-    /// Gives `home` to the descendants of `id` down to and including the instances of a home class (below which the homes stay).
+    /// Gives `home` to the descendants of `id` down to and including the instances of a home class (below which the homes stay),
+    /// and what is above them; below a home whose own changed, everything takes in what is above it again.
     fn spread_home(&mut self, id: InstanceId, home: Option<InstanceId>) {
         let mut walk = std::mem::take(&mut self.home_walk);
         walk.clear();
-        walk.extend_from_slice(&self.at(id).children);
-        while let Some(node) = walk.pop() {
-            self.put_home(node, home);
-            if !self.is_home(node) {
-                walk.extend_from_slice(&self.at(node).children);
+        walk.extend(self.at(id).children.iter().map(|&child| (child, true)));
+        self.spread(&mut walk, home);
+        self.home_walk = walk;
+    }
+
+    /// Works out again what is above each descendant of the home `id` (whose own changed), their homes staying.
+    fn spread_above(&mut self, id: InstanceId) {
+        let mut walk = std::mem::take(&mut self.home_walk);
+        walk.clear();
+        walk.extend(self.at(id).children.iter().map(|&child| (child, false)));
+        self.spread(&mut walk, None);
+        self.home_walk = walk;
+    }
+
+    /// The walk of [`Dom::spread_home`] and [`Dom::spread_above`]: an entry that takes `home` passes it on to its children unless
+    /// it is of a home class; one that keeps its home (or a home whose own was given) has its children look again at what is above
+    /// them when what is above it changed. Each instance is reached after its parent, so after its home.
+    fn spread(&mut self, walk: &mut Vec<(InstanceId, bool)>, home: Option<InstanceId>) {
+        while let Some((node, homed)) = walk.pop() {
+            let moved = if homed { self.put_home(node, home) } else { self.put_above(node) };
+            let next = if homed && !self.is_home(node) { Some(true) } else { moved.then_some(false) };
+            if let Some(next) = next {
+                walk.extend(self.at(node).children.iter().map(|&child| (child, next)));
             }
         }
-        self.home_walk = walk;
     }
 
     fn track_class(&mut self, class: ClassId) {
@@ -1599,8 +1680,10 @@ mod tests {
     /// and `attach` / `detach`), moved into and out of WorldModels and JointsService and between chains 2,000 deep, put in
     /// another's place (`replace_child` after the children were handed over, as a project mount does), freed and made again in
     /// the same slot, and given a WorldRoot's class or a Folder's where they stand (`set_class`, a placeholder revealed); homes
-    /// kept from a tree that already existed too. Whether an instance is below one of them, read from the homes, is what the walk
-    /// says too, and each change of a weld's home is in the log of the classes logged ([`Dom::log_homes`]).
+    /// kept from a tree that already existed too. What is above each instance's home (the outermost home and how many homes:
+    /// [`Dom::homes_above`]) is what the walk finds as well, through chains of WorldModels 200 deep moved into and out of the
+    /// Workspace and each other. Whether an instance is below one of them, read from the homes, is what the walk says too, and
+    /// each change of a weld's home is in the log of the classes logged ([`Dom::log_homes`]).
     #[test]
     fn homes_are_what_a_walk_up_the_tree_finds() {
         let reflection = Reflection::shared().unwrap();
@@ -1617,6 +1700,16 @@ mod tests {
                 current = dom.at(node).parent;
             }
             None
+        };
+        let walked_above = |dom: &Dom, id: InstanceId| {
+            let (mut above, mut current) = (Above::default(), dom.at(id).parent);
+            while let Some(node) = current {
+                if is_home(dom, node) {
+                    above = Above { top: Some(node), homes: above.homes + 1 };
+                }
+                current = dom.at(node).parent;
+            }
+            above
         };
         let mut dom = Dom::new();
         let game = dom.create(&reflection, class("DataModel"));
@@ -1635,6 +1728,7 @@ mod tests {
         let check = |dom: &Dom, live: &[InstanceId], step: &str| {
             for &id in live {
                 assert_eq!(dom.home(id), walked(dom, id), "{step}: the home of {}", dom.full_name(&reflection, id));
+                assert_eq!(dom.homes_above(id), walked_above(dom, id), "{step}: what is above {}", dom.full_name(&reflection, id));
             }
         };
         check(&dom, &live, "kept from the start");
@@ -1654,16 +1748,20 @@ mod tests {
         };
         // whether each is below the Workspace, JointsService or a WorldModel, read from the homes (is_descendant_of_home), is what
         // the walk up the tree says; a stale ancestor is below nothing
-        let check_below = |dom: &Dom, live: &[InstanceId], stale: Option<InstanceId>, step: &str| {
-            let ancestors: Vec<InstanceId> =
-                std::iter::once(workspace).chain(live.iter().copied().filter(|&id| id != workspace && is_home(dom, id)).take(3)).chain(stale).collect();
+        // (and below the WorldModels of the nested chains, at their top, in their middle and at their bottom)
+        let check_below = |dom: &Dom, live: &[InstanceId], worlds: &[InstanceId], stale: Option<InstanceId>, step: &str| {
+            let ancestors: Vec<InstanceId> = std::iter::once(workspace)
+                .chain(live.iter().copied().filter(|&id| id != workspace && is_home(dom, id)).take(3))
+                .chain(worlds.iter().copied().filter(|&id| dom.get(id).is_some() && is_home(dom, id)))
+                .chain(stale)
+                .collect();
             for &id in live {
                 for &ancestor in &ancestors {
                     assert_eq!(dom.is_descendant_of_home(id, ancestor), dom.is_descendant_of(id, ancestor), "{step}: whether {} is below {ancestor:?}", dom.full_name(&reflection, id));
                 }
             }
         };
-        check_below(&dom, &live, None, "kept from the start");
+        check_below(&dom, &live, &[], None, "kept from the start");
         // two chains 2,000 deep, one in the Workspace, one in storage
         let deep = |dom: &mut Dom, live: &mut Vec<InstanceId>, top: InstanceId| {
             let mut at = top;
@@ -1677,8 +1775,27 @@ mod tests {
         };
         let deep_in_world = deep(&mut dom, &mut live, workspace);
         let deep_in_storage = deep(&mut dom, &mut live, storage);
+        // and two chains of WorldModels nested 200 deep, one in the Workspace, one in storage
+        let nested = |dom: &mut Dom, live: &mut Vec<InstanceId>, top: InstanceId| {
+            let mut chain = Vec::new();
+            let mut at = top;
+            for _ in 0..200 {
+                let world = dom.create(&reflection, class("WorldModel"));
+                dom.attach(world, at);
+                live.push(world);
+                chain.push(world);
+                at = world;
+            }
+            chain
+        };
+        let nested_in_world = nested(&mut dom, &mut live, workspace);
+        let nested_in_storage = nested(&mut dom, &mut live, storage);
+        let worlds = [nested_in_world[0], nested_in_world[100], nested_in_world[199], nested_in_storage[0], nested_in_storage[100], nested_in_storage[199]];
+        let bottoms = [deep_in_world, deep_in_storage, nested_in_world[199], nested_in_storage[199]];
         check(&dom, &live, "the chains");
-        check_below(&dom, &live, None, "the chains");
+        check_below(&dom, &live, &worlds, None, "the chains");
+        assert_eq!(dom.homes_above(nested_in_world[199]), Above { top: Some(workspace), homes: 200 });
+        assert_eq!(dom.homes_above(nested_in_storage[199]), Above { top: Some(nested_in_storage[0]), homes: 199 });
         let mut stale = None;
         let kinds = ["Folder", "Part", "Model", "WorldModel", "Weld", "Folder", "Part"];
         let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
@@ -1695,8 +1812,8 @@ mod tests {
                 0 | 1 => {
                     let made = dom.create(&reflection, class(kinds[next(kinds.len())]));
                     let parent = match next(3) {
-                        0 => deep_in_world,
-                        1 => deep_in_storage,
+                        0 => bottoms[next(bottoms.len())],
+                        1 => bottoms[next(2)],
                         _ => pick(&mut next, &live),
                     };
                     dom.attach(made, parent);
@@ -1721,7 +1838,7 @@ mod tests {
                 // put in another's place, its children handed over first
                 5 => {
                     let old = pick(&mut next, &live[4..]);
-                    let Some(parent) = dom.at(old).parent.filter(|_| old != deep_in_world && old != deep_in_storage) else { continue };
+                    let Some(parent) = dom.at(old).parent.filter(|_| !bottoms.contains(&old)) else { continue };
                     let new = dom.create(&reflection, class(kinds[next(kinds.len())]));
                     let children = std::mem::take(&mut dom.at_mut(old).children);
                     for &child in &children {
@@ -1735,7 +1852,7 @@ mod tests {
                 6 => {
                     let index = 5 + next(live.len() - 5);
                     let leaf = live[index];
-                    if !dom.at(leaf).children.is_empty() || leaf == deep_in_world || leaf == deep_in_storage {
+                    if !dom.at(leaf).children.is_empty() || bottoms.contains(&leaf) {
                         continue;
                     }
                     dom.detach(leaf);
@@ -1757,12 +1874,12 @@ mod tests {
                 check_log(&mut dom, &live, &format!("round {round}"));
             }
             if round % 500 == 0 {
-                check_below(&dom, &live, stale, &format!("round {round}"));
+                check_below(&dom, &live, &worlds, stale, &format!("round {round}"));
             }
         }
         check(&dom, &live, "the end");
         check_log(&mut dom, &live, "the end");
-        check_below(&dom, &live, stale, "the end");
+        check_below(&dom, &live, &worlds, stale, "the end");
         // a JointsService between: its own home is none, those below it have it
         let weld = dom.create(&reflection, class("Weld"));
         dom.attach(weld, service);

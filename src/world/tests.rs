@@ -2275,12 +2275,16 @@ fn kept_components_answer_as_fresh_walks_do() {
 /// A write that changes a part's property is priced by whether the part is in the Workspace (cost.rs write), read from the
 /// homes the dom keeps (dom.rs Dom::is_descendant_of_home), so writes to a part 10,000 folders deep cost about as much host work
 /// as to one right in its parent, and the work clock charges the same: Transparency, Position (a view's setter), CFrame and
-/// PivotTo, to parts in the Workspace, in a WorldModel in it and out of it. Each write used to walk up from the part to the
-/// Workspace, or to the top of the tree when it was not in it: 20 us at that depth.
+/// PivotTo, to parts in the Workspace, in a WorldModel in it (which charges the same for the WorldModel above each: cost.rs
+/// world_levels) and out of it. Each write used to walk up from the part to the Workspace, or to the top of the tree when it
+/// was not in it: 20 us at that depth.
 #[test]
 fn part_writes_cost_the_same_however_deep_the_part_is() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    // (each pass's 2,000 rounds change the part 16 times: Transparency 1, Position, CFrame and PivotTo's 5 each)
+    let world_level = 2000.0 * crate::cost::world_levels(1, 16);
+    run(&lua, &engine, &format!("shared.WorldLevel = {world_level:e}"));
     run(
         &lua,
         &engine,
@@ -2343,7 +2347,7 @@ fn part_writes_cost_the_same_however_deep_the_part_is() {
             local Deep, Shallow = Work[Pair[1]], Work[Pair[2]]
             assert(Shallow > 0 and math.abs(Deep - Shallow) < 1e-9, `{Pair[1]}'s pass cost {Deep} s of work where {Pair[2]}'s {Shallow}`)
         end
-        assert(math.abs(Work.World - Work.Deep) < 1e-9, `a part in a WorldModel in the Workspace pays {Work.World} s where one in the Workspace {Work.Deep}`)
+        assert(math.abs(Work.World - Work.Deep - shared.WorldLevel) < 1e-9, `a part in a WorldModel in the Workspace pays {Work.World} s where one in the Workspace {Work.Deep}`)
         assert(Work.Loose < Work.Deep - 8000 * 0.1e-6, `a part out of the Workspace pays {Work.Loose} s, one in it {Work.Deep}`)
         "#,
     );
@@ -2351,6 +2355,99 @@ fn part_writes_cost_the_same_however_deep_the_part_is() {
         let (deep_s, shallow_s) = (host[deep], host[shallow]);
         assert!(deep_s < 2.0 * shallow_s + 0.05, "two passes of 8,000 writes took {deep_s:.3} s of host time to a part 10,000 folders deep ({deep}), {shallow_s:.3} s right in its parent");
     }
+}
+
+/// A change to a part below WorldModels nested one in another costs it, beyond the write's price, what the WorldModels above it
+/// cost a playing client (cost.rs world_levels and part_changes: 0.81 to 1.22x a 0.747 client's from 30 to 3,000 levels), read
+/// from what the dom keeps above the part's home (dom.rs Dom::homes_above), never a walk: below 300 WorldModels, in the
+/// Workspace and out of it, Transparency, CFrame and Parent writes, a part's PivotTo and a Model's (one change a part) pay exactly
+/// that more than below 300 Folders, and a write that changes nothing and a PivotTo that moves nothing pay nothing more; such a
+/// PivotTo below 10,000 WorldModels takes about the host time it takes below none. Each check used to walk up through every
+/// WorldModel to the top for the call's flat price: a PivotTo that moved nothing walked them twice (28 us at 10,000).
+#[test]
+fn a_part_below_worldmodels_pays_for_them_in_one_lookup() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let levels = |changes: u32| crate::cost::world_levels(300, changes);
+    run(&lua, &engine, &format!("shared.Levels = {{ [0] = 0, {:e}, {:e}, {:e}, {:e}, {:e} }}", levels(1), levels(2), levels(3), levels(4), levels(5)));
+    run(
+        &lua,
+        &engine,
+        r#"
+        -- (a part, a Folder and a Model of 4 parts at the bottom of `Levels` instances of `Kind` nested one in another, made from
+        -- the top down in `Where`)
+        local function Chain(Kind, Levels, Where)
+            local Top = Instance.new("Folder")
+            Top.Parent = Where
+            local Deepest = Top
+            for _ = 1, Levels do
+                local Level = Instance.new(Kind)
+                Level.Parent = Deepest
+                Deepest = Level
+            end
+            local function Part(Parent, X)
+                local Made = Instance.new("Part")
+                Made.Anchored, Made.CanCollide, Made.Size, Made.CFrame = true, false, Vector3.one, CFrame.new(300 + X, 300, 300)
+                Made.Parent = Parent
+                return Made
+            end
+            local Model = Instance.new("Model")
+            for I = 1, 4 do
+                Part(Model, I * 5)
+            end
+            Model.Parent = Deepest
+            local Inner = Instance.new("Folder")
+            Inner.Parent = Deepest
+            return { Part = Part(Deepest, 0), Model = Model, Deepest = Deepest, Inner = Inner }
+        end
+        local Storage = game:GetService("ReplicatedStorage")
+        shared.Scenes = {
+            Worlds = Chain("WorldModel", 300, workspace), Folders = Chain("Folder", 300, workspace),
+            LooseWorlds = Chain("WorldModel", 300, Storage), LooseFolders = Chain("Folder", 300, Storage),
+            Deep = Chain("WorldModel", 10000, Storage), Shallow = Chain("WorldModel", 0, Storage),
+        }
+        -- what 10 changes of each kind cost the work clock (and how many changes a client makes of a part for one)
+        local Ops = {
+            { "Transparency", 1, function(S, I) S.Part.Transparency = I % 2 end },
+            { "CFrame", 5, function(S, I) S.Part.CFrame = CFrame.new(300, 300 + I % 2, 300) end },
+            { "Parent", 1, function(S, I) S.Part.Parent = if I % 2 == 1 then S.Inner else S.Deepest end },
+            { "PivotTo", 5, function(S, I) S.Part:PivotTo(CFrame.new(300, 302 + I % 2, 300)) end },
+            { "ModelPivot", 4, function(S, I) S.Model:PivotTo(CFrame.new(310, 300 + I % 2, 300)) end },
+            { "Unchanged", 0, function(S) S.Part.Transparency = S.Part.Transparency end },
+            { "PivotSame", 0, function(S) S.Part:PivotTo(S.Part:GetPivot()) end },
+        }
+        -- (after one change, so that the frame's first change of each kind, which runs the engine's code for it cold, is not timed)
+        local function Cost(Scene, Op)
+            Op[3](Scene, 1)
+            local Start = os.clock()
+            for I = 2, 11 do
+                Op[3](Scene, I)
+            end
+            return os.clock() - Start
+        end
+        for _, Pair in { { "Worlds", "Folders" }, { "LooseWorlds", "LooseFolders" } } do
+            for _, Op in Ops do
+                local Worlds, Folders = Cost(shared.Scenes[Pair[1]], Op), Cost(shared.Scenes[Pair[2]], Op)
+                local Expected = 10 * shared.Levels[Op[2]]
+                assert(math.abs(Worlds - Folders - Expected) < 1e-9, `{Op[1]} below 300 WorldModels ({Pair[1]}) cost {Worlds} s where below Folders {Folders}: {Expected} s more expected`)
+            end
+        end
+        function shared.PivotSame(Name)
+            local Part = shared.Scenes[Name].Part
+            for _ = 1, 2000 do
+                Part:PivotTo(Part:GetPivot())
+            end
+        end
+        "#,
+    );
+    let mut host = std::collections::HashMap::new();
+    for name in ["Shallow", "Deep", "Shallow", "Deep"] {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.PivotSame(\"{name}\")"));
+        host.insert(name, start.elapsed().as_secs_f64());
+    }
+    let (deep, shallow) = (host["Deep"], host["Shallow"]);
+    assert!(deep < 2.0 * shallow + 0.02, "2,000 PivotTo calls that moved nothing took {deep:.3} s of host time to a part below 10,000 WorldModels, {shallow:.3} s below none");
 }
 
 /// The physics step asks which world each loose part is in from the homes the dom keeps, and whether a parent holds a Humanoid

@@ -709,6 +709,20 @@ pub(crate) fn world_root_of(state: &State, reflection: &super::Reflection, world
     None
 }
 
+/// Whether the live instance `id` is in the Workspace (dom.rs Dom::is_descendant_of_home) and how many WorldModels are above it (the
+/// homes above it but the Workspace or JointsService at their top: cost.rs world_levels), from what the dom keeps above its home
+/// (dom.rs Dom::homes_above): one lookup however deep it is and however many WorldModels are nested above it.
+pub(crate) fn placement(dom: &crate::dom::Dom, reflection: &super::Reflection, workspace: InstanceId, id: InstanceId) -> (bool, u32) {
+    let placed = dom.is_descendant_of_home(id, workspace);
+    let above = dom.homes_above(id);
+    let levels = match above.top {
+        Some(top) if !placed && reflection.is_a(dom.at(top).class, "WorldModel") => above.homes,
+        Some(_) => above.homes - 1,
+        None => 0,
+    };
+    (placed, levels)
+}
+
 /// The Workspace's Terrain (Studio's Workspace always holds one; scripts adorn and parent to it, and
 /// it draws nothing and holds no voxels here), made the first time `Workspace.Terrain` is read: an
 /// engine that made it at start would number every later instance differently.
