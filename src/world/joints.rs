@@ -398,8 +398,68 @@ struct Component {
     derived: Cell<bool>,
     /// Its assemblies, once worked out ([`assemblies_of`])
     tree: RefCell<Option<Rc<Assemblies>>>,
+    /// Each part's assembly, kept from its last tree through the link changes since that left the paths from their roots as they
+    /// were ([`KeptRoots`]), while it has no tree
+    roots: RefCell<Option<KeptRoots>>,
     /// What was worked out from its parts ([`Memo`])
     memo: RefCell<Memo>,
+}
+
+/// Each part's assembly in a component, read from a tree worked out before the link changes since, which each left the paths of the
+/// component's parts from their roots as they were: a side that held no root split off ([`Joints::unlink`]: its parts were all in
+/// the assembly of its end of the link, below it), or a side that held no anchored part hung from a part of it ([`attach`]). So
+/// AssemblyRootPart and its size, and the path a join hangs its other side from, are read without a tree after such changes, as a
+/// client's root read after a link change costs the same at any size (Studio 0.747: 2.1 us with 10,000 parts and two anchored).
+struct KeptRoots {
+    tree: Rc<Assemblies>,
+    /// The parts that joined since, each with its assembly in `tree`
+    joined: FxHashMap<InstanceId, u32>,
+    /// Each assembly's parts now less its parts in `tree`
+    sizes: Vec<isize>,
+}
+
+impl KeptRoots {
+    fn of(tree: Rc<Assemblies>) -> Self {
+        let sizes = vec![0; tree.list.len()];
+        KeptRoots { tree, joined: FxHashMap::default(), sizes }
+    }
+
+    /// The assembly `part` (one of the component's parts) is in
+    fn assembly(&self, part: InstanceId) -> Option<u32> {
+        self.joined.get(&part).copied().or_else(|| self.tree.place.get(&part).map(|&(assembly, _)| assembly))
+    }
+
+    /// The root of the assembly `part` is in
+    fn root(&self, part: InstanceId) -> Option<InstanceId> {
+        self.assembly(part).map(|assembly| self.tree.list[assembly as usize].nodes[0].part)
+    }
+
+    /// How many parts the assembly `part` is in holds
+    fn size(&self, part: InstanceId) -> Option<usize> {
+        let assembly = self.assembly(part)? as usize;
+        Some((self.tree.list[assembly].nodes.len() as isize + self.sizes[assembly]) as usize)
+    }
+
+    /// `count` parts left (`count` negative) or joined the assembly of `part`
+    fn resize(&mut self, part: InstanceId, count: isize) -> Option<()> {
+        let assembly = self.assembly(part)? as usize;
+        self.sizes[assembly] += count;
+        Some(())
+    }
+}
+
+/// The joints from its root to `part` in `tree`, each with the part it hangs from, the root's first (a part of the tree that joined
+/// nothing since: its path is the tree's).
+fn tree_path(tree: &Assemblies, part: InstanceId) -> Option<Vec<(InstanceId, InstanceId)>> {
+    let (assembly, _, node) = tree.of(part)?;
+    let mut path = Vec::new();
+    let mut at = node;
+    while let Some((parent, link)) = assembly.nodes[at].parent {
+        path.push((link, assembly.nodes[parent].part));
+        at = parent;
+    }
+    path.reverse();
+    Some(path)
 }
 
 impl Component {
@@ -411,8 +471,39 @@ impl Component {
             settled: Cell::new(false),
             derived: Cell::new(false),
             tree: RefCell::default(),
+            roots: RefCell::default(),
             memo: RefCell::default(),
         }
+    }
+
+    /// Its parts' assemblies as kept: from its tree, else as [`KeptRoots`] kept them (taken: a link change gives them to the side
+    /// whose paths stay)
+    fn take_roots(&self) -> Option<KeptRoots> {
+        match self.tree.borrow_mut().take() {
+            Some(tree) => Some(KeptRoots::of(tree)),
+            None => self.roots.borrow_mut().take(),
+        }
+    }
+
+    /// The root of the assembly `part` is in, when known without working a tree out: its tree's, else the kept roots'
+    fn kept_root(&self, part: InstanceId) -> Option<InstanceId> {
+        if let Some(tree) = self.tree.borrow().as_ref() {
+            return tree.of(part).map(|(assembly, ..)| assembly.nodes[0].part);
+        }
+        self.roots.borrow().as_ref().and_then(|roots| roots.root(part))
+    }
+
+    /// The joints from its root to `part` ([`tree_path`]), when known without working a tree out
+    fn kept_path(&self, part: InstanceId) -> Option<Vec<(InstanceId, InstanceId)>> {
+        if let Some(tree) = self.tree.borrow().as_ref() {
+            return tree_path(tree, part);
+        }
+        let roots = self.roots.borrow();
+        let roots = roots.as_ref()?;
+        if roots.joined.contains_key(&part) {
+            return None;
+        }
+        tree_path(&roots.tree, part)
     }
 
     /// How many parts it holds
@@ -439,6 +530,7 @@ impl Component {
     /// Forgets what was worked out from its links: its assemblies and what its reads kept
     fn relinked(&self) {
         *self.tree.borrow_mut() = None;
+        *self.roots.borrow_mut() = None;
         *self.memo.borrow_mut() = Memo::default();
     }
 }
@@ -746,8 +838,9 @@ impl Joints {
             }
             at
         };
-        let root = found.single_root();
+        let (anchored_before, best_before) = (found.anchored.borrow().len(), found.best.get());
         let settled = found.settled.get();
+        let roots = found.take_roots();
         self.unsettled = None;
         let apart = {
             let mut links = found.links.borrow_mut();
@@ -757,8 +850,8 @@ impl Joints {
             sides(&links, parts)
         };
         found.relinked();
-        // (a side that keeps the root keeps its paths from it, and stays settled; the others, and both sides while something else
-        // links them, which may change the paths, are not known to be)
+        // (a side that keeps every root keeps its paths from them, and stays settled, its parts' assemblies kept; the others, and
+        // both sides while something else links them, which may change the paths, are not known to be)
         found.settled.set(false);
         let Some(apart) = apart else {
             return Some(());
@@ -782,18 +875,34 @@ impl Joints {
         if best.is_some_and(|best| moved.contains_key(&best)) {
             found.best.set(None);
         }
+        // (which side holds every root: all the anchored parts, else the best ranked; the other side's parts were all in the
+        // assembly of the root side's end of the link, below it)
+        let (roots_apart, roots_kept) = if anchored_before > 0 {
+            (found.anchored.borrow().is_empty(), moved_anchored.is_empty())
+        } else {
+            (best_before.is_some_and(|best| moved.contains_key(&best)), best_before.is_some_and(|best| found.links.borrow().contains_key(&best)))
+        };
+        let (end_apart, end_kept) = if moved.contains_key(&parts[0]) { (parts[0], parts[1]) } else { (parts[1], parts[0]) };
+        let kept_size = found.size() as isize;
+        let mut roots = roots;
         if apart.len() > 1 {
             let piece = Rc::new(Component::new(moved, moved_anchored));
             piece.best.set(best.filter(|best| apart.contains(best)));
-            piece.settled.set(settled && root.is_some_and(|root| apart.contains(&root)));
+            piece.settled.set(settled && roots_apart);
             piece.derived.set(found.derived.get());
+            if roots_apart && let Some(mut kept) = roots.take() && kept.resize(end_apart, -kept_size).is_some() {
+                *piece.roots.borrow_mut() = Some(kept);
+            }
             for part in &apart {
                 self.components.insert(*part, piece.clone());
             }
         } else {
             self.components.remove(&apart[0]);
         }
-        found.settled.set(settled && root.is_some_and(|root| found.links.borrow().contains_key(&root)));
+        found.settled.set(settled && roots_kept);
+        if roots_kept && let Some(mut kept) = roots && kept.resize(end_kept, -(apart.len() as isize)).is_some() {
+            *found.roots.borrow_mut() = Some(kept);
+        }
         // (a side of one part is no component)
         if found.size() == 1 {
             for part in found.parts() {
@@ -1188,6 +1297,16 @@ pub(crate) fn check_index(state: &mut State, reflection: &Reflection) -> Result<
         {
             return Err(format!("{part:?}'s kept component has root {root:?} where a walk's tree has {:?}", tree.list.iter().map(|assembly| assembly.nodes[0].part).collect::<Vec<_>>()));
         }
+        // (the assemblies kept through link changes: each part's root and its assembly's size, as the walk's tree has them)
+        if let Some(roots) = found.roots.borrow().as_ref() {
+            for &at in &kept {
+                let want = tree.of(at).map(|(assembly, ..)| (assembly.nodes[0].part, assembly.nodes.len()));
+                let have = roots.root(at).zip(roots.size(at));
+                if have != want {
+                    return Err(format!("{at:?}'s kept roots give its root and assembly size as {have:?} where a walk's tree has {want:?}"));
+                }
+            }
+        }
         if found.settled.get() {
             for assembly in &tree.list {
                 let relative = relatives(state, reflection, &setup, assembly);
@@ -1405,8 +1524,8 @@ pub fn root_part(state: &mut State, reflection: &Reflection, part: InstanceId) -
     let Some(found) = component(state, reflection, &setup, part) else {
         return Some(part);
     };
-    // (one assembly whose root is known: no tree to work out after a link change)
-    if let Some(root) = found.single_root().filter(|_| found.derived.get()) {
+    // (one assembly whose root is known, or the assemblies kept through the link changes since the last tree: no tree to work out)
+    if let Some(root) = found.single_root().or_else(|| found.kept_root(part)).filter(|_| found.derived.get()) {
         return Some(root);
     }
     let tree = assemblies_of(state, reflection, &setup, &found, part, None, true);
@@ -1595,6 +1714,7 @@ fn assemblies_of(state: &mut State, reflection: &Reflection, setup: &Setup, foun
     let tree = Rc::new(Assemblies { list, place, across });
     if keep {
         *found.tree.borrow_mut() = Some(tree.clone());
+        *found.roots.borrow_mut() = None;
         if ranked.is_some() {
             found.best.set(ranked);
         }
@@ -1724,9 +1844,14 @@ pub fn assembly_size(state: &mut State, reflection: &Reflection, part: InstanceI
     let Some(setup) = setup_of(state) else { return 1 };
     ensure_scanned(state, reflection, &setup);
     let Some(found) = component(state, reflection, &setup, part) else { return 1 };
-    // (one assembly: all of it, with no tree to work out after a link change)
+    // (one assembly: all of it, with no tree to work out after a link change; of several, as the kept roots count them)
     if found.single_root().is_some() {
         return found.size();
+    }
+    if found.tree.borrow().is_none()
+        && let Some(size) = found.roots.borrow().as_ref().and_then(|roots| roots.size(part))
+    {
+        return size;
     }
     let tree = assemblies_of(state, reflection, &setup, &found, part, None, false);
     tree.of(part).map_or(1, |(assembly, ..)| assembly.nodes.len())
@@ -1763,6 +1888,7 @@ pub fn stored(state: &mut State, id: InstanceId, name: NameId) {
         }
         watch::ANCHORED => {
             let tree = found.tree.borrow_mut().take();
+            *found.roots.borrow_mut() = None;
             let settled = found.settled.replace(false);
             if joints.setup.as_ref().is_some_and(|setup| dom.boolean(id, setup.anchored) == Some(true)) {
                 found.anchored.borrow_mut().insert(id);
@@ -2020,9 +2146,11 @@ fn link_started(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup
     let places = state.joints.indexed[&joint].places;
     let plan = attach_plan(state, reflection, setup, joint, parts);
     let anchored_parts = parts.map(|part| anchored(state, setup, part));
+    // (the parts' assemblies the side that keeps its roots kept, for the joined component: taken before the join forgets them)
+    let roots = plan.as_ref().and_then(|plan| plan.kept.as_ref()).and_then(|kept| kept.take_roots());
     match state.joints.join(joint, parts, places, anchored_parts) {
         Some(found) => match plan {
-            Some(plan) => attach(state, reflection, hooks, setup, &found, plan),
+            Some(plan) => attach(state, reflection, hooks, setup, &found, plan, roots),
             None => settle_from_roots(state, reflection, hooks, setup, seeds, None),
         },
         None => {
@@ -2079,12 +2207,15 @@ struct Attach {
     to: InstanceId,
     joint: InstanceId,
     root: InstanceId,
+    /// The kept component on the side that keeps its root, whose parts' assemblies the joined component keeps ([`KeptRoots`])
+    kept: Option<Rc<Component>>,
 }
 
-/// Before `joint` joins the components of `parts`: how the join places what it moves, when its component will be one assembly whose
-/// root is one side's root (that side's one anchored part, or, none anchored on either, the better ranked of the two sides' best),
-/// that side was settled, and the other side holds no anchored part: then no part of that side moves and the other hangs from it.
-/// None otherwise (the joined component is settled from its roots).
+/// Before `joint` joins the components of `parts`: how the join places what it moves, when one side keeps its roots (it holds an
+/// anchored part and the other none, or, none anchored on either, its best ranks better than the other's), it was settled, and the
+/// other side hangs from the root of the assembly its end is in (that side's one anchored part or its best; of several anchored,
+/// the root its kept tree or kept roots give): then no part of that side moves and the other hangs from its end. None otherwise
+/// (the joined component is settled from its roots).
 fn attach_plan(state: &mut State, reflection: &Reflection, setup: &Setup, joint: InstanceId, parts: [InstanceId; 2]) -> Option<Attach> {
     let kept = parts.map(|part| state.joints.components.get(&part).cloned());
     if let [Some(first), Some(second)] = &kept
@@ -2097,8 +2228,6 @@ fn attach_plan(state: &mut State, reflection: &Reflection, setup: &Setup, joint:
         None => usize::from(anchored(state, setup, parts[side])),
     };
     let root_side = match (anchored_count(0), anchored_count(1)) {
-        (1, 0) => 0,
-        (0, 1) => 1,
         (0, 0) => {
             let best = |side: usize| match &kept[side] {
                 Some(found) => found.best.get(),
@@ -2115,41 +2244,42 @@ fn attach_plan(state: &mut State, reflection: &Reflection, setup: &Setup, joint:
                     && (rank_second.1 > rank_first.1 || rank_second.1 == rank_first.1 && (rank_second.2 > rank_first.2 || rank_second.2 == rank_first.2 && serial(second) > serial(first)));
             usize::from(better)
         }
+        (_, 0) => 0,
+        (0, _) => 1,
         _ => return None,
     };
+    let from = parts[root_side];
     let root = match &kept[root_side] {
         Some(found) => {
             if !found.settled.get() || !found.derived.get() {
                 return None;
             }
-            found.single_root()?
+            match found.single_root() {
+                Some(root) => root,
+                None => found.kept_root(from)?,
+            }
         }
         None => parts[root_side],
     };
-    let from = parts[root_side];
     // (the joined side's end's CFrame relative to the root: through its tree, from the root down, as the settle computes it)
     let from_relative = if from == root {
         Affine3A::IDENTITY
     } else {
         let found = kept[root_side].clone()?;
-        let tree = assemblies_of(state, reflection, setup, &found, from, None, true);
-        let (assembly, _, node) = tree.of(from)?;
-        let mut path = Vec::new();
-        let mut at = node;
-        while let Some((parent, link)) = assembly.nodes[at].parent {
-            path.push((link, assembly.nodes[parent].part));
-            at = parent;
-        }
-        path.iter().rev().fold(Affine3A::IDENTITY, |relative, &(link, parent)| relative * across(state, reflection, setup, link, parent))
+        let path = match found.kept_path(from) {
+            Some(path) => path,
+            None => tree_path(&assemblies_of(state, reflection, setup, &found, from, None, true), from)?,
+        };
+        path.iter().fold(Affine3A::IDENTITY, |relative, &(link, parent)| relative * across(state, reflection, setup, link, parent))
     };
-    Some(Attach { from, from_relative, to: parts[1 - root_side], joint, root })
+    Some(Attach { from, from_relative, to: parts[1 - root_side], joint, root, kept: kept[root_side].clone() })
 }
 
 /// A join's other side hangs from `plan`'s root ([`attach_plan`]): a walk from its end of the joint, the order a walk from the root
 /// meets its parts in, works out each part's CFrame through the joints (its WeldConstraints that never took their parts' relative
 /// CFrame take it first) and places those not where they put it, as settling the joined assembly from its root would; the rest of
 /// the assembly keeps its paths and has nothing to place. The joined component is settled, its root known.
-fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, found: &Rc<Component>, plan: Attach) {
+fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, found: &Rc<Component>, plan: Attach, roots: Option<KeptRoots>) {
     // (the hanging side's parts, each with its parent's index and the joint to it)
     let mut order: Vec<(InstanceId, usize, InstanceId)> = vec![(plan.to, usize::MAX, plan.joint)];
     {
@@ -2199,6 +2329,14 @@ fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
     }
     found.settled.set(true);
     found.derived.set(true);
+    // (the side that kept its roots keeps its parts' assemblies; the hung side's parts join the assembly of its end)
+    if let Some(mut kept) = roots
+        && let Some(assembly) = kept.assembly(plan.from)
+    {
+        kept.joined.extend(order.iter().map(|&(part, ..)| (part, assembly)));
+        kept.sizes[assembly as usize] += order.len() as isize;
+        *found.roots.borrow_mut() = Some(kept);
+    }
 }
 
 /// The work clock's price of a link change of `parts` (an Enabled write that linked or unlinked them, an Anchored write of a part

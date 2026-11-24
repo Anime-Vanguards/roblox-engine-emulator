@@ -2353,6 +2353,71 @@ fn link_changes_of_every_kind_in_a_large_assembly_walk_none_of_it() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
+/// Link changes in a component of several assemblies walk none of it: 500 rounds of a leaf's weld disabled and enabled and re-pointed
+/// to a spare part and back (each a different leaf), each change followed by AssemblyRootPart reads of the leaf and of a part welded
+/// to both anchored parts, on an anchored hub welded to 5,000 parts one of which is also welded to another anchored part, take about
+/// the host time they take on such a hub welded to 3 parts, as a client's root read after a link change costs the same at any size
+/// (2.1 us with 10,000 parts). Each change settled the whole component from its roots (0.8 ms at 10,000), and a root read after a
+/// change worked its tree out.
+#[test]
+fn link_changes_among_several_anchored_parts_walk_none_of_their_assembly() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function Part(Anchored)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.CFrame = Anchored, false, CFrame.new(0, 300, 0)
+            P.Parent = workspace
+            return P
+        end
+        local function Star(Count)
+            local Hub, Welds = Part(true), {}
+            for Index = 1, Count do
+                local W = Instance.new("Weld")
+                W.Part0, W.Part1, W.C0 = Hub, Part(false), CFrame.new(Index % 7, 4, 0)
+                W.Parent = W.Part1
+                Welds[Index] = W
+            end
+            local Other, Both = Part(true), Welds[1].Part1
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1, W.C0 = Both, Other, CFrame.new(0, 2, 0)
+            W.Parent = Other
+            return { Welds = Welds, Both = Both }
+        end
+        local Spare = Part(false)
+        shared.Stars = { Big = Star(5000), Small = Star(3) }
+        function shared.Changes(Name)
+            local Star = shared.Stars[Name]
+            for Index = 1, 500 do
+                local W = Star.Welds[Index % (#Star.Welds - 1) + 2]
+                local L = W.Part1
+                W.Enabled = false
+                local _ = L.AssemblyRootPart, Star.Both.AssemblyRootPart
+                W.Enabled = true
+                local _ = L.AssemblyRootPart, Star.Both.AssemblyRootPart
+                W.Part1 = Spare
+                local _ = L.AssemblyRootPart, Star.Both.AssemblyRootPart
+                W.Part1 = L
+                local _ = L.AssemblyRootPart, Star.Both.AssemblyRootPart
+            end
+        end
+        "#,
+    );
+    let time = |source: &str| {
+        run(&lua, &engine, source);
+        let start = std::time::Instant::now();
+        run(&lua, &engine, source);
+        start.elapsed().as_secs_f64()
+    };
+    let (large, small) = (time("shared.Changes('Big')"), time("shared.Changes('Small')"));
+    assert!(large < 2.0 * small + 0.05, "500 rounds of link changes took {large:.3} s of host time with 5,002 parts and two anchored, {small:.3} s with 5");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
 /// An AssemblyCenterOfMass read right after a move works nothing out: 500 moves of an anchored hub welded to 5,000 parts, each
 /// followed by a read of its centre, the reads taking about the host time a lone part's take (the medians), as a playing client's
 /// read after a move costs the same at any size (the move works the centres read since the last one out again, from the masses
@@ -2407,8 +2472,9 @@ fn centre_reads_after_a_move_work_nothing_out() {
     assert!(big < 2.0 * lone + 50e-6, "a centre read after a move took {:.1} us of host time (the median of 500) for an assembly of 5,001 parts, {:.1} us for a lone part", big * 1e6, lone * 1e6);
 }
 
-/// Kept components answer as fresh walks do through link changes: 800 random changes to an anchored hub and an unanchored one each
-/// welded to 12 parts (Welds and WeldConstraints), a chain of 10 parts hanging from an anchored one and a free chain of 8 (joints
+/// Kept components answer as fresh walks do through link changes: 800 random changes to two anchored hubs and an unanchored one each
+/// welded to 12 parts (Welds and WeldConstraints; one hub's first part also welded to an anchored part), a chain of 10 parts hanging
+/// from an anchored one, a free chain of 8 and a chain of 10 anchored at both ends (joints
 /// enabled, disabled, destroyed and made again, moved to nil and back; parts anchored and unanchored, moved by CFrame, PivotTo
 /// and the physics step, Motor6D.Transform written; a frame now and then), with every part's AssemblyRootPart, AssemblyMass,
 /// AssemblyCenterOfMass and CFrame and each change's work read after each change, read the same with the components kept (split
@@ -2438,17 +2504,24 @@ fn link_changes_keep_components_as_fresh_walks_do() {
             table.insert(Joints, J)
             return J
         end
-        for Hubs = 1, 2 do
-            local Hub = Part(Hubs == 1, CFrame.new(Hubs * 40, 50, 0), Vector3.new(6, 6, 6))
+        for Hubs = 1, 3 do
+            local Hub = Part(Hubs ~= 2, CFrame.new(Hubs * 40, 50, 0), Vector3.new(6, 6, 6))
+            local First
             for Index = 1, 12 do
                 local Leaf = Part(false, Hub.CFrame * CFrame.new(Index % 5 - 2, 4, Index // 5))
                 Join(if Index % 3 == 0 then "WeldConstraint" elseif Index % 4 == 0 then "Motor6D" else "Weld", Hub, Leaf, Hub.CFrame:ToObjectSpace(Leaf.CFrame))
+                First = First or Leaf
+            end
+            -- (the third hub's first leaf also welded to an anchored part: a component of two assemblies)
+            if Hubs == 3 then
+                local Other = Part(true, First.CFrame * CFrame.new(0, 3, 0))
+                Join("Weld", First, Other, First.CFrame:ToObjectSpace(Other.CFrame))
             end
         end
-        for Chains = 1, 2 do
-            local Prev = Part(Chains == 1, CFrame.new(-40 * Chains, 50, 0))
-            for Index = 1, if Chains == 1 then 10 else 8 do
-                local Next = Part(false, Prev.CFrame * CFrame.new(2, 0, 0) * CFrame.Angles(0, 0.1, 0))
+        for Chains = 1, 3 do
+            local Prev = Part(Chains ~= 2, CFrame.new(-40 * Chains, 50, 0))
+            for Index = 1, if Chains == 2 then 8 else 10 do
+                local Next = Part(Chains == 3 and Index == 10, Prev.CFrame * CFrame.new(2, 0, 0) * CFrame.Angles(0, 0.1, 0))
                 Join(if Index % 2 == 0 then "WeldConstraint" else "Weld", Prev, Next, Prev.CFrame:ToObjectSpace(Next.CFrame))
                 Prev = Next
             end
