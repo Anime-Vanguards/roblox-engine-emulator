@@ -4496,6 +4496,83 @@ fn mesh_parts_from_local_files_read_the_project() {
     let _ = std::fs::remove_dir_all(&project);
 }
 
+/// A mesh content id read as Studio 0.747's client reads it (2026-11-24, CreateMeshPartAsync of an asset whose only
+/// version is 1; crate::content_id::asset): `rbxassetid://N&version=V` is version V, which comes from its own
+/// cache file (`<id>-v<version>`), never the latest's; `?version=V`, a slash after the id, the scheme in capitals,
+/// whitespace before it and bare digits load nothing; and CreateEditableMeshAsync raises for an id of no protocol
+#[cfg(feature = "meshes")]
+#[test]
+fn pinned_mesh_versions_load_their_own_version() {
+    let repo = std::env::temp_dir().join(format!("ree-pinned-meshes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    std::fs::create_dir_all(&repo).unwrap();
+    let (lua, engine) = start_with(Options { repo: repo.clone(), ..Options::default() });
+    let made = run(
+        &lua,
+        &engine,
+        r#"
+        local AssetService = game:GetService("AssetService")
+        for _, size in { Vector3.new(3, 2, 1), Vector3.new(5, 4, 1) } do
+            local m = AssetService:CreateEditableMesh()
+            m:AddTriangle(m:AddVertex(Vector3.zero), m:AddVertex(Vector3.new(size.X, 0, 0)), m:AddVertex(Vector3.new(0, size.Y, size.Z)))
+            print(AssetService:CreateMeshPartAsync(Content.fromObject(m)).MeshId)
+        end
+        "#,
+    );
+    let snapshots: Vec<&str> = made.iter().filter_map(|line| line.strip_prefix("print: file://")).collect();
+    assert_eq!(snapshots.len(), 2, "{made:?}");
+    let cache = crate::state_dir(&repo).join("meshes");
+    std::fs::create_dir_all(&cache).unwrap();
+    // the latest version is the 3 x 2 x 1 mesh, version 2 the 5 x 4 x 1 one
+    std::fs::copy(snapshots[0], cache.join("4747")).unwrap();
+    std::fs::copy(snapshots[1], cache.join("4747-v2")).unwrap();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local Latest, Second = Vector3.new(3, 2, 1), Vector3.new(5, 4, 1)
+        for uri, size in {
+            ["rbxassetid://4747"] = Latest,
+            ["rbxassetid://4747&version=2"] = Second,
+            ["rbxassetid://4747&Version=2&foo=bar"] = Second,
+            ["rbxassetid://4747&version=%32"] = Second,
+            ["rbxassetid:// 4747 &version=2"] = Second,
+            ["rbxassetid://4747&version=2&version=abc&version=1"] = Second,
+            ["rbxassetid://4747&version=0"] = Latest,
+            ["rbxassetid://4747&version=abc&version=2"] = Latest,
+            ["rbxassetid://9&id=4747&version=2"] = Second,
+            ["http://www.roblox.com/asset/?id=4747&version=2"] = Second,
+            ["rbxassetid://04747 "] = Latest,
+        } do
+            local part = AssetService:CreateMeshPartAsync(Content.fromUri(uri))
+            assert(part.MeshSize == size, uri .. ": " .. tostring(part.MeshSize))
+            assert(part.MeshId == uri, "the content as given: " .. part.MeshId)
+        end
+        for _, uri in {
+            "rbxassetid://4747?version=2", "rbxassetid://4747/", "rbxassetid://4747/&version=2", "rbxassetid://4747&version=2#x",
+            "rbxassetid://4747&assetversionid=2", "RBXASSETID://4747", " rbxassetid://4747", "4747", "www.roblox.com/asset/?id=4747",
+            -- (a version not in the cache: this engine downloads nothing, and the latest's file is not it)
+            "rbxassetid://4747&version=3",
+        } do
+            local ok, message = pcall(function() return AssetService:CreateMeshPartAsync(Content.fromUri(uri)) end)
+            assert(not ok and string.find(message, "Failed to load mesh asset. ", 1, true) == 1, uri .. ": " .. tostring(message))
+        end
+        local mesh = AssetService:CreateEditableMeshAsync(Content.fromUri("rbxassetid://4747&version=2"))
+        local top = 0
+        for _, v in mesh:GetVertices() do top = math.max(top, mesh:GetPosition(v).X) end
+        assert(top == 5, "the EditableMesh of version 2: " .. top)
+        for _, uri in { " rbxassetid://4747", "RBXASSETID://4747", "4747" } do
+            local ok, message = pcall(function() return AssetService:CreateEditableMeshAsync(Content.fromUri(uri)) end)
+            assert(not ok and message == "Failed to load mesh " .. uri, uri .. ": " .. tostring(message))
+        end
+        print("ok")
+        "#,
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+    assert!(output.contains(&"print: ok".to_string()), "{output:?}");
+}
+
 /// HasSkinnedMesh as measured in Studio (2026-10-17): a part made from an EditableMesh is skinned
 /// when some vertex weighs a bone (bones no vertex weighs leave it false), ApplyMesh copies it either
 /// way, and a fresh MeshPart is not

@@ -33,7 +33,12 @@ use rbx_dom_weak::WeakDom;
 use rustc_hash::FxHashMap;
 
 use super::clip::{self, Clip, EngineTree, FileTree, Tree};
-use crate::{Engine, InstanceId, files, project::ModelPlan};
+use crate::{
+    Engine, InstanceId,
+    content_id::{self, AssetRef},
+    files,
+    project::ModelPlan,
+};
 
 /// How an engine loads keyframes ([`enable`]).
 #[derive(Clone, Debug, Default)]
@@ -133,19 +138,6 @@ fn animation_clip_from_file(engine: &Engine, path: &Path) -> Result<Arc<ModelPla
     })
 }
 
-/// The asset id of a content id (`rbxassetid://N`, `http(s)://www.roblox.com/asset/?id=N`, `N`).
-pub fn asset_id(uri: &str) -> Option<u64> {
-    let uri = uri.trim();
-    let digits = if let Some(rest) = uri.strip_prefix("rbxassetid://") {
-        rest
-    } else if let Some(index) = uri.to_ascii_lowercase().find("id=") {
-        uri[index + 3..].split('&').next().unwrap_or("")
-    } else {
-        uri
-    };
-    digits.trim().parse::<u64>().ok()
-}
-
 /// Where an AnimationId's keyframes are.
 enum Found {
     /// Nothing to load: an empty id, or loading is off
@@ -160,14 +152,14 @@ enum Found {
 /// looks for are noted: files::note.)
 fn locate(engine: &Engine, uri: &str) -> Result<Found, String> {
     let found = locate_unnoted(engine, uri);
-    if found.is_err() {
+    // (an id no client can read fails the same way every run)
+    if found.as_ref().is_err_and(|error| !error.starts_with(content_id::INVALID)) {
         files::note_unchecked("an animation failed to load");
     }
     found
 }
 
 fn locate_unnoted(engine: &Engine, uri: &str) -> Result<Found, String> {
-    let uri = uri.trim();
     if uri.is_empty() {
         return Ok(Found::Nothing);
     }
@@ -175,15 +167,17 @@ fn locate_unnoted(engine: &Engine, uri: &str) -> Result<Found, String> {
     if let Some(found) = active_clip(engine, uri) {
         return found.map(Found::Registered);
     }
-    let registered = slot.borrow().registered.get(uri).copied();
+    let registered = slot.borrow().registered.get(uri.trim()).copied();
     if let Some(sequence) = registered {
         if engine.state.borrow().dom.get(sequence).is_none() {
             return Err(format!("{uri}: its registered KeyframeSequence was destroyed"));
         }
         return Ok(Found::Registered(sequence));
     }
+    // (an id a client cannot read raises its error whether or not this engine loads files: content_id::animation)
+    let id = content_id::animation(uri)?;
     let Some(loading) = slot.borrow().loading.clone() else { return Ok(Found::Nothing) };
-    let Some(id) = asset_id(uri) else { return Err(format!("{uri}: not an asset id")) };
+    let Some(id) = id else { return Err(format!("{uri}: names no asset")) };
     for directory in &loading.directories {
         for extension in ["rbxm", "rbxmx"] {
             let file = directory.join(format!("{id}.{extension}"));
@@ -202,7 +196,7 @@ fn locate_unnoted(engine: &Engine, uri: &str) -> Result<Found, String> {
     if !loading.download {
         return Err(format!("{uri}: not in {} or the --animations directories", cache.display()));
     }
-    download(engine, slot, uri, &cache, &cached)?;
+    download(engine, slot, AssetRef::latest(id), &cache, &cached)?;
     Ok(Found::File(cached))
 }
 
@@ -412,7 +406,7 @@ pub fn sequence(engine: &Engine, uri: &str) -> Result<InstanceId, String> {
 
 fn sequence_made(engine: &Engine, uri: &str) -> Result<InstanceId, String> {
     match locate(engine, uri)? {
-        Found::Nothing if uri.trim().is_empty() => Err("no animation id".into()),
+        Found::Nothing if uri.is_empty() => Err(content_id::null_id()),
         Found::Nothing => Err(format!("{uri}: this engine loads no animation files")),
         Found::Registered(registered) => {
             let made = {
@@ -462,7 +456,7 @@ pub fn animation_clip(engine: &Engine, uri: &str) -> Result<InstanceId, String> 
 
 fn animation_clip_made(engine: &Engine, uri: &str) -> Result<InstanceId, String> {
     match locate(engine, uri)? {
-        Found::Nothing if uri.trim().is_empty() => Err("no animation id".into()),
+        Found::Nothing if uri.is_empty() => Err(content_id::null_id()),
         Found::Nothing => Err(format!("{uri}: this engine loads no animation files")),
         Found::Registered(registered) if uri.trim().starts_with("active://") => Ok(registered),
         Found::Registered(registered) => copy_of_registered(engine, uri, registered, false).ok_or_else(|| format!("{uri}: its registered clip was not kept")),
@@ -479,31 +473,38 @@ pub(crate) fn is_registered(engine: &Engine, uri: &str) -> bool {
 }
 
 /// When the animation asset `uri` arrives in this engine: its first request starts its fetch
-/// ([`crate::cost::ANIMATION_FETCH`]); later requests share it (an id's forms are one asset).
+/// ([`crate::cost::ANIMATION_FETCH`]); later requests share it (an id's forms are one asset, and every
+/// form of one names its latest version: content_id::animation).
 pub(crate) fn arrival(engine: &Engine, uri: &str) -> f64 {
-    let key = asset_id(uri).map_or_else(|| uri.trim().to_string(), |id| id.to_string());
+    let key = content_id::animation(uri).ok().flatten().map_or_else(|| uri.trim().to_string(), |id| id.to_string());
     let now = engine.state.borrow().sched.now;
     *loader(engine).borrow_mut().fetches.entry(key).or_insert(now + crate::cost::ANIMATION_FETCH)
 }
 
-/// Whether the AnimationId `uri` names an asset to fetch: a file found (a registered sequence is the
-/// engine's own; nothing found loads nothing).
-pub(crate) fn fetched_from_file(engine: &Engine, uri: &str) -> bool {
-    !uri.trim().is_empty() && !is_registered(engine, uri) && matches!(locate_unnoted(engine, uri), Ok(Found::File(_)))
+/// What ContentProvider:PreloadAsync makes of the AnimationId `uri`: whether it names an asset to fetch (a file
+/// found: a registered sequence is the engine's own, and nothing found loads nothing), and whether it reports it loaded
+/// (AssetFetchStatus Success: an id that resolves, or any a client can read in an engine that loads no files).
+/// Measured in Studio 0.747's client (2026-11-24): an id the Animator cannot read fails, so does one that names no
+/// asset or one not found, and so does `rbxassetid://N#x`, whose track still loads.
+pub(crate) fn preloaded(engine: &Engine, uri: &str) -> (bool, bool) {
+    let found = locate_unnoted(engine, uri);
+    let fetched = !uri.trim().is_empty() && !is_registered(engine, uri) && matches!(found, Ok(Found::File(_)));
+    (fetched, !uri.contains('#') && found.is_ok())
 }
 
-/// Downloads asset `uri` into `cached` the way keyframes download (the same switch and worker): what
-/// other loaders fetch, such as an EditableImage's image (crate::images).
-pub(crate) fn fetch(engine: &Engine, uri: &str, cache: &Path, cached: &Path) -> Result<(), String> {
+/// Downloads `asset`, which content id `uri` names, into `cached` the way keyframes download (the same switch and
+/// worker): what other loaders fetch, such as an EditableImage's image (crate::images).
+pub(crate) fn fetch(engine: &Engine, uri: &str, asset: AssetRef, cache: &Path, cached: &Path) -> Result<(), String> {
     let slot = loader(engine);
     if !slot.borrow().loading.as_ref().is_some_and(|loading| loading.download) {
         return Err(format!("{uri}: this run downloads no assets"));
     }
-    download(engine, slot, uri, cache, cached)
+    download(engine, slot, asset, cache, cached)
 }
 
+/// The worker is asked for `asset` by its numbers alone ([`AssetRef::worker_uri`]), never by a script's text.
 #[cfg(feature = "bundles")]
-fn download(engine: &Engine, slot: &RefCell<Loader>, uri: &str, cache: &Path, cached: &Path) -> Result<(), String> {
+fn download(engine: &Engine, slot: &RefCell<Loader>, asset: AssetRef, cache: &Path, cached: &Path) -> Result<(), String> {
     // Standalone only: the worker runs in the state dir and is sent an absolute path, so compare with its reply and copy
     // to that same path. A host's `cached` stays as it passed it, as before standalone binaries.
     let absolute_cached = if crate::is_standalone(&engine.options.repo) { Some(crate::project::model_assets::absolute_path(cached)?) } else { None };
@@ -511,7 +512,7 @@ fn download(engine: &Engine, slot: &RefCell<Loader>, uri: &str, cache: &Path, ca
     std::fs::create_dir_all(cache).map_err(|error| format!("{}: {error}", cache.display()))?;
     let mut loader = slot.borrow_mut();
     let worker = loader.worker.get_or_insert_with(|| crate::project::model_assets::AssetWorker::new(&engine.options.repo, engine.options.offline));
-    let file = crate::timing::time("animations: download", || worker.fetch_asset(uri, cached))?;
+    let file = crate::timing::time("animations: download", || worker.fetch_asset(&asset.worker_uri(), cached))?;
     // A standalone worker can name the file it wrote by a link or another spelling of the same path (a state dir behind a
     // link, say). Copying a file onto itself would truncate it, so compare identity, not only the path text.
     let is_standalone = absolute_cached.is_some();
@@ -523,8 +524,8 @@ fn download(engine: &Engine, slot: &RefCell<Loader>, uri: &str, cache: &Path, ca
 }
 
 #[cfg(not(feature = "bundles"))]
-fn download(_: &Engine, _: &RefCell<Loader>, uri: &str, _: &Path, _: &Path) -> Result<(), String> {
-    Err(format!("{uri}: this build downloads no assets"))
+fn download(_: &Engine, _: &RefCell<Loader>, asset: AssetRef, _: &Path, _: &Path) -> Result<(), String> {
+    Err(format!("{}: this build downloads no assets", asset.worker_uri()))
 }
 
 /// Whether `uri`'s failure is new to this engine (warn once).

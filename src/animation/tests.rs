@@ -687,8 +687,8 @@ fn an_asset_arrives_after_its_first_fetch() {
         task.wait(0.05)
         assert(Track.TimePosition > 0 and Track.TimePosition < 0.1 and Track.WeightCurrent > 0 and Track.WeightCurrent < 1, "from its start " .. Track.TimePosition .. " " .. Track.WeightCurrent)
         assert(Held.TimePosition > 0.4 and Held.TimePosition < 0.5, "from the TimePosition set " .. Held.TimePosition)
-        -- fetched: at once
-        assert(near(Animator:LoadAnimation(Animation("4444")).Length, 0.8), "an asset fetched before loads at once")
+        -- fetched: at once, under any spelling of the asset (a pinned version is its latest to a client)
+        assert(near(Animator:LoadAnimation(Animation("rbxassetid://4444&version=3")).Length, 0.8), "an asset fetched before loads at once")
         -- PreloadAsync waits for the animations among its items and their descendants
         local Folder = Instance.new("Folder")
         Animation("rbxassetid://4545").Parent = Folder
@@ -703,6 +703,73 @@ fn an_asset_arrives_after_its_first_fetch() {
         2.0,
     );
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// An AnimationId read as Studio 0.747's client reads it (2026-11-24; crate::content_id::animation): the digits after
+/// `rbxassetid://` name the asset and what follows them is never read, so `&version=V` (Roblox's pinned spelling),
+/// `?version=V`, `/` or `#` all load its latest version; an id the client cannot read raises from LoadAnimation in its
+/// words; and PreloadAsync calls back with each Animation's id and whether it loads.
+#[test]
+fn pinned_animation_ids_load_the_assets_latest_version() {
+    let directory = std::env::temp_dir().join(format!("ree-animation-pinned-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    write_sequence(&directory.join("4848.rbxm"));
+    let (lua, engine) = start("play");
+    enable(&engine, Loading { directories: vec![directory.clone()], download: false });
+    let lines = run(
+        &lua,
+        &engine,
+        r#"
+        local Model, Animator = Rig()
+        local function Animation(Id)
+            local Animation = Instance.new("Animation")
+            Animation.AnimationId = Id
+            return Animation
+        end
+        for _, Id in {
+            "rbxassetid://4848&version=1", "rbxassetid://4848&version=999", "rbxassetid://4848?version=1", "rbxassetid://4848&id=1",
+            "rbxassetid://4848/&version=1", "rbxassetid://4848#x", "rbxassetid://04848abc", "http://www.roblox.com/asset/?id=4848#x",
+        } do
+            local A = Animation(Id)
+            assert(A.AnimationId == Id and A.AnimationContent.Uri == Id, "kept as written: " .. A.AnimationId)
+            local Track = Animator:LoadAnimation(A)
+            local Waited = 0
+            while Track.Length == 0 and Waited < 1 do Waited += task.wait() end
+            assert(near(Track.Length, 0.8), Id .. ": " .. Track.Length)
+        end
+        for Id, Expected in {
+            ["4848"] = "Invalid animation id '<error: unknown AssetId protocol>': ",
+            [" rbxassetid://4848"] = "Invalid animation id '<error: unknown AssetId protocol>': ",
+            ["RBXASSETID://4848"] = "Invalid animation id '<error: unknown AssetId protocol>': ",
+            ["www.roblox.com/asset/?id=4848"] = "Invalid animation id '<error: unknown AssetId protocol>': ",
+            ["rbxassetid:///4848&version=1"] = "Invalid animation id '<error:  assetid does not start with a number>': ",
+            ["http://www.roblox.com/asset/?id=4848&foo=bar"] = "Invalid animation id 'rbxassetid://4848': ",
+            ["rbxtemp://12"] = "Invalid animation id '<error: rbxtemp:// not allowed>': ",
+            [""] = "LoadAnimation requires the asset id to not be empty",
+        } do
+            local Ok, Message = pcall(Animator.LoadAnimation, Animator, Animation(Id))
+            assert(not Ok and Message == Expected, `{Id}: {Message}`)
+        end
+        -- a web URL's last value is the asset a client asks for: ?id=N&version=V is asset V
+        local Other = Animator:LoadAnimation(Animation("http://www.roblox.com/asset/?id=4848&version=7"))
+        task.wait(0.6)
+        assert(Other.Length == 0, "asset 7 is not here")
+        local Folder = Instance.new("Folder")
+        for _, Id in { "rbxassetid://4848&version=2", "", "4848", "rbxassetid://4848#x", "rbxassetid://7" } do
+            Animation(Id).Parent = Folder
+        end
+        local Seen = {}
+        game:GetService("ContentProvider"):PreloadAsync({ Folder, Instance.new("Part") }, function(Id, Status)
+            table.insert(Seen, `{Id} {Status.Name}`)
+        end)
+        local Text = table.concat(Seen, ", ")
+        assert(Text == "rbxassetid://4848&version=2 Success, 4848 Failure, rbxassetid://4848#x Failure, rbxassetid://7 Failure, Part Success", Text)
+        "#,
+        3.0,
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+    // (an id no client can read raises; it is never a load that failed)
+    assert!(!lines.iter().any(|line| line.contains("Failed to load animation 4848") || line.contains("Failed to load animation  rbxassetid")), "{lines:?}");
 }
 
 /// `Describe(Sequence)`: a KeyframeSequence's tree as text (classes, names, nesting, the values a
@@ -823,7 +890,7 @@ fn get_keyframe_sequence_async_makes_a_files_sequence() {
             "{DESCRIBE}{}",
             r#"
         local First
-        for _, Id in { "rbxassetid://4343", "http://www.roblox.com/asset/?id=4343", "4343" } do
+        for _, Id in { "rbxassetid://4343", "http://www.roblox.com/asset/?id=4343", "rbxassetid://4343&version=2", "rbxassetid://4343?version=9" } do
             local Sequence = Provider:GetKeyframeSequenceAsync(Id)
             assert(Sequence:IsA("KeyframeSequence") and Sequence.Name == "Swing" and Sequence.Parent == nil, Id)
             assert(Sequence.Loop == false and Sequence.Priority == Enum.AnimationPriority.Action3, tostring(Sequence.Priority))
@@ -844,6 +911,16 @@ fn get_keyframe_sequence_async_makes_a_files_sequence() {
             return Provider:GetKeyframeSequenceAsync("rbxassetid://999999999")
         end)
         assert(not Ok and Message:find("Failed to load animation rbxassetid://999999999", 1, true) == 1, tostring(Message))
+        -- what a client cannot read raises its own words (measured in Studio 0.747)
+        for Id, Expected in {
+            ["4343"] = "Invalid animation id '<error: unknown AssetId protocol>': ",
+            [" rbxassetid://4343"] = "Invalid animation id '<error: unknown AssetId protocol>': ",
+            ["rbxassetid:// 4343"] = "Invalid animation id '<error:  assetid does not start with a number>': ",
+            [""] = "Invalid animation id '<error: null id>': ",
+        } do
+            local Read, Why = pcall(function() return Provider:GetKeyframeSequenceAsync(Id) end)
+            assert(not Read and Why == Expected, `{Id}: {Why}`)
+        end
         "#
         ),
         1.0,

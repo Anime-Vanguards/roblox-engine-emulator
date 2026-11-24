@@ -1080,8 +1080,9 @@ impl BundleSource for AssetWorker {
 }
 
 impl AssetWorker {
-    /// Downloads asset `uri` (`rbxassetid://N`) into file `out` through the worker (its `asset`
-    /// command): the KeyframeSequences AnimationTracks play.
+    /// Downloads asset `uri` (`rbxassetid://N`, or `rbxassetid://N?version=V` for a pinned version: made of
+    /// the numbers alone, crate::content_id::AssetRef::worker_uri) into file `out` through the worker (its
+    /// `asset` command): the KeyframeSequences AnimationTracks play, images and meshes.
     pub fn fetch_asset(&mut self, uri: &str, out: &Path) -> Result<PathBuf, String> {
         let out = self.worker_path(out)?;
         let reply = self.request(json!({ "command": "asset", "uri": uri, "out": out }))?;

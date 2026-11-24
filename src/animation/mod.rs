@@ -241,34 +241,58 @@ fn animation_uri(state: &State, names: &Names, animation: InstanceId) -> String 
     }
 }
 
+/// What ContentProvider:PreloadAsync reports of one item ([`preload`]): each AnimationId it holds, with whether it
+/// loads; None for an item that holds no Animation.
+pub type Preloaded = Option<Vec<(String, bool)>>;
+
 /// ContentProvider:PreloadAsync's animations: every Animation among `items` and their descendants
-/// starts its asset's fetch (cost::ANIMATION_FETCH); the seconds until the last of them arrives
-/// (0 when all are here). Measured: PreloadAsync waits for them, then LoadAnimation has Length at once.
-pub fn preload(engine: &Rc<Engine>, items: &[InstanceId]) -> f64 {
-    let Some((_, names)) = extension(engine).state.borrow().clone() else { return 0.0 };
-    let uris: Vec<String> = {
+/// starts its asset's fetch (cost::ANIMATION_FETCH). Returns the seconds until the last of them arrives
+/// (0 when all are here) and, for each item that is or holds an Animation, the ids of those that have one, in tree
+/// order, with whether each loads ([`source::preloaded`]): what PreloadAsync calls back with (None for an item that
+/// holds none). Measured:
+/// PreloadAsync waits for them, then LoadAnimation has Length at once; in Studio 0.747's client
+/// (2026-11-24) it calls back once per Animation that has an id, with that id and Success or Failure,
+/// and not for the Folder holding them or an Animation without one.
+pub fn preload(engine: &Rc<Engine>, items: &[InstanceId]) -> (f64, Vec<Preloaded>) {
+    let Some((_, names)) = extension(engine).state.borrow().clone() else { return (0.0, vec![None; items.len()]) };
+    let uris: Vec<Option<Vec<String>>> = {
         let state = engine.state.borrow();
         let mut uris = Vec::new();
         for &item in items {
-            if state.dom.get(item).is_none() {
-                continue;
-            }
-            for id in std::iter::once(item).chain(state.dom.descendants(item)) {
-                if state.dom.at(id).class == names.animation_class {
-                    uris.push(animation_uri(&state, &names, id));
+            let mut held = Vec::new();
+            if state.dom.get(item).is_some() {
+                for id in std::iter::once(item).chain(state.dom.descendants(item)) {
+                    if state.dom.at(id).class == names.animation_class {
+                        held.push(animation_uri(&state, &names, id));
+                    }
                 }
             }
+            uris.push((!held.is_empty()).then_some(held));
         }
         uris
     };
     let now = engine.state.borrow().sched.now;
     let mut wait: f64 = 0.0;
-    for uri in uris {
-        if source::fetched_from_file(engine, &uri) {
-            wait = wait.max(source::arrival(engine, &uri) - now);
+    let mut reports = Vec::with_capacity(uris.len());
+    for held in uris {
+        let Some(held) = held else {
+            reports.push(None);
+            continue;
+        };
+        let mut report = Vec::new();
+        for uri in held {
+            if uri.is_empty() {
+                continue;
+            }
+            let (fetched, loads) = source::preloaded(engine, &uri);
+            if fetched {
+                wait = wait.max(source::arrival(engine, &uri) - now);
+            }
+            report.push((uri, loads));
         }
+        reports.push(Some(report));
     }
-    wait
+    (wait, reports)
 }
 
 fn load(lua: &Lua, engine: &Rc<Engine>, shared: &Shared, names: &Names, owner: InstanceId, args: &Args) -> Result<LuaMultiValue, Flow> {
@@ -286,6 +310,14 @@ fn load(lua: &Lua, engine: &Rc<Engine>, shared: &Shared, names: &Names, owner: I
         Some(found) => Some(found.map_err(|problem| Flow::Error(ScriptError::plain(problem)))?),
         None => None,
     };
+    // (measured in Studio 0.747's client, 2026-11-24: an empty id, and one the Animator cannot read, raise here too;
+    // crate::content_id::animation)
+    if uri.is_empty() {
+        return Err(Flow::Error(ScriptError::plain(crate::content_id::EMPTY_FOR_LOAD)));
+    }
+    if !source::is_registered(engine, &uri) {
+        crate::content_id::animation(&uri).map_err(|problem| Flow::Error(ScriptError::plain(problem)))?;
+    }
     let clip = match source::resolve(engine, &uri) {
         Ok(clip) => clip,
         Err(error) => {

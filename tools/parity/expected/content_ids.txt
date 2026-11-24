@@ -1,0 +1,109 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-24
+kept rbxassetid://4848&version=1 true true true true true true
+kept rbxassetid://4848&Version=2&foo=bar true true true true true true
+kept rbxassetid://4848?version=1 true true true true true true
+kept rbxassetid://4848&id=1 true true true true true true
+kept rbxassetid:// 4848&version=1 true true true true true true
+kept http://www.roblox.com/asset/?id=4848&version=2 true true true true true true
+LoadAnimation  error LoadAnimation requires the asset id to not be empty
+GetKeyframeSequenceAsync  error Invalid animation id '<error: null id>': 
+GetAnimationClipAsync  error Invalid animation id '<error: null id>': 
+LoadAnimation   error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync   error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync   error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation 4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync 4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync 4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation 4848&version=1 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync 4848&version=1 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync 4848&version=1 error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation  rbxassetid://4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync  rbxassetid://4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync  rbxassetid://4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation RBXASSETID://4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync RBXASSETID://4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync RBXASSETID://4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation Rbxassetid://4848&version=1 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync Rbxassetid://4848&version=1 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync Rbxassetid://4848&version=1 error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation rbxassetid:///4848&version=1 error Invalid animation id '<error:  assetid does not start with a number>': 
+GetKeyframeSequenceAsync rbxassetid:///4848&version=1 error Invalid animation id '<error:  assetid does not start with a number>': 
+GetAnimationClipAsync rbxassetid:///4848&version=1 error Invalid animation id '<error:  assetid does not start with a number>': 
+LoadAnimation rbxassetid:// 4848 error Invalid animation id '<error:  assetid does not start with a number>': 
+GetKeyframeSequenceAsync rbxassetid:// 4848 error Invalid animation id '<error:  assetid does not start with a number>': 
+GetAnimationClipAsync rbxassetid:// 4848 error Invalid animation id '<error:  assetid does not start with a number>': 
+LoadAnimation rbxassetid://abc error Invalid animation id '<error:  assetid does not start with a number>': 
+GetKeyframeSequenceAsync rbxassetid://abc error Invalid animation id '<error:  assetid does not start with a number>': 
+GetAnimationClipAsync rbxassetid://abc error Invalid animation id '<error:  assetid does not start with a number>': 
+LoadAnimation rbxassetid://-5 error Invalid animation id '<error:  assetid does not start with a number>': 
+GetKeyframeSequenceAsync rbxassetid://-5 error Invalid animation id '<error:  assetid does not start with a number>': 
+GetAnimationClipAsync rbxassetid://-5 error Invalid animation id '<error:  assetid does not start with a number>': 
+LoadAnimation www.roblox.com/asset/?id=4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync www.roblox.com/asset/?id=4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync www.roblox.com/asset/?id=4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation rbxthumb://type=Asset&id=4848&w=150&h=150 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync rbxthumb://type=Asset&id=4848&w=150&h=150 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync rbxthumb://type=Asset&id=4848&w=150&h=150 error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation RBXHTTP://asset/?id=4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetKeyframeSequenceAsync RBXHTTP://asset/?id=4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+GetAnimationClipAsync RBXHTTP://asset/?id=4848 error Invalid animation id '<error: unknown AssetId protocol>': 
+LoadAnimation http://www.roblox.com/asset/?id=4848&foo=bar error Invalid animation id 'rbxassetid://4848': 
+GetKeyframeSequenceAsync http://www.roblox.com/asset/?id=4848&foo=bar error Invalid animation id 'rbxassetid://4848': 
+GetAnimationClipAsync http://www.roblox.com/asset/?id=4848&foo=bar error Invalid animation id 'rbxassetid://4848': 
+LoadAnimation http://www.roblox.com/asset/?id=4848&version=abc error Invalid animation id 'rbxassetid://4848': 
+GetKeyframeSequenceAsync http://www.roblox.com/asset/?id=4848&version=abc error Invalid animation id 'rbxassetid://4848': 
+GetAnimationClipAsync http://www.roblox.com/asset/?id=4848&version=abc error Invalid animation id 'rbxassetid://4848': 
+LoadAnimation http://www.roblox.com/asset/?id=4848&version=-1 error Invalid animation id 'rbxassetid://4848': 
+GetKeyframeSequenceAsync http://www.roblox.com/asset/?id=4848&version=-1 error Invalid animation id 'rbxassetid://4848': 
+GetAnimationClipAsync http://www.roblox.com/asset/?id=4848&version=-1 error Invalid animation id 'rbxassetid://4848': 
+LoadAnimation http://www.roblox.com/asset/?id=abc error Invalid animation id '<error:  assetid does not start with a number>': 
+GetKeyframeSequenceAsync http://www.roblox.com/asset/?id=abc error Invalid animation id '<error:  assetid does not start with a number>': 
+GetAnimationClipAsync http://www.roblox.com/asset/?id=abc error Invalid animation id '<error:  assetid does not start with a number>': 
+LoadAnimation http://www.roblox.com/asset/?id= 4848 error Invalid animation id '<error:  assetid does not start with a number>': 
+GetKeyframeSequenceAsync http://www.roblox.com/asset/?id= 4848 error Invalid animation id '<error:  assetid does not start with a number>': 
+GetAnimationClipAsync http://www.roblox.com/asset/?id= 4848 error Invalid animation id '<error:  assetid does not start with a number>': 
+LoadAnimation https://assetdelivery.roblox.com/v1/assetId/4848 error Invalid animation id '<error: id not found in first 128 char for http AssetId>': 
+GetKeyframeSequenceAsync https://assetdelivery.roblox.com/v1/assetId/4848 error Invalid animation id '<error: id not found in first 128 char for http AssetId>': 
+GetAnimationClipAsync https://assetdelivery.roblox.com/v1/assetId/4848 error Invalid animation id '<error: id not found in first 128 char for http AssetId>': 
+LoadAnimation rbxasset://animations/none.rbxm error Invalid animation id '<error: rbxasset:// file not found>': 
+GetKeyframeSequenceAsync rbxasset://animations/none.rbxm error Invalid animation id '<error: rbxasset:// file not found>': 
+GetAnimationClipAsync rbxasset://animations/none.rbxm error Invalid animation id '<error: rbxasset:// file not found>': 
+LoadAnimation rbxtemp://12 error Invalid animation id '<error: rbxtemp:// not allowed>': 
+GetKeyframeSequenceAsync rbxtemp://12 error Invalid animation id '<error: rbxtemp:// not allowed>': 
+GetAnimationClipAsync rbxtemp://12 error Invalid animation id '<error: rbxtemp:// not allowed>': 
+LoadAnimation file:///C:/none.rbxm error Invalid animation id '<error: file:// not allowed>': 
+GetKeyframeSequenceAsync file:///C:/none.rbxm error Invalid animation id '<error: file:// not allowed>': 
+GetAnimationClipAsync file:///C:/none.rbxm error Invalid animation id '<error: file:// not allowed>': 
+PreloadAsync ok 
+PreloadAsync returned true 22
+preloaded   Enum.AssetFetchStatus.Failure
+preloaded  rbxassetid://4848 Enum.AssetFetchStatus.Failure
+preloaded 4848 Enum.AssetFetchStatus.Failure
+preloaded 4848&version=1 Enum.AssetFetchStatus.Failure
+preloaded RBXASSETID://4848 Enum.AssetFetchStatus.Failure
+preloaded RBXHTTP://asset/?id=4848 Enum.AssetFetchStatus.Failure
+preloaded Rbxassetid://4848&version=1 Enum.AssetFetchStatus.Failure
+preloaded file:///C:/none.rbxm Enum.AssetFetchStatus.Failure
+preloaded http://www.roblox.com/asset/?id= 4848 Enum.AssetFetchStatus.Failure
+preloaded http://www.roblox.com/asset/?id=4848&foo=bar Enum.AssetFetchStatus.Failure
+preloaded http://www.roblox.com/asset/?id=4848&version=-1 Enum.AssetFetchStatus.Failure
+preloaded http://www.roblox.com/asset/?id=4848&version=abc Enum.AssetFetchStatus.Failure
+preloaded http://www.roblox.com/asset/?id=abc Enum.AssetFetchStatus.Failure
+preloaded https://assetdelivery.roblox.com/v1/assetId/4848 Enum.AssetFetchStatus.Failure
+preloaded rbxasset://animations/none.rbxm Enum.AssetFetchStatus.Failure
+preloaded rbxassetid:// 4848 Enum.AssetFetchStatus.Failure
+preloaded rbxassetid://-5 Enum.AssetFetchStatus.Failure
+preloaded rbxassetid:///4848&version=1 Enum.AssetFetchStatus.Failure
+preloaded rbxassetid://abc Enum.AssetFetchStatus.Failure
+preloaded rbxtemp://12 Enum.AssetFetchStatus.Failure
+preloaded rbxthumb://type=Asset&id=4848&w=150&h=150 Enum.AssetFetchStatus.Failure
+preloaded www.roblox.com/asset/?id=4848 Enum.AssetFetchStatus.Failure
+CreateEditableMeshAsync  rbxassetid://4848 error Failed to load mesh  rbxassetid://4848
+CreateMeshPartAsync  rbxassetid://4848 false true
+CreateEditableMeshAsync RBXASSETID://4848 error Failed to load mesh RBXASSETID://4848
+CreateMeshPartAsync RBXASSETID://4848 false true
+CreateEditableMeshAsync 4848 error Failed to load mesh 4848
+CreateMeshPartAsync 4848 false true
+CreateEditableMeshAsync www.roblox.com/asset/?id=4848 error Failed to load mesh www.roblox.com/asset/?id=4848
+CreateMeshPartAsync www.roblox.com/asset/?id=4848 false true

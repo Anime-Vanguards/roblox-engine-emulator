@@ -392,8 +392,11 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "KeyframeSequence",
         lua.create_function(move |lua, uri: String| match crate::animation::source::sequence(&e, &uri) {
             Ok(sequence) => Ok((instance_value(lua, &e, sequence)?, None)),
-            // (an `active://` id's error is Studio's own text, measured, and the one for what is no clip)
-            Err(error) if uri.trim().starts_with("active://") || error == crate::animation::source::NOT_VALID => Ok((LuaValue::Nil, Some(error))),
+            // (an `active://` id's error is Studio's own text, measured, and so are the one for what is no clip and those
+            // for an id no client can read: content_id::animation)
+            Err(error) if uri.trim().starts_with("active://") || error == crate::animation::source::NOT_VALID || error.starts_with(crate::content_id::INVALID) => {
+                Ok((LuaValue::Nil, Some(error)))
+            }
             Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
         })?,
     )?;
@@ -404,23 +407,34 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         lua.create_function(move |lua, uri: String| match crate::animation::source::animation_clip(&e, &uri) {
             Ok(clip) => Ok((instance_value(lua, &e, clip)?, None)),
             Err(error) if error == crate::animation::source::NEVER => Ok((LuaValue::Boolean(false), None)),
-            // (an `active://` id's error is Studio's own text, measured)
-            Err(error) if uri.trim().starts_with("active://") => Ok((LuaValue::Nil, Some(error))),
+            // (an `active://` id's error is Studio's own text, measured, and so are those for an id no client can read)
+            Err(error) if uri.trim().starts_with("active://") || error.starts_with(crate::content_id::INVALID) => Ok((LuaValue::Nil, Some(error))),
             Err(error) => Ok((LuaValue::Nil, Some(format!("Failed to load animation {uri}: {error}")))),
         })?,
     )?;
-    // ContentProvider:PreloadAsync's animations: the seconds until the ones it asks for arrive
+    // ContentProvider:PreloadAsync's animations: the seconds until the ones it asks for arrive, and by the index of each
+    // item that is or holds Animations, `{ { AnimationId, Loads }, ... }` for those that have an id
     let e = engine.clone();
     r.set(
         "PreloadAnimations",
-        lua.create_function(move |_, items: LuaTable| {
+        lua.create_function(move |lua, items: LuaTable| {
             let mut ids = Vec::new();
-            for item in items.sequence_values::<LuaValue>() {
+            for (index, item) in items.sequence_values::<LuaValue>().enumerate() {
                 if let Ok(id) = instance_of(&item?) {
-                    ids.push(id);
+                    ids.push((index + 1, id));
                 }
             }
-            Ok(crate::animation::preload(&e, &ids))
+            let (wait, reports) = crate::animation::preload(&e, &ids.iter().map(|&(_, id)| id).collect::<Vec<_>>());
+            let found = lua.create_table()?;
+            for ((index, _), report) in ids.iter().zip(reports) {
+                let Some(report) = report else { continue };
+                let list = lua.create_table()?;
+                for (uri, loads) in report {
+                    list.raw_push(lua.create_sequence_from([LuaValue::String(lua.create_string(&uri)?), LuaValue::Boolean(loads)])?)?;
+                }
+                found.raw_set(*index, list)?;
+            }
+            Ok((wait, found))
         })?,
     )?;
     // EditableImage pixels (crate::images): an asset's or file's as (width, height, buffer), else nil

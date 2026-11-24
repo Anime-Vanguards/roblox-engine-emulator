@@ -18,6 +18,7 @@ pub mod alloc;
 pub mod animation;
 pub mod boundary;
 pub mod census;
+pub mod content_id;
 pub mod cost;
 pub mod derived;
 pub mod dom;

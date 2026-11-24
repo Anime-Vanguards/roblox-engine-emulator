@@ -19,18 +19,20 @@ pub struct Pixels {
     pub rgba: Vec<u8>,
 }
 
-/// The pixels of `uri` (`rbxassetid://N`, `N`, or a local file: `file://<path>`, a path; a relative
-/// one the project's, [`crate::Options::local_file`]).
+/// The pixels of `uri` (an asset id as a client reads an image's, [`crate::content_id::asset`]:
+/// `rbxassetid://N&version=V` is version V; or a local file: `file://<path>`, a path; a relative one
+/// the project's, [`crate::Options::local_file`]). An asset downloads into `<state dir>/images/<id>`, a
+/// pinned version into `<id>-v<version>`.
 pub fn load(engine: &Engine, uri: &str) -> Result<Pixels, String> {
     files::note_unchecked("an image was read");
     let path = match engine.options.local_file(uri) {
         Some(path) => path,
         None => {
-            let id = crate::animation::source::asset_id(uri).ok_or_else(|| format!("{uri}: not an asset id"))?;
+            let asset = crate::content_id::asset(uri).ok_or_else(|| format!("{uri}: not an asset id"))?;
             let cache = crate::state_dir(&engine.options.repo).join("images");
-            let cached = cache.join(id.to_string());
+            let cached = cache.join(asset.file_stem());
             if !files::is_file(&cached) {
-                crate::animation::source::fetch(engine, uri, &cache, &cached)?;
+                crate::animation::source::fetch(engine, uri, asset, &cache, &cached)?;
             }
             cached
         }

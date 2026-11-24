@@ -1033,18 +1033,27 @@ end)
 -- (HttpService JSON and requests are Rust: services/mod.rs)
 
 -- ContentProvider
--- (it waits for the animation assets it asks for: animation/mod.rs preload)
+-- (it waits for the animation assets it asks for: animation/mod.rs preload. Its callback gets each Animation's id and
+-- whether it loads, for an item that is or holds Animations, measured; any other item, whose content is not looked at,
+-- its text and Success)
 Method("ContentProvider", "PreloadAsync", function(_, Items, Callback)
-	local Wait = R.PreloadAnimations(Items)
+	local Wait, Animations = R.PreloadAnimations(Items)
 	if Wait > 0 then
 		task.wait(Wait)
 	elseif coroutine.isyieldable() then -- (with nothing to load a client returns at once, also where the thread cannot yield: tools/parity/probes/yield_refused.luau; here one that can still waits a frame)
 		task.wait()
 	end
 	if Callback then
-		for _, Item in Items do
-			local Id = if type(Item) == "string" then Item else tostring(Item)
-			Callback(Id, EnumItem("AssetFetchStatus", "Success"))
+		for Index, Item in Items do
+			local Held = Animations[Index]
+			if Held then
+				for _, Entry in Held do
+					Callback(Entry[1], EnumItem("AssetFetchStatus", if Entry[2] then "Success" else "Failure"))
+				end
+			else
+				local Id = if type(Item) == "string" then Item else tostring(Item)
+				Callback(Id, EnumItem("AssetFetchStatus", "Success"))
+			end
 		end
 	end
 end)

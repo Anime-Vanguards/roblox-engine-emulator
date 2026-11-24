@@ -700,7 +700,7 @@ pub(crate) struct MeshExtension {
     bound: RefCell<FxHashMap<InstanceId, InstanceId>>,
     dirty: RefCell<FxHashSet<InstanceId>>,
     names: RefCell<Option<Rc<Names>>>,
-    /// Decoded asset meshes by uri (a warm service decodes each once per engine)
+    /// Decoded asset meshes by what their content id names ([`asset_key`]; a warm service decodes each once per engine)
     #[cfg_attr(not(feature = "meshes"), allow(dead_code))]
     assets: RefCell<FxHashMap<String, Rc<Mesh>>>,
 }
@@ -967,22 +967,34 @@ fn content_uri(value: &LuaValue) -> Option<String> {
     }
 }
 
+/// What the mesh content id `uri` names, as the decoded meshes are kept by: a local file's path, else the asset version
+/// a client reads ([`crate::content_id::asset`]: two spellings of one version are one mesh), else the id as written
+/// (each kind marked, so `rbxassetid://N?version=2`, which loads nothing, is not version 2's key).
+fn asset_key(engine: &Engine, uri: &str) -> String {
+    match engine.options.local_file(uri) {
+        Some(path) => format!("file {}", path.display()),
+        None => crate::content_id::asset(uri).map_or_else(|| format!("unread {uri}"), |asset| format!("asset {}", asset.file_stem())),
+    }
+}
+
 /// The mesh asset `uri`, decoded (cached per engine).
 #[cfg(feature = "meshes")]
 fn load_asset(engine: &Engine, uri: &str) -> Result<Rc<Mesh>, String> {
-    if let Some(mesh) = extension(engine).assets.borrow().get(uri) {
+    let key = asset_key(engine, uri);
+    if let Some(mesh) = extension(engine).assets.borrow().get(&key) {
         return Ok(mesh.clone());
     }
     files::note_unchecked("a mesh was read");
-    // a local file (a relative one the project's), else an asset downloaded once
+    // a local file (a relative one the project's), else an asset downloaded once: `<state dir>/meshes/<id>`, a pinned
+    // version `<id>-v<version>`
     let path = match engine.options.local_file(uri) {
         Some(path) => path,
         None => {
-            let id = crate::animation::source::asset_id(uri).ok_or_else(|| format!("{uri}: not an asset id"))?;
+            let asset = crate::content_id::asset(uri).ok_or_else(|| format!("{uri}: not an asset id"))?;
             let cache = crate::state_dir(&engine.options.repo).join("meshes");
-            let cached = cache.join(id.to_string());
+            let cached = cache.join(asset.file_stem());
             if !files::is_file(&cached) {
-                crate::animation::source::fetch(engine, uri, &cache, &cached)?;
+                crate::animation::source::fetch(engine, uri, asset, &cache, &cached)?;
             }
             cached
         }
@@ -990,7 +1002,7 @@ fn load_asset(engine: &Engine, uri: &str) -> Result<Rc<Mesh>, String> {
     let bytes = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     let file = ror_mesh::decode_mesh(&bytes).map_err(|error| format!("{uri}: {error}"))?;
     let mesh = Rc::new(Mesh::from_file(&file));
-    extension(engine).assets.borrow_mut().insert(uri.to_string(), mesh.clone());
+    extension(engine).assets.borrow_mut().insert(key, mesh.clone());
     Ok(mesh)
 }
 
@@ -1272,8 +1284,13 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         // (an asset's mesh waits for its load: a thread that cannot yield raises before anything is made, by the rule
         // measured for the engine's other yielding calls, lua/mod.rs NOT_YIELDABLE; not measured for this method)
         crate::lua::refuse_unyieldable(&lua.current_thread(), crate::lua::NOT_YIELDABLE)?;
+        // (measured in Studio 0.747's client, 2026-11-24: an id of no protocol it knows raises; another it cannot load
+        // was refused there for the place, so it is not known what that raises)
+        if engine.options.local_file(&uri).is_none() && crate::content_id::unknown_protocol(&uri) {
+            return Err(err(format!("Failed to load mesh {uri}")));
+        }
         // Studio's wait (crate::cost): the asset's first fetch in the session, else its decode
-        let first = !extension(engine).assets.borrow().contains_key(&uri);
+        let first = !extension(engine).assets.borrow().contains_key(&asset_key(engine, &uri));
         let mesh = match load_asset(engine, &uri) {
             Ok(mesh) => (*mesh).clone(),
             Err(problem) => {
