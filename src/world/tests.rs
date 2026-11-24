@@ -18,7 +18,12 @@ fn start() -> (Lua, Rc<Engine>) {
     (lua, engine)
 }
 
-/// Runs `source` as a script; panics with the script's error.
+/// The frames [`run`] steps a waiting script through before it fails the test: a minute of 60 frames a second
+const RUN_FRAMES: u32 = 3600;
+
+/// Runs `source` as a script to its end: while it waits (task.wait, an event's Wait) the engine steps frames, one at a time,
+/// until it finishes, and the test fails when it is still waiting after [`RUN_FRAMES`] (what follows a wait would otherwise
+/// never run, its asserts passing unchecked). Panics with the script's error.
 fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) {
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -28,14 +33,38 @@ fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) {
     let env = engine_lua::modules::environment(lua, engine, script).expect("environment");
     let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(lua, engine, function, LuaMultiValue::new()).expect("call");
-    if let CallOutcome::Failed(message, trace) = call.outcome().unwrap() {
-        panic!("test script failed: {message}\n{}", trace.unwrap_or_default());
+    let mut frames = 0;
+    loop {
+        match call.outcome().unwrap() {
+            CallOutcome::Finished(_) => return,
+            CallOutcome::Failed(message, trace) => panic!("test script failed: {message}\n{}", trace.unwrap_or_default()),
+            CallOutcome::Pending if frames < RUN_FRAMES => {
+                crate::scheduler::step(lua, engine, None).expect("step");
+                frames += 1;
+            }
+            CallOutcome::Pending => panic!("test script did not finish: still waiting after {frames} frames"),
+        }
     }
 }
 
 fn check(source: &str) {
     let (lua, engine) = start();
     run(&lua, &engine, source);
+}
+
+/// What follows a wait in a test script runs and is checked: [`run`] steps frames until the script ends (an assert after a
+/// task.wait() used to pass unchecked, the call left waiting).
+#[test]
+#[should_panic(expected = "checked after the wait")]
+fn a_test_script_is_checked_after_it_waits() {
+    check("task.wait() assert(false, 'checked after the wait')");
+}
+
+/// A test script still waiting after [`RUN_FRAMES`] frames fails its test.
+#[test]
+#[should_panic(expected = "still waiting")]
+fn a_test_script_that_never_ends_fails_its_test() {
+    check("while true do task.wait() end");
 }
 
 #[test]
