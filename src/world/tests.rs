@@ -2192,7 +2192,9 @@ fn link_changes_in_a_large_assembly_walk_none_of_it() {
 /// at a frame's start on an anchored hub welded to 1,000 parts against one welded to 10: the first change costs LINK_PART more for
 /// each part beyond the small hub's, the second the same at either size; a weld taken back into the world and out again, the second
 /// the same at either size. Only Enabled was priced as a link change before (a client spends 874 to 982 us on each of these at a
-/// frame's start with 10,000 parts, 10 to 43 us on a later one; 18 to 35 us on a weld taken out right after it was taken in).
+/// frame's start with 10,000 parts, 10 to 43 us on a later one; 18 to 35 us on a weld taken out right after it was taken in). Two
+/// welds disabled the frame before and enabled in turn: the second, which joins its leaf alone to the assembly the first changed,
+/// costs the same at either size (it was charged the whole assembly again: 857 us at 10,000, where a client spends 15.6).
 #[test]
 fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
     let (lua, engine) = start_play();
@@ -2224,6 +2226,8 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
             LeafDestroyed = function(S) return function() S.L:Destroy() end, function() S.L2:Destroy() end end,
             -- (a weld taken back into the world, the frame before taken out: priced by its joints, then a later change)
             WeldIn = function(S) return function() S.W.Parent = S.L end, function() S.W.Parent = nil end, function() S.W.Parent = nil end end,
+            -- (two welds disabled the frame before, enabled in turn: the second joins its leaf alone to the assembly the first changed)
+            Enabled = function(S) return function() S.W.Enabled = true end, function() S.W2.Enabled = true end, function() S.W.Enabled, S.W2.Enabled = false, false end end,
         }
         local function Changes(Count, Kind)
             local Hub, Welds = Part(true), {}
@@ -2266,7 +2270,7 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
     let more = 990.0 * crate::cost::LINK_PART;
     // (a weld taken in pays for the joints its walks look at, a later change in the frame the same at either size)
     run(&lua, &engine, "local Extra = shared.Big.WeldIn.Later - shared.Small.WeldIn.Later assert(math.abs(Extra) < 1e-9, `WeldIn Later: {Extra} s more for 1,001 parts than 11`)");
-    for kind in ["Part1", "Nil", "Part0", "WeldOut", "WeldDestroyed", "LeafOut", "LeafDestroyed"] {
+    for kind in ["Part1", "Nil", "Part0", "WeldOut", "WeldDestroyed", "LeafOut", "LeafDestroyed", "Enabled"] {
         for (name, want) in [("First", more), ("Later", 0.0)] {
             run(&lua, &engine, &format!("local Extra = shared.Big.{kind}.{name} - shared.Small.{kind}.{name} assert(math.abs(Extra - {want:e}) < 1e-9, `{kind} {name}: {{Extra}} s more for 1,001 parts than 11, not {want:e}`)"));
         }

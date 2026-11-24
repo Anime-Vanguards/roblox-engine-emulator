@@ -2690,7 +2690,8 @@ fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
 /// The work clock's price of a link change of `parts` (an Enabled write that linked or unlinked them, an Anchored write of a part
 /// that links others), as a client spends it (cost.rs LINK_CHANGED, LINK_FRAME, link_assembly): each change, the frame's first,
 /// and the first of each component in the frame, each part of it, the components counted as they are after the change. Each
-/// component's parts are marked together when it is charged, so a component the frame's changes split or joined is charged once.
+/// component's parts are marked together when it is charged, so a component the frame's changes split or joined is charged once,
+/// and parts joined to one charged earlier in the frame are charged alone.
 /// Its reads then owe the body's working out ([`pay_body`]).
 fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts: &[InstanceId]) {
     let mut work = crate::cost::LINK_CHANGED;
@@ -2721,8 +2722,10 @@ fn link_frame(joints: &mut Joints, frame: u64) -> bool {
     true
 }
 
-/// Marks the parts of the component of `part` (the kept one, else a walk's) as changed in the frame, together; how many it holds,
-/// when it was not marked yet.
+/// Marks the parts of the component of `part` (the kept one, else a walk's) as changed in the frame, together; how many of them
+/// were not marked yet, when `part` was not: all of them, or, when the change joined parts to an assembly changed earlier in the frame,
+/// those that joined it (a client's later change in the frame does not rebuild the assembly again for them: Studio 0.747, a leaf of
+/// a star of 10,000 whose weld was disabled a frame before enabled after another leaf's 15.6 us, at 1,000 6.2).
 fn mark_component(state: &mut State, reflection: &Reflection, setup: &Setup, part: InstanceId) -> Option<usize> {
     if state.joints.marked.contains(&part) {
         return None;
@@ -2731,9 +2734,8 @@ fn mark_component(state: &mut State, reflection: &Reflection, setup: &Setup, par
         Some(found) => found.parts(),
         None => walk_component(state, reflection, setup, part, &mut Walk::default()).map_or_else(|| vec![part], |found| found.parts()),
     };
-    let size = members.len();
-    state.joints.marked.extend(members);
-    Some(size)
+    let marked = &mut state.joints.marked;
+    Some(members.into_iter().filter(|&member| marked.insert(member)).count())
 }
 
 /// A part's Anchored changed: its assemblies settle from their roots, and the work clock charges each other part whose assembly
