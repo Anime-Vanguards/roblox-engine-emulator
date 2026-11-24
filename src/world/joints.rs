@@ -1641,7 +1641,8 @@ fn clean_flip(flips: &[Flip; 2]) -> Option<(InstanceId, InstanceId, bool)> {
 
 /// Takes the dom's log of the rigid joints and parts whose home changed, by whatever moved them (dom.rs Dom::log_homes), marks each
 /// indexed joint in its parts' lists as in a world or not, and works out again whether each such joint, and each joint of each such
-/// part in a world, links its parts ([`relink`]): every indexed joint when the log overflowed. Then the joints [`forget`] left.
+/// part in a world, links its parts ([`relink`]; none of a part in no world that none links): every indexed joint when the log
+/// overflowed. Then the joints [`forget`] left.
 /// Each link that ended (a joint, or one of its parts, taken out of their world, destroyed or moved to nil) leaves its parts' kept
 /// component, which splits when nothing else links its sides, one link after another, each list losing its links at once
 /// ([`Joints::unlink_all`]); a part whose world
@@ -1664,6 +1665,17 @@ fn take_homes(state: &mut State, reflection: &Reflection, setup: &Setup, mut sta
             }
         }
     };
+    // (whether an instance is in a WorldRoot now, from the dom's homes: world_of's walk)
+    let in_world = |dom: &crate::dom::Dom, id: InstanceId| {
+        let mut home = dom.home(id);
+        while let Some(node) = home {
+            if reflection.class(dom.at(node).class).is_a(setup.world_root) {
+                return true;
+            }
+            home = dom.home(node);
+        }
+        false
+    };
     let mut parts: FxHashSet<InstanceId> = FxHashSet::default();
     let overflowed = log.is_none();
     match log {
@@ -1676,9 +1688,13 @@ fn take_homes(state: &mut State, reflection: &Reflection, setup: &Setup, mut sta
                     joints.relinks.push(id);
                 } else if joints.by_part.contains_key(&id) && parts.insert(id) {
                     // (a part's world changed: its joints in a world may link or stop; the others' homes are logged themselves. Its
-                    // component goes once its links are worked out, unless they all ended)
+                    // component goes once its links are worked out, unless they all ended. A part in no world that none of its
+                    // joints links has none to start or stop: its home moved between places outside every world, JointsService and
+                    // ReplicatedStorage say, which costs a client nothing a joint, so none is worked out again)
                     let list = &joints.by_part[&id];
-                    joints.relinks.extend(list.homed());
+                    if list.linking > 0 || in_world(dom, id) {
+                        joints.relinks.extend(list.homed());
+                    }
                 }
             }
         }

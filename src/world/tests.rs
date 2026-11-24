@@ -1777,6 +1777,70 @@ fn a_part_entering_a_world_skips_its_joints_outside_every_world() {
     assert!(named < 2.0 * lone + 0.05, "1,600 moves took {named:.3} s of host time for a part named by 50,000 welds outside every world, {lone:.3} s for one named by none");
 }
 
+/// A part outside every world named by joints that are in one moves between places outside every world without working its joints
+/// out again, as a client's move costs nothing for them (Studio 0.747, a playing client: a part in ReplicatedStorage named by 100 to
+/// 10,000 welds in the Workspace, enabled or not, moved to JointsService and back, or to nil and back, 38 to 53 us, as one named by
+/// none): 200 rounds of a part named by 50,000 such welds moved to JointsService and back take about the host time of a part named
+/// by none, the two parts' rounds in turn (up to three tries), and the work clock charges the two the same. Each move worked each
+/// joint out again (0.4 to 1.5 ms a move at 10,000).
+#[test]
+fn a_part_outside_every_world_moves_without_working_its_joints_out() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Storage, Joints = game:GetService("ReplicatedStorage"), game:GetService("JointsService")
+        local function Part(Anchored, Parent)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.CFrame, P.Parent = Anchored, false, CFrame.new(0, 300, 0), Parent
+            return P
+        end
+        local Lone, Named = Part(false, Storage), Part(false, Storage)
+        local Box = Instance.new("Folder")
+        for Index = 1, 50000 do
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1, W.Enabled, W.Parent = Named, Part(true, Box), Index % 2 == 0, Box
+        end
+        Box.Parent = workspace
+        shared.Parts, shared.Work = { Lone = Lone, Named = Named }, {}
+        function shared.Move(Name)
+            local P = shared.Parts[Name]
+            local Start = os.clock()
+            for _ = 1, 200 do
+                P.Parent = Joints
+                P.Parent = Storage
+            end
+            shared.Work[Name] = os.clock() - Start
+        end
+        "#,
+    );
+    let time = |name: &str| {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.Move(\"{name}\")"));
+        start.elapsed().as_secs_f64()
+    };
+    time("Lone");
+    time("Named");
+    // (the two parts' rounds in turn, so whatever else the host does weighs on both alike; up to three tries)
+    let (mut lone, mut named) = (0.0, 0.0);
+    for _ in 0..3 {
+        (lone, named) = (0.0, 0.0);
+        for _ in 0..3 {
+            lone += time("Lone");
+            named += time("Named");
+        }
+        if named < 2.0 * lone + 0.05 {
+            break;
+        }
+    }
+    // (os.clock reads about 10,000 s, where its last bit is 1.8e-12 s)
+    run(&lua, &engine, r#"assert(math.abs(shared.Work.Named - shared.Work.Lone) < 1e-11, `the named part's moves cost {shared.Work.Named} s of work where the lone one's {shared.Work.Lone}`)"#);
+    assert!(named < 2.0 * lone + 0.05, "3 x 400 moves took {named:.3} s of host time for a part named by 50,000 welds in the Workspace, {lone:.3} s for one named by none");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
 /// Which of a part's joints are in a world is marked in its list as the dom logs their homes (dom.rs Dom::log_homes), whatever
 /// moves them: 60 welds, 40 parts, folders and WorldModels moved between the Workspace, WorldModels, JointsService, storage and
 /// nil, re-pointed, models of them cloned and destroyed, 2,000 times at random, and each joint in each list is marked as in
