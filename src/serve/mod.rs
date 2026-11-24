@@ -343,6 +343,13 @@ const REPEATS_WITHIN: Duration = Duration::from_secs(10);
 /// The jobs [`REPEATS_WITHIN`] looks back over
 const STARTS_KEPT: usize = 32;
 
+/// How long a worker waits idle before returning freed heap pages to the OS (`mi_collect(true)`)
+/// and sweeping stale entries from the shared caches. Running aggressive decommit and global cache
+/// sweeps after every single job causes Windows VAD lock contention and tens of thousands of page
+/// faults per job during concurrent bursts; running them on idle keeps bursts fast while returning
+/// memory as soon as a burst quiets.
+const IDLE_COLLECT_DELAY: Duration = Duration::from_millis(500);
+
 /// What a worker takes next: a job, or a recording (or run) to prepare ahead of the jobs.
 enum Work {
     Job(Job),
@@ -396,6 +403,8 @@ struct Service {
     /// Jobs not run, or stopped, because their client had gone
     abandoned: AtomicU64,
     shutting_down: AtomicBool,
+    /// Whether the shared caches and rayon pool have been swept since the last job/prepare finished
+    idle_cleaned: AtomicBool,
     /// The most recent recording or run prepared after its job
     recent: Mutex<Option<Ahead>>,
     build: String,
@@ -411,6 +420,16 @@ pub fn serve(options: ServeOptions) -> Result<(), String> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("binding the service port: {e}"))?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     size_pool();
+    // Keep freed pages warm across back-to-back jobs in a burst instead of decommitting every 100 ms;
+    // idle workers still run mi_collect(true) after IDLE_COLLECT_DELAY to return memory when quiet.
+    #[cfg(not(feature = "dhat-heap"))]
+    if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
+        unsafe extern "C" {
+            fn mi_option_set(option: i32, value: std::ffi::c_long);
+        }
+        // mimalloc v2's MI_OPTION_PURGE_DELAY = 15
+        unsafe { mi_option_set(15, 1500) };
+    }
     modules::reuse_compiled_modules();
     // (what every run reads, made before the first one: in the long-lived heap, crate::alloc)
     crate::alloc::long_lived(|| {
@@ -431,6 +450,7 @@ pub fn serve(options: ServeOptions) -> Result<(), String> {
         failed: AtomicU64::new(0),
         abandoned: AtomicU64::new(0),
         shutting_down: AtomicBool::new(false),
+        idle_cleaned: AtomicBool::new(true),
         recent: Mutex::new(None),
         build: options.build.clone(),
         env: options.env.clone(),
@@ -572,12 +592,15 @@ fn work(service: &Service, index: usize) {
     let mut parked: Option<prepare::Prepared> = None;
     // (how long this worker's last preparation took from its reply on: when the next is expected ready)
     let mut took: Option<Duration> = None;
+    let mut needs_collect = false;
     loop {
-        let job = match take(service, index, took) {
+        let job = match take(service, index, took, &mut needs_collect) {
             Some(Work::Job(job)) => job,
             Some(Work::Prepare(ahead)) => {
                 let started = Instant::now();
                 parked = prepare_next(service, index, &ahead);
+                needs_collect = true;
+                service.idle_cleaned.store(false, Ordering::Release);
                 if parked.is_some() {
                     took = Some(started.elapsed());
                 }
@@ -595,6 +618,7 @@ fn work(service: &Service, index: usize) {
             continue;
         }
         service.running.fetch_add(1, Ordering::SeqCst);
+        service.idle_cleaned.store(false, Ordering::Release);
         let started = Instant::now();
         if let (Some(keys), Ok(mut starts)) = (&job.key, service.starts.lock()) {
             starts.push_back((keys.clone(), started));
@@ -632,19 +656,11 @@ fn work(service: &Service, index: usize) {
         drop(job.stream);
         drop(emulator);
         drop(other);
-        // what the caches keep of files that changed since (a new bundle version, an edited module)
-        #[cfg(feature = "bundles")]
-        crate::project::model_assets::forget_stale_bundles();
-        #[cfg(feature = "meshes")]
-        crate::meshes::forget_stale_meshes();
-        modules::forget_stale_modules();
-        // (the heap gives the engine's pages back while the service waits)
-        unsafe extern "C" {
-            fn mi_collect(force: bool);
-        }
-        unsafe { mi_collect(true) };
-        // and the thread pool's, where the project listing ran
-        rayon::broadcast(|_| unsafe { mi_collect(true) });
+        // Defer aggressive heap decommit and shared-cache stale sweeps until idle (take):
+        // every cache lookup validates file stamps on read, and keeping worker segments warm
+        // across back-to-back burst jobs avoids Windows VAD contention and page-fault storms.
+        needs_collect = true;
+        service.idle_cleaned.store(false, Ordering::Release);
         if let Ok(mut time) = service.last_job.lock() {
             *time = Instant::now();
         }
@@ -669,10 +685,43 @@ fn work(service: &Service, index: usize) {
         service.queued.notify_all();
         if let (true, Some(ahead)) = (prepare_here, next) {
             parked = prepare_next(service, index, &ahead);
+            needs_collect = true;
+            service.idle_cleaned.store(false, Ordering::Release);
             if parked.is_some() {
                 took = Some(replied.elapsed());
             }
         }
+    }
+}
+
+#[cfg(not(feature = "dhat-heap"))]
+fn mi_collect_force() {
+    unsafe extern "C" {
+        fn mi_collect(force: bool);
+    }
+    unsafe { mi_collect(true) };
+}
+
+#[cfg(feature = "dhat-heap")]
+fn mi_collect_force() {}
+
+/// Returns this worker's freed pages to the OS when idle, and once the whole service is quiet
+/// sweeps stale entries from the shared caches and collects the rayon thread pool's heaps.
+fn collect_if_idle(service: &Service, needs_collect: &mut bool) {
+    if *needs_collect {
+        mi_collect_force();
+        *needs_collect = false;
+    }
+    if service.running.load(Ordering::SeqCst) == 0
+        && service.preparing.load(Ordering::SeqCst) == 0
+        && !service.idle_cleaned.swap(true, Ordering::SeqCst)
+    {
+        #[cfg(feature = "bundles")]
+        crate::project::model_assets::forget_stale_bundles();
+        #[cfg(feature = "meshes")]
+        crate::meshes::forget_stale_meshes();
+        modules::forget_stale_modules();
+        rayon::broadcast(|_| mi_collect_force());
     }
 }
 
@@ -709,7 +758,7 @@ fn repeats(service: &Service, key: &prepare::Key, own: Instant) -> bool {
 /// jobs to a worker that is idle and holds none. With no job for it, a worker holding nothing
 /// prepares the most recent recording while fewer than [`HOLDERS`] workers hold or prepare it (`took`:
 /// how long its last preparation took).
-fn take(service: &Service, index: usize, took: Option<Duration>) -> Option<Work> {
+fn take(service: &Service, index: usize, took: Option<Duration>, needs_collect: &mut bool) -> Option<Work> {
     let mut queue = service.queue.lock().ok()?;
     loop {
         let picked = {
@@ -737,6 +786,19 @@ fn take(service: &Service, index: usize, took: Option<Duration>) -> Option<Work>
         if queue.is_empty() {
             if let Some(work) = ahead(service, index, took) {
                 return Some(work);
+            }
+            let pending_global = service.running.load(Ordering::Acquire) == 0
+                && service.preparing.load(Ordering::Acquire) == 0
+                && !service.idle_cleaned.load(Ordering::Acquire);
+            if *needs_collect || pending_global {
+                let (next_queue, waited) = service.queued.wait_timeout(queue, IDLE_COLLECT_DELAY).ok()?;
+                queue = next_queue;
+                if waited.timed_out() && queue.is_empty() {
+                    drop(queue);
+                    collect_if_idle(service, needs_collect);
+                    queue = service.queue.lock().ok()?;
+                }
+                continue;
             }
         }
         queue = service.queued.wait(queue).ok()?;
@@ -1486,6 +1548,7 @@ mod tests {
             failed: AtomicU64::new(0),
             abandoned: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
+            idle_cleaned: AtomicBool::new(true),
             recent: Mutex::new(None),
             build: String::new(),
             env: String::new(),
