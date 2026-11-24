@@ -67,6 +67,8 @@ pub struct ModuleRecords {
     /// Every chunk of the VM runs in the interpreter, the engine's own included ([`interpret_all`]):
     /// loading a module leaves native code generation off
     interpret_all: bool,
+    /// On-demand tiered JIT (`--native`): chunks load without eager codegen and hot Protos compile in place
+    tiered_jit: bool,
     /// Module chunks this engine compiled from their text (not loaded from bytecode compiled ahead: [`Prefetch`],
     /// [`reuse_compiled_modules`]); a loopback run's second side compiles none of the modules both sides require
     pub text_compiles: u32,
@@ -179,6 +181,52 @@ static COMPILED: std::sync::OnceLock<CompiledSources> = std::sync::OnceLock::new
 static LOADMODULE_COMPILED: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, (crate::files::Stamp, std::sync::Arc<(Vec<u8>, Vec<u8>)>)>>> = std::sync::OnceLock::new();
 /// Process-wide cache of parsed JSON modules shared across `--batch` or `--service` workers.
 static JSON_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, (crate::files::Stamp, std::sync::Arc<serde_json::Value>)>>> = std::sync::OnceLock::new();
+/// Single-flight deduplication for cold bytecode compiles during `ree run --batch` so parallel
+/// workers starting together compile each shared module once instead of N times simultaneously.
+struct SingleFlight<V> {
+    inflight: std::sync::Mutex<FxHashMap<String, std::sync::Arc<(std::sync::Mutex<Option<Result<V, String>>>, std::sync::Condvar)>>>,
+}
+
+impl<V: Clone> SingleFlight<V> {
+    fn new() -> Self {
+        Self { inflight: std::sync::Mutex::new(FxHashMap::default()) }
+    }
+
+    fn run(&self, key: &str, f: impl FnOnce() -> Result<V, String>) -> Result<V, String> {
+        let (slot, owner) = {
+            let mut map = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(existing) = map.get(key) {
+                (existing.clone(), false)
+            } else {
+                let created = std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+                map.insert(key.to_string(), created.clone());
+                (created, true)
+            }
+        };
+        if owner {
+            let res = f();
+            {
+                let (lock, cvar) = &*slot;
+                *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(res.clone());
+                cvar.notify_all();
+            }
+            if let Ok(mut map) = self.inflight.lock() {
+                map.remove(key);
+            }
+            res
+        } else {
+            let (lock, cvar) = &*slot;
+            let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+            while guard.is_none() {
+                guard = cvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+            }
+            guard.as_ref().unwrap().clone()
+        }
+    }
+}
+
+static COMPILED_FLIGHT: std::sync::OnceLock<SingleFlight<std::sync::Arc<(Vec<u8>, Option<Vec<u8>>)>>> = std::sync::OnceLock::new();
+static LOADMODULE_FLIGHT: std::sync::OnceLock<SingleFlight<std::sync::Arc<Vec<u8>>>> = std::sync::OnceLock::new();
 /// True during `ree run --batch`: files on disk stay constant for the batch, skipping redundant `stat()`
 /// checks and duplicate precompile threads across parallel workers.
 static BATCH_FROZEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -204,6 +252,27 @@ impl CompiledSources {
                     return Ok((entry.0.clone(), entry.1.clone()));
                 }
             }
+            let flight = COMPILED_FLIGHT.get_or_init(SingleFlight::new);
+            let flight_key = if compile_bytecode { format!("c:{path}") } else { format!("r:{path}") };
+            let entry = flight
+                .run(&flight_key, || {
+                    if let Some((_, existing, _)) = self.entries.read().ok().and_then(|entries| entries.get(path).cloned()) {
+                        if !compile_bytecode || existing.1.is_some() || !(path.ends_with(".lua") || path.ends_with(".luau")) {
+                            return Ok(existing);
+                        }
+                    }
+                    let stamp = crate::files::stamp(std::path::Path::new(path)).ok_or_else(|| "not found".to_string())?;
+                    let source = std::fs::read(path).map_err(|e| e.to_string())?;
+                    let lua_source = path.ends_with(".lua") || path.ends_with(".luau");
+                    let bytecode = if compile_bytecode && lua_source { compiler().compile(&source).ok() } else { None };
+                    let entry = kept(&source, bytecode.as_deref());
+                    if let Ok(mut entries) = self.entries.write() {
+                        crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, entry.clone(), lasting)));
+                    }
+                    Ok(entry)
+                })
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            return Ok((entry.0.clone(), entry.1.clone()));
         }
         let stamp = crate::files::stamp(std::path::Path::new(path)).ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
         let known = self.entries.read().ok().and_then(|entries| entries.get(path).cloned());
@@ -401,6 +470,11 @@ pub fn interpret_all_from_start(engine: &Engine) {
     let mut modules = engine.modules.borrow_mut();
     modules.interpreted = true;
     modules.interpret_all = true;
+}
+
+/// Marks this engine as using on-demand tiered JIT so chunk loads leave eager mlua JIT off.
+pub fn use_tiered_jit(engine: &Engine) {
+    engine.modules.borrow_mut().tiered_jit = true;
 }
 
 /// Whether [`interpret_all`] is on for this engine's VM
@@ -693,6 +767,37 @@ pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId
                 let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
                 engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
                 Some(rc_bc)
+            } else if is_batch_frozen() && matches!(&source, std::borrow::Cow::Borrowed(_)) {
+                let key = engine
+                    .state
+                    .borrow()
+                    .dom
+                    .at(script)
+                    .source_path()
+                    .map(|p| p.to_string());
+                let compiled = if let Some(path_key) = key {
+                    let flight = LOADMODULE_FLIGHT.get_or_init(SingleFlight::new);
+                    flight
+                        .run(&path_key, || {
+                            if let Some(existing) = kept_loadmodule_bytecode(engine, script, &source) {
+                                return Ok(std::sync::Arc::new(existing));
+                            }
+                            let bc = loadmodule_compiler().compile(&*source).map_err(|e| e.to_string())?;
+                            store_loadmodule_bytecode(engine, script, &source, &bc);
+                            Ok(std::sync::Arc::new(bc))
+                        })
+                        .ok()
+                } else {
+                    loadmodule_compiler().compile(&*source).ok().map(std::sync::Arc::new)
+                };
+                match compiled {
+                    Some(bc) => {
+                        let rc_bc: Rc<[u8]> = Rc::from(bc.as_slice());
+                        engine.modules.borrow_mut().loadmodule_bytecode.insert(script, (Rc::from(&*source), rc_bc.clone()));
+                        Some(rc_bc)
+                    }
+                    None => None,
+                }
             } else {
                 engine.modules.borrow_mut().text_compiles += 1;
                 match loadmodule_compiler().compile(&*source) {
@@ -718,7 +823,8 @@ pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId
         Some(bytecode) => lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
         None => lua.load(&*source).set_compiler(loadmodule_compiler()),
     };
-    let skip_jit = !should_jit_chunk(&source);
+    let tiered = engine.modules.borrow().tiered_jit;
+    let skip_jit = !tiered && !should_jit_chunk(&source);
     let template = if skip_jit {
         #[cfg(feature = "jit")]
         let was_interpreted = engine.modules.borrow().interpret_all;
@@ -796,11 +902,11 @@ pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[
 /// Loads a script's chunk as this engine's VM runs scripts: interpreted, or compiled to native code now or later
 /// ([`defer_codegen`], [`interpret_modules`]). A module's chunk ([`compile_in`]) and loadstring's (loading.rs).
 pub fn load(lua: &Lua, engine: &Rc<Engine>, chunk: LuaChunk) -> LuaResult<LuaFunction> {
-    let (deferred, interpreted, interpret_all) = {
+    let (deferred, interpreted, interpret_all, tiered_jit) = {
         let modules = engine.modules.borrow();
-        (modules.deferred.is_some(), modules.interpreted, modules.interpret_all)
+        (modules.deferred.is_some(), modules.interpreted, modules.interpret_all, modules.tiered_jit)
     };
-    if !deferred && !interpreted {
+    if tiered_jit || (!deferred && !interpreted) {
         return crate::timing::time("modules: compile + load", || chunk.into_function());
     }
     #[cfg(feature = "jit")]
@@ -962,7 +1068,10 @@ pub fn wrap_json_loadmodule(lua: &Lua, engine: &Rc<Engine>, name: &str, decode: 
         return load(lua, engine, chunk)?.call(decode);
     }
     #[cfg(feature = "jit")]
-    let was_interpreted = engine.modules.borrow().interpret_all;
+    let keep_jit_off = {
+        let m = engine.modules.borrow();
+        m.interpret_all || m.tiered_jit
+    };
     #[cfg(feature = "jit")]
     lua.enable_jit(false);
     let factory = crate::timing::time("modules: compile + load", || {
@@ -973,7 +1082,7 @@ pub fn wrap_json_loadmodule(lua: &Lua, engine: &Rc<Engine>, name: &str, decode: 
             .into_function()
     });
     #[cfg(feature = "jit")]
-    if !was_interpreted {
+    if !keep_jit_off {
         lua.enable_jit(true);
     }
     factory?.call(decode)

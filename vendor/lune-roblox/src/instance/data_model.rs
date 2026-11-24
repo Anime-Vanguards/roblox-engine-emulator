@@ -28,8 +28,8 @@ pub fn add_methods<M: LuaUserDataMethods<Instance>>(m: &mut M) {
     * [`Terrain`](https://create.roblox.com/docs/reference/engine/classes/Workspace#Terrain)
       on the Roblox Developer Hub
 */
-fn data_model_get_workspace(_: &Lua, this: &Instance) -> LuaResult<Instance> {
-    get_or_create_property_ref_instance(this, "Workspace", "Workspace")
+fn data_model_get_workspace(lua: &Lua, this: &Instance) -> LuaResult<LuaValue> {
+    get_or_create_property_ref_instance(this, "Workspace", "Workspace")?.into_cached_lua(lua)
 }
 
 /**
@@ -39,17 +39,17 @@ fn data_model_get_workspace(_: &Lua, this: &Instance) -> LuaResult<Instance> {
     * [`GetService`](https://create.roblox.com/docs/reference/engine/classes/ServiceProvider#GetService)
       on the Roblox Developer Hub
 */
-fn data_model_get_service(_: &Lua, this: &Instance, service_name: String) -> LuaResult<Instance> {
+fn data_model_get_service(lua: &Lua, this: &Instance, service_name: String) -> LuaResult<LuaValue> {
     if matches!(class_is_a_service(&service_name), None | Some(false)) {
         Err(LuaError::RuntimeError(format!(
             "'{service_name}' is not a valid service name",
         )))
     } else if let Some(service) = this.find_child(|child| child.class == service_name) {
-        Ok(service)
+        service.into_cached_lua(lua)
     } else {
         let service = Instance::new_orphaned(service_name);
         service.set_parent(Some(*this));
-        Ok(service)
+        service.into_cached_lua(lua)
     }
 }
 
@@ -61,17 +61,15 @@ fn data_model_get_service(_: &Lua, this: &Instance, service_name: String) -> Lua
       on the Roblox Developer Hub
 */
 fn data_model_find_service(
-    _: &Lua,
+    lua: &Lua,
     this: &Instance,
     service_name: String,
-) -> LuaResult<Option<Instance>> {
+) -> LuaResult<LuaValue> {
     if matches!(class_is_a_service(&service_name), None | Some(false)) {
         Err(LuaError::RuntimeError(format!(
             "'{service_name}' is not a valid service name",
         )))
-    } else if let Some(service) = this.find_child(|child| child.class == service_name) {
-        Ok(Some(service))
     } else {
-        Ok(None)
+        Instance::opt_into_cached_lua(this.find_child(|child| child.class == service_name), lua)
     }
 }

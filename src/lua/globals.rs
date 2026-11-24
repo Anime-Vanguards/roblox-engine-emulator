@@ -727,6 +727,24 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     super::stubs::load(lua, engine)?;
     if engine.options.native {
         crate::cost::set_safe_global_base(lua, &shared)?;
+        #[cfg(feature = "jit")]
+        if unsafe { mlua::ffi::luau_codegen_supported() } != 0 {
+            unsafe extern "C" {
+                fn luau_codegen_set_tiered(state: *mut mlua::ffi::lua_State, threshold: u32);
+            }
+            unsafe {
+                lua.exec_raw::<()>((), |state| {
+                    luau_codegen_set_tiered(state, 16);
+                })?;
+            }
+            lua.enable_jit(false);
+            modules::use_tiered_jit(engine);
+        }
+        unsafe {
+            lua.exec_raw::<()>((), |state| {
+                mlua::ffi::lua_gc(state, mlua::ffi::LUA_GCSETGOAL, 400);
+            })?;
+        }
     }
 
     // Scheduler.Configure: math.random starts from the run's seed

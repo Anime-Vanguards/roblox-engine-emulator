@@ -255,6 +255,8 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
     g->profilecalls = 0;
     g->workoff = 0;
     g->coldslot = 0;
+    g->tiered_threshold = 0;
+    g->tiered_compile = NULL;
 
     g->lastprotoid = 1;
     g->lastclassid = 1;

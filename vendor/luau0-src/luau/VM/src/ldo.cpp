@@ -27,8 +27,8 @@ static void luaD_floatunwound(lua_State* L, int depth)
     }
 }
 
-#if LUA_USE_LONGJMP
 #include <setjmp.h>
+#if LUA_USE_LONGJMP
 #include <stdlib.h>
 #else
 #include <stdexcept>
@@ -48,7 +48,6 @@ LUAU_FASTFLAGVARIABLE(LuauIsYieldableSimplify)
 ** =======================================================
 */
 
-#if LUA_USE_LONGJMP
 struct lua_jmpbuf
 {
     lua_jmpbuf* volatile prev;
@@ -65,6 +64,8 @@ struct lua_jmpbuf
 #define LUAU_LONGJMP(buf, code) longjmp(buf, code)
 #endif
 
+#if LUA_USE_LONGJMP
+
 int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
 {
     lua_jmpbuf jb;
@@ -74,7 +75,14 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
     // (the interpreter's entries in progress: an error that unwinds some skips their exits, luaD_floatunwound)
     const int floatdepth = L->global->floatdepth;
 
-    if (LUAU_SETJMP(jb.buf) == 0)
+    int jumped = LUAU_SETJMP(jb.buf);
+#if defined(_WIN64) && defined(_MSC_VER)
+    // Clear Frame so MSVC x64 longjmp restores registers directly like POSIX _longjmp instead of walking SEH tables.
+    if (jumped == 0)
+        reinterpret_cast<_JUMP_BUFFER*>(jb.buf)->Frame = 0;
+#endif
+
+    if (jumped == 0)
         f(L, ud);
     else
     {
@@ -147,17 +155,56 @@ private:
     int status;
 };
 
+static LUAU_NOINLINE int luaD_rawrunprotected_fast(lua_State* L, Pfunc f, void* ud, lua_jmpbuf* jb)
+{
+    jb->prev = L->global->errorjmp;
+    jb->status = 0;
+    L->global->errorjmp = jb;
+
+    int jumped = LUAU_SETJMP(jb->buf);
+#if defined(_WIN64) && defined(_MSC_VER)
+    // Clear Frame so MSVC x64 longjmp restores registers directly like POSIX _longjmp instead of walking SEH tables.
+    if (jumped == 0)
+        reinterpret_cast<_JUMP_BUFFER*>(jb->buf)->Frame = 0;
+#endif
+
+    if (jumped == 0)
+    {
+        f(L, ud);
+        L->global->errorjmp = jb->prev;
+        return 0;
+    }
+
+    L->global->errorjmp = jb->prev;
+    return jb->status;
+}
+
+struct ErrorJmpRestore
+{
+    global_State* g;
+    lua_jmpbuf* prev;
+    ~ErrorJmpRestore() { g->errorjmp = prev; }
+};
+
 int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
 {
     int status = 0;
     // The interpreter's entries in progress: an error that unwinds some skips their exits, built without unwind semantics (no /EHsc),
     // so the count and the float mode are put back once it is caught (luaD_floatunwound)
     const int floatdepth = L->global->floatdepth;
+    lua_jmpbuf jb;
+    ErrorJmpRestore restore{L->global, L->global->errorjmp};
 
     try
     {
-        f(L, ud);
-        return 0;
+        status = luaD_rawrunprotected_fast(L, f, ud, &jb);
+        if (status != 0)
+        {
+            luaD_floatunwound(L, floatdepth);
+            if (luaP_state)
+                luaP_unwound(L, &jb);
+        }
+        return status;
     }
     catch (lua_exception& e)
     {
@@ -199,6 +246,12 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
 
 l_noret luaD_throw(lua_State* L, int errcode)
 {
+    if (lua_jmpbuf* jb = L->global->errorjmp)
+    {
+        jb->status = errcode;
+        LUAU_LONGJMP(jb->buf, 1);
+    }
+
     throw lua_exception(L, errcode);
 }
 #endif

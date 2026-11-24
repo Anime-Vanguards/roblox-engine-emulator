@@ -7,6 +7,7 @@
 
 #include "Luau/CodeGenCommon.h"
 #include "Luau/CodeBlockUnwind.h"
+#include "Luau/FloatMode.h"
 #include "Luau/UnwindBuilder.h"
 #include "Luau/UnwindBuilderDwarf2.h"
 #include "Luau/UnwindBuilderWin.h"
@@ -1441,6 +1442,33 @@ void setNativeExecutionEnabled(lua_State* L, bool enabled)
 {
     if (getCodeGenContext(L) != nullptr)
         L->global->ecb.enter = enabled ? onEnter : onEnterDisabled;
+}
+
+static void compileSingleProto(lua_State* L, Proto* proto)
+{
+    BaseCodeGenContext* codeGenContext = getCodeGenContext(L);
+    if (codeGenContext == nullptr || proto == nullptr || proto->execdata != nullptr || proto->lazychunk != nullptr)
+        return;
+
+    Luau::FloatModeScope floatmode(Luau::FloatMode(L->global->floatmode));
+    CompilationOptions options;
+    std::vector<Proto*> protos;
+    protos.push_back(proto);
+    (void)compileProtos({}, L, codeGenContext, protos, options, nullptr, nullptr);
+}
+
+void setTieredThreshold(lua_State* L, unsigned int threshold)
+{
+    if (threshold > 0 && getCodeGenContext(L) != nullptr)
+    {
+        L->global->tiered_threshold = threshold;
+        L->global->tiered_compile = &compileSingleProto;
+    }
+    else
+    {
+        L->global->tiered_threshold = 0;
+        L->global->tiered_compile = nullptr;
+    }
 }
 
 static uint8_t userdataRemapperWrap(lua_State* L, const char* str, size_t len)

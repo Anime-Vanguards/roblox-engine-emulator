@@ -318,6 +318,9 @@ typedef struct global_State
     bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
     unsigned int floatsaved;
     int floatdepth; // interpreter entries in progress (luau_execute)
+
+    uint32_t tiered_threshold; // calls before on-demand single-proto native compile (0: disabled)
+    void (*tiered_compile)(lua_State* L, struct Proto* p); // compiles one hot Proto in place
 } global_State;
 // clang-format on
 

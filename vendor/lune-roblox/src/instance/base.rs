@@ -30,7 +30,7 @@ pub fn add_methods<M: LuaUserDataMethods<Instance>>(m: &mut M) {
     m.add_meta_method_mut(LuaMetaMethod::NewIndex, instance_property_set);
     m.add_method("Clone", |lua, this, ()| {
         ensure_not_destroyed(this)?;
-        this.clone_instance().into_lua(lua)
+        this.clone_instance().into_cached_lua(lua)
     });
     m.add_method_mut("Destroy", |_, this, ()| {
         this.destroy();
@@ -42,11 +42,81 @@ pub fn add_methods<M: LuaUserDataMethods<Instance>>(m: &mut M) {
     });
     m.add_method("GetChildren", |lua, this, ()| {
         ensure_not_destroyed(this)?;
-        this.get_children().into_lua(lua)
+        Instance::vec_into_cached_lua(this.get_children(), lua)
     });
     m.add_method("GetDescendants", |lua, this, ()| {
         ensure_not_destroyed(this)?;
-        this.get_descendants().into_lua(lua)
+        Instance::vec_into_cached_lua(this.get_descendants(), lua)
+    });
+    m.add_method("QueryDescendants", |lua, this, selector: String| {
+        ensure_not_destroyed(this)?;
+        if let Some(override_fn) = InstanceRegistry::find_method(lua, this, "QueryDescendants") {
+            return override_fn.call::<LuaValue>((this.into_cached_lua(lua)?, selector));
+        }
+        let clauses: Vec<(Option<&str>, Option<&str>, Vec<&str>)> = selector
+            .split(',')
+            .filter_map(|raw| {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                let mut class_name: Option<&str> = None;
+                let mut id_name: Option<&str> = None;
+                let mut tags: Vec<&str> = Vec::new();
+                let bytes = trimmed.as_bytes();
+                let mut i = 0;
+                while i < bytes.len() {
+                    if bytes[i] == b'.' {
+                        let start = i + 1;
+                        i = start;
+                        while i < bytes.len() && bytes[i] != b'.' && bytes[i] != b'#' {
+                            i += 1;
+                        }
+                        if i > start {
+                            tags.push(&trimmed[start..i]);
+                        }
+                    } else if bytes[i] == b'#' {
+                        let start = i + 1;
+                        i = start;
+                        while i < bytes.len() && bytes[i] != b'.' && bytes[i] != b'#' {
+                            i += 1;
+                        }
+                        if i > start {
+                            id_name = Some(&trimmed[start..i]);
+                        }
+                    } else {
+                        let start = i;
+                        while i < bytes.len() && bytes[i] != b'.' && bytes[i] != b'#' {
+                            i += 1;
+                        }
+                        if i > start {
+                            class_name = Some(&trimmed[start..i]);
+                        }
+                    }
+                }
+                Some((class_name, id_name, tags))
+            })
+            .collect();
+        let mut matched = Vec::new();
+        for desc in this.get_descendants() {
+            let hit = clauses.iter().any(|(class_name, id_name, tags)| {
+                if let Some(cls) = class_name
+                    && !class_is_a(desc.class_name, cls).unwrap_or(false)
+                {
+                    return false;
+                }
+                if let Some(name) = id_name
+                    && desc.get_name() != *name
+                {
+                    return false;
+                }
+                tags.iter().all(|tag| desc.has_tag(*tag))
+            });
+            if hit {
+                matched.push(desc);
+            }
+        }
+        Ok(LuaValue::Table(Instance::vec_into_cached_lua(matched, lua)?))
     });
     m.add_method("GetFullName", |lua, this, ()| {
         ensure_not_destroyed(this)?;
@@ -57,22 +127,23 @@ pub fn add_methods<M: LuaUserDataMethods<Instance>>(m: &mut M) {
     });
     m.add_method("FindFirstAncestor", |lua, this, name: String| {
         ensure_not_destroyed(this)?;
-        this.find_ancestor(|child| child.name == name).into_lua(lua)
+        Instance::opt_into_cached_lua(this.find_ancestor(|child| child.name == name), lua)
     });
     m.add_method(
         "FindFirstAncestorOfClass",
         |lua, this, class_name: String| {
             ensure_not_destroyed(this)?;
-            this.find_ancestor(|child| child.class == class_name)
-                .into_lua(lua)
+            Instance::opt_into_cached_lua(this.find_ancestor(|child| child.class == class_name), lua)
         },
     );
     m.add_method(
         "FindFirstAncestorWhichIsA",
         |lua, this, class_name: String| {
             ensure_not_destroyed(this)?;
-            this.find_ancestor(|child| class_is_a(child.class, &class_name).unwrap_or(false))
-                .into_lua(lua)
+            Instance::opt_into_cached_lua(
+                this.find_ancestor(|child| class_is_a(child.class, &class_name).unwrap_or(false)),
+                lua,
+            )
         },
     );
     m.add_method(
@@ -80,11 +151,12 @@ pub fn add_methods<M: LuaUserDataMethods<Instance>>(m: &mut M) {
         |lua, this, (name, recursive): (String, Option<bool>)| {
             ensure_not_destroyed(this)?;
             let predicate = |child: &DomInstance| child.name == name;
-            if matches!(recursive, Some(true)) {
-                this.find_descendant(predicate).into_lua(lua)
+            let found = if matches!(recursive, Some(true)) {
+                this.find_descendant(predicate)
             } else {
-                this.find_child(predicate).into_lua(lua)
-            }
+                this.find_child(predicate)
+            };
+            Instance::opt_into_cached_lua(found, lua)
         },
     );
     m.add_method(
@@ -92,11 +164,12 @@ pub fn add_methods<M: LuaUserDataMethods<Instance>>(m: &mut M) {
         |lua, this, (class_name, recursive): (String, Option<bool>)| {
             ensure_not_destroyed(this)?;
             let predicate = |child: &DomInstance| child.class == class_name;
-            if matches!(recursive, Some(true)) {
-                this.find_descendant(predicate).into_lua(lua)
+            let found = if matches!(recursive, Some(true)) {
+                this.find_descendant(predicate)
             } else {
-                this.find_child(predicate).into_lua(lua)
-            }
+                this.find_child(predicate)
+            };
+            Instance::opt_into_cached_lua(found, lua)
         },
     );
     m.add_method(
@@ -105,11 +178,12 @@ pub fn add_methods<M: LuaUserDataMethods<Instance>>(m: &mut M) {
             ensure_not_destroyed(this)?;
             let predicate =
                 |child: &DomInstance| class_is_a(child.class, &class_name).unwrap_or(false);
-            if matches!(recursive, Some(true)) {
-                this.find_descendant(predicate).into_lua(lua)
+            let found = if matches!(recursive, Some(true)) {
+                this.find_descendant(predicate)
             } else {
-                this.find_child(predicate).into_lua(lua)
-            }
+                this.find_child(predicate)
+            };
+            Instance::opt_into_cached_lua(found, lua)
         },
     );
     m.add_method("IsA", |_, this, class_name: String| {
@@ -215,7 +289,7 @@ fn instance_property_get(lua: &Lua, this: &Instance, prop_name: String) -> LuaRe
     match prop_name.as_str() {
         "ClassName" => return this.get_class_name().into_lua(lua),
         "Parent" => {
-            return this.get_parent().into_lua(lua);
+            return Instance::opt_into_cached_lua(this.get_parent(), lua);
         }
         _ => {}
     }
@@ -269,9 +343,9 @@ fn instance_property_get(lua: &Lua, this: &Instance, prop_name: String) -> LuaRe
             )))
         }
     } else if let Some(inst) = this.find_child(|inst| inst.name == prop_name) {
-        Ok(LuaValue::UserData(lua.create_userdata(inst)?))
+        inst.into_cached_lua(lua)
     } else if let Some(getter) = InstanceRegistry::find_property_getter(lua, this, &prop_name) {
-        getter.call(*this)
+        getter.call(this.into_cached_lua(lua)?)
     } else if let Some(method) = InstanceRegistry::find_method(lua, this, &prop_name) {
         Ok(LuaValue::Function(method))
     } else {
@@ -350,7 +424,7 @@ fn instance_property_set(
             )))
         }
     } else if let Some(setter) = InstanceRegistry::find_property_setter(lua, this, &prop_name) {
-        setter.call((*this, prop_value))
+        setter.call((this.into_cached_lua(lua)?, prop_value))
     } else {
         Err(LuaError::RuntimeError(format!(
             "{prop_name} is not a valid member of {this}",

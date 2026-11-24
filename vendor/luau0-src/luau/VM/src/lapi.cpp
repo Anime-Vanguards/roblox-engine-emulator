@@ -25,6 +25,24 @@
 
 #include <string.h>
 
+namespace
+{
+// Any host C/Rust frame calling unprotected C API hooks that can re-enter Luau (metamethods, callbacks) may hold
+// live C++/Rust locals expecting stack unwinding; clearing errorjmp forces luaD_throw to throw lua_exception.
+struct SuppressFastJmp
+{
+    global_State* g;
+    struct lua_jmpbuf* prev;
+    explicit SuppressFastJmp(lua_State* L)
+        : g(L->global)
+        , prev(L->global->errorjmp)
+    {
+        g->errorjmp = NULL;
+    }
+    ~SuppressFastJmp() { g->errorjmp = prev; }
+};
+} // namespace
+
 LUAU_FASTFLAG(LuauGcTraceUdata)
 LUAU_FASTFLAGVARIABLE(LuauCoroutineFinally)
 LUAU_FASTFLAG(LuauLoadExplicitGcDisable)
@@ -815,6 +833,7 @@ int lua_gettable(lua_State* L, int idx)
     luaC_threadbarrier(L);
     StkId t = index2addr(L, idx);
     api_checkvalidindex(L, t);
+    SuppressFastJmp suppress(L);
     luaV_gettable(L, t, L->top - 1, L->top - 1);
     return ttype(L->top - 1);
 }
@@ -827,6 +846,7 @@ int lua_getfield(lua_State* L, int idx, const char* k)
     api_checkvalidindex(L, t);
     TValue key;
     setsvalue(L, &key, luaS_new(L, k));
+    SuppressFastJmp suppress(L);
     luaV_gettable(L, t, &key, L->top);
     api_incr_top(L);
     return ttype(L->top - 1);
@@ -972,6 +992,7 @@ void lua_settable(lua_State* L, int idx)
     api_checknelems(L, 2);
     StkId t = index2addr(L, idx);
     api_checkvalidindex(L, t);
+    SuppressFastJmp suppress(L);
     luaV_settable(L, t, L->top - 2, L->top - 1);
     L->top -= 2; // pop index and value
 }
@@ -983,6 +1004,7 @@ void lua_setfield(lua_State* L, int idx, const char* k)
     api_checkvalidindex(L, t);
     TValue key;
     setsvalue(L, &key, luaS_new(L, k));
+    SuppressFastJmp suppress(L);
     luaV_settable(L, t, &key, L->top - 1);
     L->top--;
 }
@@ -1125,6 +1147,7 @@ void lua_call(lua_State* L, int nargs, int nresults)
 
     StkId func = L->top - (nargs + 1);
 
+    SuppressFastJmp suppress(L);
     luaD_call(L, func, nresults);
 
     adjustresults(L, nresults);
@@ -1563,12 +1586,16 @@ void lua_setworkexempt(lua_State* L, int idx)
 
 void lua_workhostcalls(lua_State* L, int calls)
 {
+    if (L->global->workoff)
+        return;
     if (luaE_scriptwork(L))
         L->global->work.hostcalls += calls;
 }
 
 void lua_workhostnanos(lua_State* L, int nanos)
 {
+    if (L->global->workoff)
+        return;
     // (also for a constructor the engine's wrapper calls for a script: the host's work for a script)
     if (L->global->work.muted == 0 && luaE_workframe(L, L->ci) != 0)
         L->global->work.hostnanos += nanos;

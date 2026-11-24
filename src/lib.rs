@@ -28,6 +28,8 @@ pub mod images;
 pub mod instance;
 pub mod launch;
 pub mod lua;
+#[cfg(feature = "cli")]
+pub mod lune_run;
 pub mod luau_profile;
 pub mod loopback;
 pub mod meshes;

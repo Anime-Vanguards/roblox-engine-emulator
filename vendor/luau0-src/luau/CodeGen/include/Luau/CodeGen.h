@@ -127,6 +127,7 @@ void create(lua_State* L, SharedCodeGenContext* codeGenContext);
 
 // Enable or disable native execution according to `enabled` argument
 void setNativeExecutionEnabled(lua_State* L, bool enabled);
+void setTieredThreshold(lua_State* L, unsigned int threshold);
 
 // Given a name, this function must return the index of the type which matches the type array used all CompilationOptions and AssemblyOptions
 // If the type is unknown, 0xff has to be returned

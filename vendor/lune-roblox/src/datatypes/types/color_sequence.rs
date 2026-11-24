@@ -33,21 +33,7 @@ impl LuaExportsTable for ColorSequence {
         type ArgsColors = (LuaUserDataRef<Color3>, LuaUserDataRef<Color3>);
 
         let color_sequence_new = |lua: &Lua, args: LuaMultiValue| {
-            if let Ok(color) = ArgsColor::from_lua_multi(args.clone(), lua) {
-                super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
-                Ok(ColorSequence {
-                    keypoints: vec![
-                        ColorSequenceKeypoint {
-                            time: 0.0,
-                            color: *color,
-                        },
-                        ColorSequenceKeypoint {
-                            time: 1.0,
-                            color: *color,
-                        },
-                    ],
-                })
-            } else if let Ok((c0, c1)) = ArgsColors::from_lua_multi(args.clone(), lua) {
+            if let Ok((c0, c1)) = ArgsColors::from_lua_multi(args.clone(), lua) {
                 super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
                 Ok(ColorSequence {
                     keypoints: vec![
@@ -58,6 +44,22 @@ impl LuaExportsTable for ColorSequence {
                         ColorSequenceKeypoint {
                             time: 1.0,
                             color: *c1,
+                        },
+                    ],
+                })
+            } else if (args.len() == 1 || matches!(args.get(1), Some(LuaValue::Nil)))
+                && let Ok(color) = ArgsColor::from_lua_multi(args.clone(), lua)
+            {
+                super::charge_host_nanos(lua, super::datatype_price::COLOR_SEQUENCE_NEW);
+                Ok(ColorSequence {
+                    keypoints: vec![
+                        ColorSequenceKeypoint {
+                            time: 0.0,
+                            color: *color,
+                        },
+                        ColorSequenceKeypoint {
+                            time: 1.0,
+                            color: *color,
                         },
                     ],
                 })

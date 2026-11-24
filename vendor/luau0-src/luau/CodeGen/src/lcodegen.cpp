@@ -25,3 +25,8 @@ void luau_codegen_compile(lua_State* L, int idx)
     Luau::CodeGen::CompilationOptions options;
     Luau::CodeGen::compile(L, idx, options);
 }
+
+void luau_codegen_set_tiered(lua_State* L, unsigned int threshold)
+{
+    Luau::CodeGen::setTieredThreshold(L, threshold);
+}

@@ -4,7 +4,7 @@ use core::fmt;
 use std::ops;
 
 use glam::{Mat3, Mat4, Vec3, Vec4};
-use mlua::{Variadic, prelude::*};
+use mlua::prelude::*;
 use rbx_dom_weak::types::{CFrame as DomCFrame, Matrix3 as DomMatrix3, Vector3 as DomVector3};
 
 use lune_utils::TableBuilder;
@@ -558,7 +558,12 @@ impl LuaExportsTable for CFrame {
                 (12, _) => price::NEW_MATRIX,
                 _ => 0,
             });
-            let numbers = |args: &LuaMultiValue| args.iter().map(|value| luau_number(lua, value).unwrap_or(0.0) as f32).collect::<Vec<_>>();
+            let mut n = [0.0f32; 12];
+            let read_numbers = |args: &LuaMultiValue, buf: &mut [f32; 12]| {
+                for (slot, value) in buf.iter_mut().zip(args.iter()) {
+                    *slot = luau_number(lua, value).unwrap_or(0.0) as f32;
+                }
+            };
             match args.len() {
             0 => Ok(CFrame(Mat4::IDENTITY)),
 
@@ -571,7 +576,7 @@ impl LuaExportsTable for CFrame {
             }
 
             3 => {
-                let n = numbers(&args);
+                read_numbers(&args, &mut n);
                 Ok(CFrame(Mat4::from_translation(Vec3::new(n[0], n[1], n[2]))))
             }
 
@@ -579,12 +584,12 @@ impl LuaExportsTable for CFrame {
             // client, 0.747, 134 quaternions to the bit: tools/parity/probes/cframe_new_quat.luau). A zero quaternion gives
             // not-a-number.
             7 => {
-                let n = numbers(&args);
+                read_numbers(&args, &mut n);
                 Ok(CFrame::from_parts([n[0], n[1], n[2]], f32m::rot_from_quat([n[3], n[4], n[5], n[6]])))
             }
 
             12 => {
-                let n = numbers(&args);
+                read_numbers(&args, &mut n);
                 Ok(CFrame(Mat4::from_cols_array_2d(&[
                     [n[3], n[6], n[9], 0.0],
                     [n[4], n[7], n[10], 0.0],
@@ -715,37 +720,107 @@ impl LuaUserData for CFrame {
             Ok(CFrame::from_parts(this.pos(), f32m::orthonormalize(&this.rot())))
         });
         aliased_named!(methods, ["ToWorldSpace", "toWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
-            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            let this = *luau_self::<CFrame>(&args, name, "CFrame")?;
+            if args.len() <= 2 {
+                let cf = if args.len() < 2 { CFrame::IDENTITY } else { *luau_arg_named::<CFrame>(&args, 2, name, "CFrame")? };
+                charge_host_nanos(lua, price::TO_WORLD);
+                let mut out = LuaMultiValue::new();
+                out.push_back(LuaValue::UserData(lua.create_userdata(this * cf)?));
+                return Ok(out);
+            }
             let frames = frames_of(&args, name)?;
             charge_host_nanos(lua, price::TO_WORLD);
-            Ok(frames.into_iter().map(|cf| *this * cf).collect::<Variadic<_>>())
+            let mut out = LuaMultiValue::new();
+            for cf in frames {
+                out.push_back(LuaValue::UserData(lua.create_userdata(this * cf)?));
+            }
+            Ok(out)
         });
         aliased_named!(methods, ["ToObjectSpace", "toObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
-            let this = luau_self::<CFrame>(&args, name, "CFrame")?;
+            let this = *luau_self::<CFrame>(&args, name, "CFrame")?;
+            if args.len() <= 2 {
+                let cf = if args.len() < 2 { CFrame::IDENTITY } else { *luau_arg_named::<CFrame>(&args, 2, name, "CFrame")? };
+                charge_host_nanos(lua, price::TO_OBJECT);
+                let mut out = LuaMultiValue::new();
+                out.push_back(LuaValue::UserData(lua.create_userdata(this.inverse() * cf)?));
+                return Ok(out);
+            }
             let frames = frames_of(&args, name)?;
             charge_host_nanos(lua, price::TO_OBJECT);
             let inverse = this.inverse();
-            Ok(frames.into_iter().map(|cf| inverse * cf).collect::<Variadic<_>>())
+            let mut out = LuaMultiValue::new();
+            for cf in frames {
+                out.push_back(LuaValue::UserData(lua.create_userdata(inverse * cf)?));
+            }
+            Ok(out)
         });
         aliased_named!(methods, ["PointToWorldSpace", "pointToWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
-            let (this, points) = points_of(lua, &args, name)?;
+            let this = *luau_self::<CFrame>(&args, name, "CFrame")?;
+            if args.len() <= 2 {
+                let v = single_point_of(lua, &args, name)?;
+                charge_host_nanos(lua, price::POINT_TO_WORLD);
+                let mut out = LuaMultiValue::new();
+                out.push_back(native_vector(this.point_to_world(v)));
+                return Ok(out);
+            }
+            let (_, points) = points_of(lua, &args, name)?;
             charge_host_nanos(lua, price::POINT_TO_WORLD);
-            Ok(points.into_iter().map(|v3| native_vector(this.point_to_world(v3))).collect::<Variadic<_>>())
+            let mut out = LuaMultiValue::new();
+            for v3 in points {
+                out.push_back(native_vector(this.point_to_world(v3)));
+            }
+            Ok(out)
         });
         aliased_named!(methods, ["PointToObjectSpace", "pointToObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
-            let (this, points) = points_of(lua, &args, name)?;
+            let this = *luau_self::<CFrame>(&args, name, "CFrame")?;
+            if args.len() <= 2 {
+                let v = single_point_of(lua, &args, name)?;
+                charge_host_nanos(lua, price::POINT_TO_OBJECT);
+                let mut out = LuaMultiValue::new();
+                out.push_back(native_vector(this.point_to_object(v)));
+                return Ok(out);
+            }
+            let (_, points) = points_of(lua, &args, name)?;
             charge_host_nanos(lua, price::POINT_TO_OBJECT);
-            Ok(points.into_iter().map(|v3| native_vector(this.point_to_object(v3))).collect::<Variadic<_>>())
+            let mut out = LuaMultiValue::new();
+            for v3 in points {
+                out.push_back(native_vector(this.point_to_object(v3)));
+            }
+            Ok(out)
         });
         aliased_named!(methods, ["VectorToWorldSpace", "vectorToWorldSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
-            let (this, points) = points_of(lua, &args, name)?;
+            let this = *luau_self::<CFrame>(&args, name, "CFrame")?;
+            if args.len() <= 2 {
+                let v = single_point_of(lua, &args, name)?;
+                charge_host_nanos(lua, price::VECTOR_TO_WORLD);
+                let mut out = LuaMultiValue::new();
+                out.push_back(native_vector(this.vector_to_world(v)));
+                return Ok(out);
+            }
+            let (_, points) = points_of(lua, &args, name)?;
             charge_host_nanos(lua, price::VECTOR_TO_WORLD);
-            Ok(points.into_iter().map(|v3| native_vector(this.vector_to_world(v3))).collect::<Variadic<_>>())
+            let mut out = LuaMultiValue::new();
+            for v3 in points {
+                out.push_back(native_vector(this.vector_to_world(v3)));
+            }
+            Ok(out)
         });
         aliased_named!(methods, ["VectorToObjectSpace", "vectorToObjectSpace"], |name| move |lua: &Lua, args: LuaMultiValue| {
-            let (this, points) = points_of(lua, &args, name)?;
+            let this = *luau_self::<CFrame>(&args, name, "CFrame")?;
+            if args.len() <= 2 {
+                let v = single_point_of(lua, &args, name)?;
+                charge_host_nanos(lua, price::VECTOR_TO_OBJECT);
+                let mut out = LuaMultiValue::new();
+                out.push_back(native_vector(this.vector_to_object(v)));
+                return Ok(out);
+            }
+            let (_, points) = points_of(lua, &args, name)?;
             charge_host_nanos(lua, price::VECTOR_TO_OBJECT);
-            Ok(points.into_iter().map(|v3| native_vector(this.vector_to_object(v3))).collect::<Variadic<_>>())
+            let mut out = LuaMultiValue::new();
+            for v3 in points {
+                out.push_back(native_vector(this.vector_to_object(v3)));
+            }
+            Ok(out)
         });
         #[rustfmt::skip]
         aliased_named!(methods, ["GetComponents", "components"], |name| move |lua: &Lua, args: LuaMultiValue| {
@@ -844,7 +919,11 @@ fn vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaR
 
 /// An optional Vector3 argument: none when not passed, else checked as [`vector_arg`] (nil passed is no Vector3).
 fn optional_vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Option<Vec3>> {
-    if index > args.len() { Ok(None) } else { vector_arg(lua, args, index, name).map(Some) }
+    if matches!(args.get(index - 1), None | Some(LuaValue::Nil)) {
+        Ok(None)
+    } else {
+        vector_arg(lua, args, index, name).map(Some)
+    }
 }
 
 /// The CFrame and the Vector3 of a + or a -.
@@ -852,6 +931,17 @@ fn translation(lua: &Lua, lhs: &LuaValue, rhs: &LuaValue) -> LuaResult<(CFrame, 
     let this = *userdata_of::<CFrame>(Some(lhs)).ok_or_else(|| invalid_argument(1, None, "CFrame", lhs))?;
     let vec = VectorArg::from_lua(rhs.clone(), lua).map_err(|_| invalid_argument(2, None, "Vector3", rhs))?;
     Ok((this, vec.0))
+}
+
+/// Zero-allocation fast path for the single-point (or omitted-point) call to a space method.
+fn single_point_of(lua: &Lua, args: &LuaMultiValue, name: &str) -> LuaResult<Vec3> {
+    match args.get(1) {
+        None => Ok(Vec3::ZERO),
+        Some(LuaValue::Vector(v)) => Ok(Vec3::new(v.x(), v.y(), v.z())),
+        Some(value) => VectorArg::from_lua(value.clone(), lua)
+            .map(|v| v.0)
+            .map_err(|_| invalid_method_arg(2, name, "Vector3", value)),
+    }
 }
 
 /// Self and the points after it of a space method (PointToWorldSpace and the others).

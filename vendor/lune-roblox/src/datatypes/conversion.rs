@@ -41,6 +41,10 @@ impl DomValueToLua for LuaValue {
     fn dom_value_to_lua(lua: &Lua, variant: &DomValue) -> DomConversionResult<Self> {
         use rbx_dom_weak::types as dom;
 
+        if let DomValue::Vector3(v) = variant {
+            return Ok(LuaValue::Vector(mlua::Vector::new(v.x, v.y, v.z)));
+        }
+
         match LuaAnyUserData::dom_value_to_lua(lua, variant) {
             Ok(value) => Ok(LuaValue::UserData(value)),
             Err(e) => match variant {
@@ -59,7 +63,7 @@ impl DomValueToLua for LuaValue {
                 // no longer exist, so we handle that here instead of
                 // in the userdata conversion to be able to return nils
                 DomValue::Ref(value) => match Instance::new_opt(*value) {
-                    Some(inst) => Ok(inst.into_lua(lua)?),
+                    Some(inst) => Ok(inst.into_cached_lua(lua)?),
                     None => Ok(LuaValue::Nil),
                 },
 
@@ -115,6 +119,10 @@ impl LuaToDomValue for LuaValue {
                     dom::PhysicalProperties::Default,
                 )),
 
+                (LuaValue::Vector(v), DomType::Vector3) => {
+                    Ok(DomValue::Vector3(dom::Vector3::new(v.x(), v.y(), v.z())))
+                }
+
                 (LuaValue::UserData(u), d) => u.lua_to_dom_value(lua, Some(d)),
 
                 (v, d) => Err(DomConversionError::ToDomValue {
@@ -129,6 +137,9 @@ impl LuaToDomValue for LuaValue {
                 LuaValue::Integer(i) => Ok(DomValue::Int32(*i as i32)),
                 LuaValue::Number(n) => Ok(DomValue::Float64(*n)),
                 LuaValue::String(s) => Ok(DomValue::String(s.to_str()?.to_string())),
+                LuaValue::Vector(v) => {
+                    Ok(DomValue::Vector3(dom::Vector3::new(v.x(), v.y(), v.z())))
+                }
                 LuaValue::UserData(u) => u.lua_to_dom_value(lua, None),
                 v => Err(DomConversionError::ToDomValue {
                     to: "unknown",

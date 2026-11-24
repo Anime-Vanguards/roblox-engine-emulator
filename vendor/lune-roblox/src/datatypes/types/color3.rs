@@ -32,12 +32,13 @@ impl LuaExportsTable for Color3 {
     const EXPORT_NAME: &'static str = "Color3";
 
     fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
-        let color3_from_rgb = |lua: &Lua, (r, g, b): (Option<u8>, Option<u8>, Option<u8>)| {
+        let color3_from_rgb = |lua: &Lua, (r, g, b): (Option<f64>, Option<f64>, Option<f64>)| {
             super::charge_host_nanos(lua, super::datatype_price::COLOR3_NEW);
+            let chan = |v: Option<f64>| (v.unwrap_or_default().clamp(0.0, 255.0) as u8 as f32) / 255f32;
             Ok(Color3 {
-                r: (r.unwrap_or_default() as f32) / 255f32,
-                g: (g.unwrap_or_default() as f32) / 255f32,
-                b: (b.unwrap_or_default() as f32) / 255f32,
+                r: chan(r),
+                g: chan(g),
+                b: chan(b),
             })
         };
 

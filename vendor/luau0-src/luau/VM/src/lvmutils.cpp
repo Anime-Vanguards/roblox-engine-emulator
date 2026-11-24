@@ -326,6 +326,20 @@ void luaV_settable(lua_State* L, const TValue* t, TValue* key, StkId val)
                 if (h->readonly)
                     luaG_readonlyerror(L);
 
+                if (LUAU_UNLIKELY(L->global->workoff != 0 && oldval == luaO_nilobject && ttisnil(val)))
+                {
+                    if (ttisnil(key))
+                        luaG_runerror(L, "table index is nil");
+                    if (ttisnumber(key) && luai_numisnan(nvalue(key)))
+                        luaG_runerror(L, "table index is NaN");
+                    if (ttisvector(key) && luai_vecisnan(vvalue(key)))
+                        luaG_runerror(L, "table index contains NaN");
+                    if (LUAU_UNLIKELY(h->safeenv == 2))
+                        h->safeenv = 0;
+                    invalidateTMcache(h);
+                    return;
+                }
+
                 // luaH_set would work but would repeat the lookup so we use luaH_setslot that can reuse oldval if it's safe
                 TValue* newval = luaH_setslot(L, h, oldval, key);
 

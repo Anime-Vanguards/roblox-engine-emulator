@@ -665,8 +665,49 @@ fn a_scan_lists_dot_directories_but_not_what_a_git_directory_below_holds() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Single-flight directory scan cache used while `ree run --batch` keeps the filesystem frozen:
+/// parallel workers share one scan per root (including symlink/junction stages on Windows and Linux).
+fn batch_listed(path: String) -> ScanNode {
+    // Never block a rayon worker thread waiting on a scan that itself uses rayon.
+    if rayon::current_thread_index().is_some() {
+        return scan(path);
+    }
+    use std::sync::{Arc, Condvar, Mutex, OnceLock};
+    type Slot = Arc<(Mutex<Option<ScanNode>>, Condvar)>;
+    static BATCH_LISTINGS: OnceLock<Mutex<FxHashMap<String, Slot>>> = OnceLock::new();
+    let map = BATCH_LISTINGS.get_or_init(Default::default);
+    let (slot, owner) = {
+        let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = guard.get(&path) {
+            (existing.clone(), false)
+        } else {
+            let created: Slot = Arc::new((Mutex::new(None), Condvar::new()));
+            guard.insert(path.clone(), created.clone());
+            (created, true)
+        }
+    };
+    if owner {
+        let node = scan(path);
+        let copy = crate::alloc::long_lived(|| node.clone());
+        let (lock, cvar) = &*slot;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(copy);
+        cvar.notify_all();
+        node
+    } else {
+        let (lock, cvar) = &*slot;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while guard.is_none() {
+            guard = cvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+        }
+        guard.as_ref().unwrap().clone()
+    }
+}
+
 /// [`scan`] of a mounted tree, kept between VMs in a process that keeps compiled modules ([`kept_listing`]).
 fn listed(path: String) -> ScanNode {
+    if crate::lua::modules::is_batch_frozen() {
+        return batch_listed(path);
+    }
     #[cfg(windows)]
     if crate::lua::modules::keeping_between_runs() {
         return kept_listing::listed(path);
@@ -1282,6 +1323,11 @@ impl Prescan {
     /// [`Prescan::start`] of layout roots `roots`, with the data roots of the place `place_roots` names
     /// ([`crate::mount::place_roots`]: a Rojo project file's folder when it is mounted without roots).
     pub fn start_for(roots: &[String], place_roots: &[String], reflection: &std::sync::Arc<Reflection>) -> Prescan {
+        // In `ree run --batch`, OS worker threads share `batch_listed` directly instead of queuing
+        // duplicate prescan jobs onto the global rayon pool.
+        if crate::lua::modules::is_batch_frozen() {
+            return Prescan { roots: Vec::new(), data: None };
+        }
         let given = place_roots.to_vec();
         let layout: Vec<_> = roots
             .iter()

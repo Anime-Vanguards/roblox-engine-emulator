@@ -2995,18 +2995,46 @@ reentry:
             {
                 Proto* p = L->ci->p;
 
-                // a lazy-load stub (luau_loadlazy): build the function, then enter it like LOP_CALL does
-                // stubs never have execdata and native functions always do; checking execdata avoids loading lazychunk on the native path
+                // a lazy-load stub (luau_loadlazy) or a tiered-JIT proto waiting to warm up
                 if (LUAU_UNLIKELY(!p->execdata))
                 {
-                    LUAU_ASSERT(p->lazychunk);
+                    if (p->lazychunk)
+                    {
+                        VM_PROTECT(luaV_buildlazyproto(L, p));
 
-                    VM_PROTECT(luaV_buildlazyproto(L, p));
+                        if (L->global->tiered_threshold > 0)
+                            p->execcount = 1;
+                        L->ci->savedpc = p->code;
+                        pc = p->code;
+                        k = p->k;
+                        VM_NEXT();
+                    }
 
-                    L->ci->savedpc = p->code;
-                    pc = SingleStep ? p->code : p->codeentry;
-                    k = p->k;
-                    VM_NEXT();
+                    if (L->global->tiered_threshold > 0 && L->global->tiered_compile)
+                    {
+                        if (++p->execcount < L->global->tiered_threshold)
+                        {
+                            L->ci->savedpc = p->code;
+                            pc = p->code;
+                            VM_NEXT();
+                        }
+
+                        L->global->tiered_compile(L, p);
+                        if (!p->execdata)
+                        {
+                            p->codeentry = p->code;
+                            L->ci->savedpc = p->code;
+                            pc = p->code;
+                            VM_NEXT();
+                        }
+                    }
+                    else
+                    {
+                        p->codeentry = p->code;
+                        L->ci->savedpc = p->code;
+                        pc = p->code;
+                        VM_NEXT();
+                    }
                 }
 
                 LUAU_ASSERT(p->execdata);
@@ -4267,6 +4295,17 @@ int luau_precall(lua_State* L, StkId func, int nresults)
 #if VM_HAS_NATIVE
         if (p->exectarget != 0 && p->execdata)
             ci->flags = LUA_CALLINFO_NATIVE;
+        else if (LUAU_UNLIKELY(L->global->tiered_threshold > 0 && !p->execdata && !p->lazychunk && p->codeentry != p->code && L->global->tiered_compile))
+        {
+            if (++p->execcount >= L->global->tiered_threshold)
+            {
+                L->global->tiered_compile(L, p);
+                if (p->exectarget != 0 && p->execdata)
+                    ci->flags = LUA_CALLINFO_NATIVE;
+                else
+                    p->codeentry = p->code;
+            }
+        }
 #endif
 
         // a host's profile samples calls here (lprofile.cpp luaP_callenter)

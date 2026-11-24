@@ -1,0 +1,208 @@
+# Topic: on-demand single-proto tiered native JIT
+#
+# What it does:
+# Adds luau_codegen_set_tiered(L, threshold) so --native VMs can load large module graphs
+# without eagerly JIT-compiling every cold function, compiling individual hot Protos in place
+# once they reach 	hreshold invocations (while keeping default work-counted runs untouched).
+#
+# Why upstream lacks it: upstream luau_codegen_compile compiles an entire chunk tree up front,
+# which spends hundreds of milliseconds compiling cold test-framework modules on startup.
+diff --git a/luau/CodeGen/include/Luau/CodeGen.h b/luau/CodeGen/include/Luau/CodeGen.h
+index b45e217..8088d2b 100644
+--- a/luau/CodeGen/include/Luau/CodeGen.h
++++ b/luau/CodeGen/include/Luau/CodeGen.h
+@@ -127,6 +127,7 @@ void create(lua_State* L, SharedCodeGenContext* codeGenContext);
+ 
+ // Enable or disable native execution according to `enabled` argument
+ void setNativeExecutionEnabled(lua_State* L, bool enabled);
++void setTieredThreshold(lua_State* L, unsigned int threshold);
+ 
+ // Given a name, this function must return the index of the type which matches the type array used all CompilationOptions and AssemblyOptions
+ // If the type is unknown, 0xff has to be returned
+diff --git a/luau/CodeGen/include/luacodegen.h b/luau/CodeGen/include/luacodegen.h
+index 9de15e6..e81b6e1 100644
+--- a/luau/CodeGen/include/luacodegen.h
++++ b/luau/CodeGen/include/luacodegen.h
+@@ -16,3 +16,6 @@ LUACODEGEN_API void luau_codegen_create(lua_State* L);
+ 
+ // build target function and all inner functions
+ LUACODEGEN_API void luau_codegen_compile(lua_State* L, int idx);
++
++// enable on-demand single-proto native compilation after `threshold` calls (0 disables)
++LUACODEGEN_API void luau_codegen_set_tiered(lua_State* L, unsigned int threshold);
+diff --git a/luau/CodeGen/src/CodeGenContext.cpp b/luau/CodeGen/src/CodeGenContext.cpp
+index 6695021..f679ef2 100644
+--- a/luau/CodeGen/src/CodeGenContext.cpp
++++ b/luau/CodeGen/src/CodeGenContext.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include "Luau/CodeGenCommon.h"
+ #include "Luau/CodeBlockUnwind.h"
++#include "Luau/FloatMode.h"
+ #include "Luau/UnwindBuilder.h"
+ #include "Luau/UnwindBuilderDwarf2.h"
+ #include "Luau/UnwindBuilderWin.h"
+@@ -1443,6 +1444,33 @@ void setNativeExecutionEnabled(lua_State* L, bool enabled)
+         L->global->ecb.enter = enabled ? onEnter : onEnterDisabled;
+ }
+ 
++static void compileSingleProto(lua_State* L, Proto* proto)
++{
++    BaseCodeGenContext* codeGenContext = getCodeGenContext(L);
++    if (codeGenContext == nullptr || proto == nullptr || proto->execdata != nullptr || proto->lazychunk != nullptr)
++        return;
++
++    Luau::FloatModeScope floatmode(Luau::FloatMode(L->global->floatmode));
++    CompilationOptions options;
++    std::vector<Proto*> protos;
++    protos.push_back(proto);
++    (void)compileProtos({}, L, codeGenContext, protos, options, nullptr, nullptr);
++}
++
++void setTieredThreshold(lua_State* L, unsigned int threshold)
++{
++    if (threshold > 0 && getCodeGenContext(L) != nullptr)
++    {
++        L->global->tiered_threshold = threshold;
++        L->global->tiered_compile = &compileSingleProto;
++    }
++    else
++    {
++        L->global->tiered_threshold = 0;
++        L->global->tiered_compile = nullptr;
++    }
++}
++
+ static uint8_t userdataRemapperWrap(lua_State* L, const char* str, size_t len)
+ {
+     if (BaseCodeGenContext* codegenCtx = getCodeGenContext(L))
+diff --git a/luau/CodeGen/src/lcodegen.cpp b/luau/CodeGen/src/lcodegen.cpp
+index 3d5a3d5..826b705 100644
+--- a/luau/CodeGen/src/lcodegen.cpp
++++ b/luau/CodeGen/src/lcodegen.cpp
+@@ -25,3 +25,8 @@ void luau_codegen_compile(lua_State* L, int idx)
+     Luau::CodeGen::CompilationOptions options;
+     Luau::CodeGen::compile(L, idx, options);
+ }
++
++void luau_codegen_set_tiered(lua_State* L, unsigned int threshold)
++{
++    Luau::CodeGen::setTieredThreshold(L, threshold);
++}
+diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
+index 77eed9b..5a37c0c 100644
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -255,6 +255,8 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
+     g->profilecalls = 0;
+     g->workoff = 0;
+     g->coldslot = 0;
++    g->tiered_threshold = 0;
++    g->tiered_compile = NULL;
+ 
+     g->lastprotoid = 1;
+     g->lastclassid = 1;
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index 5764ef1..c2c203a 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -318,6 +318,9 @@ typedef struct global_State
+     bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
+     unsigned int floatsaved;
+     int floatdepth; // interpreter entries in progress (luau_execute)
++
++    uint32_t tiered_threshold; // calls before on-demand single-proto native compile (0: disabled)
++    void (*tiered_compile)(lua_State* L, struct Proto* p); // compiles one hot Proto in place
+ } global_State;
+ // clang-format on
+ 
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index a5af7bc..cd76883 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -2995,18 +2995,46 @@ reentry:
+             {
+                 Proto* p = L->ci->p;
+ 
+-                // a lazy-load stub (luau_loadlazy): build the function, then enter it like LOP_CALL does
+-                // stubs never have execdata and native functions always do; checking execdata avoids loading lazychunk on the native path
++                // a lazy-load stub (luau_loadlazy) or a tiered-JIT proto waiting to warm up
+                 if (LUAU_UNLIKELY(!p->execdata))
+                 {
+-                    LUAU_ASSERT(p->lazychunk);
++                    if (p->lazychunk)
++                    {
++                        VM_PROTECT(luaV_buildlazyproto(L, p));
+ 
+-                    VM_PROTECT(luaV_buildlazyproto(L, p));
++                        if (L->global->tiered_threshold > 0)
++                            p->execcount = 1;
++                        L->ci->savedpc = p->code;
++                        pc = p->code;
++                        k = p->k;
++                        VM_NEXT();
++                    }
+ 
+-                    L->ci->savedpc = p->code;
+-                    pc = SingleStep ? p->code : p->codeentry;
+-                    k = p->k;
+-                    VM_NEXT();
++                    if (L->global->tiered_threshold > 0 && L->global->tiered_compile)
++                    {
++                        if (++p->execcount < L->global->tiered_threshold)
++                        {
++                            L->ci->savedpc = p->code;
++                            pc = p->code;
++                            VM_NEXT();
++                        }
++
++                        L->global->tiered_compile(L, p);
++                        if (!p->execdata)
++                        {
++                            p->codeentry = p->code;
++                            L->ci->savedpc = p->code;
++                            pc = p->code;
++                            VM_NEXT();
++                        }
++                    }
++                    else
++                    {
++                        p->codeentry = p->code;
++                        L->ci->savedpc = p->code;
++                        pc = p->code;
++                        VM_NEXT();
++                    }
+                 }
+ 
+                 LUAU_ASSERT(p->execdata);
+@@ -4267,6 +4295,17 @@ int luau_precall(lua_State* L, StkId func, int nresults)
+ #if VM_HAS_NATIVE
+         if (p->exectarget != 0 && p->execdata)
+             ci->flags = LUA_CALLINFO_NATIVE;
++        else if (LUAU_UNLIKELY(L->global->tiered_threshold > 0 && !p->execdata && !p->lazychunk && p->codeentry != p->code && L->global->tiered_compile))
++        {
++            if (++p->execcount >= L->global->tiered_threshold)
++            {
++                L->global->tiered_compile(L, p);
++                if (p->exectarget != 0 && p->execdata)
++                    ci->flags = LUA_CALLINFO_NATIVE;
++                else
++                    p->codeentry = p->code;
++            }
++        }
+ #endif
+ 
+         // a host's profile samples calls here (lprofile.cpp luaP_callenter)
+diff --git a/luau/VM/src/lvmload.cpp b/luau/VM/src/lvmload.cpp
+index cf619eb..344a06f 100644
+--- a/luau/VM/src/lvmload.cpp
++++ b/luau/VM/src/lvmload.cpp
+@@ -589,7 +589,7 @@ static void loadProto(
+     for (int j = 0; j < p->sizecode; ++j)
+         p->code[j] = read<uint32_t>(data, size, offset);
+ 
+-    p->codeentry = p->code;
++    p->codeentry = (L->global->tiered_threshold > 0 && (p->flags & LPF_NATIVE_COLD) == 0) ? &kLazyEntryInsn : p->code;
+ 
+     const int sizek = readVarInt(data, size, offset);
+     luaP_allockind = LUA_ALLOC_PROTO;

@@ -85,23 +85,7 @@ impl LuaExportsTable for NumberSequence {
         type ArgsColors = (f32, f32);
 
         let number_sequence_new = |lua: &Lua, args: LuaMultiValue| {
-            if let Ok(value) = ArgsColor::from_lua_multi(args.clone(), lua) {
-                super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
-                Ok(NumberSequence {
-                    keypoints: vec![
-                        NumberSequenceKeypoint {
-                            time: 0.0,
-                            value,
-                            envelope: 0.0,
-                        },
-                        NumberSequenceKeypoint {
-                            time: 1.0,
-                            value,
-                            envelope: 0.0,
-                        },
-                    ],
-                })
-            } else if let Ok((v0, v1)) = ArgsColors::from_lua_multi(args.clone(), lua) {
+            if let Ok((v0, v1)) = ArgsColors::from_lua_multi(args.clone(), lua) {
                 super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
                 Ok(NumberSequence {
                     keypoints: vec![
@@ -113,6 +97,24 @@ impl LuaExportsTable for NumberSequence {
                         NumberSequenceKeypoint {
                             time: 1.0,
                             value: v1,
+                            envelope: 0.0,
+                        },
+                    ],
+                })
+            } else if (args.len() == 1 || matches!(args.get(1), Some(LuaValue::Nil)))
+                && let Ok(value) = ArgsColor::from_lua_multi(args.clone(), lua)
+            {
+                super::charge_host_nanos(lua, super::datatype_price::NUMBER_SEQUENCE_NEW);
+                Ok(NumberSequence {
+                    keypoints: vec![
+                        NumberSequenceKeypoint {
+                            time: 0.0,
+                            value,
+                            envelope: 0.0,
+                        },
+                        NumberSequenceKeypoint {
+                            time: 1.0,
+                            value,
                             envelope: 0.0,
                         },
                     ],
