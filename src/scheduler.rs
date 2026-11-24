@@ -1886,6 +1886,23 @@ pub(crate) fn start_cold_tracking(lua: &Lua, engine: &Engine) {
     }
 }
 
+/// [`Sched::muted`] raised for engine work no script pays for (Debris destroying an item in the engine's step) and lowered when this
+/// drops, a panic's unwinding included: left raised, the Instance API would charge no script anything.
+pub struct Muted(Rc<std::cell::Cell<u32>>);
+
+impl Muted {
+    pub fn raise(muted: &Rc<std::cell::Cell<u32>>) -> Self {
+        muted.set(muted.get() + 1);
+        Muted(muted.clone())
+    }
+}
+
+impl Drop for Muted {
+    fn drop(&mut self) {
+        self.0.set(self.0.get().saturating_sub(1));
+    }
+}
+
 /// The render step: a playing client's bindings, RenderStepped / PreRender, the tween step and one resumption point; edit mode's
 /// bindings, tween step and flush, then RenderStepped / PreRender (a server's tweens step in heartbeat_timers); then the render
 /// hooks (input, layout).

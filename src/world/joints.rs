@@ -959,6 +959,61 @@ pub fn install(engine: &Rc<Engine>) {
     }
 }
 
+/// A count of [`Joints`] raised for some work and lowered when this drops, so a panic in the work (lua/raw.rs guard turns an engine
+/// panic into an error a script can catch) leaves it as it was: [`Joints::quiet`] left raised made every later CFrame and joint
+/// write the assembly code's own (ignored) and stopped Parent writes linking, [`Joints::placing`] made every CFrame write count as
+/// the assembly code's placing. It holds the state the caller holds, no borrow of its own.
+struct Raised<'a> {
+    state: &'a mut State,
+    count: fn(&mut Joints) -> &mut u32,
+}
+
+impl<'a> Raised<'a> {
+    fn new(state: &'a mut State, count: fn(&mut Joints) -> &mut u32) -> Self {
+        *count(&mut state.joints) += 1;
+        Raised { state, count }
+    }
+}
+
+impl Drop for Raised<'_> {
+    fn drop(&mut self) {
+        let count = (self.count)(&mut self.state.joints);
+        *count = count.saturating_sub(1);
+    }
+}
+
+impl std::ops::Deref for Raised<'_> {
+    type Target = State;
+    fn deref(&self) -> &State {
+        self.state
+    }
+}
+
+impl std::ops::DerefMut for Raised<'_> {
+    fn deref_mut(&mut self) -> &mut State {
+        self.state
+    }
+}
+
+/// [`bulk_moves`] raised for a BulkMoveTo call (world/mod.rs) and lowered when this drops, a panic in the moves included: left raised,
+/// no CFrame write would pay for the joints between assemblies ([`crate::cost::JOINT_ACROSS`]). It holds no borrow while the moves
+/// run, and takes the state's when it drops (none is held then; when one still is, the count stays).
+pub struct BulkMoving<'a>(&'a RefCell<State>);
+
+/// Raises [`bulk_moves`] until the returned guard drops.
+pub fn bulk_moving(state: &RefCell<State>) -> BulkMoving<'_> {
+    bulk_moves(&mut state.borrow_mut(), true);
+    BulkMoving(state)
+}
+
+impl Drop for BulkMoving<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.0.try_borrow_mut() {
+            bulk_moves(&mut state, false);
+        }
+    }
+}
+
 impl Joints {
     /// An instance of `class` was made (instance::create).
     #[inline]
@@ -2564,9 +2619,8 @@ fn across(state: &State, reflection: &Reflection, setup: &Setup, joint: Instance
 
 /// Moves a part the assembly code computed: stored, the engine's hooks told, no Changed events. Its component stays settled.
 fn place(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, part: InstanceId, cframe: &Affine3A) {
-    state.joints.placing += 1;
-    core::raw_set_unsignalled(state, reflection, hooks, part, setup.cframe, frame::cframe_value(cframe));
-    state.joints.placing -= 1;
+    let mut placing = Raised::new(state, |joints| &mut joints.placing);
+    core::raw_set_unsignalled(&mut placing, reflection, hooks, part, setup.cframe, frame::cframe_value(cframe));
 }
 
 /// Settles an assembly: every part where its joints put it from the anchor. `tolerant`: a part
@@ -3525,42 +3579,46 @@ pub fn move_alone(state: &mut State, reflection: &Reflection, hooks: &Hooks, par
         core::raw_set(state, reflection, hooks, part, name, frame::cframe_value(cframe));
         return;
     };
-    state.joints.quiet += 1;
-    core::raw_set(state, reflection, hooks, part, name, frame::cframe_value(cframe));
-    ensure_scanned(state, reflection, &setup);
-    let links = edges(state, reflection, &setup, part);
-    // (the part's assembly, which a rewritten joint inside it settles again on a client)
-    let tree = if links.is_empty() { None } else { component(state, reflection, &setup, part).map(|found| assemblies_of(state, reflection, &setup, &found, part, None, false)) };
-    let own = tree.as_ref().and_then(|tree| tree.of(part).map(|(assembly, index, _)| (index, assembly.nodes.len())));
-    let (mut rewritten, mut inside) = (0usize, 0usize);
-    for (joint, other) in links {
-        match setup.kind(state.dom.at(joint).class) {
-            Kind::WeldConstraint => derive_weld(state, reflection, &setup, joint),
-            Kind::Joint => {
-                let [Some(part0), Some(part1)] = parts_of(state, &setup, joint) else { continue };
-                let c0 = frame::affine_of(state.dom.raw_get(joint, setup.c0));
-                let c1 = frame::affine_of(state.dom.raw_get(joint, setup.c1));
-                let class = state.dom.at(joint).class;
-                let transform = match setup.motor6d {
-                    Some(motor) if reflection.class(class).is_a(motor) => frame::affine_of(state.dom.raw_get(joint, setup.transform)),
-                    _ => Affine3A::IDENTITY,
-                };
-                // Part0 * C0 * Transform = Part1 * C1
-                let (name, value) = if part0 == part {
-                    (setup.c0, inverse(cframe) * cframe_of(state, &setup, part1) * c1 * inverse(&transform))
-                } else {
-                    (setup.c1, inverse(cframe) * cframe_of(state, &setup, part0) * c0 * transform)
-                };
-                core::raw_set(state, reflection, hooks, joint, name, frame::cframe_value(&value));
+    // (quiet while it writes the part and rewrites its joints: lowered when the guard drops, a panic's unwinding included)
+    let (rewritten, inside, own) = {
+        let mut quiet = Raised::new(state, |joints| &mut joints.quiet);
+        let state = &mut *quiet;
+        core::raw_set(state, reflection, hooks, part, name, frame::cframe_value(cframe));
+        ensure_scanned(state, reflection, &setup);
+        let links = edges(state, reflection, &setup, part);
+        // (the part's assembly, which a rewritten joint inside it settles again on a client)
+        let tree = if links.is_empty() { None } else { component(state, reflection, &setup, part).map(|found| assemblies_of(state, reflection, &setup, &found, part, None, false)) };
+        let own = tree.as_ref().and_then(|tree| tree.of(part).map(|(assembly, index, _)| (index, assembly.nodes.len())));
+        let (mut rewritten, mut inside) = (0usize, 0usize);
+        for (joint, other) in links {
+            match setup.kind(state.dom.at(joint).class) {
+                Kind::WeldConstraint => derive_weld(state, reflection, &setup, joint),
+                Kind::Joint => {
+                    let [Some(part0), Some(part1)] = parts_of(state, &setup, joint) else { continue };
+                    let c0 = frame::affine_of(state.dom.raw_get(joint, setup.c0));
+                    let c1 = frame::affine_of(state.dom.raw_get(joint, setup.c1));
+                    let class = state.dom.at(joint).class;
+                    let transform = match setup.motor6d {
+                        Some(motor) if reflection.class(class).is_a(motor) => frame::affine_of(state.dom.raw_get(joint, setup.transform)),
+                        _ => Affine3A::IDENTITY,
+                    };
+                    // Part0 * C0 * Transform = Part1 * C1
+                    let (name, value) = if part0 == part {
+                        (setup.c0, inverse(cframe) * cframe_of(state, &setup, part1) * c1 * inverse(&transform))
+                    } else {
+                        (setup.c1, inverse(cframe) * cframe_of(state, &setup, part0) * c0 * transform)
+                    };
+                    core::raw_set(state, reflection, hooks, joint, name, frame::cframe_value(&value));
+                }
+                Kind::Other => continue,
             }
-            Kind::Other => continue,
+            rewritten += 1;
+            if let (Some(tree), Some((index, _))) = (&tree, own) {
+                inside += usize::from(tree.place.get(&other).is_some_and(|&(at, _)| at as usize == index));
+            }
         }
-        rewritten += 1;
-        if let (Some(tree), Some((index, _))) = (&tree, own) {
-            inside += usize::from(tree.place.get(&other).is_some_and(|&(at, _)| at as usize == index));
-        }
-    }
-    state.joints.quiet -= 1;
+        (rewritten, inside, own)
+    };
     let work = crate::cost::joints_rewritten(rewritten, inside, own.map_or(1, |(_, parts)| parts));
     if work > 0.0 {
         state.sched.charge(work);
@@ -3657,6 +3715,61 @@ pub fn step_transforms(engine: &Engine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A panic in work that raises a joint count (lua/raw.rs guard turns it into an error its script catches) leaves the count as it
+    /// was: a hook that panics while a Position write rewrites the hub's weld (quiet), while a C0 write's settle places the welded
+    /// part (placing) and while BulkMoveTo moves the hub (bulk), each write's error caught by its script, and every count is 0 after
+    /// each; the hub's CFrame write then still carries the welded part. Each count was raised and lowered by hand around the work, so
+    /// the panic left it raised (quiet: every later CFrame and joint write ignored, Parent writes linking nothing).
+    #[test]
+    fn a_panic_in_a_counted_write_leaves_no_count_raised() {
+        let (lua, engine) = crate::world::tests::start_play();
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let armed: Rc<Cell<Option<NameId>>> = Rc::new(Cell::new(None));
+        {
+            let armed = armed.clone();
+            engine.hooks.borrow_mut().property_changed.push(Box::new(move |_, _, name| {
+                if armed.get() == Some(name) {
+                    armed.set(None);
+                    panic!("a hook's panic in a counted write");
+                }
+            }));
+        }
+        crate::world::tests::run(
+            &lua,
+            &engine,
+            r#"
+            workspace.Gravity = 0
+            local Hub = Instance.new("Part")
+            Hub.Anchored, Hub.CanCollide, Hub.CFrame, Hub.Parent = true, false, CFrame.new(0, 300, 0), workspace
+            local Leaf = Instance.new("Part")
+            Leaf.Anchored, Leaf.CanCollide, Leaf.CFrame, Leaf.Parent = false, false, CFrame.new(0, 304, 0), workspace
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1, W.C0, W.Parent = Hub, Leaf, CFrame.new(0, 4, 0), Leaf
+            shared.Hub, shared.Leaf, shared.W = Hub, Leaf, W
+            "#,
+        );
+        let name = |text: &str| engine.reflection.name_id(text).expect("a property");
+        let counts = || {
+            let state = engine.state.borrow();
+            (state.joints.quiet, state.joints.placing, state.joints.bulk)
+        };
+        for (what, armed_on, write) in [
+            ("a Position write rewriting the weld", "C0", "shared.Hub.Position = Vector3.new(1, 300, 0)"),
+            ("a C0 write's settle placing the part", "CFrame", "shared.W.C0 = CFrame.new(0, 5, 0)"),
+            ("BulkMoveTo", "CFrame", "workspace:BulkMoveTo({ shared.Hub }, { CFrame.new(2, 300, 0) })"),
+        ] {
+            armed.set(Some(name(armed_on)));
+            crate::world::tests::run(&lua, &engine, &format!("assert(not pcall(function() {write} end), 'the panic is an error the script catches')"));
+            assert_eq!(armed.get(), None, "{what}: the hook panicked");
+            assert_eq!(counts(), (0, 0, 0), "{what}: the counts (quiet, placing, bulk) after the panic");
+        }
+        crate::world::tests::run(
+            &lua,
+            &engine,
+            "shared.Hub.CFrame = CFrame.new(10, 300, 0) local Gap = (shared.Leaf.Position - shared.Hub.Position).Magnitude assert(math.abs(Gap - 5) < 1e-3, `the welded part is {Gap} studs from the hub`)",
+        );
+    }
 
     /// A part's list walks the joints marked as in a world in the order they were put in, wherever they stand among 20,000 places
     /// (blocks of 4,096 places and the words in them), as joints are put in, marked and taken out at random and the holes close,

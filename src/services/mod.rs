@@ -1117,10 +1117,9 @@ pub fn install(engine: &Rc<Engine>) {
                 let body = lua.create_function(move |lua, item: LuaValue| {
                     if let Some(item) = super::lua::instance_id(&item) {
                         // (a client's Debris destroys the item in the engine's own step, outside any script: no script pays for it)
-                        let muted = e.state.borrow().sched.muted.clone();
-                        muted.set(muted.get() + 1);
+                        let muted = crate::scheduler::Muted::raise(&e.state.borrow().sched.muted);
                         let _ = super::lua::instance::destroy(lua, &e, item);
-                        muted.set(muted.get() - 1);
+                        drop(muted);
                     }
                     Ok(())
                 })?;
