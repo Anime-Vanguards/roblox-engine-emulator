@@ -9,7 +9,8 @@
 //!   skipped, any other entry "Unable to cast value to Object"; each entry charged as it is read, also on a call that raises
 //!   later). The region is a Region3 ("Argument 1 missing or nil", "Unable to cast <type> to Region3", named as camera.rs
 //!   cast_name names it). A call that raises costs what any engine call's error costs a client (lua/cfunction.rs
-//!   charge_raised).
+//!   charge_raised). Not matched: a list whose first entry is no Instance costs a client more
+//!   (FindPartsInRegion3WithIgnoreList(region, { 5 }) 6.2 to 9.5 us past an empty pcall, here RAISED and the call, 3.8).
 //! - A Region3 query finds the BaseParts of the WorldRoot's own world (a WorldModel's parts are its own, the Workspace's
 //!   are not a WorldModel's in it; Terrain never, voxels or not; a WorldModel outside the DataModel has none) that the spatial
 //!   index holds: a part that came into the world since a spatial query of that world or the physics step last took parts in
@@ -32,12 +33,14 @@
 //!   tree (a client's index does not hold them yet, and they cost its query nothing: measured). A WorldModel's index is made
 //!   at its first Region3 query, or ArePartsTouchingOthers call that walks a part, in the DataModel (none for one outside it)
 //!   and made again after its log overflows, and that query pays for the walk of its world (cost.rs FIND_NODE an instance,
-//!   MODEL_INDEX_PART a part: ree's own cost); it is kept while the WorldModel exists (camera.rs `Cameras::model_indexes`,
-//!   dropped when it is freed). Each part it is given costs what a client spends on such a part (cost.rs REGION_FOUND and
-//!   after): one found; one with CanQuery and CanCollide off in the region or within [`BAND`] of it (REGION_HIDDEN); one whose
-//!   box is within [`BAND`] of the region and not in it (REGION_NEAR); one further out (REGION_FAR, as a client pays for the
-//!   parts of the cells its query looks at). Only the parts found are put in order, as `query.rs`'s queries put theirs (the
-//!   walk that orders them charged: world/broadphase.rs order_cost), and IsRegion3Empty* does not order them.
+//!   MODEL_INDEX_PART a part: ree's own cost), and a query after changes in its world pays FIND_NODE for each instance its
+//!   index looks at in them (one that left the world is taken out without a walk of what is below it); it is kept while the
+//!   WorldModel exists (camera.rs `Cameras::model_indexes`, dropped when it is freed). Each part it is given costs what a
+//!   client spends on such a part (cost.rs REGION_FOUND and after): one found; one with CanQuery and CanCollide off in the
+//!   region or within [`BAND`] of it (REGION_HIDDEN); one whose box is within [`BAND`] of the region and not in it
+//!   (REGION_NEAR); one further out (REGION_FAR, as a client pays for the parts of the cells its query looks at). Only the
+//!   parts found are put in order, as `query.rs`'s queries put theirs (the walk that orders them charged: world/broadphase.rs
+//!   order_cost), and IsRegion3Empty* does not order them.
 //! - Not matched: the order. A client lists the parts as its broadphase grid walks them (cells of 8 studs and up, the
 //!   order the parts entered each cell, a removal moving the cell's last part into its place); here they come in the
 //!   world's tree order, as GetPartBoundsInBox's do, so `maxParts` below the count found can keep other parts. Nor the
@@ -49,11 +52,13 @@
 //!   packed in a lattice (measured: 1,000 half-stud cubes 0.6 apart, a region around them 6.6 us with maxParts 1 or
 //!   IsRegion3Empty, here 20.4). Nor a WorldModel's own prices: a client's query of one spent about twice a Workspace
 //!   query's on each part found (196 parts 8.3 us, 4.55 in the Workspace), and as much on the others. Nor parts far from the
-//!   origin, nor a long region: a client's queries found no part 1e8 studs out on any axis, where 1e7 out they did
-//!   (GetPartBoundsInBox alike, and ArePartsTouchingOthers of two parts touching at 2e38 is false), and a region from -1 to
-//!   1e5 studs along x found none of the parts in it, one to 1e6 only the part at its centre, where one around the origin
-//!   finds what is near it however large (a client seems to look at the cells around a region's centre alone); here a
-//!   region finds every part in it, wherever it is.
+//!   origin, nor a long region: a client's queries found no part 7e7 studs or more from the origin, where 5e7 out they did
+//!   (measured along x and y, and 1e8 out along each axis; GetPartBoundsInBox, GetPartBoundsInRadius and Raycast alike), and
+//!   its ArePartsTouchingOthers of two parts touching at 2e38 is false, where here it is true; a region from -1 out to 3e4
+//!   studs or more along x found only the parts around its centre (GetPartBoundsInBox alike; out to 1e4 they found every part
+//!   in it, and -1 to 1e5 with no part at its centre found none), where one centred on the origin finds what is near it however
+//!   large (a client seems to look at the cells around a region's centre alone); here a region finds every part in it, wherever
+//!   it is.
 //! - ArePartsTouchingOthers(partList, overlapIgnored = 0.0002): the float first (camera.rs `float_argument`, nil the
 //!   default), the list (objects_arg, its entries cast as above, nil holes kept, each entry charged as it is read:
 //!   [`touching_entries`]), then each entry in turn: "All objects passed to ArePartsTouchingOthers must be BaseParts, got a
@@ -299,8 +304,9 @@ impl Candidate<'_> {
 
 impl World {
     /// The world of the WorldRoot `root` for one call: the Workspace's tree brought up to the dom's changes, or the WorldModel's
-    /// index, asked whether the WorldModel is in the DataModel (world/broadphase.rs `ModelIndex::in_game`: read off the homes
-    /// up through the WorldRoots above it, then up the parents of the topmost; each ancestor walked charged FIND_NODE).
+    /// index, asked whether the WorldModel is in the DataModel (world/broadphase.rs `ModelIndex::in_game`: read off the
+    /// outermost home above it in one lookup, then up that home's parents unless it is the Workspace, FIND_NODE charged for
+    /// each parent walked).
     fn open(engine: &Engine, root: InstanceId) -> World {
         if root == engine.world().workspace {
             query::refresh(engine);
@@ -331,12 +337,13 @@ impl World {
     /// particular order, until it returns false. The Workspace's tree for this holds its own world's parts alone (a WorldModel's
     /// in it are in a tree of their own: world/broadphase.rs `Index`), as a client's does (measured: 196 of a WorldModel's parts
     /// in a Workspace query's region cost it 0.42 us, where none 0.40). A WorldModel's index takes the dom's changes in its world
-    /// at its first walk in a call, and when it is made (at its first query in the DataModel) or made again (its log overflowed),
-    /// the call pays for that walk of its world (FIND_NODE each instance looked at, MODEL_INDEX_PART each part put in, but not
-    /// those a query of this world took into the spatial index and paid for since the index last took its log, whose price is a
-    /// client's for putting them in its index: camera.rs `Cameras::model_paid`, cost.rs); a WorldModel outside the DataModel
-    /// gives nothing and makes no index. Neither tree holds a part waiting for the spatial index: a client's index does not
-    /// hold it yet, and it costs its queries nothing (1,000 of them 0.42).
+    /// at its first walk in a call, and the call pays FIND_NODE for each instance the index looks at in them (what moved, and
+    /// the walks below what moved within the world). When the index is made (at its first query in the DataModel) or made again
+    /// (its log overflowed), the call pays for that walk of its world (FIND_NODE each instance looked at, MODEL_INDEX_PART each
+    /// part put in, but not those a query of this world took into the spatial index and paid for since the index last took its
+    /// log, whose price is a client's for putting them in its index: camera.rs `Cameras::model_paid`, cost.rs); a WorldModel
+    /// outside the DataModel gives nothing and makes no index. Neither tree holds a part waiting for the spatial index: a
+    /// client's index does not hold it yet, and it costs its queries nothing (1,000 of them 0.42).
     fn visit(&mut self, engine: &Engine, lo: Vec3, hi: Vec3, mut visit: impl FnMut(Candidate) -> bool) {
         // (from the bounds' halves: their sum or difference can overflow where the halves do not, and a box that is not finite
         // is given every part)
@@ -623,8 +630,8 @@ pub fn install(engine: &Rc<Engine>) {
     // (a call that raises costs what any engine call's error costs a client, charged where ree raises it: lua/cfunction.rs
     // charge_raised, cost.rs RAISED; measured, Studio 0.748, a client's Region3 query that raises costs past an empty pcall,
     // its call included, 3.7 to 4.5 us for FindPartsInRegion3's argument errors, 3.8 to 6.0 for IsRegion3Empty's and 6.2 to 9.5
-    // for an ignore list whose first entry is no Instance; ArePartsTouchingOthers 4.6 to 9.2, so it pays cost.rs
-    // TOUCHING_RAISED past RAISED)
+    // for FindPartsInRegion3WithIgnoreList given a list whose first entry is no Instance ({ 5 }), which ree leaves at RAISED
+    // and the call, 3.8 (not matched); ArePartsTouchingOthers 4.6 to 9.2, so it pays cost.rs TOUCHING_RAISED past RAISED)
     let members: [(&str, MethodFn); 7] = [
         ("FindPartsInRegion3", Rc::new(find_parts)),
         ("findPartsInRegion3", Rc::new(find_parts)),
@@ -1347,6 +1354,75 @@ mod tests {
         }
     }
 
+    /// An instance that left a WorldModel's world is taken out of its index without a walk of what is below it now (dom.rs
+    /// logged the parts that left with it one by one), and a sync that walks pays FIND_NODE for each instance it looks at: a
+    /// Folder moved through 200 WorldModels, each queried once before, sits in all their logs, and given 2,000 Folders outside
+    /// them all it costs each one's next sync a look, where each sync walked the 2,000 (400,400 instances in all); moved into
+    /// one of them, the 2,002 it brings cost that one's next query 2,002 FIND_NODE.
+    #[test]
+    fn a_folder_that_passed_through_many_worldmodels_costs_them_no_walk_of_what_it_holds() {
+        let (lua, engine) = start();
+        crate::lua::modules::interpret_all(&lua, &engine);
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+        let visits = || broadphase::MODEL_SYNC_VISITS.with(|visits| visits.replace(0));
+        run(
+            &lua,
+            &engine,
+            r##"
+            local Store = game:GetService("ReplicatedStorage")
+            local Region = Region3.new(Vector3.new(-1, -1, -1), Vector3.new(1, 1, 1))
+            local Worlds = {}
+            for I = 1, 200 do
+                local World = Instance.new("WorldModel")
+                World.Parent = Store
+                assert(#World:FindPartsInRegion3(Region, nil, 0) == 0)
+                Worlds[I] = World
+            end
+            local Passing = Instance.new("Folder")
+            for _, World in Worlds do
+                Passing.Parent = World
+            end
+            Passing.Parent = Store
+            local Held = Instance.new("Folder")
+            for _ = 1, 2000 do
+                Instance.new("Folder").Parent = Held
+            end
+            Held.Parent = Passing
+            shared.Worlds, shared.Passing, shared.Region = Worlds, Passing, Region
+            "##,
+        );
+        visits();
+        run(&lua, &engine, r##"for _, World in shared.Worlds do assert(#World:FindPartsInRegion3(shared.Region, nil, 0) == 0) end"##);
+        let passed = visits();
+        assert!(passed <= 400, "200 WorldModels' syncs after a Folder holding 2,000 passed through them looked at {passed} instances");
+        run(
+            &lua,
+            &engine,
+            r##"
+            local World = shared.Worlds[1]
+            local function Once()
+                local Start = os.clock()
+                assert(#World:FindPartsInRegion3(shared.Region, nil, 0) == 0)
+                return (os.clock() - Start) * 1e6
+            end
+            shared.Passing.Parent = World
+            local Moved = Once()
+            shared.Paid = Moved - Once()
+            "##,
+        );
+        assert_eq!(visits(), 2002, "the Folder, what it holds and its 2,000 moved into a WorldModel");
+        let expected = 2002.0 * crate::cost::FIND_NODE * 1e6;
+        run(&lua, &engine, &format!(r##"assert(math.abs(shared.Paid - {expected}) < 0.3, `the walk of 2,002 instances cost {{shared.Paid}} us`)"##));
+        for world in 0..2 {
+            let model = {
+                let state = engine.state.borrow();
+                let store = state.dom.find_child(engine.world().game, b"ReplicatedStorage").expect("ReplicatedStorage");
+                state.dom.children_of(store).iter().copied().filter(|&child| state.dom.at(child).class == engine.reflection.class_id("WorldModel").expect("WorldModel")).nth(world).expect("a WorldModel")
+            };
+            query::model_index_matches_a_walk(&engine, model).unwrap();
+        }
+    }
+
     /// A WorldModel's index looks at its world's wait again only when that wait changed other than as its log shows: a query of
     /// that world took its parts in, the WorldModel came back into the DataModel, or the physics step ran. Another world's intake
     /// leaves it alone, so 1,000 parts waiting in one WorldModel cost nothing to a query of it while another WorldModel's queries
@@ -1907,9 +1983,10 @@ mod tests {
             Within("a region from -inf to inf", Per(function(N) for _ = 1, N do workspace:FindPartsInRegion3(Region3.new(-Vector3.one * Inf, Vector3.one * Inf), nil, 1) end end), 0.2, 0.5)
             assert(#workspace:FindPartsInRegion3(Region3.new(Vector3.new(2990, 890, 890), Vector3.new(Inf, 910, 910)), nil, 0) == 0)
             -- a call that raises (a client's Region3 query that raises costs past an empty pcall, its call included, 3.7 to 4.5
-            -- us for FindPartsInRegion3's argument errors, 3.8 to 6.0 for IsRegion3Empty's and 6.2 to 9.5 for an ignore list
-            -- whose first entry is no Instance; ArePartsTouchingOthers 4.6 to 9.2); a bad entry after 1,000 parts costs each
-            -- entry before it (0.23 to 0.26 us a client)
+            -- us for FindPartsInRegion3's argument errors, 3.8 to 6.0 for IsRegion3Empty's and 6.2 to 9.5 for
+            -- FindPartsInRegion3WithIgnoreList given a list whose first entry is no Instance, not matched;
+            -- ArePartsTouchingOthers 4.6 to 9.2); a bad entry after 1,000 parts costs each entry before it (0.23 to 0.26 us a
+            -- client)
             local function Empty() end
             local Pcall = Per(function(N) for _ = 1, N do pcall(Empty) end end)
             Within("FindPartsInRegion3 with no region", Per(function(N) for _ = 1, N do pcall(workspace.FindPartsInRegion3, workspace) end end) - Pcall, 3.4, 4.5)

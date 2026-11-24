@@ -904,7 +904,8 @@ thread_local! {
 /// however many of its ancestors moved too. A part that waits for the spatial index (camera.rs `Cameras::unindexed_models`) is
 /// kept out of the tree until a query of its world or the physics step takes it in, as [`Index`] keeps the Workspace's. The
 /// engine keeps the index while its WorldModel exists (camera.rs `Cameras::model_indexes`: world/camera_moves.rs drops it when
-/// the WorldModel is freed), and a query pays for a walk of its world (world/region.rs).
+/// the WorldModel is freed), and a query pays for each instance it looks at, in a walk of its world or in what changed in it
+/// (world/region.rs).
 #[derive(Default)]
 pub struct ModelIndex {
     /// The WorldModel whose world it holds, once made
@@ -1000,7 +1001,8 @@ impl ModelIndex {
     }
 
     /// Takes the dom's log of `model`'s world, or makes the index from a walk of it when it has none yet or the log overflowed:
-    /// then how many instances the walk looked at and how many parts it put in (its price: world/region.rs), else none.
+    /// how many instances it looked at (those in the log that moved and the walks below them, or the walk of its world) and how
+    /// many parts a walk of its world put in (their price: world/region.rs).
     pub fn sync(&mut self, engine: &Engine, model: InstanceId) -> (usize, usize) {
         if self.names.is_none() {
             self.names = Names::of(engine);
@@ -1024,21 +1026,24 @@ impl ModelIndex {
         // what moved first (a part written and then moved out is gone before its write is looked at). Each instance is looked at
         // once: a walk does not go into an instance an earlier walk of this log reached, whose subtree that walk took whole with
         // the same answer (the tree stays as it is while the log is taken), so a chain of parts that moved costs the walk its
-        // length, where each part's walk went down the rest of it.
+        // length, where each part's walk went down the rest of it. An instance no longer in this world is taken out and not
+        // walked: the parts that left with it were logged one by one as they left (dom.rs `log_world_leaving`), and it sits in
+        // the log of every world it passed through, so a walk of what is below it now would be paid by every one of them.
         crate::dom::clear_set(&mut self.seen);
+        let mut visited = 0usize;
         for &id in &moved {
             if !self.seen.insert(id) {
                 continue;
             }
-            if state.dom.get(id).is_none() {
+            if state.dom.get(id).is_none() || state.dom.home(id) != Some(model) {
+                visited += 1;
                 self.remove(id);
                 continue;
             }
             self.walk.clear();
             self.walk.push(id);
             while let Some(node) = self.walk.pop() {
-                #[cfg(test)]
-                MODEL_SYNC_VISITS.with(|visits| visits.set(visits.get() + 1));
+                visited += 1;
                 let class = {
                     let instance = state.dom.at(node);
                     let class = engine.reflection.class(instance.class);
@@ -1073,7 +1078,9 @@ impl ModelIndex {
         if log.written.is_empty() {
             log.written = written;
         }
-        (0, 0)
+        #[cfg(test)]
+        MODEL_SYNC_VISITS.with(|visits| visits.set(visits.get() + visited as u64));
+        (visited, 0)
     }
 
     /// The log's limit: twice the parts held and the instances the last walk of its world visited, so the log overflows only

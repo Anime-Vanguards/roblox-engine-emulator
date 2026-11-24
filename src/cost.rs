@@ -1256,8 +1256,8 @@ pub const TOUCHING_FAR: f64 = 0.0107e-6;
 /// Each part put in a WorldModel's own index when the index is made, at the WorldModel's first Region3 query or walked
 /// ArePartsTouchingOthers in the DataModel, or made again after its change log overflowed (world/broadphase.rs `ModelIndex`, with
 /// [`FIND_NODE`] for each instance the walk of its world looks at; world/region.rs), but a part a query of that WorldModel took in
-/// and paid for since the index was last made. This is ree's own cost, not a client's: a client puts a world's parts in its index
-/// as they come in, at the price of taking them in ([`QUERY_TAKEN_PART`]), or in the physics step. Measured on
+/// and paid for since the index last took its log. This is ree's own cost, not a client's: a client puts a world's parts in
+/// its index as they come in, at the price of taking them in ([`QUERY_TAKEN_PART`]), or in the physics step. Measured on
 /// ree's host (a release build, the fastest of six runs): a WorldModel of 200,000 parts made and queried once took 123 ms more
 /// than made alone, one of 200,000 Folders under 1 ms more.
 pub const MODEL_INDEX_PART: f64 = 0.6e-6;
