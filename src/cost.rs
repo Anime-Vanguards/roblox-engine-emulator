@@ -995,15 +995,19 @@ pub const COLLISION_GROUP_CHANGED: f64 = 0.38e-6;
 /// earlier job's parts too: three stacks of 24, which the first fit read as a ray's or a query's dearness.)
 pub const RAY_MET: f64 = 0.175e-6;
 pub const RAY_CROSSED: f64 = 0.0424e-6;
-/// What a spatial query that takes parts into the spatial index pays for them, beyond its own price (world/query.rs take_in: the
-/// parts that entered the Workspace since the last such query or the physics step, camera_moves.rs `Cameras::unindexed`), in a
+/// What a spatial query that takes parts into the spatial index pays for them, beyond its own price (world/query.rs take_in_of:
+/// the parts that came into the world of the WorldRoot it is called on since a query of that world or the physics step last took
+/// that world's in, camera_moves.rs `Cameras::unindexed` for the Workspace's and `Cameras::unindexed_models` for a WorldModel's;
+/// a Raycast or any other query of a WorldModel takes in its world's), in a
 /// playing client (Studio 0.747, a headless client; os.clock around K parts parented into the Workspace, a Raycast or
 /// GetPartBoundsInBox and the parts parented out again, less the same without the query and the query alone, the median of 31 or
 /// 41 samples, two passes beside no other parts and beside 100,000 parts away): K = 1 1.48-1.61 us, 10 9.2-10.6, 100 95-122,
 /// 1,000 1,110-1,380, beside 100,000 parts as beside none, so [`QUERY_TAKEN_PART`] a part and [`QUERY_TAKE_IN`] once. Moving
 /// parts costs the next query nothing (1, 10 or 100 moved: within 0.3 us of a query after none, with no growth), and so does
 /// taking them out (100 or 1,000 parented out: within 0.06 us a part of none, either way). GetLargestCutoffDistance and the
-/// PlayerMouse's rays take nothing in and pay nothing for it.
+/// PlayerMouse's rays take nothing in and pay nothing for it. ArePartsTouchingOthers pays the same for the parts it takes in, a
+/// WorldModel's own world's on a WorldModel (world/region.rs; Studio 0.748, a playing client, the same method, 31 samples: K = 10,
+/// 100 and 1,000 12.7, 120 and 1,233 us in the Workspace, 12.2, 110 and 1,080 in a WorldModel under ReplicatedStorage).
 pub const QUERY_TAKE_IN: f64 = 0.5e-6;
 pub const QUERY_TAKEN_PART: f64 = 1.1e-6;
 /// A step up the tree of the walks that put what a spatial query keeps in the Workspace's order (world/broadphase.rs
@@ -1188,6 +1192,75 @@ pub const CUTOFF_IGNORE_STEP: f64 = 1.2e-9;
 /// cube 0.25, a 4-stud ball 0.25, a 40 x 2 x 40 slab 0.48, a 2-stud cube with an Include filter 0.45)
 pub const QUERY_PART_EXACT: f64 = 0.74e-6;
 pub const QUERY_PART_SIZE: f64 = 0.011e-6;
+/// The Region3 queries (world/region.rs) beyond their call, in a playing client (Studio 0.748, os.clock around 200 calls, the median
+/// of 15 samples less an empty loop, three passes within 5% of each other, GetPartBoundsInBox timed beside them): each part a query
+/// finds in its region ([`REGION_FOUND`]), each it lists ([`REGION_LISTED`] more), each its ignored instance, ignore list or
+/// whitelist leaves out ([`REGION_EXCLUDED`] more; an ignored instance the region holds none of costs nothing); IsRegion3Empty*
+/// lists none, and pays [`REGION_ANY`] once when it finds a part. Its list is read at [`IGNORE_LISTED`] an entry (world/mod.rs
+/// ignore_list; 1,000 entries over an empty region 24 to 28.5 us on this client, a list of 50 0.02 us an entry), and its checks
+/// of the parts it finds against its ignored instance, ignore list or whitelist walk up each part for each instance of the list
+/// in turn, at [`filter_step`] a step (world/region.rs Keep::keeps). FindPartsInRegion3 over a
+/// line of 0, 1, 10, 50 and 200 parts 0.40, 0.68, 1.84, 7.2 and 27.9 us (GetPartBoundsInBox 0.24, 0.45, 1.6, 6.7, 26.8); 50 parts
+/// with maxParts 5 1.97, with 20 3.77, 200 with 5 5.2; 10 and 50 parts under the ignored folder 1.08 and 3.4, beside an unrelated one
+/// 1.9 and 7.3; an ignore list of 50 unrelated entries 3.0 over 10 parts, a whitelist of none 0.98; IsRegion3Empty over 0, 1, 10, 50
+/// and 200 parts 0.42, 0.59, 0.72, 1.44 and 4.57, over 50 ignored 3.37; IsRegion3EmptyWithIgnoreList of 50 entries over none 1.06.
+pub const REGION_FOUND: f64 = 0.020e-6;
+pub const REGION_LISTED: f64 = 0.118e-6;
+pub const REGION_EXCLUDED: f64 = 0.040e-6;
+pub const REGION_ANY: f64 = 0.15e-6;
+/// Each part a Region3 query meets in its region and leaves out for having CanQuery and CanCollide both off (world/region.rs;
+/// the same client and method): 10, 100 and 1,000 such parts in the region cost FindPartsInRegion3 1.23, 7.37 and 56.6 us where
+/// none cost 0.40, IsRegion3Empty the same (least squares 0.056 us a part); 196 of them 0.1 past its face 11.2 (0.055 a part).
+/// A part waiting for the spatial index costs nothing (1,000 of them 0.40): the client's broadphase does not hold it, nor do
+/// ree's trees until a query of its world takes it in (world/broadphase.rs); nor do a WorldModel's parts in a Workspace query's
+/// region (196 of them 0.42), which ree's Workspace index keeps in a tree of their own.
+pub const REGION_HIDDEN: f64 = 0.056e-6;
+/// Each part a Region3 query's broadphase gives it whose box lies outside its region but within 0.305 of it along each axis
+/// (world/region.rs BAND: [`REGION_NEAR`]), and each one further out ([`REGION_FAR`]), in a playing client (Studio 0.748,
+/// os.clock around 100 calls, the median of 9 samples less an empty loop, three passes, FindPartsInRegion3 with maxParts 1 and
+/// IsRegion3Empty alike, regions at 4 mod 8): 196 half-stud cubes spread over an 8-stud region's face, 0.01 to 0.30 past it,
+/// 16.8 to 18.6 us where none cost 0.40, 0.1 before its min face 17.6, 133 cubes of 0.05 0.25 or 0.3 past both faces of an edge
+/// 11.8, with CanQuery or CanCollide off alike (0.084 to 0.091 us a part: more than a part found, [`REGION_FOUND`], the 196
+/// inside it 4.55); 0.31 to 3 past it, in a cell of the region's, 2.4 (0.0102 a part); 1 past it in no cell of the region's
+/// nothing. Parts stacked in one spot cost more (196 0.01 to 0.3 past 22.4, inside 9.6, 1 to 3 past 6.4), which is not modeled.
+pub const REGION_NEAR: f64 = 0.086e-6;
+pub const REGION_FAR: f64 = 0.0102e-6;
+/// ArePartsTouchingOthers beyond its call (world/region.rs; the same client and method): a list with any entries ([`TOUCHING_LIST`]),
+/// each entry ([`IGNORE_LISTED`] as it is read, world/region.rs touching_entries, and [`TOUCHING_ENTRY`] more once the entries
+/// passed their check), each listed part it checks (until one touches) and each nearby part it tests against one. An empty list
+/// 0.27 us, one part with nothing near 0.57, one touching another 0.82, 10 and 30 with nothing near 1.82 and 4.67, 10 and 30 whose
+/// first touches 1.36 and 2.53 (0.06 us an entry in all); a Folder after 1,000 parts raises for 30 to 37 us (the raise
+/// included: the read alone, 0.022 an entry). A call that raises costs [`TOUCHING_RAISED`] beyond its call and [`RAISED`] (which
+/// lua/cfunction.rs charge_raised charges for every engine error), more than a Region3 query: an overlapIgnored that is no number
+/// 7.0 to 8.4 us, a list whose first entry is no Instance 7.5 to 9.2, one whose first entry is a Folder 4.6 to 6.0, past an empty
+/// pcall (median 7.2), less the call's price (6.8 in all).
+pub const TOUCHING_LIST: f64 = 0.15e-6;
+pub const TOUCHING_ENTRY: f64 = 0.038e-6;
+pub const TOUCHING_CHECKED: f64 = 0.09e-6;
+pub const TOUCHING_RAISED: f64 = 3.4e-6;
+/// The nearby parts ArePartsTouchingOthers meets for a listed part (world/region.rs; the same client and method): each it tests
+/// ([`TOUCHING_PAIR`], plus [`TOUCHING_TESTED`] once for a listed part it tests against any), each it skips for being listed
+/// ([`TOUCHING_LISTED_NEAR`]) or for having CanCollide off ([`TOUCHING_OFF_NEAR`]). One part beside 1, 10, 30, 100 and 300 others
+/// 0.1 away 0.83, 2.43, 5.70, 17.4 and 52.5 us (nothing near 0.58); among 10, 30, 100 and 300 parts with CanCollide off 1.35,
+/// 2.11, 7.71 and 17.3 (least squares 0.057 us a part); 10, 30, 100 and 300 parts in one spot, all listed, 12.5, 65.2, 1,142 and
+/// 6,898 (each meets the others: least squares 0.077 us a part met, 0.069 to 0.117 by size).
+pub const TOUCHING_PAIR: f64 = 0.17e-6;
+pub const TOUCHING_TESTED: f64 = 0.08e-6;
+pub const TOUCHING_LISTED_NEAR: f64 = 0.077e-6;
+pub const TOUCHING_OFF_NEAR: f64 = 0.057e-6;
+/// Each part ArePartsTouchingOthers' walk is given for a listed part that lies further than 0.3125 from its box (world/region.rs
+/// REACH; the same client and method as [`REGION_NEAR`]): an 8-stud cube beside 196 half-stud cubes spread over its face 0.315
+/// to 4 away 2.65 to 3.0 us where nothing near cost 0.66 (0.0107 a part), 0.2 to 0.31 away (tested) 29.5 to 31.7; two-stud cubes
+/// stacked 0.5 to 2 away, 100 3.8 and 300 5.4, 4 away (in no cell of the listed part's) nothing.
+pub const TOUCHING_FAR: f64 = 0.0107e-6;
+/// Each part put in a WorldModel's own index when the index is made, at the WorldModel's first Region3 query or walked
+/// ArePartsTouchingOthers in the DataModel, or made again after its change log overflowed (world/broadphase.rs `ModelIndex`, with
+/// [`FIND_NODE`] for each instance the walk of its world looks at; world/region.rs), but a part a query of that WorldModel took in
+/// and paid for since the index was last made. This is ree's own cost, not a client's: a client puts a world's parts in its index
+/// as they come in, at the price of taking them in ([`QUERY_TAKEN_PART`]), or in the physics step. Measured on
+/// ree's host (a release build, the fastest of six runs): a WorldModel of 200,000 parts made and queried once took 123 ms more
+/// than made alone, one of 200,000 Folders under 1 ms more.
+pub const MODEL_INDEX_PART: f64 = 0.6e-6;
 /// FindFirstChild and the other finds: a child looked at past the first (the parity bench: the 20th of 20 children 73 ns, the first 44,
 /// so 1.55 ns a child), and a node a recursive find looks at (a miss over 1,110 nodes 4.2 us: 3.8 ns)
 pub const FIND_CHILD: f64 = 1.55e-9;
@@ -2026,6 +2099,11 @@ pub fn method(name: &str) -> f64 {
         "Blockcast" | "Spherecast" | "Shapecast" => 0.27,
         "GetPartBoundsInBox" | "GetPartBoundsInRadius" => 0.15,
         "GetPartsInPart" => 0.243,
+        // (the Region3 queries and ArePartsTouchingOthers: an empty call in a playing client, less the 0.09 us its GetPartBoundsInBox took
+        // over this table's 0.15 beside it (0.40, 0.42 and 0.27 us); what they find: [`REGION_FOUND`], [`TOUCHING_LIST`])
+        "FindPartsInRegion3" | "FindPartsInRegion3WithIgnoreList" | "FindPartsInRegion3WithWhiteList" | "findPartsInRegion3" => 0.31,
+        "IsRegion3Empty" | "IsRegion3EmptyWithIgnoreList" => 0.33,
+        "ArePartsTouchingOthers" => 0.18,
         // (HttpService:JSONEncode and JSONDecode: the call, and by what they handle [`json`])
         "JSONEncode" | "JSONDecode" => JSON_CALL * 1e6,
         // (TweenService:GetValue of a linear alpha 51.8 ns whole, 27 beyond the Luau around it)
@@ -2053,13 +2131,16 @@ pub fn method(name: &str) -> f64 {
 
 /// Where [`method`]'s price for `name` came from ([`kind`] bits): a method the table does not name borrows [`CALL`] and Shapecast the
 /// Blockcast's (defaulted); EditableMesh's methods, IsDescendantOf / IsAncestorOf and the Luau-served model queries were measured in a
-/// Studio capture or playtest (Studio-era); the rest in the parity bench's client sessions.
+/// Studio capture or playtest (Studio-era); the Region3 queries (FindPartsInRegion3, its WithIgnoreList / WithWhiteList variants and
+/// findPartsInRegion3, IsRegion3Empty, IsRegion3EmptyWithIgnoreList) and ArePartsTouchingOthers were timed with os.clock in a Studio
+/// 0.748 playing client (world/region.rs: [`REGION_FOUND`], [`TOUCHING_LIST`]); the rest in the parity bench's client sessions.
 pub fn method_kinds(name: &str) -> u8 {
     match name {
         "IsA" | "GetFullName" | "GetPlayers" | "HasTag" | "GetTags" | "AddTag" | "Emit" | "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay"
         | "ScreenPointToRay" | "GetAttribute" | "Create" | "Raycast" | "Blockcast" | "Spherecast" | "GetPartBoundsInBox" | "GetPartBoundsInRadius"
         | "GetPartsInPart" | "JSONEncode" | "JSONDecode" | "GetValue" | "GetClass" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox"
-        | "GetExtentsSize" | "PivotTo" | "ScaleTo" => 0,
+        | "GetExtentsSize" | "PivotTo" | "ScaleTo" | "FindPartsInRegion3" | "FindPartsInRegion3WithIgnoreList" | "FindPartsInRegion3WithWhiteList"
+        | "findPartsInRegion3" | "IsRegion3Empty" | "IsRegion3EmptyWithIgnoreList" | "ArePartsTouchingOthers" => 0,
         "Shapecast" => kind::DEFAULTED,
         "IsDescendantOf" | "IsAncestorOf" | "GetVertexBoneWeights" | "GetVertexBones" | "GetFaceVertices" | "GetFaceColors" | "GetFaceNormals"
         | "GetFaceUVs" | "GetPosition" | "GetNormal" | "GetUV" | "GetBoneName" | "GetColor" | "GetColorAlpha" | "SetColorAlpha" | "SetColor"

@@ -42,8 +42,10 @@ use crate::{
 
 /// What cameras hold beyond their properties (`State::cameras`): the roll SetRoll gave a camera, float32. A CFrame write keeps
 /// it; CameraType leaving Scriptable drops it (measured: Fixed and back to Scriptable reads 0). Also the field of view a
-/// DiagonalFieldOfView or MaxAxisFieldOfView write left in radians, Interpolate's tweens and the parts the spatial index has
-/// not taken in yet (camera_fov.rs, camera_moves.rs).
+/// DiagonalFieldOfView or MaxAxisFieldOfView write left in radians, Interpolate's tweens, the parts the spatial index has
+/// not taken in yet, the Workspace's and each WorldModel's (camera_fov.rs, camera_moves.rs), each WorldModel's own index and
+/// what was paid for its parts (world/broadphase.rs `ModelIndex`, world/region.rs), and the stack and list the hierarchy hook
+/// keeps between its runs.
 #[derive(Default)]
 pub struct Cameras {
     rolls: FxHashMap<InstanceId, f32>,
@@ -58,14 +60,35 @@ pub struct Cameras {
     pub(super) finished: Vec<InstanceId>,
     /// An Interpolate step is writing CFrame and Focus (not a script's write)
     pub(super) stepping: bool,
-    /// The parts that entered the Workspace since the spatial index last took parts in (the physics step, another spatial
-    /// query) and are still in it: GetLargestCutoffDistance and the PlayerMouse's rays do not see them yet (camera_moves.rs,
-    /// mouse.rs). A set, each part once however often it came back in, and a part that leaves drops out, so it holds at
-    /// most the Workspace's parts and a ray's lookup costs the same whatever it holds
+    /// The parts that came into the Workspace's own world (not a WorldModel's in it: camera_moves.rs) since the spatial index last
+    /// took the Workspace's in (the physics step, a spatial query of the Workspace) and are still in it: GetLargestCutoffDistance,
+    /// the PlayerMouse's rays and the Workspace's Region3 queries do not see them yet (camera_moves.rs, mouse.rs, region.rs). A
+    /// set, each part once however often it came back in, and a part that leaves the world drops out, so it holds at most the
+    /// world's parts and a lookup costs the same whatever it holds
     pub(super) unindexed: FxHashSet<InstanceId>,
-    /// How many times the spatial index has taken parts in ([`super::camera_moves::index_parts`]): the broadphase keeps the
-    /// waiting parts out of its tree until this moves on (world/broadphase.rs)
+    /// How many times the spatial index has taken the Workspace's parts in (the physics step, a spatial query of the Workspace:
+    /// [`super::camera_moves::index_parts`], `take_in`): the broadphase keeps the waiting parts out of its tree until this moves
+    /// on (world/broadphase.rs)
     pub(super) taken_in: u64,
+    /// The same for each WorldModel in the DataModel and its own world's parts, by WorldModel (none while none waits): a client
+    /// keeps an index for each world, and a query takes in only its own world's new parts (measured: world/region.rs)
+    pub(super) unindexed_models: FxHashMap<InstanceId, FxHashSet<InstanceId>>,
+    /// Each WorldModel's own index (world/broadphase.rs `ModelIndex`: world/region.rs), by WorldModel: made at its first query
+    /// in the DataModel and kept while it exists (camera_moves.rs drops it, with its wait, when the WorldModel is freed)
+    pub(super) model_indexes: FxHashMap<InstanceId, Box<super::broadphase::ModelIndex>>,
+    /// How many times the physics step took every world's parts in, and by WorldModel how many times its wait changed other than
+    /// as its world's change log shows (its parts taken in by a query of it, coming in anew or leaving with it: camera_moves.rs):
+    /// a WorldModel's index keeps its waiting parts out of its tree and looks at its wait again only when one of its two moved on
+    /// (world/broadphase.rs), so another world's intake costs it nothing
+    pub(super) models_stepped: u64,
+    pub(super) models_waits: FxHashMap<InstanceId, u64>,
+    /// How many parts a query of each WorldModel took in and paid for since its index last took its log (world/region.rs takes
+    /// this at each call's first walk of the index, and a build of the index then does not charge those parts again). Those
+    /// that left the world since are counted too, so a build can charge fewer parts than it puts in: MODEL_INDEX_PART is ree's
+    /// own cost
+    pub(super) model_paid: FxHashMap<InstanceId, usize>,
+    /// The stack the hierarchy hook walks a moved subtree with, kept between its runs (camera_moves.rs)
+    pub(super) walk: Vec<(InstanceId, Option<InstanceId>)>,
 }
 
 struct View {

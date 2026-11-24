@@ -1,7 +1,8 @@
 //! The 3D world: what scripts see of parts, attachments, effects and the Workspace beyond stored
 //! properties. Part and attachment CFrame views (Position, Orientation, Rotation, Axis, World*),
 //! Workspace.Terrain, BulkMoveTo, the spatial queries (query.rs: Raycast, Blockcast, Spherecast,
-//! Shapecast, GetPartBoundsInBox / InRadius, GetPartsInPart, FindPartOnRay*), the Camera's
+//! Shapecast, GetPartBoundsInBox / InRadius, GetPartsInPart, FindPartOnRay*; region.rs: the Region3
+//! queries, ArePartsTouchingOthers), the Camera's
 //! projections (camera.rs: WorldTo*Point, *PointToRay), and the calls that
 //! leave nothing in a property (ParticleEmitter:Emit / Clear, Trail:Clear, Sound:Play / Stop,
 //! SoundService:PlayLocalSound), reported to observers as [`WorldEvent`]s (engine::record keeps
@@ -26,6 +27,7 @@ pub mod gravity;
 pub mod joints;
 pub mod mouse;
 pub mod query;
+mod region;
 
 #[cfg(test)]
 mod tests;
@@ -677,6 +679,7 @@ pub fn install(engine: &Rc<Engine>) {
     }
     drop(behaviors);
     query::install(engine);
+    region::install(engine);
     camera::install(engine);
     mouse::install(engine);
     keep_homes(engine);
@@ -693,7 +696,13 @@ fn keep_homes(engine: &Engine) {
         return;
     };
     let homes = reflection.classes.iter().enumerate().map(|(class, info)| info.is_a(world_root) || joints_service.is_some_and(|service| service as usize == class)).collect();
-    engine.state.borrow_mut().dom.keep_homes(homes);
+    let mut state = engine.state.borrow_mut();
+    state.dom.keep_homes(homes);
+    // (what a WorldModel's change log follows below an instance that leaves its world: its index's parts, world/broadphase.rs)
+    if let (Some(base_part), Some(terrain)) = (reflection.class_id("BasePart"), reflection.class_id("Terrain")) {
+        let parts = reflection.classes.iter().map(|info| info.is_a(base_part) && !info.is_a(terrain)).collect();
+        state.dom.keep_logged_classes(parts);
+    }
 }
 
 /// The WorldRoot `id` is in (its nearest WorldRoot ancestor: the Workspace or a WorldModel), from the homes the dom keeps
