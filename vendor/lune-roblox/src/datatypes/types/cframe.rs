@@ -506,7 +506,7 @@ impl LuaExportsTable for CFrame {
             let pos = vector_arg(lua, &args, 1, "fromMatrix")?;
             let rx = vector_arg(lua, &args, 2, "fromMatrix")?;
             let ry = vector_arg(lua, &args, 3, "fromMatrix")?;
-            let rz = optional_vector_arg(lua, &args, 4, "fromMatrix")?;
+            let rz = if matches!(args.get(3), None | Some(LuaValue::Nil)) { None } else { Some(vector_arg(lua, &args, 4, "fromMatrix")?) };
             charge_host_nanos(lua, price::NEW_MATRIX);
             // (a missing Z column is X cross Y made a unit vector; not measured)
             let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx), array(ry))), array);
@@ -919,11 +919,7 @@ fn vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaR
 
 /// An optional Vector3 argument: none when not passed, else checked as [`vector_arg`] (nil passed is no Vector3).
 fn optional_vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Option<Vec3>> {
-    if matches!(args.get(index - 1), None | Some(LuaValue::Nil)) {
-        Ok(None)
-    } else {
-        vector_arg(lua, args, index, name).map(Some)
-    }
+    if index > args.len() { Ok(None) } else { vector_arg(lua, args, index, name).map(Some) }
 }
 
 /// The CFrame and the Vector3 of a + or a -.
