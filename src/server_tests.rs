@@ -531,6 +531,65 @@ fn clients_and_servers_compress_and_encode_buffers() {
     }
 }
 
+/// EncodingService:ComputeBufferHash and ComputeStringHash on a playing client and a server alike (measured in a 0.747 client and
+/// server, the same lines on both: tools/parity/probes/encoding_hash.luau): each HashAlgorithm's digest, as a buffer and as a string
+/// of its bytes, Blake2b's 32 bytes long; the algorithm is cast before the input (an item, its exact name, or its value cut toward
+/// zero), then the input, a string parameter's (a boolean warns and is hashed as its text). They answered nil and reported
+/// themselves `missing`.
+#[test]
+fn clients_and_servers_hash_buffers_and_strings() {
+    for run_context in [RunContext::Client, RunContext::Server] {
+        let lines = run(
+            run_context,
+            r#"
+        local EncodingService = game:GetService("EncodingService")
+        local function hex(Text)
+            return (string.gsub(Text, ".", function(Byte)
+                return string.format("%02x", string.byte(Byte))
+            end))
+        end
+        for _, Algorithm in Enum.HashAlgorithm:GetEnumItems() do
+            local Digest = EncodingService:ComputeBufferHash(buffer.fromstring("abc"), Algorithm)
+            local Text = EncodingService:ComputeStringHash("abc", Algorithm)
+            print(Algorithm.Name, typeof(Digest), typeof(Text), Text == buffer.tostring(Digest), hex(Text))
+        end
+        print("empty", hex(buffer.tostring(EncodingService:ComputeBufferHash(buffer.create(0), Enum.HashAlgorithm.Blake3))))
+        print("casts", hex(EncodingService:ComputeStringHash("abc", 2.5)), hex(EncodingService:ComputeStringHash("abc", "Sha1")))
+        print("boolean", hex(EncodingService:ComputeStringHash(true, Enum.HashAlgorithm.Md5)))
+        print("none", pcall(EncodingService.ComputeBufferHash, EncodingService))
+        print("string", pcall(EncodingService.ComputeBufferHash, EncodingService, "abc", Enum.HashAlgorithm.Md5))
+        print("zstd", pcall(EncodingService.ComputeStringHash, EncodingService, "abc", Enum.CompressionAlgorithm.Zstd))
+        print("enum", pcall(EncodingService.ComputeStringHash, EncodingService, "abc", Enum.HashAlgorithm))
+        print("lower", pcall(EncodingService.ComputeStringHash, EncodingService, "abc", "sha1"))
+        print("first", pcall(EncodingService.ComputeStringHash, EncodingService, true, "Nope"))
+        "#,
+            0.1,
+        );
+        for wanted in [
+            "print: Blake2b buffer string true bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319",
+            "print: Blake3 buffer string true 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
+            "print: Md5 buffer string true 900150983cd24fb0d6963f7d28e17f72",
+            "print: Sha1 buffer string true a9993e364706816aba3e25717850c26c9cd0d89d",
+            "print: Sha256 buffer string true ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "print: empty af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+            "print: casts 900150983cd24fb0d6963f7d28e17f72 a9993e364706816aba3e25717850c26c9cd0d89d",
+            "print: boolean b326b5062b2f0e69046810717534cb09",
+        ] {
+            assert!(has(&lines, wanted), "{run_context:?}: {wanted}: {lines:?}");
+        }
+        assert!(has_error(&lines, "none false", "Argument 2 missing or nil"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "string false", "Argument 1 missing or nil"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "zstd false", "Unable to cast CompressionAlgorithm to HashAlgorithm"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "enum false", "Unable to cast null to HashAlgorithm"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "lower false", "Unable to cast string to HashAlgorithm"), "{run_context:?}: {lines:?}");
+        assert!(has_error(&lines, "first false", "Unable to cast string to HashAlgorithm"), "{run_context:?}: {lines:?}");
+        // (one warning: the boolean of the call whose algorithm is refused is never cast)
+        let warned = lines.iter().filter(|line| line.starts_with("warn: argument #1 expects a string, but boolean was passed")).count();
+        assert_eq!(warned, 1, "{run_context:?}: {lines:?}");
+        assert!(!lines.iter().any(|line| line.starts_with("missing:")), "{run_context:?}: {lines:?}");
+    }
+}
+
 /// A server's output reaches its scripts: LogService.MessageOut (message, MessageType) for each line and ScriptContext.Error
 /// (message, stack trace, nil) for a script error, deferred. MessageOut gets them after the frame's Heartbeat, an error with
 /// its stack lines, on a playing client and a server alike (measured: tools/parity/probes/logservice.luau, run.mjs and

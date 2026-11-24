@@ -1,0 +1,342 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-24
+algorithms Blake2b=0 Blake3=1 Md5=2 Sha1=3 Sha256=4
+buffer Blake2b pattern0 ok buffer[32] 0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8
+buffer Blake2b pattern1 ok buffer[32] 03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314
+buffer Blake2b pattern2 ok buffer[32] 01cf79da4945c370c68b265ef70641aaa65eaa8f5953e3900d97724c2c5aa095
+buffer Blake2b pattern3 ok buffer[32] 3d8c3d594928271f44aad7a04b177154806867bcf918e1549c0bc16f9da2b09b
+buffer Blake2b pattern31 ok buffer[32] 9adf65b53153b1caec84cd717e00e01c2000d0569704ce38d065180adee5d964
+buffer Blake2b pattern32 ok buffer[32] cb2f5160fc1f7e05a55ef49d340b48da2e5a78099d53393351cd579dd42503d6
+buffer Blake2b pattern33 ok buffer[32] b7634fe13c7aca3914ee896e22cfabc9da5b4f13e72a2ccbecb6d44bbda95bcc
+buffer Blake2b pattern55 ok buffer[32] ace7db9e8f298e823b7b265bbcd004577e0029256c48684b2d7a7cdfcbff5e47
+buffer Blake2b pattern56 ok buffer[32] a6c1d35f74218e57b4dbd4ed467b41981208666738ffa0d9dc53d3de96be702a
+buffer Blake2b pattern57 ok buffer[32] 25e44457f063ae4ea799502c38d66eeefb46f520b4fc9a298df9826c9d62eea9
+buffer Blake2b pattern63 ok buffer[32] 29e41a64fbdd2fd27612228623c0702222bf367451e7324287f181cb3dcf7237
+buffer Blake2b pattern64 ok buffer[32] 10d8e6d534b00939843fe9dcc4dae48cdf008f6b8b2b82b156f5404d874887f5
+buffer Blake2b pattern65 ok buffer[32] 84c04ab082c8ae24206561f77397704b627892089a05887a2a1996472bcfe15d
+buffer Blake2b pattern111 ok buffer[32] e08b3d16f0a3b663f319da999db897488d1677048a38fa7b4f1f783e4f1974e6
+buffer Blake2b pattern112 ok buffer[32] d5587e0b33166a320dd69417adb01cb1129aff5506a2f655574cf2e264636bdb
+buffer Blake2b pattern113 ok buffer[32] 5a69194c22af2b7040a8488738f96c901ae215965d611a572932464261539fc8
+buffer Blake2b pattern127 ok buffer[32] f2fe67ff342e21b8f45e8f2e0bcd1d9243245d50ee6c78042e9c491388791c72
+buffer Blake2b pattern128 ok buffer[32] c3582f71ebb2be66fa5dd750f80baae97554f3b015663c8be377cfcb2488c1d1
+buffer Blake2b pattern129 ok buffer[32] f7f3c46ba2564ff4c4c162da1f5b605f9f1c4aa6a20652a9f9a337c1a2f5b9c9
+buffer Blake2b pattern255 ok buffer[32] d9ef0fc521b4266d16df662bec231bc2ec3989e7adeaf63169c295dc239dbbea
+buffer Blake2b pattern256 ok buffer[32] 582f782226018ec33076bd8d1c42413530ac7e1126260ffc0f306ba3befc3f24
+buffer Blake2b pattern257 ok buffer[32] 227e15ed64ee8e93eb7bc53828f76eed974f2c4ab1408c3d08f212b7f8d69904
+buffer Blake2b pattern1023 ok buffer[32] 90f21eb06ea3f72b69fafeb081d985dd05b8ec6217a92798050b704f0ad8842e
+buffer Blake2b pattern1024 ok buffer[32] d75edc54bb5acee4cc8610568e82872ce79758afd38c51dfe6ccfab01c2d191f
+buffer Blake2b pattern1025 ok buffer[32] 533c8d76c0f61487431e7c31d15417c8b53887e4765b5597d0d03cb085014afb
+buffer Blake2b pattern2048 ok buffer[32] 159bf6cd482f6efed5b4db91c4bdb9e499fac1605493f8f4fc53562e32f78fd4
+buffer Blake2b pattern2049 ok buffer[32] 7a27b280202e26796186e9987a93c42e8d71c938a74e8d04245aa4f7012639d0
+buffer Blake2b pattern3072 ok buffer[32] a92fc185f6f67a20dbe8e0ba5aa702bfa5fb142fd6b87b77fcb556c00cbfdc63
+buffer Blake2b pattern3073 ok buffer[32] bc88b44b54170d6a5b54a678af047aaff918fe04f8982a0acc36b7eec70e1b79
+buffer Blake2b pattern4096 ok buffer[32] 11c294a11dc67e3ddb25f8c06cca2721e58d2a044243abea6c7063fd17d589e5
+buffer Blake2b pattern4097 ok buffer[32] 615e89d4794280669cf1c7d4a8a5fcb8c97652bf82964fdb2c89d0a9d6146fa8
+buffer Blake2b pattern5120 ok buffer[32] f8b7a74f9fb2cc40768368e0d3381fe19f73b3ff88542912c9d41c90e777276f
+buffer Blake2b pattern5121 ok buffer[32] e0878fbf948910907572669f1626a3f13a963c4e169bdf294c26c973efb9a4ac
+buffer Blake2b pattern8192 ok buffer[32] 0c9bcf62e989906fda6f4dd9020822934c58d5ce78fcaf4a6f03d3bb62c54fc5
+buffer Blake2b pattern8193 ok buffer[32] a8a45c28d39d02a283195debef938f9d2c7eac6573d1dc7160ea29ab274dfe68
+buffer Blake2b pattern16384 ok buffer[32] 96bf38f5a0d5df76b3de7ee5b137eb7af5a1d86b5b1b0eab2f91d18b76f035e8
+buffer Blake2b pattern31744 ok buffer[32] 590daf62cab172061c2b93f42ef16cada4fe624358e84c3f5c0da16f52562317
+buffer Blake2b pattern102400 ok buffer[32] 3e296275877fb01eb568accdfab328359abfde8cfcfed8f3eb290399ae36d9c7
+buffer Blake2b abc ok buffer[32] bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319
+buffer Blake2b fox ok buffer[32] 01718cec35cd3d796dd00020e0bfecb473ad23457d063b75eff29c0ffa2e58a9
+buffer Blake2b zeros ok buffer[32] 540c9096f55d3fa730a42a1815036b42fee3b102fc20202a88ecf393b95368b4
+buffer Blake2b million-a ok buffer[32] 0741850f36cba4259628355d1073e24ddb9ca0e1bfac36fd39ae5dc2101e23a4
+buffer Blake2b pattern1048577 ok buffer[32] e4382dabecab6b7155cbc97ae52cbe07887664679bf907d18fa29df0bb4b4fa6
+buffer Blake2b fill16777217 ok buffer[32] d4272565700720042562dfee4d4c1e1feea9dc47c598bf7cb92264b3a7deea78
+buffer Blake3 pattern0 ok buffer[32] af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+buffer Blake3 pattern1 ok buffer[32] 2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213
+buffer Blake3 pattern2 ok buffer[32] 7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63
+buffer Blake3 pattern3 ok buffer[32] e1be4d7a8ab5560aa4199eea339849ba8e293d55ca0a81006726d184519e647f
+buffer Blake3 pattern31 ok buffer[32] bda80c7fe2db38be6387b35c870bd7728d67b7b6cc5eb9b0e5c7dcb21ea754c2
+buffer Blake3 pattern32 ok buffer[32] e528e95798037df410543d9f31e396ecdd458d71b157d6014398bae32fb56c65
+buffer Blake3 pattern33 ok buffer[32] 4f4e6c1dffd3a6c9959876d15aa96b5fb0da8632b995f6ca2e30503f2829fa29
+buffer Blake3 pattern55 ok buffer[32] d04ec5f6f5e7daf5ced7a1671fbe912580a56576c8bf6a2ed4b80e35548f9c13
+buffer Blake3 pattern56 ok buffer[32] 60f238116f2936698a88cda03d8df79d7431249373b048ee7a063849fe6e9742
+buffer Blake3 pattern57 ok buffer[32] ae097943d385bc9b2cd9369d91ed13a97c59b9b654b04514cd87c74bf4b9a80c
+buffer Blake3 pattern63 ok buffer[32] e9bc37a594daad83be9470df7f7b3798297c3d834ce80ba85d6e207627b7db7b
+buffer Blake3 pattern64 ok buffer[32] 4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98
+buffer Blake3 pattern65 ok buffer[32] de1e5fa0be70df6d2be8fffd0e99ceaa8eb6e8c93a63f2d8d1c30ecb6b263dee
+buffer Blake3 pattern111 ok buffer[32] 929dcdaf9b6a6e500a34978b5c9206d0258bc190f38c9e8e42fb19a4820b2171
+buffer Blake3 pattern112 ok buffer[32] c881a3c5ba84905a418f3da19726541b5bacd9e3438a741ffd980e00865fe13c
+buffer Blake3 pattern113 ok buffer[32] a2b62d6e7c7314e92e01de6c10643b7b0bfc2c780670d243e676763d7c41e390
+buffer Blake3 pattern127 ok buffer[32] d81293fda863f008c09e92fc382a81f5a0b4a1251cba1634016a0f86a6bd640d
+buffer Blake3 pattern128 ok buffer[32] f17e570564b26578c33bb7f44643f539624b05df1a76c81f30acd548c44b45ef
+buffer Blake3 pattern129 ok buffer[32] 683aaae9f3c5ba37eaaf072aed0f9e30bac0865137bae68b1fde4ca2aebdcb12
+buffer Blake3 pattern255 ok buffer[32] cb97b80a66306dd2d4f1ab7ff9fd17d3d62d88c974e8daf0ea9fbd0b1ae1b1c1
+buffer Blake3 pattern256 ok buffer[32] f462b63aae56ed9fb899ad8eb93aa35d3dd62773fda9c33bfe20f9dab5d3df5f
+buffer Blake3 pattern257 ok buffer[32] 3d41df314e2c7af6919d994b391780a7d8abb9a57b1abf64e04ec5d49428788e
+buffer Blake3 pattern1023 ok buffer[32] 10108970eeda3eb932baac1428c7a2163b0e924c9a9e25b35bba72b28f70bd11
+buffer Blake3 pattern1024 ok buffer[32] 42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7
+buffer Blake3 pattern1025 ok buffer[32] d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444
+buffer Blake3 pattern2048 ok buffer[32] e776b6028c7cd22a4d0ba182a8bf62205d2ef576467e838ed6f2529b85fba24a
+buffer Blake3 pattern2049 ok buffer[32] 5f4d72f40d7a5f82b15ca2b2e44b1de3c2ef86c426c95c1af0b6879522563030
+buffer Blake3 pattern3072 ok buffer[32] b98cb0ff3623be03326b373de6b9095218513e64f1ee2edd2525c7ad1e5cffd2
+buffer Blake3 pattern3073 ok buffer[32] 7124b49501012f81cc7f11ca069ec9226cecb8a2c850cfe644e327d22d3e1cd3
+buffer Blake3 pattern4096 ok buffer[32] 015094013f57a5277b59d8475c0501042c0b642e531b0a1c8f58d2163229e969
+buffer Blake3 pattern4097 ok buffer[32] 9b4052b38f1c5fc8b1f9ff7ac7b27cd242487b3d890d15c96a1c25b8aa0fb995
+buffer Blake3 pattern5120 ok buffer[32] 9cadc15fed8b5d854562b26a9536d9707cadeda9b143978f319ab34230535833
+buffer Blake3 pattern5121 ok buffer[32] 628bd2cb2004694adaab7bbd778a25df25c47b9d4155a55f8fbd79f2fe154cff
+buffer Blake3 pattern8192 ok buffer[32] aae792484c8efe4f19e2ca7d371d8c467ffb10748d8a5a1ae579948f718a2a63
+buffer Blake3 pattern8193 ok buffer[32] bab6c09cb8ce8cf459261398d2e7aef35700bf488116ceb94a36d0f5f1b7bc3b
+buffer Blake3 pattern16384 ok buffer[32] f875d6646de28985646f34ee13be9a576fd515f76b5b0a26bb324735041ddde4
+buffer Blake3 pattern31744 ok buffer[32] 62b6960e1a44bcc1eb1a611a8d6235b6b4b78f32e7abc4fb4c6cdcce94895c47
+buffer Blake3 pattern102400 ok buffer[32] bc3e3d41a1146b069abffad3c0d44860cf664390afce4d9661f7902e7943e085
+buffer Blake3 abc ok buffer[32] 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85
+buffer Blake3 fox ok buffer[32] 2f1514181aadccd913abd94cfa592701a5686ab23f8df1dff1b74710febc6d4a
+buffer Blake3 zeros ok buffer[32] 55a01d7f389c7df5218c21c17594c483474165234dbc041f7134c255a04d79af
+buffer Blake3 million-a ok buffer[32] 616f575a1b58d4c9797d4217b9730ae5e6eb319d76edef6549b46f4efe31ff8b
+buffer Blake3 pattern1048577 ok buffer[32] 2f053cd7472cf0cd2f9adaf45c1180255b91b9a865404a63671a0ee5f792ed33
+buffer Blake3 fill16777217 ok buffer[32] ea60d4756b82b20e04b5e902a403cb51e56f5a9100f5b1ab04de067124a72c51
+buffer Md5 pattern0 ok buffer[16] d41d8cd98f00b204e9800998ecf8427e
+buffer Md5 pattern1 ok buffer[16] 93b885adfe0da089cdf634904fd59f71
+buffer Md5 pattern2 ok buffer[16] 441077cc9e57554dd476bdfb8b8b8102
+buffer Md5 pattern3 ok buffer[16] b95f67f61ebb03619622d798f45fc2d3
+buffer Md5 pattern31 ok buffer[16] e9e77893ba926e732f483282f416ffac
+buffer Md5 pattern32 ok buffer[16] b4ffcb23737cec315a4a4d1aa2a620ce
+buffer Md5 pattern33 ok buffer[16] 5506a276a0a9acc3093f9169c73cf8c5
+buffer Md5 pattern55 ok buffer[16] 6912ee65fff2d9f9ce2508cddf8bcda0
+buffer Md5 pattern56 ok buffer[16] 51fdd1acda72405dfdfa03fcb85896d7
+buffer Md5 pattern57 ok buffer[16] 5320ef4c17ef34a0cf2db763338d25eb
+buffer Md5 pattern63 ok buffer[16] 48a6295221902e8e0938f773a7185e72
+buffer Md5 pattern64 ok buffer[16] b2d3f56bc197fd985d5965079b5e7148
+buffer Md5 pattern65 ok buffer[16] 8bd7053801c768420faf816fadba971c
+buffer Md5 pattern111 ok buffer[16] 4fad3ab7d8546851ec1bb63ea7e6f5a8
+buffer Md5 pattern112 ok buffer[16] d1fec2ac3715e791ca5f489f300381b3
+buffer Md5 pattern113 ok buffer[16] f62807c995735b44699bb8179100ce87
+buffer Md5 pattern127 ok buffer[16] 8402b21e7bc7906493bae0dac017f1f9
+buffer Md5 pattern128 ok buffer[16] 37eff01866ba3f538421b30b7cbefcac
+buffer Md5 pattern129 ok buffer[16] 46f986692847558fc38b0cece591c20f
+buffer Md5 pattern255 ok buffer[16] 158fbd8552a4d0bfe0a8667be32f9892
+buffer Md5 pattern256 ok buffer[16] f37caf20c55a8b74b224b3164409ad2d
+buffer Md5 pattern257 ok buffer[16] 645abb895f8cb9fda23b15544a72efff
+buffer Md5 pattern1023 ok buffer[16] 7437d7a881387db7c41cf6930ab5e35d
+buffer Md5 pattern1024 ok buffer[16] 9ee0a0e0c0bc0f1ff29d663d1fdf0743
+buffer Md5 pattern1025 ok buffer[16] 3f3789452b88cb32b8cbfbafe715e29a
+buffer Md5 pattern2048 ok buffer[16] 1544ef7a46131a30cf328f55979db73d
+buffer Md5 pattern2049 ok buffer[16] cb7fabac9ac9fd2cb4e79a6d12c8308e
+buffer Md5 pattern3072 ok buffer[16] 9fbab1246f634b8947f77fcc0f880856
+buffer Md5 pattern3073 ok buffer[16] fabbea69ebd535c3079f3f24afd6dc5c
+buffer Md5 pattern4096 ok buffer[16] a0c16616c91907bd14e999986cf822d5
+buffer Md5 pattern4097 ok buffer[16] e4df5b23488e51a7998f218196a6ef6d
+buffer Md5 pattern5120 ok buffer[16] 063d6a28e878bf1b7c5d7a071cdd3fb5
+buffer Md5 pattern5121 ok buffer[16] 91cc8e538610085ed7426698b7bf777f
+buffer Md5 pattern8192 ok buffer[16] 5756928d3feb9c830c61f92b56416d95
+buffer Md5 pattern8193 ok buffer[16] d70940b0f2d0a8ac92655d222ce0ecd5
+buffer Md5 pattern16384 ok buffer[16] e7b11e9c017496ec667c7bf8909d0e2d
+buffer Md5 pattern31744 ok buffer[16] 479ffce5ddbbbf1b728c1edb4e8fea34
+buffer Md5 pattern102400 ok buffer[16] 1a0f81547e5ba2e9c4a4b94a74731993
+buffer Md5 abc ok buffer[16] 900150983cd24fb0d6963f7d28e17f72
+buffer Md5 fox ok buffer[16] 9e107d9d372bb6826bd81d3542a419d6
+buffer Md5 zeros ok buffer[16] aa3a791e273bce9cf4a2a7caa9028b36
+buffer Md5 million-a ok buffer[16] 7707d6ae4e027c70eea2a935c2296f21
+buffer Md5 pattern1048577 ok buffer[16] 79b67c7fbf43b76e5b7f182328bdc4b6
+buffer Md5 fill16777217 ok buffer[16] 4e8b4a6a9d54f66843fa354a8d2ae88d
+buffer Sha1 pattern0 ok buffer[20] da39a3ee5e6b4b0d3255bfef95601890afd80709
+buffer Sha1 pattern1 ok buffer[20] 5ba93c9db0cff93f52b521d7420e43f6eda2784f
+buffer Sha1 pattern2 ok buffer[20] 3f29546453678b855931c174a97d6c0894b8f546
+buffer Sha1 pattern3 ok buffer[20] 0c7a623fd2bbc05b06423be359e4021d36e721ad
+buffer Sha1 pattern31 ok buffer[20] 43bbacb5f62a0482cbdb564171b04365ca6e27c0
+buffer Sha1 pattern32 ok buffer[20] ae5bd8efea5322c4d9986d06680a781392f9a642
+buffer Sha1 pattern33 ok buffer[20] eb90bce364635c4c23b49f493f0043579bc85c17
+buffer Sha1 pattern55 ok buffer[20] 8ae2d46729cfe68ff927af5eec9c7d1b66d65ac2
+buffer Sha1 pattern56 ok buffer[20] 636e2ec698dac903498e648bd2f3af641d3c88cb
+buffer Sha1 pattern57 ok buffer[20] 7cb1330f35244b57437539253304ea78a6b7c443
+buffer Sha1 pattern63 ok buffer[20] 6d942da0c4392b123528f2905c713a3ce28364bd
+buffer Sha1 pattern64 ok buffer[20] c6138d514ffa2135bfce0ed0b8fac65669917ec7
+buffer Sha1 pattern65 ok buffer[20] 69bd728ad6e13cd76ff19751fde427b00e395746
+buffer Sha1 pattern111 ok buffer[20] bc544e24573d592290fdaff8ecf3f7f2b00cd483
+buffer Sha1 pattern112 ok buffer[20] e4ce142d09a84a8645338dd6535cbfaaf800d320
+buffer Sha1 pattern113 ok buffer[20] 1c26461e26eb697ccc36a98714ee70caaa87a84e
+buffer Sha1 pattern127 ok buffer[20] 89d7312a903f65cd2b3e34a975e55dbea9033353
+buffer Sha1 pattern128 ok buffer[20] e6434bc401f98603d7eda504790c98c67385d535
+buffer Sha1 pattern129 ok buffer[20] 3352e41cc30b40ae80108970492b21014049e625
+buffer Sha1 pattern255 ok buffer[20] 47defa228fbd72b6de16bf15fb5ddd0d95f00cab
+buffer Sha1 pattern256 ok buffer[20] d761175408c7032430f9e22f87ce8417be700f73
+buffer Sha1 pattern257 ok buffer[20] 7818392b6be73226b0fc7fcfcde7944027aba973
+buffer Sha1 pattern1023 ok buffer[20] 1d58257e7e9cecee00473911023732e408e9bee3
+buffer Sha1 pattern1024 ok buffer[20] 0ac28084ff74933d05123496dafd3791684d9b53
+buffer Sha1 pattern1025 ok buffer[20] ca9fdc040579afc74c0e6314fee7af12bd5c4284
+buffer Sha1 pattern2048 ok buffer[20] b473a1c7d3ec7fa9036b3158a979dc0c65ab6d98
+buffer Sha1 pattern2049 ok buffer[20] 08f4013d7a63d68a95db3d9ac6d6e29e932f2808
+buffer Sha1 pattern3072 ok buffer[20] 75cfc01b8d827c264b86ab897a6c731e2902f69e
+buffer Sha1 pattern3073 ok buffer[20] b702fa948da042495a69e1bc6febeee715eb37d1
+buffer Sha1 pattern4096 ok buffer[20] 92ca8f2b4163e64a1b53e0fde263ad56cbdb75fc
+buffer Sha1 pattern4097 ok buffer[20] 199b39f39620b41326652dea09d98b57b0381329
+buffer Sha1 pattern5120 ok buffer[20] 4bc68e0b193fd30eb9998230f0c65d8439b2e282
+buffer Sha1 pattern5121 ok buffer[20] b8af1be942099162396c64018eaca2dfdf685ebb
+buffer Sha1 pattern8192 ok buffer[20] af99e56a73bb60c07a7f7154be3381d665673e75
+buffer Sha1 pattern8193 ok buffer[20] c7fac2a2751ad1552813f366c3daef8eba512436
+buffer Sha1 pattern16384 ok buffer[20] 68f3b81a11de1e1629e81555b4e70aed955d1140
+buffer Sha1 pattern31744 ok buffer[20] 58a1076d68ea10c83709bb2b51e42bf081594a37
+buffer Sha1 pattern102400 ok buffer[20] f18b928d893ae172a000efa19b80e1c04fb36414
+buffer Sha1 abc ok buffer[20] a9993e364706816aba3e25717850c26c9cd0d89d
+buffer Sha1 fox ok buffer[20] 2fd4e1c67a2d28fced849ee1bb76e7391b93eb12
+buffer Sha1 zeros ok buffer[20] 5b4085401e259f3918fb1701d3d9399c2c8cce73
+buffer Sha1 million-a ok buffer[20] 34aa973cd4c4daa4f61eeb2bdbad27316534016f
+buffer Sha1 pattern1048577 ok buffer[20] ffbc30b06f6bd51da52f9640804c9d0c4f6e2af2
+buffer Sha1 fill16777217 ok buffer[20] 934b8e60fb1c9a6d4a2c4ca45743c1d8568a79d9
+buffer Sha256 pattern0 ok buffer[32] e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+buffer Sha256 pattern1 ok buffer[32] 6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d
+buffer Sha256 pattern2 ok buffer[32] b413f47d13ee2fe6c845b2ee141af81de858df4ec549a58b7970bb96645bc8d2
+buffer Sha256 pattern3 ok buffer[32] ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc
+buffer Sha256 pattern31 ok buffer[32] 4f23c2ca8c5c962e50cd31e221bfb6d0adca19111dca8e0c62598ff146dd19c4
+buffer Sha256 pattern32 ok buffer[32] 630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd
+buffer Sha256 pattern33 ok buffer[32] 5d8fcfefa9aeeb711fb8ed1e4b7d5c8a9bafa46e8e76e68aa18adce5a10df6ab
+buffer Sha256 pattern55 ok buffer[32] 463eb28e72f82e0a96c0a4cc53690c571281131f672aa229e0d45ae59b598b59
+buffer Sha256 pattern56 ok buffer[32] da2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562
+buffer Sha256 pattern57 ok buffer[32] 2fe741af801cc238602ac0ec6a7b0c3a8a87c7fc7d7f02a3fe03d1c12eac4d8f
+buffer Sha256 pattern63 ok buffer[32] 29af2686fd53374a36b0846694cc342177e428d1647515f078784d69cdb9e488
+buffer Sha256 pattern64 ok buffer[32] fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108
+buffer Sha256 pattern65 ok buffer[32] 4bfd2c8b6f1eec7a2afeb48b934ee4b2694182027e6d0fc075074f2fabb31781
+buffer Sha256 pattern111 ok buffer[32] 60780e9451bdc43cf4530ffc95cbb0c4eb24dae2c39f55f334d679e076c08065
+buffer Sha256 pattern112 ok buffer[32] 09373f127d34e61dbbaa8bc4499c87074f2ddb10e1b465f506d7d70a15011979
+buffer Sha256 pattern113 ok buffer[32] 13aaa9b5fb739cdb0e2af99d9ac0a409390adc4d1cb9b41f1ef94f8552060e92
+buffer Sha256 pattern127 ok buffer[32] 92ca0fa6651ee2f97b884b7246a562fa71250fedefe5ebf270d31c546bfea976
+buffer Sha256 pattern128 ok buffer[32] 471fb943aa23c511f6f72f8d1652d9c880cfa392ad80503120547703e56a2be5
+buffer Sha256 pattern129 ok buffer[32] 5099c6a56203f9687f7d33f4bfdf576d31dc91f6b695ecea38b2770c87631135
+buffer Sha256 pattern255 ok buffer[32] 857df204175f077a9986709897f00ee0bcc0449585248e4b42498337e9329999
+buffer Sha256 pattern256 ok buffer[32] 5bc31b283cef0072274e97d74916552954c935794536cab632641e5ea071379d
+buffer Sha256 pattern257 ok buffer[32] a2c6cad2ffa699b14538231fef914f45d30440389e6f8d79091efba836165a2b
+buffer Sha256 pattern1023 ok buffer[32] 1c5e88a585b61754df6137d66632a7348557a88358afc401b0a0a4fc427104a9
+buffer Sha256 pattern1024 ok buffer[32] 2bce1ba628720664be4b9fdd77aae0678e5f0f3f02fc6ff641ec879094f6a404
+buffer Sha256 pattern1025 ok buffer[32] bc0b6b10b89b9487a12fda2a8cc13194e7091c217aabf8b92846274026f4bcd0
+buffer Sha256 pattern2048 ok buffer[32] b2a8170614e23194ae2951423d601987f518ce2f11205d7b0b708080103b9f76
+buffer Sha256 pattern2049 ok buffer[32] 26e1e2808e3a6cf967ca03f6749a063c5ed55f92f5874653a1faabed78346f00
+buffer Sha256 pattern3072 ok buffer[32] 5f24b2f16026ec7d0450a5a08283d3cfd47302fe859f579ed79fe7d2663b73f9
+buffer Sha256 pattern3073 ok buffer[32] b870cdfe188c14fbfc31a1be12cd7e83b63551fff30f847fa275d5d4ac409471
+buffer Sha256 pattern4096 ok buffer[32] d67c656e01756650d77717b0839985a056ec28ffe174601d690fc407a2ceffca
+buffer Sha256 pattern4097 ok buffer[32] a16560d668b843fb3be99ace41dbd18471f342bd3255a1d21204b35e43f74436
+buffer Sha256 pattern5120 ok buffer[32] 2d3fb9161493509e3fa3f5472d8a284ee687f64524f0925be67e132ef43f43e0
+buffer Sha256 pattern5121 ok buffer[32] f19db61046ca889db9bd34d779cd362c6a7198cb5a0e3a2882e7bd24a901cc1d
+buffer Sha256 pattern8192 ok buffer[32] 25df2449b2e5a35fea14e02a7158e283801a1069c9f84631b9a9dacb2f809a7f
+buffer Sha256 pattern8193 ok buffer[32] 7e3691790cd64b19d4edb1a80e988214515abeb53aa0f34ffbfe4b4bf405d120
+buffer Sha256 pattern16384 ok buffer[32] 4348e3b98e8a327b34ced39c1da9e67cdb4cd5e48e4d7960607a3ae403d35f0c
+buffer Sha256 pattern31744 ok buffer[32] 3cfe29c8d109f9f2c47826c78f931f31fdec70a2cf0ddfbba8fe8009a729dd42
+buffer Sha256 pattern102400 ok buffer[32] 74588b7f0bcc354ac14d9cf199fa3a20c05f0c7293b9075b2f2e146e718de800
+buffer Sha256 abc ok buffer[32] ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+buffer Sha256 fox ok buffer[32] d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592
+buffer Sha256 zeros ok buffer[32] 8fb20ef63ced4145fc2e983ffe597d1dcff39154c3bf21f0fa9dde6a0c50fdc9
+buffer Sha256 million-a ok buffer[32] cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0
+buffer Sha256 pattern1048577 ok buffer[32] 5769f52bc3eef28afa39c6fc68cadb7d0bd69812ae3a3d71452f519ec3c7aa56
+buffer Sha256 fill16777217 ok buffer[32] d382715005d41b23a4926b828459b890b86ecbe0ec45894990934a1cf1847486
+string Blake2b empty ok string[32] 0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8
+string Blake2b abc ok string[32] bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319
+string Blake2b zeros ok string[32] 540c9096f55d3fa730a42a1815036b42fee3b102fc20202a88ecf393b95368b4
+string Blake2b pattern1025 ok string[32] 533c8d76c0f61487431e7c31d15417c8b53887e4765b5597d0d03cb085014afb
+string Blake2b million-a ok string[32] 0741850f36cba4259628355d1073e24ddb9ca0e1bfac36fd39ae5dc2101e23a4
+string Blake3 empty ok string[32] af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262
+string Blake3 abc ok string[32] 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85
+string Blake3 zeros ok string[32] 55a01d7f389c7df5218c21c17594c483474165234dbc041f7134c255a04d79af
+string Blake3 pattern1025 ok string[32] d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444
+string Blake3 million-a ok string[32] 616f575a1b58d4c9797d4217b9730ae5e6eb319d76edef6549b46f4efe31ff8b
+string Md5 empty ok string[16] d41d8cd98f00b204e9800998ecf8427e
+string Md5 abc ok string[16] 900150983cd24fb0d6963f7d28e17f72
+string Md5 zeros ok string[16] aa3a791e273bce9cf4a2a7caa9028b36
+string Md5 pattern1025 ok string[16] 3f3789452b88cb32b8cbfbafe715e29a
+string Md5 million-a ok string[16] 7707d6ae4e027c70eea2a935c2296f21
+string Sha1 empty ok string[20] da39a3ee5e6b4b0d3255bfef95601890afd80709
+string Sha1 abc ok string[20] a9993e364706816aba3e25717850c26c9cd0d89d
+string Sha1 zeros ok string[20] 5b4085401e259f3918fb1701d3d9399c2c8cce73
+string Sha1 pattern1025 ok string[20] ca9fdc040579afc74c0e6314fee7af12bd5c4284
+string Sha1 million-a ok string[20] 34aa973cd4c4daa4f61eeb2bdbad27316534016f
+string Sha256 empty ok string[32] e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+string Sha256 abc ok string[32] ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+string Sha256 zeros ok string[32] 8fb20ef63ced4145fc2e983ffe597d1dcff39154c3bf21f0fa9dde6a0c50fdc9
+string Sha256 pattern1025 ok string[32] bc0b6b10b89b9487a12fda2a8cc13194e7091c217aabf8b92846274026f4bcd0
+string Sha256 million-a ok string[32] cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0
+fresh false 186 abc
+buffer-none error Argument 2 missing or nil 
+buffer-extra ok buffer[16] 900150983cd24fb0d6963f7d28e17f72 
+buffer-dot error Expected ':' not '.' calling member function ComputeBufferHash 
+string-none error Argument 2 missing or nil 
+string-both-wrong error Unable to cast string to HashAlgorithm 
+string-nil-both error Argument 2 missing or nil 
+string-dot error Expected ':' not '.' calling member function ComputeStringHash 
+buffer-input nil error Argument 1 missing or nil 
+string-input nil error Argument 1 missing or nil 
+buffer-input string error Argument 1 missing or nil 
+string-input string ok string[16] 900150983cd24fb0d6963f7d28e17f72 
+buffer-input buffer ok buffer[16] 900150983cd24fb0d6963f7d28e17f72 
+string-input buffer ok string[16] e9ce615056c27bf4ec06f730337160dc [argument #1 expects a string, but buffer was passed]
+buffer-input int error Argument 1 missing or nil 
+string-input int ok string[16] e4da3b7fbbce2345d7772b0674a318d5 
+buffer-input tenth error Argument 1 missing or nil 
+string-input tenth ok string[16] a9067f7abe18ea67c8040e8294f0c102 
+buffer-input nan error Argument 1 missing or nil 
+string-input nan ok string[16] f3e78f3265a769c4ce90390e0f40be55 
+buffer-input 2^63 error Argument 1 missing or nil 
+string-input 2^63 ok string[16] 8dbd96443e092a30e452efbf91f16e09 
+buffer-input true error Argument 1 missing or nil 
+string-input true ok string[16] b326b5062b2f0e69046810717534cb09 [argument #1 expects a string, but boolean was passed]
+buffer-input table error Argument 1 missing or nil 
+string-input table ok string[16] 99914b932bd37a50b983c5e7c90ae93b [argument #1 expects a string, but table was passed]
+buffer-input instance error Argument 1 missing or nil 
+string-input instance ok string[16] d9a17c1c9e8ef6866e4dbeef41c741b2 [argument #1 expects a string, but Instance was passed]
+buffer-input vector error Argument 1 missing or nil 
+string-input vector ok string[16] 66ce05ea43c73b8e33c74c12d0371bc9 [argument #1 expects a string, but Vector3 was passed]
+buffer-input cframe error Argument 1 missing or nil 
+string-input cframe ok string[16] d32338b433c327ae8e06b2d9aa8a3b80 [argument #1 expects a string, but CFrame was passed]
+buffer-input enumitem error Argument 1 missing or nil 
+string-input enumitem ok string[16] 8d6c0760e7dae464f181d5fb9f6d3cb0 [argument #1 expects a string, but EnumItem was passed]
+buffer-input enum error Argument 1 missing or nil 
+string-input enum ok string[16] 852438d026c018c4307b916406f98c62 [argument #1 expects a string, but Enum was passed]
+buffer-input function error Argument 1 missing or nil 
+string-input function ok string[16] c1c425268e68385d1ab5074c17a94f14 [argument #1 expects a string, but function was passed]
+buffer-algorithm nil error Argument 2 missing or nil 
+string-algorithm nil error Argument 2 missing or nil 
+buffer-algorithm zstd error Unable to cast CompressionAlgorithm to HashAlgorithm 
+string-algorithm zstd error Unable to cast CompressionAlgorithm to HashAlgorithm 
+buffer-algorithm enum error Unable to cast null to HashAlgorithm 
+string-algorithm enum error Unable to cast null to HashAlgorithm 
+buffer-algorithm enums error Unable to cast null to HashAlgorithm 
+string-algorithm enums error Unable to cast null to HashAlgorithm 
+buffer-algorithm value-0 ok buffer[32] bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319 
+string-algorithm value-0 ok string[32] bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319 
+buffer-algorithm value-4 ok buffer[32] ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad 
+string-algorithm value-4 ok string[32] ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad 
+buffer-algorithm value-5 error Unable to cast double to HashAlgorithm 
+string-algorithm value-5 error Unable to cast double to HashAlgorithm 
+buffer-algorithm value-2.5 ok buffer[16] 900150983cd24fb0d6963f7d28e17f72 
+string-algorithm value-2.5 ok string[16] 900150983cd24fb0d6963f7d28e17f72 
+buffer-algorithm value-4.9 ok buffer[32] ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad 
+string-algorithm value-4.9 ok string[32] ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad 
+buffer-algorithm value-neg-half ok buffer[32] bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319 
+string-algorithm value-neg-half ok string[32] bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319 
+buffer-algorithm value--1 error Unable to cast double to HashAlgorithm 
+string-algorithm value--1 error Unable to cast double to HashAlgorithm 
+buffer-algorithm value-2^32+4 error Unable to cast double to HashAlgorithm 
+string-algorithm value-2^32+4 error Unable to cast double to HashAlgorithm 
+buffer-algorithm value-nan error Unable to cast double to HashAlgorithm 
+string-algorithm value-nan error Unable to cast double to HashAlgorithm 
+buffer-algorithm value-inf error Unable to cast double to HashAlgorithm 
+string-algorithm value-inf error Unable to cast double to HashAlgorithm 
+buffer-algorithm name ok buffer[20] a9993e364706816aba3e25717850c26c9cd0d89d 
+string-algorithm name ok string[20] a9993e364706816aba3e25717850c26c9cd0d89d 
+buffer-algorithm name-lower error Unable to cast string to HashAlgorithm 
+string-algorithm name-lower error Unable to cast string to HashAlgorithm 
+buffer-algorithm name-number error Unable to cast string to HashAlgorithm 
+string-algorithm name-number error Unable to cast string to HashAlgorithm 
+buffer-algorithm bad-name error Unable to cast string to HashAlgorithm 
+string-algorithm bad-name error Unable to cast string to HashAlgorithm 
+buffer-algorithm true error Unable to cast bool to HashAlgorithm 
+string-algorithm true error Unable to cast bool to HashAlgorithm 
+buffer-algorithm buffer error Unable to cast buffer to HashAlgorithm 
+string-algorithm buffer error Unable to cast buffer to HashAlgorithm 
+buffer-algorithm vector error Unable to cast Vector3 to HashAlgorithm 
+string-algorithm vector error Unable to cast Vector3 to HashAlgorithm 
+buffer-algorithm cframe error Unable to cast CoordinateFrame to HashAlgorithm 
+string-algorithm cframe error Unable to cast CoordinateFrame to HashAlgorithm 
+buffer-algorithm function error Unable to cast Function to HashAlgorithm 
+string-algorithm function error Unable to cast Function to HashAlgorithm 
+buffer-algorithm thread error Unable to cast null to HashAlgorithm 
+string-algorithm thread error Unable to cast null to HashAlgorithm 
+buffer-algorithm newproxy error Unable to cast null to HashAlgorithm 
+string-algorithm newproxy error Unable to cast null to HashAlgorithm 
+buffer-algorithm instance error Unable to cast Instance to HashAlgorithm 
+string-algorithm instance error Unable to cast Instance to HashAlgorithm 
+buffer-algorithm dictionary error Unable to cast Dictionary to HashAlgorithm 
+string-algorithm dictionary error Unable to cast Dictionary to HashAlgorithm 
+buffer-algorithm array error Unable to cast Array to HashAlgorithm 
+string-algorithm array error Unable to cast Array to HashAlgorithm 

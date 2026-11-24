@@ -175,8 +175,9 @@ fn ray(lua: &Lua, (origin, direction): (Vec3, Vec3)) -> LuaResult<LuaMultiValue>
 /// with an array part) or "Dictionary", an Instance "Instance", an EnumItem its enum ("Unable to cast KeyCode to float"), a CFrame
 /// "CoordinateFrame", a function "Function", an RBXScriptSignal "EventInstance", an Enum, Enums, thread or plain userdata "null",
 /// any other value its typeof. Measured on a playing client and its server (Studio 0.748), the same in each of the Camera's casts
-/// (to float, int, Vector3, CoordinateFrame, CameraPanMode and Array) and in BulkMoveTo's.
-pub(super) fn cast_name(engine: &Engine, value: &LuaValue) -> String {
+/// (to float, int, Vector3, CoordinateFrame, CameraPanMode and Array) and in BulkMoveTo's; EncodingService's casts to HashAlgorithm
+/// name values the same way (0.747).
+pub(crate) fn cast_name(engine: &Engine, value: &LuaValue) -> String {
     match value {
         LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
         LuaValue::Boolean(_) => "bool".into(),

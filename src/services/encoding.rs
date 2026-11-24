@@ -3,16 +3,20 @@
 //! compressionLevel 1 by default, -7 to 22. The zstd library is the one Roblox's documentation names. Measured in a 0.747
 //! playing client and server (tools/parity/probes/encoding.luau): every member answers a buffer; an argument that is no
 //! buffer is "missing or nil"; Base64Decode refuses input that is not padded Base64; the errors' texts are the client's.
-//! ComputeBufferHash / ComputeStringHash are not emulated (Output `missing`).
+//! ComputeBufferHash / ComputeStringHash answer each HashAlgorithm's digest (digest.rs), as measured in the same client and
+//! server (tools/parity/probes/encoding_hash.luau): see [`hash_algorithm`] and [`install`].
+
+mod digest;
 
 use std::rc::Rc;
 
 use mlua::prelude::*;
 
-use super::{Behaviors, method, values};
+use super::{Behaviors, FIRST, cast_strings, method, values};
 use crate::{
     Engine,
-    lua::{Args, Flow, raise, types::LEnumItem},
+    lua::{Args, Flow, convert, raise, types::LEnumItem},
+    world::camera,
 };
 
 const MAX_DECOMPRESSED: u64 = 1 << 30;
@@ -32,6 +36,48 @@ fn algorithm_argument(engine: &Engine, args: &Args, index: usize, member: &str) 
         LuaValue::Nil => raise(format!("Argument {index} missing or nil")),
         _ => raise(format!("{member}: Enum.CompressionAlgorithm expected")),
     }
+}
+
+/// ComputeBufferHash and ComputeStringHash's algorithm, argument 2, cast before the input as a client casts it (measured, 0.747 client
+/// and server): an item of HashAlgorithm, an item's exact name ("sha1" and "4" are refused), or a number cut toward zero to an item's
+/// value (2.5 is Md5, -0.5 Blake2b; 5, -1, 2^32 + 4, NaN and infinities are refused); nil is "Argument 2 missing or nil" and anything
+/// else "Unable to cast <what it is> to HashAlgorithm", named as a cast names it ("double", "bool", "CompressionAlgorithm", "null"
+/// for an Enum: camera::cast_name). The answer is the item's name.
+fn hash_algorithm(lua: &Lua, engine: &Engine, args: &Args) -> Result<Box<str>, Flow> {
+    let value = args.get(2);
+    if value.is_nil() {
+        return raise("Argument 2 missing or nil");
+    }
+    let cut = match value {
+        LuaValue::Number(number) => LuaValue::Number(number.trunc()),
+        other => other.clone(),
+    };
+    match engine.reflection.enum_id("HashAlgorithm").and_then(|id| convert::coerce_enum(lua, engine, id, &cut)) {
+        Some(item) => Ok(engine.reflection.enum_item_info(item).name.clone()),
+        None => raise(format!("Unable to cast {} to HashAlgorithm", camera::cast_name(engine, value))),
+    }
+}
+
+/// The digest an algorithm (HashAlgorithm's item name) answers for `input`: Blake2b's is 32 bytes (measured), the others their
+/// standard lengths (Blake3 32, Md5 16, Sha1 20, Sha256 32). None for an item this does not know.
+fn digest_of(algorithm: &str, input: &[u8]) -> Option<Vec<u8>> {
+    Some(match algorithm {
+        "Blake2b" => digest::blake2b(input, 32),
+        "Blake3" => digest::blake3(input).to_vec(),
+        "Md5" => digest::md5(input).to_vec(),
+        "Sha1" => digest::sha1(input).to_vec(),
+        "Sha256" => digest::sha256(input).to_vec(),
+        _ => return None,
+    })
+}
+
+/// The digest, or nil with Output `missing` for an algorithm [`digest_of`] does not know (an item a newer API dump adds)
+fn hashed(lua: &Lua, engine: &Engine, member: &str, algorithm: &str, input: &[u8]) -> Option<Vec<u8>> {
+    let digest = digest_of(algorithm, input);
+    if digest.is_none() {
+        engine.missing(Some(lua), "EncodingService", &format!("{member} with HashAlgorithm.{algorithm}"));
+    }
+    digest
 }
 
 /// The decompressed size a Zstd frame holds, when it holds one within the limit.
@@ -87,6 +133,29 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         behaviors.add_method(service, n, method(|lua, _, _, args| {
             let input = buffer_argument(args, 1)?;
             Ok(values([LuaValue::Buffer(lua.create_buffer(base64::encode(input))?)]))
+        }));
+    }
+    // (measured: a new buffer each call; no input is too large: a client hashed a 1 GiB buffer and a 200 MiB string)
+    if let Some(n) = name("ComputeBufferHash") {
+        behaviors.add_method(service, n, method(|lua, engine, _, args| {
+            let algorithm = hash_algorithm(lua, engine, args)?;
+            let input = buffer_argument(args, 1)?;
+            let digest = hashed(lua, engine, "ComputeBufferHash", &algorithm, &input);
+            Ok(values([digest.map_or(Ok(LuaValue::Nil), |digest| lua.create_buffer(digest).map(LuaValue::Buffer))?]))
+        }));
+    }
+    // (measured: the digest's bytes as a string; an input that is no string is given the text a string parameter casts it to,
+    // with the parameter's warning: "argument #1 expects a string, but boolean was passed", none for a number)
+    if let Some(n) = name("ComputeStringHash") {
+        behaviors.add_method(service, n, method(|lua, engine, _, args| {
+            let algorithm = hash_algorithm(lua, engine, args)?;
+            let cast = cast_strings(lua, engine, args, FIRST)?;
+            let input = match cast.as_ref().unwrap_or(args).get(1) {
+                LuaValue::String(text) => text.as_bytes().to_vec(),
+                _ => return raise("Argument 1 missing or nil"),
+            };
+            let digest = hashed(lua, engine, "ComputeStringHash", &algorithm, &input);
+            Ok(values([digest.map_or(Ok(LuaValue::Nil), |digest| lua.create_string(digest).map(LuaValue::String))?]))
         }));
     }
     if let Some(n) = name("Base64Decode") {
