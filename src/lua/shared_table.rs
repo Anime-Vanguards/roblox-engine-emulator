@@ -6,7 +6,8 @@
 //!   Any other key raises at the script's line, on a read as on a write: "SharedTable keys can only be strings or numbers."
 //!   for a key of another type, "Numeric SharedTable keys must be nonnegative integers less than 2^32" for another number.
 //! - Values: booleans, numbers, strings, vectors and Roblox's value types are kept as they are ([`KEPT`]), a buffer as a copy
-//!   (and a new copy on every read), a SharedTable as itself. A table becomes a new SharedTable (each place it appears, its
+//!   (and a new copy on every read), a SharedTable as itself, an InstanceHandle as a new handle of its instance (or of none),
+//!   a new one on every read, `==` to the one written (Studio 0.748, tools/parity/probes/instance_handle.luau). A table becomes a new SharedTable (each place it appears, its
 //!   tables too, its metatable ignored; a cycle raises "Cannot convert a cyclic table to a SharedTable"). Instances,
 //!   functions and the engine's other objects raise "<Name>s can not be stored in a SharedTable"; threads, proxies, Enum,
 //!   Enums and RotationCurveKeys are dropped (the key reads nil). nil removes the key.
@@ -999,7 +1000,7 @@ const MESSAGE_LIMIT: usize = 1_000_000;
 /// The value types a SharedTable keeps as they are (measured, each read back as itself). Native vectors, booleans, numbers and
 /// strings are kept too.
 const KEPT: &[&str] = &[
-    "Axes", "BrickColor", "CFrame", "Color3", "ColorSequence", "ColorSequenceKeypoint", "EnumItem", "Faces", "Font", "NumberRange",
+    "Axes", "BrickColor", "CFrame", "Color3", "ColorSequence", "ColorSequenceKeypoint", "EnumItem", "Faces", "Font", "InstanceHandle", "NumberRange",
     "NumberSequence", "NumberSequenceKeypoint", "Path2DControlPoint", "PhysicalProperties", "Ray", "Rect", "Region3", "Region3int16",
     "SecurityCapabilities", "TweenInfo", "UDim", "UDim2", "Vector2", "Vector2int16", "Vector3int16",
 ];
@@ -1241,6 +1242,9 @@ fn fresh(lua: &Lua, engine: &Engine, store: &Store, value: LuaValue) -> LuaResul
         )*};
     }
     copied!(lune::Ray, lune::Region3, lune::PhysicalProperties, lune::NumberSequenceKeypoint, lune::ColorSequenceKeypoint, lune::Region3int16, lune::Vector2int16, lune::Vector3int16);
+    if ud.is::<super::types::LInstanceHandle>() {
+        return super::types::copy_instance_handle(lua, ud);
+    }
     if let Ok(info) = ud.borrow::<LTweenInfo>() {
         let copy = LTweenInfo {
             time: info.time.clone(),

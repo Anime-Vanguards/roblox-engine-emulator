@@ -908,7 +908,7 @@ pub fn read_value(value: Option<&crate::Value>) -> f64 {
         None | Some(Value::Nil | Value::Bool(_) | Value::Number(_) | Value::Vector3(_) | Value::Lua(_)) => 0.0,
         Some(Value::String(_)) => READ_STRING_EXTRA,
         Some(Value::EnumItem(_)) => 11.0e-9,
-        Some(Value::Instance(_)) => READ_INSTANCE_EXTRA,
+        Some(Value::Instance(_) | Value::NoInstance) => READ_INSTANCE_EXTRA,
         Some(Value::Vector2(_)) => 11.0e-9,
         Some(Value::Color3(_)) => 12.5e-9,
         Some(Value::UDim(_) | Value::UDim2(_) | Value::Rect(_) | Value::NumberRange(_) | Value::Font(_) | Value::Content(_)) => 12.0e-9,
@@ -2787,3 +2787,12 @@ pub const VECTOR_METHOD: f64 = 0.0;
 /// three runs, six readings each: 35.9 ns against 19.3; no bench row)
 pub const VECTOR_LERP: f64 = 0.0;
 pub const VECTOR_FUZZY_EQ: f64 = 16.5e-9;
+/// An InstanceHandle's `:Get()` of an instance and `==` (lua/types.rs LInstanceHandle) beyond what their calls count, fitted on
+/// the parity bench's fit rows (a rendered 0.747 client of a game's match place, six sessions; each row's fastest, as these rows
+/// read up to twice as dear in some sessions, as allocating rows do with the collector's phase): `Get` of a parented part 30.2
+/// ns whole, where the namecall's call counts 15.3 here, and of none 12.2 (24.2-24.7 in the other sessions, never more than
+/// half the part's in a session: none is not charged); `==` of two handles of one instance 25.2 and of two instances 26.3,
+/// where the metamethod counts 1.6. Held out: `Get` of a loose folder 23.9 (ree 26.3). InstanceHandle.new is the served
+/// call's price as it is: 45.7 ns of an instance (ree 55.6) and, held out, 27.6 of none (ree 22.3).
+pub const HANDLE_GET: f64 = 15.0e-9;
+pub const HANDLE_EQ: f64 = 24.0e-9;

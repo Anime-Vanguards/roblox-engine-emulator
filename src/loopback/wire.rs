@@ -11,7 +11,10 @@
 //!   0x...)`). CFrame, Color3, UDim, UDim2, Vector2, BrickColor, NumberRange, NumberSequence, ColorSequence, Rect, Ray, Font,
 //!   DateTime, PhysicalProperties, Random, TweenInfo and EnumItems arrive equal.
 //! - An Instance arrives as the receiver's own when it has it (mapped at delivery, after the batch's earlier creations), else
-//!   as nil: a server-only instance, a parentless one, a client-made one.
+//!   as nil: a server-only instance, a parentless one, a client-made one. An InstanceHandle arrives as a new handle of the
+//!   receiver's own, else as a handle of none, as one of none does: over a RemoteEvent, an UnreliableRemoteEvent and a
+//!   RemoteFunction's arguments and results, each way, alone and in a table; as a dictionary's key it is named
+//!   `<InstanceRef> (Name)` (Studio 0.748, tools/parity/probes/loopback/remote_instance_handles.luau, three captures alike).
 //! - Tables as BindableEvent copies them (lua/bindable.rs: the border decides array or dictionary, a dictionary's keys
 //!   become strings, `Invalid table key type used`, `tables cannot be cyclic`), except that a function or an instance the
 //!   receiver lacks leaves a hole in an array, a function's dictionary entry is dropped, and a table nested too deep for
@@ -40,6 +43,8 @@ pub enum Wire {
     Buffer(Box<[u8]>),
     /// The sender's instance: the receiver's copy of it, or nil
     Instance(InstanceId),
+    /// An InstanceHandle of the sender's instance, or of none: a handle of the receiver's copy, or of none
+    Handle(Option<InstanceId>),
     /// A datatype or EnumItem (never `Value::Lua`)
     Value(Value),
     Random(crate::lua::types::RandomState),
@@ -66,16 +71,20 @@ pub struct Delivered(pub Rc<Wire>);
 
 impl LuaUserData for Delivered {}
 
-/// `wire`'s instances made the receiver's (`map`), an instance it lacks nil
+/// `wire`'s instances made the receiver's (`map`): in a table, an instance it lacks nil; a handle's, one it lacks none
 fn map_instances(wire: &mut Wire, map: &dyn Fn(InstanceId) -> Option<InstanceId>) {
-    if let Wire::Table(entries) = wire {
-        for (_, item) in entries.iter_mut() {
-            match item {
-                Wire::Instance(id) => *item = map(*id).map_or(Wire::Nil, Wire::Instance),
-                Wire::Table(_) => map_instances(item, map),
-                _ => {}
+    match wire {
+        Wire::Handle(target) => *target = target.and_then(map),
+        Wire::Table(entries) => {
+            for (_, item) in entries.iter_mut() {
+                match item {
+                    Wire::Instance(id) => *item = map(*id).map_or(Wire::Nil, Wire::Instance),
+                    Wire::Table(_) | Wire::Handle(_) => map_instances(item, map),
+                    _ => {}
+                }
             }
         }
+        _ => {}
     }
 }
 
@@ -133,6 +142,9 @@ fn capture_userdata(userdata: &LuaAnyUserData) -> Wire {
     use crate::lua::types::{LDateTime, LRandom, LTweenInfo};
     if let Some(id) = crate::lua::raw::instance_of_ud(userdata) {
         return Wire::Instance(id);
+    }
+    if let Some(target) = crate::lua::types::instance_handle_of(&LuaValue::UserData(userdata.clone())) {
+        return Wire::Handle(target);
     }
     if let Ok(random) = userdata.borrow::<LRandom>() {
         return Wire::Random(random.0.get());
@@ -234,8 +246,8 @@ pub fn delivered(lua: &Lua, engine: &Engine, wire: Wire, map: &dyn Fn(InstanceId
         Wire::String(text) => Value::String(crate::value::Str::new(&text)),
         Wire::Instance(id) => map(id).map_or(Value::Nil, Value::Instance),
         Wire::Value(value) => value,
-        // (the message's own copy, kept: each handler rebuilds its table or buffer from it, copier.rs)
-        mut kept @ (Wire::Table(_) | Wire::Buffer(_)) => {
+        // (the message's own copy, kept: each handler rebuilds its table or buffer, or makes its handle, from it, copier.rs)
+        mut kept @ (Wire::Table(_) | Wire::Buffer(_) | Wire::Handle(_)) => {
             map_instances(&mut kept, map);
             Value::Lua(Box::new(LuaValue::UserData(lua.create_userdata(Delivered(Rc::new(kept)))?)))
         }
@@ -252,6 +264,7 @@ pub fn rebuilt(lua: &Lua, engine: &Engine, wire: &Wire, map: &dyn Fn(InstanceId)
         Wire::Bool(flag) => Ok(LuaValue::Boolean(*flag)),
         Wire::Number(number) => Ok(LuaValue::Number(*number)),
         Wire::String(text) => lua.create_string(&**text).map(LuaValue::String),
+        Wire::Handle(target) => crate::lua::types::instance_handle(lua, engine, target.and_then(map)),
         other => {
             let value = delivered(lua, engine, other.clone(), map)?;
             crate::lua::convert::to_lua(lua, engine, &value)
@@ -308,7 +321,7 @@ fn size_of(wire: &Wire) -> usize {
         Wire::Vector(_) => 13,
         Wire::String(text) => 1 + varint(text.len()) + text.len(),
         Wire::Buffer(bytes) => 2 + varint(bytes.len()) + bytes.len(),
-        Wire::Instance(_) => 6,
+        Wire::Instance(_) | Wire::Handle(_) => 6,
         Wire::Value(value) => 1 + 4 * floats_of(value),
         Wire::Random(_) => 17,
         Wire::TweenInfo { .. } => 1 + 8 * 4 + 3,

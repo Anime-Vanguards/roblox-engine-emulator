@@ -1150,7 +1150,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     }
 
     // Datatypes: engine types, prelude proxies, then Lune-backed script libraries
-    for name in ["Content", "DateTime", "FloatCurveKey", "Font", "Random", "RotationCurveKey", "SharedTable", "TweenInfo"] {
+    for name in ["Content", "DateTime", "FloatCurveKey", "Font", "InstanceHandle", "Random", "RotationCurveKey", "SharedTable", "TweenInfo"] {
         let library = engine.lua.borrow().libraries.get(name).cloned().expect("library");
         shared.raw_set(name, library)?;
     }

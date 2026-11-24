@@ -1051,10 +1051,12 @@ const ATTRIBUTE_TYPES: &[&str] = &[
     "NumberSequence", "ColorSequence", "NumberRange", "Rect", "Font", "Instance",
 ];
 
-/// An attribute's value as a script reads it: an Instance as an InstanceHandle (types.rs), anything else as itself
+/// An attribute's value as a script reads it: an Instance as a new InstanceHandle (types.rs), the handle of none an attribute
+/// may hold as a new handle of none, anything else as itself
 fn attribute_to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> {
     match value {
-        Value::Instance(target) => super::types::instance_handle(lua, engine, *target),
+        Value::Instance(target) => super::types::instance_handle(lua, engine, Some(*target)),
+        Value::NoInstance => super::types::instance_handle(lua, engine, None),
         other => convert::to_lua(lua, engine, other),
     }
 }
@@ -1515,7 +1517,9 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     // type", as a client casts its arguments before the method runs)
     behaviors.add_method(base, K::SetAttribute as NameId, strings(NAME, method(|_, engine, id, args| {
         let value = args.get(2);
-        // (an Instance, or the InstanceHandle a read gave, is kept by reference: Studio 0.744 takes both)
+        // (an Instance, or an InstanceHandle, is kept by reference: Studio 0.744 takes both; a handle of none is kept as such
+        // and reads back as one, listed by GetAttributes and copied by Clone, measured in a 0.748 client and server:
+        // tools/parity/probes/instance_handle.luau)
         let handle = super::types::instance_handle_of(value);
         if !value.is_nil() && handle.is_none() {
             let kind = typeof_value(engine, value);
@@ -1538,7 +1542,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             return raise(message);
         }
         let converted = match handle {
-            Some(target) => Value::Instance(target),
+            Some(Some(target)) => Value::Instance(target),
+            Some(None) => Value::NoInstance,
             None => convert::from_lua(value),
         };
         set_attribute(engine, id, name, converted);

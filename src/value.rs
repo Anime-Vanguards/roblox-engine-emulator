@@ -113,6 +113,9 @@ pub enum Value {
     String(Str),
     EnumItem(EnumItemId),
     Instance(InstanceId),
+    /// The InstanceHandle of no instance (`InstanceHandle.new(nil)`) an attribute holds: a read gives a handle of none
+    /// (lua/types.rs LInstanceHandle), unlike nil, which removes the attribute
+    NoInstance,
     UDim(dom::UDim),
     UDim2(dom::UDim2),
     Vector2(dom::Vector2),
@@ -262,6 +265,7 @@ impl Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::EnumItem(a), Value::EnumItem(b)) => a == b,
             (Value::Instance(a), Value::Instance(b)) => a == b,
+            (Value::NoInstance, Value::NoInstance) => true,
             (Value::UDim(a), Value::UDim(b)) => a == b,
             (Value::UDim2(a), Value::UDim2(b)) => a == b,
             (Value::Vector2(a), Value::Vector2(b)) => a == b,

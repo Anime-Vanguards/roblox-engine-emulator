@@ -7,7 +7,8 @@
 //! - A table whose border (`#t`) is not 0 is copied as an array: indices 1 to `#t`, holes kept, every other key
 //!   dropped (`{1, 2, Key = "v"}` arrives as `{1, 2}`, `{[1] = "a", [3] = "c"}` as `{"a"}`).
 //! - Any other table is copied as a dictionary whose keys all become strings: a number truncated to a 64-bit
-//!   integer (`1.5` -> `"1"`, `-9223372036854775808` when out of range), an Instance `<Instance> (Name)`, a
+//!   integer (`1.5` -> `"1"`, `-9223372036854775808` when out of range), an Instance `<Instance> (Name)`, an
+//!   InstanceHandle `<InstanceRef> (Name)` (`<InstanceRef> (nil)` for a handle of none; Studio 0.748), a
 //!   function `<Function> (function: 0x...)`, a table `<Table> (table: 0x...)`, a vector `<Vector3> (1, 2, 3)`, an
 //!   EnumItem `<token> (Enum.Material.Plastic)`, a buffer `<Buffer> (buffer: 0x...)`. Keys that end up equal keep the
 //!   later one in iteration order. A boolean or thread key is an error, `Invalid table key type used`.
@@ -21,8 +22,9 @@
 //!   playing client and server, tools/parity/probes/table_depth.luau). Remotes, data stores and MessagingService walk
 //!   the same way from heights of their own (loopback/wire.rs, server.luau `Data`).
 //! - A thread arrives as nil (in an array it leaves a hole, in a dictionary its entry is dropped); a buffer as a
-//!   new buffer with the same bytes; a SharedTable as a new handle of the same table (Studio 0.748, [`rebuild`]); everything
-//!   else (functions, Instances, datatypes, strings) as it is.
+//!   new buffer with the same bytes; a SharedTable as a new handle of the same table (Studio 0.748, [`rebuild`]), an
+//!   InstanceHandle as a new handle of the same instance, or of none (Studio 0.748: `==` to the one sent, not rawequal, at
+//!   top level and in a table, Fire and Invoke alike); everything else (functions, Instances, datatypes, strings) as it is.
 //! - The copy takes time in proportion to what it makes, a shared table counted each time it appears, and has no limit
 //!   of its own (a 0.747 playing client, one table of 1,000 numbers held 3,000 times: Fire 38 ms and each handler's copy
 //!   33 ms more; held 10,000 times, Fire 0.34 s). Since one small table may stand for a copy of any size (one holding the
@@ -228,6 +230,7 @@ pub(crate) fn key_name(lua: &Lua, engine: &Engine, key: &LuaValue) -> Result<Vec
         LuaValue::Vector(_) => "Vector3".to_string(),
         other => match super::typeof_value(engine, other).as_str() {
             "EnumItem" => "token".to_string(),
+            "InstanceHandle" => "InstanceRef".to_string(),
             name => name.to_string(),
         },
     };
@@ -253,6 +256,7 @@ pub fn rebuild(lua: &Lua, sent: &Sent) -> LuaResult<LuaValue> {
         Sent::Value(LuaValue::UserData(held)) if held.is::<super::shared_table::LSharedTable>() => {
             LuaValue::UserData(super::shared_table::fresh_handle(lua, held)?)
         }
+        Sent::Value(LuaValue::UserData(held)) if held.is::<super::types::LInstanceHandle>() => super::types::copy_instance_handle(lua, held)?,
         Sent::Value(value) => value.clone(),
         Sent::Buffer(bytes) => LuaValue::Buffer(lua.create_buffer(&bytes[..])?),
         Sent::Table(entries) => {
@@ -283,6 +287,10 @@ pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, t
         }
         LuaValue::UserData(held) if held.is::<super::shared_table::LSharedTable>() => {
             super::shared_table::mark_value(value);
+            let userdata = lua.create_userdata(Copied(Rc::new(Sent::Value(value.clone())))).map_err(|error| error.to_string())?;
+            Ok(Value::Lua(Box::new(LuaValue::UserData(userdata))))
+        }
+        LuaValue::UserData(held) if held.is::<super::types::LInstanceHandle>() => {
             let userdata = lua.create_userdata(Copied(Rc::new(Sent::Value(value.clone())))).map_err(|error| error.to_string())?;
             Ok(Value::Lua(Box::new(LuaValue::UserData(userdata))))
         }

@@ -5,7 +5,8 @@
 //! - What reaches the client: the children of [`CONTAINERS`] (ReplicatedFirst's only at the join), not ServerStorage's
 //!   or ServerScriptService's; the server's own Camera and the harness's RURFixtures stay the server's.
 //! - Of an instance: its class, Name, every property but those rbx-dom marks NotReplicated (LocalTransparencyModifier among
-//!   them, measured), its attributes and tags; a property holding an instance the client lacks arrives as nil; a server
+//!   them, measured), its attributes and tags; a property holding an instance the client lacks arrives as nil, an attribute
+//!   holding one as an InstanceHandle of none (Studio 0.748: [`attribute_ref`]); a server
 //!   Script without its source (one whose RunContext is Client with it), a LocalScript or ModuleScript with it.
 //! - When: a frame's changes go out when the frame ends, each as its value then, in the order first made: an instance made
 //!   and written in the frame arrives whole, three writes to one property give one Changed with the last value, a write
@@ -288,6 +289,7 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
     let reflection = &client.reflection;
     let mut ids = bridge.ids.borrow_mut();
     let mut refs: Vec<(InstanceId, NameId, InstanceId)> = Vec::new();
+    let mut attribute_refs: Vec<(InstanceId, Str, InstanceId)> = Vec::new();
     let mut created = 0u64;
     // (each list in the order its children came into the containers: Ranks, which stop here)
     let ranks = std::mem::take(&mut *bridge.ranks.borrow_mut());
@@ -295,7 +297,7 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
     let mut stack: Vec<(InstanceId, InstanceId)> = Vec::new();
     for &(name, service, copy) in &pairs {
         ids.pair(service, copy);
-        copy_values(&server_state, &mut client_state, reflection, &filter, service, copy, false, &mut refs);
+        copy_values(&server_state, &mut client_state, reflection, &filter, service, copy, false, (&mut refs, &mut attribute_refs));
         server_state.dom.at_mut(service).flags |= flags::SENT;
         push_joined(&server_state, &ranks, service, copy, &mut keyed, &mut stack);
         while let Some((node, parent)) = stack.pop() {
@@ -322,7 +324,7 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
                 }
             };
             ids.pair(node, made);
-            copy_values(&server_state, &mut client_state, reflection, &filter, node, made, paired.is_none(), &mut refs);
+            copy_values(&server_state, &mut client_state, reflection, &filter, node, made, paired.is_none(), (&mut refs, &mut attribute_refs));
             server_state.dom.at_mut(node).flags |= flags::SENT;
             push_joined(&server_state, &ranks, node, made, &mut keyed, &mut stack);
         }
@@ -332,6 +334,9 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
     for (copy, name, target) in refs {
         let value = ids.to_client.get(target).map_or(Value::Nil, Value::Instance);
         client_state.dom.at_mut(copy).store(name, value);
+    }
+    for (copy, name, target) in attribute_refs {
+        set_attribute_ref(&mut client_state, copy, &name, ids.to_client.get(target));
     }
     bridge.stats.borrow_mut().created += created;
     copying.stop();
@@ -359,12 +364,30 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
     Ok(())
 }
 
+/// An attribute's instance as the client holds it: its copy, or an InstanceHandle of none for one it lacks (measured, Studio
+/// 0.748, a play session's server and client: an attribute holding an Instance or a handle of a server-only or parentless
+/// instance reads as a handle of none on the client, set before the join and after;
+/// tools/parity/probes/loopback/remote_instance_handles.luau)
+fn attribute_ref(copy: Option<InstanceId>) -> Value {
+    copy.map_or(Value::NoInstance, Value::Instance)
+}
+
+/// Gives a copy's attribute `name`, which holds the server's instance, the client's ([`attribute_ref`]), once every copy is made
+fn set_attribute_ref(state: &mut State, copy: InstanceId, name: &Str, target: Option<InstanceId>) {
+    if let Some(slot) = state.dom.at_mut(copy).attributes.own_mut().iter_mut().find(|(held, _)| held.as_bytes() == name.as_bytes()) {
+        slot.1 = attribute_ref(target);
+    }
+}
+
 /// Copies an instance's name, replicated properties, attributes, tags and script source into its client copy
-/// (properties holding instances are noted in `refs`, set once every copy is made)
+/// (properties and attributes holding instances are noted in `refs`, set once every copy is made)
 /// (a `fresh` copy, made for it, takes them as one vector in the server's name order, as Clone gives a copy its own; a
 /// paired one of the client's keeps what it has, a service's camera say)
 #[allow(clippy::too_many_arguments)]
-fn copy_values(server: &State, client: &mut State, reflection: &Reflection, filter: &Filter, from: InstanceId, to: InstanceId, fresh: bool, refs: &mut Vec<(InstanceId, NameId, InstanceId)>) {
+fn copy_values(
+    server: &State, client: &mut State, reflection: &Reflection, filter: &Filter, from: InstanceId, to: InstanceId, fresh: bool,
+    (refs, attribute_refs): (&mut Vec<(InstanceId, NameId, InstanceId)>, &mut Vec<(InstanceId, Str, InstanceId)>),
+) {
     let source = server.dom.at(from);
     let class = source.class;
     let script = script_source(reflection, source);
@@ -382,6 +405,11 @@ fn copy_values(server: &State, client: &mut State, reflection: &Reflection, filt
         }
     }
     let attributes: crate::dom::Attributes = source.attributes.iter().filter_map(|(name, value)| super::wire::portable(value).map(|value| (name.clone(), value))).collect::<Vec<_>>().into();
+    for (name, value) in attributes.iter() {
+        if let Value::Instance(target) = value {
+            attribute_refs.push((to, name.clone(), *target));
+        }
+    }
     let tags = source.tags.clone();
     let json = source.flags & flags::JSON_MODULE;
     let (studio, studio_flags) = studio_of(source);
@@ -706,6 +734,7 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             let reflection = &client.reflection;
             let mut made: Vec<InstanceId> = Vec::with_capacity(nodes.len());
             let mut refs: Vec<(InstanceId, NameId, InstanceId)> = Vec::new();
+            let mut attribute_refs: Vec<(InstanceId, Str, InstanceId)> = Vec::new();
             {
                 let mut state = client.state.borrow_mut();
                 let mut ids = bridge.ids.borrow_mut();
@@ -724,6 +753,11 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
                         });
                         let target = state.dom.at_mut(copy);
                         target.props = crate::dom::Props::from(props);
+                        for (name, value) in node.attributes.iter() {
+                            if let Value::Instance(instance) = value {
+                                attribute_refs.push((copy, name.clone(), *instance));
+                            }
+                        }
                         target.attributes = std::mem::take(&mut node.attributes).into();
                         target.tags = node.tags.clone().into();
                         if node.json {
@@ -752,6 +786,10 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             for (copy, name, target) in refs {
                 let value = map(target).map_or(Value::Nil, Value::Instance);
                 client.state.borrow_mut().dom.at_mut(copy).store(name, value);
+            }
+            for (copy, name, target) in attribute_refs {
+                let target = map(target);
+                set_attribute_ref(&mut client.state.borrow_mut(), copy, &name, target);
             }
             // the tree enters at once: its DescendantAdded, ChildAdded, the tagged instances' added signals
             if let Some(&root) = made.first() {
@@ -785,7 +823,10 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
         }
         Msg::Attr { id, name, value } => {
             let Some(copy) = live(id) else { return Ok(()) };
-            let value = mapped(value);
+            let value = match value {
+                Value::Instance(target) => attribute_ref(map(target)),
+                other => other,
+            };
             let mut state = client.state.borrow_mut();
             core::set_attribute(&mut state, &client.reflection, copy, name, value);
         }

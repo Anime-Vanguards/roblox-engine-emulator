@@ -1,0 +1,151 @@
+# engine: Roblox Studio 0.748.0.7481526, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-24
+global table table
+global-tostring ok "table: ADDR"
+global-frozen ok true
+global-metatable ok nil
+global-keys new=function
+global-member new ok function(function: ADDR)
+global-member New ok nil
+global-member none ok nil
+global-member fromInstance ok nil
+global-member Get ok nil
+global-member Foo ok nil
+global-write error @61: attempt to modify a readonly table
+global-write-new error @64: attempt to modify a readonly table
+new none ok InstanceHandle(nil)
+new nil ok InstanceHandle(nil)
+new part ok InstanceHandle(ParityTarget)
+new loose ok InstanceHandle(Loose)
+new destroyed ok InstanceHandle(Gone)
+new game ok true
+new service ok InstanceHandle(Lighting)
+new number error InstanceHandle.new expects an Instance argument
+new numstr error InstanceHandle.new expects an Instance argument
+new string error InstanceHandle.new expects an Instance argument
+new bool error InstanceHandle.new expects an Instance argument
+new false error InstanceHandle.new expects an Instance argument
+new table error InstanceHandle.new expects an Instance argument
+new Vector3 error InstanceHandle.new expects an Instance argument
+new CFrame error InstanceHandle.new expects an Instance argument
+new EnumItem error InstanceHandle.new expects an Instance argument
+new Enum error InstanceHandle.new expects an Instance argument
+new function error InstanceHandle.new expects an Instance argument
+new thread error InstanceHandle.new expects an Instance argument
+new newproxy error InstanceHandle.new expects an Instance argument
+new buffer error InstanceHandle.new expects an Instance argument
+new signal error InstanceHandle.new expects an Instance argument
+new handle error InstanceHandle.new expects an Instance argument
+new nil-handle error InstanceHandle.new expects an Instance argument
+new extra ok InstanceHandle(ParityTarget)
+new nil-extra ok InstanceHandle(nil)
+new colon error InstanceHandle.new expects an Instance argument
+new colon-none error InstanceHandle.new expects an Instance argument
+new-direct error InstanceHandle.new expects an Instance argument
+new-direct-none ok InstanceHandle(nil)
+new-line error InstanceHandle.new expects an Instance argument
+handle typeof=InstanceHandle type=userdata tostring=ParityTarget
+empty typeof=InstanceHandle type=userdata tostring=ok "nil"
+get ok Instance(ParityTarget), true
+get-empty ok nil
+get-count ok 1, 1
+metatable ok "The metatable is locked"
+member Get ok function(function: ADDR)
+member Set error Set is not a valid member of InstanceHandle
+member Value error Value is not a valid member of InstanceHandle
+member Instance error Instance is not a valid member of InstanceHandle
+member Name error Name is not a valid member of InstanceHandle
+member Parent error Parent is not a valid member of InstanceHandle
+member ClassName error ClassName is not a valid member of InstanceHandle
+member Target error Target is not a valid member of InstanceHandle
+member IsValid error IsValid is not a valid member of InstanceHandle
+member Clear error Clear is not a valid member of InstanceHandle
+member Destroy error Destroy is not a valid member of InstanceHandle
+member Clone error Clone is not a valid member of InstanceHandle
+member GetInstance error GetInstance is not a valid member of InstanceHandle
+member IsA error IsA is not a valid member of InstanceHandle
+member get error get is not a valid member of InstanceHandle
+member Changed error Changed is not a valid member of InstanceHandle
+member Object error Object is not a valid member of InstanceHandle
+member Ref error Ref is not a valid member of InstanceHandle
+member-number error @140: invalid argument #2 (string expected, got number)
+member-table error @143: invalid argument #2 (string expected, got table)
+member-empty error Name is not a valid member of InstanceHandle
+get-same ok false, false, "function"
+get-dot-none error @153: missing argument #1 to 'Get' (InstanceHandle expected)
+get-dot-self ok Instance(ParityTarget)
+get-dot-other ok nil
+get-dot-number error @162: invalid argument #1 to 'Get' (InstanceHandle expected, got number)
+get-dot-instance error @165: invalid argument #1 to 'Get' (InstanceHandle expected, got Instance)
+get-dot-vector error @168: invalid argument #1 to 'Get' (InstanceHandle expected, got Vector3)
+get-direct error missing argument #1 to 'Get' (InstanceHandle expected)
+get-direct-number error invalid argument #1 to 'Get' (InstanceHandle expected, got number)
+get-extra ok Instance(ParityTarget)
+get-unknown-method error Set is not a valid member of InstanceHandle
+get-unknown-method-2 error Foo is not a valid member of InstanceHandle
+get-lower error get is not a valid member of InstanceHandle
+write Get error Get is not a valid member of InstanceHandle
+write Name error Name is not a valid member of InstanceHandle
+write Value error Value is not a valid member of InstanceHandle
+write Foo error Foo is not a valid member of InstanceHandle
+write-number error 1 is not a valid member of InstanceHandle
+op-add error @195: attempt to perform arithmetic (add) on InstanceHandle and number
+op-concat error @198: attempt to concatenate string with InstanceHandle
+op-len error @201: attempt to get length of a InstanceHandle value
+op-lt error @204: attempt to compare InstanceHandle < InstanceHandle
+op-le error @207: attempt to compare InstanceHandle <= InstanceHandle
+op-call error @210: attempt to call a InstanceHandle value
+op-unm error @213: attempt to perform arithmetic (unm) on InstanceHandle
+op-iter error @216: attempt to iterate over a InstanceHandle value
+eq same=true again=true rawequal=false instance=false empty=true empty-rawequal=false other=false vs-empty=false ne=false
+eq number=false nil=false newproxy=false
+key same=first again=nil instance=nil
+key count=2
+clone true true
+frozen-copy ok true
+after-rename tostring=Renamed get=Instance(Renamed)
+after-unparent tostring=Renamed get=Instance(Renamed) parent=nil
+after-destroy tostring=ok "Renamed" get=ok Instance(Renamed), true, nil
+after-destroy-eq true
+destroyed-made tostring=ok "Gone" get=ok Instance(Gone)
+loose tostring=Loose get=Instance(Loose)
+game tostring=ok true get=ok true
+attr-set-instance ok 
+attr-read typeof=InstanceHandle tostring=ParityTarget get=ok true eq-new=true rawequal-next=false
+attr-set-handle ok  ok "InstanceHandle", false, true, true
+attr-set-empty ok  ok "InstanceHandle", nil
+attr-set-empty-listed ok "FromEmpty:InstanceHandle,FromHandle:InstanceHandle,Ref:InstanceHandle"
+attr-set-destroyed-handle ok  ok "InstanceHandle", Instance(Gone)
+attr-changed FromEmpty,FromGone,FromHandle,Ref
+attr-same-again 
+attr-empty-again ok 
+attr-ref-to-empty ok  ok nil
+attr-empty-to-instance ok  ok Instance(ParityTarget)
+attr-changed-2 FromEmpty,Ref
+attr-clone ok "InstanceHandle", nil, true
+attr-instance-attr-of-handle error @328: attempt to index nil with 'GetAttribute'
+bindable-fire n=1 | InstanceHandle rawequal=false eq=true get=Instance(ParityTarget)
+bindable-fire-empty n=1 | InstanceHandle rawequal=false eq=false get=nil
+bindable-fire-table n=1 | table InstanceHandle rawequal=false get=Instance(ParityTarget) entries=number:InstanceHandle
+bindable-fire-key n=1 | table nil entries=string"<InstanceRef> (ParityTarget)":number
+bindable-fire-empty-key n=1 | table nil entries=string"<InstanceRef> (nil)":number
+bindable-fire-destroyed-key n=1 | table nil entries=string"<InstanceRef> (Gone)":number
+bindable-invoke ok "InstanceHandle", false, true, Instance(ParityTarget)
+bindable-invoke-table ok "InstanceHandle", false
+sharedtable ok "InstanceHandle"
+sharedtable-same ok false, true, false, true, nil
+sharedtable-clone ok false, true
+sharedtable-set ok "InstanceHandle"
+debug-new ok "[C]", "new", 0, true
+debug-get ok "[C]", "Get", 0, true
+new-count 1 1
+json ok "[null]"
+json-key ok "{"Key":null}"
+json-handle-key ok "{"<InstanceRef> (ParityTarget)":1}"
+json-empty-key ok "{"<InstanceRef> (nil)":1}"
+json-alone ok "null"
+objectvalue error Unable to assign property Value. Instance expected, got InstanceHandle
+parent error @422: invalid argument #3 (Instance expected, got InstanceHandle)
+property-string error Unable to assign property Name. string expected, got InstanceHandle
+tostring-concat ok "[ParityTarget]"
+string-format error @434: invalid argument #2 to 'format' (string expected, got InstanceHandle)

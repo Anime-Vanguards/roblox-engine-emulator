@@ -1,0 +1,76 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-24
+server: invoke case 1 shared n=1 | InstanceHandle(Shared in Workspace)
+server: event case 1 shared n=1 | InstanceHandle(Shared in Workspace)
+server: event case 2 own n=1 | InstanceHandle(nil)
+server: event case 3 loose n=1 | InstanceHandle(nil)
+server: event case 4 destroyed n=1 | InstanceHandle(Gone in nil)
+server: event case 5 empty n=1 | InstanceHandle(nil)
+server: event case 6 empty-then-1 n=2 | InstanceHandle(nil) | number 1
+server: event case 7 array n=1 | {1=InstanceHandle(Shared in Workspace), 2=InstanceHandle(nil), 3=number 3}
+server: event case 8 value n=1 | {Empty=InstanceHandle(nil), Key=InstanceHandle(Shared in Workspace)}
+server: event case 9 key n=1 | {<InstanceRef> (Shared)=number 1}
+server: event case 10 player n=1 | InstanceHandle(Player in Players)
+server: unreliable case 1 shared n=1 | InstanceHandle(Shared in Workspace)
+server: unreliable case 2 own n=1 | InstanceHandle(nil)
+server: unreliable case 3 loose n=1 | InstanceHandle(nil)
+server: unreliable case 4 destroyed n=1 | InstanceHandle(Gone in nil)
+server: unreliable case 5 empty n=1 | InstanceHandle(nil)
+server: unreliable case 6 empty-then-1 n=2 | InstanceHandle(nil) | number 1
+server: unreliable case 7 array n=1 | {1=InstanceHandle(Shared in Workspace), 2=InstanceHandle(nil), 3=number 3}
+server: unreliable case 8 value n=1 | {Empty=InstanceHandle(nil), Key=InstanceHandle(Shared in Workspace)}
+server: unreliable case 9 key n=1 | {<InstanceRef> (Shared)=number 1}
+server: unreliable case 10 player n=1 | InstanceHandle(Player in Players)
+server: invoke case 2 own n=1 | InstanceHandle(nil)
+server: invoke case 3 loose n=1 | InstanceHandle(nil)
+server: invoke case 4 destroyed n=1 | InstanceHandle(Gone in nil)
+server: invoke case 5 empty n=1 | InstanceHandle(nil)
+server: invoke case 6 empty-then-1 n=2 | InstanceHandle(nil) | number 1
+server: invoke case 7 array n=1 | {1=InstanceHandle(Shared in Workspace), 2=InstanceHandle(nil), 3=number 3}
+server: invoke case 8 value n=1 | {Empty=InstanceHandle(nil), Key=InstanceHandle(Shared in Workspace)}
+server: invoke case 9 key n=1 | {<InstanceRef> (Shared)=number 1}
+server: invoke case 10 player n=1 | InstanceHandle(Player in Players)
+client: event case 1 shared n=1 | InstanceHandle(Shared in Workspace)
+client: event case 2 own n=1 | InstanceHandle(nil)
+client: event case 3 loose n=1 | InstanceHandle(nil)
+client: event case 4 destroyed n=1 | InstanceHandle(Gone in nil)
+client: event case 5 empty n=1 | InstanceHandle(nil)
+client: event case 6 empty-then-1 n=2 | InstanceHandle(nil) | number 1
+client: event case 7 array n=1 | {1=InstanceHandle(Shared in Workspace), 2=InstanceHandle(nil), 3=number 3}
+client: event case 8 value n=1 | {Empty=InstanceHandle(nil), Key=InstanceHandle(Shared in Workspace)}
+client: event case 9 key n=1 | {<InstanceRef> (Shared)=number 1}
+client: event case 10 player n=1 | InstanceHandle(Player in Players)
+client: unreliable case 1 shared n=1 | InstanceHandle(Shared in Workspace)
+client: unreliable case 2 own n=1 | InstanceHandle(nil)
+client: unreliable case 3 loose n=1 | InstanceHandle(nil)
+client: unreliable case 4 destroyed n=1 | InstanceHandle(Gone in nil)
+client: unreliable case 5 empty n=1 | InstanceHandle(nil)
+client: unreliable case 6 empty-then-1 n=2 | InstanceHandle(nil) | number 1
+client: unreliable case 7 array n=1 | {1=InstanceHandle(Shared in Workspace), 2=InstanceHandle(nil), 3=number 3}
+client: unreliable case 8 value n=1 | {Empty=InstanceHandle(nil), Key=InstanceHandle(Shared in Workspace)}
+client: unreliable case 9 key n=1 | {<InstanceRef> (Shared)=number 1}
+client: unreliable case 10 player n=1 | InstanceHandle(Player in Players)
+client: attribute JoinedHolder Empty InstanceHandle(nil)
+client: attribute JoinedHolder Instance InstanceHandle(Shared in Workspace)
+client: attribute JoinedHolder Loose InstanceHandle(nil)
+client: attribute JoinedHolder Own InstanceHandle(nil)
+client: attribute JoinedHolder OwnInstance InstanceHandle(nil)
+client: attribute JoinedHolder Shared InstanceHandle(Shared in Workspace)
+client: attribute JoinedHolder names Empty,Instance,Loose,Own,OwnInstance,Shared
+client: attribute LaterHolder Empty InstanceHandle(nil)
+client: attribute LaterHolder Instance InstanceHandle(Shared in Workspace)
+client: attribute LaterHolder Loose InstanceHandle(nil)
+client: attribute LaterHolder Own InstanceHandle(nil)
+client: attribute LaterHolder OwnInstance InstanceHandle(nil)
+client: attribute LaterHolder Shared InstanceHandle(Shared in Workspace)
+client: attribute LaterHolder names Empty,Instance,Loose,Own,OwnInstance,Shared
+client: invoked case 1 shared n=1 | InstanceHandle(Shared in Workspace)
+client: invoked case 2 own n=1 | InstanceHandle(nil)
+client: invoked case 3 loose n=1 | InstanceHandle(nil)
+client: invoked case 4 destroyed n=1 | InstanceHandle(Gone in nil)
+client: invoked case 5 empty n=1 | InstanceHandle(nil)
+client: invoked case 6 empty-then-1 n=2 | InstanceHandle(nil) | number 1
+client: invoked case 7 array n=1 | {1=InstanceHandle(Shared in Workspace), 2=InstanceHandle(nil), 3=number 3}
+client: invoked case 8 value n=1 | {Empty=InstanceHandle(nil), Key=InstanceHandle(Shared in Workspace)}
+client: invoked case 9 key n=1 | {<InstanceRef> (Shared)=number 1}
+client: invoked case 10 player n=1 | InstanceHandle(Player in Players)

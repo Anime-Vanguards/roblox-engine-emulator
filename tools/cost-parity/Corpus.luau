@@ -2125,6 +2125,52 @@ datatype("Random.NextInteger", function(N)
 		local _ = R:NextInteger(1, 100)
 	end
 end)
+datatype("InstanceHandle.new", function(N)
+	local Target = Instance.new("Folder")
+	for _ = 1, N do
+		local _ = InstanceHandle.new(Target)
+	end
+end)
+datatype("InstanceHandle.new.nil", function(N)
+	for _ = 1, N do
+		local _ = InstanceHandle.new(nil)
+	end
+end)
+datatype("InstanceHandle.Get", function(N)
+	local Handle = InstanceHandle.new(Instance.new("Folder"))
+	for _ = 1, N do
+		local _ = Handle:Get()
+	end
+end)
+datatype("InstanceHandle.eq", function(N)
+	local Target = Instance.new("Folder")
+	local a, b = InstanceHandle.new(Target), InstanceHandle.new(Target)
+	for _ = 1, N do
+		local _ = a == b
+	end
+end)
+datatype("InstanceHandle.Get.part", function(N)
+	local Target = Instance.new("Part")
+	Target.Anchored = true
+	Target.Parent = workspace
+	local Handle = InstanceHandle.new(Target)
+	for _ = 1, N do
+		local _ = Handle:Get()
+	end
+	Target:Destroy()
+end)
+datatype("InstanceHandle.Get.none", function(N)
+	local Handle = InstanceHandle.new(nil)
+	for _ = 1, N do
+		local _ = Handle:Get()
+	end
+end)
+datatype("InstanceHandle.eq.other", function(N)
+	local a, b = InstanceHandle.new(Instance.new("Folder")), InstanceHandle.new(Instance.new("Folder"))
+	for _ = 1, N do
+		local _ = a == b
+	end
+end)
 datatype("Color3.eq", function(N)
 	local a, b = k1, k2
 	for _ = 1, N do

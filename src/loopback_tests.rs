@@ -615,6 +615,92 @@ return {
     assert!(has(&lines, "client print: client got nil [1 nil 3] [nil 2] 3"), "{lines:?}");
 }
 
+/// An InstanceHandle crosses a remote as the receiver's own (measured, Studio 0.748, a play session's server and client:
+/// tools/parity/probes/loopback/remote_instance_handles.luau, loopback/wire.rs): a new handle of the receiver's copy, or of
+/// none when the receiver lacks the instance, alone and in a table, each way, a key named `<InstanceRef> (Name)`; and an
+/// attribute holding an instance or a handle reaches the client as a handle of its copy, or of none (loopback/replicate.rs),
+/// set before the join and after. On main a handle arrived as nil and the attribute held the server's instance.
+#[test]
+fn instance_handles_cross_remotes_and_attributes_as_the_receivers_own() {
+    let summary = run_pair(
+        "instance-handle-remotes",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local function Show(Value)
+	if typeof(Value) ~= "InstanceHandle" then
+		return typeof(Value)
+	end
+	local Got = Value:Get()
+	return if Got then Got.Name else "none"
+end
+local function Shows(Alone, List, Keyed)
+	return Show(Alone) .. " [" .. Show(List[1]) .. " " .. Show(List[2]) .. "] " .. tostring(next(Keyed))
+end
+local function Attributes(Holder)
+	local Names = {}
+	for Name, Value in Holder:GetAttributes() do
+		table.insert(Names, Name .. "=" .. Show(Value))
+	end
+	table.sort(Names)
+	return table.concat(Names, " ")
+end
+return {
+	Server = function(Context)
+		local Shared = Instance.new("Part")
+		Shared.Name = "Shared"
+		Shared.Parent = workspace
+		local Mine = Instance.new("Folder")
+		Mine.Name = "ServerOnly"
+		Mine.Parent = game:GetService("ServerStorage")
+		local Joined = Instance.new("Folder")
+		Joined.Name = "Joined"
+		Joined:SetAttribute("Shared", InstanceHandle.new(Shared))
+		Joined:SetAttribute("Own", Mine)
+		Joined:SetAttribute("Empty", InstanceHandle.new(nil))
+		Joined.Parent = Storage
+		local Later = Instance.new("Folder")
+		Later.Name = "Later"
+		Later.Parent = Storage
+		local Remote = Instance.new("RemoteEvent")
+		Remote.Name = "Handles"
+		Remote.Parent = Storage
+		Remote.OnServerEvent:Connect(function(Player, ...)
+			print("server got", Shows(...))
+			Later:SetAttribute("Shared", Shared)
+			Later:SetAttribute("Own", InstanceHandle.new(Mine))
+			Remote:FireClient(Player, InstanceHandle.new(Shared), { InstanceHandle.new(Mine), InstanceHandle.new(nil) }, { [InstanceHandle.new(Shared)] = 1 })
+		end)
+	end,
+	Client = function(Context)
+		local Remote = Storage:WaitForChild("Handles")
+		print("client joined", Attributes(Storage:WaitForChild("Joined")))
+		Remote.OnClientEvent:Connect(function(...)
+			print("client got", Shows(...))
+		end)
+		local Mine = Instance.new("Folder")
+		Mine.Name = "ClientOnly"
+		Mine.Parent = Storage
+		Remote:FireServer(InstanceHandle.new(workspace:WaitForChild("Shared")), { InstanceHandle.new(Mine), InstanceHandle.new(nil) }, { [InstanceHandle.new(Mine)] = 1 })
+		for _ = 1, 10 do
+			RunService.Heartbeat:Wait()
+		end
+		print("client later", Attributes(Storage.Later))
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: client joined Empty=none Own=none Shared=Shared"), "{lines:?}");
+    assert!(has(&lines, "server print: server got Shared [none none] <InstanceRef> (ClientOnly)"), "{lines:?}");
+    assert!(has(&lines, "client print: client got Shared [none none] <InstanceRef> (Shared)"), "{lines:?}");
+    assert!(has(&lines, "client print: client later Own=none Shared=Shared"), "{lines:?}");
+}
+
 /// A remote copies a table once for each place it appears, as Roblox does (a 0.747 session carried one table of 1,000
 /// numbers held 1,000 times each way, and an UnreliableRemoteEvent's warning counted every byte of it), and ree stops a copy
 /// past its guard (lua/bindable.rs `COPY_VALUES`) at the sender with its own error. The big table holds 200 references to a

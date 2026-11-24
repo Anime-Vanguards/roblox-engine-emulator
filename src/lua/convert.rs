@@ -34,6 +34,8 @@ pub fn to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> 
                 LuaValue::Nil
             }
         }
+        // (only an attribute holds one: a handle of none)
+        Value::NoInstance => super::types::instance_handle(lua, engine, None)?,
         Value::UDim(v) => LuaValue::UserData(lua.create_userdata(lune::UDim::from(*v))?),
         Value::UDim2(v) => LuaValue::UserData(lua.create_userdata(lune::UDim2::from(*v))?),
         Value::Vector2(v) => LuaValue::UserData(lua.create_userdata(lune::Vector2::from(*v))?),

@@ -860,6 +860,74 @@ fn an_attribute_holds_an_instance_as_a_handle() {
     );
 }
 
+/// The InstanceHandle datatype as a playing client has it (Studio 0.748, a client and a server alike:
+/// tools/parity/probes/instance_handle.luau; lua/types.rs LInstanceHandle): a frozen `InstanceHandle` library holding `new`,
+/// which takes an Instance or nil and refuses anything else without a position; `Get`, a new function at each read; a handle of
+/// none that prints nil; the member errors; `==` by instance; and the copies an attribute, a Bindable and a SharedTable give.
+#[test]
+fn an_instance_handle_holds_an_instance_or_none_as_a_client_does() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Target = Instance.new("Part")
+        Target.Name = "Target"
+        Target.Parent = workspace
+        local Keys = {}
+        for Key, Value in InstanceHandle do
+            table.insert(Keys, Key .. "=" .. typeof(Value))
+        end
+        print(type(InstanceHandle), table.isfrozen(InstanceHandle), table.concat(Keys, ","), (select(2, pcall(function() InstanceHandle.Foo = 1 end))))
+        local Handle, Empty = InstanceHandle.new(Target), InstanceHandle.new(nil)
+        print(typeof(Handle), tostring(Handle), typeof(Empty), tostring(Empty), tostring(InstanceHandle.new()), rawequal(Handle:Get(), Target), Empty:Get())
+        print(select(2, pcall(InstanceHandle.new, 5)), (select(2, pcall(function() return InstanceHandle.new(Handle) end))), tostring(InstanceHandle.new(Target, 5)))
+        print(Handle.Get == Handle.Get, Handle.Get(Empty), (select(2, pcall(Handle.Get))), (select(2, pcall(Handle.Get, Vector3.one))))
+        print((select(2, pcall(function() return Handle.Name end))), (select(2, pcall(function() return Handle:Set() end))), (select(2, pcall(function() Handle.Get = 1 end))), (select(2, pcall(function() Handle[1] = 1 end))))
+        print(Handle == InstanceHandle.new(Target), rawequal(Handle, InstanceHandle.new(Target)), Empty == InstanceHandle.new(), Handle == Empty, Handle == Target, ({ [Handle] = 1 })[InstanceHandle.new(Target)])
+        Target.Name = "Renamed"
+        Target:Destroy()
+        print(tostring(Handle), rawequal(Handle:Get(), Target), tostring(InstanceHandle.new(Target)))
+        local Holder = Instance.new("Folder")
+        local Changes = 0
+        Holder.AttributeChanged:Connect(function() Changes += 1 end)
+        Holder:SetAttribute("Empty", Empty)
+        Holder:SetAttribute("Empty", InstanceHandle.new())
+        Holder:SetAttribute("Ref", Handle)
+        task.wait()
+        local Read = Holder:GetAttribute("Empty")
+        print(typeof(Read), Read:Get(), typeof(Holder:GetAttributes().Empty), typeof(Holder:Clone():GetAttribute("Empty")), rawequal(Holder:GetAttribute("Ref"):Get(), Target), Changes)
+        local Bindable = Instance.new("BindableEvent")
+        Bindable.Event:Connect(function(Alone, List, Keyed)
+            local Key = next(Keyed)
+            print(rawequal(Alone, Handle), Alone == Handle, rawequal(List[1], Handle), List[1] == Handle, Key)
+        end)
+        Bindable:Fire(Handle, { Handle }, { [Empty] = 1 })
+        task.wait()
+        local Shared = SharedTable.new({ Handle })
+        print(rawequal(Shared[1], Handle), Shared[1] == Handle, rawequal(Shared[1], Shared[1]))
+        local Http = game:GetService("HttpService")
+        print(Http:JSONEncode({ Handle }), Http:JSONEncode({ [Handle] = 1 }))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        vec![
+            "print: table true new=function Test:9: attempt to modify a readonly table",
+            "print: InstanceHandle Target InstanceHandle nil nil true nil",
+            "print: InstanceHandle.new expects an Instance argument InstanceHandle.new expects an Instance argument Target",
+            "print: false nil missing argument #1 to 'Get' (InstanceHandle expected) invalid argument #1 to 'Get' (InstanceHandle expected, got Vector3)",
+            "print: Name is not a valid member of InstanceHandle Set is not a valid member of InstanceHandle Get is not a valid member of InstanceHandle 1 is not a valid member of InstanceHandle",
+            "print: true false true false false nil",
+            "print: Renamed true Renamed",
+            "print: InstanceHandle nil InstanceHandle InstanceHandle true 2",
+            "print: false true false true <InstanceRef> (nil)",
+            "print: false true false",
+            r#"print: [null] {"<InstanceRef> (Renamed)":1}"#,
+        ]
+    );
+}
+
 /// Texts and forms measured in a playing client (Studio 0.744; tools/parity/probes/hierarchy.luau, values.luau,
 /// coercion.luau, frame_phases.luau, lifetime.luau; `typeof()` from a function is at its line: Studio 0.747,
 /// engine_functions.luau).
@@ -6556,6 +6624,14 @@ fn the_work_clock_prices_datatype_operations_as_the_studio_bench_measured() {
         Within("UDim2.fromOffset", Per(function(N) for _ = 1, N do local _ = UDim2.fromOffset(10, 10) end end), 24, 42)
         Within("ColorSequence.new", Per(function(N) for _ = 1, N do local _ = ColorSequence.new(K, L) end end), 30, 52)
         Within("NumberSequence.new", Per(function(N) for _ = 1, N do local _ = NumberSequence.new(0.5) end end), 28, 82)
+        -- InstanceHandle (cost.rs HANDLE_GET, HANDLE_EQ; each row's fastest of six sessions): Get of a parented part 30.2, of
+        -- none 12.2, == of two handles of one instance 25.2, new of an instance 45.7 (ree's served call, 55.6) and of none 27.6
+        local Handle, Same, Empty = InstanceHandle.new(workspace), InstanceHandle.new(workspace), InstanceHandle.new(nil)
+        Within("InstanceHandle:Get", Per(function(N) for _ = 1, N do local _ = Handle:Get() end end), 23, 39)
+        Within("InstanceHandle:Get of none", Per(function(N) for _ = 1, N do local _ = Empty:Get() end end), 8, 16)
+        Within("InstanceHandle ==", Per(function(N) for _ = 1, N do local _ = Handle == Same end end), 19, 33)
+        Within("InstanceHandle.new", Per(function(N) for _ = 1, N do local _ = InstanceHandle.new(workspace) end end), 35, 70)
+        Within("InstanceHandle.new(nil)", Per(function(N) for _ = 1, N do local _ = InstanceHandle.new(nil) end end), 18, 36)
         print("ok")
         "#,
     );

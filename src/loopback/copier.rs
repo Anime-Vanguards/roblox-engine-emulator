@@ -297,7 +297,7 @@ fn collect_objects(lua: &Lua, engine: &Engine, wire: &Wire, map: &dyn Fn(Instanc
             Some(mapped) if engine.state.borrow().dom.get(mapped).is_some() => crate::lua::instance_value(lua, engine, mapped)?,
             _ => LuaValue::Boolean(false),
         }),
-        Wire::Value(_) | Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) => out.push(super::wire::rebuilt(lua, engine, wire, map)?),
+        Wire::Value(_) | Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) | Wire::Handle(_) => out.push(super::wire::rebuilt(lua, engine, wire, map)?),
         _ => {}
     }
     Ok(())
@@ -341,7 +341,7 @@ unsafe fn push_wire(state: *mut ffi::lua_State, wire: &Wire, next: &mut i64) {
                     }
                 }
             }
-            Wire::Instance(_) | Wire::Value(_) | Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) => {
+            Wire::Instance(_) | Wire::Value(_) | Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) | Wire::Handle(_) => {
                 ffi::lua_rawgeti(state, 1, *next as _);
                 *next += 1;
                 if matches!(wire, Wire::Instance(_)) && ffi::lua_type(state, -1) == ffi::LUA_TBOOLEAN {

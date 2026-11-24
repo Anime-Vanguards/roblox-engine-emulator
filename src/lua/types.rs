@@ -295,48 +295,107 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
 
 // InstanceHandle
 
-/// An attribute's Instance as GetAttribute and GetAttributes hand it back (Studio 0.744, measured in a playing client:
-/// tools/parity/probes/instance_attributes.luau): a userdata of type InstanceHandle, a new one at every read (never
-/// rawequal to another, so a table key of one is not found by the next), that prints the instance's current Name (after
-/// a rename, an unparenting and a Destroy alike), has no members (`Name is not a valid member of InstanceHandle`, for
-/// methods too) and equals a handle of the same instance but never the instance. It keeps its instance's userdata as its
-/// user value, so the instance lives while a script keeps the handle.
-pub struct LInstanceHandle(pub crate::InstanceId);
+/// An InstanceHandle: a reference to an instance, or to none, as a playing client has it (Studio 0.747 and 0.748, a client and
+/// a server alike: tools/parity/probes/instance_handle.luau; 0.744: instance_attributes.luau).
+///
+/// - `InstanceHandle.new(instance)` makes one of any Instance (a parentless or destroyed one, a service, the DataModel), `new()`
+///   and `new(nil)` one of none, extra arguments ignored; any other argument, a handle too, raises `InstanceHandle.new expects
+///   an Instance argument`, without a position. The library is a frozen table holding `new` alone.
+/// - Its one member is `Get`, which answers the instance (rawequal to it, a destroyed one too) or nil. Each read of `handle.Get`
+///   gives a new function (`h.Get == h.Get` is false), a C function named Get whose wrong self raises Luau's own errors at the
+///   calling line (`invalid argument #1 to 'Get' (InstanceHandle expected, got number)`, `missing argument #1 to 'Get'
+///   (InstanceHandle expected)`); `:Get()` runs it through a `__namecall`. Any other string key, read, written or called as a
+///   method, raises `Name is not a valid member of InstanceHandle` without a position, as does writing Get or a number key
+///   (`1 is not a valid member ...`); a read with a key of another type raises `invalid argument #2 (string expected, got
+///   number)` at the calling line.
+/// - tostring is the instance's current Name (after a rename, an unparenting and a Destroy alike), `nil` for none. Two handles
+///   are `==` when they hold the same instance or both none, never `==` an instance; each is a userdata of its own, never
+///   rawequal to another (a table keyed by one does not find the next), and every engine value that hands one back (an
+///   attribute's read, a Bindable's, a remote's, a SharedTable's) makes a new one.
+///
+/// A handle keeps its instance's userdata as its user value, so the instance lives while a script keeps the handle.
+pub struct LInstanceHandle(pub Option<crate::InstanceId>);
 
-pub fn instance_handle(lua: &Lua, engine: &Engine, id: crate::InstanceId) -> LuaResult<LuaValue> {
-    if engine.state.borrow().dom.get(id).is_none() {
-        return Ok(LuaValue::Nil);
+/// The error of InstanceHandle.new given anything but an Instance or nil (measured, without a position)
+const HANDLE_NEW_EXPECTS: &str = "InstanceHandle.new expects an Instance argument";
+
+/// A new handle of `target`, or of none; a target the engine no longer has is none (what a receiver that lacks the instance
+/// gets: loopback/wire.rs).
+pub fn instance_handle(lua: &Lua, engine: &Engine, target: Option<crate::InstanceId>) -> LuaResult<LuaValue> {
+    let target = target.filter(|id| engine.state.borrow().dom.get(*id).is_some());
+    let handle = lua.create_any_userdata(LInstanceHandle(target))?;
+    if let Some(id) = target {
+        handle.set_user_value(super::instance_value(lua, engine, id)?)?;
     }
-    let handle = lua.create_any_userdata(LInstanceHandle(id))?;
-    handle.set_user_value(super::instance_value(lua, engine, id)?)?;
     Ok(LuaValue::UserData(handle))
 }
 
-/// The instance an InstanceHandle refers to
-pub fn instance_handle_of(value: &LuaValue) -> Option<crate::InstanceId> {
+/// The instance an InstanceHandle holds (`Some(None)` for a handle of none); None for any other value
+pub fn instance_handle_of(value: &LuaValue) -> Option<Option<crate::InstanceId>> {
     match value {
         LuaValue::UserData(ud) => ud.borrow::<LInstanceHandle>().ok().map(|handle| handle.0),
         _ => None,
     }
 }
 
+/// Charges the work clock `seconds` for a handle's operation, and the profiler's account of the call (as `R.Charge` does)
+fn charge_handle(engine: &Engine, seconds: f64) {
+    let state = engine.state.borrow();
+    state.sched.charge(seconds);
+    if !state.sched.is_muted() {
+        crate::boundary::add_cost(seconds);
+    }
+}
+
+/// A new handle of what `held` (an InstanceHandle) holds, keeping its instance as `held` does: the copy a Bindable and a
+/// SharedTable's read hand out
+pub fn copy_instance_handle(lua: &Lua, held: &LuaAnyUserData) -> LuaResult<LuaValue> {
+    let target = held.borrow::<LInstanceHandle>()?.0;
+    let copy = lua.create_any_userdata(LInstanceHandle(target))?;
+    if target.is_some() {
+        copy.set_user_value(held.user_value::<LuaValue>()?)?;
+    }
+    Ok(LuaValue::UserData(copy))
+}
+
 fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
-    // (an assignment raises the same text: not measured)
-    let no_member = |lua: &Lua, engine: &Rc<Engine>, name: &str| {
-        wrapped(lua, engine, name, |_, args| {
-            let args = Args::new(args);
-            raise(format!("{} is not a valid member of InstanceHandle", key_text(args.get(1))))
+    // Get, for `.` (a new C function each read: [`LInstanceHandle`]) and for `:` (the __namecall's, whose self always is a handle)
+    let e = engine.clone();
+    let get = lua.create_function(move |lua, args: LuaMultiValue| {
+        let args = Args::new(args);
+        super::encode(lua, match instance_handle_of(args.get(0)) {
+            Some(Some(id)) if e.state.borrow().dom.get(id).is_some() => {
+                charge_handle(&e, crate::cost::HANDLE_GET);
+                super::instance_value(lua, &e, id).map(|value| values([value])).map_err(Flow::from)
+            }
+            Some(_) => Ok(values([LuaValue::Nil])),
+            None if args.len() == 0 => raise_at_caller("missing argument #1 to 'Get' (InstanceHandle expected)"),
+            None => raise_at_caller(format!("invalid argument #1 to 'Get' (InstanceHandle expected, got {})", typeof_value(&e, args.get(0)))),
         })
-    };
-    let index = no_member(lua, engine, "__index")?;
-    let newindex = no_member(lua, engine, "__newindex")?;
+    })?;
+    let e = engine.clone();
+    let dotted = get.clone();
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
+        let args = Args::new(args);
+        if let LuaValue::String(key) = args.get(1)
+            && &*key.as_bytes() == b"Get"
+        {
+            return Ok(values([LuaValue::Function(super::cfunction::over_rust(lua, "Get", super::cfunction::Kind::Served, dotted.clone())?)]));
+        }
+        unknown_member(&e, args.get(1), "InstanceHandle", false)
+    })?;
+    let newindex = read_only_members(lua, engine, "InstanceHandle", &[])?;
     let e = engine.clone();
     let tostring = lua.create_function(move |_, this: LuaValue| {
         let state = e.state.borrow();
-        let name = instance_handle_of(&this).and_then(|id| state.dom.get(id)).map(|instance| instance.name.to_str_lossy().into_owned());
-        Ok(name.unwrap_or_default())
+        Ok(match instance_handle_of(&this).flatten().and_then(|id| state.dom.get(id)) {
+            Some(instance) => instance.name.to_str_lossy().into_owned(),
+            None => "nil".to_string(),
+        })
     })?;
-    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| {
+    let e = engine.clone();
+    let eq = lua.create_function(move |_, (a, b): (LuaValue, LuaValue)| {
+        charge_handle(&e, crate::cost::HANDLE_EQ);
         Ok(matches!((instance_handle_of(&a), instance_handle_of(&b)), (Some(a), Some(b)) if a == b))
     })?;
     lua.register_userdata_type::<LInstanceHandle>(|registry| {
@@ -346,8 +405,32 @@ fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         registry.add_meta_field("__tostring", tostring);
         registry.add_meta_field("__eq", eq);
     })?;
-    let sample = lua.create_any_userdata(LInstanceHandle(crate::InstanceId { index: u32::MAX, generation: u32::MAX }))?;
-    lock_metatable(lua, &sample)
+    let sample = lua.create_any_userdata(LInstanceHandle(None))?;
+    lock_metatable(lua, &sample)?;
+    let calls = lua.create_table()?;
+    calls.raw_set("Get", get)?;
+    super::raw::set_table_namecall(lua, &sample, calls, "InstanceHandle", lua.create_table()?)?;
+
+    let e = engine.clone();
+    let library = lua.create_table()?;
+    library.set(
+        "new",
+        wrapped(lua, engine, "new", move |lua, args| {
+            let args = Args::new(args);
+            let target = match args.get(0) {
+                LuaValue::Nil => None,
+                LuaValue::UserData(ud) => match super::raw::instance_of_ud(ud) {
+                    Some(id) => Some(id),
+                    None => return raise_plain(HANDLE_NEW_EXPECTS),
+                },
+                _ => return raise_plain(HANDLE_NEW_EXPECTS),
+            };
+            Ok(values([instance_handle(lua, &e, target)?]))
+        })?,
+    )?;
+    library.set_readonly(true);
+    engine.lua.borrow_mut().libraries.insert("InstanceHandle", library);
+    Ok(())
 }
 
 // Enums
