@@ -1660,7 +1660,8 @@ fn a_parts_joints_keep_their_order_as_joints_come_and_go() {
 /// A part entering a world pays for its joints (world/joints.rs reparented, cost.rs joints_entering), as a playing client's move
 /// does (Studio 0.747): beyond the same part's move with none, 1,000 welds in the world that cannot link (disabled) cost the
 /// Parent write 0.05 us each (looked at), 1,000 that link it to anchored parts 0.7 us each (looked at from both their parts and
-/// linked) and a link change's price (its assembly charged already in the frame), 1,000 outside every world nothing, and 1,000
+/// linked) and a later link change's price (its assembly charged already in the frame, the frame's first link it starts after one
+/// it ended: LINK_REJOINED), 1,000 outside every world nothing, and 1,000
 /// carried in under it at least 0.4 us each (looked at from both parts and
 /// brought into the world, besides what the write pays for carrying them), into the Workspace and into a WorldModel alike. The
 /// write used to cost the same with any number of joints.
@@ -1668,13 +1669,13 @@ fn a_parts_joints_keep_their_order_as_joints_come_and_go() {
 fn a_part_entering_a_world_pays_for_its_joints() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    let (looked, linked, entered, changed) = (crate::cost::JOINT_LOOKED_AT, crate::cost::JOINT_LINKED, crate::cost::JOINT_ENTERED, crate::cost::LINK_CHANGED);
+    let (looked, linked, entered, changed, rejoined) = (crate::cost::JOINT_LOOKED_AT, crate::cost::JOINT_LINKED, crate::cost::JOINT_ENTERED, crate::cost::LINK_CHANGED, crate::cost::LINK_REJOINED);
     run(
         &lua,
         &engine,
         &format!(
             r#"
-        local LOOKED, LINKED, ENTERED, CHANGED, N = {looked:e}, {linked:e}, {entered:e}, {changed:e}, 1000
+        local LOOKED, LINKED, ENTERED, CHANGED, REJOINED, N = {looked:e}, {linked:e}, {entered:e}, {changed:e}, {rejoined:e}, 1000
         local function Part(Name, Anchored)
             local P = Instance.new("Part")
             P.Name, P.Anchored, P.CanCollide, P.CFrame = Name, Anchored, false, CFrame.new(0, 50, 0)
@@ -1685,6 +1686,8 @@ fn a_part_entering_a_world_pays_for_its_joints() {
         for _, Into in {{ workspace, World }} do
             local Work = {{}}
             for _, Kind in {{ "none", "outside", "inactive", "linked", "carried" }} do
+                -- (each kind in a frame of its own: the moves' link changes are the frame's)
+                task.wait()
                 local Box = Instance.new("Folder")
                 Box.Parent = Into
                 local P = Part("P", false)
@@ -1710,7 +1713,7 @@ fn a_part_entering_a_world_pays_for_its_joints() {
             end
             Is("outside", 0)
             Is("inactive", N * LOOKED)
-            Is("linked", N * (2 * LOOKED + LINKED) + CHANGED)
+            Is("linked", N * (2 * LOOKED + LINKED) + CHANGED + REJOINED)
             local Carried = Work.carried - Work.none
             assert(Carried >= N * (2 * LOOKED + ENTERED), `{{Into.Name}}: welds carried in cost the move {{Carried * 1e6}} us beyond none`)
         end
@@ -2051,7 +2054,7 @@ fn assembly_writes_pay_for_the_parts_and_joints_they_change() {
 /// AssemblyCenterOfMass read twice, and in the next frame the leaf anchored and unanchored. The first change of each frame costs
 /// LINK_PART more for each part beyond the small hub's, and the first centre read after it BODY_REBUILT_PART each; the later change
 /// and read cost the same at either size. The small hub's first change costs LINK_FRAME and the first change of its two pieces
-/// (link_assembly) more than its second. Each of those cost the same at any size before.
+/// (link_assembly) more than its second, less the second's LINK_REJOINED. Each of those cost the same at any size before.
 #[test]
 fn link_changes_pay_for_their_assembly_once_a_frame() {
     let (lua, engine) = start_play();
@@ -2121,8 +2124,9 @@ fn link_changes_pay_for_their_assembly_once_a_frame() {
     ] {
         run(&lua, &engine, &format!("local Extra = shared.Big.{name} - shared.Small.{name} assert(math.abs(Extra - {want:e}) < 1e-9, `{name}: {{Extra}} s more for 1,001 parts than 11, not {want:e}`)"));
     }
-    // (the weld disabled leaves the hub's 10 parts and the leaf alone, the first change of each in the frame)
-    let first = crate::cost::LINK_FRAME + crate::cost::link_assembly(10) + crate::cost::link_assembly(1);
+    // (the weld disabled leaves the hub's 10 parts and the leaf alone, the first change of each in the frame; the second, which
+    // starts the link the first ended, is the frame's first rejoin)
+    let first = crate::cost::LINK_FRAME + crate::cost::link_assembly(10) + crate::cost::link_assembly(1) - crate::cost::LINK_REJOINED;
     run(&lua, &engine, &format!("local Extra = shared.Small.First - shared.Small.Again assert(math.abs(Extra - {first:e}) < 1e-9, `the frame's first change cost {{Extra}} s more than the second, not {first:e}`)"));
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
@@ -2286,6 +2290,84 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
         run(&lua, &engine, &format!("local Extra = shared.Small.{kind}.First - shared.Small.{kind}.Later assert(Extra > {least:e}, `{kind}: the frame's first change cost {{Extra}} s more than the second`)"));
     }
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
+/// Two later link changes in a frame cost more, as a playing client's do (cost.rs LINK_SPLIT_AGAIN, LINK_REJOINED): on an anchored hub
+/// welded to 100 parts, two leaves' welds disabled and enabled again in turn in a frame, the second disable costs LINK_SPLIT_AGAIN
+/// more than the last enable and the first enable LINK_REJOINED more; with another hub's weld disabled first in the frame, the first
+/// hub's disable costs LINK_SPLIT_AGAIN more than it costs at a frame's start and its enable LINK_REJOINED more than the other hub's
+/// enable after it. Each cost LINK_CHANGED alone (Studio 0.747: 4.0 to 8.7 us and 7.6 to 14.4, where the others cost 1.8 to 2.9).
+#[test]
+fn a_frames_first_rejoin_and_second_split_cost_more() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let (again, rejoined, frame) = (crate::cost::LINK_SPLIT_AGAIN, crate::cost::LINK_REJOINED, crate::cost::LINK_FRAME);
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        workspace.Gravity = 0
+        local AGAIN, REJOINED, FRAME = {again:e}, {rejoined:e}, {frame:e}
+        local function Part(Anchored)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.CFrame = Anchored, false, CFrame.new(0, 300, 0)
+            P.Parent = workspace
+            return P
+        end
+        local function Star(Count)
+            local Hub, Welds = Part(true), {{}}
+            for Index = 1, Count do
+                local W = Instance.new("Weld")
+                W.Part0, W.Part1 = Hub, Part(false)
+                W.Parent = W.Part1
+                Welds[Index] = W
+            end
+            return Welds
+        end
+        local A, B = Star(100), Star(100)
+        -- (a weld that links nothing, toggled first in each frame: the frame's first write is not what is compared)
+        local Spare = Instance.new("Weld")
+        Spare.Parent = workspace
+        local function Spend(F)
+            local Start = os.clock()
+            F()
+            return os.clock() - Start
+        end
+        local function Is(Name, Got, Want)
+            assert(math.abs(Got - Want) < 1e-9, `{{Name}}: {{Got * 1e6}} us more, where {{Want * 1e6}}`)
+        end
+        -- (a first round runs the code once: its first run's cold code is not what is compared)
+        for Round = 1, 2 do
+            task.wait()
+            local _ = A[1].Enabled, A[2].Enabled, B[1].Enabled
+            Spare.Enabled = not Spare.Enabled
+            local Off1 = Spend(function() A[1].Enabled = false end)
+            local Off2 = Spend(function() A[2].Enabled = false end)
+            local On1 = Spend(function() A[1].Enabled = true end)
+            local On2 = Spend(function() A[2].Enabled = true end)
+            task.wait()
+            local _ = A[1].Enabled, B[1].Enabled
+            Spare.Enabled = not Spare.Enabled
+            local First = Spend(function() A[1].Enabled = false end)
+            A[1].Enabled = true
+            task.wait()
+            local _ = A[1].Enabled, B[1].Enabled
+            Spare.Enabled = not Spare.Enabled
+            B[1].Enabled = false
+            local Second = Spend(function() A[1].Enabled = false end)
+            local Rejoin = Spend(function() A[1].Enabled = true end)
+            local Other = Spend(function() B[1].Enabled = true end)
+            if Round == 2 then
+                Is("the second disable", Off2 - On2, AGAIN)
+                Is("the first enable", On1 - On2, REJOINED)
+                Is("a disable after another hub's", Second - (First - FRAME), AGAIN)
+                Is("its enable", Rejoin - Other, REJOINED)
+            end
+        end
+        "#
+        ),
+    );
 }
 
 /// Link changes of every kind in a large assembly walk none of it: 300 rounds on an anchored hub welded to 5,000 parts of a leaf's

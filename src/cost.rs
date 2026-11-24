@@ -1541,13 +1541,21 @@ pub fn joints_reanchored(changed: usize, links: usize) -> f64 {
 /// = 1 to 10,000 parts and chains of them; docs/engine.md "Rigid assemblies", 2026-11-24) spends 31 to 66 us on a frame's first
 /// link change ([`LINK_FRAME`] beyond the rest), 6 to 20 us on the first change of another assembly in that frame
 /// ([`LINK_ASSEMBLY`] beyond a change's own), each time 0.085 us a part of the assembly ([`LINK_PART`]: 871 to 921 us at 10,000
-/// welded to a hub, 69 to 131 at 1,000, a leaf's weld disabled or enabled or the leaf anchored or not), and 2.3 to 5.5 us on each
-/// later change of an assembly changed in the frame, whatever its size ([`LINK_CHANGED`] beyond the write's own price). The other
+/// welded to a hub, 69 to 131 at 1,000, a leaf's weld disabled or enabled or the leaf anchored or not), and 1.8 to 3.9 us on each
+/// later change of an assembly changed in the frame, whatever its size ([`LINK_CHANGED`] beyond the write's own price; two of them
+/// cost more: [`LINK_REJOINED`]). The other
 /// kinds cost it alike (2026-11-24, a leaf of an anchored hub welded to 10,000 parts, at a frame's start: its weld's Part1
 /// re-pointed 874 us, set to nil 885, its Part0 re-pointed 926, the weld's Parent set to nil 864, the weld destroyed 883, the
 /// leaf's Parent set to nil 982, the leaf destroyed 929, beyond what such a write or destroy costs alone; 10 to 43 us later in the
 /// frame; its weld parented back under it 905 to 956, the leaf parented back 933, 17 to 30 later).
 pub const LINK_CHANGED: f64 = 1.7e-6;
+/// Two later link changes in a frame cost more, whichever assemblies they change (the same client, two to four sessions, single
+/// writes in turn in a frame on stars of 100 to 10,000 parts and on two such stars interleaved; docs/engine.md "Rigid assemblies",
+/// 2026-11-24): the frame's first that starts a link after one ended one ([`LINK_REJOINED`]: a weld enabled after one was disabled
+/// 7.6 to 14.4 us, 8.5 to 9.4 at 1,000, where the later ones cost 1.8 to 2.9), and its second that ends one before any starts one
+/// ([`LINK_SPLIT_AGAIN`]: 4.0 to 8.7 us, 4.4 to 4.6 at 1,000). Fitted: x0.63 to x1.18 of the first, x0.53 to x1.15 of the second.
+pub const LINK_REJOINED: f64 = 7e-6;
+pub const LINK_SPLIT_AGAIN: f64 = 2.6e-6;
 pub const LINK_FRAME: f64 = 34e-6;
 pub const LINK_ASSEMBLY: f64 = 5e-6;
 pub const LINK_PART: f64 = 0.085e-6;

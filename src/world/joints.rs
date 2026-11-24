@@ -180,6 +180,11 @@ pub struct Joints {
     /// frame was charged: each component's parts are marked together
     link_frame: Option<u64>,
     marked: FxHashSet<InstanceId>,
+    /// That frame's priced link changes that ended links and that started links, and whether one that started a link after one
+    /// that ended one was charged ([`charge_link`])
+    splits: u32,
+    joins: u32,
+    rejoined: bool,
     /// The parts of that frame's link changes whose assemblies no read has paid for working their bodies out again since
     /// ([`pay_body`])
     owed: FxHashSet<InstanceId>,
@@ -2480,7 +2485,7 @@ fn link_changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup
         }
         settle_unsettled(state, reflection, hooks, setup, &seeds);
     }
-    charge_link(state, reflection, setup, &parts);
+    charge_link(state, reflection, setup, &parts, !on, on);
 }
 
 /// The link of `joint` between `parts` (Part0's first) started: their kept components join ([`Joints::join`]) and the side that
@@ -2572,8 +2577,9 @@ fn repointed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &
         }
     }
     if ended.is_some() || started.is_some() {
+        let (ends, starts) = (ended.is_some(), started.is_some());
         let parts: Vec<InstanceId> = ended.into_iter().flatten().chain(started.into_iter().flatten()).collect();
-        charge_link(state, reflection, setup, &parts);
+        charge_link(state, reflection, setup, &parts, ends, starts);
     }
 }
 
@@ -2722,12 +2728,28 @@ fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
 /// that links others), as a client spends it (cost.rs LINK_CHANGED, LINK_FRAME, link_assembly): each change, the frame's first,
 /// and the first of each component in the frame, each part of it, the components counted as they are after the change. Each
 /// component's parts are marked together when it is charged, so a component the frame's changes split or joined is charged once,
-/// and parts joined to one charged earlier in the frame are charged alone.
+/// and parts joined to one charged earlier in the frame are charged alone. `ends` and `starts`: whether it ended a link and whether
+/// it started one; the frame's second change that ends a link before any starts one, and its first that starts one after one ended
+/// one, cost more (cost.rs LINK_SPLIT_AGAIN, LINK_REJOINED), whichever assemblies they change.
 /// Its reads then owe the body's working out ([`pay_body`]).
-fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts: &[InstanceId]) {
+fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts: &[InstanceId], ends: bool, starts: bool) {
     let mut work = crate::cost::LINK_CHANGED;
     if link_frame(&mut state.joints, state.sched.frame) {
         work += crate::cost::LINK_FRAME;
+    }
+    let joints = &mut state.joints;
+    if ends {
+        if joints.splits == 1 && joints.joins == 0 {
+            work += crate::cost::LINK_SPLIT_AGAIN;
+        }
+        joints.splits += 1;
+    }
+    if starts {
+        if joints.splits > 0 && !joints.rejoined {
+            work += crate::cost::LINK_REJOINED;
+            joints.rejoined = true;
+        }
+        joints.joins += 1;
     }
     // (a part met again is marked: its component is not charged twice)
     for &part in parts {
@@ -2748,6 +2770,7 @@ fn link_frame(joints: &mut Joints, frame: u64) -> bool {
     joints.link_frame = Some(frame);
     joints.marked.clear();
     joints.owed.clear();
+    (joints.splits, joints.joins, joints.rejoined) = (0, 0, false);
     true
 }
 
@@ -2785,13 +2808,13 @@ fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
             state.sched.charge(work);
             crate::boundary::add_cost(work);
         }
-        charge_link(state, reflection, setup, &[part]);
+        charge_link(state, reflection, setup, &[part], false, false);
         return;
     }
     let before = before.or_else(|| found.as_ref().map(|found| assemblies_of(state, reflection, setup, found, part, Some(part), false)));
     settle_from_roots(state, reflection, hooks, setup, &[part]);
     if found.is_some() {
-        charge_link(state, reflection, setup, &[part]);
+        charge_link(state, reflection, setup, &[part], false, false);
     }
     let (Some(found), Some(before)) = (found, before) else { return };
     let after = assemblies_of(state, reflection, setup, &found, part, None, true);
@@ -3087,7 +3110,7 @@ fn entering_price(state: &mut State, reflection: &Reflection, setup: &Setup, mov
     // carries make new assemblies, priced by their joints alone, as a client's Model of welded pairs entering costs it 3.1 us a weld
     // beyond its parts, and mark them as changed in the frame, so a later link change of them pays a later change's price)
     if !placed.is_empty() {
-        charge_link(state, reflection, setup, &placed);
+        charge_link(state, reflection, setup, &placed, false, true);
     }
     if !new.is_empty() {
         link_frame(&mut state.joints, state.sched.frame);
@@ -3110,7 +3133,7 @@ fn left_world(state: &mut State, reflection: &Reflection, setup: &Setup, started
         return;
     }
     let placed: Vec<InstanceId> = ended.into_iter().filter(|&part| alive(state, part) && world_of(state, reflection, setup, part).is_some()).collect();
-    charge_link(state, reflection, setup, &placed);
+    charge_link(state, reflection, setup, &placed, true, false);
 }
 
 /// BasePart Position / Orientation / Rotation: the part moves alone. Each Weld or Motor6D joined to
