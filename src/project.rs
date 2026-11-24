@@ -86,15 +86,6 @@ impl Listing {
     /// order, and the same stamps for every file but the Luau sources not in `read` (a source the run
     /// did not read may change: the run reads it later, as it is then).
     pub fn unchanged(&self, read: &FxHashSet<String>) -> bool {
-        #[cfg(windows)]
-        if self.0.watch_generation != 0 {
-            if kept_listing::unchanged_since(&self.0.path, self.0.watch_generation) {
-                return true;
-            }
-            if !crate::lua::modules::is_batch_frozen() {
-                return same_listing(&self.0, &kept_listing::listed(self.0.path.clone()), read);
-            }
-        }
         same_listing(&self.0, &scan(self.0.path.clone()), read)
     }
 
@@ -1192,9 +1183,6 @@ struct ScanNode {
     linked: bool,
     /// A [`GIT_DIRECTORY`] below a listed one, left unlisted: it mounts as an empty Folder
     unlisted: bool,
-    /// Non-zero when produced under a Windows change notification watch (`kept_listing`);
-    /// allows `Listing::unchanged` to validate in O(1) while the watch stays unsignalled
-    watch_generation: u64,
 }
 
 /// The directory Git keeps a repository's own data in. Rojo builds it as any folder (`rojo build` 7.6.1 and 7.7.0-rc.1: a
@@ -1290,7 +1278,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
         candidates.push(index);
     }
     if candidates.is_empty() {
-        return ScanNode { path, entries, stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: false, watch_generation: 0 };
+        return ScanNode { path, entries, stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: false };
     }
     let here = Above::new(&path, up);
     let visit = |index: usize| -> Option<(String, Result<ScanNode, String>)> {
@@ -1309,7 +1297,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             return None;
         }
         if entry == GIT_DIRECTORY {
-            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true, watch_generation: 0 })));
+            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true })));
         }
         let via_link = !kind.is_some_and(|kind| !kind.is_symlink());
         if let Some(above) = via_link.then(|| here.looped_by(Path::new(&child))).flatten() {
@@ -1335,7 +1323,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
         }
     }
     let linked = dirs.values().any(|dir| dir.linked);
-    ScanNode { path, entries, stamps, dirs, loops, linked, unlisted: false, watch_generation: 0 }
+    ScanNode { path, entries, stamps, dirs, loops, linked, unlisted: false }
 }
 
 #[test]
@@ -1443,7 +1431,6 @@ mod kept_listing {
     struct Kept {
         watch: *mut c_void,
         id: (u32, u64),
-        generation: u64,
         node: ScanNode,
     }
 
@@ -1451,19 +1438,6 @@ mod kept_listing {
     unsafe impl Send for Kept {}
 
     static KEPT: OnceLock<Mutex<FxHashMap<String, Kept>>> = OnceLock::new();
-    static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-    /// Whether `path` is still backed by the exact same directory handle and unsignalled NTFS
-    /// change watch that produced `generation`, proving no file or directory below `path` changed.
-    pub(super) fn unchanged_since(path: &str, generation: u64) -> bool {
-        if generation == 0 {
-            return false;
-        }
-        let Some(id) = directory_id(path) else { return false };
-        let Some(kept) = KEPT.get() else { return false };
-        let Ok(map) = kept.lock() else { return false };
-        map.get(path).is_some_and(|entry| entry.generation == generation && entry.id == id && unsafe { WaitForSingleObject(entry.watch, 0) } == WAIT_TIMEOUT)
-    }
 
     fn wide(text: &str) -> Vec<u16> {
         std::ffi::OsStr::new(text).encode_wide().chain([0]).collect()
@@ -1505,61 +1479,20 @@ mod kept_listing {
         }
         // The watch starts before the listing, so a change made while it lists shows next time
         let Some(watch) = watch(&path) else { return scan(path) };
-        let mut node = scan(path.clone());
+        let node = scan(path.clone());
         if node.linked {
             unsafe { FindCloseChangeNotification(watch) };
             return node;
         }
-        let generation = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        node.watch_generation = generation;
         let copy = crate::alloc::long_lived(|| node.clone());
         if let Ok(mut map) = kept.lock() {
-            if let Some(old) = crate::alloc::long_lived(|| map.insert(path, Kept { watch, id, generation, node: copy })) {
+            if let Some(old) = crate::alloc::long_lived(|| map.insert(path, Kept { watch, id, node: copy })) {
                 unsafe { FindCloseChangeNotification(old.watch) };
             }
         } else {
             unsafe { FindCloseChangeNotification(watch) };
         }
         node
-    }
-
-    #[test]
-    fn a_listing_watch_fast_path_detects_edits_and_rescan_generations() {
-        crate::lua::modules::reuse_compiled_modules();
-        let root = std::env::temp_dir().join(format!("ree-watch-gen-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        let path = root.to_string_lossy().replace('\\', "/");
-        std::fs::create_dir_all(root.join("Folder")).unwrap();
-        let read_file = root.join("Folder/read.luau");
-        let unread_file = root.join("Folder/unread.luau");
-        std::fs::write(&read_file, "return 1").unwrap();
-        std::fs::write(&unread_file, "return 2").unwrap();
-        // Flush NTFS's lazy directory-entry metadata update from the freshly written files before taking the watched baseline.
-        let _ = listed(path.clone());
-
-        let node = listed(path.clone());
-        assert_ne!(node.watch_generation, 0);
-        assert!(unchanged_since(&path, node.watch_generation));
-        let listing = super::Listing(node);
-        let mut read = super::FxHashSet::default();
-        read.insert(format!("{path}/Folder/read.luau"));
-        assert!(listing.unchanged(&read));
-
-        // Editing an unread Luau file trips the watch, falls back to same_listing, and still returns true.
-        std::fs::write(&unread_file, "return 222").unwrap();
-        assert!(!unchanged_since(&path, listing.0.watch_generation));
-        assert!(listing.unchanged(&read));
-
-        // Even after another caller rescans (refreshing the watch with a new generation), an older listing
-        // captured before an edit to a read file still fails unchanged_since and detects the edit.
-        let _ = listed(path.clone());
-        let before = super::Listing(listed(path.clone()));
-        assert!(unchanged_since(&path, before.0.watch_generation));
-        std::fs::write(&read_file, "return 99999").unwrap();
-        let after = listed(path.clone());
-        assert_ne!(after.watch_generation, before.0.watch_generation);
-        assert!(!unchanged_since(&path, before.0.watch_generation));
-        assert!(!before.unchanged(&read));
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
