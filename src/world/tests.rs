@@ -2708,10 +2708,11 @@ fn mass_reads_after_link_changes_add_up_nothing_again() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
-/// An AssemblyCenterOfMass read right after a move works nothing out: 500 moves of an anchored hub welded to 5,000 parts, each
-/// followed by a read of its centre, the reads taking about the host time a lone part's take (the medians), as a playing client's
-/// read after a move costs the same at any size (the move works the centres read since the last one out again, from the masses
-/// kept). Each read used to work the centre out from every part (0.2 to 0.3 ms at 5,000).
+/// An AssemblyCenterOfMass read right after a move works nothing out: 1,000 moves of an anchored hub welded to 5,000 parts, each
+/// followed by a read of its centre or of a lone part's, the hub's reads taking about the host time the lone part's take after
+/// the same move (the medians), as a playing client's read after a move costs the same at any size (the move works the centres
+/// read since the last one out again, from the masses kept). Each read used to work the centre out from every part (0.2 to 0.3
+/// ms at 5,000).
 #[test]
 fn centre_reads_after_a_move_work_nothing_out() {
     let (lua, engine) = start_play();
@@ -2745,21 +2746,24 @@ fn centre_reads_after_a_move_work_nothing_out() {
         end
         "#,
     );
-    // (the two parts' moves and reads in turn, each read timed alone: the medians, whatever else the host is doing)
+    // (the two parts' reads in turn, each timed alone right after a move of the hub, so what the move leaves for the next script and
+    // whatever else the host is doing weigh on both alike: the medians; the hub's centre is read again after the lone part's, so the
+    // next move works it out again, as it does a centre read since the last one)
     let mut times: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
     for _ in 0..500 {
         for (index, name) in ["Big", "Lone"].into_iter().enumerate() {
-            run(&lua, &engine, &format!("shared.Move('{name}')"));
+            run(&lua, &engine, "shared.Move('Big')");
             let start = std::time::Instant::now();
             run(&lua, &engine, &format!("shared.Read('{name}')"));
             times[index].push(start.elapsed().as_secs_f64());
         }
+        run(&lua, &engine, "shared.Read('Big')");
     }
     let [big, lone] = times.map(|mut list| {
         list.sort_by(f64::total_cmp);
         list[list.len() / 2]
     });
-    assert!(big < 2.0 * lone + 50e-6, "a centre read after a move took {:.1} us of host time (the median of 500) for an assembly of 5,001 parts, {:.1} us for a lone part", big * 1e6, lone * 1e6);
+    assert!(big < 2.0 * lone + 50e-6, "a centre read after a move took {:.1} us of host time (the median of 500) for an assembly of 5,001 parts, {:.1} us for a lone part after the same move", big * 1e6, lone * 1e6);
 }
 
 /// Kept components answer as fresh walks do through link changes: 800 random changes to two anchored hubs and an unanchored one each
@@ -3373,62 +3377,99 @@ fn a_part_below_worldmodels_pays_for_them_in_one_lookup() {
 }
 
 /// The physics step asks which world each loose part is in from the homes the dom keeps, and whether a parent holds a Humanoid
-/// once a step for each parent: 200 loose parts at the bottom of a chain of 20,000 folders fly for 60 frames, and 5,000 loose
-/// parts in one folder for 30, on little host work. The step used to walk up from every loose part to the Workspace each frame
-/// (4 million steps a frame in the first case), the first step from every instance in the Workspace (200 million), and look
-/// through every sibling of every loose part for a Humanoid each frame (25 million in the second).
+/// once a step for each parent: 200 loose parts at the bottom of a chain of 20,000 folders fly for 60 frames on about the host
+/// time of 200 in a folder beside 20,000 others, and 5,000 loose parts in one folder for 30 on about that of 5,000 each in a
+/// folder of its own. The step used to walk up from every loose part to the Workspace each frame (4 million steps a frame in the
+/// first case), the first step from every instance in the Workspace (200 million), and look through every sibling of every loose
+/// part for a Humanoid each frame (25 million in the second).
 #[test]
 fn free_flight_steps_cost_the_same_however_deep_or_wide_the_parts_are() {
-    let (lua, engine) = start_play();
-    run(
-        &lua,
-        &engine,
-        r#"
-        local Outer = Instance.new("Folder")
-        for I = 1, 200 do
-            local Part = Instance.new("Part")
-            Part.Size, Part.CanCollide, Part.CFrame = Vector3.one, false, CFrame.new(I * 3, 1000, 0)
-            Part.Parent = Outer
+    let scene = |source: &str| {
+        let (lua, engine) = start_play();
+        run(&lua, &engine, source);
+        (lua, engine)
+    };
+    // (each pair stepped in turn, a frame each, so whatever else the host does weighs on both alike; up to three tries, each pair
+    // made afresh, until one is within the bound: a busy host that takes the thread away for a few milliseconds slows one try's
+    // steps, a step that walks the tree slows every try's)
+    let within = |[host, base]: [f64; 2]| host < 2.0 * base + 0.05;
+    let fly = |sources: [&str; 2], frames: usize, below: f64| {
+        let mut host = [0.0; 2];
+        for _ in 0..3 {
+            let scenes = sources.map(scene);
+            host = [0.0; 2];
+            for _ in 0..frames {
+                for (index, (lua, engine)) in scenes.iter().enumerate() {
+                    let start = std::time::Instant::now();
+                    crate::scheduler::step(lua, engine, Some(1.0 / 60.0)).expect("step");
+                    host[index] += start.elapsed().as_secs_f64();
+                }
+            }
+            for (lua, engine) in &scenes {
+                run(lua, engine, &format!("assert(shared.First.Position.Y < {below}, `the part fell to {{shared.First.Position.Y}}`)"));
+            }
+            if within(host) {
+                break;
+            }
+        }
+        host
+    };
+    let parts = r#"
+        local function Parts(Count, Parent)
+            for I = 1, Count do
+                local Part = Instance.new("Part")
+                Part.Size, Part.CanCollide, Part.CFrame = Vector3.one, false, CFrame.new(I * 3, 1000, 0)
+                Part.Parent = Parent
+                shared.First = shared.First or Part
+            end
         end
-        shared.First = Outer:GetChildren()[1]
+    "#;
+    let deep = format!(
+        r#"{parts}
+        local Outer = Instance.new("Folder")
+        Parts(200, Outer)
         for _ = 1, 20000 do
             local Folder = Instance.new("Folder")
             Outer.Parent = Folder
             Outer = Folder
         end
         Outer.Parent = workspace
-        "#,
+        "#
     );
-    let start = std::time::Instant::now();
-    for _ in 0..60 {
-        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    }
-    let host = start.elapsed().as_secs_f64();
-    run(&lua, &engine, r#"assert(shared.First.Position.Y < 950, `the part fell to {shared.First.Position.Y}`)"#);
-    assert!(host < 0.25, "60 frames of 200 parts flying 20,000 deep took {host:.3} s of host time");
-
-    let (lua, engine) = start_play();
-    run(
-        &lua,
-        &engine,
-        r#"
-        local Folder = Instance.new("Folder")
-        for I = 1, 5000 do
-            local Part = Instance.new("Part")
-            Part.Size, Part.CanCollide, Part.CFrame = Vector3.one, false, CFrame.new(I * 3, 1000, 0)
-            Part.Parent = Folder
+    let flat = format!(
+        r#"{parts}
+        local Outer, Inner = Instance.new("Folder"), Instance.new("Folder")
+        Parts(200, Inner)
+        Inner.Parent = Outer
+        for _ = 1, 20000 do
+            Instance.new("Folder").Parent = Outer
         end
-        shared.First = Folder:GetChildren()[1]
-        Folder.Parent = workspace
-        "#,
+        Outer.Parent = workspace
+        "#
     );
-    let start = std::time::Instant::now();
-    for _ in 0..30 {
-        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    }
-    let host = start.elapsed().as_secs_f64();
-    run(&lua, &engine, r#"assert(shared.First.Position.Y < 990, `the part fell to {shared.First.Position.Y}`)"#);
-    assert!(host < 0.2, "30 frames of 5,000 parts flying in one folder took {host:.3} s of host time");
+    let [deep, flat] = fly([&deep, &flat], 60, 950.0);
+    assert!(within([deep, flat]), "60 frames of 200 parts flying 20,000 deep took {deep:.3} s of host time, {flat:.3} s beside 20,000 folders");
+
+    let wide = format!(
+        r#"{parts}
+        local Folder = Instance.new("Folder")
+        Parts(5000, Folder)
+        Folder.Parent = workspace
+        "#
+    );
+    let spread = format!(
+        r#"{parts}
+        local Outer = Instance.new("Folder")
+        for _ = 1, 5000 do
+            local Folder = Instance.new("Folder")
+            Parts(1, Folder)
+            Folder.Parent = Outer
+        end
+        Outer.Parent = workspace
+        "#
+    );
+    let [wide, spread] = fly([&wide, &spread], 30, 990.0);
+    assert!(within([wide, spread]), "30 frames of 5,000 parts flying in one folder took {wide:.3} s of host time, {spread:.3} s each in a folder of its own");
 }
 
 /// A script cannot overflow the engine's stack with a deep tree: the engine's walks of the tree keep stacks of their own. On a
