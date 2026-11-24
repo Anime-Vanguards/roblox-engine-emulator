@@ -193,7 +193,7 @@ fn zoom_to_extents(engine: &Engine, names: &Names, camera: InstanceId, center: &
 /// The spatial index takes in what entered the Workspace (the physics step, a spatial query other than
 /// GetLargestCutoffDistance).
 pub fn index_parts(state: &mut State) {
-    state.cameras.unindexed.clear();
+    crate::dom::clear_set(&mut state.cameras.unindexed);
     state.cameras.taken_in += 1;
 }
 

@@ -6257,6 +6257,84 @@ fn parts_whose_bounds_are_not_finite_leave_the_index_in_a_step() {
     assert!(loose < 3.0 * tree + 0.1, "the queries after 60,000 parts whose bounds are not finite were written twice, moved out and back and destroyed took {loose:.3} s of host time, after as many in the tree {tree:.3} s");
 }
 
+/// The sets the spatial index fills and empties once a round (dom.rs Watch::logged, the broadphase's walk marks, camera.rs
+/// Cameras::unindexed) keep no table a burst grew them to (dom.rs clear_set): after 500,000 folders moved between two queries
+/// (from the log, no walk of the Workspace) each later round of one part moved and one query costs about what it cost before
+/// the burst, where it cleared two tables of a million slots (32 us of host time a round after a million folders moved, 2 us
+/// before them), and after 50,000 parts entered the Workspace at once and a query took them in, the waiting parts' table is
+/// no larger than what waits.
+#[test]
+fn a_burst_of_changes_leaves_the_spatial_index_no_work_after_it() {
+    let (lua, engine) = start_play();
+    let walks = || super::broadphase::WORKSPACE_WALKS.with(|walks| walks.get());
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Holders = table.create(500)
+        for H = 1, 500 do
+            Holders[H] = Instance.new("Folder")
+            Holders[H].Parent = workspace
+        end
+        local Folders = table.create(500000)
+        for I = 1, 500000 do
+            local Folder = Instance.new("Folder")
+            Folder.Parent = Holders[I % 500 + 1]
+            Folders[I] = Folder
+        end
+        local A, B = Instance.new("Folder"), Instance.new("Folder")
+        A.Parent, B.Parent = workspace, workspace
+        local One = Instance.new("Part")
+        One.Anchored = true
+        One.Parent = A
+        function shared.Rounds(Count)
+            for I = 1, Count do
+                One.Parent = if I % 2 == 1 then B else A
+                assert(#workspace:GetPartBoundsInBox(CFrame.new(0, -500, 0), Vector3.one) == 0)
+            end
+        end
+        function shared.Burst()
+            for I, Folder in Folders do
+                Folder.Parent = Holders[(I + 1) % 500 + 1]
+            end
+            assert(#workspace:GetPartBoundsInBox(CFrame.new(0, -500, 0), Vector3.one) == 0)
+        end
+        shared.Rounds(10)
+        "##,
+    );
+    let time = |source: &str| {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, source);
+        start.elapsed().as_secs_f64()
+    };
+    let before = time("shared.Rounds(30000)");
+    let walked = walks();
+    run(&lua, &engine, "shared.Burst() shared.Rounds(10)");
+    assert_eq!(walks(), walked, "the burst came from the log");
+    let after = time("shared.Rounds(30000)");
+    eprintln!("30,000 rounds took {before:.3} s of host time before the burst, {after:.3} s after it");
+    assert!(after < 2.0 * before + 0.1, "30,000 rounds of one move and one query took {after:.3} s of host time after 500,000 folders moved, {before:.3} s before");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Store = Instance.new("Folder")
+        for I = 1, 50000 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.CFrame = CFrame.new((I % 100) * 3, -1000, (I // 100) * 3)
+            Part.Parent = Store
+        end
+        Store.Parent = workspace
+        assert(#workspace:GetPartBoundsInBox(CFrame.new(0, -500, 0), Vector3.one) == 0)
+        shared.Rounds(4)
+        "##,
+    );
+    let capacity = engine.state.borrow().cameras.unindexed.capacity();
+    assert!(capacity < 4096, "after 50,000 parts waited and were taken in, the waiting parts' table holds {capacity}");
+    super::query::index_matches_a_walk(&engine).unwrap();
+}
+
 /// The broadphase holds what a walk of the Workspace finds after random rounds of parts moved below one another (chains and
 /// trees of parts), out of the Workspace and back, destroyed, written and made, several changes to the same instances in a round,
 /// before each round's query: its walks of what moved, each instance looked at once, take what each part's own walk took.

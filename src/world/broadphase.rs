@@ -448,7 +448,7 @@ impl Index {
         // (A log naming the Workspace itself, given another class, walks each entry's subtree whole, as each did: that walk's
         // answer is not its descendants'.)
         let once = !moved.contains(&workspace);
-        self.seen.clear();
+        crate::dom::clear_set(&mut self.seen);
         for &id in &moved {
             if !self.seen.insert(id) {
                 continue;

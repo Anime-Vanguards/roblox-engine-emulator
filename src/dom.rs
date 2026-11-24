@@ -714,8 +714,23 @@ impl Watch {
     /// What the log holds, `moved` and `written`, taken by the index: the log starts again with nothing in it (the caller clears
     /// the written instances' [`flags::LOGGED`]).
     pub fn take(&mut self) -> (Vec<InstanceId>, Vec<InstanceId>) {
-        self.logged.clear();
+        clear_set(&mut self.logged);
         (std::mem::take(&mut self.moved), std::mem::take(&mut self.written))
+    }
+}
+
+/// Empties a set that is filled again and emptied once a round (Watch::logged at each take of the log, the broadphase's walk
+/// marks at each sync, the parts waiting for the spatial index each time it takes them in): in place while its table is near
+/// what it held, else for a table the size of what it held. A clear writes every slot of the table, and a table keeps what a
+/// burst grew it to, so after a million instances moved before one query each later round of one move and one query cleared
+/// tables of two million slots (30 us of host time a round, 1.9 us before the burst); a round's clear now costs what it held.
+/// Only a set read for membership is emptied so: a new table lists what it holds in another order.
+pub(crate) fn clear_set<T>(set: &mut FxHashSet<T>) {
+    let held = set.len();
+    if set.capacity() > 4 * held.max(1024) {
+        *set = FxHashSet::with_capacity_and_hasher(held, Default::default());
+    } else {
+        set.clear();
     }
 }
 
