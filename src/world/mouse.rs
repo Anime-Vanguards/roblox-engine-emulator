@@ -238,7 +238,7 @@ pub fn install(engine: &Rc<Engine>) {
         query::charge_query(engine, crate::cost::MOUSE_UNIT_RAY);
         let (origin, direction) = unit_ray(engine);
         let ray = lune::Ray::from(dom::Ray::new(dom::Vector3::new(origin.x, origin.y, origin.z), dom::Vector3::new(direction.x, direction.y, direction.z)));
-        Ok(LuaValue::UserData(crate::lua::convert::lune_userdata(lua, crate::lua::convert::LuneKind::Ray, ray)?))
+        Ok(LuaValue::UserData(lune_roblox::datatypes::create::ray(lua, ray)?))
     })));
     members.push(("Origin", Rc::new(|lua, engine, _| {
         query::charge_query(engine, crate::cost::MOUSE_ORIGIN);

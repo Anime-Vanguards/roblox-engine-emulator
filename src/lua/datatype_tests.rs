@@ -1652,3 +1652,118 @@ assert(DT:FormatUniversalTime("lll", "de-de") == "14. Nov. 2023 22:13")
 fn a_test_script_is_checked_after_it_waits() {
     assert_script("task.wait() assert(false, 'checked after the wait')");
 }
+
+/// Every rbx-dom Lune datatype stored on an instance (including Axes and Faces, which the prelude replaces
+/// in `Datatypes` with its own FlagSet proxies) reads repeatedly with its real Lune metatable intact.
+#[test]
+fn dom_lune_datatypes_including_axes_and_faces_read_repeatedly_with_metatables() {
+    use rbx_dom_weak::types as dom;
+    let engine = Engine::new(Options::default()).unwrap();
+    let lua = Lua::new();
+    crate::lua::start(&lua, &engine).unwrap();
+    let reflection = engine.reflection.clone();
+    let workspace = engine.world().workspace;
+    {
+        let mut state = engine.state.borrow_mut();
+        let handles_class = reflection.class_id("Handles").unwrap();
+        let handles = crate::instance::create_named(&mut state, &reflection, handles_class, "TestHandles");
+        let faces_prop = reflection.name_id("Faces").unwrap();
+        crate::instance::raw_set_silent(
+            &mut state,
+            &reflection,
+            handles,
+            faces_prop,
+            crate::value::Value::Dom(Rc::new(dom::Variant::Faces(dom::Faces::from_bits(dom::Faces::TOP.bits() | dom::Faces::LEFT.bits()).unwrap()))),
+        );
+        state.dom.attach(handles, workspace);
+
+        let arc_class = reflection.class_id("ArcHandles").unwrap();
+        let arc = crate::instance::create_named(&mut state, &reflection, arc_class, "TestArcHandles");
+        let axes_prop = reflection.name_id("Axes").unwrap();
+        crate::instance::raw_set_silent(
+            &mut state,
+            &reflection,
+            arc,
+            axes_prop,
+            crate::value::Value::Dom(Rc::new(dom::Variant::Axes(dom::Axes::from_bits(dom::Axes::X.bits() | dom::Axes::Z.bits()).unwrap()))),
+        );
+        state.dom.attach(arc, workspace);
+    }
+
+    // Exercise every DOM-only Lune variant through `dom_to_lua` twice to ensure lazy registration
+    // registers the real metatable and does not leave a broken cache bit behind.
+    let dom_samples = [
+        dom::Variant::Axes(dom::Axes::from_bits(dom::Axes::X.bits() | dom::Axes::Y.bits()).unwrap()),
+        dom::Variant::BrickColor(dom::BrickColor::BrightRed),
+        dom::Variant::CFrame(dom::CFrame::identity()),
+        dom::Variant::Faces(dom::Faces::from_bits(dom::Faces::RIGHT.bits() | dom::Faces::BACK.bits()).unwrap()),
+        dom::Variant::Ray(dom::Ray::new(dom::Vector3::new(0.0, 0.0, 0.0), dom::Vector3::new(0.0, 1.0, 0.0))),
+        dom::Variant::Region3(dom::Region3::new(dom::Vector3::new(0.0, 0.0, 0.0), dom::Vector3::new(1.0, 1.0, 1.0))),
+        dom::Variant::Region3int16(dom::Region3int16::new(dom::Vector3int16::new(0, 0, 0), dom::Vector3int16::new(1, 1, 1))),
+        dom::Variant::UniqueId(dom::UniqueId::new(1, 2, 3)),
+        dom::Variant::Vector2int16(dom::Vector2int16::new(1, 2)),
+        dom::Variant::Vector3int16(dom::Vector3int16::new(1, 2, 3)),
+        dom::Variant::PhysicalProperties(dom::PhysicalProperties::Custom(dom::CustomPhysicalProperties::new(1.0, 0.5, 0.5, 1.0, 1.0, 1.0))),
+    ];
+    for sample in &dom_samples {
+        for pass in 0..2 {
+            let value = crate::lua::convert::dom_to_lua(&lua, sample)
+                .unwrap_or_else(|e| panic!("dom_to_lua failed for {sample:?} pass {pass}: {e}"));
+            assert!(matches!(value, LuaValue::UserData(_)), "expected userdata for {sample:?}");
+        }
+    }
+
+    let script = r#"
+        local H = workspace:FindFirstChild("TestHandles")
+        local F1 = H.Faces
+        local F2 = H.Faces
+        assert(F1.Top and F1.Left and not F1.Right and not F1.Bottom, tostring(F1))
+        assert(F2.Top and F2.Left and not F2.Right and not F2.Bottom, tostring(F2))
+        assert(F1 == F2)
+
+        local A = workspace:FindFirstChild("TestArcHandles")
+        local X1 = A.Axes
+        local X2 = A.Axes
+        assert(X1.X and X1.Z and not X1.Y, tostring(X1))
+        assert(X2.X and X2.Z and not X2.Y, tostring(X2))
+        assert(X1 == X2)
+    "#;
+    let output = run_in_engine(&lua, &engine, script);
+    assert!(output.iter().all(|line| !line.starts_with("error")), "{output:?}");
+}
+
+/// Typed `lua_fn` callbacks preserve mlua's `bad argument #N: ` prefix on argument conversion errors.
+#[test]
+fn typed_lua_callbacks_keep_bad_argument_prefix() {
+    assert_script(
+        r#"
+        local Ok1, Err1 = pcall(function()
+            return (Enum.Material :: any).FromName("Plastic")
+        end)
+        assert(not Ok1, "expected FromName('Plastic') to fail")
+        assert(string.find(tostring(Err1), "bad argument #1: error converting Lua string to userdata", 1, true), tostring(Err1))
+
+        local Ok2, Err2 = pcall(function()
+            return (printidentity :: any)({})
+        end)
+        assert(not Ok2, "expected printidentity({}) to fail")
+        assert(string.find(tostring(Err2), "bad argument #1: error converting Lua table to String", 1, true), tostring(Err2))
+        "#,
+    );
+}
+
+#[inline(never)]
+fn run_in_engine(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
+    let script = {
+        let mut state = engine.state.borrow_mut();
+        let class = engine.reflection.class_id("ModuleScript").unwrap();
+        crate::instance::create_named(&mut state, &engine.reflection, class, "Test")
+    };
+    let env = engine_lua::modules::environment(lua, engine, script).expect("environment");
+    let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
+    let call = engine_lua::globals::call(lua, engine, function, LuaMultiValue::new()).expect("call");
+    if let Err(message) = call.finish(lua, engine) {
+        panic!("test script failed: {message}");
+    }
+    engine.state.borrow().output.entries.iter().map(|entry| format!("{}: {}", entry.kind, entry.message)).collect()
+}

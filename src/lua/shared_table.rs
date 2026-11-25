@@ -1340,23 +1340,23 @@ fn load(lua: &Lua, engine: &Engine, store: &Store, stored: &Stored, read: bool) 
 fn fresh(lua: &Lua, engine: &Engine, store: &Store, value: LuaValue) -> LuaResult<LuaValue> {
     let LuaValue::UserData(ud) = &value else { return Ok(value) };
     macro_rules! copied {
-        ($(($kind:ty, $tag:ident)),*) => {$(
+        ($(($kind:ty, $ctor:ident)),*) => {$(
             if let Ok(held) = ud.borrow::<$kind>() {
                 let copy = *held;
                 drop(held);
-                return Ok(LuaValue::UserData(convert::lune_userdata(lua, convert::LuneKind::$tag, copy)?));
+                return Ok(LuaValue::UserData(lune_roblox::datatypes::create::$ctor(lua, copy)?));
             }
         )*};
     }
     copied!(
-        (lune::Ray, Ray),
-        (lune::Region3, Region3),
-        (lune::PhysicalProperties, PhysicalProperties),
-        (lune::NumberSequenceKeypoint, NumberSequenceKeypoint),
-        (lune::ColorSequenceKeypoint, ColorSequenceKeypoint),
-        (lune::Region3int16, Region3int16),
-        (lune::Vector2int16, Vector2int16),
-        (lune::Vector3int16, Vector3int16)
+        (lune::Ray, ray),
+        (lune::Region3, region3),
+        (lune::PhysicalProperties, physical_properties),
+        (lune::NumberSequenceKeypoint, number_sequence_keypoint),
+        (lune::ColorSequenceKeypoint, color_sequence_keypoint),
+        (lune::Region3int16, region3int16),
+        (lune::Vector2int16, vector2int16),
+        (lune::Vector3int16, vector3int16)
     );
     if ud.is::<super::types::LInstanceHandle>() {
         return super::types::copy_instance_handle(lua, ud);

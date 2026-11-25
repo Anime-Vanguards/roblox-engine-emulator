@@ -380,7 +380,7 @@ fn enum_item(lua: &Lua, engine: &Engine, enum_name: &str, item: &str) -> LuaResu
 
 fn vector2(lua: &Lua, x: f64, y: f64) -> LuaResult<LuaValue> {
     let vector = lune_roblox::datatypes::types::Vector2::from(dom::Vector2::new(x as f32, y as f32));
-    Ok(LuaValue::UserData(convert::lune_userdata(lua, convert::LuneKind::Vector2, vector)?))
+    Ok(LuaValue::UserData(lune_roblox::datatypes::create::vector2(lua, vector)?))
 }
 
 /// Services Roblox keeps for its own scripts: a script's `game:GetService` answers nil for them, with no error (Studio 0.747,
@@ -1177,14 +1177,14 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                 // The item rides along as the timer's argument: queued work keeps it alive
                 // (lua/raw.rs collection) until Debris destroys it
                 let e = engine.clone();
-                let body = super::lua::create_boxed_val(lua, Box::new(move |lua, item: LuaValue| {
+                let body = super::lua::create_boxed_void_val(lua, Box::new(move |lua, item: LuaValue| {
                     if let Some(item) = super::lua::instance_id(&item) {
                         // (a client's Debris destroys the item in the engine's own step, outside any script: no script pays for it)
                         let muted = crate::scheduler::Muted::raise(&e.state.borrow().sched.muted);
                         let _ = super::lua::instance::destroy(lua, &e, item);
                         drop(muted);
                     }
-                    Ok(LuaValue::Nil)
+                    Ok(())
                 }))?;
                 let thread = lua.create_thread(body)?;
                 engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, lifetime, thread, vec![Value::Instance(item)]);

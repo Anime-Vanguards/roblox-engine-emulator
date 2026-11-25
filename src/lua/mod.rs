@@ -303,7 +303,7 @@ where
     create_boxed_fn(
         lua,
         Box::new(move |lua, args| {
-            let args = A::from_lua_multi(args, lua)?;
+            let args = A::from_lua_args(args, 1, None, lua)?;
             function(lua, args)?.into_lua_multi(lua)
         }),
     )

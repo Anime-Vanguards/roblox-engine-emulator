@@ -1032,10 +1032,15 @@ fn studio_cache_file(dir: &Path, hash: (u64, u64)) -> PathBuf {
 /// in memory, and never caches a recent mtime stamp that could hide a same-tick edit after the
 /// recency window closes.
 fn load_studio_index_in(path: &str, read_dirs: &[PathBuf], write_dir: Option<&Path>) -> Option<std::sync::Arc<StudioIndex>> {
-    load_studio_index_in_at(path, read_dirs, write_dir, std::time::SystemTime::now())
+    load_studio_index_in_at(path, read_dirs, write_dir, std::time::SystemTime::now)
 }
 
-fn load_studio_index_in_at(path: &str, read_dirs: &[PathBuf], write_dir: Option<&Path>, now: std::time::SystemTime) -> Option<std::sync::Arc<StudioIndex>> {
+fn load_studio_index_in_at(
+    path: &str,
+    read_dirs: &[PathBuf],
+    write_dir: Option<&Path>,
+    mut now: impl FnMut() -> std::time::SystemTime,
+) -> Option<std::sync::Arc<StudioIndex>> {
     use std::sync::{Arc, Mutex, OnceLock};
     type Entry = (String, Option<crate::files::Stamp>, (u64, u64), Arc<StudioIndex>);
     static CACHE: OnceLock<Mutex<Vec<Entry>>> = OnceLock::new();
@@ -1043,7 +1048,7 @@ fn load_studio_index_in_at(path: &str, read_dirs: &[PathBuf], write_dir: Option<
     let source_path = Path::new(path);
     crate::files::note(source_path);
     let stamp = crate::files::stamp(source_path);
-    let stable_stamp = stamp.filter(|st| !stamp_is_recent_at(*st, now));
+    let stable_stamp = stamp.filter(|st| !stamp_is_recent_at(*st, now()));
     let cache = CACHE.get_or_init(Default::default);
     if let Some(st) = stable_stamp {
         if let Ok(entries) = cache.lock() {
@@ -1076,6 +1081,7 @@ fn load_studio_index_in_at(path: &str, read_dirs: &[PathBuf], write_dir: Option<
     }
 
     // Cold build (or cache miss / invalid file on disk): parse JSON, encode binary, drop JSON immediately.
+    let pre_stamp = crate::files::stamp(source_path);
     let raw_bytes = std::fs::read(source_path).ok()?;
     let actual_hash = hash_bytes_128(&raw_bytes);
     let snapshot: HierarchySnapshot = serde_json::from_slice(&raw_bytes).ok()?;
@@ -1093,7 +1099,7 @@ fn load_studio_index_in_at(path: &str, read_dirs: &[PathBuf], write_dir: Option<
         StudioIndex::from_owned(encoded)?
     };
     let index = crate::alloc::long_lived(|| Arc::new(index));
-    let actual_stable_stamp = crate::files::stamp(source_path).filter(|st| !stamp_is_recent_at(*st, now));
+    let actual_stable_stamp = crate::files::stamp(source_path).filter(|st| Some(*st) == pre_stamp && !stamp_is_recent_at(*st, now()));
     if let Ok(mut entries) = cache.lock() {
         entries.retain(|(p, _, _, _)| p != path);
         crate::alloc::long_lived(|| entries.push((path.to_string(), actual_stable_stamp, actual_hash, index.clone())));
@@ -2816,8 +2822,27 @@ mod studio_index_tests {
         std::fs::write(&snap, &third).unwrap();
         std::fs::File::options().write(true).open(&snap).unwrap().set_modified(orig_mtime).unwrap();
         let after_window = std::time::SystemTime::now() + std::time::Duration::from_secs(3);
-        let idx3 = load_studio_index_in_at(&snap_str, &[cache.clone()], Some(&cache), after_window).unwrap();
+        let idx3 = load_studio_index_in_at(&snap_str, &[cache.clone()], Some(&cache), || after_window).unwrap();
         assert_eq!(idx3.name(6), b"Arena3", "same-tick edit observed after recency window must not return stale data");
+
+        // A cold build lasting over 2 s must sample the clock again after the build so a file whose
+        // mtime is recent at build completion is not cached against the old content's hash.
+        let slow_first = sample_json("Slow01");
+        let slow_second = sample_json("Slow02");
+        assert_eq!(slow_first.len(), slow_second.len());
+        let slow_snap = dir.join("SlowPlace.json");
+        let slow_str = slow_snap.to_string_lossy().replace('\\', "/");
+        std::fs::write(&slow_snap, &slow_first).unwrap();
+        let build_start = std::time::SystemTime::now() - std::time::Duration::from_secs(3);
+        let build_end = std::time::SystemTime::now();
+        let mut ticks = [build_start, build_end].into_iter();
+        let idx_slow1 = load_studio_index_in_at(&slow_str, &[cache.clone()], Some(&cache), || ticks.next().unwrap_or(build_end)).unwrap();
+        assert_eq!(idx_slow1.name(6), b"Slow01");
+        let slow_mtime = std::fs::metadata(&slow_snap).unwrap().modified().unwrap();
+        std::fs::write(&slow_snap, &slow_second).unwrap();
+        std::fs::File::options().write(true).open(&slow_snap).unwrap().set_modified(slow_mtime).unwrap();
+        let idx_slow2 = load_studio_index_in_at(&slow_str, &[cache.clone()], Some(&cache), || after_window).unwrap();
+        assert_eq!(idx_slow2.name(6), b"Slow02", "post-build recency check must use post-build time");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

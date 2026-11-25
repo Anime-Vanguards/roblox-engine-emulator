@@ -44,7 +44,7 @@ unsafe extern "C-unwind" {
 ///
 /// Returning `lune_roblox::reflection::Database` directly instantiates `lune-roblox`'s
 /// `DomValueToLua` and `mlua::UserDataRegistry` for every Roblox datatype inside this crate.
-/// Delegating to `lune-roblox`'s compiled database methods and `crate::lua::convert::lune_userdata`
+/// Delegating to `lune-roblox`'s compiled database methods and `lune_roblox::datatypes::create`
 /// preserves the exact Lua API while instantiating only this single userdata type.
 #[derive(Clone)]
 enum ReflHandle {
@@ -71,7 +71,7 @@ fn lune_enum_value(enums: &LuaValue, enum_name: &str, value: u32) -> Option<LuaV
 }
 
 fn lune_dom_variant_to_lua(lua: &Lua, enums: &LuaValue, variant: &rbx_dom_weak::types::Variant) -> Option<LuaValue> {
-    use crate::lua::convert::{LuneKind, lune_userdata};
+    use lune_roblox::datatypes::create as lune_create;
     use rbx_dom_weak::types::{self as dom, Variant as DomVariant};
 
     let result: LuaResult<LuaValue> = match variant {
@@ -89,42 +89,42 @@ fn lune_dom_variant_to_lua(lua: &Lua, enums: &LuaValue, variant: &rbx_dom_weak::
             None => Ok(LuaValue::Nil),
         },
         DomVariant::OptionalCFrame(None) | DomVariant::PhysicalProperties(dom::PhysicalProperties::Default) => Ok(LuaValue::Nil),
-        DomVariant::Axes(v) => lune_userdata(lua, LuneKind::Axes, rbx_types::Axes::from(*v)).map(LuaValue::UserData),
-        DomVariant::BrickColor(v) => lune_userdata(lua, LuneKind::BrickColor, rbx_types::BrickColor::from(*v)).map(LuaValue::UserData),
+        DomVariant::Axes(v) => lune_create::axes(lua, rbx_types::Axes::from(*v)).map(LuaValue::UserData),
+        DomVariant::BrickColor(v) => lune_create::brick_color(lua, rbx_types::BrickColor::from(*v)).map(LuaValue::UserData),
         DomVariant::CFrame(v) | DomVariant::OptionalCFrame(Some(v)) => {
-            lune_userdata(lua, LuneKind::CFrame, rbx_types::CFrame::from(*v)).map(LuaValue::UserData)
+            lune_create::cframe(lua, rbx_types::CFrame::from(*v)).map(LuaValue::UserData)
         }
-        DomVariant::Color3(v) => lune_userdata(lua, LuneKind::Color3, rbx_types::Color3::from(*v)).map(LuaValue::UserData),
-        DomVariant::Color3uint8(v) => lune_userdata(lua, LuneKind::Color3, rbx_types::Color3::from(*v)).map(LuaValue::UserData),
+        DomVariant::Color3(v) => lune_create::color3(lua, rbx_types::Color3::from(*v)).map(LuaValue::UserData),
+        DomVariant::Color3uint8(v) => lune_create::color3(lua, rbx_types::Color3::from(*v)).map(LuaValue::UserData),
         DomVariant::ColorSequence(v) => {
-            lune_userdata(lua, LuneKind::ColorSequence, rbx_types::ColorSequence::from(v.clone())).map(LuaValue::UserData)
+            lune_create::color_sequence(lua, rbx_types::ColorSequence::from(v.clone())).map(LuaValue::UserData)
         }
-        DomVariant::Content(v) => lune_userdata(lua, LuneKind::Content, rbx_types::Content::from(v.clone())).map(LuaValue::UserData),
+        DomVariant::Content(v) => lune_create::content(lua, rbx_types::Content::from(v.clone())).map(LuaValue::UserData),
         DomVariant::EnumItem(v) => return lune_enum_value(enums, &v.ty, v.value),
-        DomVariant::Faces(v) => lune_userdata(lua, LuneKind::Faces, rbx_types::Faces::from(*v)).map(LuaValue::UserData),
-        DomVariant::Font(v) => lune_userdata(lua, LuneKind::Font, rbx_types::Font::from(v.clone())).map(LuaValue::UserData),
-        DomVariant::NumberRange(v) => lune_userdata(lua, LuneKind::NumberRange, rbx_types::NumberRange::from(*v)).map(LuaValue::UserData),
+        DomVariant::Faces(v) => lune_create::faces(lua, rbx_types::Faces::from(*v)).map(LuaValue::UserData),
+        DomVariant::Font(v) => lune_create::font(lua, rbx_types::Font::from(v.clone())).map(LuaValue::UserData),
+        DomVariant::NumberRange(v) => lune_create::number_range(lua, rbx_types::NumberRange::from(*v)).map(LuaValue::UserData),
         DomVariant::NumberSequence(v) => {
-            lune_userdata(lua, LuneKind::NumberSequence, rbx_types::NumberSequence::from(v.clone())).map(LuaValue::UserData)
+            lune_create::number_sequence(lua, rbx_types::NumberSequence::from(v.clone())).map(LuaValue::UserData)
         }
         DomVariant::PhysicalProperties(dom::PhysicalProperties::Custom(v)) => {
-            lune_userdata(lua, LuneKind::PhysicalProperties, rbx_types::PhysicalProperties::from(*v)).map(LuaValue::UserData)
+            lune_create::physical_properties(lua, rbx_types::PhysicalProperties::from(*v)).map(LuaValue::UserData)
         }
-        DomVariant::Ray(v) => lune_userdata(lua, LuneKind::Ray, rbx_types::Ray::from(*v)).map(LuaValue::UserData),
-        DomVariant::Rect(v) => lune_userdata(lua, LuneKind::Rect, rbx_types::Rect::from(*v)).map(LuaValue::UserData),
-        DomVariant::Region3(v) => lune_userdata(lua, LuneKind::Region3, rbx_types::Region3::from(*v)).map(LuaValue::UserData),
+        DomVariant::Ray(v) => lune_create::ray(lua, rbx_types::Ray::from(*v)).map(LuaValue::UserData),
+        DomVariant::Rect(v) => lune_create::rect(lua, rbx_types::Rect::from(*v)).map(LuaValue::UserData),
+        DomVariant::Region3(v) => lune_create::region3(lua, rbx_types::Region3::from(*v)).map(LuaValue::UserData),
         DomVariant::Region3int16(v) => {
-            lune_userdata(lua, LuneKind::Region3int16, rbx_types::Region3int16::from(*v)).map(LuaValue::UserData)
+            lune_create::region3int16(lua, rbx_types::Region3int16::from(*v)).map(LuaValue::UserData)
         }
-        DomVariant::UDim(v) => lune_userdata(lua, LuneKind::UDim, rbx_types::UDim::from(*v)).map(LuaValue::UserData),
-        DomVariant::UDim2(v) => lune_userdata(lua, LuneKind::UDim2, rbx_types::UDim2::from(*v)).map(LuaValue::UserData),
-        DomVariant::UniqueId(v) => lune_userdata(lua, LuneKind::UniqueId, rbx_types::UniqueId::from(*v)).map(LuaValue::UserData),
-        DomVariant::Vector2(v) => lune_userdata(lua, LuneKind::Vector2, rbx_types::Vector2::from(*v)).map(LuaValue::UserData),
+        DomVariant::UDim(v) => lune_create::udim(lua, rbx_types::UDim::from(*v)).map(LuaValue::UserData),
+        DomVariant::UDim2(v) => lune_create::udim2(lua, rbx_types::UDim2::from(*v)).map(LuaValue::UserData),
+        DomVariant::UniqueId(v) => lune_create::unique_id(lua, rbx_types::UniqueId::from(*v)).map(LuaValue::UserData),
+        DomVariant::Vector2(v) => lune_create::vector2(lua, rbx_types::Vector2::from(*v)).map(LuaValue::UserData),
         DomVariant::Vector2int16(v) => {
-            lune_userdata(lua, LuneKind::Vector2int16, rbx_types::Vector2int16::from(*v)).map(LuaValue::UserData)
+            lune_create::vector2int16(lua, rbx_types::Vector2int16::from(*v)).map(LuaValue::UserData)
         }
         DomVariant::Vector3int16(v) => {
-            lune_userdata(lua, LuneKind::Vector3int16, rbx_types::Vector3int16::from(*v)).map(LuaValue::UserData)
+            lune_create::vector3int16(lua, rbx_types::Vector3int16::from(*v)).map(LuaValue::UserData)
         }
         _ => return None,
     };
