@@ -4622,6 +4622,67 @@ fn editable_mesh_faces_share_their_vertices_corners() {
     );
 }
 
+/// CreateMeshPartAsync refuses an EditableMesh whose box is wider than 2048 studs on any axis with Studio's error and
+/// makes no part (Studio 0.748, a play-test client: tools/parity/probes/mesh_extents.luau): the box is every vertex's, a
+/// face's or not, wherever it lies, and 2048 itself passes.
+#[test]
+fn mesh_parts_refuse_a_mesh_past_2048_studs() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local AssetService = game:GetService("AssetService")
+        -- a mesh whose box runs from `low` to `low + size`: a triangle at its centre, and each far corner a zero-area
+        -- triangle or, `loose`, a vertex no face uses
+        local function make(low, size, loose)
+            local m = AssetService:CreateEditableMesh()
+            local centre = low + size / 2
+            m:AddTriangle(m:AddVertex(centre + Vector3.new(-4, 0, -4)), m:AddVertex(centre + Vector3.new(0, 0, 4)), m:AddVertex(centre + Vector3.new(4, 0, -4)))
+            for _, corner in { low, low + size } do
+                if loose then
+                    m:AddVertex(corner)
+                else
+                    m:AddTriangle(m:AddVertex(corner), m:AddVertex(corner), m:AddVertex(corner))
+                end
+            end
+            return pcall(function()
+                return AssetService:CreateMeshPartAsync(Content.fromObject(m), { CollisionFidelity = Enum.CollisionFidelity.Box, RenderFidelity = Enum.RenderFidelity.Precise })
+            end)
+        end
+        local function refused(low, size, loose)
+            local ok, problem = make(low, size, loose)
+            assert(not ok and problem == "Mesh extents size too large. Maximum is (2048, 2048, 2048).", tostring(size) .. ": " .. tostring(problem))
+        end
+        local function made(low, size)
+            local ok, part = make(low, size)
+            assert(ok and part.ClassName == "MeshPart" and part.MeshSize == size and part.Size == size, tostring(size) .. ": " .. tostring(part))
+        end
+        local function centred(size)
+            return -size / 2, size
+        end
+        -- about the origin, and each axis alone
+        refused(centred(Vector3.new(2112, 520, 2112)))
+        made(centred(Vector3.new(2048, 520, 2048)))
+        for _, axis in { Vector3.xAxis, Vector3.yAxis, Vector3.zAxis } do
+            local rest = (Vector3.one - axis) * 520
+            refused(centred(rest + axis * 2112))
+            made(centred(rest + axis * 2048))
+        end
+        refused(centred(Vector3.new(2048.01, 520, 520)))
+        -- off the origin: the box's width counts, not how far its vertices are
+        made(Vector3.new(5000, -50, -50), Vector3.new(100, 100, 100))
+        made(Vector3.new(0, -260, -260), Vector3.new(2048, 520, 520))
+        refused(Vector3.new(0, -260, -260), Vector3.new(2112, 520, 520))
+        -- the far corners as vertices no face uses
+        local low, size = centred(Vector3.new(2112, 520, 520))
+        refused(low, size, true)
+        print("ok")
+        "#,
+    );
+    assert!(output.contains(&"print: ok".to_string()), "{output:?}");
+}
+
 /// EditableMesh:BatchAdd as a 0.747 client answers it (tools/parity/probes/editable_mesh_batch.luau): the new ids in the
 /// values' order; colours with their alphas; faces numbered backwards (the first face the batch's last id), listed by
 /// GetFaces in the order given, their corners as AddTriangle makes them; a value of the wrong type raises at the caller

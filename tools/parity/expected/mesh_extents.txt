@@ -1,0 +1,19 @@
+# engine: Roblox Studio 0.748.0.7481526, a playing client of a Studio Play session (script identity 2; Workspace.SignalBehavior Deferred; run through rodeo)
+# captured: 2026-11-25
+2112x520x2112 error Mesh extents size too large. Maximum is (2048, 2048, 2048).
+2048x520x2048 ok 2048 520 2048
+2112 on X error Mesh extents size too large. Maximum is (2048, 2048, 2048).
+2048 on X ok 2048 520 520
+2112 on Y error Mesh extents size too large. Maximum is (2048, 2048, 2048).
+2048 on Y ok 520 2048 520
+2112 on Z error Mesh extents size too large. Maximum is (2048, 2048, 2048).
+2048 on Z ok 520 520 2048
+2049x520x520 error Mesh extents size too large. Maximum is (2048, 2048, 2048).
+2048.01x520x520 error Mesh extents size too large. Maximum is (2048, 2048, 2048).
+0 to 1500 on X ok 1500 520 520
+5000 to 5100 on X ok 100 100 100
+0 to 2048 on X ok 2048 520 520
+0 to 2112 on X error Mesh extents size too large. Maximum is (2048, 2048, 2048).
+2112x520x520 loose error Mesh extents size too large. Maximum is (2048, 2048, 2048).
+grown add ok true
+grown part 2000 520 520 2000 520 520
