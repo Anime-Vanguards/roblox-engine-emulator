@@ -13,6 +13,7 @@ use super::{
 };
 
 /// Runs `source` as a script of a fresh engine with `options`, then its clock for a second: the lines it printed.
+#[inline(never)]
 fn run(options: Options, source: &str) -> Vec<String> {
     let engine = Engine::new(options).expect("engine");
     let lua = Lua::new();
@@ -20,6 +21,7 @@ fn run(options: Options, source: &str) -> Vec<String> {
     script(&lua, &engine, source)
 }
 
+#[inline(never)]
 fn script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -44,10 +46,12 @@ fn script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
     entries.iter().filter(|e| e.kind == "print").map(|e| e.message.to_string()).collect()
 }
 
+#[inline(never)]
 fn server(load_string: bool) -> Options {
     Options { mode: "play".into(), run_context: RunContext::Server, local_player_name: None, load_string, ..Options::default() }
 }
 
+#[inline(never)]
 fn check(lines: &[String], wanted: &[&str]) {
     assert_eq!(lines.iter().map(String::as_str).collect::<Vec<_>>(), wanted, "{lines:#?}");
 }

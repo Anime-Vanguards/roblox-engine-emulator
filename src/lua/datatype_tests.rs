@@ -15,6 +15,7 @@ use crate::{
     lua::{self as engine_lua, globals::CallOutcome},
 };
 
+#[inline(never)]
 fn assert_script(source: &str) -> Vec<String> {
     let engine: Rc<Engine> = Engine::new(Options::default()).expect("engine");
     let lua = Lua::new();

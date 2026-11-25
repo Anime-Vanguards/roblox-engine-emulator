@@ -11,6 +11,7 @@ use crate::{
     lua::{self as engine_lua, globals::CallOutcome},
 };
 
+#[inline(never)]
 pub(super) fn start() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options::default()).expect("engine");
     let lua = Lua::new();
@@ -23,6 +24,7 @@ const RUN_FRAMES: u32 = 3600;
 
 /// Compiles `source` once into a reusable Luau function in a fresh ModuleScript environment,
 /// avoiding per-round DOM creation and Luau parsing when called repeatedly through [`call`].
+#[inline(never)]
 fn compile(lua: &Lua, engine: &Rc<Engine>, source: &str) -> LuaFunction {
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -35,7 +37,11 @@ fn compile(lua: &Lua, engine: &Rc<Engine>, source: &str) -> LuaFunction {
 
 /// Runs a compiled function to its end through the scheduler, stepping frames while it waits.
 fn call(lua: &Lua, engine: &Rc<Engine>, function: &LuaFunction, args: impl IntoLuaMulti) {
-    let args = args.into_lua_multi(lua).expect("args");
+    call_multi(lua, engine, function, args.into_lua_multi(lua).expect("args"));
+}
+
+#[inline(never)]
+fn call_multi(lua: &Lua, engine: &Rc<Engine>, function: &LuaFunction, args: LuaMultiValue) {
     let running = engine_lua::globals::call(lua, engine, function.clone(), args).expect("call");
     let mut frames = 0;
     loop {
@@ -53,6 +59,7 @@ fn call(lua: &Lua, engine: &Rc<Engine>, function: &LuaFunction, args: impl IntoL
 
 /// Exposes `shared.Wrap(Inner, Depth, Kind?)` backed by direct DOM attachment, avoiding tens of
 /// thousands of Luau `Instance.new` wrapper allocations when building deep-chain test fixtures.
+#[inline(never)]
 fn register_wrap(lua: &Lua, engine: &Rc<Engine>) {
     let eng = engine.clone();
     let wrap = lua
@@ -78,11 +85,13 @@ fn register_wrap(lua: &Lua, engine: &Rc<Engine>) {
 /// Runs `source` as a script to its end: while it waits (task.wait, an event's Wait) the engine steps frames, one at a time,
 /// until it finishes, and the test fails when it is still waiting after [`RUN_FRAMES`] (what follows a wait would otherwise
 /// never run, its asserts passing unchecked). Panics with the script's error.
+#[inline(never)]
 pub(super) fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) {
     let function = compile(lua, engine, source);
     call(lua, engine, &function, ());
 }
 
+#[inline(never)]
 fn check(source: &str) {
     let (lua, engine) = start();
     run(&lua, &engine, source);
@@ -817,6 +826,7 @@ fn camera_casts_name_values_as_a_client_does() {
 }
 
 /// A client engine with Studio's measuring window (908.8 x 895.2) and its 58-pixel top inset.
+#[inline(never)]
 fn start_studio_window() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options { camera_width: Some(908.8), camera_height: Some(895.2), topbar_inset: 58.0, ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -953,11 +963,13 @@ fn bulk_moves_and_reported_calls() {
 // Rigid assemblies (joints.rs)
 
 /// Runs `source` in an engine of `mode` for `seconds` of frames; panics unless it finished cleanly.
+#[inline(never)]
 fn check_running(mode: &str, source: &str, seconds: f64) {
     check_with(Options { mode: mode.into(), ..Options::default() }, source, seconds);
 }
 
 /// Runs `source` in an engine of `options` for `seconds` of frames; panics unless it finished cleanly.
+#[inline(never)]
 fn check_with(options: Options, source: &str, seconds: f64) {
     let engine = Engine::new(options).expect("engine");
     let lua = Lua::new();
@@ -1826,6 +1838,7 @@ fn a_part_with_many_joints_moves_and_unjoins_on_little_host_time() {
 
 /// An engine with 30,000 Glue spread over `parts` parts that move together (`shared.Moving`), each part glued to one of its own
 /// that stays.
+#[inline(never)]
 fn many_joints(parts: usize) -> (Lua, Rc<Engine>) {
     let (lua, engine) = start_play();
     run(
@@ -1924,6 +1937,7 @@ fn nested_world_models_leave_their_worlds_on_little_host_time() {
 /// Builds the chain (`wrapped`: each WorldModel in a Folder of its own, the chain of the Folders; `holds`: what the bottom holds,
 /// 20,000 "enabled" or "disabled" welds or "folders") and takes it apart from the top: the host time that took, and the work the
 /// first link's move charged.
+#[inline(never)]
 fn nested_world_models_leave(wrapped: bool, holds: &str) -> (f64, f64) {
     let (lua, engine) = start_play();
     run(
@@ -2331,6 +2345,7 @@ fn glue_moved_between_worlds_pays_for_its_list_changes() {
 /// Workspace, a WorldModel in it and JointsService, and out of the DataModel and into ReplicatedStorage and back, 10 rounds a
 /// `shared.Move("Glued")`. Checks the work those rounds are charged beyond the same parts' moves with no joint, and what the Folder
 /// holding the Glue, and Folders of as many disabled Glue and Welds, are charged carried out of the DataModel and back.
+#[inline(never)]
 fn glue_between_worlds(parts: usize) -> (Lua, Rc<Engine>) {
     let count = 20_000;
     let (lua, engine) = start_play();
@@ -7563,6 +7578,7 @@ fn camera_field_of_view_stays_within_its_limits() {
 }
 
 /// A playing client's engine (one Heartbeat a frame, a playing client's render step).
+#[inline(never)]
 pub(super) fn start_play() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();

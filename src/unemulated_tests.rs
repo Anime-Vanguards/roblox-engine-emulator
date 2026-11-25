@@ -12,6 +12,7 @@ use crate::{
 };
 
 /// A scratch folder of its own for a test, with an empty project folder in it
+#[inline(never)]
 fn scratch(name: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = std::env::temp_dir().join(format!("ree-unemulated-{name}-{}-{nanos}", std::process::id()));
@@ -21,6 +22,7 @@ fn scratch(name: &str) -> PathBuf {
 
 /// The arguments of `ree run` (or `ree record` with `--out`) of `harness` (named `name`, mounted at
 /// ReplicatedStorage.RURFixtures.<name>) for 0.2 s with no project, and `extra`
+#[inline(never)]
 fn args(dir: &std::path::Path, name: &str, harness: &str, extra: &[&str]) -> RecordArgs {
     let file = dir.join(format!("{name}.luau"));
     std::fs::write(&file, harness).unwrap();
@@ -30,6 +32,7 @@ fn args(dir: &std::path::Path, name: &str, harness: &str, extra: &[&str]) -> Rec
 }
 
 /// `ree run` of `harness`: its summary
+#[inline(never)]
 fn run_harness(name: &str, harness: &str, extra: &[&str]) -> Json {
     let dir = scratch(name);
     let summary = run::run_only(&args(&dir, name, harness, extra), &Host::default()).unwrap();
@@ -38,6 +41,7 @@ fn run_harness(name: &str, harness: &str, extra: &[&str]) -> Json {
 }
 
 /// The summary's output lines of kind `missing`, as `message @ trace`
+#[inline(never)]
 fn missing_lines(summary: &Json) -> Vec<String> {
     summary["output"]
         .as_array()
@@ -49,6 +53,7 @@ fn missing_lines(summary: &Json) -> Vec<String> {
 }
 
 /// The summary's other output lines, as `kind: message`
+#[inline(never)]
 fn other_lines(summary: &Json) -> Vec<String> {
     summary["output"].as_array().unwrap().iter().filter(|line| line["kind"] != "missing").map(|line| format!("{}: {}", line["kind"].as_str().unwrap(), line["message"].as_str().unwrap())).collect()
 }

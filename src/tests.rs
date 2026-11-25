@@ -12,10 +12,12 @@ use super::{
     scheduler,
 };
 
+#[inline(never)]
 fn start() -> (Lua, Rc<Engine>) {
     start_with(Options::default())
 }
 
+#[inline(never)]
 fn start_with(options: Options) -> (Lua, Rc<Engine>) {
     let engine = Engine::new(options).expect("engine");
     let lua = Lua::new();
@@ -36,6 +38,7 @@ fn start_with(options: Options) -> (Lua, Rc<Engine>) {
 /// Runs `source` on a scheduler thread with the shared globals to its end (while it waits the engine steps frames, failing the
 /// test when it is still waiting after a minute of them: lua/globals.rs Call::finish); returns the output lines ("kind: message")
 /// after flushing deferred work.
+#[inline(never)]
 fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
     let call = start_script(lua, engine, source);
     if let Err(message) = call.finish(lua, engine) {
@@ -47,6 +50,7 @@ fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
 /// Runs `source` on a scheduler thread with the shared globals until it first yields or ends, for a test that steps the frames
 /// after it itself (what follows a wait runs in those frames, and only the test's own checks look at it). Panics with the
 /// script's error.
+#[inline(never)]
 fn start_script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> engine_lua::globals::Call {
     // A script environment (script = a detached ModuleScript named Test, require)
     let script = {
@@ -63,10 +67,12 @@ fn start_script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> engine_lua::glo
     call
 }
 
+#[inline(never)]
 fn lines(engine: &Engine) -> Vec<String> {
     engine.state.borrow().output.entries.iter().map(|e| format!("{}: {}", e.kind, e.message)).collect()
 }
 
+#[inline(never)]
 fn assert_script(source: &str) {
     let (lua, engine) = start();
     let output = run(&lua, &engine, source);
@@ -2805,6 +2811,7 @@ fn models_keep_what_the_engines_reflection_has_and_rbx_dom_lacks() {
 
 /// A model file whose Folder `name` holds the ModuleScript `Module`, whose Source returns a long string (long enough
 /// for an archive writer to keep it outside the scene), and that string.
+#[inline(never)]
 fn archived_module(name: &str) -> (Vec<u8>, String) {
     use rbx_dom_weak::{InstanceBuilder, WeakDom};
     let text = "abcdefghij".repeat(40);
@@ -2818,6 +2825,7 @@ fn archived_module(name: &str) -> (Vec<u8>, String) {
 
 /// `bytes` with the CRC-32 of the ZIP member `name` written again in its local header and its central directory entry
 /// (after a test changed the member's bytes without moving them).
+#[inline(never)]
 fn rezip_crc(mut bytes: Vec<u8>, name: &str) -> Vec<u8> {
     let crc32 = |data: &[u8]| {
         let mut crc = !0u32;
@@ -2927,6 +2935,7 @@ struct Held {
     connections: usize,
 }
 
+#[inline(never)]
 fn held(lua: &Lua, engine: &Rc<Engine>) -> (Held, usize) {
     scheduler::flush_deferred(lua, engine).unwrap();
     for _ in 0..3 {
@@ -3881,6 +3890,7 @@ fn tags_held_as_a_shared_string_are_tags() {
 }
 
 /// A folder named `name` in `parent` (made as the engine builds its own: no events).
+#[inline(never)]
 fn folder_in(engine: &Engine, parent: super::InstanceId, name: &str) -> super::InstanceId {
     let mut state = engine.state.borrow_mut();
     let class = engine.reflection.class_id("Folder").unwrap();
@@ -3890,6 +3900,7 @@ fn folder_in(engine: &Engine, parent: super::InstanceId, name: &str) -> super::I
 }
 
 /// A folder named `name` in ReplicatedStorage.
+#[inline(never)]
 fn storage_folder(engine: &Engine, name: &str) -> super::InstanceId {
     let storage = engine.state.borrow().dom.find_child(engine.world().game, b"ReplicatedStorage").unwrap();
     folder_in(engine, storage, name)
@@ -7893,6 +7904,7 @@ fn priced_places() -> crate::cost::PlacePrices {
 
 /// What a Text write costs in `place_id` with `prices` in a client (`mode` "play") or an edit DataModel ("edit"), in us a write:
 /// letters with AutoLocalize on, AutoLocalize off, digits only, forty characters
+#[inline(never)]
 fn text_write_prices(place_id: f64, prices: crate::cost::PlacePrices, mode: &str) -> Vec<f64> {
     let engine = Engine::new(Options { place_id, place_prices: prices, mode: mode.into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -9209,6 +9221,7 @@ end
 "#;
 
 /// Runs a SharedTable price test (`SHARED_PER` first) with the work clock running, and checks it printed "ok".
+#[inline(never)]
 fn assert_shared_prices(source: &str) {
     let (lua, engine) = start();
     engine_lua::modules::interpret_all(&lua, &engine);
@@ -10090,6 +10103,7 @@ fn players_group_methods_answer_as_a_client_does_for_the_offline_player() {
 
 /// A one-letter Text write's and a workspace part's CFrame write's price in a client of `place_id` with `prices` and `parts` parts
 /// in the workspace, in us a write
+#[inline(never)]
 fn place_write_prices(place_id: f64, parts: usize, prices: crate::cost::PlacePrices) -> Vec<f64> {
     let engine = Engine::new(Options { place_id, place_prices: prices, mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -10880,6 +10894,7 @@ fn a_part_fires_the_events_roblox_fires_beside_a_write() {
 }
 
 /// Lowers the engine's limits on held slots (lua/refs.rs) to what it holds now plus `work` / `wait`.
+#[inline(never)]
 fn limit_held(engine: &Engine, work: i32, wait: i32) {
     let refs = engine.lua.borrow();
     let gauge = refs.gauge.as_ref().expect("the VM's reference thread");

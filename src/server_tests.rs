@@ -12,6 +12,7 @@ use super::{
     scheduler,
 };
 
+#[inline(never)]
 fn start(run_context: RunContext) -> (Lua, Rc<Engine>) {
     let options = match run_context {
         RunContext::Server => Options { mode: "play".into(), run_context, local_player_name: None, ..Options::default() },
@@ -26,16 +27,19 @@ fn start(run_context: RunContext) -> (Lua, Rc<Engine>) {
 
 /// Runs `source` as a script of a fresh engine, then its clock to `until`: the output lines ("kind: message"),
 /// none of which may be an error.
+#[inline(never)]
 fn run(run_context: RunContext, source: &str, until: f64) -> Vec<String> {
     let (lua, engine) = start(run_context);
     run_in(&lua, &engine, source, until)
 }
 
+#[inline(never)]
 fn run_in(lua: &Lua, engine: &Rc<Engine>, source: &str, until: f64) -> Vec<String> {
     run_with(lua, engine, source, until, &[])
 }
 
 /// [`run_in`] with `globals` set in the script's environment.
+#[inline(never)]
 fn run_with(lua: &Lua, engine: &Rc<Engine>, source: &str, until: f64, globals: &[(&str, LuaValue)]) -> Vec<String> {
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -63,11 +67,13 @@ fn run_with(lua: &Lua, engine: &Rc<Engine>, source: &str, until: f64, globals: &
     lines
 }
 
+#[inline(never)]
 fn has(lines: &[String], wanted: &str) -> bool {
     lines.iter().any(|line| line == wanted)
 }
 
 /// A printed line `label` then an error ending in `message` (after the script position, when it has one).
+#[inline(never)]
 fn has_error(lines: &[String], label: &str, message: &str) -> bool {
     let start = format!("print: {label} ");
     lines.iter().any(|line| line.starts_with(&start) && line.ends_with(message))

@@ -358,6 +358,7 @@ pub fn copy_instance_handle(lua: &Lua, held: &LuaAnyUserData) -> LuaResult<LuaVa
     Ok(LuaValue::UserData(copy))
 }
 
+#[inline(never)]
 fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // Get, for `.` (a new C function each read: [`LInstanceHandle`]) and for `:` (the __namecall's, whose self always is a handle)
     let e = engine.clone();
@@ -443,6 +444,7 @@ fn enum_item_of(value: &LuaValue) -> Option<EnumItemId> {
     }
 }
 
+#[inline(never)]
 fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // EnumItem
     let is_a = named(lua, "IsA", Library, super::create_boxed_val2(lua, Box::new(|lua, item, name| {
@@ -702,6 +704,7 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
     Ok(values([LuaValue::UserData(userdata)]))
 }
 
+#[inline(never)]
 fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let members = lua.create_table()?;
     let e = engine.clone();
@@ -891,6 +894,7 @@ fn make_font(lua: &Lua, font: FontValue) -> LuaResult<LuaValue> {
     Ok(LuaValue::UserData(lua.create_any_userdata(LFont(RefCell::new(font)))?))
 }
 
+#[inline(never)]
 fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     let index = wrapped(lua, engine, "__index", move |lua, args| {
@@ -1110,6 +1114,7 @@ fn content_of(value: &LuaValue) -> Option<ContentValue> {
     }
 }
 
+#[inline(never)]
 fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     let index = wrapped(lua, engine, "__index", move |lua, args| {
@@ -1223,6 +1228,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
 
 // TweenInfo
 
+#[inline(never)]
 fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     let index = wrapped(lua, engine, "__index", move |lua, args| {
@@ -1542,6 +1548,7 @@ fn random_method(
     called.raw_set(name, raw)
 }
 
+#[inline(never)]
 fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let methods = lua.create_table()?;
     let calls = lua.create_table()?;
@@ -2249,6 +2256,7 @@ fn make_date_time(lua: &Lua, millis: f64) -> LuaResult<LuaValue> {
     Ok(LuaValue::UserData(lua.create_any_userdata(LDateTime(millis.floor() + 0.0))?))
 }
 
+#[inline(never)]
 fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let methods = lua.create_table()?;
     let calls = lua.create_table()?;

@@ -942,6 +942,7 @@ fn join(path: Option<&str>, name: &str) -> String {
 /// The copy of `id` as it is now: its serialized properties (as rbx-dom names and stores them, then
 /// those only Studio's newer dump serializes, such as a UICorner's per-corner radii), references,
 /// attributes and tags.
+#[inline(never)]
 fn snapshot(state: &State, engine: &Engine, id: InstanceId, class: ClassId) -> (Vec<(String, Variant)>, Vec<(String, InstanceId)>) {
     let mut properties = Vec::new();
     let mut references = Vec::new();
@@ -1452,6 +1453,7 @@ fn stage_moves(inner: &mut Inner, state: &State, engine: &Engine) {
 }
 
 /// Appearances, comings back, moves inside the world and departures since the last walk.
+#[inline(never)]
 fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: Option<InstanceId>) {
     let world = engine.world();
     let frame = inner.frame;
@@ -1614,6 +1616,7 @@ fn mark_seen(inner: &mut Inner, found: &mut Vec<usize>, index: usize, walk: u32)
 
 /// What changed in the world this frame: property writes, emits and clears, attachments that move by
 /// their own CFrame, sounds, the camera.
+#[inline(never)]
 fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: Option<InstanceId>) {
     let world = engine.world();
     let frame = inner.frame;
@@ -1823,6 +1826,7 @@ fn stage_record(id: InstanceId, class: ClassId, class_name: &str, path: &str) ->
 /// A UniqueId another copy has already (clones keep their template's) is replaced with one made
 /// from it and a count, before rbx-dom would replace it with a random one: the same run writes the
 /// same bytes.
+#[inline(never)]
 fn scene(inner: &Inner) -> Result<Vec<u8>, String> {
     let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
     let root = dom.root_ref();
@@ -1917,7 +1921,8 @@ fn motion_allowance(component: usize, value: f64) -> f64 {
 
 /// Drops keys a straight line between their neighbours reproduces (each number within what `allowed` gives for its
 /// index and value).
-fn reduce(keys: Vec<Json>, field: &str, allowed: impl Fn(usize, f64) -> f64) -> Vec<Json> {
+#[inline(never)]
+fn reduce(keys: Vec<Json>, field: &str, allowed: fn(usize, f64) -> f64) -> Vec<Json> {
     if keys.len() <= 2 {
         return keys;
     }
@@ -1950,6 +1955,7 @@ fn reduce(keys: Vec<Json>, field: &str, allowed: impl Fn(usize, f64) -> f64) -> 
 }
 
 /// The playback (ror's README "Playback").
+#[inline(never)]
 fn playback(inner: &Inner) -> Playback {
     let mut actions: Vec<(f64, Box<[u8]>)> = Vec::new();
     let mut tweens: Vec<Box<[u8]>> = Vec::new();
@@ -2053,6 +2059,7 @@ fn playback(inner: &Inner) -> Playback {
     Playback { actions, tweens, motion, frames }
 }
 
+#[inline(never)]
 fn events(inner: &Inner, engine: &Engine) -> Json {
     let state = engine.state.borrow();
     let output: Vec<Json> = state.output.entries.iter().map(event_json).collect();
@@ -2070,6 +2077,7 @@ fn events(inner: &Inner, engine: &Engine) -> Json {
 }
 
 /// The summary; `(errors, warns)`: the output lines of those kinds.
+#[inline(never)]
 fn summary(inner: &Inner, (errors, warns): (usize, usize), playback: &Playback, mut extra: Map<String, Json>) -> Json {
     // (a timing check's: the work each sampled frame did, ms at desktop prices, the first sample's being everything before it)
     if let Some(totals) = &inner.frame_work {

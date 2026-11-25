@@ -18,6 +18,7 @@ static TEST_DIRS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 
 /// Runs `source` in a play-mode engine for `frames` frames at 60 a second, recording; returns the
 /// output directory's files as read back.
+#[inline(never)]
 fn record(source: &str, frames: u32) -> (Json, Json, rbx_dom_weak::WeakDom, Json) {
     let (playback, events, scene, summary, _) = record_with(source, frames, false);
     (playback, events, scene, summary)
@@ -25,16 +26,19 @@ fn record(source: &str, frames: u32) -> (Json, Json, rbx_dom_weak::WeakDom, Json
 
 /// [`record`], also returning scene.rbxm's bytes; `walk_always`: the recorder walks the world every
 /// frame instead of only after something was parented.
+#[inline(never)]
 fn record_with(source: &str, frames: u32, walk_always: bool) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
     record_in(source, frames, walk_always, &[])
 }
 
 /// [`record_with`] in a place whose Lighting holds `own` (class, name) before the run.
+#[inline(never)]
 fn record_in(source: &str, frames: u32, walk_always: bool, own: &[(&str, &str)]) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
     record_options(Options { mode: "play".into(), ..Options::default() }, source, frames, walk_always, own)
 }
 
 /// [`record_in`] with the engine's options.
+#[inline(never)]
 fn record_options(options: Options, source: &str, frames: u32, walk_always: bool, own: &[(&str, &str)]) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
     record_prepared(options, source, frames, walk_always, |engine| {
         if own.is_empty() {
@@ -53,6 +57,16 @@ fn record_options(options: Options, source: &str, frames: u32, walk_always: bool
 
 /// [`record_options`] with `prepare` run on the started engine before the harness (a mount, say).
 fn record_prepared(options: Options, source: &str, frames: u32, walk_always: bool, prepare: impl FnOnce(&Engine)) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
+    let mut prepare = Some(prepare);
+    record_prepared_dyn(options, source, frames, walk_always, &mut |engine| {
+        if let Some(f) = prepare.take() {
+            f(engine);
+        }
+    })
+}
+
+#[inline(never)]
+fn record_prepared_dyn(options: Options, source: &str, frames: u32, walk_always: bool, prepare: &mut dyn FnMut(&Engine)) -> (Json, Json, rbx_dom_weak::WeakDom, Json, Vec<u8>) {
     let engine = Engine::new(options).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
@@ -97,9 +111,15 @@ fn record_prepared(options: Options, source: &str, frames: u32, walk_always: boo
 }
 
 fn find<'a>(list: &'a Json, test: impl Fn(&Json) -> bool) -> Vec<&'a Json> {
+    find_dyn(list, &test)
+}
+
+#[inline(never)]
+fn find_dyn<'a>(list: &'a Json, test: &dyn Fn(&Json) -> bool) -> Vec<&'a Json> {
     list.as_array().map(|items| items.iter().filter(|item| test(item)).collect()).unwrap_or_default()
 }
 
+#[inline(never)]
 fn instance<'a>(dom: &'a rbx_dom_weak::WeakDom, path: &[&str]) -> &'a rbx_dom_weak::Instance {
     let mut current = dom.root();
     for name in path {

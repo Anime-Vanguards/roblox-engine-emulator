@@ -797,16 +797,13 @@ impl Recorder {
         merged
     }
 
+    #[inline(never)]
     fn report(&self) -> (Json, String) {
         let phase = self.reported();
         let phase = &phase;
         // (a phase in which no virtual time passed, a boot that runs inside one frame: its figures are per run, not per second)
         let zero_time = phase.seconds <= 0.0;
         let seconds = if zero_time { 1.0 } else { phase.seconds };
-        let member_name = |member: u32| {
-            let member = &self.members[member as usize];
-            format!("{}.{}", member.class, member.member)
-        };
         let ms = |cost: f64| cost / seconds * 1e3;
 
         // (a member read through different classes of instance, Part.CFrame and MeshPart.CFrame, is one: BasePart.CFrame)
@@ -841,29 +838,6 @@ impl Recorder {
         let mut host_sites: Vec<_> = all_sites.iter().filter(|row| is_host(row.1)).cloned().collect();
         crate::sort::by(&mut sites, |a, b| b.2.count.cmp(&a.2.count).then(a.0.cmp(&b.0)));
         crate::sort::by(&mut host_sites, |a, b| b.2.cost.total_cmp(&a.2.cost).then(a.0.cmp(&b.0)));
-        let site_json = |(site, member, stat): &(u32, u32, Stat)| {
-            let info = &self.sites[*site as usize];
-            json!({
-                "script": self.scripts[info.script as usize],
-                "function": self.function_label(info.function),
-                "line": info.line,
-                "kind": self.members[*member as usize].kind.label(),
-                "member": member_name(*member),
-                "count": stat.count,
-                "per_s": stat.count as f64 / seconds,
-                "cost_ms_per_s": ms(stat.cost),
-                "unchanged_writes": stat.unchanged,
-                // (a value read again unchanged by the same function: in the same call, a local holds it; in a later call, the
-                // caller can read it once; repeat_reads is the two)
-                "repeat_reads": stat.repeats(),
-                "repeat_cost_ms": stat.repeat_cost * 1e3,
-                "unchanged_cost_ms": stat.unchanged_cost * 1e3,
-                "repeat_reads_per_s": stat.repeats() as f64 / seconds,
-                "repeat_same_call": stat.same_call,
-                "repeat_later_call": stat.later_call,
-                "repeat_other_function": stat.other_function,
-            })
-        };
         let mut by_cost = sites.clone();
         crate::sort::by(&mut by_cost, |a, b| b.2.cost.total_cmp(&a.2.cost).then(a.0.cmp(&b.0)));
 
@@ -897,6 +871,79 @@ impl Recorder {
         let mut member_rows: Vec<_> = members.into_iter().collect();
         crate::sort::by(&mut member_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
         let frames = phase.frames.max(1) as f64;
+        let mut script_rows: Vec<_> = scripts.into_iter().collect();
+        crate::sort::by(&mut script_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        let mut function_rows: Vec<_> = functions.into_iter().collect();
+        crate::sort::by(&mut function_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        let mut repeats: Vec<_> = sites.iter().filter(|row| row.2.repeats() + row.2.other_function > 0).cloned().collect();
+        crate::sort::by(&mut repeats, |a, b| (b.2.repeats() + b.2.other_function).cmp(&(a.2.repeats() + a.2.other_function)).then(a.0.cmp(&b.0)));
+        let mut unchanged: Vec<_> = sites.iter().filter(|row| row.2.unchanged > 0).cloned().collect();
+        crate::sort::by(&mut unchanged, |a, b| b.2.unchanged.cmp(&a.2.unchanged).then(a.0.cmp(&b.0)));
+
+        let coverage = if phase.charged > 0.0 { phase.attributed / phase.charged } else { 1.0 };
+        let report = self.report_json(
+            phase, zero_time, seconds, frames, crossings, priced, host_calls, host_cost, coverage,
+            &extras, &sites, &by_cost, &host_sites, &member_rows, &script_rows, &function_rows, &repeats, &unchanged,
+        );
+        let text = self.report_text(
+            phase, zero_time, seconds, frames, crossings, priced, host_calls, host_cost, coverage,
+            &extras, &sites, &by_cost, &host_sites, &member_rows, &script_rows, &repeats, &unchanged,
+        );
+        let _ = ms;
+        (report, text)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn report_json(
+        &self,
+        phase: &Phase,
+        zero_time: bool,
+        seconds: f64,
+        frames: f64,
+        crossings: u64,
+        priced: f64,
+        host_calls: u64,
+        host_cost: f64,
+        coverage: f64,
+        extras: &FxHashMap<u32, MemberStat>,
+        sites: &[(u32, u32, Stat)],
+        by_cost: &[(u32, u32, Stat)],
+        host_sites: &[(u32, u32, Stat)],
+        member_rows: &[(u32, (u64, f64, u64))],
+        script_rows: &[(u32, (u64, f64))],
+        function_rows: &[(u32, (u64, f64))],
+        repeats: &[(u32, u32, Stat)],
+        unchanged: &[(u32, u32, Stat)],
+    ) -> Json {
+        let member_name = |member: u32| {
+            let member = &self.members[member as usize];
+            format!("{}.{}", member.class, member.member)
+        };
+        let ms = |cost: f64| cost / seconds * 1e3;
+        let site_json = |(site, member, stat): &(u32, u32, Stat)| {
+            let info = &self.sites[*site as usize];
+            json!({
+                "script": self.scripts[info.script as usize],
+                "function": self.function_label(info.function),
+                "line": info.line,
+                "kind": self.members[*member as usize].kind.label(),
+                "member": member_name(*member),
+                "count": stat.count,
+                "per_s": stat.count as f64 / seconds,
+                "cost_ms_per_s": ms(stat.cost),
+                "unchanged_writes": stat.unchanged,
+                // (a value read again unchanged by the same function: in the same call, a local holds it; in a later call, the
+                // caller can read it once; repeat_reads is the two)
+                "repeat_reads": stat.repeats(),
+                "repeat_cost_ms": stat.repeat_cost * 1e3,
+                "unchanged_cost_ms": stat.unchanged_cost * 1e3,
+                "repeat_reads_per_s": stat.repeats() as f64 / seconds,
+                "repeat_same_call": stat.same_call,
+                "repeat_later_call": stat.later_call,
+                "repeat_other_function": stat.other_function,
+            })
+        };
         let member_json = |(member, (count, cost, call_sites)): &(u32, (u64, f64, u64))| {
             let extra = extras.get(member).copied().unwrap_or_default();
             json!({
@@ -913,17 +960,7 @@ impl Recorder {
                 "other_function_repeats_per_frame": extra.other_function as f64 / frames,
             })
         };
-        let mut script_rows: Vec<_> = scripts.into_iter().collect();
-        crate::sort::by(&mut script_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
-        let mut function_rows: Vec<_> = functions.into_iter().collect();
-        crate::sort::by(&mut function_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
-        let mut repeats: Vec<_> = sites.iter().filter(|row| row.2.repeats() + row.2.other_function > 0).cloned().collect();
-        crate::sort::by(&mut repeats, |a, b| (b.2.repeats() + b.2.other_function).cmp(&(a.2.repeats() + a.2.other_function)).then(a.0.cmp(&b.0)));
-        let mut unchanged: Vec<_> = sites.iter().filter(|row| row.2.unchanged > 0).cloned().collect();
-        crate::sort::by(&mut unchanged, |a, b| b.2.unchanged.cmp(&a.2.unchanged).then(a.0.cmp(&b.0)));
-
-        let coverage = if phase.charged > 0.0 { phase.attributed / phase.charged } else { 1.0 };
-        let report = json!({
+        json!({
             "version": 1,
             "phase": phase.name,
             "phases": self.phases.iter().map(|phase| {
@@ -962,8 +999,36 @@ impl Recorder {
             }).collect::<Vec<_>>(),
             "repeat_reads": repeats.iter().take(200).map(site_json).collect::<Vec<_>>(),
             "unchanged_writes": unchanged.iter().take(200).map(site_json).collect::<Vec<_>>(),
-        });
+        })
+    }
 
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn report_text(
+        &self,
+        phase: &Phase,
+        zero_time: bool,
+        seconds: f64,
+        frames: f64,
+        crossings: u64,
+        priced: f64,
+        host_calls: u64,
+        host_cost: f64,
+        coverage: f64,
+        extras: &FxHashMap<u32, MemberStat>,
+        sites: &[(u32, u32, Stat)],
+        by_cost: &[(u32, u32, Stat)],
+        host_sites: &[(u32, u32, Stat)],
+        member_rows: &[(u32, (u64, f64, u64))],
+        script_rows: &[(u32, (u64, f64))],
+        repeats: &[(u32, u32, Stat)],
+        unchanged: &[(u32, u32, Stat)],
+    ) -> String {
+        let member_name = |member: u32| {
+            let member = &self.members[member as usize];
+            format!("{}.{}", member.class, member.member)
+        };
+        let ms = |cost: f64| cost / seconds * 1e3;
         let top = self.config.top;
         let mut text = format!(
             "boundary profile: phase {} ({:.2} emulated s, {} frames{}): {} crossings ({:.0}/s), priced {:.2} ms/s; {:.0} % of the Instance API's {:.2} ms/s of charges attributed\n\
@@ -998,9 +1063,9 @@ impl Recorder {
                 ));
             }
         };
-        table("top call sites by crossings per emulated second", &sites, &mut text);
-        table("top call sites by priced cost", &by_cost, &mut text);
-        table("VM host calls (datatype operations and engine functions) by priced cost", &host_sites, &mut text);
+        table("top call sites by crossings per emulated second", sites, &mut text);
+        table("top call sites by priced cost", by_cost, &mut text);
+        table("VM host calls (datatype operations and engine functions) by priced cost", host_sites, &mut text);
         text.push_str(&format!("\nby Class.Member\n{:>10} {:>10} {:>9} {:>9} {:>9} {:>6}  {:<8} {}\n", "per s", "ms/s", "reads/fr", "distinct", "repeat/fr", "sites", "kind", "member"));
         for row in member_rows.iter().take(top) {
             let extra = extras.get(&row.0).copied().unwrap_or_default();
@@ -1051,7 +1116,7 @@ impl Recorder {
                 self.function_label(info.function)
             ));
         }
-        (report, text)
+        text
     }
 }
 

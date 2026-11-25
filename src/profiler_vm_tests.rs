@@ -14,6 +14,7 @@ use crate::{
     scheduler,
 };
 
+#[inline(never)]
 fn temp_dir(name: &str) -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -22,12 +23,23 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 }
 
 /// Runs `source` as a script (chunk `=name`) on a scheduler thread
+#[inline(never)]
 fn run(lua: &Lua, engine: &Rc<Engine>, name: &str, source: &str) {
     run_with(lua, engine, name, source, |_| {});
 }
 
 /// [`run`] with `prepare` given the script's environment first (a test's own globals)
 fn run_with(lua: &Lua, engine: &Rc<Engine>, name: &str, source: &str, prepare: impl FnOnce(&LuaTable)) {
+    let mut prepare = Some(prepare);
+    run_with_dyn(lua, engine, name, source, &mut |env| {
+        if let Some(f) = prepare.take() {
+            f(env);
+        }
+    });
+}
+
+#[inline(never)]
+fn run_with_dyn(lua: &Lua, engine: &Rc<Engine>, name: &str, source: &str, prepare: &mut dyn FnMut(&LuaTable)) {
     let script = {
         let mut state = engine.state.borrow_mut();
         let class = engine.reflection.class_id("ModuleScript").unwrap();
@@ -44,6 +56,7 @@ fn run_with(lua: &Lua, engine: &Rc<Engine>, name: &str, source: &str, prepare: i
 
 /// A profile of `source` (chunk `=name`, run once in a playing client: one Heartbeat a frame) and `frames` frames after it: the
 /// summary and profile.json
+#[inline(never)]
 fn profile(name: &str, kinds: Kinds, frames: u32, source: &str) -> (String, Json) {
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -67,6 +80,7 @@ fn profile(name: &str, kinds: Kinds, frames: u32, source: &str) -> (String, Json
 }
 
 /// The function named `name` in `module` (a table's function by its last part)
+#[inline(never)]
 fn function<'a>(json: &'a Json, module: &str, name: &str) -> &'a Json {
     json["functions"]
         .as_array()
@@ -77,11 +91,13 @@ fn function<'a>(json: &'a Json, module: &str, name: &str) -> &'a Json {
 }
 
 /// The C function named `name`
+#[inline(never)]
 fn c_function<'a>(json: &'a Json, name: &str) -> &'a Json {
     json["functions"].as_array().unwrap().iter().find(|f| f["kind"] == "C" && f["name"] == name).unwrap_or_else(|| panic!("no C function {name}: {:#}", json["functions"]))
 }
 
 /// The cache sites of a function's line, summed: (opcodes as run, outcomes by name)
+#[inline(never)]
 fn sites_at(json: &Json, function: &Json, line: i64) -> (Vec<String>, std::collections::BTreeMap<String, u64>) {
     let mut ops = Vec::new();
     let mut outcomes = std::collections::BTreeMap::new();
@@ -97,6 +113,7 @@ fn sites_at(json: &Json, function: &Json, line: i64) -> (Vec<String>, std::colle
     (ops, outcomes)
 }
 
+#[inline(never)]
 fn counts(pairs: &[(&str, u64)]) -> std::collections::BTreeMap<String, u64> {
     pairs.iter().map(|(name, count)| (name.to_string(), *count)).collect()
 }
@@ -376,6 +393,11 @@ fn time_profile(name: &str, frames: u32, source: &str, between: impl FnMut()) ->
 /// [`time_profile`], on the test's own clock where `manual` (luau_profile::manual_ticks): the clock moves only when `between`
 /// calls luau_profile::advance_ticks or the script calls `tick(n)`, so every booking is exact
 fn time_profile_with(name: &str, frames: u32, source: &str, manual: bool, mut between: impl FnMut()) -> (String, Json) {
+    time_profile_dyn(name, frames, source, manual, &mut between)
+}
+
+#[inline(never)]
+fn time_profile_dyn(name: &str, frames: u32, source: &str, manual: bool, between: &mut dyn FnMut()) -> (String, Json) {
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
@@ -408,12 +430,14 @@ fn time_profile_with(name: &str, frames: u32, source: &str, manual: bool, mut be
 }
 
 /// A function row by its exact name (an engine step's frame: `(ree engine step: recorder)`)
+#[inline(never)]
 fn named<'a>(json: &'a Json, name: &str) -> Option<&'a Json> {
     json["functions"].as_array().unwrap().iter().find(|f| f["name"] == name)
 }
 
 /// A work profile of `source` with `outer` (a host function: it calls the Luau function it is given, an error it raises caught,
 /// then charges a millisecond of the engine's work) and `pair` (two host functions no global holds) in its environment
+#[inline(never)]
 fn host_function_profile(name: &str, source: &str) -> (String, Json) {
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -476,12 +500,14 @@ fn unnamed_c_functions_are_named_by_their_call_site() {
 /// call and a function's first run are charged: the first handler can run before it). Its `clock()` reads the work clock, as a
 /// run's Context.WorkSeconds does, for the script to measure itself while its `measuring` global is set (the steady frames):
 /// profile.json and its `moved` global
+#[inline(never)]
 fn frame_charge_profile(name: &str, source: &str, unsafe_env: bool, frames: u32) -> (Json, f64) {
     let (json, moved, _) = frame_charge_profile_with(name, source, unsafe_env, frames, None);
     (json, moved)
 }
 
 /// [`frame_charge_profile`], with a second measure the script keeps (a global's name) read too
+#[inline(never)]
 fn frame_charge_profile_with(name: &str, source: &str, unsafe_env: bool, frames: u32, second: Option<&str>) -> (Json, f64, Option<f64>) {
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -651,26 +677,31 @@ fn the_work_clocks_charges_and_the_uncharged_prices_never_overlap() {
     let ns = |ms: f64, per: f64| ms * 1e6 / per;
     // (profile.json gives a site's figures to a tenth of a nanosecond: a few of them summed, within a nanosecond)
     let close = |a: f64, b: f64| (a - b).abs() < 1e-6 + 1e-9 * a.abs().max(b.abs());
-    let pairs: Vec<_> = std::thread::scope(|s| {
-        let handles: Vec<_> = cases
-            .iter()
-            .map(|case| {
-                let (source_with, source_without) = (source(case, case.outcome), source(case, case.hit));
-                let unsafe_with = case.unsafe_env[0];
-                let unsafe_without = case.unsafe_env[1];
-                let a = s.spawn(move || {
-                    let res = frame_charge_profile("charges", &source_with, unsafe_with, FRAMES);
-                    (source_with, res)
-                });
-                let b = s.spawn(move || {
-                    let res = frame_charge_profile("charges", &source_without, unsafe_without, FRAMES);
-                    (source_without, res)
-                });
-                (case, a, b)
-            })
-            .collect();
-        handles.into_iter().map(|(case, a, b)| (case, a.join().unwrap(), b.join().unwrap())).collect()
-    });
+    let mut results: Vec<Option<_>> = (0..cases.len()).map(|_| None).collect();
+    let tasks: Vec<Box<dyn FnOnce() + Send + '_>> = cases
+        .iter()
+        .zip(results.iter_mut())
+        .map(|(case, slot)| {
+            let (source_with, source_without) = (source(case, case.outcome), source(case, case.hit));
+            let unsafe_with = case.unsafe_env[0];
+            let unsafe_without = case.unsafe_env[1];
+            Box::new(move || {
+                let (a, b) = crate::profiler_tests::run_pair(
+                    || {
+                        let res = frame_charge_profile("charges", &source_with, unsafe_with, FRAMES);
+                        (source_with, res)
+                    },
+                    || {
+                        let res = frame_charge_profile("charges", &source_without, unsafe_without, FRAMES);
+                        (source_without, res)
+                    },
+                );
+                *slot = Some((case, a, b));
+            }) as Box<dyn FnOnce() + Send + '_>
+        })
+        .collect();
+    crate::profiler_tests::run_parallel(tasks);
+    let pairs: Vec<_> = results.into_iter().map(Option::unwrap).collect();
     for (case, (source_with, (with, moved_with)), (source_without, (without, moved_without))) in pairs {
         let _ = &source_without;
         // (the steady frames the loop ran in)
@@ -759,11 +790,10 @@ fn a_rehash_sites_presized_figure_is_what_presizing_saves() {
     let source = |constructor: &str| {
         format!("local clock = clock\nlocal M = {{}}\nfunction M.loop(n)\n\tlocal s\n\tfor i = 1, n do\n\t\tlocal t = {constructor}\n\t\tt.x = i\n\t\ts = t\n\tend\n\treturn s\nend\nlocal total = 0\ngame:GetService(\"RunService\").Heartbeat:Connect(function()\n\tlocal before = clock()\n\tlocal r = M.loop(2000)\n\tlocal after = clock()\n\tif measuring then\n\t\ttotal += after - before\n\t\tmoved = total\n\tend\n\tresult = r\nend)\n")
     };
-    let ((growing, growing_clock), (presized, presized_clock)) = std::thread::scope(|s| {
-        let a = s.spawn(|| frame_charge_profile("presized", &source("{a = 1, b = 1, c = 1, d = 1}"), false, FRAMES));
-        let b = s.spawn(|| frame_charge_profile("presized", &source("{a = 1, b = 1, c = 1, d = 1, x = 0}"), false, FRAMES));
-        (a.join().unwrap(), b.join().unwrap())
-    });
+    let ((growing, growing_clock), (presized, presized_clock)) = crate::profiler_tests::run_pair(
+        || frame_charge_profile("presized", &source("{a = 1, b = 1, c = 1, d = 1}"), false, FRAMES),
+        || frame_charge_profile("presized", &source("{a = 1, b = 1, c = 1, d = 1, x = 0}"), false, FRAMES),
+    );
     // the loop's `t.x = i` (line 7)
     let site = |json: &Json| -> Json {
         let id = function(json, "presized", "loop")["id"].clone();
@@ -835,19 +865,24 @@ fn a_declined_builtins_fast_equivalent_is_what_a_fix_still_pays() {
             case.setup[fixed], case.call[fixed], case.n, case.args[fixed]
         )
     };
-    let pairs: Vec<_> = std::thread::scope(|s| {
-        let handles: Vec<_> = cases
-            .iter()
-            .map(|case| {
-                let s0 = source(case, 0);
-                let s1 = source(case, 1);
-                let a = s.spawn(move || frame_charge_profile("fastpath", &s0, false, FRAMES));
-                let b = s.spawn(move || frame_charge_profile("fastpath", &s1, false, FRAMES));
-                (case, a, b)
-            })
-            .collect();
-        handles.into_iter().map(|(case, a, b)| (case, a.join().unwrap(), b.join().unwrap())).collect()
-    });
+    let mut results: Vec<Option<_>> = (0..cases.len()).map(|_| None).collect();
+    let tasks: Vec<Box<dyn FnOnce() + Send + '_>> = cases
+        .iter()
+        .zip(results.iter_mut())
+        .map(|(case, slot)| {
+            let s0 = source(case, 0);
+            let s1 = source(case, 1);
+            Box::new(move || {
+                let (a, b) = crate::profiler_tests::run_pair(
+                    || frame_charge_profile("fastpath", &s0, false, FRAMES),
+                    || frame_charge_profile("fastpath", &s1, false, FRAMES),
+                );
+                *slot = Some((case, a, b));
+            }) as Box<dyn FnOnce() + Send + '_>
+        })
+        .collect();
+    crate::profiler_tests::run_parallel(tasks);
+    let pairs: Vec<_> = results.into_iter().map(Option::unwrap).collect();
     for (case, (declining, clock_declining), (fixed, clock_fixed)) in pairs {
         // (the builtin's sites in the loop: their decline charge and fast-path equivalent, ms, and their declines; the per-node
         // records add up to them)
@@ -941,11 +976,10 @@ fn a_comparators_declines_split_between_the_sort_and_the_loop() {
             "local clock = clock\nlocal M = {{}}\nfunction M.less(a, b)\n\treturn math.abs(a) < math.abs(b)\nend\nfunction M.loop(xs, n)\n\tlocal s = 0\n\tfor i = 1, n - 1 do\n\t\tif M.less(xs[i], xs[i + 1]) then\n\t\t\ts += 1\n\t\tend\n\tend\n\treturn s\nend\nlocal function values(n, seed)\n\tlocal out = table.create(n)\n\tfor i = 1, n do\n\t\tlocal v = (i * 7919 + seed) % 1000\n\t\tout[i] = {value}\n\tend\n\treturn out\nend\nlocal sorted, looped = 0, 0\ngame:GetService(\"RunService\").Heartbeat:Connect(function()\n\tif not measuring then\n\t\treturn\n\tend\n\tlocal items, xs = values(300, 1), values(600, 7)\n\tlocal t0 = clock()\n\ttable.sort(items, M.less)\n\tlocal t1 = clock()\n\tlocal r = M.loop(xs, 600)\n\tlocal t2 = clock()\n\tsorted += t1 - t0\n\tlooped += t2 - t1\n\tmoved = sorted\n\tmovedLoop = looped\n\tresult = r\nend)\n"
         )
     };
-    let ((strings, sort_strings, loop_strings), (numbers, sort_numbers, loop_numbers)) = std::thread::scope(|s| {
-        let a = s.spawn(|| frame_charge_profile_two("comparator", &source("tostring(v)"), FRAMES));
-        let b = s.spawn(|| frame_charge_profile_two("comparator", &source("v"), FRAMES));
-        (a.join().unwrap(), b.join().unwrap())
-    });
+    let ((strings, sort_strings, loop_strings), (numbers, sort_numbers, loop_numbers)) = crate::profiler_tests::run_pair(
+        || frame_charge_profile_two("comparator", &source("tostring(v)"), FRAMES),
+        || frame_charge_profile_two("comparator", &source("v"), FRAMES),
+    );
     // the math.abs sites in M.less: per node, by the function of the node's parent, decline charged less the fast path's (ms)
     let per_node = |json: &Json| -> std::collections::BTreeMap<i64, f64> {
         let less = function(json, "comparator", "less")["id"].clone();
@@ -981,6 +1015,7 @@ fn a_comparators_declines_split_between_the_sort_and_the_loop() {
 }
 
 /// [`frame_charge_profile`] for a script that measures two parts of a frame: profile.json, its `moved` and its `movedLoop`
+#[inline(never)]
 fn frame_charge_profile_two(name: &str, source: &str, frames: u32) -> (Json, f64, f64) {
     let (json, moved, second) = frame_charge_profile_with(name, source, false, frames, Some("movedLoop"));
     (json, moved, second.unwrap_or(f64::NAN))
@@ -997,6 +1032,7 @@ fn the_prices_base_opcodes_are_named() {
 }
 
 /// The function row named `name` in `module`, if the profile has one (a host time profile lists only what a sample found)
+#[inline(never)]
 fn function_if<'a>(json: &'a Json, module: &str, name: &str) -> Option<&'a Json> {
     json["functions"].as_array().unwrap().iter().find(|f| f["module"] == module && f["name"].as_str().is_some_and(|n| n == name || n.ends_with(&format!(".{name}"))))
 }
@@ -1159,6 +1195,7 @@ fn host_time_after_a_mixed_call_site_follows_each_call() {
 /// pattern "^." (its matcher interrupts from inside C at the match, then the subject is copied), `replacement` its third
 /// argument, a leaf -O2 inlined after each call; and `extra`'s functions after the loop. A setup frame, then five steady frames
 /// that run it 100 times each, on the test's clock (a tick every 7 safepoints, the matcher's interrupts among them)
+#[inline(never)]
 fn gsub_loop_profile(name: &str, replacement: &str, extra: &str, extra_call: &str) -> (String, Json) {
     let source = format!(
         "--!optimize 2\nlocal RunService = game:GetService(\"RunService\")\nlocal M = {{}}\nlocal function gsubLeaf(x)\n\treturn x * 7 + 3\nend\nlocal function replace()\n\treturn \"x\"\nend\nfunction M.gsubLoop(n, f, s)\n\tlocal t = 0\n\tfor i = 1, n do\n\t\tlocal y = f(s, \"^.\", {replacement})\n\t\tt += gsubLeaf(#y)\n\tend\n\treturn t\nend\n{extra}local text = string.rep(\"abcdefgh\", 8192)\nlocal frame = 0\nRunService.Heartbeat:Connect(function()\n\tframe += 1\n\tif frame == 1 then\n\t\treturn\n\tend\n\tresult = M.gsubLoop(100, string.gsub, text){extra_call}\nend)\n"

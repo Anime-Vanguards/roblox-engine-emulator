@@ -83,6 +83,7 @@ fn blending_by_priority_then_weight() {
     assert!(clip::priority_rank(0) < clip::priority_rank(5));
 }
 
+#[inline(never)]
 pub(super) fn start(mode: &str) -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options { mode: mode.into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
@@ -91,6 +92,7 @@ pub(super) fn start(mode: &str) -> (Lua, Rc<Engine>) {
 }
 
 /// Runs `source` for `seconds` of play; panics with the script's error. Returns the output lines.
+#[inline(never)]
 pub(super) fn run(lua: &Lua, engine: &Rc<Engine>, source: &str, seconds: f64) -> Vec<String> {
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -109,6 +111,7 @@ pub(super) fn run(lua: &Lua, engine: &Rc<Engine>, source: &str, seconds: f64) ->
     engine.state.borrow().output.entries.iter().map(|line| format!("{}: {}", line.kind, line.message)).collect()
 }
 
+#[inline(never)]
 pub(super) fn check(source: &str, seconds: f64) {
     let (lua, engine) = start("play");
     run(&lua, &engine, source, seconds);
@@ -579,6 +582,7 @@ fn edit_mode_does_not_animate() {
 }
 
 /// A KeyframeSequence file holding a two-key arm swing.
+#[inline(never)]
 fn write_sequence(path: &std::path::Path) {
     use rbx_dom_weak::{InstanceBuilder, WeakDom, types::{CFrame, Enum, Matrix3, Variant, Vector3}};
     let pose = |name: &str, angle: f32, weight: f32| {

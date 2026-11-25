@@ -9,6 +9,7 @@ use crate::{
 };
 
 /// A scratch folder of its own for a test
+#[inline(never)]
 fn scratch(name: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = std::env::temp_dir().join(format!("ree-loopback-{name}-{}-{nanos}", std::process::id()));
@@ -18,6 +19,7 @@ fn scratch(name: &str) -> PathBuf {
 
 /// `ree run --run-context loopback` of `harness` (and `extra` arguments) with the project `roots` (none: an empty one): its
 /// summary
+#[inline(never)]
 pub(crate) fn run_pair(name: &str, harness: &str, roots: Option<&Path>, extra: &[&str]) -> serde_json::Value {
     let dir = scratch(name);
     let file = dir.join(format!("{name}.luau"));
@@ -34,6 +36,7 @@ pub(crate) fn run_pair(name: &str, harness: &str, roots: Option<&Path>, extra: &
 }
 
 /// The output lines of a summary as `side kind: message`
+#[inline(never)]
 pub(crate) fn lines(summary: &serde_json::Value) -> Vec<String> {
     summary["output"]
         .as_array()
@@ -43,6 +46,7 @@ pub(crate) fn lines(summary: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+#[inline(never)]
 fn has(lines: &[String], wanted: &str) -> bool {
     lines.iter().any(|line| line == wanted)
 }
@@ -197,6 +201,7 @@ return {
 
 /// A project with a shared module in ReplicatedStorage, a secret in ServerStorage and a server script: the join copies
 /// what replicates, keeps what does not, and the harness's own RURFixtures stays each side's
+#[inline(never)]
 fn project(name: &str) -> PathBuf {
     let root = scratch(name);
     for (path, text) in [
@@ -316,6 +321,7 @@ fn a_shared_module_compiles_once() {
 
 /// A project whose place has a Studio hierarchy snapshot: Studio-only placeholders below ReplicatedStorage and the Workspace
 /// (a Folder of remotes, an asset, a map), and one module on disk. Returns the root to mount.
+#[inline(never)]
 fn studio_project(name: &str) -> PathBuf {
     let dir = scratch(name);
     let root = dir.join("place");

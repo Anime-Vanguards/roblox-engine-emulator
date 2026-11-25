@@ -506,6 +506,7 @@ struct Model {
 
 /// The call tree's per-function and per-line figures, and its edges. `engine_exclusive`: the engine's cold charges nothing else touched
 /// in their frame, by tree node (profiler/attribution.rs), beside the VM's own (each node's `exclusive`).
+#[inline(never)]
 fn tree_model(vm: &vm::Results, engine_exclusive: &FxHashMap<i32, f64>) -> Model {
     let nodes = &vm.nodes;
     let mut model = Model { subtree: vec![(0.0, 0); nodes.len()], subtree_cold: vec![0.0; nodes.len()], node_phase: vec![0; nodes.len()], ..Model::default() };
@@ -2419,6 +2420,7 @@ fn percent(part: f64, whole: f64) -> String {
 }
 
 /// The source text of a function's lines (for the annotated listing): (line, text) from its first to its last line
+#[inline(never)]
 fn listing(input: &Input, function: &vm::Function, model: &Model, id: i32) -> Option<(String, Vec<(i32, String)>)> {
     let module = module_name(&function.source);
     let source = input.sources.get(module)?;
@@ -2433,6 +2435,7 @@ fn listing(input: &Input, function: &vm::Function, model: &Model, id: i32) -> Op
 }
 
 /// Writes every file of the profile and returns the summary text
+#[inline(never)]
 pub fn write(input: &Input) -> Result<String, String> {
     let out = &input.config.out;
     std::fs::create_dir_all(out).map_err(|error| format!("--profile-out {}: {error}", out.display()))?;
@@ -2845,662 +2848,43 @@ pub fn write(input: &Input) -> Result<String, String> {
 
     // work and instructions
     if let Some(vm_results) = input.vm.filter(|vm| !vm.nodes.is_empty() && input.config.kinds.steps()) {
-        let total_work: f64 = vm_results.nodes.iter().map(|node| node.work).sum::<f64>() + vm_results.engine_work;
-        let script_insns: u64 = vm_results.functions.iter().filter(|f| !f.exempt()).flat_map(|f| f.counts.iter()).sum();
-        let engine_insns: u64 = vm_results.functions.iter().filter(|f| f.exempt()).flat_map(|f| f.counts.iter()).sum();
-        // (the ones seen running: entered, booked to, or in a frame; the profile also registers a chunk's functions unrun)
-        let natives: Vec<&vm::Function> = vm_results
-            .functions
-            .iter()
-            .enumerate()
-            .filter(|(id, f)| f.native() && !f.exempt() && (f.native_entries > 0 || f.native_work != 0.0 || model.functions.contains_key(&(*id as i32))))
-            .map(|(_, f)| f)
-            .collect();
-        let mut opcodes: FxHashMap<u8, (u64, f64)> = FxHashMap::default();
-        for function in vm_results.functions.iter().filter(|f| !f.exempt()) {
-            for (pc, &count) in function.counts.iter().enumerate() {
-                if count > 0 {
-                    let entry = opcodes.entry((function.code[pc] & 0xff) as u8).or_default();
-                    entry.0 += count;
-                    entry.1 += function.work.get(pc).copied().unwrap_or(0.0);
-                }
-            }
-        }
-        let mut opcode_rows: Vec<_> = opcodes.into_iter().collect();
-        crate::sort::by(&mut opcode_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
-        // the run's kinds of work (of the total): cold and first-use charges, the collector's, dispatch, Studio-era and defaulted prices
-        let mut kinds_total = [0.0f64; vm::SPLITS];
-        for node in &vm_results.nodes {
-            add_kinds(&mut kinds_total, &node.split);
-        }
-        let collector_objects = input.end.and_then(|end| end.totals).map_or(0.0, |totals| totals.collector / (crate::cost::LUAU_COLLECTOR_OBJECT * 1e-9).max(1e-30));
-        // (the fidelity line weighs what the summary reports: the reported phases' game code, its work by kind)
-        let (scope_work, scope_kinds) = scope_work_kinds(&model, &scope);
-        let fidelity = if scope_work > 0.0 {
-            let luau = scope_luau(input, &scope, scope_work).unwrap_or_else(|| whole_luau(input, total_work, &kinds_total) / total_work.max(1e-12) * scope_work);
-            fidelity_json(input, scope_work, &scope_kinds, luau, &format!("the game's code in {}", scope_phrase(&scope, input.phases)))
-        } else {
-            fidelity_json(input, total_work, &kinds_total, whole_luau(input, total_work, &kinds_total), "the run")
-        };
-        // Large buffers (> 1 KB fresh, >= 64 KB segment, > 64 KB L2/L3 copy, > 1 MB DRAM copy) are priced across cache tiers.
-        let (fresh, big) = match (input.marks.first().and_then(|mark| mark.totals), input.end.and_then(|end| end.totals)) {
-            (Some(first), Some(last)) => (last.buffer_fresh.saturating_sub(first.buffer_fresh), last.buffer_big.saturating_sub(first.buffer_big)),
-            _ => (0, 0),
-        };
-        // the work clock's price of one count of the counters an issue prices what it names by (ns, at desktop prices: a phone run's
-        // are these times work.units.scale): an allocated object, a byte of table storage, a key a table's growth rehashed, a C
-        // function a script called, a comparison table.sort made and a call of its comparison function; a byte any script work
-        // allocated, a key a growth put back into a hash part, a block over 1 KB, an object a library call made, and the
-        // collector's charge an object (in work.collector_ms, not in the others)
-        let price = |set: fn(&mut crate::cost::VmCounters)| -> f64 {
-            let mut counters: crate::cost::VmCounters = unsafe { std::mem::zeroed() };
-            set(&mut counters);
-            crate::cost::luau(&counters) * 1e9
-        };
-        let work_prices = WorkPricesJson {
-            allocated_byte_ns: price(|c| c.hostops[crate::cost::ALLOCBYTES_SLOT] = 1),
-            c_call_ns: price(|c| c.ccalls = 1),
-            collector_object_ns: price(|c| c.hostops[crate::cost::GCOBJECTS_SLOT] = 1),
-            hash_rehashed_key_ns: price(|c| c.hostops[crate::cost::HASHREHASHED_SLOT] = 1),
-            large_block_ns: price(|c| c.hostops[crate::cost::LARGEBLOCKS_SLOT] = 1),
-            library_object_ns: price(|c| c.hostops[crate::cost::LIBOBJECTS_SLOT] = 1),
-            object_ns: price(|c| c.objects = 1),
-            rehashed_key_ns: price(|c| c.rehashed = 1),
-            sort_call_ns: price(|c| c.sortcalls = 1),
-            sort_compare_ns: price(|c| c.sortcompares = 1),
-            stored_byte_ns: price(|c| c.stored = 1),
-        };
-        let _ = writeln!(
-            summary,
-            "work clock {:.2} ms ({:.2} ms/s, {:.3} ms a frame) at {}; {:.2} ms charged outside any instruction",
-            ms(total_work),
-            if seconds > 0.0 { ms(total_work) / seconds } else { 0.0 },
-            ms(total_work) / frames,
-            fidelity.prices,
-            ms(vm_results.engine_work)
+        write_work_section(
+            input,
+            vm_results,
+            &names,
+            &model,
+            &scope,
+            &function_rows,
+            &inlined_into,
+            &line_rows,
+            game_self,
+            harness_self,
+            scope_engine.as_ref(),
+            seconds,
+            frames,
+            &mut summary,
+            &mut report,
         );
-        let _ = writeln!(
-            summary,
-            "of it: cold and first-use charges {:.2} ms, the collector {:.2} ms, dispatch of handlers and resumptions {:.2} ms; priced from a client {:.0} %, from Studio-era measurements {:.0} %, borrowed (defaulted) {:.0} %",
-            ms(kinds_total[vm::COLD]),
-            ms(kinds_total[vm::COLLECTOR]),
-            ms(kinds_total[vm::DISPATCH]),
-            100.0 * (total_work - kinds_total[vm::STUDIO] - kinds_total[vm::DEFAULTED]).max(0.0) / total_work.max(1e-12),
-            100.0 * kinds_total[vm::STUDIO] / total_work.max(1e-12),
-            100.0 * kinds_total[vm::DEFAULTED] / total_work.max(1e-12)
-        );
-        // (what the clock is beside a client's own time: read before taking its milliseconds as a client's)
-        let _ = writeln!(summary, "{}", fidelity.text);
-        report.work = Some(WorkJson {
-            by_provenance_ms: ProvenanceJson {
-                client: ms((total_work - kinds_total[vm::STUDIO] - kinds_total[vm::DEFAULTED]).max(0.0)),
-                defaulted: ms(kinds_total[vm::DEFAULTED]),
-                studio: ms(kinds_total[vm::STUDIO]),
-            },
-            // (a C function a CALL reached is a node of its own at the call site, whether or not it ran Luau; a Luau function a C
-            // function calls counts a call each time it is entered)
-            c_calls: true,
-            c_invocations: true,
-            cold_work_ms: ms(kinds_total[vm::COLD]),
-            collector: WorkCollectorJson {
-                basis: "every object the scripts' work allocated (its instructions and the library and engine calls it made), each swept once garbage and marked while it lives: the collector's share of the parity bench's churn rows on a heap of about 50 MB (its steps' time in ree's VM, which runs the client's collector) applied to a rendered client's time; booked to the allocating instruction",
-                // (desktop ns, as work.prices: a phone run's are these times work.units.scale)
-                object_ns: crate::cost::LUAU_COLLECTOR_OBJECT,
-                objects: collector_objects.round(),
-            },
-            collector_ms: ms(kinds_total[vm::COLLECTOR]),
-            dispatch_ms: ms(kinds_total[vm::DISPATCH]),
-            engine_insns,
-            fidelity: fidelity.text.clone(),
-            native_functions: natives
-                .iter()
-                .map(|f| NativeFunctionJson { entries: f.native_entries, line: f.line, module: module_name(&f.source), name: &f.name, work_ms: ms(f.native_work) })
-                .collect(),
-            opcodes: opcode_rows.iter().map(|&(op, (count, work))| OpcodeRowJson { count, op: vm::opcode_name(op), work_ms: ms(work) }).collect(),
-            outside_instructions_ms: ms(vm_results.engine_work),
-            per_frame_ms: ms(total_work) / frames,
-            per_second_ms: if seconds > 0.0 { ms(total_work) / seconds } else { 0.0 },
-            prices: work_prices,
-            script_insns,
-            total_ms: ms(total_work),
-            units: WorkUnitsJson { device: input.device, scale: price_scale() },
-            unpriced: WorkUnpricedJson {
-                basis: "large new buffers (> 1 KB fresh memory; >= 64 KB segment setup) and large buffer copies, fills and string writes (> 64 KB L2/L3; > 1 MB DRAM) are priced across cache tiers on the work clock",
-                buffer_big_bytes: 0,
-                buffer_fresh_bytes: 0,
-                priced_large_buffer_big_bytes: big,
-                priced_large_buffer_fresh_bytes: fresh,
-            },
-        });
-        report.fidelity = Some(fidelity);
-        let _ = writeln!(summary, "instructions: {} by scripts, {} by the engine's own Luau", group_digits(script_insns), group_digits(engine_insns));
-        if natives.is_empty() {
-            let _ = writeln!(summary, "natively compiled functions: none ran natively (every instruction is counted)");
-        } else {
-            let entries: u64 = natives.iter().map(|f| f.native_entries).sum();
-            let work: f64 = natives.iter().map(|f| f.native_work).sum();
-            let named: Vec<String> = natives.iter().take(6).map(|f| format!("{}:{}", names.short(&f.source), f.line)).collect();
-            let _ = writeln!(
-                summary,
-                "natively compiled functions: {} seen ({}{}): {} {} from interpreted code, {:.3} ms of work booked while they ran; their instructions are not counted, and a call from native code into native code is not seen (its work stays with the caller)",
-                natives.len(),
-                named.join(", "),
-                if natives.len() > named.len() { ", ..." } else { "" },
-                group_digits(entries),
-                if entries == 1 { "entry" } else { "entries" },
-                ms(work)
-            );
-        }
-        if !input.marks.is_empty() {
-            // (each mark's work clock reading to the next one's, the last to the run's end)
-            let mut parts = Vec::new();
-            for (index, mark) in input.marks.iter().enumerate() {
-                let end = input.marks.get(index + 1).map_or(input.end_work, |next| next.work);
-                parts.push(format!("{} (frame {}) {:.2} ms", mark.phase, mark.frame, ms((end - mark.work).max(0.0))));
-            }
-            let _ = writeln!(summary, "phases' work: {}", parts.join("; "));
-        }
-        // the tables below cover the reported phases (--profile-phase) and the game's code; the harness's comes apart
-        let every_phase = scope.len() >= input.phases.len().max(1);
-        let scope_label = if every_phase {
-            "every phase".to_string()
-        } else {
-            format!("{} {}", if scope.len() == 1 { "phase" } else { "phases" }, scope.iter().map(|phase| phase_name(*phase)).collect::<Vec<_>>().join(", "))
-        };
-        let _ = writeln!(
-            summary,
-            "reported below: {scope_label}: the game's code {:.2} ms, the harness's code {:.2} ms of self work (the harness's is its code under {HARNESS_FOLDER} and what that called; --profile-phase picks phases, or all)",
-            ms(game_self),
-            ms(harness_self)
-        );
-        if let Some(ops) = &scope_engine {
-            let _ = writeln!(summary, "{}", engine_line(&scope_label, ops));
-        }
-        // one side's functions in the reported phases: (id, self work, total work, calls, self instructions)
-        // each game function's cold charges and saving in the reported phases
-        let mut game_cold: FxHashMap<i32, ColdAndSaving> = FxHashMap::default();
-        for (&(id, phase, harness_side), split) in &model.phase_split {
-            if harness_side || !scope.contains(&phase) {
-                continue;
-            }
-            let work = model.phase_self.get(&(id, phase, harness_side)).map_or(0.0, |figures| figures.0);
-            let row = game_cold.entry(id).or_default();
-            row.cold += split.cold();
-            row.saving += split.saving(work);
-        }
-        let side_rows = |harness: bool| -> Vec<(i32, f64, f64, u64, u64)> {
-            let mut rows: FxHashMap<i32, (f64, f64, u64, u64)> = FxHashMap::default();
-            for (&(id, phase, side), &(work, calls, insns)) in &model.phase_self {
-                if side == harness && scope.contains(&phase) && !names.engine(id) && !names.binding(id) {
-                    let row = rows.entry(id).or_default();
-                    row.0 += work;
-                    row.2 += calls;
-                    row.3 += insns;
-                }
-            }
-            for (&(id, phase, side), &total) in &model.phase_total {
-                if side == harness && scope.contains(&phase) && !names.engine(id) {
-                    rows.entry(id).or_default().1 += total;
-                }
-            }
-            let mut rows: Vec<(i32, f64, f64, u64, u64)> = rows.into_iter().map(|(id, (work, total, calls, insns))| (id, work, total, calls, insns)).collect();
-            crate::sort::by(&mut rows, |a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-            rows
-        };
-        let (game_rows, harness_rows) = (side_rows(false), side_rows(true));
-        let top = input.config.top;
-        let _ = writeln!(
-            summary,
-            "\ntop functions by self work: the game's code, {scope_label} (ms of the work clock; cold: its cold and first-use charges; saving: what cutting it saves, its hot work and the cold charges for objects nothing else touched that frame; total includes callees)"
-        );
-        let _ = writeln!(summary, "{:>9} {:>8} {:>9} {:>9} {:>10} {:>12}  function", "self ms", "cold ms", "saving ms", "total ms", "calls", "insns");
-        // (rows that print as zero are left out)
-        for (id, work, total, calls, insns) in game_rows.iter().filter(|row| row.1 >= 5e-7).take(top) {
-            let ColdAndSaving { cold, saving } = game_cold.get(id).copied().unwrap_or(ColdAndSaving { cold: 0.0, saving: *work });
-            let _ = writeln!(summary, "{:>9.3} {:>8.3} {:>9.3} {:>9.3} {:>10} {:>12}  {}", ms(*work), ms(cold), ms(saving), ms(*total), group_digits(*calls), group_digits(*insns), names.label(*id));
-        }
-        let mut by_total: Vec<&(i32, f64, f64, u64, u64)> = game_rows.iter().filter(|row| row.0 >= 0).collect();
-        crate::sort::by(&mut by_total, |a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
-        let _ = writeln!(summary, "\ntop functions by total work: the game's code, {scope_label}");
-        let _ = writeln!(summary, "{:>9} {:>9} {:>10}  function", "total ms", "self ms", "calls");
-        for (id, work, total, calls, _) in by_total.iter().filter(|row| row.2 >= 5e-7).take(top.min(12)) {
-            let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10}  {}", ms(*total), ms(*work), group_digits(*calls), names.label(*id));
-        }
-        let harness_rows: Vec<&(i32, f64, f64, u64, u64)> = harness_rows.iter().filter(|row| row.1 >= 5e-7).collect();
-        if !harness_rows.is_empty() {
-            let _ = writeln!(summary, "\nthe harness's code, {scope_label}: {:.3} ms of self work, left out of the tables above", ms(harness_self));
-            let _ = writeln!(summary, "{:>9} {:>9} {:>10}  function", "self ms", "total ms", "calls");
-            for (id, work, total, calls, _) in harness_rows.iter().take(top.min(8)) {
-                let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10}  {}", ms(*work), ms(*total), group_digits(*calls), names.label(*id));
-            }
-        }
-        // functions -O2 inlined: no frame of theirs runs there, so the tables above count only their other calls
-        let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, _)| inlined_into.contains_key(id) && !names.engine(*id) && !names.harness(*id)).collect();
-        if !inlined.is_empty() {
-            crate::sort::by(&mut inlined, |a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(b.1.inlined_calls.cmp(&a.1.inlined_calls)).then(a.0.cmp(&b.0)));
-            let _ = writeln!(
-                summary,
-                "\ninlined functions (Luau's -O2 compiled their bodies into their callers: a call is counted where a copy was entered; the instructions and work are on their own lines in the callers, counted there too)"
-            );
-            let _ = writeln!(summary, "{:>10} {:>10} {:>12} {:>9}  function  (inlined into)", "inlined", "called", "insns", "work ms");
-            for (id, figures) in inlined.iter().take(top) {
-                let into: Vec<String> = inlined_into[id]
-                    .iter()
-                    .take(3)
-                    .map(|(caller, copies)| format!("{} ({} {})", names.label(*caller).replace("  ", " "), copies.copies, if copies.copies == 1 { "copy" } else { "copies" }))
-                    .collect();
-                let more = inlined_into[id].len().saturating_sub(into.len());
-                let _ = writeln!(
-                    summary,
-                    "{:>10} {:>10} {:>12} {:>9.3}  {}  ({}{})",
-                    group_digits(figures.inlined_calls),
-                    group_digits(figures.calls),
-                    group_digits(figures.inlined_insns),
-                    ms(figures.inlined_work),
-                    names.label(*id),
-                    into.join(", "),
-                    if more > 0 { format!(", {more} more") } else { String::new() }
-                );
-            }
-        }
-        // each line's figures in the reported phases, the heaviest first
-        let mut scoped_lines: Vec<ScopedLine> = Vec::new();
-        for &(&(function, line), figures) in line_rows.iter() {
-            scoped_lines.push(ScopedLine { function, line, figures, phase: figures.within(&scope) });
-        }
-        crate::sort::by(&mut scoped_lines, |a, b| b.phase.self_work().total_cmp(&a.phase.self_work()).then((a.function, a.line).cmp(&(b.function, b.line))));
-        let _ = writeln!(summary, "\ntop lines by self work: the game's code, {scope_label}");
-        let _ = writeln!(summary, "{:>9} {:>8} {:>11} {:>12}  line  (opcodes)", "self ms", "cold ms", "total ms", "insns");
-        let is_game_line = |line: &&ScopedLine| {
-            line.phase.self_work() >= 5e-7 && !names.engine(line.function) && !names.harness(line.function) && !names.binding(line.function)
-        };
-        for ScopedLine { function, line, figures, phase } in scoped_lines.iter().filter(is_game_line).take(top) {
-            let ops: Vec<String> = {
-                let mut ops: Vec<_> = figures.ops.iter().collect();
-                crate::sort::by(&mut ops, |a, b| b.1.cmp(a.1));
-                ops.iter().take(4).map(|(op, count)| format!("{} {}", vm::opcode_name(**op), group_digits(**count))).collect()
-            };
-            let module = names.function(*function).map_or(String::new(), |f| names.short(&f.source).to_string());
-            let _ = writeln!(summary, "{:>9.3} {:>8.3} {:>11.3} {:>12}  {module}:{line}  ({})", ms(phase.self_work()), ms(phase.cold), ms(phase.total_work), group_digits(phase.insns), ops.join(", "));
-        }
-        attribution_sections(input, &names, &mut summary, &mut report, top);
-        // inline caches
-        if input.config.kinds.has(super::Kinds::CACHES) {
-            inline_caches(input, vm_results, &names, top, &mut summary, &mut report);
-        }
     }
 
     // host time
     if let Some(time) = input.time {
-        let cpu = time.cycles_per_ms > 0.0;
-        report.time = Some(TimeJson {
-            about: "time_ms is the run thread's CPU milliseconds (its cycles, the time it ran), wall_ms the wall clock's; a sample is booked to what ran since the one before: the Luau stack at a safepoint, the Luau that ran last when the interpreter is left, the engine's step that was open when it is entered (else outside scripts), an Instance API call on its own line",
-            cycles_per_ms: time.cycles_per_ms,
-            sampled_ms: time_total,
-            wall_ms: wall_total,
-            weight: if cpu { "thread CPU" } else { "wall" },
-        });
-        let _ = writeln!(
-            summary,
-            "\nhost time: {:.1} ms {} ({:.1} ms wall), sampled each millisecond at the VM's calls, returns and loop edges, at the interpreter's entry and exit, around the engine's steps and the Instance API's calls",
-            time_total,
-            if cpu { "of the run thread's CPU" } else { "(wall: the thread's cycles cannot be read here)" },
-            wall_total
-        );
-        let mut by_self: Vec<&(i32, Figures)> = function_rows.iter().filter(|(_, f)| f.self_time > 0.0).collect();
-        crate::sort::by(&mut by_self, |a, b| b.1.self_time.total_cmp(&a.1.self_time).then(a.0.cmp(&b.0)));
-        let _ = writeln!(summary, "{:>9} {:>9} {:>9}  function", "self ms", "total ms", "wall ms");
-        for (id, figures) in by_self.iter().take(input.config.top) {
-            let _ = writeln!(summary, "{:>9.1} {:>9.1} {:>9.1}  {}", figures.self_time, figures.total_time, figures.self_wall, names.label(*id));
-        }
-        // functions -O2 inlined into their callers: their lines' time there (also their callers' own)
-        let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, f)| f.inlined_time > 0.0 && !names.engine(*id)).collect();
-        if !inlined.is_empty() {
-            crate::sort::by(&mut inlined, |a, b| b.1.inlined_time.total_cmp(&a.1.inlined_time).then(a.0.cmp(&b.0)));
-            let _ = writeln!(summary, "inlined functions' host time, an estimate (each sample's share of the code since the safepoint before it, by the work clock's prices of its opcodes, in the copies -O2 compiled into their callers; a sample right after a call that reached a C function is not split; their callers' self time holds it)");
-            for (id, figures) in inlined.iter().take(input.config.top.min(10)) {
-                let _ = writeln!(summary, "{:>9.1} {:>9} {:>9.1}  {} (inlined)", figures.inlined_time, "", figures.inlined_wall, names.label(*id));
-            }
-        }
+        write_time_section(input, time, &names, &function_rows, time_total, wall_total, &mut summary, &mut report);
     }
 
     // allocations
     if let Some(allocations) = input.allocations {
-        let mut by_type: Vec<(String, memory::Amount)> = allocations.types.names.iter().cloned().zip(allocations.by_type.iter().copied()).collect();
-        crate::sort::by(&mut by_type, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
-        let mut groups: FxHashMap<String, memory::Amount> = FxHashMap::default();
-        for (name, amount) in &by_type {
-            let entry = groups.entry(memory::group(name).to_string()).or_default();
-            entry.bytes += amount.bytes;
-            entry.count += amount.count;
-        }
-        let mut groups: Vec<_> = groups.into_iter().collect();
-        crate::sort::by(&mut groups, |a, b| b.1.bytes.total_cmp(&a.1.bytes).then_with(|| a.0.cmp(&b.0)));
-        let total = allocations.bytes as f64;
-        let _ = writeln!(
-            summary,
-            "\nallocations: {} in {} objects ({}){}",
-            bytes(total),
-            group_digits(allocations.objects),
-            groups.iter().take(6).map(|(name, amount)| format!("{name} {}", percent(amount.bytes, total))).collect::<Vec<_>>().join(", "),
-            if allocations.step > 1 { format!("; stacks sampled every {} bytes", allocations.step) } else { String::new() }
-        );
-        let mut stacks: FxHashMap<(u32, u32), memory::Amount> = FxHashMap::default();
-        for (&(_, stack, ty), amount) in &allocations.by_stack {
-            let entry = stacks.entry((stack, ty)).or_default();
-            entry.bytes += amount.bytes;
-            entry.count += amount.count;
-        }
-        let mut stack_rows: Vec<_> = stacks.into_iter().collect();
-        crate::sort::by(&mut stack_rows, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
-        let describe = |stack: u32| -> String {
-            let frames = &allocations.stacks.stacks[stack as usize];
-            let luau: Vec<String> = frames.iter().filter(|frame| frame.0 >= 0 && !names.engine(frame.0)).take(3).map(|&(function, line)| {
-                let module = names.function(function).map_or(String::new(), |f| names.short(&f.source).to_string());
-                format!("{module}:{line}")
-            }).collect();
-            let top_c = frames.first().filter(|frame| frame.0 < -1).map(|frame| format!("{} < ", names.frame(frame.0))).unwrap_or_default();
-            format!("{top_c}{}", if luau.is_empty() { "(engine)".into() } else { luau.join(" < ") })
-        };
-        let _ = writeln!(summary, "{:>10} {:>10}  type  stack (innermost Luau lines first)", "bytes", "count");
-        for ((stack, ty), amount) in stack_rows.iter().take(input.config.top) {
-            let _ = writeln!(summary, "{:>10} {:>10}  {}  {}", bytes(amount.bytes), group_digits(amount.count.round() as u64), allocations.types.names[*ty as usize], describe(*stack));
-        }
-        // tables that rehashed to grow: by the line that made them rehash and the site that made the table
-        let total = &allocations.rehashes;
-        let rehash_json = if total.events > 0 {
-            let _ = writeln!(
-                summary,
-                "table rehashes: {} ({} grew the table), {} keys moved; by scripts' own instructions {} rehashes, {} keys",
-                group_digits(total.events),
-                group_digits(total.grew),
-                group_digits(total.keys),
-                group_digits(total.script_events),
-                group_digits(total.script_keys)
-            );
-            let mut rows: Vec<(&(u32, u32, u32), &memory::Rehash)> = allocations.rehash.iter().collect();
-            crate::sort::by(&mut rows, |a, b| b.1.keys.cmp(&a.1.keys).then(b.1.events.cmp(&a.1.events)).then(a.0.cmp(b.0)));
-            let _ = writeln!(summary, "{:>10} {:>12}  rehashed at  (the table made at)", "rehashes", "keys moved");
-            for ((_, stack, made), rehash) in rows.iter().filter(|(key, _)| key.1 != memory::NO_STACK).take(input.config.top.min(10)) {
-                let made = if *made == memory::NO_STACK { "not followed".to_string() } else { describe(*made) };
-                let _ = writeln!(summary, "{:>10} {:>12}  {}  ({made})", group_digits(rehash.events), group_digits(rehash.keys), describe(*stack));
-            }
-            let frames_slice = |stack: u32| -> Option<&[(i32, i32)]> {
-                if stack == memory::NO_STACK { None } else { Some(&allocations.stacks.stacks[stack as usize]) }
-            };
-            Some(RehashJson {
-                bytes_after: total.bytes_after,
-                bytes_before: total.bytes_before,
-                events: total.events,
-                grew: total.grew,
-                keys: total.keys,
-                script_events: total.script_events,
-                script_keys: total.script_keys,
-                sites: rows
-                    .iter()
-                    .take(500)
-                    .map(|&(&(phase, stack, made), rehash)| RehashSiteJson {
-                        bytes_after: rehash.bytes_after,
-                        bytes_before: rehash.bytes_before,
-                        events: rehash.events,
-                        frames: frames_slice(stack),
-                        grew: rehash.grew,
-                        keys: rehash.keys,
-                        phase: input.phases.get(phase as usize).map(String::as_str),
-                        script_events: rehash.script_events,
-                        script_keys: rehash.script_keys,
-                        table_frames: frames_slice(made),
-                    })
-                    .collect(),
-            })
-        } else {
-            None
-        };
-        report.alloc = Some(AllocJson {
-            by_stack: stack_rows
-                .iter()
-                .take(500)
-                .map(|&((stack, ty), amount)| AllocByStackJson {
-                    bytes: amount.bytes.round(),
-                    count: amount.count.round(),
-                    frames: &allocations.stacks.stacks[stack as usize],
-                    ty: allocations.types.names[ty as usize].as_str(),
-                })
-                .collect(),
-            by_type: by_type
-                .into_iter()
-                .map(|(name, amount)| AllocByTypeJson { bytes: amount.bytes, count: amount.count, group: memory::group(&name).to_string(), ty: name })
-                .collect(),
-            bytes: allocations.bytes,
-            objects: allocations.objects,
-            rehash: rehash_json,
-            step: allocations.step,
-        });
+        write_alloc_section(input, allocations, &names, &mut summary, &mut report);
     }
 
     // heap snapshots and the collector
-    // (each table site's rehashes over the run: (rehashes, keys moved) by the stack that made the tables)
-    let mut rehash_by_site: FxHashMap<u32, (u64, u64)> = FxHashMap::default();
-    if let Some(allocations) = input.allocations {
-        for (&(_, _, made), rehash) in &allocations.rehash {
-            if made != memory::NO_STACK {
-                let entry = rehash_by_site.entry(made).or_default();
-                entry.0 += rehash.events;
-                entry.1 += rehash.keys;
-            }
-        }
-    }
     if !input.snapshots.is_empty() {
-        let last = input.snapshots.last().unwrap();
-        let _ = writeln!(
-            summary,
-            "\nheap at {}: {} reachable in {} objects, what a full collection keeps; the run's own allocations still reachable: {}",
-            last.label,
-            bytes(last.reachable.1 as f64),
-            group_digits(last.reachable.0),
-            bytes(last.allocated_since.1),
-        );
-        let _ = writeln!(
-            summary,
-            "  not swept yet: {} in {} objects, garbage the collector had not freed (not in the reachable figures; gcinfo() {} KB counts both)",
-            bytes(last.unswept.1 as f64),
-            group_digits(last.unswept.0),
-            last.total_bytes / 1024
-        );
-        let _ = writeln!(summary, "  reachable by type: {}", last.by_type.iter().take(8).map(|(name, count, size)| format!("{name} {} ({})", bytes(*size as f64), group_digits(*count))).collect::<Vec<_>>().join(", "));
-        for held in last.biggest.iter().take(input.config.top.min(8)) {
-            let _ = writeln!(summary, "  {:>10} kept alive by {} {}  ({})", bytes(held.retained as f64), held.ty, if held.name.is_empty() { String::new() } else { format!("\"{}\"", held.name) }, held.path);
-        }
-        if input.snapshots.len() > 1 {
-            let _ = writeln!(
-                summary,
-                "  snapshots, reachable (+ not swept yet): {}",
-                input.snapshots.iter().map(|s| format!("{} {} (+{})", s.label, bytes(s.reachable.1 as f64), bytes(s.unswept.1 as f64))).collect::<Vec<_>>().join(" -> ")
-            );
-        }
-        // the reachable tables' shapes by the site that made them
-        let tables = &last.tables;
-        if tables.count > 0 {
-            let whole = tables.bytes.max(1) as f64;
-            let _ = writeln!(
-                summary,
-                "  tables at {}: {} reachable, {} (the tables {}, array parts {}, hash parts {}); the run's own by the site that made them:",
-                last.label,
-                group_digits(tables.count),
-                bytes(tables.bytes as f64),
-                percent(tables.header_bytes as f64, whole),
-                percent(tables.array_bytes as f64, whole),
-                percent(tables.hash_bytes as f64, whole)
-            );
-            let _ = writeln!(summary, "  {:>9} {:>10} {:>8} {:>16} {:>16} {:>6}  site", "tables", "bytes", "each", "array slots", "hash nodes", "levels");
-            let site_of = |stack: u32| -> String {
-                let Some(allocations) = input.allocations else { return String::new() };
-                let frames = &allocations.stacks.stacks[stack as usize];
-                let luau: Vec<String> = frames.iter().filter(|frame| frame.0 >= 0 && !names.engine(frame.0)).take(3).map(|&(function, line)| {
-                    let module = names.function(function).map_or(String::new(), |f| names.short(&f.source).to_string());
-                    format!("{module}:{line}")
-                }).collect();
-                if luau.is_empty() { "(engine)".into() } else { luau.join(" < ") }
-            };
-            let shape = |distribution: &memory::Distribution| -> String {
-                if distribution.min == distribution.max {
-                    format!("{} ({})", group_digits(distribution.min as u64), group_digits(distribution.used))
-                } else {
-                    format!("{}-{} ({})", group_digits(distribution.min as u64), group_digits(distribution.max as u64), group_digits(distribution.used))
-                }
-            };
-            for site in tables.sites.iter().take(input.config.top.min(8)) {
-                let levels = if site.levels.min == site.levels.max { site.levels.min.to_string() } else { format!("{}-{}", site.levels.min, site.levels.max) };
-                let _ = writeln!(
-                    summary,
-                    "  {:>9} {:>10} {:>8} {:>16} {:>16} {:>6}  {}",
-                    group_digits(site.count.round() as u64),
-                    bytes(site.bytes),
-                    bytes(site.bytes / site.count.max(1e-9)),
-                    shape(&site.array),
-                    shape(&site.hash),
-                    levels,
-                    site_of(site.stack)
-                );
-            }
-        }
-        let collector = input.collector;
-        let _ = writeln!(
-            summary,
-            "collector: {} cycles, {} steps, {} freed, {:.1} ms host time",
-            collector.cycles,
-            group_digits(collector.steps),
-            bytes(collector.freed as f64),
-            ms(collector.seconds)
-        );
-        report.heap = Some(HeapJson {
-            gc: HeapGcJson {
-                by_state: memory::GC_STATES.iter().zip(collector.by_state.iter()).map(|(&state, &(steps, seconds))| GcStateJson { ms: ms(seconds), state, steps }).collect(),
-                cycles: collector.cycles,
-                freed: collector.freed,
-                ms: ms(collector.seconds),
-                steps: collector.steps,
-            },
-            snapshots: input
-                .snapshots
-                .iter()
-                .map(|snapshot| HeapSnapshotJson {
-                    allocated_since: CountBytesF64 { bytes: snapshot.allocated_since.1.round(), count: snapshot.allocated_since.0.round() },
-                    biggest: snapshot
-                        .biggest
-                        .iter()
-                        .map(|held| HeapBiggestJson {
-                            name: &held.name,
-                            path: &held.path,
-                            retained: held.retained,
-                            size: held.size,
-                            stack: held.stack.and_then(|stack| input.allocations.map(|allocations| &*allocations.stacks.stacks[stack as usize])),
-                            ty: &held.ty,
-                        })
-                        .collect(),
-                    by_stack: snapshot
-                        .by_stack
-                        .iter()
-                        .take(300)
-                        .map(|(stack, ty, count, size)| HeapByStackJson {
-                            bytes: size.round(),
-                            count: count.round(),
-                            frames: input.allocations.map(|allocations| &*allocations.stacks.stacks[*stack as usize]),
-                            ty: ty.as_str(),
-                        })
-                        .collect(),
-                    by_type: snapshot.by_type.iter().map(|(name, count, size)| HeapTypeJson { bytes: *size, count: *count, ty: name.as_str() }).collect(),
-                    frame: snapshot.frame,
-                    gcinfo_kb: snapshot.total_bytes / 1024,
-                    label: &snapshot.label,
-                    object_bytes: snapshot.object_bytes,
-                    objects: snapshot.objects,
-                    reachable: CountBytesU64 { bytes: snapshot.reachable.1, count: snapshot.reachable.0 },
-                    seconds: snapshot.seconds,
-                    tables: HeapTablesJson {
-                        array_bytes: snapshot.tables.array_bytes,
-                        bytes: snapshot.tables.bytes,
-                        count: snapshot.tables.count,
-                        hash_bytes: snapshot.tables.hash_bytes,
-                        header_bytes: snapshot.tables.header_bytes,
-                        sites: snapshot
-                            .tables
-                            .sites
-                            .iter()
-                            .take(300)
-                            .map(|site| {
-                                let (events, keys) = rehash_by_site.get(&site.stack).copied().unwrap_or((0, 0));
-                                TableSiteJson {
-                                    array: distribution_json(&site.array),
-                                    array_bytes: site.array_bytes.round(),
-                                    bytes: site.bytes.round(),
-                                    count: site.count.round(),
-                                    frames: input.allocations.map(|allocations| &*allocations.stacks.stacks[site.stack as usize]),
-                                    hash: distribution_json(&site.hash),
-                                    hash_bytes: site.hash_bytes.round(),
-                                    header_bytes: site.header_bytes.round(),
-                                    levels: levels_json(&site.levels),
-                                    phase: input.phases.get(site.phase as usize).map(String::as_str),
-                                    rehash_keys: keys,
-                                    rehashes: events,
-                                }
-                            })
-                            .collect(),
-                        sizes: TableSizesJson { node: snapshot.tables.sizes.2, slot: snapshot.tables.sizes.1, table: snapshot.tables.sizes.0 },
-                    },
-                    total_bytes: snapshot.total_bytes,
-                    unswept: HeapUnsweptJson {
-                        by_type: snapshot.unswept_by_type.iter().map(|(name, count, size)| HeapTypeJson { bytes: *size, count: *count, ty: name.as_str() }).collect(),
-                        bytes: snapshot.unswept.1,
-                        count: snapshot.unswept.0,
-                    },
-                })
-                .collect(),
-        });
+        write_heap_section(input, &names, &mut summary, &mut report);
     }
 
     // what the engine's caches say of the game, then ree's own caches (how fast ree runs, not what the game costs)
     if input.config.kinds.has(super::Kinds::CACHES) {
-        let facts = input.facts;
-        let _ = writeln!(
-            summary,
-            "\ngame facts (counted by the engine): {} instances touched by scripts ({} userdata made, {} collected); {} modules ran ({} requires served by a kept result); {} datatype property reads, a new value each on a client (not measured against one): ree handed back the value it had made for {} of them",
-            group_digits(facts.instances_touched),
-            group_digits(facts.userdata_made),
-            group_digits(facts.userdata_collected),
-            group_digits(facts.modules_run),
-            group_digits(facts.requires_kept),
-            group_digits(facts.datatype_reads),
-            group_digits(facts.datatype_reads_reused)
-        );
-        report.game = Some(GameJson {
-            about: GameAboutJson {
-                datatype_reads: "UDim2, Color3, ... property reads: a client makes a new value for each read (not measured against a client); ree hands back the value it made while the property is unchanged (datatype_reads_reused), so rawequal of two reads is true in ree",
-                instances_touched: "instances a userdata was made for: the ones the scripts reached (a client makes one for each too)",
-                modules_run: "ModuleScripts that ran: a require that ran its module",
-                userdata_made: "userdata made for instances, an instance's again after the VM collected its first",
-            },
-            datatype_reads: facts.datatype_reads,
-            datatype_reads_reused: facts.datatype_reads_reused,
-            instances_touched: facts.instances_touched,
-            modules_run: facts.modules_run,
-            requires_kept: facts.requires_kept,
-            userdata_collected: facts.userdata_collected,
-            userdata_made: facts.userdata_made,
-        });
-        let _ = writeln!(summary, "\nemulator: ree's own caches (how fast ree runs, not what the game costs)");
-        let _ = writeln!(summary, "{:<20} {:>8} {:>12} {:>10} {:>10}", "cache", "hit", "lookups", "misses", "evicted");
-        for (name, _, counts) in input.caches {
-            let lookups = counts.hits + counts.misses;
-            if lookups == 0 && counts.evictions == 0 {
-                continue;
-            }
-            let _ = writeln!(summary, "{:<20} {:>8} {:>12} {:>10} {:>10}", name, percent(counts.hits as f64, lookups as f64), group_digits(lookups), group_digits(counts.misses), group_digits(counts.evictions));
-        }
-        report.emulator = Some(EmulatorJson {
-            about: "ree's own caches: they measure how fast ree runs, not what the game costs",
-            caches: input.caches.iter().map(|&(name, about, counts)| EmulatorCacheJson { about, evictions: counts.evictions, hits: counts.hits, misses: counts.misses, name }).collect(),
-        });
+        write_caches_section(input, &mut summary, &mut report);
     }
 
     // the CPU's figures: this run's own, or the cpu pass's (a run a kind slows took them in a process of its own)
@@ -3521,111 +2905,7 @@ pub fn write(input: &Input) -> Result<String, String> {
 
     // the timeline
     if !input.rows.is_empty() {
-        let rows = input.rows;
-        // (a frame a phase mark split is one frame here: its parts summed)
-        struct Whole {
-            frame: u64,
-            work: f64,
-            sides: Option<(f64, f64)>,
-        }
-        let mut frames_work: Vec<Whole> = Vec::new();
-        for row in rows {
-            let work = row.work_ms * price_scale();
-            let sides = row_sides_ms(row);
-            match frames_work.last_mut().filter(|last| last.frame == row.frame && row.part > 1) {
-                Some(last) => {
-                    last.work += work;
-                    last.sides = add_sides(last.sides, sides);
-                }
-                None => frames_work.push(Whole { frame: row.frame, work, sides }),
-            }
-        }
-        let count = frames_work.len() as f64;
-        let (worst, worst_work) = frames_work.iter().fold((0, 0.0), |best, whole| if whole.work > best.1 { (whole.frame, whole.work) } else { best });
-        let mean = frames_work.iter().map(|whole| whole.work).sum::<f64>() / count;
-        let sides = frames_work.iter().all(|whole| whole.sides.is_some()).then(|| frames_work.iter().filter_map(|whole| whole.sides).fold((0.0, 0.0), |sum, (game, harness)| (sum.0 + game / count, sum.1 + harness / count)));
-        let (first, last) = (&rows[0], rows.last().unwrap());
-        // (a frame's host time and cycles: its own, else the cpu pass's for the same frame, else none: a kind slowed the run)
-        let host = |row: &Row| row.host_ms.map(|host| (host, row.cycles.unwrap_or(0))).or_else(|| (row.part == 0).then(|| cpu_by_frame.get(&row.frame).copied()).flatten());
-        let mut own_hosts: FxHashMap<u64, Option<f64>> = FxHashMap::default();
-        for row in rows {
-            let whole = own_hosts.entry(row.frame).or_insert(Some(0.0));
-            *whole = whole.zip(row.host_ms).map(|(before, part)| before + part);
-        }
-        let mut own_hosts: Vec<(u64, Option<f64>)> = own_hosts.into_iter().collect();
-        crate::sort::by_key(&mut own_hosts, |&(frame, _)| frame);
-        let hosts: Vec<f64> = own_hosts.iter().filter_map(|(frame, own)| own.or_else(|| cpu_by_frame.get(frame).map(|(host, _)| *host))).collect();
-        let host_text = if hosts.len() == count as usize {
-            format!("host a frame mean {:.2} ms{}", hosts.iter().sum::<f64>() / count, if rows[0].host_ms.is_none() { " (the cpu pass's)" } else { "" })
-        } else {
-            "host time a frame not taken (a kind slowed the run: --profile cpu takes it in a pass of its own)".to_string()
-        };
-        let threads_made: u64 = rows.iter().map(|row| row.threads_made).sum();
-        let reachable_threads: Vec<String> = input.snapshots.iter().filter_map(|snapshot| snapshot.by_type.iter().find(|(name, _, _)| name == "thread").map(|(_, count, _)| format!("{} {}", snapshot.label, group_digits(*count)))).collect();
-        let detailed = input.config.kinds.has(super::Kinds::TIMELINE);
-        if detailed {
-            let _ = writeln!(
-                summary,
-                "\ntimeline ({} frames{}): work a frame mean {:.3} ms{}, max {:.3} ms (frame {}); {host_text}; VM heap with its garbage {} -> {}; instances in the DataModel {} -> {}, alive outside it {} -> {}, destroyed awaiting collection {} -> {}; connections {} -> {}; threads made {} ({:.1} a frame){}",
-                count as usize,
-                if rows.len() > count as usize { format!(", {} rows split by phase marks", rows.len()) } else { String::new() },
-                mean,
-                sides.map_or(String::new(), |(game, harness)| format!(" (the game's code {game:.3} ms, the harness's {harness:.3} ms)")),
-                worst_work,
-                worst,
-                bytes(first.heap_bytes as f64),
-                bytes(last.heap_bytes as f64),
-                group_digits(first.instances.0),
-                group_digits(last.instances.0),
-                group_digits(first.instances.1),
-                group_digits(last.instances.1),
-                group_digits(first.instances.2),
-                group_digits(last.instances.2),
-                group_digits(first.connections),
-                group_digits(last.connections),
-                group_digits(threads_made),
-                threads_made as f64 / count,
-                if reachable_threads.is_empty() { String::new() } else { format!("; threads reachable at the heap snapshots: {}", reachable_threads.join(", ")) }
-            );
-        } else {
-            let _ = writeln!(summary, "\nframe work ({} frames): mean {mean:.3} ms, max {worst_work:.3} ms (frame {worst})", count as usize);
-        }
-        let split = rows.iter().all(|row| row.sides.is_some());
-        let (columns, about, timeline_rows) = if detailed {
-            (
-                DETAILED_TIMELINE_COLUMNS,
-                TimelineAboutJson::Detailed {
-                    host_ms: "the frame's host time and cycles: this run's, else the cpu pass's for the same frame (a kind that slows the run makes its own not the run's), else null",
-                    instances_in_datamodel: "live instances at the frame's end in the DataModel's tree; instances_outside: alive outside it; instances_destroyed: destroyed and kept until the VM collects the userdata that holds them",
-                    threads_made: "threads the VM made in the frame (coroutines, task threads, handlers' threads); the reachable ones are the heap snapshots' (by_type thread)",
-                },
-                TimelineRowsJson::Detailed(rows.iter().map(|row| timeline_row(row, host(row))).collect()),
-            )
-        } else {
-            (
-                COMPACT_TIMELINE_COLUMNS,
-                TimelineAboutJson::Compact { work_ms: "compact frame work for issue summaries and hitch attribution; timeline records the other frame metrics" },
-                TimelineRowsJson::Compact(rows.iter().map(compact_timeline_row).collect()),
-            )
-        };
-        // Summaries retain small events; heavy frames retain exact node and site contributions
-        let (function_stats, node_frames, site_frames) = if split {
-            let (stats, heavy, sites) = frame_evidence(rows, &scope, input.run.fps);
-            (Some(stats), Some(heavy), Some(sites))
-        } else {
-            (None, None, None)
-        };
-        report.timeline = Some(TimelineJson {
-            about,
-            columns,
-            function_contexts: None,
-            function_stats,
-            issue_stats: None,
-            node_frames,
-            replacement_frames: None,
-            rows: timeline_rows,
-            site_frames,
-        });
+        write_timeline_section(input, &scope, &cpu_by_frame, &mut summary, &mut report);
     }
 
     if let Some(vm_results) = input.vm {
@@ -3634,13 +2914,858 @@ pub fn write(input: &Input) -> Result<String, String> {
     }
 
     // the CPU
-    if let Some(pass) = pass.as_ref().filter(|pass| pass["cpu"].is_object()) {
+    write_cpu_section(input, pass.as_ref(), &mut summary, &mut report);
+
+    // the hardware counters
+    let mut counter_folded: Vec<(String, Vec<(String, u64)>)> = Vec::new();
+    if let Some(hw) = input.hw {
+        report.counters = Some(counters(input, hw, &names, &mut summary, &mut counter_folded));
+    }
+
+    if let Some(nodes) = input.phase_tree {
+        report.phase_tree = Some(nodes.iter().map(|node| PhaseTreeNodeJson { count: node.count, name: &node.name, parent: node.parent, self_ms: node.own * 1e3, total_ms: node.seconds * 1e3 }).collect());
+    }
+    if let Some(text) = input.phase_timing {
+        report.phase_timing = Some(text);
+        let _ = writeln!(summary, "
+{text}");
+    }
+    if let Some(text) = input.boundary {
+        report.boundary = Some(text);
+        let _ = writeln!(summary, "\n{}", text.trim_end());
+        files.push("boundary.json".into());
+    }
+
+    // sources of the hottest functions, for the annotated listing
+    let mut listed: Vec<i32> = Vec::new();
+    for (id, figures) in &function_rows {
+        if *id < 0 || names.engine(*id) || listed.len() >= 12 {
+            continue;
+        }
+        if figures.self_work > 0.0 || figures.self_time > 0.0 || figures.self_alloc > 0.0 {
+            listed.push(*id);
+        }
+    }
+    // (and the inlined functions with the most work in their copies: the page shows it on their own lines)
+    let mut inlined_hot: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, figures)| *id >= 0 && figures.inlined_work > 0.0 && !listed.contains(id) && !names.engine(*id)).collect();
+    crate::sort::by(&mut inlined_hot, |a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(a.0.cmp(&b.0)));
+    listed.extend(inlined_hot.iter().take(6).map(|(id, _)| *id));
+    for id in &listed {
+        if let Some(function) = names.function(*id) {
+            if let Some((path, rows)) = listing(input, function, &model, *id) {
+                report.listings.insert(id.to_string(), ListingJson { lines: rows, path });
+            }
+        }
+    }
+    report.source_hashes = input.sources.iter().map(|(name, source)| (name.clone(), format!("{:016x}", fxhash(&source.text)))).collect();
+
+    // folded stacks & speedscope
+    write_folded_and_speedscope(input, &names, counter_folded, out, &mut files)?;
+
+    files.insert(0, "summary.txt".into());
+    files.insert(1, "profile.json".into());
+    files.insert(2, "report.html".into());
+    let _ = writeln!(summary, "\nfiles in {}: {}", out.display(), files.join(", "));
+    report.summary = summary;
+    report.files = files;
+    let text = JsonWriter::to_string(&report);
+    write_file(&out.join("profile.json"), text.as_bytes())?;
+    write_file(&out.join("summary.txt"), report.summary.as_bytes())?;
+    // (the page never reads each frame's functions, the bulk of a big profile: it is left out of the page's copy)
+    if let Some(timeline) = &mut report.timeline {
+        timeline.function_stats = None;
+        timeline.issue_stats = None;
+        timeline.node_frames = None;
+        timeline.site_frames = None;
+        timeline.replacement_frames = None;
+        timeline.function_contexts = None;
+    }
+    let page = JsonWriter::to_string(&report);
+    write_file(&out.join("report.html"), html(&page).as_bytes())?;
+    Ok(report.summary)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn write_work_section<'a>(
+    input: &Input<'a>,
+    vm_results: &'a vm::Results,
+    names: &Names<'a>,
+    model: &Model,
+    scope: &[u32],
+    function_rows: &[(i32, Figures)],
+    inlined_into: &FxHashMap<i32, Vec<(i32, Inlined)>>,
+    line_rows: &[(&(i32, i32), &LineFigures)],
+    game_self: f64,
+    harness_self: f64,
+    scope_engine: Option<&crate::cost::EngineOps>,
+    seconds: f64,
+    frames: f64,
+    summary: &mut String,
+    report: &mut ProfileReport<'a>,
+) {
+    let phase_name = |phase: u32| input.phases.get(phase as usize).cloned().unwrap_or_else(|| "startup".to_string());
+    let total_work: f64 = vm_results.nodes.iter().map(|node| node.work).sum::<f64>() + vm_results.engine_work;
+    let script_insns: u64 = vm_results.functions.iter().filter(|f| !f.exempt()).flat_map(|f| f.counts.iter()).sum();
+    let engine_insns: u64 = vm_results.functions.iter().filter(|f| f.exempt()).flat_map(|f| f.counts.iter()).sum();
+    // (the ones seen running: entered, booked to, or in a frame; the profile also registers a chunk's functions unrun)
+    let natives: Vec<&vm::Function> = vm_results
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(id, f)| f.native() && !f.exempt() && (f.native_entries > 0 || f.native_work != 0.0 || model.functions.contains_key(&(*id as i32))))
+        .map(|(_, f)| f)
+        .collect();
+    let mut opcodes: FxHashMap<u8, (u64, f64)> = FxHashMap::default();
+    for function in vm_results.functions.iter().filter(|f| !f.exempt()) {
+        for (pc, &count) in function.counts.iter().enumerate() {
+            if count > 0 {
+                let entry = opcodes.entry((function.code[pc] & 0xff) as u8).or_default();
+                entry.0 += count;
+                entry.1 += function.work.get(pc).copied().unwrap_or(0.0);
+            }
+        }
+    }
+    let mut opcode_rows: Vec<_> = opcodes.into_iter().collect();
+    crate::sort::by(&mut opcode_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+    // the run's kinds of work (of the total): cold and first-use charges, the collector's, dispatch, Studio-era and defaulted prices
+    let mut kinds_total = [0.0f64; vm::SPLITS];
+    for node in &vm_results.nodes {
+        add_kinds(&mut kinds_total, &node.split);
+    }
+    let collector_objects = input.end.and_then(|end| end.totals).map_or(0.0, |totals| totals.collector / (crate::cost::LUAU_COLLECTOR_OBJECT * 1e-9).max(1e-30));
+    // (the fidelity line weighs what the summary reports: the reported phases' game code, its work by kind)
+    let (scope_work, scope_kinds) = scope_work_kinds(model, scope);
+    let fidelity = if scope_work > 0.0 {
+        let luau = scope_luau(input, scope, scope_work).unwrap_or_else(|| whole_luau(input, total_work, &kinds_total) / total_work.max(1e-12) * scope_work);
+        fidelity_json(input, scope_work, &scope_kinds, luau, &format!("the game's code in {}", scope_phrase(scope, input.phases)))
+    } else {
+        fidelity_json(input, total_work, &kinds_total, whole_luau(input, total_work, &kinds_total), "the run")
+    };
+    // Large buffers (> 1 KB fresh, >= 64 KB segment, > 64 KB L2/L3 copy, > 1 MB DRAM copy) are priced across cache tiers.
+    let (fresh, big) = match (input.marks.first().and_then(|mark| mark.totals), input.end.and_then(|end| end.totals)) {
+        (Some(first), Some(last)) => (last.buffer_fresh.saturating_sub(first.buffer_fresh), last.buffer_big.saturating_sub(first.buffer_big)),
+        _ => (0, 0),
+    };
+    let price = |set: fn(&mut crate::cost::VmCounters)| -> f64 {
+        let mut counters: crate::cost::VmCounters = unsafe { std::mem::zeroed() };
+        set(&mut counters);
+        crate::cost::luau(&counters) * 1e9
+    };
+    let work_prices = WorkPricesJson {
+        allocated_byte_ns: price(|c| c.hostops[crate::cost::ALLOCBYTES_SLOT] = 1),
+        c_call_ns: price(|c| c.ccalls = 1),
+        collector_object_ns: price(|c| c.hostops[crate::cost::GCOBJECTS_SLOT] = 1),
+        hash_rehashed_key_ns: price(|c| c.hostops[crate::cost::HASHREHASHED_SLOT] = 1),
+        large_block_ns: price(|c| c.hostops[crate::cost::LARGEBLOCKS_SLOT] = 1),
+        library_object_ns: price(|c| c.hostops[crate::cost::LIBOBJECTS_SLOT] = 1),
+        object_ns: price(|c| c.objects = 1),
+        rehashed_key_ns: price(|c| c.rehashed = 1),
+        sort_call_ns: price(|c| c.sortcalls = 1),
+        sort_compare_ns: price(|c| c.sortcompares = 1),
+        stored_byte_ns: price(|c| c.stored = 1),
+    };
+    let _ = writeln!(
+        summary,
+        "work clock {:.2} ms ({:.2} ms/s, {:.3} ms a frame) at {}; {:.2} ms charged outside any instruction",
+        ms(total_work),
+        if seconds > 0.0 { ms(total_work) / seconds } else { 0.0 },
+        ms(total_work) / frames,
+        fidelity.prices,
+        ms(vm_results.engine_work)
+    );
+    let _ = writeln!(
+        summary,
+        "of it: cold and first-use charges {:.2} ms, the collector {:.2} ms, dispatch of handlers and resumptions {:.2} ms; priced from a client {:.0} %, from Studio-era measurements {:.0} %, borrowed (defaulted) {:.0} %",
+        ms(kinds_total[vm::COLD]),
+        ms(kinds_total[vm::COLLECTOR]),
+        ms(kinds_total[vm::DISPATCH]),
+        100.0 * (total_work - kinds_total[vm::STUDIO] - kinds_total[vm::DEFAULTED]).max(0.0) / total_work.max(1e-12),
+        100.0 * kinds_total[vm::STUDIO] / total_work.max(1e-12),
+        100.0 * kinds_total[vm::DEFAULTED] / total_work.max(1e-12)
+    );
+    // (what the clock is beside a client's own time: read before taking its milliseconds as a client's)
+    let _ = writeln!(summary, "{}", fidelity.text);
+    report.work = Some(WorkJson {
+        by_provenance_ms: ProvenanceJson {
+            client: ms((total_work - kinds_total[vm::STUDIO] - kinds_total[vm::DEFAULTED]).max(0.0)),
+            defaulted: ms(kinds_total[vm::DEFAULTED]),
+            studio: ms(kinds_total[vm::STUDIO]),
+        },
+        c_calls: true,
+        c_invocations: true,
+        cold_work_ms: ms(kinds_total[vm::COLD]),
+        collector: WorkCollectorJson {
+            basis: "every object the scripts' work allocated (its instructions and the library and engine calls it made), each swept once garbage and marked while it lives: the collector's share of the parity bench's churn rows on a heap of about 50 MB (its steps' time in ree's VM, which runs the client's collector) applied to a rendered client's time; booked to the allocating instruction",
+            object_ns: crate::cost::LUAU_COLLECTOR_OBJECT,
+            objects: collector_objects.round(),
+        },
+        collector_ms: ms(kinds_total[vm::COLLECTOR]),
+        dispatch_ms: ms(kinds_total[vm::DISPATCH]),
+        engine_insns,
+        fidelity: fidelity.text.clone(),
+        native_functions: natives
+            .iter()
+            .map(|f| NativeFunctionJson { entries: f.native_entries, line: f.line, module: module_name(&f.source), name: &f.name, work_ms: ms(f.native_work) })
+            .collect(),
+        opcodes: opcode_rows.iter().map(|&(op, (count, work))| OpcodeRowJson { count, op: vm::opcode_name(op), work_ms: ms(work) }).collect(),
+        outside_instructions_ms: ms(vm_results.engine_work),
+        per_frame_ms: ms(total_work) / frames,
+        per_second_ms: if seconds > 0.0 { ms(total_work) / seconds } else { 0.0 },
+        prices: work_prices,
+        script_insns,
+        total_ms: ms(total_work),
+        units: WorkUnitsJson { device: input.device, scale: price_scale() },
+        unpriced: WorkUnpricedJson {
+            basis: "large new buffers (> 1 KB fresh memory; >= 64 KB segment setup) and large buffer copies, fills and string writes (> 64 KB L2/L3; > 1 MB DRAM) are priced across cache tiers on the work clock",
+            buffer_big_bytes: 0,
+            buffer_fresh_bytes: 0,
+            priced_large_buffer_big_bytes: big,
+            priced_large_buffer_fresh_bytes: fresh,
+        },
+    });
+    report.fidelity = Some(fidelity);
+    let _ = writeln!(summary, "instructions: {} by scripts, {} by the engine's own Luau", group_digits(script_insns), group_digits(engine_insns));
+    if natives.is_empty() {
+        let _ = writeln!(summary, "natively compiled functions: none ran natively (every instruction is counted)");
+    } else {
+        let entries: u64 = natives.iter().map(|f| f.native_entries).sum();
+        let work: f64 = natives.iter().map(|f| f.native_work).sum();
+        let named: Vec<String> = natives.iter().take(6).map(|f| format!("{}:{}", names.short(&f.source), f.line)).collect();
+        let _ = writeln!(
+            summary,
+            "natively compiled functions: {} seen ({}{}): {} {} from interpreted code, {:.3} ms of work booked while they ran; their instructions are not counted, and a call from native code into native code is not seen (its work stays with the caller)",
+            natives.len(),
+            named.join(", "),
+            if natives.len() > named.len() { ", ..." } else { "" },
+            group_digits(entries),
+            if entries == 1 { "entry" } else { "entries" },
+            ms(work)
+        );
+    }
+    if !input.marks.is_empty() {
+        let mut parts = Vec::new();
+        for (index, mark) in input.marks.iter().enumerate() {
+            let end = input.marks.get(index + 1).map_or(input.end_work, |next| next.work);
+            parts.push(format!("{} (frame {}) {:.2} ms", mark.phase, mark.frame, ms((end - mark.work).max(0.0))));
+        }
+        let _ = writeln!(summary, "phases' work: {}", parts.join("; "));
+    }
+    let every_phase = scope.len() >= input.phases.len().max(1);
+    let scope_label = if every_phase {
+        "every phase".to_string()
+    } else {
+        format!("{} {}", if scope.len() == 1 { "phase" } else { "phases" }, scope.iter().map(|phase| phase_name(*phase)).collect::<Vec<_>>().join(", "))
+    };
+    let _ = writeln!(
+        summary,
+        "reported below: {scope_label}: the game's code {:.2} ms, the harness's code {:.2} ms of self work (the harness's is its code under {HARNESS_FOLDER} and what that called; --profile-phase picks phases, or all)",
+        ms(game_self),
+        ms(harness_self)
+    );
+    if let Some(ops) = scope_engine {
+        let _ = writeln!(summary, "{}", engine_line(&scope_label, ops));
+    }
+    let mut game_cold: FxHashMap<i32, ColdAndSaving> = FxHashMap::default();
+    for (&(id, phase, harness_side), split) in &model.phase_split {
+        if harness_side || !scope.contains(&phase) {
+            continue;
+        }
+        let work = model.phase_self.get(&(id, phase, harness_side)).map_or(0.0, |figures| figures.0);
+        let row = game_cold.entry(id).or_default();
+        row.cold += split.cold();
+        row.saving += split.saving(work);
+    }
+    let side_rows = |harness: bool| -> Vec<(i32, f64, f64, u64, u64)> {
+        let mut rows: FxHashMap<i32, (f64, f64, u64, u64)> = FxHashMap::default();
+        for (&(id, phase, side), &(work, calls, insns)) in &model.phase_self {
+            if side == harness && scope.contains(&phase) && !names.engine(id) && !names.binding(id) {
+                let row = rows.entry(id).or_default();
+                row.0 += work;
+                row.2 += calls;
+                row.3 += insns;
+            }
+        }
+        for (&(id, phase, side), &total) in &model.phase_total {
+            if side == harness && scope.contains(&phase) && !names.engine(id) {
+                rows.entry(id).or_default().1 += total;
+            }
+        }
+        let mut rows: Vec<(i32, f64, f64, u64, u64)> = rows.into_iter().map(|(id, (work, total, calls, insns))| (id, work, total, calls, insns)).collect();
+        crate::sort::by(&mut rows, |a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        rows
+    };
+    let (game_rows, harness_rows) = (side_rows(false), side_rows(true));
+    let top = input.config.top;
+    let _ = writeln!(
+        summary,
+        "\ntop functions by self work: the game's code, {scope_label} (ms of the work clock; cold: its cold and first-use charges; saving: what cutting it saves, its hot work and the cold charges for objects nothing else touched that frame; total includes callees)"
+    );
+    let _ = writeln!(summary, "{:>9} {:>8} {:>9} {:>9} {:>10} {:>12}  function", "self ms", "cold ms", "saving ms", "total ms", "calls", "insns");
+    for (id, work, total, calls, insns) in game_rows.iter().filter(|row| row.1 >= 5e-7).take(top) {
+        let ColdAndSaving { cold, saving } = game_cold.get(id).copied().unwrap_or(ColdAndSaving { cold: 0.0, saving: *work });
+        let _ = writeln!(summary, "{:>9.3} {:>8.3} {:>9.3} {:>9.3} {:>10} {:>12}  {}", ms(*work), ms(cold), ms(saving), ms(*total), group_digits(*calls), group_digits(*insns), names.label(*id));
+    }
+    let mut by_total: Vec<&(i32, f64, f64, u64, u64)> = game_rows.iter().filter(|row| row.0 >= 0).collect();
+    crate::sort::by(&mut by_total, |a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+    let _ = writeln!(summary, "\ntop functions by total work: the game's code, {scope_label}");
+    let _ = writeln!(summary, "{:>9} {:>9} {:>10}  function", "total ms", "self ms", "calls");
+    for (id, work, total, calls, _) in by_total.iter().filter(|row| row.2 >= 5e-7).take(top.min(12)) {
+        let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10}  {}", ms(*total), ms(*work), group_digits(*calls), names.label(*id));
+    }
+    let harness_rows: Vec<&(i32, f64, f64, u64, u64)> = harness_rows.iter().filter(|row| row.1 >= 5e-7).collect();
+    if !harness_rows.is_empty() {
+        let _ = writeln!(summary, "\nthe harness's code, {scope_label}: {:.3} ms of self work, left out of the tables above", ms(harness_self));
+        let _ = writeln!(summary, "{:>9} {:>9} {:>10}  function", "self ms", "total ms", "calls");
+        for (id, work, total, calls, _) in harness_rows.iter().take(top.min(8)) {
+            let _ = writeln!(summary, "{:>9.3} {:>9.3} {:>10}  {}", ms(*work), ms(*total), group_digits(*calls), names.label(*id));
+        }
+    }
+    let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, _)| inlined_into.contains_key(id) && !names.engine(*id) && !names.harness(*id)).collect();
+    if !inlined.is_empty() {
+        crate::sort::by(&mut inlined, |a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(b.1.inlined_calls.cmp(&a.1.inlined_calls)).then(a.0.cmp(&b.0)));
+        let _ = writeln!(
+            summary,
+            "\ninlined functions (Luau's -O2 compiled their bodies into their callers: a call is counted where a copy was entered; the instructions and work are on their own lines in the callers, counted there too)"
+        );
+        let _ = writeln!(summary, "{:>10} {:>10} {:>12} {:>9}  function  (inlined into)", "inlined", "called", "insns", "work ms");
+        for (id, figures) in inlined.iter().take(top) {
+            let into: Vec<String> = inlined_into[id]
+                .iter()
+                .take(3)
+                .map(|(caller, copies)| format!("{} ({} {})", names.label(*caller).replace("  ", " "), copies.copies, if copies.copies == 1 { "copy" } else { "copies" }))
+                .collect();
+            let more = inlined_into[id].len().saturating_sub(into.len());
+            let _ = writeln!(
+                summary,
+                "{:>10} {:>10} {:>12} {:>9.3}  {}  ({}{})",
+                group_digits(figures.inlined_calls),
+                group_digits(figures.calls),
+                group_digits(figures.inlined_insns),
+                ms(figures.inlined_work),
+                names.label(*id),
+                into.join(", "),
+                if more > 0 { format!(", {more} more") } else { String::new() }
+            );
+        }
+    }
+    let mut scoped_lines: Vec<ScopedLine> = Vec::new();
+    for &(&(function, line), figures) in line_rows.iter() {
+        scoped_lines.push(ScopedLine { function, line, figures, phase: figures.within(scope) });
+    }
+    crate::sort::by(&mut scoped_lines, |a, b| b.phase.self_work().total_cmp(&a.phase.self_work()).then((a.function, a.line).cmp(&(b.function, b.line))));
+    let _ = writeln!(summary, "\ntop lines by self work: the game's code, {scope_label}");
+    let _ = writeln!(summary, "{:>9} {:>8} {:>11} {:>12}  line  (opcodes)", "self ms", "cold ms", "total ms", "insns");
+    let is_game_line = |line: &&ScopedLine| {
+        line.phase.self_work() >= 5e-7 && !names.engine(line.function) && !names.harness(line.function) && !names.binding(line.function)
+    };
+    for ScopedLine { function, line, figures, phase } in scoped_lines.iter().filter(is_game_line).take(top) {
+        let ops: Vec<String> = {
+            let mut ops: Vec<_> = figures.ops.iter().collect();
+            crate::sort::by(&mut ops, |a, b| b.1.cmp(a.1));
+            ops.iter().take(4).map(|(op, count)| format!("{} {}", vm::opcode_name(**op), group_digits(**count))).collect()
+        };
+        let module = names.function(*function).map_or(String::new(), |f| names.short(&f.source).to_string());
+        let _ = writeln!(summary, "{:>9.3} {:>8.3} {:>11.3} {:>12}  {module}:{line}  ({})", ms(phase.self_work()), ms(phase.cold), ms(phase.total_work), group_digits(phase.insns), ops.join(", "));
+    }
+    attribution_sections(input, names, summary, report, top);
+    if input.config.kinds.has(super::Kinds::CACHES) {
+        inline_caches(input, vm_results, names, top, summary, report);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn write_time_section(
+    input: &Input,
+    time: &super::time::Time,
+    names: &Names,
+    function_rows: &[(i32, Figures)],
+    time_total: f64,
+    wall_total: f64,
+    summary: &mut String,
+    report: &mut ProfileReport<'_>,
+) {
+    let cpu = time.cycles_per_ms > 0.0;
+    report.time = Some(TimeJson {
+        about: "time_ms is the run thread's CPU milliseconds (its cycles, the time it ran), wall_ms the wall clock's; a sample is booked to what ran since the one before: the Luau stack at a safepoint, the Luau that ran last when the interpreter is left, the engine's step that was open when it is entered (else outside scripts), an Instance API call on its own line",
+        cycles_per_ms: time.cycles_per_ms,
+        sampled_ms: time_total,
+        wall_ms: wall_total,
+        weight: if cpu { "thread CPU" } else { "wall" },
+    });
+    let _ = writeln!(
+        summary,
+        "\nhost time: {:.1} ms {} ({:.1} ms wall), sampled each millisecond at the VM's calls, returns and loop edges, at the interpreter's entry and exit, around the engine's steps and the Instance API's calls",
+        time_total,
+        if cpu { "of the run thread's CPU" } else { "(wall: the thread's cycles cannot be read here)" },
+        wall_total
+    );
+    let mut by_self: Vec<&(i32, Figures)> = function_rows.iter().filter(|(_, f)| f.self_time > 0.0).collect();
+    crate::sort::by(&mut by_self, |a, b| b.1.self_time.total_cmp(&a.1.self_time).then(a.0.cmp(&b.0)));
+    let _ = writeln!(summary, "{:>9} {:>9} {:>9}  function", "self ms", "total ms", "wall ms");
+    for (id, figures) in by_self.iter().take(input.config.top) {
+        let _ = writeln!(summary, "{:>9.1} {:>9.1} {:>9.1}  {}", figures.self_time, figures.total_time, figures.self_wall, names.label(*id));
+    }
+    let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, f)| f.inlined_time > 0.0 && !names.engine(*id)).collect();
+    if !inlined.is_empty() {
+        crate::sort::by(&mut inlined, |a, b| b.1.inlined_time.total_cmp(&a.1.inlined_time).then(a.0.cmp(&b.0)));
+        let _ = writeln!(summary, "inlined functions' host time, an estimate (each sample's share of the code since the safepoint before it, by the work clock's prices of its opcodes, in the copies -O2 compiled into their callers; a sample right after a call that reached a C function is not split; their callers' self time holds it)");
+        for (id, figures) in inlined.iter().take(input.config.top.min(10)) {
+            let _ = writeln!(summary, "{:>9.1} {:>9} {:>9.1}  {} (inlined)", figures.inlined_time, "", figures.inlined_wall, names.label(*id));
+        }
+    }
+}
+
+#[inline(never)]
+fn write_alloc_section<'a>(input: &Input<'a>, allocations: &'a memory::Allocations, names: &Names<'a>, summary: &mut String, report: &mut ProfileReport<'a>) {
+    let mut by_type: Vec<(String, memory::Amount)> = allocations.types.names.iter().cloned().zip(allocations.by_type.iter().copied()).collect();
+    crate::sort::by(&mut by_type, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
+    let mut groups: FxHashMap<String, memory::Amount> = FxHashMap::default();
+    for (name, amount) in &by_type {
+        let entry = groups.entry(memory::group(name).to_string()).or_default();
+        entry.bytes += amount.bytes;
+        entry.count += amount.count;
+    }
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    crate::sort::by(&mut groups, |a, b| b.1.bytes.total_cmp(&a.1.bytes).then_with(|| a.0.cmp(&b.0)));
+    let total = allocations.bytes as f64;
+    let _ = writeln!(
+        summary,
+        "\nallocations: {} in {} objects ({}){}",
+        bytes(total),
+        group_digits(allocations.objects),
+        groups.iter().take(6).map(|(name, amount)| format!("{name} {}", percent(amount.bytes, total))).collect::<Vec<_>>().join(", "),
+        if allocations.step > 1 { format!("; stacks sampled every {} bytes", allocations.step) } else { String::new() }
+    );
+    let mut stacks: FxHashMap<(u32, u32), memory::Amount> = FxHashMap::default();
+    for (&(_, stack, ty), amount) in &allocations.by_stack {
+        let entry = stacks.entry((stack, ty)).or_default();
+        entry.bytes += amount.bytes;
+        entry.count += amount.count;
+    }
+    let mut stack_rows: Vec<_> = stacks.into_iter().collect();
+    crate::sort::by(&mut stack_rows, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
+    let describe = |stack: u32| -> String {
+        let frames = &allocations.stacks.stacks[stack as usize];
+        let luau: Vec<String> = frames.iter().filter(|frame| frame.0 >= 0 && !names.engine(frame.0)).take(3).map(|&(function, line)| {
+            let module = names.function(function).map_or(String::new(), |f| names.short(&f.source).to_string());
+            format!("{module}:{line}")
+        }).collect();
+        let top_c = frames.first().filter(|frame| frame.0 < -1).map(|frame| format!("{} < ", names.frame(frame.0))).unwrap_or_default();
+        format!("{top_c}{}", if luau.is_empty() { "(engine)".into() } else { luau.join(" < ") })
+    };
+    let _ = writeln!(summary, "{:>10} {:>10}  type  stack (innermost Luau lines first)", "bytes", "count");
+    for ((stack, ty), amount) in stack_rows.iter().take(input.config.top) {
+        let _ = writeln!(summary, "{:>10} {:>10}  {}  {}", bytes(amount.bytes), group_digits(amount.count.round() as u64), allocations.types.names[*ty as usize], describe(*stack));
+    }
+    let total = &allocations.rehashes;
+    let rehash_json = if total.events > 0 {
+        let _ = writeln!(
+            summary,
+            "table rehashes: {} ({} grew the table), {} keys moved; by scripts' own instructions {} rehashes, {} keys",
+            group_digits(total.events),
+            group_digits(total.grew),
+            group_digits(total.keys),
+            group_digits(total.script_events),
+            group_digits(total.script_keys)
+        );
+        let mut rows: Vec<(&(u32, u32, u32), &memory::Rehash)> = allocations.rehash.iter().collect();
+        crate::sort::by(&mut rows, |a, b| b.1.keys.cmp(&a.1.keys).then(b.1.events.cmp(&a.1.events)).then(a.0.cmp(b.0)));
+        let _ = writeln!(summary, "{:>10} {:>12}  rehashed at  (the table made at)", "rehashes", "keys moved");
+        for ((_, stack, made), rehash) in rows.iter().filter(|(key, _)| key.1 != memory::NO_STACK).take(input.config.top.min(10)) {
+            let made = if *made == memory::NO_STACK { "not followed".to_string() } else { describe(*made) };
+            let _ = writeln!(summary, "{:>10} {:>12}  {}  ({made})", group_digits(rehash.events), group_digits(rehash.keys), describe(*stack));
+        }
+        let frames_slice = |stack: u32| -> Option<&'a [(i32, i32)]> {
+            if stack == memory::NO_STACK { None } else { Some(&allocations.stacks.stacks[stack as usize]) }
+        };
+        Some(RehashJson {
+            bytes_after: total.bytes_after,
+            bytes_before: total.bytes_before,
+            events: total.events,
+            grew: total.grew,
+            keys: total.keys,
+            script_events: total.script_events,
+            script_keys: total.script_keys,
+            sites: rows
+                .iter()
+                .take(500)
+                .map(|&(&(phase, stack, made), rehash)| RehashSiteJson {
+                    bytes_after: rehash.bytes_after,
+                    bytes_before: rehash.bytes_before,
+                    events: rehash.events,
+                    frames: frames_slice(stack),
+                    grew: rehash.grew,
+                    keys: rehash.keys,
+                    phase: input.phases.get(phase as usize).map(String::as_str),
+                    script_events: rehash.script_events,
+                    script_keys: rehash.script_keys,
+                    table_frames: frames_slice(made),
+                })
+                .collect(),
+        })
+    } else {
+        None
+    };
+    report.alloc = Some(AllocJson {
+        by_stack: stack_rows
+            .iter()
+            .take(500)
+            .map(|&((stack, ty), amount)| AllocByStackJson {
+                bytes: amount.bytes.round(),
+                count: amount.count.round(),
+                frames: &allocations.stacks.stacks[stack as usize],
+                ty: allocations.types.names[ty as usize].as_str(),
+            })
+            .collect(),
+        by_type: by_type
+            .into_iter()
+            .map(|(name, amount)| AllocByTypeJson { bytes: amount.bytes, count: amount.count, group: memory::group(&name).to_string(), ty: name })
+            .collect(),
+        bytes: allocations.bytes,
+        objects: allocations.objects,
+        rehash: rehash_json,
+        step: allocations.step,
+    });
+}
+
+#[inline(never)]
+fn write_heap_section<'a>(input: &Input<'a>, names: &Names<'a>, summary: &mut String, report: &mut ProfileReport<'a>) {
+    let mut rehash_by_site: FxHashMap<u32, (u64, u64)> = FxHashMap::default();
+    if let Some(allocations) = input.allocations {
+        for (&(_, _, made), rehash) in &allocations.rehash {
+            if made != memory::NO_STACK {
+                let entry = rehash_by_site.entry(made).or_default();
+                entry.0 += rehash.events;
+                entry.1 += rehash.keys;
+            }
+        }
+    }
+    let last = input.snapshots.last().unwrap();
+    let _ = writeln!(
+        summary,
+        "\nheap at {}: {} reachable in {} objects, what a full collection keeps; the run's own allocations still reachable: {}",
+        last.label,
+        bytes(last.reachable.1 as f64),
+        group_digits(last.reachable.0),
+        bytes(last.allocated_since.1),
+    );
+    let _ = writeln!(
+        summary,
+        "  not swept yet: {} in {} objects, garbage the collector had not freed (not in the reachable figures; gcinfo() {} KB counts both)",
+        bytes(last.unswept.1 as f64),
+        group_digits(last.unswept.0),
+        last.total_bytes / 1024
+    );
+    let _ = writeln!(summary, "  reachable by type: {}", last.by_type.iter().take(8).map(|(name, count, size)| format!("{name} {} ({})", bytes(*size as f64), group_digits(*count))).collect::<Vec<_>>().join(", "));
+    for held in last.biggest.iter().take(input.config.top.min(8)) {
+        let _ = writeln!(summary, "  {:>10} kept alive by {} {}  ({})", bytes(held.retained as f64), held.ty, if held.name.is_empty() { String::new() } else { format!("\"{}\"", held.name) }, held.path);
+    }
+    if input.snapshots.len() > 1 {
+        let _ = writeln!(
+            summary,
+            "  snapshots, reachable (+ not swept yet): {}",
+            input.snapshots.iter().map(|s| format!("{} {} (+{})", s.label, bytes(s.reachable.1 as f64), bytes(s.unswept.1 as f64))).collect::<Vec<_>>().join(" -> ")
+        );
+    }
+    let tables = &last.tables;
+    if tables.count > 0 {
+        let whole = tables.bytes.max(1) as f64;
+        let _ = writeln!(
+            summary,
+            "  tables at {}: {} reachable, {} (the tables {}, array parts {}, hash parts {}); the run's own by the site that made them:",
+            last.label,
+            group_digits(tables.count),
+            bytes(tables.bytes as f64),
+            percent(tables.header_bytes as f64, whole),
+            percent(tables.array_bytes as f64, whole),
+            percent(tables.hash_bytes as f64, whole)
+        );
+        let _ = writeln!(summary, "  {:>9} {:>10} {:>8} {:>16} {:>16} {:>6}  site", "tables", "bytes", "each", "array slots", "hash nodes", "levels");
+        let site_of = |stack: u32| -> String {
+            let Some(allocations) = input.allocations else { return String::new() };
+            let frames = &allocations.stacks.stacks[stack as usize];
+            let luau: Vec<String> = frames.iter().filter(|frame| frame.0 >= 0 && !names.engine(frame.0)).take(3).map(|&(function, line)| {
+                let module = names.function(function).map_or(String::new(), |f| names.short(&f.source).to_string());
+                format!("{module}:{line}")
+            }).collect();
+            if luau.is_empty() { "(engine)".into() } else { luau.join(" < ") }
+        };
+        let shape = |distribution: &memory::Distribution| -> String {
+            if distribution.min == distribution.max {
+                format!("{} ({})", group_digits(distribution.min as u64), group_digits(distribution.used))
+            } else {
+                format!("{}-{} ({})", group_digits(distribution.min as u64), group_digits(distribution.max as u64), group_digits(distribution.used))
+            }
+        };
+        for site in tables.sites.iter().take(input.config.top.min(8)) {
+            let levels = if site.levels.min == site.levels.max { site.levels.min.to_string() } else { format!("{}-{}", site.levels.min, site.levels.max) };
+            let _ = writeln!(
+                summary,
+                "  {:>9} {:>10} {:>8} {:>16} {:>16} {:>6}  {}",
+                group_digits(site.count.round() as u64),
+                bytes(site.bytes),
+                bytes(site.bytes / site.count.max(1e-9)),
+                shape(&site.array),
+                shape(&site.hash),
+                levels,
+                site_of(site.stack)
+            );
+        }
+    }
+    let collector = input.collector;
+    let _ = writeln!(
+        summary,
+        "collector: {} cycles, {} steps, {} freed, {:.1} ms host time",
+        collector.cycles,
+        group_digits(collector.steps),
+        bytes(collector.freed as f64),
+        ms(collector.seconds)
+    );
+    report.heap = Some(HeapJson {
+        gc: HeapGcJson {
+            by_state: memory::GC_STATES.iter().zip(collector.by_state.iter()).map(|(&state, &(steps, seconds))| GcStateJson { ms: ms(seconds), state, steps }).collect(),
+            cycles: collector.cycles,
+            freed: collector.freed,
+            ms: ms(collector.seconds),
+            steps: collector.steps,
+        },
+        snapshots: input
+            .snapshots
+            .iter()
+            .map(|snapshot| HeapSnapshotJson {
+                allocated_since: CountBytesF64 { bytes: snapshot.allocated_since.1.round(), count: snapshot.allocated_since.0.round() },
+                biggest: snapshot
+                    .biggest
+                    .iter()
+                    .map(|held| HeapBiggestJson {
+                        name: &held.name,
+                        path: &held.path,
+                        retained: held.retained,
+                        size: held.size,
+                        stack: held.stack.and_then(|stack| input.allocations.map(|allocations| &*allocations.stacks.stacks[stack as usize])),
+                        ty: &held.ty,
+                    })
+                    .collect(),
+                by_stack: snapshot
+                    .by_stack
+                    .iter()
+                    .take(300)
+                    .map(|(stack, ty, count, size)| HeapByStackJson {
+                        bytes: size.round(),
+                        count: count.round(),
+                        frames: input.allocations.map(|allocations| &*allocations.stacks.stacks[*stack as usize]),
+                        ty: ty.as_str(),
+                    })
+                    .collect(),
+                by_type: snapshot.by_type.iter().map(|(name, count, size)| HeapTypeJson { bytes: *size, count: *count, ty: name.as_str() }).collect(),
+                frame: snapshot.frame,
+                gcinfo_kb: snapshot.total_bytes / 1024,
+                label: &snapshot.label,
+                object_bytes: snapshot.object_bytes,
+                objects: snapshot.objects,
+                reachable: CountBytesU64 { bytes: snapshot.reachable.1, count: snapshot.reachable.0 },
+                seconds: snapshot.seconds,
+                tables: HeapTablesJson {
+                    array_bytes: snapshot.tables.array_bytes,
+                    bytes: snapshot.tables.bytes,
+                    count: snapshot.tables.count,
+                    hash_bytes: snapshot.tables.hash_bytes,
+                    header_bytes: snapshot.tables.header_bytes,
+                    sites: snapshot
+                        .tables
+                        .sites
+                        .iter()
+                        .take(300)
+                        .map(|site| {
+                            let (events, keys) = rehash_by_site.get(&site.stack).copied().unwrap_or((0, 0));
+                            TableSiteJson {
+                                array: distribution_json(&site.array),
+                                array_bytes: site.array_bytes.round(),
+                                bytes: site.bytes.round(),
+                                count: site.count.round(),
+                                frames: input.allocations.map(|allocations| &*allocations.stacks.stacks[site.stack as usize]),
+                                hash: distribution_json(&site.hash),
+                                hash_bytes: site.hash_bytes.round(),
+                                header_bytes: site.header_bytes.round(),
+                                levels: levels_json(&site.levels),
+                                phase: input.phases.get(site.phase as usize).map(String::as_str),
+                                rehash_keys: keys,
+                                rehashes: events,
+                            }
+                        })
+                        .collect(),
+                    sizes: TableSizesJson { node: snapshot.tables.sizes.2, slot: snapshot.tables.sizes.1, table: snapshot.tables.sizes.0 },
+                },
+                total_bytes: snapshot.total_bytes,
+                unswept: HeapUnsweptJson {
+                    by_type: snapshot.unswept_by_type.iter().map(|(name, count, size)| HeapTypeJson { bytes: *size, count: *count, ty: name.as_str() }).collect(),
+                    bytes: snapshot.unswept.1,
+                    count: snapshot.unswept.0,
+                },
+            })
+            .collect(),
+    });
+}
+
+#[inline(never)]
+fn write_caches_section(input: &Input, summary: &mut String, report: &mut ProfileReport<'_>) {
+    let facts = input.facts;
+    let _ = writeln!(
+        summary,
+        "\ngame facts (counted by the engine): {} instances touched by scripts ({} userdata made, {} collected); {} modules ran ({} requires served by a kept result); {} datatype property reads, a new value each on a client (not measured against one): ree handed back the value it had made for {} of them",
+        group_digits(facts.instances_touched),
+        group_digits(facts.userdata_made),
+        group_digits(facts.userdata_collected),
+        group_digits(facts.modules_run),
+        group_digits(facts.requires_kept),
+        group_digits(facts.datatype_reads),
+        group_digits(facts.datatype_reads_reused)
+    );
+    report.game = Some(GameJson {
+        about: GameAboutJson {
+            datatype_reads: "UDim2, Color3, ... property reads: a client makes a new value for each read (not measured against a client); ree hands back the value it made while the property is unchanged (datatype_reads_reused), so rawequal of two reads is true in ree",
+            instances_touched: "instances a userdata was made for: the ones the scripts reached (a client makes one for each too)",
+            modules_run: "ModuleScripts that ran: a require that ran its module",
+            userdata_made: "userdata made for instances, an instance's again after the VM collected its first",
+        },
+        datatype_reads: facts.datatype_reads,
+        datatype_reads_reused: facts.datatype_reads_reused,
+        instances_touched: facts.instances_touched,
+        modules_run: facts.modules_run,
+        requires_kept: facts.requires_kept,
+        userdata_collected: facts.userdata_collected,
+        userdata_made: facts.userdata_made,
+    });
+    let _ = writeln!(summary, "\nemulator: ree's own caches (how fast ree runs, not what the game costs)");
+    let _ = writeln!(summary, "{:<20} {:>8} {:>12} {:>10} {:>10}", "cache", "hit", "lookups", "misses", "evicted");
+    for (name, _, counts) in input.caches {
+        let lookups = counts.hits + counts.misses;
+        if lookups == 0 && counts.evictions == 0 {
+            continue;
+        }
+        let _ = writeln!(summary, "{:<20} {:>8} {:>12} {:>10} {:>10}", name, percent(counts.hits as f64, lookups as f64), group_digits(lookups), group_digits(counts.misses), group_digits(counts.evictions));
+    }
+    report.emulator = Some(EmulatorJson {
+        about: "ree's own caches: they measure how fast ree runs, not what the game costs",
+        caches: input.caches.iter().map(|&(name, about, counts)| EmulatorCacheJson { about, evictions: counts.evictions, hits: counts.hits, misses: counts.misses, name }).collect(),
+    });
+}
+
+#[inline(never)]
+fn write_timeline_section(input: &Input, scope: &[u32], cpu_by_frame: &FxHashMap<u64, (f64, u64)>, summary: &mut String, report: &mut ProfileReport<'_>) {
+    let rows = input.rows;
+    struct Whole {
+        frame: u64,
+        work: f64,
+        sides: Option<(f64, f64)>,
+    }
+    let mut frames_work: Vec<Whole> = Vec::new();
+    for row in rows {
+        let work = row.work_ms * price_scale();
+        let sides = row_sides_ms(row);
+        match frames_work.last_mut().filter(|last| last.frame == row.frame && row.part > 1) {
+            Some(last) => {
+                last.work += work;
+                last.sides = add_sides(last.sides, sides);
+            }
+            None => frames_work.push(Whole { frame: row.frame, work, sides }),
+        }
+    }
+    let count = frames_work.len() as f64;
+    let (worst, worst_work) = frames_work.iter().fold((0, 0.0), |best, whole| if whole.work > best.1 { (whole.frame, whole.work) } else { best });
+    let mean = frames_work.iter().map(|whole| whole.work).sum::<f64>() / count;
+    let sides = frames_work.iter().all(|whole| whole.sides.is_some()).then(|| frames_work.iter().filter_map(|whole| whole.sides).fold((0.0, 0.0), |sum, (game, harness)| (sum.0 + game / count, sum.1 + harness / count)));
+    let (first, last) = (&rows[0], rows.last().unwrap());
+    let host = |row: &Row| row.host_ms.map(|host| (host, row.cycles.unwrap_or(0))).or_else(|| (row.part == 0).then(|| cpu_by_frame.get(&row.frame).copied()).flatten());
+    let mut own_hosts: FxHashMap<u64, Option<f64>> = FxHashMap::default();
+    for row in rows {
+        let whole = own_hosts.entry(row.frame).or_insert(Some(0.0));
+        *whole = whole.zip(row.host_ms).map(|(before, part)| before + part);
+    }
+    let mut own_hosts: Vec<(u64, Option<f64>)> = own_hosts.into_iter().collect();
+    crate::sort::by_key(&mut own_hosts, |&(frame, _)| frame);
+    let hosts: Vec<f64> = own_hosts.iter().filter_map(|(frame, own)| own.or_else(|| cpu_by_frame.get(frame).map(|(host, _)| *host))).collect();
+    let host_text = if hosts.len() == count as usize {
+        format!("host a frame mean {:.2} ms{}", hosts.iter().sum::<f64>() / count, if rows[0].host_ms.is_none() { " (the cpu pass's)" } else { "" })
+    } else {
+        "host time a frame not taken (a kind slowed the run: --profile cpu takes it in a pass of its own)".to_string()
+    };
+    let threads_made: u64 = rows.iter().map(|row| row.threads_made).sum();
+    let reachable_threads: Vec<String> = input.snapshots.iter().filter_map(|snapshot| snapshot.by_type.iter().find(|(name, _, _)| name == "thread").map(|(_, count, _)| format!("{} {}", snapshot.label, group_digits(*count)))).collect();
+    let detailed = input.config.kinds.has(super::Kinds::TIMELINE);
+    if detailed {
+        let _ = writeln!(
+            summary,
+            "\ntimeline ({} frames{}): work a frame mean {:.3} ms{}, max {:.3} ms (frame {}); {host_text}; VM heap with its garbage {} -> {}; instances in the DataModel {} -> {}, alive outside it {} -> {}, destroyed awaiting collection {} -> {}; connections {} -> {}; threads made {} ({:.1} a frame){}",
+            count as usize,
+            if rows.len() > count as usize { format!(", {} rows split by phase marks", rows.len()) } else { String::new() },
+            mean,
+            sides.map_or(String::new(), |(game, harness)| format!(" (the game's code {game:.3} ms, the harness's {harness:.3} ms)")),
+            worst_work,
+            worst,
+            bytes(first.heap_bytes as f64),
+            bytes(last.heap_bytes as f64),
+            group_digits(first.instances.0),
+            group_digits(last.instances.0),
+            group_digits(first.instances.1),
+            group_digits(last.instances.1),
+            group_digits(first.instances.2),
+            group_digits(last.instances.2),
+            group_digits(first.connections),
+            group_digits(last.connections),
+            group_digits(threads_made),
+            threads_made as f64 / count,
+            if reachable_threads.is_empty() { String::new() } else { format!("; threads reachable at the heap snapshots: {}", reachable_threads.join(", ")) }
+        );
+    } else {
+        let _ = writeln!(summary, "\nframe work ({} frames): mean {mean:.3} ms, max {worst_work:.3} ms (frame {worst})", count as usize);
+    }
+    let split = rows.iter().all(|row| row.sides.is_some());
+    let (columns, about, timeline_rows) = if detailed {
+        (
+            DETAILED_TIMELINE_COLUMNS,
+            TimelineAboutJson::Detailed {
+                host_ms: "the frame's host time and cycles: this run's, else the cpu pass's for the same frame (a kind that slows the run makes its own not the run's), else null",
+                instances_in_datamodel: "live instances at the frame's end in the DataModel's tree; instances_outside: alive outside it; instances_destroyed: destroyed and kept until the VM collects the userdata that holds them",
+                threads_made: "threads the VM made in the frame (coroutines, task threads, handlers' threads); the reachable ones are the heap snapshots' (by_type thread)",
+            },
+            TimelineRowsJson::Detailed(rows.iter().map(|row| timeline_row(row, host(row))).collect()),
+        )
+    } else {
+        (
+            COMPACT_TIMELINE_COLUMNS,
+            TimelineAboutJson::Compact { work_ms: "compact frame work for issue summaries and hitch attribution; timeline records the other frame metrics" },
+            TimelineRowsJson::Compact(rows.iter().map(compact_timeline_row).collect()),
+        )
+    };
+    let (function_stats, node_frames, site_frames) = if split {
+        let (stats, heavy, sites) = frame_evidence(rows, scope, input.run.fps);
+        (Some(stats), Some(heavy), Some(sites))
+    } else {
+        (None, None, None)
+    };
+    report.timeline = Some(TimelineJson {
+        about,
+        columns,
+        function_contexts: None,
+        function_stats,
+        issue_stats: None,
+        node_frames,
+        replacement_frames: None,
+        rows: timeline_rows,
+        site_frames,
+    });
+}
+
+#[inline(never)]
+fn write_cpu_section<'a>(input: &Input<'a>, pass: Option<&Json>, summary: &mut String, report: &mut ProfileReport<'a>) {
+    if let Some(pass) = pass.filter(|pass| pass["cpu"].is_object()) {
         let mut cpu = pass["cpu"].as_object().cloned().unwrap_or_default();
         cpu.insert("pass".into(), Json::String(format!("a run of its own ({}): the kinds asked with cpu slow the run, so its figures here would not be the run's", input.config.cpu_pass.as_ref().map(|folder| folder.display().to_string()).unwrap_or_default())));
         let _ = writeln!(summary, "\n{}", pass["cpu"]["text"].as_str().unwrap_or("cpu: (the pass wrote no summary)").trim_end());
         let _ = writeln!(summary, "  (taken in a pass of its own: {})", input.config.cpu_pass.as_ref().map(|folder| folder.display().to_string()).unwrap_or_default());
-        // (the two runs went the same way, or the CPU figures are another run's: a script timeout host time fired in one pass, its
-        // backstop counting host time the profiling slows, ends a script the other let run)
         let theirs = &pass["run"];
         let (timeouts, by_host) = (theirs["script_timeouts"].as_u64().unwrap_or(0), theirs["host_backstop_timeouts"].as_u64().unwrap_or(0));
         let (frames, status) = (theirs["frames"].as_u64().unwrap_or(0), theirs["status"].as_str().unwrap_or("?"));
@@ -3657,7 +3782,6 @@ pub fn write(input: &Input) -> Result<String, String> {
         let cpu = input.cpu;
         let rate = cpu.cycles_per_ms;
         let cpu_ms = |cycles: u64| (rate > 0.0).then(|| cycles as f64 / rate);
-        // per phase: each mark's thread cycles to the next mark's (the last to the profile's end)
         let mut phases: Vec<(String, f64, Option<f64>)> = Vec::new();
         for (index, mark) in input.marks.iter().enumerate() {
             let Some(next) = input.marks.get(index + 1).or(input.end) else { continue };
@@ -3713,62 +3837,26 @@ pub fn write(input: &Input) -> Result<String, String> {
             working_set: cpu.working_set.map(|(baseline, growth)| WorkingSetJson { baseline, growth, run_peak: cpu.run_peak_working_set }),
         }));
     }
+}
 
-    // the hardware counters
-    let mut counter_folded: Vec<(String, Vec<(String, u64)>)> = Vec::new();
-    if let Some(hw) = input.hw {
-        report.counters = Some(counters(input, hw, &names, &mut summary, &mut counter_folded));
-    }
-
-    if let Some(nodes) = input.phase_tree {
-        report.phase_tree = Some(nodes.iter().map(|node| PhaseTreeNodeJson { count: node.count, name: &node.name, parent: node.parent, self_ms: node.own * 1e3, total_ms: node.seconds * 1e3 }).collect());
-    }
-    if let Some(text) = input.phase_timing {
-        report.phase_timing = Some(text);
-        let _ = writeln!(summary, "
-{text}");
-    }
-    if let Some(text) = input.boundary {
-        report.boundary = Some(text);
-        let _ = writeln!(summary, "\n{}", text.trim_end());
-        files.push("boundary.json".into());
-    }
-
-    // sources of the hottest functions, for the annotated listing
-    let mut listed: Vec<i32> = Vec::new();
-    for (id, figures) in &function_rows {
-        if *id < 0 || names.engine(*id) || listed.len() >= 12 {
-            continue;
-        }
-        if figures.self_work > 0.0 || figures.self_time > 0.0 || figures.self_alloc > 0.0 {
-            listed.push(*id);
-        }
-    }
-    // (and the inlined functions with the most work in their copies: the page shows it on their own lines)
-    let mut inlined_hot: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, figures)| *id >= 0 && figures.inlined_work > 0.0 && !listed.contains(id) && !names.engine(*id)).collect();
-    crate::sort::by(&mut inlined_hot, |a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(a.0.cmp(&b.0)));
-    listed.extend(inlined_hot.iter().take(6).map(|(id, _)| *id));
-    for id in &listed {
-        if let Some(function) = names.function(*id) {
-            if let Some((path, rows)) = listing(input, function, &model, *id) {
-                report.listings.insert(id.to_string(), ListingJson { lines: rows, path });
-            }
-        }
-    }
-    report.source_hashes = input.sources.iter().map(|(name, source)| (name.clone(), format!("{:016x}", fxhash(&source.text)))).collect();
-
-    // folded stacks
+#[inline(never)]
+fn write_folded_and_speedscope(
+    input: &Input,
+    names: &Names,
+    counter_folded: Vec<(String, Vec<(String, u64)>)>,
+    out: &Path,
+    files: &mut Vec<String>,
+) -> Result<(), String> {
     let mut folded_files: Vec<(String, Vec<(String, u64)>)> = Vec::new();
     if let Some(vm_results) = input.vm.filter(|vm| !vm.nodes.is_empty()) {
-        let (work, insns) = fold_tree(vm_results, &names, input.phases);
+        let (work, insns) = fold_tree(vm_results, names, input.phases);
         folded_files.push(("work.folded".into(), work));
         folded_files.push(("instructions.folded".into(), insns));
     }
     if let Some(time) = input.time {
-        // (milliseconds of host time, the thread's CPU where it can be read, rounded per stack)
         let mut lines: FxHashMap<String, f64> = FxHashMap::default();
         for (&(phase, stack), &(ticks, cycles)) in &time.samples {
-            *lines.entry(fold(&names, input.phases, phase, &time.stacks.stacks[stack as usize])).or_default() += time.cpu_ms(cycles).unwrap_or(ticks as f64);
+            *lines.entry(fold(names, input.phases, phase, &time.stacks.stacks[stack as usize])).or_default() += time.cpu_ms(cycles).unwrap_or(ticks as f64);
         }
         folded_files.push(("time.folded".into(), lines.into_iter().map(|(stack, weight)| (stack, weight.round() as u64)).collect()));
     }
@@ -3776,7 +3864,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         let mut by_bytes: FxHashMap<String, f64> = FxHashMap::default();
         let mut by_count: FxHashMap<String, f64> = FxHashMap::default();
         for (&(phase, stack, _), amount) in &allocations.by_stack {
-            let key = fold(&names, input.phases, phase, &allocations.stacks.stacks[stack as usize]);
+            let key = fold(names, input.phases, phase, &allocations.stacks.stacks[stack as usize]);
             *by_bytes.entry(key.clone()).or_default() += amount.bytes;
             *by_count.entry(key).or_default() += amount.count;
         }
@@ -3785,7 +3873,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         if let Some(last) = input.snapshots.last() {
             let mut live: FxHashMap<String, u64> = FxHashMap::default();
             for (stack, _, _, size) in &last.by_stack {
-                *live.entry(fold(&names, &[], u32::MAX, &allocations.stacks.stacks[*stack as usize])).or_default() += size.round() as u64;
+                *live.entry(fold(names, &[], u32::MAX, &allocations.stacks.stacks[*stack as usize])).or_default() += size.round() as u64;
             }
             folded_files.push(("heap.folded".into(), live.into_iter().collect()));
         }
@@ -3802,33 +3890,11 @@ pub fn write(input: &Input) -> Result<String, String> {
         files.push(name);
     }
 
-    // speedscope: one sampled profile per folded file
     let speedscope_data = speedscope(&folded_files, &input.run.command);
     let speedscope_text = JsonWriter::to_string(&speedscope_data);
     write_file(&out.join("profile.speedscope.json"), speedscope_text.as_bytes())?;
     files.push("profile.speedscope.json".into());
-
-    files.insert(0, "summary.txt".into());
-    files.insert(1, "profile.json".into());
-    files.insert(2, "report.html".into());
-    let _ = writeln!(summary, "\nfiles in {}: {}", out.display(), files.join(", "));
-    report.summary = summary;
-    report.files = files;
-    let text = JsonWriter::to_string(&report);
-    write_file(&out.join("profile.json"), text.as_bytes())?;
-    write_file(&out.join("summary.txt"), report.summary.as_bytes())?;
-    // (the page never reads each frame's functions, the bulk of a big profile: it is left out of the page's copy)
-    if let Some(timeline) = &mut report.timeline {
-        timeline.function_stats = None;
-        timeline.issue_stats = None;
-        timeline.node_frames = None;
-        timeline.site_frames = None;
-        timeline.replacement_frames = None;
-        timeline.function_contexts = None;
-    }
-    let page = JsonWriter::to_string(&report);
-    write_file(&out.join("report.html"), html(&page).as_bytes())?;
-    Ok(report.summary)
+    Ok(())
 }
 
 /// What each cache outcome means and what removes it (profile.json `luau_caches.outcome_info`): keyed to what the interpreter did
@@ -3941,6 +4007,7 @@ struct SiteRow {
 /// is apart by whether the work clock charges it (prices.rs): a charged one is the clock's own charge at the site (part of its
 /// function's work), an uncharged one is priced at the committed prices (work beyond the clock's). ree's own tool code (a
 /// harness one of ree's tools ran, rur.record) is counted apart: it is not the game's, nor a user's harness.
+#[inline(never)]
 fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: usize, summary: &mut String, report: &mut ProfileReport<'_>) {
     let scope = reported_phases(input.config.phases.as_deref(), input.phases);
     let frames = scope_frames(input, &scope);
@@ -4600,6 +4667,7 @@ fn fidelity_components(total: f64, kinds: &[f64; vm::SPLITS], luau: f64, studio:
 /// client on rows no fit saw, cost.rs BENCH_BANDS, each with what it is), weighted by that code's work in each (`total`, its kinds
 /// `kinds` and its Luau part `luau`), with the work priced from Studio-era measurements and by borrowed prices at their own bands, and
 /// a phone's factor's measured spread folded into the band.
+#[inline(never)]
 fn fidelity_json<'a>(input: &Input<'a>, total: f64, kinds: &[f64; vm::SPLITS], luau: f64, what: &str) -> FidelityJson<'a> {
     let total = total.max(1e-12);
     let studio = kinds[vm::STUDIO].min(total);
@@ -4718,6 +4786,7 @@ fn sum_then_sort_cold_rows(rows: &mut [ColdRow]) -> f64 {
 /// The cold and first-use charges by object, from the VM's (tables, C and engine functions) and the engine's (instances, members,
 /// engine paths): the summary's table and profile.json's `cold`. How often other code shared each object in a frame shows what cutting
 /// its first payer would really save.
+#[inline(never)]
 fn cold_object_section(input: &Input, names: &Names, summary: &mut String, report: &mut ProfileReport<'_>, top: usize) {
     let mut rows: Vec<ColdRow> = Vec::new();
     let mut objects: Vec<ColdObjectJson> = Vec::new();
@@ -4783,6 +4852,7 @@ fn cold_object_section(input: &Input, names: &Names, summary: &mut String, repor
 }
 
 /// The handlers by the site that connected them: the engine's dispatch to each, and the runs' whole work
+#[inline(never)]
 fn handler_section<'a>(attribution: &'a attribution::Results, names: &Names, summary: &mut String, report: &mut ProfileReport<'a>, top: usize) {
     if attribution.handlers.is_empty() {
         return;
@@ -4817,6 +4887,7 @@ fn handler_section<'a>(attribution: &'a attribution::Results, names: &Names, sum
 }
 
 /// The resumptions of parked threads, by the line each waited on
+#[inline(never)]
 fn resumption_section(attribution: &attribution::Results, names: &Names, summary: &mut String, report: &mut ProfileReport<'_>, top: usize) {
     if attribution.resumes.is_empty() {
         return;
@@ -4848,6 +4919,7 @@ fn iteration_us(line: &attribution::ClockLine) -> Option<f64> {
 /// The lines that read os.clock more than once a run of their function (a call, or what is left of one after its thread yielded): a
 /// budget loop's check, whose work is set by the clock (on a frozen clock it does other work than a client's). A read after a yield
 /// starts a run, so a loop that waits each iteration is none.
+#[inline(never)]
 fn clock_section(attribution: &attribution::Results, names: &Names, summary: &mut String, report: &mut ProfileReport<'_>, top: usize) {
     let budget_loops: Vec<&attribution::ClockLine> = attribution.clock_reads.iter().filter(|line| is_budget_loop(line)).collect();
     if !budget_loops.is_empty() {
@@ -4888,6 +4960,7 @@ fn clock_section(attribution: &attribution::Results, names: &Names, summary: &mu
 /// The summary's and profile.json's attributions: the cold and first-use charges by object (the VM's: tables by the line that made them,
 /// C and engine functions; the engine's: instances by class, members, engine paths), with how often other code shared each in a frame;
 /// handlers by the site that connected them; resumptions by the line threads waited on; events priced by a borrowed price
+#[inline(never)]
 fn attribution_sections<'a>(input: &Input<'a>, names: &Names, summary: &mut String, report: &mut ProfileReport<'a>, top: usize) {
     cold_object_section(input, names, summary, report, top);
     let Some(attribution) = input.attribution else { return };
@@ -4986,6 +5059,7 @@ fn compact_signed(value: f64) -> String {
 /// counter (`counters.<name>.folded`), each stack weighted by what was counted while its call was the innermost sampled
 /// one (an estimate where calls were sampled; a stack whose estimate falls below zero cannot be in a folded file, so
 /// the summary lists those and profile.json says what the folded files left out)
+#[inline(never)]
 fn counters<'a>(input: &Input, hw: &'a hw::Report, names: &Names, summary: &mut String, folded: &mut Vec<(String, Vec<(String, u64)>)>) -> CountersJson<'a> {
     use hw::{Figures, counters as known};
     let n = hw.names.len();
@@ -5472,6 +5546,7 @@ fn fold(names: &Names, phases: &[String], phase: u32, stack: &[memory::Frame]) -
 }
 
 /// The call tree as folded stacks: (path, self work in microseconds) and (path, self instructions)
+#[inline(never)]
 fn fold_tree(vm: &vm::Results, names: &Names, phases: &[String]) -> (Vec<(String, u64)>, Vec<(String, u64)>) {
     let mut paths: Vec<Option<String>> = vec![None; vm.nodes.len()];
     let mut work = Vec::new();
@@ -5497,6 +5572,7 @@ fn fold_tree(vm: &vm::Results, names: &Names, phases: &[String]) -> (Vec<(String
 }
 
 /// speedscope's file format: shared frames, one sampled profile per folded file
+#[inline(never)]
 fn speedscope<'a>(files: &'a [(String, Vec<(String, u64)>)], name: &str) -> SpeedscopeJson<'a> {
     let mut frames: Vec<String> = Vec::new();
     let mut index: FxHashMap<String, usize> = FxHashMap::default();
@@ -5728,6 +5804,7 @@ fn function_contexts(vm_results: &vm::Results, rows: &[Row], scope: &[u32], cold
 /// Prices the source-level replacement work of every builtin fix into the profile's JSON, apart from the VM's fast-path
 /// counterfactual. The prototype cost belongs to the site as a whole: dividing it between callers would turn an exact
 /// overlap into an estimate.
+#[inline(never)]
 fn price_builtin_fixes(vm_results: &vm::Results, rows: &[Row], scope: &[u32], fps: f64, builtins: &mut Option<Option<Vec<BuiltinJson>>>, timeline: &mut Option<TimelineJson>) {
     let active_frames = active_frames_by_function(timeline.as_ref());
     let whole = whole_frame_work(rows);
@@ -5792,6 +5869,7 @@ type FrameSides = (f64, f64);
 /// number, and its largest contribution to a frame over the budget. It reads every physical frame of the reported
 /// phases, before the timeline drops detail, so what the viewer lists and how severe it grades never depends on which
 /// frames the timeline happened to keep.
+#[inline(never)]
 fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64, timeline: &mut Option<TimelineJson>) {
     let Some(timeline) = timeline.as_mut() else {
         return;
@@ -5973,6 +6051,7 @@ struct FunctionFrames {
 /// Every function keeps sufficient statistics over the reported phases. Detailed nodes are needed only on heavy
 /// whole frames. Retention is by frame, never by part or by a function's mean, so a phase mark cannot hide an event.
 /// Returns the function summaries, the heavy frames' node work and their sites' savings, as the profile stores them.
+#[inline(never)]
 fn frame_evidence(rows: &[Row], scope: &[u32], fps: f64) -> (Vec<FunctionStatRow>, Vec<NodeFrameRow>, Vec<SiteFrameRow>) {
     let whole = whole_frame_work(rows);
     let mut by_function: FxHashMap<i32, FunctionFrames> = FxHashMap::default();

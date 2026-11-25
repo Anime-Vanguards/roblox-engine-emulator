@@ -12,11 +12,13 @@ use super::tests::{check, run, start};
 use super::{Loading, enable};
 
 /// Runs a golden script (a chunk that returns its text) and returns the lines.
+#[inline(never)]
 fn golden(source: &str) -> Vec<String> {
     golden_in("play", source, 1.0)
 }
 
 /// A golden script's lines in an engine of `mode`, run for `seconds`.
+#[inline(never)]
 fn golden_in(mode: &str, source: &str, seconds: f64) -> Vec<String> {
     let (lua, engine) = start(mode);
     let lines = run(&lua, &engine, &format!("print((function()\n{source}\nend)())"), seconds);
@@ -27,6 +29,7 @@ fn golden_in(mode: &str, source: &str, seconds: f64) -> Vec<String> {
 
 /// Compares a golden script's lines with Studio's. A token written `~1.25` is a number compared
 /// within `tolerance` (rotations: Studio's own float32 arithmetic leaves the seventh digit open).
+#[inline(never)]
 fn assert_golden(got: &[String], expected: &str, tolerance: f64) {
     let expected: Vec<&str> = expected.lines().collect();
     for (index, (got, want)) in got.iter().zip(&expected).enumerate() {
@@ -47,6 +50,7 @@ fn assert_golden(got: &[String], expected: &str, tolerance: f64) {
 }
 
 /// A line cut into its numbers and the text between them.
+#[inline(never)]
 fn numbers_of(line: &str) -> (String, Vec<f64>) {
     let bytes = line.as_bytes();
     let (mut text, mut numbers, mut at) = (String::new(), Vec::new(), 0);
@@ -76,6 +80,7 @@ fn numbers_of(line: &str) -> (String, Vec<f64>) {
 
 /// Compares a golden script's lines with Studio's, every number within `tolerance` and all else alike: for poses
 /// whose last digit follows Studio's own float32 sine, cosine and powers.
+#[inline(never)]
 fn assert_golden_near(got: &[String], expected: &str, tolerance: f64) {
     let expected: Vec<&str> = expected.lines().collect();
     for (index, (got, want)) in got.iter().zip(&expected).enumerate() {
@@ -322,6 +327,7 @@ end
 local function AngleX(cframe) local _, _, _, _, _, _, _, m11, _, _, m21 = cframe:GetComponents() return math.atan2(m21, m11) end
 "#;
 
+#[inline(never)]
 fn scene(source: &str) {
     check(&format!("{SCENE}\n{source}"), 3.0);
 }

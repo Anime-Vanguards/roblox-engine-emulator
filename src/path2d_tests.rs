@@ -13,6 +13,7 @@ use super::{
     scheduler,
 };
 
+#[inline(never)]
 fn start() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options::default()).expect("engine");
     let lua = Lua::new();
@@ -21,6 +22,7 @@ fn start() -> (Lua, Rc<Engine>) {
 }
 
 /// Runs `source` as a script, then the clock to `until`: the output lines ("kind: message").
+#[inline(never)]
 fn run_in(lua: &Lua, engine: &Rc<Engine>, source: &str, until: f64) -> Vec<String> {
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -41,12 +43,14 @@ fn run_in(lua: &Lua, engine: &Rc<Engine>, source: &str, until: f64) -> Vec<Strin
     engine.state.borrow().output.entries.iter().map(|entry| format!("{}: {}", entry.kind, entry.message)).collect()
 }
 
+#[inline(never)]
 fn run(source: &str) -> Vec<String> {
     let (lua, engine) = start();
     run_in(&lua, &engine, source, 0.2)
 }
 
 /// The lines a script printed, without the "print: " before each.
+#[inline(never)]
 fn printed(source: &str) -> Vec<String> {
     let output = run(source);
     let errors: Vec<&String> = output.iter().filter(|line| !line.starts_with("print: ")).collect();

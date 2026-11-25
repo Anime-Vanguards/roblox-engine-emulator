@@ -11,6 +11,7 @@ use crate::{
     scheduler,
 };
 
+#[inline(never)]
 fn start(options: Options) -> (Lua, Rc<Engine>) {
     let engine = Engine::new(options).expect("engine");
     let lua = Lua::new();
@@ -19,6 +20,7 @@ fn start(options: Options) -> (Lua, Rc<Engine>) {
 }
 
 /// Runs `source` as a script for a few frames: the output lines ("kind: message")
+#[inline(never)]
 fn run_with(options: Options, source: &str) -> Vec<String> {
     let (lua, engine) = start(options);
     let script = {
@@ -40,6 +42,7 @@ fn run_with(options: Options, source: &str) -> Vec<String> {
 }
 
 /// The lines a client script printed, without the "print: " before each (anything else it wrote fails the test)
+#[inline(never)]
 fn printed_with(options: Options, source: &str) -> Vec<String> {
     let output = run_with(options, source);
     let others: Vec<&String> = output.iter().filter(|line| !line.starts_with("print: ")).collect();
@@ -47,10 +50,12 @@ fn printed_with(options: Options, source: &str) -> Vec<String> {
     output.iter().map(|line| line["print: ".len()..].to_string()).collect()
 }
 
+#[inline(never)]
 fn printed(source: &str) -> Vec<String> {
     printed_with(Options::default(), source)
 }
 
+#[inline(never)]
 fn server() -> Options {
     Options { run_context: RunContext::Server, ..Options::default() }
 }

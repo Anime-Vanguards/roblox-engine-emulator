@@ -12,6 +12,7 @@ use super::{
     scheduler,
 };
 
+#[inline(never)]
 fn start() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options::default()).expect("engine");
     let lua = Lua::new();
@@ -20,6 +21,7 @@ fn start() -> (Lua, Rc<Engine>) {
     (lua, engine)
 }
 
+#[inline(never)]
 fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) {
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -34,11 +36,13 @@ fn run(lua: &Lua, engine: &Rc<Engine>, source: &str) {
     }
 }
 
+#[inline(never)]
 fn global(engine: &Engine, name: &str) -> LuaValue {
     let shared = engine.lua.borrow().shared.clone().unwrap();
     shared.get::<LuaTable>("_G").unwrap().get(name).unwrap()
 }
 
+#[inline(never)]
 fn number(engine: &Engine, name: &str) -> f64 {
     match global(engine, name) {
         LuaValue::Number(n) => n,
@@ -374,6 +378,7 @@ end)
 
 /// Two rendered frames, then a last step that resumes a timer and reaches the capture without rendering. An event is
 /// `["t", time]` (timers resume), `["h", delta, time]` (Heartbeat), `["r", delta, time]` (render) or `["c", ...]` (capture).
+#[inline(never)]
 fn split_frame_clock() -> serde_json::Value {
     json!({
         "version": 2, "time": 0.05,
@@ -404,6 +409,7 @@ struct PhaseFrames {
 
 /// Replays `split_frame_clock` to its capture with the boundary profile reporting `reported_phase`. Returns the
 /// profile's text and its boundary.json.
+#[inline(never)]
 fn replay_split_frame_to_capture(reported_phase: &str) -> (String, serde_json::Value) {
     let (lua, engine) = start();
     engine_lua::modules::interpret_all(&lua, &engine);

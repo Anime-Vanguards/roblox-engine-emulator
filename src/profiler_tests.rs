@@ -15,6 +15,7 @@ use crate::{
 
 mod cold;
 
+#[inline(never)]
 fn start() -> (Lua, Rc<Engine>) {
     let engine = Engine::new(Options::default()).expect("engine");
     let lua = Lua::new();
@@ -25,6 +26,7 @@ fn start() -> (Lua, Rc<Engine>) {
 }
 
 /// Runs `source` as a script (chunk `=name`) on a scheduler thread; its output lines
+#[inline(never)]
 fn run(lua: &Lua, engine: &Rc<Engine>, name: &str, source: &str) -> Vec<String> {
     let script = {
         let mut state = engine.state.borrow_mut();
@@ -49,6 +51,24 @@ fn ops(lua: &Lua) -> (u64, u64) {
     (counters.ops.iter().sum(), crate::cost::host_instructions(counters))
 }
 
+#[inline(never)]
+pub(crate) fn run_parallel<'a>(tasks: Vec<Box<dyn FnOnce() + Send + 'a>>) {
+    std::thread::scope(|s| {
+        let handles: Vec<_> = tasks.into_iter().map(|task| s.spawn(task)).collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
+}
+
+pub(crate) fn run_pair<A: Send, B: Send>(fa: impl FnOnce() -> A + Send, fb: impl FnOnce() -> B + Send) -> (A, B) {
+    let mut a = None;
+    let mut b = None;
+    run_parallel(vec![Box::new(|| a = Some(fa())), Box::new(|| b = Some(fb()))]);
+    (a.unwrap(), b.unwrap())
+}
+
+#[inline(never)]
 fn temp_dir(name: &str) -> std::path::PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -419,6 +439,7 @@ fn a_heap_snapshot_finds_what_holds_memory() {
 
 /// One profile of a script that holds 2,000 tables, then runs a loop of `churn` throwaway tables, with the collector
 /// stopped so that whatever garbage the loop makes is still there when the run ends; its profile.json
+#[inline(never)]
 fn heap_profile_with_garbage(churn: u32) -> serde_json::Value {
     let (lua, engine) = start();
     let config = Config::new(Kinds::HEAP, temp_dir("garbage"));
@@ -439,11 +460,7 @@ fn heap_profile_with_garbage(churn: u32) -> serde_json::Value {
 /// the headline counted it: +42 % for a UI module whose reachable heap had not moved).
 #[test]
 fn the_heap_headline_is_the_reachable_heap_and_leaves_garbage_out() {
-    let (before, after) = std::thread::scope(|s| {
-        let a = s.spawn(|| heap_profile_with_garbage(0));
-        let b = s.spawn(|| heap_profile_with_garbage(20_000));
-        (a.join().unwrap(), b.join().unwrap())
-    });
+    let (before, after) = run_pair(|| heap_profile_with_garbage(0), || heap_profile_with_garbage(20_000));
     let (text, diff) = profiler::diff::compare(&before, &after, 10);
     let figures = diff["figures"].as_array().unwrap();
     let figure = |name: &str| figures.iter().find(|figure| figure["name"] == name).unwrap_or_else(|| panic!("no {name:?} in\n{text}"));
@@ -468,6 +485,7 @@ fn the_heap_headline_is_the_reachable_heap_and_leaves_garbage_out() {
 }
 
 /// Walks of the heap a snapshot can be checked against: (type -> (count, bytes)) of every object, reachable and not
+#[inline(never)]
 fn objects_by_type(snapshot: &memory::Snapshot) -> std::collections::BTreeMap<String, (u64, u64)> {
     let mut types = std::collections::BTreeMap::new();
     for (name, count, bytes) in snapshot.by_type.iter().chain(&snapshot.unswept_by_type) {
@@ -642,6 +660,7 @@ fn the_timeline_has_a_row_a_frame() {
 
 /// Runs `ree run` in this process on a harness (`source`), with a game module mounted at ReplicatedStorage.Game.Spin
 /// (`game`), under `--profile <kinds>`: profile.json and the report page
+#[inline(never)]
 fn run_profiled_page(name: &str, source: &str, game: &str, kinds: &str, seconds: &str) -> (serde_json::Value, String) {
     let dir = temp_dir(name);
     std::fs::create_dir_all(dir.join("game")).unwrap();
@@ -929,6 +948,7 @@ fn a_kind_the_suite_does_not_know_is_refused() {
 
 /// A profile of the boundary kind (as rur asks for `--profile boundary`) of a script that writes and reads a part, into
 /// a profile folder that does not exist yet: its summary and the folder
+#[inline(never)]
 fn boundary_profile(name: &str) -> (String, std::path::PathBuf) {
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::BOUNDARY, temp_dir(name).join("profile")) };
@@ -1031,6 +1051,7 @@ fn a_profile_writes_its_files_and_diffs() {
 
 /// A profile of a clip-shaped run: the game mounts in startup, attacks in steady while a harness module watches, and
 /// idles after; `watch` spins `watched` times. `phases` is `--profile-phase`. Returns the summary and profile.json.
+#[inline(never)]
 fn harness_profile(name: &str, watched: u32, phases: Option<&str>) -> (String, serde_json::Value) {
     let (lua, engine) = start();
     let config = Config { print: false, phases: phases.map(str::to_string), ..Config::new(Kinds::WORK, temp_dir(name)) };
@@ -1244,6 +1265,7 @@ result = total
 
 /// Runs `source` (a chunk named `name`) under the mock counters (each reading takes the thread's cycle count, so the
 /// booking splits real cycles), then `frames` frames: each function's own cycles by name, the attribution, the summary
+#[inline(never)]
 fn booked_cycles(name: &str, source: &str, frames: usize) -> (std::collections::HashMap<String, f64>, serde_json::Value, String) {
     profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
     let (lua, engine) = start();
@@ -1277,6 +1299,7 @@ type BookedRun = (std::collections::HashMap<String, f64>, serde_json::Value);
 /// 15 % or more (measured on an idle desktop: 3 runs in 24 of the coroutine test read one function 14 % high, by 28 million
 /// cycles, the others within 1 %). A booking error is in every run and such a stretch in one, so the checks take the median of
 /// each ratio over the runs.
+#[inline(never)]
 fn booked_cycles_three_times(name: &str, source: &str, frames: usize) -> (Vec<BookedRun>, String) {
     let mut runs = Vec::new();
     let mut summaries = Vec::new();
@@ -1545,6 +1568,7 @@ result = work.main()
 
 /// Runs `script` under a profile of `kinds` whose hardware counters are the mock's, and returns the script's output with
 /// the `attribution` the profile's counters section reports
+#[inline(never)]
 fn run_with_mock_counters(kinds: Kinds, script: &str) -> (Vec<String>, serde_json::Value) {
     profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
     let (lua, engine) = start();
@@ -1748,6 +1772,7 @@ fn hardware_counter_options_parse() {
 }
 
 /// One heap profile of `source` (chunk `=shapes`): its profile.json
+#[inline(never)]
 fn shape_profile(name: &str, source: &str) -> serde_json::Value {
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::HEAP.with(Kinds::ALLOC), temp_dir(name)) };
@@ -1762,6 +1787,7 @@ fn shape_profile(name: &str, source: &str) -> serde_json::Value {
 }
 
 /// The site of a snapshot's tables whose stack's innermost Luau frame is `line` of the `shapes` chunk
+#[inline(never)]
 fn site_at<'a>(json: &serde_json::Value, snapshot: &'a serde_json::Value, line: i64) -> &'a serde_json::Value {
     let functions = json["functions"].as_array().unwrap();
     let in_chunk = |id: i64| functions.iter().any(|f| f["id"].as_i64() == Some(id) && f["module"] == "shapes");
@@ -1777,6 +1803,7 @@ fn site_at<'a>(json: &serde_json::Value, snapshot: &'a serde_json::Value, line: 
 }
 
 /// A part's (or the levels') distribution: (total, used, min, median, max, histogram)
+#[inline(never)]
 fn distribution(part: &serde_json::Value) -> (f64, f64, f64, f64, f64, Vec<(u64, u64)>) {
     let hist = part["hist"].as_array().unwrap().iter().map(|pair| (pair[0].as_u64().unwrap(), pair[1].as_u64().unwrap())).collect();
     (part["slots"].as_f64().unwrap_or(0.0), part["used"].as_f64().unwrap_or(0.0), part["min"].as_f64().unwrap(), part["median"].as_f64().unwrap(), part["max"].as_f64().unwrap(), hist)
@@ -1907,6 +1934,7 @@ fn a_phase_is_the_difference_of_its_marks_counts() {
 /// A clip-shaped run whose steady phase casts `casts` times: each cast clones a template of three into the Workspace, moves a
 /// part by a write, pivots the copy, bulk-moves both parts, emits from a new emitter and switches it off, lists the copy's
 /// descendants and destroys it. Returns the summary and profile.json.
+#[inline(never)]
 fn engine_ops_profile(name: &str, casts: u32) -> (String, serde_json::Value) {
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::WORK, temp_dir(name)) };
@@ -2025,10 +2053,12 @@ fn luau(text: &str) -> &str {
 
 /// A work profile of `source` (chunk `=name`) run once, then `frames` frames of the scheduler in phase steady: the summary and
 /// profile.json. `options` set the engine (a device); `frozen` freezes the clock (REE_FROZEN_CLOCK).
+#[inline(never)]
 fn stepped_profile(name: &str, source: &str, frames: u32, options: Options, frozen: bool) -> (String, serde_json::Value) {
     stepped_profile_kinds(name, source, frames, options, frozen, Kinds::WORK)
 }
 
+#[inline(never)]
 fn stepped_profile_kinds(name: &str, source: &str, frames: u32, options: Options, frozen: bool, kinds: Kinds) -> (String, serde_json::Value) {
     // (a playing client: one Heartbeat a frame; edit mode beats at 240 Hz)
     let engine = Engine::new(Options { mode: "play".into(), ..options }).expect("engine");
@@ -2055,11 +2085,13 @@ fn stepped_profile_kinds(name: &str, source: &str, frames: u32, options: Options
 }
 
 /// profile.json's function named `name` (a table's function `M.name` is named `name`)
+#[inline(never)]
 fn function_named<'a>(json: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
     json["functions"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap_or_else(|| panic!("no function {name}"))
 }
 
 /// A function's figure in phase steady (`self_work_ms`, `cold_work_ms`, `saving_ms`, `calls` ...)
+#[inline(never)]
 fn steady(function: &serde_json::Value, figure: &str) -> f64 {
     function["phases"]["steady"][figure].as_f64().unwrap_or(0.0)
 }
@@ -2096,11 +2128,11 @@ fn the_cold_split_and_a_cuts_saving_do_not_depend_on_which_walker_runs_first() {
         end)
     "#);
     let walkers = |first: &str, second: &str| walkers_source.replace("$first", first).replace("$second", second);
-    let runs = std::thread::scope(|s| {
-        let ab = s.spawn(|| ("A", "B", stepped_profile("walkers", &walkers("A", "B"), 12, Options::default(), false)));
-        let ba = s.spawn(|| ("B", "A", stepped_profile("walkers", &walkers("B", "A"), 12, Options::default(), false)));
-        [ab.join().unwrap(), ba.join().unwrap()]
-    });
+    let (ab, ba) = run_pair(
+        || ("A", "B", stepped_profile("walkers", &walkers("A", "B"), 12, Options::default(), false)),
+        || ("B", "A", stepped_profile("walkers", &walkers("B", "A"), 12, Options::default(), false)),
+    );
+    let runs = [ab, ba];
     let mut savings = Vec::new();
     for (first, second, (summary, json)) in runs {
         let (a, b) = (function_named(&json, first), function_named(&json, second));
@@ -2188,11 +2220,7 @@ fn a_callee_that_returns_early_pays_for_the_code_it_ran() {
         let cold_frames = f64::from(frames);
         (steady(big, "cold_work_ms") / cold_frames * 1e3, steady(caller, "cold_work_ms") / cold_frames * 1e3)
     };
-    let ((early_us, early_caller_us), (full_us, full_caller_us)) = std::thread::scope(|s| {
-        let a = s.spawn(|| cold_a_frame(true));
-        let b = s.spawn(|| cold_a_frame(false));
-        (a.join().unwrap(), b.join().unwrap())
-    });
+    let ((early_us, early_caller_us), (full_us, full_caller_us)) = run_pair(|| cold_a_frame(true), || cold_a_frame(false));
     let code_us = 6000.0 * crate::cost::LUAU_COLD_CODE * 1e-3;
     assert!(full_us >= 0.95 * code_us, "run to its end it pays for its code: {full_us} us a frame against {code_us}");
     assert!(early_us < 0.02 * code_us, "returning early it pays for a few instructions: {early_us} us a frame");
@@ -2297,11 +2325,10 @@ fn a_phone_profile_reads_in_its_clocks_units() {
         	end
         end)
     "#);
-    let ((desktop_summary, desktop), (phone_summary, phone)) = std::thread::scope(|s| {
-        let d = s.spawn(|| stepped_profile("desktop", source, 6, Options::default(), false));
-        let p = s.spawn(|| stepped_profile("phone", source, 6, Options { device: "phone".into(), ..Options::default() }, false));
-        (d.join().unwrap(), p.join().unwrap())
-    });
+    let ((desktop_summary, desktop), (phone_summary, phone)) = run_pair(
+        || stepped_profile("desktop", source, 6, Options::default(), false),
+        || stepped_profile("phone", source, 6, Options { device: "phone".into(), ..Options::default() }, false),
+    );
     let work = |json: &serde_json::Value| json["work"]["total_ms"].as_f64().unwrap();
     assert!((work(&phone) / work(&desktop) - crate::cost::PHONE_SCRIPTS).abs() < 1e-6, "{} against {}", work(&phone), work(&desktop));
     assert_eq!(phone["work"]["units"], serde_json::json!({"device": "phone", "scale": crate::cost::PHONE_SCRIPTS}));
@@ -2332,11 +2359,10 @@ fn cache_and_builtin_prices_use_the_same_device_units_as_the_clock() {
         game:GetService("RunService").Heartbeat:Connect(M.Frame)
     "#);
     let kinds = Kinds::parse("work,caches").unwrap();
-    let ((_, desktop), (_, phone)) = std::thread::scope(|s| {
-        let d = s.spawn(|| stepped_profile_kinds("device-sites", source, 4, Options::default(), false, kinds));
-        let p = s.spawn(|| stepped_profile_kinds("device-sites", source, 4, Options { device: "phone".into(), ..Options::default() }, false, kinds));
-        (d.join().unwrap(), p.join().unwrap())
-    });
+    let ((_, desktop), (_, phone)) = run_pair(
+        || stepped_profile_kinds("device-sites", source, 4, Options::default(), false, kinds),
+        || stepped_profile_kinds("device-sites", source, 4, Options { device: "phone".into(), ..Options::default() }, false, kinds),
+    );
     assert_eq!(phone["luau_caches"]["prices"]["scale"], crate::cost::PHONE_SCRIPTS);
     for field in ["charged_work_us", "extra_work_us"] {
         let sum = |json: &serde_json::Value| json["luau_caches"]["sites"].as_array().unwrap().iter().map(|site| site[field].as_f64().unwrap()).sum::<f64>();
@@ -2424,11 +2450,10 @@ fn a_budget_loop_is_named_and_does_what_its_budget_buys() {
         end)
     "#);
     let frames = 6u32;
-    let ((summary, normal), (_, frozen)) = std::thread::scope(|s| {
-        let n = s.spawn(|| stepped_profile("budget", source, frames, Options::default(), false));
-        let f = s.spawn(|| stepped_profile("budget-frozen", source, frames, Options::default(), true));
-        (n.join().unwrap(), f.join().unwrap())
-    });
+    let ((summary, normal), (_, frozen)) = run_pair(
+        || stepped_profile("budget", source, frames, Options::default(), false),
+        || stepped_profile("budget-frozen", source, frames, Options::default(), true),
+    );
     let per_frame = |json: &serde_json::Value| json["work"]["total_ms"].as_f64().unwrap() / f64::from(frames);
     assert!(per_frame(&normal) >= 0.2 && per_frame(&normal) < 0.25, "the budget buys 0.2 ms a frame: {}", per_frame(&normal));
     assert!((per_frame(&frozen) / per_frame(&normal) - 1.0).abs() > 0.5, "frozen, the loop does other work: {} against {}", per_frame(&frozen), per_frame(&normal));
@@ -2469,12 +2494,13 @@ fn a_loop_that_yields_pays_for_its_body_every_frame() {
         ("game:GetService(\"RunService\").Heartbeat:Wait()", ""),
         ("Sleep()", "local function Sleep()\n\ttask.wait()\nend\n"),
     ];
-    std::thread::scope(|s| {
-        let handles: Vec<_> = cases
+    run_parallel(
+        cases
             .into_iter()
             .map(|(wait, helper)| {
-                let make = move |lines: usize| {
-                    let source = r#"
+                Box::new(move || {
+                    let make = |lines: usize| {
+                        let source = r#"
                 $helper
                 local function Loop()
                     local X = 0
@@ -2485,25 +2511,21 @@ fn a_loop_that_yields_pays_for_its_body_every_frame() {
                 end
                 task.spawn(Loop)
             "#
-                    .replace("$helper", helper)
-                    .replace("$body", &"X += 1\n".repeat(lines))
-                    .replace("$wait", wait);
-                    let (summary, json) = stepped_profile("yields", &source, frames, Options::default(), false);
-                    // (the first frame runs the function the script made just before it: an object made in the frame is not cold)
-                    (steady(function_named(&json, "Loop"), "cold_work_ms") / f64::from(frames - 1) * 1e3, summary)
-                };
-                let with = s.spawn(move || make(300));
-                let without = s.spawn(move || make(0));
-                (wait, with, without)
+                        .replace("$helper", helper)
+                        .replace("$body", &"X += 1\n".repeat(lines))
+                        .replace("$wait", wait);
+                        let (summary, json) = stepped_profile("yields", &source, frames, Options::default(), false);
+                        // (the first frame runs the function the script made just before it: an object made in the frame is not cold)
+                        (steady(function_named(&json, "Loop"), "cold_work_ms") / f64::from(frames - 1) * 1e3, summary)
+                    };
+                    // (the body's 300 instructions each frame, beyond what the loop's wait and its few other instructions are charged cold)
+                    let ((with_us, summary), (without_us, _)) = run_pair(|| make(300), || make(0));
+                    let body_us = with_us - without_us;
+                    assert!(body_us >= 0.95 * code_us && body_us <= 1.05 * code_us, "{wait}: {with_us} us a frame with the body, {without_us} without, against {code_us}\n{summary}");
+                }) as Box<dyn FnOnce() + Send>
             })
-            .collect();
-        for (wait, with, without) in handles {
-            // (the body's 300 instructions each frame, beyond what the loop's wait and its few other instructions are charged cold)
-            let ((with_us, summary), (without_us, _)) = (with.join().unwrap(), without.join().unwrap());
-            let body_us = with_us - without_us;
-            assert!(body_us >= 0.95 * code_us && body_us <= 1.05 * code_us, "{wait}: {with_us} us a frame with the body, {without_us} without, against {code_us}\n{summary}");
-        }
-    });
+            .collect(),
+    );
 }
 
 /// A function that errors pays for the code it ran (the review: a pcall'd function that raised was never charged, its stretch never
@@ -2517,12 +2539,13 @@ fn a_function_that_errors_pays_for_the_code_it_ran() {
         ("local T = nil\n\tT.Field = X", "pcall(M.Fails)"),
         ("error(\"no\")", "task.spawn(M.Fails)"),
     ];
-    std::thread::scope(|s| {
-        let handles: Vec<_> = cases
+    run_parallel(
+        cases
             .into_iter()
             .map(|(raise, call)| {
-                let make = move |lines: usize| {
-                    let source = r#"
+                Box::new(move || {
+                    let make = |lines: usize| {
+                        let source = r#"
                 local M = {}
                 function M.Fails()
                     local X = 0
@@ -2533,26 +2556,22 @@ fn a_function_that_errors_pays_for_the_code_it_ran() {
                     $call
                 end)
             "#
-                    .replace("$body", &"X += 1\n".repeat(lines))
-                    .replace("$raise", raise)
-                    .replace("$call", call);
-                    let (summary, json) = stepped_profile("errors", &source, frames, Options::default(), false);
-                    assert_eq!(steady(function_named(&json, "Fails"), "calls"), f64::from(frames), "{summary}");
-                    // Code pays at dispatch in every frame, including code loaded during that frame.
-                    (steady(function_named(&json, "Fails"), "cold_work_ms") / f64::from(frames) * 1e3, summary)
-                };
-                let with = s.spawn(move || make(300));
-                let without = s.spawn(move || make(0));
-                (raise, call, with, without)
+                        .replace("$body", &"X += 1\n".repeat(lines))
+                        .replace("$raise", raise)
+                        .replace("$call", call);
+                        let (summary, json) = stepped_profile("errors", &source, frames, Options::default(), false);
+                        assert_eq!(steady(function_named(&json, "Fails"), "calls"), f64::from(frames), "{summary}");
+                        // Code pays at dispatch in every frame, including code loaded during that frame.
+                        (steady(function_named(&json, "Fails"), "cold_work_ms") / f64::from(frames) * 1e3, summary)
+                    };
+                    // (the 300 instructions it ran before the error, beyond what raising it is charged cold)
+                    let ((with_us, summary), (without_us, _)) = run_pair(|| make(300), || make(0));
+                    let body_us = with_us - without_us;
+                    assert!(body_us >= 0.95 * code_us && body_us <= 1.05 * code_us, "{raise} / {call}: {with_us} us a frame with the body, {without_us} without, against {code_us}\n{summary}");
+                }) as Box<dyn FnOnce() + Send>
             })
-            .collect();
-        for (raise, call, with, without) in handles {
-            // (the 300 instructions it ran before the error, beyond what raising it is charged cold)
-            let ((with_us, summary), (without_us, _)) = (with.join().unwrap(), without.join().unwrap());
-            let body_us = with_us - without_us;
-            assert!(body_us >= 0.95 * code_us && body_us <= 1.05 * code_us, "{raise} / {call}: {with_us} us a frame with the body, {without_us} without, against {code_us}\n{summary}");
-        }
-    });
+            .collect(),
+    );
 }
 
 /// Large buffer work (> 1 KB fresh, >= 64 KB segment, > 64 KB L2/L3 copy, > 1 MB DRAM copy) is priced across cache tiers
@@ -2562,11 +2581,10 @@ fn large_buffer_work_is_priced_across_cache_tiers() {
     let frames = 3u32;
     let source = |size: u64| format!("local A, B = buffer.create({size}), buffer.create({size})\ngame:GetService(\"RunService\").Heartbeat:Connect(function()\n\tbuffer.copy(A, 0, B)\n\tbuffer.fill(A, 0, 7)\n\tlocal _ = buffer.create({size})\nend)\n");
     let size = 256 * 1024u64;
-    let ((summary, json), (small, small_json)) = std::thread::scope(|s| {
-        let large = s.spawn(|| stepped_profile("buffers-large", &source(size), frames, Options::default(), false));
-        let tiny = s.spawn(|| stepped_profile("buffers-small", &source(1024), frames, Options::default(), false));
-        (large.join().unwrap(), tiny.join().unwrap())
-    });
+    let ((summary, json), (small, small_json)) = run_pair(
+        || stepped_profile("buffers-large", &source(size), frames, Options::default(), false),
+        || stepped_profile("buffers-small", &source(1024), frames, Options::default(), false),
+    );
     let unpriced = &json["work"]["unpriced"];
     assert_eq!(unpriced["buffer_big_bytes"].as_u64(), Some(0), "{unpriced}");
     assert_eq!(unpriced["buffer_fresh_bytes"].as_u64(), Some(0), "{unpriced}");

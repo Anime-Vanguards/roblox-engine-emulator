@@ -1597,6 +1597,7 @@ mod tests {
     /// An idle worker holding nothing prepares the most recent recording ahead until [`HOLDERS`] workers
     /// hold or prepare it; a job waits for a worker preparing its recording only when that is expected
     /// ready within [`WAIT_FOR_PREPARED`].
+    #[inline(never)]
     fn idle_service(workers: usize) -> Service {
         Service {
             queue: Mutex::new(VecDeque::new()),

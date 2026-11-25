@@ -125,6 +125,7 @@ impl FunctionEntry {
 /// module, first those with the same code and text (in order), then the same code (moved and re-indented or commented),
 /// then, between those anchors, the rest in order where both sides hold as many; an older profile without hashes pairs
 /// by key, then the same way in order. Named functions keep their key (module and name). before key -> after key
+#[inline(never)]
 fn pair_anonymous(before: &FxHashMap<String, FunctionEntry>, after: &FxHashMap<String, FunctionEntry>) -> FxHashMap<String, String> {
     let mut pairs = FxHashMap::default();
     let modules: FxHashSet<&String> = before.values().chain(after.values()).filter(|entry| entry.anonymous()).map(|entry| &entry.module).collect();
@@ -240,6 +241,7 @@ fn shared_scope(before: &Json, after: &Json) -> Option<Vec<String>> {
 /// A function's figures in a diff, and whether it is the harness's own code (report.rs `harness_module`). With a scope,
 /// the work, calls and instructions are those phases' and only the game's side of the work (a C function's part done for
 /// the harness's code goes with the harness); allocations and host time stay the whole run's.
+#[inline(never)]
 fn functions(profile: &Json, scope: Option<&[String]>) -> FxHashMap<String, FunctionEntry> {
     // each function's instructions by opcode over the run, from its lines
     let mut ops: FxHashMap<i64, FxHashMap<String, f64>> = FxHashMap::default();
@@ -345,6 +347,7 @@ struct Row {
 
 /// The functions of before and after paired (named ones by module and name, anonymous ones across a move:
 /// [`pair_anonymous`])
+#[inline(never)]
 fn function_rows(fb: &FxHashMap<String, FunctionEntry>, fa: &FxHashMap<String, FunctionEntry>) -> Vec<Row> {
     let moved = pair_anonymous(fb, fa);
     let paired_after: FxHashSet<&String> = moved.values().collect();
@@ -394,6 +397,7 @@ fn side_totals(profile: &Json, scope: &[String]) -> (f64, f64) {
 
 /// What the scripts asked the engine to do in the scope's phases (the whole run without one), from profile.json's marks: each
 /// mark's counts (cost::EngineOps) to the next mark's, the last to the run's end. None for a profile from before the counts.
+#[inline(never)]
 fn engine_ops(profile: &Json, scope: Option<&[String]>) -> Option<FxHashMap<String, f64>> {
     let marks = profile["marks"].as_array()?;
     let mut sum: FxHashMap<String, f64> = FxHashMap::default();
@@ -414,6 +418,7 @@ fn engine_ops(profile: &Json, scope: Option<&[String]>) -> Option<FxHashMap<Stri
 }
 
 /// Lines of modules whose source is unchanged: (module, line) -> (self work, insns, alloc)
+#[inline(never)]
 fn lines(profile: &Json, same: &FxHashSet<String>) -> FxHashMap<(String, i64), (f64, f64, f64)> {
     let mut by_id: FxHashMap<i64, String> = FxHashMap::default();
     for f in profile["functions"].as_array().into_iter().flatten() {
@@ -441,6 +446,7 @@ fn counter_counts(counts: &Json) -> Option<FxHashMap<String, f64>> {
 }
 
 /// The hardware counters' functions: key -> (label, self counts by the counters' names now)
+#[inline(never)]
 fn counter_functions(profile: &Json) -> FxHashMap<String, (String, FxHashMap<String, f64>)> {
     profile["counters"]["functions"]
         .as_array()
@@ -489,6 +495,7 @@ fn heap_split(snapshot: &Json) -> (f64, f64, f64, bool) {
 
 /// A timeline's work a frame (mean, worst), host time a frame (mean; None when a kind slowed the run and no cpu pass filled it in)
 /// and the VM heap at its last frame
+#[inline(never)]
 fn timeline_stats(profile: &Json) -> Option<(f64, f64, Option<f64>, f64)> {
     let timeline = &profile["timeline"];
     let columns: Vec<&str> = timeline["columns"].as_array()?.iter().filter_map(Json::as_str).collect();
@@ -653,18 +660,79 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
 }
 
 /// Compares two profiles; the text summary and compact serialized `diff.json`
+#[inline(never)]
 fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, String) {
     // (profiles of two versions: what changed meaning between them is left out, rather than read as a change)
     let versions = (before["version"].as_u64().unwrap_or(1), after["version"].as_u64().unwrap_or(1));
     let same_version = versions.0 == versions.1;
+    let scope = shared_scope(before, after);
+    let scope_label = scope.as_ref().map(|phases| format!("{} {}", if phases.len() == 1 { "phase" } else { "phases" }, phases.join(", ")));
+    let (figures, notes, mut text) = diff_headline(before, after, versions, same_version, scope.as_deref(), scope_label.as_deref());
+    let rows = diff_functions(before, after, same_version, scope.as_deref(), scope_label.as_deref(), top, &mut text);
+    let counter_rows = diff_counters(before, after, top, &mut text);
+    let (changed, line_rows) = diff_lines(before, after, same_version, top, &mut text);
+    let (cache_rows, type_rows) = diff_caches_and_types(before, after, same_version, top, &mut text);
+    let changed_refs: Vec<&String> = changed.iter().collect();
+
+    // a function's figures on one side: across versions only the allocations compare, the rest is null
+    let side_json = |f: &FunctionFigures| -> FunctionSideJson {
+        if !same_version {
+            return FunctionSideJson { alloc_bytes: f.alloc, calls: None, cold_work_ms: None, insns: None, self_work_ms: None, time_ms: None, total_work_ms: None };
+        }
+        FunctionSideJson { alloc_bytes: f.alloc, calls: Some(f.calls), cold_work_ms: f.cold, insns: Some(f.insns), self_work_ms: Some(f.self_work), time_ms: Some(f.time), total_work_ms: Some(f.total_work) }
+    };
+    let report = DiffReportJson {
+        caches: cache_rows
+            .iter()
+            .map(|(group, name, bh, bl, ah, al)| CacheDiffRow { after: CacheSideJson { hits: *ah, lookups: *al }, before: CacheSideJson { hits: *bh, lookups: *bl }, group, name })
+            .collect(),
+        changed_modules: &changed_refs,
+        counter_functions: counter_rows
+            .iter()
+            .map(|(function, key, counter, b, a, cb, ca)| CounterDiffRow { after: *a, after_cycles: *ca, before: *b, before_cycles: *cb, counter, function, key })
+            .collect(),
+        figures: figures.iter().map(|f| FigureDiffRow { after: f.after, before: f.before, exact: f.exact, name: &f.name, unit: f.unit }).collect(),
+        functions: rows
+            .iter()
+            .take(500)
+            .map(|row| FunctionDiffRow {
+                after: side_json(&row.after),
+                before: side_json(&row.before),
+                function: &row.label,
+                harness: row.harness,
+                moved: row.moved.map(|(from, to)| MovedSpan { from, to }),
+                price_only: row.price_only,
+                status: row.status,
+            })
+            .collect(),
+        lines: line_rows
+            .iter()
+            .take(500)
+            .map(|((module, line), b, a)| LineDiffRow {
+                after: LineSideJson { alloc_bytes: a.2, insns: a.1, work_ms: a.0 },
+                before: LineSideJson { alloc_bytes: b.2, insns: b.1, work_ms: b.0 },
+                line: *line,
+                module,
+            })
+            .collect(),
+        notes: &notes,
+        scope: scope.as_deref(),
+        summary: &text,
+        types: type_rows.iter().map(|(group, ty, b, a)| TypeDiffRow { after: *a, before: *b, group, ty }).collect(),
+        version: 1,
+    };
+    let data = JsonWriter::to_string(&report);
+    (text, data)
+}
+
+#[inline(never)]
+fn diff_headline(before: &Json, after: &Json, versions: (u64, u64), same_version: bool, scope: Option<&[String]>, scope_label: Option<&str>) -> (Vec<Figure>, Vec<String>, String) {
     let mut figures: Vec<Figure> = Vec::new();
     // (measured figures: host time and the CPU's counters move run to run, the rest is the same every run of the same code)
     let mut add = |name: &str, b: f64, a: f64, unit: &'static str| figures.push(Figure { name: name.into(), before: b, after: a, unit, exact: !(name.contains("(noisy)") || name.contains("hardware counter")) });
     // the headline: the game's code in the phases both report, apart from the harness's (whose work moves with what it
     // scans, not with the game)
-    let scope = shared_scope(before, after);
-    let scope_label = scope.as_ref().map(|phases| format!("{} {}", if phases.len() == 1 { "phase" } else { "phases" }, phases.join(", ")));
-    if let (Some(phases), Some(label), true) = (&scope, &scope_label, same_version) {
+    if let (Some(phases), Some(label), true) = (scope, scope_label, same_version) {
         let (b, a) = (side_totals(before, phases), side_totals(after, phases));
         add(&format!("the game's code, {label}"), b.0, a.0, "ms");
         add(&format!("the harness's code, {label}"), b.1, a.1, "ms");
@@ -675,8 +743,8 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
         add("script instructions", num(&before["work"]["script_insns"]), num(&after["work"]["script_insns"]), "");
     }
     // the engine's side of the same phases: what the scripts asked it to do, counted, whatever the work clock prices it at
-    if let (Some(b), Some(a)) = (engine_ops(before, scope.as_deref()), engine_ops(after, scope.as_deref())) {
-        let label = scope_label.as_ref().map_or_else(|| "the whole run".to_string(), String::clone);
+    if let (Some(b), Some(a)) = (engine_ops(before, scope), engine_ops(after, scope)) {
+        let label = scope_label.unwrap_or("the whole run");
         let get = |ops: &FxHashMap<String, f64>, names: &[&str]| names.iter().map(|name| ops.get(*name).copied().unwrap_or(0.0)).sum::<f64>();
         for (name, counts) in [
             ("instances made", &["cloned", "created"][..]),
@@ -700,7 +768,7 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
             versions.0, versions.1
         ));
     }
-    if let (Some(label), true) = (&scope_label, same_version) {
+    if let (Some(label), true) = (scope_label, same_version) {
         notes.push(format!("the first two figures and the function tables cover {label} (work, calls, instructions); allocations, host time and lines cover the whole run"));
     }
     if let (Some(b), Some(a)) = (last_snapshot(before), last_snapshot(after)) {
@@ -800,10 +868,14 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
     if figures.iter().any(|figure| !figure.exact) {
         let _ = writeln!(text, "~ measured: host time and the CPU's counters move from run to run (two runs of the same code read tens of percent apart in host time), so one run each gives their change no verdict; the rest is the same every run of the same code");
     }
+    (figures, notes, text)
+}
 
+#[inline(never)]
+fn diff_functions(before: &Json, after: &Json, same_version: bool, scope: Option<&[String]>, scope_label: Option<&str>, top: usize, text: &mut String) -> Vec<Row> {
     // functions: the game's first, the harness's apart; anonymous ones paired across a move (their key carries their line);
     // those that ran the same path both times (the same calls, instructions and opcodes) and moved only in price apart
-    let (mut fb, mut fa) = (functions(before, scope.as_deref()), functions(after, scope.as_deref()));
+    let (mut fb, mut fa) = (functions(before, scope), functions(after, scope));
     // Across versions only the allocations compare: version 1 counted a C function's work in its caller's self work and gave
     // a module's main chunk no calls and no instructions. A function keeps its identity, so it still pairs.
     if !same_version {
@@ -818,7 +890,7 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
     let weight = |row: &Row| -> f64 { (row.after.self_work - row.before.self_work).abs() * 1000.0 + (row.after.alloc - row.before.alloc).abs() / 1024.0 + (row.after.insns - row.before.insns).abs() / 1000.0 + (row.after.calls - row.before.calls).abs() / 1000.0 };
     rows.retain(|row| moved_ms(row.before.self_work, row.after.self_work) || moved_count(row.before.alloc, row.after.alloc) || moved_count(row.before.insns, row.after.insns) || moved_count(row.before.calls, row.after.calls));
     crate::sort::by(&mut rows, |a, b| weight(b).total_cmp(&weight(a)).then_with(|| a.label.cmp(&b.label)));
-    let scope_part = scope_label.as_ref().map_or(String::new(), |label| format!(", {label}"));
+    let scope_part = scope_label.map_or(String::new(), |label| format!(", {label}"));
     // (the game's self work that moved, by path changes and by price alone)
     let game: Vec<&Row> = rows.iter().filter(|row| !row.harness).collect();
     let moved_work = |rows: &[&Row]| rows.iter().map(|row| row.after.self_work - row.before.self_work).sum::<f64>();
@@ -884,7 +956,11 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
     if untold > 0 {
         let _ = writeln!(text, "note: {untold} of the game's functions above ran the same calls and instructions both times, and these profiles carry no cold and first-use split (profile.json cold_work_ms) to show their work moved only in price, so they stay with the changes: an engine call's charges grow with what it is given");
     }
+    rows
+}
 
+#[inline(never)]
+fn diff_counters(before: &Json, after: &Json, top: usize, text: &mut String) -> Vec<(String, String, &'static str, f64, f64, f64, f64)> {
     // the functions whose cycles stalled on loads moved most (the hardware counters' self counts, by function key)
     let mut counter_rows: Vec<(String, String, &'static str, f64, f64, f64, f64)> = Vec::new();
     let (cfb, cfa) = (counter_functions(before), counter_functions(after));
@@ -918,19 +994,23 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
             }
         }
     }
+    counter_rows
+}
 
+#[inline(never)]
+fn diff_lines(before: &Json, after: &Json, same_version: bool, top: usize, text: &mut String) -> (Vec<String>, Vec<((String, i64), (f64, f64, f64), (f64, f64, f64))>) {
     // lines of unchanged modules
     let hashes = |profile: &Json| -> FxHashMap<String, String> { profile["source_hashes"].as_object().map(|map| map.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string())).collect()).unwrap_or_default() };
     let (hb, ha) = (hashes(before), hashes(after));
     let same: FxHashSet<String> = hb.iter().filter(|(module, hash)| ha.get(*module) == Some(*hash)).map(|(module, _)| module.clone()).collect();
-    let mut changed: Vec<&String> = hb.keys().filter(|module| ha.get(*module).is_some_and(|hash| Some(hash) != hb.get(*module))).collect();
+    let mut changed: Vec<String> = hb.keys().filter(|module| ha.get(*module).is_some_and(|hash| Some(hash) != hb.get(*module))).cloned().collect();
     crate::sort::ord(&mut changed);
     // (a line's self work holds its C calls' before version 2 and not since: lines are compared within a version only)
     let (lb, la) = if same_version { (lines(before, &same), lines(after, &same)) } else { (FxHashMap::default(), FxHashMap::default()) };
     let line_keys: FxHashSet<&(String, i64)> = lb.keys().chain(la.keys()).collect();
-    let mut line_rows: Vec<(&(String, i64), (f64, f64, f64), (f64, f64, f64))> =
-        line_keys.into_iter().map(|key| (key, lb.get(key).copied().unwrap_or_default(), la.get(key).copied().unwrap_or_default())).filter(|(_, b, a)| moved_ms(b.0, a.0) || moved_count(b.1, a.1) || moved_count(b.2, a.2)).collect();
-    crate::sort::by(&mut line_rows, |x, y| ((y.2.0 - y.1.0).abs()).total_cmp(&(x.2.0 - x.1.0).abs()).then_with(|| x.0.cmp(y.0)));
+    let mut line_rows: Vec<((String, i64), (f64, f64, f64), (f64, f64, f64))> =
+        line_keys.into_iter().map(|key| (key.clone(), lb.get(key).copied().unwrap_or_default(), la.get(key).copied().unwrap_or_default())).filter(|(_, b, a)| moved_ms(b.0, a.0) || moved_count(b.1, a.1) || moved_count(b.2, a.2)).collect();
+    crate::sort::by(&mut line_rows, |x, y| ((y.2.0 - y.1.0).abs()).total_cmp(&(x.2.0 - x.1.0).abs()).then_with(|| x.0.cmp(&y.0)));
     if !line_rows.is_empty() {
         let _ = writeln!(text, "\nlines that moved most in modules whose source is unchanged (self work ms, instructions)");
         for ((module, line), b, a) in line_rows.iter().take(top) {
@@ -940,7 +1020,11 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
     if !changed.is_empty() {
         let _ = writeln!(text, "modules whose source changed (their lines are compared by function only): {}", changed.iter().map(|m| m.rsplit(['.', '/', '\\']).next().unwrap_or(m)).collect::<Vec<_>>().join(", "));
     }
+    (changed, line_rows)
+}
 
+#[inline(never)]
+fn diff_caches_and_types(before: &Json, after: &Json, same_version: bool, top: usize, text: &mut String) -> (Vec<(&'static str, String, f64, f64, f64, f64)>, Vec<(&'static str, String, f64, f64)>) {
     // caches
     // (ree's own caches are profile.json's emulator.caches; a profile before that has them as ree_caches)
     let rates = |profile: &Json, path: &str| -> FxHashMap<String, (f64, f64)> {
@@ -1013,56 +1097,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
             }
         }
     }
-
-    // a function's figures on one side: across versions only the allocations compare, the rest is null
-    let side_json = |f: &FunctionFigures| -> FunctionSideJson {
-        if !same_version {
-            return FunctionSideJson { alloc_bytes: f.alloc, calls: None, cold_work_ms: None, insns: None, self_work_ms: None, time_ms: None, total_work_ms: None };
-        }
-        FunctionSideJson { alloc_bytes: f.alloc, calls: Some(f.calls), cold_work_ms: f.cold, insns: Some(f.insns), self_work_ms: Some(f.self_work), time_ms: Some(f.time), total_work_ms: Some(f.total_work) }
-    };
-    let report = DiffReportJson {
-        caches: cache_rows
-            .iter()
-            .map(|(group, name, bh, bl, ah, al)| CacheDiffRow { after: CacheSideJson { hits: *ah, lookups: *al }, before: CacheSideJson { hits: *bh, lookups: *bl }, group, name })
-            .collect(),
-        changed_modules: &changed,
-        counter_functions: counter_rows
-            .iter()
-            .map(|(function, key, counter, b, a, cb, ca)| CounterDiffRow { after: *a, after_cycles: *ca, before: *b, before_cycles: *cb, counter, function, key })
-            .collect(),
-        figures: figures.iter().map(|f| FigureDiffRow { after: f.after, before: f.before, exact: f.exact, name: &f.name, unit: f.unit }).collect(),
-        functions: rows
-            .iter()
-            .take(500)
-            .map(|row| FunctionDiffRow {
-                after: side_json(&row.after),
-                before: side_json(&row.before),
-                function: &row.label,
-                harness: row.harness,
-                moved: row.moved.map(|(from, to)| MovedSpan { from, to }),
-                price_only: row.price_only,
-                status: row.status,
-            })
-            .collect(),
-        lines: line_rows
-            .iter()
-            .take(500)
-            .map(|((module, line), b, a)| LineDiffRow {
-                after: LineSideJson { alloc_bytes: a.2, insns: a.1, work_ms: a.0 },
-                before: LineSideJson { alloc_bytes: b.2, insns: b.1, work_ms: b.0 },
-                line: *line,
-                module,
-            })
-            .collect(),
-        notes: &notes,
-        scope: scope.as_deref(),
-        summary: &text,
-        types: type_rows.iter().map(|(group, ty, b, a)| TypeDiffRow { after: *a, before: *b, group, ty }).collect(),
-        version: 1,
-    };
-    let data = JsonWriter::to_string(&report);
-    (text, data)
+    (cache_rows, type_rows)
 }
 
 /// The command: `ree profile diff <before> <after> [--out <dir>] [--top <n>]`; the exit code

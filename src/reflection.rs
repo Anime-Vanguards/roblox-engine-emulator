@@ -755,12 +755,14 @@ impl Reflection {
     /// A database from a ReflectionService dump (the JSON tools/dump-reflection.luau writes) and an
     /// optional `font-enums.json`. Its methods', events' and callbacks' info ([`MethodInfo`]) is built at once, where the
     /// compiled-in database ([`Self::load`]) builds it on first use.
+    #[inline(never)]
     pub fn from_dump(bytes: &[u8], font_enums: Option<&[u8]>) -> Result<Reflection, String> {
         let reflection = Self::read_dump(bytes, font_enums)?;
         let _ = reflection.members.set(members::Members::build(&reflection, bytes));
         Ok(reflection)
     }
 
+    #[inline(never)]
     fn read_dump(bytes: &[u8], font_enums: Option<&[u8]>) -> Result<Reflection, String> {
         let dump: members::Dump<members::DumpClass> = serde_json::from_slice(bytes)
             .map_err(|error| format!("parsing reflection.json: {error}"))?;
@@ -775,178 +777,12 @@ impl Reflection {
         }
         reflection.version = text(dump.version.as_ref()).unwrap_or_default().to_string();
 
-        // Enums (enums.luau Define + LoadFromReflection)
-        for entry in list(dump.enums.as_ref()) {
-            let items: Vec<DumpEnumItem> = list(entry.get("items"))
-                .iter()
-                .filter_map(|item| {
-                    Some(DumpEnumItem { name: text(item.get("name"))?.to_string(), value: item.get("value")?.as_f64()? })
-                })
-                .collect();
-            if let Some(name) = text(entry.get("name")) {
-                reflection.define_enum(name, &items);
-            }
-        }
-        for (enum_name, aliases) in ITEM_ALIASES {
-            if let Some(&id) = reflection.enum_ids.get(*enum_name) {
-                let info = &mut reflection.enums[id as usize];
-                for (alias, target) in *aliases {
-                    if !info.by_name.contains_key(*alias) {
-                        if let Some(&item) = info.by_name.get(*target) {
-                            info.by_name.insert((*alias).into(), item);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Studio dump classes
-        let mut superclass_names: Vec<Option<String>> = Vec::new();
-        for entry in dump.classes {
-            let Some(class_name) = text(entry.name.as_ref()) else { continue };
-            let id = reflection.new_class(class_name);
-            superclass_names.push(text(entry.superclass.as_ref()).filter(|name| !name.is_empty()).map(str::to_string));
-            let permits = entry.permits.as_ref();
-            let mut own_properties = Vec::new();
-            for property in list(entry.properties.as_ref()) {
-                let Some(name) = text(property.get("name")) else { continue };
-                let kind = property.get("type");
-                let script_name = text(kind.and_then(|k| k.get("script"))).unwrap_or("any").to_string();
-                let engine_name = text(kind.and_then(|k| k.get("engine"))).unwrap_or("").to_string();
-                let enum_name = text(kind.and_then(|k| k.get("enum"))).map(str::to_string);
-                let read_only = !has_key(property.get("permits"), "Write");
-                let scriptable = has_key(property.get("permits"), "Read");
-                let serialized = property.get("serialized").and_then(|v| v.as_bool()) == Some(true);
-                let index = reflection.add_property(
-                    name,
-                    &script_name,
-                    &engine_name,
-                    enum_name.as_deref(),
-                    read_only,
-                    scriptable,
-                    serialized,
-                    id,
-                    MemberOrigin::Dump,
-                );
-                let info = &mut reflection.properties[index as usize];
-                info.instance_type = text(kind.and_then(|k| k.get("instance"))).map(Into::into);
-                info.display = members::display_from_json(property.get("display"));
-                info.permits = Permits::from_json(property.get("permits"));
-                own_properties.push(index);
-            }
-            let own_events: Vec<NameId> = entry.events.iter().map(|name| reflection.intern(name)).collect();
-            let own_methods: Vec<NameId> = entry.methods.iter().map(|name| reflection.intern(name)).collect();
-            let own_callbacks: Vec<NameId> = entry.callbacks.iter().map(|name| reflection.intern(name)).collect();
-            let raw_defaults = match entry.defaults {
-                Some(serde_json::Value::Object(defaults)) => Some(
-                    defaults
-                        .into_iter()
-                        .map(|(name, value)| (reflection.intern(&name), RawDefault::Json(value)))
-                        .collect(),
-                ),
-                Some(serde_json::Value::Array(_)) => Some(FxHashMap::default()),
-                _ => None,
-            };
-            let display = members::display_from_json(entry.display.as_ref());
-            let class = &mut reflection.classes[id as usize];
-            class.reflected = true;
-            class.serialized = entry.serialized.as_ref().and_then(|value| value.as_bool()) == Some(true);
-            class.display = display;
-            class.permits = Permits::from_json(permits);
-            class.creatable = has_key(permits, "New");
-            class.service = has_key(permits, "GetService");
-            class.own_properties = own_properties;
-            class.own_events = own_events;
-            class.own_methods = own_methods;
-            class.own_callbacks = own_callbacks;
-            class.raw_defaults = raw_defaults;
-        }
+        reflection.load_dump_enums(dump.enums.as_ref());
+        let mut superclass_names = reflection.load_dump_classes(dump.classes);
 
         // rbx-dom supplement (LoadLuneSupplement)
         reflection.load_lune_supplement(&mut superclass_names);
-
-        for (class, name, script_type, engine_type, scriptable, serialized) in PROPERTY_SUPPLEMENT {
-            if let Some(&id) = reflection.class_ids.get(*class) {
-                let known = reflection.classes[id as usize].own_properties.iter().any(|&index| reflection.names[reflection.properties[index as usize].name as usize].as_ref() == *name);
-                if !known {
-                    // an enum property names its enum where the others name their engine type
-                    let (engine_type, enum_name) = if *script_type == "EnumItem" { ("Enum", Some(*engine_type)) } else { (*engine_type, None) };
-                    let index = reflection.add_property(name, script_type, engine_type, enum_name, false, *scriptable, *serialized, id, MemberOrigin::Engine);
-                    reflection.classes[id as usize].own_properties.push(index);
-                }
-            }
-        }
-        for (class, events) in EVENT_SUPPLEMENT {
-            if let Some(&id) = reflection.class_ids.get(*class) {
-                for event in *events {
-                    let name = reflection.intern(event);
-                    let own = &mut reflection.classes[id as usize].own_events;
-                    if !own.contains(&name) {
-                        own.push(name);
-                    }
-                }
-            }
-        }
-        for (class, methods) in METHOD_SUPPLEMENT {
-            if let Some(&id) = reflection.class_ids.get(*class) {
-                for method in *methods {
-                    let name = reflection.intern(method);
-                    let own = &mut reflection.classes[id as usize].own_methods;
-                    if !own.contains(&name) {
-                        own.push(name);
-                    }
-                }
-            }
-        }
-
-        for (class, callbacks) in CALLBACK_SUPPLEMENT {
-            if let Some(&id) = reflection.class_ids.get(*class) {
-                for callback in *callbacks {
-                    let name = reflection.intern(callback);
-                    let own = &mut reflection.classes[id as usize].own_callbacks;
-                    if !own.contains(&name) {
-                        own.push(name);
-                    }
-                }
-            }
-        }
-        for (class, name, value) in default_supplement() {
-            if let Some(&id) = reflection.class_ids.get(class) {
-                let name = reflection.intern(name);
-                reflection.classes[id as usize].raw_defaults.get_or_insert_with(FxHashMap::default).insert(name, RawDefault::Dom(value));
-            }
-        }
-
-        for (index, superclass) in superclass_names.iter().enumerate() {
-            reflection.classes[index].superclass =
-                superclass.as_ref().and_then(|name| reflection.class_ids.get(name.as_str()).copied());
-        }
-        let count = reflection.classes.len();
-        let mut resolved = vec![false; count];
-        for id in 0..count {
-            reflection.resolve(id as ClassId, &mut resolved);
-        }
-        // ReflectedClass.Subclasses names every class whose superclass it is, the ones a script cannot get included (measured in
-        // a playing client, Studio 0.744: BasePlayerGui's are CoreGui, PlayerGui and StarterGui, and GetClass("CoreGui") is nil)
-        let mut subclasses: Vec<Vec<ClassId>> = vec![Vec::new(); count];
-        for class in &reflection.classes {
-            if let Some(superclass) = class.superclass {
-                subclasses[superclass as usize].push(class.id);
-            }
-        }
-        for (id, mut list) in subclasses.into_iter().enumerate() {
-            crate::sort::by(&mut list, |&a, &b| reflection.classes[a as usize].name.cmp(&reflection.classes[b as usize].name));
-            reflection.classes[id].subclasses = list.into_boxed_slice();
-        }
-        for class in &mut reflection.classes {
-            class.parent_lock = if CLASS_LOCKED.contains(&&*class.name) {
-                ParentLock::Class
-            } else if class.service && !INSTANCE_LOCKED_SERVICES.contains(&&*class.name) {
-                ParentLock::Service
-            } else {
-                ParentLock::Instance
-            };
-        }
+        reflection.apply_supplements(&superclass_names);
         reflection.link_aliases();
 
         if let Some(bytes) = font_enums {
@@ -963,6 +799,187 @@ impl Reflection {
         Ok(reflection)
     }
 
+    #[inline(never)]
+    fn load_dump_enums(&mut self, enums: Option<&serde_json::Value>) {
+        // Enums (enums.luau Define + LoadFromReflection)
+        for entry in list(enums) {
+            let items: Vec<DumpEnumItem> = list(entry.get("items"))
+                .iter()
+                .filter_map(|item| {
+                    Some(DumpEnumItem { name: text(item.get("name"))?.to_string(), value: item.get("value")?.as_f64()? })
+                })
+                .collect();
+            if let Some(name) = text(entry.get("name")) {
+                self.define_enum(name, &items);
+            }
+        }
+        for (enum_name, aliases) in ITEM_ALIASES {
+            if let Some(&id) = self.enum_ids.get(*enum_name) {
+                let info = &mut self.enums[id as usize];
+                for (alias, target) in *aliases {
+                    if !info.by_name.contains_key(*alias) {
+                        if let Some(&item) = info.by_name.get(*target) {
+                            info.by_name.insert((*alias).into(), item);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn load_dump_classes(&mut self, classes: Vec<members::DumpClass>) -> Vec<Option<String>> {
+        // Studio dump classes
+        let mut superclass_names: Vec<Option<String>> = Vec::new();
+        for entry in classes {
+            let Some(class_name) = text(entry.name.as_ref()) else { continue };
+            let id = self.new_class(class_name);
+            superclass_names.push(text(entry.superclass.as_ref()).filter(|name| !name.is_empty()).map(str::to_string));
+            let permits = entry.permits.as_ref();
+            let mut own_properties = Vec::new();
+            for property in list(entry.properties.as_ref()) {
+                let Some(name) = text(property.get("name")) else { continue };
+                let kind = property.get("type");
+                let script_name = text(kind.and_then(|k| k.get("script"))).unwrap_or("any").to_string();
+                let engine_name = text(kind.and_then(|k| k.get("engine"))).unwrap_or("").to_string();
+                let enum_name = text(kind.and_then(|k| k.get("enum"))).map(str::to_string);
+                let read_only = !has_key(property.get("permits"), "Write");
+                let scriptable = has_key(property.get("permits"), "Read");
+                let serialized = property.get("serialized").and_then(|v| v.as_bool()) == Some(true);
+                let index = self.add_property(
+                    name,
+                    &script_name,
+                    &engine_name,
+                    enum_name.as_deref(),
+                    read_only,
+                    scriptable,
+                    serialized,
+                    id,
+                    MemberOrigin::Dump,
+                );
+                let info = &mut self.properties[index as usize];
+                info.instance_type = text(kind.and_then(|k| k.get("instance"))).map(Into::into);
+                info.display = members::display_from_json(property.get("display"));
+                info.permits = Permits::from_json(property.get("permits"));
+                own_properties.push(index);
+            }
+            let own_events: Vec<NameId> = entry.events.iter().map(|name| self.intern(name)).collect();
+            let own_methods: Vec<NameId> = entry.methods.iter().map(|name| self.intern(name)).collect();
+            let own_callbacks: Vec<NameId> = entry.callbacks.iter().map(|name| self.intern(name)).collect();
+            let raw_defaults = match entry.defaults {
+                Some(serde_json::Value::Object(defaults)) => Some(
+                    defaults
+                        .into_iter()
+                        .map(|(name, value)| (self.intern(&name), RawDefault::Json(value)))
+                        .collect(),
+                ),
+                Some(serde_json::Value::Array(_)) => Some(FxHashMap::default()),
+                _ => None,
+            };
+            let display = members::display_from_json(entry.display.as_ref());
+            let class = &mut self.classes[id as usize];
+            class.reflected = true;
+            class.serialized = entry.serialized.as_ref().and_then(|value| value.as_bool()) == Some(true);
+            class.display = display;
+            class.permits = Permits::from_json(permits);
+            class.creatable = has_key(permits, "New");
+            class.service = has_key(permits, "GetService");
+            class.own_properties = own_properties;
+            class.own_events = own_events;
+            class.own_methods = own_methods;
+            class.own_callbacks = own_callbacks;
+            class.raw_defaults = raw_defaults;
+        }
+        superclass_names
+    }
+
+    #[inline(never)]
+    fn apply_supplements(&mut self, superclass_names: &[Option<String>]) {
+        for (class, name, script_type, engine_type, scriptable, serialized) in PROPERTY_SUPPLEMENT {
+            if let Some(&id) = self.class_ids.get(*class) {
+                let known = self.classes[id as usize].own_properties.iter().any(|&index| self.names[self.properties[index as usize].name as usize].as_ref() == *name);
+                if !known {
+                    // an enum property names its enum where the others name their engine type
+                    let (engine_type, enum_name) = if *script_type == "EnumItem" { ("Enum", Some(*engine_type)) } else { (*engine_type, None) };
+                    let index = self.add_property(name, script_type, engine_type, enum_name, false, *scriptable, *serialized, id, MemberOrigin::Engine);
+                    self.classes[id as usize].own_properties.push(index);
+                }
+            }
+        }
+        for (class, events) in EVENT_SUPPLEMENT {
+            if let Some(&id) = self.class_ids.get(*class) {
+                for event in *events {
+                    let name = self.intern(event);
+                    let own = &mut self.classes[id as usize].own_events;
+                    if !own.contains(&name) {
+                        own.push(name);
+                    }
+                }
+            }
+        }
+        for (class, methods) in METHOD_SUPPLEMENT {
+            if let Some(&id) = self.class_ids.get(*class) {
+                for method in *methods {
+                    let name = self.intern(method);
+                    let own = &mut self.classes[id as usize].own_methods;
+                    if !own.contains(&name) {
+                        own.push(name);
+                    }
+                }
+            }
+        }
+
+        for (class, callbacks) in CALLBACK_SUPPLEMENT {
+            if let Some(&id) = self.class_ids.get(*class) {
+                for callback in *callbacks {
+                    let name = self.intern(callback);
+                    let own = &mut self.classes[id as usize].own_callbacks;
+                    if !own.contains(&name) {
+                        own.push(name);
+                    }
+                }
+            }
+        }
+        for (class, name, value) in default_supplement() {
+            if let Some(&id) = self.class_ids.get(class) {
+                let name = self.intern(name);
+                self.classes[id as usize].raw_defaults.get_or_insert_with(FxHashMap::default).insert(name, RawDefault::Dom(value));
+            }
+        }
+
+        for (index, superclass) in superclass_names.iter().enumerate() {
+            self.classes[index].superclass =
+                superclass.as_ref().and_then(|name| self.class_ids.get(name.as_str()).copied());
+        }
+        let count = self.classes.len();
+        let mut resolved = vec![false; count];
+        for id in 0..count {
+            self.resolve(id as ClassId, &mut resolved);
+        }
+        // ReflectedClass.Subclasses names every class whose superclass it is, the ones a script cannot get included (measured in
+        // a playing client, Studio 0.744: BasePlayerGui's are CoreGui, PlayerGui and StarterGui, and GetClass("CoreGui") is nil)
+        let mut subclasses: Vec<Vec<ClassId>> = vec![Vec::new(); count];
+        for class in &self.classes {
+            if let Some(superclass) = class.superclass {
+                subclasses[superclass as usize].push(class.id);
+            }
+        }
+        for (id, mut list) in subclasses.into_iter().enumerate() {
+            crate::sort::by(&mut list, |&a, &b| self.classes[a as usize].name.cmp(&self.classes[b as usize].name));
+            self.classes[id].subclasses = list.into_boxed_slice();
+        }
+        for class in &mut self.classes {
+            class.parent_lock = if CLASS_LOCKED.contains(&&*class.name) {
+                ParentLock::Class
+            } else if class.service && !INSTANCE_LOCKED_SERVICES.contains(&&*class.name) {
+                ParentLock::Service
+            } else {
+                ParentLock::Instance
+            };
+        }
+    }
+
+    #[inline(never)]
     fn define_enum(&mut self, name: &str, items: &[DumpEnumItem]) {
         let id = match self.enum_ids.get(name) {
             Some(&id) => id,
@@ -999,6 +1016,7 @@ impl Reflection {
         }
     }
 
+    #[inline(never)]
     fn new_class(&mut self, name: &str) -> ClassId {
         let id = self.classes.len() as ClassId;
         self.classes.push(ClassInfo {
@@ -1037,6 +1055,7 @@ impl Reflection {
     /// and its Changed names the other; an alias method does the other's work through a function of its own (measured in
     /// a playing client, tools/parity/probes/aliases.luau), the work of the member its own class declares
     /// ([`Self::alias_lookup_class`]). Events keep signals of their own (lua/instance.rs fires them).
+    #[inline(never)]
     fn link_aliases(&mut self) {
         const NAMED_OTHERWISE: &[(&str, &str, &str)] =
             &[("Players", "players", "GetPlayers"), ("Players", "playerFromCharacter", "GetPlayerFromCharacter")];
@@ -1109,6 +1128,7 @@ impl Reflection {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
     fn add_property(
         &mut self,
         name: &str,
@@ -1143,6 +1163,7 @@ impl Reflection {
         index
     }
 
+    #[inline(never)]
     fn load_lune_supplement(&mut self, superclass_names: &mut Vec<Option<String>>) {
         let Ok(database) = rbx_reflection_database::get() else { return };
         let mut names: Vec<&str> = database.classes.keys().map(|name| name.as_ref()).collect();
@@ -1230,6 +1251,7 @@ impl Reflection {
         }
     }
 
+    #[inline(never)]
     fn resolve(&mut self, id: ClassId, resolved: &mut Vec<bool>) {
         if resolved[id as usize] {
             return;

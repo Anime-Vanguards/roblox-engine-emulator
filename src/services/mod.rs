@@ -82,18 +82,22 @@ fn find<'a, T>(
 }
 
 impl Behaviors {
+    #[inline(never)]
     pub fn add_method(&mut self, class: ClassId, name: NameId, method: MethodFn) {
         self.methods.insert((class, name), Method::Rust(method));
     }
 
+    #[inline(never)]
     pub fn add_lua_method(&mut self, class: ClassId, name: NameId, function: LuaFunction) {
         self.methods.insert((class, name), Method::Lua(function));
     }
 
+    #[inline(never)]
     pub fn add_getter(&mut self, class: ClassId, name: NameId, getter: GetterFn) {
         self.getters.insert((class, name), getter);
     }
 
+    #[inline(never)]
     pub fn add_setter(&mut self, class: ClassId, name: NameId, setter: SetterFn) {
         self.setters.insert((class, name), setter);
     }
@@ -531,13 +535,47 @@ pub fn install_capability_calls(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()>
 }
 
 /// Installs the service behaviours (Services.Install) and the RunService frame hooks.
+#[inline(never)]
 pub fn install(engine: &Rc<Engine>) {
     let reflection = engine.reflection.clone();
     let mut behaviors = engine.behaviors.borrow_mut();
     let options = engine.options.clone();
 
+    install_data_model(&mut behaviors, &reflection, &options);
+    install_workspace_and_camera(&mut behaviors, &reflection, &options);
+    install_players(engine, &mut behaviors, &reflection, &options);
+    install_run_service(engine, &mut behaviors, &reflection, &options);
+
+    // TweenService, Instance:QueryDescendants, AnimationTracks
+    tween::install(engine, &mut behaviors);
+    reflection_service::install(engine, &mut behaviors);
+    physics::install(engine, &mut behaviors);
+    // Teams: a player's team follows its TeamColor and Neutral; Team:GetPlayers, Teams:GetTeams
+    teams::install(engine, &mut behaviors);
+    // LocalizationTable, Translator and LocalizationService's translators
+    localization::install(engine, &mut behaviors);
+    // settings() and UserSettings(): GetService / FindService and the settings services' members
+    settings::install(engine, &mut behaviors);
+    crate::animation::install(engine, &mut behaviors);
+    crate::meshes::install(engine, &mut behaviors);
+    input_actions::install(engine, &mut behaviors);
+    crate::path2d::install(engine, &mut behaviors);
+    query::install(engine, &mut behaviors);
+    // (on every side: a playing client answers its members as a server does, measured)
+    encoding::install(engine, &mut behaviors);
+
+    install_collection_service(&mut behaviors, &reflection);
+    install_gui_and_input(&mut behaviors, &reflection, &options);
+    install_starter_actions_debris_sound(&mut behaviors, &reflection);
+    install_remotes_and_http(&mut behaviors, &reflection);
+    drop(behaviors);
+    engine.clear_member_cache();
+}
+
+#[inline(never)]
+fn install_data_model(behaviors: &mut Behaviors, reflection: &Reflection, options: &crate::Options) {
     // DataModel
-    if let Some(data_model) = class(&reflection, "DataModel") {
+    if let Some(data_model) = class(reflection, "DataModel") {
         let get = method(|lua, engine, id, args| {
             let (service_name, known) = service_param(lua, engine, args)?;
             if known && !names_service(engine, &service_name) {
@@ -608,9 +646,12 @@ pub fn install(engine: &Rc<Engine>) {
         behaviors.add_getter(data_model, K::PrivateServerId as NameId, getter(|lua, _, _| Ok(string_value(lua, "")?)));
         behaviors.add_getter(data_model, K::PrivateServerOwnerId as NameId, getter(|_, _, _| Ok(LuaValue::Number(0.0))));
     }
+}
 
+#[inline(never)]
+fn install_workspace_and_camera(behaviors: &mut Behaviors, reflection: &Reflection, options: &crate::Options) {
     // Workspace / Camera
-    if let Some(workspace) = class(&reflection, "Workspace") {
+    if let Some(workspace) = class(reflection, "Workspace") {
         let edit = options.edit_mode();
         behaviors.add_getter(workspace, K::DistributedGameTime as NameId, getter(move |_, engine, _| {
             // Measured: 0 in edit mode (the game never started running), like time()
@@ -625,10 +666,10 @@ pub fn install(engine: &Rc<Engine>) {
         // (Studio 0.748, tools/parity/probes/workspace_physics_state.luau), and so does plugin code in Studio's edit DataModel
         // (identity 5, the same calls run there by hand, not a capture). ree's world is never throttled, as its physics rate is
         // always 60)
-        if let Some(n) = name(&reflection, "PGSIsEnabled") {
+        if let Some(n) = name(reflection, "PGSIsEnabled") {
             behaviors.add_method(workspace, n, constant(|_| Ok(LuaValue::Boolean(true))));
         }
-        if let Some(n) = name(&reflection, "GetPhysicsThrottling") {
+        if let Some(n) = name(reflection, "GetPhysicsThrottling") {
             behaviors.add_method(workspace, n, constant(|_| Ok(LuaValue::Number(100.0))));
         }
         behaviors.add_getter(workspace, K::CurrentCamera as NameId, getter(|lua, engine, id| {
@@ -640,16 +681,19 @@ pub fn install(engine: &Rc<Engine>) {
             Ok(instance_value(lua, engine, camera)?)
         }));
     }
-    if let Some(camera) = class(&reflection, "Camera") {
+    if let Some(camera) = class(reflection, "Camera") {
         // (the run's screen for the camera it starts with, 1 x 1 for others: world/camera.rs)
         behaviors.add_getter(camera, K::ViewportSize as NameId, getter(|lua, engine, id| {
             let (width, height) = crate::world::camera::viewport_size(engine, id);
             Ok(vector2(lua, f64::from(width), f64::from(height))?)
         }));
     }
+}
 
+#[inline(never)]
+fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &Reflection, options: &crate::Options) {
     // Players / Player
-    if let Some(players) = class(&reflection, "Players") {
+    if let Some(players) = class(reflection, "Players") {
         let local_player = getter(|lua, engine, _| match engine.world().local_player {
             Some(player) => Ok(instance_value(lua, engine, player)?),
             None => Ok(LuaValue::Nil),
@@ -674,8 +718,8 @@ pub fn install(engine: &Rc<Engine>) {
             }
             Ok(values([LuaValue::Nil]))
         }));
-        if let Some(n) = name(&reflection, "GetPlayerFromCharacter") {
-            let character = name(&reflection, "Character");
+        if let Some(n) = name(reflection, "GetPlayerFromCharacter") {
+            let character = name(reflection, "Character");
             behaviors.add_method(players, n, method(move |lua, engine, this, args| {
                 let (Some(character), Some(model)) = (character, args.instance(1)) else { return Ok(values([LuaValue::Nil])) };
                 for player in joined_players(engine, this) {
@@ -687,7 +731,7 @@ pub fn install(engine: &Rc<Engine>) {
                 Ok(values([LuaValue::Nil]))
             }));
         }
-        if let Some(n) = name(&reflection, "GetUserIdFromNameAsync") {
+        if let Some(n) = name(reflection, "GetUserIdFromNameAsync") {
             behaviors.add_method(players, n, strings(QUIET_FIRST, constant(|_| Ok(LuaValue::Number(1.0)))));
         }
         // Players a harness adds after the run started: PlayerAdded when a Player is parented to Players,
@@ -696,11 +740,11 @@ pub fn install(engine: &Rc<Engine>) {
         // carries no old value). On a server a joining player gets the containers Roblox's server gives
         // it (Backpack, StarterGear, PlayerGui) before PlayerAdded, unless the harness made them, and its team (teams.rs).
         if let (Some(player_class), Some(added), Some(removing), Some(character), Some(character_added)) = (
-            class(&reflection, "Player"),
-            name(&reflection, "PlayerAdded"),
-            name(&reflection, "PlayerRemoving"),
-            name(&reflection, "Character"),
-            name(&reflection, "CharacterAdded"),
+            class(reflection, "Player"),
+            name(reflection, "PlayerAdded"),
+            name(reflection, "PlayerRemoving"),
+            name(reflection, "Character"),
+            name(reflection, "CharacterAdded"),
         ) {
             let weak = Rc::downgrade(engine);
             let reflection_for_enter = engine.reflection.clone();
@@ -756,7 +800,10 @@ pub fn install(engine: &Rc<Engine>) {
         }
     }
     // Player methods and the other script-data stubs are Luau (lua/services.luau)
+}
 
+#[inline(never)]
+fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &Reflection, options: &crate::Options) {
     // RunService: frame events (measured in Studio). Edit mode: Heartbeat ~240 Hz;
     // per render step the BindToRenderStep callbacks, the tween step, then RenderStepped before
     // PreRender. PreAnimation / Stepped / PreSimulation / PostSimulation never fire in edit mode.
@@ -765,7 +812,7 @@ pub fn install(engine: &Rc<Engine>) {
     // below). It renders nothing: BindToRenderStep callbacks and PreRender never run, and RenderStepped refuses a
     // connection (measured in a server's game script, Studio 0.744: tools/parity/probes/run_service_sides.luau).
     // `--studio false` answers IsStudio as a live game does (false), on either side.
-    if let Some(run_service) = class(&reflection, "RunService") {
+    if let Some(run_service) = class(reflection, "RunService") {
         let mode_edit = options.edit_mode();
         let server = options.server();
         // (Studio's edit DataModel, `--run-context edit`, is both sides: the same documentation's table, not measured)
@@ -872,28 +919,13 @@ pub fn install(engine: &Rc<Engine>) {
             fire_frame_event(lua, engine, K::Heartbeat as NameId, &[Value::Number(delta)])
         }));
     }
+}
 
-    // TweenService, Instance:QueryDescendants, AnimationTracks
-    tween::install(engine, &mut behaviors);
-    reflection_service::install(engine, &mut behaviors);
-    physics::install(engine, &mut behaviors);
-    // Teams: a player's team follows its TeamColor and Neutral; Team:GetPlayers, Teams:GetTeams
-    teams::install(engine, &mut behaviors);
-    // LocalizationTable, Translator and LocalizationService's translators
-    localization::install(engine, &mut behaviors);
-    // settings() and UserSettings(): GetService / FindService and the settings services' members
-    settings::install(engine, &mut behaviors);
-    crate::animation::install(engine, &mut behaviors);
-    crate::meshes::install(engine, &mut behaviors);
-    input_actions::install(engine, &mut behaviors);
-    crate::path2d::install(engine, &mut behaviors);
-    query::install(engine, &mut behaviors);
-    // (on every side: a playing client answers its members as a server does, measured)
-    encoding::install(engine, &mut behaviors);
-
+#[inline(never)]
+fn install_collection_service(behaviors: &mut Behaviors, reflection: &Reflection) {
     // CollectionService
-    if let Some(collection) = class(&reflection, "CollectionService") {
-        if let Some(n) = name(&reflection, "GetTagged") {
+    if let Some(collection) = class(reflection, "CollectionService") {
+        if let Some(n) = name(reflection, "GetTagged") {
             behaviors.add_method(collection, n, strings(FIRST, method(|lua, engine, _, args| {
                 let tag = args.string(1).map(|s| Str::new(&s.as_bytes())).unwrap_or_default();
                 let game = engine.world().game;
@@ -910,7 +942,7 @@ pub fn install(engine: &Rc<Engine>) {
             })));
         }
         // GetAllTags: every tag in the DataModel, in first-seen order of a depth-first walk
-        if let Some(n) = name(&reflection, "GetAllTags") {
+        if let Some(n) = name(reflection, "GetAllTags") {
             behaviors.add_method(collection, n, method(|lua, engine, _, _| {
                 let game = engine.world().game;
                 let mut tags: Vec<Str> = Vec::new();
@@ -932,7 +964,7 @@ pub fn install(engine: &Rc<Engine>) {
             }));
         }
         for (member, added) in [("GetInstanceAddedSignal", true), ("GetInstanceRemovedSignal", false)] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(collection, n, strings(FIRST, method(move |lua, engine, _, args| {
                     let tag = args.string(1).map(|s| Str::new(&s.as_bytes())).unwrap_or_default();
                     let (a, r) = tag_signals(&mut engine.state.borrow_mut(), &tag);
@@ -941,7 +973,7 @@ pub fn install(engine: &Rc<Engine>) {
             }
         }
         for member in ["AddTag", "RemoveTag", "HasTag", "GetTags"] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 let forward = n;
                 let tagged = member != "GetTags";
                 behaviors.add_method(collection, n, method(move |lua, engine, _, args| {
@@ -971,33 +1003,36 @@ pub fn install(engine: &Rc<Engine>) {
             }
         }
     }
+}
 
+#[inline(never)]
+fn install_gui_and_input(behaviors: &mut Behaviors, reflection: &Reflection, options: &crate::Options) {
     // GuiService / UserInputService
-    if let Some(gui) = class(&reflection, "GuiService") {
+    if let Some(gui) = class(reflection, "GuiService") {
         let inset = options.topbar_inset;
-        if let Some(n) = name(&reflection, "GetGuiInset") {
+        if let Some(n) = name(reflection, "GetGuiInset") {
             behaviors.add_method(gui, n, method(move |lua, _, _, _| Ok(values([vector2(lua, 0.0, inset)?, vector2(lua, 0.0, 0.0)?]))));
         }
         for member in ["IsTenFootInterface", "GetEmotesMenuOpen", "GetInspectMenuEnabled", "GetGameplayPausedNotificationEnabled"] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(gui, n, constant(|_| Ok(LuaValue::Boolean(false))));
             }
         }
         // (no inspect menu opens without a GUI layer, so there is none to close, and no selection group to remove but one
         // AddSelectionParent made, which reports itself)
         for (member, params) in [("CloseInspectMenu", NONE), ("RemoveSelectionGroup", FIRST)] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(gui, n, strings(params, method(|_, _, _, _| Ok(none()))));
             }
         }
         // (not kept: GetEmotesMenuOpen stays false, SelectedObject unset)
         for (member, params) in [("SetEmotesMenuOpen", NONE), ("Select", NONE), ("AddSelectionParent", FIRST)] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(gui, n, strings(params, unemulated("GuiService", member)));
             }
         }
     }
-    if let Some(input) = class(&reflection, "UserInputService") {
+    if let Some(input) = class(reflection, "UserInputService") {
         let device = options.device.clone();
         // (a phone is a touch device: cost.rs device_scale gives it its prices too)
         let touch = device == "touch" || device == "phone";
@@ -1008,15 +1043,15 @@ pub fn install(engine: &Rc<Engine>) {
             ("MouseEnabled", !touch && !pad),
             ("GamepadEnabled", pad),
         ] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_getter(input, n, getter(move |_, _, _| Ok(LuaValue::Boolean(value))));
             }
         }
-        if let Some(n) = name(&reflection, "GetMouseLocation") {
+        if let Some(n) = name(reflection, "GetMouseLocation") {
             behaviors.add_method(input, n, method(|lua, _, _, _| Ok(values([vector2(lua, -1000.0, -1000.0)?]))));
         }
         let edit = options.edit_mode();
-        if let Some(n) = name(&reflection, "GetLastInputType") {
+        if let Some(n) = name(reflection, "GetLastInputType") {
             behaviors.add_method(input, n, method(move |lua, engine, _, _| {
                 let item = if touch {
                     "Touch"
@@ -1032,25 +1067,25 @@ pub fn install(engine: &Rc<Engine>) {
             }));
         }
         for member in ["IsKeyDown", "IsMouseButtonPressed", "IsGamepadButtonDown", "GetGamepadConnected", "GamepadSupports"] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(input, n, constant(|_| Ok(LuaValue::Boolean(false))));
             }
         }
         for member in ["GetKeysPressed", "GetMouseButtonsPressed", "GetConnectedGamepads", "GetNavigationGamepads", "GetSupportedGamepadKeyCodes", "GetGamepadState"] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(input, n, constant(|lua| Ok(LuaValue::Table(lua.create_table()?))));
             }
         }
-        if let Some(n) = name(&reflection, "GetFocusedTextBox") {
+        if let Some(n) = name(reflection, "GetFocusedTextBox") {
             behaviors.add_method(input, n, constant(|_| Ok(LuaValue::Nil)));
         }
-        if let Some(n) = name(&reflection, "GetMouseDelta") {
+        if let Some(n) = name(reflection, "GetMouseDelta") {
             behaviors.add_method(input, n, constant(|lua| vector2(lua, 0.0, 0.0)));
         }
-        if let Some(n) = name(&reflection, "GetImageForKeyCode") {
+        if let Some(n) = name(reflection, "GetImageForKeyCode") {
             behaviors.add_method(input, n, constant(|lua| string_value(lua, "")));
         }
-        if let Some(n) = name(&reflection, "GetStringForKeyCode") {
+        if let Some(n) = name(reflection, "GetStringForKeyCode") {
             behaviors.add_method(input, n, method(|lua, engine, _, args| {
                 let item = match args.get(1) {
                     LuaValue::UserData(ud) => ud.borrow::<super::lua::types::LEnumItem>().ok().map(|i| i.0),
@@ -1061,28 +1096,31 @@ pub fn install(engine: &Rc<Engine>) {
             }));
         }
     }
+}
 
+#[inline(never)]
+fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &Reflection) {
     // StarterGui / ContextActionService / Debris / Sound
-    if let Some(starter) = class(&reflection, "StarterGui") {
+    if let Some(starter) = class(reflection, "StarterGui") {
         // (Roblox's own UI is not emulated: GetCore and GetCoreGuiEnabled keep their first answers)
         for (member, params) in [("SetCore", FIRST), ("SetCoreGuiEnabled", NONE)] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(starter, n, strings(params, unemulated("StarterGui", member)));
             }
         }
         // (GetCore yields on a server until the core scripts register the name: a client casts its name without the warning)
-        if let Some(n) = name(&reflection, "GetCore") {
+        if let Some(n) = name(reflection, "GetCore") {
             behaviors.add_method(starter, n, strings(QUIET_FIRST, method(|_, _, _, args| {
                 let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
                 let active = matches!(name.as_str(), "ChatActive" | "PointsNotificationsActive" | "BadgesNotificationsActive");
                 Ok(values([if active { LuaValue::Boolean(true) } else { LuaValue::Nil }]))
             })));
         }
-        if let Some(n) = name(&reflection, "GetCoreGuiEnabled") {
+        if let Some(n) = name(reflection, "GetCoreGuiEnabled") {
             behaviors.add_method(starter, n, constant(|_| Ok(LuaValue::Boolean(true))));
         }
     }
-    if let Some(actions) = class(&reflection, "ContextActionService") {
+    if let Some(actions) = class(reflection, "ContextActionService") {
         // Without an input layer no binding is kept (GetBoundActionInfo answers none), so a bind and a binding's touch button
         // settings report themselves, and an unbind has nothing to remove
         // (an action's name, and a binding's title, image and description, are read as a client reads a string parameter)
@@ -1095,25 +1133,25 @@ pub fn install(engine: &Rc<Engine>) {
             ("SetPosition", FIRST),
             ("BindActivate", NONE),
         ] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(actions, n, strings(params, unemulated("ContextActionService", member)));
             }
         }
         for (member, params) in [("UnbindAction", FIRST), ("UnbindAllActions", NONE), ("UnbindActivate", NONE)] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(actions, n, strings(params, method(|_, _, _, _| Ok(none()))));
             }
         }
-        if let Some(n) = name(&reflection, "GetButton") {
+        if let Some(n) = name(reflection, "GetButton") {
             behaviors.add_method(actions, n, strings(FIRST, constant(|_| Ok(LuaValue::Nil))));
         }
         for (member, params) in [("GetAllBoundActionInfo", NONE), ("GetBoundActionInfo", FIRST)] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(actions, n, strings(params, constant(|lua| Ok(LuaValue::Table(lua.create_table()?)))));
             }
         }
     }
-    if let (Some(debris), Some(n)) = (class(&reflection, "Debris"), name(&reflection, "AddItem")) {
+    if let (Some(debris), Some(n)) = (class(reflection, "Debris"), name(reflection, "AddItem")) {
         behaviors.add_method(debris, n, method(|lua, engine, _, args| {
             // Measured in a playing client (Studio 0.744, tools/parity/probes/lifetime.luau): an item that is no Instance
             // raises "Unable to cast value to Object" (nil is ignored), a lifetime that is no number "Unable to cast string to
@@ -1139,34 +1177,37 @@ pub fn install(engine: &Rc<Engine>) {
                 // The item rides along as the timer's argument: queued work keeps it alive
                 // (lua/raw.rs collection) until Debris destroys it
                 let e = engine.clone();
-                let body = lua.create_function(move |lua, item: LuaValue| {
+                let body = super::lua::create_boxed_val(lua, Box::new(move |lua, item: LuaValue| {
                     if let Some(item) = super::lua::instance_id(&item) {
                         // (a client's Debris destroys the item in the engine's own step, outside any script: no script pays for it)
                         let muted = crate::scheduler::Muted::raise(&e.state.borrow().sched.muted);
                         let _ = super::lua::instance::destroy(lua, &e, item);
                         drop(muted);
                     }
-                    Ok(())
-                })?;
+                    Ok(LuaValue::Nil)
+                }))?;
                 let thread = lua.create_thread(body)?;
                 engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, lifetime, thread, vec![Value::Instance(item)]);
             }
             Ok(none())
         }));
     }
-    if let Some(sound) = class(&reflection, "Sound") {
+    if let Some(sound) = class(reflection, "Sound") {
         // (Play / Stop / Pause / Resume are engine::world's: they set Playing and report the play)
-        if let Some(n) = name(&reflection, "IsLoaded") {
+        if let Some(n) = name(reflection, "IsLoaded") {
             behaviors.add_getter(sound, n, getter(|_, _, _| Ok(LuaValue::Boolean(true))));
         }
-        if let Some(n) = name(&reflection, "TimeLength") {
+        if let Some(n) = name(reflection, "TimeLength") {
             behaviors.add_getter(sound, n, getter(|_, _, _| Ok(LuaValue::Number(1.0))));
         }
     }
+}
 
+#[inline(never)]
+fn install_remotes_and_http(behaviors: &mut Behaviors, reflection: &Reflection) {
     // Scripts' Source reads their text, as Studio's command bar and plugins read it (the mounted
     // file of a project script, else the stored property)
-    if let Some(container) = class(&reflection, "LuaSourceContainer") {
+    if let Some(container) = class(reflection, "LuaSourceContainer") {
         behaviors.add_getter(container, K::Source as NameId, getter(|lua, engine, id| {
             let text = super::lua::modules::source_of(engine, id).unwrap_or_default();
             Ok(LuaValue::String(lua.create_string(&text)?))
@@ -1176,11 +1217,11 @@ pub fn install(engine: &Rc<Engine>) {
     // Remotes never reach a server offline (a client run's: a server run's and a loopback run's are their own), so FireServer
     // reports itself; Bindables fire locally
     for remote in ["RemoteEvent", "UnreliableRemoteEvent"] {
-        if let (Some(c), Some(n)) = (class(&reflection, remote), name(&reflection, "FireServer")) {
+        if let (Some(c), Some(n)) = (class(reflection, remote), name(reflection, "FireServer")) {
             behaviors.add_method(c, n, unemulated(remote, "FireServer"));
         }
     }
-    if let Some(bindable) = class(&reflection, "BindableEvent") {
+    if let Some(bindable) = class(reflection, "BindableEvent") {
         behaviors.add_method(bindable, K::Fire as NameId, method(|lua, engine, id, args| {
             // (raw.rs fires one without table, function or thread arguments, which hold nothing for later; tables and
             // buffers are copied as Roblox copies them, threads arrive as nil: lua/bindable.rs)
@@ -1200,9 +1241,9 @@ pub fn install(engine: &Rc<Engine>) {
         }));
     }
     // HttpService (GUIDs and URL encoding; JSON and requests are phase 4)
-    if let Some(http) = class(&reflection, "HttpService") {
+    if let Some(http) = class(reflection, "HttpService") {
         let counter = Rc::new(std::cell::Cell::new(0u32));
-        if let Some(n) = name(&reflection, "GenerateGUID") {
+        if let Some(n) = name(reflection, "GenerateGUID") {
             behaviors.add_method(http, n, method(move |lua, _, _, args| {
                 counter.set(counter.get() + 1);
                 let hex = format!("{:08X}", counter.get());
@@ -1213,7 +1254,7 @@ pub fn install(engine: &Rc<Engine>) {
         }
         // JSONEncode / JSONDecode as a playing client runs them (json.rs), and the disabled requests; their errors carry
         // no position, as Roblox raises them
-        if let Some(n) = name(&reflection, "JSONEncode") {
+        if let Some(n) = name(reflection, "JSONEncode") {
             behaviors.add_method(http, n, method(|lua, engine, _, args| match json::encode_counted(lua, engine, args.get(1)) {
                 Ok(encoded) => {
                     // (priced by what it wrote: cost.rs json)
@@ -1223,7 +1264,7 @@ pub fn install(engine: &Rc<Engine>) {
                 Err(refused) => refused.raise(),
             }));
         }
-        if let Some(n) = name(&reflection, "JSONDecode") {
+        if let Some(n) = name(reflection, "JSONDecode") {
             // (any other value is read as its text, as a client reads a string parameter: 12.5 and true parse, a table is "{}" and
             // decodes to a new empty table, an Instance is "Instance", which does not parse; measured, json_limits.luau and
             // string_parameter_methods.luau)
@@ -1240,11 +1281,11 @@ pub fn install(engine: &Rc<Engine>) {
             })));
         }
         for member in ["GetAsync", "PostAsync", "RequestAsync"] {
-            if let Some(n) = name(&reflection, member) {
+            if let Some(n) = name(reflection, member) {
                 behaviors.add_method(http, n, method(|_, _, _, _| raise("Http requests are not enabled. Enable via game settings")));
             }
         }
-        if let Some(n) = name(&reflection, "UrlEncode") {
+        if let Some(n) = name(reflection, "UrlEncode") {
             behaviors.add_method(http, n, strings(FIRST, method(|lua, _, _, args| {
                 let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
                 let mut encoded = String::new();
@@ -1260,8 +1301,6 @@ pub fn install(engine: &Rc<Engine>) {
             })));
         }
     }
-    drop(behaviors);
-    engine.clear_member_cache();
 }
 
 /// Tables JSONEncode nests at most. Each level is native stack in the encoder (this copy, mlua's serde, serde_json): a
@@ -1317,6 +1356,7 @@ fn fire_frame_event(lua: &Lua, engine: &Rc<Engine>, event: NameId, args: &[Value
 /// answers). The geometry parts (Absolute* / TextBounds getters, CanvasPosition clamping,
 /// ApplyLayout, UIPageLayout navigation, the layout pass and its invalidation hooks), ContentText,
 /// TextService's measurements and live input are a host layer's (crate::Layer).
+#[inline(never)]
 pub fn install_gui_behaviors(engine: &Rc<Engine>) {
     let reflection = engine.reflection.clone();
     let mut behaviors = engine.behaviors.borrow_mut();
