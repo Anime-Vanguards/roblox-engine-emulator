@@ -9247,24 +9247,27 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
         "#,
     );
     let use_scene = compile(&lua, &engine, "local Name = ...; shared.Use(Name)");
+    // Pause incremental GC during each warmup+timed pair so a sweep cannot free `table.concat`'s
+    // temporary integer strings between the two passes and charge re-interning (`LUAU_NEW_STRING`) to one scene.
+    let run_scene = |name: &str| {
+        lua.gc_collect().expect("gc");
+        lua.gc_stop();
+        let start = std::time::Instant::now();
+        call(&lua, &engine, &use_scene, name);
+        let elapsed = start.elapsed().as_secs_f64();
+        lua.gc_restart();
+        elapsed
+    };
     let (mut flat, mut deep) = (0.0, 0.0);
     for _ in 0..3 {
-        lua.gc_collect().expect("gc");
-        let start = std::time::Instant::now();
-        call(&lua, &engine, &use_scene, "Flat");
-        flat = start.elapsed().as_secs_f64();
-        lua.gc_collect().expect("gc");
-        let start = std::time::Instant::now();
-        call(&lua, &engine, &use_scene, "Deep");
-        deep = start.elapsed().as_secs_f64();
+        flat = run_scene("Flat");
+        deep = run_scene("Deep");
         if deep < 2.0 * flat + 0.1 {
             break;
         }
     }
-    lua.gc_collect().expect("gc");
-    call(&lua, &engine, &use_scene, "Few");
-    lua.gc_collect().expect("gc");
-    call(&lua, &engine, &use_scene, "Apart");
+    let _ = run_scene("Few");
+    let _ = run_scene("Apart");
     run(
         &lua,
         &engine,
