@@ -14,7 +14,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     ffi::{c_int, c_void},
     rc::Weak,
     time::Instant,
@@ -80,7 +79,7 @@ impl Stacks {
 #[derive(Default)]
 pub struct Types {
     pub names: Vec<String>,
-    ids: HashMap<String, u32>,
+    ids: FxHashMap<String, u32>,
 }
 
 impl Types {
@@ -587,9 +586,13 @@ impl Distribution {
             return Distribution::default();
         }
         crate::sort::ord(values);
-        let mut hist: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
+        let mut hist: Vec<(u32, u64)> = Vec::new();
         for &(size, _) in values.iter() {
-            *hist.entry(if powers && size > 0 { size.next_power_of_two() } else { size }).or_default() += 1;
+            let bucket = if powers && size > 0 { size.next_power_of_two() } else { size };
+            match hist.last_mut() {
+                Some((last, count)) if *last == bucket => *count += 1,
+                _ => hist.push((bucket, 1)),
+            }
         }
         Distribution {
             total: values.iter().map(|&(size, _)| size as u64).sum(),
@@ -597,7 +600,7 @@ impl Distribution {
             min: values[0].0,
             median: values[(values.len() - 1) / 2].0,
             max: values[values.len() - 1].0,
-            hist: hist.into_iter().collect(),
+            hist,
         }
     }
 }
@@ -916,8 +919,8 @@ pub unsafe fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: 
         }
         type_name(tts[node] as i32).to_string()
     };
-    let mut by_type: HashMap<String, (u64, u64)> = HashMap::new();
-    let mut garbage: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut by_type: FxHashMap<String, (u64, u64)> = FxHashMap::default();
+    let mut garbage: FxHashMap<String, (u64, u64)> = FxHashMap::default();
     let (mut reachable, mut unswept) = ((0u64, 0u64), (0u64, 0u64));
     for node in 0..count {
         let (types, total) = if visited[node] { (&mut by_type, &mut reachable) } else { (&mut garbage, &mut unswept) };
@@ -934,7 +937,7 @@ pub unsafe fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: 
         unswept.0 += found;
         unswept.1 += bytes;
     }
-    let sorted = |types: HashMap<String, (u64, u64)>| -> Vec<(String, u64, u64)> {
+    let sorted = |types: FxHashMap<String, (u64, u64)>| -> Vec<(String, u64, u64)> {
         let mut types: Vec<(String, u64, u64)> = types.into_iter().map(|(name, (count, bytes))| (name, count, bytes)).collect();
         crate::sort::by(&mut types, |a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
         types

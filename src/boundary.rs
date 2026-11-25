@@ -27,7 +27,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeSet, HashMap},
+    collections::BTreeSet,
     ffi::CStr,
     path::PathBuf,
 };
@@ -219,7 +219,7 @@ struct Recorder {
     function_ids: FxHashMap<(u32, i32), u32>,
     members: Vec<Member>,
     member_ids: FxHashMap<(u8, u32, u32), u32>,
-    member_texts: HashMap<(u8, String, String), u32>,
+    member_texts: FxHashMap<(u8, String, String), u32>,
     phases: Vec<Phase>,
     current: usize,
     /// the render steps so far; the one in progress is not counted until it renders
@@ -257,7 +257,7 @@ pub fn begin(config: Config) {
             function_ids: FxHashMap::default(),
             members: Vec::new(),
             member_ids: FxHashMap::default(),
-            member_texts: HashMap::new(),
+            member_texts: FxHashMap::default(),
             phases: vec![Phase { name: "startup".into(), ..Phase::default() }],
             current: 0,
             frame: 0,
@@ -810,7 +810,7 @@ impl Recorder {
         let ms = |cost: f64| cost / seconds * 1e3;
 
         // (a member read through different classes of instance, Part.CFrame and MeshPart.CFrame, is one: BasePart.CFrame)
-        let mut canonical: HashMap<(u8, &str, &str), u32> = HashMap::new();
+        let mut canonical: FxHashMap<(u8, &str, &str), u32> = FxHashMap::default();
         let canon: Vec<u32> = self.members.iter().enumerate().map(|(id, member)| *canonical.entry((member.kind as u8, &member.class, &member.member)).or_insert(id as u32)).collect();
         let mut merged: FxHashMap<(u32, u32), Stat> = FxHashMap::default();
         for (&(site, member), stat) in &phase.stats {

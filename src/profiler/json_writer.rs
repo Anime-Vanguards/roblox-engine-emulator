@@ -7,8 +7,6 @@
 //! helpers so output stays byte-for-byte identical to `serde_json::to_string` (compact) and
 //! `serde_json::to_string_pretty` (2-space indent).
 
-use std::collections::BTreeMap;
-
 use serde_json::Value as Json;
 
 /// Infallible byte-buffer JSON writer supporting both compact and 2-space pretty output.
@@ -401,11 +399,74 @@ impl<A: WriteJson, B: WriteJson, C: WriteJson> WriteJson for (A, B, C) {
     }
 }
 
-impl<K: AsRef<str>, V: WriteJson> WriteJson for BTreeMap<K, V> {
+/// Sorted key-value list serialized as a JSON object with keys in ascending order.
+/// Avoids monomorphizing `BTreeMap` across one-shot schema maps.
+#[derive(Clone, Debug)]
+pub(super) struct SortedMap<K, V>(pub(super) Vec<(K, V)>);
+
+impl<K, V> Default for SortedMap<K, V> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl<K: Ord, V> SortedMap<K, V> {
+    pub(super) fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub(super) fn from_unsorted(mut items: Vec<(K, V)>) -> Self {
+        if items.len() > 1 {
+            crate::sort::by(&mut items, |a, b| a.0.cmp(&b.0));
+            let mut write = 0usize;
+            for read in 0..items.len() {
+                if write > 0 && items[write - 1].0 == items[read].0 {
+                    items.swap(write - 1, read);
+                } else {
+                    if write != read {
+                        items.swap(write, read);
+                    }
+                    write += 1;
+                }
+            }
+            items.truncate(write);
+        }
+        Self(items)
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(super) fn insert(&mut self, key: K, value: V) {
+        match self.0.binary_search_by(|(k, _)| k.cmp(&key)) {
+            Ok(idx) => self.0[idx].1 = value,
+            Err(idx) => self.0.insert(idx, (key, value)),
+        }
+    }
+
+    pub(super) fn iter(&self) -> std::slice::Iter<'_, (K, V)> {
+        self.0.iter()
+    }
+}
+
+impl<K: Ord, V> FromIterator<(K, V)> for SortedMap<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
+        Self::from_unsorted(iter.into_iter().collect())
+    }
+}
+
+impl<K: Ord, V, const N: usize> From<[(K, V); N]> for SortedMap<K, V> {
+    fn from(items: [(K, V); N]) -> Self {
+        Self::from_unsorted(items.into_iter().collect())
+    }
+}
+
+impl<K: AsRef<str>, V: WriteJson> WriteJson for SortedMap<K, V> {
     #[inline(never)]
     fn write_json(&self, w: &mut JsonWriter) {
         let mut o = w.object();
-        for (k, v) in self {
+        for (k, v) in &self.0 {
             o.begin_field_escaped(k.as_ref());
             v.write_json(o.w);
         }
@@ -517,10 +578,10 @@ mod tests {
         struct Sample<'a> {
             a_bool: bool,
             b_empty_arr: Vec<u64>,
-            c_empty_map: BTreeMap<String, u64>,
+            c_empty_map: SortedMap<String, u64>,
             d_floats: Vec<f64>,
             e_ints: Vec<i64>,
-            f_map: BTreeMap<String, u64>,
+            f_map: SortedMap<String, u64>,
             #[skip_none]
             g_absent: Option<u64>,
             #[skip_none]
@@ -536,10 +597,10 @@ mod tests {
         let sample = Sample {
             a_bool: true,
             b_empty_arr: Vec::new(),
-            c_empty_map: BTreeMap::new(),
+            c_empty_map: SortedMap::new(),
             d_floats: vec![0.0, -0.0, 1.5, f64::NAN, f64::INFINITY],
             e_ints: vec![0, 1, -1, i64::MIN, i64::MAX],
-            f_map: BTreeMap::from([("a\"b\\c\n".to_string(), 42), ("z".to_string(), 0)]),
+            f_map: SortedMap::from([("a\"b\\c\n".to_string(), 42), ("z".to_string(), 0)]),
             g_absent: None,
             h_null_inner: Some(None),
             i_str: "hello \"world\"\n\t\x08\u{0001}😀",

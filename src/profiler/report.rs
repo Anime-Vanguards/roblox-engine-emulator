@@ -4,7 +4,6 @@
 //! and `report.html` (one self-contained page).
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Write as _,
     path::Path,
 };
@@ -14,7 +13,7 @@ use serde_json::Value as Json;
 
 use super::{
     Config, Mark, Row, Run, Source, attribution, caches::Counts, cpu, hw,
-    json_writer::{JsonWriter, WriteJson, json_struct},
+    json_writer::{JsonWriter, SortedMap, WriteJson, json_struct},
     memory, vm,
 };
 
@@ -404,12 +403,12 @@ struct LineFigures {
     total_wall: f64,
     alloc: f64,
     allocs: f64,
-    ops: BTreeMap<u8, u64>,
+    ops: FxHashMap<u8, u64>,
     /// Of its work, the cold and first-use charges and the collector's
     cold: f64,
     collector: f64,
     /// Its figures in each phase that ran it
-    phases: BTreeMap<u32, LinePhase>,
+    phases: FxHashMap<u32, LinePhase>,
 }
 
 /// A line's figures in one phase
@@ -855,7 +854,7 @@ json_struct! {
 
 json_struct! {
     struct MarkBuiltinsJson {
-        declines: BTreeMap<&'static str, u64>,
+        declines: SortedMap<&'static str, u64>,
         fast: u64,
     }
 }
@@ -895,16 +894,16 @@ json_struct! {
         #[skip_none]
         builtins: Option<MarkBuiltinsJson>,
         #[skip_none]
-        cache_depths: Option<BTreeMap<&'static str, [u64; vm::CACHE_DEPTHS]>>,
+        cache_depths: Option<SortedMap<&'static str, [u64; vm::CACHE_DEPTHS]>>,
         #[skip_none]
-        caches: Option<BTreeMap<&'static str, [u64; vm::CACHE_OUTCOMES]>>,
+        caches: Option<SortedMap<&'static str, [u64; vm::CACHE_OUTCOMES]>>,
         #[skip_none]
         cold_ms: Option<f64>,
         #[skip_none]
         collector_ms: Option<f64>,
         cycles: u64,
         #[skip_none]
-        engine: Option<BTreeMap<&'static str, u64>>,
+        engine: Option<SortedMap<&'static str, u64>>,
         frame: u64,
         #[skip_none]
         gc: Option<MarkGcJson>,
@@ -1026,7 +1025,7 @@ json_struct! {
         native: bool,
         native_entries: u64,
         native_work_ms: f64,
-        phases: Option<BTreeMap<String, FunctionPhaseJson>>,
+        phases: Option<SortedMap<String, FunctionPhaseJson>>,
         #[rename = "self"]
         own: FunctionSelfJson,
         short: Option<String>,
@@ -1040,7 +1039,7 @@ json_struct! {
     struct ScopeJson {
         cold_work_ms: f64,
         collector_ms: f64,
-        engine: Option<BTreeMap<&'static str, u64>>,
+        engine: Option<SortedMap<&'static str, u64>>,
         game_saving_ms: f64,
         game_self_ms: f64,
         harness_folder: &'static str,
@@ -1071,8 +1070,8 @@ json_struct! {
         inlined: Option<i32>,
         insns: u64,
         line: i32,
-        ops: BTreeMap<&'static str, u64>,
-        phases: BTreeMap<String, LinePhaseJson>,
+        ops: SortedMap<&'static str, u64>,
+        phases: SortedMap<String, LinePhaseJson>,
         self_work_ms: f64,
         time_ms: f64,
         total_insns: u64,
@@ -1219,7 +1218,7 @@ json_struct! {
     struct FidelityJson<'a> {
         band: [f64; 2],
         clock_band: [f64; 2],
-        components: BTreeMap<&'static str, FidelityComponentJson>,
+        components: SortedMap<&'static str, FidelityComponentJson>,
         device: FidelityDeviceJson<'a>,
         prices: String,
         reference: &'static str,
@@ -1313,7 +1312,7 @@ json_struct! {
         other: u64,
         outcome_charged_us: f64,
         outcome_charged_us_per_frame: f64,
-        outcomes: BTreeMap<&'static str, u64>,
+        outcomes: SortedMap<&'static str, u64>,
         presized_us: Option<f64>,
         slow: u64,
         unpriced: u64,
@@ -1328,7 +1327,7 @@ json_struct! {
         first_touch_us: f64,
         node: i32,
         outcome_charged_us: f64,
-        outcomes: BTreeMap<&'static str, u64>,
+        outcomes: SortedMap<&'static str, u64>,
         presized_us: Option<f64>,
         unpriced: u64,
         within_noise: u64,
@@ -1339,13 +1338,13 @@ json_struct! {
     struct CacheSiteJson {
         charged_work_us: f64,
         charged_work_us_per_frame: f64,
-        depth: BTreeMap<String, u64>,
+        depth: SortedMap<String, u64>,
         extra_work_us: f64,
         extra_work_us_per_frame: f64,
         first_touch_us: f64,
         first_touch_us_per_frame: f64,
         function: i32,
-        handlers: BTreeMap<String, u64>,
+        handlers: SortedMap<String, u64>,
         harness: bool,
         hits: u64,
         key: Option<String>,
@@ -1357,7 +1356,7 @@ json_struct! {
         other: u64,
         outcome_charged_us: f64,
         outcome_charged_us_per_frame: f64,
-        outcomes: BTreeMap<&'static str, u64>,
+        outcomes: SortedMap<&'static str, u64>,
         pc: usize,
         presized_us: Option<f64>,
         presized_us_per_frame: Option<f64>,
@@ -1380,7 +1379,7 @@ json_struct! {
         about: &'static str,
         by_kind: Vec<CacheKindJson>,
         frames: f64,
-        outcome_info: BTreeMap<&'static str, OutcomeInfoJson>,
+        outcome_info: SortedMap<&'static str, OutcomeInfoJson>,
         outcomes: [&'static str; vm::CACHE_OUTCOMES],
         prices: Json,
         scope: Vec<String>,
@@ -1393,7 +1392,7 @@ json_struct! {
     struct BuiltinNodeJson {
         calls: u64,
         decline_charged_us: f64,
-        declines: BTreeMap<&'static str, u64>,
+        declines: SortedMap<&'static str, u64>,
         fast: u64,
         fast_equivalent_us: f64,
         #[skip_none]
@@ -1406,7 +1405,7 @@ json_struct! {
     struct BuiltinSiteJson {
         calls: u64,
         decline_charged_us: f64,
-        declines: BTreeMap<&'static str, u64>,
+        declines: SortedMap<&'static str, u64>,
         fallback_end_pc: Option<usize>,
         fast: u64,
         fast_equivalent_us: f64,
@@ -1427,12 +1426,12 @@ json_struct! {
 
 json_struct! {
     struct BuiltinJson {
-        advice: BTreeMap<&'static str, &'static str>,
+        advice: SortedMap<&'static str, &'static str>,
         calls: u64,
         decline_charged_ns: Option<f64>,
         decline_charged_us: f64,
         decline_charged_us_per_frame: f64,
-        declines: BTreeMap<&'static str, u64>,
+        declines: SortedMap<&'static str, u64>,
         fast: u64,
         fast_equivalent_ns: Option<f64>,
         fast_equivalent_us: f64,
@@ -1446,7 +1445,7 @@ json_struct! {
 json_struct! {
     struct BuiltinToolJson {
         calls: u64,
-        declines: BTreeMap<&'static str, u64>,
+        declines: SortedMap<&'static str, u64>,
         fast: u64,
         id: i32,
         name: String,
@@ -2055,7 +2054,7 @@ json_struct! {
     struct CounterAttributionJson {
         calls: usize,
         calls_booked_to_callers: usize,
-        folded_left_out: BTreeMap<String, FoldedLeftOutJson>,
+        folded_left_out: SortedMap<String, FoldedLeftOutJson>,
         functions: usize,
         method: &'static str,
         min_measured: u32,
@@ -2071,8 +2070,8 @@ json_struct! {
 
 json_struct! {
     struct CounterRunJson {
-        counts: BTreeMap<String, i64>,
-        rates: BTreeMap<&'static str, f64>,
+        counts: SortedMap<String, i64>,
+        rates: SortedMap<&'static str, f64>,
         seconds: f64,
     }
 }
@@ -2082,7 +2081,7 @@ json_struct! {
         calls: usize,
         count: usize,
         matched: usize,
-        own_counts: Option<BTreeMap<String, i64>>,
+        own_counts: Option<SortedMap<String, i64>>,
         own_us: f64,
         taken_out: bool,
     }
@@ -2099,7 +2098,7 @@ json_struct! {
 
 json_struct! {
     struct CounterThreadJson<'a> {
-        counts: BTreeMap<String, i64>,
+        counts: SortedMap<String, i64>,
         id: u32,
         name: Option<&'a str>,
         run_thread: bool,
@@ -2109,9 +2108,9 @@ json_struct! {
 
 json_struct! {
     struct CounterPhaseJson {
-        counts: BTreeMap<String, i64>,
+        counts: SortedMap<String, i64>,
         phase: String,
-        rates: BTreeMap<&'static str, f64>,
+        rates: SortedMap<&'static str, f64>,
     }
 }
 
@@ -2156,10 +2155,10 @@ json_struct! {
         module: Option<String>,
         name: String,
         #[rename = "self"]
-        own: BTreeMap<String, i64>,
-        self_rates: BTreeMap<&'static str, f64>,
-        total: BTreeMap<String, i64>,
-        total_rates: BTreeMap<&'static str, f64>,
+        own: SortedMap<String, i64>,
+        self_rates: SortedMap<&'static str, f64>,
+        total: SortedMap<String, i64>,
+        total_rates: SortedMap<&'static str, f64>,
     }
 }
 
@@ -2172,8 +2171,8 @@ json_struct! {
         name: Option<String>,
         #[rename = "self"]
         own: EmptyObject,
-        total: BTreeMap<String, i64>,
-        total_rates: BTreeMap<&'static str, f64>,
+        total: SortedMap<String, i64>,
+        total_rates: SortedMap<&'static str, f64>,
     }
 }
 
@@ -2259,7 +2258,7 @@ json_struct! {
         heap: Option<HeapJson<'a>>,
         kinds: Vec<&'static str>,
         lines: Vec<LineJson>,
-        listings: BTreeMap<String, ListingJson>,
+        listings: SortedMap<String, ListingJson>,
         #[skip_none]
         luau_caches: Option<LuauCachesJson>,
         marks: Vec<MarkJson<'a>>,
@@ -2272,7 +2271,7 @@ json_struct! {
         resumptions: Option<Vec<ResumptionJson>>,
         run: RunJson<'a>,
         scope: ScopeJson,
-        source_hashes: BTreeMap<String, String>,
+        source_hashes: SortedMap<String, String>,
         summary: String,
         #[skip_none]
         time: Option<TimeJson>,
@@ -2506,7 +2505,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         crate::sort::by(callers, |a, b| b.1.work.total_cmp(&a.1.work).then(b.1.calls.cmp(&a.1.calls)).then(a.0.cmp(&b.0)));
     }
     let phase_name = |phase: u32| input.phases.get(phase as usize).cloned().unwrap_or_else(|| "startup".to_string());
-    let mut by_phase: FxHashMap<i32, BTreeMap<u32, FunctionPhase>> = FxHashMap::default();
+    let mut by_phase: FxHashMap<i32, FxHashMap<u32, FunctionPhase>> = FxHashMap::default();
     for (&(id, phase, harness), &(work, calls, insns)) in &model.phase_self {
         let figures = by_phase.entry(id).or_default().entry(phase).or_default();
         figures.self_work += work;
@@ -2806,7 +2805,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         heap: None,
         kinds: input.config.kinds.names(),
         lines: lines_json,
-        listings: BTreeMap::new(),
+        listings: SortedMap::new(),
         luau_caches: None,
         marks: input.marks.iter().map(mark_json).collect(),
         phase_timing: None,
@@ -2815,7 +2814,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         resumptions: None,
         run: run_json,
         scope: scope_json,
-        source_hashes: BTreeMap::new(),
+        source_hashes: SortedMap::new(),
         summary: String::new(),
         time: None,
         timeline: None,
@@ -2857,7 +2856,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             .filter(|(id, f)| f.native() && !f.exempt() && (f.native_entries > 0 || f.native_work != 0.0 || model.functions.contains_key(&(*id as i32))))
             .map(|(_, f)| f)
             .collect();
-        let mut opcodes: BTreeMap<u8, (u64, f64)> = BTreeMap::new();
+        let mut opcodes: FxHashMap<u8, (u64, f64)> = FxHashMap::default();
         for function in vm_results.functions.iter().filter(|f| !f.exempt()) {
             for (pc, &count) in function.counts.iter().enumerate() {
                 if count > 0 {
@@ -2868,7 +2867,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             }
         }
         let mut opcode_rows: Vec<_> = opcodes.into_iter().collect();
-        crate::sort::by(&mut opcode_rows, |a, b| b.1.0.cmp(&a.1.0));
+        crate::sort::by(&mut opcode_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
         // the run's kinds of work (of the total): cold and first-use charges, the collector's, dispatch, Studio-era and defaulted prices
         let mut kinds_total = [0.0f64; vm::SPLITS];
         for node in &vm_results.nodes {
@@ -3169,14 +3168,14 @@ pub fn write(input: &Input) -> Result<String, String> {
     if let Some(allocations) = input.allocations {
         let mut by_type: Vec<(String, memory::Amount)> = allocations.types.names.iter().cloned().zip(allocations.by_type.iter().copied()).collect();
         crate::sort::by(&mut by_type, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
-        let mut groups: BTreeMap<String, memory::Amount> = BTreeMap::new();
+        let mut groups: FxHashMap<String, memory::Amount> = FxHashMap::default();
         for (name, amount) in &by_type {
             let entry = groups.entry(memory::group(name).to_string()).or_default();
             entry.bytes += amount.bytes;
             entry.count += amount.count;
         }
         let mut groups: Vec<_> = groups.into_iter().collect();
-        crate::sort::by(&mut groups, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
+        crate::sort::by(&mut groups, |a, b| b.1.bytes.total_cmp(&a.1.bytes).then_with(|| a.0.cmp(&b.0)));
         let total = allocations.bytes as f64;
         let _ = writeln!(
             summary,
@@ -3548,11 +3547,13 @@ pub fn write(input: &Input) -> Result<String, String> {
         let (first, last) = (&rows[0], rows.last().unwrap());
         // (a frame's host time and cycles: its own, else the cpu pass's for the same frame, else none: a kind slowed the run)
         let host = |row: &Row| row.host_ms.map(|host| (host, row.cycles.unwrap_or(0))).or_else(|| (row.part == 0).then(|| cpu_by_frame.get(&row.frame).copied()).flatten());
-        let mut own_hosts: BTreeMap<u64, Option<f64>> = BTreeMap::new();
+        let mut own_hosts: FxHashMap<u64, Option<f64>> = FxHashMap::default();
         for row in rows {
             let whole = own_hosts.entry(row.frame).or_insert(Some(0.0));
             *whole = whole.zip(row.host_ms).map(|(before, part)| before + part);
         }
+        let mut own_hosts: Vec<(u64, Option<f64>)> = own_hosts.into_iter().collect();
+        crate::sort::by_key(&mut own_hosts, |&(frame, _)| frame);
         let hosts: Vec<f64> = own_hosts.iter().filter_map(|(frame, own)| own.or_else(|| cpu_by_frame.get(frame).map(|(host, _)| *host))).collect();
         let host_text = if hosts.len() == count as usize {
             format!("host a frame mean {:.2} ms{}", hosts.iter().sum::<f64>() / count, if rows[0].host_ms.is_none() { " (the cpu pass's)" } else { "" })
@@ -3765,15 +3766,15 @@ pub fn write(input: &Input) -> Result<String, String> {
     }
     if let Some(time) = input.time {
         // (milliseconds of host time, the thread's CPU where it can be read, rounded per stack)
-        let mut lines: HashMap<String, f64> = HashMap::new();
+        let mut lines: FxHashMap<String, f64> = FxHashMap::default();
         for (&(phase, stack), &(ticks, cycles)) in &time.samples {
             *lines.entry(fold(&names, input.phases, phase, &time.stacks.stacks[stack as usize])).or_default() += time.cpu_ms(cycles).unwrap_or(ticks as f64);
         }
         folded_files.push(("time.folded".into(), lines.into_iter().map(|(stack, weight)| (stack, weight.round() as u64)).collect()));
     }
     if let Some(allocations) = input.allocations {
-        let mut by_bytes: HashMap<String, f64> = HashMap::new();
-        let mut by_count: HashMap<String, f64> = HashMap::new();
+        let mut by_bytes: FxHashMap<String, f64> = FxHashMap::default();
+        let mut by_count: FxHashMap<String, f64> = FxHashMap::default();
         for (&(phase, stack, _), amount) in &allocations.by_stack {
             let key = fold(&names, input.phases, phase, &allocations.stacks.stacks[stack as usize]);
             *by_bytes.entry(key.clone()).or_default() += amount.bytes;
@@ -3782,7 +3783,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         folded_files.push(("alloc.folded".into(), by_bytes.into_iter().map(|(key, value)| (key, value.round() as u64)).collect()));
         folded_files.push(("alloc.counts.folded".into(), by_count.into_iter().map(|(key, value)| (key, value.round() as u64)).collect()));
         if let Some(last) = input.snapshots.last() {
-            let mut live: HashMap<String, u64> = HashMap::new();
+            let mut live: FxHashMap<String, u64> = FxHashMap::default();
             for (stack, _, _, size) in &last.by_stack {
                 *live.entry(fold(&names, &[], u32::MAX, &allocations.stacks.stacks[*stack as usize])).or_default() += size.round() as u64;
             }
@@ -3888,7 +3889,7 @@ pub fn builtin_advice(name: &str, reason: usize) -> Option<&'static str> {
 /// Physical frames in the reported phases. Marks are a fallback for inputs without timeline rows.
 fn scope_frames(input: &Input, scope: &[u32]) -> f64 {
     // Phase marks can split a frame, and their counters include the frame before steady starts.
-    let row_frames: std::collections::BTreeSet<u64> = input.rows.iter().filter(|row| scope.contains(&row.phase)).map(|row| row.frame).collect();
+    let row_frames: FxHashSet<u64> = input.rows.iter().filter(|row| scope.contains(&row.phase)).map(|row| row.frame).collect();
     if !row_frames.is_empty() { return row_frames.len() as f64; }
     let names: Vec<&str> = scope.iter().filter_map(|phase| input.phases.get(*phase as usize).map(String::as_str)).collect();
     let end = input.end.map_or(input.run.frames, |end| end.frame.max(input.run.frames));
@@ -3967,8 +3968,8 @@ fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: us
             }
         }
     };
-    let mut merged: BTreeMap<(i32, usize), vm::CacheSite> = BTreeMap::new();
-    let mut by_node: BTreeMap<(i32, usize), BTreeMap<i32, vm::CacheSite>> = BTreeMap::new();
+    let mut merged: FxHashMap<(i32, usize), vm::CacheSite> = FxHashMap::default();
+    let mut by_node: FxHashMap<(i32, usize), FxHashMap<i32, vm::CacheSite>> = FxHashMap::default();
     for (id, function) in vm_results.functions.iter().enumerate() {
         if function.exempt() {
             continue;
@@ -3979,6 +3980,8 @@ fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: us
             absorb(by_node.entry((id as i32, site.pc)).or_default().entry(site.node).or_insert_with(fresh), site);
         }
     }
+    let mut merged: Vec<((i32, usize), vm::CacheSite)> = merged.into_iter().collect();
+    crate::sort::by_key(&mut merged, |&(key, _)| key);
     let mut sites: Vec<SiteRow> = Vec::new();
     let mut by_kind: [KindTotals; 4] = Default::default();
     let mut tool_kinds: [KindTotals; 4] = Default::default();
@@ -3993,7 +3996,7 @@ fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: us
         // (apart by node: a site that did more than hit, so a context's share of its charge and its extra can be told)
         let beyond_hits = site.charged > 0.0 || site.outcomes.iter().enumerate().any(|(outcome, count)| outcome != vm::HIT && *count > 0);
         let nodes: Vec<(i32, vm::CacheSite, crate::profiler::prices::Extra)> = if beyond_hits {
-            by_node
+            let mut list: Vec<_> = by_node
                 .remove(&(function, pc))
                 .unwrap_or_default()
                 .into_iter()
@@ -4002,7 +4005,9 @@ fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: us
                     let extra = kind.map_or_else(Default::default, |kind| crate::profiler::prices::site_extra(kind, &at.outcomes, &at.depths, scale));
                     (node, at, extra)
                 })
-                .collect()
+                .collect();
+            crate::sort::by_key(&mut list, |&(node, _, _)| node);
+            list
         } else {
             Vec::new()
         };
@@ -4024,7 +4029,7 @@ fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: us
         }
         sites.push(SiteRow { function, site, kind, extra, charged_us, nodes });
     }
-    let outcomes_map = |outcomes: &[u64; vm::CACHE_OUTCOMES]| -> BTreeMap<&'static str, u64> { vm::CACHE_OUTCOME_NAMES.iter().copied().zip(outcomes.iter().copied()).collect() };
+    let outcomes_map = |outcomes: &[u64; vm::CACHE_OUTCOMES]| -> SortedMap<&'static str, u64> { vm::CACHE_OUTCOME_NAMES.iter().copied().zip(outcomes.iter().copied()).collect() };
     // (the four counts profiles had before, each exact: misses are repredictions, slow the metatable walks and unsafe environments, other not a table)
     let legacy = |o: &[u64; vm::CACHE_OUTCOMES]| -> (u64, u64, u64, u64) { (o[vm::HIT], o[vm::REPREDICTED], o[vm::METATABLE] + o[vm::METAFUNCTION] + o[vm::UNSAFE_ENV], o[vm::NOT_TABLE]) };
     // the lookups a table serves (a value another type's metamethod serves, not_table, is no cache's: profile diff and the viewer
@@ -4255,10 +4260,10 @@ Luau inline caches, {scope_label}: what each lookup did, as the interpreter did 
     struct Builtin {
         all: Calls,
         /// Per site (function, pc), and per site and node
-        sites: BTreeMap<(i32, usize), Calls>,
-        nodes: BTreeMap<(i32, usize), BTreeMap<i32, Calls>>,
+        sites: FxHashMap<(i32, usize), Calls>,
+        nodes: FxHashMap<(i32, usize), FxHashMap<i32, Calls>>,
     }
-    let (mut builtins, mut tool_builtins): (BTreeMap<i32, Builtin>, BTreeMap<i32, Builtin>) = (BTreeMap::new(), BTreeMap::new());
+    let (mut builtins, mut tool_builtins): (FxHashMap<i32, Builtin>, FxHashMap<i32, Builtin>) = (FxHashMap::default(), FxHashMap::default());
     for (id, function) in vm_results.functions.iter().enumerate() {
         if function.exempt() {
             continue;
@@ -4273,7 +4278,7 @@ Luau inline caches, {scope_label}: what each lookup did, as the interpreter did 
     }
     let declined = |builtin: &Builtin| builtin.all.declined();
     let charged = |builtin: &Builtin| builtin.all.charged;
-    let sorted = |builtins: BTreeMap<i32, Builtin>| -> Vec<(i32, Builtin)> {
+    let sorted = |builtins: FxHashMap<i32, Builtin>| -> Vec<(i32, Builtin)> {
         let mut rows: Vec<(i32, Builtin)> = builtins.into_iter().collect();
         crate::sort::by(&mut rows, |a, b| charged(&b.1).total_cmp(&charged(&a.1)).then(declined(&b.1).cmp(&declined(&a.1))).then((b.1.all.fast + declined(&b.1)).cmp(&(a.1.all.fast + declined(&a.1)))).then(a.0.cmp(&b.0)));
         rows
@@ -4327,12 +4332,14 @@ builtin calls (the compiler's fast calls), {scope_label}: {} calls, {} served by
         let (calls, fast): (u64, u64) = tool_rows.iter().fold((0, 0), |(calls, fast), (_, b)| (calls + b.all.fast + declined(b), fast + b.all.fast));
         let _ = writeln!(summary, "ree's own code's builtin calls: {} calls, {} served by the fast path: left out of the table above", group_digits(calls), group_digits(fast));
     }
-    let declines_map = |declines: &[u64; vm::DECLINES]| -> BTreeMap<&'static str, u64> { vm::DECLINE_NAMES.iter().copied().zip(declines.iter().copied()).collect() };
+    let declines_map = |declines: &[u64; vm::DECLINES]| -> SortedMap<&'static str, u64> { vm::DECLINE_NAMES.iter().copied().zip(declines.iter().copied()).collect() };
     report.builtins = Some(Some(
         rows.iter()
             .map(|(id, b)| {
                 let name = name_of(*id);
                 let n = declined(b);
+                let mut b_sites: Vec<((i32, usize), &Calls)> = b.sites.iter().map(|(&k, v)| (k, v)).collect();
+                crate::sort::by_key(&mut b_sites, |&(key, _)| key);
                 BuiltinJson {
                     advice: b.all.declines.iter().enumerate().filter(|(_, n)| **n > 0).filter_map(|(reason, _)| builtin_advice(&name, reason).map(|advice| (vm::DECLINE_NAMES[reason], advice))).collect(),
                     calls: b.all.fast + n,
@@ -4348,19 +4355,17 @@ builtin calls (the compiler's fast calls), {scope_label}: {} calls, {} served by
                     fast_equivalent_us_per_frame: round(b.all.fast_equivalent * 1e6 / frames, 5),
                     id: *id,
                     name,
-                    sites: b
-                        .sites
-                        .iter()
-                        .map(|(&(function, pc), at)| {
+                    sites: b_sites
+                        .into_iter()
+                        .map(|((function, pc), at)| {
                             let f = &vm_results.functions[function as usize];
                             let (mut charged, mut fast_equivalent) = (round(at.charged * 1e6, 4), round(at.fast_equivalent * 1e6, 4));
                             // (a site that declined, apart by call-tree node: its figures their rounded sums, so they add up exactly)
                             let nodes: Vec<BuiltinNodeJson> = if at.declined() > 0 || at.charged > 0.0 {
-                                b.nodes
-                                    .get(&(function, pc))
-                                    .into_iter()
-                                    .flatten()
-                                    .map(|(&node, calls)| BuiltinNodeJson {
+                                let mut list: Vec<(i32, &Calls)> = b.nodes.get(&(function, pc)).into_iter().flatten().map(|(&node, calls)| (node, calls)).collect();
+                                crate::sort::by_key(&mut list, |&(node, _)| node);
+                                list.into_iter()
+                                    .map(|(node, calls)| BuiltinNodeJson {
                                         calls: calls.fast + calls.declined(),
                                         decline_charged_us: round(calls.charged * 1e6, 4),
                                         declines: declines_map(&calls.declines),
@@ -4645,7 +4650,7 @@ fn fidelity_json<'a>(input: &Input<'a>, total: f64, kinds: &[f64; vm::SPLITS], l
         format!("desktop prices: {}", crate::cost::REFERENCE_CLIENT)
     };
 
-    let mut component_map = BTreeMap::new();
+    let mut component_map = SortedMap::new();
     for component in &components {
         component_map.insert(
             component.name,
@@ -4896,7 +4901,7 @@ fn attribution_sections<'a>(input: &Input<'a>, names: &Names, summary: &mut Stri
 }
 
 /// What the scripts asked the engine to do (cost::EngineOps), each count by name
-fn engine_map(ops: &crate::cost::EngineOps) -> BTreeMap<&'static str, u64> {
+fn engine_map(ops: &crate::cost::EngineOps) -> SortedMap<&'static str, u64> {
     ops.named().into_iter().collect()
 }
 
@@ -4985,8 +4990,8 @@ fn counters<'a>(input: &Input, hw: &'a hw::Report, names: &Names, summary: &mut 
     use hw::{Figures, counters as known};
     let n = hw.names.len();
     let whole = |value: f64| -> i64 { value.round() as i64 };
-    let object = |counts: &Figures| -> BTreeMap<String, i64> { hw.names.iter().zip(counts).map(|(name, value)| (name.clone(), whole(*value))).collect() };
-    let rates = |counts: &Figures| -> BTreeMap<&'static str, f64> { hw::figures(&hw.names, counts).into_iter().map(|figure| (figure.key, round(figure.value, 6))).collect() };
+    let object = |counts: &Figures| -> SortedMap<String, i64> { hw.names.iter().zip(counts).map(|(name, value)| (name.clone(), whole(*value))).collect() };
+    let rates = |counts: &Figures| -> SortedMap<&'static str, f64> { hw::figures(&hw.names, counts).into_iter().map(|figure| (figure.key, round(figure.value, 6))).collect() };
     let figure = |counts: &Figures, key: &str| hw::figures(&hw.names, counts).into_iter().find(|figure| figure.key == key);
     let mut out = CountersJson {
         about: hw.names.iter().map(|name| known::known(name).map(|known| known.about)).collect(),
@@ -5148,7 +5153,7 @@ fn counters<'a>(input: &Input, hw: &'a hw::Report, names: &Names, summary: &mut 
     // its total; a caller's frame carries the line it called from, so a line's total is what the calls it made cost
     let mut functions: FxHashMap<i32, (Figures, Figures)> = FxHashMap::default();
     let mut lines: FxHashMap<(i32, i32), Figures> = FxHashMap::default();
-    let mut by_counter: Vec<HashMap<String, f64>> = vec![HashMap::new(); n];
+    let mut by_counter: Vec<FxHashMap<String, f64>> = vec![FxHashMap::default(); n];
     let add = |total: &mut Figures, counts: &Figures| {
         for (total, count) in total.iter_mut().zip(counts) {
             *total += count;
@@ -5494,7 +5499,7 @@ fn fold_tree(vm: &vm::Results, names: &Names, phases: &[String]) -> (Vec<(String
 /// speedscope's file format: shared frames, one sampled profile per folded file
 fn speedscope<'a>(files: &'a [(String, Vec<(String, u64)>)], name: &str) -> SpeedscopeJson<'a> {
     let mut frames: Vec<String> = Vec::new();
-    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut index: FxHashMap<String, usize> = FxHashMap::default();
     let mut profiles = Vec::new();
     for (file, rows) in files {
         let unit = match file.as_str() {
@@ -5604,8 +5609,8 @@ fn row_code_work_ms(row: &Row) -> f64 {
 }
 
 /// Each frame's work in the code (ms), the parts a phase mark split it into added together
-fn whole_frame_work(rows: &[Row]) -> BTreeMap<u64, f64> {
-    let mut whole: BTreeMap<u64, f64> = BTreeMap::new();
+fn whole_frame_work(rows: &[Row]) -> FxHashMap<u64, f64> {
+    let mut whole: FxHashMap<u64, f64> = FxHashMap::default();
     for row in rows {
         *whole.entry(row.frame).or_default() += row_code_work_ms(row);
     }
@@ -5613,8 +5618,8 @@ fn whole_frame_work(rows: &[Row]) -> BTreeMap<u64, f64> {
 }
 
 /// The frames each function was active in, from the timeline's function summaries (stat: id, total, active, ...)
-fn active_frames_by_function(timeline: Option<&TimelineJson>) -> BTreeMap<i32, u64> {
-    let mut active = BTreeMap::new();
+fn active_frames_by_function(timeline: Option<&TimelineJson>) -> FxHashMap<i32, u64> {
+    let mut active = FxHashMap::default();
     let Some(stats) = timeline.and_then(|t| t.function_stats.as_ref()) else { return active };
     for stat in stats {
         active.insert(stat.0, stat.2);
@@ -5623,8 +5628,8 @@ fn active_frames_by_function(timeline: Option<&TimelineJson>) -> BTreeMap<i32, u
 }
 
 /// The calls a builtin site (or one context of it) had declined
-fn declined_calls(declines: &BTreeMap<&'static str, u64>) -> u64 {
-    declines.values().sum()
+fn declined_calls(declines: &SortedMap<&'static str, u64>) -> u64 {
+    declines.iter().map(|(_, count)| *count).sum()
 }
 
 /// What pricing one builtin site's fix found: the fix it belongs to and the cold code it adds
@@ -5655,7 +5660,7 @@ fn builtin_fix_adds_source_code(name: &str) -> bool {
 
 /// Writes a builtin site's fix costs into its JSON (`fix_instructions_us`, `fix_cold_us`, and `fix_unpriced` where one is
 /// unknown). None for a site the VM's results do not describe. `edits_seen` holds the edits already priced.
-fn price_builtin_site(vm_results: &vm::Results, name: &str, site: &mut BuiltinSiteJson, active_frames: &BTreeMap<i32, u64>, edits_seen: &mut BTreeSet<String>) -> Option<PricedSite> {
+fn price_builtin_site(vm_results: &vm::Results, name: &str, site: &mut BuiltinSiteJson, active_frames: &FxHashMap<i32, u64>, edits_seen: &mut FxHashSet<String>) -> Option<PricedSite> {
     let (function, pc) = (site.function, site.pc);
     let prototype = vm_results.functions.get(usize::try_from(function).ok()?)?;
     site.fix_cost_exact = Some(!builtin_fix_adds_source_code(name));
@@ -5702,17 +5707,19 @@ fn frame_ranges(frames: impl IntoIterator<Item = u64>) -> Vec<(u64, u64)> {
 
 /// For every call-tree context of a function whose edit adds cold code, the frames it ran in as `[function, node, first
 /// frame, last frame, ...]`. A partial fix can remove one caller's frames: the cold code is kept only on the callers left.
-fn function_contexts(vm_results: &vm::Results, rows: &[Row], scope: &[u32], cold_functions: &BTreeSet<i32>) -> Vec<FunctionContextRow> {
+fn function_contexts(vm_results: &vm::Results, rows: &[Row], scope: &[u32], cold_functions: &FxHashSet<i32>) -> Vec<FunctionContextRow> {
     let mut contexts = Vec::new();
     for (node, context) in vm_results.nodes.iter().enumerate() {
         if !cold_functions.contains(&context.function) {
             continue;
         }
         let in_scope = rows.iter().filter(|row| scope.contains(&row.phase));
-        let frames: BTreeSet<u64> = in_scope.filter(|row| row.nodes.iter().any(|(id, ms)| *id == node && *ms > 0.0)).map(|row| row.frame).collect();
+        let mut frames: Vec<u64> = in_scope.filter(|row| row.nodes.iter().any(|(id, ms)| *id == node && *ms > 0.0)).map(|row| row.frame).collect();
         if frames.is_empty() {
             continue;
         }
+        crate::sort::ord(&mut frames);
+        frames.dedup();
         contexts.push(FunctionContextRow { function: context.function, node, ranges: frame_ranges(frames) });
     }
     contexts
@@ -5726,8 +5733,8 @@ fn price_builtin_fixes(vm_results: &vm::Results, rows: &[Row], scope: &[u32], fp
     let whole = whole_frame_work(rows);
     let heavy_from_ms = frame_budget_ms(fps) * HEAVY_FRAME_SHARE;
     let mut replacement_frames = Vec::new();
-    let mut cold_functions: BTreeSet<i32> = BTreeSet::new();
-    let mut edits_seen: BTreeSet<String> = BTreeSet::new();
+    let mut cold_functions: FxHashSet<i32> = FxHashSet::default();
+    let mut edits_seen: FxHashSet<String> = FxHashSet::default();
     if let Some(builtins) = builtins.get_or_insert(None).as_mut() {
         for builtin in builtins {
             let name = builtin.name.clone();
@@ -5736,7 +5743,7 @@ fn price_builtin_fixes(vm_results: &vm::Results, rows: &[Row], scope: &[u32], fp
                 let Some(cold_seconds) = priced.cold_per_frame.filter(|cold| *cold > 0.0) else { continue };
                 cold_functions.insert(priced.function as i32);
                 // (the edit's cold code is paid in each heavy frame the function was active in, once)
-                let mut frames_seen = BTreeSet::new();
+                let mut frames_seen = FxHashSet::default();
                 for (index, row) in rows.iter().enumerate() {
                     let function_ran = row.functions.iter().any(|(id, ms, _)| *id == priced.function as i32 && *ms > 0.0);
                     if !scope.contains(&row.phase) || !function_ran || !frames_seen.insert(row.frame) {
@@ -5791,7 +5798,7 @@ fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64
     };
     let sort_keys = sort_keys_by_node(vm);
     let mut contributions = FrameContributions::default();
-    let mut frame_work: BTreeMap<u64, FrameSides> = BTreeMap::new();
+    let mut frame_work: FxHashMap<u64, FrameSides> = FxHashMap::default();
     for row in rows.iter().filter(|row| scope.contains(&row.phase)) {
         // (a row that does not split its work by side is all the game's)
         let (game, harness) = row_sides_ms(row).unwrap_or((row.work_ms * price_scale(), 0.0));
@@ -5908,7 +5915,7 @@ fn site_issue_key(vm: &vm::Results, site: &super::SiteWork) -> Option<IssueKey> 
 
 /// One issue's summary row, `[key, active frames, largest us, that frame, largest us in a frame over the budget]`. None
 /// when it was never active
-fn summarize_frames(key: String, frames: &mut Vec<(u64, f64)>, frame_work: &BTreeMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<IssueStatRow> {
+fn summarize_frames(key: String, frames: &mut Vec<(u64, f64)>, frame_work: &FxHashMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<IssueStatRow> {
     if frames.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
         crate::sort::by_key(frames, |&(frame, _)| frame);
         let mut write = 0usize;
@@ -6295,12 +6302,12 @@ mod frame_tests {
         let mut timeline = empty_timeline();
         timeline.as_mut().unwrap().function_stats = Some(stats);
         let mut builtins = Some(Some(vec![BuiltinJson {
-            advice: BTreeMap::new(),
+            advice: SortedMap::new(),
             calls: 1000,
             decline_charged_ns: None,
             decline_charged_us: 30.0,
             decline_charged_us_per_frame: 0.0,
-            declines: BTreeMap::from([("args", 1000)]),
+            declines: SortedMap::from([("args", 1000)]),
             fast: 0,
             fast_equivalent_ns: None,
             fast_equivalent_us: 5.0,
@@ -6310,7 +6317,7 @@ mod frame_tests {
             sites: vec![BuiltinSiteJson {
                 calls: 1000,
                 decline_charged_us: 30.0,
-                declines: BTreeMap::from([("args", 1000)]),
+                declines: SortedMap::from([("args", 1000)]),
                 fallback_end_pc: None,
                 fast: 0,
                 fast_equivalent_us: 5.0,
@@ -6321,8 +6328,8 @@ mod frame_tests {
                 function: function as i32,
                 line,
                 nodes: Some(vec![
-                    BuiltinNodeJson { calls: 600, decline_charged_us: 10.0, declines: BTreeMap::from([("args", 600)]), fast: 0, fast_equivalent_us: 2.0, fix_instructions_us: None, node: first_context_node as i32 },
-                    BuiltinNodeJson { calls: 400, decline_charged_us: 20.0, declines: BTreeMap::from([("args", 400)]), fast: 0, fast_equivalent_us: 3.0, fix_instructions_us: None, node: second_context_node as i32 },
+                    BuiltinNodeJson { calls: 600, decline_charged_us: 10.0, declines: SortedMap::from([("args", 600)]), fast: 0, fast_equivalent_us: 2.0, fix_instructions_us: None, node: first_context_node as i32 },
+                    BuiltinNodeJson { calls: 400, decline_charged_us: 20.0, declines: SortedMap::from([("args", 400)]), fast: 0, fast_equivalent_us: 3.0, fix_instructions_us: None, node: second_context_node as i32 },
                 ]),
                 pc: 0,
             }],

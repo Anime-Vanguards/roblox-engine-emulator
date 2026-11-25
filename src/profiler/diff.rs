@@ -7,11 +7,11 @@
 //! code's; host time is noise unless runs were interleaved (ABBA) and the noise of a repeat run is known.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     path::{Path, PathBuf},
 };
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value as Json;
 
 use super::json_writer::{JsonWriter, json_struct};
@@ -112,7 +112,7 @@ struct FunctionEntry {
     code: Option<String>,
     source: Option<String>,
     /// Instructions run by opcode, over the whole run (profile.json lines[].ops), for "the same path"
-    ops: BTreeMap<String, f64>,
+    ops: FxHashMap<String, f64>,
 }
 
 impl FunctionEntry {
@@ -125,13 +125,13 @@ impl FunctionEntry {
 /// module, first those with the same code and text (in order), then the same code (moved and re-indented or commented),
 /// then, between those anchors, the rest in order where both sides hold as many; an older profile without hashes pairs
 /// by key, then the same way in order. Named functions keep their key (module and name). before key -> after key
-fn pair_anonymous(before: &BTreeMap<String, FunctionEntry>, after: &BTreeMap<String, FunctionEntry>) -> BTreeMap<String, String> {
-    let mut pairs = BTreeMap::new();
-    let modules: BTreeSet<&String> = before.values().chain(after.values()).filter(|entry| entry.anonymous()).map(|entry| &entry.module).collect();
+fn pair_anonymous(before: &FxHashMap<String, FunctionEntry>, after: &FxHashMap<String, FunctionEntry>) -> FxHashMap<String, String> {
+    let mut pairs = FxHashMap::default();
+    let modules: FxHashSet<&String> = before.values().chain(after.values()).filter(|entry| entry.anonymous()).map(|entry| &entry.module).collect();
     for module in modules {
-        let side = |map: &BTreeMap<String, FunctionEntry>| -> Vec<(String, FunctionEntry)> {
+        let side = |map: &FxHashMap<String, FunctionEntry>| -> Vec<(String, FunctionEntry)> {
             let mut list: Vec<(String, FunctionEntry)> = map.iter().filter(|(_, entry)| entry.anonymous() && &entry.module == module).map(|(key, entry)| (key.clone(), entry.clone())).collect();
-            crate::sort::by_key(&mut list, |(_, entry)| entry.line);
+            crate::sort::by(&mut list, |a, b| a.1.line.cmp(&b.1.line).then_with(|| a.0.cmp(&b.0)));
             list
         };
         let (b, a) = (side(before), side(after));
@@ -240,9 +240,9 @@ fn shared_scope(before: &Json, after: &Json) -> Option<Vec<String>> {
 /// A function's figures in a diff, and whether it is the harness's own code (report.rs `harness_module`). With a scope,
 /// the work, calls and instructions are those phases' and only the game's side of the work (a C function's part done for
 /// the harness's code goes with the harness); allocations and host time stay the whole run's.
-fn functions(profile: &Json, scope: Option<&[String]>) -> BTreeMap<String, FunctionEntry> {
+fn functions(profile: &Json, scope: Option<&[String]>) -> FxHashMap<String, FunctionEntry> {
     // each function's instructions by opcode over the run, from its lines
-    let mut ops: BTreeMap<i64, BTreeMap<String, f64>> = BTreeMap::new();
+    let mut ops: FxHashMap<i64, FxHashMap<String, f64>> = FxHashMap::default();
     for line in profile["lines"].as_array().into_iter().flatten() {
         let (Some(id), Some(counts)) = (line["function"].as_i64(), line["ops"].as_object()) else { continue };
         let entry = ops.entry(id).or_default();
@@ -250,7 +250,7 @@ fn functions(profile: &Json, scope: Option<&[String]>) -> BTreeMap<String, Funct
             *entry.entry(op.clone()).or_insert(0.0) += num(count);
         }
     }
-    let mut out: BTreeMap<String, FunctionEntry> = BTreeMap::new();
+    let mut out: FxHashMap<String, FunctionEntry> = FxHashMap::default();
     for f in profile["functions"].as_array().into_iter().flatten() {
         if f["kind"] == "engine Luau" {
             continue;
@@ -345,11 +345,14 @@ struct Row {
 
 /// The functions of before and after paired (named ones by module and name, anonymous ones across a move:
 /// [`pair_anonymous`])
-fn function_rows(fb: &BTreeMap<String, FunctionEntry>, fa: &BTreeMap<String, FunctionEntry>) -> Vec<Row> {
+fn function_rows(fb: &FxHashMap<String, FunctionEntry>, fa: &FxHashMap<String, FunctionEntry>) -> Vec<Row> {
     let moved = pair_anonymous(fb, fa);
-    let paired_after: BTreeSet<&String> = moved.values().collect();
+    let paired_after: FxHashSet<&String> = moved.values().collect();
     let mut rows = Vec::new();
-    for (key, b) in fb {
+    let mut fb_keys: Vec<&String> = fb.keys().collect();
+    crate::sort::ord(&mut fb_keys);
+    for key in fb_keys {
+        let b = &fb[key];
         let after_key = if b.anonymous() { moved.get(key) } else { fa.contains_key(key).then_some(key) };
         match after_key.and_then(|key| fa.get(key)) {
             Some(a) => {
@@ -363,7 +366,10 @@ fn function_rows(fb: &BTreeMap<String, FunctionEntry>, fa: &BTreeMap<String, Fun
             None => rows.push(Row { label: b.label.clone(), harness: b.harness, before: b.figures, after: FunctionFigures::default(), status: "gone", price_only: false, moved: None }),
         }
     }
-    for (key, a) in fa {
+    let mut fa_keys: Vec<&String> = fa.keys().collect();
+    crate::sort::ord(&mut fa_keys);
+    for key in fa_keys {
+        let a = &fa[key];
         let taken = if a.anonymous() { paired_after.contains(key) } else { fb.contains_key(key) };
         if !taken {
             rows.push(Row { label: a.label.clone(), harness: a.harness, before: FunctionFigures::default(), after: a.figures, status: "new", price_only: false, moved: None });
@@ -388,9 +394,9 @@ fn side_totals(profile: &Json, scope: &[String]) -> (f64, f64) {
 
 /// What the scripts asked the engine to do in the scope's phases (the whole run without one), from profile.json's marks: each
 /// mark's counts (cost::EngineOps) to the next mark's, the last to the run's end. None for a profile from before the counts.
-fn engine_ops(profile: &Json, scope: Option<&[String]>) -> Option<BTreeMap<String, f64>> {
+fn engine_ops(profile: &Json, scope: Option<&[String]>) -> Option<FxHashMap<String, f64>> {
     let marks = profile["marks"].as_array()?;
-    let mut sum: BTreeMap<String, f64> = BTreeMap::new();
+    let mut sum: FxHashMap<String, f64> = FxHashMap::default();
     let mut counted = false;
     for (index, mark) in marks.iter().enumerate() {
         let phase = mark["phase"].as_str().unwrap_or_default();
@@ -408,14 +414,14 @@ fn engine_ops(profile: &Json, scope: Option<&[String]>) -> Option<BTreeMap<Strin
 }
 
 /// Lines of modules whose source is unchanged: (module, line) -> (self work, insns, alloc)
-fn lines(profile: &Json, same: &BTreeSet<String>) -> BTreeMap<(String, i64), (f64, f64, f64)> {
-    let mut by_id: BTreeMap<i64, String> = BTreeMap::new();
+fn lines(profile: &Json, same: &FxHashSet<String>) -> FxHashMap<(String, i64), (f64, f64, f64)> {
+    let mut by_id: FxHashMap<i64, String> = FxHashMap::default();
     for f in profile["functions"].as_array().into_iter().flatten() {
         if let (Some(id), Some(module)) = (f["id"].as_i64(), f["module"].as_str()) {
             by_id.insert(id, module.to_string());
         }
     }
-    let mut out = BTreeMap::new();
+    let mut out = FxHashMap::default();
     for line in profile["lines"].as_array().into_iter().flatten() {
         let Some(module) = line["function"].as_i64().and_then(|id| by_id.get(&id)) else { continue };
         if !same.contains(module) {
@@ -430,12 +436,12 @@ fn lines(profile: &Json, same: &BTreeSet<String>) -> BTreeMap<(String, i64), (f6
 }
 
 /// A hardware counters' counts object by the counters' names now (counters.rs `canonical`)
-fn counter_counts(counts: &Json) -> Option<BTreeMap<String, f64>> {
+fn counter_counts(counts: &Json) -> Option<FxHashMap<String, f64>> {
     Some(counts.as_object()?.iter().map(|(name, value)| (super::hw::counters::canonical(name).to_string(), num(value))).collect())
 }
 
 /// The hardware counters' functions: key -> (label, self counts by the counters' names now)
-fn counter_functions(profile: &Json) -> BTreeMap<String, (String, BTreeMap<String, f64>)> {
+fn counter_functions(profile: &Json) -> FxHashMap<String, (String, FxHashMap<String, f64>)> {
     profile["counters"]["functions"]
         .as_array()
         .into_iter()
@@ -671,7 +677,7 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
     // the engine's side of the same phases: what the scripts asked it to do, counted, whatever the work clock prices it at
     if let (Some(b), Some(a)) = (engine_ops(before, scope.as_deref()), engine_ops(after, scope.as_deref())) {
         let label = scope_label.as_ref().map_or_else(|| "the whole run".to_string(), String::clone);
-        let get = |ops: &BTreeMap<String, f64>, names: &[&str]| names.iter().map(|name| ops.get(*name).copied().unwrap_or(0.0)).sum::<f64>();
+        let get = |ops: &FxHashMap<String, f64>, names: &[&str]| names.iter().map(|name| ops.get(*name).copied().unwrap_or(0.0)).sum::<f64>();
         for (name, counts) in [
             ("instances made", &["cloned", "created"][..]),
             ("instances destroyed", &["destroyed"][..]),
@@ -726,14 +732,18 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
     // instructions, a miss's latency, and IPC
     let (counts_before, counts_after) = (counter_counts(&before["counters"]["run"]["counts"]), counter_counts(&after["counters"]["run"]["counts"]));
     if let (Some(b), Some(a)) = (&counts_before, &counts_after) {
-        for (name, value) in b {
+        let mut b_keys: Vec<&String> = b.keys().collect();
+        crate::sort::ord(&mut b_keys);
+        for name in b_keys {
             if let Some(after_value) = a.get(name) {
-                add(&format!("{name} (hardware counter)"), *value, *after_value, "");
+                add(&format!("{name} (hardware counter)"), b[name], *after_value, "");
             }
         }
-        let figures = |counts: &BTreeMap<String, f64>| {
-            let names: Vec<String> = counts.keys().cloned().collect();
-            let values: Vec<f64> = counts.values().copied().collect();
+        let figures = |counts: &FxHashMap<String, f64>| {
+            let mut pairs: Vec<(&String, f64)> = counts.iter().map(|(k, &v)| (k, v)).collect();
+            crate::sort::by(&mut pairs, |x, y| x.0.cmp(y.0));
+            let names: Vec<String> = pairs.iter().map(|(k, _)| (*k).clone()).collect();
+            let values: Vec<f64> = pairs.iter().map(|(_, v)| *v).collect();
             super::hw::counters::figures(&names, &values)
         };
         let (fb, fa) = (figures(b), figures(a));
@@ -880,13 +890,13 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
     let (cfb, cfa) = (counter_functions(before), counter_functions(after));
     let stall_key = ["load-stall-cycles", "cycles"].into_iter().find(|name| cfb.values().chain(cfa.values()).any(|(_, counts)| counts.contains_key(*name)));
     if let Some(lead) = stall_key {
-        let keys: BTreeSet<&String> = cfb.keys().chain(cfa.keys()).collect();
-        let empty = (String::new(), BTreeMap::new());
+        let keys: FxHashSet<&String> = cfb.keys().chain(cfa.keys()).collect();
+        let empty = (String::new(), FxHashMap::default());
         let mut moved: Vec<(&String, f64, f64, f64, f64)> = keys
             .into_iter()
             .map(|key| {
                 let (b, a) = (cfb.get(key).unwrap_or(&empty), cfa.get(key).unwrap_or(&empty));
-                let get = |counts: &BTreeMap<String, f64>, name: &str| counts.get(name).copied().unwrap_or(0.0);
+                let get = |counts: &FxHashMap<String, f64>, name: &str| counts.get(name).copied().unwrap_or(0.0);
                 (key, get(&b.1, lead), get(&a.1, lead), get(&b.1, "cycles"), get(&a.1, "cycles"))
             })
             .filter(|(_, b, a, _, _)| (a - b).abs() > 0.0)
@@ -910,13 +920,14 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
     }
 
     // lines of unchanged modules
-    let hashes = |profile: &Json| -> BTreeMap<String, String> { profile["source_hashes"].as_object().map(|map| map.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string())).collect()).unwrap_or_default() };
+    let hashes = |profile: &Json| -> FxHashMap<String, String> { profile["source_hashes"].as_object().map(|map| map.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string())).collect()).unwrap_or_default() };
     let (hb, ha) = (hashes(before), hashes(after));
-    let same: BTreeSet<String> = hb.iter().filter(|(module, hash)| ha.get(*module) == Some(*hash)).map(|(module, _)| module.clone()).collect();
-    let changed: Vec<&String> = hb.keys().filter(|module| ha.get(*module).is_some_and(|hash| Some(hash) != hb.get(*module))).collect();
+    let same: FxHashSet<String> = hb.iter().filter(|(module, hash)| ha.get(*module) == Some(*hash)).map(|(module, _)| module.clone()).collect();
+    let mut changed: Vec<&String> = hb.keys().filter(|module| ha.get(*module).is_some_and(|hash| Some(hash) != hb.get(*module))).collect();
+    crate::sort::ord(&mut changed);
     // (a line's self work holds its C calls' before version 2 and not since: lines are compared within a version only)
-    let (lb, la) = if same_version { (lines(before, &same), lines(after, &same)) } else { (BTreeMap::new(), BTreeMap::new()) };
-    let line_keys: BTreeSet<&(String, i64)> = lb.keys().chain(la.keys()).collect();
+    let (lb, la) = if same_version { (lines(before, &same), lines(after, &same)) } else { (FxHashMap::default(), FxHashMap::default()) };
+    let line_keys: FxHashSet<&(String, i64)> = lb.keys().chain(la.keys()).collect();
     let mut line_rows: Vec<(&(String, i64), (f64, f64, f64), (f64, f64, f64))> =
         line_keys.into_iter().map(|key| (key, lb.get(key).copied().unwrap_or_default(), la.get(key).copied().unwrap_or_default())).filter(|(_, b, a)| moved_ms(b.0, a.0) || moved_count(b.1, a.1) || moved_count(b.2, a.2)).collect();
     crate::sort::by(&mut line_rows, |x, y| ((y.2.0 - y.1.0).abs()).total_cmp(&(x.2.0 - x.1.0).abs()).then_with(|| x.0.cmp(y.0)));
@@ -932,7 +943,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
 
     // caches
     // (ree's own caches are profile.json's emulator.caches; a profile before that has them as ree_caches)
-    let rates = |profile: &Json, path: &str| -> BTreeMap<String, (f64, f64)> {
+    let rates = |profile: &Json, path: &str| -> FxHashMap<String, (f64, f64)> {
         let rows = if path == "ree_caches" && profile["emulator"]["caches"].is_array() { &profile["emulator"]["caches"] } else { &profile[path] };
         rows.as_array()
             .or_else(|| rows["by_kind"].as_array())
@@ -956,7 +967,9 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
     let cache_groups: &[(&str, &str)] = if same_version { &[("Luau inline caches", "luau_caches"), ("ree's own caches (the emulator's)", "ree_caches")] } else { &[] };
     for &(title, path) in cache_groups {
         let (b, a) = (rates(before, path), rates(after, path));
-        let names: BTreeSet<&String> = b.keys().chain(a.keys()).collect();
+        let mut names: Vec<&String> = b.keys().chain(a.keys()).collect();
+        crate::sort::ord(&mut names);
+        names.dedup();
         let mut wrote = false;
         for name in names {
             let (bh, bl) = b.get(name).copied().unwrap_or_default();
@@ -975,7 +988,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
     }
 
     // memory by type
-    let by_type = |profile: &Json, path: &[&str]| -> BTreeMap<String, f64> {
+    let by_type = |profile: &Json, path: &[&str]| -> FxHashMap<String, f64> {
         let mut value = profile;
         for key in path {
             value = &value[*key];
@@ -987,7 +1000,9 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
         ("allocated by type", by_type(before, &["alloc", "by_type"]), by_type(after, &["alloc", "by_type"])),
         ("reachable at the end by type", last_snapshot(before).map(|s| by_type(s, &["by_type"])).unwrap_or_default(), last_snapshot(after).map(|s| by_type(s, &["by_type"])).unwrap_or_default()),
     ] {
-        let names: BTreeSet<&String> = b.keys().chain(a.keys()).collect();
+        let mut names: Vec<&String> = b.keys().chain(a.keys()).collect();
+        crate::sort::ord(&mut names);
+        names.dedup();
         let mut moved: Vec<(&String, f64, f64)> = names.into_iter().map(|name| (name, b.get(name).copied().unwrap_or(0.0), a.get(name).copied().unwrap_or(0.0))).filter(|(_, x, y)| (x - y).abs() >= 1.0).collect();
         crate::sort::by(&mut moved, |x, y| (y.2 - y.1).abs().total_cmp(&(x.2 - x.1).abs()));
         if !moved.is_empty() {

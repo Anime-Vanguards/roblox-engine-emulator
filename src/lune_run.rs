@@ -9,7 +9,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    collections::VecDeque,
     ffi::{c_int, c_void},
     fs,
     hash::{Hash, Hasher},
@@ -305,11 +305,11 @@ fn apply_codegen(lua: &Lua, func: &LuaFunction, enabled: bool) {
 struct TraceState {
     enabled: bool,
     cacheable: bool,
-    files: BTreeSet<String>,
-    dirs: BTreeSet<String>,
-    stats: BTreeMap<String, &'static str>,
-    env: BTreeMap<String, Option<String>>,
-    git_shows: BTreeSet<String>,
+    files: FxHashSet<String>,
+    dirs: FxHashSet<String>,
+    stats: FxHashMap<String, &'static str>,
+    env: FxHashMap<String, Option<String>>,
+    git_shows: FxHashSet<String>,
 }
 
 impl TraceState {
@@ -384,22 +384,32 @@ impl TraceState {
     }
 
     fn to_json(&self, passed: bool) -> Json {
-        let env_pairs: Vec<Json> = self
-            .env
-            .iter()
+        let mut env_rows: Vec<(&String, &Option<String>)> = self.env.iter().collect();
+        crate::sort::by(&mut env_rows, |a, b| a.0.cmp(b.0));
+        let env_pairs: Vec<Json> = env_rows
+            .into_iter()
             .map(|(k, v)| match v {
                 Some(s) => json!([k, s]),
                 None => json!([k, false]),
             })
             .collect();
-        let files: Vec<&String> = self.files.iter().collect();
-        let dirs: Vec<&String> = self.dirs.iter().collect();
-        let git_shows: Vec<&String> = self.git_shows.iter().collect();
+        let mut files: Vec<&String> = self.files.iter().collect();
+        crate::sort::ord(&mut files);
+        let mut dirs: Vec<&String> = self.dirs.iter().collect();
+        crate::sort::ord(&mut dirs);
+        let mut git_shows: Vec<&String> = self.git_shows.iter().collect();
+        crate::sort::ord(&mut git_shows);
+        let mut stats_rows: Vec<(&String, &&'static str)> = self.stats.iter().collect();
+        crate::sort::by(&mut stats_rows, |a, b| a.0.cmp(b.0));
+        let mut stats = JsonMap::with_capacity(stats_rows.len());
+        for (k, v) in stats_rows {
+            stats.insert(k.clone(), Json::String((*v).to_string()));
+        }
         json!({
             "cacheable": passed && self.cacheable,
             "files": files,
             "dirs": dirs,
-            "stats": self.stats,
+            "stats": Json::Object(stats),
             "env": env_pairs,
             "gitShows": git_shows,
         })
@@ -582,7 +592,7 @@ struct LuneRuntime {
     output: OutputSink,
     exit_code: Cell<Option<i32>>,
     tasks: RefCell<TaskQueue>,
-    module_cache: RefCell<HashMap<String, LuaRegistryKey>>,
+    module_cache: RefCell<FxHashMap<String, LuaRegistryKey>>,
     loading: RefCell<FxHashSet<String>>,
     builtins: RefCell<Option<LuaTable>>,
     env_helpers: RefCell<Option<Rc<EnvHelpers>>>,
@@ -2462,7 +2472,7 @@ fn run_one(
         output: OutputSink::new(capture_output),
         exit_code: Cell::new(None),
         tasks: RefCell::new(TaskQueue::new()),
-        module_cache: RefCell::new(HashMap::new()),
+        module_cache: RefCell::new(FxHashMap::default()),
         loading: RefCell::new(FxHashSet::default()),
         builtins: RefCell::new(None),
         env_helpers: RefCell::new(None),

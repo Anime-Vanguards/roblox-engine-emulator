@@ -6,7 +6,7 @@
 //! on each.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::VecDeque,
     fmt::Write as _,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -14,10 +14,11 @@ use std::{
     time::Instant,
 };
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value as Json;
 
 use super::{
-    json_writer::{JsonWriter, WriteJson, json_struct},
+    json_writer::{JsonWriter, SortedMap, WriteJson, json_struct},
     stats,
 };
 
@@ -451,7 +452,7 @@ json_struct! {
         Group: Option<u64>,
         Mode: &'static str,
         #[skip_none]
-        Paths: Option<BTreeMap<String, String>>,
+        Paths: Option<SortedMap<String, String>>,
         #[skip_none]
         Reps: Option<u64>,
         #[skip_none]
@@ -459,7 +460,7 @@ json_struct! {
         #[skip_none]
         Sizes: Option<&'a [f64]>,
         #[skip_none]
-        Sources: Option<BTreeMap<String, String>>,
+        Sources: Option<SortedMap<String, String>>,
         #[skip_none]
         Variant: Option<&'a str>,
         #[skip_none]
@@ -502,8 +503,8 @@ fn base_context<'a>(options: &Options, spec: Option<&Spec>, mode: &'static str) 
         Variants: None,
     };
     if let Some(spec) = spec {
-        let mut sources = BTreeMap::new();
-        let mut paths = BTreeMap::new();
+        let mut sources = SortedMap::new();
+        let mut paths = SortedMap::new();
         for variant in spec.variants.iter().filter(|variant| variant.kind == "module") {
             if let Some(path) = &variant.path {
                 sources.insert(variant.name.clone(), std::fs::read_to_string(path).unwrap_or_default());
@@ -576,7 +577,7 @@ fn list(options: &Options) -> Result<Spec, String> {
 }
 
 /// A phase's figures by metric key (absent: not measured)
-pub type Figures = BTreeMap<&'static str, f64>;
+pub type Figures = FxHashMap<&'static str, f64>;
 
 json_struct! {
     #[derive(Clone, Debug)]
@@ -620,7 +621,7 @@ pub struct Run {
     pub reps: u64,
     pub hw_profile: bool,
     /// The hardware counters' figures a call, by metric key, one per round (None: that round's run failed)
-    pub hw_rounds: BTreeMap<&'static str, Vec<Option<f64>>>,
+    pub hw_rounds: FxHashMap<&'static str, Vec<Option<f64>>>,
     /// The core clock the counters' runs ran at: core cycles a ms, the median of its rounds
     pub hw_cycles_per_ms: Option<f64>,
 }
@@ -650,7 +651,7 @@ fn number(value: &Json) -> Option<f64> {
 
 /// The figures between two marks of a profile, flows divided by `calls`
 pub fn phase_figures(profile: &Json, from: &str, to: &str, calls: f64) -> Figures {
-    let mut figures = Figures::new();
+    let mut figures = Figures::default();
     let (Some(a), Some(b)) = (mark(profile, from), mark(profile, to)) else { return figures };
     let calls = calls.max(1.0);
     let delta = |path: &[&str]| -> Option<f64> {
@@ -719,7 +720,7 @@ fn reachable(profile: &Json, label: &str) -> Option<f64> {
 }
 
 /// A function of the profile by id: (key, name, module, line)
-fn function_of(functions: &BTreeMap<i64, &Json>, id: i64) -> (String, String, String, i64) {
+fn function_of(functions: &FxHashMap<i64, &Json>, id: i64) -> (String, String, String, i64) {
     match functions.get(&id) {
         Some(function) => (
             function["key"].as_str().unwrap_or_default().to_string(),
@@ -732,10 +733,10 @@ fn function_of(functions: &BTreeMap<i64, &Json>, id: i64) -> (String, String, St
 }
 
 /// The files of a comparison's modules by module name (frames name a module; a viewer opens its file)
-pub type ModulePaths = BTreeMap<String, String>;
+pub type ModulePaths = FxHashMap<String, String>;
 
 /// A stack's Luau frames, the harness's left out, innermost first: [{module, name, line, path}] and the site's text
-fn frames_of(frames: &Json, functions: &BTreeMap<i64, &Json>, paths: &ModulePaths) -> (Json, String) {
+fn frames_of(frames: &Json, functions: &FxHashMap<i64, &Json>, paths: &ModulePaths) -> (Json, String) {
     let mut out = Vec::new();
     let mut text = Vec::new();
     for frame in frames.as_array().into_iter().flatten() {
@@ -762,7 +763,7 @@ fn frames_of(frames: &Json, functions: &BTreeMap<i64, &Json>, paths: &ModulePath
 }
 
 /// The tables the setup and run phases made that are reachable after the run (the result held), by site
-fn table_sites(profile: &Json, functions: &BTreeMap<i64, &Json>, paths: &ModulePaths) -> Option<TableSites> {
+fn table_sites(profile: &Json, functions: &FxHashMap<i64, &Json>, paths: &ModulePaths) -> Option<TableSites> {
     let snapshot = profile["heap"]["snapshots"].as_array().and_then(|snapshots| snapshots.iter().find(|snapshot| snapshot["label"] == "after"))?;
     let tables = &snapshot["tables"];
     let mut sites = Vec::new();
@@ -799,11 +800,11 @@ fn table_sites(profile: &Json, functions: &BTreeMap<i64, &Json>, paths: &ModuleP
 }
 
 /// The functions with the most work in the run phase (its part of the call tree), most first
-fn hot_functions(profile: &Json, functions: &BTreeMap<i64, &Json>, top: usize) -> Vec<Hot> {
+fn hot_functions(profile: &Json, functions: &FxHashMap<i64, &Json>, top: usize) -> Vec<Hot> {
     let Some(tree) = profile["tree"].as_array() else { return Vec::new() };
     let Some(root) = tree.iter().position(|node| node[1].as_i64() == Some(-1) && node[5] == "run") else { return Vec::new() };
     let mut inside = vec![false; tree.len()];
-    let mut by_function: BTreeMap<i64, (f64, f64, f64)> = BTreeMap::new();
+    let mut by_function: FxHashMap<i64, (f64, f64, f64)> = FxHashMap::default();
     for (index, node) in tree.iter().enumerate() {
         let parent = node[0].as_i64().unwrap_or(-1);
         inside[index] = index == root || (parent >= 0 && (parent as usize) < index && inside[parent as usize]);
@@ -851,7 +852,7 @@ fn own_work(profile: &Json, phase: &str) -> Option<(f64, f64)> {
 /// A profiled run's figures, read from its profile folder
 fn read_profile(dir: &Path, frames: f64, paths: &ModulePaths) -> Result<(Figures, Figures, Option<(f64, f64, f64)>, Option<TableSites>, Vec<Hot>), String> {
     let profile = super::diff::load_profile(dir)?;
-    let functions: BTreeMap<i64, &Json> = profile["functions"].as_array().into_iter().flatten().filter_map(|function| Some((function["id"].as_i64()?, function))).collect();
+    let functions: FxHashMap<i64, &Json> = profile["functions"].as_array().into_iter().flatten().filter_map(|function| Some((function["id"].as_i64()?, function))).collect();
     let setup = phase_figures(&profile, "setup", "run", 1.0);
     let mut run = phase_figures(&profile, "run", "after", frames);
     // (the variant's own subtree: the generated harness's wrapper and its check are not the variant's work; first in frame with every
@@ -883,8 +884,8 @@ fn read_hw(dir: &Path, frames: f64) -> Option<(Figures, Option<f64>)> {
     let phases = profile["counters"]["phases"].as_array()?;
     let run = phases.iter().find(|phase| phase["phase"] == "run")?;
     // (by the counters' names now: a profile from before the fills were renamed reads the same)
-    let counts: std::collections::BTreeMap<String, f64> = run["counts"].as_object()?.iter().filter_map(|(name, value)| Some((super::hw::counters::canonical(name).to_string(), value.as_f64()?))).collect();
-    let mut figures = Figures::new();
+    let counts: FxHashMap<String, f64> = run["counts"].as_object()?.iter().filter_map(|(name, value)| Some((super::hw::counters::canonical(name).to_string(), value.as_f64()?))).collect();
+    let mut figures = Figures::default();
     let calls = frames.max(1.0);
     for (counter, key) in [
         ("instructions", "hw_instructions"),
@@ -1009,13 +1010,13 @@ json_struct! {
 /// rounds run, the sizes rounds were added for and what was added
 #[derive(Default)]
 pub struct Timing {
-    pub twin_ms: BTreeMap<usize, Vec<Option<f64>>>,
-    pub twin_cycles: BTreeMap<usize, Vec<Option<f64>>>,
+    pub twin_ms: FxHashMap<usize, Vec<Option<f64>>>,
+    pub twin_cycles: FxHashMap<usize, Vec<Option<f64>>>,
     pub rounds: usize,
     /// The sizes rounds were added at, and the variants (by size) that ran in them: a pair both of whose variants ran in
     /// added rounds was looked at again, and its verdict clears the later level
-    pub extended: BTreeSet<usize>,
-    pub added_arms: BTreeSet<(usize, usize)>,
+    pub extended: FxHashSet<usize>,
+    pub added_arms: FxHashSet<(usize, usize)>,
     pub added: Vec<AddedRound>,
     pub note: Option<TimingNote>,
 }
@@ -1030,8 +1031,8 @@ impl Timing {
 /// Every arm's timed rounds with the slowed runs taken out (stats::unslowed, each run against its round's level and its
 /// arm's): the runs' by (variant, size), each size's A/A twin's, and how many runs were left out of how many
 pub struct Clean {
-    pub runs: BTreeMap<(usize, usize), Vec<Option<f64>>>,
-    pub twins: BTreeMap<usize, Vec<Option<f64>>>,
+    pub runs: FxHashMap<(usize, usize), Vec<Option<f64>>>,
+    pub twins: FxHashMap<usize, Vec<Option<f64>>>,
     pub slowed: usize,
     pub timed: usize,
 }
@@ -1046,16 +1047,20 @@ impl Timing {
                 arms.push(samples.clone());
             }
         }
-        for (size, twin) in if cycles { &self.twin_cycles } else { &self.twin_ms } {
+        let twins = if cycles { &self.twin_cycles } else { &self.twin_ms };
+        let mut twin_sizes: Vec<usize> = twins.keys().copied().collect();
+        crate::sort::ord(&mut twin_sizes);
+        for size in twin_sizes {
+            let twin = &twins[&size];
             if twin.iter().any(Option::is_some) {
-                keys.push((true, 0, *size));
+                keys.push((true, 0, size));
                 arms.push(twin.clone());
             }
         }
         let cleaned = stats::unslowed(&arms);
         let timed: usize = arms.iter().map(|arm| arm.iter().flatten().count()).sum();
         let kept: usize = cleaned.iter().map(|arm| arm.iter().flatten().count()).sum();
-        let mut clean = Clean { runs: BTreeMap::new(), twins: BTreeMap::new(), slowed: timed - kept, timed };
+        let mut clean = Clean { runs: FxHashMap::default(), twins: FxHashMap::default(), slowed: timed - kept, timed };
         for ((twin, variant, size), arm) in keys.into_iter().zip(cleaned) {
             if twin {
                 clean.twins.insert(size, arm);
@@ -1070,7 +1075,9 @@ impl Timing {
 impl Clean {
     /// The A/A pairs' round-by-round log ratios at every size: the noise two runs of the same code show
     pub fn pool(&self) -> Vec<f64> {
-        self.twins.iter().filter_map(|(size, twin)| Some(stats::log_ratios(self.runs.get(&(0, *size))?, twin))).flatten().collect()
+        let mut sizes: Vec<usize> = self.twins.keys().copied().collect();
+        crate::sort::ord(&mut sizes);
+        sizes.into_iter().filter_map(|size| Some(stats::log_ratios(self.runs.get(&(0, size))?, &self.twins[&size]))).flatten().collect()
     }
 
     /// ln(b / a) round by round at a size
@@ -1341,7 +1348,7 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
     let (variants, sizes, frames) = (&spec.variants, &spec.sizes, spec.frames as f64);
     // the files of the modules a run's frames name: the variant file, and each version's (standing in for the project's
     // module when the file names one: that module is the run's version)
-    let mut paths: ModulePaths = BTreeMap::new();
+    let mut paths: ModulePaths = ModulePaths::default();
     if let Some(stem) = options.file.file_stem() {
         paths.insert(format!("{MOUNT}.{}", stem.to_string_lossy()), options.file.to_string_lossy().into_owned());
     }
@@ -1513,9 +1520,9 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
                 }
                 Ok(()) => {
                     eprintln!("ree profile try: reading the hardware counters, {HW_ROUNDS} rounds of {} runs", arms.len());
-                    let mut rates: BTreeMap<(usize, usize), Vec<f64>> = BTreeMap::new();
+                    let mut rates: FxHashMap<(usize, usize), Vec<f64>> = FxHashMap::default();
                     for run in runs.iter_mut() {
-                        run.hw_rounds = BTreeMap::new();
+                        run.hw_rounds = FxHashMap::default();
                     }
                     for round in 0..HW_ROUNDS {
                         for (variant, size) in shuffled(&arms, 1000 + round as u64) {
@@ -2054,11 +2061,11 @@ json_struct! {
         heap: Option<RunHeapJson>,
         host: RunHostJson,
         hot: Vec<RunHotJson>,
-        hw: BTreeMap<&'static str, HwRunValue>,
+        hw: SortedMap<&'static str, HwRunValue>,
         hw_profile: Option<String>,
         profile: String,
-        run: BTreeMap<&'static str, Option<f64>>,
-        setup: BTreeMap<&'static str, Option<f64>>,
+        run: SortedMap<&'static str, Option<f64>>,
+        setup: SortedMap<&'static str, Option<f64>>,
         size: f64,
         status: &'a str,
         tables: Option<&'a TableSites>,
@@ -2137,7 +2144,7 @@ json_struct! {
     }
 }
 
-fn figures_map(figures: &Figures) -> BTreeMap<&'static str, Option<f64>> {
+fn figures_map(figures: &Figures) -> SortedMap<&'static str, Option<f64>> {
     METRICS.iter().map(|metric| (metric.key, figures.get(metric.key).copied())).collect()
 }
 
@@ -2206,7 +2213,7 @@ fn index<'a>(options: &'a Options, spec: &'a Spec, runs: &'a [Run], check: Check
     let cleans = (timing.clean(runs, false), timing.clean(runs, true));
     let pools = (cleans.0.pool(), cleans.1.pool());
     let mut aa = Vec::new();
-    let mut parted: BTreeSet<usize> = BTreeSet::new();
+    let mut parted: FxHashSet<usize> = FxHashSet::default();
     for (size, n) in sizes.iter().enumerate() {
         let (Some(base), Some(twin)) = (runs.iter().find(|run| run.variant == 0 && run.size == size && run.status == "ok"), timing.twin_ms.get(&size)) else { continue };
         let (Some(clean_base), Some(clean_twin)) = (cleans.0.runs.get(&(0, size)), cleans.0.twins.get(&size)) else { continue };
@@ -2428,24 +2435,26 @@ fn index<'a>(options: &'a Options, spec: &'a Spec, runs: &'a [Run], check: Check
         if slowed > 0 {
             notes.push(format!("{slowed} of {timed} timed runs took over {}x what their round and their arm lead one to expect and were left out of the paired rounds the host-time verdicts rest on: the machine slowed them alone, not the code (rounds it slowed as a whole stay: a pair's ratio cancels them)", stats::SLOWED));
         }
-        for size in &parted {
-            let entry = aa.iter().find(|entry| entry.size == sizes[*size]);
+        for size in (0..sizes.len()).filter(|size| parted.contains(size)) {
+            let entry = aa.iter().find(|entry| entry.size == sizes[size]);
             notes.push(format!(
                 "the A/A pair (the baseline run twice) parted at n = {}: its second run read {} the first's over {} rounds, beyond the noise, so a host-time verdict there needs a gap past {:.1} % (the far end of the pair's own interval); a quieter machine reads smaller gaps",
-                size_label(sizes[*size]),
+                size_label(sizes[size]),
                 entry.map_or("?".into(), |entry| ratio_text(Some(entry.shift))),
                 entry.map_or(0, |entry| entry.n),
-                cleans.0.aa_bar(*size).exp_m1() * 100.0
+                cleans.0.aa_bar(size).exp_m1() * 100.0
             ));
         }
         if !timing.added.is_empty() {
-            let pairs: BTreeSet<String> = timing.added.iter().flat_map(|added| added.pairs.iter()).map(|pair| format!("{} and {} at n = {}", pair.a, pair.b, size_label(pair.size))).collect();
+            let mut pairs: Vec<String> = timing.added.iter().flat_map(|added| added.pairs.iter()).map(|pair| format!("{} and {} at n = {}", pair.a, pair.b, size_label(pair.size))).collect();
+            crate::sort::ord(&mut pairs);
+            pairs.dedup();
             notes.push(format!(
                 "host time ran {} rounds, {} more than the first {} for the pairs still undecided ({}); a pair that got more rounds clears its sign test at {} instead of {}, since a pair looked at again had more chances to cross by luck",
                 timing.rounds,
                 timing.rounds.saturating_sub(options.rounds as usize),
                 options.rounds,
-                pairs.into_iter().collect::<Vec<_>>().join("; "),
+                pairs.join("; "),
                 stats::LATER_ALPHA,
                 stats::ALPHA
             ));
@@ -2481,8 +2490,8 @@ fn index<'a>(options: &'a Options, spec: &'a Spec, runs: &'a [Run], check: Check
         .map(|run| {
             let variant = &variants[run.variant];
             // (each counter's figures, of the rounds whose run finished: `rounds` names them)
-            let mut hw_map: BTreeMap<&'static str, HwRunValue> = run.hw_rounds.iter().map(|(&key, values)| (key, HwRunValue::Values(values.iter().flatten().copied().collect()))).collect();
-            if let Some(values) = run.hw_rounds.values().next() {
+            let mut hw_map: SortedMap<&'static str, HwRunValue> = run.hw_rounds.iter().map(|(&key, values)| (key, HwRunValue::Values(values.iter().flatten().copied().collect()))).collect();
+            if let Some((_, values)) = run.hw_rounds.iter().min_by_key(|(key, _)| *key) {
                 hw_map.insert("rounds", HwRunValue::Rounds(values.iter().enumerate().filter(|(_, value)| value.is_some()).map(|(round, _)| round).collect()));
             }
             RunEntryJson {
@@ -3190,7 +3199,7 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let functions = BTreeMap::from([(7, &profile["functions"][0])]);
+        let functions = FxHashMap::from_iter([(7, &profile["functions"][0])]);
 
         let hot = hot_functions(&profile, &functions, 8);
 

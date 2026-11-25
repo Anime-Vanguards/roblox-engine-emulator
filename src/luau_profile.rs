@@ -29,7 +29,6 @@
 //! practice, and it only reads); a script stack of hundreds of KB could in principle fault there.
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     ffi::CStr,
     path::PathBuf,
     rc::Rc,
@@ -40,6 +39,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+use rustc_hash::FxHashMap;
 
 /// The profiles share process-wide switches (a guard's drop turns them all off): a test that starts one
 /// holds this lock until its guard drops (`claim`), so two tests never run a profile at once.
@@ -339,10 +340,10 @@ struct Samples {
     path: PathBuf,
     seen: u64,
     phase: String,
-    stacks: HashMap<String, u64>,
+    stacks: FxHashMap<String, u64>,
     stop: Arc<AtomicBool>,
     /// The work-clock profile: seconds of Studio time per stack, and the total when last sampled
-    work: HashMap<String, f64>,
+    work: FxHashMap<String, f64>,
     work_seen: f64,
     /// Weights in microseconds instead of milliseconds (`RUR_LUAU_PROFILE_UNIT=us`)
     microseconds: bool,
@@ -365,7 +366,7 @@ struct Allocations {
     phase: String,
     /// (bytes, allocations) per stack: one key for both files (a stack is ~1 KB of text; a HUD scene's
     /// profile samples ~15k of them)
-    stacks: HashMap<String, (f64, f64)>,
+    stacks: FxHashMap<String, (f64, f64)>,
 }
 
 thread_local! {
@@ -418,9 +419,9 @@ pub(crate) fn begin_time_at(path: PathBuf, work_clock: bool, microseconds: bool)
             path,
             seen: TICKS.load(Ordering::Relaxed),
             phase: "startup".into(),
-            stacks: HashMap::new(),
+            stacks: FxHashMap::default(),
             stop,
-            work: HashMap::new(),
+            work: FxHashMap::default(),
             work_seen: 0.0,
             microseconds,
         })
@@ -458,7 +459,7 @@ pub(crate) fn begin_allocations(path: PathBuf, step: u64) {
             step: step.max(1),
             random: 0x9e37_79b9_7f4a_7c15,
             phase: "startup".into(),
-            stacks: HashMap::new(),
+            stacks: FxHashMap::default(),
         })
     });
     if !LOCAL_ALLOC_ENABLED.with(|enabled| enabled.replace(true)) {
@@ -802,7 +803,7 @@ mod folded_tests {
     /// without the ones that round to 0; the allocation profile writes both files from one map.
     #[test]
     fn folded_files_list_stacks_largest_first() {
-        let mut stacks: HashMap<String, (f64, f64)> = HashMap::new();
+        let mut stacks: FxHashMap<String, (f64, f64)> = FxHashMap::default();
         stacks.insert("b;c".into(), (10.4, 2.0));
         stacks.insert("a".into(), (9.6, 0.4));
         stacks.insert("z".into(), (3.5, 1.0));
