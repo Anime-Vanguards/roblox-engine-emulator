@@ -1,0 +1,14 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+lib-color3 ok nil nil function [C]|-1|toHSV|0|true nil
+lib-others ok nil nil nil nil nil
+read Color3 [C]|-1|lerp|0|true [C]|-1|Lerp|0|true same=false
+read Vector3 [C]|-1|lerp|0|true [C]|-1|Lerp|0|true same=false
+read Vector2 [C]|-1|lerp|0|true [C]|-1|Lerp|0|true same=false
+read UDim2 [C]|-1|lerp|0|true [C]|-1|Lerp|0|true same=false
+read CFrame [C]|-1|lerp|0|true [C]|-1|Lerp|0|true same=false
+c3-values ok true true 0, 0.625, 0.875 1, 0.125, 0.375 true true true true
+c3-errors error Argument 3 missing or nil | error Argument 3 missing or nil | error Unable to cast double to Color3 | error Unable to cast string to float | error Argument 1 missing or nil | error lerp is not a valid member of Color3 | error r member of Color3 is read-only and cannot be assigned to
+v3-values ok true true
+v3-dot-errors error @53: missing argument #1 to 'lerp' (Vector3 expected) | error @54: invalid argument #1 to 'lerp' (Vector3 expected, got number) | error @55: missing argument #2 to 'lerp' (Vector3 expected) | error @56: invalid argument #2 to 'lerp' (Vector3 expected, got number) | error @57: missing argument #3 to 'lerp' (number expected) | error @58: invalid argument #3 to 'lerp' (number expected, got string)
+v3-col-errors error @60: missing argument #2 (Vector3 expected) | error @61: invalid argument #2 (Vector3 expected, got number) | error @62: missing argument #3 (number expected) | error @63: invalid argument #3 (number expected, got string)

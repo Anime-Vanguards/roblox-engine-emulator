@@ -58,7 +58,7 @@ pub fn methods(lua: &Lua) -> LuaResult<LuaTable> {
     let _ = LIBRARY.set(library);
 
     let table = lua.create_table()?;
-    let entries: [(&std::ffi::CStr, ffi::lua_CFunction); 9] = [
+    let entries: [(&std::ffi::CStr, ffi::lua_CFunction); 10] = [
         (c"Abs", abs),
         (c"Ceil", ceil),
         (c"Floor", floor),
@@ -68,6 +68,7 @@ pub fn methods(lua: &Lua) -> LuaResult<LuaTable> {
         (c"Max", max),
         (c"Min", min),
         (c"Lerp", lerp),
+        (c"lerp", lerp_lower),
     ];
     for (name, function) in entries {
         let method = unsafe {
@@ -84,17 +85,17 @@ unsafe extern "C-unwind" {
     fn lua_workhostnanos(state: *mut ffi::lua_State, nanos: c_int);
 }
 
-unsafe fn checked_lerp(state: *mut ffi::lua_State, dotted: bool) -> c_int {
+unsafe fn checked_lerp(state: *mut ffi::lua_State, name: &str, dotted: bool) -> c_int {
     unsafe {
         let count = ffi::lua_gettop(state);
         if count < 1 {
-            raise_script(state, "missing argument #1 to 'Lerp' (Vector3 expected)".into(), true);
+            raise_script(state, format!("missing argument #1 to '{name}' (Vector3 expected)"), true);
         }
         if ffi::lua_type(state, 1) != ffi::LUA_TVECTOR {
-            let message = format!("invalid argument #1 to 'Lerp' (Vector3 expected, got {})", type_name_at(state, 1));
+            let message = format!("invalid argument #1 to '{name}' (Vector3 expected, got {})", type_name_at(state, 1));
             raise_script(state, message, true);
         }
-        let to = if dotted { " to 'Lerp'" } else { "" };
+        let to = if dotted { format!(" to '{name}'") } else { String::new() };
         if count < 2 {
             raise_script(state, format!("missing argument #2{to} (Vector3 expected)"), true);
         }
@@ -188,7 +189,8 @@ pub unsafe extern "C-unwind" fn vector_namecall(state: *mut ffi::lua_State) -> c
             b"Cross" => return checked(state, "Cross", Rest::One, CROSS, false),
             b"Max" => return checked(state, "Max", Rest::Any, MAX, false),
             b"Min" => return checked(state, "Min", Rest::Any, MIN, false),
-            b"Lerp" | b"lerp" => return checked_lerp(state, false),
+            b"Lerp" => return checked_lerp(state, "Lerp", false),
+            b"lerp" => return checked_lerp(state, "lerp", false),
             _ => {}
         }
         ffi::lua_pushlstring(state, bytes.as_ptr().cast(), bytes.len());
@@ -209,7 +211,11 @@ pub unsafe extern "C-unwind" fn vector_namecall(state: *mut ffi::lua_State) -> c
 }
 
 unsafe extern "C-unwind" fn lerp(state: *mut ffi::lua_State) -> c_int {
-    unsafe { checked_lerp(state, true) }
+    unsafe { checked_lerp(state, "Lerp", true) }
+}
+
+unsafe extern "C-unwind" fn lerp_lower(state: *mut ffi::lua_State) -> c_int {
+    unsafe { checked_lerp(state, "lerp", true) }
 }
 
 unsafe extern "C-unwind" fn abs(state: *mut ffi::lua_State) -> c_int {

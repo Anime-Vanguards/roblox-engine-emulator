@@ -1752,6 +1752,76 @@ fn typed_lua_callbacks_keep_bad_argument_prefix() {
     );
 }
 
+/// Lowercase `:lerp` and `.lerp` on Color3 and the other datatypes that list it match a playing client (Studio 0.747,
+/// tools/parity/probes/datatype_lowercase_lerp.luau): the library table has no `lerp` / `Lerp`, instance reads give a
+/// distinct `[C]` function named `lerp` (not `rawequal` to `Lerp`), Color3:lerp matches Lerp on values and reflected
+/// errors, and Vector3.lerp names `'lerp'` in dotted argument errors.
+#[test]
+fn lowercase_lerp_matches_client_reads_calls_and_errors() {
+    assert_script(
+        r#"
+        local function Info(Fn)
+            local S, L, N, A, V = debug.info(Fn, "slna")
+            return `{S}|{L}|{N}|{A}|{V}`
+        end
+        local function Fails(Expected, Fn)
+            local Ok, Message = pcall(Fn)
+            assert(not Ok and tostring(Message) == Expected, `expected {Expected}, got {Ok} {Message}`)
+        end
+        local function FailsSuffix(Suffix, Fn)
+            local Ok, Message = pcall(Fn)
+            assert(not Ok and string.sub(tostring(Message), -#Suffix) == Suffix, `expected suffix {Suffix}, got {Ok} {Message}`)
+        end
+
+        -- Library tables do not expose lerp / Lerp
+        assert((Color3 :: any).lerp == nil and (Color3 :: any).Lerp == nil)
+        assert((Vector3 :: any).lerp == nil and (Vector3 :: any).Lerp == nil)
+        assert((Vector2 :: any).lerp == nil and (Vector2 :: any).Lerp == nil)
+        assert((UDim2 :: any).lerp == nil and (UDim2 :: any).Lerp == nil)
+        assert((CFrame :: any).lerp == nil and (CFrame :: any).Lerp == nil)
+
+        local C1, C2 = Color3.new(0.25, 0.5, 0.75), Color3.new(0.75, 0.25, 0.5)
+        local V1, V2 = Vector3.new(1, 2, 3), Vector3.new(4, 5, 6)
+        local Samples: { any } = { C1, V1, Vector2.new(1, 2), UDim2.new(0, 1, 0, 2), CFrame.new(1, 2, 3) }
+        for _, Sample in Samples do
+            assert(Info(Sample.lerp) == "[C]|-1|lerp|0|true", typeof(Sample) .. ": " .. Info(Sample.lerp))
+            assert(Info(Sample.Lerp) == "[C]|-1|Lerp|0|true", typeof(Sample) .. ": " .. Info(Sample.Lerp))
+            assert(not rawequal(Sample.lerp, Sample.Lerp), typeof(Sample) .. " lerp must not rawequal Lerp")
+        end
+
+        -- Color3:lerp / .lerp values and errors
+        assert(C1:lerp(C2, 0.5) == C1:Lerp(C2, 0.5))
+        assert(C1.lerp(C1, C2, 0.5) == C1:Lerp(C2, 0.5))
+        assert(C1:lerp(C2, -0.5) == Color3.new(0, 0.625, 0.875))
+        assert(C1:lerp(C2, 1.5) == Color3.new(1, 0.125, 0.375))
+        assert(C1:lerp(C2, "0.5" :: any) == C1:Lerp(C2, 0.5))
+        assert(C1:lerp(C2, true :: any) == C2)
+        assert(C1:lerp(C2, false :: any) == C1)
+        assert((C1.lerp :: any)(C1, C2, 0.5, "extra") == C1:Lerp(C2, 0.5))
+        Fails("Argument 3 missing or nil", function() return (C1 :: any):lerp() end)
+        Fails("Argument 3 missing or nil", function() return (C1 :: any):lerp(C2) end)
+        Fails("Unable to cast double to Color3", function() return (C1 :: any):lerp(1, 0.5) end)
+        Fails("Unable to cast string to float", function() return (C1 :: any):lerp(C2, "bad") end)
+        Fails("Argument 1 missing or nil", function() return (C1.lerp :: any)() end)
+        Fails("lerp is not a valid member of Color3", function() (C1 :: any).lerp = 1 end)
+
+        -- Vector3.lerp dotted errors name 'lerp', colon errors omit method name after arg 1
+        assert(V1:lerp(V2, 0.5) == V1:Lerp(V2, 0.5))
+        assert(V1.lerp(V1, V2, 0.5) == V1:Lerp(V2, 0.5))
+        FailsSuffix("missing argument #1 to 'lerp' (Vector3 expected)", function() return (V1.lerp :: any)() end)
+        FailsSuffix("invalid argument #1 to 'lerp' (Vector3 expected, got number)", function() return (V1.lerp :: any)(1) end)
+        FailsSuffix("missing argument #2 to 'lerp' (Vector3 expected)", function() return (V1.lerp :: any)(V1) end)
+        FailsSuffix("invalid argument #2 to 'lerp' (Vector3 expected, got number)", function() return (V1.lerp :: any)(V1, 1) end)
+        FailsSuffix("missing argument #3 to 'lerp' (number expected)", function() return (V1.lerp :: any)(V1, V2) end)
+        FailsSuffix("invalid argument #3 to 'lerp' (number expected, got string)", function() return (V1.lerp :: any)(V1, V2, "x") end)
+        FailsSuffix("missing argument #2 (Vector3 expected)", function() return (V1 :: any):lerp() end)
+        FailsSuffix("invalid argument #2 (Vector3 expected, got number)", function() return (V1 :: any):lerp(1) end)
+        FailsSuffix("missing argument #3 (number expected)", function() return (V1 :: any):lerp(V2) end)
+        FailsSuffix("invalid argument #3 (number expected, got string)", function() return (V1 :: any):lerp(V2, "x") end)
+        "#,
+    );
+}
+
 #[inline(never)]
 fn run_in_engine(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
     let script = {

@@ -195,7 +195,7 @@ local VectorMethods = {
 	Max = Native.Max,
 	Min = Native.Min,
 	Lerp = Native.Lerp,
-	lerp = Native.Lerp,
+	lerp = Native.lerp,
 	FuzzyEq = R.EngineFunction("FuzzyEq", true, true, MakeFuzzyEq(true)),
 	Angle = R.EngineFunction("Angle", true, true, MakeAngle(true)),
 }
