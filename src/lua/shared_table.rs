@@ -1850,7 +1850,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         Ok(none())
     })?;
     let (e, s) = (engine.clone(), store.clone());
-    let iter = lua.create_function(move |lua, handle: LuaAnyUserData| {
+    let iter = super::lua_fn(lua, move |lua, handle: LuaAnyUserData| {
         // (the entries as they are now, shared, walked an entry a step: a loop stopped at its first entry costs Roblox the same at
         // any size, measured 0.24 to 0.73 us from 3 to 200,000 entries, and a step its entry, its key's string and its value)
         let entries = handle.borrow::<LSharedTable>()?.0.entries.borrow().clone();
@@ -1871,15 +1871,15 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok((LuaValue::Nil, LuaValue::Nil))
         })
     })?;
-    let tostring = lua.create_function(|_, handle: LuaAnyUserData| Ok(format!("SharedTable: 0x{:016x}", handle.to_pointer() as usize)))?;
+    let tostring = super::lua_fn(lua, |_, handle: LuaAnyUserData| Ok(format!("SharedTable: 0x{:016x}", handle.to_pointer() as usize)))?;
     // (two handles are equal when they are of one SharedTable: [`handle`])
-    let equal = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| {
+    let equal = super::create_boxed_val2(lua, Box::new(|_, a, b| {
         let table = |value: &LuaValue| match value {
             LuaValue::UserData(ud) => ud.borrow::<LSharedTable>().ok().map(|held| Rc::as_ptr(&held.0)),
             _ => None,
         };
-        Ok(matches!((table(&a), table(&b)), (Some(a), Some(b)) if a == b))
-    })?;
+        Ok(LuaValue::Boolean(matches!((table(&a), table(&b)), (Some(a), Some(b)) if a == b)))
+    }))?;
     lua.register_userdata_type::<LSharedTable>(|registry| {
         registry.add_meta_field("__type", "SharedTable");
         registry.add_meta_field("__index", index);

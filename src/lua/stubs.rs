@@ -59,7 +59,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Method",
-        lua.create_function(move |_, (class_name, name, function): (String, String, LuaFunction)| {
+        super::lua_fn(lua, move |_, (class_name, name, function): (String, String, LuaFunction)| {
             let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else {
                 return Ok(());
             };
@@ -70,7 +70,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Getter",
-        lua.create_function(move |_, (class_name, name, function): (String, String, LuaFunction)| {
+        super::lua_fn(lua, move |_, (class_name, name, function): (String, String, LuaFunction)| {
             let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else {
                 return Ok(());
             };
@@ -89,7 +89,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         // engine::derived: a Content view of a string asset id), else as a plain assignment (coerced,
         // notified)
         "ContentSetter",
-        lua.create_function(move |_, (class_name, name, filter): (String, String, LuaFunction)| {
+        super::lua_fn(lua, move |_, (class_name, name, filter): (String, String, LuaFunction)| {
             let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else {
                 return Ok(());
             };
@@ -116,7 +116,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Create",
-        lua.create_function(move |lua, class_name: String| {
+        super::lua_fn(lua, move |lua, class_name: String| {
             let class = e.reflection.class_id(&class_name).ok_or_else(|| LuaError::runtime(format!("Unable to create an Instance of type \"{class_name}\"")))?;
             let id = core::create(&mut e.state.borrow_mut(), &e.reflection, class);
             instance_value(lua, &e, id)
@@ -125,7 +125,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "RawSet",
-        lua.create_function(move |_, (target, name, value, silent): (LuaValue, String, LuaValue, bool)| {
+        super::lua_fn(lua, move |_, (target, name, value, silent): (LuaValue, String, LuaValue, bool)| {
             let id = instance_of(&target)?;
             let Some(name) = e.reflection.name_id(&name) else { return Ok(false) };
             let value = convert::from_lua(&value);
@@ -142,7 +142,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set(
         "RawGet",
         // (`stored_only`: nil unless the instance holds a value, never the class default)
-        lua.create_function(move |lua, (target, name, stored_only): (LuaValue, String, Option<bool>)| {
+        super::lua_fn(lua, move |lua, (target, name, stored_only): (LuaValue, String, Option<bool>)| {
             let id = instance_of(&target)?;
             let Some(name) = e.reflection.name_id(&name) else { return Ok(LuaValue::Nil) };
             let value = {
@@ -162,7 +162,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Children",
-        lua.create_function(move |lua, target: LuaValue| {
+        super::lua_fn(lua, move |lua, target: LuaValue| {
             let id = instance_of(&target)?;
             // (a lazily imported bundle instance's children are made first, as GetChildren makes them)
             if e.state.borrow().dom.at(id).has(crate::dom::flags::LAZY_PENDING) {
@@ -179,7 +179,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "SetParent",
-        lua.create_function(move |_, (child, parent): (LuaValue, LuaValue)| {
+        super::lua_fn(lua, move |_, (child, parent): (LuaValue, LuaValue)| {
             let child = instance_of(&child)?;
             let parent = if parent.is_nil() { None } else { Some(instance_of(&parent)?) };
             set_parent(&e, child, parent).map_err(|_| LuaError::runtime("SetParent failed"))
@@ -190,7 +190,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Mute",
-        lua.create_function(move |lua, on: bool| {
+        super::lua_fn(lua, move |lua, on: bool| {
             crate::cost::mute_host_nanos(lua, on);
             let muted = e.state.borrow().sched.muted.clone();
             muted.set(if on { muted.get() + 1 } else { muted.get().saturating_sub(1) });
@@ -222,35 +222,35 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Charge",
-        lua.create_function(move |_, seconds: f64| {
+        super::lua_fn(lua, move |_, seconds: f64| {
             e.state.borrow().sched.charge_priced(seconds);
             Ok(())
         })?,
     )?;
     // SharedTableRegistry:GetSharedTable: a new handle of the SharedTable a name holds (shared_table.rs `fresh_handle`)
-    r.set("SharedTableHandle", lua.create_function(|lua, held: LuaAnyUserData| super::shared_table::fresh_handle(lua, &held))?)?;
+    r.set("SharedTableHandle", super::lua_fn(lua, |lua, held: LuaAnyUserData| super::shared_table::fresh_handle(lua, &held))?)?;
     // SharedTableRegistry's mark on a table it holds (shared_table.rs `mark_value`; anything else is left alone)
     r.set(
         "MarkSharedTable",
-        lua.create_function(|_, value: LuaValue| {
+        super::lua_fn(lua, |_, value: LuaValue| {
             super::shared_table::mark_value(&value);
             Ok(())
         })?,
     )?;
     // SharedTableRegistry's name for a buffer: its contents, charged as a string the script built (shared_table.rs `buffer_name`)
     let e = engine.clone();
-    r.set("BufferRegistryName", lua.create_function(move |lua, held: LuaValue| super::shared_table::buffer_name(lua, &e, &held))?)?;
+    r.set("BufferRegistryName", super::lua_fn(lua, move |lua, held: LuaValue| super::shared_table::buffer_name(lua, &e, &held))?)?;
     // A value given to a method's string parameter as a client reads it (convert.rs `string_param`: warned about with the script's
     // stack and cast to text), and the warning alone (`warn_string_param`): the string parameters of the service stubs
     let e = engine.clone();
     r.set(
         "StringParam",
-        lua.create_function(move |lua, (value, argument): (LuaValue, usize)| lua.create_string(super::convert::string_param(lua, &e, &value, argument, true)?))?,
+        super::lua_fn(lua, move |lua, (value, argument): (LuaValue, usize)| lua.create_string(super::convert::string_param(lua, &e, &value, argument, true)?))?,
     )?;
     let e = engine.clone();
     r.set(
         "WarnStringParam",
-        lua.create_function(move |lua, (value, argument): (LuaValue, usize)| {
+        super::lua_fn(lua, move |lua, (value, argument): (LuaValue, usize)| {
             super::convert::warn_string_param(lua, &e, &value, argument);
             Ok(())
         })?,
@@ -259,7 +259,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "BeginMoves",
-        lua.create_function(move |_, ()| {
+        super::lua_fn(lua, move |_, ()| {
             crate::world::joints::begin_batch(&mut e.state.borrow_mut());
             Ok(())
         })?,
@@ -267,7 +267,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "EndMoves",
-        lua.create_function(move |_, ()| {
+        super::lua_fn(lua, move |_, ()| {
             let hooks = e.hooks.borrow();
             let mut state = e.state.borrow_mut();
             crate::world::joints::end_batch(&mut state, &e.reflection, &hooks);
@@ -277,13 +277,13 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Missing",
-        lua.create_function(move |lua, (class_name, member): (String, String)| {
+        super::lua_fn(lua, move |lua, (class_name, member): (String, String)| {
             e.missing(Some(lua), &class_name, &member);
             Ok(())
         })?,
     )?;
     let e = engine.clone();
-    r.set("LogHistory", lua.create_function(move |lua, ()| {
+    r.set("LogHistory", super::lua_fn(lua, move |lua, ()| {
         let state = e.state.borrow();
         let history = lua.create_table_with_capacity(state.log_history.len(), 0)?;
         for (index, line) in state.log_history.iter().enumerate() {
@@ -306,7 +306,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "LogLine",
-        lua.create_function(move |_, (kind, message, context): (LuaString, LuaString, Option<LuaTable>)| {
+        super::lua_fn(lua, move |_, (kind, message, context): (LuaString, LuaString, Option<LuaTable>)| {
             let kind = match &*kind.as_bytes() {
                 b"info" => "info",
                 b"warn" => "warn",
@@ -321,7 +321,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // a LogService error's `stack`: "Stack Begin", a line per frame of the script's own code, "Stack End"
     r.set(
         "LogStack",
-        lua.create_function(|lua, trace: LuaString| {
+        super::lua_fn(lua, |lua, trace: LuaString| {
             let mut lines = vec!["Stack Begin".to_string()];
             lines.extend(crate::stack_frames(&trace.to_string_lossy()));
             lines.push("Stack End".to_string());
@@ -331,7 +331,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // a LogService error table turned into text ([`uncaught_log_error`])
     r.set(
         "LogErrorText",
-        lua.create_function(|lua, text: LuaString| {
+        super::lua_fn(lua, |lua, text: LuaString| {
             let thread = lua.current_thread().to_pointer() as usize;
             LOG_ERROR_TEXTS.with(|texts| {
                 let mut texts = texts.borrow_mut();
@@ -345,7 +345,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "LocalPlayer",
-        lua.create_function(move |lua, ()| match e.world().local_player {
+        super::lua_fn(lua, move |lua, ()| match e.world().local_player {
             Some(player) => instance_value(lua, &e, player),
             None => Ok(LuaValue::Nil),
         })?,
@@ -353,7 +353,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "GetEnumItem",
-        lua.create_function(move |lua, (enum_name, item_name): (String, String)| match e.reflection.enum_item(&enum_name, &item_name) {
+        super::lua_fn(lua, move |lua, (enum_name, item_name): (String, String)| match e.reflection.enum_item(&enum_name, &item_name) {
             Some(item) => enum_item_value(lua, &e, item),
             None => Ok(LuaValue::Nil),
         })?,
@@ -361,7 +361,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "NewSignal",
-        lua.create_function(move |lua, name: String| {
+        super::lua_fn(lua, move |lua, name: String| {
             let signal = types::new_signal(&e, &name);
             signal_value(lua, &e, signal)
         })?,
@@ -369,7 +369,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "GetCallback",
-        lua.create_function(move |_, (target, name): (LuaValue, String)| {
+        super::lua_fn(lua, move |_, (target, name): (LuaValue, String)| {
             let id = instance_of(&target)?;
             let Some(name) = e.reflection.name_id(&name) else { return Ok(LuaValue::Nil) };
             Ok(e.state.borrow().dom.at(id).callback(name).cloned().unwrap_or(LuaValue::Nil))
@@ -383,7 +383,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Resume",
-        lua.create_function(move |lua, thread: LuaThread| {
+        super::lua_fn(lua, move |lua, thread: LuaThread| {
             crate::scheduler::resume(lua, &e, &thread, LuaMultiValue::new());
             Ok(())
         })?,
@@ -392,7 +392,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "ReportError",
-        lua.create_function(move |lua, problem: LuaValue| {
+        super::lua_fn(lua, move |lua, problem: LuaValue| {
             crate::scheduler::report_callback_error(lua, &e, &problem);
             Ok(())
         })?,
@@ -413,7 +413,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "KeyframeSequence",
-        lua.create_function(move |lua, uri: String| match crate::animation::source::sequence(&e, &uri) {
+        super::lua_fn(lua, move |lua, uri: String| match crate::animation::source::sequence(&e, &uri) {
             Ok(sequence) => Ok((instance_value(lua, &e, sequence)?, None)),
             // (an `active://` id's error is Studio's own text, measured, and so are the one for what is no clip and those
             // for an id no client can read: content_id::animation)
@@ -427,7 +427,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "AnimationClip",
-        lua.create_function(move |lua, uri: String| match crate::animation::source::animation_clip(&e, &uri) {
+        super::lua_fn(lua, move |lua, uri: String| match crate::animation::source::animation_clip(&e, &uri) {
             Ok(clip) => Ok((instance_value(lua, &e, clip)?, None)),
             Err(error) if error == crate::animation::source::NEVER => Ok((LuaValue::Boolean(false), None)),
             // (an `active://` id's error is Studio's own text, measured, and so are those for an id no client can read)
@@ -440,7 +440,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "PreloadAnimations",
-        lua.create_function(move |lua, items: LuaTable| {
+        super::lua_fn(lua, move |lua, items: LuaTable| {
             let mut ids = Vec::new();
             for (index, item) in items.sequence_values::<LuaValue>().enumerate() {
                 if let Ok(id) = instance_of(&item?) {
@@ -465,7 +465,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "LoadImage",
-        lua.create_function(move |lua, uri: String| match crate::images::load(&e, &uri) {
+        super::lua_fn(lua, move |lua, uri: String| match crate::images::load(&e, &uri) {
             Ok(pixels) => Ok((LuaValue::Number(pixels.width as f64), LuaValue::Number(pixels.height as f64), LuaValue::Buffer(lua.create_buffer(pixels.rgba)?), None)),
             Err(error) => Ok((LuaValue::Nil, LuaValue::Nil, LuaValue::Nil, Some(error))),
         })?,
@@ -473,7 +473,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "SaveImage",
-        lua.create_function(move |_, (width, height, pixels): (u32, u32, mlua::Buffer)| match crate::images::save(&e, width, height, &pixels.to_vec()) {
+        super::lua_fn(lua, move |_, (width, height, pixels): (u32, u32, mlua::Buffer)| match crate::images::save(&e, width, height, &pixels.to_vec()) {
             Ok(path) => Ok((Some(path.to_string_lossy().replace('\\', "/")), None)),
             Err(error) => Ok((None, Some(error))),
         })?,
@@ -483,14 +483,14 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "MeshCopy",
-        lua.create_function(move |_, mesh: LuaValue| match crate::meshes::data_model_copy(&e, instance_of(&mesh)?) {
+        super::lua_fn(lua, move |_, mesh: LuaValue| match crate::meshes::data_model_copy(&e, instance_of(&mesh)?) {
             Ok(uri) => Ok((Some(uri), None)),
             Err(problem) => Ok((None, Some(problem))),
         })?,
     )?;
     r.set(
         "OpaqueContent",
-        lua.create_function(|lua, uri: LuaString| {
+        super::lua_fn(lua, |lua, uri: LuaString| {
             static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
             let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let content = crate::value::ContentValue::Opaque(serial, crate::value::Str::new(&uri.as_bytes()));
@@ -502,7 +502,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Int64Argument",
-        lua.create_function(move |_, (value, index): (LuaValue, usize)| {
+        super::lua_fn(lua, move |_, (value, index): (LuaValue, usize)| {
             Ok(match convert::int64_argument(&e, &value, index) {
                 Ok(number) => (Some(number.to_string()), None),
                 Err(message) => (None, Some(message)),
@@ -512,7 +512,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // HttpService JSON: Lune's serde (sorted keys, empty tables as `{}`, integral numbers as integers)
     r.set(
         "JsonEncode",
-        lua.create_function(|lua, value: LuaValue| {
+        super::lua_fn(lua, |lua, value: LuaValue| {
             let safe = crate::services::json_safe(lua, &value, &mut Vec::new(), &mut super::bindable::Tally::default()).map_err(|flow| match flow {
                 Flow::Error(error) => LuaError::runtime(error.message),
                 Flow::Fail(error) => error,
@@ -528,7 +528,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     r.set(
         "JsonDecode",
-        lua.create_function(|lua, text: LuaValue| {
+        super::lua_fn(lua, |lua, text: LuaValue| {
             let LuaValue::String(text) = text else { return Ok((false, LuaValue::Nil)) };
             // (services port) Lune's serde.decode number semantics (engine::lune_json)
             let decoded = std::str::from_utf8(&text.as_bytes()).map_err(|e| e.to_string()).and_then(crate::lune_json::decode);
@@ -551,7 +551,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set("Options", options)?;
     // Player:GetMouse()'s PlayerMouse, made on the first call (world/mouse.rs)
     let e = engine.clone();
-    r.set("PlayerMouse", lua.create_function(move |lua, ()| crate::world::mouse::create(lua, &e))?)?;
+    r.set("PlayerMouse", super::lua_fn(lua, move |lua, ()| crate::world::mouse::create(lua, &e))?)?;
 
     let shared = engine.lua.borrow().shared.clone().ok_or_else(|| LuaError::runtime("shared globals"))?;
     let services = modules::load_engine_luau(lua, SERVICES, "=rur.services", Some(shared.clone()))?;

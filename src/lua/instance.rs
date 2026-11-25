@@ -119,7 +119,7 @@ pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameI
     }
     let e = engine.clone();
     let method_name = engine.reflection.name(name).to_string();
-    let function = lua.create_function(move |lua, args: LuaMultiValue| {
+    let function = super::create_boxed_fn(lua, Box::new(move |lua, args: LuaMultiValue| {
         let args = Args::new(args);
         let outcome = match args.instance(0) {
             Some(id) => {
@@ -129,7 +129,7 @@ pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameI
             None => raise(format!("Expected ':' not '.' calling member function {method_name}")),
         };
         encode(lua, outcome)
-    })?;
+    }))?;
     engine.lua.borrow_mut().call_methods.insert((owner, name), function.clone());
     Ok(Some(function))
 }
@@ -208,10 +208,10 @@ fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: 
     let class_label = engine.reflection.class(class).name.to_string();
     let member = engine.reflection.name(name).to_string();
     let label = member.clone();
-    let function = super::named(lua, &label, super::cfunction::Kind::Library, lua.create_function(move |lua, _: LuaMultiValue| {
+    let function = super::named(lua, &label, super::cfunction::Kind::Library, super::create_boxed_unit(lua, Box::new(move |lua| {
         e.missing(Some(lua), &class_label, &member);
-        Ok(())
-    })?)?;
+        Ok(LuaValue::Nil)
+    }))?)?;
     engine.lua.borrow_mut().unimplemented.insert((class, name), function.clone());
     Ok(LuaValue::Function(function))
 }
@@ -1152,22 +1152,22 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
         let connection_slot = connection_slot.clone();
         let thread = thread.clone();
         let name = name.clone();
-        lua.create_function(move |lua, child: LuaValue| {
+        super::create_boxed_val(lua, Box::new(move |lua, child: LuaValue| {
             let Some(child_id) = instance_id(&child) else {
-                return Ok(());
+                return Ok(LuaValue::Nil);
             };
             let wanted = name_arg(&name);
             let wanted = wanted.as_ref().map(|s| s.as_bytes());
             if done.get() || !name_equals(&engine.state.borrow(), child_id, wanted.as_deref()) {
-                return Ok(());
+                return Ok(LuaValue::Nil);
             }
             done.set(true);
             if let Some(connection) = connection_slot.get() {
                 engine.state.borrow_mut().signals.disconnect(connection);
             }
             scheduler::resume(lua, &engine, &thread, LuaMultiValue::from_iter([child]));
-            Ok(())
-        })?
+            Ok(LuaValue::Nil)
+        }))?
     };
     let signal = core::event_signal(&mut engine.state.borrow_mut(), &engine.reflection, id, K::ChildAdded as NameId);
     let noted = crate::census::active(engine).then(|| callback.clone());
@@ -1181,15 +1181,15 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
             let engine_ref = engine.clone();
             let done = done.clone();
             let thread = thread.clone();
-            let body = lua.create_function(move |lua, ()| {
+            let body = super::create_boxed_unit(lua, Box::new(move |lua| {
                 if done.get() {
-                    return Ok(());
+                    return Ok(LuaValue::Nil);
                 }
                 done.set(true);
                 engine_ref.state.borrow_mut().signals.disconnect(connection);
                 scheduler::resume(lua, &engine_ref, &thread, LuaMultiValue::from_iter([LuaValue::Nil]));
-                Ok(())
-            })?;
+                Ok(LuaValue::Nil)
+            }))?;
             let timer = lua.create_thread(body)?;
             engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, timeout, timer, Vec::new());
         }
@@ -1200,12 +1200,12 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
                 key_text(&name)
             );
             let engine_ref = engine.clone();
-            let body = lua.create_function(move |_, ()| {
+            let body = super::create_boxed_unit(lua, Box::new(move |_| {
                 if !done.get() {
                     engine_ref.warn(label.clone());
                 }
-                Ok(())
-            })?;
+                Ok(LuaValue::Nil)
+            }))?;
             let timer = lua.create_thread(body)?;
             engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, 5.0, timer, Vec::new());
         }

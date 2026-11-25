@@ -221,8 +221,7 @@ where
     F: Fn(&Lua, LuaMultiValue) -> Ret + 'static,
 {
     let _ = engine;
-    let raw = lua.create_function(move |lua, args: LuaMultiValue| encode(lua, function(lua, args)))?;
-    cfunction::over_rust(lua, name, cfunction::Kind::Served, raw)
+    wrapped_boxed(lua, name, cfunction::Kind::Served, Box::new(function))
 }
 
 /// [`wrapped`] for a global or a library's function ([`cfunction::Kind::Library`]).
@@ -230,8 +229,68 @@ pub fn library_function<F>(lua: &Lua, name: &str, function: F) -> LuaResult<LuaF
 where
     F: Fn(&Lua, LuaMultiValue) -> Ret + 'static,
 {
+    wrapped_boxed(lua, name, cfunction::Kind::Library, Box::new(function))
+}
+
+#[inline(never)]
+fn wrapped_boxed(
+    lua: &Lua,
+    name: &str,
+    kind: cfunction::Kind,
+    function: Box<dyn Fn(&Lua, LuaMultiValue) -> Ret + 'static>,
+) -> LuaResult<LuaFunction> {
     let raw = lua.create_function(move |lua, args: LuaMultiValue| encode(lua, function(lua, args)))?;
-    cfunction::over_rust(lua, name, cfunction::Kind::Library, raw)
+    cfunction::over_rust(lua, name, kind, raw)
+}
+
+/// Creates a Lua function backed by a type-erased closure so cold callbacks share one
+/// `mlua::Lua::create_function` monomorphization instead of instantiating callback glue per closure.
+#[inline(never)]
+pub(crate) fn create_boxed_fn(
+    lua: &Lua,
+    function: Box<dyn Fn(&Lua, LuaMultiValue) -> LuaResult<LuaMultiValue> + 'static>,
+) -> LuaResult<LuaFunction> {
+    lua.create_function(move |lua, args: LuaMultiValue| function(lua, args))
+}
+
+#[inline(never)]
+pub(crate) fn create_boxed_unit(
+    lua: &Lua,
+    function: Box<dyn Fn(&Lua) -> LuaResult<LuaValue> + 'static>,
+) -> LuaResult<LuaFunction> {
+    lua.create_function(move |lua, ()| function(lua))
+}
+
+#[inline(never)]
+pub(crate) fn create_boxed_val(
+    lua: &Lua,
+    function: Box<dyn Fn(&Lua, LuaValue) -> LuaResult<LuaValue> + 'static>,
+) -> LuaResult<LuaFunction> {
+    lua.create_function(move |lua, arg: LuaValue| function(lua, arg))
+}
+
+#[inline(never)]
+pub(crate) fn create_boxed_val2(
+    lua: &Lua,
+    function: Box<dyn Fn(&Lua, LuaValue, LuaValue) -> LuaResult<LuaValue> + 'static>,
+) -> LuaResult<LuaFunction> {
+    lua.create_function(move |lua, (a, b): (LuaValue, LuaValue)| function(lua, a, b))
+}
+
+/// Typed thin wrapper over [`create_boxed_fn`] for cold callbacks.
+pub(crate) fn lua_fn<A, R, F>(lua: &Lua, function: F) -> LuaResult<LuaFunction>
+where
+    A: FromLuaMulti,
+    R: IntoLuaMulti,
+    F: Fn(&Lua, A) -> LuaResult<R> + 'static,
+{
+    create_boxed_fn(
+        lua,
+        Box::new(move |lua, args| {
+            let args = A::from_lua_multi(args, lua)?;
+            function(lua, args)?.into_lua_multi(lua)
+        }),
+    )
 }
 
 /// `function` (an mlua function, which may answer the call protocol) as one C function named `name` (lua/cfunction.rs).
@@ -499,7 +558,7 @@ pub fn strip_callback_tracebacks(lua: &Lua) -> LuaResult<()> {
             1
         }
     }
-    let failing = lua.create_function(|_, ()| Err::<(), _>(LuaError::runtime("")))?;
+    let failing = create_boxed_unit(lua, Box::new(|_| Err(LuaError::runtime(""))))?;
     unsafe {
         lua.exec_raw::<()>(failing, |state| {
             use mlua::ffi;

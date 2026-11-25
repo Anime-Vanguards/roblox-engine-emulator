@@ -98,15 +98,15 @@ fn permits_meta(lua: &Lua) -> LuaResult<LuaTable> {
         }
     }
     let meta = lua.create_table()?;
-    meta.raw_set("__index", lua.create_function(|lua, _: LuaMultiValue| {
+    meta.raw_set("__index", crate::lua::create_boxed_unit(lua, Box::new(|lua| {
         report(lua);
         Ok(LuaValue::Nil)
-    })?)?;
-    let done = lua.create_function(|_, _: LuaMultiValue| Ok(LuaValue::Nil))?;
-    meta.raw_set("__iter", lua.create_function(move |lua, _: LuaMultiValue| {
+    }))?)?;
+    let done = crate::lua::create_boxed_unit(lua, Box::new(|_| Ok(LuaValue::Nil)))?;
+    meta.raw_set("__iter", crate::lua::create_boxed_unit(lua, Box::new(move |lua| {
         report(lua);
-        Ok(done.clone())
-    })?)?;
+        Ok(LuaValue::Function(done.clone()))
+    }))?)?;
     meta.set_readonly(true);
     lua.set_named_registry_value(PERMITS_META, meta.clone())?;
     Ok(meta)

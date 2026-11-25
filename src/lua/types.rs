@@ -361,7 +361,7 @@ pub fn copy_instance_handle(lua: &Lua, held: &LuaAnyUserData) -> LuaResult<LuaVa
 fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // Get, for `.` (a new C function each read: [`LInstanceHandle`]) and for `:` (the __namecall's, whose self always is a handle)
     let e = engine.clone();
-    let get = lua.create_function(move |lua, args: LuaMultiValue| {
+    let get = super::create_boxed_fn(lua, Box::new(move |lua, args: LuaMultiValue| {
         let args = Args::new(args);
         super::encode(lua, match instance_handle_of(args.get(0)) {
             Some(Some(id)) if e.state.borrow().dom.get(id).is_some() => {
@@ -372,7 +372,7 @@ fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             None if args.len() == 0 => raise_at_caller("missing argument #1 to 'Get' (InstanceHandle expected)"),
             None => raise_at_caller(format!("invalid argument #1 to 'Get' (InstanceHandle expected, got {})", typeof_value(&e, args.get(0)))),
         })
-    })?;
+    }))?;
     let e = engine.clone();
     let dotted = get.clone();
     let index = wrapped(lua, engine, "__index", move |lua, args| {
@@ -386,18 +386,19 @@ fn register_instance_handle(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
     let newindex = read_only_members(lua, engine, "InstanceHandle", &[])?;
     let e = engine.clone();
-    let tostring = lua.create_function(move |_, this: LuaValue| {
+    let tostring = super::create_boxed_val(lua, Box::new(move |lua, this| {
         let state = e.state.borrow();
-        Ok(match instance_handle_of(&this).flatten().and_then(|id| state.dom.get(id)) {
+        let text = match instance_handle_of(&this).flatten().and_then(|id| state.dom.get(id)) {
             Some(instance) => instance.name.to_str_lossy().into_owned(),
             None => "nil".to_string(),
-        })
-    })?;
+        };
+        Ok(LuaValue::String(lua.create_string(text)?))
+    }))?;
     let e = engine.clone();
-    let eq = lua.create_function(move |_, (a, b): (LuaValue, LuaValue)| {
+    let eq = super::create_boxed_val2(lua, Box::new(move |_, a, b| {
         charge_handle(&e, crate::cost::HANDLE_EQ);
-        Ok(matches!((instance_handle_of(&a), instance_handle_of(&b)), (Some(a), Some(b)) if a == b))
-    })?;
+        Ok(LuaValue::Boolean(matches!((instance_handle_of(&a), instance_handle_of(&b)), (Some(a), Some(b)) if a == b)))
+    }))?;
     lua.register_userdata_type::<LInstanceHandle>(|registry| {
         registry.add_meta_field("__type", "InstanceHandle");
         registry.add_meta_field("__index", index);
@@ -444,14 +445,14 @@ fn enum_item_of(value: &LuaValue) -> Option<EnumItemId> {
 
 fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // EnumItem
-    let is_a = named(lua, "IsA", Library, lua.create_function(|lua, (item, name): (LuaValue, LuaValue)| {
+    let is_a = named(lua, "IsA", Library, super::create_boxed_val2(lua, Box::new(|lua, item, name| {
         let engine = engine_of(lua);
-        let Some(item) = enum_item_of(&item) else { return Ok(false) };
-        Ok(match name {
+        let Some(item) = enum_item_of(&item) else { return Ok(LuaValue::Boolean(false)) };
+        Ok(LuaValue::Boolean(match name {
             LuaValue::String(name) => engine.reflection.enum_item_type_name(item).as_bytes() == &*name.as_bytes(),
             _ => false,
-        })
-    })?)?;
+        }))
+    }))?)?;
     engine.lua.borrow_mut().enum_item_is_a = Some(is_a.clone());
     let e = engine.clone();
     let item_index = wrapped(lua, engine, "__index", move |lua, args| {
@@ -474,7 +475,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             e.reflection.enum_item_path(item)
         ))
     })?;
-    let item_tostring = lua.create_function(|lua, item: LuaAnyUserData| {
+    let item_tostring = super::lua_fn(lua, |lua, item: LuaAnyUserData| {
         let engine = engine_of(lua);
         Ok(engine.reflection.enum_item_path(item.borrow::<LEnumItem>()?.0))
     })?;
@@ -494,7 +495,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let members = lua.create_table()?;
     members.set(
         "GetEnumItems",
-        named(lua, "GetEnumItems", Library, lua.create_function(|lua, this: LuaValue| {
+        named(lua, "GetEnumItems", Library, super::lua_fn(lua, |lua, this: LuaValue| {
             let engine = engine_of(lua);
             let LuaValue::UserData(ud) = this else { return Err(LuaError::runtime("Expected ':' not '.' calling member function GetEnumItems")) };
             let id = ud.borrow::<LEnum>()?.0;
@@ -508,7 +509,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     members.set(
         "FromName",
-        named(lua, "FromName", Library, lua.create_function(|lua, (this, name): (LuaAnyUserData, LuaValue)| {
+        named(lua, "FromName", Library, super::lua_fn(lua, |lua, (this, name): (LuaAnyUserData, LuaValue)| {
             let engine = engine_of(lua);
             let id = this.borrow::<LEnum>()?.0;
             let LuaValue::String(name) = name else { return Ok(LuaValue::Nil) };
@@ -520,7 +521,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     members.set(
         "FromValue",
-        named(lua, "FromValue", Library, lua.create_function(|lua, (this, value): (LuaAnyUserData, LuaValue)| {
+        named(lua, "FromValue", Library, super::lua_fn(lua, |lua, (this, value): (LuaAnyUserData, LuaValue)| {
             let engine = engine_of(lua);
             let id = this.borrow::<LEnum>()?.0;
             let number = number_of(&value);
@@ -551,7 +552,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         raise(format!("{} is not a valid member of \"Enum.{}\"", key_text(args.get(1)), info.name))
     })?;
-    let enum_tostring = lua.create_function(|lua, this: LuaAnyUserData| {
+    let enum_tostring = super::lua_fn(lua, |lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
         Ok(engine.reflection.enums[this.borrow::<LEnum>()?.0 as usize].name.to_string())
     })?;
@@ -563,7 +564,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
 
     // The Enum global
-    let get_enums = named(lua, "GetEnums", Library, lua.create_function(|lua, ()| {
+    let get_enums = named(lua, "GetEnums", Library, super::lua_fn(lua, |lua, ()| {
         let engine = engine_of(lua);
         let table = lua.create_table()?;
         for id in 0..engine.reflection.enums.len() {
@@ -584,7 +585,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         raise(format!("{} is not a valid member of \"Enum\"", key_text(args.get(1))))
     })?;
-    let global_tostring = lua.create_function(|_, _: LuaValue| Ok("Enums"))?;
+    let global_tostring = super::create_boxed_unit(lua, Box::new(|lua| Ok(LuaValue::String(lua.create_string("Enums")?))))?;
     lua.register_userdata_type::<LEnums>(|registry| {
         registry.add_meta_field("__type", "Enums");
         registry.add_meta_field("__index", global_index);
@@ -745,7 +746,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         Ok(values([member]))
     })?;
-    let tostring = lua.create_function(|lua, this: LuaAnyUserData| {
+    let tostring = super::lua_fn(lua, |lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
         let signal = this.borrow::<LSignal>()?;
         let state = engine.state.borrow();
@@ -763,7 +764,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
 
     let connection_members = lua.create_table()?;
-    let disconnect = named(lua, "Disconnect", Library, lua.create_function(|lua, this: LuaValue| {
+    let disconnect = named(lua, "Disconnect", Library, super::create_boxed_val(lua, Box::new(|lua, this| {
         let engine = engine_of(lua);
         if let LuaValue::UserData(ud) = this {
             if let Ok(connection) = ud.borrow::<LConnection>() {
@@ -776,8 +777,8 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 state.signals.disconnect(connection.0);
             }
         }
-        Ok(())
-    })?)?;
+        Ok(LuaValue::Nil)
+    }))?)?;
     connection_members.set("Disconnect", disconnect.clone())?;
     connection_members.set("disconnect", disconnect)?;
     engine.lua.borrow_mut().connection_members = Some(connection_members.clone());
@@ -799,7 +800,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         raise(format!("{} is not a valid member of RBXScriptConnection", key_text(args.get(1))))
     })?;
-    let connection_tostring = lua.create_function(|_, _: LuaValue| Ok("Connection"))?;
+    let connection_tostring = super::create_boxed_unit(lua, Box::new(|lua| Ok(LuaValue::String(lua.create_string("Connection")?))))?;
     lua.register_userdata_type::<LConnection>(|registry| {
         registry.add_meta_field("__type", "RBXScriptConnection");
         registry.add_meta_field("__index", connection_index);
@@ -810,11 +811,11 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // functions (lua/raw.rs table_namecall); indexing keeps the wrapped ones.
     let signal_calls = lua.create_table()?;
     let e = engine.clone();
-    let raw_connect = lua.create_function(move |lua, args| super::encode(lua, connect(lua, &e, args, false)))?;
+    let raw_connect = super::create_boxed_fn(lua, Box::new(move |lua, args| super::encode(lua, connect(lua, &e, args, false))))?;
     let e = engine.clone();
-    let raw_once = lua.create_function(move |lua, args| super::encode(lua, connect(lua, &e, args, true)))?;
+    let raw_once = super::create_boxed_fn(lua, Box::new(move |lua, args| super::encode(lua, connect(lua, &e, args, true))))?;
     let e = engine.clone();
-    let raw_wait = lua.create_function(move |lua, args: LuaMultiValue| {
+    let raw_wait = super::create_boxed_fn(lua, Box::new(move |lua, args: LuaMultiValue| {
         let args = Args::new(args);
         let outcome = match signal_of(&e, args.get(0)) {
             Some(signal) => {
@@ -830,9 +831,9 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             None => wait_misuse(&e, args.get(0)),
         };
         super::encode(lua, outcome)
-    })?;
+    }))?;
     let e = engine.clone();
-    let raw_connect_parallel = lua.create_function(move |lua, args| super::encode(lua, connect_as(lua, &e, args, false, true)))?;
+    let raw_connect_parallel = super::create_boxed_fn(lua, Box::new(move |lua, args| super::encode(lua, connect_as(lua, &e, args, false, true))))?;
     for (name, function) in [
         ("Connect", &raw_connect),
         ("ConnectParallel", &raw_connect_parallel),
@@ -858,7 +859,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         lock_metatable(lua, &sample)?;
         super::raw::set_table_namecall(lua, &sample, signal_calls, "RBXScriptSignal", lua.create_table()?)?;
     }
-    let probe = lua.create_function(|_, ()| Ok(()))?;
+    let probe = super::create_boxed_unit(lua, Box::new(|_| Ok(LuaValue::Nil)))?;
     let connection = engine.state.borrow_mut().signals.connect(signal, probe, false);
     let sample = lua.create_any_userdata(LConnection(connection))?;
     lock_metatable(lua, &sample)?;
@@ -945,7 +946,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         Ok(none())
     })?;
-    let tostring = lua.create_function(|lua, this: LuaAnyUserData| {
+    let tostring = super::lua_fn(lua, |lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
         let font = this.borrow::<LFont>()?;
         let font = font.0.borrow();
@@ -956,7 +957,7 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             engine.reflection.enum_item_info(font.style).name
         ))
     })?;
-    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| Ok(matches!((font_of(&a), font_of(&b)), (Some(a), Some(b)) if a == b)))?;
+    let eq = super::create_boxed_val2(lua, Box::new(|_, a, b| Ok(LuaValue::Boolean(matches!((font_of(&a), font_of(&b)), (Some(a), Some(b)) if a == b)))))?;
     lua.register_userdata_type::<LFont>(|registry| {
         registry.add_meta_field("__type", "Font");
         registry.add_meta_field("__index", index);
@@ -1147,7 +1148,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         unknown_member(&e, args.get(1), "Content", false)
     })?;
-    let tostring = lua.create_function(|lua, this: LuaAnyUserData| {
+    let tostring = super::lua_fn(lua, |lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
         Ok(match &this.borrow::<LContent>()?.0 {
             ContentValue::Uri(uri) => format!("Content{{SourceType=Uri, Uri={uri}}}"),
@@ -1159,7 +1160,7 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             ContentValue::None => "Content{SourceType=None}".into(),
         })
     })?;
-    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| Ok(matches!((content_of(&a), content_of(&b)), (Some(a), Some(b)) if a == b)))?;
+    let eq = super::create_boxed_val2(lua, Box::new(|_, a, b| Ok(LuaValue::Boolean(matches!((content_of(&a), content_of(&b)), (Some(a), Some(b)) if a == b)))))?;
     let newindex = read_only_members(lua, engine, "Content", &["SourceType", "Uri", "Object"])?;
     lua.register_userdata_type::<LContent>(|registry| {
         registry.add_meta_field("__type", "Content");
@@ -1171,10 +1172,10 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let library = lua.create_table()?;
     library.set(
         "fromUri",
-        named(lua, "fromUri", Library, lua.create_function(|lua, uri: LuaValue| {
+        named(lua, "fromUri", Library, super::create_boxed_val(lua, Box::new(|lua, uri| {
             let text = string_of(lua, &uri)?;
-            lua.create_any_userdata(LContent::new(lua, ContentValue::Uri(Str::from(text))))
-        })?)?,
+            lua.create_any_userdata(LContent::new(lua, ContentValue::Uri(Str::from(text)))).map(LuaValue::UserData)
+        }))?)?,
     )?;
     let none_value = lua.create_any_userdata(LContent::new(lua, ContentValue::None))?;
     lock_metatable(lua, &none_value)?;
@@ -1243,7 +1244,7 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
     // "Time:0.1 DelayTime:0.333333 RepeatCount:-1 Reverses:True ..." (Studio 0.744): the times with 6 significant digits,
     // the flag capitalized
-    let tostring = lua.create_function(|lua, this: LuaAnyUserData| {
+    let tostring = super::lua_fn(lua, |lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
         let info = this.borrow::<LTweenInfo>()?;
         let time = |value: &LuaValue| match value {
@@ -1261,16 +1262,18 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             engine.reflection.enum_item_info(info.easing_style).name,
         ))
     })?;
-    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| {
-        let (LuaValue::UserData(a), LuaValue::UserData(b)) = (a, b) else { return Ok(false) };
-        let (Ok(a), Ok(b)) = (a.borrow::<LTweenInfo>(), b.borrow::<LTweenInfo>()) else { return Ok(false) };
-        Ok(a.time == b.time
-            && a.easing_style == b.easing_style
-            && a.easing_direction == b.easing_direction
-            && a.repeat_count == b.repeat_count
-            && a.reverses == b.reverses
-            && a.delay_time == b.delay_time)
-    })?;
+    let eq = super::create_boxed_val2(lua, Box::new(|_, a, b| {
+        let (LuaValue::UserData(a), LuaValue::UserData(b)) = (a, b) else { return Ok(LuaValue::Boolean(false)) };
+        let (Ok(a), Ok(b)) = (a.borrow::<LTweenInfo>(), b.borrow::<LTweenInfo>()) else { return Ok(LuaValue::Boolean(false)) };
+        Ok(LuaValue::Boolean(
+            a.time == b.time
+                && a.easing_style == b.easing_style
+                && a.easing_direction == b.easing_direction
+                && a.repeat_count == b.repeat_count
+                && a.reverses == b.reverses
+                && a.delay_time == b.delay_time,
+        ))
+    }))?;
     let newindex = read_only_members(lua, engine, "TweenInfo", &["Time", "EasingStyle", "EasingDirection", "RepeatCount", "Reverses", "DelayTime"])?;
     lua.register_userdata_type::<LTweenInfo>(|registry| {
         registry.add_meta_field("__type", "TweenInfo");
@@ -1524,17 +1527,18 @@ impl RandomCall {
 
 /// Registers a Random method twice: wrapped in `dotted` for `.` (the type's __index), and raw in `called` for `:` (the
 /// type's __namecall, which runs it without the Luau wrapper).
+#[inline(never)]
 fn random_method(
     lua: &Lua,
     engine: &Rc<Engine>,
     (dotted, called): (&LuaTable, &LuaTable),
     name: &'static str,
-    method: impl Fn(&Lua, &Engine, &Args, RandomCall) -> Ret + Clone + 'static,
+    method: fn(&Lua, &Engine, &Args, RandomCall) -> Ret,
 ) -> LuaResult<()> {
-    let (by_dot, owner) = (method.clone(), engine.clone());
-    dotted.raw_set(name, wrapped(lua, engine, name, move |lua, args| by_dot(lua, &owner, &Args::new(args), RandomCall { name, dotted: true }))?)?;
     let owner = engine.clone();
-    let raw = lua.create_function(move |lua, args: LuaMultiValue| super::encode(lua, method(lua, &owner, &Args::new(args), RandomCall { name, dotted: false })))?;
+    dotted.raw_set(name, wrapped(lua, engine, name, move |lua, args| method(lua, &owner, &Args::new(args), RandomCall { name, dotted: true }))?)?;
+    let owner = engine.clone();
+    let raw = super::create_boxed_fn(lua, Box::new(move |lua, args: LuaMultiValue| super::encode(lua, method(lua, &owner, &Args::new(args), RandomCall { name, dotted: false }))))?;
     called.raw_set(name, raw)
 }
 
@@ -1621,18 +1625,18 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         Ok(values([member]))
     })?;
     let newindex = read_only_members(lua, engine, "Random", &[])?;
-    let tostring = lua.create_function(|_, _: LuaValue| Ok("Random"))?;
+    let tostring = super::create_boxed_unit(lua, Box::new(|lua| Ok(LuaValue::String(lua.create_string("Random")?))))?;
     // (two Randoms are == when they would generate the same, as in a client: Random.new(1) == Random.new(1), not
     // Random.new(2); Studio 0.747, tools/parity/probes/datatype_errors.luau)
-    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| {
-        Ok(match (a, b) {
+    let eq = super::create_boxed_val2(lua, Box::new(|_, a, b| {
+        Ok(LuaValue::Boolean(match (a, b) {
             (LuaValue::UserData(a), LuaValue::UserData(b)) => match (a.borrow::<LRandom>(), b.borrow::<LRandom>()) {
                 (Ok(a), Ok(b)) => a.0.get().state == b.0.get().state,
                 _ => false,
             },
             _ => false,
-        })
-    })?;
+        }))
+    }))?;
     lua.register_userdata_type::<LRandom>(|registry| {
         registry.add_meta_field("__type", "Random");
         registry.add_meta_field("__index", index);
@@ -2256,9 +2260,9 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         )?;
         calls.raw_set(
             name,
-            lua.create_function(move |lua, args: LuaMultiValue| {
+            super::create_boxed_fn(lua, Box::new(move |lua, args: LuaMultiValue| {
                 super::encode(lua, this_millis(&Args::new(args)).and_then(|millis| f(lua, millis)))
-            })?,
+            }))?,
         )?;
         Ok(())
     };
@@ -2289,7 +2293,7 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     for (name, parts) in [("FormatUniversalTime", universal_parts as fn(f64) -> Parts), ("FormatLocalTime", local_parts as fn(f64) -> Parts)] {
         methods.set(name, wrapped(lua, engine, name, format(Some(name), parts, engine.clone()))?)?;
         let call = format(None, parts, engine.clone());
-        calls.raw_set(name, lua.create_function(move |lua, args: LuaMultiValue| super::encode(lua, call(lua, args)))?)?;
+        calls.raw_set(name, super::create_boxed_fn(lua, Box::new(move |lua, args: LuaMultiValue| super::encode(lua, call(lua, args))))?)?;
     }
     let e = engine.clone();
     let index = wrapped(lua, engine, "__index", move |_, args| {
@@ -2311,17 +2315,13 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         unknown_member(&e, args.get(1), "DateTime", false)
     })?;
     let newindex = read_only_members(lua, engine, "DateTime", &["UnixTimestamp", "UnixTimestampMillis"])?;
-    let compare = |f: fn(f64, f64) -> bool| {
-        move |_: &Lua, (a, b): (LuaValue, LuaValue)| -> LuaResult<bool> {
-            Ok(match (date_time_of(&a), date_time_of(&b)) {
-                (Some(a), Some(b)) => f(a, b),
-                _ => false,
-            })
-        }
-    };
-    let eq = lua.create_function(compare(|a, b| a == b))?;
+    let eq = super::create_boxed_val2(lua, Box::new(|_, a, b| {
+        Ok(LuaValue::Boolean(matches!((date_time_of(&a), date_time_of(&b)), (Some(a), Some(b)) if a == b)))
+    }))?;
     // tostring is the instant's UnixTimestampMillis ("1700000000123", "-1500"; Studio 0.744)
-    let tostring = lua.create_function(|_, this: LuaValue| Ok(format!("{}", date_time_of(&this).unwrap_or(0.0) as i64)))?;
+    let tostring = super::create_boxed_val(lua, Box::new(|lua, this| {
+        Ok(LuaValue::String(lua.create_string(format!("{}", date_time_of(&this).unwrap_or(0.0) as i64))?))
+    }))?;
     lua.register_userdata_type::<LDateTime>(|registry| {
         registry.add_meta_field("__type", "DateTime");
         registry.add_meta_field("__index", index);
@@ -2341,10 +2341,10 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     library.set(
         "now",
-        named(lua, "now", Library, lua.create_function(move |lua, ()| {
+        named(lua, "now", Library, super::create_boxed_unit(lua, Box::new(move |lua| {
             let millis = e.state.borrow_mut().sched.unix_millis();
             make_date_time(lua, millis)
-        })?)?,
+        }))?)?,
     )?;
     // fromUnixTimestamp truncates its seconds toward zero before scaling (0.5 and -0.5 are 0, 1.999 is 1000 ms, -1.5
     // -1000 ms) and raises TIMESTAMP_OUT_OF_RANGE for a second outside the range, NaN and the infinities included;

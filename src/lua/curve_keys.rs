@@ -252,7 +252,7 @@ fn register_float(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         raise(format!("{} is not a valid member of FloatCurveKey", member(args.get(1))))
     })?;
-    let tostring = lua.create_function(|_, this: LuaAnyUserData| {
+    let tostring = super::lua_fn(lua, |_, this: LuaAnyUserData| {
         let key = this.borrow::<LFloatCurveKey>()?;
         Ok(format!(
             "{{{}, {}, {}, {}, {}}}",
@@ -263,11 +263,11 @@ fn register_float(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             optional_digits(key.right)
         ))
     })?;
-    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| {
-        let (LuaValue::UserData(a), LuaValue::UserData(b)) = (a, b) else { return Ok(false) };
-        let (Ok(a), Ok(b)) = (a.borrow::<LFloatCurveKey>(), b.borrow::<LFloatCurveKey>()) else { return Ok(false) };
-        Ok(*a == *b && a.time.is_some() && a.value.is_some())
-    })?;
+    let eq = super::create_boxed_val2(lua, Box::new(|_, a, b| {
+        let (LuaValue::UserData(a), LuaValue::UserData(b)) = (a, b) else { return Ok(LuaValue::Boolean(false)) };
+        let (Ok(a), Ok(b)) = (a.borrow::<LFloatCurveKey>(), b.borrow::<LFloatCurveKey>()) else { return Ok(LuaValue::Boolean(false)) };
+        Ok(LuaValue::Boolean(*a == *b && a.time.is_some() && a.value.is_some()))
+    }))?;
     lua.register_userdata_type::<LFloatCurveKey>(|registry| {
         registry.add_meta_field("__type", "FloatCurveKey");
         registry.add_meta_field("__index", index);
@@ -325,7 +325,7 @@ fn register_rotation(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         }
         raise(format!("{} is not a valid member of RotationCurveKey", member(args.get(1))))
     })?;
-    let tostring = lua.create_function(|_, this: LuaAnyUserData| {
+    let tostring = super::lua_fn(lua, |_, this: LuaAnyUserData| {
         let key = this.borrow::<LRotationCurveKey>()?;
         let rows = frame::from_affine(&Affine3A::from_quat(key.rotation)).orientation;
         let mut parts = vec![mode_name(key.mode).to_string(), optional_digits(key.time), "0".into(), "0".into(), "0".into()];
@@ -335,11 +335,11 @@ fn register_rotation(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         parts.extend([optional_digits(key.left), optional_digits(key.right)]);
         Ok(format!("{{{}}}", parts.join(", ")))
     })?;
-    let eq = lua.create_function(|_, (a, b): (LuaValue, LuaValue)| {
-        let (LuaValue::UserData(a), LuaValue::UserData(b)) = (a, b) else { return Ok(false) };
-        let (Ok(a), Ok(b)) = (a.borrow::<LRotationCurveKey>(), b.borrow::<LRotationCurveKey>()) else { return Ok(false) };
-        Ok(*a == *b && a.time.is_some())
-    })?;
+    let eq = super::create_boxed_val2(lua, Box::new(|_, a, b| {
+        let (LuaValue::UserData(a), LuaValue::UserData(b)) = (a, b) else { return Ok(LuaValue::Boolean(false)) };
+        let (Ok(a), Ok(b)) = (a.borrow::<LRotationCurveKey>(), b.borrow::<LRotationCurveKey>()) else { return Ok(LuaValue::Boolean(false)) };
+        Ok(LuaValue::Boolean(*a == *b && a.time.is_some()))
+    }))?;
     lua.register_userdata_type::<LRotationCurveKey>(|registry| {
         registry.add_meta_field("__type", "RotationCurveKey");
         registry.add_meta_field("__index", index);

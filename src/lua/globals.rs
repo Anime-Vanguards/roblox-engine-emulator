@@ -45,7 +45,20 @@ where
     F: Fn(&Lua, &Rc<Engine>, LuaMultiValue) -> LuaResult<LuaMultiValue> + 'static,
 {
     let engine = engine.clone();
-    lua.create_function(move |lua, args| f(lua, &engine, args))
+    super::create_boxed_fn(lua, Box::new(move |lua, args| f(lua, &engine, args)))
+}
+
+#[inline(never)]
+fn charge_fn(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaFunction> {
+    let e = engine.clone();
+    super::lua_fn(lua, move |_, seconds: f64| {
+        let state = e.state.borrow();
+        state.sched.charge(seconds);
+        if !state.sched.is_muted() {
+            crate::boundary::add_cost(seconds);
+        }
+        Ok(())
+    })
 }
 
 /// The VM a prelude call names: nil for the main VM, else an Actor's key (modules::vm_key).
@@ -129,48 +142,37 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set("ParamsReadCost", crate::cost::PARAMS_READ)?;
     // Vector3:Angle's atan2 in floats (the C runtime's atan2f), as a playing client takes it (Studio 0.744,
     // tools/parity/probes/cframe_order.luau and datatypes.luau: math.atan2's doubles differ in the last digits)
-    r.set("Atan2f", lua.create_function(|_, (y, x): (f64, f64)| Ok(f64::from((y as f32).atan2(x as f32))))?)?;
-    let e = engine.clone();
-    r.set(
-        "Charge",
-        lua.create_function(move |_, seconds: f64| {
-            let state = e.state.borrow();
-            state.sched.charge(seconds);
-            if !state.sched.is_muted() {
-                crate::boundary::add_cost(seconds);
-            }
-            Ok(())
-        })?,
-    )?;
+    r.set("Atan2f", super::lua_fn(lua, |_, (y, x): (f64, f64)| Ok(f64::from((y as f32).atan2(x as f32))))?)?;
+    r.set("Charge", charge_fn(lua, engine)?)?;
     r.set(
         "EnumItemName",
-        lua.create_function(|lua, value: LuaValue| {
+        super::create_boxed_val(lua, Box::new(|lua, value: LuaValue| {
             let engine = lua.app_data_ref::<Rc<Engine>>().expect("engine").clone();
             Ok(match &value {
                 LuaValue::UserData(ud) => match ud.borrow::<types::LEnumItem>() {
-                    Ok(item) => Some(engine.reflection.enum_item_info(item.0).name.to_string()),
-                    Err(_) => None,
+                    Ok(item) => LuaValue::String(lua.create_string(&*engine.reflection.enum_item_info(item.0).name)?),
+                    Err(_) => LuaValue::Nil,
                 },
-                _ => None,
+                _ => LuaValue::Nil,
             })
-        })?,
+        }))?,
     )?;
     r.set(
         "EnumItemType",
-        lua.create_function(|lua, value: LuaValue| {
+        super::create_boxed_val(lua, Box::new(|lua, value: LuaValue| {
             let engine = lua.app_data_ref::<Rc<Engine>>().expect("engine").clone();
             Ok(match &value {
                 LuaValue::UserData(ud) => match ud.borrow::<types::LEnumItem>() {
-                    Ok(item) => Some(engine.reflection.enum_item_type_name(item.0).to_string()),
-                    Err(_) => None,
+                    Ok(item) => LuaValue::String(lua.create_string(&*engine.reflection.enum_item_type_name(item.0))?),
+                    Err(_) => LuaValue::Nil,
                 },
-                _ => None,
+                _ => LuaValue::Nil,
             })
-        })?,
+        }))?,
     )?;
     r.set(
         "GetEnumItem",
-        lua.create_function(|lua, (enum_name, item_name): (String, String)| {
+        super::lua_fn(lua, |lua, (enum_name, item_name): (String, String)| {
             let engine = lua.app_data_ref::<Rc<Engine>>().expect("engine").clone();
             match engine.reflection.enum_item(&enum_name, &item_name) {
                 Some(item) => enum_item_value(lua, &engine, item),
@@ -195,10 +197,10 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // print and warn's mark on a SharedTable they write (lua/shared_table.rs `mark_value`)
     r.set(
         "MarkSharedTable",
-        lua.create_function(|_, value: LuaValue| {
+        super::create_boxed_val(lua, Box::new(|_, value: LuaValue| {
             super::shared_table::mark_value(&value);
-            Ok(())
-        })?,
+            Ok(LuaValue::Nil)
+        }))?,
     )?;
     // ValueCurveKey's table values, copied as an event's argument is (lua/bindable.rs): `R.Copied(height, value)`, the height
     // of the frame the copy starts above; and SecurityCapabilities.fromCurrent's report in the edit run context, where a
@@ -214,7 +216,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "Missing",
-        lua.create_function(move |lua, (class_name, member): (String, String)| {
+        super::lua_fn(lua, move |lua, (class_name, member): (String, String)| {
             e.missing(Some(lua), &class_name, &member);
             Ok(())
         })?,
@@ -224,13 +226,13 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // C function named `name` over `function`, a Rust function answering the call protocol or (`luau`) the prelude's own Luau
     r.set(
         "EngineFunction",
-        lua.create_function(|lua, (name, served, luau, function): (LuaString, bool, bool, LuaFunction)| {
+        super::lua_fn(lua, |lua, (name, served, luau, function): (LuaString, bool, bool, LuaFunction)| {
             let kind = if served { cfunction::Kind::Served } else { cfunction::Kind::Library };
             let name = name.to_string_lossy();
             if luau { cfunction::over_luau(lua, &name, kind, function) } else { cfunction::over_rust(lua, &name, kind, function) }
         })?,
     )?;
-    r.set("Nothing", lua.create_function(|_, _: LuaMultiValue| Ok(()))?)?;
+    r.set("Nothing", super::create_boxed_unit(lua, Box::new(|_| Ok(LuaValue::Nil)))?)?;
     // utf8.nfcnormalize and utf8.nfdnormalize (lua/normalize.rs)
     r.set("NfcNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, true)))?)?;
     r.set("NfdNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, false)))?)?;
@@ -397,7 +399,9 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // a script's require (prelude.luau Environment): `MakeRequire(Script, Vm)`, a C function of its own (lua/builtins.rs)
     r.set(
         "MakeRequire",
-        lua.create_function(move |lua, (script, vm): (LuaValue, LuaValue)| super::builtins::require_function(lua, script, vm, require_begin.clone(), require_finish.clone()))?,
+        super::create_boxed_val2(lua, Box::new(move |lua, script, vm| {
+            super::builtins::require_function(lua, script, vm, require_begin.clone(), require_finish.clone()).map(LuaValue::Function)
+        }))?,
     )?;
 
     // Vector3 is the native vector type, as in Roblox (vector3.luau, loaded by the prelude): vectors
@@ -407,7 +411,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set("VectorMethods", super::vector_methods::methods(lua)?)?;
     r.set(
         "MakeVectorNamecall",
-        lua.create_function(|lua, extras: LuaTable| super::vector_methods::namecall(lua, extras))?,
+        super::lua_fn(lua, |lua, extras: LuaTable| super::vector_methods::namecall(lua, extras))?,
     )?;
     r.set(
         "Vector3",
@@ -418,7 +422,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     r.set(
         "RawMetatable",
-        lua.create_function(|lua, value: LuaAnyUserData| unsafe {
+        super::lua_fn(lua, |lua, value: LuaAnyUserData| unsafe {
             lua.exec_raw::<LuaValue>(value, |state| {
                 if mlua::ffi::lua_getmetatable(state, -1) == 0 {
                     mlua::ffi::lua_pushnil(state);
@@ -429,7 +433,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     r.set(
         "SetVectorMetatable",
-        lua.create_function(|lua, metatable: LuaTable| {
+        super::lua_fn(lua, |lua, metatable: LuaTable| {
             lua.set_type_metatable::<mlua::Vector>(Some(metatable));
             Ok(())
         })?,
@@ -883,15 +887,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     // coroutine.create and wrap: the VM's, after charging the script for the thread as task.spawn does (lua/builtins.rs)
     let coroutine: LuaTable = exports.get("Coroutine")?;
     let native_coroutine: LuaTable = globals.get("coroutine")?;
-    let e = engine.clone();
-    let charge = lua.create_function(move |_, seconds: f64| {
-        let state = e.state.borrow();
-        state.sched.charge(seconds);
-        if !state.sched.is_muted() {
-            crate::boundary::add_cost(seconds);
-        }
-        Ok(())
-    })?;
+    let charge = charge_fn(lua, engine)?;
     for name in ["create", "wrap"] {
         let native: LuaFunction = native_coroutine.get(name)?;
         coroutine.raw_set(name, super::builtins::coroutine_function(lua, name, native, charge.clone(), crate::cost::THREAD)?)?;
@@ -908,26 +904,26 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let e = engine.clone();
     os.raw_set(
         "clock",
-        named(lua, "clock", Library, lua.create_function(move |lua, ()| {
+        named(lua, "clock", Library, super::create_boxed_unit(lua, Box::new(move |lua| {
             let clock = e.state.borrow_mut().sched.clock();
             // (a profile counts the reads by line and the clock's advance between them: a loop that checks a budget reads it once an
             // iteration)
             if crate::profiler::attribution::on() {
                 crate::profiler::attribution::clock_read(lua, clock);
             }
-            Ok(clock)
-        })?)?,
+            Ok(LuaValue::Number(clock))
+        }))?)?,
     )?;
     if std::env::var("RUR_REAL_CLOCK").as_deref() == Ok("1") {
         let start = std::time::Instant::now();
-        os.raw_set("realclock", lua.create_function(move |_, ()| Ok(start.elapsed().as_secs_f64()))?)?;
+        os.raw_set("realclock", super::create_boxed_unit(lua, Box::new(move |_| Ok(LuaValue::Number(start.elapsed().as_secs_f64()))))?)?;
     }
     if std::env::var("REE_WORK_COUNTERS").as_deref() == Ok("1") {
         // calibration (cost.rs, tools/cost-parity): the VM's work counters, { ops = {[opcode + 1] = n}, nativeops, allocated, ccalls, ... }
         let e = engine.clone();
         os.raw_set(
             "workcounters",
-            lua.create_function(move |lua, ()| {
+            super::create_boxed_unit(lua, Box::new(move |lua| {
                 let Some(pointer) = e.state.borrow().sched.vm_counters else { return Ok(LuaValue::Nil) };
                 let counters = unsafe { &*pointer };
                 let ops = lua.create_table()?;
@@ -1005,7 +1001,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
                 result.raw_set("jsonbytes", json.bytes as f64)?;
                 result.raw_set("jsonvalues", json.values as f64)?;
                 Ok(LuaValue::Table(result))
-            })?,
+            }))?,
         )?;
     }
     // Luau's own os.time and os.date on the virtual clock; their errors are Luau's plain messages (`invalid argument #1
@@ -1076,32 +1072,32 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     shared.raw_set("Instance", instance_global)?;
     shared.raw_set("typeof", prelude.typeof_fn.clone())?;
     // print and warn: C functions that write their arguments as tostring does, from their own frame (lua/builtins.rs)
+    let e = engine.clone();
+    let output = super::lua_fn(lua, move |_, (kind, message): (LuaString, LuaString)| {
+        let kind = if &*kind.as_bytes() == b"warn" { "warn" } else { "print" };
+        e.output(kind, message.to_string_lossy(), None);
+        Ok(())
+    })?;
+    let mark = super::create_boxed_val(lua, Box::new(|_, value: LuaValue| {
+        super::shared_table::mark_value(&value);
+        Ok(LuaValue::Nil)
+    }))?;
     for kind in ["print", "warn"] {
-        let e = engine.clone();
-        let output = lua.create_function(move |_, (kind, message): (LuaString, LuaString)| {
-            let kind = if &*kind.as_bytes() == b"warn" { "warn" } else { "print" };
-            e.output(kind, message.to_string_lossy(), None);
-            Ok(())
-        })?;
-        let mark = lua.create_function(|_, value: LuaValue| {
-            super::shared_table::mark_value(&value);
-            Ok(())
-        })?;
-        shared.raw_set(kind, super::builtins::output_function(lua, kind, output, mark)?)?;
+        shared.raw_set(kind, super::builtins::output_function(lua, kind, output.clone(), mark.clone())?)?;
     }
 
     // (the C functions below are named as a client names them, each alias a function of its own: `Wait` is named Wait; measured,
     // Studio 0.747, engine_functions.luau)
     let e = engine.clone();
-    shared.raw_set("tick", named(lua, "tick", Library, lua.create_function(move |_, ()| Ok(e.state.borrow_mut().sched.tick()))?)?)?;
+    shared.raw_set("tick", named(lua, "tick", Library, super::create_boxed_unit(lua, Box::new(move |_| Ok(LuaValue::Number(e.state.borrow_mut().sched.tick()))))?)?)?;
     let e = engine.clone();
     let edit = engine.options.edit_mode();
     shared.raw_set(
         "time",
-        named(lua, "time", Library, lua.create_function(move |_, ()| Ok(if edit { 0.0 } else { e.state.borrow().sched.now }))?)?,
+        named(lua, "time", Library, super::create_boxed_unit(lua, Box::new(move |_| Ok(LuaValue::Number(if edit { 0.0 } else { e.state.borrow().sched.now }))))?)?,
     )?;
     let e = engine.clone();
-    let elapsed = lua.create_function(move |_, ()| Ok(e.state.borrow_mut().sched.elapsed_time()))?;
+    let elapsed = super::create_boxed_unit(lua, Box::new(move |_| Ok(LuaValue::Number(e.state.borrow_mut().sched.elapsed_time()))))?;
     shared.raw_set("elapsedTime", named(lua, "elapsedTime", Library, elapsed.clone())?)?;
     shared.raw_set("ElapsedTime", named(lua, "ElapsedTime", Library, elapsed)?)?;
     // (wait: the thread registered, then a yield from the C function, lua/cfunction.rs)
@@ -1166,7 +1162,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let e = engine.clone();
     shared.raw_set(
         "UserSettings",
-        named(lua, "UserSettings", Library, lua.create_function(move |lua, ()| {
+        named(lua, "UserSettings", Library, super::create_boxed_unit(lua, Box::new(move |lua| {
             if let Some(existing) = user_settings.borrow().as_ref() {
                 return Ok(existing.clone());
             }
@@ -1176,27 +1172,27 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
             };
             *user_settings.borrow_mut() = Some(made.clone());
             Ok(made)
-        })?)?,
+        }))?)?,
     )?;
     let version = engine.reflection.version.clone();
     let version = if version.is_empty() { "0.0.0.0".to_string() } else { version };
-    let version_fn = lua.create_function(move |_, ()| Ok(version.clone()))?;
+    let version_fn = super::create_boxed_unit(lua, Box::new(move |lua| Ok(LuaValue::String(lua.create_string(&version)?))))?;
     shared.raw_set("version", named(lua, "version", Library, version_fn.clone())?)?;
     shared.raw_set("Version", named(lua, "Version", Library, version_fn)?)?;
     let e = engine.clone();
-    let stats = lua.create_function(move |lua, ()| {
+    let stats = super::create_boxed_unit(lua, Box::new(move |lua| {
         let game = e.world().game;
         let stats = services::get_service(&e, game, "Stats").map_err(flow_error)?;
         instance_value(lua, &e, stats)
-    })?;
+    }))?;
     shared.raw_set("stats", named(lua, "stats", Library, stats.clone())?)?;
     shared.raw_set("Stats", named(lua, "Stats", Library, stats)?)?;
     shared.raw_set("shared", lua.create_table()?)?;
-    shared.raw_set("PluginManager", named(lua, "PluginManager", Library, lua.create_function(|_, ()| Ok(LuaValue::Nil))?)?)?;
+    shared.raw_set("PluginManager", named(lua, "PluginManager", Library, super::create_boxed_unit(lua, Box::new(|_| Ok(LuaValue::Nil)))?)?)?;
     let print: LuaFunction = exports.get("Print")?;
     shared.raw_set(
         "printidentity",
-        named(lua, "printidentity", Library, lua.create_function(move |_, prefix: Option<String>| {
+        named(lua, "printidentity", Library, super::lua_fn(lua, move |_, prefix: Option<String>| {
             print.call::<()>(format!("{} 2", prefix.unwrap_or_else(|| "Current identity is".into())))
         })?)?,
     )?;

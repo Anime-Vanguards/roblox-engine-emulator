@@ -1172,7 +1172,7 @@ fn begin_side(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, side: crate::lo
 
 /// A side with no harness of its own: a call that has finished
 fn idle_begun(lua: &Lua, engine: &Rc<Engine>) -> Result<Begun, String> {
-    let function = lua.create_function(|_, ()| Ok(())).map_err(|error| error.to_string())?;
+    let function = crate::lua::lua_fn(lua, |_, ()| Ok(())).map_err(|error| error.to_string())?;
     let call = crate::lua::globals::call(lua, engine, function, LuaMultiValue::new()).map_err(|error| error.to_string())?;
     Ok(Begun { harness_call: call, harness: PathBuf::new(), checkpoint: Rc::new(Checkpoint::default()), starting: crate::timing::start("harness start"), framed: None })
 }
@@ -1226,7 +1226,7 @@ fn begin_run_as(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, park: bool, s
         .map_err(lua_error)?;
     let make_context = {
         let (engine, checkpoint) = (engine.clone(), checkpoint.clone());
-        lua.create_function(move |lua, split: bool| {
+        crate::lua::lua_fn(lua, move |lua, split: bool| {
             checkpoint.split.set(split);
             context_table(lua, &engine, &checkpoint, split)
         })
@@ -1234,13 +1234,13 @@ fn begin_run_as(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, park: bool, s
     };
     let fill = {
         let checkpoint = checkpoint.clone();
-        lua.create_function(move |lua, context: LuaTable| fill_context(lua, &context, &checkpoint.late.borrow())).map_err(lua_error)?
+        crate::lua::lua_fn(lua, move |lua, context: LuaTable| fill_context(lua, &context, &checkpoint.late.borrow())).map_err(lua_error)?
     };
     let require: LuaFunction = engine.prelude().exports.get("Require").map_err(lua_error)?;
     let module_value = instance_value(lua, engine, module).map_err(lua_error)?;
     let arm = {
         let checkpoint = checkpoint.clone();
-        lua.create_function(move |lua, ()| {
+        crate::lua::lua_fn(lua, move |lua, ()| {
             *checkpoint.harness.borrow_mut() = Some(lua.current_thread());
             Ok(())
         })
@@ -1540,7 +1540,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let e = engine.clone();
     context.set(
         "StandIn",
-        lua.create_function(move |_, (module, source): (LuaValue, LuaString)| {
+        crate::lua::lua_fn(lua, move |_, (module, source): (LuaValue, LuaString)| {
             let Some(module) = engine_lua::instance_id(&module) else { return Err(LuaError::runtime("StandIn: a ModuleScript expected")) };
             if !e.reflection.is_a(e.state.borrow().dom.at(module).class, "ModuleScript") {
                 return Err(LuaError::runtime("StandIn: a ModuleScript expected"));
@@ -1553,7 +1553,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     // Anywhere but on the harness's own thread before it first yields it does nothing.
     let check = {
         let checkpoint = checkpoint.clone();
-        lua.create_function(move |lua, ()| {
+        crate::lua::lua_fn(lua, move |lua, ()| {
             let own = checkpoint.harness.borrow().as_ref().is_some_and(|thread| *thread == lua.current_thread());
             if !checkpoint.armed.get() || !own {
                 return Ok(false);
@@ -1571,10 +1571,10 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     // returns where it does not; a yield the harness cannot make there, inside a metamethod say, leaves
     // the run unparked)
     let raw_yield: LuaFunction = lua.globals().get::<LuaTable>("coroutine")?.get("yield")?;
-    let pass = lua.create_function(|_, ()| Ok(()))?;
+    let pass = crate::lua::lua_fn(lua, |_, ()| Ok(()))?;
     let missed = {
         let checkpoint = checkpoint.clone();
-        lua.create_function(move |_, ()| {
+        crate::lua::lua_fn(lua, move |_, ()| {
             checkpoint.parked.set(false);
             Ok(())
         })?
@@ -1592,7 +1592,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     // the first checkpoint, it does nothing.
     let between = {
         let checkpoint = checkpoint.clone();
-        lua.create_function(move |lua, ()| {
+        crate::lua::lua_fn(lua, move |lua, ()| {
             let own = checkpoint.harness.borrow().as_ref().is_some_and(|thread| *thread == lua.current_thread());
             if !own || checkpoint.armed.get() || checkpoint.reached.replace(true) {
                 return Ok(false);
@@ -1605,7 +1605,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     };
     let unparked = {
         let checkpoint = checkpoint.clone();
-        lua.create_function(move |_, ()| {
+        crate::lua::lua_fn(lua, move |_, ()| {
             checkpoint.between.set(false);
             Ok(())
         })?
@@ -1619,7 +1619,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
         .into_function()?;
     let armed = {
         let checkpoint = checkpoint.clone();
-        lua.create_function(move |lua, ()| Ok(checkpoint.armed.get() && checkpoint.harness.borrow().as_ref().is_some_and(|thread| *thread == lua.current_thread())))?
+        crate::lua::lua_fn(lua, move |lua, ()| Ok(checkpoint.armed.get() && checkpoint.harness.borrow().as_ref().is_some_and(|thread| *thread == lua.current_thread())))?
     };
     let function: LuaFunction = crate::cost::engine_luau(lua, framed)?.call((armed, function, between, raw_yield, unparked))?;
     context.set("FrameCheckpoint", function)?;
@@ -1628,7 +1628,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let e = engine.clone();
     context.set(
         "TraceWrites",
-        lua.create_function(move |lua, (properties, depth, root): (Option<Vec<String>>, Option<usize>, Option<LuaValue>)| {
+        crate::lua::lua_fn(lua, move |lua, (properties, depth, root): (Option<Vec<String>>, Option<usize>, Option<LuaValue>)| {
             let root = root.as_ref().and_then(engine_lua::instance_id);
             crate::trace::install(lua, &e, properties.unwrap_or_default(), depth.unwrap_or(3), root)
         })?,
@@ -1638,13 +1638,13 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let e = engine.clone();
     context.set(
         "Census",
-        lua.create_function(move |lua, depth: Option<usize>| crate::census::install(lua, &e, depth.unwrap_or(2)))?,
+        crate::lua::lua_fn(lua, move |lua, depth: Option<usize>| crate::census::install(lua, &e, depth.unwrap_or(2)))?,
     )?;
     // Context.ProfilePhase(Name): names the phase of the Luau profiles (RUR_LUAU_PROFILE, RUR_LUAU_ALLOC_PROFILE)
     // from here on, the first segment of each stack: `startup` before the first reply, `frames` after it
     context.set(
         "ProfilePhase",
-        lua.create_function(|_, name: String| {
+        crate::lua::lua_fn(lua, |_, name: String| {
             crate::luau_profile::set_phase(&name);
             Ok(())
         })?,
@@ -1656,7 +1656,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let e = engine.clone();
     context.set(
         "SetRandomSeed",
-        lua.create_function(move |_, seed: f64| {
+        crate::lua::lua_fn(lua, move |_, seed: f64| {
             if !seed.is_finite() {
                 return Err(LuaError::runtime("Context.SetRandomSeed: a finite number expected"));
             }
@@ -1672,7 +1672,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     // charges, cost.rs), counted whether or not a frozen clock shows them: a run's own measure of how much
     // a frame did that is the same however fast the host is
     let e = engine.clone();
-    context.set("WorkSeconds", lua.create_function(move |_, ()| Ok(e.state.borrow().sched.work_total()))?)?;
+    context.set("WorkSeconds", crate::lua::lua_fn(lua, move |_, ()| Ok(e.state.borrow().sched.work_total()))?)?;
     // Context.FireEvent(Instance, Event, ...): fires an engine event the emulator does not raise itself, to the
     // connections made to it (Humanoid.Running while a harness walks a character, which nothing simulates here);
     // nil, booleans, numbers, strings, instances and buffers, as a remote carries them (a buffer arrives as a copy, as a
@@ -1680,7 +1680,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let e = engine.clone();
     context.set(
         "FireEvent",
-        lua.create_function(move |lua, (target, event, rest): (LuaValue, String, LuaMultiValue)| {
+        crate::lua::lua_fn(lua, move |lua, (target, event, rest): (LuaValue, String, LuaMultiValue)| {
             let id = engine_lua::instance_id(&target).ok_or_else(|| LuaError::runtime("Context.FireEvent: an Instance first"))?;
             let name = e.reflection.name_id(&event).ok_or_else(|| LuaError::runtime(format!("Context.FireEvent: no event named {event}")))?;
             let mut arguments = Vec::with_capacity(rest.len());
@@ -1714,7 +1714,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let e = engine.clone();
     context.set(
         "ReseedRandoms",
-        lua.create_function(move |_, seed: f64| {
+        crate::lua::lua_fn(lua, move |_, seed: f64| {
             if !seed.is_finite() {
                 return Err(LuaError::runtime("Context.ReseedRandoms: a finite number expected"));
             }
@@ -1726,7 +1726,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let e = engine.clone();
     context.set(
         "Holders",
-        lua.create_function(move |lua, (filters, examples, requeue): (Vec<String>, Option<usize>, Option<bool>)| {
+        crate::lua::lua_fn(lua, move |lua, (filters, examples, requeue): (Vec<String>, Option<usize>, Option<bool>)| {
             let report = crate::lua::holders::report(lua, &e, filters, examples.unwrap_or(2), requeue.unwrap_or(false))?;
             Ok(serde_json::to_string(&report).unwrap_or_default())
         })?,
@@ -1742,19 +1742,19 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
                 context.set("Player", instance_value(lua, engine, player)?)?;
             }
             let bridge = endpoint.bridge.clone();
-            context.set("HoldJoin", lua.create_function(move |_, ()| {
+            context.set("HoldJoin", crate::lua::lua_fn(lua, move |_, ()| {
                 if !bridge.joined.get() {
                     bridge.hold_join.set(true);
                 }
                 Ok(())
             })?)?;
             let bridge = endpoint.bridge.clone();
-            context.set("Join", lua.create_function(move |_, ()| {
+            context.set("Join", crate::lua::lua_fn(lua, move |_, ()| {
                 bridge.join_asked.set(true);
                 Ok(())
             })?)?;
             let bridge = endpoint.bridge.clone();
-            context.set("Leave", lua.create_function(move |_, ()| {
+            context.set("Leave", crate::lua::lua_fn(lua, move |_, ()| {
                 bridge.leave_asked.set(true);
                 Ok(())
             })?)?;
@@ -1765,7 +1765,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let e = engine.clone();
     context.set(
         "Mount",
-        lua.create_function(move |lua, (path, file): (String, String)| {
+        crate::lua::lua_fn(lua, move |lua, (path, file): (String, String)| {
             let segments: Vec<String> = path.split(['/', '\\']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
             if segments.is_empty() {
                 return Err(LuaError::runtime("Context.Mount: an instance path (Service/Name) expected"));

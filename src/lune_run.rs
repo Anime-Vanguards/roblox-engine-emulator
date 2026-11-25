@@ -647,7 +647,7 @@ fn install_typeof(lua: &Lua) -> LuaResult<()> {
 fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
     let methods = crate::lua::vector_methods::methods(lua)?;
 
-    let fuzzy_eq = lua.create_function(|lua, args: LuaMultiValue| {
+    let fuzzy_eq = crate::lua::lua_fn(lua, |lua, args: LuaMultiValue| {
         let Some(LuaValue::Vector(a)) = args.front() else {
             return Err(LuaError::runtime("invalid argument #1 to 'FuzzyEq' (Vector3 expected)"));
         };
@@ -663,7 +663,7 @@ fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
             && (a.z() - b.z()).abs() <= eps)
     })?;
 
-    let angle = lua.create_function(|_, args: LuaMultiValue| {
+    let angle = crate::lua::lua_fn(lua, |_, args: LuaMultiValue| {
         if args.len() < 2 {
             return Err(LuaError::runtime(format!(
                 "Invalid number of arguments: {}, Vector3.Angle expect 2 or 3",
@@ -704,7 +704,7 @@ fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
     let methods_mt = lua.create_table()?;
     methods_mt.raw_set(
         "__index",
-        lua.create_function(|_, (_, key): (LuaValue, LuaValue)| -> LuaResult<LuaValue> {
+        crate::lua::lua_fn(lua, |_, (_, key): (LuaValue, LuaValue)| -> LuaResult<LuaValue> {
             match key {
                 LuaValue::String(s) => Err(LuaError::runtime(format!(
                     "{} is not a valid member of Vector3",
@@ -724,7 +724,7 @@ fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
     vec_mt.raw_set("__namecall", crate::lua::vector_methods::namecall(lua, extras)?)?;
     vec_mt.raw_set(
         "__newindex",
-        lua.create_function(|_, (_, key): (LuaValue, LuaValue)| -> LuaResult<()> {
+        crate::lua::lua_fn(lua, |_, (_, key): (LuaValue, LuaValue)| -> LuaResult<()> {
             Err(LuaError::runtime(format!("{} cannot be assigned to", key.to_string()?)))
         })?,
     )?;
@@ -736,7 +736,7 @@ fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
     let v3 = lua.create_table()?;
     v3.raw_set(
         "new",
-        lua.create_function(|_, (x, y, z): (Option<f32>, Option<f32>, Option<f32>)| {
+        crate::lua::lua_fn(lua, |_, (x, y, z): (Option<f32>, Option<f32>, Option<f32>)| {
             Ok(LuaValue::Vector(mlua::Vector::new(
                 x.unwrap_or(0.0),
                 y.unwrap_or(0.0),
@@ -752,7 +752,7 @@ fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
     v3.raw_set("min", vector_lib.get::<LuaValue>("min")?)?;
     v3.raw_set("max", vector_lib.get::<LuaValue>("max")?)?;
 
-    let from_normal_id = lua.create_function(|_, arg: LuaValue| {
+    let from_normal_id = crate::lua::lua_fn(lua, |_, arg: LuaValue| {
         let name: String = match &arg {
             LuaValue::UserData(ud) => {
                 let dom: rbx_dom_weak::types::EnumItem = ud.borrow::<rbx_types::EnumItem>()?.clone().into();
@@ -796,7 +796,7 @@ fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
     v3.raw_set("FromNormalId", from_normal_id.clone())?;
     v3.raw_set("fromNormalId", from_normal_id)?;
 
-    let from_axis = lua.create_function(|_, arg: LuaValue| {
+    let from_axis = crate::lua::lua_fn(lua, |_, arg: LuaValue| {
         let name: String = match &arg {
             LuaValue::UserData(ud) => {
                 let dom: rbx_dom_weak::types::EnumItem = ud.borrow::<rbx_types::EnumItem>()?.clone().into();
@@ -878,7 +878,7 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
 
     module.raw_set(
         "deserializeModel",
-        lua.create_function(|lua, data: LuaValue| {
+        crate::lua::lua_fn(lua, |lua, data: LuaValue| {
             let bytes = unwrap_archive(bytes_from_lua(&data)?, "deserializeModel")?;
             let doc = Document::from_bytes(bytes, DocumentKind::Model).map_err(LuaError::external)?;
             let instances = doc.into_instance_array().map_err(LuaError::external)?;
@@ -887,7 +887,7 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
     module.raw_set(
         "deserializePlace",
-        lua.create_function(|lua, data: LuaValue| {
+        crate::lua::lua_fn(lua, |lua, data: LuaValue| {
             let bytes = unwrap_archive(bytes_from_lua(&data)?, "deserializePlace")?;
             let doc = Document::from_bytes(bytes, DocumentKind::Place).map_err(LuaError::external)?;
             let dm = doc.into_data_model_instance().map_err(LuaError::external)?;
@@ -896,7 +896,7 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
     module.raw_set(
         "serializeModel",
-        lua.create_function(|lua, (instances_tbl, xml): (LuaTable, Option<bool>)| {
+        crate::lua::lua_fn(lua, |lua, (instances_tbl, xml): (LuaTable, Option<bool>)| {
             let mut instances = Vec::new();
             for item in instances_tbl.sequence_values::<LuaAnyUserData>() {
                 let ud = item?;
@@ -910,7 +910,7 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
     module.raw_set(
         "serializePlace",
-        lua.create_function(|lua, (dm_ud, xml): (LuaAnyUserData, Option<bool>)| {
+        crate::lua::lua_fn(lua, |lua, (dm_ud, xml): (LuaAnyUserData, Option<bool>)| {
             let dm = *dm_ud.borrow::<RbxInstance>()?;
             let doc = Document::from_data_model_instance(dm).map_err(LuaError::external)?;
             let fmt = if xml.unwrap_or(false) { DocumentFormat::Xml } else { DocumentFormat::Binary };
@@ -920,18 +920,18 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
     module.raw_set(
         "getReflectionDatabase",
-        lua.create_function(|_, ()| Ok(ReflectionDatabase::new()))?,
+        crate::lua::lua_fn(lua, |_, ()| Ok(ReflectionDatabase::new()))?,
     )?;
     module.raw_set(
         "implementMethod",
-        lua.create_function(|lua, (class_name, method_name, callback): (String, String, LuaFunction)| {
+        crate::lua::lua_fn(lua, |lua, (class_name, method_name, callback): (String, String, LuaFunction)| {
             InstanceRegistry::insert_method(lua, &class_name, &method_name, callback)
                 .map_err(LuaError::external)
         })?,
     )?;
     module.raw_set(
         "implementProperty",
-        lua.create_function(
+        crate::lua::lua_fn(lua, 
             |lua, (class_name, prop_name, getter, setter): (String, String, LuaFunction, Option<LuaFunction>)| {
                 InstanceRegistry::insert_property_getter(lua, &class_name, &prop_name, getter)
                     .map_err(LuaError::external)?;
@@ -950,7 +950,7 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
     let orig_nr_new: LuaFunction = orig_nr.raw_get("new")?;
     nr_tbl.raw_set(
         "new",
-        lua.create_function(move |_, (a, b): (f64, Option<f64>)| -> LuaResult<LuaValue> {
+        crate::lua::lua_fn(lua, move |_, (a, b): (f64, Option<f64>)| -> LuaResult<LuaValue> {
             match b {
                 Some(b_val) if a > b_val => orig_nr_new.call((b_val, a)),
                 Some(b_val) => orig_nr_new.call((a, b_val)),
@@ -1076,7 +1076,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "readFile",
-        lua.create_function(move |lua, path: String| {
+        crate::lua::lua_fn(lua, move |lua, path: String| {
             let (norm, bytes) = r
                 .cached_read_file(&path)
                 .map_err(|e| LuaError::runtime(format!("fs.readFile({path}): {e}")))?;
@@ -1088,7 +1088,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "readDir",
-        lua.create_function(move |lua, path: String| {
+        crate::lua::lua_fn(lua, move |lua, path: String| {
             let (norm, entries) = r
                 .cached_read_dir(&path)
                 .map_err(|e| LuaError::runtime(format!("fs.readDir({path}): {e}")))?;
@@ -1104,7 +1104,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "isFile",
-        lua.create_function(move |_, path: String| {
+        crate::lua::lua_fn(lua, move |_, path: String| {
             let (norm, kind) = r.cached_stat(&path);
             r.trace.borrow_mut().record_stat_known(norm, kind);
             Ok(matches!(kind, CachedStat::File))
@@ -1114,7 +1114,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "isDir",
-        lua.create_function(move |_, path: String| {
+        crate::lua::lua_fn(lua, move |_, path: String| {
             let (norm, kind) = r.cached_stat(&path);
             r.trace.borrow_mut().record_stat_known(norm, kind);
             Ok(matches!(kind, CachedStat::Dir))
@@ -1124,7 +1124,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "metadata",
-        lua.create_function(move |lua, path: String| {
+        crate::lua::lua_fn(lua, move |lua, path: String| {
             r.trace.borrow_mut().record_stat(&path);
             let tbl = lua.create_table()?;
             match fs::metadata(&path) {
@@ -1164,7 +1164,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "writeFile",
-        lua.create_function(move |_, (path, contents): (String, LuaValue)| {
+        crate::lua::lua_fn(lua, move |_, (path, contents): (String, LuaValue)| {
             r.trace.borrow_mut().taint();
             if let Some(ref c) = r.fs_cache {
                 c.invalidate_if_repo_path(&path);
@@ -1178,7 +1178,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "writeDir",
-        lua.create_function(move |_, path: String| {
+        crate::lua::lua_fn(lua, move |_, path: String| {
             r.trace.borrow_mut().taint();
             if let Some(ref c) = r.fs_cache {
                 c.invalidate_if_repo_path(&path);
@@ -1191,7 +1191,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "removeFile",
-        lua.create_function(move |_, path: String| {
+        crate::lua::lua_fn(lua, move |_, path: String| {
             r.trace.borrow_mut().taint();
             if let Some(ref c) = r.fs_cache {
                 c.invalidate_if_repo_path(&path);
@@ -1204,7 +1204,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "removeDir",
-        lua.create_function(move |_, path: String| {
+        crate::lua::lua_fn(lua, move |_, path: String| {
             r.trace.borrow_mut().taint();
             if let Some(ref c) = r.fs_cache {
                 c.invalidate_if_repo_path(&path);
@@ -1217,7 +1217,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "copy",
-        lua.create_function(move |_, (from, to, opts): (String, String, Option<LuaValue>)| {
+        crate::lua::lua_fn(lua, move |_, (from, to, opts): (String, String, Option<LuaValue>)| {
             r.trace.borrow_mut().taint();
             if let Some(ref c) = r.fs_cache {
                 c.invalidate_if_repo_path(&to);
@@ -1232,7 +1232,7 @@ fn build_fs_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "move",
-        lua.create_function(move |_, (from, to, opts): (String, String, Option<LuaValue>)| {
+        crate::lua::lua_fn(lua, move |_, (from, to, opts): (String, String, Option<LuaValue>)| {
             r.trace.borrow_mut().taint();
             if let Some(ref c) = r.fs_cache {
                 c.invalidate_if_repo_path(&from);
@@ -1428,7 +1428,7 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
     let r = rt.clone();
     env_mt.raw_set(
         "__index",
-        lua.create_function(move |lua, (_, key): (LuaValue, LuaValue)| -> LuaResult<LuaValue> {
+        crate::lua::lua_fn(lua, move |lua, (_, key): (LuaValue, LuaValue)| -> LuaResult<LuaValue> {
             match key {
                 LuaValue::String(s) => {
                     let k = s.to_str()?;
@@ -1449,7 +1449,7 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
     let r = rt.clone();
     env_mt.raw_set(
         "__newindex",
-        lua.create_function(move |_, (_, _key, _val): (LuaValue, LuaValue, LuaValue)| -> LuaResult<()> {
+        crate::lua::lua_fn(lua, move |_, (_, _key, _val): (LuaValue, LuaValue, LuaValue)| -> LuaResult<()> {
             r.trace.borrow_mut().taint();
             Ok(())
         })?,
@@ -1457,7 +1457,7 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
     let r = rt.clone();
     env_mt.raw_set(
         "__iter",
-        lua.create_function(move |lua, _: LuaValue| -> LuaResult<LuaMultiValue> {
+        crate::lua::lua_fn(lua, move |lua, _: LuaValue| -> LuaResult<LuaMultiValue> {
             r.trace.borrow_mut().taint();
             let snapshot = lua.create_table()?;
             for (k, v) in std::env::vars() {
@@ -1477,7 +1477,7 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
     let r = rt.clone();
     m.raw_set(
         "exit",
-        lua.create_function(move |_, code: Option<i32>| -> LuaResult<()> {
+        crate::lua::lua_fn(lua, move |_, code: Option<i32>| -> LuaResult<()> {
             let code = code.unwrap_or(0);
             r.exit_code.set(Some(code));
             Err(LuaError::external(ExitSignal(code)))
@@ -1485,7 +1485,7 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
     )?;
 
     let r = rt.clone();
-    let exec_fn = lua.create_function(
+    let exec_fn = crate::lua::lua_fn(lua, 
         move |lua, (program, args, opts): (String, Option<LuaValue>, Option<LuaTable>)| {
             let argv = parse_string_args(args)?;
             let out = run_subprocess(&r, &program, &argv, opts.as_ref())?;
@@ -1503,7 +1503,7 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
     let r = rt.clone();
     m.raw_set(
         "create",
-        lua.create_function(
+        crate::lua::lua_fn(lua, 
             move |lua, (program, args, opts): (String, Option<LuaValue>, Option<LuaTable>)| {
                 let argv = parse_string_args(args)?;
                 let out = run_subprocess(&r, &program, &argv, opts.as_ref())?;
@@ -1515,7 +1515,7 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
                     let p = pos.clone();
                     reader.raw_set(
                         "readToEnd",
-                        lua.create_function(move |lua, _: LuaMultiValue| {
+                        crate::lua::lua_fn(lua, move |lua, _: LuaMultiValue| {
                             let start = p.get().min(b.len());
                             p.set(b.len());
                             lua.create_string(&b[start..])
@@ -1525,7 +1525,7 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
                     let p = pos;
                     reader.raw_set(
                         "read",
-                        lua.create_function(move |lua, (_, size): (LuaValue, Option<usize>)| {
+                        crate::lua::lua_fn(lua, move |lua, (_, size): (LuaValue, Option<usize>)| {
                             let start = p.get().min(b.len());
                             if start >= b.len() {
                                 return Ok(LuaValue::Nil);
@@ -1548,14 +1548,14 @@ fn build_process_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> 
                 let code = out.code;
                 child.raw_set(
                     "status",
-                    lua.create_function(move |lua, _: LuaMultiValue| {
+                    crate::lua::lua_fn(lua, move |lua, _: LuaMultiValue| {
                         let st = lua.create_table_with_capacity(0, 2)?;
                         st.raw_set("ok", ok)?;
                         st.raw_set("code", code)?;
                         Ok(st)
                     })?,
                 )?;
-                child.raw_set("kill", lua.create_function(|_, _: LuaMultiValue| Ok(()))?)?;
+                child.raw_set("kill", crate::lua::lua_fn(lua, |_, _: LuaMultiValue| Ok(()))?)?;
                 Ok(child)
             },
         )?,
@@ -1630,7 +1630,7 @@ fn build_chunk_env(lua: &Lua, env: LuaTable, inject_globals: bool, helpers: &Env
         let chain_mt = lua.create_table_with_capacity(0, 1)?;
         chain_mt.raw_set(
             "__index",
-            lua.create_function(move |_, (_, key): (LuaValue, LuaValue)| -> LuaResult<LuaValue> {
+            crate::lua::lua_fn(lua, move |_, (_, key): (LuaValue, LuaValue)| -> LuaResult<LuaValue> {
                 let v: LuaValue = env.get(key.clone())?;
                 if !matches!(v, LuaValue::Nil) {
                     return Ok(v);
@@ -1675,7 +1675,7 @@ fn build_luau_module(lua: &Lua, helpers: Rc<EnvHelpers>, rt: &Rc<LuneRuntime>) -
 
     m.raw_set(
         "compile",
-        lua.create_function(|lua, (source, options): (LuaString, Option<LuaTable>)| {
+        crate::lua::lua_fn(lua, |lua, (source, options): (LuaString, Option<LuaTable>)| {
             let (mut opt, mut dbg, mut cov) = (1u8, 1u8, 0u8);
             if let Some(opts) = options {
                 if let Some(v) = opts.get::<Option<u8>>("optimizationLevel")? {
@@ -1696,7 +1696,7 @@ fn build_luau_module(lua: &Lua, helpers: Rc<EnvHelpers>, rt: &Rc<LuneRuntime>) -
     let r = rt.clone();
     m.raw_set(
         "load",
-        lua.create_function(move |lua, (chunk, options): (LuaString, Option<LuaTable>)| {
+        crate::lua::lua_fn(lua, move |lua, (chunk, options): (LuaString, Option<LuaTable>)| {
             let bytes = chunk.as_bytes();
             let mut debug_name = String::from("luau.load(...)");
             let mut env: Option<LuaTable> = None;
@@ -1917,7 +1917,7 @@ fn build_serde_module(lua: &Lua) -> LuaResult<LuaTable> {
 
     m.raw_set(
         "encode",
-        lua.create_function(|_, (fmt, val, pretty): (String, LuaValue, Option<bool>)| match fmt.as_str() {
+        crate::lua::lua_fn(lua, |_, (fmt, val, pretty): (String, LuaValue, Option<bool>)| match fmt.as_str() {
             "json" => {
                 let json = lua_to_json(&val, 0)?;
                 if pretty.unwrap_or(false) {
@@ -1932,7 +1932,7 @@ fn build_serde_module(lua: &Lua) -> LuaResult<LuaTable> {
 
     m.raw_set(
         "decode",
-        lua.create_function(|lua, (fmt, text): (String, LuaValue)| {
+        crate::lua::lua_fn(lua, |lua, (fmt, text): (String, LuaValue)| {
             let bytes = bytes_from_lua(&text)?;
             let s = String::from_utf8(bytes).map_err(|e| LuaError::runtime(format!("serde.decode: invalid utf-8: {e}")))?;
             match fmt.as_str() {
@@ -1948,7 +1948,7 @@ fn build_serde_module(lua: &Lua) -> LuaResult<LuaTable> {
 
     m.raw_set(
         "compress",
-        lua.create_function(|lua, (fmt, data, level): (String, LuaValue, Option<i32>)| {
+        crate::lua::lua_fn(lua, |lua, (fmt, data, level): (String, LuaValue, Option<i32>)| {
             let bytes = bytes_from_lua(&data)?;
             match fmt.as_str() {
                 "zstd" => {
@@ -1963,7 +1963,7 @@ fn build_serde_module(lua: &Lua) -> LuaResult<LuaTable> {
 
     m.raw_set(
         "decompress",
-        lua.create_function(|lua, (fmt, data): (String, LuaValue)| {
+        crate::lua::lua_fn(lua, |lua, (fmt, data): (String, LuaValue)| {
             let bytes = bytes_from_lua(&data)?;
             match fmt.as_str() {
                 "zstd" => {
@@ -1977,7 +1977,7 @@ fn build_serde_module(lua: &Lua) -> LuaResult<LuaTable> {
 
     m.raw_set(
         "hash",
-        lua.create_function(|_, (algo, data): (String, LuaValue)| {
+        crate::lua::lua_fn(lua, |_, (algo, data): (String, LuaValue)| {
             let bytes = bytes_from_lua(&data)?;
             match algo.as_str() {
                 "sha1" => Ok(sha1_hex(&bytes)),
@@ -2014,7 +2014,7 @@ fn build_stdio_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "write",
-        lua.create_function(move |_, text: LuaString| {
+        crate::lua::lua_fn(lua, move |_, text: LuaString| {
             r.output.write_stdout(&text.to_string_lossy());
             Ok(())
         })?,
@@ -2022,13 +2022,13 @@ fn build_stdio_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "ewrite",
-        lua.create_function(move |_, text: LuaString| {
+        crate::lua::lua_fn(lua, move |_, text: LuaString| {
             r.output.write_stderr(&text.to_string_lossy());
             Ok(())
         })?,
     )?;
-    m.raw_set("color", lua.create_function(|_, _: String| Ok(""))?)?;
-    m.raw_set("style", lua.create_function(|_, _: String| Ok(""))?)?;
+    m.raw_set("color", crate::lua::lua_fn(lua, |_, _: String| Ok(""))?)?;
+    m.raw_set("style", crate::lua::lua_fn(lua, |_, _: String| Ok(""))?)?;
     m.set_readonly(true);
     Ok(m)
 }
@@ -2054,7 +2054,7 @@ fn build_task_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "spawn",
-        lua.create_function(move |lua, mut args: LuaMultiValue| {
+        crate::lua::lua_fn(lua, move |lua, mut args: LuaMultiValue| {
             let Some(target) = args.pop_front() else {
                 return Err(LuaError::runtime("missing argument #1 to 'task.spawn'"));
             };
@@ -2072,7 +2072,7 @@ fn build_task_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "defer",
-        lua.create_function(move |lua, mut args: LuaMultiValue| {
+        crate::lua::lua_fn(lua, move |lua, mut args: LuaMultiValue| {
             let Some(target) = args.pop_front() else {
                 return Err(LuaError::runtime("missing argument #1 to 'task.defer'"));
             };
@@ -2086,7 +2086,7 @@ fn build_task_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     let r = rt.clone();
     m.raw_set(
         "delay",
-        lua.create_function(move |lua, mut args: LuaMultiValue| {
+        crate::lua::lua_fn(lua, move |lua, mut args: LuaMultiValue| {
             let secs = match args.pop_front() {
                 Some(LuaValue::Number(n)) => n.max(0.0),
                 Some(LuaValue::Integer(n)) => (n as f64).max(0.0),
@@ -2116,7 +2116,7 @@ fn build_task_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     )?;
 
     let r = rt.clone();
-    let register_wait = lua.create_function(move |_, (thread, secs): (LuaThread, Option<f64>)| {
+    let register_wait = crate::lua::lua_fn(lua, move |_, (thread, secs): (LuaThread, Option<f64>)| {
         let secs = secs.unwrap_or(0.0).max(0.0);
         let now = Instant::now();
         r.tasks.borrow_mut().timers.push(TimerEntry {
@@ -2135,7 +2135,7 @@ fn build_task_module(lua: &Lua, rt: &Rc<LuneRuntime>) -> LuaResult<LuaTable> {
     m.raw_set("wait", wait_fn)?;
 
     let r = rt.clone();
-    let cancel_mark = lua.create_function(move |_, thread: LuaThread| {
+    let cancel_mark = crate::lua::lua_fn(lua, move |_, thread: LuaThread| {
         r.tasks.borrow_mut().cancelled.insert(thread.to_pointer());
         Ok(())
     })?;
@@ -2323,7 +2323,7 @@ fn resolve_relative_module(rt: &LuneRuntime, base_dir: &str, target: &str) -> Lu
 fn make_require(lua: &Lua, rt: &Rc<LuneRuntime>, module_path: String) -> LuaResult<LuaFunction> {
     let (parent_dir, self_dir) = module_bases(&module_path);
     let rt = rt.clone();
-    lua.create_function(move |lua, target: String| -> LuaResult<LuaValue> {
+    crate::lua::lua_fn(lua, move |lua, target: String| -> LuaResult<LuaValue> {
         if let Some(builtins) = rt.builtins.borrow().as_ref() {
             let hit: LuaValue = builtins.raw_get(target.as_str())?;
             if !matches!(hit, LuaValue::Nil) {
@@ -2491,7 +2491,7 @@ fn run_one(
         // Clear safeenv on any environment returned by getfenv(fn) so post-load monkey-patching
         // like `getfenv(mod.Fn).os = { clock = ... }` takes effect on GETIMPORT sites.
         let orig_getfenv: LuaFunction = globals.raw_get("getfenv")?;
-        let wrapped_getfenv = lua.create_function(move |lua, args: LuaMultiValue| -> LuaResult<LuaValue> {
+        let wrapped_getfenv = crate::lua::lua_fn(&lua, move |lua, args: LuaMultiValue| -> LuaResult<LuaValue> {
             let env: LuaValue = orig_getfenv.call(args)?;
             if let LuaValue::Table(ref tbl) = env {
                 unsafe {
@@ -2513,7 +2513,7 @@ fn run_one(
         let r = rt.clone();
         globals.raw_set(
             "print",
-            lua.create_function(move |lua, args: LuaMultiValue| {
+            crate::lua::lua_fn(&lua, move |lua, args: LuaMultiValue| {
                 r.output.write_stdout(&format_print_args(lua, &args));
                 Ok(())
             })?,
@@ -2521,7 +2521,7 @@ fn run_one(
         let r = rt.clone();
         globals.raw_set(
             "warn",
-            lua.create_function(move |lua, args: LuaMultiValue| {
+            crate::lua::lua_fn(&lua, move |lua, args: LuaMultiValue| {
                 r.output.write_stderr(&format_print_args(lua, &args));
                 Ok(())
             })?,
