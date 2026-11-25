@@ -4174,27 +4174,7 @@ pub fn end_batch(state: &mut State, reflection: &Reflection, hooks: &Hooks) {
 pub fn unjoin_from_outsiders(engine: &Engine, workspace: InstanceId, listed: &[InstanceId]) -> Result<(), crate::lua::Flow> {
     let reflection = &engine.reflection;
     let Some(setup) = engine.state.borrow().joints.setup.clone() else { return Ok(()) };
-    // (every instance looked at below the entries, each once a call and made whole as the walk reaches it when it was imported
-    // lazily, before its children are read, as GetDescendants makes it, so the walk is a client's; the BaseParts among them are the
-    // listed parts)
-    let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
-    let (mut parts, mut entries) = (Vec::new(), 0usize);
-    let mut stack = Vec::new();
-    for &entry in listed {
-        if engine.state.borrow().dom.get(entry).is_none() || !seen.insert(entry) {
-            continue;
-        }
-        entries += 1;
-        stack.push(entry);
-        while let Some(node) = stack.pop() {
-            crate::lua::instance::materialize(engine, node);
-            let state = engine.state.borrow();
-            if is_part(&state, reflection, &setup, node) {
-                parts.push(node);
-            }
-            stack.extend(state.dom.children_of(node).iter().rev().copied().filter(|&child| seen.insert(child)));
-        }
-    }
+    let Listed { parts, seen, entries } = listed_parts(engine, &setup, listed);
     let (removed, seconds) = {
         let mut state = engine.state.borrow_mut();
         // (before any joint the index keeps was made there is none to take out: the walk below the entries is all the work)
@@ -4252,6 +4232,303 @@ pub fn unjoin_from_outsiders(engine: &Engine, workspace: InstanceId, listed: &[I
         crate::lua::instance::set_parent(engine, joint, None)?;
     }
     Ok(())
+}
+
+/// What a list of UnjoinFromOutsiders or JoinToOutsiders lists ([`listed_parts`]): its parts in the order the list first reaches
+/// them, every instance looked at (the entries and those below them), and how many entries there were (each once).
+struct Listed {
+    parts: Vec<InstanceId>,
+    seen: FxHashSet<InstanceId>,
+    entries: usize,
+}
+
+/// The parts `listed` lists: each listed BasePart and every BasePart below a listed instance, each entry and each instance below
+/// one looked at once a call (an entry listed again, or below or above another, lists nothing new) and made whole as the walk
+/// reaches it when it was imported lazily, before its children are read, as GetDescendants makes it, so the walk is a client's.
+fn listed_parts(engine: &Engine, setup: &Setup, listed: &[InstanceId]) -> Listed {
+    let reflection = &engine.reflection;
+    let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
+    let (mut parts, mut entries) = (Vec::new(), 0usize);
+    let mut stack = Vec::new();
+    for &entry in listed {
+        if engine.state.borrow().dom.get(entry).is_none() || !seen.insert(entry) {
+            continue;
+        }
+        entries += 1;
+        stack.push(entry);
+        while let Some(node) = stack.pop() {
+            crate::lua::instance::materialize(engine, node);
+            let state = engine.state.borrow();
+            if is_part(&state, reflection, setup, node) {
+                parts.push(node);
+            }
+            stack.extend(state.dom.children_of(node).iter().rev().copied().filter(|&child| seen.insert(child)));
+        }
+    }
+    Listed { parts, seen, entries }
+}
+
+/// Workspace:JoinToOutsiders(objects, mode) with a mode that joins (All or Surface, which do the same; world/mod.rs reads the
+/// arguments): a Weld between each listed part and each part outside the list whose face its face touches (world/faces.rs, the
+/// rules), as a playing client and its server make them (roblox-sim, Studio 0.747, both alike: tools/parity/probes/
+/// join_to_outsiders.luau):
+/// - The listed parts are [`listed_parts`]'. A listed part in the Workspace's world (not a WorldModel's, not out of the Workspace)
+///   is welded to the parts of that world that are not listed, Terrain aside; two listed parts never to each other.
+/// - Anchored, CanCollide, CanQuery, CanTouch, Massless, Locked, Transparency and the surfaces (SurfaceType, both modes) make no
+///   difference: every weld is a plain `Weld`.
+/// - A pair already joined is passed by: an active joint between them (a Weld, Snap, ManualWeld, Motor, Motor6D, Glue or
+///   ManualGlue in the Workspace or JointsService, Enabled, either way round; a WeldConstraint that links them; a Rotate, RotateP or
+///   RotateV), or a Constraint between their attachments (an Attachment's part is the nearest BasePart above it; Enabled, in the
+///   Workspace); a weld this call or an earlier one made counts. Not a disabled one, one out of the Workspace, a VelocityMotor, a
+///   NoCollisionConstraint, a path through a third part.
+/// - The weld: a `Weld` named Weld, Part0 the listed part, Part1 the other, C0 and C1 world/faces.rs gives, parented to the listed
+///   part. A listed part's welds are made in the order the other parts came into the Workspace (world/broadphase.rs entered: a
+///   moved subtree's parts as a client takes it up, the moved part first; those there before any Parent write first, in the tree's
+///   order); the listed parts are taken in the order the list first reaches them (a client goes through them in an order of its own,
+///   which differs between a client and its server, so the probe prints each part's welds apart).
+///
+/// The parts it looks at are the listed parts' neighbours in the Workspace's spatial index (world/broadphase.rs, a box 0.02 larger
+/// than the part's on each side), so a call's work is its entries, the instances below them and each listed part's neighbours,
+/// however large the rest of the place is. The work clock pays what a playing client spends (cost.rs JOIN_CALL, JOIN_PART for each
+/// part the list reaches, UNJOIN_BELOW for each other instance below an entry, JOIN_CANDIDATE for each neighbour, JOIN_OUTSIDER
+/// for the first full look at each neighbour whose axes line up with a listed part's, and JOIN_WELDING once for a call that makes a
+/// weld, each weld paying what its Parent write and link change cost; the method charges JOIN_CAST and the list's entries).
+pub fn join_to_outsiders(engine: &Engine, workspace: InstanceId, listed: &[InstanceId]) -> Result<(), crate::lua::Flow> {
+    use super::faces;
+    let reflection = &engine.reflection;
+    let Some(setup) = engine.state.borrow().joints.setup.clone() else { return Ok(()) };
+    let Some(weld_class) = reflection.class_id("Weld") else { return Ok(()) };
+    let Listed { parts, seen, entries } = listed_parts(engine, &setup, listed);
+    let shapes = Shapes::new(reflection);
+    let mut work = (seen.len() - entries) as f64 * crate::cost::UNJOIN_BELOW + parts.len() as f64 * crate::cost::JOIN_PART;
+    if !parts.is_empty() {
+        work += crate::cost::JOIN_CALL;
+    }
+    super::query::charge_query(engine, work);
+    if parts.is_empty() {
+        return Ok(());
+    }
+    // (the spatial index's waiting parts taken in, as a query takes them, unpriced: a client's call is priced whole)
+    let Some(world) = super::broadphase::take_in(engine, workspace).0 else { return Ok(()) };
+    if engine.state.borrow().joints.created > 0 {
+        ensure_scanned(&mut engine.state.borrow_mut(), reflection, &setup);
+    }
+    // (the other kinds of joints and constraints between two parts that stop it, looked up once a call when first needed)
+    let mut held: Option<FxHashSet<(InstanceId, InstanceId)>> = None;
+    let mut looked: FxHashSet<InstanceId> = FxHashSet::default();
+    let mut welding = false;
+    for part in parts {
+        let (body, near) = {
+            let mut state = engine.state.borrow_mut();
+            if state.dom.get(part).is_none() || world_of(&state, reflection, &setup, part) != Some(workspace) {
+                continue;
+            }
+            let body = shapes.body(&state, reflection, &setup, part);
+            let (low, high) = faces::world_box(&body, 0.02);
+            let mut near = Vec::new();
+            let mut met: FxHashSet<InstanceId> = FxHashSet::default();
+            // (the grid's cells give the parts filed in them: those whose boxes meet the part's grown box are its neighbours)
+            super::broadphase::visit_box(&mut state, world, glam::Vec3::from(low), glam::Vec3::from(high), super::grid::UNANCHORED, |other, entry| {
+                if other != part && !seen.contains(&other) && met.insert(other) {
+                    let (lo, hi) = faces::world_box(&faces::Body { rot: rows_of(&entry.solid.frame), pos: entry.solid.frame.translation.to_array(), half: entry.solid.half_extents().to_array(), shape: faces::Shape::Block }, 0.0);
+                    if (0..3).all(|i| lo[i] <= high[i] && hi[i] >= low[i]) {
+                        near.push(other);
+                    }
+                }
+                true
+            });
+            // (in the order they came into the Workspace: those there before any Parent write first, in the tree's order)
+            let mut old: Vec<InstanceId> = near.iter().copied().filter(|&other| super::broadphase::entered_at(&state, other) == 0).collect();
+            if old.len() > 1 {
+                super::broadphase::sort_by_order(&state.dom, workspace, &mut old, |&other| other);
+            }
+            let mut new: Vec<(u64, InstanceId)> = near.iter().map(|&other| (super::broadphase::entered_at(&state, other), other)).filter(|&(at, _)| at > 0).collect();
+            new.sort_unstable();
+            old.extend(new.into_iter().map(|(_, other)| other));
+            (body, old)
+        };
+        super::query::charge_query(engine, near.len() as f64 * crate::cost::JOIN_CANDIDATE);
+        for other in near {
+            let (face, other_body) = {
+                let mut state = engine.state.borrow_mut();
+                if state.dom.get(other).is_none() || world_of(&state, reflection, &setup, other) != Some(workspace) {
+                    continue;
+                }
+                if joined(&mut state, reflection, &setup, workspace, part, other, &mut held) {
+                    continue;
+                }
+                let other_body = shapes.body(&state, reflection, &setup, other);
+                if !faces::aligned(&body, &other_body) {
+                    continue;
+                }
+                if looked.insert(other) {
+                    state.sched.charge(crate::cost::JOIN_OUTSIDER);
+                    crate::boundary::add_cost(crate::cost::JOIN_OUTSIDER);
+                }
+                let Some(face) = faces::touching(&body, &other_body) else { continue };
+                (face, other_body)
+            };
+            let c0 = faces::weld_c0(&body, face);
+            let c1 = faces::weld_c1(&body, &other_body, c0);
+            if !welding {
+                super::query::charge_query(engine, crate::cost::JOIN_WELDING);
+                welding = true;
+            }
+            make_weld(engine, &setup, weld_class, part, other, c0, c1)?;
+        }
+    }
+    Ok(())
+}
+
+/// A Weld JoinToOutsiders makes between `part` (Part0, its parent) and `other`, with `c0` and `c1` (position, rotation rows), as a
+/// script's Instance.new and writes would make it: unparented while its properties are set, then parented, so its Parent write and
+/// link change are priced as any.
+fn make_weld(engine: &Engine, setup: &Setup, class: ClassId, part: InstanceId, other: InstanceId, c0: ([f32; 3], [[f32; 3]; 3]), c1: ([f32; 3], [[f32; 3]; 3])) -> Result<(), crate::lua::Flow> {
+    use rbx_dom_weak::types::{self as dom, Variant};
+    let value = |(position, rows): ([f32; 3], [[f32; 3]; 3])| {
+        let vector = |v: [f32; 3]| dom::Vector3::new(v[0], v[1], v[2]);
+        Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(vector(position), dom::Matrix3::new(vector(rows[0]), vector(rows[1]), vector(rows[2]))))))
+    };
+    let weld = {
+        let mut state = engine.state.borrow_mut();
+        let weld = core::create(&mut state, &engine.reflection, class);
+        state.dom.at_mut(weld).set_flag(crate::dom::flags::SCRIPT_CREATED, true);
+        weld
+    };
+    crate::lua::instance::set_property(engine, weld, setup.part0, Value::Instance(part));
+    crate::lua::instance::set_property(engine, weld, setup.part1, Value::Instance(other));
+    crate::lua::instance::set_property(engine, weld, setup.c0, value(c0));
+    crate::lua::instance::set_property(engine, weld, setup.c1, value(c1));
+    crate::lua::instance::set_parent(engine, weld, Some(part))
+}
+
+/// Whether `part` and `other` are joined already for JoinToOutsiders: an active joint of the kinds the index keeps between them
+/// (a rigid one or WeldConstraint that links them, one in their lists of active joints: Glue too), else, looked up once a call into
+/// `held`, a Rotate, RotateP or RotateV between them, Enabled, in the Workspace or JointsService, or a Constraint (Enabled, in the
+/// Workspace or JointsService) whose two attachments' parts are the two.
+fn joined(state: &mut State, reflection: &Reflection, setup: &Setup, workspace: InstanceId, part: InstanceId, other: InstanceId, held: &mut Option<FxHashSet<(InstanceId, InstanceId)>>) -> bool {
+    if edges(state, reflection, setup, part).iter().any(|&(_, linked)| linked == other) {
+        return true;
+    }
+    if let Some(list) = state.joints.attached.get(&part)
+        && list.iter().any(|&joint| parts_of(state, setup, joint).contains(&Some(other)))
+    {
+        return true;
+    }
+    let pairs = held.get_or_insert_with(|| held_pairs(state, reflection, setup, workspace));
+    pairs.contains(&(part.min(other), part.max(other)))
+}
+
+/// The pairs of parts (the lesser id first) a Rotate, RotateP or RotateV or a Constraint holds together ([`joined`]).
+fn held_pairs(state: &mut State, reflection: &Reflection, setup: &Setup, workspace: InstanceId) -> FxHashSet<(InstanceId, InstanceId)> {
+    let mut pairs = FxHashSet::default();
+    let (Some(constraint), Some(attachment0), Some(attachment1)) = (reflection.class_id("Constraint"), reflection.name_id("Attachment0"), reflection.name_id("Attachment1")) else {
+        return pairs;
+    };
+    let active = |state: &State, id: InstanceId| {
+        state.dom.boolean(id, setup.enabled) != Some(false)
+            && matches!(joint_home(state, id), Some(home) if home == workspace || Some(state.dom.at(home).class) == setup.joints_service)
+    };
+    let part_above = |state: &State, mut id: InstanceId| loop {
+        id = state.dom.parent_of(id)?;
+        if is_part(state, reflection, setup, id) {
+            break Some(id);
+        }
+    };
+    let mut put = |a: Option<InstanceId>, b: Option<InstanceId>| {
+        if let (Some(a), Some(b)) = (a, b)
+            && a != b
+        {
+            pairs.insert((a.min(b), a.max(b)));
+        }
+    };
+    for name in ["Rotate", "RotateP", "RotateV"] {
+        let Some(class) = reflection.class_id(name) else { continue };
+        for joint in state.dom.instances_of_class(class) {
+            if active(state, joint) {
+                let [a, b] = parts_of(state, setup, joint);
+                put(a, b);
+            }
+        }
+    }
+    let classes: Vec<ClassId> = (0..reflection.classes.len() as ClassId).filter(|&class| reflection.class(class).is_a(constraint)).collect();
+    for class in classes {
+        for held in state.dom.instances_of_class(class) {
+            if !active(state, held) {
+                continue;
+            }
+            let ends = [attachment0, attachment1].map(|name| reference(state, held, name).and_then(|attachment| part_above(state, attachment)));
+            put(ends[0], ends[1]);
+        }
+    }
+    pairs
+}
+
+/// A frame's rotation as rows.
+fn rows_of(frame: &Affine3A) -> [[f32; 3]; 3] {
+    let m = frame.matrix3;
+    [[m.x_axis.x, m.y_axis.x, m.z_axis.x], [m.x_axis.y, m.y_axis.y, m.z_axis.y], [m.x_axis.z, m.y_axis.z, m.z_axis.z]]
+}
+
+/// The classes and names a part's shape is read from ([`Shapes::body`]).
+struct Shapes {
+    terrain: Option<ClassId>,
+    wedge: Option<ClassId>,
+    corner_wedge: Option<ClassId>,
+    part: Option<ClassId>,
+    shape: Option<NameId>,
+}
+
+impl Shapes {
+    fn new(reflection: &Reflection) -> Self {
+        Shapes {
+            terrain: reflection.class_id("Terrain"),
+            wedge: reflection.class_id("WedgePart"),
+            corner_wedge: reflection.class_id("CornerWedgePart"),
+            part: reflection.class_id("Part"),
+            shape: reflection.name_id("Shape"),
+        }
+    }
+
+    /// A part's frame, half size and shape as JoinToOutsiders reads them (world/faces.rs Body).
+    fn body(&self, state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId) -> super::faces::Body {
+        use super::faces::Shape;
+        use rbx_dom_weak::types::Variant;
+        let (pos, rot) = match state.dom.raw_get(part, setup.cframe) {
+            Some(Value::Dom(variant)) => match &**variant {
+                Variant::CFrame(cframe) => {
+                    let (p, o) = (cframe.position, cframe.orientation);
+                    ([p.x, p.y, p.z], [[o.x.x, o.x.y, o.x.z], [o.y.x, o.y.y, o.y.z], [o.z.x, o.z.y, o.z.z]])
+                }
+                _ => ([0.0; 3], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+            },
+            _ => ([0.0; 3], [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]),
+        };
+        let half = match state.dom.raw_get(part, setup.size) {
+            Some(Value::Vector3(size)) => [size.x * 0.5, size.y * 0.5, size.z * 0.5],
+            _ => [0.5; 3],
+        };
+        let class = state.dom.at(part).class;
+        let is = |of: Option<ClassId>| of.is_some_and(|of| reflection.class(class).is_a(of));
+        let shape = if is(self.terrain) {
+            Shape::Faceless
+        } else if is(self.wedge) {
+            Shape::Wedge
+        } else if is(self.corner_wedge) {
+            Shape::CornerWedge
+        } else if is(self.part) {
+            match self.shape.and_then(|name| state.dom.raw_get(part, name)).and_then(Value::as_enum).map(|item| &*reflection.enum_item_info(item).name) {
+                Some("Ball") => Shape::Ball,
+                Some("Cylinder") => Shape::Cylinder,
+                Some("Wedge") => Shape::Wedge,
+                Some("CornerWedge") => Shape::CornerWedge,
+                _ => Shape::Block,
+            }
+        } else {
+            Shape::Block
+        };
+        super::faces::Body { rot, pos, half, shape }
+    }
 }
 
 /// Holds [`Joints::unpriced`] up while it lives, so it comes down however UnjoinFromOutsiders' removals end: a Parent write's error,

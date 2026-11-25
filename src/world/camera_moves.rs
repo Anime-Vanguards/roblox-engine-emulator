@@ -214,6 +214,7 @@ impl Wait {
             Wait::Workspace(root) => {
                 state.cameras.unindexed.remove(&part);
                 super::broadphase::left(state, root, part);
+                super::broadphase::not_entered(state, part);
             }
             Wait::Model(model) => {
                 if let Some(waiting) = state.cameras.unindexed_models.get_mut(&model) {
@@ -589,7 +590,12 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                 }
             }
             // (the parts in, or out, each after its own descendants: the reverse of the walk, which takes children last first; a
-            // client takes a subtree in so, measured: tools/parity/probes/grid_order.luau)
+            // client takes a subtree in so, measured: tools/parity/probes/grid_order.luau. Those coming into the Workspace's world
+            // are numbered as they come into its list of parts, the moved part first: broadphase.rs entered)
+            let into_workspace = moves && matches!(to, Some(Wait::Workspace(_)));
+            if into_workspace && parts.first().is_some_and(|&(node, below)| node == id && below.is_none()) {
+                super::broadphase::entered(state, id);
+            }
             for &(node, below) in parts.iter().rev() {
                 match below {
                     None if moves => {
@@ -598,6 +604,9 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                         }
                         if let Some(to) = to {
                             to.insert(state, node);
+                            if into_workspace && node != id {
+                                super::broadphase::entered(state, node);
+                            }
                         }
                     }
                     // its world's parts come in anew

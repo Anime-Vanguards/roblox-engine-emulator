@@ -261,6 +261,10 @@ pub struct Spatial {
     /// The parts the Parent write going on put in a wait (camera_moves.rs's hierarchy hook): the links it starts leave them where
     /// they came in
     fresh: FxHashSet<InstanceId>,
+    /// When each part came into the Workspace's world through a Parent write, by a number that grows ([`entered`]); a part that
+    /// leaves it is forgotten, and the parts there before any write (a mounted place's) have none
+    entered: FxHashMap<InstanceId, u64>,
+    entries: u64,
 }
 
 impl Spatial {
@@ -536,6 +540,28 @@ pub(crate) fn fresh_write(state: &mut State) {
     }
 }
 
+/// `part` came into the Workspace's world (camera_moves.rs's hierarchy hook numbers a moved subtree's parts in the order a client
+/// takes the subtree up: the moved instance first, then the rest each after its own descendants, world/joints.rs taken_up). A
+/// client keeps its parts in the order they came into the world (a part moved, written or put in another Folder of it keeps its
+/// place; one taken out and back is last), which Workspace:JoinToOutsiders welds a part's outsiders in (world/joints.rs).
+pub(crate) fn entered(state: &mut State, part: InstanceId) {
+    let spatial = &mut state.spatial;
+    spatial.entries += 1;
+    spatial.entered.insert(part, spatial.entries);
+}
+
+/// `part` left the Workspace's world, or is freed: [`entered`] forgets it.
+pub(crate) fn not_entered(state: &mut State, part: InstanceId) {
+    if !state.spatial.entered.is_empty() {
+        state.spatial.entered.remove(&part);
+    }
+}
+
+/// When `part` came into the Workspace's world ([`entered`]): 0 for a part there before any Parent write.
+pub(crate) fn entered_at(state: &State, part: InstanceId) -> u64 {
+    state.spatial.entered.get(&part).copied().unwrap_or(0)
+}
+
 /// `part` came into a wait in the Parent write going on (camera_moves.rs).
 pub(crate) fn came_in(state: &mut State, part: InstanceId) {
     if state.joints.created > 0 {
@@ -644,6 +670,7 @@ pub(crate) fn world_gone(state: &mut State, root: InstanceId) {
 
 /// `id` is about to be freed: out of any index (its slot is reused).
 pub(crate) fn freed(state: &mut State, id: InstanceId) {
+    not_entered(state, id);
     let State { spatial, sched, .. } = state;
     if let Some((world, entry)) = spatial.holder(id) {
         spatial.remove(world, entry, sched.frame);

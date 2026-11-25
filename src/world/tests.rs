@@ -1499,6 +1499,286 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
     );
 }
 
+/// Workspace:JoinToOutsiders(objects, mode) welds each listed part to each part outside the list whose face its face touches, as a
+/// playing client and its server do (roblox-sim, Studio 0.747; tools/parity/probes/join_to_outsiders.luau, whose client lines the
+/// strings here are): the mode is cast before the list; a Weld named Weld under the listed part, Part0 the listed part, C0 its face
+/// (centre, Z out, negative zeros as a client gives them), C1 Part1.CFrame:Inverse() * (Part0.CFrame * C0); None makes nothing;
+/// a gap over 0.01, an overlap of 0.1 or less, a turn of 0.573 degrees, a Ball or a wedge's empty half make none; a joint or
+/// constraint between the two stops it, a disabled one does not, nor does a weld out of the Workspace; two listed parts are never
+/// welded; a listed part's welds go in the order the other parts came into the Workspace, a subtree's parts the moved one first,
+/// then each after its own descendants.
+#[test]
+fn join_to_outsiders_welds_listed_parts_to_the_faces_they_touch() {
+    check_running(
+        "play",
+        r##"
+        local Root = Instance.new("Folder")
+        Root.Parent = workspace
+        local Storage = game:GetService("ReplicatedStorage")
+        local Base = CFrame.new(0, 100, 0)
+        local All = Enum.JointCreationMode.All
+        local function N(V)
+            if V == 0 then
+                return if 1 / V < 0 then "-0" else "0"
+            end
+            return string.format("%.9g", V)
+        end
+        local function CF(C)
+            local Parts = {}
+            for _, V in { C:GetComponents() } do
+                table.insert(Parts, N(V))
+            end
+            return table.concat(Parts, ",")
+        end
+        local function Brick(Name, At, Size, Props, Class, Parent)
+            local B = Instance.new(Class or "Part")
+            B.Name = Name
+            B.Anchored = true
+            B.Size = Size or Vector3.new(4, 1, 4)
+            for K, V in Props or {} do
+                B[K] = V
+            end
+            B.CFrame = At
+            B.Parent = Parent or Root
+            return B
+        end
+        local function Welds(Part)
+            local Lines = {}
+            for _, X in Part:GetChildren() do
+                if X:IsA("JointInstance") then
+                    table.insert(Lines, X.ClassName .. " '" .. X.Name .. "' " .. X.Part0.Name .. "-" .. X.Part1.Name .. " C0=" .. CF(X.C0) .. " C1=" .. CF(X.C1))
+                end
+            end
+            return table.concat(Lines, "; ")
+        end
+        local function Names(Part)
+            local Out = {}
+            for _, X in Part:GetChildren() do
+                table.insert(Out, X.Part1.Name)
+            end
+            return table.concat(Out, ",")
+        end
+        local function Fails(Want, F)
+            local Ok, Message = pcall(F)
+            assert(not Ok and Message == Want, tostring(Message))
+        end
+        local function Same(Got, Want)
+            assert(Got == Want, "\n got " .. tostring(Got) .. "\nwant " .. tostring(Want))
+        end
+        -- B (listed) at BAt with A under it: B's welds
+        local function Case(BAt, BSize, BProps, Mode, ASize, AProps, AClass, AAt)
+            Brick("A", AAt or Base, ASize, AProps, AClass)
+            local B = Brick("B", BAt or Base * CFrame.new(0, 1, 0), BSize, BProps)
+            workspace:JoinToOutsiders({ B }, Mode or All)
+            local Got = Welds(B)
+            Root:ClearAllChildren()
+            return Got
+        end
+
+        -- the arguments: the mode first
+        Fails("Argument 2 missing or nil", function() workspace:JoinToOutsiders() end)
+        Fails("Argument 2 missing or nil", function() workspace:JoinToOutsiders({}) end)
+        Fails("Unable to cast string to JointCreationMode", function() workspace:JoinToOutsiders(5, "Bogus") end)
+        Fails("Unable to cast double to JointCreationMode", function() workspace:JoinToOutsiders({}, 3) end)
+        Fails("Unable to cast double to JointCreationMode", function() workspace:JoinToOutsiders({}, -1) end)
+        Fails("Unable to cast null to JointCreationMode", function() workspace:JoinToOutsiders({}, Enum.JointCreationMode) end)
+        Fails("Unable to cast Array to JointCreationMode", function() workspace:JoinToOutsiders({}, {}) end)
+        Fails("Unable to cast Material to JointCreationMode", function() workspace:JoinToOutsiders({}, Enum.Material.Plastic) end)
+        Fails("Expected table argument, got number", function() workspace:JoinToOutsiders(5, All) end)
+        Fails("Unable to cast value to Object", function() workspace:JoinToOutsiders({ 1 }, Enum.JointCreationMode.None) end)
+        Fails("Expected ':' not '.' calling member function JoinToOutsiders", function() (workspace :: any).JoinToOutsiders({}, All) end)
+        assert(select("#", workspace:JoinToOutsiders({}, -0.5)) == 0)
+
+        -- the weld, by mode and face
+        local Top = "Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0"
+        Same(Case(), Top)
+        Same(Case(nil, nil, nil, "Surface"), Top)
+        Same(Case(nil, nil, nil, 1.5), Top)
+        Same(Case(nil, nil, nil, Enum.JointCreationMode.None), "")
+        Same(Case(nil, nil, nil, 2.9), "")
+        Same(Case(nil, nil, { BottomSurface = Enum.SurfaceType.Hinge }, Enum.JointCreationMode.Surface), Top)
+        Same(Case(Base + Vector3.new(-4, 0, 0)), "Weld 'Weld' B-A C0=2,0,0,0,0,1,0,1,0,-1,-0,-0 C1=-2,0,0,0,0,1,0,1,0,-1,0,0")
+        Same(Case(Base + Vector3.new(0, -3, 0), Vector3.new(2, 3, 5), nil, nil, Vector3.new(4, 3, 5)), "Weld 'Weld' B-A C0=0,1.5,0,-1,-0,-0,0,0,1,0,1,0 C1=0,-1.5,0,-1,0,0,0,0,1,0,1,0")
+        Same(Case(Base * CFrame.new(0, 0.5, 0), Vector3.new(0.7, 0.7, 0.7), nil, nil, Vector3.new(4, 0.3, 4)), "Weld 'Weld' B-A C0=0,-0.349999994,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.150001526,0,1,0,0,0,0,-1,0,1,0")
+        do
+            local A = Brick("A", CFrame.new(40, 80, 0) * CFrame.Angles(0.3, 0.7, 0.2))
+            local B = Brick("B", A.CFrame * CFrame.new(0.3, 1, -0.6), Vector3.new(2, 1, 2))
+            workspace:JoinToOutsiders({ B }, All)
+            Same(Welds(B), "Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0.300003052,0.5,-0.600003719,1.00000012,-5.96046448e-08,0,0,2.98023224e-08,-1.00000012,-5.96046448e-08,1.00000012,-2.98023224e-08")
+            local X = B:FindFirstChildOfClass("Weld")
+            assert(X.Parent == B and X.Part0 == B and X.Part1 == A and X.Enabled)
+            Root:ClearAllChildren()
+        end
+        -- when faces touch: a float32 gap of 0.01, an overlap of more than 0.1 (a separating axis's), 0.573 degrees, flat faces
+        Same(Case(CFrame.new(0, 1.51, 0), nil, nil, nil, nil, nil, nil, CFrame.new(0, 0.5, 0)) ~= "", true)
+        Same(Case(Base * CFrame.new(0, 1.0101, 0)), "")
+        Same(Case(Base * CFrame.new(3.9, 1, 0)), "")
+        Same(Case(Base * CFrame.new(1.92, 0.525, 0), Vector3.new(0.05, 0.05, 0.05)) ~= "", true)
+        Same(Case(Base * CFrame.new(1.93, 0.525, 0), Vector3.new(0.05, 0.05, 0.05)), "")
+        Same(Case(Base * CFrame.new(0, 1, 0) * CFrame.Angles(0, math.rad(0.572), 0)) ~= "", true)
+        Same(Case(Base * CFrame.new(0, 1, 0) * CFrame.Angles(0, math.rad(0.573), 0)), "")
+        Same(Case(Base * CFrame.new(0, 1, 0) * CFrame.Angles(math.rad(0.3), 0, 0)), "")
+        Same(Case(Base * CFrame.new(0, 2.5, 0), Vector3.new(4, 4, 4), { Shape = Enum.PartType.Ball }), "")
+        Same(Case(Base * CFrame.new(0, 2.5, 0), Vector3.new(4, 4, 4), { Shape = Enum.PartType.Cylinder }), "")
+        Same(Case(Base * CFrame.new(-1.5, 2.25, -1.5), Vector3.new(0.5, 0.5, 0.5), nil, nil, Vector3.new(4, 4, 4), nil, "WedgePart", Base * CFrame.Angles(0, 0, math.rad(90))), "")
+        Same(Case(Base * CFrame.new(1.5, 2.25, 1.5), Vector3.new(0.5, 0.5, 0.5), nil, nil, Vector3.new(4, 4, 4), nil, "WedgePart", Base * CFrame.Angles(0, 0, math.rad(90))) ~= "", true)
+
+        -- what is between them already
+        for Kind, Want in { Weld = 0, WeldConstraint = 0, Glue = 0, Rotate = 0, HingeConstraint = 0, VelocityMotor = 1, NoCollisionConstraint = 1, ["disabled Weld"] = 1, ["Weld in ReplicatedStorage"] = 1, twice = 1 } do
+            local A = Brick("A", Base)
+            local B = Brick("B", Base * CFrame.new(0, 1, 0))
+            local Class = if Kind == "disabled Weld" or Kind == "Weld in ReplicatedStorage" then "Weld" else Kind
+            if Kind == "twice" then
+                workspace:JoinToOutsiders({ B }, All)
+            else
+                local X = Instance.new(Class)
+                if X:IsA("Constraint") then
+                    local A0, A1 = Instance.new("Attachment"), Instance.new("Attachment")
+                    A0.Parent, A1.Parent = A, B
+                    X.Attachment0, X.Attachment1 = A0, A1
+                else
+                    X.Part0, X.Part1 = A, B
+                end
+                if Kind == "disabled Weld" then
+                    X.Enabled = false
+                end
+                X.Parent = if Kind == "Weld in ReplicatedStorage" then Storage else A
+            end
+            workspace:JoinToOutsiders({ B }, All)
+            local Made = #Welds(B):split("Weld '") - 1
+            assert(Made == Want, Kind .. ": " .. Made .. " welds")
+            Root:ClearAllChildren()
+            for _, X in Storage:GetChildren() do
+                if X:IsA("Weld") then
+                    X:Destroy()
+                end
+            end
+        end
+        -- which parts
+        do
+            local A = Brick("A", Base)
+            local B = Brick("B", Base * CFrame.new(0, 1, 0))
+            workspace:JoinToOutsiders({ Root }, All)
+            assert(#A:GetChildren() == 0 and #B:GetChildren() == 0, "both listed")
+            Root:ClearAllChildren()
+            local World = Instance.new("WorldModel")
+            World.Parent = Root
+            Brick("A", Base, nil, nil, nil, World)
+            B = Brick("B", Base * CFrame.new(0, 1, 0))
+            workspace:JoinToOutsiders({ B }, All)
+            assert(#B:GetChildren() == 0, "A in a WorldModel")
+            Root:ClearAllChildren()
+        end
+        -- the order: the other parts as they came into the Workspace
+        local At = { A = Base, C = Base * CFrame.new(0, 2, 0), D = Base * CFrame.new(4, 1, 0), E = Base * CFrame.new(-4, 1, 0) }
+        do
+            local B = Brick("B", Base * CFrame.new(0, 1, 0))
+            for _, Name in { "D", "C", "A" } do
+                Brick(Name, At[Name])
+            end
+            workspace:JoinToOutsiders({ B }, All)
+            Same(Names(B), "D,C,A")
+            Root:ClearAllChildren()
+            B = Brick("B", Base * CFrame.new(0, 1, 0))
+            local A = Brick("A", At.A)
+            Brick("C", At.C)
+            Brick("D", At.D)
+            A.Parent = nil
+            A.Parent = Root
+            workspace:JoinToOutsiders({ B }, All)
+            Same(Names(B), "C,D,A")
+            Root:ClearAllChildren()
+            local Fo = Instance.new("Folder")
+            local D = Brick("D", At.D, nil, nil, nil, Fo)
+            Brick("A", At.A, nil, nil, nil, D)
+            local Sub = Instance.new("Folder")
+            Sub.Parent = Fo
+            Brick("E", At.E, nil, nil, nil, Sub)
+            Brick("C", At.C, nil, nil, nil, Fo)
+            B = Brick("B", Base * CFrame.new(0, 1, 0))
+            Fo.Parent = Root
+            workspace:JoinToOutsiders({ B }, All)
+            Same(Names(B), "A,D,E,C")
+            Root:ClearAllChildren()
+            local P = Brick("P", At.C, nil, nil, nil, Storage)
+            Brick("Q", At.A, nil, nil, nil, P)
+            B = Brick("B", Base * CFrame.new(0, 1, 0))
+            P.Parent = Root
+            workspace:JoinToOutsiders({ B }, All)
+            Same(Names(B), "P,Q")
+            Root:ClearAllChildren()
+        end
+        "##,
+        0.1,
+    );
+}
+
+/// What JoinToOutsiders costs the work clock, against a playing client's medians (roblox-sim, Studio 0.747; cost.rs JOIN_CAST and
+/// the rest): an empty list 7.6 us, one lone part 21.6, 100 lone 2 x 1 x 2 parts 6 studs apart 185 us, the same each on a part
+/// turned 45 degrees 395, each welded already 236, each on a part of its own 1,049 (100 welds), all on one part 967; ree within
+/// x0.6 to x1.5 of each (a method call's price alone, about 2 us, before JoinToOutsiders was emulated).
+#[test]
+fn join_to_outsiders_costs_what_a_client_spends() {
+    check_running(
+        "play",
+        r##"
+        workspace.Gravity = 0
+        local function Scene(Kind)
+            local Root = Instance.new("Folder")
+            Root.Parent = workspace
+            local Listed = {}
+            for I = 1, 100 do
+                local At = Vector3.new(300 + (I - 1) * 6, 300, 300)
+                local P = Instance.new("Part")
+                P.Anchored, P.Size, P.CFrame, P.Parent = true, Vector3.new(2, 1, 2), CFrame.new(At), Root
+                Listed[I] = P
+                if Kind ~= "lone" and Kind ~= "star" then
+                    local Q = Instance.new("Part")
+                    Q.Anchored, Q.Size, Q.Parent = true, Vector3.new(2, 1, 2), Root
+                    Q.CFrame = CFrame.new(At - Vector3.new(0, 1, 0)) * (if Kind == "near" then CFrame.Angles(0, math.rad(45), 0) else CFrame.identity)
+                    if Kind == "blocked" then
+                        local X = Instance.new("Weld")
+                        X.Part0, X.Part1, X.Parent = Q, P, Q
+                    end
+                end
+            end
+            if Kind == "star" then
+                local G = Instance.new("Part")
+                G.Anchored, G.Size, G.CFrame, G.Parent = true, Vector3.new(596, 1, 2), CFrame.new(300 + 297, 299, 300), Root
+            end
+            return Root, Listed
+        end
+        local function Within(Label, Got, Client)
+            local Ratio = Got / Client
+            assert(Ratio > 0.6 and Ratio < 1.5, string.format("%s: %.1f us, x%.2f of the client's %.1f", Label, Got * 1e6, Ratio, Client * 1e6))
+        end
+        local function Time(F)
+            task.wait()
+            task.wait()
+            local Start = os.clock()
+            F()
+            return os.clock() - Start
+        end
+        Within("an empty list", Time(function() workspace:JoinToOutsiders({}, Enum.JointCreationMode.All) end), 7.6e-6)
+        for _, Case in { { "lone", 185e-6 }, { "near", 395e-6 }, { "blocked", 236e-6 }, { "weld", 1049e-6 }, { "star", 967e-6 } } do
+            local Kind, Client = Case[1], Case[2]
+            local Root, Listed = Scene(Kind)
+            if Kind == "lone" then
+                Within("one lone part", Time(function() workspace:JoinToOutsiders({ Listed[1] }, Enum.JointCreationMode.All) end), 21.6e-6)
+            end
+            Within(Kind, Time(function() workspace:JoinToOutsiders(Listed, Enum.JointCreationMode.All) end), Client)
+            local Made = 0
+            for _, P in Listed do
+                Made += #P:GetChildren()
+            end
+            assert(Made == (if Kind == "weld" or Kind == "star" then 100 else 0), Kind .. " made " .. Made)
+            Root:Destroy()
+        end
+        "##,
+        0.5,
+    );
+}
+
 /// A joint leaves its parts' lists of active joints at the same cost however long they are (joints.rs Joints::detach swaps at the
 /// place it keeps for the joint): a part holding 30,000 Glue to another leaves the Workspace and comes back 16 times, and then
 /// UnjoinFromOutsiders takes the Glue out, in at most twice the host time the same 30,000 Glue take spread over 30 parts of 1,000,

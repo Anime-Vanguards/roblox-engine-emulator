@@ -1,0 +1,220 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+JoinToOutsiders() -> error Argument 2 missing or nil
+JoinToOutsiders({}) -> error Argument 2 missing or nil
+JoinToOutsiders({}, nil) -> error Argument 2 missing or nil
+JoinToOutsiders({}, 'Bogus') -> error Unable to cast string to JointCreationMode
+JoinToOutsiders(5, 'Bogus') -> error Unable to cast string to JointCreationMode
+JoinToOutsiders(5, All) -> error Expected table argument, got number
+JoinToOutsiders(nil, All) -> error Expected table argument, got nil
+JoinToOutsiders('x', All) -> error Expected table argument, got string
+JoinToOutsiders(workspace, All) -> error Expected table argument, got userdata
+JoinToOutsiders({1}, All) -> error Unable to cast value to Object
+JoinToOutsiders({workspace, 1}, All) -> error Unable to cast value to Object
+JoinToOutsiders({1}, None) -> error Unable to cast value to Object
+JoinToOutsiders({x=1}, All) -> ok
+JoinToOutsiders({}, 3) -> error Unable to cast double to JointCreationMode
+JoinToOutsiders({}, -1) -> error Unable to cast double to JointCreationMode
+JoinToOutsiders({}, -1.5) -> error Unable to cast double to JointCreationMode
+JoinToOutsiders({}, -0.5) -> ok
+JoinToOutsiders({}, 1.5) -> ok
+JoinToOutsiders({}, 2.9) -> ok
+JoinToOutsiders({}, 0/0) -> error Unable to cast double to JointCreationMode
+JoinToOutsiders({}, math.huge) -> error Unable to cast double to JointCreationMode
+JoinToOutsiders({}, '1') -> error Unable to cast string to JointCreationMode
+JoinToOutsiders({}, 'all') -> error Unable to cast string to JointCreationMode
+JoinToOutsiders({}, 'None') -> ok
+JoinToOutsiders({}, true) -> error Unable to cast bool to JointCreationMode
+JoinToOutsiders({}, Material) -> error Unable to cast Material to JointCreationMode
+JoinToOutsiders({}, Enum.JointCreationMode) -> error Unable to cast null to JointCreationMode
+JoinToOutsiders({}, {}) -> error Unable to cast Array to JointCreationMode
+JoinToOutsiders({}, workspace) -> error Unable to cast Instance to JointCreationMode
+JoinToOutsiders({}, Vector3) -> error Unable to cast Vector3 to JointCreationMode
+JoinToOutsiders({}, print) -> error Unable to cast Function to JointCreationMode
+JoinToOutsiders({}, None, 5) -> ok
+dot call -> error Expected ':' not '.' calling member function JoinToOutsiders
+mode All -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+mode Surface -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+mode None -> ok | none
+mode 0.5 -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+mode -0.5 -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+mode 1.5 -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+mode 2.9 -> ok | none
+mode 'Surface' -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+surfaces Smooth All -> Weld 'Weld' B-A
+surfaces Smooth Surface -> Weld 'Weld' B-A
+surfaces Glue All -> Weld 'Weld' B-A
+surfaces Glue Surface -> Weld 'Weld' B-A
+surfaces Weld All -> Weld 'Weld' B-A
+surfaces Weld Surface -> Weld 'Weld' B-A
+surfaces Studs All -> Weld 'Weld' B-A
+surfaces Studs Surface -> Weld 'Weld' B-A
+surfaces Inlet All -> Weld 'Weld' B-A
+surfaces Inlet Surface -> Weld 'Weld' B-A
+surfaces Universal All -> Weld 'Weld' B-A
+surfaces Universal Surface -> Weld 'Weld' B-A
+surfaces Hinge All -> Weld 'Weld' B-A
+surfaces Hinge Surface -> Weld 'Weld' B-A
+surfaces Motor All -> Weld 'Weld' B-A
+surfaces Motor Surface -> Weld 'Weld' B-A
+B beside A at +X -> ok | Weld 'Weld' B-A C0=-2,0,0,-0,-0,-1,0,1,0,1,0,0 C1=2,0,0,0,0,-1,0,1,0,1,0,0
+B beside A at -X -> ok | Weld 'Weld' B-A C0=2,0,0,0,0,1,0,1,0,-1,-0,-0 C1=-2,0,0,0,0,1,0,1,0,-1,0,0
+B beside A at +Y -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+B beside A at -Y -> ok | Weld 'Weld' B-A C0=0,0.5,0,-1,-0,-0,0,0,1,0,1,0 C1=0,-0.5,0,-1,0,0,0,0,1,0,1,0
+B beside A at +Z -> ok | Weld 'Weld' B-A C0=0,0,-2,-1,-0,-0,0,1,0,-0,-0,-1 C1=0,0,2,-1,0,0,0,1,0,0,0,-1
+B beside A at -Z -> ok | Weld 'Weld' B-A C0=0,0,2,1,0,0,0,1,0,0,0,1 C1=0,0,-2,1,0,0,0,1,0,0,0,1
+B 2x3x5 beside A 4x3x5 at +X -> ok | Weld 'Weld' B-A C0=-1,0,0,-0,-0,-1,0,1,0,1,0,0 C1=2,0,0,0,0,-1,0,1,0,1,0,0
+B 2x3x5 beside A 4x3x5 at -Y -> ok | Weld 'Weld' B-A C0=0,1.5,0,-1,-0,-0,0,0,1,0,1,0 C1=0,-1.5,0,-1,0,0,0,0,1,0,1,0
+B 2x3x5 beside A 4x3x5 at +Z -> ok | Weld 'Weld' B-A C0=0,0,-2.5,-1,-0,-0,0,1,0,-0,-0,-1 C1=0,0,2.5,-1,0,0,0,1,0,0,0,-1
+B 0.7 on A 4x0.3x4 -> ok | Weld 'Weld' B-A C0=0,-0.349999994,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.150001526,0,1,0,0,0,0,-1,0,1,0
+B 2x2x2 turned x90 on A -> ok | Weld 'Weld' B-A C0=0,0,1,1,0,0,0,1,0,0,0,1 C1=0,0.5,-4.37113883e-08,1,0,0,0,-4.37113883e-08,-1,0,1,-4.37113883e-08
+B 2x2x2 turned y90 on A -> ok | Weld 'Weld' B-A C0=0,-1,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,-4.37113883e-08,1,0,0,0,-1,-1,-4.37113883e-08,0
+B 2x2x2 turned z90 on A -> ok | Weld 'Weld' B-A C0=-1,0,0,-0,-0,-1,0,1,0,1,0,0 C1=4.37113883e-08,0.5,0,0,-1,4.37113883e-08,0,-4.37113883e-08,-1,1,0,0
+B 2x2x2 turned x180 on A -> ok | Weld 'Weld' B-A C0=0,1,0,-1,-0,-0,0,0,1,0,1,0 C1=0,0.5,-8.74227766e-08,-1,0,0,0,8.74227766e-08,-1,0,-1,-8.74227766e-08
+B 2x2x2 turned y45 on A -> ok | none
+gap y=0.5 -> -0.011:- -0.0101:- -0.01:W -0.0099:W 0:W 0.0099:W 0.01:W 0.0101:- 0.011:-
+gap y=10 -> -0.011:- -0.0101:- -0.01:- -0.0099:W 0:W 0.0099:W 0.01:- 0.0101:- 0.011:-
+gap y=50 -> -0.011:- -0.0101:- -0.01:W -0.0099:W 0:W 0.0099:W 0.01:W 0.0101:- 0.011:-
+gap y=100 -> -0.011:- -0.0101:- -0.01:- -0.0099:W 0:W 0.0099:W 0.01:- 0.0101:- 0.011:-
+gap beside +X -> -0.0101:- -0.01:W -0.0099:W 0.0099:W 0.01:- 0.0101:-
+gap 40-stud faces -> 0.0098:W 0.01:-
+overlap s=0.05 -> 0.05:- 0.09:x 0.095:x 0.1:x 0.105:x 0.11:x 0.12:x
+overlap s=0.1 -> 0.05:- 0.09:- 0.095:- 0.1:- 0.105:x 0.11:x 0.12:x
+overlap s=0.12 -> 0.05:- 0.09:- 0.095:- 0.1:- 0.105:W 0.11:W 0.12:W
+overlap s=0.15 -> 0.05:- 0.09:- 0.095:- 0.1:W 0.105:W 0.11:W 0.12:W
+overlap s=0.2 -> 0.05:- 0.09:- 0.095:- 0.1:W 0.105:W 0.11:W 0.12:W
+overlap s=0.25 -> 0.05:- 0.09:- 0.095:- 0.1:- 0.105:W 0.11:W 0.12:W
+overlap s=1 -> 0.05:- 0.09:- 0.095:- 0.1:- 0.105:W 0.11:W 0.12:W
+overlap s=4 -> 0.05:- 0.09:- 0.095:- 0.1:- 0.105:W 0.11:W 0.12:W
+centre s=0.02 -> 1.89:W 1.9:W 1.91:W 1.92:- 1.93:- 1.94:- 1.95:- 1.99:- 2:- 2.01:-
+centre of A s=0.02 -> 1.89:W 1.9:W 1.91:W 1.92:- 1.93:- 1.94:- 1.95:- 1.99:- 2:- 2.01:-
+centre s=0.05 -> 1.89:W 1.9:W 1.91:W 1.92:W 1.93:- 1.94:- 1.95:- 1.99:- 2:- 2.01:-
+centre of A s=0.05 -> 1.89:W 1.9:W 1.91:W 1.92:W 1.93:- 1.94:- 1.95:- 1.99:- 2:- 2.01:-
+centre s=0.08 -> 1.89:W 1.9:W 1.91:W 1.92:W 1.93:W 1.94:- 1.95:- 1.99:- 2:- 2.01:-
+centre of A s=0.08 -> 1.89:W 1.9:W 1.91:W 1.92:W 1.93:W 1.94:W 1.95:- 1.99:- 2:- 2.01:-
+centre s=0.2 -> 1.89:W 1.9:W 1.91:W 1.92:W 1.93:W 1.94:W 1.95:W 1.99:W 2:W 2.01:-
+centre of A s=0.2 -> 1.89:W 1.9:W 1.91:W 1.92:W 1.93:W 1.94:W 1.95:W 1.99:W 2:W 2.01:-
+corner s=1 -> 0.095:- 0.1:- 0.105:W 0.11:W
+thin B w x 1 x 2 on A -> 0.01:W 0.05:W 0.1:W 0.2:W
+B 0.05 on A 0.05 offset -> 0:- 0.01:- 0.03:-
+B 0.2 on A 0.2 offset -> 0:W 0.04:W 0.08:W
+yaw B 4 -> 0.3:W 0.5:W 0.57:W 0.572:W 0.573:- 0.58:- 0.6:-
+yaw A under B 0.1 -> 0.3:W 0.5:W 0.57:W 0.572:W 0.573:- 0.58:- 0.6:-
+tilt B 0.1 on A 40 -> 0.3:W 0.5:W 0.57:W 0.572:W 0.573:- 0.58:- 0.6:-
+tilt and yaw B 0.1 -> 0.3:W 0.5:W 0.57:W 0.572:W 0.573:- 0.58:- 0.6:-
+yaw coarse B 2 -> 1:- 30:- 45:- 89.4:- 89.5:W 90:W 135:- 180:W 270:W
+tilt B 4 on A 40 -> 0.1:W 0.14:W 0.15:W 0.2:W 0.25:W 0.3:- 0.55:- 0.6:-
+tilt B 40 on A 4 -> 0.1:W 0.14:W 0.15:W 0.2:W 0.25:W 0.3:- 0.55:- 0.6:-
+tilt A 40 under B 4 -> 0.1:W 0.14:W 0.15:W 0.2:W 0.25:W 0.3:- 0.55:- 0.6:-
+tilt B 4 about its -Z edge on A 40 -> 0.1:W 0.14:W 0.15:- 0.2:- 0.25:- 0.3:- 0.55:- 0.6:-
+tilt B 4x1x1 about x -> 0.1:W 0.14:W 0.15:W 0.2:W 0.25:W 0.3:W 0.55:W 0.6:-
+tilt B 4 raised 0.005 -> 0.1:W 0.14:W 0.15:- 0.2:- 0.25:- 0.3:- 0.55:- 0.6:-
+tilt B over A's edge about the overlap's edge -> 0.1:W 0.14:W 0.15:W 0.2:W 0.25:W 0.3:W 0.55:W 0.6:-
+tilt B over A's edge about its far edge -> 0.1:W 0.14:W 0.15:- 0.2:- 0.25:- 0.3:- 0.55:- 0.6:-
+tilt A about its far edge under B's edge -> 0.1:W 0.14:W 0.15:- 0.2:- 0.25:- 0.3:- 0.55:- 0.6:-
+gap of a turned pair -> 0.0099:W 0.0101:-
+turned pair 1 -> Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0.300003052,0.5,-0.600003719,1.00000012,-5.96046448e-08,0,0,2.98023224e-08,-1.00000012,-5.96046448e-08,1.00000012,-2.98023224e-08
+turned pair 2 -> Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0.299998522,0.5,-0.600006104,0.999999881,5.58793545e-09,1.49011612e-08,-1.49011612e-08,-2.98023224e-08,-0.99999994,5.58793545e-09,0.99999994,2.98023224e-08
+turned pair 3 -> Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0.299999237,0.5,-0.600000024,1,0,0,0,0,-1,0,1,0
+turned pair 4 -> Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0.299999237,0.5,-0.599998474,1,2.98023224e-08,0,0,0,-1,2.98023224e-08,1,0
+B Ball -> ok | none
+B Cylinder end -> ok | Weld 'Weld' B-A C0=-2,0,0,-0,-0,-1,0,1,0,1,0,0 C1=8.74227766e-08,0.5,0,0,-1,4.37113883e-08,0,-4.37113883e-08,-1,1,0,0
+B Cylinder side -> ok | none
+B Cylinder end at A's corner -> ok | Weld 'Weld' B-A C0=-2,0,0,-0,-0,-1,0,1,0,1,0,0 C1=3.79999995,0.5,3.79999995,0,-1,4.37113883e-08,0,-4.37113883e-08,-1,1,0,0
+B TrussPart -> ok | Weld 'Weld' B-A C0=0,-2,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+B MeshPart 2x6x3 -> ok | Weld 'Weld' B-A C0=0,-3,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+B Seat -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+B SpawnLocation -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0
+A Ball -> ok | none
+A Cylinder side -> ok | none
+A Cylinder end -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=2,-8.74229045e-08,0,-4.37113883e-08,0,-1,-1,0,4.37113883e-08,0,1,0
+A TrussPart -> ok | Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,2,0,1,0,0,0,0,-1,0,1,0
+faces up of WedgePart -> - 2,0,0 - 2,0,0 - 2,0,0 - 2,0,0 - - 2,0,0 0,-2,0 0,0,2 0,0,2 -2,0,0 - 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,0,2 0,0,2 -2,0,0 - - - 2,0,0 0,-2,0
+faces up of Part Wedge -> - 2,0,0 - 2,0,0 - 2,0,0 - 2,0,0 - - 2,0,0 0,-2,0 0,0,2 0,0,2 -2,0,0 - 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,0,2 0,0,2 -2,0,0 - - - 2,0,0 0,-2,0
+faces up of CornerWedgePart -> - 2,0,0 - 2,0,0 - 2,0,0 - 2,0,0 0,0,-2 0,0,-2 2,0,0 0,-2,0 - - - - 0,-2,0 - 0,-2,0 - 0,-2,0 - 0,-2,0 - - - - - 0,0,-2 0,0,-2 2,0,0 0,-2,0
+faces up of Part CornerWedge -> - 2,0,0 - 2,0,0 - 2,0,0 - 2,0,0 0,0,-2 0,0,-2 2,0,0 0,-2,0 - - - - 0,-2,0 - 0,-2,0 - 0,-2,0 - 0,-2,0 - - - - - 0,0,-2 0,0,-2 2,0,0 0,-2,0
+faces down of listed WedgePart -> 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,-2,0 -2,0,0 0,0,2 0,0,2 -2,0,0 - - - 2,0,0 0,-2,0 - 2,0,0 - 2,0,0 - 2,0,0 - 2,0,0 - - 2,0,0 0,-2,0 0,0,2 0,0,2 -2,0,0 -
+faces down of listed CornerWedgePart -> 0,-2,0 - 0,-2,0 - 0,-2,0 - 0,-2,0 - - - - - 0,0,-2 0,0,-2 2,0,0 0,-2,0 - 2,0,0 - 2,0,0 - 2,0,0 - 2,0,0 0,0,-2 0,0,-2 2,0,0 0,-2,0 - - - -
+WedgePart +X up, B 0.5 at x,z -> -1.5,-1.5:- 1.5,1.5:W -1.5,1.5:W 1.5,-1.5:W 0,0:W
+WedgePart -Z up, B 0.5 at x,z -> -1.5,-1.5:- 1.5,1.5:- -1.5,1.5:- 1.5,-1.5:- 0,0:-
+CornerWedgePart +X up, B 0.5 at x,z -> -1.5,-1.5:W 1.5,1.5:W -1.5,1.5:- 1.5,-1.5:W 0,0:W
+CornerWedgePart -Z up, B 0.5 at x,z -> -1.5,-1.5:W 1.5,1.5:W -1.5,1.5:- 1.5,-1.5:W 0,0:W
+both unanchored -> Weld 'Weld' B-A
+both Locked -> Weld 'Weld' B-A
+both Massless -> Weld 'Weld' B-A
+both CanCollide false -> Weld 'Weld' B-A
+both CanQuery false -> Weld 'Weld' B-A
+both CanTouch false -> Weld 'Weld' B-A
+both Transparency 1 -> Weld 'Weld' B-A
+the weld -> Enabled true Archivable true parent B
+two listed on A -> B: Weld 'Weld' B-A | C: Weld 'Weld' C-A | A: none
+a Model listed -> Weld 'Weld' B-A
+a listed part's child part -> Weld 'Weld' B-A
+the other part below the listed one -> none
+in a WorldModel: both -> none
+in a WorldModel: A -> none
+in a WorldModel: B -> none
+A in ReplicatedStorage -> none
+B in ReplicatedStorage -> none
+listed again, and its Folder -> none
+A listed, B outside -> A: Weld 'Weld' A-B C0=0,0.5,0,-1,-0,-0,0,0,1,0,1,0 C1=0,-0.5,0,-1,0,0,0,0,1,0,1,0 | B: none
+B on A and beside C -> Weld 'Weld' B-A C0=0,-0.5,0,1,0,0,-0,-0,-1,0,1,0 C1=0,0.5,0,1,0,0,0,0,-1,0,1,0; Weld 'Weld' B-C C0=2,0,0,0,0,1,0,1,0,-1,-0,-0 C1=-1,-0.5,0,0,0,1,0,1,0,-1,0,0
+listing Terrain -> ok | none
+between them Weld -> none
+between them Weld swapped -> none
+between them Weld disabled -> Weld 'Weld' B-A
+between them Weld out of the DataModel -> Weld 'Weld' B-A
+between them Weld in ReplicatedStorage -> Weld 'Weld' B-A
+between them Weld in JointsService -> none
+between them Weld in a WorldModel -> Weld 'Weld' B-A
+between them Weld Part1 nil -> Weld 'Weld' B-A
+between them Weld A to A -> Weld 'Weld' B-A
+between them Weld through a third part -> Weld 'Weld' B-A
+between them joined twice -> Weld 'Weld' B-A
+between them WeldConstraint -> none
+between them WeldConstraint disabled -> Weld 'Weld' B-A
+between them WeldConstraint through a third part -> Weld 'Weld' B-A
+between them Motor6D -> none
+between them Motor6D disabled -> Weld 'Weld' B-A
+between them Motor -> none
+between them Snap -> none
+between them Glue -> none
+between them Glue disabled -> Weld 'Weld' B-A
+between them ManualWeld -> none
+between them ManualGlue -> none
+between them Rotate -> none
+between them Rotate disabled -> Weld 'Weld' B-A
+between them RotateP -> none
+between them RotateV -> none
+between them VelocityMotor -> Weld 'Weld' B-A
+between them HingeConstraint -> none
+between them HingeConstraint disabled -> Weld 'Weld' B-A
+between them HingeConstraint in ReplicatedStorage -> Weld 'Weld' B-A
+between them HingeConstraint one attachment -> Weld 'Weld' B-A
+between them HingeConstraint attachment in a Folder -> none
+between them BallSocketConstraint -> none
+between them RopeConstraint -> none
+between them RodConstraint -> none
+between them SpringConstraint -> none
+between them PrismaticConstraint -> none
+between them CylindricalConstraint -> none
+between them UniversalConstraint -> none
+between them PlaneConstraint -> none
+between them AlignPosition -> none
+between them AlignOrientation -> none
+between them TorsionSpringConstraint -> none
+between them RigidConstraint -> none
+between them NoCollisionConstraint -> Weld 'Weld' B-A
+between them Weld to a part in ReplicatedStorage -> Weld 'Weld' B-Far; Weld 'Weld' B-A
+made A,C,D -> A,C,D
+made D,C,A -> D,C,A
+made F,E,D,C,A -> F,E,D,C,A
+made A,C,D, parented D,A,C -> D,A,C
+made A,C,D, A out and back -> C,D,A
+made A,C,D far, a frame, moved in D,A,C -> A,C,D
+made A,C,D, A to another Folder -> A,C,D
+made A,C,D, A into a WorldModel and back -> C,D,A
+Folder{D{A},Sub{E},C} at once -> A,D,E,C
+P at A's place with child Q at C's, at once -> P,Q
+P at C's place with child Q at A's, at once -> P,Q
+25 made 8,15,22,4,11,18,25,7,14,21,3,10,17,24,6,13,20,2,9,16,23,5,12,19,1, the third out and back -> R8,R15,R4,R11,R18,R25,R7,R14,R21,R3,R10,R17,R24,R6,R13,R20,R2,R9,R16,R23,R5,R12,R19,R1,R22

@@ -1579,6 +1579,28 @@ pub const UNJOIN_PART: f64 = 0.35e-6;
 pub const UNJOIN_BELOW: f64 = 0.017e-6;
 pub const UNJOIN_NAMED: f64 = 0.07e-6;
 pub const UNJOIN_REMOVED: f64 = 1.7e-6;
+/// Workspace:JoinToOutsiders (world/mod.rs, world/joints.rs join_to_outsiders), beyond its list's entries ([`UNJOIN_ENTRY`],
+/// [`UNJOIN_HOLE`], read as UnjoinFromOutsiders reads them; a call whose mode is None reads the list and stops there). Measured
+/// in a playing client (roblox-sim, Studio 0.747, headless; os.clock around single calls, each in a frame of its own, the median
+/// of 7, 5 at 10,000; N listed 2 x 1 x 2 parts 6 studs apart, at N = 10, 100, 1,000 and 10,000): every call [`JOIN_CAST`] (an
+/// empty list 6 to 15 us, where a method call's own price is 2), a call that reaches a part [`JOIN_CALL`] (one lone part 18 to 39
+/// us), each part it reaches [`JOIN_PART`] (lone parts 1.5 us each at 1,000, 2.5 at 10,000), each other part whose box meets the
+/// part's [`JOIN_CANDIDATE`] (one under each part, turned 45 degrees: 0.85 and 1.34 us more; one already welded to it: 1.55 and
+/// 2.1 more), the first full look at each part whose axes line up with a listed part's [`JOIN_OUTSIDER`] (each listed part on a
+/// part of its own, welded: 3.4 and 3.5 us more a part than all of them on one part), and a call that makes any weld
+/// [`JOIN_WELDING`] once (one weld 60 to 75 us more than one welded already). Each weld beyond that costs a client what its own
+/// Parent write and link change cost ree (3.1 to 3.4 us a weld on one part, where ree charges 3.4), so the weld pays nothing of
+/// its own. ree's clock then reads x0.82 to x1.34 of the client's call at 1,000 and 10,000 listed parts for lone parts, parts
+/// on parts turned 45 degrees or welded already, and parts welded to parts of their own or to one; x0.69 to x0.95 when the listed
+/// parts are unanchored on anchored parts of their own; x0.66 to x0.89 on one anchored part (the client's cost of each weld there
+/// grows with the unanchored parts touching that part: one weld onto a part 10,000 unanchored parts rest on cost it 12.9 ms, ree
+/// 0.13: not modelled, ree keeps no contacts).
+pub const JOIN_CAST: f64 = 5.5e-6;
+pub const JOIN_CALL: f64 = 12e-6;
+pub const JOIN_PART: f64 = 2.0e-6;
+pub const JOIN_CANDIDATE: f64 = 1.1e-6;
+pub const JOIN_OUTSIDER: f64 = 3.5e-6;
+pub const JOIN_WELDING: f64 = 50e-6;
 /// Model:PivotTo, a part it moves (client: 0.48 us in the workspace; 0.15 a call), a Part:PivotTo 1.14 us
 /// (the parity bench, a rendered client of a game's match place: Model:PivotTo of 10 parts 10.65 us, Part:PivotTo 1.14)
 pub const PIVOT_PART: f64 = 1.05e-6;

@@ -22,6 +22,7 @@ pub mod broadphase;
 pub mod camera;
 mod camera_fov;
 pub(crate) mod camera_moves;
+mod faces;
 pub mod frame;
 pub mod gravity;
 pub mod grid;
@@ -243,6 +244,31 @@ pub(super) fn objects_arg(args: &Args, index: usize) -> Result<LuaTable, Flow> {
             raise(format!("Expected table argument, got {kind}"))
         }
     }
+}
+
+/// The list argument (1) of UnjoinFromOutsiders and JoinToOutsiders: the table [`objects_arg`] takes, its array part read raw, nil
+/// holes skipped and any other entry that is no Instance "Unable to cast value to Object" (measured, 0.748 and 0.747), in order,
+/// repeats kept (joints.rs walks them once). Each entry read and each hole cost what a playing client spends on them (cost.rs
+/// UNJOIN_ENTRY, UNJOIN_HOLE; JoinToOutsiders' read with a mode of None: 0.04 to 0.09 us an entry at 1,000 and 10,000), and each
+/// entry before one that raises LIST_CAST_FAILED, as an ignore list's do; the holes are counted, not kept.
+fn joints_list(engine: &Engine, args: &Args) -> Result<Vec<InstanceId>, Flow> {
+    let objects = objects_arg(args, 1)?;
+    let mut listed = Vec::new();
+    let length = objects.raw_len();
+    for index in 1..=length {
+        let entry: LuaValue = objects.raw_get(index).map_err(Flow::from)?;
+        if entry.is_nil() {
+            continue;
+        }
+        let Some(entry) = super::lua::instance_id(&entry) else {
+            query::charge_query(engine, (index - 1) as f64 * crate::cost::LIST_CAST_FAILED);
+            return raise("Unable to cast value to Object");
+        };
+        listed.push(entry);
+    }
+    let holes = length - listed.len();
+    query::charge_query(engine, listed.len() as f64 * crate::cost::UNJOIN_ENTRY + holes as f64 * crate::cost::UNJOIN_HOLE);
+    Ok(listed)
 }
 
 /// An ignore list (GetPartsObscuringTarget's, GetLargestCutoffDistance's): the table [`objects_arg`] takes, its Instances sorted
@@ -685,28 +711,39 @@ pub fn install(engine: &Rc<Engine>) {
         }));
     }
     // Workspace:UnjoinFromOutsiders(objects): the list is checked as an ignore list is (objects_arg; an entry that is no Instance
-    // "Unable to cast value to Object", nil holes skipped, measured on 0.748), every entry before any joint goes (joints.rs). Each
-    // entry read and each hole cost what a playing client spends on them (cost.rs UNJOIN_ENTRY, UNJOIN_HOLE), and each entry
-    // before one that raises LIST_CAST_FAILED, as an ignore list's do; the holes are counted, not kept
+    // "Unable to cast value to Object", nil holes skipped, measured on 0.748), every entry before any joint goes (joints.rs; the
+    // list's price: joints_list)
     if let (Some(workspace), Some(member)) = (reflection.class_id("Workspace"), name(engine, "UnjoinFromOutsiders")) {
         behaviors.add_method(workspace, member, method(|_, engine, id, args| {
-            let objects = objects_arg(args, 1)?;
-            let mut listed = Vec::new();
-            let length = objects.raw_len();
-            for index in 1..=length {
-                let entry: LuaValue = objects.raw_get(index).map_err(Flow::from)?;
-                if entry.is_nil() {
-                    continue;
-                }
-                let Some(entry) = super::lua::instance_id(&entry) else {
-                    query::charge_query(engine, (index - 1) as f64 * crate::cost::LIST_CAST_FAILED);
-                    return raise("Unable to cast value to Object");
-                };
-                listed.push(entry);
-            }
-            let holes = length - listed.len();
-            query::charge_query(engine, listed.len() as f64 * crate::cost::UNJOIN_ENTRY + holes as f64 * crate::cost::UNJOIN_HOLE);
+            let listed = joints_list(engine, args)?;
             joints::unjoin_from_outsiders(engine, id, &listed)?;
+            Ok(none())
+        }));
+    }
+    // Workspace:JoinToOutsiders(objects, jointType) (a playing client and its server alike, roblox-sim 0.747: tools/parity/probes/
+    // join_to_outsiders.luau): the mode is cast first, as an enum argument is (JointCreationMode: an item, an item's exact name, a
+    // number cut toward zero to an item's value, so 0.5 and -0.5 are All, 1.5 Surface, 2.9 None, and 3, -1, NaN and infinities are
+    // refused; nil or none "Argument 2 missing or nil", anything else "Unable to cast <what it is> to JointCreationMode", named as
+    // a cast names it: camera::cast_name), then the list, as UnjoinFromOutsiders reads it, a mode of None too, which then makes
+    // nothing. All and Surface do the same (joints.rs join_to_outsiders: the surfaces make no difference)
+    if let (Some(workspace), Some(member), Some(modes)) = (reflection.class_id("Workspace"), name(engine, "JoinToOutsiders"), reflection.enum_id("JointCreationMode")) {
+        behaviors.add_method(workspace, member, method(move |lua, engine, id, args| {
+            let value = args.get(2);
+            if value.is_nil() {
+                return raise("Argument 2 missing or nil");
+            }
+            let cut = match value {
+                LuaValue::Number(number) => LuaValue::Number(number.trunc()),
+                other => other.clone(),
+            };
+            let Some(mode) = super::lua::convert::coerce_enum(lua, engine, modes, &cut) else {
+                return raise(format!("Unable to cast {} to JointCreationMode", camera::cast_name(engine, value)));
+            };
+            let listed = joints_list(engine, args)?;
+            query::charge_query(engine, crate::cost::JOIN_CAST);
+            if &*engine.reflection.enum_item_info(mode).name != "None" {
+                joints::join_to_outsiders(engine, id, &listed)?;
+            }
             Ok(none())
         }));
     }
