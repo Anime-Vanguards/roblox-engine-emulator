@@ -1,7 +1,7 @@
 --!nocheck
 -- Rust engine: the service stubs of runtime/engine/services.luau that return script data (Players
 -- lookups, 3D model helpers, humanoid stand-ins, EditableImage, HttpService
--- JSON, ContentProvider, localization / marketplace / policy / social stubs, remotes). Kept in
+-- JSON, ContentProvider, marketplace / policy / social stubs, remotes). Kept in
 -- Luau: they build script tables, may yield, and raise their errors at script level exactly as
 -- the Luau runtime's do. Hot behaviours (DataModel, RunService, TweenService, ...) are Rust.
 --
@@ -1211,32 +1211,7 @@ Method("GuiService", "GetInsetArea", function(_, Insets)
 	return Rect.new(0, Top, Options.ViewportWidth, Options.ViewportHeight)
 end)
 
--- Localization / Marketplace / Policy / social stubs
-local TranslatorMethods = {
-	Translate = function(_, _Context, Text)
-		return Text
-	end,
-	FormatByKey = function(_, Key)
-		return Key
-	end,
-	RobloxLocaleId = "en-us",
-	LocaleId = "en-us",
-}
-Getter("LocalizationService", "RobloxLocaleId", function()
-	return "en-us"
-end)
-Getter("LocalizationService", "SystemLocaleId", function()
-	return "en-us"
-end)
-for _, Name in { "GetTranslatorForPlayerAsync", "GetTranslatorForPlayer", "GetTranslatorForLocaleAsync" } do
-	Method("LocalizationService", Name, function()
-		return TranslatorMethods
-	end)
-end
-Method("LocalizationService", "GetCountryRegionForPlayerAsync", function()
-	return "US"
-end)
-
+-- Marketplace / Policy / social stubs (LocalizationService, LocalizationTable and Translator are services/localization.rs)
 local function GetProductInfo(_, AssetId, InfoType)
 	Missing("MarketplaceService", "GetProductInfo (mocked)")
 	return {

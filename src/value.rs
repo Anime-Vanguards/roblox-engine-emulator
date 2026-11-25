@@ -27,6 +27,12 @@ impl Str {
         &self.0
     }
 
+    /// Whether both hold the same bytes, not a copy of them (a cache's check that a value is still the one it read)
+    #[inline]
+    pub fn ptr_eq(&self, other: &Str) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+
     pub fn to_str_lossy(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.0)
     }

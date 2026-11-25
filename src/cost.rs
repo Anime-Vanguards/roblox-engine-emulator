@@ -984,6 +984,30 @@ pub const REFLECTED_CLASS_TESTED: f64 = 0.006e-6;
 /// A LogService logging call (Output, Info, Warn, Error, Log), whole: the same client, `LogService:Info("L {a}", { a = 1 })` 1.10 us
 /// with the Luau around it (20 calls a sample, the median of 15 samples), the table constructor about 0.1 of that.
 pub const LOG_CALL: f64 = 1.0e-6;
+/// LocalizationTable and Translator calls (services/localization.rs) beyond their prices in [`method`], measured in a headless 0.747
+/// playing client (the median of 15 samples less an empty loop; two sessions, one on a loaded machine): SetEntries of 1, 10 and 100
+/// entries with no values 3.9, 20.7 and 201 us, 295 and 364 with two and four values each (and 3,009 for 1,000 entries with two);
+/// GetEntries 1.8, 16.7 and 146 us, 175 and 227 with two and four values (1,497 for 1,000 with two); GetContents 0.19 us for one
+/// entry and 2.06 for 100 (about 8,500 bytes of JSON).
+pub const LOCALIZATION_ENTRY_SET: f64 = 1.9e-6;
+pub const LOCALIZATION_VALUE_SET: f64 = 0.43e-6;
+pub const LOCALIZATION_ENTRY_LISTED: f64 = 1.4e-6;
+pub const LOCALIZATION_VALUE_LISTED: f64 = 0.18e-6;
+pub const LOCALIZATION_CONTENTS_BYTE: f64 = 0.22e-9;
+/// FormatByKey (the same client): a key with no parameters 0.36-0.64 us, one of 200 characters 0.77-1.03 (its text's bytes,
+/// [`LOCALIZATION_TEXT_BYTE`]); with arguments (a table read once, [`LOCALIZATION_ARGUMENTS`]) one, two and four positional
+/// strings 1.16, 1.28 and 1.43 us, one, two and four named 1.44, 1.61 and 1.99, a number written 0.6-0.8 more than a string;
+/// a missing key raised in a pcall 7.1-7.7 us, of which [`RAISED`] is the raise (the rest the lookup's failure)
+pub const LOCALIZATION_TEXT_BYTE: f64 = 2.0e-9;
+pub const LOCALIZATION_ARGUMENTS: f64 = 0.55e-6;
+pub const LOCALIZATION_POSITIONAL: f64 = 0.09e-6;
+pub const LOCALIZATION_NAMED: f64 = 0.25e-6;
+pub const LOCALIZATION_NUMBER: f64 = 0.7e-6;
+pub const LOCALIZATION_NOT_FOUND: f64 = 3.3e-6;
+/// A Translator's LocaleId read 0.17-0.24 us in the same client and LocalizationService.RobloxLocaleId 0.08-0.10, beyond what a
+/// string property's read costs here (0.046 and 0.040)
+pub const LOCALIZATION_LOCALE_READ: f64 = 0.14e-6;
+pub const LOCALIZATION_SERVICE_LOCALE_READ: f64 = 0.05e-6;
 /// A PhysicsService group change that works out every part's CollisionGroupId in the Workspace again (Register, Create, Unregister,
 /// Remove, Rename: services/physics.rs), beyond the call: a part it looks at, and one whose id it changes. A server (roblox-sim,
 /// Studio 0.747, a Script of a headless play session; os.clock around single calls, the median of 15, two passes of each scene):
@@ -2194,6 +2218,20 @@ pub fn method(name: &str) -> f64 {
         "SetFaceColors" | "SetFaceNormals" | "SetFaceUVs" => 0.15,
         "SetPosition" | "SetNormal" | "SetUV" => 0.15,
         "RemoveFace" => 0.29,
+        // LocalizationTable, Translator and LocalizationService (a 0.747 playing client; what they read and write besides:
+        // [`LOCALIZATION_ENTRY_SET`] and after): GetTranslator 0.83-1.15 us (a new instance; the service's translators priced
+        // alike, unmeasured: GetTranslatorForLocaleAsync waits on the web), GetString 0.12-0.18, SetEntry of a key it has
+        // 0.24-0.41 whatever the table's size (the other entry methods priced alike), GetContents 0.17 beyond its bytes, a
+        // FormatByKey with no parameters 0.36-0.64, Translate 9.1-9.7 on a loaded machine whatever it found
+        "SetEntries" | "SetContents" => 1.0,
+        "GetEntries" | "GetTableEntries" => 0.3,
+        "GetTranslator" | "GetTranslatorForPlayer" | "GetTranslatorForPlayerAsync" | "GetTranslatorForLocaleAsync" => 0.85,
+        "GetString" => 0.13,
+        "SetEntry" | "SetEntryValue" | "SetEntryContext" | "SetEntryKey" | "SetEntrySource" | "SetEntryExample" | "RemoveEntry" | "RemoveEntryValue"
+        | "RemoveTargetLocale" => 0.3,
+        "GetContents" => 0.17,
+        "FormatByKey" => 0.45,
+        "Translate" => 8.0,
         _ => return CALL,
     }
 }

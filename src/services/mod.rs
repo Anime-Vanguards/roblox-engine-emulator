@@ -6,16 +6,17 @@
 //! BindToRenderStep), CollectionService, GuiService, UserInputService (the static answers; runtime/
 //! input's live state is phase 5), StarterGui, ContextActionService, Debris, Sound, Bindable* /
 //! Remote*, HttpService (GUIDs, URL / JSON encoding, disabled requests); TweenService (tween.rs),
-//! QueryDescendants (query.rs), PhysicsService's collision groups (physics.rs); derived property views are engine::derived. GUI behaviours that
+//! QueryDescendants (query.rs), PhysicsService's collision groups (physics.rs), LocalizationTable and Translator (localization.rs); derived property views are engine::derived. GUI behaviours that
 //! need layout or text measurement (Absolute*, TextBounds, TextService:GetTextSize, ContentText)
 //! and live input are a host layer's (crate::Layer; roblox-ui-renderer installs them). The script-data stubs (Player methods, 3D model helpers,
 //! humanoid stand-ins (AnimationTracks: crate::animation), EditableImage, ContentProvider, marketplace / policy /
-//! social / localization mocks) are Luau (lua/services.luau). The UI Labs package is the Luau
+//! social mocks) are Luau (lua/services.luau). The UI Labs package is the Luau
 //! runtime's own file (runtime/engine/packages/ui-labs.luau, mounted by project.rs).
 
 pub mod encoding;
 pub mod input_actions;
 pub mod json;
+pub mod localization;
 pub mod physics;
 pub mod query;
 pub mod reflection_service;
@@ -856,6 +857,8 @@ pub fn install(engine: &Rc<Engine>) {
     physics::install(engine, &mut behaviors);
     // Teams: a player's team follows its TeamColor and Neutral; Team:GetPlayers, Teams:GetTeams
     teams::install(engine, &mut behaviors);
+    // LocalizationTable, Translator and LocalizationService's translators
+    localization::install(engine, &mut behaviors);
     // settings() and UserSettings(): GetService / FindService and the settings services' members
     settings::install(engine, &mut behaviors);
     crate::animation::install(engine, &mut behaviors);

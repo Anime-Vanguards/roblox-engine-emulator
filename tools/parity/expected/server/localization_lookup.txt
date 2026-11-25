@@ -1,0 +1,408 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+GetTranslator 'es-es' ok Translator<Instance> "es-es" nil:nil "Translator"
+GetTranslator 'en-us' ok Translator<Instance> "en-us" nil:nil "Translator"
+GetTranslator 'fr-fr' ok Translator<Instance> "fr-fr" nil:nil "Translator"
+GetTranslator 'de-de' ok Translator<Instance> "de-de" nil:nil "Translator"
+GetTranslator 'it-it' ok Translator<Instance> "it-it" nil:nil "Translator"
+GetTranslator 'xx-yy' ok Translator<Instance> "xx-yy" nil:nil "Translator"
+GetTranslator '' ok Translator<Instance> "" nil:nil "Translator"
+GetTranslator 'ES-ES' ok Translator<Instance> "es-es" nil:nil "Translator"
+GetTranslator 'es' ok Translator<Instance> "es" nil:nil "Translator"
+GetTranslator 'es_es' ok Translator<Instance> "es-es" nil:nil "Translator"
+GetTranslator 'zh-cjv' ok Translator<Instance> "zh-cjv" nil:nil "Translator"
+GetTranslator 'en' ok Translator<Instance> "en" nil:nil "Translator"
+GetTranslator 'en-gb' ok Translator<Instance> "en-gb" nil:nil "Translator"
+GetTranslator 'pt-br' ok Translator<Instance> "pt-br" nil:nil "Translator"
+GetTranslator nil ERR "Argument 1 missing or nil"
+GetTranslator num ok "5"
+same instance ok boolean:false
+tr props ok "Instance" boolean:true "Instance" 0
+tr LocaleId write ERR "Unable to assign property LocaleId. Property is read only"
+tr Parent write ERR "Cannot change Parent of type Translator"
+tr Parent nil ERR "Cannot change Parent of type Translator"
+tr Clone ok nil:nil
+tr Destroy ERR "Key Greeting not found for locale it-it"
+tr Instance.new ERR "Unable to create an Instance of type \"Translator\""
+tr IsA ok boolean:true boolean:true
+es-es FormatByKey "Greeting" nil:nil ok "Hola"
+es-es FormatByKey "Named" {count=5,name="Ann"} ok "Hola Ann, tienes 5.00 monedas"
+es-es FormatByKey "Named" {name="Ann"} ERR "Parameter name \"count\" not found in table"
+es-es FormatByKey "Named" nil:nil ERR "Found parameter token, but had no parameters"
+es-es FormatByKey "Named" {} ERR "Parameter index \"0\" was out of range of empty array"
+es-es FormatByKey "Pos" {[1]="x",[2]="y"} ok "y y x"
+es-es FormatByKey "Pos" {[1]="x"} ERR "Parameter index \"2\" was out of range [1-1]"
+es-es FormatByKey "Pos" nil:nil ERR "Found parameter token, but had no parameters"
+es-es FormatByKey "Missing" nil:nil ERR "Key Missing not found for locale es-es"
+es-es FormatByKey "" nil:nil ERR "Key  not found for locale es-es"
+es-es FormatByKey "NoKey" nil:nil ERR "Key NoKey not found for locale es-es"
+es-es FormatByKey "Alpha" nil:nil ERR "Key Alpha not found for locale es-es"
+es-es FormatByKey "Empty" nil:nil ERR "Key Empty not found for locale es-es"
+es-es FormatByKey "NoSrc" nil:nil ok "SoloEs"
+es-es FormatByKey "Pos" {[1]=1,[2]=2,[3]=3} ok "2.00 y 1.00"
+es-es FormatByKey "Pos" "str" ERR "Found parameter token but parameters was not a table"
+es-es FormatByKey "Pos" 5 ERR "Found parameter token but parameters was not a table"
+es-es FormatByKey "Pos" boolean:true ERR "Found parameter token but parameters was not a table"
+es-es FormatByKey "Pos" Workspace<Workspace> ERR "Found parameter token but parameters was not a table"
+es-es FormatByKey "Mixed" {[1]="a",[2]="b",name="n"} ERR "Key Mixed not found for locale es-es"
+es-es FormatByKey "Mixed" {[1]="a",[2]="b",[4]="d"} ERR "Key Mixed not found for locale es-es"
+es-es FormatByKey "Pos" {} ERR "Parameter index \"2\" was out of range of empty array"
+es-es FormatByKey "Pos" {[1]="f1",[2]="f2"} ok "f2 y f1"
+es-es FormatByKey "Pos" {[1]="{2}",[2]="{1}"} ok "{1} y {2}"
+es-es FormatByKey "Named" {count="{count}",name="%s %d"} ok "Hola %s %d, tienes {count} monedas"
+es-es FormatByKey "Named" {count=1} ERR "Parameter name \"name\" not found in table"
+es-es FormatByKey "Greeting" {[1]="unused"} ok "Hola"
+es-es FormatByKey "Greeting" 5 ok "Hola"
+es-es FormatByKey "Named" {count=1,extra=2,name="a"} ok "Hola a, tienes 1.00 monedas"
+en-us FormatByKey "Greeting" nil:nil ok "Hello"
+en-us FormatByKey "Named" {count=5,name="Ann"} ok "Hi Ann, you have 5.00 coins"
+en-us FormatByKey "Named" {name="Ann"} ERR "Parameter name \"count\" not found in table"
+en-us FormatByKey "Named" nil:nil ERR "Found parameter token, but had no parameters"
+en-us FormatByKey "Named" {} ERR "Parameter index \"0\" was out of range of empty array"
+en-us FormatByKey "Pos" {[1]="x",[2]="y"} ok "x and y"
+en-us FormatByKey "Pos" {[1]="x"} ERR "Parameter index \"2\" was out of range [1-1]"
+en-us FormatByKey "Pos" nil:nil ERR "Found parameter token, but had no parameters"
+en-us FormatByKey "Missing" nil:nil ERR "Key Missing not found for locale en-us"
+en-us FormatByKey "" nil:nil ERR "Key  not found for locale en-us"
+en-us FormatByKey "NoKey" nil:nil ERR "Key NoKey not found for locale en-us"
+en-us FormatByKey "Alpha" nil:nil ok "A-us"
+en-us FormatByKey "Empty" nil:nil ok "E"
+en-us FormatByKey "NoSrc" nil:nil ERR "Key NoSrc not found for locale en-us"
+en-us FormatByKey "Pos" {[1]=1,[2]=2,[3]=3} ok "1.00 and 2.00"
+en-us FormatByKey "Pos" "str" ERR "Found parameter token but parameters was not a table"
+en-us FormatByKey "Pos" 5 ERR "Found parameter token but parameters was not a table"
+en-us FormatByKey "Pos" boolean:true ERR "Found parameter token but parameters was not a table"
+en-us FormatByKey "Pos" Workspace<Workspace> ERR "Found parameter token but parameters was not a table"
+en-us FormatByKey "Mixed" {[1]="a",[2]="b",name="n"} ok "a b"
+en-us FormatByKey "Mixed" {[1]="a",[2]="b",[4]="d"} ok "a b"
+en-us FormatByKey "Pos" {} ERR "Parameter index \"1\" was out of range of empty array"
+en-us FormatByKey "Pos" {[1]="f1",[2]="f2"} ok "f1 and f2"
+en-us FormatByKey "Pos" {[1]="{2}",[2]="{1}"} ok "{2} and {1}"
+en-us FormatByKey "Named" {count="{count}",name="%s %d"} ok "Hi %s %d, you have {count} coins"
+en-us FormatByKey "Named" {count=1} ERR "Parameter name \"name\" not found in table"
+en-us FormatByKey "Greeting" {[1]="unused"} ok "Hello"
+en-us FormatByKey "Greeting" 5 ok "Hello"
+en-us FormatByKey "Named" {count=1,extra=2,name="a"} ok "Hi a, you have 1.00 coins"
+fr-fr FormatByKey "Greeting" nil:nil ok "Bonjour"
+fr-fr FormatByKey "Named" {count=5,name="Ann"} ERR "Key Named not found for locale fr-fr"
+fr-fr FormatByKey "Named" {name="Ann"} ERR "Key Named not found for locale fr-fr"
+fr-fr FormatByKey "Named" nil:nil ERR "Key Named not found for locale fr-fr"
+fr-fr FormatByKey "Named" {} ERR "Key Named not found for locale fr-fr"
+fr-fr FormatByKey "Pos" {[1]="x",[2]="y"} ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Pos" {[1]="x"} ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Pos" nil:nil ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Missing" nil:nil ERR "Key Missing not found for locale fr-fr"
+fr-fr FormatByKey "" nil:nil ERR "Key  not found for locale fr-fr"
+fr-fr FormatByKey "NoKey" nil:nil ERR "Key NoKey not found for locale fr-fr"
+fr-fr FormatByKey "Alpha" nil:nil ERR "Key Alpha not found for locale fr-fr"
+fr-fr FormatByKey "Empty" nil:nil ERR "Key Empty not found for locale fr-fr"
+fr-fr FormatByKey "NoSrc" nil:nil ERR "Key NoSrc not found for locale fr-fr"
+fr-fr FormatByKey "Pos" {[1]=1,[2]=2,[3]=3} ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Pos" "str" ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Pos" 5 ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Pos" boolean:true ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Pos" Workspace<Workspace> ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Mixed" {[1]="a",[2]="b",name="n"} ERR "Key Mixed not found for locale fr-fr"
+fr-fr FormatByKey "Mixed" {[1]="a",[2]="b",[4]="d"} ERR "Key Mixed not found for locale fr-fr"
+fr-fr FormatByKey "Pos" {} ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Pos" {[1]="f1",[2]="f2"} ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Pos" {[1]="{2}",[2]="{1}"} ERR "Key Pos not found for locale fr-fr"
+fr-fr FormatByKey "Named" {count="{count}",name="%s %d"} ERR "Key Named not found for locale fr-fr"
+fr-fr FormatByKey "Named" {count=1} ERR "Key Named not found for locale fr-fr"
+fr-fr FormatByKey "Greeting" {[1]="unused"} ok "Bonjour"
+fr-fr FormatByKey "Greeting" 5 ok "Bonjour"
+fr-fr FormatByKey "Named" {count=1,extra=2,name="a"} ERR "Key Named not found for locale fr-fr"
+de-de FormatByKey "Greeting" nil:nil ERR "Key Greeting not found for locale de-de"
+de-de FormatByKey "Named" {count=5,name="Ann"} ERR "Key Named not found for locale de-de"
+de-de FormatByKey "Named" {name="Ann"} ERR "Key Named not found for locale de-de"
+de-de FormatByKey "Named" nil:nil ERR "Key Named not found for locale de-de"
+de-de FormatByKey "Named" {} ERR "Key Named not found for locale de-de"
+de-de FormatByKey "Pos" {[1]="x",[2]="y"} ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Pos" {[1]="x"} ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Pos" nil:nil ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Missing" nil:nil ERR "Key Missing not found for locale de-de"
+de-de FormatByKey "" nil:nil ERR "Key  not found for locale de-de"
+de-de FormatByKey "NoKey" nil:nil ERR "Key NoKey not found for locale de-de"
+de-de FormatByKey "Alpha" nil:nil ok "A-de"
+de-de FormatByKey "Empty" nil:nil ERR "Key Empty not found for locale de-de"
+de-de FormatByKey "NoSrc" nil:nil ERR "Key NoSrc not found for locale de-de"
+de-de FormatByKey "Pos" {[1]=1,[2]=2,[3]=3} ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Pos" "str" ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Pos" 5 ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Pos" boolean:true ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Pos" Workspace<Workspace> ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Mixed" {[1]="a",[2]="b",name="n"} ERR "Key Mixed not found for locale de-de"
+de-de FormatByKey "Mixed" {[1]="a",[2]="b",[4]="d"} ERR "Key Mixed not found for locale de-de"
+de-de FormatByKey "Pos" {} ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Pos" {[1]="f1",[2]="f2"} ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Pos" {[1]="{2}",[2]="{1}"} ERR "Key Pos not found for locale de-de"
+de-de FormatByKey "Named" {count="{count}",name="%s %d"} ERR "Key Named not found for locale de-de"
+de-de FormatByKey "Named" {count=1} ERR "Key Named not found for locale de-de"
+de-de FormatByKey "Greeting" {[1]="unused"} ERR "Key Greeting not found for locale de-de"
+de-de FormatByKey "Greeting" 5 ERR "Key Greeting not found for locale de-de"
+de-de FormatByKey "Named" {count=1,extra=2,name="a"} ERR "Key Named not found for locale de-de"
+it-it FormatByKey "Greeting" nil:nil ERR "Key Greeting not found for locale it-it"
+it-it FormatByKey "Named" {count=5,name="Ann"} ERR "Key Named not found for locale it-it"
+it-it FormatByKey "Named" {name="Ann"} ERR "Key Named not found for locale it-it"
+it-it FormatByKey "Named" nil:nil ERR "Key Named not found for locale it-it"
+it-it FormatByKey "Named" {} ERR "Key Named not found for locale it-it"
+it-it FormatByKey "Pos" {[1]="x",[2]="y"} ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Pos" {[1]="x"} ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Pos" nil:nil ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Missing" nil:nil ERR "Key Missing not found for locale it-it"
+it-it FormatByKey "" nil:nil ERR "Key  not found for locale it-it"
+it-it FormatByKey "NoKey" nil:nil ERR "Key NoKey not found for locale it-it"
+it-it FormatByKey "Alpha" nil:nil ERR "Key Alpha not found for locale it-it"
+it-it FormatByKey "Empty" nil:nil ERR "Key Empty not found for locale it-it"
+it-it FormatByKey "NoSrc" nil:nil ERR "Key NoSrc not found for locale it-it"
+it-it FormatByKey "Pos" {[1]=1,[2]=2,[3]=3} ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Pos" "str" ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Pos" 5 ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Pos" boolean:true ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Pos" Workspace<Workspace> ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Mixed" {[1]="a",[2]="b",name="n"} ERR "Key Mixed not found for locale it-it"
+it-it FormatByKey "Mixed" {[1]="a",[2]="b",[4]="d"} ERR "Key Mixed not found for locale it-it"
+it-it FormatByKey "Pos" {} ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Pos" {[1]="f1",[2]="f2"} ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Pos" {[1]="{2}",[2]="{1}"} ERR "Key Pos not found for locale it-it"
+it-it FormatByKey "Named" {count="{count}",name="%s %d"} ERR "Key Named not found for locale it-it"
+it-it FormatByKey "Named" {count=1} ERR "Key Named not found for locale it-it"
+it-it FormatByKey "Greeting" {[1]="unused"} ERR "Key Greeting not found for locale it-it"
+it-it FormatByKey "Greeting" 5 ERR "Key Greeting not found for locale it-it"
+it-it FormatByKey "Named" {count=1,extra=2,name="a"} ERR "Key Named not found for locale it-it"
+FormatByKey nil key ERR "Argument 1 missing or nil"
+FormatByKey num key ERR "Key 5 not found for locale es-es"
+FormatByKey table key ERR "Key {} not found for locale es-es"
+FormatByKey dot call ok "Hola"
+FormatByKey wrong self ERR "Expected ':' not '.' calling member function FormatByKey"
+FormatByKey no self ERR "Expected ':' not '.' calling member function FormatByKey"
+es-es Translate DataModel "Hello" ok "Hola"
+es-es Translate TextLabel "Hello" ok "Hola"
+es-es Translate DataModel "NoKey" ok "SinClave"
+es-es Translate DataModel "A" ok "A"
+es-es Translate DataModel "Nope" ok "Nope"
+es-es Translate DataModel "" ok ""
+es-es Translate DataModel "hello" ok "hello"
+es-es Translate DataModel " Hello " ok " Hello "
+es-es Translate DataModel "E" ok "E"
+en-us Translate DataModel "Hello" ok "Hello"
+en-us Translate TextLabel "Hello" ok "Hello"
+en-us Translate DataModel "NoKey" ok "NoKey"
+en-us Translate DataModel "A" ok "A-us"
+en-us Translate DataModel "Nope" ok "Nope"
+en-us Translate DataModel "" ok ""
+en-us Translate DataModel "hello" ok "hello"
+en-us Translate DataModel " Hello " ok " Hello "
+en-us Translate DataModel "E" ok "E"
+de-de Translate DataModel "Hello" ok "Hello"
+de-de Translate TextLabel "Hello" ok "Hello"
+de-de Translate DataModel "NoKey" ok "NoKey"
+de-de Translate DataModel "A" ok "A-de"
+de-de Translate DataModel "Nope" ok "Nope"
+de-de Translate DataModel "" ok ""
+de-de Translate DataModel "hello" ok "hello"
+de-de Translate DataModel " Hello " ok " Hello "
+de-de Translate DataModel "E" ok "E"
+Translate nil ctx ERR "Context must be an Instance."
+Translate nil text ERR "Argument 2 missing or nil"
+Translate num text ok "5"
+Translate string ctx ERR "Unable to cast value to Object"
+Translate table ctx ERR "Unable to cast value to Object"
+live SetEntry ok "Buenas"
+live SetEntries ok "Nuevo" {[1]=boolean:false,[2]="Key Greeting not found for locale es-es"}
+after SourceLocaleId ERR "Key New not found for locale fr-fr"
+deep sees ok {[1]=boolean:true,[2]="DV"} {[1]=boolean:false,[2]="Key C not found for locale es-es"} {[1]=boolean:false,[2]="Key R not found for locale es-es"}
+root R ok "RV"
+child R ok "RV"
+root C ERR "Key C not found for locale es-es"
+child C ok "CV"
+root Shared ok "Root"
+child Shared ok "Child"
+root D ERR "Key D not found for locale es-es"
+child D ERR "Key D not found for locale es-es"
+root Translate Free ok "RootFree" "ChildFree"
+Root prop ok LocalizationTable<Root>
+child after Root ok {[1]=boolean:true,[2]="RV"}
+Root prop other ok Workspace<Workspace>
+src en-us OnlySource ok "Src text"
+src en-us WithUs ok "Us text"
+src en-us NoSource ERR "Key NoSource not found for locale en-us"
+src en-us Translate ok "Src text" "Us text"
+src es-es OnlySource ERR "Key OnlySource not found for locale es-es"
+src es-es WithUs ERR "Key WithUs not found for locale es-es"
+src es-es NoSource ERR "Key NoSource not found for locale es-es"
+src es-es Translate ok "Src text" "Src2"
+src fr-fr OnlySource ERR "Key OnlySource not found for locale fr-fr"
+src fr-fr WithUs ERR "Key WithUs not found for locale fr-fr"
+src fr-fr NoSource ok "Fr"
+src fr-fr Translate ok "Src text" "Src2"
+src en-gb OnlySource ok "Src text"
+src en-gb WithUs ok "Us text"
+src en-gb NoSource ERR "Key NoSource not found for locale en-gb"
+src en-gb Translate ok "Src text" "Us text"
+src EN-US OnlySource ok "Src text"
+src EN-US WithUs ok "Us text"
+src EN-US NoSource ERR "Key NoSource not found for locale en-us"
+src EN-US Translate ok "Src text" "Us text"
+src fr en-us ok {[1]=boolean:false,[2]="Key OnlySource not found for locale en-us"} {[1]=boolean:false,[2]="Key NoSource not found for locale en-us"} {[1]=boolean:true,[2]="Us text"}
+src fr fr-fr ok {[1]=boolean:true,[2]="Src text"} {[1]=boolean:true,[2]="Fr"} {[1]=boolean:true,[2]="Src2"}
+src fr es-es ok {[1]=boolean:false,[2]="Key OnlySource not found for locale es-es"} {[1]=boolean:false,[2]="Key NoSource not found for locale es-es"} {[1]=boolean:false,[2]="Key WithUs not found for locale es-es"}
+ctx game ok "aaa" "yo zzz" "ka plain"
+ctx Workspace ok "workspace" "yo zzz" "ka plain"
+ctx Workspace.Gui ok "aaa" "yo zzz" "ka plain"
+ctx Workspace.Gui.Label ok "gui label" "yo label" "ka plain"
+ctx Workspace.Gui.X.Label ok "x label" "yo label" "ka plain"
+ctx Workspace.Gui.Label ok "gui label" "yo label" "ka plain"
+ctx Workspace.Gui.X ok "aaa" "yo zzz" "ka plain"
+B then A ok "=B" "=BOnlyV" "!Key SrcOnly not found for locale es-es" "=Only source" "=UsVal" "!Key SrcOnly not found for locale fr-fr" "=SharedB"
+A then B ok "=A" "=BOnlyV"
+renamed ok "=A"
+nested ok "!Key Nested not found for locale es-es" "=InTableV"
+nested new translator ok "!Key Nested not found for locale es-es" "=InTableV"
+Translate game ok "=Hola label" "=Adios label" "=Con clave" "=NoEs" "=Hola {name}" "=Missing"
+Translate Workspace ok "=Hola label" "=Adios label" "=Con clave" "=NoEs" "=Hola {name}" "=Missing"
+Translate Workspace.Gui ok "=Hola label" "=Adios gui" "=Con clave" "=NoEs" "=Hola {name}" "=Missing"
+Translate Workspace.Gui.Label ok "=Hola label" "=Adios gui label" "=Con clave" "=NoEs" "=Hola {name}" "=Missing"
+Translate Workspace.Gui.Other ok "=Hola label" "=Adios label" "=Con clave" "=NoEs" "=Hola {name}" "=Missing"
+Translate LocalizationService ok "=Hola label" "=Adios label" "=Con clave" "=NoEs" "=Hola {name}" "=Missing"
+Translate detached ok "=Hola label" "=Adios label"
+Translate en ok "=Hello"
+FormatByKey keyless ok "!Key  not found for locale es-es" "!Key Hello not found for locale es-es"
+GetTableEntries ok "1:1 2:3 3:2 4:8 5:0"
+GetTableEntries arg ok 5 5
+GetTableEntries number ERR "Unable to cast value to Object"
+RobloxLocaleId write ERR "Unable to assign property RobloxLocaleId. Property is read only"
+SystemLocaleId write ERR "Unable to assign property SystemLocaleId. Property is read only"
+LocaleId write ERR "Unable to assign property LocaleId. Property is read only"
+translator members ok "Instance" "Translator" boolean:true nil:nil 0
+RobloxOnlyTranslate ERR "The current thread cannot call 'RobloxOnlyTranslate' (lacking capability RobloxScript)"
+GetIsLoadingInternalTranslations ERR "The current thread cannot call 'GetIsLoadingInternalTranslations' (lacking capability RobloxScript)"
+tables empty ok "1:0"
+tables ok "1:4 2:4 3:2 4:6 5:0"
+lookups ok "=fromA1" "=deepA2" "=A1v1" "=A2v1" "!Key F11 not found for locale es-es" "!Key M11 not found for locale es-es" "=Bv1"
+table A translator ok "=fromA" "!Key Deep not found for locale es-es" "!Key A21 not found for locale es-es" "!Key B1 not found for locale es-es" "!Key M11 not found for locale es-es"
+table A1 translator ok "=fromA1" "=Av1" "!Key A21 not found for locale es-es"
+Translate sources ok "fromA" "fromA1" "F1src1" "M1src1"
+elsewhere ok "1:4 2:4 3:2 4:6 5:0" "!Key R1 not found for locale es-es" "-"
+RootLocalizationTable ok "Rsrc1" "Rv1"
+ForLocaleAsync "ab" ok "ab" "!Key A1 not found for locale ab"
+ForLocaleAsync "a" ERR "Too few characters in locale id!"
+ForLocaleAsync "abc" ok "abc" "!Key A1 not found for locale abc"
+ForLocaleAsync "EN-US" ok "en-us" "=Asrc1"
+ForLocaleAsync "es_ES" ok "es-es" "=Av1"
+ForLocaleAsync " es-es" ok " es-es" "!Key A1 not found for locale  es-es"
+ForLocaleAsync "es-es " ok "es-es " "=Av1"
+ForLocaleAsync "es--es" ok "es--es" "=Av1"
+ForLocaleAsync "-" ERR "Too few characters in locale id!"
+ForLocaleAsync "--" ok "--" "!Key A1 not found for locale --"
+ForLocaleAsync "12" ok "12" "!Key A1 not found for locale 12"
+ForLocaleAsync table ok "{}"
+GetTranslator 'ab' ok "a" ""
+ForPlayer number ERR "Unable to cast value to Object"
+ForPlayer table ERR "Unable to cast value to Object"
+ForPlayerAsync workspace ERR "Publishing the game is required to use GetTranslatorForPlayerAsync API."
+ForPlayerAsync number ERR "Unable to cast value to Object"
+GetTableEntries number ERR "Unable to cast value to Object"
+GetTableEntries none ok 5
+GetCountryRegionForPlayerAsync workspace ERR "Instance was not a player"
+GetCountryRegionForPlayerAsync number ERR "Unable to cast value to Object"
+source locales ok "=UsValue" "!Key Bare not found for locale en-us" "=BareSource" "!Key Us1 not found for locale en-us" "=Ussrc1"
+translate source locale ok "BareSource" "BareSource" "UsValue"
+"es-es" es=v-es-es lang=v-es both=v-es two=v-es-mx pt!Key pt not found for locale es-es zh!Key zh not found for locale es-es src!Key src not found for locale es-es srcempty!Key srcempty not found for locale es-es emptyval!Key emptyval not found for locale es-es
+  translate v-es-es v-es v-es S-src
+"es-mx" es=v-es-es lang=v-es both=v-es-mx two=v-es-mx pt!Key pt not found for locale es-mx zh!Key zh not found for locale es-mx src!Key src not found for locale es-mx srcempty!Key srcempty not found for locale es-mx emptyval!Key emptyval not found for locale es-mx
+  translate v-es-es v-es v-es-mx S-src
+"es" es=v-es-es lang=v-es both=v-es two=v-es-ar pt!Key pt not found for locale es zh!Key zh not found for locale es src!Key src not found for locale es srcempty!Key srcempty not found for locale es emptyval!Key emptyval not found for locale es
+  translate v-es-es v-es v-es S-src
+"es-ar" es=v-es-es lang=v-es both=v-es two=v-es-ar pt!Key pt not found for locale es-ar zh!Key zh not found for locale es-ar src!Key src not found for locale es-ar srcempty!Key srcempty not found for locale es-ar emptyval!Key emptyval not found for locale es-ar
+  translate v-es-es v-es v-es S-src
+"es-es " es=v-es-es lang=v-es both=v-es two=v-es-ar pt!Key pt not found for locale es-es  zh!Key zh not found for locale es-es  src!Key src not found for locale es-es  srcempty!Key srcempty not found for locale es-es  emptyval!Key emptyval not found for locale es-es 
+  translate v-es-es v-es v-es S-src
+" es-es" es!Key es not found for locale  es-es lang!Key lang not found for locale  es-es both!Key both not found for locale  es-es two!Key two not found for locale  es-es pt!Key pt not found for locale  es-es zh!Key zh not found for locale  es-es src!Key src not found for locale  es-es srcempty!Key srcempty not found for locale  es-es emptyval!Key emptyval not found for locale  es-es
+  translate S-es S-lang S-both S-src
+"es--es" es=v-es-es lang=v-es both=v-es two=v-es-ar pt!Key pt not found for locale es--es zh!Key zh not found for locale es--es src!Key src not found for locale es--es srcempty!Key srcempty not found for locale es--es emptyval!Key emptyval not found for locale es--es
+  translate v-es-es v-es v-es S-src
+"es-es-x" es=v-es-es lang=v-es both=v-es two=v-es-ar pt!Key pt not found for locale es-es-x zh!Key zh not found for locale es-es-x src!Key src not found for locale es-es-x srcempty!Key srcempty not found for locale es-es-x emptyval!Key emptyval not found for locale es-es-x
+  translate v-es-es v-es v-es S-src
+"esp" es!Key es not found for locale esp lang!Key lang not found for locale esp both!Key both not found for locale esp two!Key two not found for locale esp pt!Key pt not found for locale esp zh!Key zh not found for locale esp src!Key src not found for locale esp srcempty!Key srcempty not found for locale esp emptyval!Key emptyval not found for locale esp
+  translate S-es S-lang S-both S-src
+"es_mx" es=v-es-es lang=v-es both=v-es-mx two=v-es-mx pt!Key pt not found for locale es-mx zh!Key zh not found for locale es-mx src!Key src not found for locale es-mx srcempty!Key srcempty not found for locale es-mx emptyval!Key emptyval not found for locale es-mx
+  translate v-es-es v-es v-es-mx S-src
+"pt-pt" es!Key es not found for locale pt-pt lang!Key lang not found for locale pt-pt both!Key both not found for locale pt-pt two!Key two not found for locale pt-pt pt=v-pt-br zh!Key zh not found for locale pt-pt src!Key src not found for locale pt-pt srcempty!Key srcempty not found for locale pt-pt emptyval!Key emptyval not found for locale pt-pt
+  translate S-es S-lang S-both S-src
+"pt" es!Key es not found for locale pt lang!Key lang not found for locale pt both!Key both not found for locale pt two!Key two not found for locale pt pt=v-pt-br zh!Key zh not found for locale pt src!Key src not found for locale pt srcempty!Key srcempty not found for locale pt emptyval!Key emptyval not found for locale pt
+  translate S-es S-lang S-both S-src
+"zh-hk" es!Key es not found for locale zh-hk lang!Key lang not found for locale zh-hk both!Key both not found for locale zh-hk two!Key two not found for locale zh-hk pt!Key pt not found for locale zh-hk zh=v-zh-tw src!Key src not found for locale zh-hk srcempty!Key srcempty not found for locale zh-hk emptyval!Key emptyval not found for locale zh-hk
+  translate S-es S-lang S-both S-src
+"zh" es!Key es not found for locale zh lang!Key lang not found for locale zh both!Key both not found for locale zh two!Key two not found for locale zh pt!Key pt not found for locale zh zh!Key zh not found for locale zh src!Key src not found for locale zh srcempty!Key srcempty not found for locale zh emptyval!Key emptyval not found for locale zh
+  translate S-es S-lang S-both S-src
+"zh-cn" es!Key es not found for locale zh-cn lang!Key lang not found for locale zh-cn both!Key both not found for locale zh-cn two!Key two not found for locale zh-cn pt!Key pt not found for locale zh-cn zh=v-zh-cn src!Key src not found for locale zh-cn srcempty!Key srcempty not found for locale zh-cn emptyval!Key emptyval not found for locale zh-cn
+  translate S-es S-lang S-both S-src
+"en-us" es=S-es lang=S-lang both=S-both two=S-two pt=S-pt zh=S-zh src=S-src srcempty!Key srcempty not found for locale en-us emptyval=S-ev
+  translate S-es S-lang S-both S-src
+"en-gb" es=S-es lang=S-lang both=S-both two=S-two pt=S-pt zh=S-zh src=S-src srcempty!Key srcempty not found for locale en-gb emptyval=S-ev
+  translate S-es S-lang S-both S-src
+"en" es=S-es lang=S-lang both=S-both two=S-two pt=S-pt zh=S-zh src=S-src srcempty!Key srcempty not found for locale en emptyval=S-ev
+  translate S-es S-lang S-both S-src
+"eng" es!Key es not found for locale eng lang!Key lang not found for locale eng both!Key both not found for locale eng two!Key two not found for locale eng pt!Key pt not found for locale eng zh!Key zh not found for locale eng src!Key src not found for locale eng srcempty!Key srcempty not found for locale eng emptyval!Key emptyval not found for locale eng
+  translate S-es S-lang S-both S-src
+"e" es!Key es not found for locale e lang!Key lang not found for locale e both!Key both not found for locale e two!Key two not found for locale e pt!Key pt not found for locale e zh!Key zh not found for locale e src!Key src not found for locale e srcempty!Key srcempty not found for locale e emptyval!Key emptyval not found for locale e
+  translate S-es S-lang S-both S-src
+"en-" es=S-es lang=S-lang both=S-both two=S-two pt=S-pt zh=S-zh src=S-src srcempty!Key srcempty not found for locale en- emptyval=S-ev
+  translate S-es S-lang S-both S-src
+"-us" es!Key es not found for locale -us lang!Key lang not found for locale -us both!Key both not found for locale -us two!Key two not found for locale -us pt!Key pt not found for locale -us zh!Key zh not found for locale -us src!Key src not found for locale -us srcempty!Key srcempty not found for locale -us emptyval!Key emptyval not found for locale -us
+  translate S-es S-lang S-both S-src
+"fr-fr" es!Key es not found for locale fr-fr lang!Key lang not found for locale fr-fr both!Key both not found for locale fr-fr two!Key two not found for locale fr-fr pt!Key pt not found for locale fr-fr zh!Key zh not found for locale fr-fr src!Key src not found for locale fr-fr srcempty=x emptyval!Key emptyval not found for locale fr-fr
+  translate S-es S-lang S-both S-src
+source "en" en-us=Src en=Src en-gb=Src es-es!Key k not found for locale es-es es!Key k not found for locale es !Key k not found for locale  xx!Key k not found for locale xx
+source "en-gb" en-us=Src en=Src en-gb=Src es-es!Key k not found for locale es-es es!Key k not found for locale es !Key k not found for locale  xx!Key k not found for locale xx
+source "EN_US" en-us=Src en=Src en-gb=Src es-es!Key k not found for locale es-es es!Key k not found for locale es !Key k not found for locale  xx!Key k not found for locale xx
+source "es-mx" en-us!Key k not found for locale en-us en!Key k not found for locale en en-gb!Key k not found for locale en-gb es-es=Src es=Src !Key k not found for locale  xx!Key k not found for locale xx
+source "" en-us!Key k not found for locale en-us en!Key k not found for locale en en-gb!Key k not found for locale en-gb es-es!Key k not found for locale es-es es!Key k not found for locale es =Src xx!Key k not found for locale xx
+source "xx" en-us!Key k not found for locale en-us en!Key k not found for locale en en-gb!Key k not found for locale en-gb es-es!Key k not found for locale es-es es!Key k not found for locale es !Key k not found for locale  xx=Src
+first lacks locale ok {[1]=boolean:true,[2]="Qes"} {[1]=boolean:true,[2]="PS"} {[1]=boolean:true,[2]="Q2"}
+translate first lacks ok "Qfree" "Q2" "QS"
+table translator lacks ok {[1]=boolean:false,[2]="Key K not found for locale es-es"} {[1]=boolean:true,[2]="Qes"} {[1]=boolean:false,[2]="Key K2 not found for locale es-es"}
+Changed ok "SourceLocaleId"
+RobloxOnlyTranslate ERR "The current thread cannot call 'RobloxOnlyTranslate' (lacking capability RobloxScript)"
+SetIsExemptFromUGCAnalytics ERR "The current thread cannot call 'SetIsExemptFromUGCAnalytics' (lacking capability RobloxScript)"
+GetIsLoadingInternalTranslations ERR "The current thread cannot call 'GetIsLoadingInternalTranslations' (lacking capability RobloxScript)"
+IsLoadingInternalTranslationsSettingChanged ERR "The current thread cannot call 'IsLoadingInternalTranslationsSettingChanged' (lacking capability RobloxScript)"
+SetRobloxLocaleId ERR "The current thread cannot call 'SetRobloxLocaleId' (lacking capability RobloxScript)"
+StartTextScraper ERR "The current thread cannot call 'StartTextScraper' (lacking capability RobloxScript)"
+StopTextScraper ERR "The current thread cannot call 'StopTextScraper' (lacking capability RobloxScript)"
+PromptDownloadGameTableToCSV ERR "The current thread cannot call 'PromptDownloadGameTableToCSV' (lacking capability RobloxScript)"
+PromptExportToCSVs ERR "The current thread cannot call 'PromptExportToCSVs' (lacking capability RobloxScript)"
+PromptImportFromCSVs ERR "The current thread cannot call 'PromptImportFromCSVs' (lacking capability RobloxScript)"
+PromptUploadCSVToGameTable ERR "The current thread cannot call 'PromptUploadCSVToGameTable' (lacking capability RobloxScript)"
+LocaleManifest ERR "LocaleManifest is not a valid member of LocalizationService \"LocalizationService\""
+IsExemptFromUGCAnalytics ERR "IsExemptFromUGCAnalytics is not a valid member of LocalizationTable \"LocalizationTable\""
+AutoTranslateWillRun ok RBXScriptSignal:Signal AutoTranslateWillRun
+GetCorescriptLocalizations ok 0
+ctx P partial zz zz zz
+ctx Q string suffix zz zz zz
+ctx R full zz zz zz
+ctx S lower zz zz zz
+ctx U label gui ws ws
+ctx V keyed label keyed label keyed label keyed label
+val es-es ar_us=es-ar 419=es-419 zh!Key zh not found for locale es-es zhcn!Key zhcn not found for locale es-es pt!Key pt not found for locale es-es gb!Key gb not found for locale es-es mx=es-es fr!Key fr not found for locale es-es de!Key de not found for locale es-es
+val es-mx ar_us=es-ar 419=es-419 zh!Key zh not found for locale es-mx zhcn!Key zhcn not found for locale es-mx pt!Key pt not found for locale es-mx gb!Key gb not found for locale es-mx mx=es-mx fr!Key fr not found for locale es-mx de!Key de not found for locale es-mx
+val es ar_us=es-ar 419=es-419 zh!Key zh not found for locale es zhcn!Key zhcn not found for locale es pt!Key pt not found for locale es gb!Key gb not found for locale es mx=es-es fr!Key fr not found for locale es de!Key de not found for locale es
+val es-419 ar_us=es-ar 419=es-419 zh!Key zh not found for locale es-419 zhcn!Key zhcn not found for locale es-419 pt!Key pt not found for locale es-419 gb!Key gb not found for locale es-419 mx=es-es fr!Key fr not found for locale es-419 de!Key de not found for locale es-419
+val es-co ar_us=es-ar 419=es-419 zh!Key zh not found for locale es-co zhcn!Key zhcn not found for locale es-co pt!Key pt not found for locale es-co gb!Key gb not found for locale es-co mx=es-es fr!Key fr not found for locale es-co de!Key de not found for locale es-co
+val zh-cn ar_us!Key ar_us not found for locale zh-cn 419!Key 419 not found for locale zh-cn zh=zh-cn zhcn=zh-cn pt!Key pt not found for locale zh-cn gb!Key gb not found for locale zh-cn mx!Key mx not found for locale zh-cn fr!Key fr not found for locale zh-cn de!Key de not found for locale zh-cn
+val zh-tw ar_us!Key ar_us not found for locale zh-tw 419!Key 419 not found for locale zh-tw zh=zh-tw zhcn=zh-cn pt!Key pt not found for locale zh-tw gb!Key gb not found for locale zh-tw mx!Key mx not found for locale zh-tw fr!Key fr not found for locale zh-tw de!Key de not found for locale zh-tw
+val zh-hk ar_us!Key ar_us not found for locale zh-hk 419!Key 419 not found for locale zh-hk zh=zh-hk zhcn=zh-cn pt!Key pt not found for locale zh-hk gb!Key gb not found for locale zh-hk mx!Key mx not found for locale zh-hk fr!Key fr not found for locale zh-hk de!Key de not found for locale zh-hk
+val zh-sg ar_us!Key ar_us not found for locale zh-sg 419!Key 419 not found for locale zh-sg zh=zh-cn zhcn=zh-cn pt!Key pt not found for locale zh-sg gb!Key gb not found for locale zh-sg mx!Key mx not found for locale zh-sg fr!Key fr not found for locale zh-sg de!Key de not found for locale zh-sg
+val zh-mo ar_us!Key ar_us not found for locale zh-mo 419!Key 419 not found for locale zh-mo zh!Key zh not found for locale zh-mo zhcn!Key zhcn not found for locale zh-mo pt!Key pt not found for locale zh-mo gb!Key gb not found for locale zh-mo mx!Key mx not found for locale zh-mo fr!Key fr not found for locale zh-mo de!Key de not found for locale zh-mo
+val zh ar_us!Key ar_us not found for locale zh 419!Key 419 not found for locale zh zh!Key zh not found for locale zh zhcn!Key zhcn not found for locale zh pt!Key pt not found for locale zh gb!Key gb not found for locale zh mx!Key mx not found for locale zh fr!Key fr not found for locale zh de!Key de not found for locale zh
+val pt-br ar_us!Key ar_us not found for locale pt-br 419!Key 419 not found for locale pt-br zh!Key zh not found for locale pt-br zhcn!Key zhcn not found for locale pt-br pt=pt-br gb!Key gb not found for locale pt-br mx!Key mx not found for locale pt-br fr!Key fr not found for locale pt-br de!Key de not found for locale pt-br
+val pt-pt ar_us!Key ar_us not found for locale pt-pt 419!Key 419 not found for locale pt-pt zh!Key zh not found for locale pt-pt zhcn!Key zhcn not found for locale pt-pt pt=pt-pt gb!Key gb not found for locale pt-pt mx!Key mx not found for locale pt-pt fr!Key fr not found for locale pt-pt de!Key de not found for locale pt-pt
+val pt ar_us!Key ar_us not found for locale pt 419!Key 419 not found for locale pt zh!Key zh not found for locale pt zhcn!Key zhcn not found for locale pt pt=pt-br gb!Key gb not found for locale pt mx!Key mx not found for locale pt fr!Key fr not found for locale pt de!Key de not found for locale pt
+val pt-ao ar_us!Key ar_us not found for locale pt-ao 419!Key 419 not found for locale pt-ao zh!Key zh not found for locale pt-ao zhcn!Key zhcn not found for locale pt-ao pt=pt-br gb!Key gb not found for locale pt-ao mx!Key mx not found for locale pt-ao fr!Key fr not found for locale pt-ao de!Key de not found for locale pt-ao
+val en-us ar_us!Key ar_us not found for locale en-us 419!Key 419 not found for locale en-us zh!Key zh not found for locale en-us zhcn!Key zhcn not found for locale en-us pt!Key pt not found for locale en-us gb=en-gb mx!Key mx not found for locale en-us fr!Key fr not found for locale en-us de!Key de not found for locale en-us
+val en ar_us!Key ar_us not found for locale en 419!Key 419 not found for locale en zh!Key zh not found for locale en zhcn!Key zhcn not found for locale en pt!Key pt not found for locale en gb=en-gb mx!Key mx not found for locale en fr!Key fr not found for locale en de!Key de not found for locale en
+val fr-fr ar_us!Key ar_us not found for locale fr-fr 419!Key 419 not found for locale fr-fr zh!Key zh not found for locale fr-fr zhcn!Key zhcn not found for locale fr-fr pt!Key pt not found for locale fr-fr gb!Key gb not found for locale fr-fr mx!Key mx not found for locale fr-fr fr=fr-ca de!Key de not found for locale fr-fr
+val fr ar_us!Key ar_us not found for locale fr 419!Key 419 not found for locale fr zh!Key zh not found for locale fr zhcn!Key zhcn not found for locale fr pt!Key pt not found for locale fr gb!Key gb not found for locale fr mx!Key mx not found for locale fr fr=fr-be de!Key de not found for locale fr
+val de-de ar_us!Key ar_us not found for locale de-de 419!Key 419 not found for locale de-de zh!Key zh not found for locale de-de zhcn!Key zhcn not found for locale de-de pt!Key pt not found for locale de-de gb!Key gb not found for locale de-de mx!Key mx not found for locale de-de fr!Key fr not found for locale de-de de=de-at
+val de ar_us!Key ar_us not found for locale de 419!Key 419 not found for locale de zh!Key zh not found for locale de zhcn!Key zhcn not found for locale de pt!Key pt not found for locale de gb!Key gb not found for locale de mx!Key mx not found for locale de fr!Key fr not found for locale de de=de-at

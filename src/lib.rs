@@ -671,6 +671,8 @@ pub struct State {
     pub cameras: world::camera::Cameras,
     /// The spatial queries' indexes: each world's parts in a grid of its own (world::broadphase)
     pub spatial: world::broadphase::Spatial,
+    /// Each LocalizationTable's entries as its contents last held them, and what each Translator reads (services/localization.rs)
+    pub localization: services::localization::Localization,
     /// A loopback run's server: what changed this frame in the replicated containers, with its remote messages in their
     /// places (loopback/replicate.rs; None in every other engine)
     pub loopback_log: Option<Vec<loopback::replicate::Change>>,
@@ -780,6 +782,7 @@ impl Engine {
                 gravity: Default::default(),
                 cameras: Default::default(),
                 spatial: Default::default(),
+                localization: Default::default(),
                 loopback_log: None,
                 quiet_write: false,
             }),

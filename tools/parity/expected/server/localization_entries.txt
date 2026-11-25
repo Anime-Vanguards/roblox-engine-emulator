@@ -1,0 +1,230 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+defaults en-us en-us LocalizationTable nil:nil
+GetEntries empty ok {}
+GetContents empty ok "[]"
+Contents read ERR "Contents is not a valid member of LocalizationTable \"LocalizationTable\""
+SetEntries ERR "Entry at index 7 had was missing \"Values\"."
+GetEntries ok {}
+GetContents ok "[]"
+same table twice ok boolean:false
+mutating input after ok nil:nil
+SetEntries nil ERR "Argument 1 missing or nil"
+SetEntries number ERR "entries was not an array."
+SetEntries string ERR "entries was not an array."
+SetEntries bool ERR "entries was not an array."
+SetEntries instance ERR "entries was not an array."
+SetEntries empty ok {}
+SetEntries list of numbers ERR "Entry at index 1 was not a table."
+SetEntries list of empty ERR "Entry at index 1 was not a table."
+SetEntries key number ERR "Entry at index 1 had invalid Key/Source/Context: Entry at index 1 \"Key\" was not a string."
+SetEntries source number ERR "Entry at index 1 had invalid Key/Source/Context: Entry at index 1 \"Source\" was not a string."
+SetEntries values number ERR "Entry at index 1 [\"Values\"] was not a table."
+SetEntries values array ERR "Entry at index 1 [\"Values\"] was not a table."
+SetEntries values num value ERR "Entry at index 1 \"es-es\" was not a string."
+SetEntries dup keys ERR "Entry at index 1 had was missing \"Values\"."
+SetEntries dup source no key ERR "Entry at index 1 had was missing \"Values\"."
+SetEntries dup source ctx ERR "Entry at index 1 had was missing \"Values\"."
+SetEntries bad locale ok {[1]={Context="",Example="",Key="a",Source="s",Values={en-us="w",es-es="z",xx="v"}}}
+SetEntries extra fields ok {[1]={Context="",Example="",Key="a",Source="s",Values={}}}
+SetEntries dict top ERR "entries was not an array."
+SetEntries no source ERR "Entry at index 1 had was missing \"Values\"."
+SetEntries context number ERR "Entry at index 1 had invalid Key/Source/Context: Entry at index 1 \"Context\" was not a string."
+SetEntries example bool ERR "Entry at index 1 \"Example\" was not a string."
+SetEntries lowercase fields ERR "Entry at index 1 had invalid Key/Source/Context: Cannot create entry with empty source text and no key."
+SetEntry ok 
+  entries SetEntry ok {[1]={Context="",Example="",Key="K1",Source="",Values={es-es="Uno"}}}
+SetEntry second locale ok 
+  entries 2 ok {[1]={Context="",Example="",Key="K1",Source="",Values={es-es="Uno",fr-fr="Un"}}}
+SetEntry source locale ok 
+  entries 3 ok {[1]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un"}}}
+SetEntry bad locale ok 
+  entries 4 ok {[1]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}}}
+SetEntry empty key ERR "Cannot create entry with empty source text and no key."
+  entries 5 ok {[1]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}}}
+SetEntry nil text ERR "Argument 3 missing or nil"
+  entries 6 ok {[1]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}}}
+SetEntry nil key ERR "Argument 1 missing or nil"
+SetEntry num key ok 
+  entries 7 ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}}}
+GetString es K1 ok "Uno"
+GetString en K1 ok "One"
+GetString de K1 ERR "LocalizationTable entry with key \"K1\" does not contain locale \"de-de\""
+GetString es missing ERR "LocalizationTable does not contain key \"Nope\""
+GetString bad locale ok "?"
+GetString nil ERR "Argument 2 missing or nil"
+SetEntryValue new ok 
+  entries sev1 ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="",Example="",Key="K3",Source="Three",Values={es-es="Tres"}}}
+SetEntryValue existing by key ok 
+  entries sev2 ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="",Example="",Key="K3",Source="Three",Values={es-es="Tres",fr-fr="Trois"}}}
+SetEntryValue mismatched source ok 
+  entries sev3 ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="",Example="",Key="K3",Source="Three",Values={de-de="Drei",es-es="Tres",fr-fr="Trois"}}}
+SetEntryValue no key ok 
+  entries sev4 ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="",Example="",Key="K3",Source="Three",Values={de-de="Drei",es-es="Tres",fr-fr="Trois"}},[4]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}}}
+SetEntryValue no key ctx ok 
+  entries sev5 ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="",Example="",Key="K3",Source="Three",Values={de-de="Drei",es-es="Tres",fr-fr="Trois"}},[4]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}},[5]={Context="c",Example="",Key="",Source="Free",Values={es-es="Libre c"}}}
+SetEntryValue bad locale ok 
+  entries sev6 ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="",Example="",Key="K3",Source="Three",Values={de-de="Drei",es-es="Tres",fr-fr="Trois",zz="?"}},[4]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}},[5]={Context="c",Example="",Key="",Source="Free",Values={es-es="Libre c"}}}
+SetEntryContext ok 
+  entries ctx ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="NewCtx",Example="",Key="K3",Source="Three",Values={de-de="Drei",es-es="Tres",fr-fr="Trois",zz="?"}},[4]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}},[5]={Context="c",Example="",Key="",Source="Free",Values={es-es="Libre c"}}}
+SetEntryContext missing ok 
+SetEntryExample ok 
+  entries ex ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="X",Example="",Key="Nope",Source="",Values={}},[4]={Context="NewCtx",Example="an example",Key="K3",Source="Three",Values={de-de="Drei",es-es="Tres",fr-fr="Trois",zz="?"}},[5]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}},[6]={Context="c",Example="",Key="",Source="Free",Values={es-es="Libre c"}}}
+SetEntrySource ok 
+  entries src ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="X",Example="",Key="Nope",Source="",Values={}},[4]={Context="NewCtx",Example="an example",Key="K3",Source="Tri",Values={de-de="Drei",es-es="Tres",fr-fr="Trois",zz="?"}},[5]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}},[6]={Context="c",Example="",Key="",Source="Free",Values={es-es="Libre c"}}}
+SetEntryKey ok 
+  entries key ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="X",Example="",Key="Nope",Source="",Values={}},[4]={Context="NewCtx",Example="an example",Key="K3b",Source="Tri",Values={de-de="Drei",es-es="Tres",fr-fr="Trois",zz="?"}},[5]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}},[6]={Context="c",Example="",Key="",Source="Free",Values={es-es="Libre c"}}}
+SetEntryKey to existing ERR "The modified entry would conflict with an existing entry."
+  entries key2 ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",fr-fr="Un",xx="?"}},[3]={Context="X",Example="",Key="Nope",Source="",Values={}},[4]={Context="NewCtx",Example="an example",Key="K3b",Source="Tri",Values={de-de="Drei",es-es="Tres",fr-fr="Trois",zz="?"}},[5]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}},[6]={Context="c",Example="",Key="",Source="Free",Values={es-es="Libre c"}}}
+SetEntryKey missing ok 
+RemoveEntryValue ok 
+  entries rev ok {[1]={Context="",Example="",Key="5",Source="",Values={es-es="cinco"}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",es-es="Uno",xx="?"}},[3]={Context="X",Example="",Key="X",Source="",Values={}},[4]={Context="NewCtx",Example="an example",Key="K3b",Source="Tri",Values={de-de="Drei",es-es="Tres",fr-fr="Trois",zz="?"}},[5]={Context="",Example="",Key="",Source="Free",Values={es-es="Libre"}},[6]={Context="c",Example="",Key="",Source="Free",Values={es-es="Libre c"}}}
+RemoveEntryValue missing ok 
+RemoveEntryValue missing locale ok 
+RemoveTargetLocale ok 
+  entries rtl ok {[1]={Context="",Example="",Key="5",Source="",Values={}},[2]={Context="",Example="",Key="K1",Source="",Values={en-us="One",xx="?"}},[3]={Context="X",Example="",Key="X",Source="",Values={}},[4]={Context="NewCtx",Example="an example",Key="K3b",Source="Tri",Values={de-de="Drei",fr-fr="Trois",zz="?"}},[5]={Context="",Example="",Key="",Source="Free",Values={}},[6]={Context="c",Example="",Key="",Source="Free",Values={}}}
+RemoveTargetLocale missing ok 
+RemoveTargetLocale bad ok 
+RemoveKey ok 
+  entries rk ok {[1]={Context="",Example="",Key="5",Source="",Values={}},[2]={Context="X",Example="",Key="X",Source="",Values={}},[3]={Context="NewCtx",Example="an example",Key="K3b",Source="Tri",Values={de-de="Drei",fr-fr="Trois",zz="?"}},[4]={Context="",Example="",Key="",Source="Free",Values={}},[5]={Context="c",Example="",Key="",Source="Free",Values={}}}
+RemoveKey missing ok 
+RemoveEntry ok 
+  entries re ok {[1]={Context="",Example="",Key="5",Source="",Values={}},[2]={Context="X",Example="",Key="X",Source="",Values={}},[3]={Context="",Example="",Key="",Source="Free",Values={}},[4]={Context="c",Example="",Key="",Source="Free",Values={}}}
+RemoveEntry free ok 
+  entries re2 ok {[1]={Context="",Example="",Key="5",Source="",Values={}},[2]={Context="X",Example="",Key="X",Source="",Values={}},[3]={Context="c",Example="",Key="",Source="Free",Values={}}}
+RemoveEntry missing ok 
+RemoveEntry by key only ok {}
+RemoveEntry by source ctx ok {[1]={Context="C",Example="",Key="k",Source="S",Values={es-es="v"}}}
+RemoveEntry wrong ctx ok {}
+SetEntryValue by key ignores src ok {[1]={Context="C",Example="",Key="k",Source="S",Values={es-es="v",fr-fr="w"}}}
+SetEntryValue by src ctx ok {[1]={Context="C",Example="",Key="",Source="S",Values={de-de="x"}},[2]={Context="C",Example="",Key="k",Source="S",Values={es-es="v",fr-fr="w"}}}
+order 1 ok "a|| b|| c||"
+order 2 ok "a|| b|| c||"
+order 3 ok "a|| b|| c||"
+order 4 ok "10|| 9|| Beta|| Zeta|| _x|| alpha|| |free| |free|ctx |Free|"
+order 5 ok "|free| |free|ctx |Free| 10|| 9|| Beta|| Zeta|| _x|| alpha||"
+order 6 ok "k1|zz| k2|aa| k3|mm|c"
+order 7 ok "k3|mm|c k2|aa| k1|zz|"
+order 8 ok "k2||a k1||z"
+order 9 ok "|S|C k|S|C"
+order 10 ok "|S|C k|S|C"
+order 11 ok "|B| |A|"
+order 12 ok "|A| |A|x |A|y"
+SetEntry order fwd ok "Banana|| Elder|| Hazel|| Mango|| Sage|| apple|| cherry|| date|| fig|| grape|| iris|| jade|| kiwi|| lemon|| nut|| olive|| pear|| quince|| rose|| thyme||"
+SetEntry order rev ok "Banana|| Elder|| Hazel|| Mango|| Sage|| apple|| cherry|| date|| fig|| grape|| iris|| jade|| kiwi|| lemon|| nut|| olive|| pear|| quince|| rose|| thyme||"
+order 30 ok "key1|| key10|| key11|| key12|| key13|| key14|| key15|| key16|| key17|| key18|| key19|| key2|| key20|| key21|| key22|| key23|| key24|| key25|| key26|| key27|| key28|| key29|| key3|| key30|| key4|| key5|| key6|| key7|| key8|| key9||"
+SetEntries dup keys ERR "Entry at index 2 has the same (key) or (key,source,context) tuple as another entry. key: \"a\", source: \"y\", context: \"\""
+  after ok {[1]={Context="",Example="",Key="keep",Source="",Values={}}}
+SetEntries dup source no key ok 
+  after ok {[1]={Context="",Example="",Key="",Source="x",Values={es-es="1"}}}
+SetEntries dup source ctx ok 
+  after ok {[1]={Context="c1",Example="",Key="",Source="x",Values={}},[2]={Context="c2",Example="",Key="",Source="x",Values={}}}
+SetEntries dup keyed and free ok 
+  after ok {[1]={Context="",Example="",Key="",Source="x",Values={}},[2]={Context="",Example="",Key="k",Source="x",Values={}}}
+SetEntries empty key empty source ERR "Entry at index 1 had invalid Key/Source/Context: Cannot create entry with empty source text and no key."
+  after ok {[1]={Context="",Example="",Key="keep",Source="",Values={}}}
+SetEntries values mixed ERR "Entry at index 1 [\"Values\"] was not a table."
+  after ok {[1]={Context="",Example="",Key="keep",Source="",Values={}}}
+SetEntries values empty locale ok 
+  after ok {[1]={Context="",Example="",Key="a",Source="",Values={}}}
+SetEntries values number key ok 
+  after ok {[1]={Context="",Example="",Key="a",Source="",Values={5="y"}}}
+SetEntries values bool ERR "Entry at index 1 [\"Values\"] was not a table."
+  after ok {[1]={Context="",Example="",Key="keep",Source="",Values={}}}
+SetEntries entry with array part ERR "Entry at index 1 was not a table."
+  after ok {[1]={Context="",Example="",Key="keep",Source="",Values={}}}
+SetEntries sparse ok 
+  after ok {[1]={Context="",Example="",Key="a",Source="",Values={}}}
+SetEntries second bad ERR "Entry at index 2 was not a table."
+  after ok {[1]={Context="",Example="",Key="keep",Source="",Values={}}}
+SetEntries values case ok 
+  after ok {[1]={Context="",Example="",Key="a",Source="",Values={es-es="x"}}}
+SetEntries values long locale ok 
+  after ok {[1]={Context="",Example="",Key="a",Source="",Values={abcdefghijklmnopqrstuvwxyz="y",e="z",en-us-x="w"}}}
+SetEntries key with spaces ok 
+  after ok {[1]={Context=" c ",Example=" e ",Key=" a ",Source=" s ",Values={}}}
+GetContents ok "[{\"key\":\"k\",\"context\":\"c\",\"examples\":\"e\",\"source\":\"s\",\"values\":{\"es-es\":\"v\",\"fr-fr\":\"w\"}},{\"source\":\"free\",\"values\":{}},{\"key\":\"q\\\"uote\\n\",\"source\":\"é\",\"values\":{\"es-es\":\"ü\\t\"}}]"
+SetContents back ok {[1]={Context="c",Example="",Key="k",Source="s",Values={es-es="v",fr-fr="w"}},[2]={Context="",Example="",Key="",Source="free",Values={}},[3]={Context="",Example="",Key="q\"uote\\x0A",Source="é",Values={es-es="ü	"}}}
+SetContents bad ERR "JSON parse error: Unspecific syntax error."
+SetContents nil ERR "Argument 1 missing or nil"
+SetContents capital ERR "Entry does not have \"values\""
+SourceLocaleId=es-es ok "es-es" "es-es"
+SourceLocaleId= ok "" ""
+SourceLocaleId=xx ok "xx" "xx"
+SourceLocaleId=EN-US ok "en-us" "en-us"
+SourceLocaleId=es_ES ok "es-es" "es-es"
+SourceLocaleId=5 ok "5" "5"
+DevelopmentLanguage write ok "fr-fr"
+clone entries ok 3 boolean:false
+returned copies ok "k"
+entry table frozen ok boolean:false boolean:false nil:nil
+SetEntry casts ok {[1]={Context="",Example="",Key="1",Source="",Values={2="3"}}}
+SetEntry table ok {[1]={Context="",Example="",Key="1",Source="",Values={2="3"}},[2]={Context="",Example="",Key="{}",Source="",Values={es-es="x"}}}
+GetString casts ok "3"
+GetTranslator table ok "{}"
+GetTranslator EN-US ok "en-us" "es-es"
+GetTranslator 1 char ok "e"
+GetTranslator long ok "abcdefghijklmnopqrstuvwxyz"
+dot call ERR "Expected ':' not '.' calling member function GetEntries"
+30 sources fwd ok "k1|src1| k2|src2| k3|src3| k4|src4| k5|src5| k6|src6| k7|src7| k8|src8| k9|src9| k10|src10| k11|src11| k12|src12| k13|src13| k14|src14| k15|src15| k16|src16| k17|src17| k18|src18| k19|src19| k20|src20| k21|src21| k22|src22| k23|src23| k24|src24| k25|src25| k26|src26| k27|src27| k28|src28| k29|src29| k30|src30|"
+30 sources rev ok "k30|src30| k29|src29| k28|src28| k27|src27| k26|src26| k25|src25| k24|src24| k23|src23| k22|src22| k21|src21| k20|src20| k19|src19| k18|src18| k17|src17| k16|src16| k15|src15| k14|src14| k13|src13| k12|src12| k11|src11| k10|src10| k9|src9| k8|src8| k7|src7| k6|src6| k5|src5| k4|src4| k3|src3| k2|src2| k1|src1|"
+words as sources ok "w1|pear| w2|Apple| w3|zebra| w4|mango| w5|| w6|kiwi| w7|Banana| w8|fig| w9|date| w10|cherry|"
+after source a->S9 ok "a|S9| b|S2| c|S3|"
+add d with S1 ok "a|S9| b|S2| c|S3| d|S1|"
+add e with S9 ok "a|S9| e|S9| b|S2| c|S3| d|S1|"
+remove b ok "a|S9| e|S9| c|S3| d|S1|"
+add f with S2 ok "a|S9| e|S9| f|S2| c|S3| d|S1|"
+add g with S0 ok "a|S9| e|S9| f|S2| c|S3| d|S1| g|S0|"
+a out of a shared group ok "b|S1| c|S2| a|S9|"
+c into S1 ok "b|S1| c|S1| a|S9|"
+d into S2 ok "b|S1| c|S1| d|S2| a|S9|"
+b out ok "c|S1| d|S2| a|S9| b|S8|"
+e into S1 ok "c|S1| e|S1| d|S2| a|S9| b|S8|"
+free source change ok "|S3| x|S2|"
+y into S1 ok "|S3| x|S2| y|S1|"
+SetEntryKey to empty ERR "Failed to add entry to index after modifying."
+  after ok "a||"
+SetEntrySource to empty ERR "Failed to add entry to index after modifying."
+  after ok ""
+SetEntrySource conflict ERR "The modified entry would conflict with an existing entry."
+  after ok "|A| |B|"
+SetEntryContext conflict ERR "The modified entry would conflict with an existing entry."
+  after ok "|A|x |A|y"
+SetEntryKey missing ok "made||"
+SetEntrySource missing ok "m|Made|"
+SetEntryExample missing ok {}
+SetEntryValue empty ERR "Cannot create entry with empty source text and no key."
+SetEntryContext free missing ok "|Free|c"
+RemoveEntry empty ok "k||"
+SetEntryValue empty locale ok {[1]={Context="",Example="",Key="k",Source="",Values={}}}
+values order ok "[{\"key\":\"k\",\"source\":\"s\",\"values\":{\"aa\":\"2\",\"es\":\"5\",\"es-es\":\"4\",\"mm\":\"3\",\"zz\":\"1\"}}]"
+keyed no source ok "[{\"key\":\"k\",\"values\":{}}]"
+collide ok {es-es="x"}
+collide ok {es-es="x"}
+collide ok {es-es="b"}
+collide ok {es-es="b"}
+collide ok {es-es="1"}
+SetEntry locale case ok {[1]={Context="",Example="",Key="k",Source="",Values={es-es="v"}}}
+SetEntryValue locale case ok {[1]={Context="",Example="",Key="k",Source="",Values={fr-fr="v"}}}
+GetString locale case ok "v"
+RemoveEntryValue locale case ok {[1]={Context="",Example="",Key="k",Source="",Values={}}}
+RemoveTargetLocale case ok {[1]={Context="",Example="",Key="k",Source="",Values={es-es="v"}}}
+SetEntry empty locale ok {[1]={Context="",Example="",Key="k",Source="",Values={}}}
+SetContents example ok {[1]={Context="c",Example="e1",Key="k",Source="s",Values={es-es="v"}}}
+SetContents order ok "a|x| b|x| c||"
+SetContents dup ERR "Entry at index 2 has the same (key) or (key,source,context) tuple as another entry. key: \"a\", source: \"y\", context: \"\""
+SetContents dup free ok {[1]={Context="",Example="",Key="",Source="x",Values={es-es="1"}}}
+SetContents bad entry ERR "Cannot create entry with empty source text and no key."
+SetContents object ERR "Root is not an array"
+SetContents number value ERR "Entry values value is not a string"
+SetContents number key ok {[1]={Context="",Example="",Key="",Source="s",Values={}}}
+SetContents not object ERR "Entry is not an object"
+SetContents values array ERR "Entry \"values\" is not an object"
+SetContents empty ERR "JSON parse error: The document is empty."
+SetContents keeps on error ok "keep||"
+SetContents upper locale ok {[1]={Context="",Example="",Key="k",Source="",Values={="e",es-es="v"}}}
+SetContents extra ok {[1]={Context="",Example="",Key="k",Source="",Values={}}}
+SetContents trailing ERR "JSON parse error: The document root must not be followed by other values."
+SetContents escapes ok {[1]={Context="",Example="",Key="é\\x0A/",Source="",Values={}}}
+contents escapes ok "[{\"key\":\"\\u0001\\u001F\x7F/\\\\<>&' é\\b\\f\\r\",\"values\":{}}]"
+clone order ok "b|y| a|x|"

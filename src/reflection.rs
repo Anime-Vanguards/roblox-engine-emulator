@@ -215,7 +215,7 @@ pub const INSTANCE_LOCKED_SERVICES: &[&str] = &[
 
 /// The classes other than services that refuse every Parent write by class (measured in a 0.747 client and server:
 /// "Cannot change Parent of type Terrain"); a player's Backpack and StarterGear, the Camera and the Player have no lock.
-pub const CLASS_LOCKED: &[&str] = &["PlayerGui", "PlayerScripts", "StarterCharacterScripts", "StarterPlayerScripts", "Terrain"];
+pub const CLASS_LOCKED: &[&str] = &["PlayerGui", "PlayerScripts", "StarterCharacterScripts", "StarterPlayerScripts", "Terrain", "Translator"];
 
 #[derive(Debug)]
 pub struct ClassInfo {
