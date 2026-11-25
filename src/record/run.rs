@@ -660,6 +660,9 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
     if options.run_context == crate::RunContext::Loopback {
         return start_loopback(args, host, &options, &spec, prefetch, listings).map(|emulator| (emulator, history));
     }
+    modules::warm_engine_luau(options.server(), false);
+    let place_roots = spec.place_roots();
+    let prescan = crate::project::Prescan::start_early(&spec.roots, &place_roots);
     let engine = crate::timing::time("engine (reflection)", || (host.new_engine)(options))?;
     if let Some(prefetch) = prefetch {
         modules::use_prefetch(&engine, prefetch);
@@ -672,7 +675,7 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
     if listings {
         engine.state.borrow_mut().project.listings = Some(Vec::new());
     }
-    let emulator = Emulator::start(engine, &spec)?;
+    let emulator = Emulator::start_with_prescan(engine, &spec, prescan)?;
     crate::luau_profile::install(&emulator.lua);
     // Roblox's script execution timeout (watchdog.rs): a script that never yields errors instead of spinning for good
     let limit = crate::watchdog::script_timeout_seconds(args.script_timeout);

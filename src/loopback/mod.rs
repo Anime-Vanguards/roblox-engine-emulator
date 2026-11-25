@@ -148,10 +148,13 @@ pub fn start(new_engine: &dyn Fn(Options) -> Result<Rc<Engine>, String>, options
 /// (rur's stories) starts this, makes its client from [`side_options`] with [`ready_client`], starts it with no project
 /// (its DataModel comes at the join) and [`link`]s the two.
 pub fn start_server(new_engine: &dyn Fn(Options) -> Result<Rc<Engine>, String>, options: &Options, spec: &crate::mount::ProjectSpec, setup: &dyn Fn(&Rc<Engine>)) -> Result<Emulator, String> {
+    crate::lua::modules::warm_engine_luau(true, true);
+    let place_roots = spec.place_roots();
+    let prescan = crate::project::Prescan::start_early(&spec.roots, &place_roots);
     let server_engine = crate::timing::time("engine (reflection)", || new_engine(side_options(options, Side::Server)))?;
     crate::lua::modules::interpret_modules(&server_engine);
     setup(&server_engine);
-    Emulator::start(server_engine, spec)
+    Emulator::start_with_prescan(server_engine, spec, prescan)
 }
 
 /// What a loopback client's engine takes before it starts: its own random sequence (the run's seed plus one)

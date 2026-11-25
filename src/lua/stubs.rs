@@ -11,8 +11,8 @@ use super::{
 };
 use crate::{Engine, instance as core};
 
-const SERVICES: &str = include_str!("services.luau");
-const SERVER: &str = include_str!("server.luau");
+pub(crate) static SERVICES: &str = include_str!("services.luau");
+pub(crate) static SERVER: &str = include_str!("server.luau");
 
 /// The named registry value holding server.luau's R.SetJoinData (a server run's only): what
 /// Context.SetJoinData calls to give a player the join data Player:GetJoinData returns

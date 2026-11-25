@@ -2249,6 +2249,113 @@ fn scan_layout_root_uncached(root: &str, reflection: &Reflection) -> Vec<(String
     }
 }
 
+fn is_common_service_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Workspace"
+            | "ReplicatedStorage"
+            | "ReplicatedFirst"
+            | "ServerScriptService"
+            | "ServerStorage"
+            | "StarterGui"
+            | "StarterPack"
+            | "StarterPlayer"
+            | "Lighting"
+            | "SoundService"
+            | "Players"
+            | "Teams"
+            | "Chat"
+            | "TextChatService"
+            | "LocalizationService"
+            | "MaterialService"
+            | "TestService"
+            | "VoiceChatService"
+            | "CoreGui"
+            | "GuiService"
+            | "HttpService"
+            | "RunService"
+            | "CollectionService"
+            | "TweenService"
+            | "UserInputService"
+            | "TextService"
+            | "InsertService"
+            | "JointsService"
+            | "Debris"
+            | "ContextActionService"
+            | "MarketplaceService"
+            | "ProximityPromptService"
+            | "PathfindingService"
+            | "PhysicsService"
+            | "PolicyService"
+            | "SocialService"
+            | "BadgeService"
+            | "GroupService"
+            | "MemoryStoreService"
+            | "MessagingService"
+            | "DataStoreService"
+            | "TeleportService"
+            | "AssetService"
+            | "ContentProvider"
+            | "AvatarEditorService"
+            | "AnalyticsService"
+            | "LogService"
+            | "ScriptContext"
+    )
+}
+
+enum EarlyEntry {
+    Scanned(String, ScanNode),
+    Deferred(String),
+}
+
+fn scan_layout_root_early(root: &str) -> Vec<EarlyEntry> {
+    crate::files::note_listing(Path::new(root));
+    let mut dirs: Vec<(String, bool)> = Vec::new();
+    if let Ok(read) = std::fs::read_dir(root) {
+        for entry in read.flatten() {
+            let Ok(name) = entry.file_name().into_string() else { continue };
+            if name.starts_with('.') {
+                continue;
+            }
+            let kind = entry.file_type().ok();
+            let plain = kind.is_some_and(|k| !k.is_symlink()) && !name.ends_with(['.', ' ']);
+            let is_dir = match kind {
+                Some(k) if plain => k.is_dir(),
+                _ => std::fs::metadata(format!("{root}/{name}")).is_ok_and(|m| m.is_dir()),
+            };
+            if is_dir {
+                let common = is_common_service_name(&name);
+                dirs.push((name, common));
+            }
+        }
+    }
+    let common_count = dirs.iter().filter(|(_, c)| *c).count();
+    if common_count > 1 && !crate::lua::modules::is_batch_frozen() {
+        use rayon::prelude::*;
+        dirs.into_par_iter()
+            .map(|(name, common)| {
+                if common {
+                    let node = listed(format!("{root}/{name}"));
+                    EarlyEntry::Scanned(name, node)
+                } else {
+                    EarlyEntry::Deferred(name)
+                }
+            })
+            .collect()
+    } else {
+        dirs.into_iter()
+            .map(|(name, common)| {
+                if common {
+                    let node = listed(format!("{root}/{name}"));
+                    EarlyEntry::Scanned(name, node)
+                } else {
+                    EarlyEntry::Deferred(name)
+                }
+            })
+            .collect()
+    }
+}
+
 fn mount_scanned_layout_root(engine: &Engine, scanned: Vec<(String, ScanNode)>) -> MountCounts {
     let mut mount = MountCounts::default();
     let game = engine.world().game;
@@ -2265,6 +2372,7 @@ fn mount_scanned_layout_root(engine: &Engine, scanned: Vec<(String, ScanNode)>) 
 /// A pool of the caller's thread alone lists them when the caller waits ([`listing`]).
 pub struct Prescan {
     roots: Vec<(String, crate::sort::channel::Receiver<Vec<(String, ScanNode)>>)>,
+    early_roots: Vec<(String, crate::sort::channel::Receiver<Vec<EarlyEntry>>)>,
     /// The data roots ([`data_roots`]) and their subtrees listed: (relative path, listing) in order
     data: Option<crate::sort::channel::Receiver<Vec<(String, ScanNode)>>>,
 }
@@ -2274,13 +2382,39 @@ impl Prescan {
         Prescan::start_for(roots, roots, reflection)
     }
 
+    /// Starts listing layout and data roots before [`Reflection`] has finished loading, so NTFS
+    /// directory scans overlap with both reflection deserialization and VM startup. Common service
+    /// directories are scanned eagerly; any uncommon top-level directory is checked against
+    /// reflection and scanned in order during [`Prescan::mount`].
+    pub(crate) fn start_early(roots: &[String], place_roots: &[String]) -> Prescan {
+        if crate::lua::modules::is_batch_frozen() {
+            return Prescan { roots: Vec::new(), early_roots: Vec::new(), data: None };
+        }
+        let given = place_roots.to_vec();
+        let early_roots: Vec<_> = roots
+            .iter()
+            .map(|root| {
+                let (send, receive) = crate::sort::channel::channel();
+                let path = root.clone();
+                rayon::spawn(move || drop(send.send(scan_layout_root_early(&path))));
+                (root.clone(), receive)
+            })
+            .collect();
+        let (send, receive) = crate::sort::channel::channel();
+        rayon::spawn(move || {
+            let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
+            drop(send.send(listed));
+        });
+        Prescan { roots: Vec::new(), early_roots, data: Some(receive) }
+    }
+
     /// [`Prescan::start`] of layout roots `roots`, with the data roots of the place `place_roots` names
     /// ([`crate::mount::place_roots`]: a Rojo project file's folder when it is mounted without roots).
     pub fn start_for(roots: &[String], place_roots: &[String], reflection: &std::sync::Arc<Reflection>) -> Prescan {
         // In `ree run --batch`, OS worker threads share `batch_listed` directly instead of queuing
         // duplicate prescan jobs onto the global rayon pool.
         if crate::lua::modules::is_batch_frozen() {
-            return Prescan { roots: Vec::new(), data: None };
+            return Prescan { roots: Vec::new(), early_roots: Vec::new(), data: None };
         }
         let given = place_roots.to_vec();
         let layout: Vec<_> = roots
@@ -2297,7 +2431,7 @@ impl Prescan {
             let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
             drop(send.send(listed));
         });
-        Prescan { roots: layout, data: Some(receive) }
+        Prescan { roots: layout, early_roots: Vec::new(), data: Some(receive) }
     }
 
     /// The data roots' subtrees mounted from their listings (as mount_subtree mounts each, in
@@ -2312,6 +2446,27 @@ impl Prescan {
 
     /// Layout root `root` mounted from its listing (listed now if it was not listed ahead).
     pub fn mount(&mut self, engine: &Engine, root: &str) -> MountCounts {
+        if let Some(index) = self.early_roots.iter().position(|(path, _)| path == root)
+            && let Some(entries) = listing(self.early_roots.remove(index).1)
+        {
+            let mut scanned = Vec::with_capacity(entries.len());
+            for entry in entries {
+                match entry {
+                    EarlyEntry::Scanned(name, node) => {
+                        if engine.reflection.class_by_name(&name).is_some_and(|c| c.service) {
+                            scanned.push((name, node));
+                        }
+                    }
+                    EarlyEntry::Deferred(name) => {
+                        if engine.reflection.class_by_name(&name).is_some_and(|c| c.service) {
+                            let node = listed(format!("{root}/{name}"));
+                            scanned.push((name, node));
+                        }
+                    }
+                }
+            }
+            return mount_scanned_layout_root(engine, scanned);
+        }
         let listed = match self.roots.iter().position(|(path, _)| path == root) {
             Some(index) => listing(self.roots.remove(index).1),
             None => None,

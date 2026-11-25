@@ -39,7 +39,7 @@ use crate::{
     value::Value,
 };
 
-const LOOPBACK: &str = include_str!("loopback.luau");
+pub(crate) static LOOPBACK: &str = include_str!("loopback.luau");
 
 /// An invoke waiting for its remote's callback: (call id, arguments)
 type WaitingInvoke = (u32, Box<[Wire]>);

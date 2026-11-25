@@ -45,7 +45,7 @@ pub mod run;
 #[cfg(test)]
 mod tests;
 
-use std::{cell::RefCell, path::Path, rc::Rc};
+use std::{cell::RefCell, path::Path, rc::Rc, sync::Arc};
 
 use glam::Affine3A;
 use rbx_dom_weak::{InstanceBuilder, Ustr, WeakDom, types as dom, types::Variant, ustr};
@@ -360,10 +360,10 @@ struct Inner {
     /// Sibling names already used in the scene, by parent record (None: the file's roots)
     names: FxHashMap<Option<usize>, SiblingNames>,
     /// Precomputed per-class snapshot & tracking plans
-    plans: FxHashMap<ClassId, Rc<SnapshotPlan>>,
-    tracked: FxHashMap<ClassId, Rc<[(NameId, Track)]>>,
+    plans: FxHashMap<ClassId, Arc<SnapshotPlan>>,
+    tracked: FxHashMap<ClassId, Arc<[(NameId, Track)]>>,
     /// The instance references the scene file holds, per class
-    reference_names: FxHashMap<ClassId, Rc<[NameId]>>,
+    reference_names: FxHashMap<ClassId, Arc<[NameId]>>,
     /// Property names by id, for the playback
     property_names: FxHashMap<NameId, String>,
     /// Lighting's children before the run (the place's own sky and effects: the renderer's stage
@@ -528,10 +528,35 @@ impl Recorder {
     pub fn write(&self, engine: &Rc<Engine>, out: &Path, extra: Map<String, Json>) -> Result<Json, String> {
         let inner = self.inner.borrow();
         std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
-        let scene = crate::timing::time("write: scene", || scene(&inner))?;
-        std::fs::write(out.join("scene.rbxm"), scene).map_err(|e| format!("scene.rbxm: {e}"))?;
-        let playback = crate::timing::time("write: playback", || playback(&inner));
-        crate::timing::time("write: playback.json", || write_playback(&out.join("playback.json"), &playback))?;
+        let inner_ref: &Inner = &inner;
+        let scene_path = out.join("scene.rbxm");
+        let playback_path = out.join("playback.json");
+        let profiling = crate::timing::enabled();
+        let (scene_res, playback_res) = rayon::join(
+            || -> Result<f64, String> {
+                let t0 = profiling.then(std::time::Instant::now);
+                let scene = scene(inner_ref)?;
+                let scene_secs = t0.map_or(0.0, |t| t.elapsed().as_secs_f64());
+                std::fs::write(&scene_path, scene).map_err(|e| format!("scene.rbxm: {e}"))?;
+                Ok(scene_secs)
+            },
+            || -> Result<(Playback, f64, f64), String> {
+                let t0 = profiling.then(std::time::Instant::now);
+                let pb = playback(inner_ref);
+                let pb_secs = t0.map_or(0.0, |t| t.elapsed().as_secs_f64());
+                let t1 = profiling.then(std::time::Instant::now);
+                write_playback(&playback_path, &pb)?;
+                let pb_json_secs = t1.map_or(0.0, |t| t.elapsed().as_secs_f64());
+                Ok((pb, pb_secs, pb_json_secs))
+            },
+        );
+        let scene_secs = scene_res?;
+        let (playback, pb_secs, pb_json_secs) = playback_res?;
+        if profiling {
+            crate::timing::add("write: scene", scene_secs);
+            crate::timing::add("write: playback", pb_secs);
+            crate::timing::add("write: playback.json", pb_json_secs);
+        }
         let spooled = engine.state.borrow_mut().output.take_spool();
         let events = events(&inner, engine);
         let counts = {
@@ -746,7 +771,7 @@ fn is_a(engine: &Engine, class: ClassId, name: &str) -> bool {
 }
 
 /// The tracked properties of a class.
-fn tracked(inner: &mut Inner, engine: &Engine, class: ClassId) -> Rc<[(NameId, Track)]> {
+fn tracked(inner: &mut Inner, engine: &Engine, class: ClassId) -> Arc<[(NameId, Track)]> {
     if let Some(found) = inner.tracked.get(&class) {
         return found.clone();
     }
@@ -766,14 +791,14 @@ fn tracked(inner: &mut Inner, engine: &Engine, class: ClassId) -> Rc<[(NameId, T
             }
         }
     }
-    let list: Rc<[(NameId, Track)]> = list.into();
+    let list: Arc<[(NameId, Track)]> = list.into();
     inner.tracked.insert(class, list.clone());
     list
 }
 
 /// The instance references the scene file holds for a class: its serialized Ref properties (a beam's
 /// and a trail's attachments, a model's PrimaryPart, a GUI's Adornee, a constraint's parts).
-fn reference_names(inner: &mut Inner, engine: &Engine, class: ClassId) -> Rc<[NameId]> {
+fn reference_names(inner: &mut Inner, engine: &Engine, class: ClassId) -> Arc<[NameId]> {
     if let Some(found) = inner.reference_names.get(&class) {
         return found.clone();
     }
@@ -787,7 +812,7 @@ fn reference_names(inner: &mut Inner, engine: &Engine, class: ClassId) -> Rc<[Na
             names.push(name);
         }
     }
-    let names: Rc<[NameId]> = names.into();
+    let names: Arc<[NameId]> = names.into();
     inner.reference_names.insert(class, names.clone());
     names
 }
@@ -1024,7 +1049,7 @@ fn join(path: Option<&str>, name: &str) -> String {
 
 /// Precomputes the per-class reflection and tracking metadata once per `ClassId` so `snapshot`
 /// and `appear` avoid repeated `rbx_reflection_database` walks, sorting, and string interning.
-fn snapshot_plan(inner: &mut Inner, engine: &Engine, class: ClassId) -> Rc<SnapshotPlan> {
+fn snapshot_plan(inner: &mut Inner, engine: &Engine, class: ClassId) -> Arc<SnapshotPlan> {
     if let Some(found) = inner.plans.get(&class) {
         return found.clone();
     }
@@ -1090,7 +1115,7 @@ fn snapshot_plan(inner: &mut Inner, engine: &Engine, class: ClassId) -> Rc<Snaps
             file_key: if track == Track::Effective { transp } else { name },
         })
         .collect();
-    let plan = Rc::new(SnapshotPlan {
+    let plan = Arc::new(SnapshotPlan {
         serialized,
         extra,
         known_attrs,

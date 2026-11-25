@@ -19,8 +19,8 @@ use crate::{
     value::{Str, Value},
 };
 
-const PRELUDE: &str = include_str!("prelude.luau");
-const VECTOR3: &str = include_str!("vector3.luau");
+pub(crate) static PRELUDE: &str = include_str!("prelude.luau");
+pub(crate) static VECTOR3: &str = include_str!("vector3.luau");
 
 /// Services Engine.Start creates, in its order.
 const START_SERVICES: &[&str] = &[

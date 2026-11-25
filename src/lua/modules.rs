@@ -682,6 +682,11 @@ static ENGINE_COMPILES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atom
 /// The engine's own Luau chunks compiled so far, by the address of their (compiled-in) source
 static ENGINE_BYTECODE: std::sync::Mutex<Vec<(usize, std::sync::Arc<[u8]>)>> = std::sync::Mutex::new(Vec::new());
 
+/// Single-flight coordination for engine Luau compilation so background warm-up and foreground load
+/// never compile the same static chunk twice.
+type EngineSlot = std::sync::Arc<(std::sync::Mutex<Option<Result<std::sync::Arc<[u8]>, String>>>, std::sync::Condvar)>;
+static ENGINE_INFLIGHT: std::sync::Mutex<Vec<(usize, EngineSlot)>> = std::sync::Mutex::new(Vec::new());
+
 thread_local! {
     /// The compiles of [`ENGINE_COMPILES`] this thread made
     static ENGINE_COMPILES_HERE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -697,6 +702,97 @@ pub fn engine_compiles_here() -> usize {
     ENGINE_COMPILES_HERE.with(std::cell::Cell::get)
 }
 
+fn ensure_engine_bytecode(source: &'static str, count_here: bool) -> Result<std::sync::Arc<[u8]>, String> {
+    let key = source.as_ptr() as usize;
+    if let Some(bytecode) = ENGINE_BYTECODE
+        .lock()
+        .ok()
+        .and_then(|kept| kept.iter().find(|(at, _)| *at == key).map(|(_, bytecode)| bytecode.clone()))
+    {
+        return Ok(bytecode);
+    }
+    let (slot, owner) = {
+        let mut inflight = ENGINE_INFLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(bytecode) = ENGINE_BYTECODE
+            .lock()
+            .ok()
+            .and_then(|kept| kept.iter().find(|(at, _)| *at == key).map(|(_, bytecode)| bytecode.clone()))
+        {
+            return Ok(bytecode);
+        }
+        if let Some((_, existing)) = inflight.iter().find(|(at, _)| *at == key) {
+            (existing.clone(), false)
+        } else {
+            let created: EngineSlot = std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+            inflight.push((key, created.clone()));
+            (created, true)
+        }
+    };
+    if owner {
+        let result = engine_compiler().compile(source).map_err(|e| e.to_string()).map(|compiled| {
+            ENGINE_COMPILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if count_here {
+                ENGINE_COMPILES_HERE.with(|count| count.set(count.get() + 1));
+            }
+            let bytecode: std::sync::Arc<[u8]> = crate::alloc::long_lived(|| std::sync::Arc::from(compiled.as_slice()));
+            if let Ok(mut kept) = ENGINE_BYTECODE.lock()
+                && !kept.iter().any(|(at, _)| *at == key)
+            {
+                crate::alloc::long_lived(|| kept.push((key, bytecode.clone())));
+            }
+            bytecode
+        });
+        {
+            let mut inflight = ENGINE_INFLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(pos) = inflight.iter().position(|(at, _)| *at == key) {
+                inflight.swap_remove(pos);
+            }
+        }
+        let (lock, cvar) = &*slot;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
+        cvar.notify_all();
+        result
+    } else {
+        let (lock, cvar) = &*slot;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(res) = guard.as_ref() {
+                return res.clone();
+            }
+            guard = cvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+/// Spawns parallel background compilation of the engine's static Luau chunks so they finish while
+/// reflection loads instead of compiling sequentially on the main thread during `mount: start`.
+pub(crate) fn warm_engine_luau(server: bool, loopback: bool) {
+    if rayon::current_num_threads() <= 1 || rayon::current_thread_index().is_some() {
+        return;
+    }
+    let mut chunks: [&'static str; 5] = [super::stubs::SERVICES, super::globals::PRELUDE, super::globals::VECTOR3, "", ""];
+    let mut len = 3;
+    if server {
+        chunks[len] = super::stubs::SERVER;
+        len += 1;
+    }
+    if loopback {
+        chunks[len] = crate::loopback::remotes::LOOPBACK;
+        len += 1;
+    }
+    let already_cached = |source: &'static str| {
+        let key = source.as_ptr() as usize;
+        ENGINE_BYTECODE.lock().ok().is_some_and(|kept| kept.iter().any(|(at, _)| *at == key))
+    };
+    for &source in &chunks[..len] {
+        if !already_cached(source) {
+            rayon::spawn(move || {
+                let _ = ensure_engine_bytecode(source, false);
+            });
+        }
+    }
+}
+
 /// A chunk of the engine's own Luau (the prelude, services.luau, server.luau, vector3.luau: a compiled-in `source`) as a
 /// function named `name`, in `env` when given. Its bytecode is compiled once per process ([`engine_compiler`]) and every VM
 /// loads those bytes, which are what its own compile would have made (mlua compiles a text chunk with its compiler and loads
@@ -704,21 +800,7 @@ pub fn engine_compiles_here() -> usize {
 /// it: the 137 KB of engine Luau took 8.7-9.0 ms to compile and 0.34-0.37 ms to load (docs/engine.md, Log 2026-11-19). The
 /// bytes stay in the long-lived heap (crate::alloc) for the process.
 pub fn load_engine_luau(lua: &Lua, source: &'static str, name: &str, env: Option<LuaTable>) -> LuaResult<LuaFunction> {
-    let key = source.as_ptr() as usize;
-    let kept = ENGINE_BYTECODE.lock().ok().and_then(|kept| kept.iter().find(|(at, _)| *at == key).map(|(_, bytecode)| bytecode.clone()));
-    let bytecode = match kept {
-        Some(bytecode) => bytecode,
-        None => {
-            let compiled = engine_compiler().compile(source)?;
-            ENGINE_COMPILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            ENGINE_COMPILES_HERE.with(|count| count.set(count.get() + 1));
-            let bytecode: std::sync::Arc<[u8]> = crate::alloc::long_lived(|| std::sync::Arc::from(compiled.as_slice()));
-            if let Ok(mut kept) = ENGINE_BYTECODE.lock() {
-                crate::alloc::long_lived(|| kept.push((key, bytecode.clone())));
-            }
-            bytecode
-        }
-    };
+    let bytecode = ensure_engine_bytecode(source, true).map_err(LuaError::runtime)?;
     let chunk = lua.load(&*bytecode).set_mode(mlua::chunk::ChunkMode::Binary).set_name(name);
     match env {
         Some(env) => chunk.set_environment(env).into_function(),

@@ -63,6 +63,14 @@ impl Emulator {
         let place_roots = spec.place_roots();
         // Start listing layout and data roots while the Luau VM initializes.
         let prescan = crate::project::Prescan::start_for(&spec.roots, &place_roots, &engine.reflection);
+        Self::start_with_prescan(engine, spec, prescan)
+    }
+
+    pub(crate) fn start_with_prescan(
+        engine: Rc<Engine>,
+        spec: &ProjectSpec,
+        prescan: crate::project::Prescan,
+    ) -> Result<Emulator, String> {
         let lua = Lua::new();
         match mount::mount_project_with_prescan(&lua, &engine, spec, Instant::now(), prescan) {
             Ok(project) => Ok(Emulator { engine, project, lua: ManuallyDrop::new(lua) }),
