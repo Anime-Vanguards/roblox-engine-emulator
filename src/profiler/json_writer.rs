@@ -140,7 +140,12 @@ impl JsonWriter {
     pub(super) fn object(&mut self) -> ObjectWriter<'_> {
         self.buf.push(b'{');
         self.depth += 1;
-        ObjectWriter { w: self, first: true }
+        ObjectWriter {
+            w: self,
+            first: true,
+            #[cfg(any(test, debug_assertions))]
+            last: String::new(),
+        }
     }
 
     #[inline(never)]
@@ -154,13 +159,26 @@ impl JsonWriter {
 pub(super) struct ObjectWriter<'a> {
     pub(super) w: &'a mut JsonWriter,
     first: bool,
+    /// The key written last. serde_json's maps wrote every object's keys sorted, so test and debug builds check that each
+    /// key sorts after the one before it: a field declared out of order, or two of the same name, would change the output.
+    #[cfg(any(test, debug_assertions))]
+    last: String,
 }
 
 impl<'a> ObjectWriter<'a> {
+    #[cfg(any(test, debug_assertions))]
+    fn sorted_after_last(&mut self, key: &str) {
+        assert!(self.first || key > self.last.as_str(), "JSON key {key:?} comes after {:?}: an object's keys go in sorted order", self.last);
+        self.last.clear();
+        self.last.push_str(key);
+    }
+
     /// Writes a field key known to be plain printable ASCII without quotes or backslashes.
     #[inline(never)]
     pub(super) fn begin_field(&mut self, key: &str) {
         debug_assert!(key.bytes().all(|b| b >= 0x20 && b != b'"' && b != b'\\'));
+        #[cfg(any(test, debug_assertions))]
+        self.sorted_after_last(key);
         if !self.first {
             self.w.buf.push(b',');
         }
@@ -176,6 +194,8 @@ impl<'a> ObjectWriter<'a> {
     /// Writes a dynamic field key with full JSON string escaping.
     #[inline(never)]
     pub(super) fn begin_field_escaped(&mut self, key: &str) {
+        #[cfg(any(test, debug_assertions))]
+        self.sorted_after_last(key);
         if !self.first {
             self.w.buf.push(b',');
         }
@@ -538,5 +558,34 @@ mod tests {
         });
         assert_eq!(JsonWriter::to_string(&sample), serde_json::to_string(&expected).unwrap());
         assert_eq!(JsonWriter::to_string_pretty(&sample), serde_json::to_string_pretty(&expected).unwrap());
+    }
+
+    json_struct! {
+        struct OutOfOrder {
+            b: u64,
+            a: u64,
+        }
+    }
+
+    json_struct! {
+        struct RenamedOntoAnother {
+            kind: u64,
+            #[rename = "kind"]
+            ty: u64,
+        }
+    }
+
+    /// A field declared out of order, or renamed onto another's name, writes keys a sorted map never would: the
+    /// writer refuses it in tests and debug builds.
+    #[test]
+    fn keys_out_of_order_are_refused() {
+        for written in [
+            std::panic::catch_unwind(|| JsonWriter::to_string(&OutOfOrder { b: 1, a: 2 })),
+            std::panic::catch_unwind(|| JsonWriter::to_string(&RenamedOntoAnother { kind: 1, ty: 2 })),
+        ] {
+            let problem = written.expect_err("written unsorted");
+            let text = problem.downcast_ref::<String>().map(String::as_str).unwrap_or_default();
+            assert!(text.contains("an object's keys go in sorted order"), "{text}");
+        }
     }
 }
