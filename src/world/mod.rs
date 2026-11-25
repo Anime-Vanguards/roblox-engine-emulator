@@ -711,6 +711,9 @@ fn keep_homes(engine: &Engine) {
         let parts = reflection.classes.iter().map(|info| info.is_a(base_part) && !info.is_a(terrain)).collect();
         state.dom.keep_logged_classes(parts);
     }
+    // (what no spatial index reads, the queries modelling no collision groups (query.rs): a write of either logs no part, in the
+    // Workspace's log or a WorldModel's, from the start)
+    state.dom.keep_unread(["CollisionGroup", "CollisionGroupId"].into_iter().filter_map(|name| reflection.name_id(name)).collect());
 }
 
 /// The WorldRoot `id` is in (its nearest WorldRoot ancestor: the Workspace or a WorldModel), from the homes the dom keeps

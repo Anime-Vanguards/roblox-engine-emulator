@@ -432,19 +432,35 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
             if setter {
                 let setter = engine.behaviors.borrow().find_setter(&engine.reflection, class, name).cloned();
                 if let Some(setter) = setter {
+                    // (a part's version: a setter that stores nothing new on the part leaves it)
+                    let part = engine.reflection.is_a(class, "BasePart");
+                    let version = part.then(|| engine.state.borrow().dom.at(id).version);
                     setter(lua, engine, id, value.clone())?;
                     // (a behaviour's setter stores through the engine: priced as a write that changed, a part's with the WorldModels
-                    // above it)
+                    // above it, unless it left the part as it was (the value it holds, a CollisionGroup of "" or of the name it has):
+                    // that write changes nothing and pays nothing more, as a playing client's (Studio 0.747, a part below 0, 100 and 300
+                    // WorldModels in the Workspace and in ReplicatedStorage: CollisionGroup, CollisionGroupId, Color and Position
+                    // written what they hold 0.05 to 1.2 us, where ree charged them 2, 1, 3 and 5 changes' worth, 76 to 380 us at 300))
                     let state = engine.state.borrow();
+                    let changed = name == K::Parent as NameId || version.is_none_or(|version| state.dom.get(id).is_none_or(|part| part.version != version));
                     let property = engine.reflection.name(name);
-                    let (placed, levels) = part_placement(engine, &state, class, id);
+                    let (placed, levels) = if changed && part { crate::world::placement(&state.dom, &engine.reflection, engine.world().workspace, id) } else { (false, 0) };
                     // (a Parent setter's move pays its levels itself: set_parent; a CollisionGroup setter that changed the part's
                     // CollisionGroupId made one more change: services/physics.rs wrote_id)
                     let id_changed = crate::services::physics::wrote_id(engine, name);
-                    let levels = if name == K::Parent as NameId { 0.0 } else { changed_levels(&state, id, property, id_changed, levels) };
-                    let price = crate::cost::write(&engine.reflection, class, property, true, placed) + levels + write_touch(&state, id, name, property, true);
+                    let levels = if name == K::Parent as NameId {
+                        0.0
+                    } else if changed {
+                        changed_levels(&state, id, property, id_changed, levels)
+                    } else {
+                        if state.sched.is_muted() {
+                            state.sched.touched.borrow_mut().pivot_root.take_if(|root| *root == id);
+                        }
+                        0.0
+                    };
+                    let price = crate::cost::write(&engine.reflection, class, property, changed, placed) + levels + write_touch(&state, id, name, property, changed);
                     state.sched.charge(price);
-                    cross_set(engine, &state, id, name, price, true);
+                    cross_set(engine, &state, id, name, price, changed);
                     return Ok(());
                 }
             }

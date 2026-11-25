@@ -1019,6 +1019,21 @@ pub const LOCALIZATION_SERVICE_LOCALE_READ: f64 = 0.05e-6;
 /// Folders, 1.8-3.4 beside none), and ree looks at none of them.
 pub const COLLISION_GROUP_PART: f64 = 1.7e-9;
 pub const COLLISION_GROUP_CHANGED: f64 = 0.38e-6;
+/// A part's CollisionGroup written "", which changes nothing (services/physics.rs), beyond a write that changes nothing
+/// ([`WRITE_QUIET`]): a playing client (roblox-sim, Studio 0.747, a part below 0, 100 and 300 WorldModels in the Workspace and in
+/// ReplicatedStorage, the median of 15 less an empty loop) spent 0.89 to 1.32 us a write whatever the levels (median 1.07), where
+/// a write of the name the part has cost 0.08 to 0.15.
+pub const COLLISION_GROUP_IGNORED: f64 = 1.0e-6;
+/// What a client spends taking in a snapshot of its server's groups that works out its parts' ids again (services/physics.rs
+/// apply): a part it looks at, and one whose id it changes. A playing client of a loopback session (roblox-sim, Studio 0.747,
+/// headless, its server in a process of its own; every frame kept busy for 20 ms in Heartbeat and the rest of each frame timed,
+/// six rounds a scene): with 2,000, 5,000, 10,000 and 20,000 parts in the Workspace named a group the server registers and
+/// unregisters, the frame that took the change in (and the next) spent 3.1 to 61 ms more, 1.0 to 3.1 us a part (median 1.89,
+/// 1.1 to 2.4 from the 10th to the 90th percentile of ten); a group no part names registered or unregistered 0.08 to 0.7 ms,
+/// about 30 ns a part. A snapshot that changes masks alone costs a client about 45 ns a part too (0.9 ms at 20,000), which ree,
+/// keeping no ids by mask, does not charge (nor a server's 1.7 ns a part for CollisionGroupSetCollidable).
+pub const CLIENT_GROUP_PART: f64 = 30e-9;
+pub const CLIENT_GROUP_CHANGED: f64 = 1.86e-6;
 /// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path meets up to its hit,
 /// whether its filter admits them or not, and none behind the hit (world/query.rs charge_cast: a client's cast stops there, measured
 /// on Studio 0.747 for all four): one that meets any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`] (but a shape

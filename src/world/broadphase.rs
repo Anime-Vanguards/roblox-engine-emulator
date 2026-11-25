@@ -176,9 +176,6 @@ struct Names {
     can_collide: Option<NameId>,
     can_touch: Option<NameId>,
     anchored: Option<NameId>,
-    /// BasePart.CollisionGroup and CollisionGroupId, which no entry reads (the queries model no collision groups: query.rs)
-    collision_group: Option<NameId>,
-    collision_group_id: Option<NameId>,
 }
 
 /// One world's index: its grid and its parts' entries
@@ -289,8 +286,6 @@ pub fn install(engine: &Engine) {
         can_collide: reflection.name_id("CanCollide"),
         can_touch: reflection.name_id("CanTouch"),
         anchored: reflection.name_id("Anchored"),
-        collision_group: reflection.name_id("CollisionGroup"),
-        collision_group_id: reflection.name_id("CollisionGroupId"),
     };
     let mut state = engine.state.borrow_mut();
     let spatial = &mut state.spatial;
@@ -770,9 +765,7 @@ fn open_workspace_log(state: &mut State, engine: &Engine, names: Names, workspac
     if !current {
         crate::profiler::caches::miss(crate::profiler::caches::Cache::Queries);
         walk_world(state, engine, names, world, workspace);
-        let mut watch = Watch::new(workspace, state.spatial.index(world).limit());
-        watch.unread.extend([names.collision_group, names.collision_group_id].into_iter().flatten());
-        state.dom.watch = Some(watch);
+        state.dom.watch = Some(Watch::new(workspace, state.spatial.index(world).limit()));
         return world;
     }
     let watch = state.dom.watch.as_mut().expect("watched");

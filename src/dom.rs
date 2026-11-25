@@ -747,6 +747,9 @@ pub struct Dom {
     /// Whether each class (by id) is one a [`WorldLog`] logs below an instance leaving its world, and whose writes it logs (the
     /// BaseParts but Terrain: [`Dom::keep_logged_classes`]); empty while none is named
     logged_classes: Vec<bool>,
+    /// The properties no spatial index reads, the Workspace's or a WorldModel's ([`Dom::keep_unread`]: a part's collision group):
+    /// a write of one leaves the instance out of the [`Watch`] and of its world's [`WorldLog`] alike ([`Dom::bump_version_of`])
+    unread: Vec<NameId>,
     /// A stack reused to walk a subtree whose home changed, or whose homes' outermost home did (each entry: whether it takes the
     /// new home, or keeps its own and only what is above it changed)
     home_walk: Vec<(InstanceId, bool)>,
@@ -806,16 +809,13 @@ impl WorldLog {
 /// (`moved`: [`Watch::logged`]; `written`: [`flags::LOGGED`]), however often it moves or is written. Each entry is a few ids of
 /// work for the index, so a change costs it what the change touched, never a walk of the root. Past `limit` entries (distinct
 /// instances) the log stops and says so (`overflowed`), and the index starts over from the root, so a run that stops querying
-/// keeps no more than that. A write of a property the index never reads (`unread`) is not logged.
+/// keeps no more than that. A write of a property the index never reads ([`Dom::keep_unread`]) is not logged.
 pub struct Watch {
     pub root: InstanceId,
     pub moved: Vec<InstanceId>,
     pub written: Vec<InstanceId>,
     pub limit: usize,
     pub overflowed: bool,
-    /// The properties whose writes leave an instance out of `written` ([`Dom::bump_version_of`]): what the index holds of a part
-    /// does not read them
-    pub unread: Vec<NameId>,
     /// The instances in `moved` (a stale id stays apart from its slot's next instance)
     logged: FxHashSet<InstanceId>,
     /// A leaving subtree's walk (Dom::log_leaving)
@@ -824,7 +824,7 @@ pub struct Watch {
 
 impl Watch {
     pub fn new(root: InstanceId, limit: usize) -> Self {
-        Watch { root, moved: Vec::new(), written: Vec::new(), limit, overflowed: false, unread: Vec::new(), logged: FxHashSet::default(), walk: Vec::new() }
+        Watch { root, moved: Vec::new(), written: Vec::new(), limit, overflowed: false, logged: FxHashSet::default(), walk: Vec::new() }
     }
 
     fn room(&mut self) -> bool {
@@ -1648,6 +1648,13 @@ impl Dom {
         self.logged_classes = classes;
     }
 
+    /// Names the properties no spatial index reads (world/mod.rs: a part's CollisionGroup and CollisionGroupId), whose writes
+    /// [`Dom::bump_version_of`] leaves out of the Workspace's log and every world's, from the run's start: before the Workspace's
+    /// index is made too, when a WorldModel's index may already follow its world.
+    pub fn keep_unread(&mut self, names: Vec<NameId>) {
+        self.unread = names;
+    }
+
     /// Starts (or starts over) the change log of the world whose home is `home` ([`WorldLog`]), up to `limit` entries.
     pub fn follow_world(&mut self, home: InstanceId, limit: usize) {
         self.world_logs.insert(home, WorldLog { limit, ..WorldLog::default() });
@@ -1911,11 +1918,11 @@ impl Dom {
         }
     }
 
-    /// [`Dom::bump_version`] for a write of the property `name`: one the spatial index never reads ([`Watch::unread`], a part's
-    /// collision group) leaves the instance out of its log, so a collision-group change does not have the index read every part
-    /// whose id it changed again.
+    /// [`Dom::bump_version`] for a write of the property `name`: one no spatial index reads ([`Dom::keep_unread`], a part's
+    /// collision group) leaves the instance out of the Workspace's log and its world's, whichever of their indexes was made, so a
+    /// collision-group change does not have an index read every part whose id it changed again.
     pub fn bump_version_of(&mut self, id: InstanceId, name: NameId) {
-        if self.watch.as_ref().is_some_and(|watch| watch.unread.contains(&name)) {
+        if self.unread.contains(&name) {
             let instance = self.at_mut(id);
             instance.version = instance.version.wrapping_add(1);
             self.write_version = self.write_version.wrapping_add(1);

@@ -3663,6 +3663,86 @@ fn a_part_below_worldmodels_pays_for_them_in_one_lookup() {
     assert!(deep < 2.0 * shallow + 0.02, "2,000 PivotTo calls that moved nothing took {deep:.3} s of host time to a part below 10,000 WorldModels, {shallow:.3} s below none");
 }
 
+/// A part's write through a behaviour setter (lua/instance.rs assign) that leaves the part as it was costs what any write that
+/// changes nothing costs, below WorldModels too, as a playing client's (Studio 0.747, below 0, 100 and 300 WorldModels in the
+/// Workspace and in ReplicatedStorage: 0.05 to 1.2 us a write): CollisionGroup written the name it has, CollisionGroupId, Color
+/// and Position written what they hold cost what Transparency written the value it holds does, below 300 WorldModels and below
+/// 300 Folders, and CollisionGroup written "" a flat cost.rs COLLISION_GROUP_IGNORED more. Writes that change the part still pay
+/// the WorldModels for their changes (2, 3 and 5). Each such write was priced as a change: 76 to 382 us below 300 WorldModels.
+#[test]
+fn a_parts_setter_write_that_changes_nothing_pays_nothing_more() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let levels = |changes: u32| crate::cost::world_levels(300, changes);
+    run(&lua, &engine, &format!("shared.Levels = {{ [0] = 0, {:e}, {:e}, {:e}, {:e}, {:e} }} shared.Ignored = {:e}", levels(1), levels(2), levels(3), levels(4), levels(5), crate::cost::COLLISION_GROUP_IGNORED));
+    run(
+        &lua,
+        &engine,
+        r#"
+        -- (a part at the bottom of 300 instances of `Kind` nested one in another, made from the top down in `Where`, with the
+        -- values it holds)
+        local function Chain(Kind, Where)
+            local Deepest = Where
+            for _ = 1, 300 do
+                local Level = Instance.new(Kind)
+                Level.Parent = Deepest
+                Deepest = Level
+            end
+            local Part = Instance.new("Part")
+            Part.Anchored, Part.CanCollide, Part.Size, Part.CFrame = true, false, Vector3.one, CFrame.new(300, 300, 300)
+            Part.Parent = Deepest
+            return { Part = Part, Zero = 0, Name = "Default", Empty = "", Id = Part.CollisionGroupId, Color = Part.Color, At = Part.Position }
+        end
+        local Storage = game:GetService("ReplicatedStorage")
+        local Scenes = {
+            Worlds = Chain("WorldModel", workspace), Folders = Chain("Folder", workspace),
+            LooseWorlds = Chain("WorldModel", Storage), LooseFolders = Chain("Folder", Storage),
+        }
+        -- what 10 writes of each kind cost the work clock, after one untimed (the frame's first of a kind runs its code cold)
+        local function Cost(Scene, Write)
+            Write(Scene, 1)
+            local Start = os.clock()
+            for I = 2, 11 do
+                Write(Scene, I)
+            end
+            return os.clock() - Start
+        end
+        local Quiet = function(S) S.Part.Transparency = S.Zero end
+        local Same = {
+            { "CollisionGroup", 0, function(S) S.Part.CollisionGroup = S.Name end },
+            { "CollisionGroup \"\"", shared.Ignored, function(S) S.Part.CollisionGroup = S.Empty end },
+            { "CollisionGroupId", 0, function(S) S.Part.CollisionGroupId = S.Id end },
+            { "Color", 0, function(S) S.Part.Color = S.Color end },
+            { "Position", 0, function(S) S.Part.Position = S.At end },
+        }
+        -- (a CollisionGroup change out of the Workspace also pays the walk up that finds its WorldModel in the DataModel:
+        -- services/physics.rs model_inside)
+        local Changes = {
+            { "CollisionGroup", 2, function(S, I) S.Part.CollisionGroup = if I % 2 == 0 then "ZzA" else "ZzB" end, true },
+            { "Color", 3, function(S, I) S.Part.Color = if I % 2 == 0 then Color3.new(1, 0, 0) else Color3.new(0, 1, 0) end },
+            { "Position", 5, function(S, I) S.Part.Position = Vector3.new(300, 300 + I % 2, 300) end },
+        }
+        for _, Pair in { { "Worlds", "Folders" }, { "LooseWorlds", "LooseFolders" } } do
+            local Worlds, Folders = Scenes[Pair[1]], Scenes[Pair[2]]
+            for _, Row in Same do
+                local Base = Cost(Worlds, Quiet)
+                local InWorlds, InFolders = Cost(Worlds, Row[3]), Cost(Folders, Row[3])
+                assert(math.abs(InWorlds - InFolders) < 1e-9, `{Row[1]} written what it holds below 300 WorldModels ({Pair[1]}) cost {InWorlds} s where below Folders {InFolders}`)
+                assert(math.abs(InWorlds - Base - 10 * Row[2]) < 0.2e-6, `{Row[1]} written what it holds ({Pair[1]}) cost {InWorlds} s for 10 where a Transparency write that changes nothing cost {Base}: {10 * Row[2]} s more expected`)
+            end
+            for _, Row in Changes do
+                if Row[4] and Pair[1] ~= "Worlds" then
+                    continue
+                end
+                local InWorlds, InFolders = Cost(Worlds, Row[3]), Cost(Folders, Row[3])
+                local Expected = 10 * shared.Levels[Row[2]]
+                assert(math.abs(InWorlds - InFolders - Expected) < 1e-9, `{Row[1]} changed below 300 WorldModels ({Pair[1]}) cost {InWorlds} s where below Folders {InFolders}: {Expected} s more expected`)
+            end
+        end
+        "#,
+    );
+}
+
 /// The physics step asks which world each loose part is in from the homes the dom keeps, and whether a parent holds a Humanoid
 /// once a step for each parent: 200 loose parts at the bottom of a chain of 20,000 folders fly for 60 frames on about the host
 /// time of 200 in a folder beside 20,000 others, and 5,000 loose parts in one folder for 30 on about that of 5,000 each in a

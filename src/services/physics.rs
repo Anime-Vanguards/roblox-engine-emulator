@@ -27,8 +27,12 @@
 //!   A client sees the groups its server registers, from its join on. A loopback client gets its server's registry at the
 //!   join and, after a server frame that changed it, once at that frame's flush, as the frame left it (a property's changes
 //!   in a frame go out once the same way): it works out its parts' ids again when a group's name changed (or the registry
-//!   is new to it), and a mask alone leaves them, as SetCollidable does on the server. A server and Studio's edit DataModel
-//!   may change it (the edit one by Roblox's documentation of the Collision Groups editor, not measured).
+//!   is new to it), and a mask alone leaves them, as SetCollidable does on the server. The parts it works out cost what a
+//!   client spends on them (cost.rs CLIENT_GROUP_PART, CLIENT_GROUP_CHANGED: 30 ns a part looked at and 1.86 us more a part
+//!   whose id changes, a 0.747 loopback client timed frame by frame); a snapshot of the groups it holds looks at no part (the
+//!   join's Default alone from a server that never touched its groups). Not matched: a mask alone costs a client about 45 ns
+//!   a part, not charged. A server and Studio's edit DataModel may change it (the edit one by Roblox's documentation of the
+//!   Collision Groups editor, not measured).
 //! - Arguments are cast from the last to the first, before any other check: a missing one "Argument n missing or nil". A
 //!   name casts any value to text (lua::convert::string_param: 5 is "5", true "true" after the warning a client gives for a
 //!   value that is neither a string nor a number, a table "{}"). The collidable flag
@@ -61,16 +65,19 @@
 //! - ree charges the same for a WorldModel's own group change on the parts it works out (those of the WorldModel, not those of
 //!   a WorldModel inside it), for a change of UseWorkspaceCollisionGroups on the parts that works out again, and for a tree
 //!   that comes into a WorldModel's world, or moves between worlds, on the parts that take their ids (both passes for the parts
-//!   of a WorldModel that uses the Workspace's groups); none of these was measured apart. No index holds a WorldModel's parts:
-//!   ree finds them by a walk of its descendants, which pays for each other instance it looks at what a recursive find pays
-//!   for a node (cost.rs FIND_NODE, a price borrowed: where a server's change of the Workspace's groups costs next to nothing
+//!   of a WorldModel that uses the Workspace's groups); none of these was measured apart. A group change reads no index of a
+//!   WorldModel's parts (world/broadphase.rs `WorldIndex`, made at its world's first spatial query or physics step): ree finds
+//!   them by a walk of its descendants, which pays for each other instance it looks at what a recursive find pays for a
+//!   node (cost.rs FIND_NODE, a price borrowed: where a server's change of the Workspace's groups costs next to nothing
 //!   beside its other instances, a WorldModel's was not measured), a loopback client's copy included. Whether a WorldModel
 //!   outside the Workspace is in the DataModel is looked for up its ancestors, which a method call, a part's CollisionGroup
 //!   write and a change of UseWorkspaceCollisionGroups pay for as IsDescendantOf does (cost.rs ANCESTOR_STEP), once a call; a
 //!   Parent write pays for the chains it walks already. A part's CollisionGroup write below WorldModels pays for them what any
 //!   part write pays (lua/instance.rs `assign`, cost.rs world_levels), for three changes when it changed the part's
 //!   CollisionGroupId and two when it did not, as a playing client counts them (Studio 0.748, in the Workspace and below a
-//!   WorldModel in ReplicatedStorage alike: cost.rs part_changes).
+//!   WorldModel in ReplicatedStorage alike: cost.rs part_changes). A write that changes nothing (the name the part has, or
+//!   "") pays nothing for them, as any write that changes nothing (Studio 0.747), and "" costs 1 us more than such a write,
+//!   whatever the levels (cost.rs COLLISION_GROUP_IGNORED).
 //!
 //! WorldRoot's eight collision-group methods are these on the world they are called on (Studio 0.748.0.7481526, a playing
 //! client and its server, script identity 2: tools/parity/probes/world_root_groups.luau, world_root_group_args.luau,
@@ -365,15 +372,20 @@ impl Groups {
     /// frame's changes. Groups other than Default alone, or a frame whose changes left them so ([`Snapshot::touched`]), start
     /// its parts' tracking. The parts that use them take their ids again, unless the parts were already followed and no
     /// group's name changed (a WorldModel's copy with no groups yet holds Default alone): a mask alone leaves the ids, as
-    /// CollisionGroupSetCollidable leaves them on the server. One rule for both kinds of snapshot.
+    /// CollisionGroupSetCollidable leaves them on the server. One rule for both kinds of snapshot. A snapshot of the groups the
+    /// client holds that leaves its tracking as it was (the join's Default alone from a server that never touched its groups)
+    /// changes nothing and looks at no part. The parts it works out cost what a client spends on them (cost.rs CLIENT_GROUP_PART,
+    /// CLIENT_GROUP_CHANGED), and a WorldModel's walk to them, ree's own work, what the server's change pays for it.
     fn apply(&self, engine: &Engine, world: Owner, snapshot: Snapshot) {
         let followed = self.tracking.get();
         let touched = snapshot.touched;
         let registry = Registry::from_snapshot(snapshot);
-        let renamed = self.read(world, |held| held.names != registry.names);
-        if touched || !registry.is_default() {
-            self.tracking.set(true);
+        let (held, renamed) = self.read(world, |held| (held.names == registry.names && held.masks == registry.masks, held.names != registry.names));
+        let follows = followed || touched || !registry.is_default();
+        if held && follows == followed {
+            return;
         }
+        self.tracking.set(follows);
         match world {
             Owner::Shared => *self.registry.borrow_mut() = registry,
             Owner::Model(model) => {
@@ -381,10 +393,7 @@ impl Groups {
             }
         }
         if !followed || renamed {
-            // (the parts cost a client's copy nothing, as the DataModel's do; a WorldModel's walk to them, ree's own work, is
-            // charged as the server's change charges it)
-            let resolved = self.resolve_world(engine, world);
-            Resolved { walked: resolved.walked, ..Resolved::default() }.charge(engine);
+            self.resolve_world(engine, world).charge_client(engine);
         }
     }
 
@@ -475,8 +484,8 @@ impl Groups {
     }
 
     /// The parts whose nearest world is the WorldModel `root`'s: its descendants but those in a WorldModel below it, in
-    /// GetDescendants' order, and how many other instances the walk looked at (a WorldModel's parts are in no index: the
-    /// module's notes).
+    /// GetDescendants' order, and how many other instances the walk looked at (no index is read for them: the module's
+    /// notes).
     fn parts_of(&self, state: &State, reflection: &Reflection, root: InstanceId) -> (Vec<InstanceId>, usize) {
         let mut parts = Vec::new();
         let mut walked = 0;
@@ -662,7 +671,17 @@ impl Resolved {
 
     /// [`Resolved::charge`] where the state is borrowed already.
     fn charge_in(self, state: &State) {
-        let parts = self.parts as f64 * crate::cost::COLLISION_GROUP_PART + self.changed as f64 * crate::cost::COLLISION_GROUP_CHANGED;
+        self.charge_at(state, crate::cost::COLLISION_GROUP_PART, crate::cost::COLLISION_GROUP_CHANGED);
+    }
+
+    /// What a client spends on them taking in a snapshot of its server's groups (cost.rs CLIENT_GROUP_PART, CLIENT_GROUP_CHANGED),
+    /// and ree's walks.
+    fn charge_client(self, engine: &Engine) {
+        self.charge_at(&engine.state.borrow(), crate::cost::CLIENT_GROUP_PART, crate::cost::CLIENT_GROUP_CHANGED);
+    }
+
+    fn charge_at(self, state: &State, part: f64, changed: f64) {
+        let parts = self.parts as f64 * part + self.changed as f64 * changed;
         charge_on(state, parts + self.ordered + self.walked as f64 * crate::cost::FIND_NODE);
     }
 }
@@ -1059,6 +1078,10 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let shared = groups.clone();
         behaviors.add_setter(base_part, group, Rc::new(move |lua, engine, id, value| {
             if let Value::String(name) = convert::coerce(lua, engine, &info, &value)? {
+                // (the "" it ignores costs a client more than another write that changes nothing: cost.rs COLLISION_GROUP_IGNORED)
+                if name.is_empty() {
+                    charge_on(&engine.state.borrow(), crate::cost::COLLISION_GROUP_IGNORED);
+                }
                 shared.write_name(engine, id, name.as_bytes());
             }
             Ok(())

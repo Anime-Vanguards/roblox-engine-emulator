@@ -12903,7 +12903,7 @@ fn ordering_a_group_changes_parts_deep_in_chains_of_their_own_costs_its_walk() {
 }
 
 /// The spatial index reads no part's collision group (world/query.rs: the queries model none), so a write of CollisionGroup or
-/// CollisionGroupId does not log the part for it (dom.rs Watch::unread): a group change that gives 1,000 parts new ids, and a
+/// CollisionGroupId does not log the part for it (dom.rs Dom::keep_unread): a group change that gives 1,000 parts new ids, and a
 /// script's writes of both properties, leave its log empty, where they logged every part, which the next query or group change
 /// read again. A write of another property still logs the part.
 #[test]
@@ -12944,6 +12944,79 @@ fn collision_group_writes_leave_the_spatial_index_log_alone() {
     assert_eq!(logged(&engine), Some(0), "a script's writes of both");
     run(&lua, &engine, "workspace.Grouped:GetChildren()[1].Transparency = 0.5");
     assert_eq!(logged(&engine), Some(1), "another property's write");
+}
+
+/// A WorldModel's change log leaves out its parts' collision-group writes as the Workspace's does, before the Workspace's index
+/// is made too (dom.rs Dom::keep_unread): a WorldModel in ReplicatedStorage queried once, with the Workspace never queried, keeps
+/// its log empty through its own group change giving 100 parts new ids, a change of UseWorkspaceCollisionGroups working them out
+/// again and a script's writes of both properties, where each logged the parts it wrote, which the next query read again. A
+/// write of another property still logs the part, and the index still matches a walk of its world.
+#[test]
+fn collision_group_writes_leave_a_worldmodels_log_alone_before_the_workspace_is_indexed() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    run(
+        &lua,
+        &engine,
+        r#"
+        local World = Instance.new("WorldModel")
+        World.Name = "World"
+        World.Parent = game:GetService("ReplicatedStorage")
+        for I = 1, 100 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.CollisionGroup = "A"
+            Part.Position = Vector3.new(I * 3, 0, 0)
+            Part.Parent = World
+        end
+        World:IsRegion3Empty(Region3.new(Vector3.new(-1, -1, -1), Vector3.new(1, 1, 1)))
+        "#,
+    );
+    let world = {
+        let state = engine.state.borrow();
+        let store = state.dom.find_child(engine.world().game, b"ReplicatedStorage").expect("ReplicatedStorage");
+        state.dom.find_child(store, b"World").expect("World")
+    };
+    let logged = || {
+        let mut state = engine.state.borrow_mut();
+        assert!(state.dom.watch.is_none(), "the Workspace's index is not made");
+        let log = state.dom.world_log(world).expect("followed");
+        (log.moved.len(), log.written.len())
+    };
+    assert_eq!(logged(), (0, 0), "taken by the query");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local World = game:GetService("ReplicatedStorage").World
+        World:RegisterCollisionGroup("A")
+        assert(World:GetChildren()[1].CollisionGroupId == 1, "the ids changed")
+        "#,
+    );
+    assert_eq!(logged(), (0, 0), "a WorldModel's group change's ids");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local World = game:GetService("ReplicatedStorage").World
+        World.UseWorkspaceCollisionGroups = true
+        assert(World:GetChildren()[1].CollisionGroupId == -1, "the ids worked out again")
+        "#,
+    );
+    assert_eq!(logged(), (0, 0), "UseWorkspaceCollisionGroups' ids");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Part = game:GetService("ReplicatedStorage").World:GetChildren()[1]
+        Part.CollisionGroup = "B"
+        Part.CollisionGroupId = 7
+        "#,
+    );
+    assert_eq!(logged(), (0, 0), "a script's writes of both");
+    run(&lua, &engine, r#"game:GetService("ReplicatedStorage").World:GetChildren()[2].Transparency = 0.5"#);
+    assert_eq!(logged(), (0, 1), "another property's write");
+    crate::world::query::model_index_matches_a_walk(&engine, world).unwrap();
 }
 
 /// WorldRoot's collision-group methods on a playing client (Studio 0.748): the Workspace's read the DataModel's groups,
@@ -13688,12 +13761,12 @@ fn a_burst_of_world_model_group_changes_leaves_the_loopback_flush_no_work_after_
     assert!(kept >= 5000 && physics::unsent_room(&engine) == kept, "a frame of 5,000 changes sent keeps its table: room for {kept}, then {}", physics::unsent_room(&engine));
 }
 
-/// No index holds a WorldModel's parts, so its group change walks its descendants for them and pays for each other instance
+/// A WorldModel's group change reads no index of its parts: it walks its descendants for them and pays for each other instance
 /// the walk looks at what a recursive find pays for a node (cost.rs FIND_NODE, 3.8 ns): beside 10,000 Folders a WorldModel's
 /// Register and Unregister cost 76 us more and a change of its UseWorkspaceCollisionGroups 38, and a loopback client's copy that
-/// takes groups with a new name pays 38 us for its walk and nothing for the part, as the DataModel's pay nothing for theirs. The
-/// Workspace's change takes its parts from the spatial queries' broadphase: it looks at the WorldModels' two parts and at none
-/// of the Folders. The walk used to be free.
+/// takes groups with a new name pays 38 us for its walk and what a client spends on the part whose id it works out (cost.rs
+/// CLIENT_GROUP_PART: the id stays). The Workspace's change takes its parts from the spatial queries' broadphase: it looks at
+/// the WorldModels' two parts and at none of the Folders. The walk used to be free.
 #[test]
 fn a_world_models_walk_to_its_parts_pays_for_the_instances_it_looks_at() {
     use super::RunContext;
@@ -13776,7 +13849,65 @@ fn a_world_models_walk_to_its_parts_pays_for_the_instances_it_looks_at() {
     let before = work();
     physics::apply_model_snapshot(&client, copy, snapshot);
     let spent = work() - before;
-    assert!((spent - 10_000.0 * crate::cost::FIND_NODE).abs() < 1e-9, "the copy's walk: {spent}");
+    assert!((spent - 10_000.0 * crate::cost::FIND_NODE - crate::cost::CLIENT_GROUP_PART).abs() < 1e-9, "the copy's walk and its part: {spent}");
+}
+
+/// A loopback client taking in a snapshot of its server's groups pays for the parts it works out what a 0.747 client spends on
+/// them (cost.rs CLIENT_GROUP_PART, CLIENT_GROUP_CHANGED: about 1.9 us a part whose id changes, 30 ns one whose id stays): a
+/// snapshot that registers the group 1,000 parts name costs 1.9 ms, one that adds a group no part names 30 us, one that changes
+/// a mask alone nothing, and a snapshot of what the client holds nothing, looking at no part. The join's snapshot of a server
+/// that never touched its groups, Default alone, leaves a client that never touched its own as it was: no part is looked at
+/// and no spatial index made. The parts used to cost a client nothing, and the join's Default alone looked at every part.
+#[test]
+fn a_loopback_client_pays_for_the_parts_a_snapshot_of_its_servers_groups_works_out() {
+    use super::RunContext;
+    use crate::services::physics;
+    let (server_lua, server) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    let untouched = physics::snapshot(&server).expect("the server's groups");
+    run(&server_lua, &server, r#"game:GetService("PhysicsService"):RegisterCollisionGroup("G")"#);
+    let registered = physics::snapshot(&server).expect("the server's groups");
+    run(&server_lua, &server, r#"game:GetService("PhysicsService"):RegisterCollisionGroup("H")"#);
+    let other = physics::snapshot(&server).expect("the server's groups");
+    run(&server_lua, &server, r#"game:GetService("PhysicsService"):CollisionGroupSetCollidable("G", "H", false)"#);
+    let masked = physics::snapshot(&server).expect("the server's groups");
+
+    const PARTS: &str = r#"
+        for I = 1, 1000 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Position = Vector3.new(I * 3, 0, 0)
+            Part.Name = "P" .. I
+            Part.Parent = workspace
+        end
+    "#;
+    // (a client that never touched collision groups: the join's Default alone changes nothing)
+    let (fresh_lua, fresh) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(&fresh_lua, &fresh, PARTS);
+    let looked = || physics::LOOKED_AT.with(|looked| looked.get());
+    let work = |engine: &Engine| engine.state.borrow().sched.work_total();
+    let indexed = || fresh.state.borrow().dom.watch.is_some();
+    let (before, spent, was_indexed) = (looked(), work(&fresh), indexed());
+    physics::apply_snapshot(&fresh, untouched.clone());
+    assert_eq!((looked() - before, work(&fresh) - spent), (0, 0.0), "the join's Default alone looks at no part");
+    assert!(!physics::tracking(&fresh) && indexed() == was_indexed, "nor tracks them, nor makes the spatial index");
+
+    let (client_lua, client) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(&client_lua, &client, &format!(r#"{PARTS}
+        for _, Part in workspace:GetChildren() do if Part:IsA("Part") then Part.CollisionGroup = "G" end end"#));
+    let paid = |snapshot: &physics::Snapshot| {
+        let (before, spent) = (looked(), work(&client));
+        physics::apply_snapshot(&client, snapshot.clone());
+        (looked() - before, work(&client) - spent)
+    };
+    let (seen, spent) = paid(&registered);
+    let expected = 1000.0 * (crate::cost::CLIENT_GROUP_PART + crate::cost::CLIENT_GROUP_CHANGED);
+    // (the Workspace's Terrain is looked at too)
+    assert!(seen >= 1000 && (spent - expected).abs() < 1e-7, "the group 1,000 parts name registered: {seen} looked at, {spent} s where {expected} expected");
+    let (seen, spent) = paid(&other);
+    assert!(seen >= 1000 && (spent - 1000.0 * crate::cost::CLIENT_GROUP_PART).abs() < 1e-7, "a group no part names: {seen} looked at, {spent} s");
+    assert_eq!(paid(&masked), (0, 0.0), "a mask alone");
+    assert_eq!(paid(&masked), (0, 0.0), "what the client holds");
+    run(&client_lua, &client, r#"assert(workspace.P1.CollisionGroupId == 1, `the ids follow the groups: {workspace.P1.CollisionGroupId}`)"#);
 }
 
 /// On a loopback server a frame's collision-group changes reach the client as one snapshot of the registry as the frame left it,
