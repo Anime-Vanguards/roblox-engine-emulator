@@ -31,12 +31,17 @@
 // are modified copies. luau0-src's crate carries its own LICENSE (MIT: Luau's and Lua's notices); mlua-sys's has none, so
 // mlua's (the same repository's MIT license) goes beside it. The VM's ClientFlagValues.h is written from
 // data/luau-flags.json (tools/luau-flags.mjs).
+//
+// Every download goes through tools/download.mjs: one that fails on the network (fetch failed, a reset, a stall) or on the
+// server (HTTP 5xx, 429) is tried again after 2, 4 and 8 s, while any other HTTP error and an archive whose SHA-256 is
+// not the pinned one fail at once.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { download as fetchBytes } from "./download.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const VENDOR = path.join(ROOT, "vendor");
@@ -87,11 +92,8 @@ function capture(command, parameters, cwd, input) {
 	return result;
 }
 
-async function download(url) {
-	const response = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
-	if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-	return Buffer.from(await response.arrayBuffer());
-}
+// The bytes at `url`; with `{ sha256, name }`, only when their SHA-256 is `sha256`
+const download = (url, pin = {}) => fetchBytes(url, { ...pin, headers: { "User-Agent": USER_AGENT }, log: message => console.error(`vendor: ${message}`) });
 
 // A pinned archive in the cache, downloaded when missing (and checked against its SHA-256 either way)
 async function archive({ file, url, sha256 }) {
@@ -99,8 +101,7 @@ async function archive({ file, url, sha256 }) {
 	const target = path.join(CACHE, file);
 	if (!fs.existsSync(target) || digest(fs.readFileSync(target)) !== sha256) {
 		console.error(`vendor: downloading ${url}`);
-		const bytes = await download(url);
-		if (digest(bytes) !== sha256) throw new Error(`${file}: checksum mismatch`);
+		const bytes = await download(url, { sha256, name: file });
 		fs.writeFileSync(target, bytes);
 	}
 	return target;

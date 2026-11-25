@@ -72,7 +72,7 @@ cargo build --release        # Builds target/release/ree(.exe)
 cargo test --release         # Runs engine, VM, and process-guard tests
 ```
 
-The patched Luau VM (`vendor/luau0-src`), `vendor/mlua-sys`, and Lune's Roblox datatypes (`vendor/lune-roblox`, `vendor/lune-utils`) are vendored in-tree from pinned upstream archives plus `patches/`. Never edit `vendor/` directly—edit `patches/` and run `node tools/vendor.mjs` (verify with `node tools/vendor.mjs --check`).
+The patched Luau VM (`vendor/luau0-src`), `vendor/mlua-sys`, and Lune's Roblox datatypes (`vendor/lune-roblox`, `vendor/lune-utils`) are vendored in-tree from pinned upstream archives plus `patches/`. Never edit `vendor/` directly—edit `patches/` and run `node tools/vendor.mjs` (verify with `node tools/vendor.mjs --check`). The archives are downloaded into `.cache/vendor/` and checked against their SHA-256; a download that fails on the network or with HTTP 5xx or 429 is tried again after 2, 4 and 8 s, while any other HTTP error and a checksum mismatch fail at once.
 
 **Release profile & Cargo features:**
 - `--release` uses `rust-lld` and Cargo's default ThinLTO across crate codegen units (`lto = false`) for cross-module inlining (~7 s vs. ~12 s incremental rebuilds, 5–25% faster property access; identical floating-point results).

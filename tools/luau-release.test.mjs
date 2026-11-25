@@ -4,6 +4,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { test } from "node:test";
 import { clientRelease, decide, parseTags, parseTry, plan, renderIssue } from "./luau-release.mjs";
+// The downloads of tools/vendor.mjs, which the tracker's `try` and every CI run's vendor check make, have tests of their
+// own, run with these
+import "./download.test.mjs";
 
 const WORKFLOW = fs.readFileSync(new URL("../.github/workflows/luau-upstream.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const BOT = { login: "github-actions[bot]" };
