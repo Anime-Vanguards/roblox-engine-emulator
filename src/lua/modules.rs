@@ -682,10 +682,54 @@ static ENGINE_COMPILES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atom
 /// The engine's own Luau chunks compiled so far, by the address of their (compiled-in) source
 static ENGINE_BYTECODE: std::sync::Mutex<Vec<(usize, std::sync::Arc<[u8]>)>> = std::sync::Mutex::new(Vec::new());
 
+/// Outcome published to callers waiting on an in-flight engine Luau compile.
+#[derive(Clone)]
+enum EngineBuild {
+    Done(Result<std::sync::Arc<[u8]>, String>),
+    /// The compiling worker unwound before finishing; waiters retry in their own thread.
+    Panicked,
+}
+
 /// Single-flight coordination for engine Luau compilation so background warm-up and foreground load
 /// never compile the same static chunk twice.
-type EngineSlot = std::sync::Arc<(std::sync::Mutex<Option<Result<std::sync::Arc<[u8]>, String>>>, std::sync::Condvar)>;
+type EngineSlot = std::sync::Arc<(std::sync::Mutex<Option<EngineBuild>>, std::sync::Condvar)>;
 static ENGINE_INFLIGHT: std::sync::Mutex<Vec<(usize, EngineSlot)>> = std::sync::Mutex::new(Vec::new());
+
+fn remove_engine_inflight(key: usize) {
+    let mut inflight = ENGINE_INFLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(pos) = inflight.iter().position(|(at, _)| *at == key) {
+        inflight.swap_remove(pos);
+    }
+}
+
+/// Cleans up `ENGINE_INFLIGHT` and wakes all waiters even if compilation unwinds.
+struct EngineInflightGuard {
+    key: usize,
+    slot: EngineSlot,
+    finished: bool,
+}
+
+impl EngineInflightGuard {
+    fn complete(mut self, result: Result<std::sync::Arc<[u8]>, String>) -> Result<std::sync::Arc<[u8]>, String> {
+        self.finished = true;
+        remove_engine_inflight(self.key);
+        let (lock, cvar) = &*self.slot;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(EngineBuild::Done(result.clone()));
+        cvar.notify_all();
+        result
+    }
+}
+
+impl Drop for EngineInflightGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            remove_engine_inflight(self.key);
+            let (lock, cvar) = &*self.slot;
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(EngineBuild::Panicked);
+            cvar.notify_all();
+        }
+    }
+}
 
 thread_local! {
     /// The compiles of [`ENGINE_COMPILES`] this thread made
@@ -703,16 +747,16 @@ pub fn engine_compiles_here() -> usize {
 }
 
 fn ensure_engine_bytecode(source: &'static str, count_here: bool) -> Result<std::sync::Arc<[u8]>, String> {
+    ensure_engine_bytecode_with(source, count_here, |src| engine_compiler().compile(src).map_err(|e| e.to_string()))
+}
+
+fn ensure_engine_bytecode_with(
+    source: &'static str,
+    count_here: bool,
+    compile: impl Fn(&'static str) -> Result<Vec<u8>, String>,
+) -> Result<std::sync::Arc<[u8]>, String> {
     let key = source.as_ptr() as usize;
-    if let Some(bytecode) = ENGINE_BYTECODE
-        .lock()
-        .ok()
-        .and_then(|kept| kept.iter().find(|(at, _)| *at == key).map(|(_, bytecode)| bytecode.clone()))
-    {
-        return Ok(bytecode);
-    }
-    let (slot, owner) = {
-        let mut inflight = ENGINE_INFLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
         if let Some(bytecode) = ENGINE_BYTECODE
             .lock()
             .ok()
@@ -720,46 +764,52 @@ fn ensure_engine_bytecode(source: &'static str, count_here: bool) -> Result<std:
         {
             return Ok(bytecode);
         }
-        if let Some((_, existing)) = inflight.iter().find(|(at, _)| *at == key) {
-            (existing.clone(), false)
-        } else {
-            let created: EngineSlot = std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
-            inflight.push((key, created.clone()));
-            (created, true)
-        }
-    };
-    if owner {
-        let result = engine_compiler().compile(source).map_err(|e| e.to_string()).map(|compiled| {
-            ENGINE_COMPILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if count_here {
-                ENGINE_COMPILES_HERE.with(|count| count.set(count.get() + 1));
-            }
-            let bytecode: std::sync::Arc<[u8]> = crate::alloc::long_lived(|| std::sync::Arc::from(compiled.as_slice()));
-            if let Ok(mut kept) = ENGINE_BYTECODE.lock()
-                && !kept.iter().any(|(at, _)| *at == key)
-            {
-                crate::alloc::long_lived(|| kept.push((key, bytecode.clone())));
-            }
-            bytecode
-        });
-        {
+        let (slot, owner) = {
             let mut inflight = ENGINE_INFLIGHT.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(pos) = inflight.iter().position(|(at, _)| *at == key) {
-                inflight.swap_remove(pos);
+            if let Some(bytecode) = ENGINE_BYTECODE
+                .lock()
+                .ok()
+                .and_then(|kept| kept.iter().find(|(at, _)| *at == key).map(|(_, bytecode)| bytecode.clone()))
+            {
+                return Ok(bytecode);
             }
-        }
-        let (lock, cvar) = &*slot;
-        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(result.clone());
-        cvar.notify_all();
-        result
-    } else {
-        let (lock, cvar) = &*slot;
-        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        loop {
-            if let Some(res) = guard.as_ref() {
-                return res.clone();
+            if let Some((_, existing)) = inflight.iter().find(|(at, _)| *at == key) {
+                (existing.clone(), false)
+            } else {
+                let created: EngineSlot = std::sync::Arc::new((std::sync::Mutex::new(None), std::sync::Condvar::new()));
+                inflight.push((key, created.clone()));
+                (created, true)
             }
-            guard = cvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+        };
+        if owner {
+            let guard = EngineInflightGuard { key, slot, finished: false };
+            let result = compile(source).map(|compiled| {
+                ENGINE_COMPILES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if count_here {
+                    ENGINE_COMPILES_HERE.with(|count| count.set(count.get() + 1));
+                }
+                let bytecode: std::sync::Arc<[u8]> = crate::alloc::long_lived(|| std::sync::Arc::from(compiled.as_slice()));
+                if let Ok(mut kept) = ENGINE_BYTECODE.lock()
+                    && !kept.iter().any(|(at, _)| *at == key)
+                {
+                    crate::alloc::long_lived(|| kept.push((key, bytecode.clone())));
+                }
+                bytecode
+            });
+            return guard.complete(result);
+        } else {
+            let (lock, cvar) = &*slot;
+            let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+            let outcome = loop {
+                if let Some(res) = guard.as_ref() {
+                    break res.clone();
+                }
+                guard = cvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+            };
+            match outcome {
+                EngineBuild::Done(res) => return res,
+                EngineBuild::Panicked => continue,
+            }
         }
     }
 }
@@ -787,7 +837,9 @@ pub(crate) fn warm_engine_luau(server: bool, loopback: bool) {
     for &source in &chunks[..len] {
         if !already_cached(source) {
             rayon::spawn(move || {
-                let _ = ensure_engine_bytecode(source, false);
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = ensure_engine_bytecode(source, false);
+                }));
             });
         }
     }
@@ -1771,5 +1823,62 @@ mod tests {
         assert_eq!(&*edited.0, b"return 'before two'");
         assert_eq!(Lua::new().load(&*edited.1.unwrap()).eval::<String>().unwrap(), "before two");
         assert_eq!(deleted.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// If a background worker panics while owning an in-flight engine Luau slot, waiting callers
+    /// wake up, the dead slot is removed, and the waiter compiles the chunk itself.
+    #[test]
+    fn a_panicking_engine_compile_wakes_waiters_and_falls_back() {
+        static TEST_SOURCE: &str = "return 42";
+        let key = TEST_SOURCE.as_ptr() as usize;
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = ensure_engine_bytecode_with(TEST_SOURCE, false, |_| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    panic!("simulated compiler panic");
+                });
+            }));
+        });
+        entered_rx.recv_timeout(std::time::Duration::from_secs(5)).expect("owner entered compile");
+        let (waiter_tx, waiter_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let res = ensure_engine_bytecode_with(TEST_SOURCE, true, |src| {
+                engine_compiler().compile(src).map_err(|e| e.to_string())
+            });
+            let _ = waiter_tx.send(res);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let waiters_joined = ENGINE_INFLIGHT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .find(|(at, _)| *at == key)
+                .is_some_and(|(_, slot)| std::sync::Arc::strong_count(slot) >= 3);
+            if waiters_joined || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        release_tx.send(()).unwrap();
+        let bytecode = waiter_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("waiter hung after owner panicked")
+            .expect("foreground fallback compile");
+        owner.join().unwrap();
+        waiter.join().unwrap();
+        assert_eq!(Lua::new().load(&*bytecode).eval::<i64>().unwrap(), 42);
+        let still_inflight = ENGINE_INFLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|(at, _)| *at == key);
+        assert!(!still_inflight, "inflight entry leaked after panic");
+        if let Ok(mut kept) = ENGINE_BYTECODE.lock() {
+            kept.retain(|(at, _)| *at != key);
+        }
     }
 }

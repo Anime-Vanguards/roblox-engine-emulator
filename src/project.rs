@@ -2396,14 +2396,20 @@ impl Prescan {
             .map(|root| {
                 let (send, receive) = crate::sort::channel::channel();
                 let path = root.clone();
-                rayon::spawn(move || drop(send.send(scan_layout_root_early(&path))));
+                rayon::spawn(move || {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        drop(send.send(scan_layout_root_early(&path)));
+                    }));
+                });
                 (root.clone(), receive)
             })
             .collect();
         let (send, receive) = crate::sort::channel::channel();
         rayon::spawn(move || {
-            let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
-            drop(send.send(listed));
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
+                drop(send.send(listed));
+            }));
         });
         Prescan { roots: Vec::new(), early_roots, data: Some(receive) }
     }
@@ -2422,14 +2428,20 @@ impl Prescan {
             .map(|root| {
                 let (send, receive) = crate::sort::channel::channel();
                 let (path, reflection) = (root.clone(), reflection.clone());
-                rayon::spawn(move || drop(send.send(scan_layout_root(&path, &reflection))));
+                rayon::spawn(move || {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        drop(send.send(scan_layout_root(&path, &reflection)));
+                    }));
+                });
                 (root.clone(), receive)
             })
             .collect();
         let (send, receive) = crate::sort::channel::channel();
         rayon::spawn(move || {
-            let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
-            drop(send.send(listed));
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
+                drop(send.send(listed));
+            }));
         });
         Prescan { roots: layout, early_roots: Vec::new(), data: Some(receive) }
     }

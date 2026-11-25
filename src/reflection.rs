@@ -230,13 +230,16 @@ pub struct PropertyInfo {
     pub origin: MemberOrigin,
 }
 
-/// A default as recorded: the dump's JSON encoding or an rbx-dom value (Lune supplement).
+/// A default as recorded: the dump's JSON encoding, an rbx-dom value (Lune supplement), or an
+/// undecodable entry kept so `raw_defaults.contains_key` matches raw JSON lookup during inheritance.
 #[derive(Clone, Debug)]
 pub enum RawDefault {
     Json(serde_json::Value),
     Dom(Variant),
     /// An rbx-dom enum default resolved to the interned item
     EnumItem(EnumItemId),
+    /// Recorded in the dump, but undecodable (e.g. `null` or an unsupported `$t`)
+    None,
 }
 
 /// How a class's instances refuse a Parent write (instance::set_parent; measured in a 0.747 playing client and server, every
@@ -760,15 +763,22 @@ impl Reflection {
 
     #[inline(never)]
     fn read_dump(bytes: &[u8], font_enums: Option<&[u8]>) -> Result<Reflection, String> {
-        // Parse the JSON dump and decode rbx-dom's bundled MessagePack database concurrently;
-        // rayon::join runs inline without deadlocking on a single-threaded pool.
-        let (dump, rbx_db) = rayon::join(
-            || {
-                serde_json::from_slice::<members::DumpLoad>(bytes)
-                    .map_err(|error| format!("parsing reflection.json: {error}"))
-            },
-            rbx_reflection_database::get,
-        );
+        // Parse the JSON dump and decode rbx-dom's bundled MessagePack database concurrently on a
+        // scoped OS thread rather than rayon: `Reflection::shared()` runs inside a `OnceLock`,
+        // where a rayon work-stealing wait could re-enter `Reflection::shared()` and deadlock.
+        let (dump, rbx_db) = std::thread::scope(|scope| {
+            let rbx_thread = std::thread::Builder::new()
+                .name("ree-rbx-db".into())
+                .spawn_scoped(scope, rbx_reflection_database::get)
+                .ok();
+            let dump = serde_json::from_slice::<members::DumpLoad>(bytes)
+                .map_err(|error| format!("parsing reflection.json: {error}"));
+            let rbx_db = match rbx_thread {
+                Some(handle) => handle.join().unwrap_or_else(|_| rbx_reflection_database::get()),
+                None => rbx_reflection_database::get(),
+            };
+            (dump, rbx_db)
+        });
         let dump = dump?;
         let mut reflection = Reflection {
             names: Vec::with_capacity(6144),
@@ -897,25 +907,27 @@ impl Reflection {
                             if let Some(item) = self.enum_item(&enum_name, &item_name) {
                                 map.insert(key, RawDefault::EnumItem(item));
                             } else {
-                                map.remove(&key);
+                                map.insert(
+                                    key,
+                                    RawDefault::Json(serde_json::json!({ "$t": "EnumItem", "e": enum_name, "n": item_name })),
+                                );
                             }
                         }
                         members::ParsedDefault::Font(family, weight, style) => {
-                            if self.enum_item("FontWeight", &weight).is_some() && self.enum_item("FontStyle", &style).is_some() {
-                                if let (Some(w), Some(s)) = (font_weight(&weight), font_style(&style)) {
-                                    map.insert(key, RawDefault::Dom(Variant::Font(dom::Font::new(&family, w, s))));
-                                } else {
-                                    map.insert(
-                                        key,
-                                        RawDefault::Json(serde_json::json!({ "$t": "Font", "v": [family, weight, style] })),
-                                    );
-                                }
+                            if self.enum_item("FontWeight", &weight).is_some()
+                                && self.enum_item("FontStyle", &style).is_some()
+                                && let (Some(w), Some(s)) = (font_weight(&weight), font_style(&style))
+                            {
+                                map.insert(key, RawDefault::Dom(Variant::Font(dom::Font::new(&family, w, s))));
                             } else {
-                                map.remove(&key);
+                                map.insert(
+                                    key,
+                                    RawDefault::Json(serde_json::json!({ "$t": "Font", "v": [family, weight, style] })),
+                                );
                             }
                         }
                         members::ParsedDefault::None => {
-                            map.remove(&key);
+                            map.insert(key, RawDefault::None);
                         }
                     }
                 }

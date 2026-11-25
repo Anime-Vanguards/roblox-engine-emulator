@@ -2915,3 +2915,29 @@ fn a_motion_key_is_kept_by_distance_however_far_the_part_is_from_the_origin() {
 fn a_harness_is_checked_after_it_waits() {
     record("task.wait() error('checked after the wait')", 5);
 }
+
+/// A failed `scene.rbxm` write reports its error before `playback.json` is written, leaving no partial `playback.json` behind.
+#[test]
+fn a_failed_scene_write_leaves_no_playback_json() {
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    let recorder = Recorder::install(&engine, 60.0);
+    recorder.sample(&engine, 0);
+    scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("frame");
+    recorder.sample(&engine, 1);
+    let unique = TEST_DIRS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!(
+        "rur-scene-fail-{}-{}-{unique}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    ));
+    std::fs::create_dir_all(out.join("scene.rbxm")).expect("blocking dir");
+    let err = recorder.write(&engine, &out, Map::new()).expect_err("scene.rbxm write should fail");
+    let playback_exists = out.join("playback.json").exists();
+    let _ = std::fs::remove_dir_all(&out);
+    drop(lua);
+    engine.teardown();
+    assert!(err.contains("scene.rbxm"), "expected scene.rbxm error, got: {err}");
+    assert!(!playback_exists, "playback.json should not be written when scene.rbxm fails");
+}

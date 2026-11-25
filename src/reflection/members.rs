@@ -1591,25 +1591,40 @@ impl<'de> Deserialize<'de> for DefaultNum {
     }
 }
 
-/// Up to 12 numbers inline (covers Vector2/3, UDim/2, Color3, Rect, NumberRange, CFrame without heap allocation).
+/// Up to 12 numbers inline (covers Vector2/3, UDim/2, Color3, Rect, NumberRange, CFrame without
+/// heap allocation), spilling to a `Vec` for longer sequences.
 #[derive(Default)]
 struct SmallNums {
     data: [f64; 12],
-    len: u8,
+    len: usize,
+    spill: Option<Vec<f64>>,
 }
 
 impl SmallNums {
     #[inline]
     fn push(&mut self, value: f64) {
-        if (self.len as usize) < 12 {
-            self.data[self.len as usize] = value;
-            self.len += 1;
+        if let Some(spill) = self.spill.as_mut() {
+            spill.push(value);
+        } else if self.len < 12 {
+            self.data[self.len] = value;
+        } else {
+            let mut vec = Vec::with_capacity(24);
+            vec.extend_from_slice(&self.data);
+            vec.push(value);
+            self.spill = Some(vec);
         }
+        self.len += 1;
     }
 
     #[inline]
     fn at(&self, index: usize) -> f64 {
-        if index < self.len as usize { self.data[index] } else { 0.0 }
+        if let Some(spill) = self.spill.as_ref() {
+            spill.get(index).copied().unwrap_or(0.0)
+        } else if index < self.len {
+            self.data[index]
+        } else {
+            0.0
+        }
     }
 }
 
@@ -1967,12 +1982,12 @@ impl<'de> Deserialize<'de> for DefaultKey {
     }
 }
 
-fn default_v_nums(v: Option<&DefaultV>) -> SmallNums {
+fn default_v_nums(v: Option<DefaultV>) -> SmallNums {
     match v {
-        Some(DefaultV::Array { nums, .. }) => SmallNums { data: nums.data, len: nums.len },
+        Some(DefaultV::Array { nums, .. }) => nums,
         Some(DefaultV::Num(n)) => {
             let mut out = SmallNums::default();
-            out.push(*n);
+            out.push(n);
             out
         }
         Some(DefaultV::Str(s)) => {
@@ -2054,30 +2069,30 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                         _ => ParsedDefault::None,
                     },
                     DefaultTag::UDim => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::UDim(dom::UDim::new(a.at(0) as f32, a.at(1) as i32)))
                     }
                     DefaultTag::UDim2 => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::UDim2(dom::UDim2::new(
                             dom::UDim::new(a.at(0) as f32, a.at(1) as i32),
                             dom::UDim::new(a.at(2) as f32, a.at(3) as i32),
                         )))
                     }
                     DefaultTag::Vector2 => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::Vector2(dom::Vector2::new(a.at(0) as f32, a.at(1) as f32)))
                     }
                     DefaultTag::Vector2int16 => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::Vector2int16(dom::Vector2int16::new(a.at(0) as i16, a.at(1) as i16)))
                     }
                     DefaultTag::Vector3 => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::Vector3(dom::Vector3::new(a.at(0) as f32, a.at(1) as f32, a.at(2) as f32)))
                     }
                     DefaultTag::Vector3int16 => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::Vector3int16(dom::Vector3int16::new(
                             a.at(0) as i16,
                             a.at(1) as i16,
@@ -2085,16 +2100,16 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                         )))
                     }
                     DefaultTag::Color3 => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::Color3(dom::Color3::new(a.at(0) as f32, a.at(1) as f32, a.at(2) as f32)))
                     }
                     DefaultTag::BrickColor => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         let color = dom::BrickColor::from_number(a.at(0) as u16).unwrap_or(dom::BrickColor::MediumStoneGrey);
                         ParsedDefault::Dom(Variant::BrickColor(color))
                     }
                     DefaultTag::CFrame => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         let f = |i| a.at(i) as f32;
                         let cframe = if a.len >= 12 {
                             dom::CFrame::new(
@@ -2111,14 +2126,14 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                         ParsedDefault::Dom(Variant::CFrame(cframe))
                     }
                     DefaultTag::Rect => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::Rect(dom::Rect::new(
                             dom::Vector2::new(a.at(0) as f32, a.at(1) as f32),
                             dom::Vector2::new(a.at(2) as f32, a.at(3) as f32),
                         )))
                     }
                     DefaultTag::NumberRange => {
-                        let a = default_v_nums(v.as_ref());
+                        let a = default_v_nums(v);
                         ParsedDefault::Dom(Variant::NumberRange(dom::NumberRange::new(a.at(0) as f32, a.at(1) as f32)))
                     }
                     DefaultTag::NumberSequence => {
@@ -2127,7 +2142,7 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                                 .into_iter()
                                 .map(|k| dom::NumberSequenceKeypoint::new(k[0] as f32, k[1] as f32, k[2] as f32))
                                 .collect(),
-                            Some(DefaultV::Array { nums, .. }) => (0..nums.len as usize)
+                            Some(DefaultV::Array { nums, .. }) => (0..nums.len)
                                 .map(|i| dom::NumberSequenceKeypoint::new(nums.at(i) as f32, 0.0, 0.0))
                                 .collect(),
                             _ => Vec::new(),
@@ -2145,7 +2160,7 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                                     )
                                 })
                                 .collect(),
-                            Some(DefaultV::Array { nums, .. }) => (0..nums.len as usize)
+                            Some(DefaultV::Array { nums, .. }) => (0..nums.len)
                                 .map(|i| dom::ColorSequenceKeypoint::new(nums.at(i) as f32, dom::Color3::new(0.0, 0.0, 0.0)))
                                 .collect(),
                             _ => Vec::new(),
@@ -2894,6 +2909,64 @@ mod tests {
         assert_eq!(reflection.own_events(reflection.class_id("C").unwrap())[0].origin, MemberOrigin::Dump);
         for top in [&br#"[]"#[..], br#"5"#, br#"{"classes": {}}"#, br#"{"classes": 3}"#, br#"{}"#] {
             assert_eq!(read_as_dump(top), read_as_values(top));
+        }
+    }
+
+    #[test]
+    fn undecodable_and_long_sequence_defaults_match_raw_json_decode() {
+        let dump = br#"{
+            "version": "x",
+            "enums": [],
+            "classes": [
+                {
+                    "name": "CustomBase",
+                    "defaults": {
+                        "Name": null,
+                        "UnknownEnum": { "$t": "EnumItem", "e": "NoSuchEnum", "n": "None" },
+                        "UnknownFont": { "$t": "Font", "v": ["rbxasset://fonts/families/Arial.json", "NoSuchWeight", "Normal"] },
+                        "BadTag": { "$t": "NotAType", "v": 1 },
+                        "LongNums": { "$t": "NumberSequence", "v": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] },
+                        "LongColors": { "$t": "ColorSequence", "v": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] }
+                    }
+                },
+                {
+                    "name": "CustomSub",
+                    "superclass": "CustomBase",
+                    "defaults": {}
+                }
+            ]
+        }"#;
+        let reflection = Reflection::from_dump(dump, None).unwrap();
+        let base_id = reflection.class_id("CustomBase").unwrap();
+        let sub_id = reflection.class_id("CustomSub").unwrap();
+        let base_defaults = reflection.class(base_id).raw_defaults.as_ref().unwrap();
+        for key in ["Name", "UnknownEnum", "UnknownFont", "BadTag"] {
+            let id = reflection.name_id(key).unwrap();
+            assert!(base_defaults.contains_key(&id), "missing raw default key {key}");
+            assert!(crate::value::decode_default(&reflection, &base_defaults[&id]).is_none());
+        }
+        // Superclass carries key `Name` (even though undecodable): subclass delegates to superclass's `compute_default`.
+        let name = crate::dom::compute_default(&reflection, sub_id, crate::reflection::K::Name as NameId);
+        assert_eq!(name.as_ref().and_then(Value::as_str).map(|s| s.to_str_lossy().into_owned()).as_deref(), Some("CustomBase"));
+        // Sequences with more than 12 bare numbers keep every keypoint and match `decode_json`.
+        let raw_json: serde_json::Value = serde_json::from_slice(dump).unwrap();
+        let raw_base_defaults = raw_json["classes"][0]["defaults"].as_object().unwrap();
+        for key in ["LongNums", "LongColors"] {
+            let id = reflection.name_id(key).unwrap();
+            let got = crate::value::decode_default(&reflection, &base_defaults[&id]).unwrap();
+            let expected = crate::value::decode_json(&reflection, &raw_base_defaults[key]).unwrap();
+            assert_eq!(format!("{got:?}"), format!("{expected:?}"), "{key}");
+            match &got {
+                Value::NumberSequence(seq) => {
+                    assert_eq!(seq.keypoints.len(), 15);
+                    assert_eq!(seq.keypoints[14].time, 14.0);
+                }
+                Value::ColorSequence(seq) => {
+                    assert_eq!(seq.keypoints.len(), 15);
+                    assert_eq!(seq.keypoints[14].time, 14.0);
+                }
+                other => panic!("unexpected {key}: {other:?}"),
+            }
         }
     }
 }

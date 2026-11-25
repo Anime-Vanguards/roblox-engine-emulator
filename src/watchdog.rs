@@ -135,6 +135,8 @@ pub struct Watch {
     host_timeouts: AtomicU32,
     /// The run stops: `stop_after` timeouts happened ([`ScriptTimeout::stopped`])
     stopped: AtomicBool,
+    /// Whether this VM's check currently looks at every safepoint (its thread only, counted in [`EAGER_COUNT`])
+    eager: AtomicBool,
     /// Where the last of them ran
     last: Mutex<String>,
 }
@@ -189,11 +191,23 @@ thread_local! {
     static SAFEPOINTS: Cell<u32> = const { Cell::new(0) };
     static TIMING: Cell<Timing> = const { Cell::new(Timing { serial: 0, epoch: 0, work: 0.0, host: None, raised: false }) };
     static LOOKED: Cell<Looked> = const { Cell::new(Looked { counters: 0, steps: 0, calls: 0, units: 0, engine: 0, armings: 0, work: std::ptr::null(), drained: std::ptr::null() }) };
-    /// The check looks at every safepoint: a timeout is due, or the run stops
-    static EAGER: Cell<bool> = const { Cell::new(false) };
+    /// How many VMs on this thread want the check to look at every safepoint (a timeout is due, or a run stops)
+    static EAGER_COUNT: Cell<u32> = const { Cell::new(0) };
     /// This thread's VMs with a timeout, for the interrupt (one or two: a service worker holds a prepared run beside the one
     /// it runs)
     static WATCHES: std::cell::RefCell<Vec<Local>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Updates whether `watch` looks at every safepoint and keeps this thread's [`EAGER_COUNT`] balanced
+/// so installing, disarming or detaching another VM on the same thread never clears this VM's eager flag.
+#[inline]
+fn set_eager(watch: &Watch, on: bool) {
+    if watch.eager.swap(on, Ordering::Relaxed) != on {
+        EAGER_COUNT.with(|count| {
+            let current = count.get();
+            count.set(if on { current.saturating_add(1) } else { current.saturating_sub(1) });
+        });
+    }
 }
 
 /// A VM's timeout on its own thread: its callbacks (the key), its watch and its scheduler's work clock cells
@@ -263,6 +277,7 @@ impl ScriptTimeout {
             timeouts: AtomicU32::new(0),
             host_timeouts: AtomicU32::new(0),
             stopped: AtomicBool::new(false),
+            eager: AtomicBool::new(false),
             last: Mutex::new(String::new()),
         });
         let (work, drained) = {
@@ -272,7 +287,6 @@ impl ScriptTimeout {
         // (all integers: zero is a valid VmCounters)
         let start = Start { epoch: 0, engine: 0.0, counters: Box::new(unsafe { std::mem::zeroed() }) };
         LOOKED.with(|looked| looked.set(Looked { counters: 0, work: std::ptr::null(), drained: std::ptr::null(), ..looked.get() }));
-        EAGER.with(|eager| eager.set(false));
         WATCHES.with(|watches| {
             let mut watches = watches.borrow_mut();
             watches.retain(|local| local.watch.strong_count() > 0);
@@ -298,7 +312,7 @@ impl ScriptTimeout {
         }
         WATCHES.with(|watches| watches.borrow_mut().retain(|local| local.callbacks != callbacks as usize));
         LOOKED.with(|looked| looked.set(Looked { counters: 0, work: std::ptr::null(), drained: std::ptr::null(), ..looked.get() }));
-        EAGER.with(|eager| eager.set(false));
+        set_eager(watch, false);
     }
 
     /// The seconds of the work clock a resumption may run without yielding
@@ -406,7 +420,7 @@ impl Drop for Entered {
 #[cold]
 #[inline(never)]
 fn disarm_if_stale(watch: &Watch, due: u64) {
-    EAGER.with(|eager| eager.set(false));
+    set_eager(watch, false);
     let _slot = watch.slot.lock().unwrap_or_else(|poison| poison.into_inner());
     let pointer = watch.callbacks.load(Ordering::Acquire);
     if watch.due.compare_exchange(due, 0, Ordering::AcqRel, Ordering::Relaxed).is_ok() && !pointer.is_null() {
@@ -490,9 +504,13 @@ pub unsafe fn check(state: *mut lua_State) {
     // every safepoint of an armed VM comes here (an empty loop's every step): only the ones look_due names look further,
     // unless a timeout is due and waits for a script frame (a loop's period can keep every looked-at safepoint in the
     // engine's Luau)
-    let full = EAGER.with(Cell::get) || match unsafe { look_due(state) } {
-        Some(full) => full,
-        None => return,
+    let looked = if EAGER_COUNT.with(Cell::get) != 0 {
+        None
+    } else {
+        match unsafe { look_due(state) } {
+            Some(full) => Some(full),
+            None => return,
+        }
     };
     let callbacks = unsafe { mlua::ffi::lua_callbacks(state) } as usize;
     let found = WATCHES.with(|watches| {
@@ -501,14 +519,13 @@ pub unsafe fn check(state: *mut lua_State) {
         Some((local.watch.upgrade()?, local.work.clone(), local.drained.clone()))
     });
     let Some((watch, charged, drained)) = found else {
-        EAGER.with(|eager| eager.set(false));
         return;
     };
     // the work clock so far: the VM's own work and what the engine calls charged (cost.rs)
     let work = |state| work(state) + charged.get() + drained.get();
     if watch.stopped.load(Ordering::Relaxed) {
         // the run stops: every script safepoint raises until the frame loop ends it (record/run.rs)
-        EAGER.with(|eager| eager.set(true));
+        set_eager(&watch, true);
         if !in_engine_luau(state) {
             drop(watch);
             unsafe { raise(state) }
@@ -517,12 +534,12 @@ pub unsafe fn check(state: *mut lua_State) {
     }
     let due = watch.due.load(Ordering::Acquire);
     if due == 0 {
-        EAGER.with(|eager| eager.set(false));
+        set_eager(&watch, false);
         return;
     }
     if watch.epoch.load(Ordering::Acquire) != due {
         // the resumption it was armed for has ended: back to no interrupt
-        EAGER.with(|eager| eager.set(false));
+        set_eager(&watch, false);
         let _slot = watch.slot.lock().unwrap_or_else(|poison| poison.into_inner());
         let pointer = watch.callbacks.load(Ordering::Acquire);
         if watch.due.compare_exchange(due, 0, Ordering::AcqRel, Ordering::Relaxed).is_ok() && !pointer.is_null() {
@@ -530,6 +547,16 @@ pub unsafe fn check(state: *mut lua_State) {
         }
         return;
     }
+    let full = if watch.eager.load(Ordering::Relaxed) {
+        true
+    } else if let Some(full) = looked {
+        full
+    } else {
+        match unsafe { look_due(state) } {
+            Some(full) => full,
+            None => return,
+        }
+    };
     let mut timing = TIMING.with(Cell::get);
     if timing.epoch != due || timing.serial != watch.serial {
         // the first look at this resumption: its work counts from its start (enter), the calls before the watchdog came too,
@@ -538,7 +565,7 @@ pub unsafe fn check(state: *mut lua_State) {
         timing = Timing { serial: watch.serial, epoch: due, work: start, host: Some(Instant::now()), raised: false };
         TIMING.with(|cell| cell.set(timing));
         // (an earlier resumption's timeout, due or raised, left the check looking at every safepoint)
-        EAGER.with(|eager| eager.set(false));
+        set_eager(&watch, false);
     }
     let mut by_host = false;
     if !timing.raised {
@@ -550,7 +577,7 @@ pub unsafe fn check(state: *mut lua_State) {
         by_host = !over_work;
     }
     // due (or raised already and still running: a pcall caught it): raised at the first safepoint in a script's own code
-    EAGER.with(|eager| eager.set(true));
+    set_eager(&watch, true);
     if in_engine_luau(state) {
         return;
     }
@@ -1270,5 +1297,44 @@ mod tests {
         let outcome = call(&lua, &engine, "local n = 0 for i = 1, 1e6 do n += i end");
         assert!(timed_out(&outcome), "{outcome}");
         timeout.detach();
+    }
+
+    /// Two VMs on the same thread (e.g. loopback): installing, disarming or detaching the second VM
+    /// must not clear the first VM's eager flag.
+    #[test]
+    fn disarming_one_vm_leaves_another_vms_eager_flag_intact() {
+        use std::{cell::Cell, sync::atomic::Ordering};
+        let (lua_a, engine_a, timeout_a) = start(0.02, 1);
+        let outcome = call(&lua_a, &engine_a, "while true do end");
+        assert!(timed_out(&outcome), "{outcome}");
+        assert!(timeout_a.stopped().is_some());
+        assert!(timeout_a.0.eager.load(Ordering::Relaxed));
+        assert_eq!(super::EAGER_COUNT.with(Cell::get), 1);
+
+        let (lua_b, engine_b, timeout_b) = start(10.0, 0);
+        assert!(timeout_a.0.eager.load(Ordering::Relaxed));
+        assert_eq!(super::EAGER_COUNT.with(Cell::get), 1);
+        // Simulate a stale arming on VM B followed by its resumption ending (`disarm_if_stale`).
+        {
+            let _entered = super::enter(Some(&timeout_b));
+            let epoch = timeout_b.0.epoch.load(Ordering::Acquire);
+            super::arm(&timeout_b.0, epoch);
+            super::set_eager(&timeout_b.0, true);
+            assert_eq!(super::EAGER_COUNT.with(Cell::get), 2);
+        }
+        assert!(!timeout_b.0.eager.load(Ordering::Relaxed));
+        assert!(timeout_a.0.eager.load(Ordering::Relaxed));
+        assert_eq!(super::EAGER_COUNT.with(Cell::get), 1);
+        assert_eq!(call(&lua_b, &engine_b, "local n = 0 for i = 1, 100 do n += i end"), "finished");
+        timeout_b.detach();
+        drop(lua_b);
+        engine_b.teardown();
+        assert!(timeout_a.0.eager.load(Ordering::Relaxed));
+        assert_eq!(super::EAGER_COUNT.with(Cell::get), 1);
+
+        let outcome = call(&lua_a, &engine_a, "local n = 0 for i = 1, 5 do n += i end");
+        assert!(timed_out(&outcome), "{outcome}");
+        timeout_a.detach();
+        assert_eq!(super::EAGER_COUNT.with(Cell::get), 0);
     }
 }

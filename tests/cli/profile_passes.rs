@@ -168,7 +168,7 @@ fn a_recorders_host_time_is_its_own() {
     let functions = json["functions"].as_array().unwrap();
     let time = |named: &dyn Fn(&str) -> bool| functions.iter().filter(|f| f["name"].as_str().is_some_and(named)).map(|f| f["total"]["time_ms"].as_f64().unwrap()).sum::<f64>();
     let (recorder, handler) = (time(&|name| name == "(ree engine step: recorder)"), time(&|name| name == "handler" || name.ends_with(".handler")));
-    assert!(recorder > 20.0 && handler < 0.2 * recorder, "the recorder {recorder:.1} ms, the handler {handler:.1} ms\n{}", json["summary"].as_str().unwrap_or(""));
+    assert!(recorder > 20.0 && handler < 0.1 * recorder, "the recorder {recorder:.1} ms, the handler {handler:.1} ms\n{}", json["summary"].as_str().unwrap_or(""));
     let _ = std::fs::remove_dir_all(&root);
 }
 

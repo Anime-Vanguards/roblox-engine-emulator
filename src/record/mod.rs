@@ -529,34 +529,28 @@ impl Recorder {
         let inner = self.inner.borrow();
         std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
         let inner_ref: &Inner = &inner;
-        let scene_path = out.join("scene.rbxm");
-        let playback_path = out.join("playback.json");
         let profiling = crate::timing::enabled();
-        let (scene_res, playback_res) = rayon::join(
-            || -> Result<f64, String> {
+        let (scene_res, (playback, pb_secs)) = rayon::join(
+            || -> Result<(Vec<u8>, f64), String> {
                 let t0 = profiling.then(std::time::Instant::now);
-                let scene = scene(inner_ref)?;
-                let scene_secs = t0.map_or(0.0, |t| t.elapsed().as_secs_f64());
-                std::fs::write(&scene_path, scene).map_err(|e| format!("scene.rbxm: {e}"))?;
-                Ok(scene_secs)
+                let bytes = scene(inner_ref)?;
+                Ok((bytes, t0.map_or(0.0, |t| t.elapsed().as_secs_f64())))
             },
-            || -> Result<(Playback, f64, f64), String> {
+            || {
                 let t0 = profiling.then(std::time::Instant::now);
                 let pb = playback(inner_ref);
-                let pb_secs = t0.map_or(0.0, |t| t.elapsed().as_secs_f64());
-                let t1 = profiling.then(std::time::Instant::now);
-                write_playback(&playback_path, &pb)?;
-                let pb_json_secs = t1.map_or(0.0, |t| t.elapsed().as_secs_f64());
-                Ok((pb, pb_secs, pb_json_secs))
+                (pb, t0.map_or(0.0, |t| t.elapsed().as_secs_f64()))
             },
         );
-        let scene_secs = scene_res?;
-        let (playback, pb_secs, pb_json_secs) = playback_res?;
+        let (scene_bytes, scene_secs) = scene_res?;
         if profiling {
             crate::timing::add("write: scene", scene_secs);
-            crate::timing::add("write: playback", pb_secs);
-            crate::timing::add("write: playback.json", pb_json_secs);
         }
+        std::fs::write(out.join("scene.rbxm"), scene_bytes).map_err(|e| format!("scene.rbxm: {e}"))?;
+        if profiling {
+            crate::timing::add("write: playback", pb_secs);
+        }
+        crate::timing::time("write: playback.json", || write_playback(&out.join("playback.json"), &playback))?;
         let spooled = engine.state.borrow_mut().output.take_spool();
         let events = events(&inner, engine);
         let counts = {

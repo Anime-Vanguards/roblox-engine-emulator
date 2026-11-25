@@ -568,6 +568,7 @@ pub fn decode_default(reflection: &Reflection, raw: &RawDefault) -> Option<Value
         RawDefault::Json(json) => decode_json(reflection, json),
         RawDefault::Dom(variant) => from_dom(reflection, variant),
         RawDefault::EnumItem(item) => Some(Value::EnumItem(*item)),
+        RawDefault::None => None,
     }
 }
 
