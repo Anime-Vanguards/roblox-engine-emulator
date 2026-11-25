@@ -1,0 +1,66 @@
+# engine: Roblox Studio 0.748.0.7481526, the server of a Studio Play session of one server and one client (the body run as a ModuleScript, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+index PGSIsEnabled -> ok n=1 string:function
+index GetPhysicsThrottling -> ok n=1 string:function
+index UnjoinFromOutsiders -> ok n=1 string:function
+PGSIsEnabled() -> ok n=1 boolean:true
+PGSIsEnabled(1, 'x') -> ok n=1 boolean:true
+GetPhysicsThrottling() -> ok n=1 number:100
+GetPhysicsThrottling(true) -> ok n=1 number:100
+PGSIsEnabled dot -> error Expected ':' not '.' calling member function PGSIsEnabled
+PGSIsEnabled self=game -> error Expected ':' not '.' calling member function PGSIsEnabled
+PGSIsEnabled self=Part -> error Expected ':' not '.' calling member function PGSIsEnabled
+PGSIsEnabled self=Model -> error Expected ':' not '.' calling member function PGSIsEnabled
+PGSIsEnabled self=WorldModel -> error Expected ':' not '.' calling member function PGSIsEnabled
+PGSIsEnabled self=nil -> error Expected ':' not '.' calling member function PGSIsEnabled
+PGSIsEnabled self=1 -> error Expected ':' not '.' calling member function PGSIsEnabled
+PGSIsEnabled self=table -> error Expected ':' not '.' calling member function PGSIsEnabled
+WorldModel.PGSIsEnabled -> error PGSIsEnabled is not a valid member of WorldModel "WorldModel"
+GetPhysicsThrottling dot -> error Expected ':' not '.' calling member function GetPhysicsThrottling
+GetPhysicsThrottling self=game -> error Expected ':' not '.' calling member function GetPhysicsThrottling
+GetPhysicsThrottling self=Part -> error Expected ':' not '.' calling member function GetPhysicsThrottling
+GetPhysicsThrottling self=Model -> error Expected ':' not '.' calling member function GetPhysicsThrottling
+GetPhysicsThrottling self=WorldModel -> error Expected ':' not '.' calling member function GetPhysicsThrottling
+GetPhysicsThrottling self=nil -> error Expected ':' not '.' calling member function GetPhysicsThrottling
+GetPhysicsThrottling self=1 -> error Expected ':' not '.' calling member function GetPhysicsThrottling
+GetPhysicsThrottling self=table -> error Expected ':' not '.' calling member function GetPhysicsThrottling
+WorldModel.GetPhysicsThrottling -> error GetPhysicsThrottling is not a valid member of WorldModel "WorldModel"
+UnjoinFromOutsiders dot -> error Expected ':' not '.' calling member function UnjoinFromOutsiders
+UnjoinFromOutsiders self=game -> error Expected ':' not '.' calling member function UnjoinFromOutsiders
+UnjoinFromOutsiders self=Part -> error Expected ':' not '.' calling member function UnjoinFromOutsiders
+UnjoinFromOutsiders self=Model -> error Expected ':' not '.' calling member function UnjoinFromOutsiders
+UnjoinFromOutsiders self=WorldModel -> error Expected ':' not '.' calling member function UnjoinFromOutsiders
+UnjoinFromOutsiders self=nil -> error Expected ':' not '.' calling member function UnjoinFromOutsiders
+UnjoinFromOutsiders self=1 -> error Expected ':' not '.' calling member function UnjoinFromOutsiders
+UnjoinFromOutsiders self=table -> error Expected ':' not '.' calling member function UnjoinFromOutsiders
+WorldModel.UnjoinFromOutsiders -> error UnjoinFromOutsiders is not a valid member of WorldModel "WorldModel"
+UnjoinFromOutsiders(none) -> error Argument 1 missing or nil
+UnjoinFromOutsiders(nil) -> error Expected table argument, got nil
+UnjoinFromOutsiders(empty) -> ok n=0
+UnjoinFromOutsiders({A}) -> ok n=0
+UnjoinFromOutsiders(A) -> error Expected table argument, got userdata
+UnjoinFromOutsiders(number) -> error Expected table argument, got number
+UnjoinFromOutsiders(string) -> error Expected table argument, got string
+UnjoinFromOutsiders(Vector3) -> error Expected table argument, got vector
+UnjoinFromOutsiders(Enum) -> error Expected table argument, got userdata
+UnjoinFromOutsiders({1}) -> error Unable to cast value to Object
+UnjoinFromOutsiders({'x'}) -> error Unable to cast value to Object
+UnjoinFromOutsiders({A,1}) -> error Unable to cast value to Object
+UnjoinFromOutsiders({1,A}) -> error Unable to cast value to Object
+UnjoinFromOutsiders({game}) -> ok n=0
+UnjoinFromOutsiders({Folder}) -> ok n=0
+UnjoinFromOutsiders({[2]=A}) -> ok n=0
+UnjoinFromOutsiders({x=A}) -> ok n=0
+UnjoinFromOutsiders({A,nil,A}) -> ok n=0
+UnjoinFromOutsiders({Vector3}) -> error Unable to cast value to Object
+position UnjoinFromOutsiders -> Expected table argument, got number
+cast {B} -> ok  weld removed
+cast {B,1} -> error Unable to cast value to Object weld kept
+cast {B,nil,1} -> error Unable to cast value to Object weld kept
+cast {B,nil,nil,1} -> error Unable to cast value to Object weld kept
+cast {B,x=1} -> ok  weld removed
+cast {[2]=B} -> ok  weld kept
+cast {[1]=B,[3]=B} -> ok  weld removed
+cast {nil,B} -> ok  weld removed
+cast {B} after holes -> ok  weld removed
+cast {B} metatable -> ok  weld kept

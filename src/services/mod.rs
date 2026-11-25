@@ -608,6 +608,16 @@ pub fn install(engine: &Rc<Engine>) {
             Ok(values([LuaValue::Number(time)]))
         }));
         behaviors.add_method(workspace, K::GetRealPhysicsFPS as NameId, constant(|_| Ok(LuaValue::Number(60.0))));
+        // (a playing client and its server read true and 100, the share of real time physics runs at, whatever the arguments
+        // (Studio 0.748, tools/parity/probes/workspace_physics_state.luau), and so does plugin code in Studio's edit DataModel
+        // (identity 5, the same calls run there by hand, not a capture). ree's world is never throttled, as its physics rate is
+        // always 60)
+        if let Some(n) = name(&reflection, "PGSIsEnabled") {
+            behaviors.add_method(workspace, n, constant(|_| Ok(LuaValue::Boolean(true))));
+        }
+        if let Some(n) = name(&reflection, "GetPhysicsThrottling") {
+            behaviors.add_method(workspace, n, constant(|_| Ok(LuaValue::Number(100.0))));
+        }
         behaviors.add_getter(workspace, K::CurrentCamera as NameId, getter(|lua, engine, id| {
             let stored = engine.state.borrow().dom.at(id).stored(K::CurrentCamera as NameId).cloned();
             let camera = match stored {

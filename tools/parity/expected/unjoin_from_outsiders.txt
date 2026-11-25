@@ -1,0 +1,76 @@
+# engine: Roblox Studio 0.748.0.7481526, a playing client of a Studio Play session (the body run as a ModuleScript, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-23
+order {B,C} -> ok  now j1 in nil j2 in nil j3 in nil j4 in nil j5 in nil j6 in Workspace.UnjoinProbe.B j7 in nil j8 in nil j9 in nil
+order {B,C} removing -> B:j2,j3,j4,j8 C:j1,j5,j7,j9 count 8
+order {B,C} events -> j1>nil,j2>nil,j3>nil,j4>nil,j5>nil,j7>nil,j8>nil,j9>nil
+order {C,B} -> ok  now j1 in nil j2 in nil j3 in nil j4 in nil j5 in nil j6 in Workspace.UnjoinProbe.B j7 in nil j8 in nil j9 in nil
+order {C,B} removing -> B:j2,j3,j4,j8 C:j1,j5,j7,j9 count 8
+order {A} -> ok  now j1 in Workspace.UnjoinProbe j2 in nil j3 in nil j4 in Workspace.UnjoinProbe.B j5 in Workspace.UnjoinProbe.D j6 in Workspace.UnjoinProbe.B j7 in nil j8 in Workspace.UnjoinProbe.D j9 in nil
+order {A} removing -> A:j2,j3,j7,j9 count 4
+order {D,A} -> ok  now j1 in nil j2 in nil j3 in nil j4 in nil j5 in nil j6 in Workspace.UnjoinProbe.B j7 in nil j8 in nil j9 in nil
+order {D,A} removing -> A:j2,j3,j7,j9 D:j1,j4,j5,j8 count 8
+order {B,C,B} -> ok  now j1 in nil j2 in nil j3 in nil j4 in nil j5 in nil j6 in Workspace.UnjoinProbe.B j7 in nil j8 in nil j9 in nil
+order {B,C,B} removing -> B:j2,j3,j4,j8 C:j1,j5,j7,j9 count 8
+kinds {B} -> ok  now in-worldmodel in Workspace.UnjoinProbe.WorldModel disabled in Workspace.UnjoinProbe.B in-storage in ReplicatedStorage loose in nil half in Workspace.UnjoinProbe.B self in Workspace.UnjoinProbe.B to-worldmodel-part in Workspace.UnjoinProbe.B to-storage-part in Workspace.UnjoinProbe.B glue-to-storage-part in Workspace.UnjoinProbe.B deep in nil rotate in Workspace.UnjoinProbe.B rotatep in Workspace.UnjoinProbe.B rotatev in Workspace.UnjoinProbe.B velocitymotor in Workspace.UnjoinProbe.B motor in nil wm-pair in Workspace.UnjoinProbe.WorldModel weldconstraint in Workspace.UnjoinProbe.B rigidconstraint in Workspace.UnjoinProbe.B
+kinds {N} in worldmodel -> ok  now in-worldmodel in Workspace.UnjoinProbe.WorldModel disabled in Workspace.UnjoinProbe.B in-storage in ReplicatedStorage loose in nil half in Workspace.UnjoinProbe.B self in Workspace.UnjoinProbe.B to-worldmodel-part in Workspace.UnjoinProbe.B to-storage-part in Workspace.UnjoinProbe.B glue-to-storage-part in Workspace.UnjoinProbe.B deep in nil rotate in Workspace.UnjoinProbe.B rotatep in Workspace.UnjoinProbe.B rotatev in Workspace.UnjoinProbe.B velocitymotor in Workspace.UnjoinProbe.B motor in nil wm-pair in Workspace.UnjoinProbe.WorldModel weldconstraint in Workspace.UnjoinProbe.B rigidconstraint in Workspace.UnjoinProbe.B
+listed {game} -> ok  now B-A in Workspace.UnjoinProbe.Model.B C-A in Workspace.UnjoinProbe.Model.B.C B-C in Workspace.UnjoinProbe.Model.B E-C in Workspace.UnjoinProbe.E E-A in Workspace.UnjoinProbe.E
+listed {workspace} -> ok  now B-A in Workspace.UnjoinProbe.Model.B C-A in Workspace.UnjoinProbe.Model.B.C B-C in Workspace.UnjoinProbe.Model.B E-C in Workspace.UnjoinProbe.E E-A in Workspace.UnjoinProbe.E
+listed {Root} -> ok  now B-A in Workspace.UnjoinProbe.Model.B C-A in Workspace.UnjoinProbe.Model.B.C B-C in Workspace.UnjoinProbe.Model.B E-C in Workspace.UnjoinProbe.E E-A in Workspace.UnjoinProbe.E
+listed {B} -> ok  now B-A in nil C-A in nil B-C in Workspace.UnjoinProbe.Model.B E-C in nil E-A in Workspace.UnjoinProbe.E
+listed {Model} -> ok  now B-A in nil C-A in nil B-C in Workspace.UnjoinProbe.Model.B E-C in nil E-A in Workspace.UnjoinProbe.E
+listed {Model,B} -> ok  now B-A in nil C-A in nil B-C in Workspace.UnjoinProbe.Model.B E-C in nil E-A in Workspace.UnjoinProbe.E
+listed {C,Model} -> ok  now B-A in nil C-A in nil B-C in Workspace.UnjoinProbe.Model.B E-C in nil E-A in Workspace.UnjoinProbe.E
+listed {B,Model,C,B} -> ok  now B-A in nil C-A in nil B-C in Workspace.UnjoinProbe.Model.B E-C in nil E-A in Workspace.UnjoinProbe.E
+listed {Model,E} -> ok  now B-A in nil C-A in nil B-C in Workspace.UnjoinProbe.Model.B E-C in Workspace.UnjoinProbe.E E-A in nil
+listed {C,E} -> ok  now B-A in Workspace.UnjoinProbe.Model.B C-A in nil B-C in nil E-C in Workspace.UnjoinProbe.E E-A in nil
+listed {C} -> ok  now B-A in Workspace.UnjoinProbe.Model.B C-A in nil B-C in nil E-C in nil E-A in Workspace.UnjoinProbe.E
+listed destroyed -> ok  now A-B in Workspace.UnjoinProbe.A
+assembly before -> A
+assembly unjoin -> ok  root B parent nil
+assembly parented again -> ok  parent Workspace.UnjoinProbe.B parts B A root A
+assembly unjoin again -> ok  root B parent nil
+list made 1-3, connected 3-1, parented 1-3 -> ok  x1,x2,x3
+list made 1-3, connected 1-3, parented 3-1 -> ok  x3,x2,x1
+list made 1-3, parented 1-3, connected 3-1 -> ok  x3,x2,x1
+list x1 out and back -> ok  x3,x2,x1
+list x1 out, a frame, back -> ok  x3,x2,x1
+list x1 Part1 to C and back -> ok  x3,x2,x1
+list x1 Part0 nil, a frame, back -> ok  x3,x2,x1
+list x1 disabled, a frame, enabled -> ok  x3,x2,x1
+list x1 Part0 and Part1 swapped -> ok  x3,x2,x1
+list x1 into JointsService -> ok  x1,x2,x3
+list x1 C0 changed -> ok  x1,x2,x3
+list of 4, x2 out and back -> ok  x1,x4,x3,x2
+list of 4, x1 out, x2 out, x2 back, x1 back -> ok  x4,x3,x2,x1
+list of 4, x3 to ReplicatedStorage and back -> ok  x1,x2,x4,x3
+list of 4, x2 Part1 to C, A listed -> ok  x1,x4,x3
+list of 4, A to ReplicatedStorage and back -> ok  x4,x3,x2,x1
+list of 4, A into a WorldModel and back -> ok  x4,x3,x2,x1
+moved A out, x1 x3 to A, named and parented 1-5 -> ok  x4,x2,x5
+moved A out, x1 x3 to A, named 3 1 2 4 5, parented 1-5 -> ok  x5,x2,x4
+moved A [x1] out, x1 x3 to A -> ok  x4,x2,x5
+moved Folder [A [x1]] out, x1 x3 to A -> ok  x5,x2,x4
+moved Folder [x2, x3] out -> ok  x1,x5,x4
+moved Folder [x3, x2] out -> ok  x1,x4,x5
+moved Folder [x2, Sub [x3]] out -> ok  x1,x5,x4
+moved Folder [x2 [x3]] out -> ok  x1,x4,x5
+moved Folder [A, C] out, x1 to A, x3 to C -> ok  x6,x2,x5,x4
+moved Folder [C, A] out, x1 to A, x3 to C -> ok  x5,x2,x6,x4
+moved Folder [A [x3]] out, x1 to A, x3 to C -> ok  x5,x2,x6,x4
+moved A [x3] out, x1 to A, x3 to C -> ok  x6,x2,x5,x4
+moved A into a Folder of the Workspace -> ok  x1,x2,x3,x4
+moved x2 into a Folder of the Workspace -> ok  x1,x2,x3,x4
+moved A out, x1's Part0 to D and back first -> ok  x4,x2,x5
+moved A out, x1's Part1 to C and back first -> ok  x5,x2,x4
+moved A out, x1's parts swapped first -> ok  x5,x2,x4
+moved Folder [x2, x3] in -> ok  x1,x2,x3
+moved Folder [x3, x2] in -> ok  x1,x3,x2
+moved Folder [x3, Sub [x2]] in -> ok  x1,x3,x2
+moved Folder [A, C] in, x2 x3 to A, x4 x5 to C -> ok  x1,x3,x2,x5,x4
+moved Folder [C, A] in, x2 x3 to A, x4 x5 to C -> ok  x1,x5,x4,x3,x2
+moved Folder [A [x3]] in, x2 to A, x3 to C -> ok  x1,x3,x2
+moved A [x2, x3] in, x2 x3 to A -> ok  x1,x2,x3
+moved A [x3, x2] in, x2 x3 to A -> ok  x1,x3,x2
+moved A [x3] in, x2 x3 to A -> ok  x1,x2,x3
+moved A [x2] in, x2 x3 to A -> ok  x1,x3,x2
+moved Folder [A [x2]] in, x2 x3 to A -> ok  x1,x3,x2

@@ -1461,6 +1461,73 @@ pub const BULK_MOVED_ALL_EVENTS: f64 = 2.58e-6;
 /// list, wherever the bad part stands), and a nil hole 81 ns on a call that moves (its parts pay [`BULK_MOVED`])
 pub const BULK_LISTED: f64 = 0.055e-6;
 pub const BULK_HOLE: f64 = 0.081e-6;
+/// What a Parent write that takes a subtree out of every world spends on the active joints it takes out of their parts' lists
+/// (world/joints.rs left_every_world), beyond the write's own price ([`reparented`] and the rest), in a playing client (Studio
+/// 0.748, a Studio Play session; os.clock around single writes, each in a frame of its own, the median of 11, two runs): a part P
+/// moved out of the Workspace (Parent = nil) with N Welds to it in a Folder of the Workspace cost, beyond P's move alone, 0.24
+/// to 0.26 us a Weld to one other part (0.29 at N = 1,000) and 0.72 to 0.86 a Weld to a part of its own (0.55 to 0.75 at 1,000;
+/// the same when each of those parts is welded to one more, so none is left alone); a Folder holding the N Welds cost 0.24 to
+/// 0.27 us a Weld more than one holding disabled Welds when they all went to one part, and 0.79 to 0.86 when each went to a part
+/// of its own. So 0.25 us for each joint taken out, and 0.5 for each part whose list it changes. A Weld that names P and is not
+/// active (disabled, or out of the DataModel) cost 0.025 to 0.04 us; ree does not look at those, as a joint that is not active
+/// cannot become active by leaving, and does not charge them. Glue and ManualGlue cost a client as much as Welds on every such
+/// move, and a move between two worlds (the Workspace and a WorldModel, or into JointsService) pays the same for each joint it
+/// takes out of the lists (world/joints.rs relist_moved). Studio 0.748, the same method, a part P with N = 1,000 or 10,000 Welds or
+/// Glue to one other part, each joint's cost beyond P's move at 10,000 (Welds; Glue): P out of the DataModel 0.21 to 0.24 us;
+/// 0.22 to 0.23, into ReplicatedStorage 0.21 to 0.23; 0.22 to 0.23, into a WorldModel of the Workspace 0.26 to 0.28; 0.28 to 0.32,
+/// into JointsService 0.21 to 0.23; 0.23 to 0.34; and the Folder holding the N joints out of the DataModel 0.21 to 0.25 us a joint
+/// more than one holding disabled joints; 0.20 to 0.28.
+pub const JOINT_TAKEN_OUT: f64 = 0.25e-6;
+pub const JOINT_LIST_LEFT: f64 = 0.5e-6;
+/// What a playing client spends putting a Glue or ManualGlue in its parts' lists of active joints, which it does when the Glue
+/// becomes active by a Parent write (world/joints.rs relist_moved), beyond the [`JOINT_LOOKED_AT`] the write pays for each joint
+/// in the lists of the parts it carries into a world (a rigid joint's [`JOINT_LINKED`] prices its link). Studio 0.748, as for
+/// [`JOINT_TAKEN_OUT`], each joint's cost at 10,000 (Welds; Glue): P back from out of the DataModel 0.40 to 0.42 us; 0.40 to 0.41,
+/// back from ReplicatedStorage 0.40 to 0.43; 0.39 to 0.42, back from a WorldModel 0.44; 0.45 to 0.52, back from JointsService 0.38
+/// to 0.41; 0.38 to 0.50 (0.04 to 0.05 for disabled joints of either: what JOINT_LOOKED_AT pays); and the Folder holding the N
+/// joints back into the Workspace 0.39 to 0.41 us a joint more than one holding disabled joints; 0.38 to 0.47, the disabled Glue
+/// costing as much as disabled Welds (1.68 to 1.75 us a Weld, 1.69 to 1.77 a Glue, with the Folder's own move: those pay what a
+/// Weld brought in that cannot link pays, [`JOINT_ENTERED`] and the looks at its parts). So a Glue P brings back reads 0.42 us
+/// here. Not modelled: P with its joints each to a part of its own (the parts 2 studs apart in a grid, the same method) cost a
+/// client 1.1 to 2.4 us a joint coming back at N = 1,000 and 1.3 to 2.8 at 10,000, Glue as much as Welds, where ree charges such a
+/// Glue 0.42 (a price for each part whose list a Glue joins would follow it); leaving, 0.59 to 1.4, where JOINT_TAKEN_OUT and
+/// JOINT_LIST_LEFT charge 0.75.
+pub const GLUE_LISTED: f64 = 0.37e-6;
+/// Workspace:UnjoinFromOutsiders (world/mod.rs, world/joints.rs unjoin_from_outsiders). Measured in a playing client (Studio 0.748, a
+/// Studio Play session; os.clock around single calls, each in a frame of its own, the median of 11, two runs), each case's cost
+/// beyond the call at N = 1,000 and 10,000: one part listed N times 0.052 to 0.079 and 0.056 to 0.059 us an entry; N nil holes
+/// before one part 0.12 to 0.13 and 0.069 to 0.073 a hole; a list of N parts 0.35 to 0.36 and 0.38 to 0.39 a part; one Folder of N
+/// parts 0.37 to 0.38 and 0.41 to 0.45 a part; one Folder of N Folders 0.026 to 0.027 and 0.018 to 0.019 an instance; a list of N
+/// parts each named by a Weld out of the DataModel 0.012 to 0.024 and 0.075 to 0.080 more a part, in Welded pairs (kept) 0.045 to
+/// 0.10 and 0.36 to 0.38 more; each Welded to a part of its own outside the list 3.1 to 3.4 and 4.4 to 4.5 more, all to one 2.8 to
+/// 2.9 and 4.0 to 4.1 more (the Welds taken out); N parts and then an entry that is no Instance 0.23 to 0.28 and 0.21 to 0.22 an
+/// entry. Fitted: UNJOIN_ENTRY and UNJOIN_HOLE are the slopes from 1,000 to 10,000 (the call's own cost kept out); UNJOIN_PART
+/// 0.35 lies between a listed part's 0.33 (0.39 less UNJOIN_ENTRY) and a part below a Folder's 0.41 (less UNJOIN_BELOW), so a
+/// listed part is charged 0.41 in all and one below an entry 0.37; UNJOIN_BELOW is the Folders' slope; UNJOIN_NAMED 0.07 is taken
+/// from the middle of 0.012 to 0.38, which grow with the list; each Weld taken out cost 3.6 us on average (2.8 to 4.5 across the
+/// four cases that take Welds out), of which ree's Parent write of it (instance.rs: 0.54 to 0.77 us here), [`JOINT_TAKEN_OUT`], two
+/// [`JOINT_LIST_LEFT`] and UNJOIN_NAMED pay 1.9 to 2.1, and UNJOIN_REMOVED the rest on average, its link change's flat prices among
+/// it (those Welds join anchored parts, whose links change no assembly and pay [`LINK_CHANGED`] alone: world/joints.rs
+/// charge_link). While the call takes joints out (Joints::unpriced), charge_link charges a removal that ends a single link only
+/// what grows with the links and the assemblies, [`LINK_FRAME`] for the frame's first change, [`LINK_PART`] for each part it marks
+/// and [`links_more`], and a removal that ends several links at once (a joint carrying others) every link price, as its Parent = nil
+/// pays; so taking one leaf off a hub costs the call what the leaf's Parent = nil costs, as a client's does
+/// (Studio 0.748, the same method, one leaf of an anchored hub welded to N unanchored parts, at a frame's start:
+/// UnjoinFromOutsiders({leaf}) 91 to 118 us at N = 1,000 and 975 to 1,154 at 10,000, the leaf's Weld's Parent = nil 99 to 129 and
+/// 1,026 to 1,201; ree reads 124 and 889 for the call, 133 and 898 for the write); the entries before one that raises are an ignore
+/// list's [`LIST_CAST_FAILED`] (0.19). ree's clock then reads 0.82 to 1.08 of the client's call at 10,000 entries in each case but
+/// the Welded pairs (0.63 to 0.64), the Welds taken out 0.86 to 0.97; and 0.74 to 1.29 at 1,000 but the nil holes (0.50 to 0.56)
+/// and a call that raises (0.64 to 0.70), the Welds taken out 1.07 to 1.25 (each case's whole call against both runs'). Not
+/// modelled: a joint taken off a part that keeps many active joints costs a client about 0.1 us for each it keeps, whatever their
+/// class (a Weld or a Glue leaf off a hub of 10,000 Welds, or off a hub of 10,000 Glue, 0.97 to 1.17 ms; off a hub of 10,000
+/// disabled Welds 0.11 to 0.13), which ree charges a Weld through its assembly's parts (the same count for a hub of Welds) and a
+/// Glue not at all.
+pub const UNJOIN_ENTRY: f64 = 0.057e-6;
+pub const UNJOIN_HOLE: f64 = 0.065e-6;
+pub const UNJOIN_PART: f64 = 0.35e-6;
+pub const UNJOIN_BELOW: f64 = 0.017e-6;
+pub const UNJOIN_NAMED: f64 = 0.07e-6;
+pub const UNJOIN_REMOVED: f64 = 1.7e-6;
 /// Model:PivotTo, a part it moves (client: 0.48 us in the workspace; 0.15 a call), a Part:PivotTo 1.14 us
 /// (the parity bench, a rendered client of a game's match place: Model:PivotTo of 10 parts 10.65 us, Part:PivotTo 1.14)
 pub const PIVOT_PART: f64 = 1.05e-6;
