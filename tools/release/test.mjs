@@ -617,7 +617,10 @@ test("the canary publishes a passing run's zips as a prerelease under fixed name
 	assert(!/--target|target_commitish|git push|git tag/.test(canary));
 	assert.match(canary, /gh release create canary --verify-tag .*--prerelease --latest=false /);
 	assert.match(canary, /gh release edit canary .*--prerelease --latest=false /);
-	assert(canary.includes('title="Canary (main ${GITHUB_SHA:0:10})"'));
+	assert.match(canary, /BUILT: \$\{\{ needs\.version\.outputs\.dry-run-date \}\}/);
+	assert(canary.includes('title="Canary (main ${GITHUB_SHA:0:10}, ${BUILT:0:10} ${BUILT:11:5}Z)"'));
+	// transient GitHub 5xx on asset overwrite retries with backoff before giving up
+	assert.match(canary, /for attempt in 1 2 3; do\n\s+if gh release upload canary upload\/\* --clobber -R "\$repo"; then break; fi\n\s+if \[ "\$attempt" -eq 3 \]; then exit 1; fi\n\s+sleep \$\(\(attempt \* 5\)\)\n\s+done/);
 	// an existing release gets the new zips under the same names before the stale assets go and the title changes
 	const order = ["gh release upload canary upload/* --clobber", "gh release delete-asset canary", "gh release edit canary"].map((text) => canary.indexOf(text));
 	assert(order[0] > 0 && order[0] < order[1] && order[1] < order[2], "upload, then delete, then edit");

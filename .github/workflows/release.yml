@@ -462,10 +462,11 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILT: ${{ needs.version.outputs.dry-run-date }}
         run: |
           set -euo pipefail
           repo="$GITHUB_REPOSITORY"
-          title="Canary (main ${GITHUB_SHA:0:10})"
+          title="Canary (main ${GITHUB_SHA:0:10}, ${BUILT:0:10} ${BUILT:11:5}Z)"
           # A tag that has moved on since this run started has a newer run waiting in this group, which publishes it
           tagged=$(gh api "repos/$repo/git/ref/tags/canary" --jq .object.sha)
           if [ "$tagged" != "$GITHUB_SHA" ]; then
@@ -473,7 +474,11 @@ jobs:
             exit 0
           fi
           if gh release view canary -R "$repo" --json id > /dev/null 2> view.err; then
-            gh release upload canary upload/* --clobber -R "$repo"
+            for attempt in 1 2 3; do
+              if gh release upload canary upload/* --clobber -R "$repo"; then break; fi
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep $((attempt * 5))
+            done
             gh release view canary -R "$repo" --json assets --jq '.assets[].name' > published.txt
             while IFS= read -r asset; do
               if [ ! -e "upload/$asset" ]; then gh release delete-asset canary "$asset" --yes -R "$repo"; fi
