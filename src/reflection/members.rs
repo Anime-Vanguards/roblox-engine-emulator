@@ -7,11 +7,12 @@
 
 use std::{borrow::Cow, fmt, marker::PhantomData, ptr};
 
+use rbx_dom_weak::types::{self as dom, Variant};
 use rustc_hash::FxHashMap;
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 use super::{
-    BEHAVIOR_METHODS, BEHAVIOR_PROPERTIES, ClassId, ClassInfo, EnumId, EnumInfo, EnumItemId, EnumItemInfo, ITEM_ALIASES, NameId,
+    BEHAVIOR_METHODS, BEHAVIOR_PROPERTIES, ClassId, ClassInfo, DumpEnumItem, EnumId, EnumInfo, EnumItemId, EnumItemInfo, ITEM_ALIASES, NameId,
     PropertyInfo, Reflection, ScriptType, engine_type, list, text,
 };
 use crate::value::Value;
@@ -553,7 +554,7 @@ impl Members {
     /// engine member has none). The load made class n of the dump's n-th entry with a name, so entries are matched by place.
     #[inline(never)]
     pub(super) fn build(reflection: &Reflection, dump: &[u8]) -> Members {
-        let classes = serde_json::from_slice::<Dump<MemberClass>>(dump).map(|dump| dump.classes).unwrap_or_default();
+        let classes = serde_json::from_slice::<MemberDump>(dump).map(|dump| dump.classes).unwrap_or_default();
         let entries: Vec<&MemberClass> = classes.iter().filter(|class| text(class.name.as_ref()).is_some()).collect();
         let mut members = Members::default();
         for class in &reflection.classes {
@@ -876,39 +877,78 @@ impl Reflection {
     }
 }
 
-// The dump as the engine reads it at load. The member lists keep only their names: building JSON values for the methods'
-// and events' parameters, types, permits and display only to drop them cost time and memory at every boot. Any shape of
-// JSON reads as the JSON values did: a value of another type than expected reads as empty, a repeated key's last value
-// counts, an entry without a string name is skipped, and a string reads the same with escapes as without. The member info
-// built on first use ([`Members::build`]) reads the dump by the same rules.
+// The dump as the engine reads it at load. Every field is streamed directly into typed structures without building
+// intermediate `serde_json::Value` trees or `BTreeMap`s. Any shape of JSON reads as the JSON values did: a value of
+// another type than expected reads as empty, a repeated key's last value counts, an entry without a string name is
+// skipped, and a string reads the same with escapes as without. The member info built on first use ([`Members::build`])
+// reads the dump by the same rules.
 
-/// A class entry of the dump: the fields the load reads, as JSON values, and the member lists' names.
+/// An enum entry of the dump (`enums` array).
+pub(super) struct DumpEnum {
+    pub name: String,
+    pub items: Vec<DumpEnumItem>,
+}
+
+/// A permits object of the dump, together with the presence of the keys the engine checks on raw permits.
+#[derive(Default)]
+pub(super) struct DumpPermits {
+    pub permits: Permits,
+    pub has_new: bool,
+    pub has_get_service: bool,
+    pub has_read: bool,
+    pub has_write: bool,
+}
+
+/// A property entry of the dump (`properties` array).
+pub(super) struct DumpProperty {
+    pub name: String,
+    pub script: Option<String>,
+    pub engine: Option<String>,
+    pub enum_name: Option<String>,
+    pub instance_type: Option<String>,
+    pub read_only: bool,
+    pub scriptable: bool,
+    pub serialized: bool,
+    pub display: DisplayData,
+    pub permits: Permits,
+}
+
+/// A default entry of the dump (`defaults` object), decoded directly into its typed form without `serde_json::Value`.
+pub(super) enum ParsedDefault {
+    Dom(Variant),
+    EnumItem(String, String),
+    Font(String, String, String),
+    None,
+}
+
+/// A class entry of the dump: the fields the load reads, directly typed, and the member lists' names.
 #[derive(Default)]
 pub(super) struct DumpClass {
-    pub name: Option<serde_json::Value>,
-    pub superclass: Option<serde_json::Value>,
-    pub serialized: Option<serde_json::Value>,
-    pub permits: Option<serde_json::Value>,
-    pub display: Option<serde_json::Value>,
-    pub properties: Option<serde_json::Value>,
-    pub defaults: Option<serde_json::Value>,
+    pub name: Option<String>,
+    pub superclass: Option<String>,
+    pub serialized: bool,
+    pub permits: DumpPermits,
+    pub display: DisplayData,
+    pub properties: Vec<DumpProperty>,
+    pub defaults: Option<Vec<(String, ParsedDefault)>>,
     /// The `name` of each entry of `events`, `methods` and `callbacks` that has a string one, in order
     pub events: Vec<String>,
     pub methods: Vec<String>,
     pub callbacks: Vec<String>,
 }
 
-/// The dump's top level, its class entries read as `C` (an entry that is no object reads as one without a name).
-pub(super) struct Dump<C> {
-    pub version: Option<serde_json::Value>,
-    pub enums: Option<serde_json::Value>,
-    pub classes: Vec<C>,
+/// The dump's top level as the initial load reads it (an entry that is no object reads as one without a name).
+#[derive(Default)]
+pub(super) struct DumpLoad {
+    pub version: Option<String>,
+    pub enums: Vec<DumpEnum>,
+    pub classes: Vec<DumpClass>,
 }
 
-impl<C> Default for Dump<C> {
-    fn default() -> Self {
-        Dump { version: None, enums: None, classes: Vec::new() }
-    }
+/// The dump's top level as the lazy member info reads it (skips `version` and `enums`).
+#[derive(Default)]
+struct MemberDump {
+    classes: Vec<MemberClass>,
 }
 
 /// A class entry as the member info is built from it: its name and its member lists as JSON values (the rest skipped).
@@ -935,6 +975,13 @@ enum Key {
     Version,
     Enums,
     Classes,
+    Items,
+    Value,
+    Type,
+    Script,
+    Engine,
+    Enum,
+    Instance,
     Other,
 }
 
@@ -961,6 +1008,13 @@ impl<'de> Deserialize<'de> for Key {
                     "version" => Key::Version,
                     "enums" => Key::Enums,
                     "classes" => Key::Classes,
+                    "items" => Key::Items,
+                    "value" => Key::Value,
+                    "type" => Key::Type,
+                    "script" => Key::Script,
+                    "engine" => Key::Engine,
+                    "enum" => Key::Enum,
+                    "instance" => Key::Instance,
                     _ => Key::Other,
                 })
             }
@@ -1006,58 +1060,1152 @@ fn skip_map<'de, A: MapAccess<'de>>(mut map: A) -> Result<(), A::Error> {
     Ok(())
 }
 
+/// A string value, or `None` for any other JSON value.
+struct OptText(Option<String>);
+
+impl<'de> Deserialize<'de> for OptText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<OptText, D::Error> {
+        struct TextVisitor;
+        impl<'de> Visitor<'de> for TextVisitor {
+            type Value = Option<String>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_str<E: de::Error>(self, text: &str) -> Result<Option<String>, E> {
+                Ok(Some(text.to_string()))
+            }
+            fn visit_string<E: de::Error>(self, text: String) -> Result<Option<String>, E> {
+                Ok(Some(text))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<String>, E> {
+                Ok(None)
+            }
+            fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<String>, E> {
+                Ok(None)
+            }
+            fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<String>, E> {
+                Ok(None)
+            }
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<String>, E> {
+                Ok(None)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<Option<String>, E> {
+                Ok(None)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<Option<String>, E> {
+                Ok(None)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<String>, A::Error> {
+                skip_seq(seq).map(|()| None)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<String>, A::Error> {
+                skip_map(map).map(|()| None)
+            }
+        }
+        deserializer.deserialize_any(TextVisitor).map(OptText)
+    }
+}
+
+/// A boolean `true`, or `false` for any other JSON value.
+struct IsTrue(bool);
+
+impl<'de> Deserialize<'de> for IsTrue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<IsTrue, D::Error> {
+        struct BoolVisitor;
+        impl<'de> Visitor<'de> for BoolVisitor {
+            type Value = bool;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<bool, E> {
+                Ok(v)
+            }
+            fn visit_i64<E: de::Error>(self, _: i64) -> Result<bool, E> {
+                Ok(false)
+            }
+            fn visit_u64<E: de::Error>(self, _: u64) -> Result<bool, E> {
+                Ok(false)
+            }
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<bool, E> {
+                Ok(false)
+            }
+            fn visit_str<E: de::Error>(self, _: &str) -> Result<bool, E> {
+                Ok(false)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<bool, E> {
+                Ok(false)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<bool, E> {
+                Ok(false)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<bool, A::Error> {
+                skip_seq(seq).map(|()| false)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<bool, A::Error> {
+                skip_map(map).map(|()| false)
+            }
+        }
+        deserializer.deserialize_any(BoolVisitor).map(IsTrue)
+    }
+}
+
+/// A JSON number as `f64`, or `None` for any other JSON value.
+struct OptF64(Option<f64>);
+
+impl<'de> Deserialize<'de> for OptF64 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<OptF64, D::Error> {
+        struct NumVisitor;
+        impl<'de> Visitor<'de> for NumVisitor {
+            type Value = Option<f64>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<f64>, E> {
+                Ok(Some(v as f64))
+            }
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<f64>, E> {
+                Ok(Some(v as f64))
+            }
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<Option<f64>, E> {
+                Ok(Some(v))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<f64>, E> {
+                Ok(None)
+            }
+            fn visit_str<E: de::Error>(self, _: &str) -> Result<Option<f64>, E> {
+                Ok(None)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<Option<f64>, E> {
+                Ok(None)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<Option<f64>, E> {
+                Ok(None)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<f64>, A::Error> {
+                skip_seq(seq).map(|()| None)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<f64>, A::Error> {
+                skip_map(map).map(|()| None)
+            }
+        }
+        deserializer.deserialize_any(NumVisitor).map(OptF64)
+    }
+}
+
+/// A JSON `display` object read directly into [`DisplayData`], preserving sorted key order and last-key-wins semantics.
+#[derive(Default)]
+struct ParsedDisplay(DisplayData);
+
+impl<'de> Deserialize<'de> for ParsedDisplay {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<ParsedDisplay, D::Error> {
+        struct DisplayVisitor;
+        impl<'de> Visitor<'de> for DisplayVisitor {
+            type Value = ParsedDisplay;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(ParsedDisplay);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<ParsedDisplay, A::Error> {
+                skip_seq(seq).map(|()| ParsedDisplay::default())
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ParsedDisplay, A::Error> {
+                let mut entries: Vec<(Box<str>, Box<str>)> = Vec::new();
+                while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+                    let value = map.next_value::<OptText>()?.0;
+                    if let Some(pos) = entries.iter().position(|(k, _)| &**k == &*key) {
+                        match value {
+                            Some(text) => entries[pos].1 = text.into_boxed_str(),
+                            None => {
+                                entries.remove(pos);
+                            }
+                        }
+                    } else if let Some(text) = value {
+                        entries.push((key.into_owned().into_boxed_str(), text.into_boxed_str()));
+                    }
+                }
+                if entries.len() > 1 {
+                    crate::sort::by(&mut entries, |a, b| a.0.cmp(&b.0));
+                }
+                Ok(ParsedDisplay(entries.into_boxed_slice()))
+            }
+        }
+        deserializer.deserialize_any(DisplayVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for DumpPermits {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<DumpPermits, D::Error> {
+        struct PermitsVisitor;
+        impl<'de> Visitor<'de> for PermitsVisitor {
+            type Value = DumpPermits;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(DumpPermits);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<DumpPermits, A::Error> {
+                skip_seq(seq).map(|()| DumpPermits::default())
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<DumpPermits, A::Error> {
+                let mut out = DumpPermits::default();
+                let mut entries: Vec<(Cow<'static, str>, Box<str>)> = Vec::new();
+                while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+                    match &*key {
+                        "New" => out.has_new = true,
+                        "GetService" => out.has_get_service = true,
+                        "Read" => out.has_read = true,
+                        "Write" => out.has_write = true,
+                        _ => {}
+                    }
+                    let value = map.next_value::<OptText>()?.0;
+                    if let Some(pos) = entries.iter().position(|(k, _)| &**k == &*key) {
+                        match value {
+                            Some(text) => entries[pos].1 = text.into_boxed_str(),
+                            None => {
+                                entries.remove(pos);
+                            }
+                        }
+                    } else if let Some(text) = value {
+                        let action = match ACTIONS.iter().find(|known| **known == &*key) {
+                            Some(known) => Cow::Borrowed(*known),
+                            None => Cow::Owned(key.into_owned()),
+                        };
+                        entries.push((action, text.into_boxed_str()));
+                    }
+                }
+                if entries.len() > 1 {
+                    crate::sort::by(&mut entries, |a, b| a.0.cmp(&b.0));
+                }
+                out.permits = Permits(entries.into_boxed_slice());
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_any(PermitsVisitor)
+    }
+}
+
+/// An enum item entry (`{"name": "...", "value": 0}`), or `None` when malformed.
+struct EnumItemEntry(Option<DumpEnumItem>);
+
+impl<'de> Deserialize<'de> for EnumItemEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<EnumItemEntry, D::Error> {
+        struct ItemVisitor;
+        impl<'de> Visitor<'de> for ItemVisitor {
+            type Value = Option<DumpEnumItem>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(Option<DumpEnumItem>);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<DumpEnumItem>, A::Error> {
+                skip_seq(seq).map(|()| None)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Option<DumpEnumItem>, A::Error> {
+                let mut name = None;
+                let mut value = None;
+                while let Some(key) = map.next_key::<Key>()? {
+                    match key {
+                        Key::Name => name = map.next_value::<OptText>()?.0,
+                        Key::Value => value = map.next_value::<OptF64>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(match (name, value) {
+                    (Some(name), Some(value)) => Some(DumpEnumItem { name, value }),
+                    _ => None,
+                })
+            }
+        }
+        deserializer.deserialize_any(ItemVisitor).map(EnumItemEntry)
+    }
+}
+
+#[derive(Default)]
+struct EnumItems(Vec<DumpEnumItem>);
+
+impl<'de> Deserialize<'de> for EnumItems {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<EnumItems, D::Error> {
+        struct ItemsVisitor;
+        impl<'de> Visitor<'de> for ItemsVisitor {
+            type Value = EnumItems;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(EnumItems);
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<EnumItems, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element::<EnumItemEntry>()? {
+                    items.extend(item.0);
+                }
+                Ok(EnumItems(items))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<EnumItems, A::Error> {
+                skip_map(map).map(|()| EnumItems::default())
+            }
+        }
+        deserializer.deserialize_any(ItemsVisitor)
+    }
+}
+
+struct EnumEntry(Option<DumpEnum>);
+
+impl<'de> Deserialize<'de> for EnumEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<EnumEntry, D::Error> {
+        struct EnumVisitor;
+        impl<'de> Visitor<'de> for EnumVisitor {
+            type Value = Option<DumpEnum>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(Option<DumpEnum>);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<DumpEnum>, A::Error> {
+                skip_seq(seq).map(|()| None)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Option<DumpEnum>, A::Error> {
+                let mut name = None;
+                let mut items = Vec::new();
+                while let Some(key) = map.next_key::<Key>()? {
+                    match key {
+                        Key::Name => name = map.next_value::<OptText>()?.0,
+                        Key::Items => items = map.next_value::<EnumItems>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(name.map(|name| DumpEnum { name, items }))
+            }
+        }
+        deserializer.deserialize_any(EnumVisitor).map(EnumEntry)
+    }
+}
+
+#[derive(Default)]
+struct EnumsList(Vec<DumpEnum>);
+
+impl<'de> Deserialize<'de> for EnumsList {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<EnumsList, D::Error> {
+        struct EnumsVisitor;
+        impl<'de> Visitor<'de> for EnumsVisitor {
+            type Value = EnumsList;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(EnumsList);
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<EnumsList, A::Error> {
+                let mut enums = Vec::with_capacity(660);
+                while let Some(entry) = seq.next_element::<EnumEntry>()? {
+                    enums.extend(entry.0);
+                }
+                Ok(EnumsList(enums))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<EnumsList, A::Error> {
+                skip_map(map).map(|()| EnumsList::default())
+            }
+        }
+        deserializer.deserialize_any(EnumsVisitor)
+    }
+}
+
+#[derive(Default)]
+struct PropType {
+    script: Option<String>,
+    engine: Option<String>,
+    enum_name: Option<String>,
+    instance_type: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for PropType {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<PropType, D::Error> {
+        struct PropTypeVisitor;
+        impl<'de> Visitor<'de> for PropTypeVisitor {
+            type Value = PropType;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(PropType);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<PropType, A::Error> {
+                skip_seq(seq).map(|()| PropType::default())
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<PropType, A::Error> {
+                let mut out = PropType::default();
+                while let Some(key) = map.next_key::<Key>()? {
+                    match key {
+                        Key::Script => out.script = map.next_value::<OptText>()?.0,
+                        Key::Engine => out.engine = map.next_value::<OptText>()?.0,
+                        Key::Enum => out.enum_name = map.next_value::<OptText>()?.0,
+                        Key::Instance => out.instance_type = map.next_value::<OptText>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_any(PropTypeVisitor)
+    }
+}
+
+struct PropertyEntry(Option<DumpProperty>);
+
+impl<'de> Deserialize<'de> for PropertyEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<PropertyEntry, D::Error> {
+        struct PropertyVisitor;
+        impl<'de> Visitor<'de> for PropertyVisitor {
+            type Value = Option<DumpProperty>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(Option<DumpProperty>);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<DumpProperty>, A::Error> {
+                skip_seq(seq).map(|()| None)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Option<DumpProperty>, A::Error> {
+                let mut name = None;
+                let mut prop_type = PropType::default();
+                let mut permits = DumpPermits::default();
+                let mut display = DisplayData::default();
+                let mut serialized = false;
+                while let Some(key) = map.next_key::<Key>()? {
+                    match key {
+                        Key::Name => name = map.next_value::<OptText>()?.0,
+                        Key::Type => prop_type = map.next_value()?,
+                        Key::Permits => permits = map.next_value()?,
+                        Key::Display => display = map.next_value::<ParsedDisplay>()?.0,
+                        Key::Serialized => serialized = map.next_value::<IsTrue>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(name.map(|name| DumpProperty {
+                    name,
+                    script: prop_type.script,
+                    engine: prop_type.engine,
+                    enum_name: prop_type.enum_name,
+                    instance_type: prop_type.instance_type,
+                    read_only: !permits.has_write,
+                    scriptable: permits.has_read,
+                    serialized,
+                    display,
+                    permits: permits.permits,
+                }))
+            }
+        }
+        deserializer.deserialize_any(PropertyVisitor).map(PropertyEntry)
+    }
+}
+
+#[derive(Default)]
+struct PropertiesList(Vec<DumpProperty>);
+
+impl<'de> Deserialize<'de> for PropertiesList {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<PropertiesList, D::Error> {
+        struct PropsVisitor;
+        impl<'de> Visitor<'de> for PropsVisitor {
+            type Value = PropertiesList;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(PropertiesList);
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<PropertiesList, A::Error> {
+                let mut props = Vec::new();
+                while let Some(prop) = seq.next_element::<PropertyEntry>()? {
+                    props.extend(prop.0);
+                }
+                Ok(PropertiesList(props))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<PropertiesList, A::Error> {
+                skip_map(map).map(|()| PropertiesList::default())
+            }
+        }
+        deserializer.deserialize_any(PropsVisitor)
+    }
+}
+
+/// Parses a numeric element inside a default array/scalar as `value::decode_number` does.
+fn parse_special_number(text: &str) -> f64 {
+    match text {
+        "inf" | "+inf" => f64::INFINITY,
+        "-inf" => f64::NEG_INFINITY,
+        "nan" | "-nan" => f64::NAN,
+        other => other.parse().unwrap_or(0.0),
+    }
+}
+
+/// Reads a single JSON number, numeric string, or `{"t":"numeric","v":...}` / `{"s":...}` object as `f64`.
+struct DefaultNum(f64);
+
+impl<'de> Deserialize<'de> for DefaultNum {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<DefaultNum, D::Error> {
+        struct NumVisitor;
+        impl<'de> Visitor<'de> for NumVisitor {
+            type Value = f64;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<f64, E> {
+                Ok(v as f64)
+            }
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<f64, E> {
+                Ok(v as f64)
+            }
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<f64, E> {
+                Ok(v)
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<f64, E> {
+                Ok(s.parse().unwrap_or(0.0))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<f64, E> {
+                Ok(0.0)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<f64, E> {
+                Ok(0.0)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<f64, E> {
+                Ok(0.0)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<f64, A::Error> {
+                skip_seq(seq).map(|()| 0.0)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<f64, A::Error> {
+                let mut is_numeric = false;
+                let mut v_val: Option<String> = None;
+                let mut s_val: Option<String> = None;
+                while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+                    match &*key {
+                        "t" => is_numeric = map.next_value::<OptText>()?.0.as_deref() == Some("numeric"),
+                        "v" => v_val = map.next_value::<OptText>()?.0,
+                        "s" => s_val = map.next_value::<OptText>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                let text = if is_numeric { v_val.as_deref() } else { s_val.as_deref() };
+                Ok(text.map_or(0.0, parse_special_number))
+            }
+        }
+        deserializer.deserialize_any(NumVisitor).map(DefaultNum)
+    }
+}
+
+/// Up to 12 numbers inline (covers Vector2/3, UDim/2, Color3, Rect, NumberRange, CFrame without heap allocation).
+#[derive(Default)]
+struct SmallNums {
+    data: [f64; 12],
+    len: u8,
+}
+
+impl SmallNums {
+    #[inline]
+    fn push(&mut self, value: f64) {
+        if (self.len as usize) < 12 {
+            self.data[self.len as usize] = value;
+            self.len += 1;
+        }
+    }
+
+    #[inline]
+    fn at(&self, index: usize) -> f64 {
+        if index < self.len as usize { self.data[index] } else { 0.0 }
+    }
+}
+
+enum DefaultSeqItem {
+    Num(f64),
+    Str(String),
+    Nested([f64; 4]),
+    Other,
+}
+
+impl<'de> Deserialize<'de> for DefaultSeqItem {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<DefaultSeqItem, D::Error> {
+        struct ItemVisitor;
+        impl<'de> Visitor<'de> for ItemVisitor {
+            type Value = DefaultSeqItem;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<DefaultSeqItem, E> {
+                Ok(DefaultSeqItem::Num(v as f64))
+            }
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<DefaultSeqItem, E> {
+                Ok(DefaultSeqItem::Num(v as f64))
+            }
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<DefaultSeqItem, E> {
+                Ok(DefaultSeqItem::Num(v))
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<DefaultSeqItem, E> {
+                Ok(DefaultSeqItem::Str(s.to_string()))
+            }
+            fn visit_string<E: de::Error>(self, s: String) -> Result<DefaultSeqItem, E> {
+                Ok(DefaultSeqItem::Str(s))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<DefaultSeqItem, E> {
+                Ok(DefaultSeqItem::Other)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<DefaultSeqItem, E> {
+                Ok(DefaultSeqItem::Other)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<DefaultSeqItem, E> {
+                Ok(DefaultSeqItem::Other)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<DefaultSeqItem, A::Error> {
+                let mut row = [0.0f64; 4];
+                let mut i = 0usize;
+                while let Some(n) = seq.next_element::<DefaultNum>()? {
+                    if i < 4 {
+                        row[i] = n.0;
+                    }
+                    i += 1;
+                }
+                Ok(DefaultSeqItem::Nested(row))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<DefaultSeqItem, A::Error> {
+                let mut is_numeric = false;
+                let mut v_val: Option<String> = None;
+                let mut s_val: Option<String> = None;
+                while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+                    match &*key {
+                        "t" => is_numeric = map.next_value::<OptText>()?.0.as_deref() == Some("numeric"),
+                        "v" => v_val = map.next_value::<OptText>()?.0,
+                        "s" => s_val = map.next_value::<OptText>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                let text = if is_numeric { v_val.as_deref() } else { s_val.as_deref() };
+                Ok(DefaultSeqItem::Num(text.map_or(0.0, parse_special_number)))
+            }
+        }
+        deserializer.deserialize_any(ItemVisitor)
+    }
+}
+
+enum DefaultV {
+    Num(f64),
+    Str(String),
+    Array {
+        nums: SmallNums,
+        nested: Option<Vec<[f64; 4]>>,
+        strings: Option<Vec<Option<String>>>,
+    },
+    Other,
+}
+
+impl<'de> Deserialize<'de> for DefaultV {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<DefaultV, D::Error> {
+        struct VVisitor;
+        impl<'de> Visitor<'de> for VVisitor {
+            type Value = DefaultV;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<DefaultV, E> {
+                Ok(DefaultV::Num(v as f64))
+            }
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<DefaultV, E> {
+                Ok(DefaultV::Num(v as f64))
+            }
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<DefaultV, E> {
+                Ok(DefaultV::Num(v))
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<DefaultV, E> {
+                Ok(DefaultV::Str(s.to_string()))
+            }
+            fn visit_string<E: de::Error>(self, s: String) -> Result<DefaultV, E> {
+                Ok(DefaultV::Str(s))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<DefaultV, E> {
+                Ok(DefaultV::Other)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<DefaultV, E> {
+                Ok(DefaultV::Other)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<DefaultV, E> {
+                Ok(DefaultV::Other)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<DefaultV, A::Error> {
+                let mut nums = SmallNums::default();
+                let mut nested: Option<Vec<[f64; 4]>> = None;
+                let mut strings: Option<Vec<Option<String>>> = None;
+                let mut count = 0usize;
+                while let Some(item) = seq.next_element::<DefaultSeqItem>()? {
+                    match item {
+                        DefaultSeqItem::Num(n) => {
+                            nums.push(n);
+                            if let Some(rows) = nested.as_mut() {
+                                rows.push([n, 0.0, 0.0, 0.0]);
+                            }
+                            if let Some(list) = strings.as_mut() {
+                                list.push(None);
+                            }
+                        }
+                        DefaultSeqItem::Str(s) => {
+                            let parsed = s.parse().unwrap_or(0.0);
+                            nums.push(parsed);
+                            if let Some(rows) = nested.as_mut() {
+                                rows.push([parsed, 0.0, 0.0, 0.0]);
+                            }
+                            let list = strings.get_or_insert_with(|| vec![None; count]);
+                            list.push(Some(s));
+                        }
+                        DefaultSeqItem::Nested(row) => {
+                            nums.push(0.0);
+                            let rows = nested.get_or_insert_with(|| {
+                                (0..count).map(|i| [nums.at(i), 0.0, 0.0, 0.0]).collect()
+                            });
+                            rows.push(row);
+                            if let Some(list) = strings.as_mut() {
+                                list.push(None);
+                            }
+                        }
+                        DefaultSeqItem::Other => {
+                            nums.push(0.0);
+                            if let Some(rows) = nested.as_mut() {
+                                rows.push([0.0; 4]);
+                            }
+                            if let Some(list) = strings.as_mut() {
+                                list.push(None);
+                            }
+                        }
+                    }
+                    count += 1;
+                }
+                Ok(DefaultV::Array { nums, nested, strings })
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<DefaultV, A::Error> {
+                let mut is_numeric = false;
+                let mut v_val: Option<String> = None;
+                let mut s_val: Option<String> = None;
+                while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+                    match &*key {
+                        "t" => is_numeric = map.next_value::<OptText>()?.0.as_deref() == Some("numeric"),
+                        "v" => v_val = map.next_value::<OptText>()?.0,
+                        "s" => s_val = map.next_value::<OptText>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                let text = if is_numeric { v_val.as_deref() } else { s_val.as_deref() };
+                Ok(DefaultV::Num(text.map_or(0.0, parse_special_number)))
+            }
+        }
+        deserializer.deserialize_any(VVisitor)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DefaultTag {
+    Number,
+    EnumItem,
+    UDim,
+    UDim2,
+    Vector2,
+    Vector2int16,
+    Vector3,
+    Vector3int16,
+    Color3,
+    BrickColor,
+    CFrame,
+    Rect,
+    NumberRange,
+    NumberSequence,
+    ColorSequence,
+    Font,
+    Content,
+    Other,
+}
+
+struct OptDefaultTag(Option<DefaultTag>);
+
+impl<'de> Deserialize<'de> for OptDefaultTag {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<OptDefaultTag, D::Error> {
+        struct TagVisitor;
+        impl<'de> Visitor<'de> for TagVisitor {
+            type Value = Option<DefaultTag>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<Option<DefaultTag>, E> {
+                Ok(Some(match s {
+                    "number" => DefaultTag::Number,
+                    "EnumItem" => DefaultTag::EnumItem,
+                    "UDim" => DefaultTag::UDim,
+                    "UDim2" => DefaultTag::UDim2,
+                    "Vector2" => DefaultTag::Vector2,
+                    "Vector2int16" => DefaultTag::Vector2int16,
+                    "Vector3" => DefaultTag::Vector3,
+                    "Vector3int16" => DefaultTag::Vector3int16,
+                    "Color3" => DefaultTag::Color3,
+                    "BrickColor" => DefaultTag::BrickColor,
+                    "CFrame" => DefaultTag::CFrame,
+                    "Rect" => DefaultTag::Rect,
+                    "NumberRange" => DefaultTag::NumberRange,
+                    "NumberSequence" => DefaultTag::NumberSequence,
+                    "ColorSequence" => DefaultTag::ColorSequence,
+                    "Font" => DefaultTag::Font,
+                    "Content" => DefaultTag::Content,
+                    _ => DefaultTag::Other,
+                }))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<DefaultTag>, E> {
+                Ok(None)
+            }
+            fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<DefaultTag>, E> {
+                Ok(None)
+            }
+            fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<DefaultTag>, E> {
+                Ok(None)
+            }
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<DefaultTag>, E> {
+                Ok(None)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<Option<DefaultTag>, E> {
+                Ok(None)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<Option<DefaultTag>, E> {
+                Ok(None)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<DefaultTag>, A::Error> {
+                skip_seq(seq).map(|()| None)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<DefaultTag>, A::Error> {
+                skip_map(map).map(|()| None)
+            }
+        }
+        deserializer.deserialize_any(TagVisitor).map(OptDefaultTag)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SpecialNumTag {
+    Nan,
+    Inf,
+    Other,
+}
+
+struct OptSpecialNum(Option<SpecialNumTag>);
+
+impl<'de> Deserialize<'de> for OptSpecialNum {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<OptSpecialNum, D::Error> {
+        struct SVisitor;
+        impl<'de> Visitor<'de> for SVisitor {
+            type Value = Option<SpecialNumTag>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<Option<SpecialNumTag>, E> {
+                Ok(Some(match s {
+                    "nan" => SpecialNumTag::Nan,
+                    "inf" => SpecialNumTag::Inf,
+                    _ => SpecialNumTag::Other,
+                }))
+            }
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<SpecialNumTag>, E> {
+                Ok(None)
+            }
+            fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<SpecialNumTag>, E> {
+                Ok(None)
+            }
+            fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<SpecialNumTag>, E> {
+                Ok(None)
+            }
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<SpecialNumTag>, E> {
+                Ok(None)
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<Option<SpecialNumTag>, E> {
+                Ok(None)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<Option<SpecialNumTag>, E> {
+                Ok(None)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<SpecialNumTag>, A::Error> {
+                skip_seq(seq).map(|()| None)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<SpecialNumTag>, A::Error> {
+                skip_map(map).map(|()| None)
+            }
+        }
+        deserializer.deserialize_any(SVisitor).map(OptSpecialNum)
+    }
+}
+
+enum DefaultKey {
+    Tag,
+    V,
+    E,
+    N,
+    S,
+    Other,
+}
+
+impl<'de> Deserialize<'de> for DefaultKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<DefaultKey, D::Error> {
+        struct DKVisitor;
+        impl Visitor<'_> for DKVisitor {
+            type Value = DefaultKey;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a key")
+            }
+            fn visit_str<E: de::Error>(self, key: &str) -> Result<DefaultKey, E> {
+                Ok(match key {
+                    "$t" => DefaultKey::Tag,
+                    "v" => DefaultKey::V,
+                    "e" => DefaultKey::E,
+                    "n" => DefaultKey::N,
+                    "s" => DefaultKey::S,
+                    _ => DefaultKey::Other,
+                })
+            }
+        }
+        deserializer.deserialize_identifier(DKVisitor)
+    }
+}
+
+fn default_v_nums(v: Option<&DefaultV>) -> SmallNums {
+    match v {
+        Some(DefaultV::Array { nums, .. }) => SmallNums { data: nums.data, len: nums.len },
+        Some(DefaultV::Num(n)) => {
+            let mut out = SmallNums::default();
+            out.push(*n);
+            out
+        }
+        Some(DefaultV::Str(s)) => {
+            let mut out = SmallNums::default();
+            out.push(s.parse().unwrap_or(0.0));
+            out
+        }
+        Some(DefaultV::Other) => {
+            let mut out = SmallNums::default();
+            out.push(0.0);
+            out
+        }
+        None => SmallNums::default(),
+    }
+}
+
+impl<'de> Deserialize<'de> for ParsedDefault {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<ParsedDefault, D::Error> {
+        struct DefaultVisitor;
+        impl<'de> Visitor<'de> for DefaultVisitor {
+            type Value = ParsedDefault;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            fn visit_bool<E: de::Error>(self, b: bool) -> Result<ParsedDefault, E> {
+                Ok(ParsedDefault::Dom(Variant::Bool(b)))
+            }
+            fn visit_i64<E: de::Error>(self, n: i64) -> Result<ParsedDefault, E> {
+                Ok(ParsedDefault::Dom(Variant::Float64(n as f64)))
+            }
+            fn visit_u64<E: de::Error>(self, n: u64) -> Result<ParsedDefault, E> {
+                Ok(ParsedDefault::Dom(Variant::Float64(n as f64)))
+            }
+            fn visit_f64<E: de::Error>(self, n: f64) -> Result<ParsedDefault, E> {
+                Ok(ParsedDefault::Dom(Variant::Float64(n)))
+            }
+            fn visit_str<E: de::Error>(self, s: &str) -> Result<ParsedDefault, E> {
+                Ok(ParsedDefault::Dom(Variant::String(s.to_string())))
+            }
+            fn visit_string<E: de::Error>(self, s: String) -> Result<ParsedDefault, E> {
+                Ok(ParsedDefault::Dom(Variant::String(s)))
+            }
+            fn visit_unit<E: de::Error>(self) -> Result<ParsedDefault, E> {
+                Ok(ParsedDefault::None)
+            }
+            fn visit_none<E: de::Error>(self) -> Result<ParsedDefault, E> {
+                Ok(ParsedDefault::None)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<ParsedDefault, A::Error> {
+                skip_seq(seq).map(|()| ParsedDefault::None)
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ParsedDefault, A::Error> {
+                let mut tag: Option<DefaultTag> = None;
+                let mut v: Option<DefaultV> = None;
+                let mut e: Option<String> = None;
+                let mut n: Option<String> = None;
+                let mut s: Option<SpecialNumTag> = None;
+                while let Some(key) = map.next_key::<DefaultKey>()? {
+                    match key {
+                        DefaultKey::Tag => tag = map.next_value::<OptDefaultTag>()?.0,
+                        DefaultKey::V => v = Some(map.next_value()?),
+                        DefaultKey::E => e = map.next_value::<OptText>()?.0,
+                        DefaultKey::N => n = map.next_value::<OptText>()?.0,
+                        DefaultKey::S => s = map.next_value::<OptSpecialNum>()?.0,
+                        DefaultKey::Other => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                let Some(tag) = tag else { return Ok(ParsedDefault::None) };
+                Ok(match tag {
+                    DefaultTag::Number => ParsedDefault::Dom(Variant::Float64(match s {
+                        Some(SpecialNumTag::Nan) => f64::NAN,
+                        Some(SpecialNumTag::Inf) => f64::INFINITY,
+                        _ => f64::NEG_INFINITY,
+                    })),
+                    DefaultTag::EnumItem => match (e, n) {
+                        (Some(e), Some(n)) => ParsedDefault::EnumItem(e, n),
+                        _ => ParsedDefault::None,
+                    },
+                    DefaultTag::UDim => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::UDim(dom::UDim::new(a.at(0) as f32, a.at(1) as i32)))
+                    }
+                    DefaultTag::UDim2 => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::UDim2(dom::UDim2::new(
+                            dom::UDim::new(a.at(0) as f32, a.at(1) as i32),
+                            dom::UDim::new(a.at(2) as f32, a.at(3) as i32),
+                        )))
+                    }
+                    DefaultTag::Vector2 => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::Vector2(dom::Vector2::new(a.at(0) as f32, a.at(1) as f32)))
+                    }
+                    DefaultTag::Vector2int16 => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::Vector2int16(dom::Vector2int16::new(a.at(0) as i16, a.at(1) as i16)))
+                    }
+                    DefaultTag::Vector3 => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::Vector3(dom::Vector3::new(a.at(0) as f32, a.at(1) as f32, a.at(2) as f32)))
+                    }
+                    DefaultTag::Vector3int16 => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::Vector3int16(dom::Vector3int16::new(
+                            a.at(0) as i16,
+                            a.at(1) as i16,
+                            a.at(2) as i16,
+                        )))
+                    }
+                    DefaultTag::Color3 => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::Color3(dom::Color3::new(a.at(0) as f32, a.at(1) as f32, a.at(2) as f32)))
+                    }
+                    DefaultTag::BrickColor => {
+                        let a = default_v_nums(v.as_ref());
+                        let color = dom::BrickColor::from_number(a.at(0) as u16).unwrap_or(dom::BrickColor::MediumStoneGrey);
+                        ParsedDefault::Dom(Variant::BrickColor(color))
+                    }
+                    DefaultTag::CFrame => {
+                        let a = default_v_nums(v.as_ref());
+                        let f = |i| a.at(i) as f32;
+                        let cframe = if a.len >= 12 {
+                            dom::CFrame::new(
+                                dom::Vector3::new(f(0), f(1), f(2)),
+                                dom::Matrix3::new(
+                                    dom::Vector3::new(f(3), f(4), f(5)),
+                                    dom::Vector3::new(f(6), f(7), f(8)),
+                                    dom::Vector3::new(f(9), f(10), f(11)),
+                                ),
+                            )
+                        } else {
+                            dom::CFrame::new(dom::Vector3::new(f(0), f(1), f(2)), dom::Matrix3::identity())
+                        };
+                        ParsedDefault::Dom(Variant::CFrame(cframe))
+                    }
+                    DefaultTag::Rect => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::Rect(dom::Rect::new(
+                            dom::Vector2::new(a.at(0) as f32, a.at(1) as f32),
+                            dom::Vector2::new(a.at(2) as f32, a.at(3) as f32),
+                        )))
+                    }
+                    DefaultTag::NumberRange => {
+                        let a = default_v_nums(v.as_ref());
+                        ParsedDefault::Dom(Variant::NumberRange(dom::NumberRange::new(a.at(0) as f32, a.at(1) as f32)))
+                    }
+                    DefaultTag::NumberSequence => {
+                        let keypoints = match v {
+                            Some(DefaultV::Array { nested: Some(rows), .. }) => rows
+                                .into_iter()
+                                .map(|k| dom::NumberSequenceKeypoint::new(k[0] as f32, k[1] as f32, k[2] as f32))
+                                .collect(),
+                            Some(DefaultV::Array { nums, .. }) => (0..nums.len as usize)
+                                .map(|i| dom::NumberSequenceKeypoint::new(nums.at(i) as f32, 0.0, 0.0))
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+                        ParsedDefault::Dom(Variant::NumberSequence(dom::NumberSequence { keypoints }))
+                    }
+                    DefaultTag::ColorSequence => {
+                        let keypoints = match v {
+                            Some(DefaultV::Array { nested: Some(rows), .. }) => rows
+                                .into_iter()
+                                .map(|k| {
+                                    dom::ColorSequenceKeypoint::new(
+                                        k[0] as f32,
+                                        dom::Color3::new(k[1] as f32, k[2] as f32, k[3] as f32),
+                                    )
+                                })
+                                .collect(),
+                            Some(DefaultV::Array { nums, .. }) => (0..nums.len as usize)
+                                .map(|i| dom::ColorSequenceKeypoint::new(nums.at(i) as f32, dom::Color3::new(0.0, 0.0, 0.0)))
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+                        ParsedDefault::Dom(Variant::ColorSequence(dom::ColorSequence { keypoints }))
+                    }
+                    DefaultTag::Font => match v {
+                        Some(DefaultV::Array { strings, .. }) => {
+                            let mut parts = strings.unwrap_or_default().into_iter();
+                            let family = parts.next().flatten().unwrap_or_default();
+                            let weight = parts.next().flatten().unwrap_or_default();
+                            let style = parts.next().flatten().unwrap_or_default();
+                            ParsedDefault::Font(family, weight, style)
+                        }
+                        _ => ParsedDefault::None,
+                    },
+                    DefaultTag::Content => match v {
+                        Some(DefaultV::Str(uri)) if !uri.is_empty() => ParsedDefault::Dom(Variant::Content(dom::Content::from_uri(uri))),
+                        _ => ParsedDefault::Dom(Variant::Content(dom::Content::none())),
+                    },
+                    DefaultTag::Other => ParsedDefault::None,
+                })
+            }
+        }
+        deserializer.deserialize_any(DefaultVisitor)
+    }
+}
+
+struct ParsedDefaults(Option<Vec<(String, ParsedDefault)>>);
+
+impl<'de> Deserialize<'de> for ParsedDefaults {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<ParsedDefaults, D::Error> {
+        struct DefaultsVisitor;
+        impl<'de> Visitor<'de> for DefaultsVisitor {
+            type Value = Option<Vec<(String, ParsedDefault)>>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(Option<Vec<(String, ParsedDefault)>>);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<Vec<(String, ParsedDefault)>>, A::Error> {
+                skip_seq(seq).map(|()| Some(Vec::new()))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Option<Vec<(String, ParsedDefault)>>, A::Error> {
+                let mut entries = Vec::new();
+                while let Some((key, value)) = map.next_entry::<String, ParsedDefault>()? {
+                    entries.push((key, value));
+                }
+                Ok(Some(entries))
+            }
+        }
+        deserializer.deserialize_any(DefaultsVisitor).map(ParsedDefaults)
+    }
+}
+
 /// A member list entry's `name`: the string value of an object's last `name` key, or `None` (an entry that is no object,
 /// or whose name is no string).
 struct EntryName(Option<String>);
 
 impl<'de> Deserialize<'de> for EntryName {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<EntryName, D::Error> {
-        /// A string value, or `None` for any other
-        struct Text(Option<String>);
-        impl<'de> Deserialize<'de> for Text {
-            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Text, D::Error> {
-                struct TextVisitor;
-                impl<'de> Visitor<'de> for TextVisitor {
-                    type Value = Option<String>;
-                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                        formatter.write_str("a JSON value")
-                    }
-                    // (serde_json hands a string with escapes to visit_str and one without to visit_borrowed_str, which
-                    // goes to visit_str)
-                    fn visit_str<E: de::Error>(self, text: &str) -> Result<Option<String>, E> {
-                        Ok(Some(text.to_string()))
-                    }
-                    fn visit_string<E: de::Error>(self, text: String) -> Result<Option<String>, E> {
-                        Ok(Some(text))
-                    }
-                    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<String>, E> {
-                        Ok(None)
-                    }
-                    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<String>, E> {
-                        Ok(None)
-                    }
-                    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<String>, E> {
-                        Ok(None)
-                    }
-                    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<String>, E> {
-                        Ok(None)
-                    }
-                    fn visit_unit<E: de::Error>(self) -> Result<Option<String>, E> {
-                        Ok(None)
-                    }
-                    fn visit_none<E: de::Error>(self) -> Result<Option<String>, E> {
-                        Ok(None)
-                    }
-                    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<String>, A::Error> {
-                        skip_seq(seq).map(|()| None)
-                    }
-                    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Option<String>, A::Error> {
-                        skip_map(map).map(|()| None)
-                    }
-                }
-                deserializer.deserialize_any(TextVisitor).map(Text)
-            }
-        }
         struct EntryVisitor;
         impl<'de> Visitor<'de> for EntryVisitor {
             type Value = Option<String>;
@@ -1072,7 +2220,7 @@ impl<'de> Deserialize<'de> for EntryName {
                 let mut name = None;
                 while let Some(key) = map.next_key::<Key>()? {
                     match key {
-                        Key::Name => name = map.next_value::<Text>()?.0,
+                        Key::Name => name = map.next_value::<OptText>()?.0,
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -1129,13 +2277,13 @@ impl<'de> Deserialize<'de> for DumpClass {
                 let mut class = DumpClass::default();
                 while let Some(key) = map.next_key::<Key>()? {
                     match key {
-                        Key::Name => class.name = Some(map.next_value()?),
-                        Key::Superclass => class.superclass = Some(map.next_value()?),
-                        Key::Serialized => class.serialized = Some(map.next_value()?),
-                        Key::Permits => class.permits = Some(map.next_value()?),
-                        Key::Display => class.display = Some(map.next_value()?),
-                        Key::Properties => class.properties = Some(map.next_value()?),
-                        Key::Defaults => class.defaults = Some(map.next_value()?),
+                        Key::Name => class.name = map.next_value::<OptText>()?.0,
+                        Key::Superclass => class.superclass = map.next_value::<OptText>()?.0,
+                        Key::Serialized => class.serialized = map.next_value::<IsTrue>()?.0,
+                        Key::Permits => class.permits = map.next_value()?,
+                        Key::Display => class.display = map.next_value::<ParsedDisplay>()?.0,
+                        Key::Properties => class.properties = map.next_value::<PropertiesList>()?.0,
+                        Key::Defaults => class.defaults = map.next_value::<ParsedDefaults>()?.0,
                         Key::Events => class.events = map.next_value::<Names>()?.0,
                         Key::Methods => class.methods = map.next_value::<Names>()?.0,
                         Key::Callbacks => class.callbacks = map.next_value::<Names>()?.0,
@@ -1216,25 +2364,25 @@ impl<'de> Deserialize<'de> for MemberClass {
     }
 }
 
-impl<'de, C: Deserialize<'de>> Deserialize<'de> for Dump<C> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Dump<C>, D::Error> {
-        struct DumpVisitor<C>(PhantomData<C>);
-        impl<'de, C: Deserialize<'de>> Visitor<'de> for DumpVisitor<C> {
-            type Value = Dump<C>;
+impl<'de> Deserialize<'de> for DumpLoad {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<DumpLoad, D::Error> {
+        struct DumpVisitor;
+        impl<'de> Visitor<'de> for DumpVisitor {
+            type Value = DumpLoad;
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a JSON value")
             }
-            scalars_read_empty!(Dump<C>);
-            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Dump<C>, A::Error> {
-                skip_seq(seq).map(|()| Dump::default())
+            scalars_read_empty!(DumpLoad);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<DumpLoad, A::Error> {
+                skip_seq(seq).map(|()| DumpLoad::default())
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Dump<C>, A::Error> {
-                let mut dump = Dump::default();
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<DumpLoad, A::Error> {
+                let mut dump = DumpLoad::default();
                 while let Some(key) = map.next_key::<Key>()? {
                     match key {
-                        Key::Version => dump.version = Some(map.next_value()?),
-                        Key::Enums => dump.enums = Some(map.next_value()?),
-                        Key::Classes => dump.classes = map.next_value::<List<C>>()?.0,
+                        Key::Version => dump.version = map.next_value::<OptText>()?.0,
+                        Key::Enums => dump.enums = map.next_value::<EnumsList>()?.0,
+                        Key::Classes => dump.classes = map.next_value::<List<DumpClass>>()?.0,
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -1243,7 +2391,36 @@ impl<'de, C: Deserialize<'de>> Deserialize<'de> for Dump<C> {
                 Ok(dump)
             }
         }
-        deserializer.deserialize_any(DumpVisitor(PhantomData))
+        deserializer.deserialize_any(DumpVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for MemberDump {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<MemberDump, D::Error> {
+        struct MemberDumpVisitor;
+        impl<'de> Visitor<'de> for MemberDumpVisitor {
+            type Value = MemberDump;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(MemberDump);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<MemberDump, A::Error> {
+                skip_seq(seq).map(|()| MemberDump::default())
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<MemberDump, A::Error> {
+                let mut dump = MemberDump::default();
+                while let Some(key) = map.next_key::<Key>()? {
+                    match key {
+                        Key::Classes => dump.classes = map.next_value::<List<MemberClass>>()?.0,
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(dump)
+            }
+        }
+        deserializer.deserialize_any(MemberDumpVisitor)
     }
 }
 
@@ -1564,34 +2741,137 @@ mod tests {
     /// A class entry as a test compares the readers: its name, its events', methods' and callbacks' names, and the rest.
     type ClassRead = (Option<String>, Vec<String>, Vec<String>, Vec<String>, String);
 
-    /// What the load read from a dump when it held the whole file as JSON values: each class's name and its member lists'
-    /// names, by the same helpers.
-    fn read_as_values(bytes: &[u8]) -> Vec<ClassRead> {
+    /// What the load read from a dump when it held the whole file as JSON values: each class's name, member lists,
+    /// properties, permits, display, and defaults decoded through `decode_json`.
+    fn read_as_values(bytes: &[u8]) -> (Option<String>, Vec<(String, Vec<(String, u64)>)>, Vec<ClassRead>) {
         let dump: serde_json::Value = serde_json::from_slice(bytes).unwrap();
-        list(dump.get("classes"))
+        let version = text(dump.get("version")).map(str::to_string);
+        let enums: Vec<(String, Vec<(String, u64)>)> = list(dump.get("enums"))
+            .iter()
+            .filter_map(|entry| {
+                let name = text(entry.get("name"))?.to_string();
+                let items = list(entry.get("items"))
+                    .iter()
+                    .filter_map(|item| Some((text(item.get("name"))?.to_string(), item.get("value")?.as_f64()?.to_bits())))
+                    .collect();
+                Some((name, items))
+            })
+            .collect();
+        let classes = list(dump.get("classes"))
             .iter()
             .map(|entry| {
                 let names = |key: &str| list(entry.get(key)).iter().filter_map(|e| text(e.get("name"))).map(str::to_string).collect::<Vec<_>>();
-                let rest = ["superclass", "serialized", "permits", "display", "properties", "defaults"].map(|key| format!("{:?}", entry.get(key))).join(";");
+                let permits = entry.get("permits");
+                let has_key = |v: Option<&serde_json::Value>, k: &str| v.and_then(|v| v.as_object()).is_some_and(|m| m.contains_key(k));
+                let props: Vec<String> = list(entry.get("properties"))
+                    .iter()
+                    .filter_map(|p| {
+                        let name = text(p.get("name"))?;
+                        let k = p.get("type");
+                        let pp = p.get("permits");
+                        Some(format!(
+                            "{name}|{:?}|{:?}|{:?}|{:?}|{}|{}|{}|{:?}|{:?}",
+                            text(k.and_then(|k| k.get("script"))),
+                            text(k.and_then(|k| k.get("engine"))),
+                            text(k.and_then(|k| k.get("enum"))),
+                            text(k.and_then(|k| k.get("instance"))),
+                            !has_key(pp, "Write"),
+                            has_key(pp, "Read"),
+                            p.get("serialized").and_then(|v| v.as_bool()) == Some(true),
+                            display_from_json(p.get("display")),
+                            Permits::from_json(pp),
+                        ))
+                    })
+                    .collect();
+                let has_defaults = matches!(entry.get("defaults"), Some(serde_json::Value::Object(_) | serde_json::Value::Array(_)));
+                let rest = format!(
+                    "{:?};{};{};{};{:?};{:?};{};{:?}",
+                    text(entry.get("superclass")),
+                    entry.get("serialized").and_then(|v| v.as_bool()) == Some(true),
+                    has_key(permits, "New"),
+                    has_key(permits, "GetService"),
+                    Permits::from_json(permits),
+                    display_from_json(entry.get("display")),
+                    has_defaults,
+                    props,
+                );
                 (text(entry.get("name")).map(str::to_string), names("events"), names("methods"), names("callbacks"), rest)
             })
-            .collect()
+            .collect();
+        (version, enums, classes)
     }
 
-    fn read_as_dump(bytes: &[u8]) -> Vec<ClassRead> {
-        let dump: Dump<DumpClass> = serde_json::from_slice(bytes).unwrap();
-        dump.classes
+    fn read_as_dump(bytes: &[u8]) -> (Option<String>, Vec<(String, Vec<(String, u64)>)>, Vec<ClassRead>) {
+        let dump: DumpLoad = serde_json::from_slice(bytes).unwrap();
+        let enums = dump
+            .enums
+            .into_iter()
+            .map(|e| (e.name, e.items.into_iter().map(|i| (i.name, i.value.to_bits())).collect()))
+            .collect();
+        let classes = dump
+            .classes
             .into_iter()
             .map(|class| {
-                let rest = [&class.superclass, &class.serialized, &class.permits, &class.display, &class.properties, &class.defaults].map(|value| format!("{:?}", value.as_ref())).join(";");
-                (text(class.name.as_ref()).map(str::to_string), class.events, class.methods, class.callbacks, rest)
+                let props: Vec<String> = class
+                    .properties
+                    .into_iter()
+                    .map(|p| {
+                        format!(
+                            "{}|{:?}|{:?}|{:?}|{:?}|{}|{}|{}|{:?}|{:?}",
+                            p.name,
+                            p.script.as_deref(),
+                            p.engine.as_deref(),
+                            p.enum_name.as_deref(),
+                            p.instance_type.as_deref(),
+                            p.read_only,
+                            p.scriptable,
+                            p.serialized,
+                            p.display,
+                            p.permits,
+                        )
+                    })
+                    .collect();
+                let rest = format!(
+                    "{:?};{};{};{};{:?};{:?};{};{:?}",
+                    class.superclass.as_deref(),
+                    class.serialized,
+                    class.permits.has_new,
+                    class.permits.has_get_service,
+                    class.permits.permits,
+                    class.display,
+                    class.defaults.is_some(),
+                    props,
+                );
+                (class.name, class.events, class.methods, class.callbacks, rest)
             })
-            .collect()
+            .collect();
+        (dump.version, enums, classes)
     }
 
     #[test]
     fn the_load_reads_what_the_json_values_held() {
         assert_eq!(read_as_dump(crate::data::REFLECTION), read_as_values(crate::data::REFLECTION));
+        // Every decoded default of every class in the compiled-in dump matches `value::decode_json` on the raw JSON values.
+        let reflection = Reflection::shared().unwrap();
+        let raw_dump: serde_json::Value = serde_json::from_slice(crate::data::REFLECTION).unwrap();
+        for entry in list(raw_dump.get("classes")) {
+            let Some(class_name) = text(entry.get("name")) else { continue };
+            let class = reflection.class_by_name(class_name).unwrap();
+            if let Some(serde_json::Value::Object(defaults)) = entry.get("defaults") {
+                let loaded = class.raw_defaults.as_ref().unwrap();
+                for (prop_name, json_val) in defaults {
+                    let expected = crate::value::decode_json(&reflection, json_val);
+                    let got = reflection
+                        .name_id(prop_name)
+                        .and_then(|id| loaded.get(&id))
+                        .and_then(|raw| crate::value::decode_default(&reflection, raw));
+                    match (&expected, &got) {
+                        (Some(Value::Number(a)), Some(Value::Number(b))) if a.is_nan() && b.is_nan() => {}
+                        _ => assert_eq!(format!("{got:?}"), format!("{expected:?}"), "{class_name}.{prop_name}"),
+                    }
+                }
+            }
+        }
         // entries of other shapes: not an object, lists that are `{}` or no list, names that are no string, repeated and
         // escaped keys, escaped names, nesting
         let odd = br#"{"version": "x", "classes": [
@@ -1601,7 +2881,7 @@ mod tests {
             {"name": "B", "name": "C", "methods": [{"name": "X", "name": "Y"}, {"name": "Z", "name": null}], "methods": [{"name": "Last"}], "events": [{"name": "E"}], "superclass": "A", "defaults": {"Size": {"$t": "Vector3", "v": [1, 2, 3]}}}
         ], "enums": []}"#;
         assert_eq!(read_as_dump(odd), read_as_values(odd));
-        let classes = read_as_dump(odd);
+        let (_, _, classes) = read_as_dump(odd);
         assert_eq!(classes[4].2, ["M", "Escaped"]);
         // the member info reads the same entries, by the same rules (from_dump builds it at once)
         let reflection = Reflection::from_dump(odd, None).unwrap();
