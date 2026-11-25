@@ -7,7 +7,7 @@
 //
 // Two test binaries run in jobs of their own, beside the rest:
 //
-// - The planted profile tests (profile-view/tests/planted.rs): each runs the engine under the profiler in process.
+// - The planted profile tests (tests/planted/planted.rs): each runs the engine under the profiler in process.
 // - The standalone tests (tests/standalone.rs): end-to-end checks of the installed binary and service.
 //
 // CI runs each in one job (shard 0 of 1) on libtest's own threads; raising `count` splits a binary across that many
@@ -96,7 +96,7 @@ export function partition(names, index, count, weights = new Map()) {
 // The test binaries that run in jobs of their own, by the mode of those jobs: the package each belongs to and its test
 // target
 export const OWN_JOBS = {
-	planted: { packageName: "ree-profile-view", target: "planted" },
+	planted: { packageName: "ree-test-planted", target: "planted" },
 	standalone: { packageName: "roblox-engine-emulator", target: "standalone" },
 };
 

@@ -3,17 +3,18 @@
 #
 # Three kinds of job (four Windows runners), side by side, which shortens the run: test runs everything but two test
 # binaries in two parts (the libraries' unit tests; the integration tests, binaries and doctests), planted runs the
-# planted profile tests in one job, and standalone runs the standalone tests together with the checks that need no build,
-# Clippy and the counter service's tests. Cargo starts each test binary through tools/ci/test-entry.mjs, and the runner
-# it calls (tools/ci/test-runner.mjs) decides what runs where (and can split planted or standalone across shards by the
-# test times in tools/ci/test-weights.json if either grows slow again).
+# planted profile tests together with Clippy and the counter service's tests, and standalone runs the standalone tests
+# together with the checks that need no build. Cargo starts each test binary through tools/ci/test-entry.mjs, and the
+# runner it calls (tools/ci/test-runner.mjs) decides what runs where (and can split planted or standalone across shards
+# by the test times in tools/ci/test-weights.json if either grows slow again).
 #
 # Two caches keep a job from compiling everything on every run. The dependency cache (Swatinem/rust-cache) holds what
 # the crates.io crates compile to. The compile cache (sccache, set up by tools/ci/compile-cache.mjs) holds what that one
 # cannot: the Luau VM's C++ and the vendored crates, each under a hash of what its compile read, so a change in vendor/
-# always compiles. Every job reads both caches. Only runs on main store them, and the compile cache only from the test
-# job, so main never reads what a pull request built. Release dry runs on main keep their own separate build cache;
-# version-bump release commits and tag fallback builds start clean (release.yml).
+# always compiles. Every job reads both caches. Only runs on main store them, from the second part of the test job
+# (which compiles every workspace library and external dependency), so main never reads what a pull request built. Release
+# dry runs on main keep their own separate build cache; version-bump release commits and tag fallback builds start clean
+# (release.yml).
 name: CI
 
 on:
@@ -36,9 +37,10 @@ concurrency:
 
 jobs:
   # The two parts split the build where it is widest: the engine's library is compiled twice, as the library the rest
-  # links and as its unit-test binary, and on one runner the two shared four CPUs. The first part builds the libraries'
-  # unit-test binaries (and the engine's library, which the viewer's links), the second the binaries and the integration
-  # tests. Neither names a package, so cargo resolves the workspace's features in both, as a plain cargo test does.
+  # links and as its unit-test binary, and on one runner the two shared four CPUs. The first part builds only the
+  # libraries' unit-test binaries (with tests/planted in its own crate, --lib never compiles the engine's library rlib),
+  # and the second builds the workspace libraries, binaries and integration tests, so the second part stores both caches
+  # on main. Neither names a package, so cargo resolves the workspace's features in both, as a plain cargo test does.
   test:
     if: ${{ !github.event.repository.private }}
     name: Build and test, ${{ matrix.part }} (windows-latest)
@@ -87,8 +89,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: test # Every job shares the one cache the single test job used before.
-          # Stored by the first part alone: the two would only race to store the same key
-          save-if: ${{ github.ref == 'refs/heads/main' && strategy.job-index == 0 }}
+          # Stored by the second part alone: it builds all workspace libraries and external dependencies (including test crates)
+          save-if: ${{ github.ref == 'refs/heads/main' && strategy.job-index == 1 }}
           env-vars: INCLUDE # The key takes in the compilers' variables by itself; the include paths are named here.
       # Cargo builds this part's test targets in one graph; the second part's includes the release binaries the
       # integration tests run. The runner skips planted's and standalone's tests; their jobs run them.
@@ -110,10 +112,11 @@ jobs:
       - name: Compile cache statistics
         if: ${{ !cancelled() }}
         run: node tools/ci/compile-cache.mjs stop
-      # Stored by main alone, from this job's first part alone, and only under a key that is not stored yet: a run that
-      # found its key has compiled nothing new from vendor/. A red job stores nothing.
+      # Stored by main alone, from this job's second part alone (which compiles the workspace libraries including the
+      # engine rlib), and only under a key that is not stored yet: a run that found its key has compiled nothing new from
+      # vendor/. A red job stores nothing.
       - name: Store the compile cache
-        if: ${{ github.ref == 'refs/heads/main' && steps.compile-cache-restore.outputs.cache-hit != 'true' && strategy.job-index == 0 }}
+        if: ${{ github.ref == 'refs/heads/main' && steps.compile-cache-restore.outputs.cache-hit != 'true' && strategy.job-index == 1 }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/compile-cache
@@ -121,7 +124,7 @@ jobs:
 
   planted:
     if: ${{ !github.event.repository.private }}
-    name: Planted profile tests (windows-latest)
+    name: Planted profile tests and Clippy (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -131,6 +134,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
           toolchain: "1.90.0"
+          components: clippy
       # The two caches, as in the test job. This job reads the compile cache and never stores it.
       - name: Set up the compile cache
         id: compile-cache
@@ -153,10 +157,11 @@ jobs:
             esac
           done
           rustup toolchain list
+      # The second part of the test job stores the shared dependency cache; this job also runs Clippy so it only reads it.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: test # The test job's cache, see above.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: false
           env-vars: INCLUDE
       # The runner lists planted's tests and runs them on libtest's threads (tools/ci/test-runner.mjs).
       # Only planted's target is built here: the other test targets are built by the test job. No package is named, as in
@@ -167,13 +172,22 @@ jobs:
         run: |
           $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
           cargo test --release --locked --no-fail-fast --test planted --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','planted','0','1']"
+      # Clippy's errors only: its warnings are not cleaned up yet, so they do not fail the run. This job already builds
+      # both the engine and the profile viewer and finishes its tests quickly, so Clippy and the counter service run here
+      # rather than adding to the longer standalone job.
+      - name: Lint (clippy errors)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --release --locked --all-targets
+      - name: Test the counter service (tools/hw-counters, a workspace of its own)
+        if: ${{ !cancelled() }}
+        run: cargo test --release --locked --manifest-path tools/hw-counters/Cargo.toml
       - name: Compile cache statistics
         if: ${{ !cancelled() }}
         run: node tools/ci/compile-cache.mjs stop
 
   standalone:
     if: ${{ !github.event.repository.private }}
-    name: Standalone tests, source checks and Clippy (windows-latest)
+    name: Standalone tests and source checks (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -183,11 +197,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
           toolchain: "1.90.0"
-          components: clippy
-      # The checks of the sources need no build. They run here because this job ends before the test job, the longest of
-      # the run, which they used to hold up. They come before the build caches, so a cache that fails to download or
-      # restore cannot skip them, and after the toolchain, since the tool tests ask cargo for the packages' targets.
-      # The vendored archives cache is soft-failed (continue-on-error) and vendor.mjs re-checks every archive's SHA-256.
+      # The checks of the sources need no build. They run here before the build caches, so a cache that fails to
+      # download or restore cannot skip them, and after the toolchain, since the tool tests ask cargo for the packages'
+      # targets. The vendored archives cache is soft-failed (continue-on-error) and vendor.mjs re-checks every archive's
+      # SHA-256.
       - name: Restore the vendored archives cache
         id: vendor-cache
         continue-on-error: true
@@ -253,14 +266,6 @@ jobs:
         run: |
           $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
           cargo test --release --locked --no-fail-fast --test standalone --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','standalone','0','1']"
-      # Clippy's errors only: its warnings are not cleaned up yet, so they do not fail the run. The dependency cache holds
-      # the dependencies, so this checks the workspace's own crates.
-      - name: Lint (clippy errors)
-        if: ${{ !cancelled() }}
-        run: cargo clippy --release --locked --all-targets
-      - name: Test the counter service (tools/hw-counters, a workspace of its own)
-        if: ${{ !cancelled() }}
-        run: cargo test --release --locked --manifest-path tools/hw-counters/Cargo.toml
       - name: Compile cache statistics
         if: ${{ !cancelled() }}
         run: node tools/ci/compile-cache.mjs stop

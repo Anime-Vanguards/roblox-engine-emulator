@@ -66,8 +66,8 @@ export const SCCACHE_PINS = {
 
 // What the vendored builds are made from besides the compilers and the workflow file: the vendored sources, the versions
 // and features of the crates they depend on, the build settings, and this script. Folders count with every file below them.
-const BASE_KEY_INPUTS = [
-	"vendor", "Cargo.lock", "Cargo.toml", "profile-view/Cargo.toml", "tests/host/Cargo.toml", ".cargo/config.toml",
+export const BASE_KEY_INPUTS = [
+	"vendor", "Cargo.lock", "Cargo.toml", "profile-view/Cargo.toml", "tests/host/Cargo.toml", "tests/planted/Cargo.toml", ".cargo/config.toml",
 ];
 
 // The most the cache folder holds before sccache drops what was used longest ago. Every job waits for the folder's

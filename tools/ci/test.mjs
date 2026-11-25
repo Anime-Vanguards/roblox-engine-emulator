@@ -9,20 +9,21 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { command } from "../release/common.mjs";
-import { cacheKey, checked, download, parseEnvironment, sccachePin, stop } from "./compile-cache.mjs";
+import { BASE_KEY_INPUTS, cacheKey, checked, download, parseEnvironment, sccachePin, stop } from "./compile-cache.mjs";
 import { OWN_JOBS, RUN_MS, jobOf, parseTestList, partition, readWeights, run, shares } from "./test-runner.mjs";
 
 const WORKFLOW = fs.readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
+const RELEASE_WORKFLOW = fs.readFileSync(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8");
 
-// Where cargo runs planted's binary (the profile-view package's folder), and the package name it sets there
-const cwd = path.resolve("profile-view");
-const env = { CARGO_PKG_NAME: "ree-profile-view" };
+// Where cargo runs planted's binary (the ree-test-planted package's folder), and the package name it sets there
+const cwd = path.resolve("tests/planted");
+const env = { CARGO_PKG_NAME: "ree-test-planted" };
 const planted = path.resolve("target/release/deps/planted-0123abcd.exe");
 // Standalone's binary belongs to the engine's package, which cargo runs in the repository's root
 const standalone = path.resolve("target/release/deps/standalone-0123abcd.exe");
 const engineEnv = { CARGO_PKG_NAME: "roblox-engine-emulator" };
-// A folder that is also named profile-view, but belongs to another package
-const otherPackage = path.resolve("tools/profile-view");
+// A folder that is also named planted, but belongs to another package
+const otherPackage = path.resolve("tools/planted");
 
 // A fake spawn that answers every call with `result` and records the arguments it was called with
 function fakeSpawn(result) {
@@ -78,15 +79,16 @@ test("a list that is empty, repeats a name or does not read as libtest's fails, 
 });
 
 test("core skips only the two test binaries with jobs of their own and passes everything else through", () => {
-	assert.equal(jobOf(planted, "ree-profile-view"), "planted");
+	assert.equal(jobOf(planted, "ree-test-planted"), "planted");
 	assert.equal(jobOf(standalone, "roblox-engine-emulator"), "standalone");
 	// the same target in another package, each other's package, no package name, and other targets of the two packages
 	assert.equal(jobOf(planted, "another-package"), "core");
+	assert.equal(jobOf(planted, "ree-profile-view"), "core");
 	assert.equal(jobOf(planted, "roblox-engine-emulator"), "core");
-	assert.equal(jobOf(standalone, "ree-profile-view"), "core");
+	assert.equal(jobOf(standalone, "ree-test-planted"), "core");
 	assert.equal(jobOf(planted, undefined), "core");
 	assert.equal(jobOf(standalone, undefined), "core");
-	assert.equal(jobOf(path.resolve("target/release/deps/engine-0123abcd.exe"), "ree-profile-view"), "core");
+	assert.equal(jobOf(path.resolve("target/release/deps/engine-0123abcd.exe"), "ree-test-planted"), "core");
 	assert.equal(jobOf(path.resolve("target/release/deps/standalone_more-0123abcd.exe"), "roblox-engine-emulator"), "core");
 
 	for (const [binary, packageEnv] of [[planted, env], [standalone, engineEnv]]) {
@@ -124,7 +126,7 @@ test("each test binary with a job of its own is a test target, and the only targ
 	}
 });
 
-// A test binary named planted that is not profile-view's: core runs it and returns its exit code, a shard rejects it
+// A test binary named planted that is not ree-test-planted's: core runs it and returns its exit code, a shard rejects it
 function checkRunsInCoreOnly(packageEnv) {
 	const passedThrough = fakeSpawn({ status: 23 });
 	const options = { cwd: otherPackage, env: packageEnv, spawn: passedThrough.spawn };
@@ -134,7 +136,7 @@ function checkRunsInCoreOnly(packageEnv) {
 	assert.equal(passedThrough.calls.length, 1);
 }
 
-test("core runs the planted binary of another package in a folder also named profile-view, and a shard rejects it", () => {
+test("core runs the planted binary of another package in a folder also named planted, and a shard rejects it", () => {
 	checkRunsInCoreOnly({ CARGO_PKG_NAME: "another-package" });
 });
 
@@ -373,4 +375,31 @@ test("only main stores the compile and vendored archive caches, and sccache neve
 	assert.doesNotMatch(WORKFLOW, /SCCACHE_GHA|ACTIONS_RUNTIME_TOKEN|ACTIONS_CACHE_URL|ACTIONS_RESULTS_URL/);
 	// every action is pinned to a full commit SHA
 	for (const line of WORKFLOW.split("\n").filter(line => line.includes("uses:"))) assert.match(line, /@[0-9a-f]{40}\b/);
+});
+
+test("every workspace manifest enters both CI and release cache keys, and Part 2 stores the shared CI caches", () => {
+	const { packages, workspace_root: workspaceRoot } = JSON.parse(command("cargo", ["metadata", "--no-deps", "--format-version", "1", "--locked"]));
+	const manifests = packages.map(pkg => path.relative(workspaceRoot, pkg.manifest_path).replaceAll("\\", "/"));
+	const releaseKeyLine = RELEASE_WORKFLOW.split(/\r?\n/).find(line => line.includes("tools/release/build-cache.mjs "));
+	assert.ok(releaseKeyLine, "release.yml calls build-cache.mjs");
+	for (const manifest of manifests) {
+		assert.ok(BASE_KEY_INPUTS.includes(manifest), `compile-cache.mjs BASE_KEY_INPUTS is missing ${manifest}`);
+		assert.ok(releaseKeyLine.includes(manifest), `release.yml build-cache.mjs call is missing ${manifest}`);
+	}
+
+	const testJob = WORKFLOW.split(/^  test:\r?\n/m)[1].split(/^  planted:\r?\n/m)[0];
+	const plantedJob = WORKFLOW.split(/^  planted:\r?\n/m)[1].split(/^  standalone:\r?\n/m)[0];
+	const standaloneJob = WORKFLOW.split(/^  standalone:\r?\n/m)[1];
+	// Part 2 (job-index == 1) builds the workspace libraries and all external deps, so it owns both shared cache writes.
+	assert.match(testJob, /save-if: \$\{\{ github\.ref == 'refs\/heads\/main' && strategy\.job-index == 1 \}\}/);
+	assert.match(testJob, /Store the compile cache[\s\S]*?strategy\.job-index == 1/);
+	// Planted runs Clippy and the counter service and never writes back to rust-cache.
+	assert.match(plantedJob, /components: clippy/);
+	assert.match(plantedJob, /save-if: false/);
+	for (const check of ["run: cargo clippy --release --locked --all-targets", "run: cargo test --release --locked --manifest-path tools/hw-counters/Cargo.toml"]) {
+		assert.equal(WORKFLOW.split(check).length, 2, `${check} runs once`);
+		assert.ok(plantedJob.includes(check), `${check} belongs to the planted job`);
+		assert.ok(!standaloneJob.includes(check), `${check} is not duplicated in standalone`);
+	}
+	assert.doesNotMatch(standaloneJob, /components: clippy/);
 });

@@ -117,7 +117,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          key=$(node tools/release/build-cache.mjs Cargo.toml profile-view/Cargo.toml tests/host/Cargo.toml Cargo.lock .cargo/config.toml)
+          key=$(node tools/release/build-cache.mjs Cargo.toml profile-view/Cargo.toml tests/host/Cargo.toml tests/planted/Cargo.toml Cargo.lock .cargo/config.toml)
           release_commit=$(node tools/release/build-cache.mjs --is-release-commit)
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "release-commit=$release_commit" >> "$GITHUB_OUTPUT"
