@@ -2,7 +2,7 @@
 //! instance.luau Coerce). Lune's datatype userdata are the script representation of rbx-dom
 //! datatypes, as in the Luau runtime.
 
-use std::rc::Rc;
+use std::{any::TypeId, rc::Rc};
 
 use lune_roblox::datatypes::{create as lune_create, types as lune};
 use mlua::prelude::*;
@@ -128,47 +128,48 @@ fn userdata_value(ud: &LuaAnyUserData) -> Option<Value> {
     if let Some(instance) = instance_of_ud(ud) {
         return Some(Value::Instance(instance));
     }
-    if let Ok(item) = ud.borrow::<LEnumItem>() {
-        return Some(Value::EnumItem(item.0));
+    let tid = ud.type_id()?;
+    if tid == TypeId::of::<LEnumItem>() {
+        return ud.borrow::<LEnumItem>().ok().map(|item| Value::EnumItem(item.0));
     }
-    if let Ok(v) = ud.borrow::<lune::UDim2>() {
-        return Some(Value::UDim2(dom::UDim2::from(*v)));
+    if tid == TypeId::of::<lune::CFrame>() {
+        return ud.borrow::<lune::CFrame>().ok().map(|v| Value::Dom(Rc::new(Variant::CFrame(cframe_exact(&v)))));
     }
-    if let Ok(v) = ud.borrow::<lune::Color3>() {
-        return Some(Value::Color3(dom::Color3::from(*v)));
+    if tid == TypeId::of::<lune::Color3>() {
+        return ud.borrow::<lune::Color3>().ok().map(|v| Value::Color3(dom::Color3::from(*v)));
     }
-    if let Ok(v) = ud.borrow::<lune::Vector2>() {
-        return Some(Value::Vector2(dom::Vector2::from(*v)));
+    if tid == TypeId::of::<lune::UDim2>() {
+        return ud.borrow::<lune::UDim2>().ok().map(|v| Value::UDim2(dom::UDim2::from(*v)));
     }
-    if let Ok(v) = ud.borrow::<lune::UDim>() {
-        return Some(Value::UDim(dom::UDim::from(*v)));
+    if tid == TypeId::of::<lune::Vector2>() {
+        return ud.borrow::<lune::Vector2>().ok().map(|v| Value::Vector2(dom::Vector2::from(*v)));
     }
-    if let Ok(v) = ud.borrow::<lune::Vector3>() {
-        return Some(Value::Vector3(vector3_exact(&v)));
+    if tid == TypeId::of::<lune::UDim>() {
+        return ud.borrow::<lune::UDim>().ok().map(|v| Value::UDim(dom::UDim::from(*v)));
     }
-    if let Ok(font) = ud.borrow::<LFont>() {
-        return Some(Value::Font(Rc::new(font.0.borrow().clone())));
+    if tid == TypeId::of::<lune::Vector3>() {
+        return ud.borrow::<lune::Vector3>().ok().map(|v| Value::Vector3(vector3_exact(&v)));
     }
-    if let Ok(content) = ud.borrow::<LContent>() {
-        return Some(Value::Content(Rc::new(content.0.clone())));
+    if tid == TypeId::of::<LFont>() {
+        return ud.borrow::<LFont>().ok().map(|font| Value::Font(Rc::new(font.0.borrow().clone())));
     }
-    if let Ok(v) = ud.borrow::<lune::Rect>() {
-        return Some(Value::Rect(dom::Rect::from(*v)));
+    if tid == TypeId::of::<LContent>() {
+        return ud.borrow::<LContent>().ok().map(|content| Value::Content(Rc::new(content.0.clone())));
     }
-    if let Ok(v) = ud.borrow::<lune::NumberRange>() {
-        return Some(Value::NumberRange(dom::NumberRange::from(*v)));
+    if tid == TypeId::of::<lune::Rect>() {
+        return ud.borrow::<lune::Rect>().ok().map(|v| Value::Rect(dom::Rect::from(*v)));
     }
-    if let Ok(v) = ud.borrow::<lune::NumberSequence>() {
-        return Some(Value::NumberSequence(Rc::new(dom::NumberSequence::from(v.clone()))));
+    if tid == TypeId::of::<lune::NumberRange>() {
+        return ud.borrow::<lune::NumberRange>().ok().map(|v| Value::NumberRange(dom::NumberRange::from(*v)));
     }
-    if let Ok(v) = ud.borrow::<lune::ColorSequence>() {
-        return Some(Value::ColorSequence(Rc::new(dom::ColorSequence::from(v.clone()))));
+    if tid == TypeId::of::<lune::NumberSequence>() {
+        return ud.borrow::<lune::NumberSequence>().ok().map(|v| Value::NumberSequence(Rc::new(dom::NumberSequence::from(v.clone()))));
     }
-    if let Ok(v) = ud.borrow::<lune::CFrame>() {
-        return Some(Value::Dom(Rc::new(Variant::CFrame(cframe_exact(&v)))));
+    if tid == TypeId::of::<lune::ColorSequence>() {
+        return ud.borrow::<lune::ColorSequence>().ok().map(|v| Value::ColorSequence(Rc::new(dom::ColorSequence::from(v.clone()))));
     }
-    if let Ok(v) = ud.borrow::<lune::BrickColor>() {
-        return Some(Value::Dom(Rc::new(Variant::BrickColor(dom::BrickColor::from(*v)))));
+    if tid == TypeId::of::<lune::BrickColor>() {
+        return ud.borrow::<lune::BrickColor>().ok().map(|v| Value::Dom(Rc::new(Variant::BrickColor(dom::BrickColor::from(*v)))));
     }
     None
 }
@@ -195,6 +196,15 @@ fn whole_text_size_owner(engine: &Engine, info: &PropertyInfo) -> bool {
 /// BasePart.Size (a part of any class).
 fn part_size_owner(engine: &Engine, info: &PropertyInfo) -> bool {
     engine.reflection.class_id("BasePart").is_some_and(|base| engine.reflection.class(info.owner).is_a(base))
+}
+
+/// The Vector3 a Vector3 property stores (BasePart.Size clamps each axis to at least 0.001).
+#[inline]
+fn vector3_for(engine: &Engine, info: &PropertyInfo, x: f32, y: f32, z: f32) -> Value {
+    if info.name == crate::K::Size as crate::NameId && part_size_owner(engine, info) {
+        return Value::Vector3(dom::Vector3::new(x.max(0.001), y.max(0.001), z.max(0.001)));
+    }
+    Value::Vector3(dom::Vector3::new(x, y, z))
 }
 
 /// UIScale.Scale stays within [float32(1e-7), 1000] (measured, tools/studio/layout-probe-zeroscale2:
@@ -399,14 +409,74 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
         _ => {
             // Native vectors are Vector3 values in Roblox; properties store the datatype form
             if let (ScriptType::Vector3, LuaValue::Vector(v)) = (info.script_type, value) {
-                if info.name == crate::K::Size as crate::NameId && part_size_owner(engine, info) {
-                    // A part is at least 0.001 on every axis (measured in a playing client, Studio 0.744,
-                    // tools/parity/probes/changed.luau: Size = (0, 0, 0) reads 0.00100000005 each; negative axes
-                    // not measured)
-                    let least = |axis: f32| axis.max(0.001);
-                    return Ok(Value::Vector3(dom::Vector3::new(least(v.x()), least(v.y()), least(v.z()))));
+                return Ok(vector3_for(engine, info, v.x(), v.y(), v.z()));
+            }
+            // Fast path for userdata matching the property's expected datatype (1 borrow instead of scanning 14 types).
+            if let LuaValue::UserData(ud) = value {
+                match info.script_type {
+                    ScriptType::CFrame => {
+                        if let Ok(v) = ud.borrow::<lune::CFrame>() {
+                            return Ok(Value::Dom(Rc::new(Variant::CFrame(cframe_exact(&v)))));
+                        }
+                    }
+                    ScriptType::Color3 => {
+                        if let Ok(v) = ud.borrow::<lune::Color3>() {
+                            return Ok(Value::Color3(dom::Color3::from(*v)));
+                        }
+                    }
+                    ScriptType::UDim2 => {
+                        if let Ok(v) = ud.borrow::<lune::UDim2>() {
+                            return Ok(Value::UDim2(dom::UDim2::from(*v)));
+                        }
+                    }
+                    ScriptType::UDim => {
+                        if let Ok(v) = ud.borrow::<lune::UDim>() {
+                            return Ok(Value::UDim(dom::UDim::from(*v)));
+                        }
+                    }
+                    ScriptType::Vector2 => {
+                        if let Ok(v) = ud.borrow::<lune::Vector2>() {
+                            return Ok(Value::Vector2(dom::Vector2::from(*v)));
+                        }
+                    }
+                    ScriptType::Vector3 => {
+                        if let Ok(v) = ud.borrow::<lune::Vector3>() {
+                            let v = vector3_exact(&v);
+                            return Ok(vector3_for(engine, info, v.x, v.y, v.z));
+                        }
+                    }
+                    ScriptType::Rect => {
+                        if let Ok(v) = ud.borrow::<lune::Rect>() {
+                            return Ok(Value::Rect(dom::Rect::from(*v)));
+                        }
+                    }
+                    ScriptType::NumberRange => {
+                        if let Ok(v) = ud.borrow::<lune::NumberRange>() {
+                            return Ok(Value::NumberRange(dom::NumberRange::from(*v)));
+                        }
+                    }
+                    ScriptType::NumberSequence => {
+                        if let Ok(v) = ud.borrow::<lune::NumberSequence>() {
+                            return Ok(Value::NumberSequence(Rc::new(dom::NumberSequence::from(v.clone()))));
+                        }
+                    }
+                    ScriptType::ColorSequence => {
+                        if let Ok(v) = ud.borrow::<lune::ColorSequence>() {
+                            return Ok(Value::ColorSequence(Rc::new(dom::ColorSequence::from(v.clone()))));
+                        }
+                    }
+                    ScriptType::Font => {
+                        if let Ok(font) = ud.borrow::<LFont>() {
+                            return Ok(Value::Font(Rc::new(font.0.borrow().clone())));
+                        }
+                    }
+                    ScriptType::BrickColor => {
+                        if let Ok(v) = ud.borrow::<lune::BrickColor>() {
+                            return Ok(Value::Dom(Rc::new(Variant::BrickColor(dom::BrickColor::from(*v)))));
+                        }
+                    }
+                    _ => {}
                 }
-                return Ok(Value::Vector3(dom::Vector3::new(v.x(), v.y(), v.z())));
             }
             let converted = from_lua(value);
             let matches = match (info.script_type, &converted) {

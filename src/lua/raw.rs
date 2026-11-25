@@ -347,6 +347,28 @@ struct Refs {
     bridge: c_int,
 }
 
+const MEMBER_IC_SIZE: usize = 512;
+const MEMBER_IC_MASK: usize = MEMBER_IC_SIZE - 1;
+const EMPTY_MEMBER: Member = Member {
+    read: Read::Child,
+    write: Write::Slow,
+    call: Call::NotMethod,
+    index_fn: 0,
+    call_fn: 0,
+    cost: 0.0,
+    name: 0,
+};
+
+#[inline]
+fn member_ic_key(class: ClassId, name: NameId) -> u64 {
+    ((u64::from(class) + 1) << 32) | u64::from(name)
+}
+
+#[inline]
+fn member_ic_slot(class: ClassId, name: NameId) -> usize {
+    ((class as usize).wrapping_mul(0x9e37_79b9) ^ (name as usize)) & MEMBER_IC_MASK
+}
+
 /// Per-engine state of the raw Instance API (one per Lua state; payloads point at it).
 pub struct Api {
     engine: *const Engine,
@@ -363,6 +385,8 @@ pub struct Api {
     /// Hands a stack value to Rust as an mlua value (slot 1)
     bridge: LuaTable,
     create: RefCell<Option<LuaFunction>>,
+    /// Direct-mapped inline cache in front of `members` (avoids RefCell borrow + hash lookup on hits).
+    member_ic: Box<[Cell<(u64, Member)>]>,
     members: RefCell<FxHashMap<(ClassId, NameId), Member>>,
     values: RefCell<ValueCache>,
     next_function: Cell<c_int>,
@@ -424,14 +448,33 @@ impl Api {
 
     #[inline]
     fn member(&self, class: ClassId, name: NameId) -> Member {
-        if let Some(member) = self.members.borrow().get(&(class, name)) {
+        let key = member_ic_key(class, name);
+        let slot = &self.member_ic[member_ic_slot(class, name)];
+        let (cached_key, cached_member) = slot.get();
+        if cached_key == key {
             crate::profiler::caches::hit(crate::profiler::caches::Cache::Members);
-            return *member;
+            return cached_member;
+        }
+        self.member_slow(class, name, key, slot)
+    }
+
+    #[inline(never)]
+    fn member_slow(&self, class: ClassId, name: NameId, key: u64, slot: &Cell<(u64, Member)>) -> Member {
+        if let Some(&member) = self.members.borrow().get(&(class, name)) {
+            crate::profiler::caches::hit(crate::profiler::caches::Cache::Members);
+            slot.set((key, member));
+            return member;
         }
         crate::profiler::caches::miss(crate::profiler::caches::Cache::Members);
         let member = compute_member(self.engine(), class, name);
         self.members.borrow_mut().insert((class, name), member);
+        slot.set((key, member));
         member
+    }
+
+    fn set_member(&self, class: ClassId, name: NameId, member: Member) {
+        self.members.borrow_mut().insert((class, name), member);
+        self.member_ic[member_ic_slot(class, name)].set((member_ic_key(class, name), member));
     }
 
     fn next_function_slot(&self) -> c_int {
@@ -458,6 +501,9 @@ impl Api {
         let mut members = self.members.borrow_mut();
         crate::profiler::caches::evicted(crate::profiler::caches::Cache::Members, members.len() as u64);
         members.clear();
+        for slot in &*self.member_ic {
+            slot.set((0, EMPTY_MEMBER));
+        }
     }
 }
 
@@ -614,7 +660,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             api.functions.raw_set(slot, function.clone())?;
             let mut member = api.member(class, name);
             member.call_fn = slot;
-            api.members.borrow_mut().insert((class, name), member);
+            api.set_member(class, name, member);
         }
         Ok(function.map_or(LuaValue::Nil, LuaValue::Function))
     })?;
@@ -647,6 +693,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         functions,
         bridge,
         create: RefCell::new(None),
+        member_ic: vec![Cell::new((0u64, EMPTY_MEMBER)); MEMBER_IC_SIZE].into_boxed_slice(),
         members: RefCell::default(),
         values: RefCell::default(),
         next_function: Cell::new(0),
@@ -813,7 +860,7 @@ pub fn remember_index_function(engine: &Engine, class: ClassId, name: NameId, fu
     let slot = api.next_function_slot();
     api.functions.raw_set(slot, function.clone())?;
     member.index_fn = slot;
-    api.members.borrow_mut().insert((class, name), member);
+    api.set_member(class, name, member);
     Ok(())
 }
 

@@ -2691,10 +2691,38 @@ unsafe extern "C" fn gc_clock(ud: *mut std::ffi::c_void) -> f64 {
 /// interpreted ones), not [`luau`]'s, so that a price measured anew does not move where the collector steps: its points move what
 /// the counters see (an allocating fast call gives way to its C function while a step is due) and every memory reading a script
 /// takes. (Priced at [`luau`]'s, the parity bench's 24 new strings read -208 bytes: a step fell inside every round.)
+/// Number of leading opcode slots covering all Luau opcodes (`LOP__COUNT == 95`, bit 7 is `LUAU_INSN_COLD`).
+const ACTIVE_OP_SLOTS: usize = 96;
+
+#[inline]
+fn sum_op_counts(counts: &[u64; 256]) -> u64 {
+    let mut total: u64 = counts[..ACTIVE_OP_SLOTS].iter().sum();
+    if counts[ACTIVE_OP_SLOTS..].iter().fold(0u64, |acc, &v| acc | v) != 0 {
+        total += counts[ACTIVE_OP_SLOTS..].iter().sum::<u64>();
+    }
+    total
+}
+
+#[inline]
+fn sum_op_prices(counts: &[u64; 256], prices: &[f64; 256]) -> f64 {
+    let mut sum: f64 = counts[..ACTIVE_OP_SLOTS]
+        .iter()
+        .zip(prices[..ACTIVE_OP_SLOTS].iter())
+        .map(|(&count, &price)| count as f64 * price)
+        .sum();
+    if counts[ACTIVE_OP_SLOTS..].iter().fold(0u64, |acc, &v| acc | v) != 0 {
+        for (&count, &price) in counts[ACTIVE_OP_SLOTS..].iter().zip(prices[ACTIVE_OP_SLOTS..].iter()) {
+            sum += count as f64 * price;
+        }
+    }
+    sum
+}
+
 pub fn collector_work(c: &VmCounters) -> f64 {
     const CALLS: [usize; 2] = [20, 21];
     const FASTCALLS: [usize; 5] = [60, 68, 73, 74, 75];
-    let ops: u64 = c.ops.iter().sum::<u64>() + c.nativeops.iter().sum::<u64>();
+    let ops: u64 = sum_op_counts(&c.ops)
+        + if c.nativeops.iter().fold(0u64, |acc, &v| acc | v) != 0 { sum_op_counts(&c.nativeops) } else { 0 };
     let calls: u64 = CALLS.iter().map(|&op| c.ops[op] + c.nativeops[op]).sum();
     let fastcalls: u64 = FASTCALLS.iter().map(|&op| c.ops[op] + c.nativeops[op]).sum();
     1e-9 * (ops as f64 * 1.6
@@ -2791,8 +2819,12 @@ pub fn engine_luau(lua: &mlua::Lua, function: mlua::Function) -> mlua::Result<ml
 /// making, formatting: [`LUAU_NUMBER_STRING`] and below), which no instruction count sees. Linear in the counts (the profiler books
 /// them count by count: profiler/vm.rs `prices`).
 pub fn luau(c: &VmCounters) -> f64 {
-    let interpreted: f64 = c.ops.iter().zip(INTERPRETED_OPS.iter()).map(|(&count, &price)| count as f64 * price).sum();
-    let native: f64 = c.nativeops.iter().zip(NATIVE_OPS.iter()).map(|(&count, &price)| count as f64 * price).sum();
+    let interpreted: f64 = sum_op_prices(&c.ops, &INTERPRETED_OPS);
+    let native: f64 = if c.nativeops.iter().fold(0u64, |acc, &v| acc | v) != 0 {
+        sum_op_prices(&c.nativeops, &NATIVE_OPS)
+    } else {
+        0.0
+    };
     1e-9 * (interpreted
         + native
         + c.objects as f64 * LUAU_OBJECT

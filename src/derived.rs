@@ -44,13 +44,32 @@ pub struct DerivedView {
 
 /// Views by the class that declares them, and a per-(class, source) cache of the views an
 /// instance's source change must consider (DerivedFor).
-#[derive(Default)]
 pub struct DerivedViews {
     by_class: FxHashMap<(ClassId, NameId), Vec<Rc<DerivedView>>>,
     cache: RefCell<FxHashMap<(ClassId, NameId), Rc<[Rc<DerivedView>]>>>,
+    /// Flat NameId filter: true only for the ~35 property names that are a derived source on any class.
+    has_source: Vec<bool>,
+    /// Shared empty slice returned without RefCell/hash lookup when `!has_source[source]`.
+    empty: Rc<[Rc<DerivedView>]>,
     /// BasePart, and the events a part fires beside a change of each source ([`Companions`])
     part: Option<ClassId>,
     part_companions: FxHashMap<NameId, Rc<Companions>>,
+    /// Flat NameId filter for the 7 BasePart companion sources.
+    has_companion: Vec<bool>,
+}
+
+impl Default for DerivedViews {
+    fn default() -> Self {
+        DerivedViews {
+            by_class: FxHashMap::default(),
+            cache: RefCell::new(FxHashMap::default()),
+            has_source: Vec::new(),
+            empty: Rc::from([]),
+            part: None,
+            part_companions: FxHashMap::default(),
+            has_companion: Vec::new(),
+        }
+    }
 }
 
 /// The Changed events (and property signals) a part fires beside a change of one of its properties, each whether or not
@@ -77,12 +96,26 @@ impl Companions {
 
 impl DerivedViews {
     fn add(&mut self, class: ClassId, view: DerivedView) {
+        let source = view.source as usize;
+        if self.has_source.len() <= source {
+            self.has_source.resize(source + 1, false);
+        }
+        self.has_source[source] = true;
         self.by_class.entry((class, view.source)).or_default().push(Rc::new(view));
         self.cache.borrow_mut().clear();
     }
 
     /// DerivedFor: the views of `source` on `class` and its superclasses (own class first).
+    #[inline]
     pub fn views_for(&self, reflection: &Reflection, class: ClassId, source: NameId) -> Rc<[Rc<DerivedView>]> {
+        if !self.has_source.get(source as usize).copied().unwrap_or(false) {
+            return self.empty.clone();
+        }
+        self.views_for_slow(reflection, class, source)
+    }
+
+    #[inline(never)]
+    fn views_for_slow(&self, reflection: &Reflection, class: ClassId, source: NameId) -> Rc<[Rc<DerivedView>]> {
         if let Some(found) = self.cache.borrow().get(&(class, source)) {
             return found.clone();
         }
@@ -94,7 +127,7 @@ impl DerivedViews {
             }
             current = reflection.class(id).superclass;
         }
-        let found: Rc<[Rc<DerivedView>]> = found.into();
+        let found: Rc<[Rc<DerivedView>]> = if found.is_empty() { self.empty.clone() } else { found.into() };
         self.cache.borrow_mut().insert((class, source), found.clone());
         found
     }
@@ -104,8 +137,11 @@ impl DerivedViews {
     }
 
     /// The events an instance of `class` fires beside a change of `source`, if it is a part with some.
+    #[inline]
     pub fn companions_for(&self, reflection: &Reflection, class: ClassId, source: NameId) -> Option<Rc<Companions>> {
-        if self.part_companions.is_empty() || !self.part.is_some_and(|part| reflection.class(class).is_a(part)) {
+        if !self.has_companion.get(source as usize).copied().unwrap_or(false)
+            || !self.part.is_some_and(|part| reflection.class(class).is_a(part))
+        {
             return None;
         }
         self.part_companions.get(&source).cloned()
@@ -125,6 +161,11 @@ impl DerivedViews {
             ("Anchored", &[], &["AssemblyMass", "AssemblyCenterOfMass"]),
         ] {
             if let Some(source) = id(source) {
+                let idx = source as usize;
+                if self.has_companion.len() <= idx {
+                    self.has_companion.resize(idx + 1, false);
+                }
+                self.has_companion[idx] = true;
                 self.part_companions.insert(source, Rc::new(Companions { before: names(before), after: names(after) }));
             }
         }

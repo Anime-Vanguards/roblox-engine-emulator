@@ -86,9 +86,44 @@ impl Filing {
     }
 
     /// Its cells, x outermost
-    pub fn cells(&self) -> impl Iterator<Item = Key> + '_ {
-        let (lo, hi) = (self.lo, self.hi);
-        (lo[0]..=hi[0]).flat_map(move |x| (lo[1]..=hi[1]).flat_map(move |y| (lo[2]..=hi[2]).map(move |z| [x, y, z])))
+    pub fn cells(&self) -> CellIter {
+        CellIter { lo: self.lo, hi: self.hi, cur: self.lo, done: self.is_empty() }
+    }
+}
+
+/// Flat x-outermost iterator over a [`Filing`]'s closed cell range.
+pub struct CellIter {
+    lo: Key,
+    hi: Key,
+    cur: Key,
+    done: bool,
+}
+
+impl Iterator for CellIter {
+    type Item = Key;
+
+    #[inline]
+    fn next(&mut self) -> Option<Key> {
+        if self.done {
+            return None;
+        }
+        let key = self.cur;
+        if self.cur[2] < self.hi[2] {
+            self.cur[2] += 1;
+        } else {
+            self.cur[2] = self.lo[2];
+            if self.cur[1] < self.hi[1] {
+                self.cur[1] += 1;
+            } else {
+                self.cur[1] = self.lo[1];
+                if self.cur[0] < self.hi[0] {
+                    self.cur[0] += 1;
+                } else {
+                    self.done = true;
+                }
+            }
+        }
+        Some(key)
     }
 }
 
@@ -308,23 +343,35 @@ impl Grid {
     }
 
     fn append(&mut self, level: u8, key: Key, list: u8, entry: u32) {
+        use std::collections::hash_map::Entry;
         let map = &mut self.levels[level as usize];
-        let made = !map.contains_key(&key);
-        map.entry(key).or_default().lists[list as usize].push(entry);
-        if made {
-            self.link(level, key);
+        match map.entry(key) {
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().lists[list as usize].push(entry);
+            }
+            Entry::Vacant(vacant) => {
+                let mut node = Node::default();
+                node.lists[list as usize].push(entry);
+                vacant.insert(node);
+                self.link(level, key);
+            }
         }
     }
 
     /// Marks a new node of `level` in its parent, making the parents it needs up to level 7.
     fn link(&mut self, mut level: u8, mut key: Key) {
+        use std::collections::hash_map::Entry;
         while (level as usize) < LEVELS - 1 {
             let (up, bit) = parent(key);
             let map = &mut self.levels[level as usize + 1];
-            let made = !map.contains_key(&up);
-            map.entry(up).or_default().children |= 1 << bit;
-            if !made {
-                return;
+            match map.entry(up) {
+                Entry::Occupied(mut occupied) => {
+                    occupied.get_mut().children |= 1 << bit;
+                    return;
+                }
+                Entry::Vacant(vacant) => {
+                    vacant.insert(Node { lists: [Vec::new(), Vec::new()], children: 1 << bit });
+                }
             }
             level += 1;
             key = up;
@@ -332,29 +379,34 @@ impl Grid {
     }
 
     fn take(&mut self, level: u8, key: Key, list: u8, entry: u32) {
+        use std::collections::hash_map::Entry;
         let map = &mut self.levels[level as usize];
-        let Some(node) = map.get_mut(&key) else { return };
-        let held = &mut node.lists[list as usize];
-        if let Some(place) = held.iter().position(|&e| e == entry) {
-            held.swap_remove(place);
-        }
-        if node.is_empty() {
-            map.remove(&key);
-            self.unlink(level, key);
+        if let Entry::Occupied(mut occupied) = map.entry(key) {
+            let node = occupied.get_mut();
+            let held = &mut node.lists[list as usize];
+            if let Some(place) = held.iter().position(|&e| e == entry) {
+                held.swap_remove(place);
+            }
+            if node.is_empty() {
+                occupied.remove();
+                self.unlink(level, key);
+            }
         }
     }
 
     /// Clears an emptied node's mark in its parent, removing the parents left empty.
     fn unlink(&mut self, mut level: u8, mut key: Key) {
+        use std::collections::hash_map::Entry;
         while (level as usize) < LEVELS - 1 {
             let (up, bit) = parent(key);
             let map = &mut self.levels[level as usize + 1];
-            let Some(node) = map.get_mut(&up) else { return };
+            let Entry::Occupied(mut occupied) = map.entry(up) else { return };
+            let node = occupied.get_mut();
             node.children &= !(1 << bit);
             if !node.is_empty() {
                 return;
             }
-            map.remove(&up);
+            occupied.remove();
             level += 1;
             key = up;
         }

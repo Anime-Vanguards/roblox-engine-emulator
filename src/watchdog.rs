@@ -179,13 +179,16 @@ struct Looked {
     units: u64,
     engine: u64,
     armings: u64,
+    /// Raw pointers into the active VM's `Local::work` / `Local::drained` cells (valid until `detach`, which resets `counters: 0`).
+    work: *const Cell<f64>,
+    drained: *const Cell<f64>,
 }
 
 thread_local! {
     /// Safepoints the check has seen on this thread ([`HOST_LOOK_EVERY`])
     static SAFEPOINTS: Cell<u32> = const { Cell::new(0) };
     static TIMING: Cell<Timing> = const { Cell::new(Timing { serial: 0, epoch: 0, work: 0.0, host: None, raised: false }) };
-    static LOOKED: Cell<Looked> = const { Cell::new(Looked { counters: 0, steps: 0, calls: 0, units: 0, engine: 0, armings: 0 }) };
+    static LOOKED: Cell<Looked> = const { Cell::new(Looked { counters: 0, steps: 0, calls: 0, units: 0, engine: 0, armings: 0, work: std::ptr::null(), drained: std::ptr::null() }) };
     /// The check looks at every safepoint: a timeout is due, or the run stops
     static EAGER: Cell<bool> = const { Cell::new(false) };
     /// This thread's VMs with a timeout, for the interrupt (one or two: a service worker holds a prepared run beside the one
@@ -268,7 +271,7 @@ impl ScriptTimeout {
         };
         // (all integers: zero is a valid VmCounters)
         let start = Start { epoch: 0, engine: 0.0, counters: Box::new(unsafe { std::mem::zeroed() }) };
-        LOOKED.with(|looked| looked.set(Looked { counters: 0, ..looked.get() }));
+        LOOKED.with(|looked| looked.set(Looked { counters: 0, work: std::ptr::null(), drained: std::ptr::null(), ..looked.get() }));
         EAGER.with(|eager| eager.set(false));
         WATCHES.with(|watches| {
             let mut watches = watches.borrow_mut();
@@ -294,7 +297,7 @@ impl ScriptTimeout {
             unsafe { clear_timeout_interrupt(callbacks) };
         }
         WATCHES.with(|watches| watches.borrow_mut().retain(|local| local.callbacks != callbacks as usize));
-        LOOKED.with(|looked| looked.set(Looked { counters: 0, ..looked.get() }));
+        LOOKED.with(|looked| looked.set(Looked { counters: 0, work: std::ptr::null(), drained: std::ptr::null(), ..looked.get() }));
         EAGER.with(|eager| eager.set(false));
     }
 
@@ -388,9 +391,26 @@ impl Drop for Entered {
     fn drop(&mut self) {
         if let Some(watch) = unsafe { self.0.as_ref() } {
             if watch.depth.fetch_sub(1, Ordering::Relaxed) == 1 {
-                watch.epoch.fetch_add(1, Ordering::Release);
+                let ended = watch.epoch.fetch_add(1, Ordering::Release);
+                let due = watch.due.load(Ordering::Acquire);
+                if due != 0 && due <= ended && !watch.stopped.load(Ordering::Relaxed) {
+                    disarm_if_stale(watch, due);
+                }
             }
         }
+    }
+}
+
+/// Disarms a timeout interrupt immediately when the long resumption it was armed for ends,
+/// so subsequent short resumptions do not keep trapping on every safepoint until a look fires.
+#[cold]
+#[inline(never)]
+fn disarm_if_stale(watch: &Watch, due: u64) {
+    EAGER.with(|eager| eager.set(false));
+    let _slot = watch.slot.lock().unwrap_or_else(|poison| poison.into_inner());
+    let pointer = watch.callbacks.load(Ordering::Acquire);
+    if watch.due.compare_exchange(due, 0, Ordering::AcqRel, Ordering::Relaxed).is_ok() && !pointer.is_null() {
+        unsafe { clear_timeout_interrupt(pointer) };
     }
 }
 
@@ -576,9 +596,18 @@ unsafe fn look_due(state: *mut lua_State) -> Option<bool> {
     let fresh = last.counters != key;
     let mut look = fresh || last.armings != armings || last.steps != steps;
     let mut next = Looked { counters: key, steps, calls, armings, ..last };
+    if fresh {
+        let (work, drained) = engine_work_ptrs(state);
+        next.work = work;
+        next.drained = drained;
+    }
     if fresh || calls != last.calls {
         next.units = size_units(counters) / LOOK_UNITS;
-        next.engine = engine_ticks(state);
+        next.engine = if !next.work.is_null() && !next.drained.is_null() {
+            unsafe { (((*next.work).get() + (*next.drained).get()) / LOOK_ENGINE) as u64 }
+        } else {
+            0
+        };
         look |= next.units != last.units || next.engine != last.engine;
     }
     LOOKED.with(|looked| looked.set(next));
@@ -600,15 +629,15 @@ fn size_units(c: &crate::cost::VmCounters) -> u64 {
     scalars.iter().chain(special).fold(0u64, |sum, &count| sum.wrapping_add(count))
 }
 
-/// The engine calls' charges to the VM with `state`'s callbacks so far, in [`LOOK_ENGINE`]s
-fn engine_ticks(state: *mut lua_State) -> u64 {
+/// Raw pointers to the engine calls' charge cells for the VM with `state`'s callbacks.
+fn engine_work_ptrs(state: *mut lua_State) -> (*const Cell<f64>, *const Cell<f64>) {
     let callbacks = unsafe { mlua::ffi::lua_callbacks(state) } as usize;
     WATCHES.with(|watches| {
         let watches = watches.try_borrow().ok()?;
         let local = watches.iter().find(|local| local.callbacks == callbacks)?;
-        Some(((local.work.get() + local.drained.get()) / LOOK_ENGINE) as u64)
+        Some((Rc::as_ptr(&local.work), Rc::as_ptr(&local.drained)))
     })
-    .unwrap_or(0)
+    .unwrap_or((std::ptr::null(), std::ptr::null()))
 }
 
 /// Where `state` runs, innermost first: `name chunk:line` for up to 6 Luau frames
