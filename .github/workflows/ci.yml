@@ -109,6 +109,33 @@ jobs:
       - name: Build release binaries
         if: ${{ !cancelled() && strategy.job-index == 1 }}
         run: cargo build --release --locked
+      # Resource budgets (tools/resources; AGENTS.md "Resource budgets"): the ci suite's workloads run with the ree the
+      # step above built, and what each one wrote to disk, kept on it, left behind, and held in memory is checked against
+      # tools/resources/baseline.json. A figure over its budget fails the job; the plain-language report is the job
+      # summary. Everything it writes (workloads, figures, the watcher it builds) is under the runner's temp folder.
+      - name: Resource budgets
+        if: ${{ !cancelled() && strategy.job-index == 1 }}
+        env:
+          FIGURES: ${{ runner.temp }}/resource-figures
+          WORK: ${{ runner.temp }}/resource-budgets
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          node --test tools/resources/test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force $env:FIGURES | Out-Null
+          node tools/resources/measure.mjs --suite ci --ree target/release/ree.exe --work $env:WORK --out "$env:FIGURES/run.json" --history "$env:FIGURES/history.jsonl" --summary $env:GITHUB_STEP_SUMMARY
+          exit $LASTEXITCODE
+      # The run's figures, kept 90 days: history.mjs --github reads main's as a table; a pull request's give
+      # measure.mjs --write-baseline --from the figures a runner measured
+      - name: Keep the resource figures
+        if: ${{ !cancelled() && strategy.job-index == 1 }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: resource-figures
+          path: ${{ runner.temp }}/resource-figures
+          retention-days: 90
+          if-no-files-found: ignore
       - name: Compile cache statistics
         if: ${{ !cancelled() }}
         run: node tools/ci/compile-cache.mjs stop

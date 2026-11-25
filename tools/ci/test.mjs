@@ -403,3 +403,24 @@ test("every workspace manifest enters both CI and release cache keys, and Part 2
 	}
 	assert.doesNotMatch(standaloneJob, /components: clippy/);
 });
+
+test("the resource budgets run once, in Part 2 after the release build, writing only under the runner's temp folder", () => {
+	const testJob = WORKFLOW.split(/^  test:\r?\n/m)[1].split(/^  planted:\r?\n/m)[0];
+	const steps = testJob.split(/^      - /m);
+	const index = name => steps.findIndex(step => step.startsWith(`name: ${name}\n`) || step.startsWith(`name: ${name}\r\n`));
+	const budgets = steps[index("Resource budgets")];
+	const figures = steps[index("Keep the resource figures")];
+	assert.ok(budgets && figures, "the test job has the resource budget steps");
+	assert.equal(WORKFLOW.split("tools/resources/measure.mjs").length, 2, "the budgets run once");
+	assert.ok(index("Build release binaries") < index("Resource budgets") && index("Resource budgets") < index("Keep the resource figures") && index("Keep the resource figures") < index("Compile cache statistics"));
+	for (const step of [budgets, figures]) assert.match(step, /if: \$\{\{ !cancelled\(\) && strategy\.job-index == 1 \}\}/);
+	// what it writes goes under runner.temp, passed through env (no context in the script itself)
+	assert.match(budgets, /FIGURES: \$\{\{ runner\.temp \}\}\/resource-figures/);
+	assert.match(budgets, /WORK: \$\{\{ runner\.temp \}\}\/resource-budgets/);
+	assert.match(budgets, /--work \$env:WORK --out "\$env:FIGURES\/run\.json"/);
+	// the tools' own tests write through the OS temp folder
+	assert.match(budgets, /TEMP: \$\{\{ runner\.temp \}\}\r?\n {10}TMP: \$\{\{ runner\.temp \}\}/);
+	assert.doesNotMatch(budgets.split(/^        run: \|/m)[1], /\$\{\{/);
+	assert.doesNotMatch(budgets + figures, /actions\/cache|CARGO_|RUSTFLAGS/);
+	assert.match(figures, /uses: actions\/upload-artifact@[0-9a-f]{40} /);
+});

@@ -56,6 +56,8 @@ tools/
   hw-counters/         Separate Windows service crate (`ree-hw-counters`) and setup.ps1 for `--profile hw`
   what-if/             Variant benchmark scripts for `ree profile try`
   profile-demo/        Intentionally slow demo harness for trying the profiler (see README)
+  resources/           Resource budgets: heavy workloads measured for disk writes, disk space, memory and page faults
+                       against baseline.json (measure.mjs, history.mjs; AGENTS.md "Resource budgets")
 tests/                 Patched-VM tests (`luau_vm.rs`), parity runner (`parity.rs`), process guards
 docs/engine.md         Public engine contract: architecture, rules, and formats
 ```

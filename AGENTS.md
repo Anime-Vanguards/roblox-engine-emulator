@@ -87,3 +87,32 @@ nearly every file.
   `=rur.record`, ...) and the `RURFixtures` folder keep their names, because rur's tools set them and its golden output
   records them.
 
+## Resource budgets
+
+`tools/resources/` runs ree's heavy workloads (cold and warm `--batch` runs on the module store, many processes sharing
+one store, a `ree serve` series, a recording, the parity probes) and measures what each costs the machine: data
+written, disk space kept, leftover temporary files, files created, memory (the biggest process, all of them together,
+memory reserved), page faults and processes, checked against `tools/resources/baseline.json`; time and CPU are shown
+only. CI runs the `ci` suite after the release build and fails on a figure over its budget; the job summary explains
+each figure in plain words.
+
+- Run it before and after any change to the module store or another cache, to file or process I/O, to `--batch` or
+  `serve` workers, to what the recorder writes, or to memory use, and put the comparison in your report:
+
+  ```sh
+  cargo build --release
+  node tools/resources/measure.mjs --suite ci --out ../before.json        # on the base commit
+  node tools/resources/measure.mjs --suite ci --compare ../before.json    # with the change
+  ```
+
+  `--workload <id,...>` runs some of them (`--list` names them), `--repeat 3` checks medians, `--suite full` runs larger
+  sizes, `--ree <exe>` measures another build. Each workload is held to 4 CPUs (`--cpus`), as on a CI runner.
+- Over budget: find what made the run do more work and fix it. Only an increase the change means to make goes into the
+  baseline, rewritten in the same commit so a reviewer sees it: `node tools/resources/measure.mjs --suite ci --repeat 3
+  --write-baseline` (or `--write-baseline --from <run.json>` with the `resource-figures` artifact of a CI run). Never
+  widen a tolerance or skip the step to get a run through.
+- Under the baseline by more than its tolerance ("lower it too"): rewrite the baseline in the same commit, so the gain
+  is kept.
+- `node tools/resources/history.mjs --github <owner>/<repo>` prints the figures CI kept for main as a table per
+  workload; `node --test tools/resources/test.mjs` tests the tools.
+
