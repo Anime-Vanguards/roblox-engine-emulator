@@ -1,0 +1,93 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+in, p(q) from nil: x p q
+in, p(q) from ReplicatedStorage: x p q
+in, p(q) back from nil, a query between: x p q
+in, p(q) back from nil, no query between: x p q
+in, p(q) back from ReplicatedStorage: x p q
+in, p(q) a clone of it: x p q
+in, p(q,r) from nil: x p q r
+in, p(q,r) from ReplicatedStorage: x p q r
+in, p(q,r) back from nil, a query between: x p q r
+in, p(q,r) back from nil, no query between: x p q r
+in, p(q,r) back from ReplicatedStorage: x p q r
+in, p(q,r) a clone of it: x p q r
+in, p(q(r)) from nil: x p r q
+in, p(q(r)) from ReplicatedStorage: x p r q
+in, p(q(r)) back from nil, a query between: x p r q
+in, p(q(r)) back from nil, no query between: x p r q
+in, p(q(r)) back from ReplicatedStorage: x p r q
+in, p(q(r)) a clone of it: x p r q
+in, p(q(r),s) from nil: x p r q s
+in, p(q(r),s) from ReplicatedStorage: x p r q s
+in, p(q(r),s) back from nil, a query between: x p r q s
+in, p(q(r),s) back from nil, no query between: x p r q s
+in, p(q(r),s) back from ReplicatedStorage: x p r q s
+in, p(q(r),s) a clone of it: x p r q s
+in, p(q,r(s),t) from nil: x p q s r t
+in, p(q,r(s),t) from ReplicatedStorage: x p q s r t
+in, p(q,r(s),t) back from nil, a query between: x p q s r t
+in, p(q,r(s),t) back from nil, no query between: x p q s r t
+in, p(q,r(s),t) back from ReplicatedStorage: x p q s r t
+in, p(q,r(s),t) a clone of it: x p q s r t
+in, p(q(r(s))) from nil: x p s r q
+in, p(q(r(s))) from ReplicatedStorage: x p s r q
+in, p(q(r(s))) back from nil, a query between: x p s r q
+in, p(q(r(s))) back from nil, no query between: x p s r q
+in, p(q(r(s))) back from ReplicatedStorage: x p s r q
+in, p(q(r(s))) a clone of it: x p s r q
+in, M(p(q),r) from nil: x q p r
+in, M(p(q),r) from ReplicatedStorage: x q p r
+in, M(p(q),r) back from nil, a query between: x q p r
+in, M(p(q),r) back from nil, no query between: x q p r
+in, M(p(q),r) back from ReplicatedStorage: x q p r
+in, M(p(q),r) a clone of it: x q p r
+in, F(p(q),r) from nil: x q p r
+in, F(p(q),r) from ReplicatedStorage: x q p r
+in, F(p(q),r) back from nil, a query between: x q p r
+in, F(p(q),r) back from nil, no query between: x q p r
+in, F(p(q),r) back from ReplicatedStorage: x q p r
+in, F(p(q),r) a clone of it: x q p r
+in, p(F(q,r),s) from nil: x p q r s
+in, p(F(q,r),s) from ReplicatedStorage: x p q r s
+in, p(F(q,r),s) back from nil, a query between: x p q r s
+in, p(F(q,r),s) back from nil, no query between: x p q r s
+in, p(F(q,r),s) back from ReplicatedStorage: x p q r s
+in, p(F(q,r),s) a clone of it: x p q r s
+in, F(p(q(r)),M(s(t))) from nil: x r q p t s
+in, F(p(q(r)),M(s(t))) from ReplicatedStorage: x r q p t s
+in, F(p(q(r)),M(s(t))) back from nil, a query between: x r q p t s
+in, F(p(q(r)),M(s(t))) back from nil, no query between: x r q p t s
+in, F(p(q(r)),M(s(t))) back from ReplicatedStorage: x r q p t s
+in, F(p(q(r)),M(s(t))) a clone of it: x r q p t s
+in, p, then q(r) into p: x p q r
+in, x p(q) y, then p into a Model in the Workspace: x p q y
+in, p(q) then r(s) then y in one frame: x p q r s y
+in, p(q(r),s) unanchored, from nil: p r q s x
+in, p(q(r),s) unanchored, back from nil: p r q s x
+in, a WorldModel, p(q(r),s) from nil: x p r q s
+in, a WorldModel, p(q(r),s) back from nil: x p r q s
+out, x p(q) a b c d e, p(q) to nil: x e d a b c
+out, x p(q) a b c d e, p(q) destroyed: x e d a b c
+out, x p(q) a b c d e, p(q) to ReplicatedStorage: x e d a b c
+out, x p(q) a b c d e, p(q) into a WorldModel: x e d a b c
+out, x p(q,r) a b c d e, p(q,r) to nil: x e d c a b
+out, x p(q,r) a b c d e, p(q,r) destroyed: x e d c a b
+out, x p(q,r) a b c d e, p(q,r) to ReplicatedStorage: x e d c a b
+out, x p(q,r) a b c d e, p(q,r) into a WorldModel: x e d c a b
+out, x p(q(r)) a b c d e, p(q(r)) to nil: x e c d a b
+out, x p(q(r)) a b c d e, p(q(r)) destroyed: x e c d a b
+out, x p(q(r)) a b c d e, p(q(r)) to ReplicatedStorage: x e c d a b
+out, x p(q(r)) a b c d e, p(q(r)) into a WorldModel: x e c d a b
+out, x p(q(r),s) a b c d e, p(q(r),s) to nil: x e c d b a
+out, x p(q(r),s) a b c d e, p(q(r),s) destroyed: x e c d b a
+out, x p(q(r),s) a b c d e, p(q(r),s) to ReplicatedStorage: x e c d b a
+out, x p(q(r),s) a b c d e, p(q(r),s) into a WorldModel: x e c d b a
+out, x M(p(q),r) a b c d e, M(p(q),r) to nil: x d e c a b
+out, x M(p(q),r) a b c d e, M(p(q),r) destroyed: x d e c a b
+out, x M(p(q),r) a b c d e, M(p(q),r) to ReplicatedStorage: x d e c a b
+out, x M(p(q),r) a b c d e, M(p(q),r) into a WorldModel: x d e c a b
+out, x p(F(q,r),s) a b c d e, p(F(q,r),s) to nil: x e d c b a
+out, x p(F(q,r),s) a b c d e, p(F(q,r),s) destroyed: x e d c b a
+out, x p(F(q,r),s) a b c d e, p(F(q,r),s) to ReplicatedStorage: x e d c b a
+out, x p(F(q,r),s) a b c d e, p(F(q,r),s) into a WorldModel: x e d c b a

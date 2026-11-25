@@ -8023,10 +8023,11 @@ fn broadphase_answers_match_a_test_of_every_part() {
 /// Spatial queries list and pick parts as a client's grid walk gives them (world/grid.rs; Studio 0.747, a playing client and a
 /// server alike, tools/parity/probes/grid_*.luau): a cell's unanchored parts before its anchored ones, each in the order they came
 /// in; a part leaving gives its place to the cell's last; a part moved out of its cell and back, or anchored and freed, before a
-/// query is last; a subtree comes in each part after its descendants; parts of the levels above the query's come last; a query's
-/// low edge on a cell edge walks the cell below; welded parts come in root first and a weld made later files them again; the casts
-/// take a cell's anchored parts first among exact ties; a box is clamped to 7,500 studs about its centre and a ray cut at 15,000;
-/// nothing is found past the far bound; and a WorldModel walks a grid of its own, which the Workspace's queries never meet.
+/// query is last; a subtree comes in the moved part first, then each part after its descendants; parts of the levels above the
+/// query's come last; a query's low edge on a cell edge walks the cell below; welded parts come in root first and a weld made later
+/// files them again; the casts take a cell's anchored parts first among exact ties; a box is clamped to 7,500 studs about its
+/// centre and a ray cut at 15,000; nothing is found past the far bound; and a WorldModel walks a grid of its own, which the
+/// Workspace's queries never meet.
 #[test]
 fn queries_list_parts_in_a_clients_grid_order() {
     let (lua, engine) = start_play();
@@ -8083,7 +8084,7 @@ fn queries_list_parts_in_a_clients_grid_order() {
         Is("a2 CanCollide and CanTouch off", Q(), "a1 a5 a3 a4 a2") Clear()
         A = Five() A[2].CFrame += V(0, 0, 0.3) A[2].Transparency = 0.5 A[2].Parent = Instance.new("Folder", Root)
         Is("a2 moved within its cell, written and moved in the tree", Q(), "a1 a2 a3 a4 a5") Clear()
-        -- a subtree comes in each part after its descendants
+        -- a subtree comes in each part after its descendants (the moved Folder is no part)
         local T = Instance.new("Folder")
         Part("a", C0 + V(-0.9, 0, 0), nil, true, T)
         local M = Instance.new("Model", T)
@@ -8148,6 +8149,99 @@ fn queries_list_parts_in_a_clients_grid_order() {
         Is("the Workspace beside it", Names(workspace:GetPartBoundsInBox(CFrame.new(C0), V(0.01, 0.01, 0.01))), "")
         Is("its ray", World:Raycast(C0 + V(0, 100, 0), V(0, -200, 0)).Instance.Name, "K64")
         Is("the Workspace's ray", tostring(workspace:Raycast(C0 + V(0, 100, 0), V(0, -200, 0))), "nil")
+        World:Destroy()
+        "##,
+    );
+    super::query::index_matches_a_walk(&engine).unwrap();
+}
+
+/// A Parent write files the moved subtree's parts into a grid's cells, and out of them, in the order a client takes the subtree
+/// up (joints.rs taken_up; Studio 0.747, a playing client and a server alike, tools/parity/probes/grid_subtree.luau): the moved
+/// part first, then the rest each after its own descendants. So a part p holding q(r) and s comes into a cell as p r q s, made in
+/// nil or coming back, from nil or from ReplicatedStorage, into the Workspace or a WorldModel; a moved Model is no part, so its
+/// parts come each after its descendants. It leaves in the same order, each leaving part giving its place to the cell's last:
+/// p(q(r), s) leaving x p q r s a b c d e leaves x e c d b a, where each part after its descendants left x b d e c a.
+#[test]
+fn a_moved_subtree_comes_into_and_leaves_the_grid_as_a_client_takes_it_up() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        workspace.Gravity = 0
+        local Storage = game:GetService("ReplicatedStorage")
+        local Root = Instance.new("Folder")
+        Root.Parent = workspace
+        local Mine = {}
+        local V = Vector3.new
+        local C0 = V(2004, 1004, 2004)
+        local Slot = 0
+        local function Part(Name, Parent)
+            local Made = Instance.new("Part")
+            Made.Name, Made.Anchored, Made.Size = Name, true, V(0.2, 0.2, 0.2)
+            Slot += 1
+            Made.CFrame = CFrame.new(C0 + V(-2.6 + Slot * 0.3, 0, 0))
+            Made.Parent = Parent
+            Mine[Made] = true
+            return Made
+        end
+        local function Index(World) (World or workspace):GetPartBoundsInBox(CFrame.new(0, -10000, 0), Vector3.one) end
+        local function Q(World)
+            local Out = {}
+            for _, Found in (World or workspace):GetPartBoundsInBox(CFrame.new(C0), V(6, 1, 1)) do
+                if Mine[Found] then table.insert(Out, Found.Name) end
+            end
+            return table.concat(Out, " ")
+        end
+        local function Clear() Root:ClearAllChildren() table.clear(Mine) Slot = 0 end
+        local function Is(Label, Got, Want) assert(Got == Want, `{Label}: {Got}, a client lists {Want}`) end
+        -- p(q(r), s), or M(p(q), r), each instance parented as it is made
+        local function Tree(Parent)
+            local P = Part("p", Parent)
+            Part("r", Part("q", P))
+            Part("s", P)
+            return P
+        end
+        local function ModelTree(Parent)
+            local M = Instance.new("Model")
+            M.Parent = Parent
+            Part("q", Part("p", M))
+            Part("r", M)
+            return M
+        end
+        -- coming in, after x
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        local function In(Label, Make, Move, Want, Into)
+            Part("x", Into or Root)
+            Index(Into)
+            Move(Make(nil), Into or Root)
+            Index(Into)
+            Is(Label, Q(Into), Want)
+            Root:ClearAllChildren() World:ClearAllChildren() table.clear(Mine) Slot = 0
+        end
+        In("from nil", Tree, function(T, To) T.Parent = To end, "x p r q s")
+        In("back from nil, a query between", Tree, function(T, To) T.Parent = To Index() T.Parent = nil Index() T.Parent = To end, "x p r q s")
+        In("back from ReplicatedStorage, no query between", Tree, function(T, To) T.Parent = To Index() T.Parent = Storage T.Parent = To end, "x p r q s")
+        In("a Model from nil", ModelTree, function(T, To) T.Parent = To end, "x q p r")
+        In("into a WorldModel", Tree, function(T, To) T.Parent = To end, "x p r q s", World)
+        -- going out, from x, the tree made in place, a b c d e
+        local function Out(Label, Make, Move, Want)
+            Part("x", Root)
+            local T = Make(Root)
+            for _, Name in { "a", "b", "c", "d", "e" } do Part(Name, Root) end
+            Index()
+            Move(T)
+            Index()
+            Is(Label, Q(), Want)
+            T:Destroy()
+            Clear()
+        end
+        Out("to nil", Tree, function(T) T.Parent = nil end, "x e c d b a")
+        Out("destroyed", Tree, function(T) T:Destroy() end, "x e c d b a")
+        Out("into a WorldModel", Tree, function(T) T.Parent = World end, "x e c d b a")
+        Out("a Model to nil", ModelTree, function(T) T.Parent = nil end, "x d e c a b")
         World:Destroy()
         "##,
     );

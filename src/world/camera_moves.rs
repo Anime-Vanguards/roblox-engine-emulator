@@ -589,14 +589,15 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                     parts.push((node, below));
                 }
             }
-            // (the parts in, or out, each after its own descendants: the reverse of the walk, which takes children last first; a
-            // client takes a subtree in so, measured: tools/parity/probes/grid_order.luau. Those coming into the Workspace's world
-            // are numbered as they come into its list of parts, the moved part first: broadphase.rs entered)
+            // (the parts in, or out, in the order a client takes the moved subtree up, world/joints.rs taken_up: the moved part
+            // first, then the rest each after its own descendants, the reverse of the walk, which takes children last first.
+            // Measured, Studio 0.747, a playing client and a server alike, tools/parity/probes/grid_subtree.luau: a part p holding
+            // q(r) and s comes into a cell's list as p r q s and leaves it in that order too (each leaving part giving its place to
+            // the list's last), whether it comes from nil, from ReplicatedStorage or out of a WorldModel, made there or coming back.
+            // Those coming into the Workspace's world are numbered in the same order: broadphase.rs entered)
             let into_workspace = moves && matches!(to, Some(Wait::Workspace(_)));
-            if into_workspace && parts.first().is_some_and(|&(node, below)| node == id && below.is_none()) {
-                super::broadphase::entered(state, id);
-            }
-            for &(node, below) in parts.iter().rev() {
+            let first = usize::from(parts.first().is_some_and(|&(node, _)| node == id));
+            for &(node, below) in parts[..first].iter().chain(parts[first..].iter().rev()) {
                 match below {
                     None if moves => {
                         if let Some(from) = from {
@@ -604,7 +605,7 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                         }
                         if let Some(to) = to {
                             to.insert(state, node);
-                            if into_workspace && node != id {
+                            if into_workspace {
                                 super::broadphase::entered(state, node);
                             }
                         }

@@ -6,10 +6,11 @@
 //! every write can file a part at once.
 //!
 //! - **Coming in**: a part that enters a world waits (camera.rs `Cameras::unindexed`, `unindexed_models`: [`Waiting`], in the
-//!   order the parts came, a subtree's parts each after its own descendants) until a query of that world or the physics step
-//!   takes the waiting parts in ([`take_in`], [`index_parts`]); each is then filed at the end of its cells' lists.
+//!   order the parts came, a moved subtree's parts as a client takes the subtree up: the moved part first, then the rest each
+//!   after its own descendants, world/joints.rs taken_up) until a query of that world or the physics step takes the waiting
+//!   parts in ([`take_in`], [`index_parts`]); each is then filed at the end of its cells' lists.
 //! - **Going out** (destroyed, parented out of the world, into another): it leaves its cells at once ([`left`], from the
-//!   hierarchy hook in camera_moves.rs), the list's last taking its place.
+//!   hierarchy hook in camera_moves.rs, a moved subtree's parts in the order they come in), the list's last taking its place.
 //! - **Every write files at once** ([`stored`], from instance.rs store): a write of CFrame, Size, Anchored, CanCollide or
 //!   CanTouch of a filed part works out its filing again (float32 box arithmetic) and, when it changed, files it: at the end of
 //!   every cell when its level, its list or CanCollide-and-CanTouch-both-off changed, else out of the cells it left and at
