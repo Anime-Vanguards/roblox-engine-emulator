@@ -117,6 +117,18 @@ impl Behaviors {
     pub fn find_setter(&self, reflection: &Reflection, class: ClassId, name: NameId) -> Option<&SetterFn> {
         find(&self.setters, reflection, class, name).map(|(_, f)| f)
     }
+
+    /// Every (class, name) a method behaviour is registered for (tests: the reflection's list of behaviour-only members).
+    #[cfg(test)]
+    pub(crate) fn method_keys(&self) -> Vec<(ClassId, NameId)> {
+        self.methods.keys().copied().collect()
+    }
+
+    /// Every (class, name) a getter behaviour is registered for.
+    #[cfg(test)]
+    pub(crate) fn getter_keys(&self) -> Vec<(ClassId, NameId)> {
+        self.getters.keys().copied().collect()
+    }
 }
 
 /// CollectionService's per-tag signals.

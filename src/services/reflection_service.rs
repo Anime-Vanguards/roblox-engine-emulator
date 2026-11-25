@@ -7,12 +7,14 @@
 //! order, those a script cannot get included; absent when there is none), `Display` (Category and, where the class has one,
 //! DeprecationMessage) and `Permits` (GetService / New, SecurityCapabilities). The filter is a dictionary: `IsA` (the class and
 //! its subclasses; a name no class has gives none), `ExcludeDisplay` (no Display), `Security`; other keys are ignored.
-//! ree does not know which SecurityCapabilities a class permits, so `Permits` is a frozen empty table that reports itself as not
-//! emulated when a script reads or iterates it (Output `missing`, ReflectedClass.Permits). A `Security` filter of another type is
-//! refused as Roblox refuses it; a SecurityCapabilities one (prelude.luau) reports itself (ReflectionClassFilter.Security) and
-//! filters nothing. GetPropertiesOfClass, GetMethodsOfClass and GetEventsOfClass need
-//! fields the dump does not record (a reference type's InstanceType, a parameter's DefaultValue, member Display and event
-//! Permits) and stay unemulated.
+//! The dump records each class's permits as text (crate::reflection::Permits: "Physics", "Basic | UI"), but ree makes no
+//! SecurityCapabilities values for a script, so `Permits` is a frozen empty table that reports itself as not emulated when a
+//! script reads or iterates it (Output `missing`, ReflectedClass.Permits). A `Security` filter of another type is refused as
+//! Roblox refuses it; a SecurityCapabilities one (prelude.luau) reports itself (ReflectionClassFilter.Security) and filters
+//! nothing. GetPropertiesOfClass, GetMethodsOfClass and GetEventsOfClass stay unemulated: the dump records what they answer
+//! with now (a type's InstanceType, a parameter's DefaultValue, member Display and event Permits; the Rust API reads them),
+//! but nothing builds their answers yet, and a DefaultValue the dump keeps as text (RaycastParams, OverlapParams) could not be
+//! handed back as the object.
 
 use std::rc::Rc;
 

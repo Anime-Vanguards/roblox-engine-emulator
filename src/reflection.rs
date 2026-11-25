@@ -30,7 +30,7 @@
 //! let recursive = &find.parameters[1];
 //! assert_eq!((&*recursive.name, &*recursive.type_info.script, recursive.default_text().as_deref()), ("recursive", "boolean", Some("false")));
 //! assert!(find.permits.allows("Call") && find.callable_in_parallel());
-//! // every member, own and inherited: Instance's first
+//! // every member, own and inherited: Object's first, then Instance's
 //! for member in reflection.members(part) {
 //!     match member {
 //!         ReflectedMember::Property(property) => println!("{} {}", reflection.name(property.name), property.script_type_name),
@@ -366,17 +366,42 @@ pub struct Reflection {
     /// The methods, events and callbacks with all the dump says of them, built on first use (members.rs)
     members: OnceLock<members::Members>,
     /// The dump they are built from (the compiled-in one; [`Self::from_dump`] builds them at once)
-    member_source: Option<&'static [u8]>,
+    member_source: DumpSource,
+}
+
+/// The dump the member info is built from, which Debug gives as its size only.
+#[derive(Clone, Copy, Default)]
+struct DumpSource(Option<&'static [u8]>);
+
+impl std::fmt::Debug for DumpSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self.0 {
+            Some(bytes) => write!(formatter, "DumpSource({} bytes)", bytes.len()),
+            None => formatter.write_str("DumpSource(None)"),
+        }
+    }
 }
 
 /// Members services.luau / query.luau give behaviours that the Studio dump does not list (Player
-/// methods are not in it), interned at load so behaviours can register them.
+/// methods are not in it), interned at load so behaviours can register them ([`BEHAVIOR_METHODS`] files them).
 const BEHAVIOR_ONLY_NAMES: &[&str] = &[
     "DistanceFromCharacter", "GetFriendsOnline", "GetJoinData", "GetMouse", "GetNetworkPing", "GetRankInGroup",
     "GetRankInGroupAsync", "GetRoleInGroup", "GetRoleInGroupAsync", "HasAppearanceLoaded", "IsFriendsWith", "IsInGroup",
     "IsInGroupAsync", "IsVerified", "LoadCharacter", "LoadCharacterAsync",
     "RequestStreamAroundAsync", "Kick", "Move", "AddReplicationFocus", "RemoveReplicationFocus",
 ];
+
+/// The methods a class has only through the engine's behaviours: a script calls them, and neither the dump nor rbx-dom
+/// lists them for the class. The engine finds their behaviours; the metadata lists them as [`MemberOrigin::Engine`] members,
+/// with no parameters or types (none are recorded). members.rs's tests check this list and [`BEHAVIOR_PROPERTIES`] against a
+/// started engine's behaviours in the client, server and edit run contexts.
+const BEHAVIOR_METHODS: &[(&str, &[&str])] = &[("Player", BEHAVIOR_ONLY_NAMES)];
+
+/// The properties a script reads (and writes) only through the engine's behaviours: (class, name, script type, engine type,
+/// read-only, serialized). Scripts' Source, which the dump lists for no class (its engine type unrecorded), and TextBox's
+/// LocalizedText, which the dump lists for TextLabel and TextButton only (the types and serialization are theirs).
+const BEHAVIOR_PROPERTIES: &[(&str, &str, &str, &str, bool, bool)] =
+    &[("LuaSourceContainer", "Source", "string", "", false, true), ("TextBox", "LocalizedText", "string", "string", true, false)];
 
 // Content properties whose string asset id has another name: (declaring class, Content property,
 // string property). Measured in Studio (2026-10-12): setting the Content property
@@ -717,7 +742,7 @@ impl Reflection {
     pub fn load() -> Result<Reflection, String> {
         let mut reflection = Self::read_dump(crate::data::REFLECTION, Some(crate::data::FONT_ENUMS))?;
         // (its methods', events' and callbacks' info is built from the dump on first use: the engine reads none of it)
-        reflection.member_source = Some(crate::data::REFLECTION);
+        reflection.member_source = DumpSource(Some(crate::data::REFLECTION));
         // Names the engine stores that no script reaches (interned last, so every other id stays)
         for &name in ENGINE_ONLY {
             if reflection.name_id(name).is_none() {
@@ -737,7 +762,7 @@ impl Reflection {
     }
 
     fn read_dump(bytes: &[u8], font_enums: Option<&[u8]>) -> Result<Reflection, String> {
-        let dump: members::Dump = serde_json::from_slice(bytes)
+        let dump: members::Dump<members::DumpClass> = serde_json::from_slice(bytes)
             .map_err(|error| format!("parsing reflection.json: {error}"))?;
         let mut reflection = Reflection::default();
         for name in KNOWN_NAMES {

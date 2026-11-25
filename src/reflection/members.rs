@@ -5,12 +5,15 @@
 //! The engine itself reads none of this. A method's, event's or callback's info is built on the first call that asks for
 //! one (the compiled-in dump is read again for it, some milliseconds), so an engine that never asks boots as it did.
 
-use std::{borrow::Cow, fmt, ptr};
+use std::{borrow::Cow, fmt, marker::PhantomData, ptr};
 
 use rustc_hash::FxHashMap;
 use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
-use super::{ClassId, ClassInfo, EnumId, EnumItemId, EnumInfo, EnumItemInfo, ITEM_ALIASES, NameId, PropertyInfo, Reflection, list, text};
+use super::{
+    BEHAVIOR_METHODS, BEHAVIOR_PROPERTIES, ClassId, ClassInfo, EnumId, EnumInfo, EnumItemId, EnumItemInfo, ITEM_ALIASES, NameId,
+    PropertyInfo, Reflection, ScriptType, engine_type, list, text,
+};
 use crate::value::Value;
 
 /// Where the reflection's knowledge of a member comes from.
@@ -22,8 +25,10 @@ pub enum MemberOrigin {
     /// rbx-dom's database, for a class the dump does not list (Player, UserGameSettings): a property's type and
     /// [`DomProperty`] data, but no display data or permits.
     RbxDom,
-    /// The engine's own lists: a member the dump leaves out that the engine has (measured, or documented by Roblox). Its
-    /// name and class are known, its parameters and types are not (none are listed), and it has no permits or display data.
+    /// The engine's own lists: a member the dump leaves out that the engine has (measured, or documented by Roblox), such as
+    /// Player's methods (Kick, GetMouse, LoadCharacter), scripts' Source and BindableFunction.OnInvoke. Its name and class are
+    /// known, and a property's type; a method's, event's or callback's parameters and types are not (ree records none: its
+    /// `parameters` are empty and its `returns` is `None`), and it has no permits or display data.
     Engine,
 }
 
@@ -509,40 +514,26 @@ fn dom_property(class: &'static str, name: &'static str, descriptor: &'static rb
     }
 }
 
-/// The methods, events and callbacks of every class, built on first use ([`Reflection::members`]).
+/// The methods, events and callbacks of every class, and the properties it has only through behaviours, built on first use
+/// ([`Reflection::members`]).
 #[derive(Debug, Default)]
 pub(super) struct Members {
     methods: Vec<MethodInfo>,
     events: Vec<EventInfo>,
     callbacks: Vec<CallbackInfo>,
-    /// Per class: where its own methods, events and callbacks are in the lists above (start, end), in its order
-    own: Vec<[(u32, u32); 3]>,
+    /// [`BEHAVIOR_PROPERTIES`] as properties ([`MemberOrigin::Engine`])
+    properties: Vec<PropertyInfo>,
+    /// Per class: where its own methods, events, callbacks and behaviour properties are in the lists above (start, end), in
+    /// its order
+    own: Vec<[(u32, u32); 4]>,
     /// (declaring class, name) to the index in each list
-    declared: [FxHashMap<(ClassId, NameId), u32>; 3],
+    declared: [FxHashMap<(ClassId, NameId), u32>; 4],
 }
 
 const METHODS: usize = 0;
 const EVENTS: usize = 1;
 const CALLBACKS: usize = 2;
-
-/// A class entry of the dump, as the members are built from it: its name and member lists (other fields skipped).
-#[derive(serde::Deserialize)]
-struct MemberClass {
-    #[serde(default)]
-    name: Option<serde_json::Value>,
-    #[serde(default)]
-    events: Option<serde_json::Value>,
-    #[serde(default)]
-    methods: Option<serde_json::Value>,
-    #[serde(default)]
-    callbacks: Option<serde_json::Value>,
-}
-
-#[derive(serde::Deserialize)]
-struct MemberDump {
-    #[serde(default)]
-    classes: Vec<MemberClass>,
-}
+const PROPERTIES: usize = 3;
 
 /// A class's own entries of one kind in the dump, by name (the first of a name).
 fn by_name(list: Option<&serde_json::Value>) -> FxHashMap<&str, &serde_json::Value> {
@@ -556,30 +547,32 @@ fn by_name(list: Option<&serde_json::Value>) -> FxHashMap<&str, &serde_json::Val
 }
 
 impl Members {
-    /// The members of every class of `reflection`, from the dump it was read from (its own lists give each class's
-    /// members and order; the dump's entry of the same name the rest; an engine member has none).
+    /// The members of every class of `reflection`, from the dump it was read from: its own lists give each class's
+    /// members and order (then the methods and properties it has only through behaviours), the dump's entry the rest (an
+    /// engine member has none). The load made class n of the dump's n-th entry with a name, so entries are matched by place.
     pub(super) fn build(reflection: &Reflection, dump: &[u8]) -> Members {
-        let classes = serde_json::from_slice::<MemberDump>(dump).map(|dump| dump.classes).unwrap_or_default();
-        let mut entries: FxHashMap<&str, &MemberClass> = FxHashMap::default();
-        for class in &classes {
-            if let Some(name) = text(class.name.as_ref()) {
-                entries.insert(name, class);
-            }
-        }
+        let classes = serde_json::from_slice::<Dump<MemberClass>>(dump).map(|dump| dump.classes).unwrap_or_default();
+        let entries: Vec<&MemberClass> = classes.iter().filter(|class| text(class.name.as_ref()).is_some()).collect();
         let mut members = Members::default();
         for class in &reflection.classes {
-            let entry = if class.reflected { entries.get(&*class.name).copied() } else { None };
+            let entry = if class.reflected { entries.get(class.id as usize).copied() } else { None };
             let parameters = |member: Option<&serde_json::Value>| -> Box<[ParameterInfo]> {
                 list(member.and_then(|member| member.get("parameters"))).iter().map(ParameterInfo::from_json).collect()
             };
             let permits = |member: Option<&serde_json::Value>| Permits::from_json(member.and_then(|member| member.get("permits")));
             let display = |member: Option<&serde_json::Value>| display_from_json(member.and_then(|member| member.get("display")));
             let origin = |member: Option<&serde_json::Value>| if member.is_some() { MemberOrigin::Dump } else { MemberOrigin::Engine };
-            let mut own = [(0u32, 0u32); 3];
+            let mut own = [(0u32, 0u32); 4];
 
             let dumped = by_name(entry.and_then(|entry| entry.methods.as_ref()));
             own[METHODS].0 = members.methods.len() as u32;
-            for &name in &class.own_methods {
+            let behaviour_methods = BEHAVIOR_METHODS
+                .iter()
+                .filter(|(owner, _)| *owner == &*class.name)
+                .flat_map(|(_, names)| names.iter())
+                .filter_map(|name| reflection.name_id(name))
+                .filter(|name| !class.own_methods.contains(name));
+            for name in class.own_methods.iter().copied().chain(behaviour_methods) {
                 let member = dumped.get(reflection.name(name)).copied();
                 members.declared[METHODS].entry((class.id, name)).or_insert(members.methods.len() as u32);
                 members.methods.push(MethodInfo {
@@ -626,6 +619,33 @@ impl Members {
                 });
             }
             own[CALLBACKS].1 = members.callbacks.len() as u32;
+
+            own[PROPERTIES].0 = members.properties.len() as u32;
+            for &(owner, name, script_type, engine_type_name, read_only, serialized) in BEHAVIOR_PROPERTIES {
+                let Some(name) = reflection.name_id(name).filter(|&name| owner == &*class.name && reflection.class_property(class.id, name).is_none())
+                else {
+                    continue;
+                };
+                members.declared[PROPERTIES].entry((class.id, name)).or_insert(members.properties.len() as u32);
+                members.properties.push(PropertyInfo {
+                    name,
+                    script_type: ScriptType::parse(script_type),
+                    script_type_name: script_type.into(),
+                    engine_type: engine_type(engine_type_name),
+                    engine_type_name: engine_type_name.into(),
+                    enum_name: None,
+                    enum_type: None,
+                    read_only,
+                    scriptable: true,
+                    serialized,
+                    owner: class.id,
+                    instance_type: None,
+                    display: Box::new([]),
+                    permits: Permits::default(),
+                    origin: MemberOrigin::Engine,
+                });
+            }
+            own[PROPERTIES].1 = members.properties.len() as u32;
             members.own.push(own);
         }
         members
@@ -635,7 +655,7 @@ impl Members {
 impl Reflection {
     /// The methods, events and callbacks, built on the first call.
     fn member_store(&self) -> &Members {
-        self.members.get_or_init(|| self.member_source.map(|dump| Members::build(self, dump)).unwrap_or_default())
+        self.members.get_or_init(|| self.member_source.0.map(|dump| Members::build(self, dump)).unwrap_or_default())
     }
 
     /// Every class, in id order: the dump's in the dump's order (ReflectionService's, by name), then those only rbx-dom
@@ -662,12 +682,13 @@ impl Reflection {
     /// dump's LegacyNames, each measured in a 0.747 client. No enumeration, FromName or FromValue answers one.
     pub fn legacy_names(&self, item: EnumItemId) -> impl Iterator<Item = &'static str> + '_ {
         let info = &self.enum_items[item as usize];
-        let enum_name = &self.enums[info.enum_type as usize].name;
+        let enum_info = &self.enums[info.enum_type as usize];
         ITEM_ALIASES
             .iter()
-            .filter(move |(name, _)| *name == &**enum_name)
+            .filter(move |(name, _)| *name == &*enum_info.name)
             .flat_map(|(_, aliases)| aliases.iter())
-            .filter(move |(_, target)| *target == &*info.name)
+            // (a legacy name the load installed for this item: not one an item of the enum already has)
+            .filter(move |(alias, _)| enum_info.by_name.get(*alias) == Some(&item))
             .map(|(alias, _)| *alias)
     }
 
@@ -683,12 +704,19 @@ impl Reflection {
         chain
     }
 
-    /// The properties `class` declares, in the dump's order (then the ones the engine adds).
+    /// The properties `class` declares, in the dump's order (then the ones the engine adds, and those it has only through
+    /// behaviours).
     pub fn own_properties(&self, class: ClassId) -> impl Iterator<Item = &PropertyInfo> {
-        self.classes[class as usize].own_properties.iter().map(|&index| &self.properties[index as usize])
+        let (start, end) = self.member_store().own[class as usize][PROPERTIES];
+        self.classes[class as usize]
+            .own_properties
+            .iter()
+            .map(|&index| &self.properties[index as usize])
+            .chain(self.member_store().properties[start as usize..end as usize].iter())
     }
 
-    /// The methods `class` declares, in the dump's order (then the ones the engine adds).
+    /// The methods `class` declares, in the dump's order (then the ones the engine adds, and those it has only through
+    /// behaviours: Player's).
     pub fn own_methods(&self, class: ClassId) -> &[MethodInfo] {
         let (start, end) = self.member_store().own[class as usize][METHODS];
         &self.member_store().methods[start as usize..end as usize]
@@ -716,9 +744,9 @@ impl Reflection {
     }
 
     /// Every member of `class`, its own and inherited, in a stable order: class by class from the root of its chain to
-    /// `class` itself ([`Self::class_chain`]: Instance's first), each class's as [`Self::own_members`] lists them. A member
-    /// a class declares again (a value object's Changed, CollectionService's AddTag) is listed once, where that class lists
-    /// it, as [`Self::member`] finds it.
+    /// `class` itself ([`Self::class_chain`]: Object's first, then Instance's), each class's as [`Self::own_members`] lists
+    /// them. A member a class declares again (a value object's Changed, CollectionService's AddTag) is listed once, where
+    /// that class lists it, as [`Self::member`] finds it.
     pub fn members(&self, class: ClassId) -> impl Iterator<Item = ReflectedMember<'_>> {
         self.class_chain(class)
             .into_iter()
@@ -738,41 +766,39 @@ impl Reflection {
         None
     }
 
-    /// The method `name` of `class`, its own or inherited (the nearest class's that declares it).
+    /// The method `name` of `class`, its own or inherited (the nearest class's that declares it), the ones it has only through
+    /// behaviours included.
     pub fn class_method(&self, class: ClassId, name: NameId) -> Option<&MethodInfo> {
-        if !self.classes[class as usize].methods.contains(&name) {
-            return None;
-        }
         self.declared(METHODS, &self.member_store().methods, class, name)
     }
 
     /// The event `name` of `class`, its own or inherited (the nearest class's that declares it).
     pub fn class_event(&self, class: ClassId, name: NameId) -> Option<&EventInfo> {
-        if !self.classes[class as usize].events.contains(&name) {
-            return None;
-        }
         self.declared(EVENTS, &self.member_store().events, class, name)
     }
 
     /// The callback `name` of `class`, its own or inherited.
     pub fn class_callback(&self, class: ClassId, name: NameId) -> Option<&CallbackInfo> {
-        if !self.classes[class as usize].callbacks.contains(&name) {
-            return None;
-        }
         self.declared(CALLBACKS, &self.member_store().callbacks, class, name)
     }
 
     fn member_of_kind(&self, class: ClassId, kind: MemberKind, name: NameId) -> Option<ReflectedMember<'_>> {
         match kind {
-            MemberKind::Property => self.class_property(class, name).map(ReflectedMember::Property),
+            MemberKind::Property => self
+                .class_property(class, name)
+                .or_else(|| self.declared(PROPERTIES, &self.member_store().properties, class, name))
+                .map(ReflectedMember::Property),
             MemberKind::Method => self.class_method(class, name).map(ReflectedMember::Method),
             MemberKind::Event => self.class_event(class, name).map(ReflectedMember::Event),
             MemberKind::Callback => self.class_callback(class, name).map(ReflectedMember::Callback),
         }
     }
 
-    /// The member `name` of `class`, its own or inherited: a property, else a method, an event or a callback, in the order
-    /// an instance's member read looks for them (scriptable or not: [`PropertyInfo::scriptable`] says).
+    /// The member `name` of `class`, its own or inherited, of any kind: a property, else a method, an event or a callback.
+    /// The ones the class has only through the engine's behaviours are found too (Player's Kick, scripts' Source). Unlike an
+    /// instance's member read, this finds a property scripts cannot read as well (PVInstance.Origin, where a script's
+    /// `part.Origin` finds a child named Origin: [`PropertyInfo::scriptable`] says which), and a deprecated lower-case member
+    /// as itself (`brickColor`, which a script's read takes for BrickColor: [`Self::property_alias`], [`Self::method_alias`]).
     pub fn member(&self, class: ClassId, name: NameId) -> Option<ReflectedMember<'_>> {
         [MemberKind::Property, MemberKind::Method, MemberKind::Event, MemberKind::Callback]
             .into_iter()
@@ -850,7 +876,8 @@ impl Reflection {
 // The dump as the engine reads it at load. The member lists keep only their names: building JSON values for the methods'
 // and events' parameters, types, permits and display only to drop them cost time and memory at every boot. Any shape of
 // JSON reads as the JSON values did: a value of another type than expected reads as empty, a repeated key's last value
-// counts, an entry without a string name is skipped.
+// counts, an entry without a string name is skipped, and a string reads the same with escapes as without. The member info
+// built on first use ([`Members::build`]) reads the dump by the same rules.
 
 /// A class entry of the dump: the fields the load reads, as JSON values, and the member lists' names.
 #[derive(Default)]
@@ -868,13 +895,26 @@ pub(super) struct DumpClass {
     pub callbacks: Vec<String>,
 }
 
-/// The dump's top level, read the same way.
-#[derive(Default)]
-pub(super) struct Dump {
+/// The dump's top level, its class entries read as `C` (an entry that is no object reads as one without a name).
+pub(super) struct Dump<C> {
     pub version: Option<serde_json::Value>,
     pub enums: Option<serde_json::Value>,
-    /// The entries of `classes` (an entry that is no object reads as one without a name)
-    pub classes: Vec<DumpClass>,
+    pub classes: Vec<C>,
+}
+
+impl<C> Default for Dump<C> {
+    fn default() -> Self {
+        Dump { version: None, enums: None, classes: Vec::new() }
+    }
+}
+
+/// A class entry as the member info is built from it: its name and its member lists as JSON values (the rest skipped).
+#[derive(Default)]
+struct MemberClass {
+    name: Option<serde_json::Value>,
+    events: Option<serde_json::Value>,
+    methods: Option<serde_json::Value>,
+    callbacks: Option<serde_json::Value>,
 }
 
 /// A key of an object the load reads, matched without an allocation.
@@ -979,12 +1019,31 @@ impl<'de> Deserialize<'de> for EntryName {
                     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                         formatter.write_str("a JSON value")
                     }
-                    scalars_read_empty!(Option<String>);
-                    fn visit_borrowed_str<E: de::Error>(self, text: &'de str) -> Result<Option<String>, E> {
+                    // (serde_json hands a string with escapes to visit_str and one without to visit_borrowed_str, which
+                    // goes to visit_str)
+                    fn visit_str<E: de::Error>(self, text: &str) -> Result<Option<String>, E> {
                         Ok(Some(text.to_string()))
                     }
                     fn visit_string<E: de::Error>(self, text: String) -> Result<Option<String>, E> {
                         Ok(Some(text))
+                    }
+                    fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<String>, E> {
+                        Ok(None)
+                    }
+                    fn visit_i64<E: de::Error>(self, _: i64) -> Result<Option<String>, E> {
+                        Ok(None)
+                    }
+                    fn visit_u64<E: de::Error>(self, _: u64) -> Result<Option<String>, E> {
+                        Ok(None)
+                    }
+                    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Option<String>, E> {
+                        Ok(None)
+                    }
+                    fn visit_unit<E: de::Error>(self) -> Result<Option<String>, E> {
+                        Ok(None)
+                    }
+                    fn visit_none<E: de::Error>(self) -> Result<Option<String>, E> {
+                        Ok(None)
                     }
                     fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Option<String>, A::Error> {
                         skip_seq(seq).map(|()| None)
@@ -1089,53 +1148,90 @@ impl<'de> Deserialize<'de> for DumpClass {
     }
 }
 
-/// The entries of the dump's `classes`.
-#[derive(Default)]
-struct Classes(Vec<DumpClass>);
+/// A JSON array's items read as `T`, or none for any other value.
+struct List<T>(Vec<T>);
 
-impl<'de> Deserialize<'de> for Classes {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Classes, D::Error> {
-        struct ClassesVisitor;
-        impl<'de> Visitor<'de> for ClassesVisitor {
-            type Value = Classes;
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a JSON value")
-            }
-            scalars_read_empty!(Classes);
-            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Classes, A::Error> {
-                let mut classes = Vec::new();
-                while let Some(class) = seq.next_element::<DumpClass>()? {
-                    classes.push(class);
-                }
-                Ok(Classes(classes))
-            }
-            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Classes, A::Error> {
-                skip_map(map).map(|()| Classes::default())
-            }
-        }
-        deserializer.deserialize_any(ClassesVisitor)
+impl<T> Default for List<T> {
+    fn default() -> Self {
+        List(Vec::new())
     }
 }
 
-impl<'de> Deserialize<'de> for Dump {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Dump, D::Error> {
-        struct DumpVisitor;
-        impl<'de> Visitor<'de> for DumpVisitor {
-            type Value = Dump;
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for List<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<List<T>, D::Error> {
+        struct ListVisitor<T>(PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for ListVisitor<T> {
+            type Value = List<T>;
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("a JSON value")
             }
-            scalars_read_empty!(Dump);
-            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Dump, A::Error> {
+            scalars_read_empty!(List<T>);
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<List<T>, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element::<T>()? {
+                    items.push(item);
+                }
+                Ok(List(items))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<List<T>, A::Error> {
+                skip_map(map).map(|()| List::default())
+            }
+        }
+        deserializer.deserialize_any(ListVisitor(PhantomData))
+    }
+}
+
+impl<'de> Deserialize<'de> for MemberClass {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<MemberClass, D::Error> {
+        struct ClassVisitor;
+        impl<'de> Visitor<'de> for ClassVisitor {
+            type Value = MemberClass;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(MemberClass);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<MemberClass, A::Error> {
+                skip_seq(seq).map(|()| MemberClass::default())
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<MemberClass, A::Error> {
+                let mut class = MemberClass::default();
+                while let Some(key) = map.next_key::<Key>()? {
+                    match key {
+                        Key::Name => class.name = Some(map.next_value()?),
+                        Key::Events => class.events = Some(map.next_value()?),
+                        Key::Methods => class.methods = Some(map.next_value()?),
+                        Key::Callbacks => class.callbacks = Some(map.next_value()?),
+                        _ => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(class)
+            }
+        }
+        deserializer.deserialize_any(ClassVisitor)
+    }
+}
+
+impl<'de, C: Deserialize<'de>> Deserialize<'de> for Dump<C> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Dump<C>, D::Error> {
+        struct DumpVisitor<C>(PhantomData<C>);
+        impl<'de, C: Deserialize<'de>> Visitor<'de> for DumpVisitor<C> {
+            type Value = Dump<C>;
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+            scalars_read_empty!(Dump<C>);
+            fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Dump<C>, A::Error> {
                 skip_seq(seq).map(|()| Dump::default())
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Dump, A::Error> {
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Dump<C>, A::Error> {
                 let mut dump = Dump::default();
                 while let Some(key) = map.next_key::<Key>()? {
                     match key {
                         Key::Version => dump.version = Some(map.next_value()?),
                         Key::Enums => dump.enums = Some(map.next_value()?),
-                        Key::Classes => dump.classes = map.next_value::<Classes>()?.0,
+                        Key::Classes => dump.classes = map.next_value::<List<C>>()?.0,
                         _ => {
                             map.next_value::<IgnoredAny>()?;
                         }
@@ -1144,14 +1240,27 @@ impl<'de> Deserialize<'de> for Dump {
                 Ok(dump)
             }
         }
-        deserializer.deserialize_any(DumpVisitor)
+        deserializer.deserialize_any(DumpVisitor(PhantomData))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reflection::K;
+    use crate::reflection::{BEHAVIOR_ONLY_NAMES, K};
+
+    /// The members `class` has only through the engine's behaviours, by the lists ([`BEHAVIOR_METHODS`],
+    /// [`BEHAVIOR_PROPERTIES`]): (kind, name), for the class and its subclasses.
+    fn behaviour_only(reflection: &Reflection, class: &ClassInfo) -> Vec<(MemberKind, NameId)> {
+        let methods = BEHAVIOR_METHODS.iter().flat_map(|(owner, names)| names.iter().map(move |name| (*owner, MemberKind::Method, *name)));
+        let properties = BEHAVIOR_PROPERTIES.iter().map(|&(owner, name, ..)| (owner, MemberKind::Property, name));
+        methods
+            .chain(properties)
+            .filter(|&(owner, ..)| reflection.is_a(class.id, owner))
+            .map(|(_, kind, name)| (kind, reflection.name_id(name).unwrap()))
+            .filter(|&(kind, name)| if kind == MemberKind::Method { !class.methods.contains(&name) } else { !class.properties.contains_key(&name) })
+            .collect()
+    }
 
     fn names(parameters: &[ParameterInfo]) -> Vec<(&str, &str, Option<String>)> {
         parameters.iter().map(|parameter| (&*parameter.name, &*parameter.type_info.script, parameter.default_text())).collect()
@@ -1296,8 +1405,10 @@ mod tests {
             reflection.members(bool_value).filter(|member| member.kind() == MemberKind::Event && member.name() == K::Changed as NameId).collect();
         assert_eq!(changed.len(), 1);
         assert_eq!(changed[0].owner(), bool_value);
-        // every class's list is the members the engine resolves for it, once each
+        // every class's list is the members the engine resolves for it, once each: the reflection's and the ones it has only
+        // through behaviours
         for class in reflection.all_classes() {
+            let behaviour = behaviour_only(&reflection, class);
             let mut seen = FxHashMap::default();
             for member in reflection.members(class.id) {
                 let known = match member {
@@ -1305,12 +1416,75 @@ mod tests {
                     ReflectedMember::Method(method) => class.methods.contains(&method.name),
                     ReflectedMember::Event(event) => class.events.contains(&event.name),
                     ReflectedMember::Callback(callback) => class.callbacks.contains(&callback.name),
-                };
+                } || (member.origin() == MemberOrigin::Engine && behaviour.contains(&(member.kind(), member.name())));
                 assert!(known, "{}.{}", class.name, reflection.name(member.name()));
                 assert!(seen.insert((member.kind(), member.name()), ()).is_none(), "{}.{} twice", class.name, reflection.name(member.name()));
             }
-            assert_eq!(seen.len(), class.properties.len() + class.methods.len() + class.events.len() + class.callbacks.len(), "{}", class.name);
+            let reflected = class.properties.len() + class.methods.len() + class.events.len() + class.callbacks.len();
+            assert_eq!(seen.len(), reflected + behaviour.len(), "{}", class.name);
         }
+    }
+
+    /// The members the metadata lists as the engine's behaviours are the ones a started engine has behaviours for that the
+    /// reflection lacks, in the client, server and edit run contexts, a property read-only where it has no setter.
+    #[test]
+    fn behaviour_only_members_are_the_engines_behaviours() {
+        let mut listed: Vec<(String, &str, String, bool)> = BEHAVIOR_METHODS
+            .iter()
+            .flat_map(|(class, names)| names.iter().map(move |name| (class.to_string(), "method", name.to_string(), false)))
+            .chain(BEHAVIOR_PROPERTIES.iter().map(|&(class, name, _, _, read_only, _)| (class.to_string(), "property", name.to_string(), read_only)))
+            .collect();
+        listed.sort();
+        assert_eq!(listed.iter().filter(|entry| entry.1 == "method").count(), BEHAVIOR_ONLY_NAMES.len());
+        for (mode, context) in [("play", crate::RunContext::Client), ("play", crate::RunContext::Server), ("edit", crate::RunContext::Edit)] {
+            let engine = crate::Engine::new(crate::Options { mode: mode.into(), run_context: context, ..crate::Options::default() }).unwrap();
+            let lua = mlua::Lua::new();
+            crate::lua::start(&lua, &engine).unwrap();
+            let reflection = &engine.reflection;
+            let behaviors = engine.behaviors.borrow();
+            let mut found = Vec::new();
+            for (class, name) in behaviors.method_keys() {
+                let info = reflection.class(class);
+                if !info.methods.contains(&name) {
+                    found.push((info.name.to_string(), "method", reflection.name(name).to_string(), false));
+                }
+            }
+            for (class, name) in behaviors.getter_keys() {
+                let info = reflection.class(class);
+                if !info.properties.contains_key(&name) {
+                    let read_only = behaviors.find_setter(reflection, class, name).is_none();
+                    found.push((info.name.to_string(), "property", reflection.name(name).to_string(), read_only));
+                }
+            }
+            found.sort();
+            assert_eq!(found, listed, "{mode} {}", context.name());
+        }
+        // the metadata finds them, as the engine's members with no recorded signature
+        let reflection = Reflection::shared().unwrap();
+        let Some(ReflectedMember::Method(kick)) = reflection.member_by_name("Player", "Kick") else { panic!("Player.Kick") };
+        assert_eq!((kick.origin, kick.parameters.len(), kick.returns.is_none(), reflection.class(kick.owner).name.as_ref()), (MemberOrigin::Engine, 0, true, "Player"));
+        let player = reflection.class_id("Player").unwrap();
+        let own: Vec<&str> = reflection.own_methods(player).iter().map(|method| reflection.name(method.name)).collect();
+        assert!(BEHAVIOR_ONLY_NAMES.iter().all(|name| own.contains(name)), "{own:?}");
+        assert!(reflection.members(player).any(|member| reflection.name(member.name()) == "LoadCharacter"));
+        let Some(ReflectedMember::Property(source)) = reflection.member_by_name("ModuleScript", "Source") else { panic!("ModuleScript.Source") };
+        assert_eq!((source.origin, &*source.script_type_name, source.read_only, source.scriptable), (MemberOrigin::Engine, "string", false, true));
+        assert_eq!(reflection.class(source.owner).name.as_ref(), "LuaSourceContainer");
+        // (files hold a script's Source: rbx-dom's database serializes it)
+        let dom = ["LuaSourceContainer", "BaseScript", "Script", "ModuleScript"]
+            .into_iter()
+            .flat_map(|class| reflection.dom_properties(reflection.class_id(class).unwrap()))
+            .find(|property| property.name == "Source")
+            .unwrap();
+        assert_eq!((source.serialized, dom.serialization), (true, Serialization::Serializes));
+        let module = reflection.class_id("ModuleScript").unwrap();
+        assert!(reflection.members(module).any(|member| member == ReflectedMember::Property(source)));
+        let Some(ReflectedMember::Property(localized)) = reflection.member_by_name("TextBox", "LocalizedText") else { panic!("TextBox.LocalizedText") };
+        assert_eq!((localized.origin, localized.read_only), (MemberOrigin::Engine, true));
+        let Some(ReflectedMember::Property(label)) = reflection.member_by_name("TextLabel", "LocalizedText") else { panic!("TextLabel.LocalizedText") };
+        assert_eq!((label.origin, label.category()), (MemberOrigin::Dump, Some("Data")));
+        // (the engine's own lookups are as they were: no reflected member of these names)
+        assert!(reflection.class_property(module, K::Source as NameId).is_none() && !reflection.class(player).methods.contains(&kick.name));
     }
 
     #[test]
@@ -1326,7 +1500,18 @@ mod tests {
         assert_eq!(reflection.all_enums().count(), 662);
         for (index, item) in reflection.enum_items.iter().enumerate() {
             assert_eq!(item.id as usize, index);
+            for legacy in reflection.legacy_names(item.id) {
+                assert_eq!(reflection.enum_item(reflection.enum_item_type_name(item.id), legacy), Some(item.id), "{legacy}");
+            }
         }
+        // a legacy name an item of the enum already has is not installed, and is not that item's legacy name
+        let dump = br#"{"classes": [], "enums": [{"name": "KeyCode", "items": [{"name": "None", "value": 0}, {"name": "Unknown", "value": 1}]}]}"#;
+        let own = Reflection::from_dump(dump, None).unwrap();
+        let none = own.enum_item("KeyCode", "None").unwrap();
+        assert_eq!(own.legacy_names(none).collect::<Vec<_>>(), Vec::<&str>::new());
+        assert_ne!(own.enum_item("KeyCode", "Unknown"), Some(none));
+        let none = reflection.enum_item("KeyCode", "None").unwrap();
+        assert!(reflection.legacy_names(none).any(|name| name == "Unknown"));
     }
 
     #[test]
@@ -1361,6 +1546,8 @@ mod tests {
         let part = reflection.class_id("Part").unwrap();
         assert!(reflection.class_method(part, K::Destroy as NameId).is_some());
         assert!(reflection.members.get().is_some());
+        // (Debug gives the dump the info is built from as its size)
+        assert_eq!(format!("{:?}", reflection.member_source), format!("DumpSource({} bytes)", crate::data::REFLECTION.len()));
         // from_dump builds it at once, the same
         let read = Reflection::from_dump(crate::data::REFLECTION, None).unwrap();
         assert!(read.members.get().is_some());
@@ -1371,9 +1558,12 @@ mod tests {
         }
     }
 
+    /// A class entry as a test compares the readers: its name, its events', methods' and callbacks' names, and the rest.
+    type ClassRead = (Option<String>, Vec<String>, Vec<String>, Vec<String>, String);
+
     /// What the load read from a dump when it held the whole file as JSON values: each class's name and its member lists'
     /// names, by the same helpers.
-    fn read_as_values(bytes: &[u8]) -> Vec<(Option<String>, Vec<String>, Vec<String>, Vec<String>, String)> {
+    fn read_as_values(bytes: &[u8]) -> Vec<ClassRead> {
         let dump: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         list(dump.get("classes"))
             .iter()
@@ -1385,8 +1575,8 @@ mod tests {
             .collect()
     }
 
-    fn read_as_dump(bytes: &[u8]) -> Vec<(Option<String>, Vec<String>, Vec<String>, Vec<String>, String)> {
-        let dump: Dump = serde_json::from_slice(bytes).unwrap();
+    fn read_as_dump(bytes: &[u8]) -> Vec<ClassRead> {
+        let dump: Dump<DumpClass> = serde_json::from_slice(bytes).unwrap();
         dump.classes
             .into_iter()
             .map(|class| {
@@ -1400,14 +1590,25 @@ mod tests {
     fn the_load_reads_what_the_json_values_held() {
         assert_eq!(read_as_dump(crate::data::REFLECTION), read_as_values(crate::data::REFLECTION));
         // entries of other shapes: not an object, lists that are `{}` or no list, names that are no string, repeated and
-        // escaped keys, nesting
+        // escaped keys, escaped names, nesting
         let odd = br#"{"version": "x", "classes": [
             5, [1, {"name": "A"}], null, "Part",
-            {"name": "A", "events": {}, "methods": [{"name": "M", "parameters": [{"name": "p", "default": {"$t": "table", "v": {"name": "no"}}}]}, {"name": 3}, 7, [], {"name": "Escaped"}, {"other": {"name": "deep"}}], "callbacks": "none"},
+            {"name": "A", "events": {}, "methods": [{"name": "M", "parameters": [{"name": "p", "default": {"$t": "table", "v": {"name": "no"}}}]}, {"name": 3}, 7, [], {"na\u006de": "Esc\u0061ped"}, {"other": {"name": "deep"}}], "callbacks": "none"},
             {"name": 5, "methods": [{"name": "Lost"}]},
             {"name": "B", "name": "C", "methods": [{"name": "X", "name": "Y"}, {"name": "Z", "name": null}], "methods": [{"name": "Last"}], "events": [{"name": "E"}], "superclass": "A", "defaults": {"Size": {"$t": "Vector3", "v": [1, 2, 3]}}}
         ], "enums": []}"#;
         assert_eq!(read_as_dump(odd), read_as_values(odd));
+        let classes = read_as_dump(odd);
+        assert_eq!(classes[4].2, ["M", "Escaped"]);
+        // the member info reads the same entries, by the same rules (from_dump builds it at once)
+        let reflection = Reflection::from_dump(odd, None).unwrap();
+        let methods = |class: &str| -> Vec<(String, MemberOrigin)> {
+            reflection.own_methods(reflection.class_id(class).unwrap()).iter().map(|method| (reflection.name(method.name).to_string(), method.origin)).collect()
+        };
+        assert_eq!(methods("A"), [("M".to_string(), MemberOrigin::Dump), ("Escaped".to_string(), MemberOrigin::Dump)]);
+        assert_eq!(&*reflection.own_methods(reflection.class_id("A").unwrap())[0].parameters[0].name, "p");
+        assert_eq!(methods("C"), [("Last".to_string(), MemberOrigin::Dump)]);
+        assert_eq!(reflection.own_events(reflection.class_id("C").unwrap())[0].origin, MemberOrigin::Dump);
         for top in [&br#"[]"#[..], br#"5"#, br#"{"classes": {}}"#, br#"{"classes": 3}"#, br#"{}"#] {
             assert_eq!(read_as_dump(top), read_as_values(top));
         }
