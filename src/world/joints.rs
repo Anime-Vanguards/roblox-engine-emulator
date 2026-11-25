@@ -2978,11 +2978,15 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
         if state.joints.quiet > 0 {
             return;
         }
-        let seeds: Vec<InstanceId> = parts_of(state, &setup, id).into_iter().flatten().collect();
         if state.joints.batch > 0 {
-            state.joints.batch_seeds.extend(seeds);
+            state.joints.batch_seeds.extend(parts_of(state, &setup, id).into_iter().flatten());
             return;
         }
+        // (a write that neither made nor broke a link on a joint that links nothing cannot move any part)
+        if flips.iter().all(Option::is_none) && linked_pair(&state.joints, id).is_none() {
+            return;
+        }
+        let seeds: Vec<InstanceId> = parts_of(state, &setup, id).into_iter().flatten().collect();
         // (an Enabled write that links nothing new places nothing in settled components, whose parts are where their joints put them)
         if name == setup.enabled && !seeds.is_empty() && seeds.iter().all(|seed| state.joints.components.get(seed).is_some_and(|found| found.settled.get() && found.derived.get())) {
             return;
@@ -3119,17 +3123,22 @@ fn repointed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &
     if kind == Kind::WeldConstraint {
         derive_weld(state, reflection, setup, joint);
     }
-    let seeds: Vec<InstanceId> = parts_of(state, setup, joint).into_iter().flatten().collect();
     state.joints.unsettled = None;
     let started = match clean_flip(&flips) {
         Some((first, second, true)) => Some([first, second]),
         _ => None,
     };
     match started {
-        Some(parts) => link_started(state, reflection, hooks, setup, joint, parts, &seeds),
+        Some(parts) => {
+            let seeds: Vec<InstanceId> = parts_of(state, setup, joint).into_iter().flatten().collect();
+            link_started(state, reflection, hooks, setup, joint, parts, &seeds);
+        }
         None => {
             drop_flipped(&mut state.joints, &flips);
-            settle_unsettled(state, reflection, hooks, setup, &seeds);
+            if ended.is_some() || flips.iter().any(Option::is_some) {
+                let seeds: Vec<InstanceId> = parts_of(state, setup, joint).into_iter().flatten().collect();
+                settle_unsettled(state, reflection, hooks, setup, &seeds);
+            }
         }
     }
     if ended.is_some() || started.is_some() {

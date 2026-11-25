@@ -3209,6 +3209,152 @@ fn assembly_reads_and_joints_that_cannot_link_walk_nothing() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
+/// Writing C0, C1, Enabled or Part0/Part1 on a weld that does not link two parts (unparented, disabled or one-sided)
+/// cannot change any assembly and must not settle the hub's assembly: host time on a 5,001-part assembly matches a
+/// 2-part one, work-clock charges match, pending Motor6D transforms stay deferred until the step, and active welds
+/// still place Part1 on C0/C1 writes and on parenting.
+#[test]
+fn c0_and_c1_writes_on_non_linking_joints_walk_nothing() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function MakePart(Anchored, At)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.CFrame = Anchored, false, At
+            P.Parent = workspace
+            return P
+        end
+        local function BuildRig(Leaves, Origin)
+            local Hub = MakePart(true, Origin)
+            for _ = 1, Leaves do
+                local Leaf = MakePart(false, Origin)
+                local W = Instance.new("Weld")
+                W.Part0, W.Part1 = Hub, Leaf
+                W.Parent = Leaf
+            end
+            local MotorLeaf = MakePart(false, Origin)
+            local Motor = Instance.new("Motor6D")
+            Motor.Part0, Motor.Part1 = Hub, MotorLeaf
+            Motor.Parent = MotorLeaf
+            local SpareAt = Origin * CFrame.new(0, 50, 0)
+            local Spare = MakePart(false, SpareAt)
+
+            local Unparented = Instance.new("Weld")
+            Unparented.Part0, Unparented.Part1 = Hub, Spare
+
+            local Disabled = Instance.new("Weld")
+            Disabled.Part0, Disabled.Part1, Disabled.Enabled = Hub, Spare, false
+            Disabled.Parent = Spare
+
+            local OneSided = Instance.new("Weld")
+            OneSided.Part0 = Hub
+            OneSided.Parent = Hub
+
+            local Repoint = Instance.new("Weld")
+
+            return {
+                Hub = Hub, Motor = Motor, MotorLeaf = MotorLeaf,
+                Spare = Spare, SpareAt = SpareAt,
+                Unparented = Unparented, Disabled = Disabled, OneSided = OneSided, Repoint = Repoint,
+            }
+        end
+        shared.Rigs = {
+            Big = BuildRig(5000, CFrame.new(0, 300, 0)),
+            Small = BuildRig(1, CFrame.new(500, 300, 0)),
+        }
+        shared.Work = {}
+        function shared.WriteNonLinking(Name)
+            local R = shared.Rigs[Name]
+            local T0 = os.clock()
+            for Index = 1, 300 do
+                local Shift = CFrame.new(Index, 0, 0)
+                local Counter = CFrame.new(0, Index, 0)
+                R.Unparented.C0 = Shift
+                R.Unparented.C1 = Counter
+                R.Disabled.C0 = Shift
+                R.Disabled.C1 = Counter
+                R.OneSided.C0 = Shift
+                R.OneSided.C1 = Counter
+            end
+            shared.Work[Name] = os.clock() - T0
+        end
+        "#,
+    );
+    let write_fn = compile(&lua, &engine, "local Name = ...; shared.WriteNonLinking(Name)");
+    let time_call = |name: &str| {
+        let start = std::time::Instant::now();
+        call(&lua, &engine, &write_fn, name);
+        start.elapsed().as_secs_f64()
+    };
+    call(&lua, &engine, &write_fn, "Big");
+    call(&lua, &engine, &write_fn, "Small");
+    let (mut big, mut small) = (0.0, 0.0);
+    for _ in 0..3 {
+        (big, small) = (time_call("Big"), time_call("Small"));
+        if big < 2.0 * small + 0.05 {
+            break;
+        }
+    }
+    assert!(
+        big < 2.0 * small + 0.05,
+        "1,800 C0/C1 writes on non-linking welds took {big:.3} s of host time on a 5,001-part assembly, {small:.3} s on a 2-part assembly"
+    );
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function near(A, B) return (A.Position - B.Position).Magnitude < 1e-3 end
+        assert(shared.Work.Big > 0, "work clock charged")
+        assert(math.abs(shared.Work.Big - shared.Work.Small) < 1e-11, string.format("work clock differed: %.15g vs %.15g", shared.Work.Big, shared.Work.Small))
+        -- Non-linking C0/C1 writes must not move Spare
+        assert(near(shared.Rigs.Big.Spare.CFrame, shared.Rigs.Big.SpareAt), "Big Spare moved")
+        assert(near(shared.Rigs.Small.Spare.CFrame, shared.Rigs.Small.SpareAt), "Small Spare moved")
+
+        -- With a pending Motor6D.Transform (component unsettled), non-linking writes (C0/C1/Enabled/Part0) must not settle it early
+        local Big = shared.Rigs.Big
+        local BeforeMotor = Big.MotorLeaf.CFrame
+        Big.Motor.Transform = CFrame.new(0, 7, 0)
+        Big.Unparented.C0 = CFrame.new(9, 0, 0)
+        Big.Unparented.C1 = CFrame.new(0, 9, 0)
+        Big.Unparented.Enabled = false
+        Big.Unparented.Part0 = Big.Hub
+        Big.Repoint.Part0 = Big.Hub
+        Big.Repoint.Part1 = Big.Spare
+        Big.Repoint.Part0 = nil
+        assert(near(Big.MotorLeaf.CFrame, BeforeMotor), "non-linking writes settled a pending Motor6D.Transform early")
+        task.wait()
+        assert(near(Big.MotorLeaf.CFrame, Big.Hub.CFrame * CFrame.new(0, 7, 0)), "Motor6D.Transform settled on step")
+
+        -- Part0/Part1 -> C0/C1 -> Parent weld creation places each leaf exactly on Parent, and active C0/C1 writes move it immediately
+        local LastWeld, LastLeaf = nil, nil
+        for Index = 1, 50 do
+            local Leaf = Instance.new("Part")
+            Leaf.Anchored, Leaf.CanCollide, Leaf.CFrame = false, false, CFrame.new(0, 0, 0)
+            Leaf.Parent = workspace
+            local W = Instance.new("Weld")
+            local C0 = CFrame.new(Index, 2, 3)
+            local C1 = CFrame.new(0, -1, 0)
+            W.Part0, W.Part1 = Big.Hub, Leaf
+            W.C0, W.C1 = C0, C1
+            W.Parent = Leaf
+            assert(near(Leaf.CFrame, Big.Hub.CFrame * C0 * C1:Inverse()), "leaf not placed on Parent")
+            LastWeld, LastLeaf = W, Leaf
+        end
+        local NewC0 = CFrame.new(11, 13, 17)
+        local NewC1 = CFrame.new(1, 2, 3)
+        LastWeld.C0 = NewC0
+        assert(near(LastLeaf.CFrame, Big.Hub.CFrame * NewC0 * LastWeld.C1:Inverse()), "active C0 write moved leaf")
+        LastWeld.C1 = NewC1
+        assert(near(LastLeaf.CFrame, Big.Hub.CFrame * NewC0 * NewC1:Inverse()), "active C1 write moved leaf")
+        "#,
+    );
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
 /// What an assembly's writes cost beyond the same write to a lone part (measured in a playing client, cost.rs): a CFrame write
 /// each part it carries and each joint between its assembly and another (assembly_moved), BulkMoveTo the parts alone, a Position
 /// write each joint it rewrites and, for those inside the part's assembly, each part of it (joints_rewritten), an Anchored write
