@@ -5,8 +5,8 @@
 //
 // plan.json: { "steps": [ <command> | { "parallel": [<command>, ...] } ] }, run one after another; a parallel step
 // starts its commands together and waits for all of them. A command is { "argv": [...], "cwd"?, "env"?: {...},
-// "log": <file>, "expect"?: <exit code, default 0> }. Exits 1 when a command ends with another code than it expects,
-// after every step has run (so one failure does not hide what the others cost).
+// "log": <file>, "stdin"?: <file fed to it>, "expect"?: <exit code, default 0> }. Exits 1 when a command ends with
+// another code than it expects, after every step has run (so one failure does not hide what the others cost).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -15,10 +15,11 @@ import { spawn } from "node:child_process";
 function run(command) {
 	fs.mkdirSync(path.dirname(command.log), { recursive: true });
 	const out = fs.openSync(command.log, "w");
+	const input = command.stdin ? fs.openSync(command.stdin, "r") : "ignore";
 	const child = spawn(command.argv[0], command.argv.slice(1), {
 		cwd: command.cwd || process.cwd(),
 		env: { ...process.env, ...(command.env || {}) },
-		stdio: ["ignore", out, out],
+		stdio: [input, out, out],
 		windowsHide: true,
 	});
 	return new Promise(resolve => {
@@ -29,6 +30,7 @@ function run(command) {
 		});
 		child.on("exit", code => {
 			fs.closeSync(out);
+			if (typeof input === "number") fs.closeSync(input);
 			const ok = code === (command.expect ?? 0);
 			if (!ok) process.stderr.write(`fanout: ${path.basename(command.argv[0])} exited ${code} (see ${command.log})\n`);
 			resolve(ok);

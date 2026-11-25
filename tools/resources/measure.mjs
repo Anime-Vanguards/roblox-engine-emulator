@@ -5,7 +5,8 @@
 //
 //   node tools/resources/measure.mjs [--suite ci] [--workload <id,...>] [--compare baseline|<run.json>|none]
 //        [--repeat <n>] [--out <run.json>] [--summary <file.md>] [--history <file.jsonl>] [--work <dir>] [--keep]
-//        [--write-baseline [--from <run.json>,...]] [--cpus 4] [--where <text>] [--list] [suite options, below]
+//        [--write-baseline [--from <run.json>,...]] [--cpus 4] [--where <text>] [--check <run.json>] [--list]
+//        [suite options, below]
 //   node tools/resources/measure.mjs --run [--watch <dir>[=state|out|temp]]... -- <command...>
 //
 //   --suite      which workloads (--list shows them); default ci, the set CI runs
@@ -20,6 +21,8 @@
 //                A deliberate increase goes into baseline.json in the same commit as the change that causes it.
 //   --cpus       holds every workload to this many CPUs (default 4, a CI runner's; 0 for all) and tells thread pools
 //                (RAYON_NUM_THREADS) the same, so a run on a large machine reads like a runner's
+//   --check      checks the figures of a run file written by --out against the baseline (or --compare), without
+//                running anything: the same report and exit code as the run itself would have given
 //   --run        measures any one command instead of a suite (the folders given with --watch are accounted too)
 //
 // Exit code: 1 when a workload went over budget or its command failed, 2 for a usage error, else 0.
@@ -105,17 +108,21 @@ async function runOnce(workload, context) {
 		fs.mkdirSync(temp.dir, { recursive: true });
 		Object.assign(env, { TEMP: temp.dir, TMP: temp.dir, TMPDIR: temp.dir });
 	}
-	if (context.cpus) env.RAYON_NUM_THREADS = String(context.cpus);
+	// a workload that only runs on a developer's machine may use more CPUs than a runner has
+	const cpus = prepared.cpus ?? context.cpus;
+	if (cpus) env.RAYON_NUM_THREADS = String(cpus);
 	const log = prepared.log || path.join(context.work, workload.id, "command.log");
-	const result = await measure({ argv: prepared.argv, cwd: prepared.cwd || context.work, env, log, toolsDir: context.tools, lingerMs: prepared.lingerMs, onSample: () => folders.sample(), cpus: context.cpus });
+	const result = await measure({ argv: prepared.argv, cwd: prepared.cwd || context.work, env, log, toolsDir: context.tools, lingerMs: prepared.lingerMs, onSample: () => folders.sample(), cpus });
 	const { totals, perFolder } = folders.finish();
 	const metrics = {};
 	for (const key of ["ioWriteBytes", "ioReadBytes", "peakWorkingSetMax", "peakWorkingSetSum", "peakPrivateSum", "pageFaults", "processes", "peakProcesses", "peakHandlesMax", "leftRunning", "wallMs", "cpuMs", "cpuKernelMs"]) metrics[key] = result[key];
 	Object.assign(metrics, totals);
 	delete metrics.filesDeleted;
-	const problem = result.exitCode === 0 && workload.verify ? workload.verify(prepared, result) : null;
+	// (a workload can accept other exit codes, such as a check that reports differences it does not measure)
+	const accepted = (prepared.acceptExit || [0]).includes(result.exitCode);
+	const problem = accepted && workload.verify ? workload.verify(prepared, result) : null;
 	return {
-		exitCode: problem ? 1 : result.exitCode,
+		exitCode: !accepted ? result.exitCode || 1 : problem ? 1 : 0,
 		problem,
 		log,
 		metrics,
@@ -169,8 +176,9 @@ async function main() {
 		for (const workload of all) console.log(`${workload.id}: ${workload.title}\n   ${workload.about}`);
 		return 0;
 	}
-	const suiteName = args.suite || "ci";
-	const chosen = args.workload ? args.workload.split(",") : suite.SUITES[suiteName]?.workloads;
+	const saved = args.check ? JSON.parse(fs.readFileSync(args.check, "utf8")) : null;
+	const suiteName = args.suite || saved?.suite || "ci";
+	const chosen = args.workload ? args.workload.split(",") : saved && !args.suite ? Object.keys(saved.workloads || {}) : suite.SUITES[suiteName]?.workloads;
 	if (!chosen) throw usage(`no suite ${suiteName} (${Object.keys(suite.SUITES).join(", ")})`);
 	for (const id of chosen) if (!byId.has(id)) throw usage(`no workload ${id} (--list shows them)`);
 
@@ -189,9 +197,11 @@ async function main() {
 		return 0;
 	}
 
-	const repeat = Math.max(1, Number(args.repeat) || 1);
-	fs.rmSync(work, { recursive: true, force: true });
-	fs.mkdirSync(work, { recursive: true });
+	const repeat = saved ? 0 : Math.max(1, Number(args.repeat) || 1);
+	if (!saved) {
+		fs.rmSync(work, { recursive: true, force: true });
+		fs.mkdirSync(work, { recursive: true });
+	}
 	const order = [];
 	const add = id => {
 		if (order.includes(id)) return;
@@ -200,6 +210,7 @@ async function main() {
 	};
 	chosen.forEach(add);
 	const results = new Map();
+	for (const id of saved ? chosen : []) if (saved.workloads[id]) results.set(id, saved.workloads[id].runs);
 	for (let round = 0; round < repeat; round++) {
 		for (const id of order) {
 			const workload = byId.get(id);
@@ -219,9 +230,9 @@ async function main() {
 		}
 	}
 
-	const commit = process.env.GITHUB_SHA || git("rev-parse", "HEAD");
-	const date = new Date().toISOString();
-	const run = { suite: suiteName, platform, commit, date, where: where(args, cpus), cpus: cpus || os.availableParallelism(), workloads: {} };
+	const commit = saved ? saved.commit : process.env.GITHUB_SHA || git("rev-parse", "HEAD");
+	const date = saved ? saved.date : new Date().toISOString();
+	const run = { suite: suiteName, platform: saved?.platform || platform, commit, date, where: saved?.where || where(args, cpus), cpus: saved?.cpus || cpus || os.availableParallelism(), workloads: {} };
 	for (const [id, runs] of results) run.workloads[id] = { metrics: summarize(runs).metrics, runs: runs.map(({ metrics, exitCode, folders, perProcess, leftRunningNames }) => ({ metrics, exitCode, folders, perProcess, leftRunningNames })) };
 
 	const compare = args.compare || "baseline";
@@ -261,8 +272,8 @@ async function main() {
 		writeBaseline(BASELINE, platform, entries);
 		console.log(`baseline.json: ${Object.keys(entries).length} workloads recorded for ${platform} (${repeat} runs each)`);
 	}
-	if (!args.keep) fs.rmSync(work, { recursive: true, force: true });
-	else console.error(`kept the run's folders in ${work}`);
+	if (!args.keep && !saved) fs.rmSync(work, { recursive: true, force: true });
+	else if (!saved) console.error(`kept the run's folders in ${work}`);
 	if (args["write-baseline"]) return checked.some(item => item.result.exitCode !== 0) ? 1 : 0;
 	return checked.some(item => item.verdict === "fail") ? 1 : 0;
 }

@@ -45,7 +45,7 @@ function headline(checked, suite) {
 				lines.push(`- **${item.workload.title}**: ${METRIC[row.key].label.toLowerCase()} ${format(row.key, row.value)} against a baseline of ${format(row.key, row.baseline)}${times}; the budget is ${format(row.key, row.budget)}.`);
 			}
 		}
-		lines.push("", "If the increase is intended, raise the baseline in the same commit as the change, so a reviewer sees it: `node tools/resources/measure.mjs --suite ${suite} --repeat 3 --write-baseline` (AGENTS.md, \"Resource budgets\"). Otherwise find what made the run do more work.");
+		lines.push("", `If the increase is intended, raise the baseline in the same commit as the change, so a reviewer sees it: \`node tools/resources/measure.mjs --suite ${suite} --repeat 3 --write-baseline\` (AGENTS.md, "Resource budgets"). Otherwise find what made the run do more work.`);
 	} else lines.push(`✅ All ${checked.length} workloads are within their budgets.`);
 	if (better.length) lines.push("", `⬇️ ${better.map(item => item.workload.title).join(", ")} used less than their baseline: lower the baseline with \`--write-baseline\` so the gain is kept.`);
 	if (fresh.length) lines.push("", `🆕 ${fresh.map(item => item.workload.title).join(", ")} have no baseline on this platform yet (nothing is checked for them).`);
