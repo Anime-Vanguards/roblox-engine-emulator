@@ -117,11 +117,21 @@ fn lua_error(error: LuaError) -> String {
 /// project file's tree), data roots, mounts, package stand-ins, JoinLocalPlayer. `started` is when the
 /// run began (timings count from it).
 pub fn begin_project(lua: &Lua, engine: &Rc<Engine>, spec: &ProjectSpec, started: Instant) -> Result<Mounting, String> {
+    begin_project_with_prescan(lua, engine, spec, started, None)
+}
+
+pub(crate) fn begin_project_with_prescan(
+    lua: &Lua,
+    engine: &Rc<Engine>,
+    spec: &ProjectSpec,
+    started: Instant,
+    prescan: Option<project::Prescan>,
+) -> Result<Mounting, String> {
     let mut mounting = Mounting { started, phase_start: started, timings: std::env::var("RUR_ENGINE_TIMINGS").as_deref() == Ok("1") };
     mounting.phase(engine, "engine (reflection)");
     let place_roots = spec.place_roots();
     // (the roots listed on other threads during Engine.Start)
-    let mut prescan = project::Prescan::start_for(&spec.roots, &place_roots, &engine.reflection);
+    let mut prescan = prescan.unwrap_or_else(|| project::Prescan::start_for(&spec.roots, &place_roots, &engine.reflection));
     engine_lua::start(lua, engine).map_err(lua_error)?;
     // Scheduler.MainThread (Engine.Start runs on the main thread)
     engine.state.borrow_mut().sched.set_main_thread(&lua.current_thread());
@@ -207,4 +217,14 @@ pub fn begin_project(lua: &Lua, engine: &Rc<Engine>, spec: &ProjectSpec, started
 /// Engine.Start plus the whole project mount.
 pub fn mount_project(lua: &Lua, engine: &Rc<Engine>, spec: &ProjectSpec, started: Instant) -> Result<Project, String> {
     begin_project(lua, engine, spec, started)?.finish(engine, spec)
+}
+
+pub(crate) fn mount_project_with_prescan(
+    lua: &Lua,
+    engine: &Rc<Engine>,
+    spec: &ProjectSpec,
+    started: Instant,
+    prescan: project::Prescan,
+) -> Result<Project, String> {
+    begin_project_with_prescan(lua, engine, spec, started, Some(prescan))?.finish(engine, spec)
 }

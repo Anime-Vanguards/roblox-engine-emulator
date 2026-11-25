@@ -731,8 +731,26 @@ fn parent_path(path: &str) -> String {
     }
 }
 
+fn batch_read_json(path: &str) -> Option<serde_json::Value> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<FxHashMap<String, Option<serde_json::Value>>>> = OnceLock::new();
+    let map = CACHE.get_or_init(|| crate::alloc::long_lived(Default::default));
+    if let Some(found) = map.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
+        return found.clone();
+    }
+    let parsed = std::fs::read(path).ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let stored = crate::alloc::long_lived(|| parsed.clone());
+    crate::alloc::long_lived(|| {
+        map.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), stored);
+    });
+    parsed
+}
+
 fn read_json(path: &str) -> Option<serde_json::Value> {
     crate::files::note(Path::new(path));
+    if crate::lua::modules::is_batch_frozen() {
+        return batch_read_json(path);
+    }
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
@@ -1538,10 +1556,84 @@ fn script_info(file_name: &str) -> Option<(&str, &'static str)> {
     None
 }
 
+/// Byte-borrowed wrapper around [`Str`] for zero-allocation `&[u8]` lookups in [`ChildIndex`].
+#[derive(Clone)]
+struct ChildKey(Str);
+
+impl std::borrow::Borrow<[u8]> for ChildKey {
+    #[inline]
+    fn borrow(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl PartialEq for ChildKey {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_bytes() == other.0.as_bytes()
+    }
+}
+
+impl Eq for ChildKey {}
+
+impl std::hash::Hash for ChildKey {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.as_bytes().hash(state);
+    }
+}
+
+/// First-match child index for mounting directories with many children in O(1) per entry.
+struct ChildIndex {
+    by_name: FxHashMap<ChildKey, InstanceId>,
+}
+
+impl ChildIndex {
+    fn new(state: &State, parent: InstanceId, reserve: usize) -> Self {
+        let existing = &state.dom.at(parent).children;
+        let mut by_name = FxHashMap::with_capacity_and_hasher(existing.len() + reserve, Default::default());
+        for &child in existing {
+            by_name.entry(ChildKey(state.dom.at(child).name.clone())).or_insert(child);
+        }
+        ChildIndex { by_name }
+    }
+
+    #[inline]
+    fn get(&self, name: &str) -> Option<InstanceId> {
+        self.by_name.get(name.as_bytes()).copied()
+    }
+
+    #[inline]
+    fn insert(&mut self, name: Str, id: InstanceId) {
+        self.by_name.insert(ChildKey(name), id);
+    }
+
+    #[inline]
+    fn insert_if_absent(&mut self, name: Str, id: InstanceId) {
+        self.by_name.entry(ChildKey(name)).or_insert(id);
+    }
+}
+
 /// EnsureChild: the existing child for a mounted entry, or a new one (scripts replace plain
 /// folders of an earlier root, keeping their children).
 fn ensure_child(state: &mut State, reflection: &Reflection, parent: InstanceId, name: &str, class_name: &str, mount: &mut MountCounts) -> InstanceId {
-    if let Some(existing) = find_child(state, parent, name) {
+    ensure_child_indexed(state, reflection, parent, name, class_name, mount, None)
+}
+
+fn ensure_child_indexed(
+    state: &mut State,
+    reflection: &Reflection,
+    parent: InstanceId,
+    name: &str,
+    class_name: &str,
+    mount: &mut MountCounts,
+    mut index: Option<&mut ChildIndex>,
+) -> InstanceId {
+    let found = match &index {
+        Some(idx) => idx.get(name),
+        None => find_child(state, parent, name),
+    };
+    if let Some(existing) = found {
         let existing_class = state.dom.at(existing).class;
         if &*reflection.class(existing_class).name == class_name {
             return existing;
@@ -1557,6 +1649,9 @@ fn ensure_child(state: &mut State, reflection: &Reflection, parent: InstanceId, 
             let replacement = core::create_named(state, reflection, class, name);
             state.dom.hand_children(existing, replacement);
             state.dom.replace_child(parent, existing, replacement);
+            if let Some(idx) = index.as_deref_mut() {
+                idx.insert(state.dom.at(replacement).name.clone(), replacement);
+            }
             return replacement;
         }
         if wants_script {
@@ -1567,6 +1662,9 @@ fn ensure_child(state: &mut State, reflection: &Reflection, parent: InstanceId, 
     let class = reflection.class_id(class_name).expect("mounted class");
     let created = core::create_named(state, reflection, class, name);
     state.dom.attach(created, parent);
+    if let Some(idx) = index.as_deref_mut() {
+        idx.insert(state.dom.at(created).name.clone(), created);
+    }
     mount.created += 1;
     created
 }
@@ -1574,6 +1672,11 @@ fn ensure_child(state: &mut State, reflection: &Reflection, parent: InstanceId, 
 fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount: &mut MountCounts, relative: &str) {
     let has_loops = !node.loops.is_empty();
     let has_dirs = !node.dirs.is_empty();
+    let mut child_index = {
+        let state = engine.state.borrow();
+        let existing_len = state.dom.at(instance).children.len();
+        (node.entries.len() + existing_len >= 16).then(|| ChildIndex::new(&state, instance, node.entries.len()))
+    };
     for (index, entry) in node.entries.iter().enumerate() {
         if has_loops {
             if let Some((_, above)) = node.loops.iter().find(|(name, _)| name == entry) {
@@ -1588,10 +1691,10 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
                     // Named by the project's `name`, else by its directory (Rojo's src/project.rs, Project::set_file_name)
                     Some(project) => {
                         let name = project.get("name").and_then(serde_json::Value::as_str).unwrap_or(entry);
-                        mount_nested_project(engine, child_node, &project, instance, name, mount, &child_relative);
+                        mount_nested_project(engine, child_node, &project, instance, name, mount, &child_relative, child_index.as_mut());
                     }
                     None => {
-                        mount_plain_directory_as(engine, child_node, instance, entry, mount, &child_relative);
+                        mount_plain_directory_as(engine, child_node, instance, entry, mount, &child_relative, child_index.as_mut());
                     }
                 }
                 continue;
@@ -1601,7 +1704,7 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
             continue;
         }
         let full_path = format!("{}/{entry}", node.path);
-        mount_file(engine, &full_path, entry, None, instance, mount);
+        mount_file(engine, &full_path, entry, None, instance, mount, child_index.as_mut());
         if let Some(stamp) = node.stamps.get(index).copied().flatten() {
             engine.state.borrow_mut().project.stamps.insert(full_path, stamp);
         }
@@ -1610,10 +1713,18 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
 
 /// A scanned directory mounted as the child `name` of `parent` (a project node's name, which Rojo keeps for a
 /// `$path` target): as the project its `default.project.json` holds, else by its own init scripts and contents.
-fn mount_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> InstanceId {
+fn mount_directory_as(
+    engine: &Engine,
+    node: &ScanNode,
+    parent: InstanceId,
+    name: &str,
+    mount: &mut MountCounts,
+    relative: &str,
+    parent_index: Option<&mut ChildIndex>,
+) -> InstanceId {
     match nested_project(engine, node) {
-        Some(project) => mount_nested_project(engine, node, &project, parent, name, mount, relative),
-        None => mount_plain_directory_as(engine, node, parent, name, mount, relative),
+        Some(project) => mount_nested_project(engine, node, &project, parent, name, mount, relative, parent_index),
+        None => mount_plain_directory_as(engine, node, parent, name, mount, relative, parent_index),
     }
 }
 
@@ -1638,7 +1749,17 @@ const MAX_PROJECTS_PER_MOUNT: u32 = 10_000;
 
 /// A nested project's tree mounted as the child `name` of `parent`. One whose `$path` is refused or names nothing mounts
 /// the directory as it is; one past a limit above is left an empty Folder, reported.
-fn mount_nested_project(engine: &Engine, node: &ScanNode, project: &serde_json::Value, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> InstanceId {
+#[allow(clippy::too_many_arguments)]
+fn mount_nested_project(
+    engine: &Engine,
+    node: &ScanNode,
+    project: &serde_json::Value,
+    parent: InstanceId,
+    name: &str,
+    mount: &mut MountCounts,
+    relative: &str,
+    mut parent_index: Option<&mut ChildIndex>,
+) -> InstanceId {
     let stopped = if mount.project_depth > MAX_PROJECT_NESTING {
         Some(format!("project nesting too deep (past {MAX_PROJECT_NESTING} levels)"))
     } else if mount.projects >= MAX_PROJECTS_PER_MOUNT {
@@ -1648,14 +1769,17 @@ fn mount_nested_project(engine: &Engine, node: &ScanNode, project: &serde_json::
     };
     if let Some(reason) = stopped {
         engine.warn(format!("{}/default.project.json: {reason}; not mounted", node.path));
-        return ensure_child(&mut engine.state.borrow_mut(), &engine.reflection, parent, name, "Folder", mount);
+        return ensure_child_indexed(&mut engine.state.borrow_mut(), &engine.reflection, parent, name, "Folder", mount, parent_index);
     }
     mount.projects += 1;
     mount.project_depth += 1;
-    let mounted = project.get("tree").and_then(serde_json::Value::as_object).and_then(|tree| mount_project_node(engine, node, tree, parent, name, mount, relative));
+    let mounted = project
+        .get("tree")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|tree| mount_project_node(engine, node, tree, parent, name, mount, relative, parent_index.as_deref_mut()));
     let instance = match mounted {
         Some(instance) => instance,
-        None => mount_plain_directory_as(engine, node, parent, name, mount, relative),
+        None => mount_plain_directory_as(engine, node, parent, name, mount, relative, parent_index),
     };
     mount.project_depth -= 1;
     instance
@@ -1669,18 +1793,31 @@ fn leaves_project_folder(path: &str, segments: &[&str]) -> bool {
 
 /// The target of a `$path` split into `segments`, mounted as the child `name` of `parent`. It is looked up only in `base`'s
 /// listing, which holds nothing outside the project's folder. None when the listing has no such target.
-fn mount_listed_path(engine: &Engine, base: &ScanNode, segments: &[&str], parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> Option<InstanceId> {
+#[allow(clippy::too_many_arguments)]
+fn mount_listed_path(
+    engine: &Engine,
+    base: &ScanNode,
+    segments: &[&str],
+    parent: InstanceId,
+    name: &str,
+    mount: &mut MountCounts,
+    relative: &str,
+    mut parent_index: Option<&mut ChildIndex>,
+) -> Option<InstanceId> {
     let Some((last, folders)) = segments.split_last() else {
-        return Some(mount_plain_directory_as(engine, base, parent, name, mount, relative));
+        return Some(mount_plain_directory_as(engine, base, parent, name, mount, relative, parent_index));
     };
     let folder = folders.iter().try_fold(base, |dir, segment| dir.dirs.get(*segment))?;
     if let Some(dir) = folder.dirs.get(*last) {
-        return Some(mount_directory_as(engine, dir, parent, name, mount, relative));
+        return Some(mount_directory_as(engine, dir, parent, name, mount, relative, parent_index));
     }
     let index = folder.entries.iter().position(|entry| entry == last)?;
     let full_path = format!("{}/{last}", folder.path);
-    mount_file(engine, &full_path, last, Some(name), parent, mount);
-    let instance = find_child(&engine.state.borrow(), parent, name)?;
+    mount_file(engine, &full_path, last, Some(name), parent, mount, parent_index.as_deref_mut());
+    let instance = match parent_index {
+        Some(idx) => idx.get(name)?,
+        None => find_child(&engine.state.borrow(), parent, name)?,
+    };
     if let Some(stamp) = folder.stamps.get(index).copied().flatten() {
         engine.state.borrow_mut().project.stamps.insert(full_path, stamp);
     }
@@ -1690,7 +1827,17 @@ fn mount_listed_path(engine: &Engine, base: &ScanNode, segments: &[&str], parent
 /// A node of a nested project's tree (`$path`s relative to `base`, the project file's directory) mounted as the child
 /// `name` of `parent`, then its child nodes; `$properties` and `$attributes` are ignored, as cli/rojo.mjs does. None when
 /// its `$path` is refused or names nothing, reported unless Rojo allows that (`{ "optional": ... }`).
-fn mount_project_node(engine: &Engine, base: &ScanNode, tree: &serde_json::Map<String, serde_json::Value>, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> Option<InstanceId> {
+#[allow(clippy::too_many_arguments)]
+fn mount_project_node(
+    engine: &Engine,
+    base: &ScanNode,
+    tree: &serde_json::Map<String, serde_json::Value>,
+    parent: InstanceId,
+    name: &str,
+    mount: &mut MountCounts,
+    relative: &str,
+    parent_index: Option<&mut ChildIndex>,
+) -> Option<InstanceId> {
     let optional = tree.get("$path").and_then(|value| value.get("optional")?.as_str());
     let instance = match optional.or_else(|| tree.get("$path")?.as_str()) {
         Some(path) => {
@@ -1700,7 +1847,7 @@ fn mount_project_node(engine: &Engine, base: &ScanNode, tree: &serde_json::Map<S
                 engine.warn(format!("{project_file}: $path {path} leaves the project's folder; not mounted"));
                 return None;
             }
-            let found = mount_listed_path(engine, base, &segments, parent, name, mount, relative);
+            let found = mount_listed_path(engine, base, &segments, parent, name, mount, relative, parent_index);
             if found.is_none() && optional.is_none() {
                 engine.warn(format!("{project_file}: $path {path} names nothing ree can mount; not mounted"));
             }
@@ -1709,12 +1856,12 @@ fn mount_project_node(engine: &Engine, base: &ScanNode, tree: &serde_json::Map<S
         None => {
             let reflection = &engine.reflection;
             let class_name = tree.get("$className").and_then(|value| value.as_str()).filter(|class_name| reflection.class_id(class_name).is_some_and(|class| !reflection.class(class).service)).unwrap_or("Folder");
-            ensure_child(&mut engine.state.borrow_mut(), reflection, parent, name, class_name, mount)
+            ensure_child_indexed(&mut engine.state.borrow_mut(), reflection, parent, name, class_name, mount, parent_index)
         }
     };
     for (child_name, child) in tree {
         if let (false, Some(child)) = (child_name.starts_with('$'), child.as_object()) {
-            mount_project_node(engine, base, child, instance, child_name, mount, &format!("{relative}/{child_name}"));
+            mount_project_node(engine, base, child, instance, child_name, mount, &format!("{relative}/{child_name}"), None);
         }
     }
     Some(instance)
@@ -1722,7 +1869,15 @@ fn mount_project_node(engine: &Engine, base: &ScanNode, tree: &serde_json::Map<S
 
 /// A scanned directory mounted as the child `name` of `parent` (init scripts and init.meta.json
 /// className decide its class; a Folder otherwise), then its contents.
-fn mount_plain_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId, name: &str, mount: &mut MountCounts, relative: &str) -> InstanceId {
+fn mount_plain_directory_as(
+    engine: &Engine,
+    node: &ScanNode,
+    parent: InstanceId,
+    name: &str,
+    mount: &mut MountCounts,
+    relative: &str,
+    parent_index: Option<&mut ChildIndex>,
+) -> InstanceId {
     let reflection = &engine.reflection;
     let full_path = &node.path;
     if node.unlisted {
@@ -1769,7 +1924,7 @@ fn mount_plain_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId
     let class_name = explicit_class.unwrap_or("Folder");
     let child = {
         let mut state = engine.state.borrow_mut();
-        let child = ensure_child(&mut state, reflection, parent, name, class_name, mount);
+        let child = ensure_child_indexed(&mut state, reflection, parent, name, class_name, mount, parent_index);
         if let Some((path, _)) = &init {
             let instance = state.dom.at_mut(child);
             instance.set_source_path(Some(Rc::from(path.as_str())));
@@ -1788,11 +1943,19 @@ fn mount_plain_directory_as(engine: &Engine, node: &ScanNode, parent: InstanceId
 
 /// A file entry of a mounted directory (`file_name` its name on disk; `name` overrides the
 /// instance name): scripts by suffix, JSON models, JSON modules, models. Other files are ignored.
-fn mount_file(engine: &Engine, full_path: &str, file_name: &str, name: Option<&str>, instance: InstanceId, mount: &mut MountCounts) {
+fn mount_file(
+    engine: &Engine,
+    full_path: &str,
+    file_name: &str,
+    name: Option<&str>,
+    instance: InstanceId,
+    mount: &mut MountCounts,
+    parent_index: Option<&mut ChildIndex>,
+) {
     let reflection = &engine.reflection;
     if let Some((script_name, class_name)) = script_info(file_name) {
         let mut state = engine.state.borrow_mut();
-        let child = ensure_child(&mut state, reflection, instance, name.unwrap_or(script_name), class_name, mount);
+        let child = ensure_child_indexed(&mut state, reflection, instance, name.unwrap_or(script_name), class_name, mount, parent_index);
         let class = state.dom.at(child).class;
         if is_a(reflection, class, "LuaSourceContainer") {
             let instance = state.dom.at_mut(child);
@@ -1803,32 +1966,38 @@ fn mount_file(engine: &Engine, full_path: &str, file_name: &str, name: Option<&s
     } else if ends_with_ignore_ascii_case(file_name, ".model.json") {
         // Rojo's JSON model (project/json_model.rs): one instance, named after the file
         match mounted_plan(engine, full_path) {
-            Some(plan) => instantiate_model(engine, &plan, name, instance),
+            Some(plan) => instantiate_model(engine, &plan, name, instance, parent_index),
             None => mount.skipped += 1,
         }
     } else if ends_with_ignore_ascii_case(file_name, ".json") {
         // JSON modules (Rojo / JSON-backed data) return the decoded value; read on require
         let module_name = name.unwrap_or(&file_name[..file_name.len() - 5]);
         let mut state = engine.state.borrow_mut();
-        let child = ensure_child(&mut state, reflection, instance, module_name, "ModuleScript", mount);
+        let child = ensure_child_indexed(&mut state, reflection, instance, module_name, "ModuleScript", mount, parent_index);
         let instance = state.dom.at_mut(child);
         instance.set_source_path(Some(Rc::from(full_path)));
         instance.set_source(None);
         instance.set_flag(flags::JSON_MODULE, true);
     } else if ends_with_ignore_ascii_case(file_name, ".rbxm") || ends_with_ignore_ascii_case(file_name, ".rbxmx") {
         if let Some(plan) = mounted_plan(engine, full_path) {
-            instantiate_model(engine, &plan, name, instance);
+            instantiate_model(engine, &plan, name, instance, parent_index);
         }
     }
 }
 
 /// A mounted model file's instances made under `parent`; with `name` (Rojo: a model $path is one
 /// instance, named by its project node) a single top instance takes that name.
-fn instantiate_model(engine: &Engine, plan: &ModelPlan, name: Option<&str>, parent: InstanceId) {
+fn instantiate_model(engine: &Engine, plan: &ModelPlan, name: Option<&str>, parent: InstanceId, parent_index: Option<&mut ChildIndex>) {
     let created = plan.instantiate(engine, Some(parent));
     if let (Some(name), [root]) = (name, created.as_slice()) {
         let mut state = engine.state.borrow_mut();
         core::raw_set_silent(&mut state, &engine.reflection, *root, K::Name as NameId, Value::String(Str::from(name)));
+    }
+    if let Some(idx) = parent_index {
+        let state = engine.state.borrow();
+        for &root in &created {
+            idx.insert_if_absent(state.dom.at(root).name.clone(), root);
+        }
     }
 }
 
@@ -1970,7 +2139,7 @@ pub fn mount_at(engine: &Engine, spec: &Mount) -> Result<MountCounts, String> {
                 let node = listed(path);
                 match last {
                     Some(last) => {
-                        mount_directory_as(engine, &node, parent, last, &mut mount, &relative);
+                        mount_directory_as(engine, &node, parent, last, &mut mount, &relative, None);
                     }
                     None => mount_directory(engine, &node, service, &mut mount, service_name),
                 }
@@ -1984,10 +2153,10 @@ pub fn mount_at(engine: &Engine, spec: &Mount) -> Result<MountCounts, String> {
                     // a Roblox archive mounted on its own, as a model file is (a Rojo tree holds none: Rojo does not
                     // read them, so mount_file leaves them out of directories)
                     if let Some(plan) = mounted_plan(engine, &path) {
-                        instantiate_model(engine, &plan, Some(last), parent);
+                        instantiate_model(engine, &plan, Some(last), parent, None);
                     }
                 } else {
-                    mount_file(engine, &path, &file_name, Some(last), parent, &mut mount);
+                    mount_file(engine, &path, &file_name, Some(last), parent, &mut mount, None);
                 }
             }
         }
@@ -2011,20 +2180,81 @@ pub fn mount_layout_root(engine: &Engine, root: &str) -> MountCounts {
     mount_scanned_layout_root(engine, scan_layout_root(root, &engine.reflection))
 }
 
+/// Single-flight layout root cache used while `ree run --batch` keeps the filesystem frozen.
+fn batch_layout_root(root: &str, reflection: &Reflection) -> Vec<(String, ScanNode)> {
+    use std::sync::{Arc, Condvar, Mutex, OnceLock};
+    type Slot = Arc<(Mutex<Option<Vec<(String, ScanNode)>>>, Condvar)>;
+    static BATCH_ROOTS: OnceLock<Mutex<FxHashMap<String, Slot>>> = OnceLock::new();
+    let map = BATCH_ROOTS.get_or_init(|| crate::alloc::long_lived(Default::default));
+    let (slot, owner) = {
+        let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = guard.get(root) {
+            (existing.clone(), false)
+        } else {
+            let created: Slot = crate::alloc::long_lived(|| Arc::new((Mutex::new(None), Condvar::new())));
+            crate::alloc::long_lived(|| guard.insert(root.to_string(), created.clone()));
+            (created, true)
+        }
+    };
+    if owner {
+        let scanned = scan_layout_root_uncached(root, reflection);
+        let copy = crate::alloc::long_lived(|| scanned.clone());
+        let (lock, cvar) = &*slot;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(copy);
+        cvar.notify_all();
+        scanned
+    } else {
+        let (lock, cvar) = &*slot;
+        let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if let Some(scanned) = guard.as_ref() {
+                return scanned.clone();
+            }
+            guard = cvar.wait(guard).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
 /// Layout root `root`'s service directories, listed: what [`mount_layout_root`] mounts, in its order.
 fn scan_layout_root(root: &str, reflection: &Reflection) -> Vec<(String, ScanNode)> {
-    let mut services_found = Vec::new();
     crate::files::note_listing(Path::new(root));
+    if crate::lua::modules::is_batch_frozen() && rayon::current_thread_index().is_none() {
+        return batch_layout_root(root, reflection);
+    }
+    scan_layout_root_uncached(root, reflection)
+}
+
+fn scan_layout_root_uncached(root: &str, reflection: &Reflection) -> Vec<(String, ScanNode)> {
+    let mut services_found = Vec::new();
     if let Ok(read) = std::fs::read_dir(root) {
         for entry in read.flatten() {
             let Ok(name) = entry.file_name().into_string() else { continue };
-            let is_service = reflection.class_by_name(&name).is_some_and(|c| c.service);
-            if !name.starts_with('.') && is_service && std::fs::metadata(format!("{root}/{name}")).is_ok_and(|m| m.is_dir()) {
+            if name.starts_with('.') || !reflection.class_by_name(&name).is_some_and(|c| c.service) {
+                continue;
+            }
+            let kind = entry.file_type().ok();
+            let plain = kind.is_some_and(|k| !k.is_symlink()) && !name.ends_with(['.', ' ']);
+            let is_dir = match kind {
+                Some(k) if plain => k.is_dir(),
+                _ => std::fs::metadata(format!("{root}/{name}")).is_ok_and(|m| m.is_dir()),
+            };
+            if is_dir {
                 services_found.push(name);
             }
         }
     }
-    services_found.into_iter().map(|name| (name.clone(), listed(format!("{root}/{name}")))).collect()
+    if services_found.len() > 1 && !crate::lua::modules::is_batch_frozen() {
+        use rayon::prelude::*;
+        services_found.into_par_iter().map(|name| {
+            let node = listed(format!("{root}/{name}"));
+            (name, node)
+        }).collect()
+    } else {
+        services_found.into_iter().map(|name| {
+            let node = listed(format!("{root}/{name}"));
+            (name, node)
+        }).collect()
+    }
 }
 
 fn mount_scanned_layout_root(engine: &Engine, scanned: Vec<(String, ScanNode)>) -> MountCounts {
@@ -2116,22 +2346,23 @@ fn listing<T: Send + 'static>(receive: crate::sort::channel::Receiver<T>) -> Opt
     }
 }
 
-/// [`DATA_ROOTS_FILE`]'s [`DATA_ROOTS_KEY`] paths materialized from `<project>/external/<Name>/src`.
-pub fn data_roots(roots: &[String]) -> Vec<(String, Vec<String>)> {
-    let mut result = Vec::new();
-    let mut seen = FxHashSet::default();
-    for root in roots {
-        let project_root = parent_path(&normalize(root));
-        if project_root.is_empty() || !seen.insert(project_root.clone()) {
-            continue;
-        }
-        let manifest = read_json(&format!("{project_root}/{DATA_ROOTS_FILE}"));
-        let Some(paths) = manifest.as_ref().and_then(|m| m.get(DATA_ROOTS_KEY)).and_then(|p| p.as_array()) else {
-            continue;
-        };
-        let external = format!("{project_root}/external");
-        crate::files::note_listing(Path::new(&external));
-        let Ok(read) = std::fs::read_dir(&external) else { continue };
+#[derive(Clone)]
+struct CachedDataRoot {
+    entries: Vec<(String, Vec<String>)>,
+    external_dir: Option<String>,
+    noted_paths: Vec<String>,
+}
+
+fn project_data_roots(project_root: &str) -> CachedDataRoot {
+    let manifest = read_json(&format!("{project_root}/{DATA_ROOTS_FILE}"));
+    let Some(paths) = manifest.as_ref().and_then(|m| m.get(DATA_ROOTS_KEY)).and_then(|p| p.as_array()) else {
+        return CachedDataRoot { entries: Vec::new(), external_dir: None, noted_paths: Vec::new() };
+    };
+    let external = format!("{project_root}/external");
+    crate::files::note_listing(Path::new(&external));
+    let mut entries = Vec::new();
+    let mut noted_paths = Vec::new();
+    if let Ok(read) = std::fs::read_dir(&external) {
         for entry in read.flatten() {
             let Ok(name) = entry.file_name().into_string() else { continue };
             let source = format!("{external}/{name}/src");
@@ -2142,14 +2373,54 @@ pub fn data_roots(roots: &[String]) -> Vec<(String, Vec<String>)> {
                     other => other.to_string(),
                 };
                 let clean = text.strip_prefix(DATA_ROOTS_PREFIX).unwrap_or(&text).trim_end_matches('/').to_string();
-                crate::files::note(Path::new(&format!("{source}/{clean}")));
-                if !clean.is_empty() && Path::new(&format!("{source}/{clean}")).is_dir() {
+                let full = format!("{source}/{clean}");
+                crate::files::note(Path::new(&full));
+                if !clean.is_empty() && Path::new(&full).is_dir() {
                     found.push(clean);
                 }
+                noted_paths.push(full);
             }
             if !found.is_empty() {
-                result.push((source, found));
+                entries.push((source, found));
             }
+        }
+    }
+    CachedDataRoot { entries, external_dir: Some(external), noted_paths }
+}
+
+/// [`DATA_ROOTS_FILE`]'s [`DATA_ROOTS_KEY`] paths materialized from `<project>/external/<Name>/src`.
+pub fn data_roots(roots: &[String]) -> Vec<(String, Vec<String>)> {
+    use std::sync::{Mutex, OnceLock};
+    static BATCH_DATA_ROOTS: OnceLock<Mutex<FxHashMap<String, CachedDataRoot>>> = OnceLock::new();
+    let frozen = crate::lua::modules::is_batch_frozen();
+    let mut result = Vec::new();
+    let mut seen = FxHashSet::default();
+    for root in roots {
+        let project_root = parent_path(&normalize(root));
+        if project_root.is_empty() || !seen.insert(project_root.clone()) {
+            continue;
+        }
+        if frozen {
+            let cache = BATCH_DATA_ROOTS.get_or_init(|| crate::alloc::long_lived(Default::default));
+            if let Some(cached) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&project_root).cloned() {
+                crate::files::note(Path::new(&format!("{project_root}/{DATA_ROOTS_FILE}")));
+                if let Some(ext) = &cached.external_dir {
+                    crate::files::note_listing(Path::new(ext));
+                }
+                for p in &cached.noted_paths {
+                    crate::files::note(Path::new(p));
+                }
+                result.extend(cached.entries);
+                continue;
+            }
+            let computed = project_data_roots(&project_root);
+            let stored = crate::alloc::long_lived(|| computed.clone());
+            crate::alloc::long_lived(|| {
+                cache.lock().unwrap_or_else(|e| e.into_inner()).insert(project_root, stored);
+            });
+            result.extend(computed.entries);
+        } else {
+            result.extend(project_data_roots(&project_root).entries);
         }
     }
     result

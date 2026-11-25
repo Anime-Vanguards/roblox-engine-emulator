@@ -60,8 +60,11 @@ impl Emulator {
     /// Engine.Start and the project mount of `spec` in `engine` (made by [`Engine::new`] or
     /// [`Engine::with_layers`]).
     pub fn start(engine: Rc<Engine>, spec: &ProjectSpec) -> Result<Emulator, String> {
+        let place_roots = spec.place_roots();
+        // Start listing layout and data roots while the Luau VM initializes.
+        let prescan = crate::project::Prescan::start_for(&spec.roots, &place_roots, &engine.reflection);
         let lua = Lua::new();
-        match mount::mount_project(&lua, &engine, spec, Instant::now()) {
+        match mount::mount_project_with_prescan(&lua, &engine, spec, Instant::now(), prescan) {
             Ok(project) => Ok(Emulator { engine, project, lua: ManuallyDrop::new(lua) }),
             Err(error) => {
                 drop(lua);
