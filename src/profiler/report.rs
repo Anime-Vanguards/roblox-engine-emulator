@@ -3882,7 +3882,7 @@ fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64
     }
     let sort_keys = sort_keys_by_node(vm);
     let mut contributions = FrameContributions::default();
-    let mut frame_work: FxHashMap<u64, FrameSides> = FxHashMap::default();
+    let mut frame_work: BTreeMap<u64, FrameSides> = BTreeMap::new();
     for row in rows.iter().filter(|row| scope.contains(&row.phase)) {
         // (a row that does not split its work by side is all the game's)
         let (game, harness) = row_sides_ms(row).unwrap_or((row.work_ms * price_scale(), 0.0));
@@ -3999,7 +3999,7 @@ fn site_issue_key(vm: &vm::Results, site: &super::SiteWork) -> Option<IssueKey> 
 
 /// One issue's summary row, `[key, active frames, largest us, that frame, largest us in a frame over the budget]`. None
 /// when it was never active
-fn summarize_frames(key: &str, frames: &mut Vec<(u64, f64)>, frame_work: &FxHashMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<Json> {
+fn summarize_frames(key: &str, frames: &mut Vec<(u64, f64)>, frame_work: &BTreeMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<Json> {
     if frames.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
         frames.sort_by_key(|&(frame, _)| frame);
         let mut write = 0usize;

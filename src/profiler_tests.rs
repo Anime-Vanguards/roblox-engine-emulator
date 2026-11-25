@@ -76,7 +76,8 @@ fn a_handler_queued_before_a_profile_keeps_its_price_provenance() {
     lua.load(source).set_name("=queue-before-profile").set_environment(env).exec().unwrap();
     assert!(engine.state.borrow().sched.kinds.is_none());
 
-    let config = Config { print: false, ..Config::new(Kinds::WORK, temp_dir("queued-before-profile")) };
+    let out = temp_dir("queued-before-profile");
+    let config = Config { print: false, ..Config::new(Kinds::WORK, out.clone()) };
     let session = profiler::Session::begin(config);
     profiler::install(&lua);
     scheduler::flush_deferred(&lua, &engine).unwrap();
@@ -84,6 +85,7 @@ fn a_handler_queued_before_a_profile_keeps_its_price_provenance() {
     profiler::collect(&lua);
     let run = profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() };
     session.finish(run).unwrap();
+    let _ = std::fs::remove_dir_all(&out);
 
     // (the order of cost.rs `kind`'s bits)
     let [_cold, _collector, studio, defaulted, dispatch] = totals;
@@ -1207,6 +1209,8 @@ fn hardware_counters_are_booked_to_the_run_its_phases_frames_and_stacks() {
 /// readings for it, not one a call, and the tiny function's counts are all its caller's, those first calls' too
 #[test]
 fn hardware_counters_leave_short_calls_to_their_callers() {
+    // (1 us calls against the 10 us MIN_SAMPLED_US floor: short regardless of host speed or load)
+    let _fixed_call_length = profiler::hw::fixed_call_us(1.0);
     profiler::hw::TEST_MODE.with(|mode| mode.set(Some("mock")));
     let (lua, engine) = start();
     let config = Config { print: false, ..Config::new(Kinds::HW, temp_dir("hw-short")) };

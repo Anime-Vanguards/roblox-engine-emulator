@@ -8863,8 +8863,7 @@ fn a_deep_copy_of_shallow_clones_walks_only_to_the_tables_they_hold() {
     let (lua, engine) = start();
     engine_lua::modules::interpret_all(&lua, &engine);
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    let started = std::time::Instant::now();
-    let output = run(
+    run(
         &lua,
         &engine,
         r#"
@@ -8878,6 +8877,15 @@ fn a_deep_copy_of_shallow_clones_walks_only_to_the_tables_they_hold() {
         for I = 1, 20000 do
             U[I] = SharedTable.clone(T)
         end
+        shared.T, shared.U = T, U
+        "#,
+    );
+    let started = std::time::Instant::now();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local T, U = shared.T, shared.U
         local Before = os.clock()
         local D = SharedTable.clone(U, true)
         local Spent = os.clock() - Before

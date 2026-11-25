@@ -73,6 +73,8 @@ pub struct RecordArgs {
     /// `--max-script-timeouts <n>`: script timeouts after which the run exits with 126 (None: `REE_MAX_SCRIPT_TIMEOUTS`, else
     /// 3; 0 never)
     pub script_timeouts: Option<u32>,
+    /// `--max-wall-seconds <seconds>`: per-run wall-clock cap (used by `--batch` so a hung job fails alone with exit 124)
+    pub max_wall_seconds: Option<f64>,
     /// `--timing-check` (or `REE_TIMING_CHECK=1`): record again with the in-frame clock moved and say whether the recording
     /// changed ([`check_timing`])
     pub timing_check: bool,
@@ -119,10 +121,15 @@ fn read_frame_times(path: &str) -> Result<Vec<f64>, String> {
     Ok(times)
 }
 
-/// `ree record ...` (`record`) or `ree run ...`: the exit code (0 when the run finished; a
-/// harness error is in the printed status). The process is expected to exit after it: the VM and
-/// the engine are left to the operating system ([`release`]).
-pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
+struct CliOptions {
+    watchdog: bool,
+    cpu_pass: bool,
+    print: bool,
+    leak_emulator: bool,
+}
+
+/// Shared entry point for [`cli`] and [`cli_in_process`].
+fn run_cli(args: &[String], host: &Host, record: bool, options: CliOptions) -> i32 {
     let started = std::time::Instant::now();
     let command = if record { "record" } else { "run" };
     let args = launch::split_equals(args);
@@ -131,7 +138,9 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
         eprintln!("{} {command}: {error}", host.name);
         return 1;
     }
-    if let Err(error) = guard_process(command, &args, started) {
+    if options.watchdog
+        && let Err(error) = guard_process(command, &args, started)
+    {
         eprintln!("{} {command}: {error}", host.name);
         return 1;
     }
@@ -146,7 +155,7 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
     };
     // (the CPU figures, host time a frame and cycles of a run a kind slows are not the run's: a pass of their own, first)
     let suite = suite.map(|mut config| {
-        if config.kinds.has(crate::profiler::Kinds::CPU) && config.kinds.slows_the_run() {
+        if options.cpu_pass && config.kinds.has(crate::profiler::Kinds::CPU) && config.kinds.slows_the_run() {
             let folder = config.out.join("cpu-pass");
             match crate::profiler::cpu_pass(&args, command, &folder) {
                 Ok(()) => config.cpu_pass = Some(folder),
@@ -170,8 +179,15 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
         profiled_run.harness = Some(args.harness.clone());
         profiled_run.seconds = args.seconds;
         profiled_run.fps = args.fps;
-        let (done, emulator) = execute_with(&args, host, record, true)?;
-        release(emulator);
+        let (done, emulator) = execute_with(&args, host, record, options.print)?;
+        if options.leak_emulator {
+            release(emulator);
+        } else {
+            #[cfg(feature = "bundles")]
+            project::model_assets::stop(&emulator.engine);
+            crate::animation::source::stop(&emulator.engine);
+            drop(emulator);
+        }
         Ok(done)
     });
     drop(luau_profile);
@@ -188,29 +204,50 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
             profiled_run.status = "failed".into();
         }
         match session.finish(profiled_run) {
-            Ok(summary) => eprint!("{summary}"),
-            Err(error) => eprintln!("{} {command}: profile: {error}", host.name),
+            Ok(summary) => {
+                if options.print {
+                    eprint!("{summary}");
+                }
+            }
+            Err(error) => {
+                eprintln!("{} {command}: profile: {error}", host.name);
+                if !options.print {
+                    return 1;
+                }
+            }
         }
-    } else if let Some(report) = crate::boundary::finish() {
+    } else if let Some(report) = crate::boundary::finish()
+        && options.print
+    {
         eprintln!("{report}");
     }
     match result {
         Ok(done) => {
-            eprintln!("{}", done.line);
-            if let Some(profile) = crate::timing::finish() {
+            if options.print {
+                eprintln!("{}", done.line);
+            }
+            if let Some(profile) = crate::timing::finish()
+                && options.print
+            {
                 eprintln!("{profile}");
             }
             let code = done.code;
-            match done.print(&mut std::io::stdout().lock()) {
-                Ok(()) => code,
-                Err(error) => {
-                    eprintln!("{} {command}: stdout: {error}", host.name);
-                    1
+            if options.print {
+                match done.print(&mut std::io::stdout().lock()) {
+                    Ok(()) => code,
+                    Err(error) => {
+                        eprintln!("{} {command}: stdout: {error}", host.name);
+                        1
+                    }
                 }
+            } else {
+                code
             }
         }
         Err(error) => {
-            if let Some(profile) = crate::timing::finish() {
+            if let Some(profile) = crate::timing::finish()
+                && options.print
+            {
                 eprintln!("{profile}");
             }
             eprintln!("{} {command}: {error}", host.name);
@@ -219,72 +256,18 @@ pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
     }
 }
 
+/// `ree record ...` (`record`) or `ree run ...`: the exit code (0 when the run finished; a
+/// harness error is in the printed status). The process is expected to exit after it: the VM and
+/// the engine are left to the operating system ([`release`]).
+pub fn cli(args: &[String], host: &Host, record: bool) -> i32 {
+    run_cli(args, host, record, CliOptions { watchdog: true, cpu_pass: true, print: true, leak_emulator: true })
+}
+
 /// Like [`cli`], for callers that stay alive after the run (integration tests): skips process-wide
-/// watchdogs and child `cpu_pass` spawns, and drops the emulator instead of leaking it.
+/// watchdogs, child `cpu_pass` spawns, and stdout/stderr summaries, and drops the emulator instead
+/// of leaking it.
 pub fn cli_in_process(args: &[String], host: &Host, record: bool) -> i32 {
-    let command = if record { "record" } else { "run" };
-    let args = launch::split_equals(args);
-    if let Err(error) = crate::require_standalone_state(&host.repo) {
-        eprintln!("{} {command}: {error}", host.name);
-        return 1;
-    }
-    let suite = match crate::profiler::Config::from_args(&args, || default_profile_dir(&args, record)) {
-        Ok(suite) => suite,
-        Err(error) => {
-            eprintln!("{} {command}: {error}", host.name);
-            return 2;
-        }
-    };
-    if suite.is_none() {
-        if crate::profiler::phases_requested(&args) {
-            crate::timing::begin(std::time::Instant::now());
-        }
-        if let Some(config) = crate::boundary::parse(&args) {
-            crate::boundary::begin(config);
-        }
-    }
-    let session = suite.map(crate::profiler::Session::begin);
-    let luau_profile = crate::luau_profile::begin();
-    let mut profiled_run = crate::profiler::Run { command: command.into(), ..Default::default() };
-    let result = parse(&args, record).and_then(|args| {
-        profiled_run.harness = Some(args.harness.clone());
-        profiled_run.seconds = args.seconds;
-        profiled_run.fps = args.fps;
-        let (done, emulator) = execute_with(&args, host, record, false)?;
-        #[cfg(feature = "bundles")]
-        project::model_assets::stop(&emulator.engine);
-        crate::animation::source::stop(&emulator.engine);
-        drop(emulator);
-        Ok(done)
-    });
-    drop(luau_profile);
-    if let Some(session) = session {
-        if let Ok(done) = &result {
-            profiled_run.status = done.summary["status"].as_str().unwrap_or("?").to_string();
-            profiled_run.frames = done.summary["frames"].as_u64().unwrap_or(0);
-            profiled_run.script_timeouts = done.summary["script_timeouts"].as_u64().unwrap_or(0);
-            profiled_run.host_backstop_timeouts = done.summary["host_backstop_timeouts"].as_u64().unwrap_or(0);
-            if let Some(frames) = done.summary["frames"].as_u64().filter(|_| profiled_run.fps > 0.0) {
-                profiled_run.seconds = profiled_run.seconds.min(frames.saturating_sub(1) as f64 / profiled_run.fps).max(0.0);
-            }
-        } else {
-            profiled_run.status = "failed".into();
-        }
-        if let Err(error) = session.finish(profiled_run) {
-            eprintln!("{} {command}: profile: {error}", host.name);
-            return 1;
-        }
-    } else {
-        let _ = crate::boundary::finish();
-    }
-    let _ = crate::timing::finish();
-    match result {
-        Ok(done) => done.code,
-        Err(error) => {
-            eprintln!("{} {command}: {error}", host.name);
-            1
-        }
-    }
+    run_cli(args, host, record, CliOptions { watchdog: false, cpu_pass: false, print: false, leak_emulator: false })
 }
 
 /// `ree run --batch <jobs.json>`: runs multiple independent `run` jobs concurrently in one process
@@ -539,8 +522,11 @@ pub fn parse(args: &[String], record: bool) -> Result<RecordArgs, String> {
         .map(|text| text.parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0).ok_or("--script-timeout: not a number of seconds"))
         .transpose()?;
     let script_timeouts = value("--max-script-timeouts").map(|text| text.parse::<u32>().map_err(|_| "--max-script-timeouts: not a count")).transpose()?;
+    let max_wall_seconds = value("--max-wall-seconds")
+        .map(|text| text.parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0).ok_or("--max-wall-seconds: not a number of seconds"))
+        .transpose()?;
     let timing_check = record && (args.iter().any(|arg| arg == "--timing-check") || std::env::var("REE_TIMING_CHECK").as_deref() == Ok("1"));
-    Ok(RecordArgs { engine, harness, out, seconds, fps, context, model_assets, animations, frame_times, script_timeout, script_timeouts, timing_check, clock_probe: None, latency, record_server })
+    Ok(RecordArgs { engine, harness, out, seconds, fps, context, model_assets, animations, frame_times, script_timeout, script_timeouts, max_wall_seconds, timing_check, clock_probe: None, latency, record_server })
 }
 
 /// The exit code of a run whose status is `error` (its harness or a frame failed), with its summary printed and
@@ -690,7 +676,11 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
     crate::luau_profile::install(&emulator.lua);
     // Roblox's script execution timeout (watchdog.rs): a script that never yields errors instead of spinning for good
     let limit = crate::watchdog::script_timeout_seconds(args.script_timeout);
-    let timeout = crate::watchdog::ScriptTimeout::install(&emulator.lua, &emulator.engine, limit, crate::watchdog::stop_after(args.script_timeouts));
+    let backstop = match args.max_wall_seconds.filter(|&cap| cap > 0.0 && limit > 0.0) {
+        Some(cap) => crate::watchdog::HOST_BACKSTOP.min(cap / limit),
+        None => crate::watchdog::HOST_BACKSTOP,
+    };
+    let timeout = crate::watchdog::ScriptTimeout::install_with(&emulator.lua, &emulator.engine, limit, crate::watchdog::stop_after(args.script_timeouts), backstop);
     emulator.engine.state.borrow_mut().sched.timeout = timeout;
     Ok((emulator, history))
 }
@@ -717,8 +707,12 @@ fn start_loopback(args: &RecordArgs, host: &Host, options: &crate::Options, spec
     })?;
     crate::luau_profile::install(&client.lua);
     let (server_lua, server) = client.engine.peer_server().ok_or("not a loopback client")?;
+    let backstop = match args.max_wall_seconds.filter(|&cap| cap > 0.0 && limit > 0.0) {
+        Some(cap) => crate::watchdog::HOST_BACKSTOP.min(cap / limit),
+        None => crate::watchdog::HOST_BACKSTOP,
+    };
     for (lua, engine) in [(&server_lua, &server), (&*client.lua, &client.engine)] {
-        let timeout = crate::watchdog::ScriptTimeout::install(lua, engine, limit, crate::watchdog::stop_after(args.script_timeouts));
+        let timeout = crate::watchdog::ScriptTimeout::install_with(lua, engine, limit, crate::watchdog::stop_after(args.script_timeouts), backstop);
         engine.state.borrow_mut().sched.timeout = timeout;
     }
     Ok(client)
@@ -1333,6 +1327,7 @@ pub(crate) struct Steps {
     stepped: u32,
     next: usize,
     previous: f64,
+    started: std::time::Instant,
     status: String,
     failure: Option<String>,
     code: i32,
@@ -1340,7 +1335,7 @@ pub(crate) struct Steps {
 
 impl Default for Steps {
     fn default() -> Steps {
-        Steps { stepped: 0, next: 0, previous: 0.0, status: "ok".into(), failure: None, code: 0 }
+        Steps { stepped: 0, next: 0, previous: 0.0, started: std::time::Instant::now(), status: "ok".into(), failure: None, code: 0 }
     }
 }
 
@@ -1388,6 +1383,16 @@ fn step_frames(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, recorder: Opti
             engine.output("error", message.clone(), None);
             steps.fail(message);
             steps.code = crate::watchdog::EXIT_SCRIPT_TIMEOUTS;
+            return Ok(false);
+        }
+        // a per-run wall-clock cap (used by `--batch` so one hung job fails alone without hanging the batch)
+        if let Some(cap) = args.max_wall_seconds.filter(|&seconds| seconds > 0.0)
+            && steps.started.elapsed().as_secs_f64() >= cap
+        {
+            let message = format!("after frame {}: reached wall-clock cap ({cap:.1} s)", steps.stepped);
+            engine.output("error", message.clone(), None);
+            steps.fail(message);
+            steps.code = crate::watchdog::EXIT_CAP;
             return Ok(false);
         }
         // a service's job whose client has gone: nobody waits for the rest of it

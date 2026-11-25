@@ -112,6 +112,8 @@ fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: boo
         empty.to_string_lossy().into_owned(),
         "--seconds".into(),
         "120".into(),
+        "--max-wall-seconds".into(),
+        "60".into(),
     ];
     if server {
         args.extend(["--run-context", "server", "--load-string"].map(str::to_owned));
@@ -161,6 +163,7 @@ fn loopback_probe_job(scratch: &Path, empty: &Path, name: &str, server: &str, cl
             "--harness", harness.to_string_lossy().into_owned(),
             "--roots", empty.to_string_lossy().into_owned(),
             "--seconds", "120",
+            "--max-wall-seconds", "60",
             "--run-context", "loopback",
         ]
     })
@@ -201,6 +204,7 @@ fn paired_probes_print_what_a_real_server_and_client_printed() {
     assert_eq!(results.len(), queued.len());
     for ((name, expected), result) in queued.into_iter().zip(results.iter()) {
         assert_eq!(result["id"].as_str(), Some(name));
+        assert_ne!(result["code"].as_i64(), Some(124), "{name}: probe hit its wall-clock cap: {result}");
         let actual = printed_lines(&result["summary"]);
         let allowed: HashSet<&str> =
             known[name].as_array().map(|list| list.iter().filter_map(|entry| entry["line"].as_str()).collect()).unwrap_or_default();
@@ -288,6 +292,7 @@ fn check(server: bool) {
     let checked = queued.len();
     for ((name, expected), result) in queued.into_iter().zip(results.iter()) {
         assert_eq!(result["id"].as_str(), Some(name));
+        assert_ne!(result["code"].as_i64(), Some(124), "{name}: probe hit its wall-clock cap: {result}");
         let summary = &result["summary"];
         assert_eq!(summary["done"], true, "{name}: the probe did not finish: {result}");
         let actual = printed_lines(summary);

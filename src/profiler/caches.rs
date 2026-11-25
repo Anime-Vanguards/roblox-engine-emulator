@@ -22,6 +22,11 @@ static ACTIVE_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 /// so parallel sessions do not mix background-thread counts into one another.
 static CONCURRENT: AtomicBool = AtomicBool::new(false);
 
+/// Coordinates unit tests that assert exclusive single-session background merging with concurrent
+/// `Session` tests in the same library binary (normal sessions hold a shared read lock).
+#[cfg(test)]
+pub(super) static TEST_SESSION_LOCK: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
 /// Instances touched on background threads (outside any session thread) while a single caches session is active.
 static BG_TOUCHED: Mutex<Option<rustc_hash::FxHashSet<u64>>> = Mutex::new(None);
 
@@ -381,5 +386,162 @@ pub(crate) fn cancel() {
         .unwrap_or(false);
     if was_active {
         ACTIVE_SESSIONS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn counts_of(rows: &[(&'static str, &'static str, Counts)], cache: Cache) -> Counts {
+        rows.iter().find(|(name, _, _)| *name == cache.name()).map(|(_, _, counts)| *counts).expect("cache row")
+    }
+
+    #[test]
+    fn background_thread_counts_merge_into_single_session() {
+        let _exclusive = TEST_SESSION_LOCK.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // High generation values no concurrent non-profiler test Dom will ever touch.
+        let sentinel_gen = u32::MAX;
+        let is_sentinel = |id: u64| (id >> 32) as u32 == sentinel_gen;
+        let foreign_touched = || {
+            BG_TOUCHED
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .map_or(0, |bg| bg.iter().filter(|&&id| !is_sentinel(id)).count() as u64)
+        };
+
+        begin();
+        hit(Cache::Bytecode);
+        miss(Cache::Wrappers);
+        instance_touched(1, sentinel_gen);
+        instance_touched(2, sentinel_gen);
+
+        // Background worker (prefetch / bundle decode) has no caches session of its own.
+        std::thread::spawn(move || {
+            for _ in 0..51 {
+                hit(Cache::Bytecode);
+            }
+            miss(Cache::Bytecode);
+            evicted(Cache::Bytecode, 3);
+            miss(Cache::Wrappers);
+            // Instance (2, sentinel_gen) duplicates one already touched on the session thread; (3, sentinel_gen) is new.
+            instance_touched(2, sentinel_gen);
+            instance_touched(3, sentinel_gen);
+        })
+        .join()
+        .unwrap();
+
+        // Confirm both background instances actually landed in BG_TOUCHED (not LOCAL).
+        {
+            let bg = BG_TOUCHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let bg = bg.as_ref().expect("background touched set");
+            let id = |index: u32| ((sentinel_gen as u64) << 32) | index as u64;
+            assert!(bg.contains(&id(2)) && bg.contains(&id(3)) && !bg.contains(&id(1)));
+        }
+
+        // Monotonic sandwich bounds: sibling non-profiler tests running in the same --lib binary may add to
+        // BG_COUNTS / BG_TOUCHED while ACTIVE_SESSIONS == 1, never subtract. Sandwiching snapshot()/facts()/finish()
+        // verifies exact local + bg merging and exact deduplication of (2, sentinel_gen) without flaking.
+        let bg_bc_before = bg_counts(Cache::Bytecode as usize);
+        let foreign_before_mid = foreign_touched();
+        let mid_rows = snapshot();
+        let mid_facts = facts();
+        let bg_bc_after = bg_counts(Cache::Bytecode as usize);
+        let foreign_after_mid = foreign_touched();
+
+        assert!(bg_bc_before.hits >= 51 && bg_bc_before.misses >= 1 && bg_bc_before.evictions >= 3);
+        let mid = counts_of(&mid_rows, Cache::Bytecode);
+        assert!((1 + bg_bc_before.hits..=1 + bg_bc_after.hits).contains(&mid.hits), "{mid:?} vs {bg_bc_before:?}..={bg_bc_after:?}");
+        assert!((bg_bc_before.misses..=bg_bc_after.misses).contains(&mid.misses), "{mid:?} vs {bg_bc_before:?}..={bg_bc_after:?}");
+        assert!((bg_bc_before.evictions..=bg_bc_after.evictions).contains(&mid.evictions), "{mid:?} vs {bg_bc_before:?}..={bg_bc_after:?}");
+        assert!(
+            (3 + foreign_before_mid..=3 + foreign_after_mid).contains(&mid_facts.instances_touched),
+            "mid instances_touched={} outside {}..={}",
+            mid_facts.instances_touched,
+            3 + foreign_before_mid,
+            3 + foreign_after_mid
+        );
+
+        let bg_bc_before = bg_counts(Cache::Bytecode as usize);
+        let bg_wr_before = bg_counts(Cache::Wrappers as usize);
+        let foreign_before_done = foreign_touched();
+        let (rows, done_facts) = finish();
+        let bg_bc_after = bg_counts(Cache::Bytecode as usize);
+        let bg_wr_after = bg_counts(Cache::Wrappers as usize);
+        let foreign_after_done = foreign_touched();
+
+        let done_bc = counts_of(&rows, Cache::Bytecode);
+        assert!((1 + bg_bc_before.hits..=1 + bg_bc_after.hits).contains(&done_bc.hits), "{done_bc:?} vs {bg_bc_before:?}..={bg_bc_after:?}");
+        assert!((bg_bc_before.misses..=bg_bc_after.misses).contains(&done_bc.misses), "{done_bc:?} vs {bg_bc_before:?}..={bg_bc_after:?}");
+        assert!((bg_bc_before.evictions..=bg_bc_after.evictions).contains(&done_bc.evictions), "{done_bc:?} vs {bg_bc_before:?}..={bg_bc_after:?}");
+        let done_wr = counts_of(&rows, Cache::Wrappers);
+        assert!(bg_wr_before.misses >= 1);
+        assert!((1 + bg_wr_before.misses..=1 + bg_wr_after.misses).contains(&done_wr.misses), "{done_wr:?} vs {bg_wr_before:?}..={bg_wr_after:?}");
+        assert_eq!(done_facts.userdata_made, done_wr.misses);
+        assert!(
+            (3 + foreign_before_done..=3 + foreign_after_done).contains(&done_facts.instances_touched),
+            "done instances_touched={} outside {}..={}",
+            done_facts.instances_touched,
+            3 + foreign_before_done,
+            3 + foreign_after_done
+        );
+    }
+
+    #[test]
+    fn overlapping_sessions_keep_their_own_counts() {
+        let _exclusive = TEST_SESSION_LOCK.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let both_begun = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let bg_done = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let (b1, d1) = (both_begun.clone(), bg_done.clone());
+        let first = std::thread::spawn(move || {
+            begin();
+            b1.wait();
+            for _ in 0..7 {
+                hit(Cache::Atoms);
+            }
+            miss(Cache::Requires);
+            instance_touched(10, 1);
+            // Record background-thread counts while both sessions are active; neither session may pull them in.
+            std::thread::spawn(|| {
+                for _ in 0..99 {
+                    hit(Cache::Atoms);
+                    hit(Cache::Bytecode);
+                }
+                instance_touched(99, 9);
+            })
+            .join()
+            .unwrap();
+            d1.wait();
+            finish()
+        });
+
+        let (b2, d2) = (both_begun.clone(), bg_done.clone());
+        let second = std::thread::spawn(move || {
+            begin();
+            b2.wait();
+            for _ in 0..13 {
+                hit(Cache::Bytecode);
+            }
+            evicted(Cache::Queries, 4);
+            instance_touched(20, 2);
+            instance_touched(21, 2);
+            d2.wait();
+            finish()
+        });
+
+        let (rows1, facts1) = first.join().unwrap();
+        let (rows2, facts2) = second.join().unwrap();
+
+        assert_eq!(counts_of(&rows1, Cache::Atoms), Counts { hits: 7, misses: 0, evictions: 0 });
+        assert_eq!(counts_of(&rows1, Cache::Bytecode), Counts::default());
+        assert_eq!(counts_of(&rows1, Cache::Requires), Counts { hits: 0, misses: 1, evictions: 0 });
+        assert_eq!(facts1.instances_touched, 1);
+
+        assert_eq!(counts_of(&rows2, Cache::Bytecode), Counts { hits: 13, misses: 0, evictions: 0 });
+        assert_eq!(counts_of(&rows2, Cache::Atoms), Counts::default());
+        assert_eq!(counts_of(&rows2, Cache::Queries), Counts { hits: 0, misses: 0, evictions: 4 });
+        assert_eq!(facts2.instances_touched, 2);
     }
 }

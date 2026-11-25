@@ -7,9 +7,8 @@
 //
 // Two test binaries take most of a run's testing time, so each runs in jobs of its own, beside the rest:
 //
-// - The planted profile tests (profile-view/tests/planted.rs): each runs the engine under the profiler, and one lock
-//   around the engine keeps them from running side by side. So CI runs them on `count` machines, each running one slice,
-//   one test at a time.
+// - The planted profile tests (profile-view/tests/planted.rs): each runs the engine under the profiler in process.
+//   CI runs them across `count` machines, each running one slice with `--test-threads=1` until workflow sharding is updated.
 // - The standalone tests (tests/standalone.rs): one test runs the installed binary's checks six times in a row and
 //   takes two minutes, longer than every other test of the test job together. CI runs them on `count` machines too,
 //   each slice on libtest's own threads.
@@ -154,8 +153,8 @@ export function run(argv, { cwd = process.cwd(), env = process.env, spawn = spaw
 	log(`${mode} shard ${index + 1}/${count}: ${slice.length} of ${names.length} tests, about ${Math.round(all[index].ms / 1000)} s (the shards: ${all.map(share => Math.round(share.ms / 1000)).join(" / ")} s)`);
 	if (slice.length === 0) return 0;
 	// Several test names after the options are run together. --exact makes each name match that test alone, never every
-	// test whose name contains it. Planted's one test thread keeps the engine runs one at a time; standalone's tests run
-	// on libtest's threads, as they did in one job.
+	// test whose name contains it. Planted shards pass --test-threads=1 while workflow sharding still splits them across
+	// runners; standalone's tests run on libtest's threads, as they did in one job.
 	const threads = mode === "planted" ? ["--test-threads=1"] : [];
 	return start(["--exact", ...threads, ...testArguments, ...slice]).code;
 }

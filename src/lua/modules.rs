@@ -615,12 +615,11 @@ pub fn read_files(engine: &Engine) -> rustc_hash::FxHashSet<String> {
     engine.modules.borrow().read.clone()
 }
 
-/// Notes that the engine read source file `path` ([`read_files`]; one that is no project listing's
-/// is noted for a prepared run as well: crate::files::note).
+/// Notes that the engine read source file `path` ([`read_files`]; always noted via `files::note`
+/// so a prepared run checks its true metadata stamp rather than relying on Windows directory-entry
+/// caches that can lag behind recent writes).
 fn note_read(engine: &Engine, path: &str) {
-    if !engine.state.borrow().project.stamps.contains_key(path) {
-        crate::files::note(std::path::Path::new(path));
-    }
+    crate::files::note(std::path::Path::new(path));
     engine.modules.borrow_mut().read.insert(path.to_string());
 }
 

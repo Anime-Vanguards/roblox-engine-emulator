@@ -18,13 +18,14 @@ use ree_profile_view::{
 };
 
 /// Pattern of 16 `%a` followed by `%d`: fails every start position on an `"a"` string, doing linear C work on the
-/// work clock (`17 * 6.33 + 0.70 = 108.31` ns/byte) with zero allocations and no builtin/cache noise.
+/// work clock (`17 * LUAU_MATCH_CLASS + LUAU_MATCH_STEP` ns/byte) with zero allocations and no builtin/cache noise.
 const WORK_PATTERN: &str = "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d";
-const WORK_NS_PER_BYTE: f64 = 17.0 * 6.33 + 0.70;
+const WORK_NS_PER_BYTE: f64 = 17.0 * roblox_engine_emulator::cost::LUAU_MATCH_CLASS + roblox_engine_emulator::cost::LUAU_MATCH_STEP;
 
 /// Length of `string.rep("a", n)` whose `string.match(_, WORK_PATTERN)` charges `ms` milliseconds on the work clock.
+/// The last 16 start positions hit end-of-string early and average half a pattern (8 bytes less work), so add 8.
 fn work_bytes(ms: f64) -> usize {
-    (ms * 1e6 / WORK_NS_PER_BYTE).round().max(16.0) as usize
+    (ms * 1e6 / WORK_NS_PER_BYTE).round().max(16.0) as usize + 8
 }
 
 /// Runs `work` over `items` across a bounded pool of scoped threads, preserving item order.
@@ -1070,8 +1071,11 @@ fn a_quiet_run_reports_nothing() {
     assert!(found.iter().all(|issue| issue.kind == "work below floor"), "{found:#?}");
 }
 
-const BURST: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local frame, _b = 0, string.rep("a", 236359)
+fn burst_module() -> String {
+    let burst = work_bytes(25.6);
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local frame, _b = 0, string.rep("a", {burst})
 
 function M.Burst()
 	return _m(_b, _p) and 1 or 0
@@ -1090,7 +1094,9 @@ function M.Tick()
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn a_one_off_is_its_own_issue_never_steady_work() {
@@ -1098,7 +1104,7 @@ fn a_one_off_is_its_own_issue_never_steady_work() {
     // a frame, graded by its hitch (the frame overruns by half a frame or more); the frame's hitch names it too; and it is
     // never advised as a function to run less often every frame
     let temp = Temp::new("planted-burst");
-    let (_, app) = run(&temp, "burst", "Burst", BURST, &harness("Burst", "sink += M.Tick()"), "all", "2");
+    let (_, app) = run(&temp, "burst", "Burst", &burst_module(), &harness("Burst", "sink += M.Tick()"), "all", "2");
     let (found, _) = issues(&app);
     let once = of(&found, "one-off");
     assert_eq!(once.len(), 1, "{found:#?}");
@@ -1142,8 +1148,11 @@ fn function_issue<'a>(found: &'a [Issue], label: &str) -> Option<&'a Issue> {
     found.iter().find(|issue| issue.kind.starts_with("hot") && issue.title.contains(label))
 }
 
-const STEADY_BURST: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local frame, _s, _b = 0, string.rep("a", 8863), string.rep("a", 177269)
+fn steady_burst_module() -> String {
+    let (steady, burst) = (work_bytes(0.96), work_bytes(19.2));
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local frame, _s, _b = 0, string.rep("a", {steady}), string.rep("a", {burst})
 
 function M.Steady()
 	return _m(_s, _p) and 1 or 0
@@ -1167,17 +1176,20 @@ function M.Tick()
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn the_same_code_profiled_for_two_seconds_and_ten_ranks_the_same() {
     // Steady's 1 ms every frame and Burst's 19 ms once a second: seen twice in 2 s and ten times in 10 s, the bursts have a
     // rate, so Burst's issue is priced a frame, the same either way, and so is the ranking with its severities
     let temp = Temp::new("planted-run-length");
+    let source = steady_burst_module();
     let handler = harness("SteadyBurst", "sink += M.Tick()");
     let (short_out, long_out) = std::thread::scope(|scope| {
-        let h1 = scope.spawn(|| run_dir(&temp, "two", "SteadyBurst", STEADY_BURST, &handler, "work,timeline", "2"));
-        let h2 = scope.spawn(|| run_dir(&temp, "ten", "SteadyBurst", STEADY_BURST, &handler, "work,timeline", "10"));
+        let h1 = scope.spawn(|| run_dir(&temp, "two", "SteadyBurst", &source, &handler, "work,timeline", "2"));
+        let h2 = scope.spawn(|| run_dir(&temp, "ten", "SteadyBurst", &source, &handler, "work,timeline", "10"));
         (h1.join().unwrap(), h2.join().unwrap())
     });
     let (short, long) = (open_out(&short_out), open_out(&long_out));
@@ -1198,8 +1210,11 @@ fn fraction_harness(fraction: f64) -> String {
     harness("Fraction", &format!("sink += M.Tick({twentieths})"))
 }
 
-const FRACTION: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local due, _w = 0, string.rep("a", 5447)
+fn fraction_module() -> String {
+    let work = work_bytes(0.59);
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local due, _w = 0, string.rep("a", {work})
 
 function M.Work()
 	return _m(_w, _p) and 1 or 0
@@ -1215,15 +1230,18 @@ function M.Tick(twentieths)
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn work_on_more_frames_moves_its_price_and_severity_steadily() {
     // The full mean grows with duty, including the 5% case below the mean floor: its own .59 ms peak still lists it.
     let temp = Temp::new("planted-sweep");
+    let source = fraction_module();
     let outs = parallel_map((1..=19).collect(), |twentieth| {
         let fraction = twentieth as f64 / 20.0;
-        let out = run_dir(&temp, &format!("f{twentieth}"), "Fraction", FRACTION, &fraction_harness(fraction), "work,timeline", "2");
+        let out = run_dir(&temp, &format!("f{twentieth}"), "Fraction", &source, &fraction_harness(fraction), "work,timeline", "2");
         (twentieth, fraction, out)
     });
     let mut rows: Vec<(f64, f64, f64, Severity)> = Vec::new();
@@ -1252,8 +1270,11 @@ fn work_on_more_frames_moves_its_price_and_severity_steadily() {
     }
 }
 
-const BIG_BURST: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local frame, _b = 0, string.rep("a", 709076)
+fn big_burst_module() -> String {
+    let burst = work_bytes(76.8);
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local frame, _b = 0, string.rep("a", {burst})
 
 function M.Steady()
 	local s = 0
@@ -1285,14 +1306,16 @@ function M.Tick()
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn a_big_one_off_does_not_hide_a_steady_hot_function() {
     // Steady's 96 µs a frame beside Other's 200 µs, and Burst's 77 ms once, in frame 60: the one-off is its own issue, so
     // Steady's share is of the work a frame (a third), not of the run's (a tenth), and it is hot
     let temp = Temp::new("planted-big-burst");
-    let (_, app) = run(&temp, "big", "BigBurst", BIG_BURST, &harness("BigBurst", "sink += M.Tick()"), "work,timeline", "2");
+    let (_, app) = run(&temp, "big", "BigBurst", &big_burst_module(), &harness("BigBurst", "sink += M.Tick()"), "work,timeline", "2");
     let (found, _) = issues(&app);
     let once = of(&found, "one-off");
     assert_eq!(once.len(), 1, "{found:#?}");
@@ -1305,8 +1328,11 @@ fn a_big_one_off_does_not_hide_a_steady_hot_function() {
     assert!(priced_sum(&found) <= code_per_frame(&app) + 1e-9, "{found:#?}");
 }
 
-const FOUR_BURSTS: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local frame, _b = 0, string.rep("a", 177269)
+fn four_bursts_module() -> String {
+    let burst = work_bytes(19.2);
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local frame, _b = 0, string.rep("a", {burst})
 
 function M.A()
 	return _m(_b, _p) and 1 or 0
@@ -1358,7 +1384,9 @@ function M.Tick()
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn a_one_off_spread_over_four_functions_names_each_and_is_never_steady_work() {
@@ -1366,7 +1394,7 @@ fn a_one_off_spread_over_four_functions_names_each_and_is_never_steady_work() {
     // frame's hitch names all four with their shares, none is advised as steady work, and Steady, which runs every frame,
     // is hot
     let temp = Temp::new("planted-four");
-    let (_, app) = run(&temp, "four", "Four", FOUR_BURSTS, &harness("Four", "sink += M.Tick()"), "work,timeline", "2");
+    let (_, app) = run(&temp, "four", "Four", &four_bursts_module(), &harness("Four", "sink += M.Tick()"), "work,timeline", "2");
     let (found, _) = issues(&app);
     let functions = ["A Four:4", "B Four:12", "C Four:20", "D Four:28"];
     let once = of(&found, "one-off");
@@ -1552,8 +1580,11 @@ fn an_unrelated_one_off_leaves_a_function_that_runs_every_fifth_frame_its_own_is
     assert!((once[0].ms.unwrap() * 120.0 - once[0].total_ms.unwrap()).abs() < 1e-8);
 }
 
-const CADENCES: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local frame, _a, _u, _b = 0, string.rep("a", 64629), string.rep("a", 92328), string.rep("a", 18466)
+fn cadences_module() -> String {
+    let (ai, ui, base) = (work_bytes(7.0), work_bytes(10.0), work_bytes(2.0));
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local frame, _a, _u, _b = 0, string.rep("a", {ai}), string.rep("a", {ui}), string.rep("a", {base})
 
 function M.Ai()
 	return _m(_a, _p) and 1 or 0
@@ -1588,14 +1619,16 @@ function M.Tick()
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn every_function_of_game_like_cadences_is_named_with_its_own_work() {
     // Ai's 7 ms every third frame, Ui's 10 ms every seventh and Base's 2 ms every frame: each has its own issue holding its own
     // work, and the frames where Ai and Ui meet overrun the frame, the hitch naming all three with their shares
     let temp = Temp::new("planted-cadences");
-    let (_, app) = run(&temp, "cadences", "Cadence", CADENCES, &harness("Cadence", "sink += M.Tick()"), "work,timeline", "2");
+    let (_, app) = run(&temp, "cadences", "Cadence", &cadences_module(), &harness("Cadence", "sink += M.Tick()"), "work,timeline", "2");
     let (found, _) = issues(&app);
     let price = |label: &str| function_issue(&found, label).unwrap_or_else(|| panic!("{label}: {found:#?}")).ms.unwrap();
     let (ai, ui, base) = (price("Ai Cadence:4"), price("Ui Cadence:12"), price("Base Cadence:20"));
@@ -1610,8 +1643,11 @@ fn every_function_of_game_like_cadences_is_named_with_its_own_work() {
     }
 }
 
-const BASE_BURST: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local _b, _e = string.rep("a", 10895), string.rep("a", 27237)
+fn base_burst_module() -> String {
+    let (base, extra) = (work_bytes(1.18), work_bytes(2.95));
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local _b, _e = string.rep("a", {base}), string.rep("a", {extra})
 function M.Work(extra)
 	local s = _m(_b, _p) and 1 or 0
 	if extra then
@@ -1627,18 +1663,21 @@ function M.Tick(bursts)
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn a_burst_on_top_of_steady_work_claims_what_doing_it_ahead_saves() {
     // Work's full mean includes its 1.18 ms base and each observed 2.95 ms pulse. Removing the pulses changes that
     // mean by the actual A/B saving; neither run has a separate burst price.
     let temp = Temp::new("planted-base-burst");
+    let source = base_burst_module();
     let h_with = harness("BaseBurst", "sink += M.Tick(true)");
     let h_without = harness("BaseBurst", "sink += M.Tick(false)");
     let (with_out, without_out) = std::thread::scope(|scope| {
-        let a = scope.spawn(|| run_dir(&temp, "with", "BaseBurst", BASE_BURST, &h_with, "work,timeline", "4"));
-        let b = scope.spawn(|| run_dir(&temp, "without", "BaseBurst", BASE_BURST, &h_without, "work,timeline", "4"));
+        let a = scope.spawn(|| run_dir(&temp, "with", "BaseBurst", &source, &h_with, "work,timeline", "4"));
+        let b = scope.spawn(|| run_dir(&temp, "without", "BaseBurst", &source, &h_without, "work,timeline", "4"));
         (a.join().unwrap(), b.join().unwrap())
     });
     let (with, without) = (open_out(&with_out), open_out(&without_out));
@@ -1651,8 +1690,11 @@ fn a_burst_on_top_of_steady_work_claims_what_doing_it_ahead_saves() {
     assert!(work.title.contains("active in 240 of 240 frames"));
 }
 
-const FIFTEEN: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local due, _r, _b = 0, string.rep("a", 9233), string.rep("a", 3075)
+fn fifteen_module() -> String {
+    let (rare, base) = (work_bytes(1.0), work_bytes(0.333));
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local due, _r, _b = 0, string.rep("a", {rare}), string.rep("a", {base})
 
 function M.Rare()
 	return _m(_r, _p) and 1 or 0
@@ -1677,14 +1719,16 @@ function M.Tick()
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn work_on_fifteen_percent_of_the_frames_is_never_listed_nowhere() {
     // Rare's 1 ms on 15% of the frames (150 µs a frame, 31% of the game's work) beside Base's 333 µs every frame: Rare's
     // issue holds all its work in the recurring part, and the issues hold the game's work a frame
     let temp = Temp::new("planted-fifteen");
-    let (_, app) = run(&temp, "fifteen", "Fifteen", FIFTEEN, &harness("Fifteen", "sink += M.Tick()"), "work,timeline", "2");
+    let (_, app) = run(&temp, "fifteen", "Fifteen", &fifteen_module(), &harness("Fifteen", "sink += M.Tick()"), "work,timeline", "2");
     let (found, _) = issues(&app);
     let rare = function_issue(&found, "Rare Fifteen:4").unwrap_or_else(|| panic!("{found:#?}"));
     assert!((rare.ms.unwrap() - 0.15).abs() < 0.02, "{rare:#?}");
@@ -1692,11 +1736,14 @@ fn work_on_fifteen_percent_of_the_frames_is_never_listed_nowhere() {
     assert!((priced_sum(&found) / code_per_frame(&app) - 1.0).abs() < 0.02, "{} of {}: {found:#?}", priced_sum(&found), code_per_frame(&app));
 }
 
-const TENTH: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local frame, _b = 0, string.rep("a", 110793)
-local entries = {}
+fn tenth_module(period: usize) -> String {
+    let big = work_bytes(12.0);
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local frame, _b = 0, string.rep("a", {big})
+local entries = {{}}
 for i = 1, 300 do
-	entries[i] = { id = i, score = (i * 7919) % 1000 }
+	entries[i] = {{ id = i, score = (i * 7919) % 1000 }}
 end
 
 function M.Big()
@@ -1716,14 +1763,16 @@ end
 function M.Tick()
 	frame += 1
 	local s = M.Board()
-	if frame % 10 == 5 then
+	if frame % {period} == 5 then
 		s += M.Big()
 	end
 	return s
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn a_big_burst_every_tenth_frame_ranks_by_its_price() {
@@ -1734,8 +1783,7 @@ fn a_big_burst_every_tenth_frame_ranks_by_its_price() {
     let handler = harness("Tenth", "sink += M.Tick()");
     let jobs = vec![(8, 2), (8, 10), (10, 2), (10, 10)];
     let mut outs = parallel_map(jobs, |(period, seconds)| {
-        // (TENTH bursts every 10th frame: the period is set in its source)
-        let source = TENTH.replace("frame % 10 == 5", &format!("frame % {period} == 5"));
+        let source = tenth_module(period);
         run_dir(&temp, &format!("p{period}-s{seconds}"), "Tenth", &source, &handler, "work,timeline", &seconds.to_string())
     })
     .into_iter();
@@ -1757,8 +1805,11 @@ fn a_big_burst_every_tenth_frame_ranks_by_its_price() {
     }
 }
 
-const ONCE_BESIDE: &str = r#"local M, _m, _p = {}, string.match, "%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%a%d"
-local frame, _s, _o = 0, string.rep("a", 27698), string.rep("a", 175422)
+fn once_beside_module() -> String {
+    let (steady, once) = (work_bytes(3.0), work_bytes(19.0));
+    format!(
+        r#"local M, _m, _p = {{}}, string.match, "{WORK_PATTERN}"
+local frame, _s, _o = 0, string.rep("a", {steady}), string.rep("a", {once})
 
 function M.Steady()
 	return _m(_s, _p) and 1 or 0
@@ -1782,16 +1833,19 @@ function M.Tick()
 end
 
 return M
-"#;
+"#
+    )
+}
 
 #[test]
 fn a_one_off_beside_a_hot_line_ranks_the_same_at_two_seconds_and_ten() {
     // Once keeps its full 19 ms size and honest mean rate. Its own hitch makes it warning at 2, 5 and 10 seconds,
     // beside Steady's critical 3 ms/frame.
     let temp = Temp::new("planted-once-beside");
+    let source = once_beside_module();
     let handler = harness("Beside", "sink += M.Tick()");
     let outs = parallel_map(vec![2, 5, 10], |seconds| {
-        run_dir(&temp, &seconds.to_string(), "Beside", ONCE_BESIDE, &handler, "work,timeline", &seconds.to_string())
+        run_dir(&temp, &seconds.to_string(), "Beside", &source, &handler, "work,timeline", &seconds.to_string())
     });
     let mut ranks = Vec::new();
     for out in outs {
@@ -2001,9 +2055,12 @@ fn fifteen_hundred_functions_over_six_hundred_frames_keep_a_small_profile() {
     // history for them: it is at most half as big again as it would be without any, and the report page holds none
     let temp = Temp::new("planted-size");
     let function_count = 1500;
-    let mut source = "local M = {}\n".to_string();
+    // Keep ~3.2 us of work per function per frame (~4.8 ms/frame across 1,500 functions, above 25% of a 60 fps frame
+    // and below the 50% / 8.3 ms heavy-frame line) using C match work so host time stays small.
+    let work_size = work_bytes(0.0032);
+    let mut source = format!("local M, _m, _p, _s = {{}}, string.match, \"{WORK_PATTERN}\", string.rep(\"a\", {work_size})\n");
     for index in 1..=function_count {
-        source.push_str(&format!("function M.Work{index}()\n local sum = 0\n for i = 1, 5 do sum += i % 7 end\n return sum\nend\n"));
+        source.push_str(&format!("function M.Work{index}()\n return _m(_s, _p) and 1 or 0\nend\n"));
     }
     source.push_str("function M.Tick()\n local sum = 0\n");
     for index in 1..=function_count {

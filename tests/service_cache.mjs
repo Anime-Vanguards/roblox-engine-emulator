@@ -10,7 +10,7 @@ import { realPath } from "../tools/release/common.mjs";
 import { pixelPng, removeTestFolder, servedRun, startManualService, stopServices } from "../tools/release/smoke.mjs";
 
 const WINDOWS = process.platform === "win32";
-const CONCURRENCY = Math.min(6, Math.max(2, os.availableParallelism()));
+const CONCURRENCY = os.availableParallelism() >= 8 ? Math.min(6, Math.floor(os.availableParallelism() / 4)) : 1;
 
 let stageDir = null;
 let stagedBinary = null;
@@ -484,31 +484,28 @@ check("an input repo never substitutes for a missing per-user cache", async ({ r
 		["serve", "--warm", ...args],
 	];
 	const before = contentsOf(root);
-	const failingRuns = [];
 	// A drive-relative per-user folder is not an absolute cache root, even though Windows can resolve it.
 	if (WINDOWS) {
 		const drive = path.parse(project).root.slice(0, -1);
-		failingRuns.push(run(["run", ...args], project, { ...env, LOCALAPPDATA: drive }).then((result) => {
-			assert.notEqual(result.status, 0);
-			assert(result.stderr.includes(MISSING_CACHE_ERROR), result.stderr);
-		}));
+		const result = await run(["run", ...args], project, { ...env, LOCALAPPDATA: drive });
+		assert.notEqual(result.status, 0);
+		assert(result.stderr.includes(MISSING_CACHE_ERROR), result.stderr);
+		assert.deepEqual(contentsOf(root), before, "writes before the missing-cache error with drive-relative LOCALAPPDATA");
 	}
 	for (const command of commands) {
-		failingRuns.push(run(command).then((result) => {
-			assert.notEqual(result.status, 0, command.join(" "));
-			assert.match(result.stderr, new RegExp(`^ree(?: run| record| profile (?:try|diff|report)| serve| serve --warm)?: ${MISSING_CACHE_ERROR}\\r?\\n$`));
-		}));
+		const result = await run(command);
+		assert.notEqual(result.status, 0, command.join(" "));
+		assert.match(result.stderr, new RegExp(`^ree(?: run| record| profile (?:try|diff|report)| serve| serve --warm)?: ${MISSING_CACHE_ERROR}\\r?\\n$`));
+		assert.deepEqual(contentsOf(root), before, `writes before the missing-cache error: ${command.join(" ")}`);
 	}
 	// profiling that an environment variable switches on must not write before the error either
 	for (const variable of ["REE_PROFILE", "RUR_BOUNDARY_PROFILE", "RUR_LUAU_PROFILE", "RUR_LUAU_ALLOC_PROFILE"]) {
 		const varEnv = { ...env, [variable]: variable === "REE_PROFILE" ? "work" : "profile-from-env" };
-		failingRuns.push(run(["run", "--service", ...args], project, varEnv).then((result) => {
-			assert.match(result.stderr, new RegExp(`^ree(?: run)?: ${MISSING_CACHE_ERROR}\\r?\\n$`));
-			assert.notEqual(result.status, 0);
-		}));
+		const result = await run(["run", "--service", ...args], project, varEnv);
+		assert.match(result.stderr, new RegExp(`^ree(?: run)?: ${MISSING_CACHE_ERROR}\\r?\\n$`));
+		assert.notEqual(result.status, 0);
+		assert.deepEqual(contentsOf(root), before, `writes before the missing-cache error with ${variable}`);
 	}
-	await Promise.all(failingRuns);
-	assert.deepEqual(contentsOf(root), before, "writes before the missing-cache error");
 	assert(!fs.existsSync(path.join(inputs, ".cache", "editable-images")));
 	// An explicit cache also works without any per-user folder, including service startup and warm-up.
 	env.RUR_STATE_DIR = path.join(project, "state");

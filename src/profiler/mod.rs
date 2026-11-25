@@ -719,6 +719,8 @@ pub fn kinds() -> Kinds {
 /// (luau_profile::install calls it), [`collect`] before the VM goes, [`Session::finish`] to write it.
 pub struct Session {
     finished: bool,
+    #[cfg(test)]
+    _caches_guard: Option<std::sync::RwLockReadGuard<'static, ()>>,
 }
 
 impl Session {
@@ -731,6 +733,8 @@ impl Session {
         if config.kinds.has(Kinds::BOUNDARY) {
             crate::boundary::begin(crate::boundary::Config { out: config.out.join("boundary.json"), top: config.top, phase: config.phases.clone() });
         }
+        #[cfg(test)]
+        let caches_guard = config.kinds.has(Kinds::CACHES).then(|| caches::TEST_SESSION_LOCK.read().unwrap_or_else(|poisoned| poisoned.into_inner()));
         if config.kinds.has(Kinds::CACHES) {
             caches::begin();
         }
@@ -775,7 +779,11 @@ impl Session {
         };
         STATE.with(|cell| *cell.borrow_mut() = Some(Box::new(state)));
         ON.with(|on| on.set(true));
-        Session { finished: false }
+        Session {
+            finished: false,
+            #[cfg(test)]
+            _caches_guard: caches_guard,
+        }
     }
 
     /// Writes the profile (collecting what [`collect`] did not: a host that never called it gets no VM profile, which

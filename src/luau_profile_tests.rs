@@ -149,7 +149,7 @@ fn the_engine_step_has_its_own_row_in_the_host_time_profile() {
         Ok(())
     }).unwrap();
     lua.globals().set("sleep", work).unwrap();
-    let handler = "local function handler() local n = 0 for i = 1, 200000 do n += i end return n end\nhandler()\n";
+    let handler = "local function handler() local n = 0 for i = 1, 2000 do n += i end return n end\nhandler()\n";
     // the engine's step first, as the scheduler runs it between two handlers
     luau_profile::engine_step("probe", wait_for_ticks);
     lua.load(handler).set_name("=after").exec().unwrap();

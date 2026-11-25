@@ -32,7 +32,7 @@ use super::{
     Recorder,
     run::{self, Begun, Done, History, RecordArgs},
 };
-use crate::{Emulator, launch::Host, lua::modules};
+use crate::{Emulator, launch::Host};
 
 /// The jobs a prepared run serves: those of its command (`record`, else `run`) whose [`key`] (`split`:
 /// [`split_key`]) is `args`.
@@ -177,14 +177,17 @@ impl Prepared {
         if !engine.state.borrow().sched.wall_clock_current() {
             return Err("the wall clock's hour changed".into());
         }
-        let read = modules::read_files(engine);
         let listings = engine.state.borrow_mut().project.listings.take().unwrap_or_default();
         crate::timing::tally("prepared: files noted", noted.len() as u64);
         crate::timing::tally("prepared: listings", listings.len() as u64);
         let (sender, receiver) = std::sync::mpsc::channel();
         rayon::spawn(move || {
             use rayon::prelude::*;
-            let changed = noted.changed().or_else(|| listings.par_iter().find_any(|listing| !listing.unchanged(&read)).map(|listing| format!("{} changed", listing.path())));
+            // Read source files are already checked in `noted` via direct metadata stamps; check
+            // listings for directory entries and non-source files only (avoids Windows NTFS
+            // directory-entry timestamp lag on recently written source files).
+            let empty = rustc_hash::FxHashSet::default();
+            let changed = noted.changed().or_else(|| listings.par_iter().find_any(|listing| !listing.unchanged(&empty)).map(|listing| format!("{} changed", listing.path())));
             let _ = sender.send(changed);
         });
         // (the listing's stamps are the prepared run's: a module read from here on is stamped now)

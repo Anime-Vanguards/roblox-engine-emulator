@@ -125,13 +125,36 @@ fn standalone_checks_accept_linked_and_canonical_temporary_folders() {
         .into_iter()
         .flat_map(|(script, args)| [linked.as_path(), canonical.as_path()].into_iter().map(move |temp| (script, args, temp)))
         .collect();
-    let results: Vec<(&str, &Path, Output)> = std::thread::scope(|scope| {
-        let handles: Vec<_> = runs
-            .into_iter()
-            .map(|(script, args, temp)| scope.spawn(move || (script, temp, node(script, args, temp))))
-            .collect();
-        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
-    });
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let concurrency = if cpus >= 8 { (cpus / 4).min(6) } else { 1 };
+    let results: Vec<(&str, &Path, Output)> = if concurrency <= 1 {
+        runs.into_iter().map(|(script, args, temp)| (script, temp, node(script, args, temp))).collect()
+    } else {
+        let queue = std::sync::Mutex::new(runs.into_iter().enumerate());
+        let slots: std::sync::Mutex<Vec<Option<(&str, &Path, Output)>>> = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..concurrency)
+                .map(|_| {
+                    let queue = &queue;
+                    let slots = &slots;
+                    scope.spawn(move || loop {
+                        let next = queue.lock().unwrap().next();
+                        let Some((index, (script, args, temp))) = next else { break };
+                        let output = node(script, args, temp);
+                        let mut guard = slots.lock().unwrap();
+                        if guard.len() <= index {
+                            guard.resize_with(index + 1, || None);
+                        }
+                        guard[index] = Some((script, temp, output));
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
+        slots.into_inner().unwrap().into_iter().map(Option::unwrap).collect()
+    };
     let mut cleanup_deferred = false;
     for (script, temp, result) in results {
         assert!(result.status.success(), "{script} with {}: {}", temp.display(), describe(&result));

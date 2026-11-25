@@ -14,7 +14,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { realPath } from "../tools/release/common.mjs";
 import { removeTestFolder, servedRun, startManualService, stopServices, waitForProcesses } from "../tools/release/smoke.mjs";
 
-const CONCURRENCY = Math.min(6, Math.max(2, os.availableParallelism()));
+const CONCURRENCY = os.availableParallelism() >= 8 ? Math.min(6, Math.floor(os.availableParallelism() / 4)) : 1;
 
 function spawnAsync(executable, args, { cwd, env, timeout = 120_000 }) {
 	return new Promise((resolve) => {
@@ -350,12 +350,13 @@ for (const manual of [false, true]) check(`workers receive the full client envir
 		{ nodePath: path.join(directory, "second"), value: undefined, servicesAfter: 3 },
 	];
 	let id = 8000;
-	for (const { nodePath, value, servicesAfter } of environments) {
+	// Run the direct baselines before starting automatic services so an earlier automatic service does not sit idle
+	// waiting on later direct runs under load.
+	const directByEnv = [];
+	for (const { nodePath, value } of environments) {
 		env.NODE_PATH = nodePath;
 		if (value === undefined) delete env.WORKER_VALUE;
 		else env.WORKER_VALUE = value;
-
-		// the direct run: NODE_PATH is resolved against the client's folder, the custom values arrive as they are
 		await fetchAnimation(ree, directory, ++id);
 		const direct = requests().at(-1);
 		assert.equal(direct.nodePath, path.resolve(directory, nodePath));
@@ -363,12 +364,23 @@ for (const manual of [false, true]) check(`workers receive the full client envir
 		assert.equal(direct.customValue, value);
 		assert.equal(direct.customRelative, env.WORKER_RELATIVE);
 		assert.equal(direct.cwd, env.RUR_STATE_DIR);
+		directByEnv.push(direct);
+	}
+	const seenPids = new Set();
+	for (let index = 0; index < environments.length; index++) {
+		const { nodePath, value, servicesAfter } = environments[index];
+		const direct = directByEnv[index];
+		env.NODE_PATH = nodePath;
+		if (value === undefined) delete env.WORKER_VALUE;
+		else env.WORKER_VALUE = value;
 
 		const started = manual ? startManualService(executable, directory, env) : null;
 		try {
 			if (started) await started.listening;
 			const pid = await warmService(ree, directory, [], started?.service.pid);
 			assert(pid, "a changed worker environment must select a new service");
+			assert(!seenPids.has(pid), "each environment must select a distinct service");
+			seenPids.add(pid);
 			const jobCounts = await serviceJobCounts(ree, directory);
 
 			// the served runs: the worker sees what the direct one saw

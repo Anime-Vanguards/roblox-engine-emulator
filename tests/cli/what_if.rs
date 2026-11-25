@@ -52,6 +52,37 @@ fn text(output: &Output) -> String {
     format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))
 }
 
+fn run_pair<A: Send, B: Send>(fa: impl FnOnce() -> A + Send, fb: impl FnOnce() -> B + Send) -> (A, B) {
+    if std::thread::available_parallelism().is_ok_and(|n| n.get() >= 8) {
+        std::thread::scope(|scope| {
+            let ha = scope.spawn(fa);
+            let hb = scope.spawn(fb);
+            (ha.join().unwrap(), hb.join().unwrap())
+        })
+    } else {
+        (fa(), fb())
+    }
+}
+
+fn run_quad<A: Send, B: Send, C: Send, D: Send>(
+    fa: impl FnOnce() -> A + Send,
+    fb: impl FnOnce() -> B + Send,
+    fc: impl FnOnce() -> C + Send,
+    fd: impl FnOnce() -> D + Send,
+) -> (A, B, C, D) {
+    if std::thread::available_parallelism().is_ok_and(|n| n.get() >= 8) {
+        std::thread::scope(|scope| {
+            let ha = scope.spawn(fa);
+            let hb = scope.spawn(fb);
+            let hc = scope.spawn(fc);
+            let hd = scope.spawn(fd);
+            (ha.join().unwrap(), hb.join().unwrap(), hc.join().unwrap(), hd.join().unwrap())
+        })
+    } else {
+        (fa(), fb(), fc(), fd())
+    }
+}
+
 /// Two variants of a table keyed two ways, with the line each table is made on known (lines 8, 10, 22 and 24)
 const NESTED: &str = "return {
 	title = \"nested either way\",
@@ -105,7 +136,15 @@ fn site<'a>(run: &'a Json, line: i64) -> &'a Json {
 #[test]
 fn a_comparison_writes_profiles_and_an_index_of_what_they_show() {
     let root = scratch("index");
-    let (done, compare) = try_file(&root, "nested.luau", NESTED, "out", &["--rounds", "2", "--time-ms", "1", "--no-hw"], false);
+    let (mut done, mut compare) = try_file(&root, "nested.luau", NESTED, "out", &["--rounds", "2", "--time-ms", "1", "--no-hw"], false);
+    // On a loaded CI-sized machine a single preemption can slow both 1 ms A/A rounds at one size so `stats::clean`
+    // drops both pairs; retry up to 3 fresh tries before asserting every check identically.
+    for _ in 0..2 {
+        if done.status.code() != Some(0) || compare["aa"].as_array().is_some_and(|aa| aa.len() == 2) {
+            break;
+        }
+        (done, compare) = try_file(&root, "nested.luau", NESTED, "out", &["--rounds", "2", "--time-ms", "1", "--no-hw"], false);
+    }
     let output = text(&done);
     assert_eq!(done.status.code(), Some(0), "{output}");
     assert_eq!((compare["format"].as_str(), compare["version"].as_u64(), compare["baseline"].as_str()), (Some("ree-what-if"), Some(2), Some("by kind")));
@@ -240,13 +279,12 @@ fn a_failed_check_and_a_variant_that_raises_are_reported() {
 ";
     let failures_path = root.join("failures.luau");
     std::fs::write(&failures_path, source).unwrap();
-    let ((done, compare), (bad, _), (unknown, _), (option, _)) = std::thread::scope(|scope| {
-        let h1 = scope.spawn(|| try_existing(&root, &failures_path, "out", &["--no-time", "--no-hw"], false));
-        let h2 = scope.spawn(|| try_file(&root, "bad.luau", "return 5\n", "bad", &["--no-time"], false));
-        let h3 = scope.spawn(|| try_existing(&root, &failures_path, "out2", &["--variants", "nope"], false));
-        let h4 = scope.spawn(|| try_existing(&root, &failures_path, "out3", &["--sizez", "4"], false));
-        (h1.join().unwrap(), h2.join().unwrap(), h3.join().unwrap(), h4.join().unwrap())
-    });
+    let ((done, compare), (bad, _), (unknown, _), (option, _)) = run_quad(
+        || try_existing(&root, &failures_path, "out", &["--no-time", "--no-hw"], false),
+        || try_file(&root, "bad.luau", "return 5\n", "bad", &["--no-time"], false),
+        || try_existing(&root, &failures_path, "out2", &["--variants", "nope"], false),
+        || try_existing(&root, &failures_path, "out3", &["--sizez", "4"], false),
+    );
     let output = text(&done);
     assert_eq!(done.status.code(), Some(1), "{output}");
     let raises = run_of(&compare, "raises", 4.0);
@@ -287,11 +325,10 @@ fn results_compared_by_digest_block_a_winner_and_small_gaps_are_not_material() {
 }
 ";
     let busy = source.replace("sizes = { 100, 1000 },", "sizes = { 100, 1000 },\n\tper_frame = 1000,");
-    let ((done, compare), (_, busy_compare)) = std::thread::scope(|scope| {
-        let h1 = scope.spawn(|| try_file(&root, "digest.luau", source, "out", &["--no-time", "--no-hw"], false));
-        let h2 = scope.spawn(|| try_file(&root, "digest-busy.luau", &busy, "busy", &["--no-time", "--no-hw"], false));
-        (h1.join().unwrap(), h2.join().unwrap())
-    });
+    let ((done, compare), (_, busy_compare)) = run_pair(
+        || try_file(&root, "digest.luau", source, "out", &["--no-time", "--no-hw"], false),
+        || try_file(&root, "digest-busy.luau", &busy, "busy", &["--no-time", "--no-hw"], false),
+    );
     let output = text(&done);
     assert_eq!(done.status.code(), Some(1), "a differing result fails the comparison: {output}");
     assert_eq!((compare["check"]["ran"].as_bool(), compare["check"]["by"].as_str(), compare["check"]["ok"].as_bool()), (Some(true), Some("digest"), Some(false)));
@@ -373,11 +410,10 @@ fn a_tie_at_the_top_leaves_the_other_verdicts() {
         let winners = output.split("winners at n = 1,000").nth(1).unwrap_or_else(|| panic!("no winners section: {output}"));
         winners.lines().find(|line| line.trim_start().starts_with("instructions ")).unwrap_or_else(|| panic!("{output}")).to_string()
     };
-    let ((tied, compare), (near, _)) = std::thread::scope(|scope| {
-        let h1 = scope.spawn(|| try_file(&root, "tie.luau", &source(""), "tied", &["--no-time", "--no-hw"], false));
-        let h2 = scope.spawn(|| try_file(&root, "tie-near.luau", &source("s += 0 "), "near", &["--no-time", "--no-hw"], false));
-        (h1.join().unwrap(), h2.join().unwrap())
-    });
+    let ((tied, compare), (near, _)) = run_pair(
+        || try_file(&root, "tie.luau", &source(""), "tied", &["--no-time", "--no-hw"], false),
+        || try_file(&root, "tie-near.luau", &source("s += 0 "), "near", &["--no-time", "--no-hw"], false),
+    );
     let output = text(&tied);
     assert_eq!(tied.status.code(), Some(0), "{output}");
     let insns = compare["winners"].as_array().unwrap().iter().find(|winner| winner["metric"] == "insns" && winner["size"] == 1000.0).unwrap_or_else(|| panic!("a tie leaves the figure's verdicts: {}", compare["winners"]));
@@ -401,11 +437,10 @@ fn the_exact_figures_are_the_same_every_run() {
     let root = scratch("exact");
     let nested_path = root.join("nested.luau");
     std::fs::write(&nested_path, NESTED).unwrap();
-    let ((first, a), (second, b)) = std::thread::scope(|scope| {
-        let h1 = scope.spawn(|| try_existing(&root, &nested_path, "a", &["--no-time", "--no-hw", "--no-check"], false));
-        let h2 = scope.spawn(|| try_existing(&root, &nested_path, "b", &["--no-time", "--no-hw", "--no-check"], false));
-        (h1.join().unwrap(), h2.join().unwrap())
-    });
+    let ((first, a), (second, b)) = run_pair(
+        || try_existing(&root, &nested_path, "a", &["--no-time", "--no-hw", "--no-check"], false),
+        || try_existing(&root, &nested_path, "b", &["--no-time", "--no-hw", "--no-check"], false),
+    );
     assert_eq!((first.status.code(), second.status.code()), (Some(0), Some(0)), "{}{}", text(&first), text(&second));
     let exact: Vec<String> = a["metrics"].as_array().unwrap().iter().filter(|metric| metric["exact"] == true).map(|metric| metric["key"].as_str().unwrap().to_string()).collect();
     assert!(exact.len() >= 10, "{exact:?}");
@@ -438,11 +473,10 @@ fn hardware_counters_join_the_figures_when_they_count() {
     let root = scratch("hw");
     let nested_path = root.join("nested.luau");
     std::fs::write(&nested_path, NESTED).unwrap();
-    let ((done, compare), (plain, without)) = std::thread::scope(|scope| {
-        let h1 = scope.spawn(|| try_existing(&root, &nested_path, "out", &["--no-time", "--no-check", "--sizes", "8"], true));
-        let h2 = scope.spawn(|| try_existing(&root, &nested_path, "plain", &["--no-time", "--no-check", "--sizes", "8"], false));
-        (h1.join().unwrap(), h2.join().unwrap())
-    });
+    let ((done, compare), (plain, without)) = run_pair(
+        || try_existing(&root, &nested_path, "out", &["--no-time", "--no-check", "--sizes", "8"], true),
+        || try_existing(&root, &nested_path, "plain", &["--no-time", "--no-check", "--sizes", "8"], false),
+    );
     assert_eq!(done.status.code(), Some(0), "{}", text(&done));
     assert_eq!(compare["hw"]["read"], true, "{}", compare["hw"]);
     let summary = std::fs::read_to_string(root.join("out").join("compare.txt")).unwrap();
@@ -522,13 +556,12 @@ fn a_profile_of_every_kind_leaves_a_recording_as_it_was() {
         let summary: Json = serde_json::from_slice(&done.stdout).unwrap();
         summary["output"].clone()
     };
-    let (plain, profiled, quiet, watched) = std::thread::scope(|scope| {
-        let h1 = scope.spawn(|| record("plain", false));
-        let h2 = scope.spawn(|| record("profiled", true));
-        let h3 = scope.spawn(|| run(false));
-        let h4 = scope.spawn(|| run(true));
-        (h1.join().unwrap(), h2.join().unwrap(), h3.join().unwrap(), h4.join().unwrap())
-    });
+    let (plain, profiled, quiet, watched) = run_quad(
+        || record("plain", false),
+        || record("profiled", true),
+        || run(false),
+        || run(true),
+    );
     let profile: Json = serde_json::from_str(&std::fs::read_to_string(root.join("profiled-profile").join("profile.json")).unwrap()).unwrap();
     assert!(profile["alloc"]["rehash"]["events"].as_u64().unwrap() > 0, "the tables grew under the profile");
     assert!(profile["heap"]["snapshots"].as_array().unwrap().iter().any(|snapshot| snapshot["tables"]["count"].as_u64().unwrap() > 400));
