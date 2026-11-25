@@ -197,9 +197,9 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // print and warn's mark on a SharedTable they write (lua/shared_table.rs `mark_value`)
     r.set(
         "MarkSharedTable",
-        super::create_boxed_val(lua, Box::new(|_, value: LuaValue| {
+        super::create_boxed_void_val(lua, Box::new(|_, value: LuaValue| {
             super::shared_table::mark_value(&value);
-            Ok(LuaValue::Nil)
+            Ok(())
         }))?,
     )?;
     // ValueCurveKey's table values, copied as an event's argument is (lua/bindable.rs): `R.Copied(height, value)`, the height
@@ -232,7 +232,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             if luau { cfunction::over_luau(lua, &name, kind, function) } else { cfunction::over_rust(lua, &name, kind, function) }
         })?,
     )?;
-    r.set("Nothing", super::create_boxed_unit(lua, Box::new(|_| Ok(LuaValue::Nil)))?)?;
+    r.set("Nothing", super::create_boxed_void(lua, Box::new(|_| Ok(())))?)?;
     // utf8.nfcnormalize and utf8.nfdnormalize (lua/normalize.rs)
     r.set("NfcNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, true)))?)?;
     r.set("NfdNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, false)))?)?;
@@ -1078,9 +1078,9 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
         e.output(kind, message.to_string_lossy(), None);
         Ok(())
     })?;
-    let mark = super::create_boxed_val(lua, Box::new(|_, value: LuaValue| {
+    let mark = super::create_boxed_void_val(lua, Box::new(|_, value: LuaValue| {
         super::shared_table::mark_value(&value);
-        Ok(LuaValue::Nil)
+        Ok(())
     }))?;
     for kind in ["print", "warn"] {
         shared.raw_set(kind, super::builtins::output_function(lua, kind, output.clone(), mark.clone())?)?;

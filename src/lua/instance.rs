@@ -208,9 +208,9 @@ fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: 
     let class_label = engine.reflection.class(class).name.to_string();
     let member = engine.reflection.name(name).to_string();
     let label = member.clone();
-    let function = super::named(lua, &label, super::cfunction::Kind::Library, super::create_boxed_unit(lua, Box::new(move |lua| {
+    let function = super::named(lua, &label, super::cfunction::Kind::Library, super::create_boxed_void(lua, Box::new(move |lua| {
         e.missing(Some(lua), &class_label, &member);
-        Ok(LuaValue::Nil)
+        Ok(())
     }))?)?;
     engine.lua.borrow_mut().unimplemented.insert((class, name), function.clone());
     Ok(LuaValue::Function(function))
@@ -1152,21 +1152,21 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
         let connection_slot = connection_slot.clone();
         let thread = thread.clone();
         let name = name.clone();
-        super::create_boxed_val(lua, Box::new(move |lua, child: LuaValue| {
+        super::create_boxed_void_val(lua, Box::new(move |lua, child: LuaValue| {
             let Some(child_id) = instance_id(&child) else {
-                return Ok(LuaValue::Nil);
+                return Ok(());
             };
             let wanted = name_arg(&name);
             let wanted = wanted.as_ref().map(|s| s.as_bytes());
             if done.get() || !name_equals(&engine.state.borrow(), child_id, wanted.as_deref()) {
-                return Ok(LuaValue::Nil);
+                return Ok(());
             }
             done.set(true);
             if let Some(connection) = connection_slot.get() {
                 engine.state.borrow_mut().signals.disconnect(connection);
             }
             scheduler::resume(lua, &engine, &thread, LuaMultiValue::from_iter([child]));
-            Ok(LuaValue::Nil)
+            Ok(())
         }))?
     };
     let signal = core::event_signal(&mut engine.state.borrow_mut(), &engine.reflection, id, K::ChildAdded as NameId);
@@ -1181,14 +1181,14 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
             let engine_ref = engine.clone();
             let done = done.clone();
             let thread = thread.clone();
-            let body = super::create_boxed_unit(lua, Box::new(move |lua| {
+            let body = super::create_boxed_void(lua, Box::new(move |lua| {
                 if done.get() {
-                    return Ok(LuaValue::Nil);
+                    return Ok(());
                 }
                 done.set(true);
                 engine_ref.state.borrow_mut().signals.disconnect(connection);
                 scheduler::resume(lua, &engine_ref, &thread, LuaMultiValue::from_iter([LuaValue::Nil]));
-                Ok(LuaValue::Nil)
+                Ok(())
             }))?;
             let timer = lua.create_thread(body)?;
             engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, timeout, timer, Vec::new());
@@ -1200,11 +1200,11 @@ fn wait_for_child(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -
                 key_text(&name)
             );
             let engine_ref = engine.clone();
-            let body = super::create_boxed_unit(lua, Box::new(move |_| {
+            let body = super::create_boxed_void(lua, Box::new(move |_| {
                 if !done.get() {
                     engine_ref.warn(label.clone());
                 }
-                Ok(LuaValue::Nil)
+                Ok(())
             }))?;
             let timer = lua.create_thread(body)?;
             engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, 5.0, timer, Vec::new());

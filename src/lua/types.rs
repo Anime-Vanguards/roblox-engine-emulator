@@ -767,7 +767,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     })?;
 
     let connection_members = lua.create_table()?;
-    let disconnect = named(lua, "Disconnect", Library, super::create_boxed_val(lua, Box::new(|lua, this| {
+    let disconnect = named(lua, "Disconnect", Library, super::create_boxed_void_val(lua, Box::new(|lua, this| {
         let engine = engine_of(lua);
         if let LuaValue::UserData(ud) = this {
             if let Ok(connection) = ud.borrow::<LConnection>() {
@@ -780,7 +780,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 state.signals.disconnect(connection.0);
             }
         }
-        Ok(LuaValue::Nil)
+        Ok(())
     }))?)?;
     connection_members.set("Disconnect", disconnect.clone())?;
     connection_members.set("disconnect", disconnect)?;
@@ -862,7 +862,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         lock_metatable(lua, &sample)?;
         super::raw::set_table_namecall(lua, &sample, signal_calls, "RBXScriptSignal", lua.create_table()?)?;
     }
-    let probe = super::create_boxed_unit(lua, Box::new(|_| Ok(LuaValue::Nil)))?;
+    let probe = super::create_boxed_void(lua, Box::new(|_| Ok(())))?;
     let connection = engine.state.borrow_mut().signals.connect(signal, probe, false);
     let sample = lua.create_any_userdata(LConnection(connection))?;
     lock_metatable(lua, &sample)?;

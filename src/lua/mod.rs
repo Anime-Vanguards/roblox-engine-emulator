@@ -254,6 +254,22 @@ pub(crate) fn create_boxed_fn(
 }
 
 #[inline(never)]
+pub(crate) fn create_boxed_void(
+    lua: &Lua,
+    function: Box<dyn Fn(&Lua) -> LuaResult<()> + 'static>,
+) -> LuaResult<LuaFunction> {
+    lua.create_function(move |lua, _: LuaMultiValue| function(lua))
+}
+
+#[inline(never)]
+pub(crate) fn create_boxed_void_val(
+    lua: &Lua,
+    function: Box<dyn Fn(&Lua, LuaValue) -> LuaResult<()> + 'static>,
+) -> LuaResult<LuaFunction> {
+    lua.create_function(move |lua, arg: LuaValue| function(lua, arg))
+}
+
+#[inline(never)]
 pub(crate) fn create_boxed_unit(
     lua: &Lua,
     function: Box<dyn Fn(&Lua) -> LuaResult<LuaValue> + 'static>,
