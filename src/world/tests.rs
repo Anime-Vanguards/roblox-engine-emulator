@@ -2816,6 +2816,7 @@ fn a_part_entering_a_world_skips_its_joints_outside_every_world() {
             let w = crate::instance::create_named(&mut state, &reflection, weld_class, "Weld");
             crate::instance::raw_set_silent(&mut state, &reflection, w, part0_prop, crate::value::Value::Instance(named));
             crate::instance::raw_set_silent(&mut state, &reflection, w, part1_prop, crate::value::Value::Instance(other));
+            super::joints::made_in_place(&mut state, &reflection, w);
         }
         (lone, named)
     };
@@ -2834,7 +2835,7 @@ fn a_part_entering_a_world_skips_its_joints_outside_every_world() {
         World.Parent = game:GetService("ReplicatedStorage")
         shared.Work = {}
         local function Moves(P)
-            for _ = 1, 200 do
+            for _ = 1, 400 do
                 P.Parent = workspace
                 P.Parent = nil
                 P.Parent = World
@@ -2870,7 +2871,8 @@ fn a_part_entering_a_world_skips_its_joints_outside_every_world() {
     }
     // (os.clock reads about 10,000 s, where its last bit is 1.8e-12 s)
     run(&lua, &engine, r#"assert(math.abs(shared.Work.Named - shared.Work.Lone) < 1e-11, `the named part's moves cost {shared.Work.Named} s of work where the lone one's {shared.Work.Lone}`)"#);
-    assert!(named < 2.0 * lone + 0.05, "800 moves took {named:.3} s of host time for a part named by 50,000 welds outside every world, {lone:.3} s for one named by none");
+    assert!(named < 2.0 * lone + 0.05, "1,600 moves took {named:.3} s of host time for a part named by 50,000 welds outside every world, {lone:.3} s for one named by none");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
 /// A part outside every world named by joints that are in one moves between places outside every world without working its joints
@@ -2918,6 +2920,7 @@ fn a_part_outside_every_world_moves_without_working_its_joints_out() {
             crate::instance::raw_set_silent(&mut state, &reflection, w, part1_prop, crate::value::Value::Instance(other));
             crate::instance::raw_set_silent(&mut state, &reflection, w, enabled_prop, crate::value::Value::Bool(index.is_multiple_of(2)));
             state.dom.attach(w, box_folder);
+            super::joints::made_in_place(&mut state, &reflection, w);
         }
         (lone, named, box_folder)
     };
@@ -4093,6 +4096,7 @@ fn one_writes_link_changes_cost_the_links_however_many_one_part_has() {
                 crate::instance::raw_set_silent(state, &reflection, w, part0_prop, crate::value::Value::Instance(a));
                 crate::instance::raw_set_silent(state, &reflection, w, part1_prop, crate::value::Value::Instance(b));
                 state.dom.attach(w, parent);
+                super::joints::made_in_place(state, &reflection, w);
             };
             let model = crate::instance::create_named(&mut state, &reflection, model_class, "Model");
             let hub = make_part(&mut state, true, model);
@@ -4249,12 +4253,13 @@ fn link_changes_among_several_anchored_parts_walk_none_of_their_assembly() {
 }
 
 /// An AssemblyMass read whose kept walk was made while a leaf's weld was disabled walks nothing after the weld is enabled again,
-/// though the leaf joins the middle of the walk's order: 300 rounds on a free hub welded to 10,000 parts (the hub the root), each the
-/// kept walks dropped (a weld closing a cycle enabled and disabled), another leaf's weld disabled, the hub's mass read (its walk made
-/// then), the weld enabled and the hub's mass read again, the last read timed alone, take about the host time the same reads take on
-/// hubs welded to four parts, a big and a small hub's round in turn (up to three tries). The read after the enable walked the whole
-/// assembly again (about 0.6 ms at 10,000); it adds the kept masses up again from the leaf on, to the bit (30 to 35 us at 10,001
-/// parts, 0.2 to 0.3 ms with the caches cold on a loaded host).
+/// though the leaf joins the middle of the walk's order: on a free hub welded to 10,000 parts (the hub the root), each try
+/// disables all 320 target leaves, drops the kept walk once (a weld closing a cycle enabled and disabled), and reads the hub's
+/// mass (making its kept walk once with those leaves out); then each of the 300 timed rounds enables another leaf's weld and
+/// times the hub's mass read alone (taking about the host time the same reads take on 320 four-part hubs, a big and a small
+/// hub's round in turn, up to three tries). The read after the enable walked the whole assembly again (about 0.6 ms at 10,000);
+/// it adds the kept masses up again from the leaf on, to the bit (30 to 35 us at 10,001 parts, 0.2 to 0.3 ms with the caches
+/// cold on a loaded host).
 #[test]
 fn a_mass_read_after_a_leaf_rejoins_its_walks_middle_walks_nothing() {
     let (lua, engine) = start_play();
@@ -5323,10 +5328,10 @@ fn free_flight_steps_cost_the_same_however_deep_or_wide_the_parts_are() {
 }
 
 /// A script cannot overflow the engine's stack with a deep tree: the engine's walks of the tree keep stacks of their own. On a
-/// thread with libtest's 2 MiB stack (a recursion over these chains overflows it at 20 bytes a level, 200 for the one destroyed):
-/// a chain of 100,000 Folders with a Part at the bottom holding 50,000 nested Attachments and 50,000 nested Bones below them, a
-/// CurveAnimation of 100,000 nested Folders, and a chain of 10,000 Folders, each moved into ReplicatedStorage, and a model of
-/// 100,000 nested Folders imported there lazily (its instances made as a script reaches them), with a Studio place's hierarchy
+/// thread with a 512 KiB stack (a recursion over these chains overflows it at 18 bytes a level, 180 for the one destroyed):
+/// a chain of 30,000 Folders with a Part at the bottom holding 15,000 nested Attachments and 15,000 nested Bones below them, a
+/// CurveAnimation of 30,000 nested Folders, and a chain of 3,000 Folders, each moved into ReplicatedStorage, and a model of
+/// 30,000 nested Folders imported there lazily (its instances made as a script reaches them), with a Studio place's hierarchy
 /// loaded. The script first lists the bottom part's children (its Studio node worked out up the whole chain), then searches the chain
 /// (FindFirstChild and FindFirstChildWhichIsA recursive, QueryDescendants) and the import's plan, clones the chain, reads the bottom bone's and
 /// attachment's world frames and moves the chain into the Workspace (AncestryChanged's order, the move's price), where it is stepped
@@ -8148,13 +8153,20 @@ fn query_order_is_the_order_of_whole_attach_number_lists() {
 fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    register_wrap(&lua, &engine);
     run(
         &lua,
         &engine,
         r#"
-        -- (a chain of folders `Depth` deep holding `Inner`, built directly in the dom so making it walks nothing)
-        local Wrap = shared.Wrap
+        -- (a chain of folders `Depth` deep holding `Inner`, made from the bottom up so that making it walks nothing)
+        local function Wrap(Inner, Depth)
+            local Outer = Inner
+            for _ = 1, Depth do
+                local Folder = Instance.new("Folder")
+                Outer.Parent = Folder
+                Outer = Folder
+            end
+            return Outer
+        end
         -- `Count` parts in a stack along Z at X, in a folder `Depth` deep, or each in a chain of its own `Apart` deep
         local function Scene(X, Count, Depth, Apart)
             local Parts = {}

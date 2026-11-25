@@ -28,7 +28,7 @@ Search open issues before filing a duplicate.
    cargo test --release
    ```
    The first build compiles Luau's C++ sources and takes a few minutes; subsequent `--release` builds are incremental.
-3. `cargo test --release` requires ~2 GB of free RAM (for `ree serve` tests) and runs `tests/process_guards.rs` against the compiled `ree` binary. No test requires Roblox Studio, a GPU, or network access.
+3. `cargo test --release` requires ~2 GB of free RAM (for `ree serve` tests) and runs `tests/cli.rs` against the compiled `ree` binary. No test requires Roblox Studio, a GPU, or network access.
 4. **Editing VM/datatype patches:** Never edit `vendor/` directly. Edit the topic patches under `patches/luau/` (or `patches/lune.patch`, `patches/mlua-sys.patch`), rebuild with `node tools/vendor.mjs`, verify with `node tools/vendor.mjs --check`, and commit both `patches/` and `vendor/`. See [docs/building.md](docs/building.md#updating-luau).
 
 Read the relevant section of [docs/engine.md](docs/engine.md) before changing engine behavior, and update it in the same commit.

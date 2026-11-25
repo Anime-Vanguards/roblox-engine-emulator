@@ -94,7 +94,7 @@ node tools/vendor.mjs edit              # Edit a mid-series topic in .cache/vend
 Useful `bump` flags: `--crate <version>` (switch `luau0-src` crate version if upstream file layout changed) and `--verify` (build, test, and run parity probes afterward).
 
 **Post-bump checklist** (clean rebases don't guarantee new upstream code paths are covered by topic hooks):
-1. Audit upstream diffs touching any file patched by a topic (new call opcodes, allocations, table lookups, or free paths often need corresponding counters/hooks; a new entry into the interpreter or a new place that catches errors needs the float mode's set and restore, `19-float-mode`).
+1. Audit upstream diffs touching any file patched by a topic (new call opcodes, allocations, table lookups, or free paths often need corresponding counters/hooks; every new non-opcode `lua_WorkCounters` write must set its bit in `global_State::workdirty`, `27-profile-dirty-mask`; a new entry into the interpreter or a new place that catches errors needs the float mode's set and restore, `19-float-mode`).
 2. If Luau's C API or type tags changed (e.g., Luau 0.747 removing the integer type tag), update `mlua` and `mlua-sys` pins in `Cargo.toml` / `tools/vendor.mjs` (or temporarily bridge with `patches/mlua-sys.patch`).
 3. Refresh live Roblox client Luau FFlags (`data/luau-flags.json`) and re-vendor: `node tools/luau-flags.mjs`.
 4. Verify build, tests, and vendor integrity: `cargo build --release && cargo test --release && node tools/vendor.mjs --check`.

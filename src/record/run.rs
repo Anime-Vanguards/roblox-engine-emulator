@@ -1272,9 +1272,13 @@ pub(crate) fn finish_run(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, reco
     let mut steps = Steps::default();
     if let Some(framed) = framed {
         // (parked between frames: frame 0 and the frames up to the checkpoint ran ahead; the harness
-        // goes on before the next frame, as in a run from the start)
-        checkpoint.parked.set(false);
+        // goes on before the next frame, as in a run from the start. Reset the wall-clock cap so a
+        // prepared run that sat parked before this job arrived gets the job's full cap.)
+        let was_parked = checkpoint.parked.replace(false);
         steps = framed;
+        if was_parked {
+            steps.started = std::time::Instant::now();
+        }
     } else if checkpoint.parked.get() {
         checkpoint.parked.set(false);
         let thread = checkpoint.harness.borrow().clone().ok_or("no harness thread")?;

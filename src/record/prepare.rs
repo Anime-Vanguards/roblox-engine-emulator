@@ -183,12 +183,16 @@ impl Prepared {
         let (sender, receiver) = std::sync::mpsc::channel();
         rayon::spawn(move || {
             use rayon::prelude::*;
-            // Read source files are already checked in `noted` via direct metadata stamps; check
-            // listings for directory entries and non-source files only (avoids Windows NTFS
-            // directory-entry timestamp lag on recently written source files).
+            // Read source files are checked in `noted` via direct metadata stamps in parallel;
+            // listings check directory entries and non-source files concurrently (avoids Windows
+            // NTFS directory-entry timestamp lag on recently written source files without blocking
+            // the job on sequential stat calls).
             let empty = rustc_hash::FxHashSet::default();
-            let changed = noted.changed().or_else(|| listings.par_iter().find_any(|listing| !listing.unchanged(&empty)).map(|listing| format!("{} changed", listing.path())));
-            let _ = sender.send(changed);
+            let (noted_changed, listing_changed) = rayon::join(
+                || noted.changed(),
+                || listings.par_iter().find_any(|listing| !listing.unchanged(&empty)).map(|listing| format!("{} changed", listing.path())),
+            );
+            let _ = sender.send(noted_changed.or(listing_changed));
         });
         // (the listing's stamps are the prepared run's: a module read from here on is stamped now)
         engine.state.borrow_mut().project.stamps.clear();

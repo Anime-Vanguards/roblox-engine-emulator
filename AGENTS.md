@@ -49,7 +49,7 @@ nearly every file.
   viewer in `profile-view/`, a crate of its own in the workspace (the engine's crate has no terminal UI).
 - Tests: `src/tests.rs` (script API), `src/scheduler_tests.rs`, `src/lua/datatype_tests.rs`, `src/world/tests.rs`,
   `src/record/tests.rs`, `src/emulator.rs`, tests beside their modules, `tests/luau_vm.rs` (the patched VM),
-  `tests/process_guards.rs` (the built `ree`).
+  `tests/cli.rs` (the built `ree`).
 - `vendor/` (generated: never edit by hand), `patches/`, `tools/vendor.mjs`; `data/` (Studio's API dump and text
   metrics, compiled in); `tools/cost-parity/` (the work clock's calibration: the parity bench, its fits and its kept client
   sessions; `tools/luau-cost/` is the older Studio-playtest fit); `docs/engine.md` (the contract).

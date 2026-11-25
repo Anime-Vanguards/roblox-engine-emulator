@@ -1530,6 +1530,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A prepared run parked at `Context.FrameCheckpoint` whose idle wait exceeds `--max-wall-seconds`
+    /// must not trip the wall-clock cap on the next job (its cap counts from the job's start, not
+    /// when the run was prepared ahead), while a job that genuinely runs past the cap still exits 124.
+    #[test]
+    fn a_prepared_framed_run_parked_past_max_wall_seconds_still_succeeds() {
+        modules::reuse_compiled_modules();
+        let root = std::env::temp_dir().join(format!("ree-serve-framed-cap-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let harness = root.join("FramedCap.luau");
+        std::fs::write(
+            &harness,
+            r#"return {
+                Prepare = function(Context)
+                    task.wait(0.05)
+                    Context.FrameCheckpoint()
+                end,
+                Run = function(Context)
+                    if Context.Slow then
+                        local RunService = game:GetService("RunService")
+                        RunService.Heartbeat:Connect(function()
+                            local S = 0
+                            for I = 1, 200000 do
+                                S += I
+                            end
+                        end)
+                        task.wait(Context.Seconds)
+                    else
+                        task.wait(0.05)
+                        print("ok", Context.Tag)
+                        print("@done")
+                    end
+                end,
+            }"#,
+        )
+        .unwrap();
+        let roots = root.join("game").to_string_lossy().into_owned();
+        let arguments = |tag: &str, slow: bool, cap: &str| -> Vec<String> {
+            [
+                "--harness",
+                &harness.to_string_lossy(),
+                "--roots",
+                &roots,
+                "--seconds",
+                "10",
+                "--fps",
+                "60",
+                "--run-context",
+                "server",
+                "--max-wall-seconds",
+                cap,
+                "--context",
+                &format!(r#"{{"Tag":"{tag}","Slow":{slow}}}"#),
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+        };
+        let counts = PreparedCounts::default();
+        let mut parked = Some(prepare::prepare(&arguments("prep", false, "1"), &launch::Host::default(), false).expect("prepared framed run"));
+        assert!(parked.as_ref().unwrap().key().framed);
+        // Park the prepared run longer than its 1 s wall-clock cap before serving the next job.
+        std::thread::sleep(Duration::from_millis(1250));
+        let (reply, emulator, _) = run_job("run", &arguments("waited", false, "1"), &mut parked, &counts);
+        drop(emulator);
+        assert_eq!(reply["code"], 0, "a parked prepared run must not inherit its idle time into --max-wall-seconds: {reply}");
+        assert_eq!(counts.used.load(Ordering::SeqCst), 1, "the prepared framed run was reused");
+        let summary: serde_json::Value = serde_json::from_str(reply["stdout"].as_str().unwrap().trim()).unwrap();
+        assert_eq!(summary["status"], "ok", "{summary}");
+        assert!(summary["output"].as_array().unwrap().iter().any(|line| line["message"] == "ok waited"), "{summary}");
+
+        // A job whose own frames run past the cap still stops with exit 124.
+        let mut parked_slow = Some(prepare::prepare(&arguments("prep", false, "0.2"), &launch::Host::default(), false).expect("prepared framed run"));
+        let (reply, emulator, _) = run_job("run", &arguments("runaway", true, "0.2"), &mut parked_slow, &counts);
+        drop(emulator);
+        assert_eq!(reply["code"], crate::watchdog::EXIT_CAP, "a runaway prepared job must still stop at --max-wall-seconds: {reply}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// An idle worker holding nothing prepares the most recent recording ahead until [`HOLDERS`] workers
     /// hold or prepare it; a job waits for a worker preparing its recording only when that is expected
     /// ready within [`WAIT_FOR_PREPARED`].

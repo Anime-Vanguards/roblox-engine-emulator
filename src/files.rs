@@ -31,13 +31,23 @@ pub fn stamp(path: &Path) -> Option<Stamp> {
         fn GetFileAttributesExW(name: *const u16, level: i32, data: *mut Data) -> i32;
     }
     const DIRECTORY: u32 = 0x10;
-    let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
-    if wide.len() > 240 {
+    let mut wide = [0u16; 241];
+    let mut len = 0usize;
+    for unit in path.as_os_str().encode_wide() {
+        if len >= 240 {
+            len = 241;
+            break;
+        }
+        wide[len] = unit;
+        len += 1;
+    }
+    if len > 240 {
         // (past MAX_PATH the plain call fails; std adds the \\?\ prefix)
         let metadata = std::fs::metadata(path).ok()?;
         let since_1601 = metadata.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |time| (time.as_nanos() / 100) as u64 + 116_444_736_000_000_000);
         return Some(Stamp { len: metadata.len(), modified: since_1601, directory: metadata.is_dir() });
     }
+    wide[len] = 0;
     let mut data = Data { attributes: 0, created: [0; 2], accessed: [0; 2], written: [0; 2], size_high: 0, size_low: 0 };
     // GetFileExInfoStandard
     if unsafe { GetFileAttributesExW(wide.as_ptr(), 0, &mut data) } == 0 {
@@ -209,6 +219,14 @@ pub fn note(path: &Path) {
     }
 }
 
+/// Notes that this thread's engine read file `path` with an already-queried [`Stamp`], avoiding a
+/// second `GetFileAttributesExW` / `stat` syscall when the caller already stamped the file.
+pub fn note_stamp(path: &Path, stamp: Option<Stamp>) {
+    if is_noting() {
+        noting(|noted| noted.files.push((path.to_path_buf(), stamp)));
+    }
+}
+
 /// Notes that this thread's engine listed directory `path` as it is now.
 pub fn note_listing(path: &Path) {
     if is_noting() {
@@ -236,18 +254,19 @@ fn listing(path: &Path) -> Option<Vec<std::ffi::OsString>> {
 }
 
 impl Noted {
-    /// What differs from what was read (None: every file and listing is as it was then).
+    /// What differs from what was read (None: every file and listing is as it was then). Checks
+    /// noted files and directory listings in parallel on rayon so large prepared projects do not
+    /// pay sequential per-file stat latency.
     pub fn changed(&self) -> Option<String> {
+        use rayon::prelude::*;
         if let Some(why) = &self.unchecked {
             return Some(why.clone());
         }
-        if let Some((path, _)) = self.files.iter().find(|(path, was)| stamp(path) != *was) {
-            return Some(format!("{} changed", path.display()));
-        }
-        if let Some((path, _)) = self.listings.iter().find(|(path, was)| listing(path) != *was) {
-            return Some(format!("{}'s entries changed", path.display()));
-        }
-        None
+        let (file_changed, listing_changed) = rayon::join(
+            || self.files.par_iter().find_any(|(path, was)| stamp(path) != *was).map(|(path, _)| format!("{} changed", path.display())),
+            || self.listings.par_iter().find_any(|(path, was)| listing(path) != *was).map(|(path, _)| format!("{}'s entries changed", path.display())),
+        );
+        file_changed.or(listing_changed)
     }
 
     /// How many files and listings it holds.

@@ -194,12 +194,14 @@ pub fn use_prefetch(engine: &Engine, prefetch: std::sync::Arc<Prefetch>) {
 fn read_file_opts(engine: &Engine, path: &str, compile_bytecode: bool) -> std::io::Result<(std::sync::Arc<[u8]>, Option<StoredBytes>)> {
     let prefetch = engine.modules.borrow().prefetch.clone();
     if let Some(taken) = prefetch.and_then(|prefetch| prefetch.take(path)) {
+        crate::files::note(std::path::Path::new(path));
         return Ok(taken);
     }
     if let Some(compiled) = COMPILED.get() {
         let disk = store::for_engine(engine);
         return compiled.read_with_store(path, compile_bytecode, disk.as_deref());
     }
+    crate::files::note(std::path::Path::new(path));
     let bytes = std::fs::read(path)?;
     let source: std::sync::Arc<[u8]> = std::sync::Arc::from(bytes.into_boxed_slice());
     let bytecode = if compile_bytecode && (path.ends_with(".lua") || path.ends_with(".luau")) {
@@ -313,6 +315,7 @@ impl CompiledSources {
         let lasting = !TRANSIENT.with(std::cell::Cell::get);
         let lua_source = path.ends_with(".lua") || path.ends_with(".luau");
         if one_shot {
+            crate::files::note(std::path::Path::new(path));
             if let Some((_, entry, _)) = self.entries.read().ok().and_then(|entries| entries.get(path).cloned()) {
                 if !compile_bytecode || entry.1.is_some() || !lua_source {
                     crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
@@ -354,7 +357,10 @@ impl CompiledSources {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
             return Ok((entry.0.clone(), entry.1.clone()));
         }
-        let stamp = crate::files::stamp(std::path::Path::new(path)).ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+        let file_path = std::path::Path::new(path);
+        let stamp_opt = crate::files::stamp(file_path);
+        crate::files::note_stamp(file_path, stamp_opt);
+        let stamp = stamp_opt.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
         let known = self.entries.read().ok().and_then(|entries| entries.get(path).cloned());
         if let Some((known_stamp, entry, home)) = known {
             if known_stamp == stamp {
@@ -615,11 +621,9 @@ pub fn read_files(engine: &Engine) -> rustc_hash::FxHashSet<String> {
     engine.modules.borrow().read.clone()
 }
 
-/// Notes that the engine read source file `path` ([`read_files`]; always noted via `files::note`
-/// so a prepared run checks its true metadata stamp rather than relying on Windows directory-entry
-/// caches that can lag behind recent writes).
+/// Notes that the engine read source file `path` ([`read_files`]). File metadata noting for
+/// prepared runs happens once on the actual stamp lookup (`files::note_stamp` / `files::note`).
 fn note_read(engine: &Engine, path: &str) {
-    crate::files::note(std::path::Path::new(path));
     engine.modules.borrow_mut().read.insert(path.to_string());
 }
 
@@ -1146,14 +1150,18 @@ pub fn parse_json(engine: &Engine, path: &str) -> Result<std::sync::Arc<serde_js
     if let Some(global_cache) = JSON_CACHE.get() {
         if is_batch_frozen() {
             if let Some(found) = global_cache.read().ok().and_then(|entries| entries.get(path).map(|(_, value)| value.clone())) {
+                crate::files::note(std::path::Path::new(path));
                 engine.modules.borrow_mut().json_cache.insert(path.to_string(), found.clone());
                 return Ok(found);
             }
         }
-        if let Some(stamp) = crate::files::stamp(std::path::Path::new(path)) {
+        let file_path = std::path::Path::new(path);
+        let stamp_opt = crate::files::stamp(file_path);
+        if let Some(stamp) = stamp_opt {
             if let Some(found) = global_cache.read().ok().and_then(|entries| {
                 entries.get(path).and_then(|(known, value)| (*known == stamp).then(|| value.clone()))
             }) {
+                crate::files::note_stamp(file_path, stamp_opt);
                 engine.modules.borrow_mut().json_cache.insert(path.to_string(), found.clone());
                 return Ok(found);
             }
@@ -1189,6 +1197,7 @@ pub(crate) fn parse_bjson(engine: &Engine, path: &str) -> Result<StoredBytes, St
     if let Some(global_cache) = BJSON_CACHE.get() {
         if is_batch_frozen() || !keeping_between_runs() {
             if let Some(found) = global_cache.read().ok().and_then(|entries| entries.get(path).map(|(_, value)| value.clone())) {
+                crate::files::note(std::path::Path::new(path));
                 engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), found.clone());
                 return Ok(found);
             }
@@ -1201,10 +1210,13 @@ pub(crate) fn parse_bjson(engine: &Engine, path: &str) -> Result<StoredBytes, St
             engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), bjson.clone());
             return Ok(bjson);
         }
-        if let Some(stamp) = crate::files::stamp(std::path::Path::new(path)) {
+        let file_path = std::path::Path::new(path);
+        let stamp_opt = crate::files::stamp(file_path);
+        if let Some(stamp) = stamp_opt {
             if let Some(found) = global_cache.read().ok().and_then(|entries| {
                 entries.get(path).and_then(|(known, value)| (*known == stamp).then(|| value.clone()))
             }) {
+                crate::files::note_stamp(file_path, stamp_opt);
                 engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), found.clone());
                 return Ok(found);
             }
