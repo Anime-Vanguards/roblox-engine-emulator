@@ -12373,6 +12373,90 @@ fn workspace_and_world_root_engine_only_methods_raise_a_game_scripts_capability_
     }
 }
 
+/// Selection's capability-gated methods raise in play mode (client and server) before self/arg checks, matching a Studio
+/// 0.747 playing client and server (`selection_terrain.luau`): `Get`, `Set`, `Add`, `Remove` lack `Plugin` (making
+/// `pcall(Selection.Get, Selection)` return `false` so plugin checks do not mistake play mode for a plugin; edit mode
+/// leaves them unemulated as plugin code has `Plugin`), `AddFocusCallback`, `ClearTerrainSelectionHack`, and
+/// `SetTerrainSelectionHack` lack `RobloxScript` in every context, and lowercase `Selection:remove()` still hits
+/// `Instance:Remove` (parent lock).
+#[test]
+fn selection_capability_methods_raise_for_game_scripts_and_keep_instance_remove() {
+    use super::RunContext;
+    const METHODS: &[(&str, &str)] = &[
+        ("Get", "Plugin"),
+        ("Set", "Plugin"),
+        ("Add", "Plugin"),
+        ("Remove", "Plugin"),
+        ("AddFocusCallback", "RobloxScript"),
+        ("ClearTerrainSelectionHack", "RobloxScript"),
+        ("SetTerrainSelectionHack", "RobloxScript"),
+    ];
+    let script = r#"
+        local Selection = game:GetService("Selection")
+        for _, Name in { "Get", "Set", "Add", "Remove", "AddFocusCallback", "ClearTerrainSelectionHack", "SetTerrainSelectionHack" } do
+            local Ok, Message = pcall(Selection[Name], Selection)
+            if Ok then
+                print(Name, "answers", Message)
+                continue
+            end
+            local NoSelf = select(2, pcall(Selection[Name]))
+            local OtherSelf = select(2, pcall(Selection[Name], workspace))
+            local WithArg = select(2, pcall(Selection[Name], Selection, {}))
+            print(Name, typeof(Selection[Name]), tostring(Ok), Message, tostring(NoSelf == Message and OtherSelf == Message and WithArg == Message))
+        end
+        local IsPlugin = pcall(function() return Selection:Get() end)
+        print("is_plugin", tostring(IsPlugin))
+        print("lower_get_same", tostring(rawequal((Selection :: any).get, Selection.Get)))
+        local RemoveOk, RemoveErr = pcall(function() return (Selection :: any):remove() end)
+        print("lower_remove", tostring(RemoveOk), tostring(string.find(tostring(RemoveErr), "The Parent property of Selection is locked", 1, true) == 1))
+    "#;
+    for (mode, run_context) in [("play", RunContext::Client), ("play", RunContext::Server), ("edit", RunContext::Edit)] {
+        let mut want = Vec::new();
+        for &(name, capability) in METHODS {
+            if mode == "edit" && capability == "Plugin" {
+                want.push(format!("missing: Selection.{name} is not emulated"));
+                want.push(format!("print: {name} answers nil"));
+                continue;
+            }
+            want.push(format!("print: {name} function false The current thread cannot call '{name}' (lacking capability {capability}) true"));
+        }
+        want.push(format!("print: is_plugin {}", mode == "edit"));
+        want.push("print: lower_get_same true".into());
+        want.push("print: lower_remove false true".into());
+        let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, script);
+        assert_eq!(output, want, "{mode} {run_context:?}");
+    }
+}
+
+/// Terrain:CountCells returns 0 (ree's Terrain holds no voxels), matches lowercase `countCells`, ignores extra
+/// arguments, raises the client's self check for wrong or missing self, and never reports `missing` (Studio 0.747,
+/// `selection_terrain.luau`).
+#[test]
+fn terrain_count_cells_returns_zero_with_client_self_checks() {
+    use super::RunContext;
+    let script = r#"
+        local T = workspace.Terrain
+        local S, L, N, A, V = debug.info(T.CountCells, "slna")
+        print("info", `{S}|{L}|{N}|{A}|{V}`, tostring(rawequal(T.CountCells, (T :: any).countCells)))
+        print("calls", T:CountCells(), (T :: any):countCells(), (T :: any):CountCells(1, "extra"))
+        local E1 = select(2, pcall(T.CountCells))
+        local E2 = select(2, pcall(T.CountCells, workspace))
+        local E3 = select(2, pcall(T.CountCells, 123))
+        print("errs", E1, tostring(E1 == E2 and E1 == E3))
+    "#;
+    let want = vec![
+        "print: info [C]|-1|CountCells|0|true true".to_string(),
+        "print: calls 0 0 0".to_string(),
+        "print: errs Expected ':' not '.' calling member function CountCells true".to_string(),
+    ];
+    for (mode, run_context) in [("play", RunContext::Client), ("play", RunContext::Server), ("edit", RunContext::Edit)] {
+        let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, script);
+        assert_eq!(output, want, "{mode} {run_context:?}");
+    }
+}
+
 /// What Studio 0.747's dump adds and ree does not emulate reports itself (an Output line of kind `missing` at its first use)
 /// and answers nil; what the dump drops is no member any more.
 #[test]

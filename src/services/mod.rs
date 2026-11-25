@@ -523,10 +523,19 @@ struct RenderStep {
 pub fn install_capability_calls(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let plugin = engine.options.edit_mode();
     for &(class_name, member, capability) in crate::reflection::CAPABILITY_CALLS {
+        let (Some(owner), Some(name)) = (class(&engine.reflection, class_name), engine.reflection.name_id(member)) else { continue };
         if plugin && capability == "Plugin" {
+            // A subclass method shadowing an emulated superclass method (Selection.Remove over Instance.Remove) would
+            // fall through to the superclass's unrelated behaviour if left unregistered; bind its own unemulated
+            // stand-in instead (lowercase Selection.remove still reaches Instance.Remove via alias_lookup_class).
+            let shadowed = engine.reflection.class(owner).superclass.is_some_and(|superclass| {
+                engine.behaviors.borrow().find_method(&engine.reflection, superclass, name).is_some()
+            });
+            if shadowed && let LuaValue::Function(function) = super::lua::instance::unimplemented_function(lua, engine, owner, name)? {
+                engine.behaviors.borrow_mut().add_lua_method(owner, name, function);
+            }
             continue;
         }
-        let (Some(owner), Some(name)) = (class(&engine.reflection, class_name), engine.reflection.name_id(member)) else { continue };
         let message = format!("The current thread cannot call '{member}' (lacking capability {capability})");
         let function = super::lua::wrapped(lua, engine, member, move |_, _| raise(message.clone()))?;
         engine.behaviors.borrow_mut().add_lua_method(owner, name, function);

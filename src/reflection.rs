@@ -575,6 +575,11 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
 /// mode) raises the same for those that lack RobloxScript, RobloxEngine or LocalUser, and gets past the check for the six
 /// that lack Plugin (Plugin Security in Roblox's API reference: `StepPhysics()` and `BreakJoints()` raise "Argument 1
 /// missing or nil"), so in edit mode, where ree runs a plugin's code, those six report themselves not emulated instead.
+/// Selection's methods were measured the same on a Studio 0.747 playing client and server (`selection_terrain.luau`):
+/// `Get`, `Set`, `Add` and `Remove` lack `Plugin` (at identity 4 `Get` returns `{}` and the others succeed, while in
+/// play mode `pcall(Selection.Get, Selection)` must fail as plugin-detection code expects; `Selection:remove()` still
+/// resolves to `Instance:Remove` via `alias_lookup_class`), and `AddFocusCallback`, `ClearTerrainSelectionHack` and
+/// `SetTerrainSelectionHack` lack `RobloxScript` (raising at identity 4 too).
 /// services::install_capability_calls gives each its function.
 pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "DefineFastFlag", "RobloxScript"),
@@ -609,6 +614,13 @@ pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("Workspace", "SetPhysicsThrottleEnabled", "LocalUser"),
     ("Workspace", "BreakJoints", "Plugin"),
     ("Workspace", "MakeJoints", "Plugin"),
+    ("Selection", "Get", "Plugin"),
+    ("Selection", "Set", "Plugin"),
+    ("Selection", "Add", "Plugin"),
+    ("Selection", "Remove", "Plugin"),
+    ("Selection", "AddFocusCallback", "RobloxScript"),
+    ("Selection", "ClearTerrainSelectionHack", "RobloxScript"),
+    ("Selection", "SetTerrainSelectionHack", "RobloxScript"),
 ];
 
 // Callbacks the dump leaves out (it lists none for any class): every callback Roblox's API dump lets

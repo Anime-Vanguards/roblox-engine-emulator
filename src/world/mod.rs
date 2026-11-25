@@ -44,7 +44,7 @@ use super::{
     Engine, InstanceId, NameId, State,
     derived::{self, ReadFn, ViewEvents, WriteFn},
     instance as core,
-    lua::{Args, Flow, convert, none, raise},
+    lua::{Args, Flow, convert, none, raise, values},
     services::{GetterFn, MethodFn, SetterFn},
     value::Value,
 };
@@ -662,6 +662,13 @@ pub fn install(engine: &Rc<Engine>) {
             Some(found) => Ok(super::lua::instance_value(lua, engine, found)?),
             None => Ok(LuaValue::Nil),
         }));
+    }
+
+    // Terrain:CountCells(): ree's Terrain holds no voxels (measured on a Studio 0.747 playing client and server:
+    // empty Terrain returns 0 and ignores extra arguments; wrong/missing self raises "Expected ':' not '.' calling
+    // member function CountCells", tools/parity/probes/selection_terrain.luau).
+    if let (Some(terrain_class), Some(count_cells)) = (reflection.class_id("Terrain"), name(engine, "CountCells")) {
+        behaviors.add_method(terrain_class, count_cells, method(|_, _, _, _| Ok(values([LuaValue::Number(0.0)]))));
     }
 
     // Workspace:BulkMoveTo(parts, cframes, mode): each part's CFrame, with its events, once the lists pass a client's checks

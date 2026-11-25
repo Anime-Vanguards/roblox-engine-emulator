@@ -200,7 +200,7 @@ fn lua_method(lua: &Lua, engine: &Rc<Engine>, owner: ClassId, name: NameId, func
 }
 
 /// A reflected method no behaviour implements: records the call and returns nil.
-fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<LuaValue> {
+pub(crate) fn unimplemented_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameId) -> LuaResult<LuaValue> {
     if let Some(existing) = engine.lua.borrow().unimplemented.get(&(class, name)) {
         return Ok(LuaValue::Function(existing.clone()));
     }
