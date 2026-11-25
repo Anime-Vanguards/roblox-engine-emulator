@@ -121,7 +121,7 @@ fn charge_thread(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) {
         let state = engine.state.borrow();
         state.sched.charge(crate::cost::THREAD);
         if crate::boundary::active() && !state.sched.is_muted() {
-            crate::boundary::enter(lua.current_thread().state());
+            crate::boundary::enter(lua.state());
             crate::boundary::record_named(crate::boundary::Kind::Method, "task", call, crate::cost::THREAD);
         }
     }
@@ -245,7 +245,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let thread = to_thread(lua, engine, args.get(0), 1, "spawn")?;
                 refs::admit(engine, Hold::Work, "task.spawn")?;
                 charge_thread(lua, engine, args.get(0), "spawn");
-                if let Some(script) = unsafe { super::script_of_thread(lua.current_thread().state()) } {
+                if let Some(script) = unsafe { super::script_of_thread(lua.state()) } {
                     engine.state.borrow_mut().sched.set_thread_script(&thread, script);
                 }
                 scheduler::resume(lua, engine, &thread, args.rest(1));
@@ -261,7 +261,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let thread = to_thread(lua, engine, args.get(0), 1, "defer")?;
                 refs::admit(engine, Hold::Work, "task.defer")?;
                 charge_thread(lua, engine, args.get(0), "defer");
-                let caller_script = unsafe { super::script_of_thread(lua.current_thread().state()) };
+                let caller_script = unsafe { super::script_of_thread(lua.state()) };
                 let rest: Vec<Value> = args.0.iter().skip(1).map(super::convert::from_lua).collect();
                 if engine.state.borrow().sched.can_defer_event() {
                     let mut state = engine.state.borrow_mut();
@@ -292,7 +292,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 // (its timer, a thread or a function's: cost.rs DELAYED)
                 engine.state.borrow().sched.charge(crate::cost::DELAYED);
                 crate::boundary::add_cost(crate::cost::DELAYED);
-                let caller_script = unsafe { super::script_of_thread(lua.current_thread().state()) };
+                let caller_script = unsafe { super::script_of_thread(lua.state()) };
                 let rest: Vec<Value> = args.0.iter().skip(2).map(super::convert::from_lua).collect();
                 let mut state = engine.state.borrow_mut();
                 if let Some(script) = caller_script {

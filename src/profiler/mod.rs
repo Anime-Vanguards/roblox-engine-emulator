@@ -872,7 +872,7 @@ pub fn install(lua: &Lua) {
         return;
     }
     let Some(engine) = lua.app_data_ref::<Rc<Engine>>().map(|engine| engine.clone()) else { return };
-    let state = unsafe { mlua::ffi::lua_mainthread(lua.current_thread().state()) };
+    let state = unsafe { mlua::ffi::lua_mainthread(lua.state()) };
     let kinds = kinds();
     let (work, drained, counters) = {
         let engine_state = engine.state.borrow();

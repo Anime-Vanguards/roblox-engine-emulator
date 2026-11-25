@@ -1556,7 +1556,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let check = {
         let checkpoint = checkpoint.clone();
         crate::lua::lua_fn(lua, move |lua, ()| {
-            let own = checkpoint.harness.borrow().as_ref().is_some_and(|thread| *thread == lua.current_thread());
+            let own = checkpoint.harness.borrow().as_ref().is_some_and(|thread| thread.state() == lua.state());
             if !checkpoint.armed.get() || !own {
                 return Ok(false);
             }
@@ -1595,7 +1595,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let between = {
         let checkpoint = checkpoint.clone();
         crate::lua::lua_fn(lua, move |lua, ()| {
-            let own = checkpoint.harness.borrow().as_ref().is_some_and(|thread| *thread == lua.current_thread());
+            let own = checkpoint.harness.borrow().as_ref().is_some_and(|thread| thread.state() == lua.state());
             if !own || checkpoint.armed.get() || checkpoint.reached.replace(true) {
                 return Ok(false);
             }
@@ -1621,7 +1621,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
         .into_function()?;
     let armed = {
         let checkpoint = checkpoint.clone();
-        crate::lua::lua_fn(lua, move |lua, ()| Ok(checkpoint.armed.get() && checkpoint.harness.borrow().as_ref().is_some_and(|thread| *thread == lua.current_thread())))?
+        crate::lua::lua_fn(lua, move |lua, ()| Ok(checkpoint.armed.get() && checkpoint.harness.borrow().as_ref().is_some_and(|thread| thread.state() == lua.state())))?
     };
     let function: LuaFunction = crate::cost::engine_luau(lua, framed)?.call((armed, function, between, raw_yield, unparked))?;
     context.set("FrameCheckpoint", function)?;

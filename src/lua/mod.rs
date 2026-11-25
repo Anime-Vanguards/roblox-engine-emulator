@@ -327,7 +327,7 @@ pub fn traceback(lua: &Lua, thread: &LuaThread) -> Option<String> {
 /// service stubs, the harness wrapper) are skipped; none when no script's frame is on the stack.
 pub fn script_position(lua: &Lua) -> Option<String> {
     // SAFETY: the running thread's state, valid while the callback runs
-    unsafe { script_position_on(lua.current_thread().state()) }
+    unsafe { script_position_on(lua.state()) }
 }
 
 /// [`script_position`] on the thread `state` (a C metamethod's own: lua/raw.rs).
@@ -361,7 +361,7 @@ pub unsafe fn script_position_on(state: *mut mlua::ffi::lua_State) -> Option<Str
 /// the script's call carries (convert::string_param; lib.rs client_error_text keeps the script's own frames).
 pub fn script_traceback(lua: &Lua) -> String {
     // SAFETY: the running thread's state, valid while the callback runs
-    unsafe { script_traceback_on(lua.current_thread().state()) }
+    unsafe { script_traceback_on(lua.state()) }
 }
 
 /// [`script_traceback`] on the thread `state` (a C metamethod's own: lua/raw.rs).

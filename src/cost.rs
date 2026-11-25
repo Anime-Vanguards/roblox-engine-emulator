@@ -2660,12 +2660,12 @@ unsafe extern "C-unwind" {
 /// or function made before the frame is counted (VmCounters `coldtables` and below) and priced ([`luau`]). A host that charges scripts'
 /// Luau (it interprets them) turns it on; nothing a script reads changes either way.
 pub fn cold_tracking(lua: &mlua::Lua, on: bool) {
-    unsafe { lua_coldtracking(lua.current_thread().state(), on as std::ffi::c_int) }
+    unsafe { lua_coldtracking(lua.state(), on as std::ffi::c_int) }
 }
 
 /// A frame begins for the VM's cold touches: every object is cold again ([`cold_tracking`]).
 pub fn cold_frame(lua: &mlua::Lua) {
-    unsafe { lua_coldframe(lua.current_thread().state()) }
+    unsafe { lua_coldframe(lua.state()) }
 }
 
 /// The garbage collector's clock: the scripts' own Luau work so far, measured at fixed prices ([`collector_work`]).
@@ -2772,7 +2772,7 @@ pub fn install_gc_clock(lua: &mlua::Lua, counters: *const VmCounters) -> mlua::R
 
 /// Mutes (or unmutes) the native datatype charges of the VM while the engine's Luau prices a call as a whole (`R.Mute`).
 pub fn mute_host_nanos(lua: &mlua::Lua, on: bool) {
-    unsafe { lua_workmute(lua.current_thread().state(), on as std::ffi::c_int) }
+    unsafe { lua_workmute(lua.state(), on as std::ffi::c_int) }
 }
 
 /// Turns the VM's work counters on or off (patches/luau/21-work-counting-toggle.patch).

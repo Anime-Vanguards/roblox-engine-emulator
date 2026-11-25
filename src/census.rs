@@ -183,7 +183,7 @@ pub fn connected(lua: &Lua, connection: ConnectionId, callback: &LuaFunction) {
     if connection == ConnectionId::DISCONNECTED {
         return;
     }
-    let state = lua.current_thread().state();
+    let state = lua.state();
     let info = callback.info();
     let source = info.short_src.unwrap_or_default();
     let source = source.strip_prefix("[string \"").and_then(|inner| inner.strip_suffix("\"]")).unwrap_or(&source);
@@ -244,7 +244,7 @@ pub fn handler_ran(site: (u32, u32), thread: &LuaThread) {
 
 /// Installs the census for this engine's VM and returns `Take`.
 pub fn install(lua: &Lua, engine: &Rc<Engine>, depth: usize) -> LuaResult<LuaFunction> {
-    let main = unsafe { ffi::lua_mainthread(lua.current_thread().state()) };
+    let main = unsafe { ffi::lua_mainthread(lua.state()) };
     let since = {
         let state = engine.state.borrow();
         (state.sched.now, state.sched.frame)
@@ -274,7 +274,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, depth: usize) -> LuaResult<LuaFun
             crate::lua::raw::collect(lua, &engine)?;
             lua.gc_collect()?;
         }
-        let current = lua.current_thread().state();
+        let current = lua.state();
         let census = take(&engine, current, lua.used_memory());
         Ok(serde_json::to_string(&census).unwrap_or_default())
     })

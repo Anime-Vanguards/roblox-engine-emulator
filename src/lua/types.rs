@@ -674,7 +674,7 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
     let noted = crate::census::active(engine).then(|| callback.clone());
     engine.state.borrow().sched.charge(crate::cost::CONNECT);
     if crate::boundary::active() && !engine.state.borrow().sched.is_muted() {
-        crate::boundary::enter(lua.current_thread().state());
+        crate::boundary::enter(lua.state());
         let name = signal.map_or_else(|| "signal".to_string(), |signal| engine.state.borrow().signals.get(signal).name.to_str_lossy().into_owned());
         let verb = if parallel { "ConnectParallel" } else if once { "Once" } else { "Connect" };
         crate::boundary::record_named(crate::boundary::Kind::Event, "RBXScriptSignal", &format!("{verb}({name})"), crate::cost::CONNECT);
@@ -774,7 +774,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let mut state = engine.state.borrow_mut();
                 state.sched.charge(crate::cost::DISCONNECT);
                 if crate::boundary::active() && !state.sched.is_muted() {
-                    crate::boundary::enter(lua.current_thread().state());
+                    crate::boundary::enter(lua.state());
                     crate::boundary::record_named(crate::boundary::Kind::Event, "RBXScriptConnection", "Disconnect", crate::cost::DISCONNECT);
                 }
                 state.signals.disconnect(connection.0);

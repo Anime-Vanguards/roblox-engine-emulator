@@ -40,7 +40,7 @@ const KEEP: c_int = 2;
 pub const COMPILE_FLUSH: &str = "@floatmode:flush";
 
 fn set(lua: &Lua, mode: c_int) -> bool {
-    unsafe { lua_setfloatmode(lua.current_thread().state(), mode) != 0 }
+    unsafe { lua_setfloatmode(lua.state(), mode) != 0 }
 }
 
 /// Engine.Start: the VM's scripts flush subnormal results from now on.

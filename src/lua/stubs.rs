@@ -332,7 +332,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set(
         "LogErrorText",
         super::lua_fn(lua, |lua, text: LuaString| {
-            let thread = lua.current_thread().to_pointer() as usize;
+            let thread = lua.state() as usize;
             LOG_ERROR_TEXTS.with(|texts| {
                 let mut texts = texts.borrow_mut();
                 texts.count += 1;

@@ -1265,7 +1265,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
     let mut entries = Vec::new();
     let mut kinds = Vec::new();
     let mut stamps = Vec::new();
-    let stamped = crate::lua::modules::keeping_between_runs();
+    let stamped = crate::lua::modules::keeping_between_runs() && !crate::lua::modules::is_batch_frozen();
     if let Ok(read) = std::fs::read_dir(&path) {
         let mut valid = true;
         for entry in read {
@@ -1677,7 +1677,7 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
         let existing_len = state.dom.at(instance).children.len();
         (node.entries.len() + existing_len >= 16).then(|| ChildIndex::new(&state, instance, node.entries.len()))
     };
-    for (index, entry) in node.entries.iter().enumerate() {
+    for entry in &node.entries {
         if has_loops {
             if let Some((_, above)) = node.loops.iter().find(|(name, _)| name == entry) {
                 engine.warn(format!("{}/{entry}: a link back to {above}, which would hold itself; not mounted", node.path));
@@ -1705,9 +1705,6 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
         }
         let full_path = format!("{}/{entry}", node.path);
         mount_file(engine, &full_path, entry, None, instance, mount, child_index.as_mut());
-        if let Some(stamp) = node.stamps.get(index).copied().flatten() {
-            engine.state.borrow_mut().project.stamps.insert(full_path, stamp);
-        }
     }
 }
 
@@ -1811,16 +1808,15 @@ fn mount_listed_path(
     if let Some(dir) = folder.dirs.get(*last) {
         return Some(mount_directory_as(engine, dir, parent, name, mount, relative, parent_index));
     }
-    let index = folder.entries.iter().position(|entry| entry == last)?;
+    if !folder.entries.iter().any(|entry| entry == last) {
+        return None;
+    }
     let full_path = format!("{}/{last}", folder.path);
     mount_file(engine, &full_path, last, Some(name), parent, mount, parent_index.as_deref_mut());
     let instance = match parent_index {
         Some(idx) => idx.get(name)?,
         None => find_child(&engine.state.borrow(), parent, name)?,
     };
-    if let Some(stamp) = folder.stamps.get(index).copied().flatten() {
-        engine.state.borrow_mut().project.stamps.insert(full_path, stamp);
-    }
     Some(instance)
 }
 
@@ -1908,11 +1904,7 @@ fn mount_plain_directory_as(
     let meta_class = meta.as_ref().and_then(|m| m.get("className")).and_then(|c| c.as_str());
     let init = best_init.map(|(_, index, class)| {
         let found = &node.entries[index];
-        let path = format!("{full_path}/{found}");
-        if let Some(stamp) = node.stamps.get(index).copied().flatten() {
-            engine.state.borrow_mut().project.stamps.insert(path.clone(), stamp);
-        }
-        (path, class)
+        (format!("{full_path}/{found}"), class)
     });
     let known = match relative {
         "StarterPlayer/StarterPlayerScripts" => Some("StarterPlayerScripts"),

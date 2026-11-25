@@ -723,7 +723,7 @@ pub fn install(lua: &mlua::Lua) {
 /// the VM's heap, and those few bytes move where the collector's later cycles begin, so what a script reads of memory
 /// (collectgarbage("count")) differed at some frames with a profile that hooks the VM this way
 fn callbacks(lua: &mlua::Lua) -> *mut mlua::ffi::lua_Callbacks {
-    unsafe { mlua::ffi::lua_callbacks(lua.current_thread().state()) }
+    unsafe { mlua::ffi::lua_callbacks(lua.state()) }
 }
 
 /// Points `lua`'s `onallocate` callback at the allocation profile of the thread it runs on.

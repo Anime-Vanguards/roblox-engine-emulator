@@ -1327,7 +1327,7 @@ pub const NO_OUTPUT: &str = "Error occurred, no output from Luau.";
 pub fn report_callback_error(lua: &Lua, engine: &Engine, problem: &LuaValue) {
     let trace = super::lua::script_traceback(lua);
     // SAFETY: the running thread's state, valid while the error handler runs
-    let script = unsafe { super::lua::script_of_thread(lua.current_thread().state()) };
+    let script = unsafe { super::lua::script_of_thread(lua.state()) };
     let message = match problem {
         LuaValue::String(text) => text.to_string_lossy(),
         _ => NO_OUTPUT.into(),
@@ -1349,7 +1349,7 @@ fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMu
         let top_level = sched.track_build
             && sched.flushing == 0
             && sched.heartbeat_count == 0
-            && sched.main_thread.is_some_and(|main| main == lua.current_thread().to_pointer() as usize);
+            && sched.main_thread.is_some_and(|main| main == lua.state() as usize);
         if top_level && !sched.build_start_explicit {
             sched.build_work_start = Some(sched.build_work);
         }
@@ -1489,7 +1489,7 @@ pub(crate) fn charge_dispatch_to(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThr
     }
     if crate::profiler::attribution::on() {
         // (both are the running VM's threads)
-        unsafe { crate::profiler::attribution::book_next(lua.current_thread().state(), thread.state()) };
+        unsafe { crate::profiler::attribution::book_next(lua.state(), thread.state()) };
     }
     engine.state.borrow().sched.charge_dispatch(seconds, kinds);
 }
