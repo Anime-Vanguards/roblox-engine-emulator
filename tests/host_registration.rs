@@ -1,8 +1,5 @@
 //! Host registration is process-wide, so this regression has its own test binary.
 
-// The engine's service code links mi_collect, as the other engine integration tests do.
-extern crate mimalloc;
-
 use mlua::{Function, Lua, Table, ffi};
 use roblox_engine_emulator::cost;
 

@@ -70,6 +70,10 @@ for member in reflection.members(part) {
 
 The public structs are `#[non_exhaustive]`: read their fields, but get them from the database rather than building them, so fields can be added without breaking your code.
 
+## Allocator
+
+The library calls no allocator's functions itself, so a program links it with whatever global allocator it has. `ree serve` asks the program's allocator to hand an idle worker's freed pages back and to keep freed pages committed longer between jobs through `alloc::Controls`, which `ree`'s binary installs for mimalloc (`alloc::set_controls`); a program that installs none skips both. What a warm service keeps across runs is allocated in a heap of its own while `alloc::long_lived` runs, when the program's allocator honours `alloc::in_long_lived` (`ree`'s does: `src/main.rs`).
+
 ## Depending on the crate from Cargo
 
 ```toml

@@ -7,9 +7,6 @@ use std::{
     cell::Cell,
 };
 
-// (the engine's service code calls mimalloc's collection, which the CLI links; the heap here is the counting one below)
-extern crate mimalloc;
-
 struct Counting;
 
 thread_local! {

@@ -5,7 +5,8 @@ Directory and module overview for `roblox-engine-emulator`.
 ```text
 src/
   lib.rs               Engine, Options, State, Hooks, Layer, Extension, compiled-in data
-  alloc.rs             Long-lived mimalloc heap for warm-service shared state (allocator in main.rs)
+  alloc.rs             Long-lived heap for warm-service shared state, and the allocator controls `ree serve` uses (both
+                       answered by main.rs's mimalloc; the library calls no allocator itself)
   emulator.rs          High-level Emulator wrapper owning Engine, Lua VM, and mounted project
   launch.rs            CLI engine option parsing -> Options, roots, mounts; Host trait
   mount.rs             Project mount orchestration

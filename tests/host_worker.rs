@@ -4,9 +4,6 @@
 use std::{path::{Path, PathBuf}, process::Command};
 use roblox_engine_emulator::{Engine, Options, animation::{self, Loading}};
 
-// The CLI host links the same allocator collection.
-extern crate mimalloc;
-
 /// The test runs itself as a child with this variable set; the child is the library host.
 const CHILD_MARKER: &str = "REE_TEST_HOST_CHILD";
 

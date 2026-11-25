@@ -3,9 +3,6 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-// The library's service collection links mimalloc, as the CLI host does.
-extern crate mimalloc;
-
 /// Runs `node <script> <args>` with the temporary folder moved to `temp`, so a test can see what the script leaves there.
 /// The scripts that copy and run ree take the binary under test from `REE_TEST_BINARY`.
 fn node(script: &str, args: &[&str], temp: &Path) -> Output {

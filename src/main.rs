@@ -36,6 +36,16 @@ mod heap {
         pub fn mi_heap_realloc_aligned(heap: *mut c_void, p: *mut c_void, size: usize, alignment: usize) -> *mut c_void;
         pub fn mi_option_set_enabled_default(option: i32, enable: bool);
         pub fn mi_option_set_default(option: i32, value: std::ffi::c_long);
+        pub fn mi_option_set(option: i32, value: std::ffi::c_long);
+        pub fn mi_collect(force: bool);
+    }
+
+    /// What `ree serve` asks of the allocator (roblox_engine_emulator::alloc::Controls), done by mimalloc
+    pub fn controls() -> roblox_engine_emulator::alloc::Controls {
+        roblox_engine_emulator::alloc::Controls {
+            collect: || unsafe { mi_collect(true) },
+            set_purge_delay: |milliseconds| unsafe { mi_option_set(MI_OPTION_PURGE_DELAY, milliseconds as std::ffi::c_long) },
+        }
     }
 
     /// mimalloc v2's `mi_option_eager_commit`
@@ -140,6 +150,9 @@ fn main() {
         heap::mi_option_set_enabled_default(heap::MI_OPTION_EAGER_COMMIT, false);
         heap::mi_option_set_default(heap::MI_OPTION_PURGE_DELAY, 100);
     }
+    // (the service's idle collection and purge delay: the library calls mimalloc through these)
+    #[cfg(not(feature = "dhat-heap"))]
+    let _ = roblox_engine_emulator::alloc::set_controls(heap::controls());
     #[cfg(feature = "dhat-heap")]
     {
         *PROFILER.lock().unwrap() = Some(dhat::Profiler::new_heap());
@@ -273,6 +286,23 @@ fn run_command(argv: &[String], service: bool) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// The controls the binary installs reach mimalloc: the purge delay `ree serve` sets reads back from mimalloc, and a
+    /// collect runs.
+    #[cfg(not(feature = "dhat-heap"))]
+    #[test]
+    fn the_services_allocator_controls_are_mimallocs() {
+        unsafe extern "C" {
+            fn mi_option_get(option: i32) -> std::ffi::c_long;
+        }
+        let controls = super::heap::controls();
+        let before = unsafe { mi_option_get(super::heap::MI_OPTION_PURGE_DELAY) };
+        (controls.set_purge_delay)(1500);
+        assert_eq!(unsafe { mi_option_get(super::heap::MI_OPTION_PURGE_DELAY) }, 1500);
+        (controls.set_purge_delay)(before as i64);
+        assert_eq!(unsafe { mi_option_get(super::heap::MI_OPTION_PURGE_DELAY) }, before);
+        (controls.collect)();
+    }
+
     use super::*;
 
     /// `--help` and `-h` after `record` or `run` ask for the usage, not for a run; `serve` and `profile` keep their own.

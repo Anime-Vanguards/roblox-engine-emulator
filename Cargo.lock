@@ -1488,7 +1488,6 @@ dependencies = [
 name = "ree-test-planted"
 version = "0.1.0"
 dependencies = [
- "mimalloc",
  "ree-profile-view",
  "roblox-engine-emulator",
  "serde_json",

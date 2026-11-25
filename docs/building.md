@@ -78,7 +78,7 @@ The patched Luau VM (`vendor/luau0-src`), `vendor/mlua-sys`, and Lune's Roblox d
 - `--release` uses `rust-lld` and Cargo's default ThinLTO across crate codegen units (`lto = false`) for cross-module inlining (~7 s vs. ~12 s incremental rebuilds, 5–25% faster property access; identical floating-point results).
 - Default features: `jit` (Luau native codegen), `bundles` (asset-worker bundle loading), `meshes` (`EditableMesh` via `ror-mesh`), and `cli` (`ree` binary). WebAssembly targets disable `jit` and `bundles`.
 - Optional `dhat-heap` feature: writes `dhat-heap.json` on exit (`cargo build --release --features dhat-heap --target-dir target-dhat`).
-- **Allocator:** Uses `mimalloc` v2 (commits segments page by page unless `MIMALLOC_EAGER_COMMIT=1`, and returns pages to the OS after each run). Warm-service shared state (bundles, bytecode, Studio hierarchy) allocates on a dedicated long-lived heap (`src/alloc.rs`, `alloc::long_lived`) so per-run arenas free cleanly.
+- **Allocator:** Uses `mimalloc` v2 (commits segments page by page unless `MIMALLOC_EAGER_COMMIT=1`, and returns pages to the OS after each run). Warm-service shared state (bundles, bytecode, Studio hierarchy) allocates on a dedicated long-lived heap (`src/alloc.rs`, `alloc::long_lived`) so per-run arenas free cleanly. The library calls mimalloc only through the controls the binary installs (`alloc::Controls`: the service's idle collection and purge delay), so a program that embeds the crate links it with any allocator.
 
 ## Updating Luau
 

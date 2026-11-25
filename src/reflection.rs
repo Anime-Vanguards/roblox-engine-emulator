@@ -15,7 +15,7 @@
 //! serialization ([`ClassTags`], [`DomProperty`]), and enums with their items and legacy names. Members are listed in a
 //! stable order (the root class's first, each class's in the dump's order: [`Reflection::members`]).
 //!
-//! ```no_run
+//! ```
 //! use roblox_engine_emulator::reflection::{Reflection, ReflectedMember};
 //!
 //! let reflection = Reflection::shared().unwrap();

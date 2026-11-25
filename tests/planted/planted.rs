@@ -4,9 +4,6 @@
 //! finish, repeat reads beside unchanged writes, a folder that kept profile.json alone, and a quiet run that must
 //! report nothing.
 
-// (the engine's service code calls mimalloc's mi_collect, which ree's binary links the same way)
-extern crate mimalloc;
-
 mod common;
 #[path = "planted/engine.rs"]
 mod engine;

@@ -11,5 +11,4 @@ path = "planted.rs"
 [dev-dependencies]
 ree-profile-view = { path = "../../profile-view" }
 roblox-engine-emulator = { path = "../.." }
-mimalloc = { version = "=0.1.52", default-features = false, features = ["v2"] }
 serde_json = { version = "=1.0.145", features = ["float_roundtrip"] }

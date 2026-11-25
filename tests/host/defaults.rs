@@ -8,9 +8,6 @@ use std::{path::{Path, PathBuf}, process::{Command, Output}};
 
 use roblox_engine_emulator::{Options, checkout_of, default_repo, is_standalone, launch::{self, Host}, serve::client::{absolute_paths, named_project}, set_default_repo, shared_state_path, state_dir};
 
-// The engine's service collection uses mimalloc, as a CLI host does.
-extern crate mimalloc;
-
 /// The failure message of a child test: what it printed.
 fn describe(output: &Output) -> String {
     format!("{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr))

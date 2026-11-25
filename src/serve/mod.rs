@@ -343,7 +343,7 @@ const REPEATS_WITHIN: Duration = Duration::from_secs(10);
 /// The jobs [`REPEATS_WITHIN`] looks back over
 const STARTS_KEPT: usize = 32;
 
-/// How long a worker waits idle before returning freed heap pages to the OS (`mi_collect(true)`)
+/// How long a worker waits idle before returning freed heap pages to the OS (crate::alloc::collect: mimalloc's `mi_collect(true)`)
 /// and sweeping stale entries from the shared caches. Running aggressive decommit and global cache
 /// sweeps after every single job causes Windows VAD lock contention and tens of thousands of page
 /// faults per job during concurrent bursts; running them on idle keeps bursts fast while returning
@@ -421,14 +421,10 @@ pub fn serve(options: ServeOptions) -> Result<(), String> {
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     size_pool();
     // Keep freed pages warm across back-to-back jobs in a burst instead of decommitting every 100 ms;
-    // idle workers still run mi_collect(true) after IDLE_COLLECT_DELAY to return memory when quiet.
-    #[cfg(not(feature = "dhat-heap"))]
+    // idle workers still collect after IDLE_COLLECT_DELAY to return memory when quiet (the program's
+    // allocator does both: crate::alloc::Controls, mimalloc's in ree's binary, none in a dhat-heap build)
     if std::env::var_os("MIMALLOC_PURGE_DELAY").is_none() {
-        unsafe extern "C" {
-            fn mi_option_set(option: i32, value: std::ffi::c_long);
-        }
-        // mimalloc v2's MI_OPTION_PURGE_DELAY = 15
-        unsafe { mi_option_set(15, 1500) };
+        crate::alloc::set_purge_delay(1500);
     }
     modules::reuse_compiled_modules();
     // (what every run reads, made before the first one: in the long-lived heap, crate::alloc)
@@ -694,22 +690,12 @@ fn work(service: &Service, index: usize) {
     }
 }
 
-#[cfg(not(feature = "dhat-heap"))]
-fn mi_collect_force() {
-    unsafe extern "C" {
-        fn mi_collect(force: bool);
-    }
-    unsafe { mi_collect(true) };
-}
-
-#[cfg(feature = "dhat-heap")]
-fn mi_collect_force() {}
 
 /// Returns this worker's freed pages to the OS when idle, and once the whole service is quiet
 /// sweeps stale entries from the shared caches and collects the rayon thread pool's heaps.
 fn collect_if_idle(service: &Service, needs_collect: &mut bool) {
     if *needs_collect {
-        mi_collect_force();
+        crate::alloc::collect();
         *needs_collect = false;
     }
     if service.running.load(Ordering::SeqCst) == 0
@@ -721,7 +707,7 @@ fn collect_if_idle(service: &Service, needs_collect: &mut bool) {
         #[cfg(feature = "meshes")]
         crate::meshes::forget_stale_meshes();
         modules::forget_stale_modules();
-        rayon::broadcast(|_| mi_collect_force());
+        rayon::broadcast(|_| crate::alloc::collect());
     }
 }
 
