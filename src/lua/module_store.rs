@@ -53,6 +53,8 @@ const RECORD_LEN: usize = 64;
 const COMPACT_THRESHOLD: usize = 16;
 /// The file whose lock a compacting process holds (`File::try_lock`): a process that cannot take it skips
 const COMPACT_LOCK: &str = "compact.lock";
+/// The entry count up to which [`Pack::covers`] reads the covering pack's payloads, not only its records
+const COVER_PAYLOADS_UP_TO: usize = 64;
 const STALE_TMP_AGE: Duration = Duration::from_secs(300);
 
 const BJSON_MAGIC: &[u8; 4] = b"RBJ1";
@@ -217,11 +219,18 @@ impl Pack {
         Some(StoredBytes { backing: self.backing.clone(), start: offset, end: offset + len })
     }
 
-    /// Whether this pack has a payload that reads as stored for every key `other` has (so a pack holding the good copy of
-    /// an entry damaged here is never taken for covered).
+    /// Whether this pack holds every entry `other` has, as `other` stored it (the same checksum in both records). Only the
+    /// record tables are read for a large pack: reading every payload put each new compacted pack's 40 MB into every
+    /// worker's working set (a cold `golden --all`: 1.5 GB at a worker's peak, against 350 MB before). For a small pack,
+    /// such as the delta that replaced an entry whose copy here read back damaged, this pack's payloads are checked too,
+    /// so that delta is kept while the copy here reads otherwise.
     fn covers(&self, other: &Pack) -> bool {
         let bytes = other.backing.bytes();
-        (0..other.entry_count).all(|index| self.get(&read_record(bytes, index).0).is_some())
+        let read_payloads = other.entry_count <= COVER_PAYLOADS_UP_TO;
+        (0..other.entry_count).all(|index| {
+            let (key, _, _, check) = read_record(bytes, index);
+            self.find(&key).is_some_and(|(offset, len, own)| own == check && (!read_payloads || payload_check(&self.backing.bytes()[offset..offset + len]) == own))
+        })
     }
 
     /// The entries whose payloads read as they were stored, with their checksums.
@@ -1394,6 +1403,33 @@ mod tests {
         for index in (0..200).chain([500]) {
             assert_eq!(store.get(&stress_key(index)).as_deref(), Some(stress_payload(index).as_slice()), "entry {index}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A large pack is taken for covered by the records alone (its entries' keys and checksums in the larger pack: reading
+    /// every payload of the larger pack put it whole into each process's working set), a small one only where the larger
+    /// pack's payloads read back as stored, so the delta holding the good copy of an entry damaged there is kept.
+    #[test]
+    fn a_large_pack_is_covered_by_records_and_a_small_one_by_payloads_that_read_back() {
+        let dir = temp_dir("cover-check");
+        let (abi, _) = abi_info();
+        let largest = write_stress_pack(&dir, 0..200);
+        write_stress_pack(&dir, 0..150);
+        let delta = write_stress_pack(&dir, 5..6);
+        // zero two payloads in the largest pack, as the pages read back under write load
+        let mut bytes = std::fs::read(&largest).unwrap();
+        for index in [5, 100] {
+            let payload = stress_payload(index);
+            let at = bytes.windows(payload.len()).position(|window| window == payload.as_slice()).unwrap();
+            bytes[at..at + payload.len()].fill(0);
+        }
+        std::fs::write(&largest, &bytes).unwrap();
+
+        let store = Store::open_at(dir.clone(), *abi);
+        let kept: Vec<PathBuf> = store.packs.read().unwrap().iter().map(|pack| pack.path.clone()).collect();
+        assert_eq!(kept, vec![largest.clone(), delta.clone()], "the 150-entry pack is covered by its records; the delta is not");
+        assert_eq!(store.get(&stress_key(5)).as_deref(), Some(stress_payload(5).as_slice()), "the delta's good copy");
+        assert_eq!(store.get(&stress_key(6)).as_deref(), Some(stress_payload(6).as_slice()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
