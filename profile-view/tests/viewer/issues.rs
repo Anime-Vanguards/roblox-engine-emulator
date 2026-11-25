@@ -27,7 +27,7 @@ fn each_pattern_is_named_with_its_numbers() {
     let temp = Temp::new("detect");
     let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
     let (issues, unchecked, app) = issues_of(&dir);
-    // (every kind is there but the CPU's counters, which a run of their own reads: tests/counters.rs; this profile records a C function only when Luau runs under it)
+    // (every kind is there but the CPU's counters, which a run of their own reads: viewer/counters.rs; this profile records a C function only when Luau runs under it)
     assert_eq!(
         unchecked,
         vec![
