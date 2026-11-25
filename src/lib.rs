@@ -434,6 +434,35 @@ pub(crate) fn strip_verbatim(path: PathBuf) -> PathBuf {
     }
 }
 
+/// Collapses `.` and lexical `Normal + ..` pairs without resolving symlinks or junctions. Any remaining
+/// `..` (for example at the start of a relative path) is kept so checkout detection rejects it.
+fn normalize_lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else if !matches!(out.components().next_back(), Some(Component::RootDir | Component::Prefix(_))) {
+                    out.push(component);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn clean_path(path: &Path) -> PathBuf {
+    if path.as_os_str().is_empty() {
+        return PathBuf::new();
+    }
+    let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    normalize_lexical(&strip_verbatim(abs))
+}
+
 /// The unresolved launch path of `current_exe`, when `argv[0]` (or a `PATH` lookup of a bare `argv[0]`)
 /// points to the same underlying executable without resolving intermediate junctions or symlinks.
 pub(crate) fn unresolved_exe(current_exe: &Path) -> Option<PathBuf> {
@@ -450,19 +479,23 @@ fn unresolved_exe_from(arg0: Option<&std::ffi::OsStr>, current_exe: &Path, path_
     let real = std::fs::canonicalize(current_exe).ok()?;
     let matches_current = |candidate: &Path| -> Option<PathBuf> {
         let abs = std::path::absolute(candidate).ok()?;
-        let mut candidates = vec![abs.clone()];
+        let normalized = normalize_lexical(&strip_verbatim(abs));
+        if normalized.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            return None;
+        }
+        let mut candidates = vec![normalized.clone()];
         #[cfg(windows)]
         {
-            let lower = abs.to_string_lossy().to_ascii_lowercase();
+            let lower = normalized.to_string_lossy().to_ascii_lowercase();
             if !lower.ends_with(".exe") {
-                let mut with_exe = abs.into_os_string();
+                let mut with_exe = normalized.into_os_string();
                 with_exe.push(".exe");
                 candidates.push(PathBuf::from(with_exe));
             }
         }
         for path in candidates {
             if std::fs::canonicalize(&path).ok().as_ref() == Some(&real) {
-                return Some(strip_verbatim(path));
+                return Some(path);
             }
         }
         None
@@ -488,36 +521,84 @@ fn unresolved_exe_from(arg0: Option<&std::ffi::OsStr>, current_exe: &Path, path_
     None
 }
 
-/// Candidate executable paths for checkout detection, unresolved launch path first, then `exe`.
-pub(crate) fn exe_candidates(exe: &Path) -> Vec<PathBuf> {
+/// Candidate executable paths for checkout detection: unresolved launch path first, then `exe`, then
+/// `canonicalize(exe)` (deduplicated and lexically normalized).
+fn exe_candidates_from(arg0: Option<&std::ffi::OsStr>, exe: &Path, path_env: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
     let mut sources = Vec::new();
-    if let Some(unresolved) = unresolved_exe(exe) {
-        sources.push(unresolved);
+    let mut push_unique = |path: PathBuf| {
+        if !path.as_os_str().is_empty() && !sources.iter().any(|existing| existing == &path) {
+            sources.push(path);
+        }
+    };
+    if let Some(unresolved) = unresolved_exe_from(arg0, exe, path_env) {
+        push_unique(unresolved);
     }
-    let current = strip_verbatim(std::path::absolute(exe).unwrap_or_else(|_| exe.to_path_buf()));
-    if !sources.iter().any(|existing| existing == &current) {
-        sources.push(current);
+    if !exe.as_os_str().is_empty() {
+        push_unique(clean_path(exe));
+        if let Ok(real) = std::fs::canonicalize(exe) {
+            push_unique(normalize_lexical(&strip_verbatim(real)));
+        }
     }
     sources
+}
+
+/// Candidate executable paths for checkout detection, unresolved launch path first, then `exe`.
+pub(crate) fn exe_candidates(exe: &Path) -> Vec<PathBuf> {
+    let arg0 = std::env::args_os().next();
+    let path_env = std::env::var_os("PATH");
+    exe_candidates_from(arg0.as_deref(), exe, path_env.as_deref())
+}
+
+/// Candidate executable paths for a given `--source` / binary path: the normalized path itself first,
+/// then its canonical target when it differs (for example `~/.local/bin/ree` symlinked to
+/// `<checkout>/target/release/ree`).
+fn source_candidates(source: &Path) -> Vec<PathBuf> {
+    if source.as_os_str().is_empty() {
+        return Vec::new();
+    }
+    let mut sources = vec![clean_path(source)];
+    if let Ok(real) = std::fs::canonicalize(source) {
+        let real = normalize_lexical(&strip_verbatim(real));
+        if !sources.iter().any(|existing| existing == &real) {
+            sources.push(real);
+        }
+    }
+    sources
+}
+
+/// The executable path handed to `ree serve --source`: the candidate that matched a checkout (so a
+/// junctioned `target` keeps its checkout path and a symlink outside the checkout such as
+/// `~/.local/bin/ree -> <checkout>/target/release/ree` hands over the checkout path), or else the
+/// first candidate (unresolved launch path if any, else `exe`).
+pub(crate) fn service_source(exe: &Path) -> PathBuf {
+    let arg0 = std::env::args_os().next();
+    let path_env = std::env::var_os("PATH");
+    service_source_from(arg0.as_deref(), exe, path_env.as_deref())
+}
+
+fn service_source_from(arg0: Option<&std::ffi::OsStr>, exe: &Path, path_env: Option<&std::ffi::OsStr>) -> PathBuf {
+    let candidates = exe_candidates_from(arg0, exe, path_env);
+    candidates
+        .iter()
+        .find(|candidate| ree_checkout_of(candidate).is_some())
+        .or_else(|| candidates.first())
+        .cloned()
+        .unwrap_or_else(|| clean_path(exe))
 }
 
 /// For ree's own binary, not for hosts: picks the binary's defaults before anything reads them, so
 /// call it first thing in `main`. A host that never calls it keeps [`default_repo`] and `<repo>/.cache`.
 ///
 /// `source` is the executable, or the starter of a service (`serve --source`). If a ree checkout holds
-/// it (a `Cargo.lock` beside a `Cargo.toml` that names this package), that checkout is the default
-/// repo. Otherwise ree is standalone: the default repo is the empty path and the cache is `state`
-/// (`serve --state-dir`) or else the per-user folder. Selecting the mode does not resolve that folder:
-/// metadata and other stateless commands need no cache. `--repo` never changes this mode.
+/// it (or its canonical target: a `Cargo.lock` beside a `Cargo.toml` that names this package), that
+/// checkout is the default repo. Otherwise ree is standalone: the default repo is the empty path and
+/// the cache is `state` (`serve --state-dir`) or else the per-user folder. Selecting the mode does not
+/// resolve that folder: metadata and other stateless commands need no cache. `--repo` never changes
+/// this mode.
 ///
 /// The first call wins: later calls do not change the defaults.
 pub fn init_binary(source: &Path, state: Option<PathBuf>) -> Result<(), String> {
-    let normalized = if source.as_os_str().is_empty() {
-        PathBuf::new()
-    } else {
-        strip_verbatim(std::path::absolute(source).unwrap_or_else(|_| source.to_path_buf()))
-    };
-    let sources = if normalized.as_os_str().is_empty() { Vec::new() } else { vec![normalized] };
+    let sources = source_candidates(source);
     init_binary_sources(&sources, state)
 }
 
@@ -560,8 +641,14 @@ pub(crate) fn ree_checkout_of(exe: &Path) -> Option<PathBuf> {
 }
 
 /// The nearest ancestor of `exe` (not `exe` itself) that `is_checkout` accepts, without a verbatim prefix.
+/// Collapses lexical `.` / `Normal + ..` segments first and refuses any remaining `..` so a path like
+/// `/w/A/../ree-1.2/ree` never visits `/w/A` as an ancestor.
 fn checkout_matching(exe: &Path, is_checkout: impl Fn(&Path) -> bool) -> Option<PathBuf> {
-    let dir = exe.ancestors().skip(1).find(|dir| is_checkout(dir))?;
+    let normalized = normalize_lexical(&strip_verbatim(exe.to_path_buf()));
+    if normalized.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return None;
+    }
+    let dir = normalized.ancestors().skip(1).find(|dir| is_checkout(dir))?;
     Some(strip_verbatim(dir.to_path_buf()))
 }
 

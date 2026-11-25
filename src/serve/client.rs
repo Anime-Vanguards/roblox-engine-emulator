@@ -291,11 +291,10 @@ fn service_binary(state_dir: &Path, build: &str) -> Result<PathBuf, String> {
 
 fn source() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
-    // Keep the unresolved launch path so a build reached through a junctioned or symlinked `target`
-    // directory stays in its checkout when handed to `ree serve --source`.
-    let unresolved = crate::unresolved_exe(&exe).unwrap_or(exe);
-    let path = std::path::absolute(&unresolved).unwrap_or(unresolved);
-    Some(crate::strip_verbatim(path).display().to_string())
+    // Hand the service the checkout-matching candidate when either the unresolved launch path (junctioned
+    // or symlinked `target`) or the resolved executable (symlinked binary such as `~/.local/bin/ree`) is
+    // inside a checkout; otherwise keep the unresolved launch path.
+    Some(crate::service_source(&exe).display().to_string())
 }
 
 fn same_source(a: Option<&str>, b: Option<&str>) -> bool {

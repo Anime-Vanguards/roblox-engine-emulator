@@ -943,15 +943,17 @@ fn format_worker_not_named(standalone_sources: Option<&[PathBuf]>) -> String {
                 format!("no roblox-engine-emulator Cargo.toml + Cargo.lock ancestor above {checked}")
             };
             format!(
-                "manifest bundles need an asset worker: running in standalone mode ({why}); set REE_ASSET_WORKER to the worker executable (and REE_ASSET_WORKER_ARGS for any arguments, such as a subcommand), or run a build inside a roblox-engine-emulator checkout (docs/engine.md, \"Asset bundles\")"
+                "manifest bundles need an asset worker: running in standalone mode ({why}); set REE_ASSET_WORKER to the worker executable (and REE_ASSET_WORKER_ARGS for any arguments, using absolute paths because standalone workers run in the state dir), or run a build inside a roblox-engine-emulator checkout (docs/engine.md, \"Asset bundles\")"
             )
         }
-        None => "manifest bundles need an asset worker: set REE_ASSET_WORKER to the worker executable (and REE_ASSET_WORKER_ARGS for any arguments, such as a subcommand) (docs/engine.md, \"Asset bundles\")".to_string(),
+        None => "manifest bundles need an asset worker: set REE_ASSET_WORKER to the worker executable (and REE_ASSET_WORKER_ARGS for any arguments) (docs/engine.md, \"Asset bundles\")".to_string(),
     }
 }
 
-/// Splits `REE_ASSET_WORKER_ARGS` into argv tokens: whitespace-separated, with `'...'` literal quotes and `"..."`
-/// quotes where `\"` and `\\` unescape (backslashes before other characters stay literal for Windows paths).
+/// Splits `REE_ASSET_WORKER_ARGS` into argv tokens: whitespace-separated, with `'...'` verbatim single
+/// quotes and `"..."` double quotes following Windows command-line backslash rules (backslashes are
+/// literal except runs immediately preceding `"`, where `2n` backslashes emit `n` backslashes and close
+/// the quote while `2n+1` emit `n` backslashes and a literal `"`).
 fn parse_worker_args(raw: &str) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -977,12 +979,35 @@ fn parse_worker_args(raw: &str) -> Result<Vec<String>, String> {
             '"' => loop {
                 match chars.next() {
                     Some('"') => break,
-                    Some('\\') => match chars.peek().copied() {
-                        Some('"' | '\\') => current.push(chars.next().unwrap()),
-                        _ => current.push('\\'),
-                    },
+                    Some('\\') => {
+                        let mut slashes = 1usize;
+                        while chars.peek() == Some(&'\\') {
+                            chars.next();
+                            slashes += 1;
+                        }
+                        if chars.peek() == Some(&'"') {
+                            for _ in 0..(slashes / 2) {
+                                current.push('\\');
+                            }
+                            chars.next();
+                            if slashes % 2 == 1 {
+                                current.push('"');
+                            } else {
+                                break;
+                            }
+                        } else {
+                            for _ in 0..slashes {
+                                current.push('\\');
+                            }
+                        }
+                    }
                     Some(c) => current.push(c),
-                    None => return Err("REE_ASSET_WORKER_ARGS: unclosed \" quote".to_string()),
+                    None => {
+                        return Err(
+                            "REE_ASSET_WORKER_ARGS: unclosed \" quote (use single quotes '...' for paths with a trailing backslash, or double the trailing backslash before \")"
+                                .to_string(),
+                        );
+                    }
                 }
             },
             other => current.push(other),
@@ -2051,12 +2076,21 @@ mod tests {
     fn worker_args_parser_handles_subcommands_quotes_and_errors() {
         assert_eq!(parse_worker_args("viewport-worker").unwrap(), vec!["viewport-worker"]);
         assert_eq!(parse_worker_args("  viewport-worker   --refresh  ").unwrap(), vec!["viewport-worker", "--refresh"]);
+        // Windows command-line backslash rules inside "...": backslashes stay literal unless immediately
+        // before `"`, preserving UNC paths and allowing doubled trailing backslashes; `'...'` is verbatim.
         assert_eq!(
-            parse_worker_args(r#"worker.mjs --dir "C:\my cache\dir" 'two words' "a\"b\\c""#).unwrap(),
-            vec!["worker.mjs", "--dir", r"C:\my cache\dir", "two words", r#"a"b\c"#]
+            parse_worker_args(r#"worker.mjs --dir "C:\my cache\dir" 'two words' "a\"b\\c" "a\\\"b""#).unwrap(),
+            vec!["worker.mjs", "--dir", r"C:\my cache\dir", "two words", r#"a"b\\c"#, r#"a\"b"#]
+        );
+        assert_eq!(
+            parse_worker_args(r#""\\nas\My Tools\w.mjs" "C:\my dir\\" 'C:\my dir\' '\\nas\My Tools\w.mjs'"#).unwrap(),
+            vec![r"\\nas\My Tools\w.mjs", r"C:\my dir\", r"C:\my dir\", r"\\nas\My Tools\w.mjs"]
         );
         assert!(parse_worker_args("   ").unwrap().is_empty());
         assert!(parse_worker_args(r#""unclosed"#).unwrap_err().contains("unclosed \" quote"));
+        let trailing_slash_err = parse_worker_args(r#""C:\my dir\""#).unwrap_err();
+        assert!(trailing_slash_err.contains("unclosed \" quote"), "{trailing_slash_err}");
+        assert!(trailing_slash_err.contains("single quotes"), "{trailing_slash_err}");
         assert!(parse_worker_args("'unclosed").unwrap_err().contains("unclosed ' quote"));
     }
 
@@ -2069,6 +2103,7 @@ mod tests {
         assert!(standalone_msg.contains(r"C:\tools\ree.exe"), "{standalone_msg}");
         assert!(standalone_msg.contains("set REE_ASSET_WORKER"), "{standalone_msg}");
         assert!(standalone_msg.contains("REE_ASSET_WORKER_ARGS"), "{standalone_msg}");
+        assert!(standalone_msg.contains("state dir"), "{standalone_msg}");
         assert!(standalone_msg.contains("checkout"), "{standalone_msg}");
 
         let plain_msg = format_worker_not_named(None);

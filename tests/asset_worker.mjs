@@ -1000,6 +1000,86 @@ test("a junctioned or symlinked target directory stays in checkout mode directly
 	}
 });
 
+// A checkout binary reached through a symlink outside the checkout (such as `~/.local/bin/ree -> <checkout>/target/release/ree`
+// on Unix, or a directory junction outside the checkout on Windows) must hand its service the checkout path so both
+// direct and served jobs stay in checkout mode rather than falling into standalone mode.
+test("a checkout binary reached through a link outside the checkout keeps its service in checkout mode", async () => {
+	const root = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-outside-link-")));
+	const checkout = path.join(root, "checkout");
+	const releaseDir = path.join(checkout, "target", "release");
+	const outsideDir = path.join(root, "local-bin");
+	const project = path.join(root, "project");
+	const userCache = path.join(root, "user-cache");
+	for (const dir of [releaseDir, outsideDir, path.join(project, "helpers"), path.join(project, "root"), userCache]) {
+		fs.mkdirSync(dir, { recursive: true });
+	}
+	fs.writeFileSync(path.join(checkout, "Cargo.toml"), '[package]\nname = "roblox-engine-emulator"\nversion = "0.1.0"\n');
+	fs.writeFileSync(path.join(checkout, "Cargo.lock"), "");
+	const reeName = WINDOWS ? "ree.exe" : "ree";
+	const checkoutExe = path.join(releaseDir, reeName);
+	installRee(checkoutExe);
+
+	const linkPath = WINDOWS ? path.join(outsideDir, "bin") : path.join(outsideDir, reeName);
+	if (WINDOWS) fs.symlinkSync(releaseDir, linkPath, "junction");
+	else fs.symlinkSync(checkoutExe, linkPath, "file");
+	const linkedExe = WINDOWS ? path.join(linkPath, reeName) : linkPath;
+
+	const mock = path.join(root, "mock.cjs");
+	fs.writeFileSync(mock, MOCK_WORKER);
+	const worker = path.join(project, "helpers", WORKER_FILE);
+	installWorker(worker);
+
+	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !STEERING_VARIABLES.test(key)));
+	Object.assign(env, {
+		LOCALAPPDATA: userCache,
+		HOME: userCache,
+		USERPROFILE: userCache,
+		XDG_CACHE_HOME: userCache,
+		REE_PARENT_WATCH: "0",
+		REE_SERVE_WORKERS: "1",
+		REE_WORKER_LOG: path.join(root, "requests.jsonl"),
+		NODE_OPTIONS: `--require=${JSON.stringify(mock)}`,
+		[HOST_WORKER_VARIABLE]: worker,
+	});
+	const ree = async (cwd, args) => {
+		const result = await spawnAsync(linkedExe, args, { cwd, env, timeout: 120_000 });
+		assert.ifError(result.error);
+		assert.equal(result.status, 0, result.stderr || result.stdout);
+		return result.stdout;
+	};
+	const requests = () => fs.readFileSync(env.REE_WORKER_LOG, "utf8").trim().split("\n").map(JSON.parse);
+
+	let passed = false;
+	try {
+		await fetchAnimation(ree, project, 9151, false);
+		const pid = await warmService(ree, project);
+		await fetchAnimation(ree, project, 9152, true, [], pid);
+
+		assert.equal(requests().length, 2);
+		assert(!fs.existsSync(path.join(userCache, "ree")), "symlinked checkout binary must not fall back to standalone per-user cache");
+		const servicesDir = path.join(checkout, ".cache", "services");
+		const records = fs.readdirSync(servicesDir).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(servicesDir, name), "utf8")));
+		assert.equal(records.length, 1);
+		assert.equal(records[0].source.toLowerCase(), checkoutExe.toLowerCase(), "service --source uses the checkout path rather than the outside link");
+		passed = true;
+	} finally {
+		try {
+			await stopServices((args) => ree(project, args));
+			if (fs.existsSync(env.REE_WORKER_LOG)) await waitForWorkers(requests());
+		} catch (error) {
+			console.error(`outside link cleanup failed; files kept at ${root}: ${error.message}`);
+			if (passed) throw error;
+		}
+		if (passed) {
+			if (WINDOWS) fs.rmdirSync(linkPath);
+			else fs.unlinkSync(linkPath);
+			await removeTestFolder(root);
+		} else {
+			console.error(`outside link check failed; files kept at ${root}`);
+		}
+	}
+});
+
 // A standalone release layout explains why it is standalone when no worker is configured, and starts workers that
 // require subcommand arguments via REE_ASSET_WORKER_ARGS.
 check("standalone release layout explains missing worker and starts subcommand workers", async ({ root, env, ree, failed, project, requests, executable }) => {

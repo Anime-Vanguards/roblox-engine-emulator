@@ -1,0 +1,9 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+uis GetPlatform function [C]|-1|GetPlatform|0|true same=true
+uis call error The current thread cannot call 'GetPlatform' (lacking capability RobloxScript)
+uis arg error The current thread cannot call 'GetPlatform' (lacking capability RobloxScript)
+uis other error The current thread cannot call 'GetPlatform' (lacking capability RobloxScript)
+uis none error The current thread cannot call 'GetPlatform' (lacking capability RobloxScript)
+uis lower-read ok function true
+uis lower-call error The current thread cannot call 'GetPlatform' (lacking capability RobloxScript)

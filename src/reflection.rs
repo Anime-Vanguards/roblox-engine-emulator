@@ -580,6 +580,10 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
 /// play mode `pcall(Selection.Get, Selection)` must fail as plugin-detection code expects; `Selection:remove()` still
 /// resolves to `Instance:Remove` via `alias_lookup_class`), and `AddFocusCallback`, `ClearTerrainSelectionHack` and
 /// `SetTerrainSelectionHack` lack `RobloxScript` (raising at identity 4 too).
+/// `UserInputService:GetPlatform` was measured on Studio 0.747 across desktop, touch and gamepad and on the server
+/// (`user_input_platform.luau`): at identities 2 and 4 `UIS.GetPlatform` reads as a function (same function each read;
+/// lowercase `getPlatform` aliases it) and calls raise `lacking capability RobloxScript` before self or argument checks
+/// (at identity 8 it returns `Enum.Platform.Windows`).
 /// services::install_capability_calls gives each its function.
 pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "DefineFastFlag", "RobloxScript"),
@@ -590,6 +594,7 @@ pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "GetFastString", "LocalUser"),
     ("DataModel", "GetEngineFeature", "LocalUser"),
     ("GuiService", "GetResolutionScale", "RobloxScript"),
+    ("UserInputService", "GetPlatform", "RobloxScript"),
     ("Camera", "Zoom", "RobloxScript"),
     ("Camera", "SetImageServerView", "RobloxScript"),
     ("WorldRoot", "GetAwakeContactNormals", "RobloxScript"),

@@ -11249,6 +11249,126 @@ fn unresolved_exe_preserves_junctioned_or_symlinked_target_checkout() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// A checkout binary reached through a link outside the checkout (such as `~/.local/bin/ree` symlinked to
+/// `<checkout>/target/release/ree` on Unix or a directory junction outside the checkout on Windows) must hand
+/// `ree serve --source` the checkout path, and `source_candidates` must also resolve links to the checkout.
+#[test]
+fn linked_binary_outside_checkout_resolves_checkout_for_service_and_source() {
+    let root = std::env::temp_dir().join(format!("ree-outside-link-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let checkout = root.join("checkout");
+    let release = checkout.join("target").join("release");
+    let outside_parent = root.join("local-bin");
+    std::fs::create_dir_all(&release).unwrap();
+    std::fs::create_dir_all(&outside_parent).unwrap();
+    std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"roblox-engine-emulator\"\n").unwrap();
+    std::fs::write(checkout.join("Cargo.lock"), "").unwrap();
+    let exe_name = format!("ree{}", std::env::consts::EXE_SUFFIX);
+    let checkout_exe = release.join(&exe_name);
+    std::fs::write(&checkout_exe, b"binary").unwrap();
+
+    #[cfg(unix)]
+    let (outside_exe, cleanup_dir) = {
+        let link = outside_parent.join(&exe_name);
+        std::os::unix::fs::symlink(&checkout_exe, &link).unwrap();
+        (link, false)
+    };
+    #[cfg(windows)]
+    let (outside_exe, cleanup_dir) = {
+        let link_dir = outside_parent.join("bin");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link_dir)
+            .arg(&release)
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "mklink /J failed: {}", String::from_utf8_lossy(&status.stderr));
+        (link_dir.join(&exe_name), true)
+    };
+
+    let canonical_checkout = super::strip_verbatim(std::fs::canonicalize(&checkout).unwrap());
+    let canonical_checkout_exe = super::strip_verbatim(std::fs::canonicalize(&checkout_exe).unwrap());
+    // The link path outside the checkout has no checkout ancestor of its own
+    assert_eq!(super::ree_checkout_of(&outside_exe), None);
+    // `service_source_from` picks the checkout-matching candidate rather than the outside link
+    let chosen = super::service_source_from(Some(outside_exe.as_os_str()), &checkout_exe, None);
+    let chosen_checkout = super::ree_checkout_of(&chosen).expect("chosen source must be inside checkout");
+    assert_eq!(super::strip_verbatim(std::fs::canonicalize(&chosen_checkout).unwrap()), canonical_checkout);
+    assert_eq!(super::strip_verbatim(std::fs::canonicalize(&chosen).unwrap()), canonical_checkout_exe);
+    // Even if `--source` receives the outside link directly, `source_candidates` falls through to its canonical target
+    let candidates = super::source_candidates(&outside_exe);
+    let fallback_checkout = candidates.iter().find_map(|p| super::ree_checkout_of(p)).expect("source_candidates must resolve checkout");
+    assert_eq!(super::strip_verbatim(std::fs::canonicalize(&fallback_checkout).unwrap()), canonical_checkout);
+
+    if cleanup_dir {
+        std::fs::remove_dir(outside_exe.parent().unwrap()).unwrap();
+    } else {
+        std::fs::remove_file(&outside_exe).unwrap();
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Launch paths containing `..` (such as `../ree-1.2/ree` run from inside another checkout `/w/A`) must be
+/// lexically normalized so ancestor walks never pick `/w/A` as the binary's checkout, while legitimate
+/// normalized paths into a checkout still resolve it.
+#[test]
+fn parent_dir_segments_cannot_match_unrelated_checkout() {
+    let root = std::env::temp_dir().join(format!("ree-dotdot-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let checkout = root.join("checkout");
+    let release_dir = root.join("ree-1.2");
+    let sibling = root.join("other");
+    let real_target = root.join("real-target/release");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::create_dir_all(&release_dir).unwrap();
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::create_dir_all(&real_target).unwrap();
+    std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"roblox-engine-emulator\"\n").unwrap();
+    std::fs::write(checkout.join("Cargo.lock"), "").unwrap();
+
+    let exe_name = format!("ree{}", std::env::consts::EXE_SUFFIX);
+    let standalone_exe = release_dir.join(&exe_name);
+    std::fs::write(&standalone_exe, b"release").unwrap();
+
+    // Unnormalized `<root>/checkout/../ree-1.2/ree`: lexical `ancestors()` without normalization visits `<root>/checkout`
+    let unnormalized = checkout.join("..").join("ree-1.2").join(&exe_name);
+    assert_eq!(super::ree_checkout_of(&unnormalized), None);
+    assert_eq!(super::checkout_of(&unnormalized), None);
+    let unresolved = super::unresolved_exe_from(Some(unnormalized.as_os_str()), &standalone_exe, None);
+    assert_eq!(unresolved.as_deref(), Some(super::clean_path(&standalone_exe).as_path()));
+    assert_eq!(super::ree_checkout_of(unresolved.as_ref().unwrap()), None);
+    assert_eq!(super::source_candidates(&unnormalized).iter().find_map(|p| super::ree_checkout_of(p)), None);
+    // Relative paths with leading `..` never match a checkout either
+    assert_eq!(super::ree_checkout_of(std::path::Path::new("../ree-1.2/ree")), None);
+
+    // Legitimate `..` landing inside a checkout with a linked target still detects the checkout
+    let linked_target = checkout.join("target");
+    let checkout_real_exe = real_target.join(&exe_name);
+    std::fs::write(&checkout_real_exe, b"dev").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("real-target"), &linked_target).unwrap();
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&linked_target)
+            .arg(root.join("real-target"))
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "mklink /J failed: {}", String::from_utf8_lossy(&status.stderr));
+    }
+    let via_sibling = sibling.join("..").join("checkout").join("target").join("release").join(&exe_name);
+    let resolved_via_sibling = super::unresolved_exe_from(Some(via_sibling.as_os_str()), &checkout_real_exe, None).unwrap();
+    assert_eq!(resolved_via_sibling, super::clean_path(&linked_target.join("release").join(&exe_name)));
+    assert_eq!(super::ree_checkout_of(&resolved_via_sibling), Some(super::clean_path(&checkout)));
+
+    #[cfg(unix)]
+    std::fs::remove_file(&linked_target).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(&linked_target).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// Standalone state uses the platform's per-user cache, unless the environment names one.
 #[test]
 fn standalone_caches_are_per_user() {
@@ -12449,6 +12569,35 @@ fn terrain_count_cells_returns_zero_with_client_self_checks() {
         "print: info [C]|-1|CountCells|0|true true".to_string(),
         "print: calls 0 0 0".to_string(),
         "print: errs Expected ':' not '.' calling member function CountCells true".to_string(),
+    ];
+    for (mode, run_context) in [("play", RunContext::Client), ("play", RunContext::Server), ("edit", RunContext::Edit)] {
+        let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, script);
+        assert_eq!(output, want, "{mode} {run_context:?}");
+    }
+}
+
+/// UserInputService:GetPlatform reads as one `[C]` function (with lowercase `getPlatform` aliasing it) and
+/// raises `The current thread cannot call 'GetPlatform' (lacking capability RobloxScript)` before any self
+/// or argument check in client, server, and edit contexts (Studio 0.747, `user_input_platform.luau`).
+#[test]
+fn user_input_service_get_platform_raises_roblox_script_capability_error() {
+    use super::RunContext;
+    let script = r#"
+        local UIS = game:GetService("UserInputService")
+        local Fn = UIS.GetPlatform
+        local S, L, N, A, V = debug.info(Fn, "slna")
+        print("read", typeof(Fn), `{S}|{L}|{N}|{A}|{V}`, tostring(rawequal(Fn, UIS.GetPlatform)), tostring(rawequal((UIS :: any).getPlatform, Fn)))
+        local Ok, Msg = pcall(Fn, UIS)
+        local E1 = select(2, pcall(Fn))
+        local E2 = select(2, pcall(Fn, workspace))
+        local E3 = select(2, pcall(Fn, UIS, 1))
+        local E4 = select(2, pcall(function() return (UIS :: any):getPlatform() end))
+        print("call", tostring(Ok), Msg, tostring(E1 == Msg and E2 == Msg and E3 == Msg and E4 == Msg))
+    "#;
+    let want = vec![
+        "print: read function [C]|-1|GetPlatform|0|true true true".to_string(),
+        "print: call false The current thread cannot call 'GetPlatform' (lacking capability RobloxScript) true".to_string(),
     ];
     for (mode, run_context) in [("play", RunContext::Client), ("play", RunContext::Server), ("edit", RunContext::Edit)] {
         let (lua, engine) = start_with(Options { mode: mode.into(), run_context, ..Options::default() });

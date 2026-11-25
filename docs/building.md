@@ -20,7 +20,7 @@ Maintainers develop and test on Windows. CI builds and smoke-tests every archive
 
 ### Runtime requirements and supported commands
 
-- **Zero runtime dependencies for offline runs:** The patched Luau VM, Studio API reflection dump, and stubs are compiled in. Offline harnesses and recordings need no Rust, C++, Roblox Studio, GPU, or network. (Rendering a recording requires `ror`; optional manifest bundles require `REE_ASSET_WORKER`—plus `REE_ASSET_WORKER_ARGS` if the worker takes a subcommand or flags—implementing the protocol in [engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles); Windows hardware counters require the separate `ree-hw-counters` service.)
+- **Zero runtime dependencies for offline runs:** The patched Luau VM, Studio API reflection dump, and stubs are compiled in. Offline harnesses and recordings need no Rust, C++, Roblox Studio, GPU, or network. (Rendering a recording requires `ror`; optional manifest bundles require `REE_ASSET_WORKER`—plus `REE_ASSET_WORKER_ARGS` with absolute paths if the worker takes a subcommand or file arguments, since standalone workers run in `<state dir>`—implementing the protocol in [engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles); Windows hardware counters require the separate `ree-hw-counters` service.)
 - **Included CLI commands:** `run`, `record`, `serve`, `--profile`, `profile report`, `profile diff`, and `profile try`.
 - **Source-build-only commands:** `profile view` and `profile render` require the separate `ree-profile-view` binary from a workspace source build (release archives contain only one executable so tool managers like Rokit can install cleanly). Repository examples and `tools/` scripts also require a checkout.
 
