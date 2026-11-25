@@ -318,6 +318,14 @@ pub fn batch_cli(args: &[String], host: &Host) -> i32 {
 
     modules::reuse_compiled_modules();
     modules::set_batch_frozen(true);
+    struct BatchStoreFlushGuard;
+    impl Drop for BatchStoreFlushGuard {
+        fn drop(&mut self) {
+            modules::set_batch_frozen(false);
+            modules::flush_module_store();
+        }
+    }
+    let _store_flush = BatchStoreFlushGuard;
     let total = spec.jobs.len();
     if total == 0 {
         println!("{{\"results\":[]}}");

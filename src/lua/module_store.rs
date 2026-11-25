@@ -57,8 +57,8 @@ const COMPACT_LOCK: &str = "compact.lock";
 const COVER_PAYLOADS_UP_TO: usize = 64;
 const STALE_TMP_AGE: Duration = Duration::from_secs(300);
 /// Pending entries or payload bytes a long-lived batch worker accumulates before publishing a delta pack.
-const DEFERRED_FLUSH_ENTRIES: usize = 128;
-const DEFERRED_FLUSH_BYTES: usize = 2 * 1024 * 1024;
+const DEFERRED_FLUSH_ENTRIES: usize = 256;
+const DEFERRED_FLUSH_BYTES: usize = 4 * 1024 * 1024;
 /// Minimum interval between `packs/` mtime checks on cold misses so sibling workers pick up fresh packs cheaply.
 const MISS_REFRESH_INTERVAL_MS: u64 = 500;
 
@@ -770,6 +770,11 @@ fn for_each_store(mut f: impl FnMut(&Store)) {
 }
 
 pub(crate) fn flush_all() {
+    if super::is_batch_frozen() {
+        // In-process `ree run --batch` shares one Store across all worker threads and flushes once
+        // on batch completion so concurrent workers write a single pack with zero compaction churn.
+        return;
+    }
     if DEFERRED_FLUSH.load(Ordering::Relaxed) {
         for_each_store(|store| store.flush_deferred());
     } else {
