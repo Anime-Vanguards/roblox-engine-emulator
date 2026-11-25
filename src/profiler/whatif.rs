@@ -14,9 +14,12 @@ use std::{
     time::Instant,
 };
 
-use serde_json::{Value as Json, json};
+use serde_json::Value as Json;
 
-use super::stats;
+use super::{
+    json_writer::{JsonWriter, WriteJson, json_struct},
+    stats,
+};
 
 /// The harness every run of a comparison runs, written into its folder
 pub const HARNESS: &str = include_str!("whatif.luau");
@@ -436,12 +439,40 @@ fn ree_run(options: &Options, args: &[String], timed: bool) -> Ran {
     }
 }
 
+// Harness context JSON written for each `ree run` (`harness/context/<name>.json`).
+// Fields are declared in strict ASCII ascending order to match `serde_json::Map` output byte-for-byte.
+json_struct! {
+    #[allow(non_snake_case)]
+    struct RunContext<'a> {
+        File: String,
+        #[skip_none]
+        Frames: Option<u32>,
+        #[skip_none]
+        Group: Option<u64>,
+        Mode: &'static str,
+        #[skip_none]
+        Paths: Option<BTreeMap<String, String>>,
+        #[skip_none]
+        Reps: Option<u64>,
+        #[skip_none]
+        Size: Option<f64>,
+        #[skip_none]
+        Sizes: Option<&'a [f64]>,
+        #[skip_none]
+        Sources: Option<BTreeMap<String, String>>,
+        #[skip_none]
+        Variant: Option<&'a str>,
+        #[skip_none]
+        Variants: Option<Vec<&'a str>>,
+    }
+}
+
 /// One run's arguments: the harness, its context (written to a file), and enough emulated time for `frames` frames
-fn run_args(out: &Path, context_name: &str, context: &Json, frames: f64) -> Result<Vec<String>, String> {
+fn run_args(out: &Path, context_name: &str, context: &RunContext<'_>, frames: f64) -> Result<Vec<String>, String> {
     let contexts = out.join("harness").join("context");
     std::fs::create_dir_all(&contexts).map_err(|error| format!("{}: {error}", contexts.display()))?;
     let path = contexts.join(format!("{context_name}.json"));
-    std::fs::write(&path, serde_json::to_string_pretty(context).unwrap_or_default()).map_err(|error| format!("{}: {error}", path.display()))?;
+    std::fs::write(&path, JsonWriter::to_string_pretty(context)).map_err(|error| format!("{}: {error}", path.display()))?;
     let seconds = (frames + 8.0) / FPS;
     Ok(vec![
         "--harness".into(),
@@ -456,23 +487,35 @@ fn run_args(out: &Path, context_name: &str, context: &Json, frames: f64) -> Resu
 }
 
 /// The context every mode's run gets: the file, and the versions' sources and paths
-fn base_context(options: &Options, spec: Option<&Spec>, mode: &str) -> Json {
-    let mut context = json!({"Mode": mode, "File": options.file.to_string_lossy()});
+fn base_context<'a>(options: &Options, spec: Option<&Spec>, mode: &'static str) -> RunContext<'a> {
+    let mut context = RunContext {
+        File: options.file.to_string_lossy().into_owned(),
+        Frames: None,
+        Group: None,
+        Mode: mode,
+        Paths: None,
+        Reps: None,
+        Size: None,
+        Sizes: None,
+        Sources: None,
+        Variant: None,
+        Variants: None,
+    };
     if let Some(spec) = spec {
-        let mut sources = serde_json::Map::new();
-        let mut paths = serde_json::Map::new();
+        let mut sources = BTreeMap::new();
+        let mut paths = BTreeMap::new();
         for variant in spec.variants.iter().filter(|variant| variant.kind == "module") {
             if let Some(path) = &variant.path {
-                sources.insert(variant.name.clone(), json!(std::fs::read_to_string(path).unwrap_or_default()));
-                paths.insert(variant.name.clone(), json!(path.to_string_lossy()));
+                sources.insert(variant.name.clone(), std::fs::read_to_string(path).unwrap_or_default());
+                paths.insert(variant.name.clone(), path.to_string_lossy().into_owned());
             }
         }
         if !sources.is_empty() {
-            context["Sources"] = Json::Object(sources);
-            context["Paths"] = Json::Object(paths);
+            context.Sources = Some(sources);
+            context.Paths = Some(paths);
         }
         if let Some(frames) = options.frames {
-            context["Frames"] = json!(frames);
+            context.Frames = Some(frames);
         }
     }
     context
@@ -535,6 +578,26 @@ fn list(options: &Options) -> Result<Spec, String> {
 /// A phase's figures by metric key (absent: not measured)
 pub type Figures = BTreeMap<&'static str, f64>;
 
+json_struct! {
+    #[derive(Clone, Debug)]
+    pub struct TableCountBytes {
+        bytes: f64,
+        count: f64,
+    }
+}
+
+json_struct! {
+    #[derive(Clone, Debug)]
+    pub struct TableSites {
+        bytes: f64,
+        count: f64,
+        run: TableCountBytes,
+        setup: TableCountBytes,
+        sites: Vec<Json>,
+        sizes: Json,
+    }
+}
+
 /// One variant at one size: its profiled run, its timed rounds and its hardware counters
 #[derive(Clone, Debug, Default)]
 pub struct Run {
@@ -547,7 +610,7 @@ pub struct Run {
     pub setup: Figures,
     pub run: Figures,
     pub heap: Option<(f64, f64, f64)>,
-    pub tables: Json,
+    pub tables: Option<TableSites>,
     pub hot: Vec<Hot>,
     /// The timed rounds' figures a call, one per round (None: that round's run failed)
     pub host_ms: Vec<Option<f64>>,
@@ -687,15 +750,20 @@ fn frames_of(frames: &Json, functions: &BTreeMap<i64, &Json>, paths: &ModulePath
         if text.len() < 3 {
             text.push(format!("{}:{line}", super::report::short_module(&module)));
         }
-        out.push(json!({"module": module, "name": name, "line": line, "path": paths.get(&module).cloned().unwrap_or_default()}));
+        let mut obj = serde_json::Map::new();
+        obj.insert("line".into(), Json::from(line));
+        obj.insert("module".into(), Json::String(module.clone()));
+        obj.insert("name".into(), Json::String(name));
+        obj.insert("path".into(), Json::String(paths.get(&module).cloned().unwrap_or_default()));
+        out.push(Json::Object(obj));
     }
     let site = if text.is_empty() { "(engine)".to_string() } else { text.join(" < ") };
     (Json::Array(out), site)
 }
 
 /// The tables the setup and run phases made that are reachable after the run (the result held), by site
-fn table_sites(profile: &Json, functions: &BTreeMap<i64, &Json>, paths: &ModulePaths) -> Json {
-    let Some(snapshot) = profile["heap"]["snapshots"].as_array().and_then(|snapshots| snapshots.iter().find(|snapshot| snapshot["label"] == "after")) else { return Json::Null };
+fn table_sites(profile: &Json, functions: &BTreeMap<i64, &Json>, paths: &ModulePaths) -> Option<TableSites> {
+    let snapshot = profile["heap"]["snapshots"].as_array().and_then(|snapshots| snapshots.iter().find(|snapshot| snapshot["label"] == "after"))?;
     let tables = &snapshot["tables"];
     let mut sites = Vec::new();
     // (count, bytes) of all, of setup's and of run's
@@ -714,14 +782,19 @@ fn table_sites(profile: &Json, functions: &BTreeMap<i64, &Json>, paths: &ModuleP
             totals[at].1 += bytes;
         }
         let mut entry = site.clone();
-        entry["site"] = json!(text);
-        entry["frames"] = frames;
+        if let Some(obj) = entry.as_object_mut() {
+            obj.insert("site".into(), Json::String(text));
+            obj.insert("frames".into(), frames);
+        }
         sites.push(entry);
     }
-    json!({
-        "count": totals[0].0, "bytes": totals[0].1,
-        "setup": {"count": totals[1].0, "bytes": totals[1].1}, "run": {"count": totals[2].0, "bytes": totals[2].1},
-        "sizes": tables["sizes"], "sites": sites,
+    Some(TableSites {
+        bytes: totals[0].1,
+        count: totals[0].0,
+        run: TableCountBytes { bytes: totals[2].1, count: totals[2].0 },
+        setup: TableCountBytes { bytes: totals[1].1, count: totals[1].0 },
+        sites,
+        sizes: tables["sizes"].clone(),
     })
 }
 
@@ -776,7 +849,7 @@ fn own_work(profile: &Json, phase: &str) -> Option<(f64, f64)> {
 }
 
 /// A profiled run's figures, read from its profile folder
-fn read_profile(dir: &Path, frames: f64, paths: &ModulePaths) -> Result<(Figures, Figures, Option<(f64, f64, f64)>, Json, Vec<Hot>), String> {
+fn read_profile(dir: &Path, frames: f64, paths: &ModulePaths) -> Result<(Figures, Figures, Option<(f64, f64, f64)>, Option<TableSites>, Vec<Hot>), String> {
     let profile = super::diff::load_profile(dir)?;
     let functions: BTreeMap<i64, &Json> = profile["functions"].as_array().into_iter().flatten().filter_map(|function| Some((function["id"].as_i64()?, function))).collect();
     let setup = phase_figures(&profile, "setup", "run", 1.0);
@@ -861,23 +934,75 @@ fn hw_available(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+json_struct! {
+    #[derive(Clone, Debug)]
+    struct GrowthFitJson {
+        coefficient: f64,
+        error: f64,
+        fitted: bool,
+        fixed: f64,
+        k: f64,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GrowthData {
+    exponent: f64,
+    fit: GrowthFitJson,
+    last: Option<f64>,
+    points: Vec<(f64, f64)>,
+    segments: Vec<(f64, f64, f64)>,
+}
+
 /// How a figure grows with n, as compare.json's `scaling` and `functions` give it: the exponent at large n (the growing
 /// part's slope between the two largest sizes once a fixed cost a call is fitted apart), the fit, each segment's slope, the
 /// last segment's raw slope, and the points
-fn growth_json(points: &[(f64, f64)]) -> Option<Json> {
+fn growth_data(points: &[(f64, f64)]) -> Option<GrowthData> {
     let found = stats::growth(points)?;
-    Some(json!({
-        "exponent": found.large_n,
-        "fit": {"k": found.k, "fixed": found.fixed, "coefficient": found.coefficient, "error": found.error, "fitted": found.fitted},
-        "segments": found.segments.iter().map(|(from, to, slope)| json!([from, to, slope])).collect::<Vec<_>>(),
-        "last": found.segments.last().map(|segment| segment.2),
-        "points": points.iter().map(|(n, value)| json!([n, value])).collect::<Vec<_>>(),
-    }))
+    let last = found.segments.last().map(|segment| segment.2);
+    Some(GrowthData {
+        exponent: found.large_n,
+        fit: GrowthFitJson { coefficient: found.coefficient, error: found.error, fitted: found.fitted, fixed: found.fixed, k: found.k },
+        last,
+        points: points.to_vec(),
+        segments: found.segments,
+    })
 }
 
 /// Round by round, b's figure over a's (the rounds both have)
 pub fn paired(a: &[Option<f64>], b: &[Option<f64>]) -> Vec<f64> {
     a.iter().zip(b.iter()).filter_map(|(a, b)| Some((a.filter(|a| *a > 0.0)?, (*b)?))).map(|(a, b)| b / a).collect()
+}
+
+json_struct! {
+    #[derive(Clone, Debug)]
+    pub struct AddedPair {
+        a: String,
+        b: String,
+        size: f64,
+    }
+}
+
+json_struct! {
+    #[derive(Clone, Debug)]
+    pub struct AddedRound {
+        after: usize,
+        pairs: Vec<AddedPair>,
+        rounds: usize,
+    }
+}
+
+json_struct! {
+    #[derive(Clone, Debug)]
+    pub struct TimingNote {
+        added: Vec<AddedRound>,
+        groups: Vec<(f64, u64)>,
+        max_rounds: u32,
+        ran: usize,
+        reps: Vec<(f64, u64)>,
+        rounds: u32,
+        time_ms: f64,
+    }
 }
 
 /// The timed rounds beyond each run's own: each size's A/A twin (the baseline run a second time in each round it ran), the
@@ -891,8 +1016,8 @@ pub struct Timing {
     /// added rounds was looked at again, and its verdict clears the later level
     pub extended: BTreeSet<usize>,
     pub added_arms: BTreeSet<(usize, usize)>,
-    pub added: Vec<Json>,
-    pub note: Json,
+    pub added: Vec<AddedRound>,
+    pub note: Option<TimingNote>,
 }
 
 impl Timing {
@@ -1239,8 +1364,8 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
         let mut run = Run { variant, size, ..Run::default() };
         let profile_dir = options.out.join("runs").join(&variants[variant].slug).join(size_label(sizes[size]));
         let mut context = base_context(options, Some(&spec), "profile");
-        context["Variant"] = json!(variants[variant].name);
-        context["Size"] = json!(sizes[size]);
+        context.Variant = Some(&variants[variant].name);
+        context.Size = Some(sizes[size]);
         let name = format!("profile-{}-{}", variants[variant].slug, size_label(sizes[size]));
         let args = match run_args(&options.out, &name, &context, frames + 4.0) {
             Ok(mut args) => {
@@ -1286,12 +1411,12 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
 
     // the check: every variant at every size in one engine, against the baseline's result
     // (`ok` only when something was checked)
-    let mut check = json!({"ran": false, "failures": []});
+    let mut check = CheckReportJson::NotRan { failures: Vec::new(), ran: false };
     if options.check && spec.check {
         eprintln!("ree profile try: checking every variant's result against {}'s", variants[0].name);
         let mut context = base_context(options, Some(&spec), "check");
-        context["Variants"] = json!(variants.iter().map(|variant| variant.name.clone()).collect::<Vec<_>>());
-        context["Sizes"] = json!(sizes);
+        context.Variants = Some(variants.iter().map(|variant| variant.name.as_str()).collect());
+        context.Sizes = Some(sizes);
         let count = (variants.len() * sizes.len()) as f64;
         let ran = run_args(&options.out, "check", &context, count + 8.0).map(|args| ree_run(options, &args, false));
         let mut failures = Vec::new();
@@ -1306,16 +1431,16 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
                         run.check = Some((ok, message.clone()));
                     }
                     if !ok {
-                        failures.push(json!({"variant": name, "size": sizes[size], "message": message}));
+                        failures.push(CheckFailureJson { message, size: Some(sizes[size]), variant: Some(name.to_string()) });
                     }
                 }
                 if let Some(failure) = ran.failure() {
-                    failures.push(json!({"variant": Json::Null, "size": Json::Null, "message": failure}));
+                    failures.push(CheckFailureJson { message: Some(failure), size: None, variant: None });
                 }
             }
-            Err(error) => failures.push(json!({"variant": Json::Null, "size": Json::Null, "message": error})),
+            Err(error) => failures.push(CheckFailureJson { message: Some(error), size: None, variant: None }),
         }
-        check = json!({"ran": true, "by": spec.check_kind.clone().unwrap_or_else(|| "function".into()), "ok": failures.is_empty(), "failures": failures});
+        check = CheckReportJson::Ran { by: spec.check_kind.clone().unwrap_or_else(|| "function".into()), ok: failures.is_empty(), failures, ran: true };
     } else if options.check {
         // no check function: the results' digests (the result's contents, keys sorted). A variant whose digest differs from
         // the baseline's at a size computes something else there, so it is no other way of writing the same thing
@@ -1328,12 +1453,12 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
                     run.check = Some((true, None));
                 } else {
                     let message = format!("its result's digest is {digest}, the baseline's {base}: the results differ (without a check function the results are compared by digest; add check = function(a, b, n) to compare them your way)");
-                    failures.push(json!({"variant": variants[run.variant].name, "size": n, "message": message}));
+                    failures.push(CheckFailureJson { message: Some(message.clone()), size: Some(*n), variant: Some(variants[run.variant].name.clone()) });
                     run.check = Some((false, Some(message)));
                 }
             }
         }
-        check = json!({"ran": true, "by": "digest", "ok": failures.is_empty(), "failures": failures});
+        check = CheckReportJson::Ran { by: "digest".into(), ok: failures.is_empty(), failures, ran: true };
     }
 
     // the calls a timed (or counted) run makes at each size: about --time-ms of the slowest variant's warm work clock (nearer
@@ -1353,10 +1478,10 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
     // a run of the timing harness: (variant, size), its profile kinds, its folder; the profile folder when it finished
     let timed_run = |variant: usize, size: usize, profile: &str, dir: &Path| -> Result<(), String> {
         let mut context = base_context(options, Some(&spec), "time");
-        context["Variant"] = json!(variants[variant].name);
-        context["Size"] = json!(sizes[size]);
-        context["Reps"] = json!(reps[size]);
-        context["Group"] = json!(groups[size]);
+        context.Variant = Some(&variants[variant].name);
+        context.Size = Some(sizes[size]);
+        context.Reps = Some(reps[size]);
+        context.Group = Some(groups[size]);
         let name = format!("time-{}-{}", variants[variant].slug, size_label(sizes[size]));
         let mut args = run_args(&options.out, &name, &context, 4.0)?;
         args.extend(["--profile".into(), profile.into(), "--profile-out".into(), dir.to_string_lossy().into_owned()]);
@@ -1369,7 +1494,7 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
 
     // the hardware counters: HW_ROUNDS rounds of every variant at every size, each a timed run (grouped calls) with only
     // `hw` on, in a new order each round; the first run is the probe of whether they count here
-    let mut hw = json!({"read": false, "why": "--no-hw"});
+    let mut hw = HwStatusJson::NotRead { read: false, why: "--no-hw".into() };
     if options.hw {
         let arms: Vec<(usize, usize)> = runs.iter().filter(|run| run.status == "ok").map(|run| (run.variant, run.size)).collect();
         let dir_of = |variant: usize, size: usize, round: usize| -> PathBuf {
@@ -1380,11 +1505,11 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
             }
         };
         hw = match arms.first() {
-            None => json!({"read": false, "why": "no run finished"}),
+            None => HwStatusJson::NotRead { read: false, why: "no run finished".into() },
             Some(&(variant, size)) => match timed_run(variant, size, "hw", &dir_of(variant, size, 0)).and_then(|()| hw_available(&dir_of(variant, size, 0))) {
                 Err(why) => {
                     let _ = std::fs::remove_dir_all(dir_of(variant, size, 0));
-                    json!({"read": false, "why": why})
+                    HwStatusJson::NotRead { read: false, why }
                 }
                 Ok(()) => {
                     eprintln!("ree profile try: reading the hardware counters, {HW_ROUNDS} rounds of {} runs", arms.len());
@@ -1418,7 +1543,7 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
                             }
                         }
                     }
-                    json!({"read": true, "why": Json::Null, "rounds": HW_ROUNDS})
+                    HwStatusJson::Read { read: true, rounds: HW_ROUNDS, why: None }
                 }
             },
         };
@@ -1505,10 +1630,11 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
                 which.len(),
                 undecided.iter().map(|(size, a, b)| format!("{} and {} at n = {}", variants[*a].name, variants[*b].name, size_label(sizes[*size]))).collect::<Vec<_>>().join(", ")
             );
-            timing.added.push(json!({
-                "after": timing.rounds, "rounds": adding,
-                "pairs": undecided.iter().map(|(size, a, b)| json!({"size": sizes[*size], "a": variants[*a].name, "b": variants[*b].name})).collect::<Vec<_>>(),
-            }));
+            timing.added.push(AddedRound {
+                after: timing.rounds,
+                pairs: undecided.iter().map(|(size, a, b)| AddedPair { a: variants[*a].name.clone(), b: variants[*b].name.clone(), size: sizes[*size] }).collect(),
+                rounds: adding,
+            });
             for _ in 0..adding {
                 time_round(&mut runs, &mut timing, &which);
             }
@@ -1524,11 +1650,14 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
                 run.run.insert("host_cycles", cycles.iter().copied().fold(f64::INFINITY, f64::min));
             }
         }
-        timing.note = json!({
-            "rounds": options.rounds, "max_rounds": options.max_rounds, "ran": timing.rounds, "time_ms": options.time_ms,
-            "reps": sizes.iter().zip(reps.iter()).map(|(size, reps)| json!([size, reps])).collect::<Vec<_>>(),
-            "groups": sizes.iter().zip(groups.iter()).map(|(size, group)| json!([size, group])).collect::<Vec<_>>(),
-            "added": timing.added,
+        timing.note = Some(TimingNote {
+            added: timing.added.clone(),
+            groups: sizes.iter().zip(groups.iter()).map(|(&size, &group)| (size, group)).collect(),
+            max_rounds: options.max_rounds,
+            ran: timing.rounds,
+            reps: sizes.iter().zip(reps.iter()).map(|(&size, &reps)| (size, reps)).collect(),
+            rounds: options.rounds,
+            time_ms: options.time_ms,
         });
     }
 
@@ -1552,44 +1681,489 @@ pub fn compare(options: &Options) -> Result<(String, bool), String> {
                 let Ok(other) = super::diff::load_profile(&dir) else { continue };
                 let out = options.out.join("diff").join(&entry.slug);
                 if super::diff::write(&base, &other, 20, &out).1.is_ok() {
-                    diffs.push(json!({"variant": entry.name, "size": sizes[largest], "dir": format!("diff/{}", entry.slug)}));
+                    diffs.push(DiffLinkJson { dir: format!("diff/{}", entry.slug), size: sizes[largest], variant: entry.name.clone() });
                 }
             }
         }
     }
 
-    let (json, text, ok) = index(options, &spec, &runs, check, hw, &timing, diffs, fidelity, started.elapsed().as_secs_f64());
-    let written = serde_json::to_string_pretty(&json).map_err(|error| error.to_string())?;
+    let (report, text, ok) = index(options, &spec, &runs, check, hw, &timing, diffs, fidelity, started.elapsed().as_secs_f64());
+    let written = JsonWriter::to_string_pretty(&report);
     std::fs::write(options.out.join("compare.json"), written).map_err(|error| format!("{}: {error}", options.out.display()))?;
     std::fs::write(options.out.join("compare.txt"), &text).map_err(|error| format!("{}: {error}", options.out.display()))?;
     Ok((text, ok))
 }
 
-fn figures_json(figures: &Figures) -> Json {
-    let mut object = serde_json::Map::new();
-    for metric in METRICS {
-        object.insert(metric.key.to_string(), figures.get(metric.key).map_or(Json::Null, |value| json!(value)));
+// Serialized `compare.json` schema. Every struct declares its fields in strict ASCII ascending order
+// to match `serde_json::Map` (`BTreeMap`) output byte-for-byte.
+
+json_struct! {
+    struct CheckFailureJson {
+        message: Option<String>,
+        size: Option<f64>,
+        variant: Option<String>,
     }
-    Json::Object(object)
+}
+
+enum CheckReportJson {
+    NotRan { failures: Vec<CheckFailureJson>, ran: bool },
+    Ran { by: String, failures: Vec<CheckFailureJson>, ok: bool, ran: bool },
+}
+
+impl WriteJson for CheckReportJson {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut o = w.object();
+        match self {
+            Self::NotRan { failures, ran } => {
+                o.field("failures", failures);
+                o.field("ran", ran);
+            }
+            Self::Ran { by, failures, ok, ran } => {
+                o.field("by", by);
+                o.field("failures", failures);
+                o.field("ok", ok);
+                o.field("ran", ran);
+            }
+        }
+        o.end();
+    }
+}
+
+enum HwStatusJson {
+    NotRead { read: bool, why: String },
+    Read { read: bool, rounds: usize, why: Option<&'static str> },
+}
+
+impl WriteJson for HwStatusJson {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut o = w.object();
+        match self {
+            Self::NotRead { read, why } => {
+                o.field("read", read);
+                o.field("why", why);
+            }
+            Self::Read { read, rounds, why } => {
+                o.field("read", read);
+                o.field("rounds", rounds);
+                o.field("why", why);
+            }
+        }
+        o.end();
+    }
+}
+
+json_struct! {
+    struct DiffLinkJson {
+        dir: String,
+        size: f64,
+        variant: String,
+    }
+}
+
+json_struct! {
+    struct ScalingEntryJson {
+        exponent: f64,
+        fit: GrowthFitJson,
+        last: Option<f64>,
+        metric: &'static str,
+        points: Vec<(f64, f64)>,
+        segments: Vec<(f64, f64, f64)>,
+        variant: String,
+    }
+}
+
+enum FunctionScalingJson {
+    Fitted {
+        exponent: f64,
+        fit: GrowthFitJson,
+        key: String,
+        last: Option<f64>,
+        line: i64,
+        module: String,
+        name: String,
+        points: Vec<(f64, f64)>,
+        segments: Vec<(f64, f64, f64)>,
+        variant: String,
+    },
+    Unfitted {
+        exponent: Option<f64>,
+        key: String,
+        line: i64,
+        module: String,
+        name: String,
+        points: Vec<(f64, f64)>,
+        variant: String,
+    },
+}
+
+impl WriteJson for FunctionScalingJson {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut o = w.object();
+        match self {
+            Self::Fitted { exponent, fit, key, last, line, module, name, points, segments, variant } => {
+                o.field("exponent", exponent);
+                o.field("fit", fit);
+                o.field("key", key);
+                o.field("last", last);
+                o.field("line", line);
+                o.field("module", module);
+                o.field("name", name);
+                o.field("points", points);
+                o.field("segments", segments);
+                o.field("variant", variant);
+            }
+            Self::Unfitted { exponent, key, line, module, name, points, variant } => {
+                o.field("exponent", exponent);
+                o.field("key", key);
+                o.field("line", line);
+                o.field("module", module);
+                o.field("name", name);
+                o.field("points", points);
+                o.field("variant", variant);
+            }
+        }
+        o.end();
+    }
+}
+
+json_struct! {
+    struct AaEntryJson {
+        first_ms: Vec<f64>,
+        interval: Option<[f64; 2]>,
+        min_ratio: f64,
+        n: usize,
+        noise: Option<f64>,
+        ratio: f64,
+        second_ms: Vec<f64>,
+        separated: bool,
+        shift: f64,
+        size: f64,
+        spread: f64,
+        wins: usize,
+    }
+}
+
+json_struct! {
+    struct NoiseJson {
+        alpha: f64,
+        at_rounds: u32,
+        floor: f64,
+        later_alpha: f64,
+        level: Option<f64>,
+        pool: usize,
+        quantile: f64,
+        slowed: f64,
+    }
+}
+
+#[derive(Clone)]
+enum VerdictRoundsJson {
+    Host {
+        aa_bar: Option<f64>,
+        added: bool,
+        alpha: f64,
+        faster: bool,
+        fastest: Option<f64>,
+        lost: usize,
+        noise: Option<f64>,
+        of: usize,
+        p: f64,
+        won: usize,
+    },
+    Hw {
+        of: usize,
+        won: usize,
+    },
+}
+
+impl WriteJson for VerdictRoundsJson {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut o = w.object();
+        match self {
+            Self::Host { aa_bar, added, alpha, faster, fastest, lost, noise, of, p, won } => {
+                o.field("aa_bar", aa_bar);
+                o.field("added", added);
+                o.field("alpha", alpha);
+                o.field("faster", faster);
+                o.field("fastest", fastest);
+                o.field("lost", lost);
+                o.field("noise", noise);
+                o.field("of", of);
+                o.field("p", p);
+                o.field("won", won);
+            }
+            Self::Hw { of, won } => {
+                o.field("of", of);
+                o.field("won", won);
+            }
+        }
+        o.end();
+    }
+}
+
+struct Verdict {
+    clear: bool,
+    gap: f64,
+    interval: Option<[f64; 2]>,
+    material: bool,
+    ratio: Option<f64>,
+    rounds: Option<VerdictRoundsJson>,
+}
+
+json_struct! {
+    struct RankingEntryJson {
+        clear: bool,
+        differs: bool,
+        gap: Option<f64>,
+        interval: Option<[f64; 2]>,
+        material: Option<bool>,
+        ratio: Option<f64>,
+        rounds: Option<VerdictRoundsJson>,
+        value: f64,
+        value_ratio: Option<f64>,
+        variant: String,
+    }
+}
+
+enum BaselineEntryJson {
+    Differing {
+        clear: bool,
+        differs: bool,
+        material: Option<bool>,
+        ratio: Option<f64>,
+        variant: String,
+    },
+    Compared {
+        clear: bool,
+        differs: bool,
+        gap: f64,
+        interval: Option<[f64; 2]>,
+        material: bool,
+        ratio: Option<f64>,
+        rounds: Option<VerdictRoundsJson>,
+        variant: String,
+    },
+}
+
+impl WriteJson for BaselineEntryJson {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut o = w.object();
+        match self {
+            Self::Differing { clear, differs, material, ratio, variant } => {
+                o.field("clear", clear);
+                o.field("differs", differs);
+                o.field("material", material);
+                o.field("ratio", ratio);
+                o.field("variant", variant);
+            }
+            Self::Compared { clear, differs, gap, interval, material, ratio, rounds, variant } => {
+                o.field("clear", clear);
+                o.field("differs", differs);
+                o.field("gap", gap);
+                o.field("interval", interval);
+                o.field("material", material);
+                o.field("ratio", ratio);
+                o.field("rounds", rounds);
+                o.field("variant", variant);
+            }
+        }
+        o.end();
+    }
+}
+
+json_struct! {
+    struct WinnerEntryJson {
+        baseline: Vec<BaselineEntryJson>,
+        clear: bool,
+        interval: Option<[f64; 2]>,
+        material: bool,
+        metric: &'static str,
+        ranking: Vec<RankingEntryJson>,
+        ratio: Option<f64>,
+        rounds: Option<VerdictRoundsJson>,
+        runner_up: String,
+        size: f64,
+        value: f64,
+        vs_baseline: Option<f64>,
+        winner: String,
+    }
+}
+
+json_struct! {
+    struct RunCheckJson {
+        message: Option<String>,
+        ok: bool,
+    }
+}
+
+json_struct! {
+    struct RunHostJson {
+        cycles: Vec<f64>,
+        group: u64,
+        ms: Vec<f64>,
+        reps: u64,
+        rounds: Vec<usize>,
+    }
+}
+
+json_struct! {
+    struct RunHeapJson {
+        after_run: f64,
+        after_setup: f64,
+        before: f64,
+    }
+}
+
+json_struct! {
+    struct RunHotJson {
+        calls: f64,
+        insns: f64,
+        key: String,
+        line: i64,
+        module: String,
+        name: String,
+        work_ms: f64,
+    }
+}
+
+enum HwRunValue {
+    Values(Vec<f64>),
+    Rounds(Vec<usize>),
+}
+
+impl WriteJson for HwRunValue {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        match self {
+            Self::Values(values) => values.write_json(w),
+            Self::Rounds(rounds) => rounds.write_json(w),
+        }
+    }
+}
+
+json_struct! {
+    struct RunEntryJson<'a> {
+        check: Option<RunCheckJson>,
+        digest: Option<&'a str>,
+        error: Option<&'a str>,
+        heap: Option<RunHeapJson>,
+        host: RunHostJson,
+        hot: Vec<RunHotJson>,
+        hw: BTreeMap<&'static str, HwRunValue>,
+        hw_profile: Option<String>,
+        profile: String,
+        run: BTreeMap<&'static str, Option<f64>>,
+        setup: BTreeMap<&'static str, Option<f64>>,
+        size: f64,
+        status: &'a str,
+        tables: Option<&'a TableSites>,
+        variant: &'a str,
+    }
+}
+
+json_struct! {
+    struct VariantMetaJson<'a> {
+        file: Option<String>,
+        kind: &'a str,
+        name: &'a str,
+        slug: &'a str,
+        source: Option<&'a str>,
+    }
+}
+
+json_struct! {
+    struct FloorJson {
+        bytes: f64,
+        count: f64,
+        count_share: f64,
+        cycles_per_ms: Option<f64>,
+        frame_ms: f64,
+        frame_share: f64,
+        host: f64,
+        ms: f64,
+        ns: f64,
+        per_frame: f64,
+    }
+}
+
+json_struct! {
+    struct MetricMetaJson {
+        about: &'static str,
+        better: &'static str,
+        exact: bool,
+        key: &'static str,
+        label: &'static str,
+        per_call: bool,
+        unit: &'static str,
+    }
+}
+
+json_struct! {
+    struct CompareReportJson<'a> {
+        aa: Vec<AaEntryJson>,
+        about: String,
+        baseline: &'a str,
+        check: CheckReportJson,
+        command: &'a str,
+        diffs: Vec<DiffLinkJson>,
+        fidelity: &'static str,
+        fidelity_profile: Json,
+        file: String,
+        floor: FloorJson,
+        format: &'static str,
+        frames: u32,
+        functions: Vec<FunctionScalingJson>,
+        host: Option<&'a TimingNote>,
+        hw: HwStatusJson,
+        metrics: Vec<MetricMetaJson>,
+        module: Option<&'a str>,
+        noise: NoiseJson,
+        notes: Vec<String>,
+        out: String,
+        per_frame: f64,
+        runs: Vec<RunEntryJson<'a>>,
+        scaling: Vec<ScalingEntryJson>,
+        seconds: f64,
+        sizes: &'a [f64],
+        title: String,
+        variants: Vec<VariantMetaJson<'a>>,
+        version: u64,
+        winners: Vec<WinnerEntryJson>,
+    }
+}
+
+fn figures_map(figures: &Figures) -> BTreeMap<&'static str, Option<f64>> {
+    METRICS.iter().map(|metric| (metric.key, figures.get(metric.key).copied())).collect()
 }
 
 /// compare.json and compare.txt from the runs
 #[allow(clippy::too_many_arguments)]
-fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, timing: &Timing, diffs: Vec<Json>, fidelity: Json, seconds: f64) -> (Json, String, bool) {
+fn index<'a>(options: &'a Options, spec: &'a Spec, runs: &'a [Run], check: CheckReportJson, hw: HwStatusJson, timing: &'a Timing, diffs: Vec<DiffLinkJson>, fidelity: Json, seconds: f64) -> (CompareReportJson<'a>, String, bool) {
     let (variants, sizes) = (&spec.variants, &spec.sizes);
     let run_of = |variant: usize, size: usize| runs.iter().find(|run| run.variant == variant && run.size == size);
     let ok_runs = runs.iter().all(|run| run.status == "ok");
-    let check_ok = check["ok"].as_bool() != Some(false);
+    let check_ok = !matches!(check, CheckReportJson::Ran { ok: false, .. });
 
     // how each figure grows with n: a fixed cost a call fitted apart, the exponent read at large n
     let mut scaling = Vec::new();
     for (variant, entry) in variants.iter().enumerate() {
         for metric in METRICS.iter().filter(|metric| metric.scales) {
             let points: Vec<(f64, f64)> = (0..sizes.len()).filter_map(|size| Some((sizes[size], *run_of(variant, size)?.run.get(metric.key)?))).collect();
-            if let Some(mut found) = growth_json(&points) {
-                found["variant"] = json!(entry.name);
-                found["metric"] = json!(metric.key);
-                scaling.push(found);
+            if let Some(found) = growth_data(&points) {
+                scaling.push(ScalingEntryJson {
+                    exponent: found.exponent,
+                    fit: found.fit,
+                    last: found.last,
+                    metric: metric.key,
+                    points: found.points,
+                    segments: found.segments,
+                    variant: entry.name.clone(),
+                });
             }
         }
     }
@@ -1600,11 +2174,30 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, ti
             let Some(top) = run_of(variant, largest) else { continue };
             for hot in top.hot.iter().take(5).filter(|hot| !hot.key.is_empty()) {
                 let points: Vec<(f64, f64)> = (0..sizes.len()).filter_map(|size| Some((sizes[size], run_of(variant, size)?.hot.iter().find(|other| other.key == hot.key)?.work_ms))).collect();
-                let mut found = growth_json(&points).unwrap_or_else(|| json!({"exponent": null, "points": points.iter().map(|(n, value)| json!([n, value])).collect::<Vec<_>>()}));
-                for (key, value) in [("variant", json!(entry.name)), ("key", json!(hot.key)), ("name", json!(hot.name)), ("module", json!(hot.module)), ("line", json!(hot.line))] {
-                    found[key] = value;
-                }
-                functions.push(found);
+                let item = match growth_data(&points) {
+                    Some(found) => FunctionScalingJson::Fitted {
+                        exponent: found.exponent,
+                        fit: found.fit,
+                        key: hot.key.clone(),
+                        last: found.last,
+                        line: hot.line,
+                        module: hot.module.clone(),
+                        name: hot.name.clone(),
+                        points: found.points,
+                        segments: found.segments,
+                        variant: entry.name.clone(),
+                    },
+                    None => FunctionScalingJson::Unfitted {
+                        exponent: None,
+                        key: hot.key.clone(),
+                        line: hot.line,
+                        module: hot.module.clone(),
+                        name: hot.name.clone(),
+                        points,
+                        variant: entry.name.clone(),
+                    },
+                };
+                functions.push(item);
             }
         }
     }
@@ -1627,19 +2220,32 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, ti
         let (first, second): (Vec<f64>, Vec<f64>) = base.host_ms.iter().zip(twin.iter()).filter_map(|(a, b)| Some(((*a)?, (*b)?))).unzip();
         let fastest = |values: &[f64]| values.iter().copied().fold(f64::INFINITY, f64::min);
         let (ratio, spread) = median_spread(&paired(&base.host_ms, twin)).unwrap_or((1.0, 0.0));
-        aa.push(json!({
-            "size": n, "n": d.len(), "wins": d.iter().filter(|value| **value > 0.0).count(),
-            "shift": found.estimate.exp(), "interval": found.interval.map(|(low, high)| json!([low.exp(), high.exp()])),
-            "separated": separated, "noise": stats::noise_level(&pools.0, d.len().max(1), stats::NOISE_QUANTILE, stats::NOISE_DRAWS, 0x5eed).map(f64::exp_m1),
-            "ratio": ratio, "min_ratio": fastest(&second) / fastest(&first), "spread": spread, "first_ms": first, "second_ms": second,
-        }));
+        aa.push(AaEntryJson {
+            first_ms: first.clone(),
+            interval: found.interval.map(|(low, high)| [low.exp(), high.exp()]),
+            min_ratio: fastest(&second) / fastest(&first),
+            n: d.len(),
+            noise: stats::noise_level(&pools.0, d.len().max(1), stats::NOISE_QUANTILE, stats::NOISE_DRAWS, 0x5eed).map(f64::exp_m1),
+            ratio,
+            second_ms: second,
+            separated,
+            shift: found.estimate.exp(),
+            size: *n,
+            spread,
+            wins: d.iter().filter(|value| **value > 0.0).count(),
+        });
     }
     // the noise level two runs of the same code reach at the comparison's rounds, as the verdicts read it
-    let noise = json!({
-        "pool": pools.0.len(), "quantile": stats::NOISE_QUANTILE, "slowed": stats::SLOWED, "floor": HOST_FLOOR,
-        "at_rounds": options.rounds, "level": stats::noise_level(&pools.0, options.rounds as usize, stats::NOISE_QUANTILE, stats::NOISE_DRAWS, 0x5eed).map(f64::exp_m1),
-        "alpha": stats::ALPHA, "later_alpha": stats::LATER_ALPHA,
-    });
+    let noise = NoiseJson {
+        alpha: stats::ALPHA,
+        at_rounds: options.rounds,
+        floor: HOST_FLOOR,
+        later_alpha: stats::LATER_ALPHA,
+        level: stats::noise_level(&pools.0, options.rounds as usize, stats::NOISE_QUANTILE, stats::NOISE_DRAWS, 0x5eed).map(f64::exp_m1),
+        pool: pools.0.len(),
+        quantile: stats::NOISE_QUANTILE,
+        slowed: stats::SLOWED,
+    };
     // the winners. A variant whose result differs from the baseline's (its check, or its digest without one) computes
     // something else, so it is no candidate. Then each other variant against the best: an exact figure clear by 1 % or
     // more; host time by its paired rounds (stats::paired); a hardware counter when it won every round by 5 % or more; any
@@ -1676,23 +2282,29 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, ti
             let floor = Floor { ms: floor_ms, per_frame: spec.per_frame, insns, lookups, cycles_per_ms: if metric.key == "hw_cycles" { run_of(best, size).and_then(|run| run.hw_cycles_per_ms) } else { cycles_per_ms } };
             // b against a (a the best, or the baseline): (b's figure over a's, oriented so above 1 is worse; its interval;
             // clear; material; the rounds) for b worse than a. `both` asks either way (against the baseline)
-            let verdict = |a: usize, a_value: f64, b: usize, b_value: f64, both: bool| -> Json {
+            let verdict = |a: usize, a_value: f64, b: usize, b_value: f64, both: bool| -> Verdict {
                 let plain = if metric.better == "higher" { (b_value > 0.0).then(|| a_value / b_value) } else { (a_value > 0.0).then(|| b_value / a_value) };
-                let (mut ratio, mut interval, mut rounds, mut clear) = (plain, Json::Null, Json::Null, false);
+                let (mut ratio, mut interval, mut rounds, mut clear) = (plain, None, None, false);
                 if host {
                     let (clean, pool) = if metric.key == "host_cycles" { (&cleans.1, &pools.1) } else { (&cleans.0, &pools.0) };
                     let worse = host_verdict(clean, pool, timing, size, a, b);
                     let better = if both { host_verdict(clean, pool, timing, size, b, a) } else { None };
                     if let Some(found) = &worse {
                         ratio = Some(found.estimate.exp());
-                        interval = found.interval.map_or(Json::Null, |(low, high)| json!([low.exp(), high.exp()]));
+                        interval = found.interval.map(|(low, high)| [low.exp(), high.exp()]);
                         let reported = better.as_ref().filter(|better| better.clear).unwrap_or(found);
-                        rounds = json!({
-                            "won": found.wins, "of": found.n, "p": found.p, "alpha": found.alpha, "noise": found.noise.map(f64::exp_m1),
-                            "added": timing.looked_again(size, a, b), "aa_bar": parted.contains(&size).then(|| clean.aa_bar(size).exp_m1()), "faster": better.as_ref().is_some_and(|better| better.clear),
-                            "lost": reported.n - reported.wins,
+                        rounds = Some(VerdictRoundsJson::Host {
+                            aa_bar: parted.contains(&size).then(|| clean.aa_bar(size).exp_m1()),
+                            added: timing.looked_again(size, a, b),
+                            alpha: found.alpha,
+                            faster: better.as_ref().is_some_and(|better| better.clear),
                             // (b's fastest run over a's: a clear verdict needs it to agree with the shift)
-                            "fastest": clean.fastest_ratio(size, a, b),
+                            fastest: clean.fastest_ratio(size, a, b),
+                            lost: reported.n - reported.wins,
+                            noise: found.noise.map(f64::exp_m1),
+                            of: found.n,
+                            p: found.p,
+                            won: found.wins,
                         });
                         clear = found.clear || better.as_ref().is_some_and(|better| better.clear);
                     }
@@ -1702,7 +2314,7 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, ti
                     (true, Some(ratio)) => (a_value * (ratio - 1.0)).abs(),
                     _ => (b_value - a_value).abs(),
                 };
-                let material = material(metric, gap, floor);
+                let is_material = material(metric, gap, floor);
                 if !host {
                     clear = match plain {
                         None => b_value != a_value,
@@ -1713,13 +2325,13 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, ti
                             let (low, high) = if (metric.better == "higher") == (ratio >= 1.0) { (b, a) } else { (a, b) };
                             let ratios = paired(&samples(low), &samples(high));
                             let won = ratios.iter().filter(|ratio| **ratio > 1.0).count();
-                            rounds = json!({"won": won, "of": ratios.len()});
+                            rounds = Some(VerdictRoundsJson::Hw { of: ratios.len(), won });
                             won == ratios.len() && won >= 2 && (ratio >= 1.05 || (both && ratio <= 1.0 / 1.05))
                         }
                         Some(ratio) => ratio >= 1.1 || (both && ratio <= 1.0 / 1.1),
                     };
                 }
-                json!({"ratio": ratio, "interval": interval, "clear": clear && material, "material": material, "gap": gap, "rounds": rounds})
+                Verdict { clear: clear && is_material, gap, interval, material: is_material, ratio, rounds }
             };
             let value_of = |variant: usize| all.iter().find(|(v, _)| *v == variant).map(|(_, value)| *value);
             let mut ranking: Vec<(usize, f64)> = all.clone();
@@ -1727,54 +2339,86 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, ti
                 let differs = |variant: usize| run_of(variant, size).is_some_and(result_differs);
                 differs(a.0).cmp(&differs(b.0)).then((a.0 != best).cmp(&(b.0 != best))).then(if metric.better == "higher" { b.1.total_cmp(&a.1) } else { a.1.total_cmp(&b.1) }).then(a.0.cmp(&b.0))
             });
-            let ranking: Vec<Json> = ranking
+            let mut ranking: Vec<RankingEntryJson> = ranking
                 .iter()
                 .map(|&(variant, figure)| {
                     let differs = run_of(variant, size).is_some_and(result_differs);
-                    let mut entry = if variant == best || differs { json!({"ratio": null, "interval": null, "clear": false, "material": null, "gap": null, "rounds": null}) } else { verdict(best, value, variant, figure, false) };
                     // (the ratio of the figures themselves, for a host figure beside its paired shift)
                     let plain = if metric.better == "higher" { (figure > 0.0).then(|| value / figure) } else { (value > 0.0).then(|| figure / value) };
+                    let (clear, gap, interval, material, mut ratio, rounds) = if variant == best || differs {
+                        (false, None, None, None, None, None)
+                    } else {
+                        let v = verdict(best, value, variant, figure, false);
+                        (v.clear, Some(v.gap), v.interval, Some(v.material), v.ratio, v.rounds)
+                    };
                     if variant == best {
-                        entry["ratio"] = json!(1.0);
+                        ratio = Some(1.0);
                     } else if differs || !host {
-                        entry["ratio"] = json!(plain);
+                        ratio = plain;
                     }
-                    entry["value_ratio"] = json!(plain);
-                    entry["variant"] = json!(variants[variant].name);
-                    entry["value"] = json!(figure);
-                    entry["differs"] = json!(differs);
-                    entry
+                    RankingEntryJson {
+                        clear,
+                        differs,
+                        gap,
+                        interval,
+                        material,
+                        ratio,
+                        rounds,
+                        value: figure,
+                        value_ratio: plain,
+                        variant: variants[variant].name.clone(),
+                    }
                 })
                 .collect();
             // (host time: the rest by their paired ratio against the leader, the leader first, differing results last)
-            let mut ranking = ranking;
             if host {
-                let key = |entry: &Json| (entry["differs"] == true, entry["variant"] != variants[best].name.as_str());
-                ranking.sort_by(|x, y| key(x).cmp(&key(y)).then(x["ratio"].as_f64().unwrap_or(f64::INFINITY).total_cmp(&y["ratio"].as_f64().unwrap_or(f64::INFINITY))));
+                let key = |entry: &RankingEntryJson| (entry.differs, entry.variant.as_str() != variants[best].name.as_str());
+                ranking.sort_by(|x, y| key(x).cmp(&key(y)).then(x.ratio.unwrap_or(f64::INFINITY).total_cmp(&y.ratio.unwrap_or(f64::INFINITY))));
             }
-            let runner = ranking.iter().skip(1).find(|entry| entry["differs"] != true).and_then(|entry| variants.iter().position(|v| entry["variant"] == v.name.as_str())).unwrap_or(best);
+            let runner = ranking.iter().skip(1).find(|entry| !entry.differs).and_then(|entry| variants.iter().position(|v| entry.variant == v.name)).unwrap_or(best);
             let vs_baseline = value_of(0).filter(|_| run_of(0, size).is_some_and(|run| !result_differs(run))).and_then(|base| if metric.better == "higher" { (base > 0.0).then(|| value / base) } else { (value > 0.0).then(|| base / value) });
             // each variant against the baseline (the Compare view's column), either way
             let base = value_of(0).filter(|_| run_of(0, size).is_some_and(|run| run.status == "ok"));
-            let baseline: Vec<Json> = (1..variants.len())
+            let baseline: Vec<BaselineEntryJson> = (1..variants.len())
                 .filter_map(|variant| {
                     let (base, figure) = (base?, value_of(variant)?);
-                    let mut entry = if run_of(variant, size).is_some_and(result_differs) { json!({"ratio": null, "clear": false, "material": null}) } else { verdict(0, base, variant, figure, true) };
-                    entry["variant"] = json!(variants[variant].name);
-                    entry["differs"] = json!(run_of(variant, size).is_some_and(result_differs));
-                    Some(entry)
+                    let differs = run_of(variant, size).is_some_and(result_differs);
+                    if differs {
+                        Some(BaselineEntryJson::Differing { clear: false, differs: true, material: None, ratio: None, variant: variants[variant].name.clone() })
+                    } else {
+                        let v = verdict(0, base, variant, figure, true);
+                        Some(BaselineEntryJson::Compared {
+                            clear: v.clear,
+                            differs: false,
+                            gap: v.gap,
+                            interval: v.interval,
+                            material: v.material,
+                            ratio: v.ratio,
+                            rounds: v.rounds,
+                            variant: variants[variant].name.clone(),
+                        })
+                    }
                 })
                 .collect();
-            let runner_entry = ranking.iter().find(|entry| entry["variant"] == variants[runner].name.as_str()).cloned().unwrap_or(Json::Null);
+            let runner_entry = ranking.iter().find(|entry| entry.variant == variants[runner].name);
             // (a winner is clear of every other variant whose result holds, not of the runner-up alone: host time's paired
             // rounds can leave a third variant within noise of the best where the runner-up's do not)
-            let clear_of_all = ranking.iter().filter(|entry| entry["variant"] != variants[best].name.as_str() && entry["differs"] != true).all(|entry| entry["clear"] == true);
-            winners.push(json!({
-                "metric": metric.key, "size": sizes[size], "winner": variants[best].name, "value": value, "runner_up": variants[runner].name,
-                "ratio": runner_entry["ratio"], "interval": runner_entry["interval"], "vs_baseline": vs_baseline,
-                "clear": clear_of_all, "material": runner_entry["material"] != false, "rounds": runner_entry["rounds"],
-                "ranking": ranking, "baseline": baseline,
-            }));
+            let clear_of_all = ranking.iter().filter(|entry| entry.variant != variants[best].name && !entry.differs).all(|entry| entry.clear);
+            winners.push(WinnerEntryJson {
+                baseline,
+                clear: clear_of_all,
+                interval: runner_entry.and_then(|entry| entry.interval),
+                material: runner_entry.is_none_or(|entry| entry.material != Some(false)),
+                metric: metric.key,
+                ratio: runner_entry.and_then(|entry| entry.ratio),
+                rounds: runner_entry.and_then(|entry| entry.rounds.clone()),
+                ranking,
+                runner_up: variants[runner].name.clone(),
+                size: sizes[size],
+                value,
+                vs_baseline,
+                winner: variants[best].name.clone(),
+            });
         }
     }
     let mut notes = notes(spec, runs, &hw);
@@ -1785,17 +2429,17 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, ti
             notes.push(format!("{slowed} of {timed} timed runs took over {}x what their round and their arm lead one to expect and were left out of the paired rounds the host-time verdicts rest on: the machine slowed them alone, not the code (rounds it slowed as a whole stay: a pair's ratio cancels them)", stats::SLOWED));
         }
         for size in &parted {
-            let entry = aa.iter().find(|entry| entry["size"].as_f64() == Some(sizes[*size]));
+            let entry = aa.iter().find(|entry| entry.size == sizes[*size]);
             notes.push(format!(
                 "the A/A pair (the baseline run twice) parted at n = {}: its second run read {} the first's over {} rounds, beyond the noise, so a host-time verdict there needs a gap past {:.1} % (the far end of the pair's own interval); a quieter machine reads smaller gaps",
                 size_label(sizes[*size]),
-                entry.and_then(|entry| entry["shift"].as_f64()).map_or("?".into(), |shift| ratio_text(Some(shift))),
-                entry.and_then(|entry| entry["n"].as_u64()).unwrap_or(0),
+                entry.map_or("?".into(), |entry| ratio_text(Some(entry.shift))),
+                entry.map_or(0, |entry| entry.n),
                 cleans.0.aa_bar(*size).exp_m1() * 100.0
             ));
         }
         if !timing.added.is_empty() {
-            let pairs: BTreeSet<String> = timing.added.iter().flat_map(|added| added["pairs"].as_array().cloned().unwrap_or_default()).map(|pair| format!("{} and {} at n = {}", pair["a"].as_str().unwrap_or("?"), pair["b"].as_str().unwrap_or("?"), pair["size"].as_f64().map(size_label).unwrap_or_default())).collect();
+            let pairs: BTreeSet<String> = timing.added.iter().flat_map(|added| added.pairs.iter()).map(|pair| format!("{} and {} at n = {}", pair.a, pair.b, size_label(pair.size))).collect();
             notes.push(format!(
                 "host time ran {} rounds, {} more than the first {} for the pairs still undecided ({}); a pair that got more rounds clears its sign test at {} instead of {}, since a pair looked at again had more chances to cross by luck",
                 timing.rounds,
@@ -1809,77 +2453,130 @@ fn index(options: &Options, spec: &Spec, runs: &[Run], check: Json, hw: Json, ti
     }
     // where host time and the work clock disagree: a clear host-time gap the work clock calls about equal or reverses
     if let Some(largest) = sizes.len().checked_sub(1) {
-        let host = winners.iter().find(|winner| winner["metric"] == "host_ms" && winner["size"].as_f64() == Some(sizes[largest]));
+        let host = winners.iter().find(|winner| winner.metric == "host_ms" && winner.size == sizes[largest]);
         let work_of = |name: &str| -> Option<f64> { runs.iter().find(|run| run.size == largest && variants[run.variant].name == name)?.run.get("work_ms").copied() };
-        for entry in host.and_then(|host| host["ranking"].as_array()).into_iter().flatten().skip(1) {
-            let (Some(fast), Some(slow)) = (host.and_then(|host| host["winner"].as_str()), entry["variant"].as_str()) else { continue };
-            let Some(ratio) = entry["ratio"].as_f64().filter(|ratio| *ratio >= 1.2 && entry["clear"] == true) else { continue };
-            let (Some(fast_work), Some(slow_work)) = (work_of(fast), work_of(slow)) else { continue };
-            if fast_work <= 0.0 || slow_work / fast_work >= 1.05 {
-                continue;
+        if let Some(host) = host {
+            for entry in host.ranking.iter().skip(1) {
+                let (fast, slow) = (host.winner.as_str(), entry.variant.as_str());
+                let Some(ratio) = entry.ratio.filter(|ratio| *ratio >= 1.2 && entry.clear) else { continue };
+                let (Some(fast_work), Some(slow_work)) = (work_of(fast), work_of(slow)) else { continue };
+                if fast_work <= 0.0 || slow_work / fast_work >= 1.05 {
+                    continue;
+                }
+                let (won, of) = match &entry.rounds {
+                    Some(VerdictRoundsJson::Host { won, of, .. } | VerdictRoundsJson::Hw { won, of }) => (won.to_string(), of.to_string()),
+                    None => ("null".into(), "null".into()),
+                };
+                notes.push(format!(
+                    "host time puts {slow} {} behind {fast} (slower in {won} of {of} rounds), where the work clock gives {slow} {}: the clock prices instructions by their kind at a client's measured averages and cannot see all that makes one faster than another (whether a key lies in an array part or a hash part, which loop form runs, whether data is in the CPU's caches), while host time is the Luau VM itself on this machine. Rank this gap by host time, and size it in a client",
+                    ratio_text(Some(ratio)),
+                    if (slow_work / fast_work - 1.0).abs() < 0.01 { "the same figure".to_string() } else { ratio_text(Some(slow_work / fast_work)) }
+                ));
             }
-            notes.push(format!(
-                "host time puts {slow} {} behind {fast} (slower in {} of {} rounds), where the work clock gives {slow} {}: the clock prices instructions by their kind at a client's measured averages and cannot see all that makes one faster than another (whether a key lies in an array part or a hash part, which loop form runs, whether data is in the CPU's caches), while host time is the Luau VM itself on this machine. Rank this gap by host time, and size it in a client",
-                ratio_text(Some(ratio)),
-                entry["rounds"]["won"],
-                entry["rounds"]["of"],
-                if (slow_work / fast_work - 1.0).abs() < 0.01 { "the same figure".to_string() } else { format!("{}", ratio_text(Some(slow_work / fast_work))) }
-            ));
         }
     }
 
-    let runs_json: Vec<Json> = runs
+    let runs_json: Vec<RunEntryJson<'a>> = runs
         .iter()
         .map(|run| {
             let variant = &variants[run.variant];
             // (each counter's figures, of the rounds whose run finished: `rounds` names them)
-            let mut hw: serde_json::Map<String, Json> = run.hw_rounds.iter().map(|(key, values)| (key.to_string(), json!(values.iter().flatten().collect::<Vec<_>>()))).collect();
+            let mut hw_map: BTreeMap<&'static str, HwRunValue> = run.hw_rounds.iter().map(|(&key, values)| (key, HwRunValue::Values(values.iter().flatten().copied().collect()))).collect();
             if let Some(values) = run.hw_rounds.values().next() {
-                hw.insert("rounds".into(), json!(values.iter().enumerate().filter(|(_, value)| value.is_some()).map(|(round, _)| round).collect::<Vec<_>>()));
+                hw_map.insert("rounds", HwRunValue::Rounds(values.iter().enumerate().filter(|(_, value)| value.is_some()).map(|(round, _)| round).collect()));
             }
-            json!({
-                "variant": variant.name, "size": sizes[run.size], "status": run.status, "error": run.error,
-                "profile": format!("runs/{}/{}", variant.slug, size_label(sizes[run.size])),
-                "hw_profile": run.hw_profile.then(|| format!("runs/{}/{}/hw", variant.slug, size_label(sizes[run.size]))),
-                "digest": run.digest,
-                "check": run.check.as_ref().map(|(ok, message)| json!({"ok": ok, "message": message})),
-                "setup": figures_json(&run.setup), "run": figures_json(&run.run),
+            RunEntryJson {
+                check: run.check.as_ref().map(|(ok, message)| RunCheckJson { message: message.clone(), ok: *ok }),
+                digest: run.digest.as_deref(),
+                error: run.error.as_deref(),
+                heap: run.heap.map(|(before, set, after)| RunHeapJson { after_run: after, after_setup: set, before }),
                 // (each round's figure, of the rounds whose run finished: `rounds` names them)
-                "host": {
-                    "ms": run.host_ms.iter().flatten().collect::<Vec<_>>(), "cycles": run.host_cycles.iter().flatten().collect::<Vec<_>>(),
-                    "rounds": run.host_ms.iter().enumerate().filter(|(_, ms)| ms.is_some()).map(|(round, _)| round).collect::<Vec<_>>(),
-                    "reps": run.reps, "group": run.group,
+                host: RunHostJson {
+                    cycles: run.host_cycles.iter().flatten().copied().collect(),
+                    group: run.group,
+                    ms: run.host_ms.iter().flatten().copied().collect(),
+                    reps: run.reps,
+                    rounds: run.host_ms.iter().enumerate().filter(|(_, ms)| ms.is_some()).map(|(round, _)| round).collect(),
                 },
-                "hw": hw,
-                "heap": run.heap.map(|(before, set, after)| json!({"before": before, "after_setup": set, "after_run": after})),
-                "tables": run.tables,
-                "hot": run.hot.iter().map(|hot| json!({"key": hot.key, "name": hot.name, "module": hot.module, "line": hot.line, "work_ms": hot.work_ms, "insns": hot.insns, "calls": hot.calls})).collect::<Vec<_>>(),
-            })
+                hot: run
+                    .hot
+                    .iter()
+                    .map(|hot| RunHotJson { calls: hot.calls, insns: hot.insns, key: hot.key.clone(), line: hot.line, module: hot.module.clone(), name: hot.name.clone(), work_ms: hot.work_ms })
+                    .collect(),
+                hw: hw_map,
+                hw_profile: run.hw_profile.then(|| format!("runs/{}/{}/hw", variant.slug, size_label(sizes[run.size]))),
+                profile: format!("runs/{}/{}", variant.slug, size_label(sizes[run.size])),
+                run: figures_map(&run.run),
+                setup: figures_map(&run.setup),
+                size: sizes[run.size],
+                status: &run.status,
+                tables: run.tables.as_ref(),
+                variant: &variant.name,
+            }
         })
         .collect();
     let title = spec.title.clone().unwrap_or_else(|| options.file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
-    let json = json!({
-        "format": "ree-what-if", "version": 2,
-        "title": title, "about": spec.about.clone().unwrap_or_default(), "file": options.file.to_string_lossy(), "out": options.out.to_string_lossy(), "command": options.command,
-        "baseline": variants[0].name,
-        "variants": variants.iter().map(|variant| json!({"name": variant.name, "slug": variant.slug, "kind": variant.kind, "source": variant.source, "file": variant.path.as_ref().map(|path| path.to_string_lossy().into_owned())})).collect::<Vec<_>>(),
-        "sizes": sizes, "frames": spec.frames, "per_frame": spec.per_frame, "module": spec.module,
-        "fidelity": crate::cost::FIDELITY,
+    let report = CompareReportJson {
+        aa,
+        about: spec.about.clone().unwrap_or_default(),
+        baseline: &variants[0].name,
+        check,
+        command: &options.command,
+        diffs,
+        fidelity: crate::cost::FIDELITY,
         // (the baseline's profile's own fidelity at the largest size: the band its figures may lie in against a client's)
-        "fidelity_profile": fidelity,
-        "floor": {"ms": floor_ms, "per_frame": spec.per_frame, "frame_ms": FRAME_MS, "frame_share": MATERIAL_SHARE, "ns": MATERIAL_NS, "host": HOST_FLOOR,
-            "count_share": MATERIAL_COUNT_SHARE, "count": MATERIAL_COUNT, "bytes": MATERIAL_BYTES, "cycles_per_ms": cycles_per_ms},
-        "metrics": METRICS.iter().map(|metric| json!({"key": metric.key, "label": metric.label, "unit": metric.unit, "better": metric.better, "exact": metric.exact, "per_call": metric.per_call, "about": metric.about})).collect::<Vec<_>>(),
-        "runs": runs_json,
-        "scaling": scaling, "functions": functions, "winners": winners, "aa": aa, "noise": noise, "host": timing.note, "hw": hw, "check": check, "diffs": diffs, "notes": notes,
-        "seconds": seconds,
-    });
-    let text = text(options, spec, runs, &json);
-    (json, text, ok_runs && check_ok)
+        fidelity_profile: fidelity,
+        file: options.file.to_string_lossy().into_owned(),
+        floor: FloorJson {
+            bytes: MATERIAL_BYTES,
+            count: MATERIAL_COUNT,
+            count_share: MATERIAL_COUNT_SHARE,
+            cycles_per_ms,
+            frame_ms: FRAME_MS,
+            frame_share: MATERIAL_SHARE,
+            host: HOST_FLOOR,
+            ms: floor_ms,
+            ns: MATERIAL_NS,
+            per_frame: spec.per_frame,
+        },
+        format: "ree-what-if",
+        frames: spec.frames,
+        functions,
+        host: timing.note.as_ref(),
+        hw,
+        metrics: METRICS
+            .iter()
+            .map(|metric| MetricMetaJson { about: metric.about, better: metric.better, exact: metric.exact, key: metric.key, label: metric.label, per_call: metric.per_call, unit: metric.unit })
+            .collect(),
+        module: spec.module.as_deref(),
+        noise,
+        notes,
+        out: options.out.to_string_lossy().into_owned(),
+        per_frame: spec.per_frame,
+        runs: runs_json,
+        scaling,
+        seconds,
+        sizes,
+        title,
+        variants: variants
+            .iter()
+            .map(|variant| VariantMetaJson {
+                file: variant.path.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                kind: &variant.kind,
+                name: &variant.name,
+                slug: &variant.slug,
+                source: variant.source.as_deref(),
+            })
+            .collect(),
+        version: 2,
+        winners,
+    };
+    let text = text(options, spec, runs, &report);
+    (report, text, ok_runs && check_ok)
 }
 
 /// What to keep in mind reading the comparison: where the work clock's model bears on it, failed runs and checks
-fn notes(spec: &Spec, runs: &[Run], hw: &Json) -> Vec<String> {
+fn notes(spec: &Spec, runs: &[Run], hw: &HwStatusJson) -> Vec<String> {
     let (variants, sizes) = (&spec.variants, &spec.sizes);
     let mut notes = Vec::new();
     for run in runs.iter().filter(|run| run.status != "ok") {
@@ -1941,8 +2638,8 @@ fn notes(spec: &Spec, runs: &[Run], hw: &Json) -> Vec<String> {
             ));
         }
     }
-    if hw["read"] == false {
-        if let Some(why) = hw["why"].as_str().filter(|why| *why != "--no-hw") {
+    if let HwStatusJson::NotRead { why, .. } = hw {
+        if why != "--no-hw" {
             notes.push(format!("hardware counters not read: {why}"));
         }
     }
@@ -1950,14 +2647,14 @@ fn notes(spec: &Spec, runs: &[Run], hw: &Json) -> Vec<String> {
 }
 
 /// The text summary (compare.txt, also printed)
-fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
+fn text(options: &Options, spec: &Spec, runs: &[Run], report: &CompareReportJson<'_>) -> String {
     let (variants, sizes) = (&spec.variants, &spec.sizes);
     let mut out = String::new();
     let name_width = variants.iter().map(|variant| variant.name.chars().count()).max().unwrap_or(4).clamp(4, 28);
     let _ = writeln!(
         out,
         "what-if: {} ({}): {} variants at n = {}; {}",
-        json["title"].as_str().unwrap_or_default(),
+        report.title,
         options.file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
         variants.len(),
         sizes.iter().map(|size| grouped(*size)).collect::<Vec<_>>().join(", "),
@@ -1966,23 +2663,31 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
     if let Some(about) = &spec.about {
         let _ = writeln!(out, "{about}");
     }
-    let check = &json["check"];
-    let by = match check["by"].as_str() {
-        Some("digest") => "by digest: no check function in the file",
-        Some("equality") => "by deep equality: check = true",
-        _ => "by the file's check function",
-    };
-    if check["ran"] == true {
-        if check["ok"] == true {
-            let _ = writeln!(out, "check: every variant's result holds against {}'s at every size ({by})", variants[0].name);
-        } else {
-            for failure in check["failures"].as_array().into_iter().flatten() {
-                let _ = writeln!(out, "check FAILED ({by}): {} at n = {}: {}", failure["variant"].as_str().unwrap_or("?"), failure["size"].as_f64().map(grouped).unwrap_or_else(|| "?".into()), failure["message"].as_str().unwrap_or("?"));
+    match &report.check {
+        CheckReportJson::Ran { by, ok, failures, .. } => {
+            let by_text = match by.as_str() {
+                "digest" => "by digest: no check function in the file",
+                "equality" => "by deep equality: check = true",
+                _ => "by the file's check function",
+            };
+            if *ok {
+                let _ = writeln!(out, "check: every variant's result holds against {}'s at every size ({by_text})", variants[0].name);
+            } else {
+                for failure in failures {
+                    let _ = writeln!(
+                        out,
+                        "check FAILED ({by_text}): {} at n = {}: {}",
+                        failure.variant.as_deref().unwrap_or("?"),
+                        failure.size.map(grouped).unwrap_or_else(|| "?".into()),
+                        failure.message.as_deref().unwrap_or("?")
+                    );
+                }
+                let _ = writeln!(out, "  a variant whose result differs computes something else: it wins nothing, and its figures are no other way of writing the same work");
             }
-            let _ = writeln!(out, "  a variant whose result differs computes something else: it wins nothing, and its figures are no other way of writing the same work");
         }
-    } else {
-        let _ = writeln!(out, "results: not checked (--no-check)");
+        CheckReportJson::NotRan { .. } => {
+            let _ = writeln!(out, "results: not checked (--no-check)");
+        }
     }
     // the table of figures
     let columns: [(&str, &str); 10] = [("work_ms", "work"), ("warm_ms", "warm work"), ("host_ms", "host"), ("insns", "insns"), ("alloc_bytes", "alloc"), ("allocs", "allocs"), ("heap_bytes", "heap held"), ("gc_steps", "gc steps"), ("rehash_keys", "rehash keys"), ("cache_hit_rate", "cache hit")];
@@ -2028,9 +2733,8 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
         }
     }
     // scaling
-    let scaling = json["scaling"].as_array().cloned().unwrap_or_default();
-    if sizes.len() >= 2 && !scaling.is_empty() {
-        let fitted = scaling.iter().any(|entry| entry["fit"]["fitted"] == true);
+    if sizes.len() >= 2 && !report.scaling.is_empty() {
+        let fitted = report.scaling.iter().any(|entry| entry.fit.fitted);
         let _ = writeln!(
             out,
             "\nscaling: the exponent k at large n{} [each segment's slope, n to n]",
@@ -2040,10 +2744,10 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
             let rows: Vec<String> = variants
                 .iter()
                 .filter_map(|variant| {
-                    let entry = scaling.iter().find(|entry| entry["variant"] == variant.name.as_str() && entry["metric"] == key)?;
-                    let segments: Vec<String> = entry["segments"].as_array().into_iter().flatten().filter_map(|segment| segment[2].as_f64()).map(|slope| format!("{slope:.2}")).collect();
+                    let entry = report.scaling.iter().find(|entry| entry.variant == variant.name && entry.metric == key)?;
+                    let segments: Vec<String> = entry.segments.iter().map(|(_, _, slope)| format!("{slope:.2}")).collect();
                     let segments = if segments.len() > 1 { format!(" [{}]", segments.join(" ")) } else { String::new() };
-                    Some(format!("{} {:.2}{segments}", variant.name, entry["exponent"].as_f64()?))
+                    Some(format!("{} {:.2}{segments}", variant.name, entry.exponent))
                 })
                 .collect();
             if !rows.is_empty() {
@@ -2053,7 +2757,7 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
     }
     // winners at the largest size
     if let Some(largest) = sizes.len().checked_sub(1) {
-        let winners: Vec<&Json> = json["winners"].as_array().into_iter().flatten().filter(|winner| winner["size"].as_f64() == Some(sizes[largest])).collect();
+        let winners: Vec<&WinnerEntryJson> = report.winners.iter().filter(|winner| winner.size == sizes[largest]).collect();
         let differing: Vec<&str> = runs.iter().filter(|run| run.size == largest && result_differs(run)).map(|run| variants[run.variant].name.as_str()).collect();
         if winners.is_empty() && !differing.is_empty() {
             let _ = writeln!(out, "\nwinners at n = {}: none, as only one variant's result holds ({} computes something else)", grouped(sizes[largest]), differing.join(", "));
@@ -2062,18 +2766,18 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
             let _ = writeln!(out, "\nwinners at n = {} (the best where it is clear of every other variant, else no clear winner among those within reach of the best figure; then each other variant's figure over the first)", grouped(sizes[largest]));
             let (mut equal, mut noise, mut negligible) = (Vec::new(), Vec::new(), Vec::new());
             for winner in winners {
-                let metric = metric_of(winner["metric"].as_str().unwrap_or_default()).unwrap();
+                let metric = metric_of(winner.metric).unwrap();
                 if matches!(metric.key, "gc_freed" | "cold_ms") {
                     continue;
                 }
-                let ranking = winner["ranking"].as_array().cloned().unwrap_or_default();
-                let others = || ranking.iter().skip(1).filter(|entry| entry["differs"] != true);
-                if !ranking.iter().any(|entry| entry["clear"] == true) {
+                let ranking = &winner.ranking;
+                let others = || ranking.iter().skip(1).filter(|entry| !entry.differs);
+                if !ranking.iter().any(|entry| entry.clear) {
                     // (exact figures within 1 % are about equal, however small; a gap past that under the floor is too small)
-                    let level = metric.exact && others().all(|entry| entry["value_ratio"].as_f64().is_some_and(|ratio| ratio < 1.01));
+                    let level = metric.exact && others().all(|entry| entry.value_ratio.is_some_and(|ratio| ratio < 1.01));
                     if level {
                         equal.push(metric.label);
-                    } else if others().all(|entry| entry["material"] == false) && others().next().is_some() {
+                    } else if others().all(|entry| entry.material == Some(false)) && others().next().is_some() {
                         negligible.push(metric.label);
                     } else if metric.exact {
                         equal.push(metric.label);
@@ -2083,12 +2787,12 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
                     continue;
                 }
                 let best = &ranking[0];
-                let best_name = best["variant"].as_str().unwrap_or_default();
+                let best_name = best.variant.as_str();
                 // (a winner only where every other gap is clear; else the variants no clear gap parts from the best figure)
-                let leaders: Vec<&str> = std::iter::once(best_name).chain(others().filter(|entry| entry["clear"] != true).filter_map(|entry| entry["variant"].as_str())).collect();
+                let leaders: Vec<&str> = std::iter::once(best_name).chain(others().filter(|entry| !entry.clear).map(|entry| entry.variant.as_str())).collect();
                 let best_text = if leaders.len() > 1 {
                     format!("no clear winner among {}", leaders.join(", "))
-                } else if best["value"].as_f64() == Some(0.0) {
+                } else if best.value == 0.0 {
                     format!("{best_name} (none)")
                 } else {
                     best_name.to_string()
@@ -2096,25 +2800,22 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
                 let others: Vec<String> = ranking[1..]
                     .iter()
                     .map(|entry| {
-                        let name = entry["variant"].as_str().unwrap_or_default();
-                        if entry["differs"] == true {
+                        let name = entry.variant.as_str();
+                        if entry.differs {
                             return format!("{name} (its result differs)");
                         }
-                        let figure = match entry["ratio"].as_f64() {
+                        let figure = match entry.ratio {
                             Some(ratio) => ratio_text(Some(ratio)),
-                            None => show(entry["value"].as_f64().unwrap_or(0.0), metric.unit),
+                            None => show(entry.value, metric.unit),
                         };
-                        let rounds = &entry["rounds"];
-                        let interval = entry["interval"].as_array().filter(|_| entry["clear"] == true).map_or(String::new(), |pair| format!(" [{:.2}-{:.2}]", pair[0].as_f64().unwrap_or(0.0), pair[1].as_f64().unwrap_or(0.0)));
-                        let flag = match (entry["clear"].as_bool(), rounds["won"].as_u64()) {
-                            (Some(true), Some(won)) => format!(" ({won} of {} rounds)", rounds["of"]),
-                            _ if entry["material"] == false => " (too small to matter)".into(),
-                            (Some(false), _) if metric.exact => " (about equal)".into(),
-                            (Some(false), _) if rounds["aa_bar"].is_number() => format!(" (within the A/A pair's own gap here, {:.1} %)", rounds["aa_bar"].as_f64().unwrap_or(0.0) * 100.0),
-                            (Some(false), _) => match rounds["noise"].as_f64() {
-                                Some(noise) => format!(" (within noise: +-{:.1} % at {} rounds)", noise * 100.0, rounds["of"]),
-                                None => " (noise)".into(),
-                            },
+                        let interval = entry.interval.filter(|_| entry.clear).map_or(String::new(), |[low, high]| format!(" [{low:.2}-{high:.2}]"));
+                        let flag = match (entry.clear, &entry.rounds) {
+                            (true, Some(VerdictRoundsJson::Host { won, of, .. } | VerdictRoundsJson::Hw { won, of })) => format!(" ({won} of {of} rounds)"),
+                            _ if entry.material == Some(false) => " (too small to matter)".into(),
+                            (false, _) if metric.exact => " (about equal)".into(),
+                            (false, Some(VerdictRoundsJson::Host { aa_bar: Some(bar), .. })) => format!(" (within the A/A pair's own gap here, {:.1} %)", bar * 100.0),
+                            (false, Some(VerdictRoundsJson::Host { noise: Some(noise), of, .. })) => format!(" (within noise: +-{:.1} % at {of} rounds)", noise * 100.0),
+                            (false, _) => " (noise)".into(),
                             _ => String::new(),
                         };
                         format!("{name} {figure}{interval}{flag}")
@@ -2131,11 +2832,10 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
             if !negligible.is_empty() {
                 let _ = writeln!(out, "  too small to matter: {}", negligible.join(", "));
             }
-            let floor = &json["floor"];
             let _ = writeln!(
                 out,
                 "  (material from: a ms figure's gap of {} a call, 0.1 % of a 60 fps frame at {} a frame (the file's per_frame says how often the game runs the code), {} at least; cycles as the time they take at the clock they ran at, the same; a count's gap a frame of 0.1 % of a call's instructions, 10 at least; a gap of 1 KB a frame; a hit rate's gap over as many lookups)",
-                show(floor["ms"].as_f64().unwrap_or(0.0), "ms"),
+                show(report.floor.ms, "ms"),
                 if spec.per_frame == 1.0 { "one call".to_string() } else { format!("{} calls", grouped(spec.per_frame)) },
                 show(MATERIAL_NS * 1e-6, "ms")
             );
@@ -2144,38 +2844,44 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
         let largest_runs: Vec<(&Variant, &Run)> = variants.iter().enumerate().filter_map(|(variant, entry)| Some((entry, runs.iter().find(|run| run.variant == variant && run.size == largest && run.status == "ok")?))).collect();
         let _ = writeln!(out, "\ntable shapes at n = {}: the tables each variant's run made, held after it, by the line that made them", grouped(sizes[largest]));
         for (entry, run) in &largest_runs {
-            let made = &run.tables["run"];
-            let _ = writeln!(out, "  {}: {}, {}", entry.name, tables_text(made["count"].as_f64().unwrap_or(0.0)), show(made["bytes"].as_f64().unwrap_or(0.0), "bytes"));
-            for site in run.tables["sites"].as_array().into_iter().flatten().filter(|site| site["phase"] == "run").take(4) {
+            let (made_count, made_bytes) = run.tables.as_ref().map_or((0.0, 0.0), |t| (t.run.count, t.run.bytes));
+            let _ = writeln!(out, "  {}: {}, {}", entry.name, tables_text(made_count), show(made_bytes, "bytes"));
+            for site in run.tables.iter().flat_map(|t| t.sites.iter()).filter(|site| site["phase"] == "run").take(4) {
                 let _ = writeln!(out, "{}", site_line(site));
             }
         }
         // setup's: the input (the same for every variant when they share a setup)
-        let inputs: Vec<(String, f64, f64)> = largest_runs.iter().map(|(entry, run)| (entry.name.clone(), run.tables["setup"]["count"].as_f64().unwrap_or(0.0), run.tables["setup"]["bytes"].as_f64().unwrap_or(0.0))).collect();
+        let inputs: Vec<(String, f64, f64)> = largest_runs
+            .iter()
+            .map(|(entry, run)| {
+                let (c, b) = run.tables.as_ref().map_or((0.0, 0.0), |t| (t.setup.count, t.setup.bytes));
+                (entry.name.clone(), c, b)
+            })
+            .collect();
         if inputs.iter().any(|input| input.1 > 0.0) {
             if inputs.windows(2).all(|pair| pair[0].1 == pair[1].1 && (pair[0].2 - pair[1].2).abs() <= 0.005 * pair[0].2.max(pair[1].2)) {
                 let _ = writeln!(out, "  the input (setup's, the same for every variant): {}, {}", tables_text(inputs[0].1), show(inputs[0].2, "bytes"));
             } else {
                 let _ = writeln!(out, "  setup's tables, held after the run:");
                 for (entry, run) in &largest_runs {
-                    let _ = writeln!(out, "  {}: {}, {}", entry.name, tables_text(run.tables["setup"]["count"].as_f64().unwrap_or(0.0)), show(run.tables["setup"]["bytes"].as_f64().unwrap_or(0.0), "bytes"));
-                    for site in run.tables["sites"].as_array().into_iter().flatten().filter(|site| site["phase"] == "setup").take(3) {
+                    let (c, b) = run.tables.as_ref().map_or((0.0, 0.0), |t| (t.setup.count, t.setup.bytes));
+                    let _ = writeln!(out, "  {}: {}, {}", entry.name, tables_text(c), show(b, "bytes"));
+                    for site in run.tables.iter().flat_map(|t| t.sites.iter()).filter(|site| site["phase"] == "setup").take(3) {
                         let _ = writeln!(out, "{}", site_line(site));
                     }
                 }
             }
         }
     }
-    let notes = json["notes"].as_array().cloned().unwrap_or_default();
-    if !notes.is_empty() {
+    if !report.notes.is_empty() {
         let _ = writeln!(out, "\nnotes");
-        for note in notes {
-            let _ = writeln!(out, "  - {}", note.as_str().unwrap_or_default());
+        for note in &report.notes {
+            let _ = writeln!(out, "  - {note}");
         }
     }
     let _ = writeln!(out, "\nexact (the same every run): work clock, instructions, allocations, heap, collector steps, tables, rehashes, cold touches, cache counts.");
     let host = if options.time {
-        let noise = json["noise"]["level"].as_f64().map_or(String::new(), |level| format!(" (two runs of the same code part by up to {:.1} % at {} rounds here)", level * 100.0, options.rounds));
+        let noise = report.noise.level.map_or(String::new(), |level| format!(" (two runs of the same code part by up to {:.1} % at {} rounds here)", level * 100.0, options.rounds));
         format!(
             "host time: each variant's fastest of {} interleaved rounds (up to {} for undecided pairs; the median beside it in compare.json); a gap is clear when paired round by round it wins the sign test at {} (8 of 9), the 95 % interval of its shift leaves out none, the shift is past the A/A noise{noise} and {:.0} %, and the fastest runs agree (slower by a third of the shift at least); a run over {}x what its round and its arm lead one to expect is left out",
             options.rounds,
@@ -2187,15 +2893,18 @@ fn text(options: &Options, spec: &Spec, runs: &[Run], json: &Json) -> String {
     } else {
         "host time: not timed (--no-time)".to_string()
     };
-    let hw = if json["hw"]["read"] == true { format!("hardware counters: median of {} rounds", json["hw"]["rounds"].as_u64().unwrap_or(HW_ROUNDS as u64)) } else { "hardware counters: not read".to_string() };
+    let hw = match &report.hw {
+        HwStatusJson::Read { rounds, .. } => format!("hardware counters: median of {rounds} rounds"),
+        HwStatusJson::NotRead { .. } => "hardware counters: not read".to_string(),
+    };
     let _ = writeln!(out, "measured: {host}; {hw}; the collector's host time.");
     let _ = writeln!(out, "{}", crate::cost::FIDELITY);
     let _ = writeln!(
         out,
         "files in {}: compare.json, compare.txt, runs/<variant>/<n>/ (profiles: ree profile report|diff){} ({:.1} s)",
         options.out.display(),
-        if json["diffs"].as_array().is_some_and(|diffs| !diffs.is_empty()) { ", diff/<variant>/ (the baseline's profile against each variant's at the largest n)" } else { "" },
-        json["seconds"].as_f64().unwrap_or(0.0)
+        if !report.diffs.is_empty() { ", diff/<variant>/ (the baseline's profile against each variant's at the largest n)" } else { "" },
+        report.seconds
     );
     out
 }
@@ -2262,16 +2971,15 @@ mod tests {
     #[test]
     fn scaling_reads_the_exponent_at_large_n() {
         let overhead: Vec<(f64, f64)> = [10.0, 100.0, 1000.0, 10000.0].iter().map(|&n| (n, 1000.0 + n)).collect();
-        let found = growth_json(&overhead).unwrap();
-        assert!((found["exponent"].as_f64().unwrap() - 1.0).abs() < 0.02, "{found}");
-        assert!((found["fit"]["fixed"].as_f64().unwrap() - 1000.0).abs() < 30.0, "{found}");
-        let segments = found["segments"].as_array().unwrap();
-        assert_eq!(segments.len(), 3);
-        assert!(segments[0][2].as_f64().unwrap() < 0.1 && found["last"].as_f64().unwrap() < 0.97, "{found}");
+        let found = growth_data(&overhead).unwrap();
+        assert!((found.exponent - 1.0).abs() < 0.02, "{found:?}");
+        assert!((found.fit.fixed - 1000.0).abs() < 30.0, "{found:?}");
+        assert_eq!(found.segments.len(), 3);
+        assert!(found.segments[0].2 < 0.1 && found.last.unwrap() < 0.97, "{found:?}");
         let squares: Vec<(f64, f64)> = [10.0, 100.0, 1000.0].iter().map(|&n| (n, n * n + 5.0)).collect();
-        assert!((growth_json(&squares).unwrap()["exponent"].as_f64().unwrap() - 2.0).abs() < 0.01);
-        assert!(growth_json(&[(10.0, 1.0)]).is_none());
-        assert!(growth_json(&[(10.0, 0.0), (100.0, 0.0)]).is_none());
+        assert!((growth_data(&squares).unwrap().exponent - 2.0).abs() < 0.01);
+        assert!(growth_data(&[(10.0, 1.0)]).is_none());
+        assert!(growth_data(&[(10.0, 0.0), (100.0, 0.0)]).is_none());
     }
 
     /// A gap in a ms figure matters from 0.1 % of a 60 fps frame at the file's calls a frame, and 1 ns at least
@@ -2569,7 +3277,7 @@ mod tests {
             profiled_run(2, &[("work_ms", 0.2), ("gc_steps", 0.0), ("gc_ms", 0.0)]),
         ];
 
-        let notes = notes(&spec, &runs, &json!({"read": true}));
+        let notes = notes(&spec, &runs, &HwStatusJson::Read { read: true, rounds: HW_ROUNDS, why: None });
 
         let cold_note = notes.iter().find(|note| note.contains("cold and first-use charges")).expect("a cold share note");
         assert!(cold_note.contains("88 %"), "{cold_note}");

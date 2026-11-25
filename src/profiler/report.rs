@@ -10,9 +10,13 @@ use std::{
 };
 
 use rustc_hash::{FxHashMap, FxHashSet};
-use serde_json::{Value as Json, json};
+use serde_json::Value as Json;
 
-use super::{Config, Mark, Row, Run, Source, attribution, caches::Counts, cpu, hw, memory, vm};
+use super::{
+    Config, Mark, Row, Run, Source, attribution, caches::Counts, cpu, hw,
+    json_writer::{JsonWriter, WriteJson, json_struct},
+    memory, vm,
+};
 
 /// What a profile collected
 pub struct Input<'a> {
@@ -826,40 +830,1547 @@ fn add_sides(first: Option<(f64, f64)>, second: Option<(f64, f64)>) -> Option<(f
     Some((first.0 + second.0, first.1 + second.1))
 }
 
+// Serialized `profile.json` and `profile.speedscope.json` schema. Every struct declares its fields
+// in strict ASCII ascending order to match `serde_json::Map` (`BTreeMap`) output byte-for-byte
+// without building intermediate `serde_json::Value` trees.
+
+json_struct! {
+    struct EmptyObject {}
+}
+
+json_struct! {
+    struct RunJson<'a> {
+        command: &'a str,
+        elapsed: f64,
+        fps: f64,
+        frames: u64,
+        harness: Option<&'a str>,
+        harness_hash: Option<String>,
+        host_backstop_timeouts: u64,
+        script_timeouts: u64,
+        seconds: f64,
+        status: &'a str,
+    }
+}
+
+json_struct! {
+    struct MarkBuiltinsJson {
+        declines: BTreeMap<&'static str, u64>,
+        fast: u64,
+    }
+}
+
+json_struct! {
+    struct MarkGcJson {
+        cycles: u64,
+        freed: u64,
+        ms: f64,
+        steps: u64,
+    }
+}
+
+json_struct! {
+    struct MarkVmJson {
+        allocated: u64,
+        buffer_big_bytes: u64,
+        buffer_fresh_bytes: u64,
+        cold_closures: u64,
+        cold_code: u64,
+        cold_protos: u64,
+        cold_tables: u64,
+        objects: u64,
+        rehashed: u64,
+        sort_calls: u64,
+        sort_compares: u64,
+        stored: u64,
+    }
+}
+
+json_struct! {
+    struct MarkJson<'a> {
+        #[skip_none]
+        alloc_bytes: Option<u64>,
+        #[skip_none]
+        allocs: Option<u64>,
+        #[skip_none]
+        builtins: Option<MarkBuiltinsJson>,
+        #[skip_none]
+        cache_depths: Option<BTreeMap<&'static str, [u64; vm::CACHE_DEPTHS]>>,
+        #[skip_none]
+        caches: Option<BTreeMap<&'static str, [u64; vm::CACHE_OUTCOMES]>>,
+        #[skip_none]
+        cold_ms: Option<f64>,
+        #[skip_none]
+        collector_ms: Option<f64>,
+        cycles: u64,
+        #[skip_none]
+        engine: Option<BTreeMap<&'static str, u64>>,
+        frame: u64,
+        #[skip_none]
+        gc: Option<MarkGcJson>,
+        host_ms: f64,
+        #[skip_none]
+        insns: Option<u64>,
+        phase: &'a str,
+        #[skip_none]
+        rehash_keys: Option<u64>,
+        #[skip_none]
+        rehashes: Option<u64>,
+        #[skip_none]
+        script_rehash_keys: Option<u64>,
+        #[skip_none]
+        script_rehashes: Option<u64>,
+        seconds: f64,
+        #[skip_none]
+        vm: Option<MarkVmJson>,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct FunctionPhaseJson {
+        calls: u64,
+        cold_work_ms: f64,
+        collector_ms: f64,
+        harness_cold_work_ms: f64,
+        harness_self_work_ms: f64,
+        insns: u64,
+        saving_ms: f64,
+        self_work_ms: f64,
+        total_work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct ProvenanceJson {
+        client: f64,
+        defaulted: f64,
+        studio: f64,
+    }
+}
+
+json_struct! {
+    struct FunctionSelfJson {
+        alloc_bytes: f64,
+        allocs: f64,
+        by_provenance_ms: ProvenanceJson,
+        cold_work_ms: f64,
+        collector_ms: f64,
+        dispatch_ms: f64,
+        exclusive_cold_ms: f64,
+        insns: u64,
+        saving_ms: f64,
+        time_ms: f64,
+        wall_ms: f64,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct FunctionTotalJson {
+        alloc_bytes: f64,
+        allocs: f64,
+        cold_work_ms: f64,
+        insns: u64,
+        time_ms: f64,
+        wall_ms: f64,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct CallSiteJson {
+        caller: i32,
+        calls: u64,
+        line: i32,
+        self_work_ms: f64,
+        total_work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct InlinedIntoJson {
+        calls: u64,
+        copies: u64,
+        function: i32,
+        insns: u64,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct InlinedJson {
+        calls: Option<u64>,
+        estimated_time_ms: f64,
+        estimated_wall_ms: f64,
+        insns: Option<u64>,
+        into: Vec<InlinedIntoJson>,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct FunctionJson {
+        call_sites: Option<Vec<CallSiteJson>>,
+        calls: u64,
+        code_hash: Option<String>,
+        harness: bool,
+        id: i32,
+        inlined: Option<InlinedJson>,
+        key: String,
+        kind: &'static str,
+        last_line: Option<i32>,
+        line: Option<i32>,
+        module: Option<String>,
+        name: String,
+        native: bool,
+        native_entries: u64,
+        native_work_ms: f64,
+        phases: Option<BTreeMap<String, FunctionPhaseJson>>,
+        #[rename = "self"]
+        own: FunctionSelfJson,
+        short: Option<String>,
+        source_hash: Option<String>,
+        tool: bool,
+        total: FunctionTotalJson,
+    }
+}
+
+json_struct! {
+    struct ScopeJson {
+        cold_work_ms: f64,
+        collector_ms: f64,
+        engine: Option<BTreeMap<&'static str, u64>>,
+        game_saving_ms: f64,
+        game_self_ms: f64,
+        harness_folder: &'static str,
+        harness_self_ms: f64,
+        phases: Vec<String>,
+    }
+}
+
+json_struct! {
+    struct LinePhaseJson {
+        c_work_ms: f64,
+        cold_work_ms: f64,
+        insns: u64,
+        self_work_ms: f64,
+        total_work_ms: f64,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct LineJson {
+        alloc_bytes: f64,
+        allocs: f64,
+        c_work_ms: f64,
+        cold_work_ms: f64,
+        collector_ms: f64,
+        function: i32,
+        inlined: Option<i32>,
+        insns: u64,
+        line: i32,
+        ops: BTreeMap<&'static str, u64>,
+        phases: BTreeMap<String, LinePhaseJson>,
+        self_work_ms: f64,
+        time_ms: f64,
+        total_insns: u64,
+        total_time_ms: f64,
+        total_wall_ms: f64,
+        total_work_ms: f64,
+        wall_ms: f64,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct EdgeJson {
+        callee: i32,
+        caller: i32,
+        calls: u64,
+        #[skip_none]
+        copies: Option<u64>,
+        #[skip_none]
+        inlined: Option<bool>,
+        insns: u64,
+        work_ms: f64,
+    }
+}
+
+struct TreeNodeRow(i32, i32, u64, f64, u64, Option<String>);
+
+impl WriteJson for TreeNodeRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.0);
+        a.elem(&self.1);
+        a.elem(&self.2);
+        a.elem(&self.3);
+        a.elem(&self.4);
+        a.elem(&self.5);
+        a.end();
+    }
+}
+
+json_struct! {
+    struct WorkCollectorJson {
+        basis: &'static str,
+        object_ns: f64,
+        objects: f64,
+    }
+}
+
+json_struct! {
+    struct NativeFunctionJson<'a> {
+        entries: u64,
+        line: i32,
+        module: &'a str,
+        name: &'a str,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct OpcodeRowJson {
+        count: u64,
+        op: &'static str,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct WorkPricesJson {
+        allocated_byte_ns: f64,
+        c_call_ns: f64,
+        collector_object_ns: f64,
+        hash_rehashed_key_ns: f64,
+        large_block_ns: f64,
+        library_object_ns: f64,
+        object_ns: f64,
+        rehashed_key_ns: f64,
+        sort_call_ns: f64,
+        sort_compare_ns: f64,
+        stored_byte_ns: f64,
+    }
+}
+
+json_struct! {
+    struct WorkUnitsJson<'a> {
+        device: &'a str,
+        scale: f64,
+    }
+}
+
+json_struct! {
+    struct WorkUnpricedJson {
+        basis: &'static str,
+        buffer_big_bytes: u64,
+        buffer_fresh_bytes: u64,
+        priced_large_buffer_big_bytes: u64,
+        priced_large_buffer_fresh_bytes: u64,
+    }
+}
+
+json_struct! {
+    struct WorkJson<'a> {
+        by_provenance_ms: ProvenanceJson,
+        c_calls: bool,
+        c_invocations: bool,
+        cold_work_ms: f64,
+        collector: WorkCollectorJson,
+        collector_ms: f64,
+        dispatch_ms: f64,
+        engine_insns: u64,
+        fidelity: String,
+        native_functions: Vec<NativeFunctionJson<'a>>,
+        opcodes: Vec<OpcodeRowJson>,
+        outside_instructions_ms: f64,
+        per_frame_ms: f64,
+        per_second_ms: f64,
+        prices: WorkPricesJson,
+        script_insns: u64,
+        total_ms: f64,
+        units: WorkUnitsJson<'a>,
+        unpriced: WorkUnpricedJson,
+    }
+}
+
+json_struct! {
+    struct FidelityComponentJson {
+        band: [f64; 2],
+        basis: String,
+        rows: usize,
+        share: f64,
+    }
+}
+
+json_struct! {
+    struct FidelityDeviceJson<'a> {
+        band: [f64; 2],
+        name: &'a str,
+        ratio_band: [f64; 2],
+        scale: f64,
+    }
+}
+
+json_struct! {
+    struct FidelityJson<'a> {
+        band: [f64; 2],
+        clock_band: [f64; 2],
+        components: BTreeMap<&'static str, FidelityComponentJson>,
+        device: FidelityDeviceJson<'a>,
+        prices: String,
+        reference: &'static str,
+        studio_share: f64,
+        text: String,
+        unmeasured_share: f64,
+        weighted: String,
+    }
+}
+
+json_struct! {
+    struct ColdPayerJson {
+        cost_ms: f64,
+        function: i32,
+        line: Option<i32>,
+    }
+}
+
+json_struct! {
+    struct ColdObjectJson {
+        cost_ms: f64,
+        frames: u64,
+        kind: &'static str,
+        name: String,
+        payers: Vec<ColdPayerJson>,
+        shared_frames: u64,
+    }
+}
+
+json_struct! {
+    struct ColdSectionJson {
+        objects: Vec<ColdObjectJson>,
+        objects_ms: f64,
+        total_ms: f64,
+    }
+}
+
+json_struct! {
+    struct HandlerJson<'a> {
+        connections: usize,
+        dispatch_ms: f64,
+        function: i32,
+        line: Option<i32>,
+        runs: u64,
+        signal: &'a str,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct ResumptionJson {
+        cost_ms: f64,
+        count: u64,
+        function: i32,
+        line: Option<i32>,
+    }
+}
+
+json_struct! {
+    struct ClockReadJson {
+        budget_loop: bool,
+        frames: u64,
+        function: i32,
+        iteration_us: Option<f64>,
+        iterations: u64,
+        line: Option<i32>,
+        reads: u64,
+        runs: u64,
+    }
+}
+
+json_struct! {
+    struct OutcomeInfoJson {
+        advice: &'static str,
+        meaning: &'static str,
+    }
+}
+
+json_struct! {
+    struct CacheKindJson {
+        charged_work_us: f64,
+        charged_work_us_per_frame: f64,
+        extra_work_us: f64,
+        extra_work_us_per_frame: f64,
+        first_touch_us: f64,
+        first_touch_us_per_frame: f64,
+        hits: u64,
+        kind: &'static str,
+        lookups: u64,
+        misses: u64,
+        other: u64,
+        outcome_charged_us: f64,
+        outcome_charged_us_per_frame: f64,
+        outcomes: BTreeMap<&'static str, u64>,
+        presized_us: Option<f64>,
+        slow: u64,
+        unpriced: u64,
+        within_noise: u64,
+    }
+}
+
+json_struct! {
+    struct CacheNodeJson {
+        charged_work_us: f64,
+        extra_work_us: f64,
+        first_touch_us: f64,
+        node: i32,
+        outcome_charged_us: f64,
+        outcomes: BTreeMap<&'static str, u64>,
+        presized_us: Option<f64>,
+        unpriced: u64,
+        within_noise: u64,
+    }
+}
+
+json_struct! {
+    struct CacheSiteJson {
+        charged_work_us: f64,
+        charged_work_us_per_frame: f64,
+        depth: BTreeMap<String, u64>,
+        extra_work_us: f64,
+        extra_work_us_per_frame: f64,
+        first_touch_us: f64,
+        first_touch_us_per_frame: f64,
+        function: i32,
+        handlers: BTreeMap<String, u64>,
+        harness: bool,
+        hits: u64,
+        key: Option<String>,
+        kind: Option<&'static str>,
+        line: i32,
+        misses: u64,
+        nodes: Option<Vec<CacheNodeJson>>,
+        op: &'static str,
+        other: u64,
+        outcome_charged_us: f64,
+        outcome_charged_us_per_frame: f64,
+        outcomes: BTreeMap<&'static str, u64>,
+        pc: usize,
+        presized_us: Option<f64>,
+        presized_us_per_frame: Option<f64>,
+        slow: u64,
+        unpriced: u64,
+        within_noise: u64,
+    }
+}
+
+json_struct! {
+    struct CacheToolJson {
+        about: &'static str,
+        by_kind: Vec<CacheKindJson>,
+        sites: usize,
+    }
+}
+
+json_struct! {
+    struct LuauCachesJson {
+        about: &'static str,
+        by_kind: Vec<CacheKindJson>,
+        frames: f64,
+        outcome_info: BTreeMap<&'static str, OutcomeInfoJson>,
+        outcomes: [&'static str; vm::CACHE_OUTCOMES],
+        prices: Json,
+        scope: Vec<String>,
+        sites: Vec<CacheSiteJson>,
+        tool: CacheToolJson,
+    }
+}
+
+json_struct! {
+    struct BuiltinNodeJson {
+        calls: u64,
+        decline_charged_us: f64,
+        declines: BTreeMap<&'static str, u64>,
+        fast: u64,
+        fast_equivalent_us: f64,
+        #[skip_none]
+        fix_instructions_us: Option<Option<f64>>,
+        node: i32,
+    }
+}
+
+json_struct! {
+    struct BuiltinSiteJson {
+        calls: u64,
+        decline_charged_us: f64,
+        declines: BTreeMap<&'static str, u64>,
+        fallback_end_pc: Option<usize>,
+        fast: u64,
+        fast_equivalent_us: f64,
+        #[skip_none]
+        fix_cold_us: Option<Option<f64>>,
+        #[skip_none]
+        fix_cost_exact: Option<bool>,
+        #[skip_none]
+        fix_instructions_us: Option<Option<f64>>,
+        #[skip_none]
+        fix_unpriced: Option<&'static str>,
+        function: i32,
+        line: i32,
+        nodes: Option<Vec<BuiltinNodeJson>>,
+        pc: usize,
+    }
+}
+
+json_struct! {
+    struct BuiltinJson {
+        advice: BTreeMap<&'static str, &'static str>,
+        calls: u64,
+        decline_charged_ns: Option<f64>,
+        decline_charged_us: f64,
+        decline_charged_us_per_frame: f64,
+        declines: BTreeMap<&'static str, u64>,
+        fast: u64,
+        fast_equivalent_ns: Option<f64>,
+        fast_equivalent_us: f64,
+        fast_equivalent_us_per_frame: f64,
+        id: i32,
+        name: String,
+        sites: Vec<BuiltinSiteJson>,
+    }
+}
+
+json_struct! {
+    struct BuiltinToolJson {
+        calls: u64,
+        declines: BTreeMap<&'static str, u64>,
+        fast: u64,
+        id: i32,
+        name: String,
+    }
+}
+
+json_struct! {
+    struct TimeJson {
+        about: &'static str,
+        cycles_per_ms: f64,
+        sampled_ms: f64,
+        wall_ms: f64,
+        weight: &'static str,
+    }
+}
+
+json_struct! {
+    struct AllocByTypeJson {
+        bytes: f64,
+        count: f64,
+        group: String,
+        #[rename = "type"]
+        ty: String,
+    }
+}
+
+json_struct! {
+    struct AllocByStackJson<'a> {
+        bytes: f64,
+        count: f64,
+        frames: &'a [(i32, i32)],
+        #[rename = "type"]
+        ty: &'a str,
+    }
+}
+
+json_struct! {
+    struct RehashSiteJson<'a> {
+        bytes_after: u64,
+        bytes_before: u64,
+        events: u64,
+        frames: Option<&'a [(i32, i32)]>,
+        grew: u64,
+        keys: u64,
+        phase: Option<&'a str>,
+        script_events: u64,
+        script_keys: u64,
+        table_frames: Option<&'a [(i32, i32)]>,
+    }
+}
+
+json_struct! {
+    struct RehashJson<'a> {
+        bytes_after: u64,
+        bytes_before: u64,
+        events: u64,
+        grew: u64,
+        keys: u64,
+        script_events: u64,
+        script_keys: u64,
+        sites: Vec<RehashSiteJson<'a>>,
+    }
+}
+
+json_struct! {
+    struct AllocJson<'a> {
+        by_stack: Vec<AllocByStackJson<'a>>,
+        by_type: Vec<AllocByTypeJson>,
+        bytes: u64,
+        objects: u64,
+        #[skip_none]
+        rehash: Option<RehashJson<'a>>,
+        step: u64,
+    }
+}
+
+json_struct! {
+    struct CountBytesF64 {
+        bytes: f64,
+        count: f64,
+    }
+}
+
+json_struct! {
+    struct CountBytesU64 {
+        bytes: u64,
+        count: u64,
+    }
+}
+
+json_struct! {
+    struct HeapTypeJson<'a> {
+        bytes: u64,
+        count: u64,
+        #[rename = "type"]
+        ty: &'a str,
+    }
+}
+
+json_struct! {
+    struct HeapUnsweptJson<'a> {
+        by_type: Vec<HeapTypeJson<'a>>,
+        bytes: u64,
+        count: u64,
+    }
+}
+
+json_struct! {
+    struct HeapBiggestJson<'a> {
+        name: &'a str,
+        path: &'a str,
+        retained: u64,
+        size: u64,
+        stack: Option<&'a [(i32, i32)]>,
+        #[rename = "type"]
+        ty: &'a str,
+    }
+}
+
+json_struct! {
+    struct HeapByStackJson<'a> {
+        bytes: f64,
+        count: f64,
+        frames: Option<&'a [(i32, i32)]>,
+        #[rename = "type"]
+        ty: &'a str,
+    }
+}
+
+json_struct! {
+    struct DistributionJson<'a> {
+        hist: &'a [(u32, u64)],
+        max: u32,
+        median: u32,
+        min: u32,
+        slots: u64,
+        used: u64,
+    }
+}
+
+json_struct! {
+    struct LevelsJson<'a> {
+        hist: &'a [(u32, u64)],
+        max: u32,
+        median: u32,
+        min: u32,
+    }
+}
+
+json_struct! {
+    struct TableSizesJson {
+        node: u64,
+        slot: u64,
+        table: u64,
+    }
+}
+
+json_struct! {
+    struct TableSiteJson<'a> {
+        array: DistributionJson<'a>,
+        array_bytes: f64,
+        bytes: f64,
+        count: f64,
+        frames: Option<&'a [(i32, i32)]>,
+        hash: DistributionJson<'a>,
+        hash_bytes: f64,
+        header_bytes: f64,
+        levels: LevelsJson<'a>,
+        phase: Option<&'a str>,
+        rehash_keys: u64,
+        rehashes: u64,
+    }
+}
+
+json_struct! {
+    struct HeapTablesJson<'a> {
+        array_bytes: u64,
+        bytes: u64,
+        count: u64,
+        hash_bytes: u64,
+        header_bytes: u64,
+        sites: Vec<TableSiteJson<'a>>,
+        sizes: TableSizesJson,
+    }
+}
+
+json_struct! {
+    struct HeapSnapshotJson<'a> {
+        allocated_since: CountBytesF64,
+        biggest: Vec<HeapBiggestJson<'a>>,
+        by_stack: Vec<HeapByStackJson<'a>>,
+        by_type: Vec<HeapTypeJson<'a>>,
+        frame: u64,
+        gcinfo_kb: usize,
+        label: &'a str,
+        object_bytes: u64,
+        objects: u64,
+        reachable: CountBytesU64,
+        seconds: f64,
+        tables: HeapTablesJson<'a>,
+        total_bytes: usize,
+        unswept: HeapUnsweptJson<'a>,
+    }
+}
+
+json_struct! {
+    struct GcStateJson {
+        ms: f64,
+        state: &'static str,
+        steps: u64,
+    }
+}
+
+json_struct! {
+    struct HeapGcJson {
+        by_state: Vec<GcStateJson>,
+        cycles: u64,
+        freed: u64,
+        ms: f64,
+        steps: u64,
+    }
+}
+
+json_struct! {
+    struct HeapJson<'a> {
+        gc: HeapGcJson,
+        snapshots: Vec<HeapSnapshotJson<'a>>,
+    }
+}
+
+json_struct! {
+    struct GameAboutJson {
+        datatype_reads: &'static str,
+        instances_touched: &'static str,
+        modules_run: &'static str,
+        userdata_made: &'static str,
+    }
+}
+
+json_struct! {
+    struct GameJson {
+        about: GameAboutJson,
+        datatype_reads: u64,
+        datatype_reads_reused: u64,
+        instances_touched: u64,
+        modules_run: u64,
+        requires_kept: u64,
+        userdata_collected: u64,
+        userdata_made: u64,
+    }
+}
+
+json_struct! {
+    struct EmulatorCacheJson {
+        about: &'static str,
+        evictions: u64,
+        hits: u64,
+        misses: u64,
+        name: &'static str,
+    }
+}
+
+json_struct! {
+    struct EmulatorJson {
+        about: &'static str,
+        caches: Vec<EmulatorCacheJson>,
+    }
+}
+
+enum TimelineAboutJson {
+    Detailed {
+        host_ms: &'static str,
+        instances_in_datamodel: &'static str,
+        threads_made: &'static str,
+    },
+    Compact {
+        work_ms: &'static str,
+    },
+}
+
+impl WriteJson for TimelineAboutJson {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut o = w.object();
+        match self {
+            Self::Detailed { host_ms, instances_in_datamodel, threads_made } => {
+                o.field("host_ms", host_ms);
+                o.field("instances_in_datamodel", instances_in_datamodel);
+                o.field("threads_made", threads_made);
+            }
+            Self::Compact { work_ms } => {
+                o.field("work_ms", work_ms);
+            }
+        }
+        o.end();
+    }
+}
+
+struct TimelineRow {
+    frame: u64,
+    seconds: f64,
+    phase: u32,
+    host_ms: Option<f64>,
+    work_ms: f64,
+    instructions: u64,
+    heap_bytes: u64,
+    allocated_bytes: u64,
+    allocations: u64,
+    gc_steps: u64,
+    gc_ms: f64,
+    gc_freed: u64,
+    instances_in_datamodel: u64,
+    instances_outside: u64,
+    instances_destroyed: u64,
+    connections: u64,
+    threads_made: u64,
+    cycles: Option<u64>,
+    part: u8,
+    game_ms: Option<f64>,
+    harness_ms: Option<f64>,
+    collector_ms: f64,
+}
+
+impl WriteJson for TimelineRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.frame);
+        a.elem(&self.seconds);
+        a.elem(&self.phase);
+        a.elem(&self.host_ms);
+        a.elem(&self.work_ms);
+        a.elem(&self.instructions);
+        a.elem(&self.heap_bytes);
+        a.elem(&self.allocated_bytes);
+        a.elem(&self.allocations);
+        a.elem(&self.gc_steps);
+        a.elem(&self.gc_ms);
+        a.elem(&self.gc_freed);
+        a.elem(&self.instances_in_datamodel);
+        a.elem(&self.instances_outside);
+        a.elem(&self.instances_destroyed);
+        a.elem(&self.connections);
+        a.elem(&self.threads_made);
+        a.elem(&self.cycles);
+        a.elem(&self.part);
+        a.elem(&self.game_ms);
+        a.elem(&self.harness_ms);
+        a.elem(&self.collector_ms);
+        a.end();
+    }
+}
+
+struct CompactTimelineRow(u64, f64, u32, f64, u8, Option<f64>, Option<f64>, f64);
+
+impl WriteJson for CompactTimelineRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.0);
+        a.elem(&self.1);
+        a.elem(&self.2);
+        a.elem(&self.3);
+        a.elem(&self.4);
+        a.elem(&self.5);
+        a.elem(&self.6);
+        a.elem(&self.7);
+        a.end();
+    }
+}
+
+enum TimelineRowsJson {
+    Detailed(Vec<TimelineRow>),
+    Compact(Vec<CompactTimelineRow>),
+}
+
+impl WriteJson for TimelineRowsJson {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        match self {
+            Self::Detailed(rows) => rows.write_json(w),
+            Self::Compact(rows) => rows.write_json(w),
+        }
+    }
+}
+
+struct FunctionStatRow(i32, f64, u64, f64, u64);
+
+impl WriteJson for FunctionStatRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.0);
+        a.elem(&self.1);
+        a.elem(&self.2);
+        a.elem(&self.3);
+        a.elem(&self.4);
+        a.end();
+    }
+}
+
+struct NodeFrameRow {
+    index: usize,
+    nodes: Vec<(usize, f64)>,
+}
+
+impl WriteJson for NodeFrameRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.index);
+        for &(node, us) in &self.nodes {
+            a.elem(&node);
+            a.elem(&us);
+        }
+        a.end();
+    }
+}
+
+struct SiteFrameRow(usize, &'static str, i32, usize, usize, f64);
+
+impl WriteJson for SiteFrameRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.0);
+        a.elem(&self.1);
+        a.elem(&self.2);
+        a.elem(&self.3);
+        a.elem(&self.4);
+        a.elem(&self.5);
+        a.end();
+    }
+}
+
+struct IssueStatRow(String, u64, f64, u64, f64);
+
+impl WriteJson for IssueStatRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.0);
+        a.elem(&self.1);
+        a.elem(&self.2);
+        a.elem(&self.3);
+        a.elem(&self.4);
+        a.end();
+    }
+}
+
+struct ReplacementFrameRow(usize, String, f64);
+
+impl WriteJson for ReplacementFrameRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.0);
+        a.elem(&self.1);
+        a.elem(&self.2);
+        a.end();
+    }
+}
+
+struct FunctionContextRow {
+    function: i32,
+    node: usize,
+    ranges: Vec<(u64, u64)>,
+}
+
+impl WriteJson for FunctionContextRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.function);
+        a.elem(&self.node);
+        for &(first, last) in &self.ranges {
+            a.elem(&first);
+            a.elem(&last);
+        }
+        a.end();
+    }
+}
+
+json_struct! {
+    struct TimelineJson {
+        about: TimelineAboutJson,
+        columns: &'static [&'static str],
+        #[skip_none]
+        function_contexts: Option<Vec<FunctionContextRow>>,
+        #[skip_none]
+        function_stats: Option<Vec<FunctionStatRow>>,
+        #[skip_none]
+        issue_stats: Option<Vec<IssueStatRow>>,
+        #[skip_none]
+        node_frames: Option<Vec<NodeFrameRow>>,
+        #[skip_none]
+        replacement_frames: Option<Vec<ReplacementFrameRow>>,
+        rows: TimelineRowsJson,
+        #[skip_none]
+        site_frames: Option<Vec<SiteFrameRow>>,
+    }
+}
+
+json_struct! {
+    struct ProcessCpuJson {
+        kernel: f64,
+        user: f64,
+    }
+}
+
+json_struct! {
+    struct WorkingSetJson {
+        baseline: u64,
+        growth: i64,
+        run_peak: Option<u64>,
+    }
+}
+
+json_struct! {
+    struct MemoryGrowthJson {
+        baseline: u64,
+        growth: i64,
+    }
+}
+
+json_struct! {
+    struct CpuPhaseJson {
+        host_ms: f64,
+        phase: String,
+        thread_ms: Option<f64>,
+    }
+}
+
+struct CpuFrameRow(u64, u32, f64, u64, Option<f64>, Option<u64>);
+
+impl WriteJson for CpuFrameRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.0);
+        a.elem(&self.1);
+        a.elem(&self.2);
+        a.elem(&self.3);
+        a.elem(&self.4);
+        a.elem(&self.5);
+        a.end();
+    }
+}
+
+json_struct! {
+    struct CpuFramesJson {
+        columns: [&'static str; 6],
+        rows: Vec<CpuFrameRow>,
+    }
+}
+
+json_struct! {
+    struct PmcCounterJson<'a> {
+        counter: &'a str,
+        value: u64,
+    }
+}
+
+json_struct! {
+    struct CpuOwnJson<'a> {
+        about: &'static str,
+        cycles_per_ms: f64,
+        frames: CpuFramesJson,
+        page_faults: Option<u64>,
+        phases: Vec<CpuPhaseJson>,
+        pmc: Option<Vec<PmcCounterJson<'a>>>,
+        pmc_missing: Option<&'a str>,
+        pmc_sources: &'a [String],
+        private_bytes: Option<MemoryGrowthJson>,
+        process_cpu_s: Option<ProcessCpuJson>,
+        text: String,
+        thread_cycles: Option<u64>,
+        thread_ms: Option<f64>,
+        working_set: Option<WorkingSetJson>,
+    }
+}
+
+enum CpuSectionJson<'a> {
+    Pass(serde_json::Map<String, Json>),
+    Own(CpuOwnJson<'a>),
+}
+
+impl WriteJson for CpuSectionJson<'_> {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        match self {
+            Self::Pass(map) => w.json_map(map),
+            Self::Own(own) => own.write_json(w),
+        }
+    }
+}
+
+json_struct! {
+    struct FoldedLeftOutJson {
+        stacks: usize,
+        sum: i64,
+    }
+}
+
+json_struct! {
+    struct CounterAttributionJson {
+        calls: usize,
+        calls_booked_to_callers: usize,
+        folded_left_out: BTreeMap<String, FoldedLeftOutJson>,
+        functions: usize,
+        method: &'static str,
+        min_measured: u32,
+        min_sampled_us: f64,
+        readings_a_second: f64,
+        readings_share_of_cycles: f64,
+        switch_readings: usize,
+        threshold_us: f64,
+        unsampled_functions: usize,
+        version: u32,
+    }
+}
+
+json_struct! {
+    struct CounterRunJson {
+        counts: BTreeMap<String, i64>,
+        rates: BTreeMap<&'static str, f64>,
+        seconds: f64,
+    }
+}
+
+json_struct! {
+    struct CounterReadingsJson {
+        calls: usize,
+        count: usize,
+        matched: usize,
+        own_counts: Option<BTreeMap<String, i64>>,
+        own_us: f64,
+        taken_out: bool,
+    }
+}
+
+json_struct! {
+    struct CounterTraceJson {
+        lost_buffers: u32,
+        lost_events: u32,
+        switches: u64,
+        without_counters: u64,
+    }
+}
+
+json_struct! {
+    struct CounterThreadJson<'a> {
+        counts: BTreeMap<String, i64>,
+        id: u32,
+        name: Option<&'a str>,
+        run_thread: bool,
+        slices: usize,
+    }
+}
+
+json_struct! {
+    struct CounterPhaseJson {
+        counts: BTreeMap<String, i64>,
+        phase: String,
+        rates: BTreeMap<&'static str, f64>,
+    }
+}
+
+struct CounterFrameRow {
+    frame: u64,
+    phase: u32,
+    host_ms: f64,
+    counts: Vec<i64>,
+    figures: Vec<f64>,
+}
+
+impl WriteJson for CounterFrameRow {
+    #[inline(never)]
+    fn write_json(&self, w: &mut JsonWriter) {
+        let mut a = w.array();
+        a.elem(&self.frame);
+        a.elem(&self.phase);
+        a.elem(&self.host_ms);
+        for value in &self.counts {
+            a.elem(value);
+        }
+        for value in &self.figures {
+            a.elem(value);
+        }
+        a.end();
+    }
+}
+
+json_struct! {
+    struct CounterFramesJson {
+        columns: Vec<String>,
+        rows: Vec<CounterFrameRow>,
+    }
+}
+
+json_struct! {
+    struct CounterFunctionJson {
+        id: i32,
+        key: String,
+        kind: &'static str,
+        line: Option<i32>,
+        module: Option<String>,
+        name: String,
+        #[rename = "self"]
+        own: BTreeMap<String, i64>,
+        self_rates: BTreeMap<&'static str, f64>,
+        total: BTreeMap<String, i64>,
+        total_rates: BTreeMap<&'static str, f64>,
+    }
+}
+
+json_struct! {
+    struct CounterLineJson {
+        calls: bool,
+        function: i32,
+        line: i32,
+        module: Option<String>,
+        name: Option<String>,
+        #[rename = "self"]
+        own: EmptyObject,
+        total: BTreeMap<String, i64>,
+        total_rates: BTreeMap<&'static str, f64>,
+    }
+}
+
+json_struct! {
+    struct CountersJson<'a> {
+        about: Vec<Option<&'static str>>,
+        amd: Vec<Option<&'static str>>,
+        #[skip_none]
+        attribution: Option<CounterAttributionJson>,
+        cut_short: Option<f64>,
+        error: Option<&'a str>,
+        #[skip_none]
+        frames: Option<CounterFramesJson>,
+        #[skip_none]
+        functions: Option<Vec<CounterFunctionJson>>,
+        #[skip_none]
+        lines: Option<Vec<CounterLineJson>>,
+        names: &'a [String],
+        notes: &'a [String],
+        #[skip_none]
+        phases: Option<Vec<CounterPhaseJson>>,
+        #[skip_none]
+        readings: Option<CounterReadingsJson>,
+        #[skip_none]
+        run: Option<CounterRunJson>,
+        source: &'a str,
+        sources: &'a [String],
+        #[skip_none]
+        threads: Option<Vec<CounterThreadJson<'a>>>,
+        #[skip_none]
+        trace: Option<CounterTraceJson>,
+    }
+}
+
+json_struct! {
+    struct PhaseTreeNodeJson<'a> {
+        count: u64,
+        name: &'a str,
+        parent: Option<usize>,
+        self_ms: f64,
+        total_ms: f64,
+    }
+}
+
+json_struct! {
+    struct ListingJson {
+        lines: Vec<(i32, String)>,
+        path: String,
+    }
+}
+
+json_struct! {
+    struct ProfileReport<'a> {
+        #[skip_none]
+        alloc: Option<AllocJson<'a>>,
+        #[skip_none]
+        boundary: Option<&'a str>,
+        #[skip_none]
+        builtins: Option<Option<Vec<BuiltinJson>>>,
+        #[skip_none]
+        builtins_tool: Option<Vec<BuiltinToolJson>>,
+        #[skip_none]
+        clock_reads: Option<Vec<ClockReadJson>>,
+        #[skip_none]
+        cold: Option<ColdSectionJson>,
+        #[skip_none]
+        counters: Option<CountersJson<'a>>,
+        #[skip_none]
+        cpu: Option<CpuSectionJson<'a>>,
+        edges: Vec<EdgeJson>,
+        #[skip_none]
+        emulator: Option<EmulatorJson>,
+        end: Option<MarkJson<'a>>,
+        #[skip_none]
+        fidelity: Option<FidelityJson<'a>>,
+        files: Vec<String>,
+        functions: Vec<FunctionJson>,
+        #[skip_none]
+        game: Option<GameJson>,
+        #[skip_none]
+        handlers: Option<Vec<HandlerJson<'a>>>,
+        #[skip_none]
+        heap: Option<HeapJson<'a>>,
+        kinds: Vec<&'static str>,
+        lines: Vec<LineJson>,
+        listings: BTreeMap<String, ListingJson>,
+        #[skip_none]
+        luau_caches: Option<LuauCachesJson>,
+        marks: Vec<MarkJson<'a>>,
+        #[skip_none]
+        phase_timing: Option<&'a str>,
+        #[skip_none]
+        phase_tree: Option<Vec<PhaseTreeNodeJson<'a>>>,
+        phases: &'a [String],
+        #[skip_none]
+        resumptions: Option<Vec<ResumptionJson>>,
+        run: RunJson<'a>,
+        scope: ScopeJson,
+        source_hashes: BTreeMap<String, String>,
+        summary: String,
+        #[skip_none]
+        time: Option<TimeJson>,
+        #[skip_none]
+        timeline: Option<TimelineJson>,
+        tool: &'static str,
+        #[skip_none]
+        tree: Option<Vec<TreeNodeRow>>,
+        #[skip_none]
+        tree_lines: Option<Vec<i32>>,
+        #[skip_none]
+        unmeasured_fires: Option<u64>,
+        version: u64,
+        warnings: &'a [String],
+        #[skip_none]
+        work: Option<WorkJson<'a>>,
+    }
+}
+
+json_struct! {
+    struct SpeedscopeFrame {
+        name: String,
+    }
+}
+
+json_struct! {
+    struct SpeedscopeShared {
+        frames: Vec<SpeedscopeFrame>,
+    }
+}
+
+json_struct! {
+    #[allow(non_snake_case)]
+    struct SpeedscopeProfile<'a> {
+        endValue: u64,
+        name: &'a str,
+        samples: Vec<Vec<usize>>,
+        startValue: u64,
+        #[rename = "type"]
+        ty: &'static str,
+        unit: &'static str,
+        weights: Vec<u64>,
+    }
+}
+
+json_struct! {
+    #[allow(non_snake_case)]
+    struct SpeedscopeJson<'a> {
+        #[rename = "$schema"]
+        schema: &'static str,
+        activeProfileIndex: u64,
+        exporter: &'static str,
+        name: String,
+        profiles: Vec<SpeedscopeProfile<'a>>,
+        shared: SpeedscopeShared,
+    }
+}
+
+const DETAILED_TIMELINE_COLUMNS: &[&str] = &[
+    "frame", "seconds", "phase", "host_ms", "work_ms", "instructions", "heap_bytes", "allocated_bytes", "allocations", "gc_steps", "gc_ms", "gc_freed", "instances_in_datamodel", "instances_outside", "instances_destroyed", "connections", "threads_made", "cycles", "part", "game_ms", "harness_ms", "collector_ms",
+];
+
+const COMPACT_TIMELINE_COLUMNS: &[&str] = &["frame", "seconds", "phase", "work_ms", "part", "game_ms", "harness_ms", "collector_ms"];
+
 /// A timeline row as profile.json stores it, its values in the order of the timeline's `columns`. `host`: the frame's host time
 /// (ms) and cycles
-fn timeline_row(row: &Row, host: Option<(f64, u64)>) -> Json {
+fn timeline_row(row: &Row, host: Option<(f64, u64)>) -> TimelineRow {
     let sides = row_sides_ms(row);
-    json!([
-        row.frame,
-        round(row.seconds, 4),
-        row.phase,
-        host.map(|(ms, _)| round(ms, 4)),
-        round(row.work_ms * price_scale(), 5),
-        row.instructions,
-        row.heap_bytes,
-        row.allocated_bytes,
-        row.allocations,
-        row.gc_steps,
-        round(row.gc_ms, 4),
-        row.gc_freed,
-        row.instances.0,
-        row.instances.1,
-        row.instances.2,
-        row.connections,
-        row.threads_made,
-        host.map(|(_, cycles)| cycles),
-        row.part,
-        sides.map(|(game, _)| game),
-        sides.map(|(_, harness)| harness),
-        round(row.collector_ms * price_scale(), 5),
-    ])
+    TimelineRow {
+        frame: row.frame,
+        seconds: round(row.seconds, 4),
+        phase: row.phase,
+        host_ms: host.map(|(ms, _)| round(ms, 4)),
+        work_ms: round(row.work_ms * price_scale(), 5),
+        instructions: row.instructions,
+        heap_bytes: row.heap_bytes,
+        allocated_bytes: row.allocated_bytes,
+        allocations: row.allocations,
+        gc_steps: row.gc_steps,
+        gc_ms: round(row.gc_ms, 4),
+        gc_freed: row.gc_freed,
+        instances_in_datamodel: row.instances.0,
+        instances_outside: row.instances.1,
+        instances_destroyed: row.instances.2,
+        connections: row.connections,
+        threads_made: row.threads_made,
+        cycles: host.map(|(_, cycles)| cycles),
+        part: row.part,
+        game_ms: sides.map(|(game, _)| game),
+        harness_ms: sides.map(|(_, harness)| harness),
+        collector_ms: round(row.collector_ms * price_scale(), 5),
+    }
 }
 
 /// The row a timeline keeps when it drops the detail: the frame's work, its sides and its collector share
-fn compact_timeline_row(row: &Row) -> Json {
+fn compact_timeline_row(row: &Row) -> CompactTimelineRow {
     let sides = row_sides_ms(row);
-    json!([
+    CompactTimelineRow(
         row.frame,
         row.seconds,
         row.phase,
@@ -868,7 +2379,7 @@ fn compact_timeline_row(row: &Row) -> Json {
         sides.map(|(game, _)| game),
         sides.map(|(_, harness)| harness),
         row.collector_ms * price_scale(),
-    ])
+    )
 }
 
 /// Milliseconds of the work clock as the run's clock ran (`seconds` at desktop prices times the run's scale)
@@ -964,27 +2475,24 @@ pub fn write(input: &Input) -> Result<String, String> {
     let seconds = input.run.seconds.max(0.0);
     let frames = input.run.frames.max(1) as f64;
     let mut files: Vec<String> = Vec::new();
-    let mut json = json!({
-        "version": PROFILE_VERSION,
-        "tool": "ree",
-        "kinds": input.config.kinds.names(),
-        "run": {
-            "command": input.run.command, "status": input.run.status, "harness": input.run.harness, "frames": input.run.frames,
-            "seconds": input.run.seconds, "fps": input.run.fps, "elapsed": input.elapsed,
-            // (the harness's contents hashed: two copies of one harness in other folders are the same harness. The text its
-            // module loaded, hashed as source_hashes hashes it, so that a profile from before this field, compared by that
-            // entry, reads the same harness as the same; the file's bytes where no module of its name loaded)
-            "harness_hash": input.run.harness.as_ref().and_then(|path| match Path::new(path).file_stem().and_then(|stem| input.sources.get(&format!("{HARNESS_FOLDER}.{}", stem.to_string_lossy()))) {
-                Some(source) => Some(format!("{:016x}", fxhash(&source.text))),
-                None => std::fs::read(path).ok().map(|bytes| format!("{:016x}", fxhash(&bytes))),
-            }),
-            "script_timeouts": input.run.script_timeouts, "host_backstop_timeouts": input.run.host_backstop_timeouts,
-        },
-        "phases": input.phases,
-        "marks": input.marks.iter().map(mark_json).collect::<Vec<_>>(),
-        "end": input.end.map(mark_json),
-        "warnings": input.warnings,
-    });
+    let run_json = RunJson {
+        command: &input.run.command,
+        elapsed: input.elapsed,
+        fps: input.run.fps,
+        frames: input.run.frames,
+        harness: input.run.harness.as_deref(),
+        // (the harness's contents hashed: two copies of one harness in other folders are the same harness. The text its
+        // module loaded, hashed as source_hashes hashes it, so that a profile from before this field, compared by that
+        // entry, reads the same harness as the same; the file's bytes where no module of its name loaded)
+        harness_hash: input.run.harness.as_ref().and_then(|path| match Path::new(path).file_stem().and_then(|stem| input.sources.get(&format!("{HARNESS_FOLDER}.{}", stem.to_string_lossy()))) {
+            Some(source) => Some(format!("{:016x}", fxhash(&source.text))),
+            None => std::fs::read(path).ok().map(|bytes| format!("{:016x}", fxhash(&bytes))),
+        }),
+        host_backstop_timeouts: input.run.host_backstop_timeouts,
+        script_timeouts: input.run.script_timeouts,
+        seconds: input.run.seconds,
+        status: &input.run.status,
+    };
 
     // functions: every one with figures, keyed so a diff finds it again
     let mut function_rows: Vec<(i32, Figures)> = model.functions.iter().map(|(&id, figures)| (id, *figures)).collect();
@@ -1068,63 +2576,106 @@ pub fn write(input: &Input) -> Result<String, String> {
     }
     let stepping = input.config.kinds.steps();
     let source_lines = SourceLines::new(input.sources);
-    let function_json = |id: i32, figures: &Figures| -> Json {
+    let function_json = |id: i32, figures: &Figures| -> FunctionJson {
         let function = names.function(id);
-        json!({
-            "id": id,
-            "key": function_key(&names, id),
-            "name": names.name(id),
-            "module": function.map(|f| module_name(&f.source).to_string()),
-            "line": function.map(|f| f.line),
-            "last_line": function.and_then(|f| f.lines.iter().copied().max()),
+        FunctionJson {
+            // (a C function: where it was called from, by the calling function and line)
+            call_sites: c_sites.get(&id).map(|rows| {
+                rows.iter()
+                    .take(100)
+                    .map(|&((caller, line), (calls, own, total))| CallSiteJson { caller, calls, line, self_work_ms: ms(own), total_work_ms: ms(total) })
+                    .collect()
+            }),
+            calls: figures.calls,
             // (what pairs a function across an edit that moved it: its code as compiled, and its text)
-            "code_hash": function.and_then(code_hash),
-            "source_hash": function.and_then(|f| source_lines.hash(f)),
-            "kind": match function { Some(f) if f.exempt() => "engine Luau", Some(_) => "Luau", None if id <= ENGINE_STEP_BASE => "engine step", None => "C" },
-            "native": function.is_some_and(vm::Function::native),
+            code_hash: function.and_then(code_hash),
             // (the harness's own code, under HARNESS_FOLDER; tool: ree's own, never the game's nor a user's: the engine's chunks
             // that drive a harness, and the harness of a run a tool of ree's made)
-            "harness": names.harness(id),
-            "tool": names.tool(id),
-            // (the module's last segment, qualified where two modules would share it)
-            "short": function.map(|f| names.short(&f.source).to_string()),
+            harness: names.harness(id),
+            id,
+            // (calls and instructions are counted while the VM steps, `work` or `caches`: null without)
+            inlined: inlined_into.get(&id).map(|callers| InlinedJson {
+                calls: stepping.then_some(figures.inlined_calls),
+                // (host time: an estimate, each sample's share of the code since the safepoint before it by the work clock's opcode prices)
+                estimated_time_ms: figures.inlined_time,
+                estimated_wall_ms: figures.inlined_wall,
+                insns: stepping.then_some(figures.inlined_insns),
+                into: callers.iter().map(|&(caller, inlined)| InlinedIntoJson { calls: inlined.calls, copies: inlined.copies, function: caller, insns: inlined.insns, work_ms: ms(inlined.work) }).collect(),
+                work_ms: ms(figures.inlined_work),
+            }),
+            key: function_key(&names, id),
+            kind: match function {
+                Some(f) if f.exempt() => "engine Luau",
+                Some(_) => "Luau",
+                None if id <= ENGINE_STEP_BASE => "engine step",
+                None => "C",
+            },
+            last_line: function.and_then(|f| f.lines.iter().copied().max()),
+            line: function.map(|f| f.line),
+            module: function.map(|f| module_name(&f.source).to_string()),
+            name: names.name(id),
+            native: function.is_some_and(vm::Function::native),
+            native_entries: function.map_or(0, |f| f.native_entries),
+            native_work_ms: function.map_or(0.0, |f| ms(f.native_work)),
             // (per phase; harness_self_work_ms is the part done for the harness's code: all of a harness function's, a C
             // function's or the engine's Luau when the harness called it)
-            "phases": by_phase.get(&id).map(|phases| phases.iter().map(|(phase, f)| (phase_name(*phase), json!({
-                "self_work_ms": ms(f.self_work), "total_work_ms": ms(f.total_work), "calls": f.calls, "insns": f.self_insns, "harness_self_work_ms": ms(f.harness_self_work),
-                "cold_work_ms": ms(f.cold), "saving_ms": ms(f.saving), "collector_ms": ms(f.collector), "harness_cold_work_ms": ms(f.harness_cold),
-            }))).collect::<serde_json::Map<_, _>>()),
-            "native_entries": function.map_or(0, |f| f.native_entries),
-            "native_work_ms": function.map_or(0.0, |f| ms(f.native_work)),
-            "calls": figures.calls,
-            "self": {
-                "insns": figures.self_insns, "work_ms": ms(figures.self_work), "time_ms": figures.self_time, "wall_ms": figures.self_wall, "alloc_bytes": figures.self_alloc.round(), "allocs": figures.self_allocs.round(),
+            phases: by_phase.get(&id).map(|phases| {
+                phases
+                    .iter()
+                    .map(|(phase, f)| {
+                        (
+                            phase_name(*phase),
+                            FunctionPhaseJson {
+                                calls: f.calls,
+                                cold_work_ms: ms(f.cold),
+                                collector_ms: ms(f.collector),
+                                harness_cold_work_ms: ms(f.harness_cold),
+                                harness_self_work_ms: ms(f.harness_self_work),
+                                insns: f.self_insns,
+                                saving_ms: ms(f.saving),
+                                self_work_ms: ms(f.self_work),
+                                total_work_ms: ms(f.total_work),
+                            },
+                        )
+                    })
+                    .collect()
+            }),
+            own: FunctionSelfJson {
+                alloc_bytes: figures.self_alloc.round(),
+                allocs: figures.self_allocs.round(),
+                by_provenance_ms: ProvenanceJson {
+                    client: ms((figures.self_work - figures.self_split[vm::STUDIO] - figures.self_split[vm::DEFAULTED]).max(0.0)),
+                    defaulted: ms(figures.self_split[vm::DEFAULTED]),
+                    studio: ms(figures.self_split[vm::STUDIO]),
+                },
                 // (of work_ms: the cold and first-use charges, the collector's, the engine's dispatch of its handlers and resumptions of its
                 // threads, and by where the prices came from; saving_ms is what cutting it saves: hot work and unshared cold charges)
-                "cold_work_ms": ms(figures.self_split[vm::COLD]), "collector_ms": ms(figures.self_split[vm::COLLECTOR]), "dispatch_ms": ms(figures.self_split[vm::DISPATCH]),
-                "exclusive_cold_ms": ms(figures.self_exclusive), "saving_ms": ms(figures.saving()),
-                "by_provenance_ms": {
-                    "client": ms((figures.self_work - figures.self_split[vm::STUDIO] - figures.self_split[vm::DEFAULTED]).max(0.0)),
-                    "studio": ms(figures.self_split[vm::STUDIO]), "defaulted": ms(figures.self_split[vm::DEFAULTED]),
-                },
+                cold_work_ms: ms(figures.self_split[vm::COLD]),
+                collector_ms: ms(figures.self_split[vm::COLLECTOR]),
+                dispatch_ms: ms(figures.self_split[vm::DISPATCH]),
+                exclusive_cold_ms: ms(figures.self_exclusive),
+                insns: figures.self_insns,
+                saving_ms: ms(figures.saving()),
+                time_ms: figures.self_time,
+                wall_ms: figures.self_wall,
+                work_ms: ms(figures.self_work),
             },
-            "total": {"insns": figures.total_insns, "work_ms": ms(figures.total_work), "cold_work_ms": ms(figures.total_cold), "time_ms": figures.total_time, "wall_ms": figures.total_wall, "alloc_bytes": figures.total_alloc.round(), "allocs": figures.total_allocs.round()},
-            // (inlined by -O2 into the functions in `into`: its calls through those copies, and the instructions and work on
-            // its own lines there, which are also theirs)
-            // (a C function: where it was called from, by the calling function and line)
-            "call_sites": c_sites.get(&id).map(|rows| rows.iter().take(100).map(|((caller, line), (calls, own, total))| json!({
-                "caller": caller, "line": line, "calls": calls, "self_work_ms": ms(*own), "total_work_ms": ms(*total),
-            })).collect::<Vec<_>>()),
-            // (calls and instructions are counted while the VM steps, `work` or `caches`: null without)
-            "inlined": inlined_into.get(&id).map(|callers| json!({
-                "calls": stepping.then_some(figures.inlined_calls), "insns": stepping.then_some(figures.inlined_insns), "work_ms": ms(figures.inlined_work),
-                // (host time: an estimate, each sample's share of the code since the safepoint before it by the work clock's opcode prices)
-                "estimated_time_ms": figures.inlined_time, "estimated_wall_ms": figures.inlined_wall,
-                "into": callers.iter().map(|(caller, inlined)| json!({"function": caller, "copies": inlined.copies, "calls": inlined.calls, "insns": inlined.insns, "work_ms": ms(inlined.work)})).collect::<Vec<_>>(),
-            })),
-        })
+            // (the module's last segment, qualified where two modules would share it)
+            short: function.map(|f| names.short(&f.source).to_string()),
+            source_hash: function.and_then(|f| source_lines.hash(f)),
+            tool: names.tool(id),
+            total: FunctionTotalJson {
+                alloc_bytes: figures.total_alloc.round(),
+                allocs: figures.total_allocs.round(),
+                cold_work_ms: ms(figures.total_cold),
+                insns: figures.total_insns,
+                time_ms: figures.total_time,
+                wall_ms: figures.total_wall,
+                work_ms: ms(figures.total_work),
+            },
+        }
     };
-    json["functions"] = Json::Array(function_rows.iter().map(|(id, figures)| function_json(*id, figures)).collect());
+    let functions_json: Vec<FunctionJson> = function_rows.iter().map(|(id, figures)| function_json(*id, figures)).collect();
     // the reported phases' cold and collector work on both sides, and what cutting the game's code saves
     let (mut scope_cold, mut scope_collector, mut scope_saving_game) = (0.0, 0.0, 0.0);
     for (&(id, phase, harness_side), split) in &model.phase_split {
@@ -1138,74 +2689,144 @@ pub fn write(input: &Input) -> Result<String, String> {
             scope_saving_game += split.saving(work);
         }
     }
-    json["scope"] = json!({
-        "phases": scope.iter().map(|phase| phase_name(*phase)).collect::<Vec<_>>(),
-        "game_self_ms": ms(game_self),
-        "harness_self_ms": ms(harness_self),
-        "cold_work_ms": ms(scope_cold),
-        "collector_ms": ms(scope_collector),
-        "game_saving_ms": ms(scope_saving_game),
-        "harness_folder": HARNESS_FOLDER,
-        "engine": scope_engine.as_ref().map(engine_json),
-    });
+    let scope_json = ScopeJson {
+        cold_work_ms: ms(scope_cold),
+        collector_ms: ms(scope_collector),
+        engine: scope_engine.as_ref().map(engine_map),
+        game_saving_ms: ms(scope_saving_game),
+        game_self_ms: ms(game_self),
+        harness_folder: HARNESS_FOLDER,
+        harness_self_ms: ms(harness_self),
+        phases: scope.iter().map(|phase| phase_name(*phase)).collect(),
+    };
 
     // lines (with their opcodes)
     let mut line_rows: Vec<(&(i32, i32), &LineFigures)> = model.lines.iter().collect();
     let line_self = |figures: &LineFigures| figures.work + figures.c_work;
     line_rows.sort_by(|a, b| line_self(b.1).total_cmp(&line_self(a.1)).then(b.1.time.total_cmp(&a.1.time)).then(b.1.alloc.total_cmp(&a.1.alloc)).then(a.0.cmp(b.0)));
-    json["lines"] = Json::Array(
-        line_rows
-            .iter()
-            .map(|((function, line), figures)| {
-                json!({
-                    // (self_work_ms: its own instructions' work_ms and its C calls' own c_work_ms)
-                    "function": function, "line": line, "insns": figures.insns, "work_ms": ms(figures.work), "c_work_ms": ms(figures.c_work), "self_work_ms": ms(line_self(figures)), "total_work_ms": ms(figures.total_work),
-                    "total_insns": figures.total_insns, "time_ms": figures.time, "total_time_ms": figures.total_time, "wall_ms": figures.wall, "total_wall_ms": figures.total_wall,
-                    "alloc_bytes": figures.alloc.round(), "allocs": figures.allocs.round(),
-                    "cold_work_ms": ms(figures.cold), "collector_ms": ms(figures.collector),
-                    "phases": figures.phases.iter().map(|(phase, f)| (phase_name(*phase), json!({"work_ms": ms(f.work), "self_work_ms": ms(f.work + f.c_work), "c_work_ms": ms(f.c_work), "total_work_ms": ms(f.total_work), "insns": f.insns, "cold_work_ms": ms(f.cold)}))).collect::<serde_json::Map<_, _>>(),
-                    "ops": figures.ops.iter().map(|(op, count)| (vm::opcode_name(*op).to_string(), json!(count))).collect::<serde_json::Map<_, _>>(),
-                    "inlined": model.line_inlined.get(&(*function, *line)),
+    let lines_json: Vec<LineJson> = line_rows
+        .iter()
+        .map(|&(&(function, line), figures)| LineJson {
+            alloc_bytes: figures.alloc.round(),
+            allocs: figures.allocs.round(),
+            c_work_ms: ms(figures.c_work),
+            cold_work_ms: ms(figures.cold),
+            collector_ms: ms(figures.collector),
+            function,
+            inlined: model.line_inlined.get(&(function, line)).copied(),
+            insns: figures.insns,
+            line,
+            ops: figures.ops.iter().map(|(op, &count)| (vm::opcode_name(*op), count)).collect(),
+            phases: figures
+                .phases
+                .iter()
+                .map(|(phase, f)| {
+                    (
+                        phase_name(*phase),
+                        LinePhaseJson {
+                            c_work_ms: ms(f.c_work),
+                            cold_work_ms: ms(f.cold),
+                            insns: f.insns,
+                            self_work_ms: ms(f.work + f.c_work),
+                            total_work_ms: ms(f.total_work),
+                            work_ms: ms(f.work),
+                        },
+                    )
                 })
-            })
-            .collect(),
-    );
-    json["edges"] = Json::Array({
+                .collect(),
+            // (self_work_ms: its own instructions' work_ms and its C calls' own c_work_ms)
+            self_work_ms: ms(line_self(figures)),
+            time_ms: figures.time,
+            total_insns: figures.total_insns,
+            total_time_ms: figures.total_time,
+            total_wall_ms: figures.total_wall,
+            total_work_ms: ms(figures.total_work),
+            wall_ms: figures.wall,
+            work_ms: ms(figures.work),
+        })
+        .collect();
+    let edges_json: Vec<EdgeJson> = {
         let mut edges: Vec<_> = model.edges.iter().collect();
         edges.sort_by(|a, b| b.1.1.total_cmp(&a.1.1).then(a.0.cmp(b.0)));
-        let mut rows: Vec<Json> = edges.iter().map(|((caller, callee), (calls, work, insns))| json!({"caller": caller, "callee": callee, "calls": calls, "work_ms": ms(*work), "insns": insns})).collect();
+        let mut rows: Vec<EdgeJson> = edges
+            .iter()
+            .map(|&(&(caller, callee), &(calls, work, insns))| EdgeJson { callee, caller, calls, copies: None, inlined: None, insns, work_ms: ms(work) })
+            .collect();
         // (calls -O2 compiled into the caller: entries into the callee's copies there)
         let mut inlined: Vec<_> = model.inlined.iter().collect();
         inlined.sort_by(|a, b| b.1.work.total_cmp(&a.1.work).then(a.0.cmp(b.0)));
-        rows.extend(inlined.iter().map(|((caller, callee), inlined)| json!({"caller": caller, "callee": callee, "calls": inlined.calls, "work_ms": ms(inlined.work), "insns": inlined.insns, "inlined": true, "copies": inlined.copies})));
+        rows.extend(inlined.iter().map(|&(&(caller, callee), inlined)| EdgeJson { callee, caller, calls: inlined.calls, copies: Some(inlined.copies), inlined: Some(true), insns: inlined.insns, work_ms: ms(inlined.work) }));
         rows
-    });
+    };
 
     // The call tree: [parent, function, calls, self work in us, self instructions, label].
     // Keep fractional work so node unions reconcile with the clock.
-    if let Some(vm_results) = input.vm {
-        json["tree"] = Json::Array(
-            vm_results
-                .nodes
-                .iter()
-                .enumerate()
-                .map(|(index, node)| {
-                    let label = if index == 0 {
-                        Some(input.phases.first().cloned().unwrap_or_else(|| "startup".into()))
-                    } else if node.function == -1 {
-                        Some(input.phases.get(node.callpc.max(0) as usize).cloned().unwrap_or_default())
-                    } else if node.function < -1 {
-                        Some(names.frame(node.function))
-                    } else {
-                        None
-                    };
-                    json!([node.parent, node.function, node.calls, node.work * 1e6, node.insns, label])
-                })
-                .collect(),
-        );
+    let (tree_json, tree_lines_json) = if let Some(vm_results) = input.vm {
+        let tree = vm_results
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                let label = if index == 0 {
+                    Some(input.phases.first().cloned().unwrap_or_else(|| "startup".into()))
+                } else if node.function == -1 {
+                    Some(input.phases.get(node.callpc.max(0) as usize).cloned().unwrap_or_default())
+                } else if node.function < -1 {
+                    Some(names.frame(node.function))
+                } else {
+                    None
+                };
+                TreeNodeRow(node.parent, node.function, node.calls, node.work * 1e6, node.insns, label)
+            })
+            .collect();
         // (each node's calling line, -1 for none, beside the rows: a row keeps the six fields every reader of the tree takes)
-        json["tree_lines"] = Json::Array(vm_results.nodes.iter().map(|node| json!(call_line(node))).collect());
-    }
+        let tree_lines = vm_results.nodes.iter().map(call_line).collect();
+        (Some(tree), Some(tree_lines))
+    } else {
+        (None, None)
+    };
+
+    let mut report = ProfileReport {
+        alloc: None,
+        boundary: None,
+        builtins: None,
+        builtins_tool: None,
+        clock_reads: None,
+        cold: None,
+        counters: None,
+        cpu: None,
+        edges: edges_json,
+        emulator: None,
+        end: input.end.map(mark_json),
+        fidelity: None,
+        files: Vec::new(),
+        functions: functions_json,
+        game: None,
+        handlers: None,
+        heap: None,
+        kinds: input.config.kinds.names(),
+        lines: lines_json,
+        listings: BTreeMap::new(),
+        luau_caches: None,
+        marks: input.marks.iter().map(mark_json).collect(),
+        phase_timing: None,
+        phase_tree: None,
+        phases: input.phases,
+        resumptions: None,
+        run: run_json,
+        scope: scope_json,
+        source_hashes: BTreeMap::new(),
+        summary: String::new(),
+        time: None,
+        timeline: None,
+        tool: "ree",
+        tree: tree_json,
+        tree_lines: tree_lines_json,
+        unmeasured_fires: None,
+        version: PROFILE_VERSION,
+        warnings: input.warnings,
+        work: None,
+    };
 
     let mut summary = String::new();
     let _ = writeln!(
@@ -1262,55 +2883,41 @@ pub fn write(input: &Input) -> Result<String, String> {
         } else {
             fidelity_json(input, total_work, &kinds_total, whole_luau(input, total_work, &kinds_total), "the run")
         };
-        json["work"] = json!({
-            "total_ms": ms(total_work),
-            "outside_instructions_ms": ms(vm_results.engine_work),
-            "per_second_ms": if seconds > 0.0 { ms(total_work) / seconds } else { 0.0 },
-            "per_frame_ms": ms(total_work) / frames,
-            "fidelity": fidelity["text"].clone(),
-            "cold_work_ms": ms(kinds_total[vm::COLD]),
-            "collector_ms": ms(kinds_total[vm::COLLECTOR]),
-            "dispatch_ms": ms(kinds_total[vm::DISPATCH]),
-            "by_provenance_ms": {
-                "client": ms((total_work - kinds_total[vm::STUDIO] - kinds_total[vm::DEFAULTED]).max(0.0)),
-                "studio": ms(kinds_total[vm::STUDIO]), "defaulted": ms(kinds_total[vm::DEFAULTED]),
-            },
-            "collector": {
-                // (desktop ns, as work.prices: a phone run's are these times work.units.scale)
-                "object_ns": crate::cost::LUAU_COLLECTOR_OBJECT,
-                "objects": collector_objects.round(),
-                "basis": "every object the scripts' work allocated (its instructions and the library and engine calls it made), each swept once garbage and marked while it lives: the collector's share of the parity bench's churn rows on a heap of about 50 MB (its steps' time in ree's VM, which runs the client's collector) applied to a rendered client's time; booked to the allocating instruction",
-            },
-            "units": {"device": input.device, "scale": price_scale()},
-            "script_insns": script_insns,
-            "engine_insns": engine_insns,
-            "native_functions": natives.iter().map(|f| json!({"name": f.name, "module": module_name(&f.source), "line": f.line, "entries": f.native_entries, "work_ms": ms(f.native_work)})).collect::<Vec<_>>(),
-            "opcodes": opcode_rows.iter().map(|(op, (count, work))| json!({"op": vm::opcode_name(*op), "count": count, "work_ms": ms(*work)})).collect::<Vec<_>>(),
-            // (a C function a CALL reached is a node of its own at the call site, whether or not it ran Luau; a Luau function a C
-            // function calls counts a call each time it is entered)
-            "c_calls": true,
-            "c_invocations": true,
-        });
-        json["fidelity"] = fidelity.clone();
         // Large buffers (> 1 KB fresh, >= 64 KB segment, > 64 KB L2/L3 copy, > 1 MB DRAM copy) are priced across cache tiers.
         let (fresh, big) = match (input.marks.first().and_then(|mark| mark.totals), input.end.and_then(|end| end.totals)) {
             (Some(first), Some(last)) => (last.buffer_fresh.saturating_sub(first.buffer_fresh), last.buffer_big.saturating_sub(first.buffer_big)),
             _ => (0, 0),
         };
-        json["work"]["unpriced"] = json!({
-            "buffer_fresh_bytes": 0,
-            "buffer_big_bytes": 0,
-            "priced_large_buffer_fresh_bytes": fresh,
-            "priced_large_buffer_big_bytes": big,
-            "basis": "large new buffers (> 1 KB fresh memory; >= 64 KB segment setup) and large buffer copies, fills and string writes (> 64 KB L2/L3; > 1 MB DRAM) are priced across cache tiers on the work clock",
-        });
+        // the work clock's price of one count of the counters an issue prices what it names by (ns, at desktop prices: a phone run's
+        // are these times work.units.scale): an allocated object, a byte of table storage, a key a table's growth rehashed, a C
+        // function a script called, a comparison table.sort made and a call of its comparison function; a byte any script work
+        // allocated, a key a growth put back into a hash part, a block over 1 KB, an object a library call made, and the
+        // collector's charge an object (in work.collector_ms, not in the others)
+        let price = |set: fn(&mut crate::cost::VmCounters)| -> f64 {
+            let mut counters: crate::cost::VmCounters = unsafe { std::mem::zeroed() };
+            set(&mut counters);
+            crate::cost::luau(&counters) * 1e9
+        };
+        let work_prices = WorkPricesJson {
+            allocated_byte_ns: price(|c| c.hostops[crate::cost::ALLOCBYTES_SLOT] = 1),
+            c_call_ns: price(|c| c.ccalls = 1),
+            collector_object_ns: price(|c| c.hostops[crate::cost::GCOBJECTS_SLOT] = 1),
+            hash_rehashed_key_ns: price(|c| c.hostops[crate::cost::HASHREHASHED_SLOT] = 1),
+            large_block_ns: price(|c| c.hostops[crate::cost::LARGEBLOCKS_SLOT] = 1),
+            library_object_ns: price(|c| c.hostops[crate::cost::LIBOBJECTS_SLOT] = 1),
+            object_ns: price(|c| c.objects = 1),
+            rehashed_key_ns: price(|c| c.rehashed = 1),
+            sort_call_ns: price(|c| c.sortcalls = 1),
+            sort_compare_ns: price(|c| c.sortcompares = 1),
+            stored_byte_ns: price(|c| c.stored = 1),
+        };
         let _ = writeln!(
             summary,
             "work clock {:.2} ms ({:.2} ms/s, {:.3} ms a frame) at {}; {:.2} ms charged outside any instruction",
             ms(total_work),
             if seconds > 0.0 { ms(total_work) / seconds } else { 0.0 },
             ms(total_work) / frames,
-            fidelity["prices"].as_str().unwrap_or_default(),
+            fidelity.prices,
             ms(vm_results.engine_work)
         );
         let _ = writeln!(
@@ -1324,7 +2931,49 @@ pub fn write(input: &Input) -> Result<String, String> {
             100.0 * kinds_total[vm::DEFAULTED] / total_work.max(1e-12)
         );
         // (what the clock is beside a client's own time: read before taking its milliseconds as a client's)
-        let _ = writeln!(summary, "{}", fidelity["text"].as_str().unwrap_or_default());
+        let _ = writeln!(summary, "{}", fidelity.text);
+        report.work = Some(WorkJson {
+            by_provenance_ms: ProvenanceJson {
+                client: ms((total_work - kinds_total[vm::STUDIO] - kinds_total[vm::DEFAULTED]).max(0.0)),
+                defaulted: ms(kinds_total[vm::DEFAULTED]),
+                studio: ms(kinds_total[vm::STUDIO]),
+            },
+            // (a C function a CALL reached is a node of its own at the call site, whether or not it ran Luau; a Luau function a C
+            // function calls counts a call each time it is entered)
+            c_calls: true,
+            c_invocations: true,
+            cold_work_ms: ms(kinds_total[vm::COLD]),
+            collector: WorkCollectorJson {
+                basis: "every object the scripts' work allocated (its instructions and the library and engine calls it made), each swept once garbage and marked while it lives: the collector's share of the parity bench's churn rows on a heap of about 50 MB (its steps' time in ree's VM, which runs the client's collector) applied to a rendered client's time; booked to the allocating instruction",
+                // (desktop ns, as work.prices: a phone run's are these times work.units.scale)
+                object_ns: crate::cost::LUAU_COLLECTOR_OBJECT,
+                objects: collector_objects.round(),
+            },
+            collector_ms: ms(kinds_total[vm::COLLECTOR]),
+            dispatch_ms: ms(kinds_total[vm::DISPATCH]),
+            engine_insns,
+            fidelity: fidelity.text.clone(),
+            native_functions: natives
+                .iter()
+                .map(|f| NativeFunctionJson { entries: f.native_entries, line: f.line, module: module_name(&f.source), name: &f.name, work_ms: ms(f.native_work) })
+                .collect(),
+            opcodes: opcode_rows.iter().map(|&(op, (count, work))| OpcodeRowJson { count, op: vm::opcode_name(op), work_ms: ms(work) }).collect(),
+            outside_instructions_ms: ms(vm_results.engine_work),
+            per_frame_ms: ms(total_work) / frames,
+            per_second_ms: if seconds > 0.0 { ms(total_work) / seconds } else { 0.0 },
+            prices: work_prices,
+            script_insns,
+            total_ms: ms(total_work),
+            units: WorkUnitsJson { device: input.device, scale: price_scale() },
+            unpriced: WorkUnpricedJson {
+                basis: "large new buffers (> 1 KB fresh memory; >= 64 KB segment setup) and large buffer copies, fills and string writes (> 64 KB L2/L3; > 1 MB DRAM) are priced across cache tiers on the work clock",
+                buffer_big_bytes: 0,
+                buffer_fresh_bytes: 0,
+                priced_large_buffer_big_bytes: big,
+                priced_large_buffer_fresh_bytes: fresh,
+            },
+        });
+        report.fidelity = Some(fidelity);
         let _ = writeln!(summary, "instructions: {} by scripts, {} by the engine's own Luau", group_digits(script_insns), group_digits(engine_insns));
         if natives.is_empty() {
             let _ = writeln!(summary, "natively compiled functions: none ran natively (every instruction is counted)");
@@ -1475,45 +3124,22 @@ pub fn write(input: &Input) -> Result<String, String> {
             let module = names.function(*function).map_or(String::new(), |f| names.short(&f.source).to_string());
             let _ = writeln!(summary, "{:>9.3} {:>8.3} {:>11.3} {:>12}  {module}:{line}  ({})", ms(phase.self_work()), ms(phase.cold), ms(phase.total_work), group_digits(phase.insns), ops.join(", "));
         }
-        attribution_sections(input, &names, &mut summary, &mut json, top);
+        attribution_sections(input, &names, &mut summary, &mut report, top);
         // inline caches
         if input.config.kinds.has(super::Kinds::CACHES) {
-            inline_caches(input, vm_results, &names, top, &mut summary, &mut json);
+            inline_caches(input, vm_results, &names, top, &mut summary, &mut report);
         }
-    }
-
-    // the work clock's price of one count of the counters an issue prices what it names by (ns, at desktop prices: a phone run's
-    // are these times work.units.scale): an allocated object, a byte of table storage, a key a table's growth rehashed, a C
-    // function a script called, a comparison table.sort made and a call of its comparison function; a byte any script work
-    // allocated, a key a growth put back into a hash part, a block over 1 KB, an object a library call made, and the
-    // collector's charge an object (in work.collector_ms, not in the others)
-    if json["work"].is_object() {
-        let price = |set: fn(&mut crate::cost::VmCounters)| -> f64 {
-            let mut counters: crate::cost::VmCounters = unsafe { std::mem::zeroed() };
-            set(&mut counters);
-            crate::cost::luau(&counters) * 1e9
-        };
-        json["work"]["prices"] = json!({
-            "object_ns": price(|c| c.objects = 1),
-            "stored_byte_ns": price(|c| c.stored = 1),
-            "rehashed_key_ns": price(|c| c.rehashed = 1),
-            "c_call_ns": price(|c| c.ccalls = 1),
-            "sort_compare_ns": price(|c| c.sortcompares = 1),
-            "sort_call_ns": price(|c| c.sortcalls = 1),
-            "allocated_byte_ns": price(|c| c.hostops[crate::cost::ALLOCBYTES_SLOT] = 1),
-            "hash_rehashed_key_ns": price(|c| c.hostops[crate::cost::HASHREHASHED_SLOT] = 1),
-            "large_block_ns": price(|c| c.hostops[crate::cost::LARGEBLOCKS_SLOT] = 1),
-            "library_object_ns": price(|c| c.hostops[crate::cost::LIBOBJECTS_SLOT] = 1),
-            "collector_object_ns": price(|c| c.hostops[crate::cost::GCOBJECTS_SLOT] = 1),
-        });
     }
 
     // host time
     if let Some(time) = input.time {
         let cpu = time.cycles_per_ms > 0.0;
-        json["time"] = json!({
-            "sampled_ms": time_total, "wall_ms": wall_total, "weight": if cpu { "thread CPU" } else { "wall" }, "cycles_per_ms": time.cycles_per_ms,
-            "about": "time_ms is the run thread's CPU milliseconds (its cycles, the time it ran), wall_ms the wall clock's; a sample is booked to what ran since the one before: the Luau stack at a safepoint, the Luau that ran last when the interpreter is left, the engine's step that was open when it is entered (else outside scripts), an Instance API call on its own line",
+        report.time = Some(TimeJson {
+            about: "time_ms is the run thread's CPU milliseconds (its cycles, the time it ran), wall_ms the wall clock's; a sample is booked to what ran since the one before: the Luau stack at a safepoint, the Luau that ran last when the interpreter is left, the engine's step that was open when it is entered (else outside scripts), an Instance API call on its own line",
+            cycles_per_ms: time.cycles_per_ms,
+            sampled_ms: time_total,
+            wall_ms: wall_total,
+            weight: if cpu { "thread CPU" } else { "wall" },
         });
         let _ = writeln!(
             summary,
@@ -1581,19 +3207,9 @@ pub fn write(input: &Input) -> Result<String, String> {
         for ((stack, ty), amount) in stack_rows.iter().take(input.config.top) {
             let _ = writeln!(summary, "{:>10} {:>10}  {}  {}", bytes(amount.bytes), group_digits(amount.count.round() as u64), allocations.types.names[*ty as usize], describe(*stack));
         }
-        json["alloc"] = json!({
-            "bytes": allocations.bytes,
-            "objects": allocations.objects,
-            "step": allocations.step,
-            "by_type": by_type.iter().map(|(name, amount)| json!({"type": name, "group": memory::group(name), "bytes": amount.bytes, "count": amount.count})).collect::<Vec<_>>(),
-            "by_stack": stack_rows.iter().take(500).map(|((stack, ty), amount)| json!({
-                "frames": allocations.stacks.stacks[*stack as usize].iter().map(|&(f, l)| json!([f, l])).collect::<Vec<_>>(),
-                "type": allocations.types.names[*ty as usize], "bytes": amount.bytes.round(), "count": amount.count.round(),
-            })).collect::<Vec<_>>(),
-        });
         // tables that rehashed to grow: by the line that made them rehash and the site that made the table
         let total = &allocations.rehashes;
-        if total.events > 0 {
+        let rehash_json = if total.events > 0 {
             let _ = writeln!(
                 summary,
                 "table rehashes: {} ({} grew the table), {} keys moved; by scripts' own instructions {} rehashes, {} keys",
@@ -1610,19 +3226,57 @@ pub fn write(input: &Input) -> Result<String, String> {
                 let made = if *made == memory::NO_STACK { "not followed".to_string() } else { describe(*made) };
                 let _ = writeln!(summary, "{:>10} {:>12}  {}  ({made})", group_digits(rehash.events), group_digits(rehash.keys), describe(*stack));
             }
-            let frames = |stack: u32| -> Json {
-                if stack == memory::NO_STACK { Json::Null } else { Json::Array(allocations.stacks.stacks[stack as usize].iter().map(|&(f, l)| json!([f, l])).collect()) }
+            let frames_slice = |stack: u32| -> Option<&[(i32, i32)]> {
+                if stack == memory::NO_STACK { None } else { Some(&allocations.stacks.stacks[stack as usize]) }
             };
-            json["alloc"]["rehash"] = json!({
-                "events": total.events, "keys": total.keys, "script_events": total.script_events, "script_keys": total.script_keys, "grew": total.grew,
-                "bytes_before": total.bytes_before, "bytes_after": total.bytes_after,
-                "sites": rows.iter().take(500).map(|((phase, stack, made), rehash)| json!({
-                    "phase": input.phases.get(*phase as usize), "frames": frames(*stack), "table_frames": frames(*made),
-                    "events": rehash.events, "keys": rehash.keys, "script_events": rehash.script_events, "script_keys": rehash.script_keys,
-                    "grew": rehash.grew, "bytes_before": rehash.bytes_before, "bytes_after": rehash.bytes_after,
-                })).collect::<Vec<_>>(),
-            });
-        }
+            Some(RehashJson {
+                bytes_after: total.bytes_after,
+                bytes_before: total.bytes_before,
+                events: total.events,
+                grew: total.grew,
+                keys: total.keys,
+                script_events: total.script_events,
+                script_keys: total.script_keys,
+                sites: rows
+                    .iter()
+                    .take(500)
+                    .map(|&(&(phase, stack, made), rehash)| RehashSiteJson {
+                        bytes_after: rehash.bytes_after,
+                        bytes_before: rehash.bytes_before,
+                        events: rehash.events,
+                        frames: frames_slice(stack),
+                        grew: rehash.grew,
+                        keys: rehash.keys,
+                        phase: input.phases.get(phase as usize).map(String::as_str),
+                        script_events: rehash.script_events,
+                        script_keys: rehash.script_keys,
+                        table_frames: frames_slice(made),
+                    })
+                    .collect(),
+            })
+        } else {
+            None
+        };
+        report.alloc = Some(AllocJson {
+            by_stack: stack_rows
+                .iter()
+                .take(500)
+                .map(|&((stack, ty), amount)| AllocByStackJson {
+                    bytes: amount.bytes.round(),
+                    count: amount.count.round(),
+                    frames: &allocations.stacks.stacks[stack as usize],
+                    ty: allocations.types.names[ty as usize].as_str(),
+                })
+                .collect(),
+            by_type: by_type
+                .into_iter()
+                .map(|(name, amount)| AllocByTypeJson { bytes: amount.bytes, count: amount.count, group: memory::group(&name).to_string(), ty: name })
+                .collect(),
+            bytes: allocations.bytes,
+            objects: allocations.objects,
+            rehash: rehash_json,
+            step: allocations.step,
+        });
     }
 
     // heap snapshots and the collector
@@ -1720,39 +3374,89 @@ pub fn write(input: &Input) -> Result<String, String> {
             bytes(collector.freed as f64),
             ms(collector.seconds)
         );
-        json["heap"] = json!({
-            "snapshots": input.snapshots.iter().map(|snapshot| json!({
-                "label": snapshot.label, "frame": snapshot.frame, "seconds": snapshot.seconds, "gcinfo_kb": snapshot.total_bytes / 1024, "total_bytes": snapshot.total_bytes,
-                "objects": snapshot.objects, "object_bytes": snapshot.object_bytes,
-                "reachable": {"count": snapshot.reachable.0, "bytes": snapshot.reachable.1},
-                "unswept": {"count": snapshot.unswept.0, "bytes": snapshot.unswept.1,
-                    "by_type": snapshot.unswept_by_type.iter().map(|(name, count, size)| json!({"type": name, "count": count, "bytes": size})).collect::<Vec<_>>()},
-                "by_type": snapshot.by_type.iter().map(|(name, count, size)| json!({"type": name, "count": count, "bytes": size})).collect::<Vec<_>>(),
-                "allocated_since": {"count": snapshot.allocated_since.0.round(), "bytes": snapshot.allocated_since.1.round()},
-                "biggest": snapshot.biggest.iter().map(|held| json!({"type": held.ty, "name": held.name, "size": held.size, "retained": held.retained, "path": held.path,
-                    "stack": held.stack.and_then(|stack| input.allocations.map(|allocations| allocations.stacks.stacks[stack as usize].iter().map(|&(f, l)| json!([f, l])).collect::<Vec<_>>()))})).collect::<Vec<_>>(),
-                "by_stack": snapshot.by_stack.iter().take(300).map(|(stack, ty, count, size)| json!({
-                    "frames": input.allocations.map(|allocations| allocations.stacks.stacks[*stack as usize].iter().map(|&(f, l)| json!([f, l])).collect::<Vec<_>>()),
-                    "type": ty, "count": count.round(), "bytes": size.round()})).collect::<Vec<_>>(),
-                "tables": {
-                    "count": snapshot.tables.count, "bytes": snapshot.tables.bytes, "header_bytes": snapshot.tables.header_bytes,
-                    "array_bytes": snapshot.tables.array_bytes, "hash_bytes": snapshot.tables.hash_bytes,
-                    "sizes": {"table": snapshot.tables.sizes.0, "slot": snapshot.tables.sizes.1, "node": snapshot.tables.sizes.2},
-                    "sites": snapshot.tables.sites.iter().take(300).map(|site| {
-                        let (events, keys) = rehash_by_site.get(&site.stack).copied().unwrap_or((0, 0));
-                        json!({
-                            "phase": input.phases.get(site.phase as usize),
-                            "frames": input.allocations.map(|allocations| allocations.stacks.stacks[site.stack as usize].iter().map(|&(f, l)| json!([f, l])).collect::<Vec<_>>()),
-                            "count": site.count.round(), "bytes": site.bytes.round(), "header_bytes": site.header_bytes.round(),
-                            "array_bytes": site.array_bytes.round(), "hash_bytes": site.hash_bytes.round(),
-                            "array": distribution_json(&site.array), "hash": distribution_json(&site.hash), "levels": levels_json(&site.levels),
-                            "rehashes": events, "rehash_keys": keys,
+        report.heap = Some(HeapJson {
+            gc: HeapGcJson {
+                by_state: memory::GC_STATES.iter().zip(collector.by_state.iter()).map(|(&state, &(steps, seconds))| GcStateJson { ms: ms(seconds), state, steps }).collect(),
+                cycles: collector.cycles,
+                freed: collector.freed,
+                ms: ms(collector.seconds),
+                steps: collector.steps,
+            },
+            snapshots: input
+                .snapshots
+                .iter()
+                .map(|snapshot| HeapSnapshotJson {
+                    allocated_since: CountBytesF64 { bytes: snapshot.allocated_since.1.round(), count: snapshot.allocated_since.0.round() },
+                    biggest: snapshot
+                        .biggest
+                        .iter()
+                        .map(|held| HeapBiggestJson {
+                            name: &held.name,
+                            path: &held.path,
+                            retained: held.retained,
+                            size: held.size,
+                            stack: held.stack.and_then(|stack| input.allocations.map(|allocations| &*allocations.stacks.stacks[stack as usize])),
+                            ty: &held.ty,
                         })
-                    }).collect::<Vec<_>>(),
-                },
-            })).collect::<Vec<_>>(),
-            "gc": {"cycles": collector.cycles, "steps": collector.steps, "freed": collector.freed, "ms": ms(collector.seconds),
-                "by_state": memory::GC_STATES.iter().zip(collector.by_state.iter()).map(|(state, (steps, seconds))| json!({"state": state, "steps": steps, "ms": ms(*seconds)})).collect::<Vec<_>>()},
+                        .collect(),
+                    by_stack: snapshot
+                        .by_stack
+                        .iter()
+                        .take(300)
+                        .map(|(stack, ty, count, size)| HeapByStackJson {
+                            bytes: size.round(),
+                            count: count.round(),
+                            frames: input.allocations.map(|allocations| &*allocations.stacks.stacks[*stack as usize]),
+                            ty: ty.as_str(),
+                        })
+                        .collect(),
+                    by_type: snapshot.by_type.iter().map(|(name, count, size)| HeapTypeJson { bytes: *size, count: *count, ty: name.as_str() }).collect(),
+                    frame: snapshot.frame,
+                    gcinfo_kb: snapshot.total_bytes / 1024,
+                    label: &snapshot.label,
+                    object_bytes: snapshot.object_bytes,
+                    objects: snapshot.objects,
+                    reachable: CountBytesU64 { bytes: snapshot.reachable.1, count: snapshot.reachable.0 },
+                    seconds: snapshot.seconds,
+                    tables: HeapTablesJson {
+                        array_bytes: snapshot.tables.array_bytes,
+                        bytes: snapshot.tables.bytes,
+                        count: snapshot.tables.count,
+                        hash_bytes: snapshot.tables.hash_bytes,
+                        header_bytes: snapshot.tables.header_bytes,
+                        sites: snapshot
+                            .tables
+                            .sites
+                            .iter()
+                            .take(300)
+                            .map(|site| {
+                                let (events, keys) = rehash_by_site.get(&site.stack).copied().unwrap_or((0, 0));
+                                TableSiteJson {
+                                    array: distribution_json(&site.array),
+                                    array_bytes: site.array_bytes.round(),
+                                    bytes: site.bytes.round(),
+                                    count: site.count.round(),
+                                    frames: input.allocations.map(|allocations| &*allocations.stacks.stacks[site.stack as usize]),
+                                    hash: distribution_json(&site.hash),
+                                    hash_bytes: site.hash_bytes.round(),
+                                    header_bytes: site.header_bytes.round(),
+                                    levels: levels_json(&site.levels),
+                                    phase: input.phases.get(site.phase as usize).map(String::as_str),
+                                    rehash_keys: keys,
+                                    rehashes: events,
+                                }
+                            })
+                            .collect(),
+                        sizes: TableSizesJson { node: snapshot.tables.sizes.2, slot: snapshot.tables.sizes.1, table: snapshot.tables.sizes.0 },
+                    },
+                    total_bytes: snapshot.total_bytes,
+                    unswept: HeapUnsweptJson {
+                        by_type: snapshot.unswept_by_type.iter().map(|(name, count, size)| HeapTypeJson { bytes: *size, count: *count, ty: name.as_str() }).collect(),
+                        bytes: snapshot.unswept.1,
+                        count: snapshot.unswept.0,
+                    },
+                })
+                .collect(),
         });
     }
 
@@ -1770,16 +3474,20 @@ pub fn write(input: &Input) -> Result<String, String> {
             group_digits(facts.datatype_reads),
             group_digits(facts.datatype_reads_reused)
         );
-        json["game"] = json!({
-            "instances_touched": facts.instances_touched, "userdata_made": facts.userdata_made, "userdata_collected": facts.userdata_collected,
-            "modules_run": facts.modules_run, "requires_kept": facts.requires_kept,
-            "datatype_reads": facts.datatype_reads, "datatype_reads_reused": facts.datatype_reads_reused,
-            "about": {
-                "instances_touched": "instances a userdata was made for: the ones the scripts reached (a client makes one for each too)",
-                "userdata_made": "userdata made for instances, an instance's again after the VM collected its first",
-                "modules_run": "ModuleScripts that ran: a require that ran its module",
-                "datatype_reads": "UDim2, Color3, ... property reads: a client makes a new value for each read (not measured against a client); ree hands back the value it made while the property is unchanged (datatype_reads_reused), so rawequal of two reads is true in ree",
+        report.game = Some(GameJson {
+            about: GameAboutJson {
+                datatype_reads: "UDim2, Color3, ... property reads: a client makes a new value for each read (not measured against a client); ree hands back the value it made while the property is unchanged (datatype_reads_reused), so rawequal of two reads is true in ree",
+                instances_touched: "instances a userdata was made for: the ones the scripts reached (a client makes one for each too)",
+                modules_run: "ModuleScripts that ran: a require that ran its module",
+                userdata_made: "userdata made for instances, an instance's again after the VM collected its first",
             },
+            datatype_reads: facts.datatype_reads,
+            datatype_reads_reused: facts.datatype_reads_reused,
+            instances_touched: facts.instances_touched,
+            modules_run: facts.modules_run,
+            requires_kept: facts.requires_kept,
+            userdata_collected: facts.userdata_collected,
+            userdata_made: facts.userdata_made,
         });
         let _ = writeln!(summary, "\nemulator: ree's own caches (how fast ree runs, not what the game costs)");
         let _ = writeln!(summary, "{:<20} {:>8} {:>12} {:>10} {:>10}", "cache", "hit", "lookups", "misses", "evicted");
@@ -1790,9 +3498,9 @@ pub fn write(input: &Input) -> Result<String, String> {
             }
             let _ = writeln!(summary, "{:<20} {:>8} {:>12} {:>10} {:>10}", name, percent(counts.hits as f64, lookups as f64), group_digits(lookups), group_digits(counts.misses), group_digits(counts.evictions));
         }
-        json["emulator"] = json!({
-            "about": "ree's own caches: they measure how fast ree runs, not what the game costs",
-            "caches": input.caches.iter().map(|(name, about, counts)| json!({"name": name, "about": about, "hits": counts.hits, "misses": counts.misses, "evictions": counts.evictions})).collect::<Vec<_>>(),
+        report.emulator = Some(EmulatorJson {
+            about: "ree's own caches: they measure how fast ree runs, not what the game costs",
+            caches: input.caches.iter().map(|&(name, about, counts)| EmulatorCacheJson { about, evictions: counts.evictions, hits: counts.hits, misses: counts.misses, name }).collect(),
         });
     }
 
@@ -1882,38 +3590,52 @@ pub fn write(input: &Input) -> Result<String, String> {
             let _ = writeln!(summary, "\nframe work ({} frames): mean {mean:.3} ms, max {worst_work:.3} ms (frame {worst})", count as usize);
         }
         let split = rows.iter().all(|row| row.sides.is_some());
-        json["timeline"] = json!({
-            "columns": ["frame", "seconds", "phase", "host_ms", "work_ms", "instructions", "heap_bytes", "allocated_bytes", "allocations", "gc_steps", "gc_ms", "gc_freed", "instances_in_datamodel", "instances_outside", "instances_destroyed", "connections", "threads_made", "cycles", "part", "game_ms", "harness_ms", "collector_ms"],
-            "about": {
-                "host_ms": "the frame's host time and cycles: this run's, else the cpu pass's for the same frame (a kind that slows the run makes its own not the run's), else null",
-                "instances_in_datamodel": "live instances at the frame's end in the DataModel's tree; instances_outside: alive outside it; instances_destroyed: destroyed and kept until the VM collects the userdata that holds them",
-                "threads_made": "threads the VM made in the frame (coroutines, task threads, handlers' threads); the reachable ones are the heap snapshots' (by_type thread)",
-            },
-            "rows": rows.iter().map(|row| timeline_row(row, host(row))).collect::<Vec<_>>(),
-        });
-        if !detailed {
-            json["timeline"]["columns"] = json!(["frame", "seconds", "phase", "work_ms", "part", "game_ms", "harness_ms", "collector_ms"]);
-            json["timeline"]["rows"] = json!(rows.iter().map(compact_timeline_row).collect::<Vec<_>>());
-            json["timeline"]["about"] = json!({"work_ms": "compact frame work for issue summaries and hitch attribution; timeline records the other frame metrics"});
-        }
+        let (columns, about, timeline_rows) = if detailed {
+            (
+                DETAILED_TIMELINE_COLUMNS,
+                TimelineAboutJson::Detailed {
+                    host_ms: "the frame's host time and cycles: this run's, else the cpu pass's for the same frame (a kind that slows the run makes its own not the run's), else null",
+                    instances_in_datamodel: "live instances at the frame's end in the DataModel's tree; instances_outside: alive outside it; instances_destroyed: destroyed and kept until the VM collects the userdata that holds them",
+                    threads_made: "threads the VM made in the frame (coroutines, task threads, handlers' threads); the reachable ones are the heap snapshots' (by_type thread)",
+                },
+                TimelineRowsJson::Detailed(rows.iter().map(|row| timeline_row(row, host(row))).collect()),
+            )
+        } else {
+            (
+                COMPACT_TIMELINE_COLUMNS,
+                TimelineAboutJson::Compact { work_ms: "compact frame work for issue summaries and hitch attribution; timeline records the other frame metrics" },
+                TimelineRowsJson::Compact(rows.iter().map(compact_timeline_row).collect()),
+            )
+        };
         // Summaries retain small events; heavy frames retain exact node and site contributions
-        if split {
-            let (stats, heavy, site_frames) = frame_evidence(rows, &scope, input.run.fps);
-            json["timeline"]["function_stats"] = stats;
-            json["timeline"]["node_frames"] = heavy;
-            json["timeline"]["site_frames"] = site_frames;
-        }
+        let (function_stats, node_frames, site_frames) = if split {
+            let (stats, heavy, sites) = frame_evidence(rows, &scope, input.run.fps);
+            (Some(stats), Some(heavy), Some(sites))
+        } else {
+            (None, None, None)
+        };
+        report.timeline = Some(TimelineJson {
+            about,
+            columns,
+            function_contexts: None,
+            function_stats,
+            issue_stats: None,
+            node_frames,
+            replacement_frames: None,
+            rows: timeline_rows,
+            site_frames,
+        });
     }
 
     if let Some(vm_results) = input.vm {
-        price_builtin_fixes(vm_results, input.rows, &scope, input.run.fps, &mut json);
-        write_issue_summaries(vm_results, input.rows, &scope, input.run.fps, &mut json);
+        price_builtin_fixes(vm_results, input.rows, &scope, input.run.fps, &mut report.builtins, &mut report.timeline);
+        write_issue_summaries(vm_results, input.rows, &scope, input.run.fps, &mut report.timeline);
     }
 
     // the CPU
     if let Some(pass) = pass.as_ref().filter(|pass| pass["cpu"].is_object()) {
-        let mut cpu = pass["cpu"].clone();
-        cpu["pass"] = json!(format!("a run of its own ({}): the kinds asked with cpu slow the run, so its figures here would not be the run's", input.config.cpu_pass.as_ref().map(|folder| folder.display().to_string()).unwrap_or_default()));
+        let mut cpu = pass["cpu"].as_object().cloned().unwrap_or_default();
+        cpu.insert("pass".into(), Json::String(format!("a run of its own ({}): the kinds asked with cpu slow the run, so its figures here would not be the run's", input.config.cpu_pass.as_ref().map(|folder| folder.display().to_string()).unwrap_or_default())));
         let _ = writeln!(summary, "\n{}", pass["cpu"]["text"].as_str().unwrap_or("cpu: (the pass wrote no summary)").trim_end());
         let _ = writeln!(summary, "  (taken in a pass of its own: {})", input.config.cpu_pass.as_ref().map(|folder| folder.display().to_string()).unwrap_or_default());
         // (the two runs went the same way, or the CPU figures are another run's: a script timeout host time fired in one pass, its
@@ -1927,9 +3649,9 @@ pub fn write(input: &Input) -> Result<String, String> {
                 input.run.script_timeouts, input.run.host_backstop_timeouts, input.run.frames, input.run.status
             );
             let _ = writeln!(summary, "  warning: {text}");
-            cpu["pass_differs"] = json!(text);
+            cpu.insert("pass_differs".into(), Json::String(text));
         }
-        json["cpu"] = cpu;
+        report.cpu = Some(CpuSectionJson::Pass(cpu));
     } else if input.config.kinds.has(super::Kinds::CPU) {
         let cpu = input.cpu;
         let rate = cpu.cycles_per_ms;
@@ -1970,40 +3692,43 @@ pub fn write(input: &Input) -> Result<String, String> {
         if let Some(missing) = cpu.pmc_missing.as_ref().filter(|_| input.hw.is_none()) {
             let _ = writeln!(summary, "hardware counters: not read: {missing}");
         }
-        json["cpu"] = json!({
-            "text": text,
-            "thread_cycles": cpu.thread_cycles, "thread_ms": cpu.thread_ms, "cycles_per_ms": rate,
-            "process_cpu_s": cpu.process_cpu.map(|(user, kernel)| json!({"user": user, "kernel": kernel})),
-            "page_faults": cpu.page_faults,
-            "working_set": cpu.working_set.map(|(base, growth)| json!({"baseline": base, "growth": growth, "run_peak": cpu.run_peak_working_set})),
-            "private_bytes": cpu.private_bytes.map(|(base, growth)| json!({"baseline": base, "growth": growth})),
-            "phases": phases.iter().map(|(phase, host, ms)| json!({"phase": phase, "thread_ms": ms, "host_ms": host})).collect::<Vec<_>>(),
-            "frames": {
-                "columns": ["frame", "phase", "host_ms", "cycles", "thread_ms", "working_set"],
-                "rows": frames.iter().map(|frame| json!([frame.frame, frame.phase, round(frame.host_ms, 4), frame.cycles, cpu_ms(frame.cycles).map(|ms| round(ms, 4)), frame.working_set])).collect::<Vec<_>>(),
+        report.cpu = Some(CpuSectionJson::Own(CpuOwnJson {
+            about: "from the run's start (its VM's) to the profile's end: the run thread's CPU (its cycles at the counter's rate), by phase from the marks and by frame; memory as the working set and the private bytes at the run's start and their growth",
+            cycles_per_ms: rate,
+            frames: CpuFramesJson {
+                columns: ["frame", "phase", "host_ms", "cycles", "thread_ms", "working_set"],
+                rows: frames.iter().map(|frame| CpuFrameRow(frame.frame, frame.phase, round(frame.host_ms, 4), frame.cycles, cpu_ms(frame.cycles).map(|ms| round(ms, 4)), frame.working_set)).collect(),
             },
-            "about": "from the run's start (its VM's) to the profile's end: the run thread's CPU (its cycles at the counter's rate), by phase from the marks and by frame; memory as the working set and the private bytes at the run's start and their growth",
-            "pmc_sources": cpu.pmc_sources, "pmc": cpu.pmc.as_ref().map(|counters| counters.iter().map(|(name, value)| json!({"counter": name, "value": value})).collect::<Vec<_>>()),
-            "pmc_missing": cpu.pmc_missing,
-        });
+            page_faults: cpu.page_faults,
+            phases: phases.into_iter().map(|(phase, host_ms, thread_ms)| CpuPhaseJson { host_ms, phase, thread_ms }).collect(),
+            pmc: cpu.pmc.as_ref().map(|counters| counters.iter().map(|(name, value)| PmcCounterJson { counter: name.as_str(), value: *value }).collect()),
+            pmc_missing: cpu.pmc_missing.as_deref(),
+            pmc_sources: &cpu.pmc_sources,
+            private_bytes: cpu.private_bytes.map(|(baseline, growth)| MemoryGrowthJson { baseline, growth }),
+            process_cpu_s: cpu.process_cpu.map(|(user, kernel)| ProcessCpuJson { kernel, user }),
+            text,
+            thread_cycles: cpu.thread_cycles,
+            thread_ms: cpu.thread_ms,
+            working_set: cpu.working_set.map(|(baseline, growth)| WorkingSetJson { baseline, growth, run_peak: cpu.run_peak_working_set }),
+        }));
     }
 
     // the hardware counters
     let mut counter_folded: Vec<(String, Vec<(String, u64)>)> = Vec::new();
     if let Some(hw) = input.hw {
-        json["counters"] = counters(input, hw, &names, &mut summary, &mut counter_folded);
+        report.counters = Some(counters(input, hw, &names, &mut summary, &mut counter_folded));
     }
 
     if let Some(nodes) = input.phase_tree {
-        json["phase_tree"] = Json::Array(nodes.iter().map(|node| json!({"name": node.name, "parent": node.parent, "total_ms": node.seconds * 1e3, "self_ms": node.own * 1e3, "count": node.count})).collect());
+        report.phase_tree = Some(nodes.iter().map(|node| PhaseTreeNodeJson { count: node.count, name: &node.name, parent: node.parent, self_ms: node.own * 1e3, total_ms: node.seconds * 1e3 }).collect());
     }
     if let Some(text) = input.phase_timing {
-        json["phase_timing"] = json!(text);
+        report.phase_timing = Some(text);
         let _ = writeln!(summary, "
 {text}");
     }
     if let Some(text) = input.boundary {
-        json["boundary"] = json!(text);
+        report.boundary = Some(text);
         let _ = writeln!(summary, "\n{}", text.trim_end());
         files.push("boundary.json".into());
     }
@@ -2022,16 +3747,14 @@ pub fn write(input: &Input) -> Result<String, String> {
     let mut inlined_hot: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, figures)| *id >= 0 && figures.inlined_work > 0.0 && !listed.contains(id) && !names.engine(*id)).collect();
     inlined_hot.sort_by(|a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(a.0.cmp(&b.0)));
     listed.extend(inlined_hot.iter().take(6).map(|(id, _)| *id));
-    let mut listings = serde_json::Map::new();
     for id in &listed {
         if let Some(function) = names.function(*id) {
             if let Some((path, rows)) = listing(input, function, &model, *id) {
-                listings.insert(id.to_string(), json!({"path": path, "lines": rows.iter().map(|(line, text)| json!([line, text])).collect::<Vec<_>>()}));
+                report.listings.insert(id.to_string(), ListingJson { lines: rows, path });
             }
         }
     }
-    json["listings"] = Json::Object(listings);
-    json["source_hashes"] = Json::Object(input.sources.iter().map(|(name, source)| (name.clone(), json!(format!("{:016x}", fxhash(&source.text))))).collect());
+    report.source_hashes = input.sources.iter().map(|(name, source)| (name.clone(), format!("{:016x}", fxhash(&source.text)))).collect();
 
     // folded stacks
     let mut folded_files: Vec<(String, Vec<(String, u64)>)> = Vec::new();
@@ -2079,33 +3802,32 @@ pub fn write(input: &Input) -> Result<String, String> {
     }
 
     // speedscope: one sampled profile per folded file
-    let speedscope = speedscope(&folded_files, &input.run.command);
-    write_file(&out.join("profile.speedscope.json"), speedscope.to_string().as_bytes())?;
+    let speedscope_data = speedscope(&folded_files, &input.run.command);
+    let speedscope_text = JsonWriter::to_string(&speedscope_data);
+    write_file(&out.join("profile.speedscope.json"), speedscope_text.as_bytes())?;
     files.push("profile.speedscope.json".into());
 
     files.insert(0, "summary.txt".into());
     files.insert(1, "profile.json".into());
     files.insert(2, "report.html".into());
     let _ = writeln!(summary, "\nfiles in {}: {}", out.display(), files.join(", "));
-    json["summary"] = json!(summary);
-    json["files"] = json!(files);
-    let text = serde_json::to_string(&json).map_err(|error| error.to_string())?;
+    report.summary = summary;
+    report.files = files;
+    let text = JsonWriter::to_string(&report);
     write_file(&out.join("profile.json"), text.as_bytes())?;
-    write_file(&out.join("summary.txt"), summary.as_bytes())?;
+    write_file(&out.join("summary.txt"), report.summary.as_bytes())?;
     // (the page never reads each frame's functions, the bulk of a big profile: it is left out of the page's copy)
-    if let Some(timeline) = json.get_mut("timeline").and_then(Json::as_object_mut) {
-        timeline.remove("functions");
-        timeline.remove("function_runs");
-        timeline.remove("function_stats");
-        timeline.remove("issue_stats");
-        timeline.remove("node_frames");
-        timeline.remove("site_frames");
-        timeline.remove("replacement_frames");
-        timeline.remove("function_contexts");
+    if let Some(timeline) = &mut report.timeline {
+        timeline.function_stats = None;
+        timeline.issue_stats = None;
+        timeline.node_frames = None;
+        timeline.site_frames = None;
+        timeline.replacement_frames = None;
+        timeline.function_contexts = None;
     }
-    let page = serde_json::to_string(&json).map_err(|error| error.to_string())?;
+    let page = JsonWriter::to_string(&report);
     write_file(&out.join("report.html"), html(&page).as_bytes())?;
-    Ok(summary)
+    Ok(report.summary)
 }
 
 /// What each cache outcome means and what removes it (profile.json `luau_caches.outcome_info`): keyed to what the interpreter did
@@ -2218,7 +3940,7 @@ struct SiteRow {
 /// is apart by whether the work clock charges it (prices.rs): a charged one is the clock's own charge at the site (part of its
 /// function's work), an uncharged one is priced at the committed prices (work beyond the clock's). ree's own tool code (a
 /// harness one of ree's tools ran, rur.record) is counted apart: it is not the game's, nor a user's harness.
-fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: usize, summary: &mut String, json: &mut Json) {
+fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: usize, summary: &mut String, report: &mut ProfileReport<'_>) {
     let scope = reported_phases(input.config.phases.as_deref(), input.phases);
     let frames = scope_frames(input, &scope);
     let every_phase = scope.len() >= input.phases.len().max(1);
@@ -2302,7 +4024,7 @@ fn inline_caches(input: &Input, vm_results: &vm::Results, names: &Names, top: us
         }
         sites.push(SiteRow { function, site, kind, extra, charged_us, nodes });
     }
-    let outcomes_json = |outcomes: &[u64; vm::CACHE_OUTCOMES]| -> Json { Json::Object(vm::CACHE_OUTCOME_NAMES.iter().zip(outcomes).map(|(name, count)| (name.to_string(), json!(count))).collect()) };
+    let outcomes_map = |outcomes: &[u64; vm::CACHE_OUTCOMES]| -> BTreeMap<&'static str, u64> { vm::CACHE_OUTCOME_NAMES.iter().copied().zip(outcomes.iter().copied()).collect() };
     // (the four counts profiles had before, each exact: misses are repredictions, slow the metatable walks and unsafe environments, other not a table)
     let legacy = |o: &[u64; vm::CACHE_OUTCOMES]| -> (u64, u64, u64, u64) { (o[vm::HIT], o[vm::REPREDICTED], o[vm::METATABLE] + o[vm::METAFUNCTION] + o[vm::UNSAFE_ENV], o[vm::NOT_TABLE]) };
     // the lookups a table serves (a value another type's metamethod serves, not_table, is no cache's: profile diff and the viewer
@@ -2390,73 +4112,117 @@ Luau inline caches, {scope_label}: what each lookup did, as the interpreter did 
         let (charged, first_touch) = (round(charged, digits), round(first_touch.min(charged), digits));
         (charged, first_touch, round(charged - first_touch, digits))
     };
-    let kind_json = |kind: usize, totals: &KindTotals| -> Json {
+    let kind_json = |kind: usize, totals: &KindTotals| -> CacheKindJson {
         let (hits, misses, slow, other) = legacy(&totals.outcomes);
         let (_, first_touch, outcome) = split(totals.charged_us, totals.first_touch_us, 3);
         let (_, first_touch_frame, outcome_frame) = split(totals.charged_us / frames, totals.first_touch_us / frames, 4);
-        json!({
-            "kind": vm::CACHE_KINDS[kind], "outcomes": outcomes_json(&totals.outcomes), "lookups": lookups(&totals.outcomes),
-            "charged_work_us": round(totals.charged_us, 3), "charged_work_us_per_frame": round(totals.charged_us / frames, 4),
-            "first_touch_us": first_touch, "first_touch_us_per_frame": first_touch_frame, "outcome_charged_us": outcome, "outcome_charged_us_per_frame": outcome_frame,
-            "presized_us": (totals.outcomes[vm::REHASHED] > 0).then(|| round(totals.presized_us, 3)),
-            "extra_work_us": round(totals.extra_us, 3), "extra_work_us_per_frame": round(totals.extra_us / frames, 4), "within_noise": totals.within_noise, "unpriced": totals.unpriced,
-            "hits": hits, "misses": misses, "slow": slow, "other": other,
-        })
+        CacheKindJson {
+            charged_work_us: round(totals.charged_us, 3),
+            charged_work_us_per_frame: round(totals.charged_us / frames, 4),
+            extra_work_us: round(totals.extra_us, 3),
+            extra_work_us_per_frame: round(totals.extra_us / frames, 4),
+            first_touch_us: first_touch,
+            first_touch_us_per_frame: first_touch_frame,
+            hits,
+            kind: vm::CACHE_KINDS[kind],
+            lookups: lookups(&totals.outcomes),
+            misses,
+            other,
+            outcome_charged_us: outcome,
+            outcome_charged_us_per_frame: outcome_frame,
+            outcomes: outcomes_map(&totals.outcomes),
+            presized_us: (totals.outcomes[vm::REHASHED] > 0).then(|| round(totals.presized_us, 3)),
+            slow,
+            unpriced: totals.unpriced,
+            within_noise: totals.within_noise,
+        }
     };
-    json["luau_caches"] = json!({
-        "scope": scope_names,
-        "frames": frames,
-        "outcomes": vm::CACHE_OUTCOME_NAMES,
-        "outcome_info": Json::Object(OUTCOME_INFO.iter().map(|(name, meaning, advice)| (name.to_string(), json!({"meaning": meaning, "advice": advice}))).collect()),
-        "prices": crate::profiler::prices::json(scale),
-        "about": "charged_work_us: the work clock's own charge at a site past its dispatch, part of its function's work (claim it from there), split exactly into first_touch_us (the first touch in a frame of the table the site reaches: its operand's, the environment's for a global; any change to the site still pays it) and outcome_charged_us (the rest: what its outcomes cost the clock); presized_us, at a site whose inserts rehashed: what allocating those tables' storage at the size each rehash made, up front, would have charged beyond the storage they had (a presized constructor's or table.create's cost in their place, at the clock's price for storage), so outcome_charged_us - presized_us is what building them presized saves; extra_work_us: what the outcomes the clock does not charge cost over hits at the committed prices, beyond the clock's work (within_noise counts the outcomes whose prices are within the noise, left out of it)",
-        "by_kind": by_kind.iter().enumerate().filter(|(_, totals)| totals.outcomes.iter().any(|n| *n > 0)).map(|(kind, totals)| kind_json(kind, totals)).collect::<Vec<_>>(),
-        "tool": {
-            "about": "ree's own code (a harness one of ree's tools ran, rur.record), left out of by_kind and sites",
-            "sites": tool_sites,
-            "by_kind": tool_kinds.iter().enumerate().filter(|(_, totals)| totals.outcomes.iter().any(|n| *n > 0)).map(|(kind, totals)| kind_json(kind, totals)).collect::<Vec<_>>(),
-        },
-        "sites": sites.iter().map(|row| {
-            let (function, site) = (row.function, &row.site);
-            let f = &vm_results.functions[function as usize];
-            let (hits, misses, slow, other) = legacy(&site.outcomes);
-            let rehashes = site.outcomes[vm::REHASHED] > 0;
-            let (mut charged, mut first_touch, mut outcome) = split(row.charged_us, site.first_touch * 1e6, 4);
-            let (mut presized, mut extra) = (round(site.presized * 1e6, 4), round(row.extra.uncharged_us, 4));
-            let (charged_frame, first_touch_frame, outcome_frame) = split(row.charged_us / frames, site.first_touch * 1e6 / frames, 5);
-            // (each call-tree node's part, rounded as the site's figures are; the site's figures their sums)
-            let nodes: Vec<Json> = row
-                .nodes
-                .iter()
-                .map(|(node, at, at_extra)| {
-                    let (c, ft, oc) = split(at.charged * 1e6, at.first_touch * 1e6, 4);
-                    json!({
-                        "node": node, "outcomes": outcomes_json(&at.outcomes),
-                        "charged_work_us": c, "first_touch_us": ft, "outcome_charged_us": oc,
-                        "presized_us": rehashes.then(|| round(at.presized * 1e6, 4)),
-                        "extra_work_us": round(at_extra.uncharged_us, 4), "within_noise": at_extra.within_noise, "unpriced": at_extra.unpriced,
+    report.luau_caches = Some(LuauCachesJson {
+        about: "charged_work_us: the work clock's own charge at a site past its dispatch, part of its function's work (claim it from there), split exactly into first_touch_us (the first touch in a frame of the table the site reaches: its operand's, the environment's for a global; any change to the site still pays it) and outcome_charged_us (the rest: what its outcomes cost the clock); presized_us, at a site whose inserts rehashed: what allocating those tables' storage at the size each rehash made, up front, would have charged beyond the storage they had (a presized constructor's or table.create's cost in their place, at the clock's price for storage), so outcome_charged_us - presized_us is what building them presized saves; extra_work_us: what the outcomes the clock does not charge cost over hits at the committed prices, beyond the clock's work (within_noise counts the outcomes whose prices are within the noise, left out of it)",
+        by_kind: by_kind.iter().enumerate().filter(|(_, totals)| totals.outcomes.iter().any(|n| *n > 0)).map(|(kind, totals)| kind_json(kind, totals)).collect(),
+        frames,
+        outcome_info: OUTCOME_INFO.iter().map(|&(name, meaning, advice)| (name, OutcomeInfoJson { advice, meaning })).collect(),
+        outcomes: vm::CACHE_OUTCOME_NAMES,
+        prices: crate::profiler::prices::json(scale),
+        scope: scope_names,
+        sites: sites
+            .iter()
+            .map(|row| {
+                let (function, site) = (row.function, &row.site);
+                let f = &vm_results.functions[function as usize];
+                let (hits, misses, slow, other) = legacy(&site.outcomes);
+                let rehashes = site.outcomes[vm::REHASHED] > 0;
+                let (mut charged, mut first_touch, mut outcome) = split(row.charged_us, site.first_touch * 1e6, 4);
+                let (mut presized, mut extra) = (round(site.presized * 1e6, 4), round(row.extra.uncharged_us, 4));
+                let (charged_frame, first_touch_frame, outcome_frame) = split(row.charged_us / frames, site.first_touch * 1e6 / frames, 5);
+                // (each call-tree node's part, rounded as the site's figures are; the site's figures their sums)
+                let nodes: Vec<CacheNodeJson> = row
+                    .nodes
+                    .iter()
+                    .map(|(node, at, at_extra)| {
+                        let (c, ft, oc) = split(at.charged * 1e6, at.first_touch * 1e6, 4);
+                        CacheNodeJson {
+                            charged_work_us: c,
+                            extra_work_us: round(at_extra.uncharged_us, 4),
+                            first_touch_us: ft,
+                            node: *node,
+                            outcome_charged_us: oc,
+                            outcomes: outcomes_map(&at.outcomes),
+                            presized_us: rehashes.then(|| round(at.presized * 1e6, 4)),
+                            unpriced: at_extra.unpriced,
+                            within_noise: at_extra.within_noise,
+                        }
                     })
-                })
-                .collect();
-            if !nodes.is_empty() {
-                let sum = |field: &str| round(nodes.iter().map(|node| node[field].as_f64().unwrap_or(0.0)).sum::<f64>(), 4);
-                (charged, first_touch, outcome, presized, extra) = (sum("charged_work_us"), sum("first_touch_us"), sum("outcome_charged_us"), sum("presized_us"), sum("extra_work_us"));
-            }
-            json!({
-                "function": function, "line": f.lines.get(site.pc).copied().unwrap_or(0), "pc": site.pc, "op": vm::opcode_name(site.op),
-                "key": (!site.key.is_empty()).then_some(site.key.as_str()), "harness": harness_site(function),
-                "kind": row.kind.map(|kind| vm::CACHE_KINDS[kind]), "outcomes": outcomes_json(&site.outcomes),
-                "depth": Json::Object(site.depths.iter().enumerate().filter(|(_, n)| **n > 0).map(|(d, n)| (if d + 1 == vm::CACHE_DEPTHS { format!("{}+", d + 1) } else { (d + 1).to_string() }, json!(n))).collect()),
-                "handlers": Json::Object(site.handlers.iter().map(|(name, count)| (name.clone(), json!(count))).collect()),
-                "charged_work_us": charged, "charged_work_us_per_frame": charged_frame,
-                "first_touch_us": first_touch, "first_touch_us_per_frame": first_touch_frame, "outcome_charged_us": outcome, "outcome_charged_us_per_frame": outcome_frame,
-                "presized_us": rehashes.then_some(presized), "presized_us_per_frame": rehashes.then(|| round(site.presized * 1e6 / frames, 5)),
-                "extra_work_us": extra, "extra_work_us_per_frame": round(row.extra.uncharged_us / frames, 5),
-                "within_noise": row.extra.within_noise, "unpriced": row.extra.unpriced,
-                "hits": hits, "misses": misses, "slow": slow, "other": other,
-                "nodes": (!nodes.is_empty()).then_some(nodes),
+                    .collect();
+                if !nodes.is_empty() {
+                    charged = round(nodes.iter().map(|n| n.charged_work_us).sum::<f64>(), 4);
+                    first_touch = round(nodes.iter().map(|n| n.first_touch_us).sum::<f64>(), 4);
+                    outcome = round(nodes.iter().map(|n| n.outcome_charged_us).sum::<f64>(), 4);
+                    presized = round(nodes.iter().map(|n| n.presized_us.unwrap_or(0.0)).sum::<f64>(), 4);
+                    extra = round(nodes.iter().map(|n| n.extra_work_us).sum::<f64>(), 4);
+                }
+                CacheSiteJson {
+                    charged_work_us: charged,
+                    charged_work_us_per_frame: charged_frame,
+                    depth: site
+                        .depths
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, n)| **n > 0)
+                        .map(|(d, &n)| (if d + 1 == vm::CACHE_DEPTHS { format!("{}+", d + 1) } else { (d + 1).to_string() }, n))
+                        .collect(),
+                    extra_work_us: extra,
+                    extra_work_us_per_frame: round(row.extra.uncharged_us / frames, 5),
+                    first_touch_us: first_touch,
+                    first_touch_us_per_frame: first_touch_frame,
+                    function,
+                    handlers: site.handlers.iter().map(|(name, count)| (name.clone(), *count)).collect(),
+                    harness: harness_site(function),
+                    hits,
+                    key: (!site.key.is_empty()).then(|| site.key.clone()),
+                    kind: row.kind.map(|kind| vm::CACHE_KINDS[kind]),
+                    line: f.lines.get(site.pc).copied().unwrap_or(0),
+                    misses,
+                    nodes: (!nodes.is_empty()).then_some(nodes),
+                    op: vm::opcode_name(site.op),
+                    other,
+                    outcome_charged_us: outcome,
+                    outcome_charged_us_per_frame: outcome_frame,
+                    outcomes: outcomes_map(&site.outcomes),
+                    pc: site.pc,
+                    presized_us: rehashes.then_some(presized),
+                    presized_us_per_frame: rehashes.then(|| round(site.presized * 1e6 / frames, 5)),
+                    slow,
+                    unpriced: row.extra.unpriced,
+                    within_noise: row.extra.within_noise,
+                }
             })
-        }).collect::<Vec<_>>(),
+            .collect(),
+        tool: CacheToolJson {
+            about: "ree's own code (a harness one of ree's tools ran, rur.record), left out of by_kind and sites",
+            by_kind: tool_kinds.iter().enumerate().filter(|(_, totals)| totals.outcomes.iter().any(|n| *n > 0)).map(|(kind, totals)| kind_json(kind, totals)).collect(),
+            sites: tool_sites,
+        },
     });
 
     // builtin calls in the reported phases: per builtin, the calls its fast path served, the declined ones by reason, what the
@@ -2561,87 +4327,149 @@ builtin calls (the compiler's fast calls), {scope_label}: {} calls, {} served by
         let (calls, fast): (u64, u64) = tool_rows.iter().fold((0, 0), |(calls, fast), (_, b)| (calls + b.all.fast + declined(b), fast + b.all.fast));
         let _ = writeln!(summary, "ree's own code's builtin calls: {} calls, {} served by the fast path: left out of the table above", group_digits(calls), group_digits(fast));
     }
-    let declines_json = |declines: &[u64; vm::DECLINES]| -> Json { Json::Object(vm::DECLINE_NAMES.iter().zip(declines).map(|(name, count)| (name.to_string(), json!(count))).collect()) };
-    json["builtins"] = Json::Array(
+    let declines_map = |declines: &[u64; vm::DECLINES]| -> BTreeMap<&'static str, u64> { vm::DECLINE_NAMES.iter().copied().zip(declines.iter().copied()).collect() };
+    report.builtins = Some(Some(
         rows.iter()
             .map(|(id, b)| {
                 let name = name_of(*id);
                 let n = declined(b);
-                json!({
-                    "name": name, "id": id, "calls": b.all.fast + n, "fast": b.all.fast, "declines": declines_json(&b.all.declines),
+                BuiltinJson {
+                    advice: b.all.declines.iter().enumerate().filter(|(_, n)| **n > 0).filter_map(|(reason, _)| builtin_advice(&name, reason).map(|advice| (vm::DECLINE_NAMES[reason], advice))).collect(),
+                    calls: b.all.fast + n,
                     // (the work clock's own charge for the declines: part of their functions' work, claimed from there; and what the
                     // fast path would charge the same calls, which a fix still pays)
-                    "decline_charged_us": round(charged(b) * 1e6, 4), "decline_charged_us_per_frame": round(charged(b) * 1e6 / frames, 5),
-                    "decline_charged_ns": (n > 0).then(|| round(charged(b) * 1e9 / n as f64, 3)),
-                    "fast_equivalent_us": round(b.all.fast_equivalent * 1e6, 4), "fast_equivalent_us_per_frame": round(b.all.fast_equivalent * 1e6 / frames, 5),
-                    "fast_equivalent_ns": (n > 0).then(|| round(b.all.fast_equivalent * 1e9 / n as f64, 3)),
-                    "advice": Json::Object(b.all.declines.iter().enumerate().filter(|(_, n)| **n > 0).filter_map(|(reason, _)| builtin_advice(&name, reason).map(|advice| (vm::DECLINE_NAMES[reason].to_string(), json!(advice)))).collect()),
-                    "sites": b.sites.iter().map(|(&(function, pc), at)| {
-                        let f = &vm_results.functions[function as usize];
-                        let (mut charged, mut fast_equivalent) = (round(at.charged * 1e6, 4), round(at.fast_equivalent * 1e6, 4));
-                        // (a site that declined, apart by call-tree node: its figures their rounded sums, so they add up exactly)
-                        let nodes: Vec<Json> = if at.declined() > 0 || at.charged > 0.0 {
-                            b.nodes.get(&(function, pc)).into_iter().flatten().map(|(node, calls)| json!({
-                                "node": node, "calls": calls.fast + calls.declined(), "fast": calls.fast, "declines": declines_json(&calls.declines),
-                                "decline_charged_us": round(calls.charged * 1e6, 4), "fast_equivalent_us": round(calls.fast_equivalent * 1e6, 4),
-                            })).collect()
-                        } else {
-                            Vec::new()
-                        };
-                        if !nodes.is_empty() {
-                            let sum = |field: &str| round(nodes.iter().map(|node| node[field].as_f64().unwrap_or(0.0)).sum::<f64>(), 4);
-                            (charged, fast_equivalent) = (sum("decline_charged_us"), sum("fast_equivalent_us"));
-                        }
-                        json!({
-                            "fallback_end_pc": fallback_end_pc(f, pc),
-                            "function": function, "line": f.lines.get(pc).copied().unwrap_or(0), "pc": pc, "calls": at.fast + at.declined(), "fast": at.fast,
-                            "declines": declines_json(&at.declines), "decline_charged_us": charged, "fast_equivalent_us": fast_equivalent,
-                            "nodes": (!nodes.is_empty()).then_some(nodes),
+                    decline_charged_ns: (n > 0).then(|| round(charged(b) * 1e9 / n as f64, 3)),
+                    decline_charged_us: round(charged(b) * 1e6, 4),
+                    decline_charged_us_per_frame: round(charged(b) * 1e6 / frames, 5),
+                    declines: declines_map(&b.all.declines),
+                    fast: b.all.fast,
+                    fast_equivalent_ns: (n > 0).then(|| round(b.all.fast_equivalent * 1e9 / n as f64, 3)),
+                    fast_equivalent_us: round(b.all.fast_equivalent * 1e6, 4),
+                    fast_equivalent_us_per_frame: round(b.all.fast_equivalent * 1e6 / frames, 5),
+                    id: *id,
+                    name,
+                    sites: b
+                        .sites
+                        .iter()
+                        .map(|(&(function, pc), at)| {
+                            let f = &vm_results.functions[function as usize];
+                            let (mut charged, mut fast_equivalent) = (round(at.charged * 1e6, 4), round(at.fast_equivalent * 1e6, 4));
+                            // (a site that declined, apart by call-tree node: its figures their rounded sums, so they add up exactly)
+                            let nodes: Vec<BuiltinNodeJson> = if at.declined() > 0 || at.charged > 0.0 {
+                                b.nodes
+                                    .get(&(function, pc))
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|(&node, calls)| BuiltinNodeJson {
+                                        calls: calls.fast + calls.declined(),
+                                        decline_charged_us: round(calls.charged * 1e6, 4),
+                                        declines: declines_map(&calls.declines),
+                                        fast: calls.fast,
+                                        fast_equivalent_us: round(calls.fast_equivalent * 1e6, 4),
+                                        fix_instructions_us: None,
+                                        node,
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            if !nodes.is_empty() {
+                                charged = round(nodes.iter().map(|n| n.decline_charged_us).sum::<f64>(), 4);
+                                fast_equivalent = round(nodes.iter().map(|n| n.fast_equivalent_us).sum::<f64>(), 4);
+                            }
+                            BuiltinSiteJson {
+                                calls: at.fast + at.declined(),
+                                decline_charged_us: charged,
+                                declines: declines_map(&at.declines),
+                                fallback_end_pc: fallback_end_pc(f, pc),
+                                fast: at.fast,
+                                fast_equivalent_us: fast_equivalent,
+                                fix_cold_us: None,
+                                fix_cost_exact: None,
+                                fix_instructions_us: None,
+                                fix_unpriced: None,
+                                function,
+                                line: f.lines.get(pc).copied().unwrap_or(0),
+                                nodes: (!nodes.is_empty()).then_some(nodes),
+                                pc,
+                            }
                         })
-                    }).collect::<Vec<_>>(),
-                })
+                        .collect(),
+                }
             })
             .collect(),
+    ));
+    report.builtins_tool = Some(
+        tool_rows
+            .iter()
+            .map(|(id, b)| BuiltinToolJson { calls: b.all.fast + declined(b), declines: declines_map(&b.all.declines), fast: b.all.fast, id: *id, name: name_of(*id) })
+            .collect(),
     );
-    json["builtins_tool"] = Json::Array(tool_rows.iter().map(|(id, b)| json!({"name": name_of(*id), "id": id, "calls": b.all.fast + declined(b), "fast": b.all.fast, "declines": declines_json(&b.all.declines)})).collect());
 }
 
 /// A mark with its running counts (a phase's figures are the difference between two marks')
-fn mark_json(mark: &Mark) -> Json {
-    let mut json = json!({"phase": mark.phase, "frame": mark.frame, "seconds": mark.seconds, "work_ms": ms(mark.work), "host_ms": mark.host * 1e3, "cycles": mark.cycles});
+fn mark_json(mark: &Mark) -> MarkJson<'_> {
+    let mut out = MarkJson {
+        alloc_bytes: None,
+        allocs: None,
+        builtins: None,
+        cache_depths: None,
+        caches: None,
+        cold_ms: None,
+        collector_ms: None,
+        cycles: mark.cycles,
+        engine: mark.engine.as_ref().map(engine_map),
+        frame: mark.frame,
+        gc: None,
+        host_ms: mark.host * 1e3,
+        insns: None,
+        phase: &mark.phase,
+        rehash_keys: None,
+        rehashes: None,
+        script_rehash_keys: None,
+        script_rehashes: None,
+        seconds: mark.seconds,
+        vm: None,
+        work_ms: ms(mark.work),
+    };
     if let Some(totals) = &mark.totals {
-        json["insns"] = json!(totals.insns);
-        json["cold_ms"] = json!(ms(totals.cold));
-        json["collector_ms"] = json!(ms(totals.collector));
-        json["vm"] = json!({
-            "objects": totals.objects, "allocated": totals.allocated, "stored": totals.stored, "rehashed": totals.rehashed,
-            "cold_tables": totals.cold_tables, "cold_closures": totals.cold_closures, "cold_protos": totals.cold_protos, "cold_code": totals.cold_code,
-            "sort_compares": totals.sort_compares, "sort_calls": totals.sort_calls,
-            "buffer_fresh_bytes": totals.buffer_fresh, "buffer_big_bytes": totals.buffer_big,
+        out.insns = Some(totals.insns);
+        out.cold_ms = Some(ms(totals.cold));
+        out.collector_ms = Some(ms(totals.collector));
+        out.vm = Some(MarkVmJson {
+            allocated: totals.allocated,
+            buffer_big_bytes: totals.buffer_big,
+            buffer_fresh_bytes: totals.buffer_fresh,
+            cold_closures: totals.cold_closures,
+            cold_code: totals.cold_code,
+            cold_protos: totals.cold_protos,
+            cold_tables: totals.cold_tables,
+            objects: totals.objects,
+            rehashed: totals.rehashed,
+            sort_calls: totals.sort_calls,
+            sort_compares: totals.sort_compares,
+            stored: totals.stored,
         });
         if let (Some(bytes), Some(count)) = (totals.alloc_bytes, totals.allocs) {
-            json["alloc_bytes"] = json!(bytes);
-            json["allocs"] = json!(count);
+            out.alloc_bytes = Some(bytes);
+            out.allocs = Some(count);
         }
         if let Some((events, keys, script_events, script_keys)) = totals.rehashes {
-            json["rehashes"] = json!(events);
-            json["rehash_keys"] = json!(keys);
-            json["script_rehashes"] = json!(script_events);
-            json["script_rehash_keys"] = json!(script_keys);
+            out.rehashes = Some(events);
+            out.rehash_keys = Some(keys);
+            out.script_rehashes = Some(script_events);
+            out.script_rehash_keys = Some(script_keys);
         }
-        json["gc"] = json!({"steps": totals.gc.0, "cycles": totals.gc.1, "freed": totals.gc.2, "ms": ms(totals.gc.3)});
+        out.gc = Some(MarkGcJson { cycles: totals.gc.1, freed: totals.gc.2, ms: ms(totals.gc.3), steps: totals.gc.0 });
         if let Some(caches) = &totals.caches {
             // (each kind's outcomes in luau_caches.outcomes' order; the builtin calls served and declined by reason)
-            json["caches"] = Json::Object(vm::CACHE_KINDS.iter().zip(caches.kinds.iter()).map(|(kind, outcomes)| (kind.to_string(), json!(outcomes))).collect());
+            out.caches = Some(vm::CACHE_KINDS.iter().copied().zip(caches.kinds.iter().copied()).collect());
             // (each kind's metatable walks by depth: 1, 2, 3, 4 or more)
-            json["cache_depths"] = Json::Object(vm::CACHE_KINDS.iter().zip(caches.depths.iter()).map(|(kind, depths)| (kind.to_string(), json!(depths))).collect());
-            json["builtins"] = json!({"fast": caches.fast, "declines": Json::Object(vm::DECLINE_NAMES.iter().zip(caches.declines.iter()).map(|(name, count)| (name.to_string(), json!(count))).collect())});
+            out.cache_depths = Some(vm::CACHE_KINDS.iter().copied().zip(caches.depths.iter().copied()).collect());
+            out.builtins = Some(MarkBuiltinsJson { declines: vm::DECLINE_NAMES.iter().copied().zip(caches.declines.iter().copied()).collect(), fast: caches.fast });
         }
     }
-    if let Some(ops) = &mark.engine {
-        json["engine"] = engine_json(ops);
-    }
-    json
+    out
 }
 
 /// The reported phases' game code: its self work, and each kind's share of it (vm::SPLITS)
@@ -2767,7 +4595,7 @@ fn fidelity_components(total: f64, kinds: &[f64; vm::SPLITS], luau: f64, studio:
 /// client on rows no fit saw, cost.rs BENCH_BANDS, each with what it is), weighted by that code's work in each (`total`, its kinds
 /// `kinds` and its Luau part `luau`), with the work priced from Studio-era measurements and by borrowed prices at their own bands, and
 /// a phone's factor's measured spread folded into the band.
-fn fidelity_json(input: &Input, total: f64, kinds: &[f64; vm::SPLITS], luau: f64, what: &str) -> Json {
+fn fidelity_json<'a>(input: &Input<'a>, total: f64, kinds: &[f64; vm::SPLITS], luau: f64, what: &str) -> FidelityJson<'a> {
     let total = total.max(1e-12);
     let studio = kinds[vm::STUDIO].min(total);
     let defaulted = kinds[vm::DEFAULTED].min(total - studio);
@@ -2817,23 +4645,25 @@ fn fidelity_json(input: &Input, total: f64, kinds: &[f64; vm::SPLITS], luau: f64
         format!("desktop prices: {}", crate::cost::REFERENCE_CLIENT)
     };
 
-    let mut component_json = serde_json::Map::new();
+    let mut component_map = BTreeMap::new();
     for component in &components {
-        let row = json!({"share": round(component.share / weight, 4), "band": [component.low, component.high], "rows": component.rows, "basis": component.basis()});
-        component_json.insert(component.name.to_string(), row);
+        component_map.insert(
+            component.name,
+            FidelityComponentJson { band: [component.low, component.high], basis: component.basis(), rows: component.rows, share: round(component.share / weight, 4) },
+        );
     }
-    json!({
-        "text": text,
-        "band": [round(lo, 3), round(hi, 3)],
-        "clock_band": [round(clock_lo, 3), round(clock_hi, 3)],
-        "weighted": what,
-        "components": component_json,
-        "unmeasured_share": round(defaulted / total, 4),
-        "studio_share": round(studio / total, 4),
-        "device": {"name": device, "scale": price_scale(), "band": [device_lo, device_hi], "ratio_band": [round(ratio_lo, 3), round(ratio_hi, 3)]},
-        "prices": prices,
-        "reference": crate::cost::REFERENCE_CLIENT,
-    })
+    FidelityJson {
+        band: [round(lo, 3), round(hi, 3)],
+        clock_band: [round(clock_lo, 3), round(clock_hi, 3)],
+        components: component_map,
+        device: FidelityDeviceJson { band: [device_lo, device_hi], name: device, ratio_band: [round(ratio_lo, 3), round(ratio_hi, 3)], scale: price_scale() },
+        prices,
+        reference: crate::cost::REFERENCE_CLIENT,
+        studio_share: round(studio / total, 4),
+        text,
+        unmeasured_share: round(defaulted / total, 4),
+        weighted: what.to_string(),
+    }
 }
 
 /// The line of source the instruction `pc` of `function` is on
@@ -2851,10 +4681,10 @@ fn line_label(names: &Names, function: i32, pc: i32) -> String {
 }
 
 /// The five dearest instructions that paid cold charges, for profile.json
-fn payers_json(names: &Names, payers: &[vm::Payer]) -> Vec<Json> {
+fn payers_json(names: &Names, payers: &[vm::Payer]) -> Vec<ColdPayerJson> {
     let mut rows = Vec::new();
     for payer in payers.iter().take(5) {
-        rows.push(json!({"function": payer.function, "line": source_line(names, payer.function, payer.pc), "cost_ms": ms(payer.cost)}));
+        rows.push(ColdPayerJson { cost_ms: ms(payer.cost), function: payer.function, line: source_line(names, payer.function, payer.pc) });
     }
     rows
 }
@@ -2883,9 +4713,9 @@ fn sum_then_sort_cold_rows(rows: &mut [ColdRow]) -> f64 {
 /// The cold and first-use charges by object, from the VM's (tables, C and engine functions) and the engine's (instances, members,
 /// engine paths): the summary's table and profile.json's `cold`. How often other code shared each object in a frame shows what cutting
 /// its first payer would really save.
-fn cold_object_section(input: &Input, names: &Names, summary: &mut String, json: &mut Json, top: usize) {
+fn cold_object_section(input: &Input, names: &Names, summary: &mut String, report: &mut ProfileReport<'_>, top: usize) {
     let mut rows: Vec<ColdRow> = Vec::new();
-    let mut objects: Vec<Json> = Vec::new();
+    let mut objects: Vec<ColdObjectJson> = Vec::new();
     if let Some(vm_results) = input.vm {
         for object in &vm_results.cold_objects {
             let (kind, name) = match object.kind {
@@ -2896,20 +4726,28 @@ fn cold_object_section(input: &Input, names: &Names, summary: &mut String, json:
             };
             let first_payer = object.payers.first().map(|payer| line_label(names, payer.function, payer.pc)).unwrap_or_default();
             rows.push(ColdRow { cost: object.cost, kind: kind.to_string(), name: name.clone(), charges: object.frames, shared: object.shared_frames, first_payer });
-            objects.push(json!({
-                "kind": kind, "name": name, "cost_ms": ms(object.cost), "frames": object.frames, "shared_frames": object.shared_frames,
-                "payers": payers_json(names, &object.payers),
-            }));
+            objects.push(ColdObjectJson {
+                cost_ms: ms(object.cost),
+                frames: object.frames,
+                kind,
+                name,
+                payers: payers_json(names, &object.payers),
+                shared_frames: object.shared_frames,
+            });
         }
     }
     if let Some(attribution) = input.attribution {
         for object in &attribution.cold {
             let first_payer = object.payers.first().map(|payer| line_label(names, payer.function, payer.pc)).unwrap_or_default();
             rows.push(ColdRow { cost: object.cost, kind: object.kind.to_string(), name: object.name.clone(), charges: object.charges, shared: object.shared, first_payer });
-            objects.push(json!({
-                "kind": object.kind, "name": object.name, "cost_ms": ms(object.cost), "frames": object.charges, "shared_frames": object.shared,
-                "payers": payers_json(names, &object.payers),
-            }));
+            objects.push(ColdObjectJson {
+                cost_ms: ms(object.cost),
+                frames: object.charges,
+                kind: object.kind,
+                name: object.name.clone(),
+                payers: payers_json(names, &object.payers),
+                shared_frames: object.shared,
+            });
         }
     }
     if rows.is_empty() {
@@ -2934,13 +4772,13 @@ fn cold_object_section(input: &Input, names: &Names, summary: &mut String, json:
         let _ = writeln!(summary, "{:>9.3} {:>8} {:>7.0}%  {} {}  ({})", ms(row.cost), group_digits(row.charges), shared_percent, row.kind, row.name, row.first_payer);
     }
     // (the dearest first; equal costs keep their order of listing)
-    objects.sort_by(|a, b| b["cost_ms"].as_f64().unwrap_or(0.0).total_cmp(&a["cost_ms"].as_f64().unwrap_or(0.0)));
+    objects.sort_by(|a, b| b.cost_ms.total_cmp(&a.cost_ms));
     objects.truncate(500);
-    json["cold"] = json!({"total_ms": ms(run_cold), "objects_ms": ms(total), "objects": objects});
+    report.cold = Some(ColdSectionJson { objects, objects_ms: ms(total), total_ms: ms(run_cold) });
 }
 
 /// The handlers by the site that connected them: the engine's dispatch to each, and the runs' whole work
-fn handler_section(attribution: &attribution::Results, names: &Names, summary: &mut String, json: &mut Json, top: usize) {
+fn handler_section<'a>(attribution: &'a attribution::Results, names: &Names, summary: &mut String, report: &mut ProfileReport<'a>, top: usize) {
     if attribution.handlers.is_empty() {
         return;
     }
@@ -2958,18 +4796,23 @@ fn handler_section(attribution: &attribution::Results, names: &Names, summary: &
             line_label(names, site.function, site.pc)
         );
     }
-    let mut sites = Vec::new();
+    let mut sites = Vec::with_capacity(attribution.handlers.len());
     for site in &attribution.handlers {
-        sites.push(json!({
-            "signal": site.signal, "function": site.function, "line": source_line(names, site.function, site.pc),
-            "connections": site.connections, "runs": site.runs, "dispatch_ms": ms(site.dispatch), "work_ms": ms(site.work),
-        }));
+        sites.push(HandlerJson {
+            connections: site.connections,
+            dispatch_ms: ms(site.dispatch),
+            function: site.function,
+            line: source_line(names, site.function, site.pc),
+            runs: site.runs,
+            signal: &site.signal,
+            work_ms: ms(site.work),
+        });
     }
-    json["handlers"] = Json::Array(sites);
+    report.handlers = Some(sites);
 }
 
 /// The resumptions of parked threads, by the line each waited on
-fn resumption_section(attribution: &attribution::Results, names: &Names, summary: &mut String, json: &mut Json, top: usize) {
+fn resumption_section(attribution: &attribution::Results, names: &Names, summary: &mut String, report: &mut ProfileReport<'_>, top: usize) {
     if attribution.resumes.is_empty() {
         return;
     }
@@ -2979,11 +4822,11 @@ fn resumption_section(attribution: &attribution::Results, names: &Names, summary
     for site in attribution.resumes.iter().take(top.min(6)) {
         let _ = writeln!(summary, "{:>9.3} ms {:>8}  {}", ms(site.cost), group_digits(site.count), line_label(names, site.function, site.pc));
     }
-    let mut sites = Vec::new();
+    let mut sites = Vec::with_capacity(attribution.resumes.len());
     for site in &attribution.resumes {
-        sites.push(json!({"function": site.function, "line": source_line(names, site.function, site.pc), "count": site.count, "cost_ms": ms(site.cost)}));
+        sites.push(ResumptionJson { cost_ms: ms(site.cost), count: site.count, function: site.function, line: source_line(names, site.function, site.pc) });
     }
-    json["resumptions"] = Json::Array(sites);
+    report.resumptions = Some(sites);
 }
 
 /// Whether a line that read os.clock is a budget loop's check: it read the clock more than once a run of its function, and two of its
@@ -3000,7 +4843,7 @@ fn iteration_us(line: &attribution::ClockLine) -> Option<f64> {
 /// The lines that read os.clock more than once a run of their function (a call, or what is left of one after its thread yielded): a
 /// budget loop's check, whose work is set by the clock (on a frozen clock it does other work than a client's). A read after a yield
 /// starts a run, so a loop that waits each iteration is none.
-fn clock_section(attribution: &attribution::Results, names: &Names, summary: &mut String, json: &mut Json, top: usize) {
+fn clock_section(attribution: &attribution::Results, names: &Names, summary: &mut String, report: &mut ProfileReport<'_>, top: usize) {
     let budget_loops: Vec<&attribution::ClockLine> = attribution.clock_reads.iter().filter(|line| is_budget_loop(line)).collect();
     if !budget_loops.is_empty() {
         let _ = writeln!(
@@ -3021,35 +4864,40 @@ fn clock_section(attribution: &attribution::Results, names: &Names, summary: &mu
             );
         }
     }
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(attribution.clock_reads.len());
     for line in &attribution.clock_reads {
-        lines.push(json!({
-            "function": line.function, "line": source_line(names, line.function, line.pc),
-            "reads": line.reads, "frames": line.frames, "runs": line.runs, "iterations": line.intervals,
-            "iteration_us": iteration_us(line), "budget_loop": is_budget_loop(line),
-        }));
+        lines.push(ClockReadJson {
+            budget_loop: is_budget_loop(line),
+            frames: line.frames,
+            function: line.function,
+            iteration_us: iteration_us(line),
+            iterations: line.intervals,
+            line: source_line(names, line.function, line.pc),
+            reads: line.reads,
+            runs: line.runs,
+        });
     }
-    json["clock_reads"] = Json::Array(lines);
+    report.clock_reads = Some(lines);
 }
 
 /// The summary's and profile.json's attributions: the cold and first-use charges by object (the VM's: tables by the line that made them,
 /// C and engine functions; the engine's: instances by class, members, engine paths), with how often other code shared each in a frame;
 /// handlers by the site that connected them; resumptions by the line threads waited on; events priced by a borrowed price
-fn attribution_sections(input: &Input, names: &Names, summary: &mut String, json: &mut Json, top: usize) {
-    cold_object_section(input, names, summary, json, top);
+fn attribution_sections<'a>(input: &Input<'a>, names: &Names, summary: &mut String, report: &mut ProfileReport<'a>, top: usize) {
+    cold_object_section(input, names, summary, report, top);
     let Some(attribution) = input.attribution else { return };
-    handler_section(attribution, names, summary, json, top);
-    resumption_section(attribution, names, summary, json, top);
-    clock_section(attribution, names, summary, json, top);
+    handler_section(attribution, names, summary, report, top);
+    resumption_section(attribution, names, summary, report, top);
+    clock_section(attribution, names, summary, report, top);
     if attribution.unmeasured_fires > 0 {
         let _ = writeln!(summary, "events of kinds no bench measured fired {} times with handlers: each priced as a heard BindableEvent's (a borrowed price, in the defaulted share)", group_digits(attribution.unmeasured_fires));
-        json["unmeasured_fires"] = json!(attribution.unmeasured_fires);
+        report.unmeasured_fires = Some(attribution.unmeasured_fires);
     }
 }
 
 /// What the scripts asked the engine to do (cost::EngineOps), each count by name
-fn engine_json(ops: &crate::cost::EngineOps) -> Json {
-    Json::Object(ops.named().iter().map(|(name, count)| (name.to_string(), json!(count))).collect())
+fn engine_map(ops: &crate::cost::EngineOps) -> BTreeMap<&'static str, u64> {
+    ops.named().into_iter().collect()
 }
 
 /// The summary's line of what the scripts asked the engine to do in the reported phases: the instances made, destroyed and taken
@@ -3101,13 +4949,13 @@ fn engine_line(scope_label: &str, ops: &crate::cost::EngineOps) -> String {
 
 /// A distribution of a table part's size: its slots, those holding a value, the least, median and greatest part, and how
 /// many tables fall in each power-of-two bucket
-fn distribution_json(distribution: &memory::Distribution) -> Json {
-    json!({"slots": distribution.total, "used": distribution.used, "min": distribution.min, "median": distribution.median, "max": distribution.max, "hist": distribution.hist})
+fn distribution_json(distribution: &memory::Distribution) -> DistributionJson<'_> {
+    DistributionJson { hist: &distribution.hist, max: distribution.max, median: distribution.median, min: distribution.min, slots: distribution.total, used: distribution.used }
 }
 
 /// A distribution of nesting levels
-fn levels_json(distribution: &memory::Distribution) -> Json {
-    json!({"min": distribution.min, "median": distribution.median, "max": distribution.max, "hist": distribution.hist})
+fn levels_json(distribution: &memory::Distribution) -> LevelsJson<'_> {
+    LevelsJson { hist: &distribution.hist, max: distribution.max, median: distribution.median, min: distribution.min }
 }
 
 /// `1.23G`, `45.6M`, `789K` (whole numbers below ten thousand)
@@ -3133,23 +4981,32 @@ fn compact_signed(value: f64) -> String {
 /// counter (`counters.<name>.folded`), each stack weighted by what was counted while its call was the innermost sampled
 /// one (an estimate where calls were sampled; a stack whose estimate falls below zero cannot be in a folded file, so
 /// the summary lists those and profile.json says what the folded files left out)
-fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String, folded: &mut Vec<(String, Vec<(String, u64)>)>) -> Json {
+fn counters<'a>(input: &Input, hw: &'a hw::Report, names: &Names, summary: &mut String, folded: &mut Vec<(String, Vec<(String, u64)>)>) -> CountersJson<'a> {
     use hw::{Figures, counters as known};
     let n = hw.names.len();
-    let whole = |value: f64| -> Json { json!(value.round() as i64) };
-    let object = |counts: &Figures| -> Json { Json::Object(hw.names.iter().zip(counts).map(|(name, value)| (name.clone(), whole(*value))).collect()) };
-    let rates = |counts: &Figures| -> Json { Json::Object(hw::figures(&hw.names, counts).into_iter().map(|figure| (figure.key.to_string(), json!(round(figure.value, 6)))).collect()) };
+    let whole = |value: f64| -> i64 { value.round() as i64 };
+    let object = |counts: &Figures| -> BTreeMap<String, i64> { hw.names.iter().zip(counts).map(|(name, value)| (name.clone(), whole(*value))).collect() };
+    let rates = |counts: &Figures| -> BTreeMap<&'static str, f64> { hw::figures(&hw.names, counts).into_iter().map(|figure| (figure.key, round(figure.value, 6))).collect() };
     let figure = |counts: &Figures, key: &str| hw::figures(&hw.names, counts).into_iter().find(|figure| figure.key == key);
-    let mut out = json!({
-        "source": hw.source,
-        "names": hw.names,
-        "sources": hw.sources,
-        "about": hw.names.iter().map(|name| known::known(name).map(|known| known.about)).collect::<Vec<_>>(),
-        "amd": hw.names.iter().map(|name| known::known(name).and_then(|known| (!known.amd.is_empty()).then_some(known.amd))).collect::<Vec<_>>(),
-        "error": hw.error,
-        "notes": hw.notes,
-        "cut_short": hw.cut_short,
-    });
+    let mut out = CountersJson {
+        about: hw.names.iter().map(|name| known::known(name).map(|known| known.about)).collect(),
+        amd: hw.names.iter().map(|name| known::known(name).and_then(|known| (!known.amd.is_empty()).then_some(known.amd))).collect(),
+        attribution: None,
+        cut_short: hw.cut_short,
+        error: hw.error.as_deref(),
+        frames: None,
+        functions: None,
+        lines: None,
+        names: &hw.names,
+        notes: &hw.notes,
+        phases: None,
+        readings: None,
+        run: None,
+        source: &hw.source,
+        sources: &hw.sources,
+        threads: None,
+        trace: None,
+    };
     let _ = writeln!(summary);
     if let Some(error) = &hw.error {
         let _ = writeln!(summary, "hardware counters: not read: {error}");
@@ -3366,46 +5223,98 @@ fn counters(input: &Input, hw: &hw::Report, names: &Names, summary: &mut String,
 
     // (version 2: each call drawn on its own, a function's first calls all read and its short calls measured again, the
     // readings where threads switch; a profile without a version drew one call of each run of calls and read no switch)
-    out["attribution"] = json!({
-        "method": "calls", "version": ATTRIBUTION_VERSION,
-        "calls": hw.calls, "calls_booked_to_callers": hw.transparent_calls, "switch_readings": hw.switch_readings,
-        "functions": hw.sampled_functions, "unsampled_functions": hw.unsampled_functions,
-        "threshold_us": round(hw.threshold_us, 3), "min_sampled_us": hw::MIN_SAMPLED_US, "min_measured": hw::MIN_MEASURED, "readings_a_second": hw::READINGS_A_SECOND,
-        "readings_share_of_cycles": round(readings_share, 6),
-        "folded_left_out": Json::Object(hw.names.iter().zip(&left_out).map(|(name, (stacks, sum))| (name.clone(), json!({"stacks": stacks, "sum": sum.round() as i64}))).collect()),
+    out.attribution = Some(CounterAttributionJson {
+        calls: hw.calls,
+        calls_booked_to_callers: hw.transparent_calls,
+        folded_left_out: hw.names.iter().zip(&left_out).map(|(name, &(stacks, sum))| (name.clone(), FoldedLeftOutJson { stacks, sum: sum.round() as i64 })).collect(),
+        functions: hw.sampled_functions,
+        method: "calls",
+        min_measured: hw::MIN_MEASURED,
+        min_sampled_us: hw::MIN_SAMPLED_US,
+        readings_a_second: hw::READINGS_A_SECOND,
+        readings_share_of_cycles: round(readings_share, 6),
+        switch_readings: hw.switch_readings,
+        threshold_us: round(hw.threshold_us, 3),
+        unsampled_functions: hw.unsampled_functions,
+        version: ATTRIBUTION_VERSION,
     });
-    out["run"] = json!({"counts": object(&hw.run), "rates": rates(&hw.run), "seconds": hw.run_seconds});
-    out["readings"] = json!({"count": hw.readings, "matched": hw.matched, "calls": hw.calls, "own_counts": hw.per_reading.as_ref().map(|own| object(&own.map(|value| value as f64))), "own_us": round(hw.reading_us, 3), "taken_out": true});
-    out["trace"] = json!({"switches": hw.switches, "without_counters": hw.without_counters, "lost_events": hw.lost_events, "lost_buffers": hw.lost_buffers});
-    out["threads"] = Json::Array(hw.threads.iter().map(|thread| json!({"id": thread.id, "name": thread.name, "run_thread": thread.run_thread, "slices": thread.slices, "counts": object(&thread.counts)})).collect());
-    out["phases"] = Json::Array(hw.phases.iter().map(|(phase, counts)| json!({"phase": phase_name(*phase), "counts": object(counts), "rates": rates(counts)})).collect());
+    out.run = Some(CounterRunJson { counts: object(&hw.run), rates: rates(&hw.run), seconds: hw.run_seconds });
+    out.readings = Some(CounterReadingsJson {
+        calls: hw.calls,
+        count: hw.readings,
+        matched: hw.matched,
+        own_counts: hw.per_reading.as_ref().map(|own| object(&own.map(|value| value as f64))),
+        own_us: round(hw.reading_us, 3),
+        taken_out: true,
+    });
+    out.trace = Some(CounterTraceJson { lost_buffers: hw.lost_buffers, lost_events: hw.lost_events, switches: hw.switches, without_counters: hw.without_counters });
+    out.threads = Some(
+        hw.threads
+            .iter()
+            .map(|thread| CounterThreadJson { counts: object(&thread.counts), id: thread.id, name: thread.name.as_deref(), run_thread: thread.run_thread, slices: thread.slices })
+            .collect(),
+    );
+    out.phases = Some(hw.phases.iter().map(|(phase, counts)| CounterPhaseJson { counts: object(counts), phase: phase_name(*phase), rates: rates(counts) }).collect());
     // a row a frame: its counts, then the cost figures they allow
     let frame_figures: Vec<&str> = [known::LOAD_STALL_SHARE, known::STALL_PER_THOUSAND, known::MISS_LATENCY, "IPC"].into_iter().filter(|key| hw.frames.iter().any(|frame| figure(&frame.counts, key).is_some())).collect();
     let mut columns = vec!["frame".to_string(), "phase".to_string(), "host_ms".to_string()];
     columns.extend(hw.names.iter().cloned());
     columns.extend(frame_figures.iter().map(|key| key.to_string()));
-    out["frames"] = json!({
-        "columns": columns,
-        "rows": hw.frames.iter().map(|frame| {
-            let mut row = vec![json!(frame.frame), json!(frame.phase), json!(round(frame.host_ms, 4))];
-            row.extend(frame.counts[..n].iter().map(|value| whole(*value)));
-            row.extend(frame_figures.iter().map(|key| figure(&frame.counts, key).map_or(json!(0.0), |figure| json!(round(figure.value, 6)))));
-            Json::Array(row)
-        }).collect::<Vec<_>>(),
+    out.frames = Some(CounterFramesJson {
+        columns,
+        rows: hw
+            .frames
+            .iter()
+            .map(|frame| CounterFrameRow {
+                frame: frame.frame,
+                phase: frame.phase,
+                host_ms: round(frame.host_ms, 4),
+                counts: frame.counts[..n].iter().map(|value| whole(*value)).collect(),
+                figures: frame_figures.iter().map(|key| figure(&frame.counts, key).map_or(0.0, |figure| round(figure.value, 6))).collect(),
+            })
+            .collect(),
     });
-    out["functions"] = Json::Array(function_rows.iter().take(2000).map(|(id, (own, total))| {
-        let function = names.function(*id);
-        json!({
-            "id": id, "key": function_key(names, *id), "name": function.map_or_else(|| names.frame(*id), |f| f.name.clone()),
-            "module": function.map(|f| module_name(&f.source).to_string()), "line": function.map(|f| f.line), "kind": kind(*id),
-            "self": object(own), "total": object(total), "self_rates": rates(own), "total_rates": rates(total),
-        })
-    }).collect());
+    out.functions = Some(
+        function_rows
+            .iter()
+            .take(2000)
+            .map(|(id, (own, total))| {
+                let function = names.function(*id);
+                CounterFunctionJson {
+                    id: *id,
+                    key: function_key(names, *id),
+                    kind: kind(*id),
+                    line: function.map(|f| f.line),
+                    module: function.map(|f| module_name(&f.source).to_string()),
+                    name: function.map_or_else(|| names.frame(*id), |f| f.name.clone()),
+                    own: object(own),
+                    self_rates: rates(own),
+                    total: object(total),
+                    total_rates: rates(total),
+                }
+            })
+            .collect(),
+    );
     // (a line's own code is its function's: "self" is empty, "total" is what the calls made from it cost)
-    out["lines"] = Json::Array(line_rows.iter().take(2000).map(|((function, line), total)| {
-        let f = names.function(*function);
-        json!({"function": function, "name": f.map(|f| f.name.clone()), "module": f.map(|f| module_name(&f.source).to_string()), "line": line, "self": {}, "total": object(total), "total_rates": rates(total), "calls": true})
-    }).collect());
+    out.lines = Some(
+        line_rows
+            .iter()
+            .take(2000)
+            .map(|((function, line), total)| {
+                let f = names.function(*function);
+                CounterLineJson {
+                    calls: true,
+                    function: *function,
+                    line: *line,
+                    module: f.map(|f| module_name(&f.source).to_string()),
+                    name: f.map(|f| f.name.clone()),
+                    own: EmptyObject {},
+                    total: object(total),
+                    total_rates: rates(total),
+                }
+            })
+            .collect(),
+    );
     out
 }
 
@@ -3583,7 +5492,7 @@ fn fold_tree(vm: &vm::Results, names: &Names, phases: &[String]) -> (Vec<(String
 }
 
 /// speedscope's file format: shared frames, one sampled profile per folded file
-fn speedscope(files: &[(String, Vec<(String, u64)>)], name: &str) -> Json {
+fn speedscope<'a>(files: &'a [(String, Vec<(String, u64)>)], name: &str) -> SpeedscopeJson<'a> {
     let mut frames: Vec<String> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut profiles = Vec::new();
@@ -3610,16 +5519,24 @@ fn speedscope(files: &[(String, Vec<(String, u64)>)], name: &str) -> Json {
             weights.push(*weight);
         }
         let total: u64 = weights.iter().sum();
-        profiles.push(json!({"type": "sampled", "name": file.trim_end_matches(".folded"), "unit": unit, "startValue": 0, "endValue": total, "samples": samples, "weights": weights}));
+        profiles.push(SpeedscopeProfile {
+            endValue: total,
+            name: file.trim_end_matches(".folded"),
+            samples,
+            startValue: 0,
+            ty: "sampled",
+            unit,
+            weights,
+        });
     }
-    json!({
-        "$schema": "https://www.speedscope.app/file-format-schema.json",
-        "shared": {"frames": frames.iter().map(|frame| json!({"name": frame})).collect::<Vec<_>>()},
-        "profiles": profiles,
-        "name": format!("ree {name}"),
-        "activeProfileIndex": 0,
-        "exporter": "ree",
-    })
+    SpeedscopeJson {
+        schema: "https://www.speedscope.app/file-format-schema.json",
+        activeProfileIndex: 0,
+        exporter: "ree",
+        name: format!("ree {name}"),
+        profiles,
+        shared: SpeedscopeShared { frames: frames.into_iter().map(|name| SpeedscopeFrame { name }).collect() },
+    }
 }
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -3696,21 +5613,18 @@ fn whole_frame_work(rows: &[Row]) -> BTreeMap<u64, f64> {
 }
 
 /// The frames each function was active in, from the timeline's function summaries (stat: id, total, active, ...)
-fn active_frames_by_function(json: &Json) -> BTreeMap<i32, u64> {
+fn active_frames_by_function(timeline: Option<&TimelineJson>) -> BTreeMap<i32, u64> {
     let mut active = BTreeMap::new();
-    let Some(stats) = json["timeline"]["function_stats"].as_array() else { return active };
+    let Some(stats) = timeline.and_then(|t| t.function_stats.as_ref()) else { return active };
     for stat in stats {
-        if let (Some(function), Some(frames)) = (stat[0].as_i64(), stat[2].as_u64()) {
-            active.insert(function as i32, frames);
-        }
+        active.insert(stat.0, stat.2);
     }
     active
 }
 
 /// The calls a builtin site (or one context of it) had declined
-fn declined_calls(site: &Json) -> u64 {
-    let Some(counts) = site["declines"].as_object() else { return 0 };
-    counts.values().map(|count| count.as_u64().unwrap_or(0)).sum()
+fn declined_calls(declines: &BTreeMap<&'static str, u64>) -> u64 {
+    declines.values().sum()
 }
 
 /// What pricing one builtin site's fix found: the fix it belongs to and the cold code it adds
@@ -3741,37 +5655,37 @@ fn builtin_fix_adds_source_code(name: &str) -> bool {
 
 /// Writes a builtin site's fix costs into its JSON (`fix_instructions_us`, `fix_cold_us`, and `fix_unpriced` where one is
 /// unknown). None for a site the VM's results do not describe. `edits_seen` holds the edits already priced.
-fn price_builtin_site(vm_results: &vm::Results, name: &str, site: &mut Json, active_frames: &BTreeMap<i32, u64>, edits_seen: &mut BTreeSet<String>) -> Option<PricedSite> {
-    let (function, pc) = (site["function"].as_i64()?, site["pc"].as_u64()?);
-    let prototype = vm_results.functions.get(function as usize)?;
-    site["fix_cost_exact"] = json!(!builtin_fix_adds_source_code(name));
-    let op = (*prototype.code.get(pc as usize)? & 255) as u8;
-    let line = site["line"].as_i64().unwrap_or(0);
+fn price_builtin_site(vm_results: &vm::Results, name: &str, site: &mut BuiltinSiteJson, active_frames: &BTreeMap<i32, u64>, edits_seen: &mut BTreeSet<String>) -> Option<PricedSite> {
+    let (function, pc) = (site.function, site.pc);
+    let prototype = vm_results.functions.get(usize::try_from(function).ok()?)?;
+    site.fix_cost_exact = Some(!builtin_fix_adds_source_code(name));
+    let op = (*prototype.code.get(pc)? & 255) as u8;
+    let line = site.line;
     let fix = format!("builtin:{name}:{function}:{line}");
-    let calls = declined_calls(site);
-    let frames = active_frames.get(&(function as i32)).copied();
+    let calls = declined_calls(&site.declines);
+    let frames = active_frames.get(&function).copied();
     let extra_work = builtin_extra_work(name, op, calls);
     let cold_per_frame = if calls > 0 && edits_seen.insert(fix.clone()) { extra_work.and_then(|work| work.cold) } else { Some(0.0) };
 
     let mut instructions_us = extra_work.map(|work| work.instructions * 1e6);
-    if let Some(contexts) = site["nodes"].as_array_mut() {
+    if let Some(contexts) = site.nodes.as_mut() {
         // (each context pays for its own calls' instructions; the site's is their sum, unknown if any is)
         for context in contexts.iter_mut() {
-            let own = builtin_extra_work(name, op, declined_calls(context));
-            context["fix_instructions_us"] = own.map_or(Json::Null, |work| json!(work.instructions * 1e6));
+            let own = builtin_extra_work(name, op, declined_calls(&context.declines));
+            context.fix_instructions_us = Some(own.map(|work| work.instructions * 1e6));
         }
-        let per_context: Option<Vec<f64>> = contexts.iter().map(|context| context["fix_instructions_us"].as_f64()).collect();
+        let per_context: Option<Vec<f64>> = contexts.iter().map(|context| context.fix_instructions_us.flatten()).collect();
         instructions_us = per_context.map(|values| values.iter().sum());
     }
     let cold_is_known = cold_per_frame.is_some_and(|cold| cold == 0.0) || (cold_per_frame.is_some() && frames.is_some());
-    site["fix_instructions_us"] = instructions_us.map_or(Json::Null, |us| json!(us));
-    site["fix_cold_us"] = cold_per_frame.filter(|_| cold_is_known).map_or(Json::Null, |seconds| json!(seconds * frames.unwrap_or(0) as f64 * 1e6));
+    site.fix_instructions_us = Some(instructions_us);
+    site.fix_cold_us = Some(cold_per_frame.filter(|_| cold_is_known).map(|seconds| seconds * frames.unwrap_or(0) as f64 * 1e6));
     if extra_work.is_none() {
-        site["fix_unpriced"] = json!("the advised argument rewrite has no measured instruction cost");
+        site.fix_unpriced = Some("the advised argument rewrite has no measured instruction cost");
     } else if !cold_is_known {
-        site["fix_unpriced"] = json!("added cold-code work needs the replacement's executed instructions in each frame");
+        site.fix_unpriced = Some("added cold-code work needs the replacement's executed instructions in each frame");
     }
-    Some(PricedSite { function, fix, cold_per_frame })
+    Some(PricedSite { function: i64::from(function), fix, cold_per_frame })
 }
 
 /// Consecutive frame numbers as inclusive (first, last) ranges
@@ -3788,7 +5702,7 @@ fn frame_ranges(frames: impl IntoIterator<Item = u64>) -> Vec<(u64, u64)> {
 
 /// For every call-tree context of a function whose edit adds cold code, the frames it ran in as `[function, node, first
 /// frame, last frame, ...]`. A partial fix can remove one caller's frames: the cold code is kept only on the callers left.
-fn function_contexts(vm_results: &vm::Results, rows: &[Row], scope: &[u32], cold_functions: &BTreeSet<i32>) -> Json {
+fn function_contexts(vm_results: &vm::Results, rows: &[Row], scope: &[u32], cold_functions: &BTreeSet<i32>) -> Vec<FunctionContextRow> {
     let mut contexts = Vec::new();
     for (node, context) in vm_results.nodes.iter().enumerate() {
         if !cold_functions.contains(&context.function) {
@@ -3799,30 +5713,25 @@ fn function_contexts(vm_results: &vm::Results, rows: &[Row], scope: &[u32], cold
         if frames.is_empty() {
             continue;
         }
-        let mut cells = vec![json!(context.function), json!(node)];
-        for (first, last) in frame_ranges(frames) {
-            cells.extend([json!(first), json!(last)]);
-        }
-        contexts.push(Json::Array(cells));
+        contexts.push(FunctionContextRow { function: context.function, node, ranges: frame_ranges(frames) });
     }
-    Json::Array(contexts)
+    contexts
 }
 
 /// Prices the source-level replacement work of every builtin fix into the profile's JSON, apart from the VM's fast-path
 /// counterfactual. The prototype cost belongs to the site as a whole: dividing it between callers would turn an exact
 /// overlap into an estimate.
-fn price_builtin_fixes(vm_results: &vm::Results, rows: &[Row], scope: &[u32], fps: f64, json: &mut Json) {
-    let active_frames = active_frames_by_function(json);
+fn price_builtin_fixes(vm_results: &vm::Results, rows: &[Row], scope: &[u32], fps: f64, builtins: &mut Option<Option<Vec<BuiltinJson>>>, timeline: &mut Option<TimelineJson>) {
+    let active_frames = active_frames_by_function(timeline.as_ref());
     let whole = whole_frame_work(rows);
     let heavy_from_ms = frame_budget_ms(fps) * HEAVY_FRAME_SHARE;
     let mut replacement_frames = Vec::new();
     let mut cold_functions: BTreeSet<i32> = BTreeSet::new();
     let mut edits_seen: BTreeSet<String> = BTreeSet::new();
-    if let Some(builtins) = json["builtins"].as_array_mut() {
+    if let Some(builtins) = builtins.get_or_insert(None).as_mut() {
         for builtin in builtins {
-            let name = builtin["name"].as_str().unwrap_or("").to_string();
-            let Some(sites) = builtin["sites"].as_array_mut() else { continue };
-            for site in sites {
+            let name = builtin.name.clone();
+            for site in &mut builtin.sites {
                 let Some(priced) = price_builtin_site(vm_results, &name, site, &active_frames, &mut edits_seen) else { continue };
                 let Some(cold_seconds) = priced.cold_per_frame.filter(|cold| *cold > 0.0) else { continue };
                 cold_functions.insert(priced.function as i32);
@@ -3834,15 +5743,15 @@ fn price_builtin_fixes(vm_results: &vm::Results, rows: &[Row], scope: &[u32], fp
                         continue;
                     }
                     if whole[&row.frame] >= heavy_from_ms {
-                        replacement_frames.push(json!([index, priced.fix, cold_seconds * 1e6]));
+                        replacement_frames.push(ReplacementFrameRow(index, priced.fix.clone(), cold_seconds * 1e6));
                     }
                 }
             }
         }
     }
-    if json["timeline"].is_object() {
-        json["timeline"]["replacement_frames"] = Json::Array(replacement_frames);
-        json["timeline"]["function_contexts"] = function_contexts(vm_results, rows, scope, &cold_functions);
+    if let Some(timeline) = timeline.as_mut() {
+        timeline.replacement_frames = Some(replacement_frames);
+        timeline.function_contexts = Some(function_contexts(vm_results, rows, scope, &cold_functions));
     }
 }
 
@@ -3876,10 +5785,10 @@ type FrameSides = (f64, f64);
 /// number, and its largest contribution to a frame over the budget. It reads every physical frame of the reported
 /// phases, before the timeline drops detail, so what the viewer lists and how severe it grades never depends on which
 /// frames the timeline happened to keep.
-fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64, json: &mut Json) {
-    if !json["timeline"].is_object() {
+fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64, timeline: &mut Option<TimelineJson>) {
+    let Some(timeline) = timeline.as_mut() else {
         return;
-    }
+    };
     let sort_keys = sort_keys_by_node(vm);
     let mut contributions = FrameContributions::default();
     let mut frame_work: BTreeMap<u64, FrameSides> = BTreeMap::new();
@@ -3901,11 +5810,11 @@ fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64
 
     let mut summaries = Vec::with_capacity(keyed.len());
     for (key, mut frames) in keyed {
-        if let Some(summary) = summarize_frames(&key, &mut frames, &frame_work, harness_apart, budget) {
+        if let Some(summary) = summarize_frames(key, &mut frames, &frame_work, harness_apart, budget) {
             summaries.push(summary);
         }
     }
-    json["timeline"]["issue_stats"] = Json::Array(summaries);
+    timeline.issue_stats = Some(summaries);
 }
 
 /// For every call-tree node, the `(calling function, line)` pairs of the sorts it sits under. A node under a sort
@@ -3999,7 +5908,7 @@ fn site_issue_key(vm: &vm::Results, site: &super::SiteWork) -> Option<IssueKey> 
 
 /// One issue's summary row, `[key, active frames, largest us, that frame, largest us in a frame over the budget]`. None
 /// when it was never active
-fn summarize_frames(key: &str, frames: &mut Vec<(u64, f64)>, frame_work: &BTreeMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<Json> {
+fn summarize_frames(key: String, frames: &mut Vec<(u64, f64)>, frame_work: &BTreeMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<IssueStatRow> {
     if frames.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
         frames.sort_by_key(|&(frame, _)| frame);
         let mut write = 0usize;
@@ -4036,7 +5945,7 @@ fn summarize_frames(key: &str, frames: &mut Vec<(u64, f64)>, frame_work: &BTreeM
     if active_frames == 0 {
         return None;
     }
-    Some(json!([key, active_frames, largest_ms * 1000.0, largest_frame, largest_over_budget_ms * 1000.0]))
+    Some(IssueStatRow(key, active_frames, largest_ms * 1000.0, largest_frame, largest_over_budget_ms * 1000.0))
 }
 
 /// What the timeline keeps of a function over the reported phases (the summary the issue list reads)
@@ -4057,7 +5966,7 @@ struct FunctionFrames {
 /// Every function keeps sufficient statistics over the reported phases. Detailed nodes are needed only on heavy
 /// whole frames. Retention is by frame, never by part or by a function's mean, so a phase mark cannot hide an event.
 /// Returns the function summaries, the heavy frames' node work and their sites' savings, as the profile stores them.
-fn frame_evidence(rows: &[Row], scope: &[u32], fps: f64) -> (Json, Json, Json) {
+fn frame_evidence(rows: &[Row], scope: &[u32], fps: f64) -> (Vec<FunctionStatRow>, Vec<NodeFrameRow>, Vec<SiteFrameRow>) {
     let whole = whole_frame_work(rows);
     let mut by_function: FxHashMap<i32, FunctionFrames> = FxHashMap::default();
     for row in rows.iter().filter(|row| scope.contains(&row.phase)) {
@@ -4085,24 +5994,20 @@ fn frame_evidence(rows: &[Row], scope: &[u32], fps: f64) -> (Json, Json, Json) {
         if !is_heavy(row) {
             continue;
         }
-        let mut cells = vec![json!(index)];
-        for &(node, ms) in &row.nodes {
-            cells.extend([json!(node), json!(microseconds(ms))]);
-        }
-        heavy_rows.push(Json::Array(cells));
+        heavy_rows.push(NodeFrameRow { index, nodes: row.nodes.iter().map(|&(node, ms)| (node, microseconds(ms))).collect() });
     }
     for (index, row) in rows.iter().enumerate().filter(|(_, row)| is_heavy(row)) {
         for site in &row.sites {
-            site_frames.push(json!([index, site.kind, site.function, site.pc, site.node, microseconds(site.saving_ms)]));
+            site_frames.push(SiteFrameRow(index, site.kind, site.function, site.pc, site.node, microseconds(site.saving_ms)));
         }
     }
     let mut ordered: Vec<(i32, FunctionFrames)> = by_function.into_iter().collect();
     ordered.sort_by_key(|(id, _)| *id);
     let stats = ordered
         .into_iter()
-        .map(|(id, stat)| json!([id, microseconds(stat.total), stat.active, microseconds(stat.largest), stat.peak_frame]))
+        .map(|(id, stat)| FunctionStatRow(id, microseconds(stat.total), stat.active, microseconds(stat.largest), stat.peak_frame))
         .collect();
-    (Json::Array(stats), Json::Array(heavy_rows), Json::Array(site_frames))
+    (stats, heavy_rows, site_frames)
 }
 
 // The self-contained report page: the template with the profile's JSON in it
@@ -4115,6 +6020,8 @@ pub fn html(profile_json: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn op(name: &str) -> u32 {
@@ -4203,7 +6110,8 @@ mod tests {
         };
         let names = Names { vm: None, steps: Vec::new(), outside: Vec::new(), shorts: FxHashMap::default(), tool_harness: false };
         let mut summary = String::new();
-        let json = counters(&input, &hw, &names, &mut summary, &mut Vec::new());
+        let report = counters(&input, &hw, &names, &mut summary, &mut Vec::new());
+        let json: Json = serde_json::from_str(&JsonWriter::to_string(&report)).unwrap();
         assert_eq!(json["cut_short"], json!(12.345));
         assert!(summary.contains("WARNING: hardware-counter profile CUT SHORT after 12.345 s"), "{summary}");
     }
@@ -4211,7 +6119,30 @@ mod tests {
 
 #[cfg(test)]
 mod frame_tests {
+    use serde_json::json;
+
     use super::*;
+
+    fn to_json<T: WriteJson>(value: &T) -> Json {
+        let text = JsonWriter::to_string(value);
+        let parsed: Json = serde_json::from_str(&text).unwrap();
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), text, "serialized keys must be ASCII-sorted");
+        parsed
+    }
+
+    fn empty_timeline() -> Option<TimelineJson> {
+        Some(TimelineJson {
+            about: TimelineAboutJson::Compact { work_ms: "" },
+            columns: COMPACT_TIMELINE_COLUMNS,
+            function_contexts: None,
+            function_stats: None,
+            issue_stats: None,
+            node_frames: None,
+            replacement_frames: None,
+            rows: TimelineRowsJson::Compact(Vec::new()),
+            site_frames: None,
+        })
+    }
 
     #[test]
     fn issue_summaries_keep_small_sort_peaks_across_unrelated_retention_changes() {
@@ -4226,9 +6157,10 @@ mod frame_tests {
             let mut event = row(30, 1, 1.27 + other);
             event.functions = vec![(7, 1.27, false), (6, other, false)];
             event.nodes = vec![(2, 1.27)];
-            let mut json = json!({"timeline": {}});
-            write_issue_summaries(&vm, &[event], &[1], 60.0, &mut json);
-            let sort = json["timeline"]["issue_stats"].as_array().unwrap().iter().find(|stat| stat[0] == "sort:7:12").unwrap();
+            let mut timeline = empty_timeline();
+            write_issue_summaries(&vm, &[event], &[1], 60.0, &mut timeline);
+            let timeline_json = to_json(&timeline.unwrap());
+            let sort = timeline_json["issue_stats"].as_array().unwrap().iter().find(|stat| stat[0] == "sort:7:12").unwrap();
             assert_eq!(sort[1], 1);
             assert_eq!(sort[2], 1270.0);
             assert_eq!(sort[3], 30);
@@ -4252,20 +6184,21 @@ mod frame_tests {
         let event_ms = 0.30094479;
         let rows = vec![row(30, 1, event_ms)];
         let (stats, nodes, _) = frame_evidence(&rows, &[1], 120.0);
-        assert_eq!(stats, json!([stats_row(7, event_ms, 1, event_ms, 30)]));
-        assert_eq!(nodes, json!([]));
+        assert_eq!(to_json(&stats), json!([stats_row(7, event_ms, 1, event_ms, 30)]));
+        assert_eq!(to_json(&nodes), json!([]));
 
         // a frame a phase mark split in two: its parts are one active frame, and their work adds up
         let first_part_ms = 0.30365224;
         let second_part_ms = 0.30094479;
         let rows = vec![row(120, 1, first_part_ms), row(120, 2, second_part_ms)];
         let (stats, nodes, _) = frame_evidence(&rows, &[1, 2], 60.0);
+        let stats = to_json(&stats);
         let whole_frame_us = (first_part_ms + second_part_ms) * 1000.0;
         assert_eq!(stats[0][2], 1);
         assert!((stats[0][1].as_f64().unwrap() - whole_frame_us).abs() < 1e-9);
         assert!((stats[0][3].as_f64().unwrap() - whole_frame_us).abs() < 1e-9);
         assert_eq!(stats[0][4], 120);
-        assert_eq!(nodes, json!([]));
+        assert_eq!(to_json(&nodes), json!([]));
     }
 
     #[test]
@@ -4275,9 +6208,9 @@ mod frame_tests {
         let rows = vec![row(1, 1, 5.0), row(2, 1, 4.2), row(2, 2, 4.2)];
         // (a heavy row lists its index, then each node and its work in us)
         let (_, at_sixty, _) = frame_evidence(&rows, &[1, 2], 60.0);
-        assert_eq!(at_sixty, json!([[1, 3, 4200.0], [2, 3, 4200.0]]));
+        assert_eq!(to_json(&at_sixty), json!([[1, 3, 4200.0], [2, 3, 4200.0]]));
         let (_, at_one_twenty, _) = frame_evidence(&rows, &[1, 2], 120.0);
-        assert_eq!(at_one_twenty, json!([[0, 3, 5000.0], [1, 3, 4200.0], [2, 3, 4200.0]]));
+        assert_eq!(to_json(&at_one_twenty), json!([[0, 3, 5000.0], [1, 3, 4200.0], [2, 3, 4200.0]]));
     }
 
     #[test]
@@ -4286,7 +6219,7 @@ mod frame_tests {
         let saving_ms = 20.0;
         heavy.sites.push(super::super::SiteWork { kind: "builtin", function: 7, pc: 12, node: 3, saving_ms });
         let (_, _, sites) = frame_evidence(&[heavy], &[1], 60.0);
-        assert_eq!(sites, json!([[0, "builtin", 7, 12, 3, saving_ms * 1000.0]]));
+        assert_eq!(to_json(&sites), json!([[0, "builtin", 7, 12, 3, saving_ms * 1000.0]]));
     }
 
     #[test]
@@ -4305,13 +6238,14 @@ mod frame_tests {
         let largest_frame_us = 4_000.0 * scale;
         let part_us = 2_000.0 * scale;
         let site_saving_us = 800.0 * scale;
-        assert_eq!(stats, json!([[7, function_us, 2, largest_frame_us, 1]]));
-        assert_eq!(nodes, json!([[0, 3, part_us], [1, 3, part_us]]));
-        assert_eq!(sites, json!([[0, "cache", 7, 12, 3, site_saving_us]]));
+        assert_eq!(to_json(&stats), json!([[7, function_us, 2, largest_frame_us, 1]]));
+        assert_eq!(to_json(&nodes), json!([[0, 3, part_us], [1, 3, part_us]]));
+        assert_eq!(to_json(&sites), json!([[0, "cache", 7, 12, 3, site_saving_us]]));
 
-        let mut json = json!({"timeline": {}});
-        write_issue_summaries(&vm::Results::default(), &rows, &scope, fps, &mut json);
-        let issue_stats = json["timeline"]["issue_stats"].as_array().unwrap();
+        let mut timeline = empty_timeline();
+        write_issue_summaries(&vm::Results::default(), &rows, &scope, fps, &mut timeline);
+        let timeline_json = to_json(&timeline.unwrap());
+        let issue_stats = timeline_json["issue_stats"].as_array().unwrap();
         let function_issue = issue_stats.iter().find(|stat| stat[0] == "function:7").unwrap();
         assert_eq!(function_issue, &json!(["function:7", 2, largest_frame_us, 1, 0.0]));
         assert_eq!(row_sides_ms(&rows[0]), Some((2.0 * scale, 0.0)));
@@ -4358,29 +6292,54 @@ mod frame_tests {
         let mut parts = vec![row(1, 1, 10.0), row(1, 2, 10.0), row(2, 1, 1.0), row(3, 9, 12.0)];
         parts[1].nodes = vec![(second_context_node, 10.0)];
         let (stats, _, _) = frame_evidence(&parts, &[1, 2], 60.0);
-        let mut json: Json = serde_json::from_str(&format!(
-            r#"{{"timeline": {{}}, "builtins": [{{
-                "name": "string.sub", "sites": [{{"function": {function}, "pc": 0, "line": {line},
-                    "declines": {{"args": 1000}}, "decline_charged_us": 30, "fast_equivalent_us": 5,
-                    "nodes": [
-                        {{"node": {first_context_node}, "declines": {{"args": 600}}, "decline_charged_us": 10, "fast_equivalent_us": 2}},
-                        {{"node": {second_context_node}, "declines": {{"args": 400}}, "decline_charged_us": 20, "fast_equivalent_us": 3}}
-                    ]}}]
-            }}]}}"#
-        ))
-        .unwrap();
-        json["timeline"]["function_stats"] = stats;
-        price_builtin_fixes(&vm_results, &parts, &[1, 2], 60.0, &mut json);
-        let site = &json["builtins"][0]["sites"][0];
+        let mut timeline = empty_timeline();
+        timeline.as_mut().unwrap().function_stats = Some(stats);
+        let mut builtins = Some(Some(vec![BuiltinJson {
+            advice: BTreeMap::new(),
+            calls: 1000,
+            decline_charged_ns: None,
+            decline_charged_us: 30.0,
+            decline_charged_us_per_frame: 0.0,
+            declines: BTreeMap::from([("args", 1000)]),
+            fast: 0,
+            fast_equivalent_ns: None,
+            fast_equivalent_us: 5.0,
+            fast_equivalent_us_per_frame: 0.0,
+            id: builtin as i32,
+            name: "string.sub".into(),
+            sites: vec![BuiltinSiteJson {
+                calls: 1000,
+                decline_charged_us: 30.0,
+                declines: BTreeMap::from([("args", 1000)]),
+                fallback_end_pc: None,
+                fast: 0,
+                fast_equivalent_us: 5.0,
+                fix_cold_us: None,
+                fix_cost_exact: None,
+                fix_instructions_us: None,
+                fix_unpriced: None,
+                function: function as i32,
+                line,
+                nodes: Some(vec![
+                    BuiltinNodeJson { calls: 600, decline_charged_us: 10.0, declines: BTreeMap::from([("args", 600)]), fast: 0, fast_equivalent_us: 2.0, fix_instructions_us: None, node: first_context_node as i32 },
+                    BuiltinNodeJson { calls: 400, decline_charged_us: 20.0, declines: BTreeMap::from([("args", 400)]), fast: 0, fast_equivalent_us: 3.0, fix_instructions_us: None, node: second_context_node as i32 },
+                ]),
+                pc: 0,
+            }],
+        }]));
+        price_builtin_fixes(&vm_results, &parts, &[1, 2], 60.0, &mut builtins, &mut timeline);
+        let builtins_json = to_json(&builtins.unwrap().unwrap());
+        let timeline_json = to_json(&timeline.unwrap());
+        let site = &builtins_json[0]["sites"][0];
         // 1000 declined calls at the warm cost of a LENGTH and a LOADN each
         assert!((site["fix_instructions_us"].as_f64().unwrap() - 2.93).abs() < 1e-12);
         // Neither dead compiled copies nor the prototype's active frames establish which replacement PCs would run.
         assert_eq!(site["fix_cold_us"], Json::Null);
         assert!(site["fix_unpriced"].as_str().unwrap().contains("executed instructions"));
-        assert_eq!(site["fast_equivalent_us"], 5);
-        assert_eq!(site["nodes"][0]["fast_equivalent_us"], 2);
+        assert_eq!(site["fast_equivalent_us"], 5.0);
+        assert_eq!(site["nodes"][0]["fast_equivalent_us"], 2.0);
         // (a context is [function, node, first frame, last frame]: the frames the node ran in, in the reported phases)
-        assert_eq!(json["timeline"]["function_contexts"], json!([]));
-        assert_eq!(json["timeline"]["replacement_frames"], json!([]));
+        assert_eq!(timeline_json["function_contexts"], json!([]));
+        assert_eq!(timeline_json["replacement_frames"], json!([]));
     }
 }

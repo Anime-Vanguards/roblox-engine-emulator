@@ -12,7 +12,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde_json::{Value as Json, json};
+use serde_json::Value as Json;
+
+use super::json_writer::{JsonWriter, json_struct};
 
 fn load(dir: &Path) -> Result<Json, String> {
     let path = if dir.is_file() { dir.to_path_buf() } else { dir.join("profile.json") };
@@ -521,8 +523,131 @@ fn timeline_stats(profile: &Json) -> Option<(f64, f64, Option<f64>, f64)> {
     Some((mean(&work), max, host, heap_at_end))
 }
 
+// Serialized `diff.json` schema. Every struct declares its fields in strict ASCII ascending order
+// to match `serde_json::Map` (`BTreeMap`) output byte-for-byte without constructing intermediate
+// `serde_json::Value` trees.
+
+json_struct! {
+    struct CounterDiffRow<'a> {
+        after: f64,
+        after_cycles: f64,
+        before: f64,
+        before_cycles: f64,
+        counter: &'a str,
+        function: &'a str,
+        key: &'a str,
+    }
+}
+
+json_struct! {
+    struct CacheSideJson {
+        hits: f64,
+        lookups: f64,
+    }
+}
+
+json_struct! {
+    struct CacheDiffRow<'a> {
+        after: CacheSideJson,
+        before: CacheSideJson,
+        group: &'a str,
+        name: &'a str,
+    }
+}
+
+json_struct! {
+    struct TypeDiffRow<'a> {
+        after: f64,
+        before: f64,
+        group: &'a str,
+        #[rename = "type"]
+        ty: &'a str,
+    }
+}
+
+json_struct! {
+    struct FunctionSideJson {
+        alloc_bytes: f64,
+        calls: Option<f64>,
+        cold_work_ms: Option<f64>,
+        insns: Option<f64>,
+        self_work_ms: Option<f64>,
+        time_ms: Option<f64>,
+        total_work_ms: Option<f64>,
+    }
+}
+
+json_struct! {
+    struct FigureDiffRow<'a> {
+        after: f64,
+        before: f64,
+        exact: bool,
+        name: &'a str,
+        unit: &'a str,
+    }
+}
+
+json_struct! {
+    struct MovedSpan {
+        from: i64,
+        to: i64,
+    }
+}
+
+json_struct! {
+    struct FunctionDiffRow<'a> {
+        after: FunctionSideJson,
+        before: FunctionSideJson,
+        function: &'a str,
+        harness: bool,
+        moved: Option<MovedSpan>,
+        price_only: bool,
+        status: &'a str,
+    }
+}
+
+json_struct! {
+    struct LineSideJson {
+        alloc_bytes: f64,
+        insns: f64,
+        work_ms: f64,
+    }
+}
+
+json_struct! {
+    struct LineDiffRow<'a> {
+        after: LineSideJson,
+        before: LineSideJson,
+        line: i64,
+        module: &'a str,
+    }
+}
+
+json_struct! {
+    struct DiffReportJson<'a> {
+        caches: Vec<CacheDiffRow<'a>>,
+        changed_modules: &'a [&'a String],
+        counter_functions: Vec<CounterDiffRow<'a>>,
+        figures: Vec<FigureDiffRow<'a>>,
+        functions: Vec<FunctionDiffRow<'a>>,
+        lines: Vec<LineDiffRow<'a>>,
+        notes: &'a [String],
+        scope: Option<&'a [String]>,
+        summary: &'a str,
+        types: Vec<TypeDiffRow<'a>>,
+        version: u64,
+    }
+}
+
 /// Compares two profiles; the text (printed by the command) and the JSON
 pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
+    let (text, data) = compare_serialized(before, after, top);
+    let json = serde_json::from_str(&data).expect("valid diff json");
+    (text, json)
+}
+
+/// Compares two profiles; the text summary and compact serialized `diff.json`
+fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, String) {
     // (profiles of two versions: what changed meaning between them is left out, rather than read as a change)
     let versions = (before["version"].as_u64().unwrap_or(1), after["version"].as_u64().unwrap_or(1));
     let same_version = versions.0 == versions.1;
@@ -751,7 +876,7 @@ pub fn compare(before: &Json, after: &Json, top: usize) -> (String, Json) {
     }
 
     // the functions whose cycles stalled on loads moved most (the hardware counters' self counts, by function key)
-    let mut counter_rows: Vec<Json> = Vec::new();
+    let mut counter_rows: Vec<(String, String, &'static str, f64, f64, f64, f64)> = Vec::new();
     let (cfb, cfa) = (counter_functions(before), counter_functions(after));
     let stall_key = ["load-stall-cycles", "cycles"].into_iter().find(|name| cfb.values().chain(cfa.values()).any(|(_, counts)| counts.contains_key(*name)));
     if let Some(lead) = stall_key {
@@ -779,7 +904,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
                 } else {
                     let _ = writeln!(text, "{:>12} -> {:<12} {:>10}  {}", compact(*b), compact(*a), change(*b, *a), label);
                 }
-                counter_rows.push(json!({"function": label, "key": key, "counter": lead, "before": b, "after": a, "before_cycles": cb, "after_cycles": ca}));
+                counter_rows.push((label.to_string(), (*key).clone(), lead, *b, *a, *cb, *ca));
             }
         }
     }
@@ -827,7 +952,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
             })
             .collect()
     };
-    let mut cache_rows = Vec::new();
+    let mut cache_rows: Vec<(&'static str, String, f64, f64, f64, f64)> = Vec::new();
     let cache_groups: &[(&str, &str)] = if same_version { &[("Luau inline caches", "luau_caches"), ("ree's own caches (the emulator's)", "ree_caches")] } else { &[] };
     for &(title, path) in cache_groups {
         let (b, a) = (rates(before, path), rates(after, path));
@@ -845,7 +970,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
             }
             let rate = |hits: f64, lookups: f64| if lookups > 0.0 { hits / lookups * 100.0 } else { 0.0 };
             let _ = writeln!(text, "{:<22} {:>7.2} % -> {:<7.2} % {:>12} -> {:<12}", name, rate(bh, bl), rate(ah, al), bl as u64, al as u64);
-            cache_rows.push(json!({"group": title, "name": name, "before": {"hits": bh, "lookups": bl}, "after": {"hits": ah, "lookups": al}}));
+            cache_rows.push((title, name.clone(), bh, bl, ah, al));
         }
     }
 
@@ -857,7 +982,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
         }
         value.as_array().into_iter().flatten().map(|row| (row["type"].as_str().unwrap_or("?").to_string(), num(&row["bytes"]))).collect()
     };
-    let mut type_rows = Vec::new();
+    let mut type_rows: Vec<(&'static str, String, f64, f64)> = Vec::new();
     for (title, b, a) in [
         ("allocated by type", by_type(before, &["alloc", "by_type"]), by_type(after, &["alloc", "by_type"])),
         ("reachable at the end by type", last_snapshot(before).map(|s| by_type(s, &["by_type"])).unwrap_or_default(), last_snapshot(after).map(|s| by_type(s, &["by_type"])).unwrap_or_default()),
@@ -869,34 +994,60 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
             let _ = writeln!(text, "\n{title}");
             for (name, x, y) in moved.iter().take(top.min(12)) {
                 let _ = writeln!(text, "{:>12} -> {:<12} {:>10}  {}", bytes(*x), bytes(*y), change(*x, *y), name);
-                type_rows.push(json!({"group": title, "type": name, "before": x, "after": y}));
+                type_rows.push((title, (*name).clone(), *x, *y));
             }
         }
     }
 
     // a function's figures on one side: across versions only the allocations compare, the rest is null
-    let side_json = |f: &FunctionFigures| -> Json {
+    let side_json = |f: &FunctionFigures| -> FunctionSideJson {
         if !same_version {
-            return json!({"self_work_ms": null, "total_work_ms": null, "calls": null, "insns": null, "alloc_bytes": f.alloc, "time_ms": null, "cold_work_ms": null});
+            return FunctionSideJson { alloc_bytes: f.alloc, calls: None, cold_work_ms: None, insns: None, self_work_ms: None, time_ms: None, total_work_ms: None };
         }
-        json!({"self_work_ms": f.self_work, "total_work_ms": f.total_work, "calls": f.calls, "insns": f.insns, "alloc_bytes": f.alloc, "time_ms": f.time, "cold_work_ms": f.cold})
+        FunctionSideJson { alloc_bytes: f.alloc, calls: Some(f.calls), cold_work_ms: f.cold, insns: Some(f.insns), self_work_ms: Some(f.self_work), time_ms: Some(f.time), total_work_ms: Some(f.total_work) }
     };
-    let json = json!({
-        "version": 1,
-        "figures": figures.iter().map(|f| json!({"name": f.name, "before": f.before, "after": f.after, "unit": f.unit, "exact": f.exact})).collect::<Vec<_>>(),
-        "scope": scope,
-        "functions": rows.iter().take(500).map(|row| { let (b, a) = (&row.before, &row.after); json!({"function": row.label, "harness": row.harness, "status": row.status, "price_only": row.price_only,
-            "moved": row.moved.map(|(from, to)| json!({"from": from, "to": to})),
-            "before": side_json(b), "after": side_json(a)}) }).collect::<Vec<_>>(),
-        "lines": line_rows.iter().take(500).map(|((module, line), b, a)| json!({"module": module, "line": line, "before": {"work_ms": b.0, "insns": b.1, "alloc_bytes": b.2}, "after": {"work_ms": a.0, "insns": a.1, "alloc_bytes": a.2}})).collect::<Vec<_>>(),
-        "counter_functions": counter_rows,
-        "changed_modules": changed,
-        "notes": notes,
-        "caches": cache_rows,
-        "types": type_rows,
-        "summary": text,
-    });
-    (text, json)
+    let report = DiffReportJson {
+        caches: cache_rows
+            .iter()
+            .map(|(group, name, bh, bl, ah, al)| CacheDiffRow { after: CacheSideJson { hits: *ah, lookups: *al }, before: CacheSideJson { hits: *bh, lookups: *bl }, group, name })
+            .collect(),
+        changed_modules: &changed,
+        counter_functions: counter_rows
+            .iter()
+            .map(|(function, key, counter, b, a, cb, ca)| CounterDiffRow { after: *a, after_cycles: *ca, before: *b, before_cycles: *cb, counter, function, key })
+            .collect(),
+        figures: figures.iter().map(|f| FigureDiffRow { after: f.after, before: f.before, exact: f.exact, name: &f.name, unit: f.unit }).collect(),
+        functions: rows
+            .iter()
+            .take(500)
+            .map(|row| FunctionDiffRow {
+                after: side_json(&row.after),
+                before: side_json(&row.before),
+                function: &row.label,
+                harness: row.harness,
+                moved: row.moved.map(|(from, to)| MovedSpan { from, to }),
+                price_only: row.price_only,
+                status: row.status,
+            })
+            .collect(),
+        lines: line_rows
+            .iter()
+            .take(500)
+            .map(|((module, line), b, a)| LineDiffRow {
+                after: LineSideJson { alloc_bytes: a.2, insns: a.1, work_ms: a.0 },
+                before: LineSideJson { alloc_bytes: b.2, insns: b.1, work_ms: b.0 },
+                line: *line,
+                module,
+            })
+            .collect(),
+        notes: &notes,
+        scope: scope.as_deref(),
+        summary: &text,
+        types: type_rows.iter().map(|(group, ty, b, a)| TypeDiffRow { after: *a, before: *b, group, ty }).collect(),
+        version: 1,
+    };
+    let data = JsonWriter::to_string(&report);
+    (text, data)
 }
 
 /// The command: `ree profile diff <before> <after> [--out <dir>] [--top <n>]`; the exit code
@@ -957,11 +1108,10 @@ fn default_diff_out(after_dir: &str) -> PathBuf {
 /// Two profiles compared ([`compare`]) into `out`: diff.txt, diff.json and diff.html; the text, and whether the files were
 /// written
 pub fn write(before: &Json, after: &Json, top: usize, out: &Path) -> (String, Result<(), String>) {
-    let (text, json) = compare(before, after, top);
+    let (text, data) = compare_serialized(before, after, top);
     let written = (|| -> Result<(), String> {
         std::fs::create_dir_all(out).map_err(|error| format!("{}: {error}", out.display()))?;
         std::fs::write(out.join("diff.txt"), &text).map_err(|error| error.to_string())?;
-        let data = serde_json::to_string(&json).map_err(|error| error.to_string())?;
         std::fs::write(out.join("diff.json"), &data).map_err(|error| error.to_string())?;
         std::fs::write(out.join("diff.html"), html(&data)).map_err(|error| error.to_string())
     })();
@@ -1085,6 +1235,8 @@ const DIFF = /*DIFF_DATA*/null;
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     /// A profile of four functions in module Game: an anonymous handler at `handler`, `first` and `second` (whose work
@@ -1368,5 +1520,14 @@ mod tests {
         assert_eq!(row["before"]["alloc_bytes"], allocated_before as f64);
         assert_eq!(row["after"]["alloc_bytes"], allocated_after as f64);
         assert!(!text.contains("priced differently, same path"), "{text}");
+    }
+
+    #[test]
+    fn serialized_diff_json_matches_btreemap_key_order_byte_for_byte() {
+        let before = with_cold(profile(12, 0.9, 0.1, 100.0, ("a/run.luau", "h1"), 10.0), &[("first", 0.85), ("second", 0.05)]);
+        let after = with_cold(profile(15, 0.1, 0.9, 1000.0, ("b/run.luau", "h1"), 14.0), &[("first", 0.05), ("second", 0.85)]);
+        let (_, data) = compare_serialized(&before, &after, 20);
+        let roundtrip = serde_json::to_string(&serde_json::from_str::<Json>(&data).unwrap()).unwrap();
+        assert_eq!(data, roundtrip);
     }
 }

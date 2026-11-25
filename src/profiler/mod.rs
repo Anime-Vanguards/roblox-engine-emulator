@@ -41,6 +41,7 @@ pub mod caches;
 pub mod cpu;
 pub mod diff;
 pub mod hw;
+mod json_writer;
 pub mod memory;
 pub mod prices;
 pub mod report;
