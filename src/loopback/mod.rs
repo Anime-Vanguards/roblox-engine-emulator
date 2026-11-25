@@ -167,6 +167,7 @@ pub fn ready_client(client: &Engine) {
 pub fn link(server: Emulator, client_lua: &Lua, client: &Rc<Engine>, spec: Spec) -> Result<(), String> {
     let bridge = Rc::new(Bridge::new(spec.latency));
     bridge.record_server.set(spec.record_server);
+    *bridge.client.borrow_mut() = Rc::downgrade(client);
     for (lua, engine, side) in [(&*server.lua, &server.engine, Side::Server), (client_lua, client, Side::Client)] {
         let endpoint = Rc::new(Endpoint { side, bridge: bridge.clone(), remotes: Default::default(), lazy: Default::default() });
         *engine.loopback.borrow_mut() = Some(endpoint);

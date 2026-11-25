@@ -102,6 +102,9 @@ pub struct ModelAssets {
     /// The manifest's aliases of this mount not asked for yet: each key with the path of the model it copies ([`aliases_in`],
     /// [`requested`])
     aliases: FxHashMap<String, String>,
+    /// A loopback client's copies of the server's instances where bundles wait (the server's mount's, sent at the join or in a
+    /// tree): its server imports them when the client looks, and the copy takes what that made (src/loopback/lazy.rs)
+    remote: FxHashSet<InstanceId>,
 }
 
 fn folder(engine: &Engine, parent: InstanceId, name: &str) -> InstanceId {
@@ -161,7 +164,7 @@ pub fn mount(engine: &Engine, roots: &[String], chosen: &ModelAssetsOverride) {
             .collect();
         Decoding::start(files, reflection)
     });
-    engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: project.into(), pending, decoding, recent, scene, imported: Vec::new(), root: Some(parent), aliases };
+    engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: project.into(), pending, decoding, recent, scene, imported: Vec::new(), root: Some(parent), aliases, remote: FxHashSet::default() };
 }
 
 /// The folders of bundles `keys` below `parent` (as a game's installer makes a path's folders), with
@@ -227,6 +230,27 @@ impl ModelAssets {
     pub fn waits_at(&self, id: InstanceId) -> bool {
         self.pending.contains_key(&id)
     }
+
+    /// The instances where bundles wait to import
+    pub(crate) fn waiting(&self) -> impl Iterator<Item = InstanceId> + '_ {
+        self.pending.keys().copied()
+    }
+
+    /// A loopback client's copy `id` of a server instance where bundles wait: whether its server imports them when the client
+    /// looks ([`ModelAssets::remote`])
+    #[inline]
+    pub(crate) fn waits_remotely(&self, id: InstanceId) -> bool {
+        !self.remote.is_empty() && self.remote.contains(&id)
+    }
+
+    /// Notes whether bundles wait on a loopback client's server at the instance the client's `id` is a copy of
+    pub(crate) fn set_waits_remotely(&mut self, id: InstanceId, waits: bool) {
+        if waits {
+            self.remote.insert(id);
+        } else {
+            self.remote.remove(&id);
+        }
+    }
 }
 
 /// Before the children of `id` are looked at: the bundles waiting there import, the one `id` stands
@@ -244,6 +268,12 @@ pub fn reveal(engine: &Engine, id: InstanceId) {
 }
 
 fn import(engine: &Engine, id: InstanceId, own_only: bool) {
+    // (a loopback client's copy of a server instance where bundles wait: the server imports them, and the copy takes what that
+    // made)
+    if engine.state.borrow().project.model_assets.waits_remotely(id) {
+        crate::loopback::lazy::import_on_server(engine, id, own_only);
+        return;
+    }
     let (keys, mut source, project, decoding, shape) = {
         let mut state = engine.state.borrow_mut();
         let state = &mut *state;
@@ -299,6 +329,10 @@ fn import(engine: &Engine, id: InstanceId, own_only: bool) {
         }
     }
     engine.state.borrow_mut().project.model_assets.source = Some(source);
+    // (a loopback server's instance its client holds a copy of: the copy takes what the import made)
+    if engine.loopback.borrow().is_some() {
+        crate::loopback::lazy::bundle_imported(engine, id);
+    }
 }
 
 /// How a bundle's plan goes in at the instance it waits at.

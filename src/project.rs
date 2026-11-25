@@ -675,10 +675,10 @@ pub fn share_studio(server: &State, client: &mut State, client_game: InstanceId)
     client.project.hierarchy_path = server.project.hierarchy_path.clone();
 }
 
-/// Whether `id` waits to make instances only the server can (a lazily imported plan's, a bundle's: not the Studio
-/// snapshot's, which a loopback client makes itself)
-pub fn lazy_beyond_studio(state: &State, id: InstanceId) -> bool {
-    if state.dom.at(id).flags & (flags::LAZY_PENDING | flags::BUNDLE_ROOT | flags::LAZY_ABOVE) != 0 {
+/// Whether a manifest bundle waits to import at `id`: its placeholder ([`flags::BUNDLE_ROOT`]), or the instance a bundle's
+/// roots or a loose bundle's members go into (model_assets.rs). A loopback join leaves it so (loopback/lazy.rs).
+pub fn bundle_waits(state: &State, id: InstanceId) -> bool {
+    if state.dom.at(id).has(flags::BUNDLE_ROOT) {
         return true;
     }
     #[cfg(feature = "bundles")]

@@ -5,7 +5,14 @@
 //! instances. The two are paired when a message first names one: by the instance it was made under (paired itself, or
 //! paired the same way) and its node in the snapshot, the other side making that instance's Studio children first if it
 //! has not. A server instance made this way under a sent one is replicated (its changes go to the client) and counts as
-//! sent; one the client cannot make itself (a plan's or a bundle's) is sent as a script's new instance is.
+//! sent; one the client cannot make itself (a plan's) is sent as a script's new instance is.
+//!
+//! Manifest bundles (project::model_assets) stay lazy too, but only the server imports them (one source, one decode, one set
+//! of instances): the join copies a waiting bundle's placeholder (or the folder its members go into) as it is, and the
+//! client's copy notes that bundles wait for it. When the client finds, touches or looks inside the copy, the server's
+//! instance imports them ([`import_on_server`]); when either side's import ends, the client's copy takes what it made at
+//! once ([`bundle_imported`], replicate.rs `copy_import`), as the join would have copied it. A bundle nothing looked at is
+//! never fetched or made on either side.
 
 use std::rc::Rc;
 
@@ -64,6 +71,8 @@ pub fn materialized(engine: &Engine, id: InstanceId, before: usize) {
                     state.dom.at_mut(child).flags |= flags::REPLICATED | flags::SENT;
                 }
             }
+            // (a bundle's instance the client has a copy of already: copy_import sent it)
+            _ if server && state.dom.at(child).flags & flags::SENT != 0 => {}
             _ if server => {
                 // (a parent not sent yet takes it along; otherwise it goes as a new instance)
                 super::replicate::mark(&mut state, child, true, &[]);
@@ -117,6 +126,66 @@ fn pair_lazily(from: &Engine, from_end: &Endpoint, to: &Engine, to_end: &Endpoin
         Side::Server => ids.pair(made, id),
     }
     Some(made)
+}
+
+/// A loopback client's copy `id` of a server instance where manifest bundles wait (project::model_assets: the join's copy of
+/// a bundle's placeholder, or of the folder a bundle's roots or a loose one's members go into), about to be found, touched
+/// or looked inside: the server's instance imports them, as the client's look would in a plain run (`own_only`: the bundle
+/// it stands for, for a find or a touch; else the loose ones too, for a look inside), which gives the copy what the
+/// import made at once ([`bundle_imported`]); then the copy waits for what still waits there. The server makes nothing a
+/// script sees (a bundle is made as its scripts would find it), so a bundle nothing looked at is never fetched or made on
+/// either side.
+#[cfg(feature = "bundles")]
+pub fn import_on_server(client: &Engine, id: InstanceId, own_only: bool) {
+    let original = client.loopback().and_then(|endpoint| endpoint.bridge.ids.borrow().to_server.get(id));
+    let server = client.peer_server().map(|(_, server)| server);
+    match (original, server) {
+        (Some(original), Some(server)) if server.state.borrow().dom.get(original).is_some() => {
+            if own_only {
+                crate::project::model_assets::reveal(&server, original);
+            } else {
+                crate::project::model_assets::materialize(&server, original);
+            }
+            // (an import that made nothing gave the copy nothing: it takes the flag and the waiting the server's has now)
+            let (waits, placeholder) = {
+                let state = server.state.borrow();
+                (crate::project::bundle_waits(&state, original), state.dom.at(original).has(flags::BUNDLE_ROOT))
+            };
+            let mut state = client.state.borrow_mut();
+            state.project.model_assets.set_waits_remotely(id, waits);
+            if let Some(instance) = state.dom.get_mut(id)
+                && !placeholder
+            {
+                instance.set_flag(flags::BUNDLE_ROOT, false);
+            }
+        }
+        // (the server's instance is gone: nothing waits for the copy any more)
+        _ => {
+            let mut state = client.state.borrow_mut();
+            state.project.model_assets.set_waits_remotely(id, false);
+            if let Some(instance) = state.dom.get_mut(id) {
+                instance.set_flag(flags::BUNDLE_ROOT, false);
+            }
+        }
+    }
+}
+
+/// After a manifest bundle import at a loopback server's instance `id` (project::model_assets, whichever side looked): when
+/// its client holds a copy of it, the copy takes what the import made now (replicate.rs `copy_import`), so the client
+/// finds the bundle as the server made it, and the server's instances replicate from then on.
+#[cfg(feature = "bundles")]
+pub fn bundle_imported(server: &Engine, id: InstanceId) {
+    let Some(endpoint) = server.loopback() else { return };
+    if endpoint.side != Side::Server || server.state.borrow().dom.get(id).is_none_or(|instance| instance.flags & flags::SENT == 0) {
+        return;
+    }
+    let Some(client) = endpoint.bridge.client.borrow().upgrade() else { return };
+    let Some(client_end) = client.loopback() else { return };
+    let Some(copy) = to_client(&client, &client_end, id) else { return };
+    if client.state.borrow().dom.get(copy).is_none_or(|instance| instance.flags & flags::DESTROYED != 0) {
+        return;
+    }
+    crate::timing::time("loopback: a bundle's copy", || super::replicate::copy_import(server, &client, &endpoint.bridge, id, copy));
 }
 
 /// A client's message about to go: every instance it names that the client made of the snapshot is paired with the

@@ -63,6 +63,8 @@ pub struct Node {
     /// Its place in the Studio snapshot and whether its Studio children were made (lazy.rs): the client makes them itself
     pub studio: crate::dom::StudioNode,
     pub studio_flags: u16,
+    /// Bundles wait to import at it (project.rs `bundle_waits`): the server imports them when the client looks (lazy.rs)
+    pub waits: bool,
 }
 
 /// Messages sealed at the end of a sender's frame, delivered at the receiver's frame `due`.
@@ -210,6 +212,8 @@ pub struct Bridge {
     pub filter: RefCell<Option<std::rc::Rc<super::replicate::Filter>>>,
     /// When each server instance came into the replicated containers, until the join's copy (the order it lists them in)
     pub ranks: RefCell<super::replicate::Ranks>,
+    /// The client engine (the server's way to it: a bundle the server imports goes to the client's copy at once, lazy.rs)
+    pub client: RefCell<std::rc::Weak<crate::Engine>>,
 }
 
 impl Bridge {
@@ -230,6 +234,7 @@ impl Bridge {
             stats: Default::default(),
             filter: Default::default(),
             ranks: Default::default(),
+            client: RefCell::new(std::rc::Weak::new()),
         }
     }
 

@@ -1566,3 +1566,214 @@ return {
     assert!(has(&lines, "client print: moved 1 1"), "{lines:?}");
     assert!(has(&lines, "client print: back 1 1 true"), "{lines:?}");
 }
+
+/// A manifest bundle source for the bundle tests: a model file per key, uploaded bundles, and each fetch noted
+#[cfg(feature = "bundles")]
+struct Bundles {
+    files: std::rc::Rc<Vec<(String, PathBuf)>>,
+    fetched: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+}
+
+#[cfg(feature = "bundles")]
+impl crate::project::model_assets::BundleSource for Bundles {
+    fn catalog(&mut self, _: &Path) -> Result<Vec<String>, String> {
+        Ok(self.files.iter().map(|(key, _)| key.clone()).collect())
+    }
+
+    fn bundle(&mut self, _: &Path, key: &str) -> Result<PathBuf, String> {
+        self.fetched.borrow_mut().push(key.to_string());
+        self.files.iter().find(|(held, _)| held == key).map(|(_, file)| file.clone()).ok_or_else(|| format!("no bundle {key}"))
+    }
+
+    fn shape(&self) -> crate::project::model_assets::BundleShape {
+        crate::project::model_assets::BundleShape::Uploaded
+    }
+}
+
+/// A project with an asset manifest (its bundles come from [`Bundles`]): a machine (a Model with a PrimaryPart, an attribute
+/// and a tag) at three paths and a loose bundle of a model and a part. Returns the folder, the root to mount and the files.
+#[cfg(feature = "bundles")]
+#[inline(never)]
+fn bundle_project(name: &str) -> (PathBuf, PathBuf, Vec<(String, PathBuf)>) {
+    use rbx_dom_weak::{
+        InstanceBuilder, WeakDom,
+        types::{Attributes, Tags, Variant, Vector3},
+    };
+    let dir = scratch(name);
+    let project = dir.join("project");
+    let manifest = project.join(crate::project::model_assets::MANIFEST);
+    std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+    std::fs::write(&manifest, "return {}\n").unwrap();
+    let root = project.join("src");
+    std::fs::create_dir_all(&root).unwrap();
+    let write = |file: &Path, dom: &WeakDom| {
+        let mut bytes = Vec::new();
+        rbx_binary::to_writer(&mut bytes, dom, dom.root().children()).unwrap();
+        std::fs::write(file, bytes).unwrap();
+    };
+    let machine = dir.join("machine.rbxm");
+    {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let mut attributes = Attributes::new();
+        attributes.insert("Reach".into(), Variant::Float64(5.0));
+        let mut tags = Tags::new();
+        tags.push("Machine");
+        let model = dom.insert(dom.root_ref(), InstanceBuilder::new("Model").with_name("Machine").with_property("Attributes", attributes).with_property("Tags", tags));
+        let body = dom.insert(model, InstanceBuilder::new("Part").with_name("Body").with_property("Size", Vector3::new(4., 5., 6.)));
+        dom.insert(model, InstanceBuilder::new("Part").with_name("Lamp"));
+        dom.get_by_ref_mut(model).unwrap().properties.insert("PrimaryPart".into(), Variant::Ref(body));
+        write(&machine, &dom);
+    }
+    let loose = dir.join("loose.rbxm");
+    {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let content = dom.insert(dom.root_ref(), InstanceBuilder::new("Folder").with_name("Content"));
+        dom.insert(content, InstanceBuilder::new("Model").with_name("Sword"));
+        dom.insert(content, InstanceBuilder::new("Part").with_name("Shield"));
+        write(&loose, &dom);
+    }
+    let files = vec![
+        ("Models/Items/_Loose".to_string(), loose),
+        ("Models/Machines/ServerFirst".to_string(), machine.clone()),
+        ("Models/Machines/Touched".to_string(), machine.clone()),
+        ("Models/Machines/Untouched".to_string(), machine),
+    ];
+    (dir, root, files)
+}
+
+/// A test host whose engines take their bundles from [`Bundles`], each fetch noted in `fetched`
+#[cfg(feature = "bundles")]
+fn bundle_host(files: Vec<(String, PathBuf)>, fetched: &std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> Host {
+    let files = std::rc::Rc::new(files);
+    let fetched = fetched.clone();
+    Host {
+        new_engine: std::rc::Rc::new(move |options| {
+            let engine = crate::Engine::new(options)?;
+            engine.set_bundle_source(Box::new(Bundles { files: files.clone(), fetched: fetched.clone() }));
+            Ok(engine)
+        }),
+        ..Host::default()
+    }
+}
+
+/// Manifest bundles stay lazy across the pair: the join copies a waiting bundle's placeholder and fetches nothing. What the
+/// client finds or looks inside, the server imports then, and the client's copy takes what it made at once (the class,
+/// values, attributes, tags and children a plain client run finds, a loose bundle's members in their folder); what the server
+/// finds first goes to the client's copy as it is made, and its write after it at the client's next frame; each side's bundle
+/// instances are the other's counterparts (a remote's argument maps), and the server's writes to them replicate. A bundle
+/// nothing looked at is never fetched or made on either side.
+#[cfg(feature = "bundles")]
+#[test]
+fn bundles_stay_lazy_and_the_server_imports_what_either_side_looks_at() {
+    let (dir, root, files) = bundle_project("bundles");
+    let fetched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let host = bundle_host(files, &fetched);
+    let harness = dir.join("Bundles.luau");
+    std::fs::write(
+        &harness,
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+return {
+	Server = function(Context)
+		local Remote = Instance.new("RemoteEvent")
+		Remote.Name = "Ping"
+		Remote.Parent = Storage
+		Remote.OnServerEvent:Connect(function(Player, Body)
+			local Touched = Storage.Library.Models.Machines.Touched
+			print("server got", Body == Touched.Body, Body:GetFullName())
+			Body.Transparency = 0.5
+			Remote:FireAllClients("written")
+		end)
+		task.wait(0.2)
+		local Machine = Storage.Library.Models.Machines.ServerFirst
+		Machine.Lamp.Transparency = 0.25
+		Remote:FireAllClients("server first")
+	end,
+	Client = function(Context)
+		local Remote = Storage:WaitForChild("Ping")
+		local Machines = Storage.Library.Models.Machines
+		local Touched = Machines.Touched
+		print("client touched", Touched.ClassName, Touched.PrimaryPart == Touched.Body, Touched.Body.Size, Touched:GetAttribute("Reach"), Touched:HasTag("Machine"), #Touched:GetChildren(), Machines:FindFirstChild("Touched") == Touched)
+		local Names = {}
+		for _, Item in Storage.Library.Models.Items:GetChildren() do
+			table.insert(Names, Item.Name .. ":" .. Item.ClassName)
+		end
+		table.sort(Names)
+		print("client items", table.concat(Names, " "))
+		Remote.OnClientEvent:Connect(function(Tag)
+			if Tag == "written" then
+				print("client written", Touched.Body.Transparency)
+			else
+				local Machine = Machines.ServerFirst
+				print("client server first", Machine.ClassName, Machine.Lamp.Transparency, Machine.PrimaryPart == Machine.Body, Machine:GetAttribute("Reach"))
+				print("@done")
+			end
+		end)
+		Remote:FireServer(Touched.Body)
+	end,
+}
+"##,
+    )
+    .unwrap();
+    let words: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--run-context", "loopback", "--assets-at", "ReplicatedStorage.Library", "--assets", "Models"].iter().map(|s| s.to_string()).collect();
+    let args = run::parse(&words, false).unwrap();
+    let (done, emulator) = run::execute(&args, &host, false).unwrap();
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: client touched Model true 4, 5, 6 5 true 2 true"), "{lines:?}");
+    assert!(has(&lines, "client print: client items Shield:Part Sword:Model"), "{lines:?}");
+    assert!(has(&lines, "server print: server got true ReplicatedStorage.Library.Models.Machines.Touched.Body"), "{lines:?}");
+    assert!(has(&lines, "client print: client written 0.5"), "{lines:?}");
+    assert!(has(&lines, "client print: client server first Model 0.25 true 5"), "{lines:?}");
+    // fetched in the order looked at, each once: nothing at the join, the untouched one never
+    assert_eq!(*fetched.borrow(), ["Models/Machines/Touched", "Models/Items/_Loose", "Models/Machines/ServerFirst"], "fetched");
+    let (_, server) = emulator.engine.peer_server().unwrap();
+    let client = &emulator.engine;
+    let untouched = |engine: &crate::Engine| {
+        let state = engine.state.borrow();
+        let storage = crate::services::find_service(engine, engine.world().game, "ReplicatedStorage").unwrap();
+        let machines = ["Library", "Models", "Machines"].iter().try_fold(storage, |at, name| state.dom.find_child(at, name.as_bytes())).unwrap();
+        state.dom.find_child(machines, b"Untouched").unwrap()
+    };
+    let (server_untouched, client_untouched) = (untouched(&server), untouched(client));
+    for (side, engine, id) in [("server", &server, server_untouched), ("client", client, client_untouched)] {
+        let state = engine.state.borrow();
+        let instance = state.dom.at(id);
+        assert!(instance.has(crate::dom::flags::BUNDLE_ROOT) && &*engine.reflection.class(instance.class).name == "Folder", "the {side}'s untouched bundle was made");
+        assert!(instance.children.is_empty(), "the {side}'s untouched bundle has children");
+    }
+    assert!(server.state.borrow().project.model_assets.waits_at(server_untouched), "the server's untouched bundle waits no more");
+    assert!(client.state.borrow().project.model_assets.waits_remotely(client_untouched), "the client's copy waits no more");
+    assert_eq!(crate::loopback::counterpart(client, client_untouched), Some(server_untouched));
+    drop(server);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle that waits in a world (here the Workspace) is imported at the join and copied whole, as before: a world's walks,
+/// queries and recorder read it with no script looking, so the client's copy is the bundle's own from the start
+#[cfg(feature = "bundles")]
+#[test]
+fn a_bundle_waiting_in_a_world_is_imported_at_the_join() {
+    let (dir, root, files) = bundle_project("bundles-world");
+    let fetched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let host = bundle_host(files, &fetched);
+    let harness = dir.join("World.luau");
+    std::fs::write(&harness, "return { Server = function(Context) end, Client = function(Context) print('@done') end }").unwrap();
+    let words: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--run-context", "loopback", "--assets-at", "Workspace.Library", "--assets", "Models"].iter().map(|s| s.to_string()).collect();
+    let args = run::parse(&words, false).unwrap();
+    let (done, emulator) = run::execute(&args, &host, false).unwrap();
+    assert_eq!(done.summary["status"], "ok", "{:?}", lines(&done.summary));
+    assert_eq!(fetched.borrow().len(), 4, "every bundle in the Workspace was imported at the join: {:?}", fetched.borrow());
+    let client = &emulator.engine;
+    let state = client.state.borrow();
+    let machines = ["Library", "Models", "Machines"].iter().try_fold(client.world().workspace, |at, name| state.dom.find_child(at, name.as_bytes())).unwrap();
+    let untouched = state.dom.find_child(machines, b"Untouched").unwrap();
+    let instance = state.dom.at(untouched);
+    assert_eq!(&*client.reflection.class(instance.class).name, "Model", "the client's copy is the bundle's root");
+    assert!(!instance.has(crate::dom::flags::BUNDLE_ROOT) && instance.children.len() == 2, "the client's copy is whole");
+    assert!(!state.project.model_assets.waits_remotely(untouched), "the client's copy waits for its server");
+    drop(state);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
