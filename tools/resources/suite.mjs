@@ -6,7 +6,7 @@
 // The sizes are chosen so the store matters to the figures: a store that rewrote itself on every flush multiplies the
 // data written, and processes that read each new compacted pack whole raise the summed memory and the page faults well
 // past their budgets. The recording runs a scene of its own (fixtures/Scene.luau), the parity probes what the repository
-// already has (tools/parity/probes: every fifth one in CI, all of them in the full suite).
+// already has (tools/parity/probes: a fifth of them in CI, chosen by name, all of them in the full suite).
 //
 // Options: --ree <exe> (default: target/release/ree beside this checkout, or REE_BIN).
 
@@ -158,7 +158,16 @@ function batchWorkload({ id, title, about, size, processes, workers, stateOf, fr
 	};
 }
 
-// `node tools/parity/run.mjs` over every `sample`-th probe (in name order)
+// Whether a probe is in the sample of one in `sample`: by a hash of its name (FNV-1a), not its place in the list, so a
+// probe added or removed moves only itself in or out (by place, three new probes once changed 20 of the 25 sampled and
+// the figures with them)
+function sampled(name, sample) {
+	let hash = 0x811c9dc5;
+	for (const byte of Buffer.from(name, "utf8")) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+	return hash % sample === 0;
+}
+
+// `node tools/parity/run.mjs` over the probes `sampled` picks (all of them when `sample` is 1)
 function parityWorkload({ id, title, about, sample }) {
 	return {
 		id, title, about,
@@ -168,7 +177,7 @@ function parityWorkload({ id, title, about, sample }) {
 			fs.rmSync(state, { recursive: true, force: true });
 			fs.mkdirSync(state, { recursive: true });
 			const probes = fs.readdirSync(path.join(context.repo, "tools", "parity", "probes")).filter(name => name.endsWith(".luau")).map(name => name.slice(0, -5)).sort();
-			const chosen = sample > 1 ? probes.filter((_, index) => index % sample === 0) : [];
+			const chosen = sample > 1 ? probes.filter(name => sampled(name, sample)) : [];
 			return { argv: [context.node, path.join(context.repo, "tools", "parity", "run.mjs"), ...chosen, "--ree", ree], cwd: context.repo, folders: folders(context, id, state), env: { RUR_STATE_DIR: state } };
 		},
 	};
@@ -251,7 +260,7 @@ export function workloads() {
 		},
 		parityWorkload({
 			id: "parity-sample", title: "A sample of the parity probes",
-			about: "`node tools/parity/run.mjs` with every fifth probe of tools/parity/probes, each in a `ree run` process of its own, compared with what a Roblox client printed.",
+			about: "`node tools/parity/run.mjs` with a fifth of the probes in tools/parity/probes (chosen by name, so a new probe moves only itself in or out), each in a `ree run` process of its own, compared with what a Roblox client printed.",
 			sample: 5,
 		}),
 		parityWorkload({
