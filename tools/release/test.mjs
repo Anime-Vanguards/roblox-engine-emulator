@@ -529,13 +529,23 @@ test("release workflow retains its publication boundary and pins", () => {
 	assert.doesNotMatch(workflow, /SCCACHE_GHA|ACTIONS_RUNTIME_TOKEN|ACTIONS_CACHE_URL|ACTIONS_RESULTS_URL/);
 
 	// main-only release build caches never run on PRs, version-bump release commits, v* tag builds,
-	// RELEASE_BUILD_CACHE=off, or clean-build; keys include runner image; ree's own crate is pruned before save
+	// RELEASE_BUILD_CACHE=off, or clean-build; keys include runner image; ree's own crate is pruned before save.
+	// The vendored archives cache (.cache/vendor) is SHA-256 re-verified by tools/vendor.mjs --check on every run,
+	// so it may restore on release builds too, while still storing only on refs/heads/main after verification passes.
 	const buildJob = workflow.replace(/\r\n/g, "\n").split(/^  build:\n/m)[1].split(/^  \S/m)[0];
 	const cacheGate = "github.ref == 'refs/heads/main' && needs.version.outputs.release-commit != 'true' && vars.RELEASE_BUILD_CACHE != 'off' && !inputs.clean-build";
 	assert.match(workflow, /clean-build:\r?\n\s+description:[^\r\n]+\r?\n\s+type: boolean\r?\n\s+default: false/);
 	assert.match(workflow, /release-commit: \$\{\{ steps\.build-cache\.outputs\.release-commit \}\}/);
 	assert.match(buildJob, /- name: Install sccache /);
-	for (const step of buildJob.split(/^      - /m).filter((s) => /actions\/cache\/(restore|save)@|compile-cache\.mjs start|build-cache\.mjs --prune/.test(s))) {
+	const buildSteps = buildJob.split(/^      - /m);
+	const vendorSteps = buildSteps.filter((s) => /vendored archives cache/.test(s));
+	assert.equal(vendorSteps.length, 2, "release build should restore and store the vendored archives cache");
+	assert.match(vendorSteps[0], /continue-on-error: true/);
+	assert.match(vendorSteps[0], /hashFiles\('patches\/luau\/upstream\.json', 'tools\/vendor\.mjs'\)/);
+	assert.match(vendorSteps[1], /if: \$\{\{ !cancelled\(\) && github\.ref == 'refs\/heads\/main' && .*steps\.vendor-check\.outcome == 'success' \}\}/);
+	assert(buildJob.indexOf("Restore the vendored archives cache") < buildJob.indexOf("node tools/vendor.mjs --check"));
+	assert(buildJob.indexOf("node tools/vendor.mjs --check") < buildJob.indexOf("Store the vendored archives cache"));
+	for (const step of buildSteps.filter((s) => /actions\/cache\/(restore|save)@|compile-cache\.mjs start|build-cache\.mjs --prune/.test(s) && !/vendored archives cache/.test(s))) {
 		assert(step.includes(cacheGate), `cache step missing main/release-commit/kill-switch gate:\n${step}`);
 	}
 	assert.equal(buildJob.match(/steps\.image\.outputs\.name/g)?.length >= 4, true, "runner image must enter cache keys");

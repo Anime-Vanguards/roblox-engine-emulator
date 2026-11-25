@@ -244,7 +244,12 @@ test("a download that fails or stalls is tried again after a growing pause, and 
 			reject(signal.reason);
 		});
 	});
-	await assert.rejects(download(pin, { ...options, attempts: 2, timeout: 20, get: stalled }), /no download in 2 attempts, the last one failed: .*timeout/);
+	await assert.rejects(download(pin, { ...options, attempts: 2, timeout: 20, get: stalled }), /no download in 2 attempts, the last one failed: no complete answer in 0\.02 s/);
+
+	// a non-transient 4xx fails at once with no retry
+	const missing = fakeFetch(new Response("missing", { status: 404 }));
+	await assert.rejects(download(pin, { ...options, get: missing.get, pause: () => assert.fail("404 must not retry") }), /HTTP 404/);
+	assert.equal(missing.calls.length, 1);
 });
 
 test("a download whose SHA-256 is not the pinned one fails at once, with no second attempt", async () => {
@@ -322,7 +327,7 @@ test("every job sets up the compile cache before it restores the two caches, and
 	const jobs = WORKFLOW.split(/^jobs:/m)[1].split(/^  \w+:\r?\n/m).slice(1);
 	assert.equal(jobs.length, 3);
 	for (const job of jobs) {
-		const steps = ["compile-cache.mjs start", "actions/cache/restore@", "Swatinem/rust-cache@", "cargo test", "compile-cache.mjs stop"];
+		const steps = ["compile-cache.mjs start", "Restore the compile cache", "Swatinem/rust-cache@", "cargo test", "compile-cache.mjs stop"];
 		const order = steps.map(step => job.indexOf(step));
 		assert(order.every(at => at >= 0), "a job is missing one of the steps");
 		assert.deepEqual(order, [...order].sort((a, b) => a - b));
@@ -337,13 +342,21 @@ test("the source checks run once, in the standalone job, before any step that a 
 		const at = standaloneJob.indexOf(check);
 		assert(at >= 0 && at < firstCacheStep, `${check} comes before the caches`);
 	}
+	const vendorRestore = standaloneJob.split(/^      - /m).find(step => step.includes("Restore the vendored archives cache"));
+	assert(vendorRestore, "standalone job restores the vendored archives cache");
+	assert.match(vendorRestore, /continue-on-error: true/);
+	assert.match(vendorRestore, /hashFiles\('patches\/luau\/upstream\.json', 'tools\/vendor\.mjs'\)/);
+	assert(standaloneJob.indexOf("Restore the vendored archives cache") < standaloneJob.indexOf("run: node tools/vendor.mjs --check"));
 });
 
-test("only the test job on main stores the compile cache, and sccache never gets the workflow's token", () => {
+test("only main stores the compile and vendored archive caches, and sccache never gets the workflow's token", () => {
 	const stores = WORKFLOW.split(/^      - /m).filter(step => step.includes("actions/cache/save@"));
-	assert.equal(stores.length, 1);
-	assert.match(stores[0], /if: \$\{\{ github\.ref == 'refs\/heads\/main' && /);
-	assert(WORKFLOW.split(/^  planted:/m)[0].includes("actions/cache/save@"), "the store step belongs to the test job");
+	assert.equal(stores.length, 2);
+	for (const store of stores) {
+		assert.match(store, /if: \$\{\{ github\.ref == 'refs\/heads\/main' && /);
+	}
+	assert(WORKFLOW.split(/^  planted:/m)[0].includes("Store the compile cache"), "the compile cache store step belongs to the test job");
+	assert(WORKFLOW.split(/^  standalone:\r?\n/m)[1].includes("Store the vendored archives cache"), "the vendored archive store step belongs to the standalone job");
 	// the whole cache action would also store at the end of any job that missed, a pull request's included
 	assert(!WORKFLOW.includes("uses: actions/cache@"));
 	// sccache's own GitHub storage needs the runner's cache token in the environment of the build

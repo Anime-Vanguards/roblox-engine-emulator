@@ -200,11 +200,27 @@ jobs:
           toolchain: "1.90.0"
           components: clippy
       # The checks of the sources need no build. They run here because this job ends before the test job, the longest of
-      # the run, which they used to hold up. They come before the caches, so a cache that fails to download or restore
-      # cannot skip them, and after the toolchain, since the tool tests ask cargo for the packages' targets.
+      # the run, which they used to hold up. They come before the build caches, so a cache that fails to download or
+      # restore cannot skip them, and after the toolchain, since the tool tests ask cargo for the packages' targets.
+      # The vendored archives cache is soft-failed (continue-on-error) and vendor.mjs re-checks every archive's SHA-256.
+      - name: Restore the vendored archives cache
+        id: vendor-cache
+        if: ${{ strategy.job-index == 1 }}
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: vendor-archives-v1-${{ runner.os }}-${{ hashFiles('patches/luau/upstream.json', 'tools/vendor.mjs') }}
+          path: .cache/vendor
       - name: Vendored VM matches its patches
+        id: vendor-check
         if: ${{ strategy.job-index == 1 }}
         run: node tools/vendor.mjs --check
+      - name: Store the vendored archives cache
+        if: ${{ github.ref == 'refs/heads/main' && strategy.job-index == 1 && steps.vendor-cache.outcome == 'success' && steps.vendor-cache.outputs.cache-hit != 'true' && steps.vendor-check.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.vendor-cache.outputs.cache-primary-key }}
+          path: .cache/vendor
       - name: CI tool tests
         if: ${{ !cancelled() && strategy.job-index == 1 }}
         run: node --test tools/ci/test.mjs

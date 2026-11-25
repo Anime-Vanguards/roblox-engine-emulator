@@ -37,6 +37,7 @@ on:
       - '**/build.rs'
       - '.cargo/config.toml'
       - 'tools/vendor.mjs'
+      - 'tools/download.mjs'
       - 'patches/**'
       - 'src/**'
       - 'vendor/**'
@@ -182,8 +183,22 @@ jobs:
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch, 2026-10-16
         with:
           toolchain: "1.90.0"
+      - name: Restore the vendored archives cache
+        id: vendor-cache
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: vendor-archives-v1-${{ runner.os }}-${{ hashFiles('patches/luau/upstream.json', 'tools/vendor.mjs') }}
+          path: &vendor-cache-path .cache/vendor
       - name: Vendored VM matches its patches
+        id: vendor-check
         run: node tools/vendor.mjs --check
+      - name: Store the vendored archives cache
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.vendor-cache.outcome == 'success' && steps.vendor-cache.outputs.cache-hit != 'true' && steps.vendor-check.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          key: ${{ steps.vendor-cache.outputs.cache-primary-key }}
+          path: *vendor-cache-path
       - name: Release script tests
         run: node --test tools/release/test.mjs
       # Main-only build cache for non-release dry runs (canaries). Never runs on PRs, version-bump release commits

@@ -39,7 +39,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { setTimeout as sleep } from "node:timers/promises";
+import { download as fetchBytes } from "../download.mjs";
 import { ROOT, args, command, isMain, main } from "../release/common.mjs";
 
 // The pinned releases (https://github.com/mozilla/sccache/releases/tag/v0.19.0) and each archive's SHA-256
@@ -131,34 +131,10 @@ export function cacheKey(root, inputs, facts, prefix = DEFAULT_PREFIX) {
 	return `${prefix}-${hash.digest("hex").slice(0, 32)}`;
 }
 
-// Why a download failed. Of a network error fetch says only "fetch failed" and keeps the reason in `cause`
-function reason(error) {
-	const cause = error.cause?.message || error.cause?.code;
-	return cause ? `${error.message}: ${cause}` : error.message;
-}
-
-// The bytes `get` answers with for `url`; fails when the answer is no success or is not complete after `timeout` ms
-async function fetched(url, timeout, get) {
-	const response = await get(url, { signal: AbortSignal.timeout(timeout) });
-	if (!response.ok) throw new Error(`HTTP ${response.status}`);
-	return Buffer.from(await response.arrayBuffer());
-}
-
-// The bytes at `url`, used only when their SHA-256 is `sha256`. Every job of a run downloads the archive, so one
-// answer that fails or stalls must not fail the run: a failed attempt is followed by another, after a pause that
-// grows by `wait` ms each time. A checksum that differs is no network error and fails at once.
-export async function download({ url, sha256 }, { attempts = 4, timeout = 30_000, wait = 2_000, get = fetch, pause = sleep, log = console.log } = {}) {
-	let bytes;
-	for (let attempt = 1; !bytes; attempt++) {
-		try {
-			bytes = await fetched(url, timeout, get);
-		} catch (error) {
-			if (attempt >= attempts) throw new Error(`${url}: no download in ${attempts} attempts, the last one failed: ${reason(error)}`);
-			log(`${url}: attempt ${attempt} of ${attempts} failed: ${reason(error)}`);
-			await pause(wait * attempt);
-		}
-	}
-	return checked(bytes, sha256, url);
+// The bytes at `url`, used only when their SHA-256 is `sha256`. Delegates to tools/download.mjs so network errors,
+// HTTP 5xx and 429 are retried with exponential backoff, while non-transient 4xx and checksum mismatches fail at once.
+export function download({ url, sha256 }, options = {}) {
+	return fetchBytes(url, { sha256, name: url, timeout: 30_000, log: console.log, ...options });
 }
 
 // Downloads the pinned archive for this platform and unpacks it into `tools` once its checksum matches; returns sccache's path
