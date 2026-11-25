@@ -62,5 +62,12 @@ fn main() {
     }
     let low = fnv(0xcbf2_9ce4_8422_2325, material.iter().copied());
     let high = fnv(0x6c62_272e_07bb_0142, material.iter().copied().rev());
-    println!("cargo:rustc-env=REE_CONVERSION_DIGEST={high:016x}{low:016x}");
+    // Written to OUT_DIR instead of cargo:rustc-env so editing a watched source file does not
+    // change the crate-wide env fingerprint and invalidate rustc's incremental cache for modules
+    // that do not read the digest.
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR")).join("conversion_digest.rs");
+    let content = format!("\"{high:016x}{low:016x}\"\n");
+    if fs::read_to_string(&out).ok().as_deref() != Some(content.as_str()) {
+        fs::write(&out, content).expect("write conversion_digest.rs");
+    }
 }

@@ -44,7 +44,7 @@ src/serve/               Warm background service (`ree serve`) and `--service` c
 src/watchdog.rs          Script timeout, wall-clock cap, and parent-exit watchdog
 src/trace.rs, census.rs  Context.TraceWrites and Context.Census (plus lua/holders.rs for Context.Holders)
 src/timing.rs, files.rs  Phase timers, cache file stamps, and long-lived heap (alloc.rs)
-build.rs                 Computes REE_CONVERSION_DIGEST keying cached `<bundle>.plan` files
+build.rs                 Writes OUT_DIR/conversion_digest.rs (REE_CONVERSION_DIGEST) keying cached `<bundle>.plan` files
 vendor/, patches/        Vendored patched Luau VM, mlua-sys, and Lune datatypes (tools/vendor.mjs)
 ```
 

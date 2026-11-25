@@ -657,12 +657,23 @@ fn converted_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// Isolated in its own leaf module so changing `OUT_DIR/conversion_digest.rs` only dirties one
+/// tiny codegen unit instead of propagating through `model_assets` via ThinLTO.
+mod conversion_digest {
+    const DIGEST: &str = include!(concat!(env!("OUT_DIR"), "/conversion_digest.rs"));
+
+    #[inline(never)]
+    pub(super) fn get() -> &'static str {
+        std::hint::black_box(DIGEST)
+    }
+}
+
 /// What a converted file must have been written for: the conversion (build.rs digests its code,
 /// the reflection and the dump it resolves names and classes with, and the decoders' versions: a
 /// rebuild that changed none of them keeps every plan) and the bundle file as it is.
 fn converted_key(path: &Path) -> Option<Vec<u8>> {
     let stamp = file_stamp(path)?;
-    Some(format!("conversion {}|{}|{}", env!("REE_CONVERSION_DIGEST"), stamp.len, stamp.modified).into_bytes())
+    Some(format!("conversion {}|{}|{}", conversion_digest::get(), stamp.len, stamp.modified).into_bytes())
 }
 
 /// Bundle files decoded and converted on other threads, taken by the imports that need them (the
@@ -1897,6 +1908,61 @@ mod tests {
         }
         assert!(decoding.take("Models/Other").is_none());
         assert!(Decoding::start(Vec::new(), reflection).is_none());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// `REE_CONVERSION_DIGEST` included from `OUT_DIR/conversion_digest.rs` matches `build.rs`'s
+    /// FNV-1a digest over `INPUTS` and keys `<bundle>.plan` identically.
+    #[test]
+    fn conversion_digest_matches_build_script_and_keys_plans() {
+        fn walk(path: &Path, out: &mut Vec<PathBuf>) {
+            if path.is_dir() {
+                let mut entries: Vec<PathBuf> = std::fs::read_dir(path).map(|read| read.flatten().map(|entry| entry.path()).collect()).unwrap_or_default();
+                entries.sort();
+                for entry in entries {
+                    walk(&entry, out);
+                }
+            } else if path.is_file() {
+                out.push(path.to_path_buf());
+            }
+        }
+        fn fnv(basis: u64, bytes: impl Iterator<Item = u8>) -> u64 {
+            bytes.fold(basis, |hash, byte| (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3))
+        }
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(root.join("build.rs")).unwrap();
+        let block = source.split("const INPUTS: &[&str] = &[").nth(1).unwrap().split("];").next().unwrap();
+        let inputs: Vec<&str> = block.lines().filter_map(|line| line.trim().strip_prefix('"').and_then(|rest| rest.strip_suffix("\","))).collect();
+        assert!(!inputs.is_empty());
+
+        let mut list = Vec::new();
+        for input in inputs {
+            walk(&root.join(input), &mut list);
+        }
+        let mut material = Vec::new();
+        for file in &list {
+            let relative = file.strip_prefix(root).unwrap_or(file).to_string_lossy().replace('\\', "/");
+            let bytes = std::fs::read(file).unwrap_or_default();
+            material.extend_from_slice(relative.as_bytes());
+            material.push(0);
+            material.extend(bytes.iter().copied().filter(|&byte| byte != b'\r'));
+            material.push(0);
+        }
+        let low = fnv(0xcbf2_9ce4_8422_2325, material.iter().copied());
+        let high = fnv(0x6c62_272e_07bb_0142, material.iter().copied().rev());
+        let expected = format!("{high:016x}{low:016x}");
+
+        let actual = conversion_digest::get();
+        assert_eq!(actual.len(), 32);
+        assert!(actual.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));
+        assert_eq!(actual, expected);
+
+        let directory = scratch("digest-key");
+        let file = directory.join("bundle.rbxm");
+        std::fs::write(&file, b"payload").unwrap();
+        let stamp = file_stamp(&file).unwrap();
+        assert_eq!(converted_key(&file).unwrap(), format!("conversion {expected}|{}|{}", stamp.len, stamp.modified).into_bytes());
         let _ = std::fs::remove_dir_all(&directory);
     }
 }
