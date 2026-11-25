@@ -190,7 +190,7 @@ mod tests {
                 .collect();
             // (the first start reads the reflection dump)
             times.remove(0);
-            times.sort_by(f64::total_cmp);
+            crate::sort::by(&mut times, f64::total_cmp);
             eprintln!("{} start: min {:.2} ms, median {:.2} ms", if server { "server" } else { "client" }, times[0], times[times.len() / 2]);
         }
     }

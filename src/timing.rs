@@ -100,7 +100,7 @@ fn tree(total: f64, spans: &[Span]) -> Vec<Node> {
     let mut nodes = vec![Node { name: "command".into(), parent: None, seconds: total, own: total, count: 1 }];
     let mut order: Vec<usize> = (0..spans.len()).collect();
     // (the outer of two stretches that begin together is the longer: it comes first)
-    order.sort_by(|&a, &b| spans[a].start.total_cmp(&spans[b].start).then(spans[b].end.total_cmp(&spans[a].end)).then(a.cmp(&b)));
+    crate::sort::by(&mut order, |&a, &b| spans[a].start.total_cmp(&spans[b].start).then(spans[b].end.total_cmp(&spans[a].end)).then(a.cmp(&b)));
     // the open stretches: (their end, their node)
     let mut open: Vec<(f64, usize)> = Vec::new();
     // (a little slack: the timers' clocks are read a moment apart)

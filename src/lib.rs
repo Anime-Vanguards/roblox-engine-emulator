@@ -49,6 +49,7 @@ pub mod scheduler;
 pub mod serve;
 pub mod services;
 pub mod signal;
+pub(crate) mod sort;
 pub mod text_measure;
 pub mod timing;
 pub mod trace;

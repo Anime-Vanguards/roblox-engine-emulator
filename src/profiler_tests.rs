@@ -1291,7 +1291,7 @@ fn booked_cycles_three_times(name: &str, source: &str, frames: usize) -> (Vec<Bo
 /// The median of each run's `ratio` of its own cycles by name ([`booked_cycles_three_times`])
 fn median_ratio(runs: &[BookedRun], ratio: impl Fn(&dyn Fn(&str) -> f64) -> f64) -> f64 {
     let mut ratios: Vec<f64> = runs.iter().map(|(own, _)| ratio(&|name: &str| own.get(name).copied().unwrap_or(0.0))).collect();
-    ratios.sort_by(f64::total_cmp);
+    crate::sort::by(&mut ratios, f64::total_cmp);
     ratios[ratios.len() / 2]
 }
 

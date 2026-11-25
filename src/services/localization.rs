@@ -406,7 +406,7 @@ impl Builder {
     /// The entries, each group sorted by Context, then Key
     fn done(mut self) -> Entries {
         for group in &mut self.groups {
-            group.entries.sort_by(|a, b| a.order().cmp(&b.order()));
+            crate::sort::by(&mut group.entries, |a, b| a.order().cmp(&b.order()));
         }
         Entries { groups: self.groups }
     }
@@ -1276,7 +1276,7 @@ fn entries_from_lua(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Entr
             let (name, text) = pair.map_err(|error| error.to_string())?;
             pairs.push((crate::lua::bindable::key_name(lua, engine, &values, &name)?, text));
         }
-        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        crate::sort::by(&mut pairs, |a, b| a.0.cmp(&b.0));
         for (name, text) in pairs {
             let LuaValue::String(text) = text else { return Err(Refused::from(format!("Entry at index {index} \"{}\" was not a string.", lossy(&name)))) };
             let id = locale(&name);

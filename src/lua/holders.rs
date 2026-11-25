@@ -603,9 +603,9 @@ pub fn report(lua: &Lua, engine: &Rc<Engine>, filters: Vec<String>, examples: us
             }
         }
         let mut ways: Vec<(String, (usize, Vec<String>))> = ways.into_iter().collect();
-        ways.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
+        crate::sort::by(&mut ways, |a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
         let mut holders: Vec<(String, (usize, String))> = group.holders.drain().collect();
-        holders.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
+        crate::sort::by(&mut holders, |a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
         let mut explained: FxHashMap<&'static str, usize> = FxHashMap::default();
         for &root in &group.roots {
             *explained.entry(group.explained.get(&root).copied().unwrap_or("unexplained")).or_default() += 1;

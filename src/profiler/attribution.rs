@@ -425,10 +425,10 @@ fn cold_objects(totals: FxHashMap<TotalKey, Total>, names: &Names) -> Vec<ColdOb
         for ((function, pc), cost) in total.payers {
             payers.push(Payer { function, pc, cost });
         }
-        payers.sort_by(|a, b| b.cost.total_cmp(&a.cost).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)));
+        crate::sort::by(&mut payers, |a, b| b.cost.total_cmp(&a.cost).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)));
         objects.push(ColdObject { kind, name, cost: total.cost, charges: total.charges, shared: total.shared, payers });
     }
-    objects.sort_by(|a, b| b.cost.total_cmp(&a.cost).then(a.kind.cmp(b.kind)).then(a.name.cmp(&b.name)));
+    crate::sort::by(&mut objects, |a, b| b.cost.total_cmp(&a.cost).then(a.kind.cmp(b.kind)).then(a.name.cmp(&b.name)));
     objects
 }
 
@@ -446,7 +446,7 @@ fn handler_sites(handlers: FxHashMap<Site, Handlers>) -> Vec<HandlerSite> {
             work: handlers.work,
         });
     }
-    sites.sort_by(|a, b| b.work.total_cmp(&a.work).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)).then(a.signal.cmp(&b.signal)));
+    crate::sort::by(&mut sites, |a, b| b.work.total_cmp(&a.work).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)).then(a.signal.cmp(&b.signal)));
     sites
 }
 
@@ -462,19 +462,19 @@ pub(super) fn finish(engine: Option<&crate::Engine>) -> Option<Results> {
     for ((function, pc, node), cost) in state.exclusive {
         exclusive.push(ExclusiveCharge { function, pc, node, cost });
     }
-    exclusive.sort_by_key(|charge| (charge.function, charge.pc, charge.node));
+    crate::sort::by_key(&mut exclusive, |charge| (charge.function, charge.pc, charge.node));
 
     let mut resumes: Vec<ResumeSite> = Vec::new();
     for ((function, pc), line) in state.resumes {
         resumes.push(ResumeSite { function, pc, count: line.count, cost: line.seconds });
     }
-    resumes.sort_by(|a, b| b.cost.total_cmp(&a.cost).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)));
+    crate::sort::by(&mut resumes, |a, b| b.cost.total_cmp(&a.cost).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)));
 
     let mut clock_reads: Vec<ClockLine> = Vec::new();
     for ((function, pc), line) in state.clock_reads {
         clock_reads.push(ClockLine { function, pc, reads: line.reads, frames: line.frames, runs: line.runs, intervals: line.intervals, between: line.between });
     }
-    clock_reads.sort_by(|a, b| b.reads.cmp(&a.reads).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)));
+    crate::sort::by(&mut clock_reads, |a, b| b.reads.cmp(&a.reads).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)));
 
     Some(Results { cold, exclusive, handlers: handler_sites(state.handlers), resumes, unmeasured_fires: state.unmeasured_fires, clock_reads })
 }

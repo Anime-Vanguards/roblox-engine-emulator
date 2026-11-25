@@ -262,7 +262,7 @@ impl Signals {
         if self.parallel_connections > 0 {
             let parallel = |handler: &Handler| matches!(handler, Handler::Connection(id) if self.connection(*id).is_some_and(|data| data.parallel));
             if result.iter().any(parallel) {
-                result.sort_by_key(parallel);
+                crate::sort::by_key(&mut result, parallel);
             }
         }
         result

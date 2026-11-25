@@ -1093,7 +1093,7 @@ pub fn font_to_enum(engine: &Engine, font: &FontValue) -> Option<EnumItemId> {
         .map(|(name, _)| &**name)
         .collect();
     // The Luau runtime takes the first in table order; prefer a stable choice
-    matches.sort_unstable();
+    crate::sort::ord(&mut matches);
     match matches.first() {
         Some(name) => reflection.enum_item("Font", name),
         None => reflection.enum_item("Font", "Unknown"),

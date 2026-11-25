@@ -224,7 +224,7 @@ pub fn unemulated(sides: &[Vec<Unemulated>]) -> Option<serde_json::Value> {
     if merged.is_empty() {
         return None;
     }
-    merged.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.member.cmp(&b.member)));
+    crate::sort::by(&mut merged, |a, b| b.count.cmp(&a.count).then_with(|| a.member.cmp(&b.member)));
     Some(serde_json::Value::Array(merged.into_iter().map(|entry| serde_json::json!({ "member": entry.member, "count": entry.count, "first": entry.first })).collect()))
 }
 

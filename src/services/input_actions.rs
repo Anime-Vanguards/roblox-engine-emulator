@@ -443,7 +443,7 @@ fn moved(state: &mut State, input: &InputActions, names: &Names, id: InstanceId,
         }
     }
     // (in a fixed order: an action's events queue as it resets)
-    affected.sort_unstable_by_key(|action| (action.index, action.generation));
+    crate::sort::by_key(&mut affected, |action| (action.index, action.generation));
     for action in affected {
         reset(state, input, names, action);
     }
@@ -463,7 +463,7 @@ fn changed(state: &mut State, input: &InputActions, names: &Names, id: InstanceI
         if name == names.enabled && !flag(state, id, names.enabled) {
             let mut actions: Vec<InstanceId> = input.states.borrow().keys().copied().collect();
             actions.extend(input.holds.borrow().iter().map(|hold| hold.action));
-            actions.sort_unstable_by_key(|action| (action.index, action.generation));
+            crate::sort::by_key(&mut actions, |action| (action.index, action.generation));
             actions.dedup();
             for action in actions {
                 if context_of(state, names, action) == Some(id) {
@@ -472,7 +472,7 @@ fn changed(state: &mut State, input: &InputActions, names: &Names, id: InstanceI
             }
         } else if name == names.priority {
             // (a stable re-sort: among equal priorities the context keeps its place)
-            input.order.borrow_mut().sort_by(|&a, &b| number(state, b, names.priority, 1000.0).total_cmp(&number(state, a, names.priority, 1000.0)));
+            crate::sort::by(&mut input.order.borrow_mut(), |&a, &b| number(state, b, names.priority, 1000.0).total_cmp(&number(state, a, names.priority, 1000.0)));
         }
     } else if class == names.action {
         if name == names.enabled && !flag(state, id, names.enabled) {

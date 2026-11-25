@@ -935,7 +935,7 @@ impl Reflection {
             }
         }
         for (id, mut list) in subclasses.into_iter().enumerate() {
-            list.sort_unstable_by(|&a, &b| reflection.classes[a as usize].name.cmp(&reflection.classes[b as usize].name));
+            crate::sort::by(&mut list, |&a, &b| reflection.classes[a as usize].name.cmp(&reflection.classes[b as usize].name));
             reflection.classes[id].subclasses = list.into_boxed_slice();
         }
         for class in &mut reflection.classes {
@@ -1147,7 +1147,7 @@ impl Reflection {
         let Ok(database) = rbx_reflection_database::get() else { return };
         let mut names: Vec<&str> = database.classes.keys().map(|name| name.as_ref()).collect();
         // rbx-dom's map order is arbitrary; sort so class ids are stable across processes
-        names.sort_unstable();
+        crate::sort::ord(&mut names);
         for name in names {
             let descriptor = &database.classes[name];
             let (id, is_new) = match self.class_ids.get(name) {
@@ -1167,7 +1167,7 @@ impl Reflection {
 
             if is_new {
                 let mut properties: Vec<_> = descriptor.properties.iter().collect();
-                properties.sort_unstable_by(|a, b| a.0.cmp(b.0));
+                crate::sort::by(&mut properties, |a, b| a.0.cmp(b.0));
                 for (property_name, property) in properties {
                     let Some(datatype) = lune_datatype_name(&property.data_type) else {
                         continue;
@@ -1389,7 +1389,7 @@ impl Reflection {
             .filter(|&(_, &index)| self.properties[index as usize].script_type == ScriptType::Content)
             .filter_map(|(&content, _)| self.content_sibling(class, content).map(|string| (string, content)))
             .collect();
-        pairs.sort();
+        crate::sort::ord(&mut pairs);
         pairs
     }
 

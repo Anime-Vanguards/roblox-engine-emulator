@@ -2069,12 +2069,12 @@ mod tests {
     fn string_order(keys: Vec<&[u8]>) -> Vec<&[u8]> {
         fn group_order<'a>(group: &mut [(u64, &'a [u8])], level: u32, order: &mut Vec<&'a [u8]>) {
             if group.len() <= 1 || level * 5 >= 64 {
-                group.sort_by(|a, b| a.1.cmp(b.1));
+                crate::sort::by(group, |a, b| a.1.cmp(b.1));
                 order.extend(group.iter().map(|(_, key)| *key));
                 return;
             }
             let slot = |hash: u64| (hash >> (5 * level)) & 31;
-            group.sort_by_key(|(hash, _)| slot(*hash));
+            crate::sort::by_key(group, |(hash, _)| slot(*hash));
             let mut groups = Vec::new();
             let mut start = 0;
             while start < group.len() {

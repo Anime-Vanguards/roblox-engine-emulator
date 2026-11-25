@@ -131,7 +131,7 @@ pub fn insert<K: Timed>(keys: &mut Vec<K>, key: K) -> (bool, usize) {
 /// difference falls short of 1/2400. Measured: 201 keys at k/2400 s leave 113, at 7 + k/2400 s 164
 /// and at 700 + k/2400 s 166.
 pub fn set<K: Timed>(mut keys: Vec<(f32, K)>) -> Vec<K> {
-    keys.sort_by(|a, b| a.0.total_cmp(&b.0));
+    crate::sort::by(&mut keys, |a, b| a.0.total_cmp(&b.0));
     let mut kept: Vec<K> = Vec::with_capacity(keys.len());
     let mut last = f32::NEG_INFINITY;
     for (time, key) in keys {
@@ -528,7 +528,7 @@ pub fn encode_markers(keys: &[MarkerKey]) -> Vec<u8> {
 /// hand).
 fn in_order<K: Timed>(mut keys: Vec<K>) -> Vec<K> {
     if keys.windows(2).any(|pair| pair[0].tick() >= pair[1].tick()) {
-        keys.sort_by_key(Timed::tick);
+        crate::sort::by_key(&mut keys, Timed::tick);
         keys.dedup_by_key(|key| key.tick());
     }
     keys

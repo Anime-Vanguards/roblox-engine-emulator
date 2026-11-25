@@ -409,7 +409,7 @@ fn take(engine: &Engine, current: *mut ffi::lua_State, heap: usize) -> Json {
             .collect();
         // (stable output: biggest first, then by text)
         for rows in [&mut thread_rows, &mut connection_rows, &mut run_rows, &mut made_rows, &mut timer_rows, &mut instance_rows] {
-            rows.sort_by(|a, b| {
+            crate::sort::by(rows, |a, b| {
                 let count = |row: &Json| row.as_array().and_then(|r| r.last()).and_then(Json::as_f64).unwrap_or(0.0);
                 count(b).partial_cmp(&count(a)).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.to_string().cmp(&b.to_string()))
             });

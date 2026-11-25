@@ -253,15 +253,15 @@ impl Clip {
             }
         }
         for joint in &mut joints {
-            joint.keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+            crate::sort::by(&mut joint.keys, |a, b| a.time.total_cmp(&b.time));
         }
         clip.even = evenly_keyed(&clip.names, &joints);
         clip.joints = joints;
         for track in &mut clip.face {
-            track.keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+            crate::sort::by(&mut track.keys, |a, b| a.time.total_cmp(&b.time));
         }
-        clip.keyframes.sort_by(|a, b| a.0.total_cmp(&b.0));
-        clip.markers.sort_by(|a, b| a.time.total_cmp(&b.time));
+        crate::sort::by(&mut clip.keyframes, |a, b| a.0.total_cmp(&b.0));
+        crate::sort::by(&mut clip.markers, |a, b| a.time.total_cmp(&b.time));
         if clip.even {
             pack(&mut clip);
         }
@@ -282,7 +282,7 @@ impl Clip {
 /// keyframe is packed too; two at one time are not.
 fn evenly_keyed(keyframes: &[(f32, String)], joints: &[JointTrack]) -> bool {
     let mut times: Vec<f32> = keyframes.iter().map(|(time, _)| *time).collect();
-    times.sort_by(f32::total_cmp);
+    crate::sort::by(&mut times, f32::total_cmp);
     let first = times.get(1).map_or(0.0, |second| second - times[0]);
     times.windows(2).all(|pair| (pair[1] - pair[0] - first).abs() <= first * 0.1 && pair[1] > pair[0])
         && joints.iter().all(|joint| joint.keys.len() == times.len() && joint.keys.iter().all(|key| key.style == LINEAR))
@@ -305,7 +305,7 @@ const PACKED_ROTATION: f32 = 16383.0;
 /// Between two keys such a clip mixes the quaternions and normalizes ([`sample`]).
 fn pack(clip: &mut Clip) {
     let mut times: Vec<f32> = clip.names.iter().map(|(time, _)| *time).collect();
-    times.sort_by(f32::total_cmp);
+    crate::sort::by(&mut times, f32::total_cmp);
     if times.len() > 1 {
         let step = clip.length / (times.len() - 1) as f32;
         let moved = |time: f32| times.partition_point(|&earlier| earlier < time) as f32 * step;

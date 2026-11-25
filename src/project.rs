@@ -1016,7 +1016,7 @@ pub(crate) fn sweep_immutable_store_dir(dir: &Path, ext: &str, max_files: usize)
     if entries.len() <= max_files {
         return;
     }
-    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    crate::sort::by(&mut entries, |a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
     for (_, old_path) in entries.into_iter().skip(max_files) {
         let _ = std::fs::remove_file(old_path);
     }
@@ -2386,7 +2386,7 @@ pub fn mount_place_content(engine: &Engine, hierarchy: &str) -> usize {
     for (link, above) in loops {
         engine.warn(format!("place content {}: a link back to {}, which would hold itself; not read", normalize(&link), normalize(&above)));
     }
-    files.sort();
+    crate::sort::ord(&mut files);
     let mut mounted = 0;
     for file in files {
         let segments: Vec<String> = file.parent().and_then(|dir| dir.strip_prefix(&top).ok()).map(|rel| rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect()).unwrap_or_default();

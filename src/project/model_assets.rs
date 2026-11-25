@@ -264,7 +264,7 @@ fn import(engine: &Engine, id: InstanceId, own_only: bool) {
         } else {
             // (the bundle `id` stands for before the members other bundles put in it)
             let mut keys = std::mem::take(pending);
-            keys.sort_by_key(|key| is_loose(key));
+            crate::sort::by_key(&mut keys, |key| is_loose(key));
             keys
         };
         if pending.is_empty() {
@@ -1476,7 +1476,7 @@ mod tests {
         files.insert("Models/Items/_Loose".into(), loose_file);
         files.insert("Models/Odd/Two".into(), two_file);
         let mut keys: Vec<String> = files.keys().cloned().collect();
-        keys.sort();
+        crate::sort::ord(&mut keys);
 
         let engine = Engine::new(Options::default()).unwrap();
         let vm = mlua::Lua::new();
@@ -1607,7 +1607,7 @@ mod tests {
         files.insert("Models/Stables/Horse".into(), horse_file);
         files.insert("Models/Arena".into(), arena_file);
         let mut keys: Vec<String> = files.keys().cloned().collect();
-        keys.sort();
+        crate::sort::ord(&mut keys);
 
         let engine = Engine::new(Options::default()).unwrap();
         let vm = mlua::Lua::new();
@@ -1653,7 +1653,7 @@ mod tests {
         "#).set_environment(env.clone()).exec().unwrap();
 
         let mut fetched = fetched.borrow().clone();
-        fetched.sort();
+        crate::sort::ord(&mut fetched);
         assert_eq!(fetched, ["Models/Arena", "Models/Stables/Horse"], "each bundle fetched once");
         let mut state = engine.state.borrow_mut();
         assert!(state.project.model_assets.pending.is_empty());
@@ -1701,7 +1701,7 @@ mod tests {
             assert(Assets.Machines.Renamed == Listed.Written)
         "#).set_environment(env).exec().unwrap();
         let mut fetched = fetched.borrow().clone();
-        fetched.sort();
+        crate::sort::ord(&mut fetched);
         assert_eq!(fetched, ["Machines/Called", "Machines/Read", "Machines/Written"], "a name read fetched nothing");
         engine.state.borrow_mut().project.model_assets.source = None;
         let _ = std::fs::remove_dir_all(directory);
@@ -1918,7 +1918,7 @@ mod tests {
         fn walk(path: &Path, out: &mut Vec<PathBuf>) {
             if path.is_dir() {
                 let mut entries: Vec<PathBuf> = std::fs::read_dir(path).map(|read| read.flatten().map(|entry| entry.path()).collect()).unwrap_or_default();
-                entries.sort();
+                crate::sort::ord(&mut entries);
                 for entry in entries {
                     walk(&entry, out);
                 }

@@ -121,7 +121,7 @@ fn scripts_flush_subnormal_results_where_roblox_does_and_keep_them_in_a_clients_
         if render {
             want.extend([format!("binding={keep}"), format!("renderDeferred={keep}"), format!("renderStepped={keep}")]);
         }
-        want.sort();
+        crate::sort::ord(&mut want);
         assert_eq!(got, want, "{mode} {run_context:?}");
         assert_eq!(std::hint::black_box(5e-324_f64) * std::hint::black_box(1.0), 5e-324, "the host's arithmetic keeps subnormals ({mode} {run_context:?})");
     }
@@ -3648,7 +3648,7 @@ fn lazily_made_instances_share_their_nodes_properties_until_written() {
                 }
             }
         }
-        listing.sort();
+        crate::sort::ord(&mut listing);
         listings.push(listing);
         drop(state);
         drop(lua);
@@ -13960,7 +13960,7 @@ fn a_burst_of_world_model_group_changes_leaves_the_loopback_flush_no_work_after_
     // (a flush's host time is a few ticks of the timer at most: many rounds, the slowest tenth left out)
     let typical = |rounds: usize| -> f64 {
         let mut times: Vec<f64> = (0..rounds).map(|_| frame("shared.Round()", false)).collect();
-        times.sort_by(f64::total_cmp);
+        crate::sort::by(&mut times, f64::total_cmp);
         let kept = rounds * 9 / 10;
         times[..kept].iter().sum::<f64>() / kept as f64
     };

@@ -97,7 +97,7 @@ pub fn env_digest() -> String {
         })
         .map(|(name, value)| (name.to_ascii_uppercase(), value))
         .collect();
-    variables.sort();
+    crate::sort::ord(&mut variables);
     let mut hasher = rustc_hash::FxHasher::default();
     variables.hash(&mut hasher);
     format!("{:016x}", hasher.finish())

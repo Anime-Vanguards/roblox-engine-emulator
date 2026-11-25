@@ -630,7 +630,7 @@ pub unsafe fn results(state: *mut lua_State) -> Results {
         lua_profilecoldobjects(state, each_cold, &mut cold_objects as *mut _ as *mut c_void);
     }
     let functions = collected.functions;
-    cold_objects.sort_by(|a, b| b.cost.total_cmp(&a.cost).then(a.kind.cmp(&b.kind)).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)));
+    crate::sort::by(&mut cold_objects, |a, b| b.cost.total_cmp(&a.cost).then(a.kind.cmp(&b.kind)).then(a.function.cmp(&b.function)).then(a.pc.cmp(&b.pc)));
     let mut cfunctions = Vec::new();
     loop {
         let name = unsafe { lua_profilecfunction(state, cfunctions.len() as c_int) };

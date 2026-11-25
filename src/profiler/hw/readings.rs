@@ -29,7 +29,7 @@ pub struct Split {
 /// end at or after it; it matched when that came within `tolerance` ticks.
 pub fn split(readings: &[i64], slices: &[Slice], tolerance: i64) -> Split {
     let mut ends: Vec<(i64, usize)> = slices.iter().enumerate().map(|(index, slice)| (slice.end, index)).collect();
-    ends.sort_unstable();
+    crate::sort::ord(&mut ends);
     // each reading's switch: the first slice end at or after it
     let mut boundaries = Vec::with_capacity(readings.len());
     let mut matched = 0;

@@ -27,7 +27,7 @@ pub fn unslowed(arms: &[Vec<Option<f64>>]) -> Vec<Vec<Option<f64>>> {
         if values.is_empty() {
             return 0.0;
         }
-        values.sort_by(f64::total_cmp);
+        crate::sort::by(values, f64::total_cmp);
         let middle = values.len() / 2;
         if values.len() % 2 == 1 { values[middle] } else { (values[middle - 1] + values[middle]) / 2.0 }
     };
@@ -130,7 +130,7 @@ pub fn shift(d: &[f64], level: f64) -> Option<Shift> {
             walsh.push((d[i] + d[j]) / 2.0);
         }
     }
-    walsh.sort_by(f64::total_cmp);
+    crate::sort::by(&mut walsh, f64::total_cmp);
     let count = walsh.len();
     let estimate = if count % 2 == 1 { walsh[count / 2] } else { (walsh[count / 2 - 1] + walsh[count / 2]) / 2.0 };
     let interval = signed_rank_critical(d.len(), (1.0 - level) / 2.0).map(|c| (walsh[c], walsh[count - 1 - c]));
@@ -143,7 +143,7 @@ pub fn quantile(values: &[f64], q: f64) -> Option<f64> {
     if sorted.is_empty() {
         return None;
     }
-    sorted.sort_by(f64::total_cmp);
+    crate::sort::by(&mut sorted, f64::total_cmp);
     let position = q.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
     let (low, high) = (position.floor() as usize, position.ceil() as usize);
     Some(sorted[low] + (sorted[high] - sorted[low]) * (position - low as f64))
@@ -281,7 +281,7 @@ fn fit_at(points: &[(f64, f64)], k: f64) -> (f64, f64, f64) {
 
 pub fn growth(points: &[(f64, f64)]) -> Option<Growth> {
     let mut points: Vec<(f64, f64)> = points.iter().copied().filter(|(n, y)| *n > 0.0 && *y > 0.0 && n.is_finite() && y.is_finite()).collect();
-    points.sort_by(|a, b| a.0.total_cmp(&b.0));
+    crate::sort::by(&mut points, |a, b| a.0.total_cmp(&b.0));
     points.dedup_by(|a, b| a.0 == b.0);
     if points.len() < 2 {
         return None;

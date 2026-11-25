@@ -185,7 +185,7 @@ pub fn tagged_below(state: &mut State, root: InstanceId, tag: &Str) -> Vec<Insta
             (!path.is_empty()).then_some((path, id))
         })
         .collect();
-    found.sort_unstable();
+    crate::sort::ord(&mut found);
     found.into_iter().map(|(_, id)| id).collect()
 }
 
@@ -811,7 +811,7 @@ pub fn install(engine: &Rc<Engine>) {
             };
             let mut list = bind_steps.borrow_mut();
             list.push(Rc::new(RenderStep { name, priority: level, callback, sequence: sequence.get() }));
-            list.sort_by(|a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal).then(a.sequence.cmp(&b.sequence)));
+            crate::sort::by(&mut list, |a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal).then(a.sequence.cmp(&b.sequence)));
             Ok(none())
         }));
         let unbind_steps = steps.clone();

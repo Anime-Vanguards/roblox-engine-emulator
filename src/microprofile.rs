@@ -282,7 +282,7 @@ pub fn window(from: u64, to: u64) -> Vec<Lane> {
             }
         })
         .collect();
-    lanes.sort_by_key(|lane| lane.order);
+    crate::sort::by_key(&mut lanes, |lane| lane.order);
     lanes
 }
 

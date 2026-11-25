@@ -38,7 +38,7 @@ pub fn project_files_in(dir: &Path) -> Vec<PathBuf> {
         .filter(|entry| is_project_file(&entry.file_name().to_string_lossy()) && entry.path().is_file())
         .map(|entry| entry.path())
         .collect();
-    files.sort();
+    crate::sort::ord(&mut files);
     files
 }
 

@@ -186,12 +186,12 @@ pub fn start_noting() {
 /// changed while it was read, which cannot be checked).
 pub fn stop_noting() -> Noted {
     let mut noted = NOTING.with(|noting| noting.borrow_mut().take()).unwrap_or_default();
-    noted.files.sort_by(|a, b| a.0.cmp(&b.0));
+    crate::sort::by(&mut noted.files, |a, b| a.0.cmp(&b.0));
     if noted.files.windows(2).any(|pair| pair[0].0 == pair[1].0 && pair[0].1 != pair[1].1) && noted.unchecked.is_none() {
         noted.unchecked = Some("a file changed while it was read".into());
     }
     noted.files.dedup_by(|a, b| a.0 == b.0);
-    noted.listings.sort_by(|a, b| a.0.cmp(&b.0));
+    crate::sort::by(&mut noted.listings, |a, b| a.0.cmp(&b.0));
     noted.listings.dedup_by(|a, b| a.0 == b.0);
     noted
 }
@@ -249,7 +249,7 @@ pub fn note_unchecked(why: &str) {
 
 fn listing(path: &Path) -> Option<Vec<std::ffi::OsString>> {
     let mut names: Vec<std::ffi::OsString> = std::fs::read_dir(path).ok()?.map(|entry| entry.map(|entry| entry.file_name())).collect::<Result<_, _>>().ok()?;
-    names.sort();
+    crate::sort::ord(&mut names);
     Some(names)
 }
 

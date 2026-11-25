@@ -131,7 +131,7 @@ fn pair_anonymous(before: &BTreeMap<String, FunctionEntry>, after: &BTreeMap<Str
     for module in modules {
         let side = |map: &BTreeMap<String, FunctionEntry>| -> Vec<(String, FunctionEntry)> {
             let mut list: Vec<(String, FunctionEntry)> = map.iter().filter(|(_, entry)| entry.anonymous() && &entry.module == module).map(|(key, entry)| (key.clone(), entry.clone())).collect();
-            list.sort_by_key(|(_, entry)| entry.line);
+            crate::sort::by_key(&mut list, |(_, entry)| entry.line);
             list
         };
         let (b, a) = (side(before), side(after));
@@ -143,7 +143,7 @@ fn pair_anonymous(before: &BTreeMap<String, FunctionEntry>, after: &BTreeMap<Str
         anchor_pass(&b, &a, |x, y| hashed(x) && x.code == y.code, &mut taken_b, &mut taken_a, &mut anchors, false);
         // (a profile from before the hashes: the same key, as before)
         anchor_pass(&b, &a, |x, y| !hashed(x) && !hashed(y) && x.line == y.line, &mut taken_b, &mut taken_a, &mut anchors, true);
-        anchors.sort();
+        crate::sort::ord(&mut anchors);
         // between anchors (those in order on both sides), the rest in order where both sides hold as many (a handler edited
         // where it stands)
         let mut bounds: Vec<(isize, isize)> = vec![(-1, -1)];
@@ -807,7 +807,7 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
     // moved has not moved)
     let weight = |row: &Row| -> f64 { (row.after.self_work - row.before.self_work).abs() * 1000.0 + (row.after.alloc - row.before.alloc).abs() / 1024.0 + (row.after.insns - row.before.insns).abs() / 1000.0 + (row.after.calls - row.before.calls).abs() / 1000.0 };
     rows.retain(|row| moved_ms(row.before.self_work, row.after.self_work) || moved_count(row.before.alloc, row.after.alloc) || moved_count(row.before.insns, row.after.insns) || moved_count(row.before.calls, row.after.calls));
-    rows.sort_by(|a, b| weight(b).total_cmp(&weight(a)).then_with(|| a.label.cmp(&b.label)));
+    crate::sort::by(&mut rows, |a, b| weight(b).total_cmp(&weight(a)).then_with(|| a.label.cmp(&b.label)));
     let scope_part = scope_label.as_ref().map_or(String::new(), |label| format!(", {label}"));
     // (the game's self work that moved, by path changes and by price alone)
     let game: Vec<&Row> = rows.iter().filter(|row| !row.harness).collect();
@@ -891,7 +891,7 @@ fn compare_serialized(before: &Json, after: &Json, top: usize) -> (String, Strin
             })
             .filter(|(_, b, a, _, _)| (a - b).abs() > 0.0)
             .collect();
-        moved.sort_by(|x, y| (y.2 - y.1).abs().total_cmp(&(x.2 - x.1).abs()).then_with(|| x.0.cmp(y.0)));
+        crate::sort::by(&mut moved, |x, y| (y.2 - y.1).abs().total_cmp(&(x.2 - x.1).abs()).then_with(|| x.0.cmp(y.0)));
         if !moved.is_empty() {
             let stalls = lead == "load-stall-cycles";
             let _ = writeln!(text, "
@@ -919,7 +919,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
     let line_keys: BTreeSet<&(String, i64)> = lb.keys().chain(la.keys()).collect();
     let mut line_rows: Vec<(&(String, i64), (f64, f64, f64), (f64, f64, f64))> =
         line_keys.into_iter().map(|key| (key, lb.get(key).copied().unwrap_or_default(), la.get(key).copied().unwrap_or_default())).filter(|(_, b, a)| moved_ms(b.0, a.0) || moved_count(b.1, a.1) || moved_count(b.2, a.2)).collect();
-    line_rows.sort_by(|x, y| ((y.2.0 - y.1.0).abs()).total_cmp(&(x.2.0 - x.1.0).abs()).then_with(|| x.0.cmp(y.0)));
+    crate::sort::by(&mut line_rows, |x, y| ((y.2.0 - y.1.0).abs()).total_cmp(&(x.2.0 - x.1.0).abs()).then_with(|| x.0.cmp(y.0)));
     if !line_rows.is_empty() {
         let _ = writeln!(text, "\nlines that moved most in modules whose source is unchanged (self work ms, instructions)");
         for ((module, line), b, a) in line_rows.iter().take(top) {
@@ -989,7 +989,7 @@ functions whose {} moved most (hardware counters, self: before -> after{}; they 
     ] {
         let names: BTreeSet<&String> = b.keys().chain(a.keys()).collect();
         let mut moved: Vec<(&String, f64, f64)> = names.into_iter().map(|name| (name, b.get(name).copied().unwrap_or(0.0), a.get(name).copied().unwrap_or(0.0))).filter(|(_, x, y)| (x - y).abs() >= 1.0).collect();
-        moved.sort_by(|x, y| (y.2 - y.1).abs().total_cmp(&(x.2 - x.1).abs()));
+        crate::sort::by(&mut moved, |x, y| (y.2 - y.1).abs().total_cmp(&(x.2 - x.1).abs()));
         if !moved.is_empty() {
             let _ = writeln!(text, "\n{title}");
             for (name, x, y) in moved.iter().take(top.min(12)) {

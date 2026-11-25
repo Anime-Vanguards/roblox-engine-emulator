@@ -404,7 +404,7 @@ fn playing_tracks(lua: &Lua, engine: &Rc<Engine>, shared: &Shared, names: &Names
             .filter(|(_, track)| track.animator == animator && track.playing)
             .map(|(&id, track)| (track.order, id))
             .collect();
-        found.sort();
+        crate::sort::ord(&mut found);
         for (_, id) in found {
             table.raw_push(instance_value(lua, engine, id)?)?;
         }
@@ -839,7 +839,7 @@ fn passed(clip: &Clip, stretches: &[Stretch], back: bool, out: &mut Vec<Fire>) {
             if back {
                 found.reverse();
             }
-            found.sort_by_key(|marker| marker.curve);
+            crate::sort::by_key(&mut found, |marker| marker.curve);
             out.extend(found.into_iter().map(|marker| Fire::Marker(marker.name.clone(), marker.value.clone())));
         }
     }
@@ -1151,7 +1151,7 @@ fn step_of(engine: &Rc<Engine>, delta: f64, only: Option<InstanceId>) {
             let priority = state.dom.raw_get(*id, names.priority).and_then(Value::as_enum).map_or(clip::PRIORITY_ACTION, |item| engine.reflection.enum_item_info(item).value as u32);
             animators[index].1.push((clip, track.time as f32, track.weight, priority_rank(priority)));
         }
-        animators.sort_by_key(|(id, _)| state.dom.get(*id).map_or(0, |instance| instance.serial));
+        crate::sort::by_key(&mut animators, |(id, _)| state.dom.get(*id).map_or(0, |instance| instance.serial));
     }
     for (animator, tracks) in animators {
         pose(engine, &shared, &names, animator, tracks);
@@ -1272,7 +1272,7 @@ pub type Layer = (u32, f32, Quat, Vec3A);
 /// 0.25 at 8 and 2 studs under an Action2 track of weight 0.5 at 4 studs give 4.5, the lower level taking all of the
 /// half that is left, not half of it.
 pub fn blend(layers: &mut [Layer]) -> (Quat, Vec3A) {
-    layers.sort_by(|a, b| b.0.cmp(&a.0));
+    crate::sort::by(layers, |a, b| b.0.cmp(&a.0));
     let align = |q: Quat| if q.w < 0.0 { -q } else { q };
     let mut remaining = 1.0f32;
     let mut rotation = Vec4::ZERO;
@@ -1386,7 +1386,7 @@ fn pose(engine: &Rc<Engine>, shared: &Shared, names: &Names, animator: InstanceI
 /// [`blend`] for a number whose rest is 0 (a FaceControls property; measured with the same mixes: 0.8 and 0.2 at
 /// weight 0.25 each under a higher 0.4 at weight 0.5 give 0.45).
 pub fn blend_values(layers: &mut [(u32, f32, f32)]) -> f32 {
-    layers.sort_by(|a, b| b.0.cmp(&a.0));
+    crate::sort::by(layers, |a, b| b.0.cmp(&a.0));
     let mut remaining = 1.0f32;
     let mut value = 0.0f32;
     let mut start = 0;

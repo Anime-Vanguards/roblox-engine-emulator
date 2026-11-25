@@ -586,7 +586,7 @@ impl Distribution {
         if values.is_empty() {
             return Distribution::default();
         }
-        values.sort_unstable();
+        crate::sort::ord(values);
         let mut hist: std::collections::BTreeMap<u32, u64> = std::collections::BTreeMap::new();
         for &(size, _) in values.iter() {
             *hist.entry(if powers && size > 0 { size.next_power_of_two() } else { size }).or_default() += 1;
@@ -936,7 +936,7 @@ pub unsafe fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: 
     }
     let sorted = |types: HashMap<String, (u64, u64)>| -> Vec<(String, u64, u64)> {
         let mut types: Vec<(String, u64, u64)> = types.into_iter().map(|(name, (count, bytes))| (name, count, bytes)).collect();
-        types.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        crate::sort::by(&mut types, |a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
         types
     };
     let (by_type, unswept_by_type) = (sorted(by_type), sorted(garbage));
@@ -991,7 +991,7 @@ pub unsafe fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: 
     // nearly everything: left out)
     let main_index = index.get(&main).copied();
     let mut candidates: Vec<u32> = (0..count as u32).filter(|&node| visited[node as usize] && !is_root[node as usize]).collect();
-    candidates.sort_by(|&a, &b| retained[b as usize].cmp(&retained[a as usize]).then(a.cmp(&b)));
+    crate::sort::by(&mut candidates, |&a, &b| retained[b as usize].cmp(&retained[a as usize]).then(a.cmp(&b)));
     // (the main thread's globals table keeps nearly everything too)
     let globals = main_index.and_then(|main| successors(main).find(|&at| edge_names.names.get(target_names[at] as usize).map(String::as_str) == Some("globals")).map(|at| targets[at]));
     let keep_out = |node: u32| -> bool { Some(node) == globals };
@@ -1026,7 +1026,7 @@ pub unsafe fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: 
         }
     }
     let mut by_stack: Vec<(u32, String, f64, f64)> = by_stack.into_iter().map(|((stack, ty), (count, bytes))| (stack, type_names.get(ty as usize).cloned().unwrap_or_default(), count, bytes)).collect();
-    by_stack.sort_by(|a, b| b.3.total_cmp(&a.3).then(a.0.cmp(&b.0)));
+    crate::sort::by(&mut by_stack, |a, b| b.3.total_cmp(&a.3).then(a.0.cmp(&b.0)));
 
     // the reachable tables: their shapes, nesting levels (over the references between tables, a metatable's aside) and
     // the sites that allocated them
@@ -1043,7 +1043,7 @@ pub unsafe fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: 
             .filter(|&&(from, to, name)| name != metatable && table_of[from as usize] != NONE && table_of[to as usize] != NONE)
             .map(|&(from, to, _)| (table_of[from as usize], table_of[to as usize]))
             .collect();
-        table_edges.sort_unstable();
+        crate::sort::ord(&mut table_edges);
         table_edges.dedup();
         for &(from, _) in &table_edges {
             table_offsets[from as usize + 1] += 1;
@@ -1086,7 +1086,7 @@ pub unsafe fn snapshot(state: *mut lua_State, label: &str, frame: u64, seconds: 
                 site
             })
             .collect();
-        tables.sites.sort_by(|a, b| b.bytes.total_cmp(&a.bytes).then(a.phase.cmp(&b.phase)).then(a.stack.cmp(&b.stack)));
+        crate::sort::by(&mut tables.sites, |a, b| b.bytes.total_cmp(&a.bytes).then(a.phase.cmp(&b.phase)).then(a.stack.cmp(&b.stack)));
         tables
     };
 

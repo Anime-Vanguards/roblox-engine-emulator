@@ -170,7 +170,7 @@ pub fn tool_module(module: &str) -> bool {
 /// what-if runner's harness `RURFixtures.WhatIf` and a user's `ReplicatedStorage.WhatIf`)
 pub fn short_names<'a>(modules: impl Iterator<Item = &'a str>) -> FxHashMap<String, String> {
     let mut modules: Vec<&str> = modules.collect();
-    modules.sort_unstable();
+    crate::sort::ord(&mut modules);
     modules.dedup();
     let segments = |module: &str| -> Vec<String> {
         let trimmed = module.trim_end_matches(".luau").trim_end_matches(".lua");
@@ -2496,14 +2496,14 @@ pub fn write(input: &Input) -> Result<String, String> {
 
     // functions: every one with figures, keyed so a diff finds it again
     let mut function_rows: Vec<(i32, Figures)> = model.functions.iter().map(|(&id, figures)| (id, *figures)).collect();
-    function_rows.sort_by(|a, b| b.1.self_work.total_cmp(&a.1.self_work).then(b.1.total_time.total_cmp(&a.1.total_time)).then(b.1.total_alloc.total_cmp(&a.1.total_alloc)).then(a.0.cmp(&b.0)));
+    crate::sort::by(&mut function_rows, |a, b| b.1.self_work.total_cmp(&a.1.self_work).then(b.1.total_time.total_cmp(&a.1.total_time)).then(b.1.total_alloc.total_cmp(&a.1.total_alloc)).then(a.0.cmp(&b.0)));
     // each inlined function's callers, most work first
     let mut inlined_into: FxHashMap<i32, Vec<(i32, Inlined)>> = FxHashMap::default();
     for (&(caller, callee), inlined) in &model.inlined {
         inlined_into.entry(callee).or_default().push((caller, *inlined));
     }
     for callers in inlined_into.values_mut() {
-        callers.sort_by(|a, b| b.1.work.total_cmp(&a.1.work).then(b.1.calls.cmp(&a.1.calls)).then(a.0.cmp(&b.0)));
+        crate::sort::by(callers, |a, b| b.1.work.total_cmp(&a.1.work).then(b.1.calls.cmp(&a.1.calls)).then(a.0.cmp(&b.0)));
     }
     let phase_name = |phase: u32| input.phases.get(phase as usize).cloned().unwrap_or_else(|| "startup".to_string());
     let mut by_phase: FxHashMap<i32, BTreeMap<u32, FunctionPhase>> = FxHashMap::default();
@@ -2571,7 +2571,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             c_sites.entry(function).or_default().push(((caller, line), figures));
         }
         for rows in c_sites.values_mut() {
-            rows.sort_by(|a, b| b.1.2.total_cmp(&a.1.2).then(b.1.0.cmp(&a.1.0)).then(a.0.cmp(&b.0)));
+            crate::sort::by(rows, |a, b| b.1.2.total_cmp(&a.1.2).then(b.1.0.cmp(&a.1.0)).then(a.0.cmp(&b.0)));
         }
     }
     let stepping = input.config.kinds.steps();
@@ -2703,7 +2703,7 @@ pub fn write(input: &Input) -> Result<String, String> {
     // lines (with their opcodes)
     let mut line_rows: Vec<(&(i32, i32), &LineFigures)> = model.lines.iter().collect();
     let line_self = |figures: &LineFigures| figures.work + figures.c_work;
-    line_rows.sort_by(|a, b| line_self(b.1).total_cmp(&line_self(a.1)).then(b.1.time.total_cmp(&a.1.time)).then(b.1.alloc.total_cmp(&a.1.alloc)).then(a.0.cmp(b.0)));
+    crate::sort::by(&mut line_rows, |a, b| line_self(b.1).total_cmp(&line_self(a.1)).then(b.1.time.total_cmp(&a.1.time)).then(b.1.alloc.total_cmp(&a.1.alloc)).then(a.0.cmp(b.0)));
     let lines_json: Vec<LineJson> = line_rows
         .iter()
         .map(|&(&(function, line), figures)| LineJson {
@@ -2747,14 +2747,14 @@ pub fn write(input: &Input) -> Result<String, String> {
         .collect();
     let edges_json: Vec<EdgeJson> = {
         let mut edges: Vec<_> = model.edges.iter().collect();
-        edges.sort_by(|a, b| b.1.1.total_cmp(&a.1.1).then(a.0.cmp(b.0)));
+        crate::sort::by(&mut edges, |a, b| b.1.1.total_cmp(&a.1.1).then(a.0.cmp(b.0)));
         let mut rows: Vec<EdgeJson> = edges
             .iter()
             .map(|&(&(caller, callee), &(calls, work, insns))| EdgeJson { callee, caller, calls, copies: None, inlined: None, insns, work_ms: ms(work) })
             .collect();
         // (calls -O2 compiled into the caller: entries into the callee's copies there)
         let mut inlined: Vec<_> = model.inlined.iter().collect();
-        inlined.sort_by(|a, b| b.1.work.total_cmp(&a.1.work).then(a.0.cmp(b.0)));
+        crate::sort::by(&mut inlined, |a, b| b.1.work.total_cmp(&a.1.work).then(a.0.cmp(b.0)));
         rows.extend(inlined.iter().map(|&(&(caller, callee), inlined)| EdgeJson { callee, caller, calls: inlined.calls, copies: Some(inlined.copies), inlined: Some(true), insns: inlined.insns, work_ms: ms(inlined.work) }));
         rows
     };
@@ -2868,7 +2868,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             }
         }
         let mut opcode_rows: Vec<_> = opcodes.into_iter().collect();
-        opcode_rows.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        crate::sort::by(&mut opcode_rows, |a, b| b.1.0.cmp(&a.1.0));
         // the run's kinds of work (of the total): cold and first-use charges, the collector's, dispatch, Studio-era and defaulted prices
         let mut kinds_total = [0.0f64; vm::SPLITS];
         for node in &vm_results.nodes {
@@ -3045,7 +3045,7 @@ pub fn write(input: &Input) -> Result<String, String> {
                 }
             }
             let mut rows: Vec<(i32, f64, f64, u64, u64)> = rows.into_iter().map(|(id, (work, total, calls, insns))| (id, work, total, calls, insns)).collect();
-            rows.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+            crate::sort::by(&mut rows, |a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
             rows
         };
         let (game_rows, harness_rows) = (side_rows(false), side_rows(true));
@@ -3061,7 +3061,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             let _ = writeln!(summary, "{:>9.3} {:>8.3} {:>9.3} {:>9.3} {:>10} {:>12}  {}", ms(*work), ms(cold), ms(saving), ms(*total), group_digits(*calls), group_digits(*insns), names.label(*id));
         }
         let mut by_total: Vec<&(i32, f64, f64, u64, u64)> = game_rows.iter().filter(|row| row.0 >= 0).collect();
-        by_total.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut by_total, |a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
         let _ = writeln!(summary, "\ntop functions by total work: the game's code, {scope_label}");
         let _ = writeln!(summary, "{:>9} {:>9} {:>10}  function", "total ms", "self ms", "calls");
         for (id, work, total, calls, _) in by_total.iter().filter(|row| row.2 >= 5e-7).take(top.min(12)) {
@@ -3078,7 +3078,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         // functions -O2 inlined: no frame of theirs runs there, so the tables above count only their other calls
         let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, _)| inlined_into.contains_key(id) && !names.engine(*id) && !names.harness(*id)).collect();
         if !inlined.is_empty() {
-            inlined.sort_by(|a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(b.1.inlined_calls.cmp(&a.1.inlined_calls)).then(a.0.cmp(&b.0)));
+            crate::sort::by(&mut inlined, |a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(b.1.inlined_calls.cmp(&a.1.inlined_calls)).then(a.0.cmp(&b.0)));
             let _ = writeln!(
                 summary,
                 "\ninlined functions (Luau's -O2 compiled their bodies into their callers: a call is counted where a copy was entered; the instructions and work are on their own lines in the callers, counted there too)"
@@ -3109,7 +3109,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         for &(&(function, line), figures) in line_rows.iter() {
             scoped_lines.push(ScopedLine { function, line, figures, phase: figures.within(&scope) });
         }
-        scoped_lines.sort_by(|a, b| b.phase.self_work().total_cmp(&a.phase.self_work()).then((a.function, a.line).cmp(&(b.function, b.line))));
+        crate::sort::by(&mut scoped_lines, |a, b| b.phase.self_work().total_cmp(&a.phase.self_work()).then((a.function, a.line).cmp(&(b.function, b.line))));
         let _ = writeln!(summary, "\ntop lines by self work: the game's code, {scope_label}");
         let _ = writeln!(summary, "{:>9} {:>8} {:>11} {:>12}  line  (opcodes)", "self ms", "cold ms", "total ms", "insns");
         let is_game_line = |line: &&ScopedLine| {
@@ -3118,7 +3118,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         for ScopedLine { function, line, figures, phase } in scoped_lines.iter().filter(is_game_line).take(top) {
             let ops: Vec<String> = {
                 let mut ops: Vec<_> = figures.ops.iter().collect();
-                ops.sort_by(|a, b| b.1.cmp(a.1));
+                crate::sort::by(&mut ops, |a, b| b.1.cmp(a.1));
                 ops.iter().take(4).map(|(op, count)| format!("{} {}", vm::opcode_name(**op), group_digits(**count))).collect()
             };
             let module = names.function(*function).map_or(String::new(), |f| names.short(&f.source).to_string());
@@ -3149,7 +3149,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             wall_total
         );
         let mut by_self: Vec<&(i32, Figures)> = function_rows.iter().filter(|(_, f)| f.self_time > 0.0).collect();
-        by_self.sort_by(|a, b| b.1.self_time.total_cmp(&a.1.self_time).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut by_self, |a, b| b.1.self_time.total_cmp(&a.1.self_time).then(a.0.cmp(&b.0)));
         let _ = writeln!(summary, "{:>9} {:>9} {:>9}  function", "self ms", "total ms", "wall ms");
         for (id, figures) in by_self.iter().take(input.config.top) {
             let _ = writeln!(summary, "{:>9.1} {:>9.1} {:>9.1}  {}", figures.self_time, figures.total_time, figures.self_wall, names.label(*id));
@@ -3157,7 +3157,7 @@ pub fn write(input: &Input) -> Result<String, String> {
         // functions -O2 inlined into their callers: their lines' time there (also their callers' own)
         let mut inlined: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, f)| f.inlined_time > 0.0 && !names.engine(*id)).collect();
         if !inlined.is_empty() {
-            inlined.sort_by(|a, b| b.1.inlined_time.total_cmp(&a.1.inlined_time).then(a.0.cmp(&b.0)));
+            crate::sort::by(&mut inlined, |a, b| b.1.inlined_time.total_cmp(&a.1.inlined_time).then(a.0.cmp(&b.0)));
             let _ = writeln!(summary, "inlined functions' host time, an estimate (each sample's share of the code since the safepoint before it, by the work clock's prices of its opcodes, in the copies -O2 compiled into their callers; a sample right after a call that reached a C function is not split; their callers' self time holds it)");
             for (id, figures) in inlined.iter().take(input.config.top.min(10)) {
                 let _ = writeln!(summary, "{:>9.1} {:>9} {:>9.1}  {} (inlined)", figures.inlined_time, "", figures.inlined_wall, names.label(*id));
@@ -3168,7 +3168,7 @@ pub fn write(input: &Input) -> Result<String, String> {
     // allocations
     if let Some(allocations) = input.allocations {
         let mut by_type: Vec<(String, memory::Amount)> = allocations.types.names.iter().cloned().zip(allocations.by_type.iter().copied()).collect();
-        by_type.sort_by(|a, b| b.1.bytes.total_cmp(&a.1.bytes));
+        crate::sort::by(&mut by_type, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
         let mut groups: BTreeMap<String, memory::Amount> = BTreeMap::new();
         for (name, amount) in &by_type {
             let entry = groups.entry(memory::group(name).to_string()).or_default();
@@ -3176,7 +3176,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             entry.count += amount.count;
         }
         let mut groups: Vec<_> = groups.into_iter().collect();
-        groups.sort_by(|a, b| b.1.bytes.total_cmp(&a.1.bytes));
+        crate::sort::by(&mut groups, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
         let total = allocations.bytes as f64;
         let _ = writeln!(
             summary,
@@ -3193,7 +3193,7 @@ pub fn write(input: &Input) -> Result<String, String> {
             entry.count += amount.count;
         }
         let mut stack_rows: Vec<_> = stacks.into_iter().collect();
-        stack_rows.sort_by(|a, b| b.1.bytes.total_cmp(&a.1.bytes));
+        crate::sort::by(&mut stack_rows, |a, b| b.1.bytes.total_cmp(&a.1.bytes));
         let describe = |stack: u32| -> String {
             let frames = &allocations.stacks.stacks[stack as usize];
             let luau: Vec<String> = frames.iter().filter(|frame| frame.0 >= 0 && !names.engine(frame.0)).take(3).map(|&(function, line)| {
@@ -3220,7 +3220,7 @@ pub fn write(input: &Input) -> Result<String, String> {
                 group_digits(total.script_keys)
             );
             let mut rows: Vec<(&(u32, u32, u32), &memory::Rehash)> = allocations.rehash.iter().collect();
-            rows.sort_by(|a, b| b.1.keys.cmp(&a.1.keys).then(b.1.events.cmp(&a.1.events)).then(a.0.cmp(b.0)));
+            crate::sort::by(&mut rows, |a, b| b.1.keys.cmp(&a.1.keys).then(b.1.events.cmp(&a.1.events)).then(a.0.cmp(b.0)));
             let _ = writeln!(summary, "{:>10} {:>12}  rehashed at  (the table made at)", "rehashes", "keys moved");
             for ((_, stack, made), rehash) in rows.iter().filter(|(key, _)| key.1 != memory::NO_STACK).take(input.config.top.min(10)) {
                 let made = if *made == memory::NO_STACK { "not followed".to_string() } else { describe(*made) };
@@ -3745,7 +3745,7 @@ pub fn write(input: &Input) -> Result<String, String> {
     }
     // (and the inlined functions with the most work in their copies: the page shows it on their own lines)
     let mut inlined_hot: Vec<&(i32, Figures)> = function_rows.iter().filter(|(id, figures)| *id >= 0 && figures.inlined_work > 0.0 && !listed.contains(id) && !names.engine(*id)).collect();
-    inlined_hot.sort_by(|a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(a.0.cmp(&b.0)));
+    crate::sort::by(&mut inlined_hot, |a, b| b.1.inlined_work.total_cmp(&a.1.inlined_work).then(a.0.cmp(&b.0)));
     listed.extend(inlined_hot.iter().take(6).map(|(id, _)| *id));
     for id in &listed {
         if let Some(function) = names.function(*id) {
@@ -3792,7 +3792,7 @@ pub fn write(input: &Input) -> Result<String, String> {
     folded_files.extend(counter_folded);
     for (name, mut rows) in folded_files.clone() {
         rows.retain(|row| row.1 > 0);
-        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        crate::sort::by(&mut rows, |a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let mut text = String::with_capacity(rows.len() * 80);
         for (stack, weight) in rows {
             let _ = writeln!(text, "{stack} {weight}");
@@ -4096,7 +4096,7 @@ Luau inline caches, {scope_label}: what each lookup did, as the interpreter did 
     let weight = |row: &SiteRow| row.extra.uncharged_us + row.charged_us;
     let game_sites = sites.iter().any(|row| costly(row) > 0 && !harness_site(row.function));
     let mut ranked: Vec<&SiteRow> = sites.iter().filter(|row| costly(row) > 0 && (!game_sites || !harness_site(row.function))).collect();
-    ranked.sort_by(|a, b| weight(b).total_cmp(&weight(a)).then(costly(b).cmp(&costly(a))).then(a.function.cmp(&b.function)).then(a.site.pc.cmp(&b.site.pc)));
+    crate::sort::by(&mut ranked, |a, b| weight(b).total_cmp(&weight(a)).then(costly(b).cmp(&costly(a))).then(a.function.cmp(&b.function)).then(a.site.pc.cmp(&b.site.pc)));
     if !ranked.is_empty() {
         let _ = writeln!(summary, "sites costing most{} (the work clock's us a frame: charged, then extra)", if game_sites { ": the game's code (the harness's apart)" } else { "" });
         for row in ranked.iter().take(top.min(10)) {
@@ -4105,7 +4105,7 @@ Luau inline caches, {scope_label}: what each lookup did, as the interpreter did 
             let _ = writeln!(summary, "  {:>9.2} {:>9.2}  {}  {} of {}{noise}", row.charged_us / frames, row.extra.uncharged_us / frames, site_label(row.function, &row.site), parts.join(", "), group_digits(row.site.runs()));
         }
     }
-    sites.sort_by(|a, b| weight(b).total_cmp(&weight(a)).then(costly(b).cmp(&costly(a))).then(b.site.runs().cmp(&a.site.runs())).then(a.function.cmp(&b.function)).then(a.site.pc.cmp(&b.site.pc)));
+    crate::sort::by(&mut sites, |a, b| weight(b).total_cmp(&weight(a)).then(costly(b).cmp(&costly(a))).then(b.site.runs().cmp(&a.site.runs())).then(a.function.cmp(&b.function)).then(a.site.pc.cmp(&b.site.pc)));
     // a charge split into its table's first touch and the rest, each rounded so that the parts add up to the rounded charge:
     // (charged, first touch, the outcome's own)
     let split = |charged: f64, first_touch: f64, digits: i32| -> (f64, f64, f64) {
@@ -4275,7 +4275,7 @@ Luau inline caches, {scope_label}: what each lookup did, as the interpreter did 
     let charged = |builtin: &Builtin| builtin.all.charged;
     let sorted = |builtins: BTreeMap<i32, Builtin>| -> Vec<(i32, Builtin)> {
         let mut rows: Vec<(i32, Builtin)> = builtins.into_iter().collect();
-        rows.sort_by(|a, b| charged(&b.1).total_cmp(&charged(&a.1)).then(declined(&b.1).cmp(&declined(&a.1))).then((b.1.all.fast + declined(&b.1)).cmp(&(a.1.all.fast + declined(&a.1)))).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut rows, |a, b| charged(&b.1).total_cmp(&charged(&a.1)).then(declined(&b.1).cmp(&declined(&a.1))).then((b.1.all.fast + declined(&b.1)).cmp(&(a.1.all.fast + declined(&a.1)))).then(a.0.cmp(&b.0)));
         rows
     };
     let (rows, tool_rows) = (sorted(builtins), sorted(tool_builtins));
@@ -4706,7 +4706,7 @@ struct ColdRow {
 /// differ from it in its last bits.
 fn sum_then_sort_cold_rows(rows: &mut [ColdRow]) -> f64 {
     let total = rows.iter().map(|row| row.cost).sum();
-    rows.sort_by(|a, b| b.cost.total_cmp(&a.cost).then(a.kind.cmp(&b.kind)).then(a.name.cmp(&b.name)));
+    crate::sort::by(rows, |a, b| b.cost.total_cmp(&a.cost).then(a.kind.cmp(&b.kind)).then(a.name.cmp(&b.name)));
     total
 }
 
@@ -4772,7 +4772,7 @@ fn cold_object_section(input: &Input, names: &Names, summary: &mut String, repor
         let _ = writeln!(summary, "{:>9.3} {:>8} {:>7.0}%  {} {}  ({})", ms(row.cost), group_digits(row.charges), shared_percent, row.kind, row.name, row.first_payer);
     }
     // (the dearest first; equal costs keep their order of listing)
-    objects.sort_by(|a, b| b.cost_ms.total_cmp(&a.cost_ms));
+    crate::sort::by(&mut objects, |a, b| b.cost_ms.total_cmp(&a.cost_ms));
     objects.truncate(500);
     report.cold = Some(ColdSectionJson { objects, objects_ms: ms(total), total_ms: ms(run_cold) });
 }
@@ -5138,7 +5138,7 @@ fn counters<'a>(input: &Input, hw: &'a hw::Report, names: &Names, summary: &mut 
         let shares: Vec<(usize, f64)> = hw.frames.iter().enumerate().filter_map(|(index, frame)| figure(&frame.counts, known::LOAD_STALL_SHARE).map(|figure| (index, figure.value))).collect();
         if let Some(&(most, share)) = shares.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
             let mut sorted: Vec<f64> = shares.iter().map(|(_, share)| *share).collect();
-            sorted.sort_by(f64::total_cmp);
+            crate::sort::by(&mut sorted, f64::total_cmp);
             let _ = write!(line, "; load stall share a frame median {:.1} %, most {:.1} % (frame {})", sorted[sorted.len() / 2] * 100.0, share * 100.0, hw.frames[most].frame);
         }
         let _ = writeln!(summary, "{line}");
@@ -5194,7 +5194,7 @@ fn counters<'a>(input: &Input, hw: &'a hw::Report, names: &Names, summary: &mut 
         }
     };
     let mut function_rows: Vec<(i32, (Figures, Figures))> = functions.into_iter().collect();
-    function_rows.sort_by(|a, b| b.1.0[lead].total_cmp(&a.1.0[lead]).then(b.1.1[lead].total_cmp(&a.1.1[lead])).then(a.0.cmp(&b.0)));
+    crate::sort::by(&mut function_rows, |a, b| b.1.0[lead].total_cmp(&a.1.0[lead]).then(b.1.1[lead].total_cmp(&a.1.1[lead])).then(a.0.cmp(&b.0)));
     let share_of = |counts: &Figures| figure(counts, known::LOAD_STALL_SHARE).map(|figure| figure.text()).unwrap_or_else(|| "-".into());
     let ipc_of = |counts: &Figures| figure(counts, "IPC").map(|figure| figure.text()).unwrap_or_else(|| "-".into());
     let _ = writeln!(summary, "\ntop functions by self {lead_name} (readings around sampled calls: a function's own counts are its calls', its callees' apart, estimated where one call in several was sampled; total includes callees; a reading costs the code after it some of its caches, so a short sampled function reads a little high and its callers low)");
@@ -5214,7 +5214,7 @@ fn counters<'a>(input: &Input, hw: &'a hw::Report, names: &Names, summary: &mut 
         let _ = writeln!(summary, "the folded files leave out the stacks estimated below zero: {} stacks, {lead_name} {}", group_digits(left_out[lead].0 as u64), compact_signed(left_out[lead].1));
     }
     let mut line_rows: Vec<((i32, i32), Figures)> = lines.into_iter().collect();
-    line_rows.sort_by(|a, b| b.1[lead].total_cmp(&a.1[lead]).then(a.0.cmp(&b.0)));
+    crate::sort::by(&mut line_rows, |a, b| b.1[lead].total_cmp(&a.1[lead]).then(a.0.cmp(&b.0)));
     let _ = writeln!(summary, "\ntop call sites by the {lead_name} of the calls they make (a line's own code is its function's)");
     for ((function, line), total) in line_rows.iter().filter(|(_, total)| total[lead] > 0.0).take(input.config.top.min(15)) {
         let module = names.function(*function).map_or(String::new(), |f| names.short(&f.source).to_string());
@@ -5806,7 +5806,7 @@ fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64
     let budget = frame_budget_ms(fps);
 
     let mut keyed: Vec<(String, Vec<(u64, f64)>)> = contributions.into_iter().map(|(key, frames)| (key.format(), frames)).collect();
-    keyed.sort_by(|a, b| a.0.cmp(&b.0));
+    crate::sort::by(&mut keyed, |a, b| a.0.cmp(&b.0));
 
     let mut summaries = Vec::with_capacity(keyed.len());
     for (key, mut frames) in keyed {
@@ -5910,7 +5910,7 @@ fn site_issue_key(vm: &vm::Results, site: &super::SiteWork) -> Option<IssueKey> 
 /// when it was never active
 fn summarize_frames(key: String, frames: &mut Vec<(u64, f64)>, frame_work: &BTreeMap<u64, FrameSides>, harness_apart: bool, budget_ms: f64) -> Option<IssueStatRow> {
     if frames.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
-        frames.sort_by_key(|&(frame, _)| frame);
+        crate::sort::by_key(frames, |&(frame, _)| frame);
         let mut write = 0usize;
         for read in 0..frames.len() {
             let (frame, ms) = frames[read];
@@ -6002,7 +6002,7 @@ fn frame_evidence(rows: &[Row], scope: &[u32], fps: f64) -> (Vec<FunctionStatRow
         }
     }
     let mut ordered: Vec<(i32, FunctionFrames)> = by_function.into_iter().collect();
-    ordered.sort_by_key(|(id, _)| *id);
+    crate::sort::by_key(&mut ordered, |(id, _)| *id);
     let stats = ordered
         .into_iter()
         .map(|(id, stat)| FunctionStatRow(id, microseconds(stat.total), stat.active, microseconds(stat.largest), stat.peak_frame))

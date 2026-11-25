@@ -554,7 +554,7 @@ fn a_task_delay_counts_from_the_moment_of_its_call() {
         LuaValue::Table(table) => table.sequence_values::<String>().map(Result::unwrap).collect(),
         other => panic!("{other:?}"),
     };
-    log.sort();
+    crate::sort::ord(&mut log);
     // (the Heartbeat handler runs before the counter: newest connection first; render counts from its own frame's count)
     assert_eq!(log.join(" "), "render-wait=2 render=2 short-wait=2 short=2 whole-wait=3 whole=3");
 }

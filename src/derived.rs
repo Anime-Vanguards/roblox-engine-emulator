@@ -195,7 +195,7 @@ pub fn install(engine: &Rc<Engine>) {
             }
         }
     }
-    font_sizes.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    crate::sort::by(&mut font_sizes, |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let font_sizes = Rc::new(font_sizes);
 
     for class_name in ["TextLabel", "TextButton", "TextBox"] {
@@ -327,7 +327,7 @@ pub fn install(engine: &Rc<Engine>) {
             content_views.push((class.name.to_string(), reflection.name(property_name).to_string(), reflection.name(source).to_string()));
         }
     }
-    content_views.sort();
+    crate::sort::ord(&mut content_views);
     for (class_name, name, source_name) in content_views {
         let read: ReadFn = Rc::new(|uri| match uri {
             Some(Value::String(uri)) if !uri.is_empty() => Value::Content(Rc::new(ContentValue::Uri(uri.clone()))),

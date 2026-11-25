@@ -223,10 +223,10 @@ pub fn report(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<Json> {
             })
         })
         .collect();
-    handlers.sort_by(|a, b| {
+    crate::sort::by(&mut handlers, |a, b| {
         (b["trees"].as_u64(), b["connections"].as_u64(), a["handler"].as_str()).cmp(&(a["trees"].as_u64(), a["connections"].as_u64(), b["handler"].as_str()))
     });
-    roots.sort_by_key(|&(id, size)| (std::cmp::Reverse(size), id.index));
+    crate::sort::by_key(&mut roots, |&(id, size)| (std::cmp::Reverse(size), id.index));
     let held_by_handlers: usize = roots.iter().filter(|(id, _)| holding.contains(id)).map(|&(_, size)| size).sum();
     let largest: Vec<Json> = roots
         .iter()

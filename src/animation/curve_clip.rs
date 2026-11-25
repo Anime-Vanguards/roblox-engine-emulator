@@ -207,7 +207,7 @@ fn read<T: Tree>(tree: &T, clip: T::Node) -> Read {
             stack.push((tree.children(child), 0, Some(read.folders.len() - 1)));
         }
     }
-    read.markers.sort_by(|a, b| a.time.total_cmp(&b.time));
+    crate::sort::by(&mut read.markers, |a, b| a.time.total_cmp(&b.time));
     read
 }
 

@@ -266,7 +266,7 @@ fn the_offline_players_group_answers_stay_quiet_on_both_sides() {
     assert_eq!(summary["status"], "ok", "{summary}");
     assert_eq!(summary["errors"], 0, "{summary}");
     let mut printed = other_lines(&summary);
-    printed.sort();
+    crate::sort::ord(&mut printed);
     assert_eq!(printed, ["print: client false 0 Guest 0", "print: server false 0 Guest false"], "{summary}");
     assert!(missing_lines(&summary).is_empty(), "{summary}");
     assert!(summary.get("unemulated").is_none(), "{summary}");

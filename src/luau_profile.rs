@@ -736,7 +736,7 @@ pub struct ProfileGuard;
 fn folded<'a>(rows: impl Iterator<Item = (&'a str, f64)>) -> Vec<(&'a str, u64)> {
     let mut rows: Vec<_> = rows.map(|(stack, weight)| (stack, weight.round() as u64)).collect();
     rows.retain(|row| row.1 > 0);
-    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    crate::sort::by(&mut rows, |a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     rows
 }
 
@@ -769,7 +769,7 @@ impl Drop for ProfileGuard {
                     write_folded(&samples.path, folded(samples.work.iter().map(|(stack, seconds)| (stack.as_str(), seconds * unit))))
                 } else {
                     let mut rows: Vec<_> = samples.stacks.iter().map(|(stack, count)| (stack.as_str(), *count)).collect();
-                    rows.sort_by(|a, b| b.1.cmp(&a.1));
+                    crate::sort::by(&mut rows, |a, b| b.1.cmp(&a.1));
                     write_folded(&samples.path, rows)
                 };
                 if let Err(error) = written {

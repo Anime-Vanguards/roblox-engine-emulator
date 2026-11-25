@@ -835,7 +835,7 @@ impl ModelPlan {
                 }
             }
             // (sorted by name, as storing them one by one leaves them)
-            own.sort_by_key(|(name, _)| *name);
+            crate::sort::by_key(&mut own, |(name, _)| *name);
             let props_start = props.len() as u32;
             let mut refs = false;
             for (name, converted) in own.drain(..) {

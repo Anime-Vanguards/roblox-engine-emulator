@@ -165,7 +165,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             let filter = filter(lua, engine, args, 1)?;
             let classes = &engine.reflection.classes;
             let mut found: Vec<ClassId> = classes.iter().map(|class| class.id).filter(|&class| matches(engine, class, &filter)).collect();
-            found.sort_unstable_by(|&a, &b| classes[a as usize].name.cmp(&classes[b as usize].name));
+            crate::sort::by(&mut found, |&a, &b| classes[a as usize].name.cmp(&classes[b as usize].name));
             let list = lua.create_table_with_capacity(found.len(), 0)?;
             for (index, &class) in found.iter().enumerate() {
                 list.raw_set(index + 1, entry(lua, engine, class, filter.display)?)?;

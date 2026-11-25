@@ -159,7 +159,7 @@ fn push_joined(state: &State, ranks: &Ranks, node: InstanceId, copy: InstanceId,
         keyed.push((key, child));
     }
     if !sorted {
-        keyed.sort_by_key(|&(key, _)| key);
+        crate::sort::by_key(keyed, |&(key, _)| key);
     }
     stack.extend(keyed.iter().rev().map(|&(_, child)| (child, copy)));
 }

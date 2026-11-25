@@ -543,7 +543,7 @@ fn write_filled(path: &Path, top: &Json, arrays: Vec<(&str, Elements)>) -> Resul
         let at = text.find(&needle).ok_or_else(|| format!("{}: no {key} array", path.display()))? + needle.len() - 2;
         places.push((at, elements));
     }
-    places.sort_by_key(|(at, _)| *at);
+    crate::sort::by_key(&mut places, |(at, _)| *at);
     let fail = |e: std::io::Error| format!("{}: {e}", path.display());
     let mut file = std::io::BufWriter::with_capacity(1 << 16, std::fs::File::create(path).map_err(fail)?);
     let mut written = 0;
@@ -992,7 +992,7 @@ fn snapshot(state: &State, engine: &Engine, id: InstanceId, class: ClassId) -> (
                 .then_some((text, name, index))
         })
         .collect();
-    extra.sort_by(|a, b| a.0.cmp(b.0));
+    crate::sort::by(&mut extra, |a, b| a.0.cmp(b.0));
     for (text, name, index) in extra {
         let property = engine.reflection.property(index);
         if let Some(variant) = read_property(name, name).and_then(|value| encode::untyped_variant(engine, &value, property.engine_type)) {
@@ -1729,7 +1729,7 @@ fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lightin
     // Attachments that move by their own CFrame (parents first: a track starting late backfills
     // from what carried it, which may itself have just started)
     let mut sampled: Vec<usize> = inner.sampled.iter().copied().collect();
-    sampled.sort_unstable();
+    crate::sort::ord(&mut sampled);
     for index in sampled {
         let id = inner.records[index].id;
         if is_present(inner, &id) {
@@ -2048,7 +2048,7 @@ fn playback(inner: &Inner) -> Playback {
         }
     }
     // (stable: equal times keep the order they were made in)
-    actions.sort_by(|a, b| a.0.total_cmp(&b.0));
+    crate::sort::by(&mut actions, |a, b| a.0.total_cmp(&b.0));
     let frames = ((inner.fps - 60.0).abs() > 1e-9 || inner.times.is_some()).then(|| Json::Array((0..=inner.frame).map(|f| json!(time_of(inner, f))).collect()));
     Playback { actions, tweens, motion, frames }
 }
@@ -2097,7 +2097,7 @@ fn summary(inner: &Inner, (errors, warns): (usize, usize), playback: &Playback, 
             bump(*frame, *count as usize);
         }
     }
-    activity.sort();
+    crate::sort::ord(&mut activity);
     let count = |key: &str| match key {
         "actions" => playback.actions.len(),
         "tweens" => playback.tweens.len(),

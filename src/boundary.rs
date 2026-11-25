@@ -839,8 +839,8 @@ impl Recorder {
         let is_host = |member: u32| self.members[member as usize].kind == Kind::Datatype;
         let mut sites: Vec<_> = all_sites.iter().filter(|row| !is_host(row.1)).cloned().collect();
         let mut host_sites: Vec<_> = all_sites.iter().filter(|row| is_host(row.1)).cloned().collect();
-        sites.sort_by(|a, b| b.2.count.cmp(&a.2.count).then(a.0.cmp(&b.0)));
-        host_sites.sort_by(|a, b| b.2.cost.total_cmp(&a.2.cost).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut sites, |a, b| b.2.count.cmp(&a.2.count).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut host_sites, |a, b| b.2.cost.total_cmp(&a.2.cost).then(a.0.cmp(&b.0)));
         let site_json = |(site, member, stat): &(u32, u32, Stat)| {
             let info = &self.sites[*site as usize];
             json!({
@@ -865,7 +865,7 @@ impl Recorder {
             })
         };
         let mut by_cost = sites.clone();
-        by_cost.sort_by(|a, b| b.2.cost.total_cmp(&a.2.cost).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut by_cost, |a, b| b.2.cost.total_cmp(&a.2.cost).then(a.0.cmp(&b.0)));
 
         let mut members: FxHashMap<u32, (u64, f64, u64)> = FxHashMap::default();
         let mut scripts: FxHashMap<u32, (u64, f64)> = FxHashMap::default();
@@ -895,7 +895,7 @@ impl Recorder {
             }
         }
         let mut member_rows: Vec<_> = members.into_iter().collect();
-        member_rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut member_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
         let frames = phase.frames.max(1) as f64;
         let member_json = |(member, (count, cost, call_sites)): &(u32, (u64, f64, u64))| {
             let extra = extras.get(member).copied().unwrap_or_default();
@@ -914,13 +914,13 @@ impl Recorder {
             })
         };
         let mut script_rows: Vec<_> = scripts.into_iter().collect();
-        script_rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut script_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
         let mut function_rows: Vec<_> = functions.into_iter().collect();
-        function_rows.sort_by(|a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut function_rows, |a, b| b.1.0.cmp(&a.1.0).then(a.0.cmp(&b.0)));
         let mut repeats: Vec<_> = sites.iter().filter(|row| row.2.repeats() + row.2.other_function > 0).cloned().collect();
-        repeats.sort_by(|a, b| (b.2.repeats() + b.2.other_function).cmp(&(a.2.repeats() + a.2.other_function)).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut repeats, |a, b| (b.2.repeats() + b.2.other_function).cmp(&(a.2.repeats() + a.2.other_function)).then(a.0.cmp(&b.0)));
         let mut unchanged: Vec<_> = sites.iter().filter(|row| row.2.unchanged > 0).cloned().collect();
-        unchanged.sort_by(|a, b| b.2.unchanged.cmp(&a.2.unchanged).then(a.0.cmp(&b.0)));
+        crate::sort::by(&mut unchanged, |a, b| b.2.unchanged.cmp(&a.2.unchanged).then(a.0.cmp(&b.0)));
 
         let coverage = if phase.charged > 0.0 { phase.attributed / phase.charged } else { 1.0 };
         let report = json!({

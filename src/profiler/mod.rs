@@ -528,7 +528,7 @@ impl NodeWork {
             }
         }
         // (the heaviest first; equal work by function id, then side)
-        functions.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)).then(a.2.cmp(&b.2)));
+        crate::sort::by(&mut functions, |a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)).then(a.2.cmp(&b.2)));
         out.functions = functions;
     }
 

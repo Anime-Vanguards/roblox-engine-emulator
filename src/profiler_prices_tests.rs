@@ -256,7 +256,7 @@ fn calibrate_prices_once() {
     }
     let median = |values: &[f64]| -> f64 {
         let mut sorted = values.to_vec();
-        sorted.sort_by(f64::total_cmp);
+        crate::sort::by(&mut sorted, f64::total_cmp);
         quantile(&sorted, 0.5)
     };
     for ((name, _, _), values) in bases.iter().zip(&base_ns) {
@@ -324,7 +324,7 @@ fn calibrate_prices() {
     }
     let spread = |values: &[f64]| -> (f64, f64, f64) {
         let mut sorted = values.to_vec();
-        sorted.sort_by(f64::total_cmp);
+        crate::sort::by(&mut sorted, f64::total_cmp);
         (quantile(&sorted, 0.5), sorted[0], sorted[sorted.len() - 1])
     };
     let cpu = std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default();

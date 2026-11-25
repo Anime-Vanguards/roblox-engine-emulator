@@ -421,7 +421,7 @@ impl Session {
         }
         // (a reading's own host time: the median gap of the back-to-back readings)
         let mut gaps: Vec<i64> = session.readings.windows(2).map(|pair| pair[1].at - pair[0].at).collect();
-        gaps.sort_unstable();
+        crate::sort::ord(&mut gaps);
         session.reading_ticks = gaps.get(gaps.len() / 2).copied().unwrap_or(0) as f64;
         session.read(What::Start, 0);
         session.pacing.since = (session.readings.last().map_or(0, |reading| reading.at), 0);
@@ -990,7 +990,7 @@ fn book(report: &mut Report, session: &Session, results: protocol::Results) {
         let mut median = [0u64; MAX_COUNTERS];
         for (counter, value) in median.iter_mut().enumerate() {
             let mut values: Vec<u64> = calibration.iter().map(|counts| counts[counter]).collect();
-            values.sort_unstable();
+            crate::sort::ord(&mut values);
             *value = values[values.len() / 2];
         }
         report.per_reading = Some(median);
@@ -1015,7 +1015,7 @@ fn book(report: &mut Report, session: &Session, results: protocol::Results) {
         }
         report.threads.push(ThreadCounts { id: thread.id, name: client::thread_name(thread.id), run_thread: thread.id == session.thread, slices, counts });
     }
-    report.threads.sort_by(|a, b| b.run_thread.cmp(&a.run_thread).then(b.counts[0].total_cmp(&a.counts[0])));
+    crate::sort::by(&mut report.threads, |a, b| b.run_thread.cmp(&a.run_thread).then(b.counts[0].total_cmp(&a.counts[0])));
     if let Some(run_thread) = report.threads.iter().find(|thread| thread.run_thread) {
         report.run = run_thread.counts;
     }
@@ -1115,7 +1115,7 @@ fn book(report: &mut Report, session: &Session, results: protocol::Results) {
     report.by_stack = booking.by_stack;
     report.stacks = stacks;
     let mut phases: Vec<(u32, Figures)> = phases.into_iter().collect();
-    phases.sort_by_key(|(phase, _)| *phase);
+    crate::sort::by_key(&mut phases, |(phase, _)| *phase);
     report.phases = phases;
 }
 

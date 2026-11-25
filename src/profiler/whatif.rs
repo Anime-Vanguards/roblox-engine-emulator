@@ -559,7 +559,7 @@ fn list(options: &Options) -> Result<Spec, String> {
         Some(sizes) => sizes.clone(),
         None => listed["sizes"].as_array().into_iter().flatten().filter_map(Json::as_f64).collect(),
     };
-    sizes.sort_by(f64::total_cmp);
+    crate::sort::by(&mut sizes, f64::total_cmp);
     sizes.dedup();
     Ok(Spec {
         title: listed["title"].as_str().map(str::to_string),
@@ -824,7 +824,7 @@ fn hot_functions(profile: &Json, functions: &BTreeMap<i64, &Json>, top: usize) -
             (!skip && (work_ms > 0.0 || insns > 0.0)).then_some(Hot { key, name, module, line, work_ms, insns, calls })
         })
         .collect();
-    hot.sort_by(|a, b| b.work_ms.total_cmp(&a.work_ms).then(a.key.cmp(&b.key)));
+    crate::sort::by(&mut hot, |a, b| b.work_ms.total_cmp(&a.work_ms).then(a.key.cmp(&b.key)));
     hot.truncate(top);
     hot
 }
@@ -1158,7 +1158,7 @@ pub fn median_spread(samples: &[f64]) -> Option<(f64, f64)> {
     if sorted.is_empty() {
         return None;
     }
-    sorted.sort_by(f64::total_cmp);
+    crate::sort::by(&mut sorted, f64::total_cmp);
     let at = |q: f64| -> f64 {
         let position = q * (sorted.len() - 1) as f64;
         let (low, high) = (position.floor() as usize, position.ceil() as usize);
@@ -1178,7 +1178,7 @@ pub fn winner(values: &[(usize, f64)], better_higher: bool, baseline: usize) -> 
     if sorted.len() < 2 {
         return None;
     }
-    sorted.sort_by(|a, b| if better_higher { b.1.total_cmp(&a.1) } else { a.1.total_cmp(&b.1) }.then(a.0.cmp(&b.0)));
+    crate::sort::by(&mut sorted, |a, b| if better_higher { b.1.total_cmp(&a.1) } else { a.1.total_cmp(&b.1) }.then(a.0.cmp(&b.0)));
     let (best, runner) = (sorted[0], sorted[1]);
     let ratio = |good: f64, other: f64| -> Option<f64> {
         if better_higher {
@@ -2335,7 +2335,7 @@ fn index<'a>(options: &'a Options, spec: &'a Spec, runs: &'a [Run], check: Check
             };
             let value_of = |variant: usize| all.iter().find(|(v, _)| *v == variant).map(|(_, value)| *value);
             let mut ranking: Vec<(usize, f64)> = all.clone();
-            ranking.sort_by(|a, b| {
+            crate::sort::by(&mut ranking, |a, b| {
                 let differs = |variant: usize| run_of(variant, size).is_some_and(result_differs);
                 differs(a.0).cmp(&differs(b.0)).then((a.0 != best).cmp(&(b.0 != best))).then(if metric.better == "higher" { b.1.total_cmp(&a.1) } else { a.1.total_cmp(&b.1) }).then(a.0.cmp(&b.0))
             });
@@ -2373,7 +2373,7 @@ fn index<'a>(options: &'a Options, spec: &'a Spec, runs: &'a [Run], check: Check
             // (host time: the rest by their paired ratio against the leader, the leader first, differing results last)
             if host {
                 let key = |entry: &RankingEntryJson| (entry.differs, entry.variant.as_str() != variants[best].name.as_str());
-                ranking.sort_by(|x, y| key(x).cmp(&key(y)).then(x.ratio.unwrap_or(f64::INFINITY).total_cmp(&y.ratio.unwrap_or(f64::INFINITY))));
+                crate::sort::by(&mut ranking, |x, y| key(x).cmp(&key(y)).then(x.ratio.unwrap_or(f64::INFINITY).total_cmp(&y.ratio.unwrap_or(f64::INFINITY))));
             }
             let runner = ranking.iter().skip(1).find(|entry| !entry.differs).and_then(|entry| variants.iter().position(|v| entry.variant == v.name)).unwrap_or(best);
             let vs_baseline = value_of(0).filter(|_| run_of(0, size).is_some_and(|run| !result_differs(run))).and_then(|base| if metric.better == "higher" { (base > 0.0).then(|| value / base) } else { (value > 0.0).then(|| base / value) });

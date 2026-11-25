@@ -649,7 +649,7 @@ impl Defaults {
             current = info.superclass;
         }
         names.extend(reflection.class(class).properties.keys().copied());
-        names.sort_unstable();
+        crate::sort::ord(&mut names);
         names.dedup();
         let mut table = FxHashMap::default();
         for name in names {
