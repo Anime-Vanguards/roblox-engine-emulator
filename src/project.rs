@@ -79,7 +79,7 @@ pub struct ProjectState {
 
 /// A directory tree as a mount listed it: what a later [`Listing::unchanged`] compares the directory
 /// with now.
-pub struct Listing(ScanNode);
+pub struct Listing(std::sync::Arc<ScanNode>);
 
 impl Listing {
     /// Whether the directory listed now is as it was: the same entries, of the same kinds, in the same
@@ -132,7 +132,7 @@ fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
 }
 
 /// Keeps `node` when the mount keeps its listings ([`ProjectState::listings`]).
-fn keep_listing(engine: &Engine, node: ScanNode) {
+fn keep_listing(engine: &Engine, node: std::sync::Arc<ScanNode>) {
     if let Some(listings) = engine.state.borrow_mut().project.listings.as_mut() {
         listings.push(Listing(node));
     }
@@ -731,27 +731,58 @@ fn parent_path(path: &str) -> String {
     }
 }
 
-fn batch_read_json(path: &str) -> Option<serde_json::Value> {
-    use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<FxHashMap<String, Option<serde_json::Value>>>> = OnceLock::new();
+fn batch_read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<FxHashMap<String, Option<Arc<serde_json::Value>>>>> = OnceLock::new();
     let map = CACHE.get_or_init(|| crate::alloc::long_lived(Default::default));
     if let Some(found) = map.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
         return found.clone();
     }
-    let parsed = std::fs::read(path).ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    let stored = crate::alloc::long_lived(|| parsed.clone());
+    let parsed = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| crate::alloc::long_lived(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok().map(Arc::new)));
     crate::alloc::long_lived(|| {
-        map.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), stored);
+        map.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), parsed.clone());
     });
     parsed
 }
 
-fn read_json(path: &str) -> Option<serde_json::Value> {
-    crate::files::note(Path::new(path));
+fn kept_read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
+    use std::sync::{Arc, OnceLock, RwLock};
+    type Entry = (Option<crate::files::Stamp>, Option<Arc<serde_json::Value>>);
+    static CACHE: OnceLock<RwLock<FxHashMap<String, Entry>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| crate::alloc::long_lived(Default::default));
+    let file_path = Path::new(path);
+    let stamp = crate::files::stamp(file_path);
+    crate::files::note_stamp(file_path, stamp);
+    if let Some((known_stamp, value)) = cache.read().ok().and_then(|map| map.get(path).cloned()) {
+        if known_stamp == stamp {
+            return value;
+        }
+    }
+    let parsed = if stamp.is_some() {
+        std::fs::read(path)
+            .ok()
+            .and_then(|bytes| crate::alloc::long_lived(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok().map(Arc::new)))
+    } else {
+        None
+    };
+    if let Ok(mut map) = cache.write() {
+        crate::alloc::long_lived(|| map.insert(path.to_string(), (stamp, parsed.clone())));
+    }
+    parsed
+}
+
+fn read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
     if crate::lua::modules::is_batch_frozen() {
+        crate::files::note(Path::new(path));
         return batch_read_json(path);
     }
-    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    if crate::lua::modules::keeping_between_runs() {
+        return kept_read_json(path);
+    }
+    crate::files::note(Path::new(path));
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok().map(std::sync::Arc::new)
 }
 
 /// A project's places, at its folder: `{"environments": [{"name": "<Place>", "projectFile":
@@ -1207,10 +1238,12 @@ struct ScanNode {
     /// Entries that are links back to a directory on the way down to them (the entry, that directory's
     /// path): not listed, since the directory would hold itself without end
     loops: Vec<(String, String)>,
-    /// A directory below was listed through a link, whose target a watch on this tree does not see
+    /// A file or directory below was listed through a link, whose target a watch on this tree does not see
     linked: bool,
     /// A [`GIT_DIRECTORY`] below a listed one, left unlisted: it mounts as an empty Folder
     unlisted: bool,
+    /// Approximate instance count in this subtree (used to pre-reserve the DOM slot arena).
+    approx_instances: usize,
 }
 
 /// The directory Git keeps a repository's own data in. Rojo builds it as any folder (`rojo build` 7.6.1 and 7.7.0-rc.1: a
@@ -1293,9 +1326,13 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             stamps.clear();
         }
     }
+    let mut has_symlink = false;
     // Pre-filter candidate subdirectories without rayon overhead on leaf directories (the common case).
     let mut candidates: Vec<usize> = Vec::new();
     for (index, (entry, kind)) in entries.iter().zip(kinds.iter()).enumerate() {
+        if !kind.is_some_and(|k| !k.is_symlink()) {
+            has_symlink = true;
+        }
         if !may_be_directory(entry) {
             continue;
         }
@@ -1306,7 +1343,8 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
         candidates.push(index);
     }
     if candidates.is_empty() {
-        return ScanNode { path, entries, stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: false };
+        let approx_instances = entries.len();
+        return ScanNode { path, entries, stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: has_symlink, unlisted: false, approx_instances };
     }
     let here = Above::new(&path, up);
     let visit = |index: usize| -> Option<(String, Result<ScanNode, String>)> {
@@ -1325,7 +1363,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             return None;
         }
         if entry == GIT_DIRECTORY {
-            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true })));
+            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true, approx_instances: 1 })));
         }
         let via_link = !kind.is_some_and(|kind| !kind.is_symlink());
         if let Some(above) = via_link.then(|| here.looped_by(Path::new(&child))).flatten() {
@@ -1350,8 +1388,9 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             Err(above) => loops.push((entry, above)),
         }
     }
-    let linked = dirs.values().any(|dir| dir.linked);
-    ScanNode { path, entries, stamps, dirs, loops, linked, unlisted: false }
+    let linked = has_symlink || dirs.values().any(|dir| dir.linked);
+    let approx_instances = entries.len() + dirs.values().map(|d| d.approx_instances).sum::<usize>();
+    ScanNode { path, entries, stamps, dirs, loops, linked, unlisted: false, approx_instances }
 }
 
 #[test]
@@ -1373,13 +1412,13 @@ fn a_scan_lists_dot_directories_but_not_what_a_git_directory_below_holds() {
 
 /// Single-flight directory scan cache used while `ree run --batch` keeps the filesystem frozen:
 /// parallel workers share one scan per root (including symlink/junction stages on Windows and Linux).
-fn batch_listed(path: String) -> ScanNode {
+fn batch_listed(path: String) -> std::sync::Arc<ScanNode> {
     // Never block a rayon worker thread waiting on a scan that itself uses rayon.
     if rayon::current_thread_index().is_some() {
-        return scan(path);
+        return std::sync::Arc::new(scan(path));
     }
     use std::sync::{Arc, Condvar, Mutex, OnceLock};
-    type Slot = Arc<(Mutex<Option<ScanNode>>, Condvar)>;
+    type Slot = Arc<(Mutex<Option<Arc<ScanNode>>>, Condvar)>;
     static BATCH_LISTINGS: OnceLock<Mutex<FxHashMap<String, Slot>>> = OnceLock::new();
     let map = BATCH_LISTINGS.get_or_init(Default::default);
     let (slot, owner) = {
@@ -1394,11 +1433,11 @@ fn batch_listed(path: String) -> ScanNode {
     };
     if owner {
         let node = scan(path);
-        let copy = crate::alloc::long_lived(|| node.clone());
+        let shared = crate::alloc::long_lived(|| Arc::new(node.clone()));
         let (lock, cvar) = &*slot;
-        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(copy);
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = Some(shared.clone());
         cvar.notify_all();
-        node
+        shared
     } else {
         let (lock, cvar) = &*slot;
         let mut guard = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -1410,7 +1449,7 @@ fn batch_listed(path: String) -> ScanNode {
 }
 
 /// [`scan`] of a mounted tree, kept between VMs in a process that keeps compiled modules ([`kept_listing`]).
-fn listed(path: String) -> ScanNode {
+fn listed(path: String) -> std::sync::Arc<ScanNode> {
     if crate::lua::modules::is_batch_frozen() {
         return batch_listed(path);
     }
@@ -1418,7 +1457,7 @@ fn listed(path: String) -> ScanNode {
     if crate::lua::modules::keeping_between_runs() {
         return kept_listing::listed(path);
     }
-    scan(path)
+    std::sync::Arc::new(scan(path))
 }
 
 /// Listings kept while Windows reports no change below them and their path names the same directory.
@@ -1427,7 +1466,7 @@ mod kept_listing {
     use super::{FxHashMap, ScanNode, scan};
     use std::ffi::c_void;
     use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     #[repr(C)]
     #[derive(Default)]
@@ -1459,7 +1498,7 @@ mod kept_listing {
     struct Kept {
         watch: *mut c_void,
         id: (u32, u64),
-        node: ScanNode,
+        node: Arc<ScanNode>,
     }
 
     // SAFETY: a watch handle is waited on and closed only under the map's lock
@@ -1497,35 +1536,37 @@ mod kept_listing {
         (!handle.is_null() && handle as isize != -1).then_some(handle)
     }
 
-    pub(super) fn listed(path: String) -> ScanNode {
-        let Some(id) = directory_id(&path) else { return scan(path) };
-        let kept = KEPT.get_or_init(Default::default);
+    pub(super) fn listed(path: String) -> Arc<ScanNode> {
+        let Some(id) = directory_id(&path) else { return Arc::new(scan(path)) };
+        let kept = KEPT.get_or_init(|| crate::alloc::long_lived(Default::default));
         if let Ok(map) = kept.lock() {
             if let Some(entry) = map.get(&path).filter(|entry| entry.id == id && unsafe { WaitForSingleObject(entry.watch, 0) } == WAIT_TIMEOUT) {
                 return entry.node.clone();
             }
         }
         // The watch starts before the listing, so a change made while it lists shows next time
-        let Some(watch) = watch(&path) else { return scan(path) };
+        let Some(watch) = watch(&path) else { return Arc::new(scan(path)) };
         let node = scan(path.clone());
         if node.linked {
             unsafe { FindCloseChangeNotification(watch) };
-            return node;
+            return Arc::new(node);
         }
-        let copy = crate::alloc::long_lived(|| node.clone());
+        let shared = crate::alloc::long_lived(|| Arc::new(node.clone()));
         if let Ok(mut map) = kept.lock() {
-            if let Some(old) = crate::alloc::long_lived(|| map.insert(path, Kept { watch, id, node: copy })) {
+            if let Some(old) = crate::alloc::long_lived(|| map.insert(path, Kept { watch, id, node: shared.clone() })) {
                 unsafe { FindCloseChangeNotification(old.watch) };
             }
         } else {
             unsafe { FindCloseChangeNotification(watch) };
         }
-        node
+        shared
     }
 
     #[test]
     fn a_kept_listing_follows_every_change_below_it() {
         let root = std::env::temp_dir().join(format!("ree-kept-listing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(root.with_extension("old"));
         let path = root.to_string_lossy().replace('\\', "/");
         std::fs::create_dir_all(root.join("Folder")).unwrap();
         std::fs::write(root.join("Folder/a.luau"), "return 1").unwrap();
@@ -1677,6 +1718,10 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
         let existing_len = state.dom.at(instance).children.len();
         (node.entries.len() + existing_len >= 16).then(|| ChildIndex::new(&state, instance, node.entries.len()))
     };
+    let mut full_path = String::with_capacity(node.path.len() + 64);
+    full_path.push_str(&node.path);
+    full_path.push('/');
+    let prefix_len = full_path.len();
     for entry in &node.entries {
         if has_loops {
             if let Some((_, above)) = node.loops.iter().find(|(name, _)| name == entry) {
@@ -1703,7 +1748,8 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
         if starts_with_ignore_ascii_case(entry, "init.") || ends_with_ignore_ascii_case(entry, ".meta.json") {
             continue;
         }
-        let full_path = format!("{}/{entry}", node.path);
+        full_path.truncate(prefix_len);
+        full_path.push_str(entry);
         mount_file(engine, &full_path, entry, None, instance, mount, child_index.as_mut());
     }
 }
@@ -1728,7 +1774,7 @@ fn mount_directory_as(
 /// A directory's `default.project.json`: Rojo mounts the directory as that project "instead of anything else in the
 /// directory" (rojo.space/docs/v7/sync-details/#projects), init scripts included. Wally packages each ship one.
 /// None, reported, for a file that isn't a project.
-fn nested_project(engine: &Engine, node: &ScanNode) -> Option<serde_json::Value> {
+fn nested_project(engine: &Engine, node: &ScanNode) -> Option<std::sync::Arc<serde_json::Value>> {
     let file = node.entries.iter().find(|entry| entry.eq_ignore_ascii_case("default.project.json"))?;
     let path = format!("{}/{file}", node.path);
     let project = read_json(&path).filter(|project| project.get("tree").is_some_and(serde_json::Value::is_object));
@@ -2037,17 +2083,29 @@ pub(crate) fn warn_notes(engine: &Engine, path: &str, notes: &[String]) {
 /// (a sim mounts the same bundle file run after run; one whose reading noted something is read again, so each run
 /// reports it). None when it does not read or decode.
 fn mounted_plan(engine: &Engine, path: &str) -> Option<std::sync::Arc<ModelPlan>> {
-    type Kept = std::sync::Mutex<FxHashMap<String, (crate::files::Stamp, std::sync::Arc<ModelPlan>)>>;
+    type Entry = (crate::files::Stamp, std::sync::Arc<ModelPlan>);
+    type Kept = std::sync::Mutex<FxHashMap<String, Entry>>;
     static KEPT: std::sync::OnceLock<Kept> = std::sync::OnceLock::new();
     let keep = crate::lua::modules::keeping_between_runs();
-    crate::files::note(Path::new(path));
-    let stamp = crate::files::stamp(Path::new(path));
-    if keep {
-        let kept = KEPT.get_or_init(Default::default);
-        if let Some((kept_stamp, plan)) = kept.lock().ok().and_then(|map| map.get(path).cloned()) {
-            if Some(kept_stamp) == stamp {
-                return Some(plan);
-            }
+    let frozen = crate::lua::modules::is_batch_frozen();
+    let file_path = Path::new(path);
+    let known = if keep {
+        let kept = KEPT.get_or_init(|| crate::alloc::long_lived(Kept::default));
+        kept.lock().ok().and_then(|map| map.get(path).cloned())
+    } else {
+        None
+    };
+    if frozen {
+        if let Some((kept_stamp, plan)) = known {
+            crate::files::note_stamp(file_path, Some(kept_stamp));
+            return Some(plan);
+        }
+    }
+    let stamp = crate::files::stamp(file_path);
+    crate::files::note_stamp(file_path, stamp);
+    if let Some((kept_stamp, plan)) = known {
+        if Some(kept_stamp) == stamp {
+            return Some(plan);
         }
     }
     let bytes = std::fs::read(path).ok()?;
@@ -2057,7 +2115,9 @@ fn mounted_plan(engine: &Engine, path: &str) -> Option<std::sync::Arc<ModelPlan>
         let kept = KEPT.get_or_init(|| crate::alloc::long_lived(Kept::default));
         let plan = crate::alloc::long_lived(|| std::sync::Arc::new(ModelPlan::clone_compacted(&plan)));
         if let Ok(mut map) = kept.lock() {
-            map.retain(|other, (other_stamp, _)| crate::files::stamp(Path::new(other)) == Some(*other_stamp));
+            if !frozen {
+                map.retain(|other, (other_stamp, _)| crate::files::stamp(Path::new(other)) == Some(*other_stamp));
+            }
             crate::alloc::long_lived(|| map.insert(path.to_string(), (stamp, plan.clone())));
         }
         return Some(plan);
@@ -2129,6 +2189,7 @@ pub fn mount_at(engine: &Engine, spec: &Mount) -> Result<MountCounts, String> {
             let metadata = std::fs::metadata(&path).map_err(|e| format!("{}={path}: {e}", spec.segments.join("/")))?;
             if metadata.is_dir() {
                 let node = listed(path);
+                engine.state.borrow_mut().dom.reserve(node.approx_instances);
                 match last {
                     Some(last) => {
                         mount_directory_as(engine, &node, parent, last, &mut mount, &relative, None);
@@ -2162,6 +2223,7 @@ pub fn mount_at(engine: &Engine, spec: &Mount) -> Result<MountCounts, String> {
 pub fn mount_children(engine: &Engine, path: &str, instance: InstanceId) -> MountCounts {
     let mut mount = MountCounts::default();
     let node = listed(normalize(path).trim_end_matches('/').to_string());
+    engine.state.borrow_mut().dom.reserve(node.approx_instances);
     mount_directory(engine, &node, instance, &mut mount, "");
     keep_listing(engine, node);
     mount
@@ -2173,9 +2235,9 @@ pub fn mount_layout_root(engine: &Engine, root: &str) -> MountCounts {
 }
 
 /// Single-flight layout root cache used while `ree run --batch` keeps the filesystem frozen.
-fn batch_layout_root(root: &str, reflection: &Reflection) -> Vec<(String, ScanNode)> {
+fn batch_layout_root(root: &str, reflection: &Reflection) -> Vec<(String, std::sync::Arc<ScanNode>)> {
     use std::sync::{Arc, Condvar, Mutex, OnceLock};
-    type Slot = Arc<(Mutex<Option<Vec<(String, ScanNode)>>>, Condvar)>;
+    type Slot = Arc<(Mutex<Option<Vec<(String, Arc<ScanNode>)>>>, Condvar)>;
     static BATCH_ROOTS: OnceLock<Mutex<FxHashMap<String, Slot>>> = OnceLock::new();
     let map = BATCH_ROOTS.get_or_init(|| crate::alloc::long_lived(Default::default));
     let (slot, owner) = {
@@ -2208,7 +2270,7 @@ fn batch_layout_root(root: &str, reflection: &Reflection) -> Vec<(String, ScanNo
 }
 
 /// Layout root `root`'s service directories, listed: what [`mount_layout_root`] mounts, in its order.
-fn scan_layout_root(root: &str, reflection: &Reflection) -> Vec<(String, ScanNode)> {
+fn scan_layout_root(root: &str, reflection: &Reflection) -> Vec<(String, std::sync::Arc<ScanNode>)> {
     crate::files::note_listing(Path::new(root));
     if crate::lua::modules::is_batch_frozen() && rayon::current_thread_index().is_none() {
         return batch_layout_root(root, reflection);
@@ -2216,7 +2278,7 @@ fn scan_layout_root(root: &str, reflection: &Reflection) -> Vec<(String, ScanNod
     scan_layout_root_uncached(root, reflection)
 }
 
-fn scan_layout_root_uncached(root: &str, reflection: &Reflection) -> Vec<(String, ScanNode)> {
+fn scan_layout_root_uncached(root: &str, reflection: &Reflection) -> Vec<(String, std::sync::Arc<ScanNode>)> {
     let mut services_found = Vec::new();
     if let Ok(read) = std::fs::read_dir(root) {
         for entry in read.flatten() {
@@ -2304,7 +2366,7 @@ fn is_common_service_name(name: &str) -> bool {
 }
 
 enum EarlyEntry {
-    Scanned(String, ScanNode),
+    Scanned(String, std::sync::Arc<ScanNode>),
     Deferred(String),
 }
 
@@ -2356,7 +2418,9 @@ fn scan_layout_root_early(root: &str) -> Vec<EarlyEntry> {
     }
 }
 
-fn mount_scanned_layout_root(engine: &Engine, scanned: Vec<(String, ScanNode)>) -> MountCounts {
+fn mount_scanned_layout_root(engine: &Engine, scanned: Vec<(String, std::sync::Arc<ScanNode>)>) -> MountCounts {
+    let approx: usize = scanned.iter().map(|(_, node)| node.approx_instances).sum();
+    engine.state.borrow_mut().dom.reserve(approx);
     let mut mount = MountCounts::default();
     let game = engine.world().game;
     for (name, node) in scanned {
@@ -2371,10 +2435,10 @@ fn mount_scanned_layout_root(engine: &Engine, scanned: Vec<(String, ScanNode)>) 
 /// Engine.Start, which needs no files): [`Prescan::mount`] mounts each as [`mount_layout_root`] would.
 /// A pool of the caller's thread alone lists them when the caller waits ([`listing`]).
 pub struct Prescan {
-    roots: Vec<(String, crate::sort::channel::Receiver<Vec<(String, ScanNode)>>)>,
+    roots: Vec<(String, crate::sort::channel::Receiver<Vec<(String, std::sync::Arc<ScanNode>)>>)>,
     early_roots: Vec<(String, crate::sort::channel::Receiver<Vec<EarlyEntry>>)>,
     /// The data roots ([`data_roots`]) and their subtrees listed: (relative path, listing) in order
-    data: Option<crate::sort::channel::Receiver<Vec<(String, ScanNode)>>>,
+    data: Option<crate::sort::channel::Receiver<Vec<(String, std::sync::Arc<ScanNode>)>>>,
 }
 
 impl Prescan {
@@ -2407,7 +2471,7 @@ impl Prescan {
         let (send, receive) = crate::sort::channel::channel();
         rayon::spawn(move || {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
+                let listed: Vec<(String, std::sync::Arc<ScanNode>)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
                 drop(send.send(listed));
             }));
         });
@@ -2439,7 +2503,7 @@ impl Prescan {
         let (send, receive) = crate::sort::channel::channel();
         rayon::spawn(move || {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
+                let listed: Vec<(String, std::sync::Arc<ScanNode>)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
                 drop(send.send(listed));
             }));
         });
@@ -2450,7 +2514,9 @@ impl Prescan {
     /// [`data_roots`]' order; listed now if they were not listed ahead).
     pub fn mount_data(&mut self, engine: &Engine, roots: &[String]) {
         let listed = self.data.take().and_then(listing);
-        let listed: Vec<(String, ScanNode)> = listed.unwrap_or_else(|| data_roots(roots).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = self::listed(format!("{root}/{path}")); (path, node) }).collect());
+        let listed: Vec<(String, std::sync::Arc<ScanNode>)> = listed.unwrap_or_else(|| data_roots(roots).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = self::listed(format!("{root}/{path}")); (path, node) }).collect());
+        let approx: usize = listed.iter().map(|(_, node)| node.approx_instances).sum();
+        engine.state.borrow_mut().dom.reserve(approx);
         for (relative, node) in listed {
             mount_scanned_subtree(engine, &relative, node);
         }
@@ -2651,7 +2717,7 @@ pub fn mount_subtree(engine: &Engine, root: &str, relative: &str) -> MountCounts
     mount_scanned_subtree(engine, relative, listed(format!("{root}/{relative}")))
 }
 
-fn mount_scanned_subtree(engine: &Engine, relative: &str, node: ScanNode) -> MountCounts {
+fn mount_scanned_subtree(engine: &Engine, relative: &str, node: std::sync::Arc<ScanNode>) -> MountCounts {
     let mut mount = MountCounts::default();
     let segments: Vec<&str> = relative.split('/').collect();
     let reflection = &engine.reflection;
@@ -3046,9 +3112,111 @@ pub fn convert_model(engine: &Engine, dom: &WeakDom, parent: Option<InstanceId>)
     convert_instances(engine, dom, dom.root().children(), parent)
 }
 
+struct SnapshotRoot {
+    name: String,
+    class: String,
+    as_root: ModelPlan,
+    as_children: Option<ModelPlan>,
+}
+
+struct SnapshotPlan {
+    roots: Vec<SnapshotRoot>,
+}
+
+impl SnapshotPlan {
+    fn from_dom(reflection: &Reflection, dom: &WeakDom) -> SnapshotPlan {
+        let roots = dom
+            .root()
+            .children()
+            .iter()
+            .map(|&root| {
+                let source = dom.get_by_ref(root).unwrap();
+                let as_root = ModelPlan::clone_compacted(&ModelPlan::new(reflection, dom, &[root]));
+                let is_service = reflection.class_by_name(source.class.as_str()).is_some_and(|c| c.service);
+                let as_children = is_service.then(|| ModelPlan::clone_compacted(&ModelPlan::new(reflection, dom, source.children())));
+                SnapshotRoot {
+                    name: source.name.clone(),
+                    class: source.class.to_string(),
+                    as_root,
+                    as_children,
+                }
+            })
+            .collect();
+        SnapshotPlan { roots }
+    }
+
+    fn instantiate(&self, engine: &Engine, parent: InstanceId) -> Vec<InstanceId> {
+        let mut result = Vec::new();
+        for root in &self.roots {
+            let existing = root.as_children.as_ref().and_then(|_| {
+                let state = engine.state.borrow();
+                find_child(&state, parent, &root.name).filter(|&e| {
+                    let class = state.dom.at(e).class;
+                    &*engine.reflection.class(class).name == root.class.as_str() && engine.reflection.class(class).service
+                })
+            });
+            match (existing, &root.as_children) {
+                (Some(existing), Some(children)) => result.extend(children.instantiate(engine, Some(existing))),
+                _ => result.extend(root.as_root.instantiate(engine, Some(parent))),
+            }
+        }
+        result
+    }
+}
+
 /// Loads a Studio snapshot whose top-level instances become children of `parent` (a service
 /// root's children merge into the existing service), with rotations as a client receives them.
 pub fn load_snapshot(engine: &Engine, path: &Path, parent: InstanceId) -> Result<Vec<InstanceId>, String> {
+    type Entry = (crate::files::Stamp, std::sync::Arc<SnapshotPlan>);
+    static KEPT: std::sync::OnceLock<std::sync::Mutex<FxHashMap<String, Entry>>> = std::sync::OnceLock::new();
+    let keep = crate::lua::modules::keeping_between_runs();
+    let frozen = crate::lua::modules::is_batch_frozen();
+    if keep {
+        let path_key = path.to_string_lossy();
+        let kept = KEPT.get_or_init(|| crate::alloc::long_lived(Default::default));
+        let known = kept.lock().ok().and_then(|map| map.get(path_key.as_ref()).cloned());
+        if frozen {
+            if let Some((kept_stamp, plan)) = known {
+                crate::files::note_stamp(path, Some(kept_stamp));
+                return Ok(plan.instantiate(engine, parent));
+            }
+        }
+        let stamp = crate::files::stamp(path);
+        crate::files::note_stamp(path, stamp);
+        if let Some((kept_stamp, plan)) = known {
+            if Some(kept_stamp) == stamp {
+                return Ok(plan.instantiate(engine, parent));
+            }
+        }
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let (mut dom, notes) = decode_model(&bytes)?;
+        warn_notes(engine, &path_key, &notes);
+        received::as_received(&mut dom);
+        if let (Some(stamp), true) = (stamp, notes.is_empty()) {
+            let plan = crate::alloc::long_lived(|| std::sync::Arc::new(SnapshotPlan::from_dom(&engine.reflection, &dom)));
+            if let Ok(mut map) = kept.lock() {
+                crate::alloc::long_lived(|| map.insert(path_key.into_owned(), (stamp, plan.clone())));
+            }
+            return Ok(plan.instantiate(engine, parent));
+        }
+        let mut result = Vec::new();
+        for &root in dom.root().children() {
+            let source = dom.get_by_ref(root).unwrap();
+            let existing = {
+                let state = engine.state.borrow();
+                find_child(&state, parent, &source.name).filter(|&e| {
+                    let class = state.dom.at(e).class;
+                    &*engine.reflection.class(class).name == source.class.as_str() && engine.reflection.class(class).service
+                })
+            };
+            if let Some(existing) = existing {
+                result.extend(convert_instances(engine, &dom, source.children(), Some(existing)));
+            } else {
+                result.extend(convert_instances(engine, &dom, &[root], Some(parent)));
+            }
+        }
+        return Ok(result);
+    }
     crate::files::note(path);
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     let (mut dom, notes) = decode_model(&bytes)?;
@@ -3083,15 +3251,37 @@ pub fn load_model(engine: &Engine, path: &Path) -> Result<Vec<InstanceId>, Strin
     Ok(convert_model(engine, &dom, None))
 }
 
+#[inline]
+fn paths_equal_ignore_case_ascii(source: &str, wanted_lower_slash: &[u8]) -> bool {
+    let bytes = source.as_bytes();
+    if bytes.len() != wanted_lower_slash.len() {
+        return false;
+    }
+    for (&a, &b) in bytes.iter().zip(wanted_lower_slash.iter()) {
+        let a = if a == b'\\' { b'/' } else { a.to_ascii_lowercase() };
+        if a != b {
+            return false;
+        }
+    }
+    true
+}
+
 /// Walks the DataModel for the ModuleScript mounted from `path` (main.luau FindModuleByPath).
 pub fn find_module_by_path(engine: &Engine, path: &str) -> Option<InstanceId> {
     let wanted = normalize(path).to_lowercase();
+    let wanted_ascii = wanted.is_ascii();
+    let wanted_bytes = wanted.as_bytes();
     let state = engine.state.borrow();
     let mut stack = vec![engine.world().game];
     while let Some(node) = stack.pop() {
         let instance = state.dom.at(node);
         if let Some(source) = instance.source_path() {
-            if normalize(source).to_lowercase() == wanted {
+            let matched = if wanted_ascii && source.is_ascii() {
+                paths_equal_ignore_case_ascii(source, wanted_bytes)
+            } else {
+                normalize(source).to_lowercase() == wanted
+            };
+            if matched {
                 return Some(node);
             }
         }
@@ -3392,6 +3582,25 @@ mod studio_index_tests {
         }
         assert_eq!(results[0], results[1], "cold vs warm mmap mount must match");
         assert!(results[0].iter().any(|l| l == "print:ok Part ModuleScript"), "unexpected output: {:?}", results[0]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_module_by_path_matches_case_and_separators() {
+        let dir = unique_dir("find-module");
+        let root = dir.join("src");
+        std::fs::create_dir_all(root.join("ReplicatedStorage/UI")).unwrap();
+        let file = root.join("ReplicatedStorage/UI/Button.luau");
+        std::fs::write(&file, "return 1").unwrap();
+        let spec = ProjectSpec { roots: vec![root.to_string_lossy().replace('\\', "/")], ..ProjectSpec::default() };
+        let emu = Emulator::start(Engine::new(Options::default()).unwrap(), &spec).unwrap();
+        let forward = file.to_string_lossy().replace('\\', "/");
+        let backward = forward.replace('/', "\\");
+        let upper = forward.to_ascii_uppercase();
+        let a = find_module_by_path(&emu.engine, &forward).expect("forward path");
+        assert_eq!(find_module_by_path(&emu.engine, &backward), Some(a));
+        assert_eq!(find_module_by_path(&emu.engine, &upper), Some(a));
+        assert_eq!(find_module_by_path(&emu.engine, &format!("{forward}.missing")), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

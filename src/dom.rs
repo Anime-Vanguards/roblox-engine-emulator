@@ -886,6 +886,15 @@ impl Dom {
         Self::default()
     }
 
+    /// Reserves capacity in the slot arena before mounting a scanned tree so the arena grows once.
+    pub fn reserve(&mut self, additional: usize) {
+        self.slots.reserve(additional);
+        if !self.home_classes.is_empty() {
+            self.homes.reserve(additional);
+            self.above.reserve(additional);
+        }
+    }
+
     /// Creates an unparented instance of `class` with the next serial (InstanceModule.Create).
     pub fn create(&mut self, reflection: &Reflection, class: ClassId) -> InstanceId {
         self.next_serial += 1;

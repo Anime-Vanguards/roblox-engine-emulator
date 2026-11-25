@@ -248,6 +248,10 @@ static LOADMODULE_COMPILED: std::sync::OnceLock<std::sync::RwLock<std::collectio
 static JSON_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, (crate::files::Stamp, std::sync::Arc<serde_json::Value>)>>> = std::sync::OnceLock::new();
 /// Process-wide cache of compact binary JSON payloads shared across `--batch` or `--service` workers.
 static BJSON_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, (crate::files::Stamp, StoredBytes)>>> = std::sync::OnceLock::new();
+/// Process-wide cache of determinism-patched module bytecode (`.vide.values`), keyed by path and raw source bytes.
+static PATCHED_BYTECODE: std::sync::OnceLock<
+    std::sync::RwLock<FxHashMap<String, (std::sync::Arc<[u8]>, StoredBytes)>>,
+> = std::sync::OnceLock::new();
 /// Single-flight deduplication for cold bytecode compiles during `ree run --batch` so parallel
 /// workers starting together compile each shared module once instead of N times simultaneously.
 struct SingleFlight<V> {
@@ -331,9 +335,18 @@ impl CompiledSources {
                             return Ok(existing);
                         }
                         let bytecode = compile_std_cached(disk, &existing.0);
-                        let upgraded = std::sync::Arc::new((existing.0.clone(), bytecode));
+                        let upgraded = if keeping {
+                            kept(&existing.0, bytecode)
+                        } else {
+                            std::sync::Arc::new((existing.0.clone(), bytecode))
+                        };
                         if let Ok(mut entries) = self.entries.write() {
-                            entries.insert(path.to_string(), (crate::files::Stamp { len: existing.0.len() as u64, modified: 0, directory: false }, upgraded.clone(), true));
+                            let stamp = crate::files::Stamp { len: existing.0.len() as u64, modified: 0, directory: false };
+                            if keeping {
+                                crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, upgraded.clone(), lasting)));
+                            } else {
+                                entries.insert(path.to_string(), (stamp, upgraded.clone(), true));
+                            }
                         }
                         return Ok(upgraded);
                     }
@@ -361,9 +374,8 @@ impl CompiledSources {
         let stamp_opt = crate::files::stamp(file_path);
         crate::files::note_stamp(file_path, stamp_opt);
         let stamp = stamp_opt.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
-        let known = self.entries.read().ok().and_then(|entries| entries.get(path).cloned());
-        if let Some((known_stamp, entry, home)) = known {
-            if known_stamp == stamp {
+        if let Some((known, entry, home)) = self.entries.read().ok().and_then(|entries| entries.get(path).cloned()) {
+            if known == stamp {
                 if !compile_bytecode || entry.1.is_some() || !lua_source {
                     crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
                     if lasting && !home {
@@ -1156,49 +1168,92 @@ pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId
 
 /// [`compile`] for a script of the VM `vm`.
 pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[u8], vm: Vm) -> LuaResult<LuaFunction> {
+    compile_in_with(lua, engine, script, source, None, vm)
+}
+
+fn compile_in_with(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, raw_source: &[u8], precompiled: Option<StoredBytes>, vm: Vm) -> LuaResult<LuaFunction> {
     let env = environment_in(lua, engine, script, vm)?;
-    let name = engine.state.borrow().dom.full_name(&engine.reflection, script);
+    let (name, source_path) = {
+        let state = engine.state.borrow();
+        (state.dom.full_name(&engine.reflection, script), state.dom.at(script).source_path().cloned())
+    };
     // (a profile's annotated listing reads the chunk's source: profiler.rs)
     if crate::profiler::active() {
-        let path = engine.state.borrow().dom.at(script).source_path().map(|path| path.to_string());
-        crate::profiler::source_loaded(&name, path.as_deref(), &std::rc::Rc::from(source));
+        crate::profiler::source_loaded(&name, source_path.as_deref(), &std::rc::Rc::from(raw_source));
     }
-    let source = deterministic_source(&name, source);
-    let cached = engine
-        .modules
-        .borrow()
-        .bytecode
-        .get(&script)
-        .and_then(|(cached_src, cached_bc)| (cached_src.as_ref() == &*source).then(|| cached_bc.clone()));
-    let bytecode = match cached {
-        Some(bc) => Some(bc),
-        None => {
-            let from_kept = matches!(&source, std::borrow::Cow::Borrowed(_))
-                .then(|| kept_bytecode(engine, script, &source))
-                .flatten();
-            if let Some(bc) = from_kept {
-                engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), bc.clone()));
-                Some(bc)
-            } else {
-                let disk = store::for_engine(engine);
-                let disk_key = store::key_for(store::KIND_STD_BYTECODE, &*source);
-                if let Some(bc) = disk.as_deref().and_then(|s| s.get(&disk_key)) {
-                    crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
+    let is_vide_values = name.ends_with(".vide.values");
+    if is_vide_values {
+        if let Some(ref path) = source_path {
+            if let Some(bc) = PATCHED_BYTECODE
+                .get()
+                .and_then(|map| map.read().ok())
+                .and_then(|map| map.get(&**path).and_then(|(cached_raw, bc)| (&**cached_raw == raw_source).then(|| bc.clone())))
+            {
+                let chunk = lua.load(&*bc).set_mode(mlua::chunk::ChunkMode::Binary).set_name(format!("={name}")).set_environment(env.clone());
+                if let Ok(function) = load(lua, engine, chunk) {
+                    return Ok(function);
+                }
+                forget_unloadable(engine, script);
+            }
+        }
+    }
+    let source = if is_vide_values { deterministic_source(&name, raw_source) } else { std::borrow::Cow::Borrowed(raw_source) };
+    let patched = matches!(&source, std::borrow::Cow::Owned(_));
+    let bytecode = if !patched && precompiled.is_some() {
+        precompiled
+    } else {
+        let cached = engine
+            .modules
+            .borrow()
+            .bytecode
+            .get(&script)
+            .and_then(|(cached_src, cached_bc)| (cached_src.as_ref() == &*source).then(|| cached_bc.clone()));
+        match cached {
+            Some(bc) => Some(bc),
+            None => {
+                let from_kept = (!patched).then(|| kept_bytecode(engine, script, &source)).flatten();
+                if let Some(bc) = from_kept {
                     engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), bc.clone()));
                     Some(bc)
                 } else {
-                    engine.modules.borrow_mut().text_compiles += 1;
-                    match compiler().compile(&*source) {
-                        Ok(bc) => {
-                            let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(bc.into_boxed_slice());
-                            if let Some(s) = disk.as_deref() {
-                                s.put(disk_key, arc.clone());
+                    let disk = store::for_engine(engine);
+                    let disk_key = store::key_for(store::KIND_STD_BYTECODE, &*source);
+                    if let Some(bc) = disk.as_deref().and_then(|s| s.get(&disk_key)) {
+                        crate::profiler::caches::hit(crate::profiler::caches::Cache::Bytecode);
+                        if patched && keeping_between_runs() {
+                            if let Some(ref path) = source_path {
+                                let cache = PATCHED_BYTECODE.get_or_init(|| crate::alloc::long_lived(Default::default));
+                                if let Ok(mut map) = cache.write() {
+                                    let raw_arc: std::sync::Arc<[u8]> = crate::alloc::long_lived(|| std::sync::Arc::from(raw_source));
+                                    crate::alloc::long_lived(|| map.insert(path.to_string(), (raw_arc, bc.clone())));
+                                }
                             }
-                            let stored = StoredBytes::owned(arc);
-                            engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), stored.clone()));
-                            Some(stored)
                         }
-                        Err(_) => None,
+                        engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), bc.clone()));
+                        Some(bc)
+                    } else {
+                        engine.modules.borrow_mut().text_compiles += 1;
+                        match compiler().compile(&*source) {
+                            Ok(bc) => {
+                                let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(bc.into_boxed_slice());
+                                if let Some(s) = disk.as_deref() {
+                                    s.put(disk_key, arc.clone());
+                                }
+                                let stored = StoredBytes::owned(arc);
+                                if patched && keeping_between_runs() {
+                                    if let Some(ref path) = source_path {
+                                        let cache = PATCHED_BYTECODE.get_or_init(|| crate::alloc::long_lived(Default::default));
+                                        if let Ok(mut map) = cache.write() {
+                                            let raw_arc: std::sync::Arc<[u8]> = crate::alloc::long_lived(|| std::sync::Arc::from(raw_source));
+                                            crate::alloc::long_lived(|| map.insert(path.to_string(), (raw_arc, stored.clone())));
+                                        }
+                                    }
+                                }
+                                engine.modules.borrow_mut().bytecode.insert(script, (Rc::from(&*source), stored.clone()));
+                                Some(stored)
+                            }
+                            Err(_) => None,
+                        }
                     }
                 }
             }
@@ -1245,6 +1300,11 @@ fn forget_unloadable(engine: &Engine, script: InstanceId) {
     }
     if let Some(compiled) = LOADMODULE_COMPILED.get() {
         if let Ok(mut entries) = compiled.write() {
+            entries.remove(&*path);
+        }
+    }
+    if let Some(patched) = PATCHED_BYTECODE.get() {
+        if let Ok(mut entries) = patched.write() {
             entries.remove(&*path);
         }
     }
@@ -1347,6 +1407,17 @@ pub fn parse_json(engine: &Engine, path: &str) -> Result<std::sync::Arc<serde_js
                 engine.modules.borrow_mut().json_cache.insert(path.to_string(), found.clone());
                 return Ok(found);
             }
+            let value = read_file_opts(engine, path, false)
+                .map(|(bytes, _)| bytes)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| error.to_string()))?;
+            let cached = crate::alloc::long_lived(|| std::sync::Arc::new(value));
+            let stamp = crate::files::Stamp { len: 0, modified: 0, directory: false };
+            if let Ok(mut entries) = global_cache.write() {
+                crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, cached.clone())));
+            }
+            engine.modules.borrow_mut().json_cache.insert(path.to_string(), cached.clone());
+            return Ok(cached);
         }
         let file_path = std::path::Path::new(path);
         let stamp_opt = crate::files::stamp(file_path);
@@ -1398,7 +1469,11 @@ pub(crate) fn parse_bjson(engine: &Engine, path: &str) -> Result<StoredBytes, St
             let bjson = parse_bjson_cached(disk.as_deref(), &bytes)?;
             let stamp = crate::files::Stamp { len: bytes.len() as u64, modified: 0, directory: false };
             if let Ok(mut entries) = global_cache.write() {
-                entries.insert(path.to_string(), (stamp, bjson.clone()));
+                if keeping_between_runs() {
+                    crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, bjson.clone())));
+                } else {
+                    entries.insert(path.to_string(), (stamp, bjson.clone()));
+                }
             }
             engine.modules.borrow_mut().bjson_cache.insert(path.to_string(), bjson.clone());
             return Ok(bjson);
@@ -1700,7 +1775,27 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         };
     }
 
-    let Some(source) = source_rc(engine, module) else {
+    // File-backed modules with no in-memory override borrow the shared `Arc<[u8]>` source and
+    // precompiled bytecode directly without copying the source bytes into a per-instance `Rc<[u8]>`.
+    let in_memory_source = engine.state.borrow().dom.at(module).source().cloned();
+    let loaded = match (&in_memory_source, &path) {
+        (Some(source), _) => Some((None, Some(source.clone()), None)),
+        (None, Some(path)) => {
+            note_read(engine, path);
+            match crate::timing::time("modules: read sources", || read_file_opts(engine, path, true)) {
+                Ok((bytes, bytecode)) => Some((Some(bytes), None, bytecode)),
+                Err(_) => match engine.state.borrow().dom.raw_get(module, K::Source as NameId) {
+                    Some(Value::String(source)) => Some((None, Some(Rc::from(source.as_bytes())), None)),
+                    _ => None,
+                },
+            }
+        }
+        (None, None) => match engine.state.borrow().dom.raw_get(module, K::Source as NameId) {
+            Some(Value::String(source)) => Some((None, Some(Rc::from(source.as_bytes())), None)),
+            _ => None,
+        },
+    };
+    let Some((arc_source, rc_source, precompiled)) = loaded else {
         let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
         let message = if studio_only {
             format!("Module {name} exists only in Studio (its source is not in the project)")
@@ -1709,12 +1804,17 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         };
         return error_result(lua, message, 0);
     };
+    let source_bytes: &[u8] = match (&arc_source, &rc_source) {
+        (Some(bytes), _) => bytes,
+        (None, Some(bytes)) => bytes,
+        (None, None) => unreachable!(),
+    };
 
     engine.modules.borrow_mut().records.insert(
         (vm, module),
         Record { status: Status::Loading, result: None, waiting: Vec::new(), owner: Some(current) },
     );
-    match compile_in(lua, engine, module, &source, vm) {
+    match compile_in_with(lua, engine, module, source_bytes, precompiled, vm) {
         Ok(chunk) => Ok(LuaMultiValue::from_iter([
             LuaValue::Integer(3),
             LuaValue::Function(chunk),
